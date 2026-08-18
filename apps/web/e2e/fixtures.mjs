@@ -189,6 +189,65 @@ export const WORKFLOW_RUN_RESULT = {
   failed: [],
 };
 
+// The Studio's detached-run record (#2829): POST /{name}/start returns the run_id,
+// GET /runs/{run_id} serves this — terminal immediately so the timeline renders
+// its done state without the e2e having to poll through intermediate states.
+export const WORKFLOW_RUN_RECORD = {
+  run_id: "run-e2e-1",
+  recipe_name: "research-and-brief",
+  inputs: { topic: "AI" },
+  steps: [
+    { id: "gather", subagent: "researcher", depends_on: [] },
+    { id: "brief", subagent: "researcher", depends_on: ["gather"] },
+  ],
+  step_outputs: {
+    gather: "raw research notes",
+    brief: "## Brief on AI\n\nKey findings…",
+  },
+  step_meta: {
+    gather: { status: "done", started_at: "2026-05-30T12:00:00Z", finished_at: "2026-05-30T12:00:03Z", seconds: 3.2 },
+    brief: { status: "done", started_at: "2026-05-30T12:00:03Z", finished_at: "2026-05-30T12:00:08Z", seconds: 5.1 },
+  },
+  status: "done",
+  pending_step: null,
+  created_at: "2026-05-30T12:00:00Z",
+  updated_at: "2026-05-30T12:00:08Z",
+  output: "## Brief on AI\n\nKey findings…",
+  failed: [],
+  degraded: [],
+};
+
+// GET /runs/all — the History list's summaries.
+export const WORKFLOW_RUN_SUMMARIES = [
+  {
+    run_id: "run-e2e-1",
+    recipe_name: "research-and-brief",
+    status: "done",
+    pending_step: null,
+    created_at: "2026-05-30T12:00:00Z",
+    updated_at: "2026-05-30T12:00:08Z",
+    steps_total: 2,
+    steps_done: 2,
+    failed: [],
+  },
+];
+
+// GET /{name}/recipe — the FULL document the builder loads to EDIT.
+export const WORKFLOW_RECIPE_FULL = {
+  name: "research-and-brief",
+  description: "Research a topic, then write a brief.",
+  version: 1,
+  inputs: [
+    { name: "topic", required: true },
+    { name: "depth", required: false, default: "deep" },
+  ],
+  steps: [
+    { id: "gather", subagent: "researcher", prompt: "Research {{inputs.topic}} ({{inputs.depth}})" },
+    { id: "brief", subagent: "researcher", depends_on: ["gather"], prompt: "Write a brief from:\n{{steps.gather.output}}" },
+  ],
+  output: "{{steps.brief.output}}",
+};
+
 export const SLASH_COMMANDS = [
   { name: "goal", description: "Set a goal for this session", usage: "/goal <condition>" },
   { name: "clear", description: "Clear the conversation", usage: "/clear" },

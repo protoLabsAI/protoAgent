@@ -49,7 +49,10 @@ import {
   TELEMETRY_TURNS,
   WATCHES,
   VERIFIERS,
+  WORKFLOW_RECIPE_FULL,
+  WORKFLOW_RUN_RECORD,
   WORKFLOW_RUN_RESULT,
+  WORKFLOW_RUN_SUMMARIES,
   WORKFLOWS,
 } from "./fixtures.mjs";
 
@@ -373,6 +376,14 @@ function handleApiGet(pathname, fleet = FLEET, params = new URLSearchParams(), m
       };
     case "/api/plugins/workflows/list":
       return { workflows: WORKFLOWS };
+    case "/api/plugins/workflows/runs":
+      return { runs: [] }; // Pending Gates queue — nothing parked in the e2e
+    case "/api/plugins/workflows/runs/all":
+      return { runs: WORKFLOW_RUN_SUMMARIES };
+    case "/api/plugins/workflows/runs/run-e2e-1":
+      return WORKFLOW_RUN_RECORD;
+    case "/api/plugins/workflows/research-and-brief/recipe":
+      return { recipe: WORKFLOW_RECIPE_FULL };
     case "/api/theme":
       return { theme: null }; // per-agent theme (ADR 0042); null → DS defaults
     case "/api/fleet":
@@ -979,6 +990,13 @@ const server = createServer(async (req, res) => {
     }
     if (/^\/api\/plugins\/workflows\/[^/]+\/run$/.test(pathname)) {
       return sendJson(res, WORKFLOW_RUN_RESULT);
+    }
+    if (/^\/api\/plugins\/workflows\/[^/]+\/start$/.test(pathname)) {
+      // The Studio's detached run (#2829) — the timeline then polls the record.
+      return sendJson(res, { started: true, run_id: "run-e2e-1" });
+    }
+    if (pathname === "/api/plugins/workflows/validate") {
+      return sendJson(res, { errors: [] });
     }
     if (pathname === "/api/plugins/workflows/save") {
       return sendJson(res, { saved: true, name: "demo" });

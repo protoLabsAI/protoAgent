@@ -1,8 +1,10 @@
 import { expect, test } from "@playwright/test";
 
-// The Workflows surface lists recipes from GET /api/workflows, shows the
-// selected recipe's step DAG + inputs, and runs it via
-// POST /api/workflows/{name}/run — rendering the output + per-step results.
+// The Studio (Workflows surface, reworked in #2830): recipes list from
+// GET /api/plugins/workflows/list and render as dependency-depth DAG lanes;
+// Run starts a DETACHED run (POST /{name}/start) and the timeline polls its
+// record (GET /runs/{run_id}); History lists every recorded run; the builder
+// EDITs an existing recipe loaded from GET /{name}/recipe.
 
 async function openWorkflows(page) {
   await page.goto("/app/", { waitUntil: "load" });
@@ -11,15 +13,16 @@ async function openWorkflows(page) {
   await expect(page.getByRole("heading", { name: "Workflows" })).toBeVisible();
 }
 
-test("lists a recipe with its steps and inputs", async ({ page }) => {
+test("lists a recipe with its DAG lanes and inputs", async ({ page }) => {
   await openWorkflows(page);
   // The kicker reads "…recipes the engine runs over subagents · 1 recipe" (ADR 0009 contrast copy).
   await expect(page.getByText(/\b1 recipe\b/)).toBeVisible();
-  // The recipe's description + step DAG render.
   await expect(page.getByText("Research a topic, then write a brief.")).toBeVisible();
-  const steps = page.locator(".workflow-step");
-  await expect(steps).toHaveCount(2);
-  await expect(steps.nth(1)).toContainText("after gather");
+  // Dependency depth renders as lanes: gather | brief in two columns.
+  const lanes = page.locator(".workflow-lanes .workflow-lane");
+  await expect(lanes).toHaveCount(2);
+  await expect(lanes.nth(0)).toContainText("gather");
+  await expect(lanes.nth(1)).toContainText("brief");
   // Required + optional inputs are present; the optional one shows its default.
   await expect(page.locator(".field span", { hasText: /^topic \*$/ })).toBeVisible();
   await expect(page.locator('input[placeholder="default: deep"]')).toBeVisible();
@@ -31,16 +34,47 @@ test("requires the required input before running", async ({ page }) => {
   await expect(run).toBeDisabled(); // topic is empty
 });
 
-test("runs the workflow and renders the result", async ({ page }) => {
+test("runs detached and renders the live timeline", async ({ page }) => {
   await openWorkflows(page);
-  // Fill the required input → Run enables.
   const topic = page.locator(".subagent-grid .field").first().locator("input");
   await topic.fill("AI");
   const run = page.locator(".panel-actions").getByRole("button", { name: "Run", exact: true });
   await expect(run).toBeEnabled();
   await run.click();
-  // The run result output renders.
-  await expect(page.locator(".workflow-result .output-block").first()).toContainText("Brief on AI");
-  // Per-step details are available.
-  await expect(page.getByText(/Per-step output \(2\)/)).toBeVisible();
+  // The timeline appears, polling the run record — terminal in the mock, so it
+  // renders done: status badge, both steps with durations, the final output.
+  const timeline = page.locator(".run-timeline");
+  await expect(timeline).toBeVisible();
+  await expect(timeline.locator(".run-status")).toHaveText("done");
+  const steps = timeline.locator(".run-step");
+  await expect(steps).toHaveCount(2);
+  await expect(steps.nth(0)).toContainText("gather");
+  // Expanding a step reveals its output.
+  await steps.nth(0).locator("summary").click();
+  await expect(steps.nth(0)).toContainText("raw research notes");
+  await expect(timeline.locator(".workflow-result .output-block")).toContainText("Brief on AI");
+});
+
+test("history lists recorded runs and reopens one in the timeline", async ({ page }) => {
+  await openWorkflows(page);
+  const history = page.locator(".run-history");
+  await history.locator("summary").click();
+  const row = history.locator(".run-history-row").first();
+  await expect(row).toContainText("research-and-brief");
+  await expect(row).toContainText("2/2 steps");
+  await row.click();
+  await expect(page.locator(".run-timeline .run-status")).toHaveText("done");
+});
+
+test("edit loads the full recipe into the builder", async ({ page }) => {
+  await openWorkflows(page);
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  // Name is fixed in edit mode; the step prompts came from GET /{name}/recipe.
+  const name = page.getByPlaceholder("my-workflow");
+  await expect(name).toHaveValue("research-and-brief");
+  await expect(name).toBeDisabled();
+  await expect(page.locator(".builder-prompt").first()).toHaveValue(/Research \{\{inputs\.topic\}\}/);
+  // Template-ref chips render for inputs and sibling steps.
+  await expect(page.locator(".builder-chip", { hasText: "{{inputs.topic}}" }).first()).toBeVisible();
+  await expect(page.locator(".builder-chip", { hasText: "{{steps.gather.output}}" }).first()).toBeVisible();
 });
