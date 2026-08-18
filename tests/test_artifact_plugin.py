@@ -1233,3 +1233,38 @@ def test_resolve_for_bundle_detects_trim_and_reports_unavailable(monkeypatch, tm
     # same post-trim length) — also unavailable, not a lucky guess at the wrong content.
     ambiguous = art.resolve_for_bundle(aid, 2)
     assert ambiguous["available"] is False and "trimmed" in ambiguous["reason"]
+
+
+# ── typed file previews (v0.17.0): csv/tsv table, md prose, json pretty ────────
+
+
+def test_text_ext_covers_data_and_code_files(monkeypatch, tmp_path):
+    """.tsv and .py previews decode verbatim — not the '(binary file …)' note —
+    regardless of what the platform's mimetypes table says about the extension."""
+    art = _load(monkeypatch, tmp_path)
+    for name, body in (("t.tsv", "a\tb\n1\t2"), ("s.py", "print('hi')")):
+        f = tmp_path / name
+        f.write_text(body, encoding="utf-8")
+        art.save_file_artifact.invoke({"path": str(f)})
+        assert _arts(art)[0]["versions"][0]["code"] == body
+
+
+def test_shell_types_file_previews(monkeypatch, tmp_path):
+    """fileCard dispatches by extension: DSV parser + row-capped table for csv/tsv,
+    mdDoc reuse for .md, JSON pretty-print, text fallback."""
+    html = _load(monkeypatch, tmp_path)._SHELL_HTML
+    assert "function parseDsv(" in html
+    assert "function previewKind(" in html
+    assert "TABLE_MAX_ROWS" in html
+    assert 'return mdDoc(' in html  # .md files reuse the markdown kind's renderer
+    assert "JSON.stringify(JSON.parse(" in html
+
+
+def test_shell_trunc_marker_mirrors_python(monkeypatch, tmp_path):
+    """The shell strips the preview-truncation note before parsing a table/json —
+    its marker string must stay a literal mirror of _PREVIEW_TRUNC or clipped
+    previews would feed the note into the parsers."""
+    art = _load(monkeypatch, tmp_path)
+    mark = "(preview truncated — download the file for the full content)"
+    assert art._PREVIEW_TRUNC.endswith(mark)
+    assert '"' + mark + '"' in art._SHELL_HTML

@@ -624,7 +624,27 @@ _EXTRACTORS = {
     ".pptx": (_extract_pptx, "python-pptx"),
     ".pdf": (_extract_pdf, "pypdf"),
 }
-_TEXT_EXT = {".txt", ".md", ".markdown", ".csv", ".json", ".log", ".yaml", ".yml"}
+_TEXT_EXT = {
+    ".txt",
+    ".md",
+    ".markdown",
+    ".csv",
+    ".tsv",
+    ".json",
+    ".log",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".ini",
+    ".xml",
+    ".html",
+    ".htm",
+    ".py",
+    ".js",
+    ".ts",
+    ".sh",
+    ".sql",
+}
 
 
 def _extract_preview(path: Path, data: bytes, mime: str) -> str:
@@ -710,8 +730,10 @@ def save_file_artifact(path: str, title: str = "", artifact_id: str = "") -> str
 
     Use this right AFTER a skill writes a document to disk (e.g. cowork's docx/xlsx/pptx/pdf
     skills, a generated report or image): pass the file ``path``. The panel stores the bytes,
-    shows a download card with a readable text preview (docx→text, xlsx→sheet table,
-    pptx→slide outline, pdf→text; images get a thumbnail), and offers a Download button.
+    shows a download card with a preview typed by content (csv/tsv → a real table, .md →
+    rendered prose, .json → pretty-printed; docx→text, xlsx→sheet table, pptx→slide outline,
+    pdf→text; images get a thumbnail; other text files → plain text), and offers a Download
+    button.
 
     COMPOSE the file completely, then save ONCE — do not save revision after revision while
     you iterate in a single turn; every save round-trips the full file through the
@@ -1505,19 +1527,74 @@ _SHELL_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
       mmRun + '<\/script></body>';
   }
   // `file` artifacts (ADR 0092 D2) don't iframe generated code — they show a static,
-  // themed DOWNLOAD CARD: thumbnail (images) or a file glyph, name + mime + size, and the
-  // extracted text preview (v.code) in a scroll box. Self-contained srcdoc (no scripts, so
-  // the sandbox stays inert); tokens read from the live theme like base().
+  // themed DOWNLOAD CARD whose preview is TYPED by the file's extension: csv/tsv parse
+  // into a real table, .json pretty-prints, .md renders through mdDoc (the same sandboxed
+  // machinery as the markdown kind), everything else stays a text scroll box. The
+  // table/json/text srcdocs carry no scripts, so those sandboxes stay inert; only the
+  // .md path runs script, and it's the already-trusted markdown renderer.
   function fmtSize(n){ n=+n||0; return n<1024?n+" B":n<1048576?(n/1024).toFixed(1)+" KB":(n/1048576).toFixed(1)+" MB"; }
+  // Mirror of the Python _PREVIEW_TRUNC note (drift-guarded by a test): detect + strip it
+  // so a clipped preview doesn't feed the marker into the table/json parsers.
+  var TRUNC_MARK="(preview truncated — download the file for the full content)";
+  function stripTrunc(code){
+    var i=code.lastIndexOf(TRUNC_MARK);
+    if(i<0 || i+TRUNC_MARK.length<code.length-2) return {code:code, truncated:false};
+    var j=code.lastIndexOf("\n…", i); // the note's own lead-in, appended by _clip
+    return {code:code.slice(0, j>=0?j:i), truncated:true};
+  }
+  function previewKind(name){
+    var n=String(name||"").toLowerCase(), i=n.lastIndexOf("."), ext=i<0?"":n.slice(i+1);
+    if(ext==="csv"||ext==="tsv") return "table";
+    if(ext==="md"||ext==="markdown") return "md";
+    if(ext==="json") return "json";
+    return "text";
+  }
+  // Minimal RFC-4180: quoted fields, doubled quotes, delimiters/newlines inside quotes.
+  function parseDsv(text, delim){
+    var rows=[], row=[], cur="", q=false;
+    for(var i=0;i<text.length;i++){
+      var c=text[i];
+      if(q){ if(c==='"'){ if(text[i+1]==='"'){cur+='"';i++;} else q=false; } else cur+=c; }
+      else if(c==='"') q=true;
+      else if(c===delim){ row.push(cur); cur=""; }
+      else if(c==="\n"){ row.push(cur); rows.push(row); row=[]; cur=""; }
+      else if(c!=="\r") cur+=c;
+    }
+    if(cur!==""||row.length) { row.push(cur); rows.push(row); }
+    return rows;
+  }
+  var TABLE_MAX_ROWS=500;
   function fileCard(v){
     var cs=getComputedStyle(document.documentElement);
     function tok(n,d){ return (cs.getPropertyValue(n)||d).trim(); }
     var bg=tok("--pl-color-bg","#0a0a0c"), fg=tok("--pl-color-fg","#ededed"),
         muted=tok("--pl-color-fg-muted","#9aa0aa"), border=tok("--pl-color-border","rgba(255,255,255,.12)");
     var f=v.file||{}, name=f.filename||"file", mime=f.mime||"application/octet-stream";
+    var st=stripTrunc(v.code||""), code=st.code, truncated=st.truncated;
+    var pk=previewKind(name);
+    if(pk==="md")
+      return mdDoc(truncated ? code+"\n\n> *(preview truncated — download the file for the full document)*" : code);
     var thumb = f.thumb
       ? '<img src="'+f.thumb+'" alt="" style="max-width:200px;max-height:200px;border-radius:8px;border:1px solid '+border+'">'
       : '<div style="font-size:44px;line-height:1">📄</div>';
+    var body, pvl="Preview";
+    if(pk==="table"){
+      var rows=parseDsv(code, name.slice(-4)===".tsv" ? "\t" : ",");
+      if(truncated && rows.length>1) rows=rows.slice(0,-1); // last row may be mid-cut
+      var head=rows[0]||[], data=rows.slice(1), shown=data.slice(0,TABLE_MAX_ROWS);
+      body='<div class="tw"><table><thead><tr>'
+        + head.map(function(c){return "<th>"+esc(c)+"</th>";}).join("")
+        + '</tr></thead><tbody>'
+        + shown.map(function(r){return "<tr>"+r.map(function(c){return "<td>"+esc(c)+"</td>";}).join("")+"</tr>";}).join("")
+        + '</tbody></table></div>';
+      pvl=head.length+" columns × "+data.length+(truncated?"+":"")+" rows"
+        + (data.length>shown.length||truncated ? " · first "+shown.length+" shown — download for all" : "");
+    } else {
+      if(pk==="json" && !truncated){
+        try{ code=JSON.stringify(JSON.parse(code), null, 2); }catch(_){ /* not valid JSON → raw */ }
+      }
+      body='<pre class="pv">'+esc(code)+(truncated?'\n… (preview truncated — download the file for the full content)':'')+'</pre>';
+    }
     return '<!doctype html><meta charset="utf-8"><style>'
       + 'html,body{margin:0;height:100%;background:'+bg+';color:'+fg+';font-family:var(--pl-font-sans,ui-sans-serif,system-ui,sans-serif)}'
       + '.wrap{display:flex;flex-direction:column;height:100%;box-sizing:border-box;padding:18px;gap:14px}'
@@ -1527,9 +1604,15 @@ _SHELL_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
       + 'pre.pv{flex:1;min-height:0;overflow:auto;margin:0;padding:12px;border:1px solid '+border+';border-radius:8px;'
       + 'background:rgba(127,127,127,.08);white-space:pre-wrap;word-break:break-word;'
       + 'font-family:var(--pl-font-mono,ui-monospace,Menlo,monospace);font-size:12px;line-height:1.5}'
+      + '.tw{flex:1;min-height:0;overflow:auto;border:1px solid '+border+';border-radius:8px;background:rgba(127,127,127,.08)}'
+      + '.tw table{border-collapse:collapse;width:100%;font-size:12px;line-height:1.4}'
+      + '.tw th{position:sticky;top:0;background:'+bg+';text-align:left;font-weight:600;border-bottom:1px solid '+border+'}'
+      + '.tw th,.tw td{padding:6px 10px;border-right:1px solid '+border+';white-space:nowrap;max-width:28em;overflow:hidden;text-overflow:ellipsis}'
+      + '.tw th:last-child,.tw td:last-child{border-right:0}'
+      + '.tw tbody tr:nth-child(even){background:rgba(127,127,127,.06)}'
       + '</style><div class="wrap"><div class="hd">'+thumb
       + '<div class="meta"><div class="nm">'+esc(name)+'</div><div class="mt">'+esc(mime)+' · '+fmtSize(f.size)+'</div></div></div>'
-      + '<div class="pvl">Preview</div><pre class="pv">'+esc(v.code||"")+'</pre></div>';
+      + '<div class="pvl">'+esc(pvl)+'</div>'+body+'</div>';
   }
   var $art=document.getElementById("art"), $vprev=document.getElementById("vprev"),
       $vnext=document.getElementById("vnext"), $vlabel=document.getElementById("vlabel"),
