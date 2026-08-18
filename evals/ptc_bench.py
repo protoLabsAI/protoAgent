@@ -211,8 +211,18 @@ def main() -> int:
 
     import httpx
 
-    turns = httpx.get(f"{args.base_url}/api/telemetry/recent", params={"limit": 200}, timeout=30).json()
-    turns = turns.get("turns", turns) if isinstance(turns, dict) else turns
+    import os
+
+    headers = {}
+    if os.environ.get("A2A_AUTH_TOKEN"):
+        headers["Authorization"] = f"Bearer {os.environ['A2A_AUTH_TOKEN']}"
+    body = httpx.get(
+        f"{args.base_url}/api/telemetry/recent", params={"limit": 200}, timeout=30, headers=headers
+    ).json()
+    # The route returns {"enabled":…, "turns":[…], …} — take the list, never fall
+    # back to iterating the dict (its KEYS are strings; the first live run
+    # crashed exactly there).
+    turns = body.get("turns") or [] if isinstance(body, dict) else (body or [])
     loop_rows, code_rows = _lane_rows(turns, "loop", args.reps), _lane_rows(turns, "code", args.reps)
     loop, code = _agg(loop_rows), _agg(code_rows)
     loop_pass, code_pass = _pass_rate(report, "ptc-loop"), _pass_rate(report, "ptc-code")

@@ -70,3 +70,18 @@ def test_verdict_applies_the_preregistered_thresholds():
     weak_code = _agg([{"llm_calls": 12 / (RQ_ROUNDS - 1), "input_tokens": 1, "cost_usd": 0, "duration_ms": 1}])
     v3 = verdict(loop, weak_code, loop_pass=(2, 2), code_pass=(2, 2))
     assert v3["graduated"] is False
+
+
+def test_recent_response_unwrap_never_iterates_dict_keys():
+    """The live run's crash: /api/telemetry/recent returns a DICT envelope
+    ({enabled, turns, …}); falling back to the dict itself iterates its string
+    keys and _lane_rows explodes. The unwrap must take the list or nothing."""
+    from evals.ptc_bench import _lane_rows
+
+    body = {"enabled": True, "turns": [{"session_id": "a2a:ptc-eval-loop-0", "llm_calls": 11}],
+            "langfuse_trace_url_template": None}
+    turns = body.get("turns") or [] if isinstance(body, dict) else (body or [])
+    assert _lane_rows(turns, "loop", 1)[0]["llm_calls"] == 11
+    empty = {"enabled": False}
+    turns2 = empty.get("turns") or [] if isinstance(empty, dict) else (empty or [])
+    assert _lane_rows(turns2, "loop", 1) == []
