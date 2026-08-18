@@ -17,7 +17,8 @@ VIEW_SOURCES = [
     REPO / "plugins" / "docs" / "__init__.py",
     REPO / "plugins" / "orgchart" / "view.py",
     # Found while fixing the issue: artifact carried the same shim (on by default).
-    REPO / "plugins" / "artifact" / "__init__.py",
+    # The shell moved out of __init__.py in the #2817 decomposition.
+    REPO / "plugins" / "artifact" / "_shell.py",
 ]
 
 

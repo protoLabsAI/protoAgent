@@ -8,6 +8,7 @@ ROOT anchors there off the repo root rather than the test's parent dir."""
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
@@ -16,19 +17,27 @@ ROOT = Path(__file__).resolve().parent.parent / "plugins" / "artifact"
 
 
 def _load(monkeypatch, tmp_path):
-    """Fresh module bound to a temp ARTIFACT_DIR so history is isolated per test."""
+    """Fresh package bound to a temp ARTIFACT_DIR so history is isolated per test.
+
+    Loaded as a PACKAGE (submodule_search_locations, the way the host loader does)
+    so the plugin's relative imports resolve. Prior runs' submodules are evicted
+    from sys.modules first — a cached ``artifact_under_test._tools`` would carry
+    mutable module state (nudge counters, poll stamps) across tests."""
     monkeypatch.setenv("ARTIFACT_DIR", str(tmp_path))
     monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
+    for k in [k for k in sys.modules if k.startswith("artifact_under_test")]:
+        del sys.modules[k]
     spec = importlib.util.spec_from_file_location(
-        "artifact_under_test", ROOT / "__init__.py"
+        "artifact_under_test", ROOT / "__init__.py", submodule_search_locations=[str(ROOT)]
     )
     mod = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
+    sys.modules["artifact_under_test"] = mod
     spec.loader.exec_module(mod)
     # No real browser in tests → never block a tool on the async render verdict (#1458). The
     # render-feedback tests drive the store directly; _await_render still returns an already-
     # recorded result on its first (pre-sleep) check.
-    mod._RENDER_WAIT_MS = 0
+    mod._render_status._RENDER_WAIT_MS = 0
     return mod
 
 
@@ -230,7 +239,7 @@ def test_config_layer_precedence_env_then_ui_then_default(monkeypatch, tmp_path)
     assert art._max_history() == 20
 
     # host/UI config drives it (simulate Settings ▸ Plugins → artifact.ask_enabled).
-    monkeypatch.setattr(art, "_plugin_cfg", lambda: {"ask_enabled": True, "history": 7})
+    monkeypatch.setattr(art._config, "_plugin_cfg", lambda: {"ask_enabled": True, "history": 7})
     assert art._ask_enabled() is True
     assert art._max_history() == 7
 
@@ -328,7 +337,7 @@ def test_nudge_window_expires(monkeypatch, tmp_path):
     art_id = _saved_id(art.save_file_artifact.invoke({"path": p}))
     art.save_file_artifact.invoke({"path": p, "artifact_id": art_id})
     real_now = art._now
-    monkeypatch.setattr(art, "_now", lambda: real_now() + art._SAVE_NUDGE_WINDOW_MS + 1)
+    monkeypatch.setattr(art._store, "_now", lambda: real_now() + art._SAVE_NUDGE_WINDOW_MS + 1)
     # Old stamps aged out — the counter restarts instead of nagging forever.
     assert "NOTE:" not in art.save_file_artifact.invoke({"path": p, "artifact_id": art_id})
 
@@ -791,7 +800,7 @@ def test_create_reply_surfaces_render_error_when_renderer_live(monkeypatch, tmp_
     store = art._read_store()
     store["artifacts"][0]["versions"][0]["render"] = {"ok": False, "error": "Icon is not defined", "ts": art._now()}
     art._write_store(store)
-    art._LAST_POLL_TS = art._now()
+    art._render_status._LAST_POLL_TS = art._now()
     suffix = art._render_suffix(aid, 1)
     assert "FAILED to render" in suffix and "Icon is not defined" in suffix
     # a clean render reads as such
@@ -803,7 +812,7 @@ def test_create_reply_surfaces_render_error_when_renderer_live(monkeypatch, tmp_
 
 def test_render_wait_is_skipped_when_no_renderer(monkeypatch, tmp_path):
     art = _load(monkeypatch, tmp_path)
-    art._LAST_POLL_TS = 0  # no panel poll ⇒ headless ⇒ no wait, no inline verdict
+    art._render_status._LAST_POLL_TS = 0  # no panel poll ⇒ headless ⇒ no wait, no inline verdict
     assert art._renderer_live() is False
     out = art.show_artifact.invoke({"kind": "react", "code": "x"})
     assert "FAILED to render" not in out and "rendered cleanly" not in out
@@ -841,7 +850,7 @@ def test_check_artifact_waits_for_a_live_render(monkeypatch, tmp_path):
     store = art._read_store()
     store["artifacts"][0]["versions"][0]["render"] = {"ok": True, "error": "", "ts": art._now()}
     art._write_store(store)
-    art._LAST_POLL_TS = 0
+    art._render_status._LAST_POLL_TS = 0
     assert "rendered cleanly" in art.check_artifact.invoke({"artifact_id": aid})
 
 
@@ -1111,7 +1120,7 @@ def test_clip_truncates_on_a_codepoint_boundary(monkeypatch, tmp_path):
     4-byte emoji straddling the budget is excluded cleanly, not decoded to a broken char."""
     art = _load(monkeypatch, tmp_path)
     note_len = len(art._PREVIEW_TRUNC.encode())
-    monkeypatch.setattr(art, "_max_preview_bytes", lambda: note_len + 5)  # 5-byte body budget
+    monkeypatch.setattr(art._config, "_max_preview_bytes", lambda: note_len + 5)  # 5-byte body budget
     out = art._clip("😀" * 30)  # 4-byte codepoints, well over budget — byte-5 cut splits the 2nd
     assert out.endswith(art._PREVIEW_TRUNC)
     body = out[: -len(art._PREVIEW_TRUNC)]
