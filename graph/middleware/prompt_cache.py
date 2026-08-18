@@ -24,9 +24,15 @@ watches the outcome instead:
 - a provider that REJECTS the blocks (error naming ``cache_control``) gets one
   retry without them, and that model falls back to plain delivery for the rest
   of the session (WARNING, once);
-- a provider that silently IGNORES them (usage shows zero cache activity on
+- a provider that silently IGNORES them (usage REPORTS cache fields as zero on
   consecutive calls with a cacheable-sized prefix) draws a WARNING naming the
   model, so "caching isn't working" is never invisible again;
+- a provider that doesn't REPORT cache usage at all (no cache fields in
+  ``input_token_details`` — e.g. a vLLM lane started without
+  ``--enable-prompt-tokens-details``) draws a DIFFERENT warning: caching may be
+  working invisibly, and the fix is the lane's reporting, not our blocks
+  (learned the hard way in homelab-iac#242, where "ignoring" was really
+  "not reporting");
 - ``force=True`` keeps meaning "the operator knows best": always attach, never
   auto-fall back (a rejection propagates instead of degrading silently).
 
@@ -81,6 +87,10 @@ class PromptCacheMiddleware(AgentMiddleware):
         # Zero-cache-activity streaks + the once-per-model warning latch.
         self._zero_hit_streak: dict[str, int] = {}
         self._warned: set[str] = set()
+        # Models whose current streak contains at least one call that REPORTED
+        # cache fields (explicit zeros) — distinguishes "provider shows zero
+        # activity" from "provider doesn't report cache usage at all".
+        self._streak_reported: set[str] = set()
 
     def _model_name(self, request) -> str:
         m = getattr(request, "model", None)
@@ -244,25 +254,50 @@ class PromptCacheMiddleware(AgentMiddleware):
             model = self._model_name(request)
             if int(details.get("cache_read") or 0) or int(details.get("cache_creation") or 0):
                 self._zero_hit_streak[model] = 0
+                self._streak_reported.discard(model)
                 return
+            # Explicit zeros mean the provider REPORTS cache usage and there
+            # genuinely was none; absent keys mean it doesn't report at all —
+            # caching may be working invisibly (a vLLM lane without
+            # --enable-prompt-tokens-details emits no prompt_tokens_details,
+            # which is indistinguishable from 0 unless we keep the difference).
+            if "cache_read" in details or "cache_creation" in details:
+                self._streak_reported.add(model)
             streak = self._zero_hit_streak.get(model, 0) + 1
             self._zero_hit_streak[model] = streak
             if streak >= ZERO_HIT_WARN_AFTER and model not in self._warned:
                 self._warned.add(model)
-                log.warning(
-                    "[prompt-cache] %s: %d consecutive calls with cache_control attached and "
-                    "ZERO cache activity — the provider behind this model is likely ignoring "
-                    "prompt caching, so you are paying full input price on every call. Set "
-                    "prompt_cache.enabled: false to stop attaching blocks, or check the "
-                    "gateway's model mapping.",
-                    model,
-                    streak,
-                )
-                self._notify(
-                    f"Prompt caching is not engaging for {model} — {streak} consecutive "
-                    f"calls show zero cache activity, so every call bills full input price. "
-                    f"Check the gateway's model mapping, or set prompt_cache.enabled: false."
-                )
+                if model in self._streak_reported:
+                    log.warning(
+                        "[prompt-cache] %s: %d consecutive calls with cache_control attached and "
+                        "ZERO cache activity — the provider behind this model is likely ignoring "
+                        "prompt caching, so you are paying full input price on every call. Set "
+                        "prompt_cache.enabled: false to stop attaching blocks, or check the "
+                        "gateway's model mapping.",
+                        model,
+                        streak,
+                    )
+                    self._notify(
+                        f"Prompt caching is not engaging for {model} — {streak} consecutive "
+                        f"calls show zero cache activity, so every call bills full input price. "
+                        f"Check the gateway's model mapping, or set prompt_cache.enabled: false."
+                    )
+                else:
+                    log.warning(
+                        "[prompt-cache] %s: %d consecutive calls with cache_control attached and "
+                        "NO cache-usage fields in the response — the provider doesn't report "
+                        "cache activity, so caching may be working invisibly rather than not at "
+                        "all. On vLLM lanes, start the server with --enable-prompt-tokens-details "
+                        "to surface real numbers; until then telemetry reads 0%% cached here.",
+                        model,
+                        streak,
+                    )
+                    self._notify(
+                        f"Prompt caching can't be observed for {model} — {streak} consecutive "
+                        f"calls report no cache-usage fields at all. The provider may be caching "
+                        f"without reporting it (vLLM needs --enable-prompt-tokens-details); "
+                        f"telemetry will show 0% cached for this model until the lane reports."
+                    )
         except Exception:  # noqa: BLE001 — watching must never touch the turn
             log.debug("[prompt-cache] usage observation failed", exc_info=True)
 

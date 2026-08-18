@@ -192,6 +192,70 @@ def test_cache_hit_resets_the_streak(caplog):
     assert "ZERO cache activity" not in caplog.text
 
 
+def _unreported_usage_response():
+    """OpenAI-compat provider WITHOUT cache reporting: no cache keys at all
+    (langchain-openai filters the Nones a null prompt_tokens_details produces)."""
+    from types import SimpleNamespace as NS
+
+    from langchain_core.messages import AIMessage
+
+    return NS(
+        result=[
+            AIMessage(
+                content="ok",
+                usage_metadata={
+                    "input_tokens": 100,
+                    "output_tokens": 5,
+                    "total_tokens": 105,
+                    "input_token_details": {},
+                },
+            )
+        ]
+    )
+
+
+def test_unreported_usage_warns_reporting_gap_not_ignoring(caplog):
+    # homelab-iac#242: a lane can cache invisibly. Absent cache fields must not
+    # be accused of "ignoring prompt caching" — that message sends the operator
+    # to the wrong fix (disabling blocks) when the real fix is the lane's
+    # reporting flag.
+    mw = PromptCacheMiddleware()
+    req = _Req("protolabs/reasoning", SystemMessage(content=BIG), state={})
+    with caplog.at_level("WARNING"):
+        for _ in range(5):
+            mw.wrap_model_call(req, lambda r: _unreported_usage_response())
+    hits = [r for r in caplog.records if "NO cache-usage fields" in r.message]
+    assert len(hits) == 1  # fires at the threshold, then latches
+    assert "enable-prompt-tokens-details" in hits[0].message
+    assert "ZERO cache activity" not in caplog.text  # not the ignoring message
+
+
+def test_reported_zero_still_warns_ignoring(caplog):
+    # Explicit zeros = the provider reports and there was genuinely no cache
+    # activity — the original "likely ignoring" message stays for that case.
+    mw = PromptCacheMiddleware()
+    req = _Req("protolabs/fast", SystemMessage(content=BIG), state={})
+    with caplog.at_level("WARNING"):
+        for _ in range(3):
+            mw.wrap_model_call(req, lambda r: _usage_response())
+    assert "ZERO cache activity" in caplog.text
+    assert "NO cache-usage fields" not in caplog.text
+
+
+def test_cache_hit_resets_reported_flavor(caplog):
+    # A hit clears both the streak and its reported/unreported flavor, so a
+    # later streak is judged only on its own calls.
+    mw = PromptCacheMiddleware()
+    req = _Req("protolabs/fast", SystemMessage(content=BIG), state={})
+    with caplog.at_level("WARNING"):
+        mw.wrap_model_call(req, lambda r: _usage_response())  # reported zero
+        mw.wrap_model_call(req, lambda r: _usage_response(cache_read=90))  # hit — reset
+        for _ in range(3):
+            mw.wrap_model_call(req, lambda r: _unreported_usage_response())
+    assert "NO cache-usage fields" in caplog.text  # judged as unreported, not ignoring
+    assert "ZERO cache activity" not in caplog.text
+
+
 def test_small_prefix_never_warns(caplog):
     # Under the provider's ~1024-token floor, zero activity is EXPECTED — silence.
     mw = PromptCacheMiddleware()
