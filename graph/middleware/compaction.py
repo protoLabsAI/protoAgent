@@ -32,6 +32,26 @@ from langchain.agents.middleware import SummarizationMiddleware
 log = logging.getLogger(__name__)
 
 
+def _surface_op(state, result) -> None:
+    """Trajectory surface_op for an auto-compaction (ADR 0102 S1) — counts from
+    the update the parent computed: [RemoveMessage(ALL), summary, *preserved]."""
+    try:
+        from observability.trajectory import log_surface_op
+
+        update = list((result or {}).get("messages") or [])
+        preserved = max(0, len(update) - 2)
+        before = len(list((state or {}).get("messages") or []))
+        log_surface_op(
+            str((state or {}).get("session_id") or ""),
+            "compact",
+            cause="auto",
+            removed=max(0, before - preserved),
+            kept=preserved,
+        )
+    except Exception:  # noqa: BLE001 — the trajectory never touches a model call
+        pass
+
+
 def _count() -> None:
     try:
         from observability import metrics
@@ -106,6 +126,7 @@ class CountingSummarizationMiddleware(SummarizationMiddleware):
             # is before-commit, exactly like the manual path's ordering.
             self._archive(state)
             _count()
+            _surface_op(state, result)
         return result
 
     async def abefore_model(self, state, runtime):  # type: ignore[override]
@@ -117,4 +138,5 @@ class CountingSummarizationMiddleware(SummarizationMiddleware):
             # same pattern as compaction_op / conversation_harvest.
             await asyncio.to_thread(self._archive, state)
             _count()
+            _surface_op(state, result)
         return result

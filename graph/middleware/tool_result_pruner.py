@@ -144,4 +144,15 @@ class ToolResultPrunerMiddleware(AgentMiddleware):
             metrics.record_pruning(len(replacements))
         except Exception:  # noqa: BLE001 — telemetry must never break a model call
             pass
+        try:
+            from observability.trajectory import log_surface_op
+
+            log_surface_op(
+                str(state.get("session_id") or ""),
+                "prune",
+                cause=f"pressure>={self._at:.0%}",
+                rewritten_ids=[m.id for m in replacements],
+            )
+        except Exception:  # noqa: BLE001
+            pass
         return {"messages": replacements}

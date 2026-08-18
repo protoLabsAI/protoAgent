@@ -77,6 +77,14 @@ def _build_middleware(
 
     middleware.append(ModelOverrideMiddleware(config))
 
+    # Trajectory writer (ADR 0102 S1, #2806) — one request/response ref event
+    # per model call. Inside ModelOverride (real model) but OUTSIDE PromptCache:
+    # the refs hash STORED message bytes so reconstruction joins the checkpoint;
+    # the cache decoration is a wire concern (wire_capture's job).
+    from graph.middleware.trajectory import TrajectoryMiddleware
+
+    middleware.append(TrajectoryMiddleware())
+
     # Prompt caching + knowledge-context delivery (wrap_model_call). Added
     # first/outermost so the cache breakpoint lands on the stable system
     # prefix; KnowledgeMiddleware's context is delivered just after it.

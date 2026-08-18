@@ -241,6 +241,18 @@ async def compact_thread(
         lg_config,
         {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), summary_msg, *recent_tail]},
     )
+    try:
+        from observability.trajectory import log_surface_op
+
+        log_surface_op(
+            thread_id,
+            "compact",
+            cause="overflow-force" if force else "manual",
+            removed=cut,
+            kept=len(recent_tail) + 1,
+        )
+    except Exception:  # noqa: BLE001 — trajectory is best-effort
+        pass
     log.info(
         "[compact] thread %s: archived %d chunk(s), removed %d msg(s), kept %d",
         thread_id,

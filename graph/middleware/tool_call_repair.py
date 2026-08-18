@@ -56,6 +56,18 @@ class ToolCallRepairMiddleware(AgentMiddleware):
     def _repair(self, state):
         messages = state.get("messages") or []
         repairs = repair_messages(messages)
+        if repairs:
+            try:
+                from observability.trajectory import log_surface_op
+
+                log_surface_op(
+                    str((state or {}).get("session_id") or ""),
+                    "repair",
+                    cause="dangling tool_call",
+                    rewritten_ids=[getattr(m, "id", None) for m in repairs],
+                )
+            except Exception:  # noqa: BLE001 — trajectory is best-effort
+                pass
         return {"messages": repairs} if repairs else None
 
     def before_model(self, state, runtime):  # type: ignore[override]

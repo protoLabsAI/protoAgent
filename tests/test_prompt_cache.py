@@ -220,7 +220,10 @@ def test_config_wires_middleware():
     # ACTUAL model when deciding whether to cache. ModelOverride doesn't touch the
     # system message, so the cache breakpoint still lands on the stable prefix.
     wrappers = [m.__class__.__name__ for m in mw if type(m).wrap_model_call is not AgentMiddleware.wrap_model_call]
-    assert wrappers[:2] == ["ModelOverrideMiddleware", "PromptCacheMiddleware"]
+    # Trajectory sits BETWEEN them by design (ADR 0102 S1): inside ModelOverride
+    # (logs the real per-tab model) but outside PromptCache (its refs must hash
+    # the STORED message bytes, not the view-only cache-marked copies).
+    assert wrappers[:3] == ["ModelOverrideMiddleware", "TrajectoryMiddleware", "PromptCacheMiddleware"]
 
 
 @pytest.mark.asyncio

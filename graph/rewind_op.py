@@ -200,6 +200,12 @@ async def rewind_thread(
         {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *kept]},
     )
     log.info("[rewind] thread %s: kept %d msg(s), discarded %d", thread_id, len(kept), removed)
+    try:
+        from observability.trajectory import log_surface_op
+
+        log_surface_op(thread_id, "rewind", cause="operator", removed=removed, kept=len(kept))
+    except Exception:  # noqa: BLE001 — trajectory is best-effort
+        pass
     return {"found": True, "kept": len(kept), "removed": removed, "reason": ""}
 
 
@@ -265,4 +271,16 @@ async def fork_thread(
         len(kept),
         len(messages),
     )
+    try:
+        from observability.trajectory import log_surface_op
+
+        log_surface_op(
+            target_thread_id,
+            "fork",
+            cause=f"from {source_thread_id}",
+            kept=len(kept),
+            inserted_ids=[getattr(m, "id", None) for m in kept if getattr(m, "id", None)],
+        )
+    except Exception:  # noqa: BLE001 — trajectory is best-effort
+        pass
     return {"found": True, "kept": len(kept), "discarded": len(messages) - end, "reason": ""}

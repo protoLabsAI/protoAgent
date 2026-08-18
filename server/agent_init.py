@@ -1022,6 +1022,14 @@ async def _retire_thread(thread_id: str, *, harvest: bool | None = None, cascade
             STATE.checkpointer.delete_thread(thread_id)
         except Exception:
             log.exception("[retire] in-memory delete_thread failed for %s", thread_id)
+    # The trajectory outlives checkpoint PRUNING but not thread RETIREMENT
+    # (ADR 0102 D3) — same lifetime as the thread's own existence.
+    try:
+        from observability.trajectory import trajectory_log
+
+        trajectory_log.retire(thread_id)
+    except Exception:  # noqa: BLE001 — retirement cleanup is best-effort
+        log.debug("[retire] trajectory retire failed for %s", thread_id, exc_info=True)
     return chunk_id
 
 
