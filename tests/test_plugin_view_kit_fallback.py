@@ -17,8 +17,9 @@ VIEW_SOURCES = [
     REPO / "plugins" / "docs" / "__init__.py",
     REPO / "plugins" / "orgchart" / "view.py",
     # Found while fixing the issue: artifact carried the same shim (on by default).
-    # The shell moved out of __init__.py in the #2817 decomposition.
-    REPO / "plugins" / "artifact" / "_shell.py",
+    # The shell moved out of __init__.py in the #2817 decomposition; the kit boot
+    # (and its loud failure path) lives in the extracted module script.
+    REPO / "plugins" / "artifact" / "shell.js",
 ]
 
 

@@ -44,6 +44,18 @@ def _build_view_router():
     async def _view():
         return HTMLResponse(_shell._SHELL_HTML)
 
+    # The shell's module script, same-origin beside the page (its relative ``src``
+    # resolves against /plugins/artifact/view). NOT immutable-cached like vendor
+    # files — it changes with the plugin, so a stale cache would desync it from
+    # the page and the data plane.
+    @router.get("/shell.js")
+    async def _shell_js():
+        return Response(
+            content=_shell._SHELL_JS,
+            media_type="text/javascript",
+            headers={"Cache-Control": "no-cache"},
+        )
+
     # Vendored JS libs (react/react-dom/babel/mermaid) served SAME-ORIGIN so the
     # react/mermaid kinds work fully OFFLINE — no cdnjs dependency, and the
     # `network: []` capability is now literally true. Allowlisted (no path

@@ -38,7 +38,7 @@ from ._config import _ask_enabled, _max_history
 from ._preview import _PREVIEW_TRUNC, _clip
 from ._render_status import _RENDER_ERR_MAX, _render_suffix, _renderer_live
 from ._routes import _VENDOR_FILES, _build_data_router, _build_view_router
-from ._shell import _SHELL_HTML
+from ._shell import _SHELL_HTML, _SHELL_JS
 from ._store import (
     _blob_path,
     _blob_root,
