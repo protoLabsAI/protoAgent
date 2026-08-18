@@ -403,7 +403,68 @@ export type WorkflowSummary = {
   name: string;
   description: string;
   inputs: { name: string; required: boolean; default?: unknown }[];
-  steps: { id: string; subagent: string; depends_on: string[] }[];
+  steps: { id: string; subagent: string; depends_on: string[]; gate?: string }[];
+};
+
+// The FULL recipe document (GET /{name}/recipe) — what the builder loads to EDIT:
+// prompts, output template, gates. `/list` is the summary shape above.
+export type WorkflowRecipe = {
+  name: string;
+  description?: string;
+  version?: number;
+  inputs?: { name: string; required?: boolean; default?: unknown }[];
+  steps: {
+    id: string;
+    subagent: string;
+    prompt: string;
+    depends_on?: string[] | string;
+    gate?: string;
+    timeout?: number;
+  }[];
+  output?: string;
+  max_concurrency?: number;
+};
+
+export type WorkflowRunStatus = "running" | "done" | "failed" | "paused";
+
+export type WorkflowStepMeta = {
+  status?: "running" | "done" | "failed";
+  started_at?: string;
+  finished_at?: string;
+  seconds?: number;
+};
+
+// One run's durable record (GET /runs/{run_id}) — the Studio polls this while a
+// detached run executes (POST /{name}/start) and reads it back as history. `steps`
+// is the recipe's graph at start time, so the timeline renders even after the
+// recipe is edited or deleted.
+export type WorkflowRunRecord = {
+  run_id: string;
+  recipe_name: string;
+  inputs: Record<string, unknown>;
+  steps: { id: string; subagent: string; depends_on: string[]; gate?: string }[];
+  step_outputs: Record<string, string>;
+  step_meta: Record<string, WorkflowStepMeta>;
+  status: WorkflowRunStatus;
+  pending_step: string | null;
+  created_at?: string;
+  updated_at?: string;
+  output?: string;
+  failed?: string[];
+  degraded?: string[];
+};
+
+// History summaries (GET /runs/all) — every recorded run, newest first.
+export type WorkflowRunSummary = {
+  run_id: string;
+  recipe_name: string;
+  status: WorkflowRunStatus;
+  pending_step?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  steps_total: number;
+  steps_done: number;
+  failed: string[];
 };
 
 export type WorkflowRunResult = {

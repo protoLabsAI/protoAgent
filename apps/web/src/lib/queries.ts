@@ -18,6 +18,10 @@ export const queryKeys = {
   // Paused workflow runs (F3 Pending Gates) — a distinct top-level key so a recipe-list
   // save/delete invalidation (["workflows"]) doesn't disturb this queue, and vice versa.
   workflowRuns: ["workflow-runs"] as const,
+  // One run's live record (the Studio timeline) — under `workflow-runs` so gate
+  // resume invalidations refresh an open timeline too.
+  workflowRun: (runId: string) => ["workflow-runs", "record", runId] as const,
+  workflowRunHistory: ["workflow-run-history"] as const,
   subagents: ["subagents"] as const,
   tools: ["tools"] as const,
   telemetry: ["telemetry"] as const,
@@ -152,6 +156,27 @@ export const workflowRunsQuery = () =>
     queryKey: queryKeys.workflowRuns,
     queryFn: () => api.workflowRuns(),
     refetchInterval: 5_000,
+  });
+
+// One run's live record — the Studio's timeline. Polls fast while the run is
+// running/paused (steps flip in place) and stops on a terminal status.
+export const workflowRunQuery = (runId: string) =>
+  queryOptions({
+    queryKey: queryKeys.workflowRun(runId),
+    queryFn: () => api.workflowRun(runId),
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === "done" || status === "failed" ? false : 1_200;
+    },
+  });
+
+// Run history summaries — refreshed when the watched run reaches a terminal state
+// (the timeline invalidates it), plus a slow poll for runs started elsewhere (chat).
+export const workflowRunHistoryQuery = () =>
+  queryOptions({
+    queryKey: queryKeys.workflowRunHistory,
+    queryFn: () => api.workflowRunHistory(),
+    refetchInterval: 15_000,
   });
 
 export const subagentsQuery = () =>

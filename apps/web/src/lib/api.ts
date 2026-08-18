@@ -61,7 +61,10 @@ import type {
   TurnUsage,
   WatchState,
   WorkflowPausedRun,
+  WorkflowRecipe,
+  WorkflowRunRecord,
   WorkflowRunResult,
+  WorkflowRunSummary,
   VerifierCatalog,
   WorkflowSummary,
 } from "./types";
@@ -1562,6 +1565,53 @@ export const api = {
       method: "POST",
       body: { inputs },
     });
+  },
+
+  // The Studio's run shape: validated up front (a bad request rejects here), then the
+  // DAG executes detached — poll workflowRun(run_id) for the live per-step record.
+  startWorkflow(name: string, inputs: Record<string, unknown>) {
+    return request<{ started: boolean; run_id: string }>(
+      `/api/plugins/workflows/${encodeURIComponent(name)}/start`,
+      { method: "POST", body: { inputs } },
+    );
+  },
+
+  // One run's full record — live polling target while it executes, history inspector after.
+  workflowRun(runId: string) {
+    return request<WorkflowRunRecord>(`/api/plugins/workflows/runs/${encodeURIComponent(runId)}`);
+  },
+
+  // Run history — summaries of every recorded run (any status), newest first.
+  workflowRunHistory(limit = 50) {
+    return request<{ runs: WorkflowRunSummary[] }>(`/api/plugins/workflows/runs/all?limit=${limit}`);
+  },
+
+  // The full recipe document — what the builder loads to EDIT (prompts, gates, output).
+  workflowRecipe(name: string) {
+    return request<{ recipe: WorkflowRecipe }>(
+      `/api/plugins/workflows/${encodeURIComponent(name)}/recipe`,
+    );
+  },
+
+  // Save's checks as data (never a 400) — the builder's live validation.
+  validateWorkflow(recipe: Record<string, unknown>) {
+    return request<{ errors: string[] }>("/api/plugins/workflows/validate", {
+      method: "POST",
+      body: recipe,
+    });
+  },
+
+  // Resume a paused run detached (the Studio timeline's shape): prechecked up front,
+  // then poll workflowRun(run_id) — the sync resumeWorkflow below returns the final
+  // result directly and stays for the Pending Gates cards.
+  resumeWorkflowBackground(
+    runId: string,
+    body: { action: "approve" | "edit" | "reject"; edits?: { prompt?: string } },
+  ) {
+    return request<{ resumed: boolean; run_id: string }>(
+      `/api/plugins/workflows/runs/${encodeURIComponent(runId)}/resume`,
+      { method: "POST", body: { ...body, background: true } },
+    );
   },
 
   saveWorkflow(recipe: Record<string, unknown>) {

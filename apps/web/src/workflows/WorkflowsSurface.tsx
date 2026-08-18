@@ -8,20 +8,43 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query";
-import { Check, Loader2, Pencil, Play, Plus, RefreshCw, Trash2, Workflow, X } from "lucide-react";
+import {
+  Check,
+  History,
+  Loader2,
+  Pause,
+  Pencil,
+  Play,
+  Plus,
+  RefreshCw,
+  Trash2,
+  Workflow,
+  X,
+} from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { StagePanel } from "../app/ErrorBoundary";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { api } from "../lib/api";
-import { queryKeys, subagentsQuery, workflowRunsQuery, workflowsQuery } from "../lib/queries";
-import type { WorkflowPausedRun, WorkflowRunResult } from "../lib/types";
+import { ago, errMsg } from "../lib/format";
+import {
+  queryKeys,
+  subagentsQuery,
+  workflowRunHistoryQuery,
+  workflowRunsQuery,
+  workflowsQuery,
+} from "../lib/queries";
+import type { WorkflowPausedRun, WorkflowRecipe, WorkflowRunResult, WorkflowSummary } from "../lib/types";
+import { RunTimeline, computeLanes } from "./RunTimeline";
 import { WorkflowBuilder } from "./WorkflowBuilder";
 
 // Operator surface for declarative workflow recipes (ADR 0002), on the TanStack
-// Query data layer (ADR 0013): the recipe list + subagent registry are
-// `useSuspenseQuery` reads; run/delete are `useMutation`s; loading is a
-// <Suspense> fallback and errors a contained <ErrorBoundary>.
+// Query data layer (ADR 0013). The Studio's two halves:
+//   CREATE — recipe picker + the builder (new or EDIT, loaded from /{name}/recipe),
+//     with the recipe's parallelism lanes rendered read-only.
+//   TEST — Run starts a DETACHED run (POST /{name}/start) and watches its record
+//     live in <RunTimeline> (per-step status/outputs, inline gate approval); past
+//     runs come back through the History list, inspected in the same timeline.
 
 // One paused run's card: recipe name, the parked step id, its RENDERED prompt (inputs +
 // prior outputs already substituted), and Approve / Edit / Reject. Edit swaps the prompt
@@ -119,10 +142,12 @@ function ResolvedGateCard({ run, result }: { run: WorkflowPausedRun; result: Wor
 // GET /api/plugins/workflows/runs (on mount + on the 5s interval) and, after each
 // approve/edit/reject, invalidates it so a resolved run drops out. A resolved run's
 // result stays pinned in place (its card is replaced by the output) until the next poll.
-function PendingGates() {
+// The run the operator is already watching in the timeline is excluded — its gate
+// renders inline there instead of twice.
+function PendingGates({ excludeRunId }: { excludeRunId: string | null }) {
   const queryClient = useQueryClient();
   const { data } = useQuery(workflowRunsQuery());
-  const runs = data?.runs ?? [];
+  const runs = (data?.runs ?? []).filter((r) => r.run_id !== excludeRunId);
   const [results, setResults] = useState<Record<string, { run: WorkflowPausedRun; result: WorkflowRunResult }>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -143,6 +168,7 @@ function PendingGates() {
         setResults((prev) => ({ ...prev, [v.run.run_id]: { run: v.run, result } }));
       }
       void queryClient.invalidateQueries({ queryKey: queryKeys.workflowRuns });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.workflowRunHistory });
     },
     onSettled: () => setBusyId(null),
   });
@@ -171,8 +197,63 @@ function PendingGates() {
       {resolved.map(({ run, result }) => (
         <ResolvedGateCard key={run.run_id} run={run} result={result} />
       ))}
-      {resume.isError ? <p className="workflow-failed">{(resume.error as Error).message}</p> : null}
+      {resume.isError ? <p className="workflow-failed">{errMsg(resume.error)}</p> : null}
     </section>
+  );
+}
+
+// The recipe's parallelism lanes, read-only: column N holds the steps whose longest
+// dependency chain is N deep — steps sharing a column run in parallel.
+function RecipeLanes({ steps }: { steps: WorkflowSummary["steps"] }) {
+  const lanes = useMemo(() => computeLanes(steps), [steps]);
+  const byId = useMemo(() => new Map(steps.map((s) => [s.id, s])), [steps]);
+  return (
+    <div className="workflow-lanes" aria-label="step order (columns run in parallel)">
+      {lanes.map((lane, i) => (
+        <div className="workflow-lane" key={i}>
+          {lane.map((id) => (
+            <span key={id} className="lane-chip" title={byId.get(id)?.subagent}>
+              {id}
+              {byId.get(id)?.gate ? <Pause size={10} aria-label="operator gate" /> : null}
+            </span>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Run history — every recorded run (any status), newest first; a row opens its
+// record in the timeline (live if still running, an inspection if terminal).
+function RunHistory({ activeRunId, onOpen }: { activeRunId: string | null; onOpen: (runId: string) => void }) {
+  const { data } = useQuery(workflowRunHistoryQuery());
+  const runs = data?.runs ?? [];
+  if (!runs.length) return null;
+
+  return (
+    <details className="run-history">
+      <summary>
+        <History size={13} /> History ({runs.length})
+      </summary>
+      <div className="run-history-list">
+        {runs.map((r) => (
+          <button
+            key={r.run_id}
+            type="button"
+            className={`run-history-row${r.run_id === activeRunId ? " run-history-row-active" : ""}`}
+            onClick={() => onOpen(r.run_id)}
+          >
+            <span className={`run-status run-status-${r.status}`}>{r.status}</span>
+            <strong>{r.recipe_name}</strong>
+            <span className="run-history-steps">
+              {r.steps_done}/{r.steps_total} steps
+              {r.failed.length ? ` · ${r.failed.length} failed` : ""}
+            </span>
+            <span className="run-history-when">{ago(r.updated_at ?? null)}</span>
+          </button>
+        ))}
+      </div>
+    </details>
   );
 }
 
@@ -185,8 +266,9 @@ function WorkflowsBody() {
 
   const [selected, setSelected] = useState<string>("");
   const [inputs, setInputs] = useState<Record<string, string>>({});
-  const [result, setResult] = useState<WorkflowRunResult | null>(null);
   const [building, setBuilding] = useState(false);
+  const [editRecipe, setEditRecipe] = useState<WorkflowRecipe | null>(null);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
 
   // Effective selection: explicit pick, else the first recipe.
   const selectedName = selected || workflows[0]?.name || "";
@@ -197,20 +279,30 @@ function WorkflowsBody() {
 
   const invalidateWorkflows = () => queryClient.invalidateQueries({ queryKey: queryKeys.workflows });
 
-  const run = useMutation({
+  const start = useMutation({
     mutationFn: (v: { name: string; inputs: Record<string, unknown> }) =>
-      api.runWorkflow(v.name, v.inputs),
-    onSuccess: (r) => setResult(r),
+      api.startWorkflow(v.name, v.inputs),
+    onSuccess: (r) => {
+      setActiveRunId(r.run_id);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.workflowRunHistory });
+    },
   });
   const remove = useMutation({
     mutationFn: (name: string) => api.deleteWorkflow(name),
     onSuccess: () => setSelected(""),
     onSettled: invalidateWorkflows,
   });
+  const edit = useMutation({
+    mutationFn: (name: string) => api.workflowRecipe(name),
+    onSuccess: (r) => {
+      setEditRecipe(r.recipe);
+      setBuilding(true);
+    },
+  });
 
   function selectRecipe(name: string) {
     setSelected(name);
-    setResult(null);
+    setActiveRunId(null);
     const recipe = workflows.find((w) => w.name === name);
     const seed: Record<string, string> = {};
     for (const inp of recipe?.inputs ?? []) {
@@ -225,13 +317,17 @@ function WorkflowsBody() {
 
   function doRun() {
     if (!current) return;
-    setResult(null);
     const payload: Record<string, unknown> = {};
     for (const inp of current.inputs) {
       const v = inputs[inp.name];
       if (v != null && v !== "") payload[inp.name] = v;
     }
-    run.mutate({ name: current.name, inputs: payload });
+    start.mutate({ name: current.name, inputs: payload });
+  }
+
+  function closeBuilder() {
+    setBuilding(false);
+    setEditRecipe(null);
   }
 
   return (
@@ -241,7 +337,13 @@ function WorkflowsBody() {
         kicker={`step-by-step recipes the engine runs over subagents · ${workflows.length} recipe${workflows.length === 1 ? "" : "s"}`}
         actions={
           <>
-            <Button icon variant="ghost" type="button" onClick={() => setBuilding((b) => !b)} title="New workflow">
+            <Button
+              icon
+              variant="ghost"
+              type="button"
+              onClick={() => (building ? closeBuilder() : setBuilding(true))}
+              title="New workflow"
+            >
               <Plus size={16} />
             </Button>
             <Button icon variant="ghost" type="button" onClick={() => void invalidateWorkflows()} title="Refresh">
@@ -255,16 +357,17 @@ function WorkflowsBody() {
         {building ? (
           <WorkflowBuilder
             subagents={subagentNames}
-            onCancel={() => setBuilding(false)}
+            initial={editRecipe ?? undefined}
+            onCancel={closeBuilder}
             onSaved={(name) => {
-              setBuilding(false);
+              closeBuilder();
               void queryClient.invalidateQueries({ queryKey: queryKeys.workflows });
               setSelected(name);
             }}
           />
         ) : (
           <>
-            <PendingGates />
+            <PendingGates excludeRunId={activeRunId} />
 
             {!workflows.length ? (
               <div className="subagent-row">
@@ -274,32 +377,45 @@ function WorkflowsBody() {
                 </div>
               </div>
             ) : (
-              <label className="field">
-                <span>Recipe</span>
-                <DropdownSelect
-                  value={selectedName}
-                  onValueChange={(v) => selectRecipe(v)}
-                  options={workflows.map((w) => ({ value: w.name, label: w.name }))}
-                />
-              </label>
+              <div className="workflow-picker">
+                <label className="field">
+                  <span>Recipe</span>
+                  <DropdownSelect
+                    value={selectedName}
+                    onValueChange={(v) => selectRecipe(v)}
+                    options={workflows.map((w) => ({ value: w.name, label: w.name }))}
+                  />
+                </label>
+                {current ? (
+                  <div className="workflow-picker-actions">
+                    <Button
+                      variant="ghost"
+                      type="button"
+                      onClick={() => edit.mutate(current.name)}
+                      loading={edit.isPending}
+                      title="Edit this workflow"
+                    >
+                      {edit.isPending ? null : <Pencil size={14} />} Edit
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      type="button"
+                      onClick={() => remove.mutate(current.name)}
+                      title="Delete this workflow"
+                    >
+                      <Trash2 size={14} /> Delete
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
             )}
+            {edit.isError ? <p className="workflow-failed">{errMsg(edit.error)}</p> : null}
 
             {current ? (
               <>
                 {current.description ? <p className="workflow-desc">{current.description}</p> : null}
 
-                <div className="workflow-steps">
-                  {current.steps.map((step) => (
-                    <div className="workflow-step" key={step.id}>
-                      <Workflow size={14} />
-                      <strong>{step.id}</strong>
-                      <span className="workflow-step-sub">{step.subagent}</span>
-                      {step.depends_on.length ? (
-                        <span className="workflow-step-dep">after {step.depends_on.join(", ")}</span>
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
+                {!activeRunId ? <RecipeLanes steps={current.steps} /> : null}
 
                 {current.inputs.length ? (
                   <div className="subagent-grid">
@@ -324,46 +440,21 @@ function WorkflowsBody() {
                     variant="primary"
                     type="button"
                     onClick={doRun}
-                    loading={run.isPending}
+                    loading={start.isPending}
                     disabled={missingRequired.length > 0}
                     title={missingRequired.length ? `missing: ${missingRequired.join(", ")}` : "Run workflow"}
                   >
-                    {run.isPending ? null : <Play size={16} />}
+                    {start.isPending ? null : <Play size={16} />}
                     Run
                   </Button>
-                  <Button
-                    variant="ghost"
-                    type="button"
-                    onClick={() => remove.mutate(current.name)}
-                    title="Delete this workflow"
-                  >
-                    <Trash2 size={14} /> Delete
-                  </Button>
                 </div>
-                {run.isError ? <p className="workflow-failed">{(run.error as Error).message}</p> : null}
+                {start.isError ? <p className="workflow-failed">{errMsg(start.error)}</p> : null}
               </>
             ) : null}
 
-            {result ? (
-              <div className="workflow-result">
-                {result.failed.length ? (
-                  <p className="workflow-failed">Failed steps: {result.failed.join(", ")}</p>
-                ) : null}
-                <h2>Output</h2>
-                <pre className="output-block">{result.output}</pre>
-                {Object.keys(result.steps).length ? (
-                  <details>
-                    <summary>Per-step output ({Object.keys(result.steps).length})</summary>
-                    {Object.entries(result.steps).map(([id, out]) => (
-                      <div className="workflow-step-out" key={id}>
-                        <strong>{id}</strong>
-                        <pre className="output-block">{out}</pre>
-                      </div>
-                    ))}
-                  </details>
-                ) : null}
-              </div>
-            ) : null}
+            {activeRunId ? <RunTimeline runId={activeRunId} onClose={() => setActiveRunId(null)} /> : null}
+
+            <RunHistory activeRunId={activeRunId} onOpen={(runId) => setActiveRunId(runId)} />
           </>
         )}
       </div>
