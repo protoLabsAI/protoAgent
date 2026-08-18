@@ -317,7 +317,10 @@ async def test_bridged_calls_land_in_audit_and_metrics(tmp_path, monkeypatch):
         "    print('caught')\n"
     )
     out = await run_code(code, _TOOL_MAP, session_id="sess-ptc-test")
-    assert out == "OK\ncaught"
+    # The child's stdout is platform-newlined — CRLF on Windows (the native CI
+    # lane caught exactly this). Normalize for the assertion; the engine
+    # deliberately returns stdout verbatim.
+    assert out.replace("\r\n", "\n") == "OK\ncaught"
 
     rows = [_json.loads(line) for line in (tmp_path / "audit.jsonl").read_text().splitlines()]
     by_tool = {r["tool"]: r for r in rows}
