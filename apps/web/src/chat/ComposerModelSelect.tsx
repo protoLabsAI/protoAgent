@@ -54,6 +54,15 @@ export function ComposerModelSelect() {
   // Headings earn their place only when there's a choice of account to make.
   const showLanes = groups.length > 1;
 
+  // The composer mounts once for the app's lifetime (visibility-toggled, never
+  // remounted), so its boot-time schema fetch can race the server — graph still
+  // compiling, provider probes empty — and the shared query then never refires
+  // on its own (no refocus refetch, no interval). The menu would sit on the
+  // one-model fallback until a Settings visit happened to refetch the cache.
+  // Opening the menu is the moment freshness matters: refetch when the cached
+  // schema is stale or came back without model options (the boot-race signature).
+  const degraded = !!schema.data && !field?.options?.length;
+
   return (
     <Menu
       trigger={
@@ -62,6 +71,9 @@ export function ComposerModelSelect() {
         </button>
       }
       align="start"
+      onOpenChange={(open) => {
+        if (open && (degraded || schema.isStale)) void schema.refetch();
+      }}
     >
       {/* Grouped by account, with the provider as a section heading rather than a badge
           on every row: the rows are then just model names, which is what you're actually
