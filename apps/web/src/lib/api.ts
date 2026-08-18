@@ -882,6 +882,18 @@ export const api = {
     return request<{ ok: boolean; cleared?: number }>("/api/background/clear", { method: "POST" });
   },
 
+  trajectoryEvents(sessionId: string, limit = 20) {
+    return request<{ found: boolean; events: import("./types").TrajectoryEvent[]; total: number }>(
+      `/api/trajectory/${encodeURIComponent(sessionId)}?limit=${limit}`,
+    );
+  },
+
+  trajectoryCall(sessionId: string, n: number) {
+    return request<import("./types").TrajectoryCall & { reason?: string }>(
+      `/api/trajectory/${encodeURIComponent(sessionId)}/call/${n}`,
+    );
+  },
+
   telemetrySummary(since?: string) {
     const q = since ? `?since=${encodeURIComponent(since)}` : "";
     return request<{ enabled: boolean; summary: TelemetrySummary | null }>(

@@ -534,6 +534,7 @@ def _main():
     from operator_api.mcp_routes import register_mcp_routes
     from operator_api.routes import register_operator_routes
     from operator_api.telemetry_routes import register_telemetry_routes
+    from operator_api.trajectory_routes import register_trajectory_routes
 
     # The in-process tasks store is agent-global + graph-independent, but it's
     # otherwise created in _init_langgraph_agent (which only runs once setup is
@@ -912,6 +913,9 @@ def _main():
     # Per-turn cost/latency + advise-only insights (ADR 0006). Extracted to
     # operator_api/telemetry_routes.py (ADR 0023 phase 3).
     register_telemetry_routes(fastapi_app)
+    # Trajectory read surface (ADR 0102 S2) — events + call reconstruction over
+    # the S1 writer's per-conversation log.
+    register_trajectory_routes(fastapi_app)
 
     # Memory-injection record (ADR 0069 D6) — which memory items entered which
     # turn. Read-only forensics surface over observability/injection_log.py.

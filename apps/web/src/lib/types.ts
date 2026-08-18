@@ -968,6 +968,38 @@ export type TelemetrySummary = {
   by_tool: TelemetryByToolRow[];
 };
 
+// Trajectory read surface (ADR 0102 S2, #2806) — the per-conversation event
+// stream and the availability-joined call reconstruction behind /trajectory.
+export type TrajectoryEvent = {
+  index: number;
+  ts?: string;
+  t: "request" | "response" | "surface_op" | string;
+  // request
+  model?: string;
+  tools_count?: number;
+  msgs?: { id?: string | null; role: string; sha: string; chars: number }[];
+  // response
+  status?: string;
+  error?: string;
+  usage?: { input?: number; output?: number; cache_read?: number; cache_creation?: number };
+  // surface_op
+  op?: string;
+  cause?: string;
+  removed?: number;
+  kept?: number;
+  rewritten_ids?: string[];
+};
+
+export type TrajectoryCall = {
+  found: boolean;
+  call: number;
+  calls: number;
+  model: string;
+  ts: string;
+  messages: { id?: string | null; role: string; sha: string; chars: number; status: string; preview?: string }[];
+  availability: { available: number; rewritten: number; missing: number };
+};
+
 export type TelemetryTurn = {
   task_id: string;
   session_id: string;
