@@ -39,8 +39,10 @@ def test_verifier_can_recheck_the_diff():
 
 
 def test_synthesizer_has_a_tool():
-    # A toolless subagent config fails at runtime ("No tools available") — the
-    # text-in/text-out synthesizer still needs at least one benign tool bound.
+    # Declared-empty tools now run toolless (test_subagent_toolless.py), so this
+    # is no longer load-bearing for the runtime — kept because the synthesizer's
+    # prompt references its tools, and a silent tools-list wipe should fail here
+    # rather than as a prompt/behavior drift.
     assert SUBAGENT_REGISTRY["review-synthesizer"].tools
 
 

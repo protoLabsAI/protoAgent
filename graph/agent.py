@@ -436,8 +436,15 @@ async def _run_subagent(
         prompt = sub_config.default_prompt
 
     sub_tools = _subagent_tools(sub_config, tool_map)
-    if not sub_tools:
+    if not sub_tools and getattr(sub_config, "tools", None):
+        # The subagent DECLARED tools and none resolved — a misconfiguration
+        # (denylisted / not bound on this instance), not a text-only design.
         return f"Error: No tools available for subagent '{subagent_type}'."
+    # A subagent whose config declares tools=[] is a deliberate TEXT-ONLY
+    # transform (edit/summarize/classify passes) — legal, and load-bearing for
+    # model-pinned passes whose backing lane rejects tools-bearing requests
+    # (e.g. a creative-tuned vLLM lane with supports_function_calling: false).
+    # The agent below runs with an empty toolset: one model call, text out.
 
     # Subagent model: per-subagent override → routing.aux_model → main model.
     sub_model = _resolve_aux_model(config, getattr(sub_config, "model", ""))
@@ -1253,9 +1260,7 @@ def create_agent_graph(
     # so it can run compose_context(record=False) speculatively. Stamped like bound_tools —
     # consumers read what's BOUND rather than re-deriving and drifting.
     agent.system_prompt_parts = list(prompt_parts)
-    agent.knowledge_middleware = next(
-        (m for m in middleware if m.__class__.__name__ == "KnowledgeMiddleware"), None
-    )
+    agent.knowledge_middleware = next((m for m in middleware if m.__class__.__name__ == "KnowledgeMiddleware"), None)
     return agent
 
 
