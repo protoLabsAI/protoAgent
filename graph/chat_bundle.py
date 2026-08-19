@@ -36,7 +36,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable
 
-from graph.export_op import redact, role_of, text_of, tool_calls_of
+from graph.export_op import redact
+from graph.message_blocks import role_of, text_of, tool_calls_of
 
 BUNDLE_VERSION = 1
 

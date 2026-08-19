@@ -131,6 +131,14 @@ proposed-direction / acceptance (enhancements). Intentional free-form → add th
 
 These are the failures that actually recur — read them before you edit.
 
+- **A message's `content` already contains its `tool_use` blocks — never sum
+  `content` + `tool_calls`.** LangChain's `tool_calls` is a parsed *mirror* of the same
+  blocks, so any walk that counts/renders/redacts both double-processes the arguments
+  (a live context audit overstated a thread by ~34k tokens this way). Walk messages
+  through `graph.message_blocks` (`text_of` yields text only; `tool_calls_of` yields
+  args exactly once) — and for "what's eating this thread's window", don't hand-roll:
+  `python scripts/context_audit.py <session-id>`.
+
 - **Instance paths are two-tier (box / instance) — one rule, resolve once (ADR 0065).**
   Every on-disk location comes from `infra.paths.instance_paths()` (a frozen
   `InstancePaths`): the **box** tier (`box_root` = `~/.protoagent` or `/sandbox`) holds

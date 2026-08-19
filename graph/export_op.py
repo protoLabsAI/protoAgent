@@ -107,51 +107,11 @@ _ROLE_HEADINGS = {
 }
 
 
-def role_of(message) -> str:
-    """The message's role, tolerant of LangChain objects and plain dicts.
-
-    Public (no leading underscore): shared with ``graph.chat_bundle`` (#2681), which walks
-    the same message list into a structured bundle rather than flattened markdown. Keep the
-    two walks using the same primitives rather than let them drift.
-    """
-    for attr in ("type", "role"):
-        value = getattr(message, attr, None) or (message.get(attr) if isinstance(message, dict) else None)
-        if value:
-            return str(value).lower()
-    return type(message).__name__.replace("Message", "").lower() or "unknown"
-
-
-def text_of(message) -> str:
-    """Message content as text. Multi-part content (the vision/tool-block shape) is
-    flattened to its text parts so an export never renders a raw Python repr.
-
-    Public — see ``role_of``.
-    """
-    content = getattr(message, "content", None)
-    if content is None and isinstance(message, dict):
-        content = message.get("content")
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):  # [{type: text, text: …}, {type: image_url, …}]
-        parts: list[str] = []
-        for block in content:
-            if isinstance(block, str):
-                parts.append(block)
-            elif isinstance(block, dict):
-                if block.get("type") == "text" and block.get("text"):
-                    parts.append(str(block["text"]))
-                elif block.get("type"):
-                    parts.append(f"_[{block['type']}]_")
-        return "\n\n".join(parts)
-    return "" if content is None else str(content)
-
-
-def tool_calls_of(message) -> list[dict]:
-    """Public — see ``role_of``."""
-    calls = getattr(message, "tool_calls", None)
-    if not calls and isinstance(message, dict):
-        calls = message.get("tool_calls")
-    return list(calls or [])
+# role_of / text_of / tool_calls_of moved to graph.message_blocks (the canonical
+# message-shape walk — see its module docstring for the count-once contract).
+# Re-exported here because this module was their original public home
+# (graph.chat_bundle and friends import them from either path).
+from graph.message_blocks import role_of, text_of, tool_calls_of  # noqa: F401,E402
 
 
 def render_markdown(
