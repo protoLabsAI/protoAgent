@@ -685,6 +685,108 @@ async function consumeBuffered(
   drainSseBuffer(text.endsWith("\n\n") ? text : `${text}\n\n`, onFrame);
 }
 
+// The handler surface a streaming turn drives — shared by the LIVE stream
+// (SendStreamingMessage) and the REATTACH stream (SubscribeToTask after an
+// agent switch / reload, Swap & Resume S1).
+export type TurnStreamHandlers = {
+  signal?: AbortSignal;
+  onTaskId?: (taskId: string) => void;
+  onStatus?: (status: string) => void;
+  onText?: (text: string, append: boolean) => void;
+  onReasoning?: (delta: string) => void;
+  onToolCall?: (evt: ToolEvent) => void;
+  onComponent?: (spec: ComponentSpec) => void;
+  onCost?: (usage: TurnUsage) => void;
+  onContext?: (ctx: ContextWindow) => void;
+  onInputRequired?: (payload: HitlPayload) => void;
+  onFailed?: (message: string) => void;
+  onDone?: () => void;
+};
+
+// Replay a Task SNAPSHOT (the first frame of tasks/resubscribe, or a GetTask
+// result) into the handlers: accumulated artifact text, then the durable
+// history's tool/reasoning/component frames — everything the agent did while
+// nobody was subscribed. A live SendStreamingMessage's initial Task frame is
+// bare (submitted; no artifacts, no history), so this is a no-op there.
+function replayTaskSnapshot(task: NonNullable<A2AFrame["result"]>, handlers: TurnStreamHandlers): void {
+  const arts = (task as { artifacts?: Array<{ parts?: RawPart[] }> }).artifacts || [];
+  const accumulated = arts.map((a) => textFromParts(a.parts)).join("");
+  const history = ((task as { history?: Array<{ role?: string; parts?: RawPart[]; metadata?: ExtMetadata }> }).history ||
+    []) as Array<{ role?: string; parts?: RawPart[]; metadata?: ExtMetadata }>;
+  for (const msg of history) {
+    if ((msg.role || "").includes("USER") || msg.role === "user") continue;
+    const toolEvent = toolEventFromMeta(msg.metadata);
+    if (toolEvent) handlers.onToolCall?.(toolEvent);
+    const reasoning = reasoningFromParts(msg.parts);
+    if (reasoning) handlers.onReasoning?.(reasoning);
+    const component = componentFromParts(msg.parts);
+    if (component) handlers.onComponent?.(component);
+  }
+  if (accumulated) handlers.onText?.(accumulated, false);
+  const state = (task.status?.state || "").toString();
+  if (/input.required/i.test(state)) {
+    const parts = (task.status as { message?: { parts?: RawPart[] } } | undefined)?.message?.parts;
+    handlers.onInputRequired?.(hitlFromParts(parts) || { question: textFromParts(parts) });
+  }
+}
+
+// One A2A frame dispatcher for every streaming consumer — the live turn, the
+// reattach stream, and snapshot replays all decode frames identically.
+function makeA2ADispatcher(sessionId: string, handlers: TurnStreamHandlers): (frame: A2AFrame) => void {
+  return (frame: A2AFrame) => {
+    if (frame.error?.message) throw new Error(frame.error.message);
+    const result = frame.result;
+    if (!result) return;
+    // Drop any frame stamped with a different contextId than this turn's — cross-talk from
+    // a concurrent turn or background job can't leak into this message (see frameIsForeign).
+    if (frameIsForeign(frame, sessionId)) return;
+    const task = result.task ?? (result.kind === "task" ? result : undefined);
+    const statusUpdate = result.statusUpdate ?? (result.kind === "status-update" ? result : undefined);
+    const artifactUpdate = result.artifactUpdate ?? (result.kind === "artifact-update" ? result : undefined);
+    if (task?.id) {
+      handlers.onTaskId?.(task.id);
+      // Snapshot replay covers BOTH shapes: history first (the tool/reasoning
+      // frames a detached client missed), then the accumulated artifact text —
+      // which for a terminal task IS the final answer. A live stream's initial
+      // Task frame is bare (submitted, no artifacts/history), so it's a no-op.
+      replayTaskSnapshot(task, handlers);
+    }
+    if (statusUpdate) {
+      const state = statusUpdate.status?.state || "";
+      const parts = statusUpdate.status?.message?.parts;
+      const messageText = textFromParts(parts);
+      const reasoning = reasoningFromParts(parts);
+      if (reasoning) handlers.onReasoning?.(reasoning);
+      // A reasoning-only frame carries no status text; don't let it clobber the
+      // transient status line with the bare working state.
+      if (!reasoning) handlers.onStatus?.(messageText || state);
+      // tool-call-v1 rides the status MESSAGE's metadata (URI-keyed), not its parts.
+      const toolEvent = toolEventFromMeta(statusUpdate.status?.message?.metadata);
+      if (toolEvent) handlers.onToolCall?.(toolEvent);
+      const component = componentFromParts(parts);
+      if (component) handlers.onComponent?.(component);
+      if (state === "input-required" || state === "TASK_STATE_INPUT_REQUIRED") {
+        handlers.onInputRequired?.(hitlFromParts(parts) || { question: messageText });
+      }
+      if (state === "failed" || state === "TASK_STATE_FAILED") {
+        handlers.onFailed?.(messageText || "the turn failed");
+      }
+    }
+    if (artifactUpdate) {
+      const aParts = artifactUpdate.artifact?.parts;
+      const text = textFromParts(aParts);
+      if (text) handlers.onText?.(text, artifactAppends(artifactUpdate));
+      // The terminal answer artifact carries cost-v1 in its URI-keyed METADATA and
+      // context-v1 as a DataPart (a2a_impl executor) — surface this turn's spend and
+      // its context-window fill.
+      const usage = costFromMeta(artifactUpdate.artifact?.metadata);
+      if (usage) handlers.onCost?.(usage);
+      const ctx = contextFromParts(aParts);
+      if (ctx) handlers.onContext?.(ctx);
+    }
+  };
+}
+
 async function consumeSse(
   response: Response,
   onFrame: (frame: A2AFrame) => void,
@@ -1968,26 +2070,7 @@ export const api = {
   async streamChat(
     message: string,
     sessionId: string,
-    handlers: {
-      signal?: AbortSignal;
-      onTaskId?: (taskId: string) => void;
-      onStatus?: (status: string) => void;
-      onText?: (text: string, append: boolean) => void;
-      onReasoning?: (delta: string) => void;
-      onToolCall?: (evt: ToolEvent) => void;
-      onComponent?: (spec: ComponentSpec) => void;
-      // This turn's token usage + cost — lifted off the terminal cost-v1 DataPart.
-      onCost?: (usage: TurnUsage) => void;
-      // This turn's context-window fill + compaction threshold — terminal context-v1 DataPart.
-      onContext?: (ctx: ContextWindow) => void;
-      onInputRequired?: (payload: HitlPayload) => void;
-      // Terminal failure (A2A `TASK_STATE_FAILED`) — e.g. the model rejected the
-      // turn (bad API key → 401). Carries the gateway's error text. Without this
-      // the failure only flashed in the transient status line and the turn
-      // looked like a silent "no response".
-      onFailed?: (message: string) => void;
-      onDone?: () => void;
-    } = {},
+    handlers: TurnStreamHandlers = {},
     opts: {
       images?: { b64: string; mime: string; name: string }[];
       model?: string;
@@ -2045,55 +2128,7 @@ export const api = {
         },
       },
     });
-    const dispatchFrame = (frame: A2AFrame) => {
-      if (frame.error?.message) throw new Error(frame.error.message);
-      const result = frame.result;
-      if (!result) return;
-      // Drop any frame stamped with a different contextId than this turn's — cross-talk from
-      // a concurrent turn or background job can't leak into this message (see frameIsForeign).
-      if (frameIsForeign(frame, sessionId)) return;
-      const task = result.task ?? (result.kind === "task" ? result : undefined);
-      const statusUpdate = result.statusUpdate ?? (result.kind === "status-update" ? result : undefined);
-      const artifactUpdate = result.artifactUpdate ?? (result.kind === "artifact-update" ? result : undefined);
-      if (task?.id) {
-        handlers.onTaskId?.(task.id);
-        const terminalText = textFromTerminalTask(task);
-        if (terminalText) handlers.onText?.(terminalText, false);
-      }
-      if (statusUpdate) {
-        const state = statusUpdate.status?.state || "";
-        const parts = statusUpdate.status?.message?.parts;
-        const messageText = textFromParts(parts);
-        const reasoning = reasoningFromParts(parts);
-        if (reasoning) handlers.onReasoning?.(reasoning);
-        // A reasoning-only frame carries no status text; don't let it clobber the
-        // transient status line with the bare working state.
-        if (!reasoning) handlers.onStatus?.(messageText || state);
-        // tool-call-v1 rides the status MESSAGE's metadata (URI-keyed), not its parts.
-        const toolEvent = toolEventFromMeta(statusUpdate.status?.message?.metadata);
-        if (toolEvent) handlers.onToolCall?.(toolEvent);
-        const component = componentFromParts(parts);
-        if (component) handlers.onComponent?.(component);
-        if (state === "input-required" || state === "TASK_STATE_INPUT_REQUIRED") {
-          handlers.onInputRequired?.(hitlFromParts(parts) || { question: messageText });
-        }
-        if (state === "failed" || state === "TASK_STATE_FAILED") {
-          handlers.onFailed?.(messageText || "the turn failed");
-        }
-      }
-      if (artifactUpdate) {
-        const aParts = artifactUpdate.artifact?.parts;
-        const text = textFromParts(aParts);
-        if (text) handlers.onText?.(text, artifactAppends(artifactUpdate));
-        // The terminal answer artifact carries cost-v1 in its URI-keyed METADATA and
-        // context-v1 as a DataPart (a2a_impl executor) — surface this turn's spend and
-        // its context-window fill.
-        const usage = costFromMeta(artifactUpdate.artifact?.metadata);
-        if (usage) handlers.onCost?.(usage);
-        const ctx = contextFromParts(aParts);
-        if (ctx) handlers.onContext?.(ctx);
-      }
-    };
+    const dispatchFrame = makeA2ADispatcher(sessionId, handlers);
 
     // Desktop: WKWebView can't read a streaming SSE body via fetch, so relay the /a2a
     // SSE through the Tauri shell (Rust reqwest → IPC Channel) and parse frames with the
@@ -2306,6 +2341,82 @@ export const api = {
     if (!task) return { state: "", text: "" };
     const state = (task.status?.state || "").toString();
     return { state, text: textFromTerminalTask(task) };
+  },
+
+  // Reattach to an IN-FLIGHT turn after an agent switch / reload (Swap & Resume
+  // S1): A2A `SubscribeToTask` — served by the backend and forwarded by the
+  // fleet proxy all along; the console just never called it. The server replays
+  // a Task snapshot first (whose durable history carries everything emitted
+  // while nobody was subscribed — replayed via replayTaskSnapshot), then the
+  // same live frames SendStreamingMessage emits. Stream close = turn complete.
+  // A TERMINAL task is rejected by the server (UnsupportedOperation) — callers
+  // catch and fall back to replayTask() below.
+  async resumeTask(taskId: string, sessionId: string, handlers: TurnStreamHandlers = {}) {
+    const dispatchFrame = makeA2ADispatcher(sessionId, handlers);
+    const body = {
+      jsonrpc: "2.0",
+      id: `resub-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      method: "SubscribeToTask",
+      params: { id: taskId },
+    };
+    // Desktop: same WKWebView limitation as streamChat — relay the SSE through
+    // the Tauri shell; any A2A streaming body rides the same command.
+    if (isDesktopWebview()) {
+      const core = tauriCore();
+      if (!core) throw new Error("Tauri core API unavailable");
+      const channel = new core.Channel<string>();
+      let buf = "";
+      channel.onmessage = (chunk) => {
+        buf += chunk;
+        buf = drainSseBuffer(buf, dispatchFrame);
+      };
+      const tok = authToken();
+      await core.invoke("chat_stream", {
+        url: apiUrl("/a2a"),
+        body,
+        auth: tok ? `Bearer ${tok}` : null,
+        onEvent: channel,
+      });
+      handlers.onDone?.();
+      return;
+    }
+    const response = await fetch(apiUrl("/a2a"), {
+      method: "POST",
+      headers: applyAuth(new Headers({ "Content-Type": "application/json", "A2A-Version": "1.0" })),
+      signal: handlers.signal,
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    // A JSON-RPC rejection (e.g. resubscribing a TERMINAL task) comes back as a
+    // plain JSON body, not an SSE stream — surfacing it as a throw is what routes
+    // the caller onto the snapshot-replay fallback.
+    if (!(response.headers.get("content-type") || "").includes("text/event-stream")) {
+      const payload = (await response.json().catch(() => null)) as { error?: { message?: string } } | null;
+      throw new Error(payload?.error?.message || "resubscribe rejected");
+    }
+    await consumeSse(response, dispatchFrame);
+    handlers.onDone?.();
+  },
+
+  // Fetch the durable task and replay its snapshot (accumulated text + history
+  // tool/reasoning frames) through the SAME dispatcher the streams use — the
+  // catch-up path when the turn already ended while nobody was watching.
+  // Returns the task state ("" when the task is gone).
+  async replayTask(taskId: string, sessionId: string, handlers: TurnStreamHandlers = {}): Promise<string> {
+    const res = await request<A2AFrame>("/a2a", {
+      method: "POST",
+      headers: { "A2A-Version": "1.0" },
+      body: { jsonrpc: "2.0", id: `get-${Date.now()}`, method: "GetTask", params: { id: taskId } },
+    });
+    const result = res.result;
+    if (!result) return "";
+    const task = (result.task ?? (result.kind === "task" ? result : result)) as NonNullable<A2AFrame["result"]>;
+    if (!task?.status) return "";
+    const dispatch = makeA2ADispatcher(sessionId, handlers);
+    // GetTask results aren't context-stamped frames — wrap as a task frame; the
+    // dispatcher's foreign-frame guard passes frames without a contextId.
+    dispatch({ result: { task } } as A2AFrame);
+    return (task.status?.state || "").toString();
   },
 
   // Tasks are agent-global (one persistent store) — no project scope. (Notes moved

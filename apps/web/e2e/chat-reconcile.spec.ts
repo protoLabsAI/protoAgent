@@ -37,3 +37,35 @@ test("a stuck 'streaming' message reconciles to the server's completed answer on
   // No longer spinning — the streaming loader is gone once finalized.
   await expect(page.locator(".pl-message--assistant .spin")).toHaveCount(0);
 });
+
+test("reattach replays tool frames the operator never saw live (Swap & Resume S1)", async ({ page }) => {
+  await page.addInitScript(() => {
+    const stuck = {
+      version: 1,
+      currentSessionId: "s-stuck",
+      sessions: [
+        {
+          id: "s-stuck",
+          title: "Interrupted turn",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          messages: [
+            { id: "u1", role: "user", content: "file that bug", status: "done" },
+            // The task id carries "history": the mock's GetTask returns a durable
+            // history holding a tool-call-v1 frame emitted while detached.
+            { id: "a1", role: "assistant", content: "", status: "streaming", taskId: "task-stuck-history-1" },
+          ],
+        },
+      ],
+    };
+    window.localStorage.setItem("protoagent.chat.sessions", JSON.stringify(stuck));
+  });
+
+  await page.goto("/app/", { waitUntil: "load" });
+
+  // Resubscribe is rejected (terminal) → snapshot replay: the missed tool card
+  // AND the final answer both land, and the spinner is gone.
+  await expect(page.locator(".pl-message--assistant")).toContainText("RECONCILED ANSWER");
+  await expect(page.locator(".pl-message--assistant")).toContainText("file_bug");
+  await expect(page.locator(".pl-message--assistant .spin")).toHaveCount(0);
+});

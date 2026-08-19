@@ -10,8 +10,10 @@ import type { ChatMessage } from "../lib/types";
 // on another agent. But every window on this origin can see the other slugs'
 // persisted chat state (`protoagent.chat.sessions[:slug]`), and the hub proxies every
 // agent's A2A — so we watch the other slugs' in-flight turns and poll their durable
-// tasks (the same `tasks/get` the in-window self-heal uses; the a2a-sdk has no
-// `tasks/resubscribe`, so polling is the re-attach ceiling). Two signals, deduped:
+// tasks. (The a2a-sdk DOES serve `tasks/resubscribe` — the focused agent's chat
+// reattach uses it, chat/reattach.ts — but for a lightweight completion watch
+// across N background agents, one cheap poll beats N parked SSE streams.)
+// Two signals, deduped:
 //   • poll: a watched taskId reaches a terminal state on its agent;
 //   • storage event: the owning window (still open) finalized the turn itself.
 

@@ -559,14 +559,45 @@ const server = createServer(async (req, res) => {
     // FLAT on `result`, member-style `{text}` parts. The legacy `tasks/get` is -32601 on
     // the live server — answering it here is how the self-heal rotted unnoticed.
     if (body?.method === "GetTask") {
+      // A task id carrying "history" also returns a durable history with a
+      // tool-call-v1 frame — the Swap & Resume replay path (reattach.ts) must
+      // render the tool card the operator never saw live.
+      const wantHistory = String(body.params?.id || "").includes("history");
       return sendJson(res, {
         jsonrpc: "2.0",
         id: body.id,
         result: {
-          id: body.params?.id, contextId: "reconcile",
+          // The real server stamps the task's own context id (= the console
+          // session). The history-replay spec relies on the match (the frame
+          // dispatcher drops foreign-context frames); plain reconciles keep the
+          // legacy placeholder.
+          id: body.params?.id, contextId: wantHistory ? "s-stuck" : "reconcile",
           status: { state: "TASK_STATE_COMPLETED" },
           artifacts: [{ parts: [{ text: "RECONCILED ANSWER" }] }],
+          ...(wantHistory
+            ? {
+                history: [
+                  {
+                    role: "ROLE_AGENT",
+                    parts: [],
+                    metadata: {
+                      "https://proto-labs.ai/a2a/ext/tool-call-v1": {
+                        toolCallId: "missed-t1", name: "file_bug", phase: "completed", result: "BUG-42",
+                      },
+                    },
+                  },
+                ],
+              }
+            : {}),
         },
+      });
+    }
+    if (body?.method === "SubscribeToTask") {
+      // The real server rejects resubscribe for a TERMINAL task — the console's
+      // reattach then falls back to GetTask snapshot replay. Mirror that.
+      return sendJson(res, {
+        jsonrpc: "2.0", id: body.id,
+        error: { code: -32004, message: "task is not running (UnsupportedOperationError)" },
       });
     }
     if (body?.method === "CancelTask") {
