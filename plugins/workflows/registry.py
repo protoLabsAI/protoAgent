@@ -30,6 +30,12 @@ def _canon_inputs(raw: Any) -> list[dict[str, Any]]:
     ``inputs: {topic: {required: true}}`` (or ``topic:`` bare) — which authors
     reach for constantly; anything else degrades to no declared inputs rather
     than a raw shape leaking through ``get()``.
+
+    Normalizes SHAPE, never vocabulary: annotation keys (``type``,
+    ``description``, anything an author added) ride along verbatim — a
+    ``type: object`` input or a described string loses its meaning if
+    canonicalization strips the hint (learned the hard way on the
+    agent-browser recipes).
     """
     if isinstance(raw, dict):
         rows: list[dict[str, Any]] = [
@@ -44,9 +50,9 @@ def _canon_inputs(raw: Any) -> list[dict[str, Any]]:
         name = str(row.get("name") or "").strip()
         if not name:
             continue
-        entry: dict[str, Any] = {"name": name, "required": bool(row.get("required"))}
-        if row.get("default") is not None:
-            entry["default"] = row["default"]
+        entry = {**row, "name": name, "required": bool(row.get("required"))}
+        if entry.get("default") is None:
+            entry.pop("default", None)
         out.append(entry)
     return out
 
@@ -93,11 +99,12 @@ class WorkflowRegistry:
                 {
                     "name": name,
                     "description": r.get("description", ""),
-                    "inputs": [
-                        {"name": i.get("name"), "required": bool(i.get("required")), "default": i.get("default")}
-                        for i in (r.get("inputs") or [])
-                        if isinstance(i, dict)
-                    ],
+                    # Already canonical (reload/save run _canon_inputs) — pass the
+                    # rows through WITH their annotations: the Studio's run form
+                    # needs `description` as the field hint and `type` to know an
+                    # object-typed input takes JSON, and stripping them here is
+                    # how those hints went missing (#2834 round 2).
+                    "inputs": [dict(i) for i in (r.get("inputs") or []) if isinstance(i, dict)],
                     "steps": [
                         # depends_on may be authored as a single id string (e.g. `depends_on: step-a`)
                         # — list() would shatter that into characters, so coerce a str to [str].

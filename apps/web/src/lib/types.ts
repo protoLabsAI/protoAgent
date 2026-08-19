@@ -402,7 +402,7 @@ export type SecretsTestResult = {
 export type WorkflowSummary = {
   name: string;
   description: string;
-  inputs: { name: string; required: boolean; default?: unknown }[];
+  inputs: { name: string; required: boolean; default?: unknown; type?: string; description?: string }[];
   steps: { id: string; subagent: string; depends_on: string[]; gate?: string }[];
 };
 
@@ -412,7 +412,7 @@ export type WorkflowRecipe = {
   name: string;
   description?: string;
   version?: number;
-  inputs?: { name: string; required?: boolean; default?: unknown }[];
+  inputs?: { name: string; required?: boolean; default?: unknown; type?: string; description?: string }[];
   steps: {
     id: string;
     subagent: string;

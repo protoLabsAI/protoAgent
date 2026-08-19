@@ -125,17 +125,30 @@ export function WorkflowBuilder({
       Object.entries(initial ?? {}).filter(([k]) => !(MANAGED_KEYS as readonly string[]).includes(k)),
     );
     const origById = new Map((initial?.steps ?? []).map((s) => [String(s.id), s]));
+    // Same preservation contract as steps, keyed by name: the form manages
+    // name/required/default, but an input's annotations (type, description)
+    // must survive an edit — they're the run form's field hints.
+    const origInputByName = new Map<string, Record<string, unknown>>(
+      (Array.isArray(initial?.inputs) ? initial.inputs : [])
+        .filter((i) => !!i && typeof i === "object")
+        .map((i) => [String(i.name), i as unknown as Record<string, unknown>]),
+    );
     const recipe: Record<string, unknown> = {
       ...extras,
       name: name.trim(),
       version: initial?.version ?? 1,
       inputs: inputs
         .filter((i) => i.name.trim())
-        .map((i) => ({
-          name: i.name.trim(),
-          required: i.required,
-          ...(i.default.trim() !== "" ? { default: i.default } : {}),
-        })),
+        .map((i) => {
+          const row: Record<string, unknown> = {
+            ...(origInputByName.get(i.name.trim()) ?? {}),
+            name: i.name.trim(),
+            required: i.required,
+          };
+          if (i.default.trim() !== "") row.default = i.default;
+          else delete row.default;
+          return row;
+        }),
       steps: steps.map((st) => {
         const orig = origById.get(st.id.trim()) ?? {};
         const step: Record<string, unknown> = {

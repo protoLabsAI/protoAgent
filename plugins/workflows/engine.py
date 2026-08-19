@@ -26,6 +26,7 @@ loop is byte-for-byte the pre-gate path.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time
 from typing import Any, Awaitable, Callable
@@ -137,13 +138,25 @@ def _has_cycle(steps: list[dict]) -> bool:
     return any(visit(n) for n in graph)
 
 
+def _render_value(value: Any) -> str:
+    """A structured input substitutes as JSON, not Python repr — a step prompt
+    reading ``{{inputs.fields}}`` should see ``{"name": "Alice"}``, never
+    ``{'name': 'Alice'}`` (which models copy verbatim into tool calls)."""
+    if isinstance(value, (dict, list)):
+        try:
+            return json.dumps(value, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return str(value)
+    return str(value)
+
+
 def render_template(text: str, inputs: dict, step_outputs: dict) -> str:
     def sub(m: re.Match) -> str:
         ref = m.group(1)
         if ref.startswith("inputs."):
-            return str(inputs.get(ref[len("inputs.") :], ""))
+            return _render_value(inputs.get(ref[len("inputs.") :], ""))
         if ref.startswith("steps.") and ref.endswith(".output"):
-            return str(step_outputs.get(ref[len("steps.") : -len(".output")], ""))
+            return _render_value(step_outputs.get(ref[len("steps.") : -len(".output")], ""))
         return m.group(0)
 
     return _REF_RE.sub(sub, text or "")

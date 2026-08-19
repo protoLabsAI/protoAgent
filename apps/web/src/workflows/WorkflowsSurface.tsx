@@ -320,7 +320,20 @@ function WorkflowsBody() {
     const payload: Record<string, unknown> = {};
     for (const inp of current.inputs) {
       const v = inputs[inp.name];
-      if (v != null && v !== "") payload[inp.name] = v;
+      if (v == null || v === "") continue;
+      // A declared structured type takes JSON: parse it so the engine gets a
+      // real object/array, not the string "{...}" (which would render into
+      // step prompts verbatim). Unparseable text falls through as the typed
+      // string — the engine substitutes it as-is either way.
+      if (inp.type === "object" || inp.type === "array") {
+        try {
+          payload[inp.name] = JSON.parse(v);
+          continue;
+        } catch {
+          /* not JSON — send the raw string */
+        }
+      }
+      payload[inp.name] = v;
     }
     start.mutate({ name: current.name, inputs: payload });
   }
@@ -420,15 +433,23 @@ function WorkflowsBody() {
                 {current.inputs.length ? (
                   <div className="subagent-grid">
                     {current.inputs.map((inp) => (
-                      <label className="field" key={inp.name}>
+                      <label className="field" key={inp.name} title={inp.description || undefined}>
                         <span>
                           {inp.name}
                           {inp.required ? " *" : ""}
+                          {inp.type === "object" || inp.type === "array" ? " (JSON)" : ""}
                         </span>
                         <Input
                           value={inputs[inp.name] ?? ""}
                           onChange={(event) => setInputs((prev) => ({ ...prev, [inp.name]: event.target.value }))}
-                          placeholder={inp.default != null ? `default: ${String(inp.default)}` : inp.required ? "required" : "optional"}
+                          placeholder={
+                            inp.description ||
+                            (inp.default != null
+                              ? `default: ${String(inp.default)}`
+                              : inp.required
+                                ? "required"
+                                : "optional")
+                          }
                         />
                       </label>
                     ))}

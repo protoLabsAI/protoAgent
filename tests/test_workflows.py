@@ -825,3 +825,30 @@ def test_registry_save_canonicalizes_inputs_on_disk(tmp_path):
     on_disk = _yaml.safe_load((tmp_path / "saved.yaml").read_text(encoding="utf-8"))
     assert on_disk["inputs"] == [{"name": "topic", "required": False, "default": "x"}]
     assert reg.get("saved")["inputs"] == on_disk["inputs"]
+
+
+def test_canonicalization_preserves_annotations(tmp_path):
+    # Shape normalizes; vocabulary survives — type/description are the run
+    # form's field hints and an agent's semantic contract for the input.
+    (tmp_path / "a.yaml").write_text(
+        "name: annotated\ninputs:\n  fields:\n    type: object\n    description: form fields\n    required: true\n",
+        encoding="utf-8",
+    )
+    reg = WorkflowRegistry([str(tmp_path)])
+    row = reg.get("annotated")["inputs"][0]
+    assert row == {"name": "fields", "type": "object", "description": "form fields", "required": True}
+    # list() (the run form's source) carries them too
+    assert next(r for r in reg.list() if r["name"] == "annotated")["inputs"][0]["description"] == "form fields"
+
+
+def test_render_template_substitutes_structured_values_as_json():
+    from plugins.workflows.engine import render_template
+
+    out = render_template(
+        "fill: {{inputs.fields}} · from {{steps.prev.output}}",
+        {"fields": {"name": "Alice", "n": 2}},
+        {"prev": ["a", "b"]},
+    )
+    assert '{"name": "Alice", "n": 2}' in out
+    assert '["a", "b"]' in out
+    assert "'" not in out  # never Python repr
