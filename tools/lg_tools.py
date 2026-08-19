@@ -440,10 +440,14 @@ def _extract_text_from_html(content: bytes) -> str:
         return re.sub(r"\s+", " ", raw)
 
     soup = BeautifulSoup(content, "html.parser")
-    for el in soup(["script", "style", "nav", "footer", "noscript"]):
+    for el in soup(["script", "style", "nav", "header", "footer", "noscript"]):
         el.decompose()
-    # Prefer <main> / <article> when the page uses them; otherwise whole body
-    main = soup.find("main") or soup.find("article") or soup.body or soup
+    # Strip ARIA role chrome
+    for role in ["navigation", "banner", "contentinfo"]:
+        for el in soup.find_all(attrs={"role": role}):
+            el.decompose()
+    # Prefer <main> / <article> / role="main" when the page uses them; otherwise whole body
+    main = soup.find("main") or soup.find("article") or soup.find(attrs={"role": "main"}) or soup.body or soup
     lines = [line.strip() for line in main.get_text("\n").splitlines() if line.strip()]
     return "\n".join(lines)
 
