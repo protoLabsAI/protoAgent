@@ -125,7 +125,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "fleet_max_warm": 0,
     "fleet_trace_export_enabled": False,
     "fleet_port_base": 7870,
-    "fleet_warm_grace_seconds": 0,
+    "fleet_warm_grace_seconds": 300,
     "goal_enabled": True,
     "goal_eval_model": "",
     "goal_max_iterations": 8,

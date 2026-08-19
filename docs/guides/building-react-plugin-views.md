@@ -352,6 +352,22 @@ respect the same typing gate it applies to its own inputs. A forwarded chord rea
 **global** bindings — the host can't see inside your iframe, so it can't know which of its
 panels is focused, and firing another panel's scoped chord would be worse than not firing.
 
+## Fleet-proxied requests: the 20-second read lane
+
+When your view runs on a fleet **member**, every request rides the hub's reverse
+proxy — and plain requests to `/plugins/…` / `/api/plugins/…` get a **20s read
+timeout** (a stalled member must answer with a 504 instead of parking the
+browser's per-origin connection pool, which is what froze whole consoles before
+the lanes existed). Two lanes are exempt:
+
+- **SSE** — send `Accept: text/event-stream` (or use the bus via the kit) and the
+  proxy holds the stream open indefinitely, with a 30s comment keepalive so an
+  abandoned stream still unwinds.
+- **WebSockets** — upgraded connections relay untimed.
+
+So: never hold a plain GET/POST open as a long-poll. For anything slower than
+~20s, return early and deliver the result over the event bus, or stream SSE.
+
 ## Trust & the sandbox split
 
 There are **two different** iframe-sandbox postures. Do not blur them.

@@ -1103,7 +1103,11 @@ class LangGraphConfig:
     discovery_mdns: bool = False  # advertise + browse the _protoagent._tcp mDNS channel
     fleet_max_warm: int = 0  # warm-agent cap (0 = unlimited); env: PROTOAGENT_FLEET_MAX_WARM
     fleet_warm_grace_seconds: int = (
-        0  # spare agents touched within N s from LRU eviction; env: PROTOAGENT_FLEET_WARM_GRACE
+        # Spare agents touched within N s from LRU eviction; env: PROTOAGENT_FLEET_WARM_GRACE.
+        # Default 300 (Swap & Resume S4): rapid A->B->A switching used to be able to evict A
+        # MID-TURN (pure LRU, grace 0) — five minutes of recency protection covers the common
+        # switch-and-return without unbounding the warm set. 0 restores pure LRU.
+        300
     )
     # Member ids/names (re)started at hub boot (ADR 0072 autostart slice) — a container
     # recreate/host restart kills the detached member processes, and without this the

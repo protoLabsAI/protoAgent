@@ -103,10 +103,46 @@ def test_keep_n_warm_evicts_lru(tmp_path, monkeypatch):
         ids[nm] = manager.create(nm)["id"]
         supervisor.start(nm)  # display name resolves to the id
 
+    # Pure LRU (grace 0) still evicts immediately — the pre-S4 contract, kept.
+    monkeypatch.setenv("PROTOAGENT_FLEET_WARM_GRACE", "0")
     evicted = supervisor.enforce_warm_cap(keep=2, protect="c")  # protect by name too
     assert evicted == [ids["a"]]  # LRU evicted (state keys = ids), protected one kept
     assert not supervisor.is_running("a")
     assert supervisor.is_running("b") and supervisor.is_running("c")
+
+
+def test_warm_grace_default_spares_recently_active(tmp_path, monkeypatch):
+    """Swap & Resume S4: the default grace (300s) spares agents touched within the
+    window — a rapid A→B→A switch can no longer evict A mid-turn. Explicit 0
+    restores pure LRU (asserted above)."""
+    monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
+    alive: set[int] = set()
+    seq = {"n": 6000}
+    monkeypatch.setattr(supervisor, "_alive", lambda pid: int(pid) in alive if pid else False)
+
+    class FakeProc:
+        returncode = None
+
+        def __init__(self, *a, **k):
+            seq["n"] += 1
+            self.pid = seq["n"]
+            alive.add(self.pid)
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(supervisor.subprocess, "Popen", FakeProc)
+    monkeypatch.setattr(supervisor, "_is_our_agent", lambda pid: True)
+    monkeypatch.setattr(supervisor, "_port_listening", lambda port, timeout=0.25: True)
+    monkeypatch.setattr(supervisor, "signal_tree", lambda pid, *, force: alive.discard(int(pid)))
+
+    for nm in ("a", "b", "c"):
+        manager.create(nm)
+        supervisor.start(nm)  # start() touches last_active — all three are recent
+
+    evicted = supervisor.enforce_warm_cap(keep=2, protect="c")
+    assert evicted == []  # everyone inside the default grace window survives
+    assert supervisor.is_running("a") and supervisor.is_running("b") and supervisor.is_running("c")
     assert supervisor.enforce_warm_cap(keep=0) == []  # 0 = unlimited, no-op
 
 

@@ -18,6 +18,7 @@ the socket forever — see the read-timeout lanes below (#2590).
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 
@@ -131,6 +132,10 @@ def _target_for_slug(slug: str) -> tuple[str, dict] | None:
     return target
 
 
+# Idle keepalive for proxied SSE lanes (Swap & Resume S4) — see _pipe below.
+_SSE_KEEPALIVE_S = 30.0
+
+
 async def _forward_to_base(base: str, request, path: str, extra_headers: dict | None = None):
     """Stream-proxy ``request`` to ``<base>/<path>`` (SSE-safe)."""
     url = f"{base}/{path}"
@@ -164,13 +169,57 @@ async def _forward_to_base(base: str, request, path: str, extra_headers: dict | 
         log.warning("[fleet] proxied %s %s timed out waiting for the agent to respond", request.method, url)
         return JSONResponse({"detail": "agent did not respond in time"}, status_code=504)
 
+    # A swapped-away client is only DETECTED on the next downstream write, and the
+    # unbounded stream lanes (a2a / api/events) can sit silent for minutes inside a
+    # long tool call — an abandoned member stream used to park indefinitely (Swap &
+    # Resume S4). For SSE responses, inject a comment keepalive after 30s of upstream
+    # silence: the write to a dead client raises, the generator closes, and the
+    # member-side connection unwinds within one keepalive period. SSE-only — a
+    # comment line is protocol-legal there and corruption anywhere else.
+    is_sse = (upstream.headers.get("content-type") or "").startswith("text/event-stream")
+
     async def _pipe():
+        import asyncio
+
         try:
-            async for chunk in upstream.aiter_raw():
-                yield chunk
+            if not is_sse:
+                async for chunk in upstream.aiter_raw():
+                    yield chunk
+                return
+            done = object()
+            queue: asyncio.Queue = asyncio.Queue(maxsize=16)
+
+            async def _reader() -> None:
+                try:
+                    async for chunk in upstream.aiter_raw():
+                        await queue.put(chunk)
+                except httpx.ReadTimeout:
+                    log.warning(
+                        "[fleet] proxied %s %s stalled mid-response — closing the stream", request.method, url
+                    )
+                except Exception:  # noqa: BLE001 — reader end = stream end; the finally closes upstream
+                    pass
+                finally:
+                    await queue.put(done)
+
+            reader = asyncio.create_task(_reader())
+            try:
+                while True:
+                    try:
+                        item = await asyncio.wait_for(queue.get(), timeout=_SSE_KEEPALIVE_S)
+                    except asyncio.TimeoutError:
+                        yield b": keepalive\n\n"  # liveness probe: raises when the client left
+                        continue
+                    if item is done:
+                        break
+                    yield item
+            finally:
+                reader.cancel()
+                with contextlib.suppress(BaseException):
+                    await reader
         except httpx.ReadTimeout:
-            # Stalled mid-body. The status line is already sent, so the only honest signal
-            # left is to end the response rather than hold the connection open forever.
+            # Stalled mid-body (non-SSE lane). The status line is already sent, so the only
+            # honest signal left is to end the response rather than hold the connection open.
             log.warning("[fleet] proxied %s %s stalled mid-response — closing the stream", request.method, url)
         finally:
             await upstream.aclose()  # close the response, not the shared client
@@ -207,6 +256,12 @@ async def forward_to(slug: str, request, path: str):
         from graph.fleet.service_token import resolve_service_token
 
         extra = {**extra, "authorization": f"Bearer {resolve_service_token()}"}
+    if path == "a2a" and request.method == "POST":
+        # A turn is starting (or being resumed/queried) on this member — refresh its
+        # LRU recency so the warm-cap's grace window (Swap & Resume S4) actually
+        # covers agents that are WORKING, not just ones the operator clicked.
+        with contextlib.suppress(Exception):
+            supervisor.touch(slug)
     return await _forward_to_base(base, request, path, extra)
 
 

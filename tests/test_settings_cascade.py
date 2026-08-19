@@ -459,7 +459,7 @@ def test_d8_app_defaults_when_nothing_set(monkeypatch):
     assert (cfg.discovery_port_min, cfg.discovery_port_max) == (7860, 7910)
     assert cfg.discovery_mdns is False  # opt-in / off by default (#1802)
     assert cfg.fleet_max_warm == 0
-    assert cfg.fleet_warm_grace_seconds == 0
+    assert cfg.fleet_warm_grace_seconds == 300  # S4 default: grace spares mid-turn agents
 
 
 def test_d8_env_fallback_when_key_absent(monkeypatch):

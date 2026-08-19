@@ -393,7 +393,9 @@ fleet:
     mdns: false             # opt-in (#1802): advertise + browse _protoagent._tcp on the LAN. Off = stay quiet on the network
   warm:
     max: 0                  # warm-agent cap (0 = unlimited)
-    grace_seconds: 0        # spare agents touched within N seconds from LRU eviction
+    grace_seconds: 300      # spare agents touched within N s from LRU eviction (0 = pure LRU) —
+                            # the hub refreshes recency on member turn starts, so the default
+                            # 5min window protects a mid-turn agent from a rapid A→B→A switch
   autostart: []             # member ids/names the hub (re)starts on boot (survives container recreate);
                             # e.g. [cindi, matt]. Env: PROTOAGENT_FLEET_AUTOSTART (comma-separated)
 

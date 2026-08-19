@@ -982,9 +982,9 @@ def _warm_grace_seconds() -> int:
         except (TypeError, ValueError):
             return 0
     try:
-        return int(os.environ.get("PROTOAGENT_FLEET_WARM_GRACE", "0") or "0")
+        return int(os.environ.get("PROTOAGENT_FLEET_WARM_GRACE", "300") or "300")
     except ValueError:
-        return 0
+        return 300
 
 
 def touch(ident: str) -> None:
@@ -1013,10 +1013,10 @@ def enforce_warm_cap(keep: int | None = None, *, protect: str | None = None) -> 
     # background turn. (Beyond the grace, eviction can interrupt a turn; the session resumes
     # from its instance.id-scoped checkpoint on the next switch — that's by design.)
     running.sort(key=lambda kv: kv[1].get("last_active", ""))
-    # Opt-in grace (default 0 = pure LRU, unchanged): a positive value spares agents touched
-    # within that window, trading a temporarily-over-cap fleet for not killing a recently-active
-    # (possibly mid-turn) agent. Off by default so rapid switching still bounds the warm set.
-    # Host layer (ADR 0047 D8): resolved fleet.warm.grace_seconds, env fallback when no config.
+    # Grace (default 300s, Swap & Resume S4): spare agents touched within the window, trading a
+    # temporarily-over-cap fleet for not killing a recently-active (likely mid-turn) agent — the
+    # hub proxy refreshes recency on every member turn start, so grace tracks WORK, not clicks.
+    # 0 restores pure LRU. Host layer (ADR 0047 D8): fleet.warm.grace_seconds, env fallback.
     grace = _warm_grace_seconds()
     cutoff = (datetime.now(timezone.utc) - timedelta(seconds=grace)).isoformat()
     candidates = [n for n, r in running if n != protect and r.get("last_active", "") < cutoff]

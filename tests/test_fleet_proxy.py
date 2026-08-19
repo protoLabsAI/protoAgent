@@ -420,3 +420,94 @@ async def test_a_stalled_member_returns_rather_than_parking_the_socket(monkeypat
         stop.set()  # release the handler BEFORE closing, or wait_closed() blocks on it
         server.close()
         await server.wait_closed()
+
+
+# ── Swap & Resume S4: SSE keepalive + turn-touch ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_sse_pipe_emits_keepalive_on_upstream_silence(monkeypatch):
+    """An abandoned proxied stream used to park until the member's next write —
+    indefinitely for a silent tool call. The SSE pipe now writes a comment
+    keepalive after idle, so a dead client raises on the write and the pipe
+    (and the member-side connection) unwinds within one keepalive period."""
+    import asyncio
+
+    monkeypatch.setattr(proxy, "_SSE_KEEPALIVE_S", 0.05)
+
+    class FakeUpstream:
+        status_code = 200
+        headers = {"content-type": "text/event-stream"}
+
+        async def aiter_raw(self):
+            yield b"data: one\n\n"
+            await asyncio.sleep(0.2)  # silence >> keepalive interval
+            yield b"data: two\n\n"
+
+        async def aclose(self):
+            pass
+
+    class FakeClient:
+        def build_request(self, *a, **k):
+            return "req"
+
+        async def send(self, req, stream=True):
+            return FakeUpstream()
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    resp = await proxy._forward_to_base("http://127.0.0.1:7001", FakeRequest(), "a2a")
+    chunks = [c async for c in resp.body_iterator]
+    joined = b"".join(chunks)
+    assert b"data: one" in joined and b"data: two" in joined
+    assert b": keepalive" in joined  # emitted during the silent gap
+    # ordering: keepalive lands between the two data frames
+    assert joined.index(b"data: one") < joined.index(b": keepalive") < joined.index(b"data: two")
+
+
+@pytest.mark.asyncio
+async def test_non_sse_pipe_never_injects_keepalive(monkeypatch):
+    monkeypatch.setattr(proxy, "_SSE_KEEPALIVE_S", 0.05)
+
+    class FakeUpstream:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+
+        async def aiter_raw(self):
+            import asyncio
+
+            yield b'{"a":'
+            await asyncio.sleep(0.15)
+            yield b"1}"
+
+        async def aclose(self):
+            pass
+
+    class FakeClient:
+        def build_request(self, *a, **k):
+            return "req"
+
+        async def send(self, req, stream=True):
+            return FakeUpstream()
+
+    monkeypatch.setattr(proxy, "_get_client", lambda: FakeClient())
+    resp = await proxy._forward_to_base("http://127.0.0.1:7001", FakeRequest(), "api/x")
+    joined = b"".join([c async for c in resp.body_iterator])
+    assert joined == b'{"a":1}'  # byte-exact: comments would corrupt a JSON body
+
+
+@pytest.mark.asyncio
+async def test_member_turn_start_touches_recency(monkeypatch):
+    """S4: a POST /a2a through the proxy refreshes the member's LRU recency, so
+    the warm-cap grace window tracks agents that are WORKING, not just clicked."""
+    monkeypatch.setattr(proxy, "_target_for_slug", lambda slug: ("http://127.0.0.1:7001", {}))
+    touched = []
+    monkeypatch.setattr(proxy.supervisor, "touch", lambda slug: touched.append(slug))
+
+    async def fake_fwd(base, request, path, extra=None):
+        return "OK"
+
+    monkeypatch.setattr(proxy, "_forward_to_base", fake_fwd)
+    await proxy.forward_to("ava", FakeRequest(method="POST"), "a2a")
+    assert touched == ["ava"]
+    await proxy.forward_to("ava", FakeRequest(method="GET"), "api/tools")
+    assert touched == ["ava"]  # non-turn traffic doesn't churn LRU order
