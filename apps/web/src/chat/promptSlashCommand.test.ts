@@ -10,12 +10,17 @@ import { findSlashCommand } from "../ext/slashRegistry";
 import { api } from "../lib/api";
 import "./coreSlashCommands";
 
+vi.mock("./PromptViewer", () => ({ openPromptViewer: vi.fn() }));
+
 vi.mock("../lib/api", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../lib/api")>();
   return { ...mod, api: { ...mod.api, promptLast: vi.fn(), promptBreakdown: vi.fn() } };
 });
 
+import { openPromptViewer } from "./PromptViewer";
+
 const promptLast = vi.mocked(api.promptLast);
+const openViewer = vi.mocked(openPromptViewer);
 const promptBreakdown = vi.mocked(api.promptBreakdown);
 
 function ctx(over: Partial<SlashContext> = {}): SlashContext {
@@ -40,6 +45,7 @@ function call(over: Partial<SlashContext> = {}) {
 beforeEach(() => {
   promptLast.mockReset();
   promptBreakdown.mockReset();
+  openViewer.mockReset();
   // Default: no breakdown — pre-#2843 server / empty thread; the note must render without it.
   promptBreakdown.mockResolvedValue({ found: false });
 });
@@ -51,7 +57,27 @@ describe("/prompt", () => {
     expect(promptLast).not.toHaveBeenCalled();
   });
 
-  it("notes the last captured call's prompt, fenced and labeled", async () => {
+  it("opens the FULL prompt dialog when the call names its turn", async () => {
+    promptLast.mockResolvedValue({
+      enabled: true,
+      call: {
+        call_index: 0,
+        task_id: "task-abc",
+        ts: "2026-07-24T10:00:00+00:00",
+        model: "claude-opus-4-7",
+        system: { stable: "STABLE", context: "\n\n# Context\n\ntail" },
+        usage: { input_tokens: 10, output_tokens: 2, cache_read_tokens: 0, cache_creation_tokens: 0 },
+      },
+    });
+    const { handled, noted } = call();
+    expect(handled).toBe(true);
+    expect(promptLast).toHaveBeenCalledWith("s1");
+    await vi.waitFor(() => expect(openViewer).toHaveBeenCalledWith("task-abc", "s1"));
+    expect(noted.length).toBe(0); // the dialog IS the surface — no inline note
+    expect(promptBreakdown).not.toHaveBeenCalled(); // the dialog fetches its own
+  });
+
+  it("degrades to the inline note on a pre-task_id server (skew)", async () => {
     promptLast.mockResolvedValue({
       enabled: true,
       call: {
@@ -64,8 +90,8 @@ describe("/prompt", () => {
     });
     const { handled, noted } = call();
     expect(handled).toBe(true);
-    expect(promptLast).toHaveBeenCalledWith("s1");
     await vi.waitFor(() => expect(noted.length).toBe(1));
+    expect(openViewer).not.toHaveBeenCalled();
     expect(noted[0].tone).toBe("info");
     expect(noted[0].md).toContain("**System prompt**");
     expect(noted[0].md).toContain("STABLE\n\n# Context\n\ntail");

@@ -1293,6 +1293,9 @@ export type PromptSection = {
 };
 export type PromptCall = {
   call_index: number;
+  // The owning A2A turn — "" on the /preview synthesis and pre-#2388 subagent
+  // rows; optional for skew with servers predating the /prompt-dialog change.
+  task_id?: string;
   ts: string;
   model: string;
   // wire_differs/wire (#2527): what the call ACTUALLY carried when a provider

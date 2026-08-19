@@ -182,3 +182,13 @@ def test_breakdown_degrades_honestly(monkeypatch):
         "reason": "no live agent",
     }
     assert c.get("/api/prompts/breakdown").json()["reason"] == "session_id required"
+
+
+def test_shape_carries_the_owning_task_id(monkeypatch):
+    """/last exposes the call's task_id so /prompt can open the SAME full dialog
+    the message action opens ("" on /preview's synthesized row — no turn owns it)."""
+    store = prompt_snapshots()
+    store.record(task_id="task-9", session_id="sess-9", model="m", stable_text="S", context_text="C")
+    c = _client(monkeypatch)
+    body = c.get("/api/prompts/last", params={"session_id": "sess-9"}).json()
+    assert body["call"]["task_id"] == "task-9"

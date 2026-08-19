@@ -58,6 +58,10 @@ def _shape(row: dict) -> dict:
     wire = row.get("wire_text")
     return {
         "call_index": int(row.get("call_index") or 0),
+        # The owning A2A turn ("" on the synthesized /preview row and pre-#2388
+        # subagent rows) — lets /prompt open the SAME full dialog the message
+        # action opens, instead of rendering a second-class inline note.
+        "task_id": row.get("task_id") or "",
         "ts": row.get("ts") or "",
         "model": row.get("model") or "",
         "system": {

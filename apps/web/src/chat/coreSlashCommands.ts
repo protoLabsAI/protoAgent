@@ -18,6 +18,7 @@ import { buildGoalSetBody, goalFormPayload } from "./goalForm";
 import { buildWatchCreateBody, watchFormPayload } from "./watchForm";
 import type { VerifierCatalog } from "../lib/types";
 import { modelChoices, modelFormPayload, modelPickerData, resolveModelArg, type ModelPickerData } from "./modelForm";
+import { openPromptViewer } from "./PromptViewer";
 import { historyLine, promptNoteMarkdown } from "./promptView";
 import { perfNoteMarkdown } from "./perfView";
 import { trajectoryNoteMarkdown } from "./trajectoryView";
@@ -170,19 +171,25 @@ registerSlashCommand({
   usage: "/prompt",
   run: (ctx) => {
     if (!ctx.sessionId) return false; // no session → fall through
-    // Honest framing (#2243): this is the prompt AS OF the last captured call —
-    // a true "next call" preview would need speculative retrieval (P3). The
-    // fetch is a local read, so no optimistic pending note (unlike /btw).
-    // The history breakdown (#2843) rides along: it reads the checkpoint (works
-    // even with capture off) and is cheap; its failure never sinks the note.
-    // request() has no timeout, so a HUNG (never-settling) breakdown must not
-    // stall the note either — race a 3s cap alongside the rejection catch.
-    const breakdown = Promise.race([
-      api.promptBreakdown(ctx.sessionId).catch(() => null),
-      new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 3000)),
-    ]);
-    void Promise.all([api.promptLast(ctx.sessionId), breakdown])
-      .then(([res, bd]) => {
+    const sessionId = ctx.sessionId;
+    // Same surface as the message row's View prompt: when the latest captured
+    // call names its owning turn, open the FULL dialog (tabs, budget bars,
+    // history breakdown) — one prompt surface, not a second-class inline note.
+    // The note remains the degrade path: capture off, nothing captured yet, or
+    // a pre-task_id server (skew) — and there the #2843 history line rides
+    // along, raced against a 3s cap since request() has no timeout and a HUNG
+    // breakdown must not stall the note.
+    void api
+      .promptLast(sessionId)
+      .then(async (res) => {
+        if (res.enabled && res.call?.task_id) {
+          openPromptViewer(res.call.task_id, sessionId);
+          return;
+        }
+        const bd = await Promise.race([
+          api.promptBreakdown(sessionId).catch(() => null),
+          new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 3000)),
+        ]);
         const history = bd?.found && bd.breakdown ? `\n\n${historyLine(bd.breakdown)}` : "";
         if (!res.enabled) {
           ctx.noteToThread(
