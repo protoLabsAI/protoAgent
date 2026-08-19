@@ -15,6 +15,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.140.0] - 2026-08-19
+
+### Added
+- **Workflow runs are now observable while they execute (#2829).** The workflows
+  plugin gains `POST /{name}/start` (validate up front, run detached, poll the
+  run record), a live per-step record (step graph snapshot, running/done/failed
+  lifecycle with timestamps and engine seconds, final envelope), run history
+  (`GET /runs/all` + `GET /runs/{run_id}`), a `POST /validate` endpoint for live
+  builder validation, background resume with an up-front precheck, and
+  terminal-run retention (`max_runs`, default 200). Grounds the Studio's live
+  run timeline; the sync run route and `run_workflow` tool are unchanged.
+
+### Changed
+- **The Studio actually shows a workflow run happening (#2830).** Run starts a
+  detached run and watches it live — per-step status with durations, outputs
+  expanding as they land, an inline gate card for `gate: human` pauses, and a
+  History list that reopens any past run in the same timeline. The builder can
+  now EDIT an existing recipe, toggle operator gates, set input defaults, insert
+  `{{…}}` template refs from chips, and shows the server's validation errors
+  live while authoring; the recipe's parallelism renders as DAG lanes.
+
+- **Workflows is GA — the plugin ships enabled by default (#2831).** The engine,
+  the `run_workflow`/`save_workflow` tools, and the Studio console surface now
+  light up out of the box instead of requiring `plugins.enabled: [workflows]`.
+  Opting out is `plugins.disabled: [workflows]`.
+
+### Fixed
+- **The chat model dropdown no longer needs a Settings visit to fill in
+  (#2828).** The composer mounts once for the app's lifetime, so its boot-time
+  settings-schema fetch could race the server (graph still compiling, provider
+  probes empty) and the menu then sat frozen on a one-model fallback until
+  Settings ▸ Model happened to refetch the shared cache. The menu now refetches
+  on open whenever the cached schema is stale or carries no model options.
+
 ## [0.139.0] - 2026-08-18
 
 ### Added

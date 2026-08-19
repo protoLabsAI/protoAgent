@@ -1,5 +1,15 @@
 [
   {
+    "version": "v0.140.0",
+    "date": "2026-08-19",
+    "changes": [
+      "Workflow runs are now observable while they execute (#2829).",
+      "The Studio actually shows a workflow run happening (#2830).",
+      "Workflows is GA — the plugin ships enabled by default (#2831).",
+      "The chat model dropdown no longer needs a Settings visit to fill in (#2828)."
+    ]
+  },
+  {
     "version": "v0.139.0",
     "date": "2026-08-18",
     "changes": [
