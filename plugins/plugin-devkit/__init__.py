@@ -371,10 +371,18 @@ def _build_file_tools(config: dict | None) -> list:
         return f"{pdir}:\n" + "\n".join(rows)
 
     @tool
-    def plugin_read_file(plugin_id: str, path: str) -> str:
+    def plugin_read_file(plugin_id: str, path: str, offset: int = 1, limit: int | None = None) -> str:
         """Read a file inside a plugin's dir (relative path, e.g. ``__init__.py``).
         This is how you inspect a plugin you're iterating on — pair with
-        ``plugin_write_file`` + ``reload_plugins``."""
+        ``plugin_write_file`` + ``reload_plugins``.
+
+        ``offset``/``limit`` are LINE numbers (``offset=1`` is the first line):
+        the result is up to ``limit`` lines starting at ``offset``, the same
+        addressing as the core ``read_file``. Leave both at their defaults and
+        a file that fits the read cap comes back whole in one call, exactly as
+        before. A truncated result names the next offset to pass, so in a
+        build loop you re-read just the region you're editing instead of the
+        whole file after every write."""
         try:
             pdir = _plugin_dir(plugin_id, target_dir)
             target = _resolve_member(pdir, path)
@@ -383,9 +391,46 @@ def _build_file_tools(config: dict | None) -> list:
         if not target.is_file():
             return f"✗ no file {path!r} in {plugin_id!r} — plugin_list_files shows what's there"
         text = target.read_text(errors="replace")
-        if len(text) > _READ_CAP:
-            return text[:_READ_CAP] + f"\n… ✂ truncated ({len(text)} chars total)"
-        return text
+        offset = max(1, offset)
+        explicit_limit = None if limit is None else max(1, limit)
+        lines = text.splitlines(keepends=True)
+        total = len(lines)
+        # offset=1 must stay valid for an empty file (total=0) — `max(total, 1)`
+        # keeps that floor without letting a larger offset slip past the check.
+        if offset > max(total, 1):
+            return f"✗ offset {offset} is past the end of {path!r} ({total} lines)"
+        start = offset - 1
+        wanted = lines[start:] if explicit_limit is None else lines[start : start + explicit_limit]
+        # Char safety net independent of `limit` — always include at least one
+        # line (cut short if it alone blows the cap) so a pathologically long
+        # single line still makes progress instead of returning nothing.
+        selected: list[str] = []
+        chars = 0
+        line_truncated = False
+        for ln in wanted:
+            if selected and chars + len(ln) > _READ_CAP:
+                break
+            if not selected and len(ln) > _READ_CAP:
+                selected.append(ln[:_READ_CAP])
+                line_truncated = True
+                break
+            selected.append(ln)
+            chars += len(ln)
+        returned = len(selected)
+        chunk = "".join(selected)
+        reached_eof = (start + returned) >= total
+        if offset == 1 and reached_eof and not line_truncated:
+            return chunk  # the common case, unchanged: the whole (small) file in one call
+        end_line = offset + returned - 1
+        note = f"\n… ✂ (showing lines {offset}-{end_line} of {total}"
+        if line_truncated:
+            note += f"; line {offset} is longer than {_READ_CAP} chars and was cut short"
+            if not reached_eof:
+                note += f"; call again with offset={end_line + 1} for the rest of the file"
+        elif not reached_eof:
+            note += f"; call again with offset={end_line + 1} for more"
+        note += ")"
+        return chunk + note
 
     @tool
     def plugin_write_file(plugin_id: str, path: str, content: str) -> str:

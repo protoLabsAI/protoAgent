@@ -255,6 +255,54 @@ def test_file_tools_roundtrip_and_fence(tmp_path):
     assert "✗" in tools["plugin_list_files"].invoke({"plugin_id": "no-such-plugin"})
 
 
+def test_plugin_read_file_paginates_by_line(tmp_path):
+    """plugin_read_file offset/limit (#2840) — line-addressed pagination matching
+    core read_file (#2709): defaults return a small file whole, an explicit window
+    returns exactly those lines with a continuation hint naming the next offset."""
+    mod = _load_devkit_module(tmp_path)
+    out_root = tmp_path / "out"
+    out_root.mkdir()
+    scaffold = mod._build_scaffold_tool({"target_dir": str(out_root)})
+    _run(scaffold.ainvoke({"name": "Pager", "enable": False}))
+
+    tools = {t.name: t for t in mod._build_file_tools({"target_dir": str(out_root)})}
+    body = "".join(f"line {n}\n" for n in range(1, 11))  # 10 numbered lines
+    tools["plugin_write_file"].invoke({"plugin_id": "pager", "path": "notes.md", "content": body})
+
+    # defaults: the whole small file in one call, verbatim (backward compatible)
+    assert tools["plugin_read_file"].invoke({"plugin_id": "pager", "path": "notes.md"}) == body
+
+    # an explicit window returns exactly those lines + the next offset to continue
+    page = tools["plugin_read_file"].invoke({"plugin_id": "pager", "path": "notes.md", "offset": 3, "limit": 4})
+    assert page.startswith("line 3\nline 4\nline 5\nline 6\n")
+    assert "line 2" not in page and "line 7\n" not in page
+    assert "showing lines 3-6 of 10" in page and "offset=7" in page
+
+    # limit alone pages from the top and still names the continuation
+    page = tools["plugin_read_file"].invoke({"plugin_id": "pager", "path": "notes.md", "limit": 2})
+    assert page.startswith("line 1\nline 2\n") and "offset=3" in page
+
+    # a window ending exactly at EOF reports the range but no further offset
+    tail = tools["plugin_read_file"].invoke({"plugin_id": "pager", "path": "notes.md", "offset": 9})
+    assert tail.startswith("line 9\nline 10\n")
+    assert "showing lines 9-10 of 10" in tail and "offset=" not in tail
+
+    # past-EOF offsets refuse instead of returning an empty success
+    assert "✗ offset 42" in tools["plugin_read_file"].invoke({"plugin_id": "pager", "path": "notes.md", "offset": 42})
+
+    # a file bigger than the read cap paginates instead of char-truncating: the
+    # first default call cuts at a line boundary and names the offset that reads
+    # the remainder in full
+    long_line = "x" * 1000
+    big = "".join(f"{long_line} {n}\n" for n in range(1, 61))  # ~60KB, 60 lines
+    tools["plugin_write_file"].invoke({"plugin_id": "pager", "path": "big.md", "content": big})
+    first = tools["plugin_read_file"].invoke({"plugin_id": "pager", "path": "big.md"})
+    assert "… ✂ (showing lines 1-" in first and "of 60" in first
+    next_offset = int(first.rsplit("offset=", 1)[1].split(" ", 1)[0])
+    rest = tools["plugin_read_file"].invoke({"plugin_id": "pager", "path": "big.md", "offset": next_offset})
+    assert rest.endswith(f"showing lines {next_offset}-60 of 60)")
+
+
 def test_test_plugin_runs_the_scaffolded_suite(tmp_path):
     """test_plugin (ADR 0096 D3) actually subprocess-runs the with_tests suite of a
     freshly scaffolded plugin — the loop's verify step, green from birth."""
