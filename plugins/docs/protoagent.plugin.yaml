@@ -9,7 +9,17 @@ description: >-
 enabled: true
 capabilities:
   network: []
-  filesystem: scoped   # read-only over the bundled docs/ tree
+  filesystem: scoped   # read-only over the bundled docs/ tree (or the configured root)
+
+config_section: docs
+config:
+  root: ""   # point the Docs view + docs_search/docs_read at any directory of
+             # markdown files (absolute path; ~ ok). Empty = the bundled
+             # protoAgent docs. Custom trees group by top-level directory.
+
+# Rendered in the console Settings dialog for this plugin (ADR 0019).
+settings:
+  - { key: root, label: "Docs root — a folder of .md files (empty = protoAgent docs)", type: string }
 views:
   # A rail "Docs" reader (domain/section tree + markdown), and a ⌘K "Docs" palette morph
   # into the same page in search-first mode (ADR 0026 / 0057).

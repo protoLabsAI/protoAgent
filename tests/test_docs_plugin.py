@@ -197,3 +197,78 @@ def test_view_is_four_rules_compliant() -> None:
     assert 'location.pathname.split("/plugins/")[0]' in html  # rule 3 (slug-aware base)
     assert 'apiFetch("/api/plugins/docs' in html  # rules 2+3 (gated data via authed fetch)
     assert "https://" not in html.split("<style>")[0]  # no CDN in the head
+
+
+# ── operator-chosen docs root (`docs.root`) ───────────────────────────────────
+
+
+def _custom_tree(root: Path) -> None:
+    """An arbitrary md tree: root-level file, nested dirs, a hidden dir, and a
+    symlink escaping the root."""
+    (root / "README.md").write_text("# Welcome\n\nintro\n", encoding="utf-8")
+    (root / "runbooks").mkdir()
+    (root / "runbooks" / "deploy.md").write_text("# Deploying\n\nsteps\n", encoding="utf-8")
+    (root / "team-notes").mkdir()
+    (root / "team-notes" / "onboarding.md").write_text("# Onboarding\n\nhello\n", encoding="utf-8")
+    (root / ".vitepress").mkdir()
+    (root / ".vitepress" / "hidden.md").write_text("# Hidden\n", encoding="utf-8")
+    outside = root.parent / "outside.md"
+    outside.write_text("# Outside\n\nsecret\n", encoding="utf-8")
+    (root / "runbooks" / "escape.md").symlink_to(outside)
+
+
+def test_custom_root_serves_any_md_tree(tmp_path) -> None:
+    mod = _load_docs()
+    corpus = sys.modules["docs_plugin_under_test.corpus"]
+    docs_dir = tmp_path / "mydocs"
+    docs_dir.mkdir()
+    _custom_tree(docs_dir)
+    corpus.set_docs_root(docs_dir)
+    try:
+        paths = corpus.valid_paths()
+        assert paths == {"README.md", "runbooks/deploy.md", "team-notes/onboarding.md"}
+        # hidden dirs and symlink escapes are NOT docs
+        assert ".vitepress/hidden.md" not in paths and "runbooks/escape.md" not in paths
+        # reads work by rel path; traversal and absolute stay rejected
+        assert "steps" in corpus.read_doc("runbooks/deploy.md")
+        assert corpus.read_doc("../outside.md") is None
+        assert corpus.read_doc(str(docs_dir.parent / "outside.md")) is None
+        # grouping IS the directory structure: root files first, dirs title-cased
+        tree = corpus.grouped_tree()
+        assert [s["label"] for s in tree] == ["Docs", "Runbooks", "Team Notes"]
+        assert all(len(s["groups"]) == 1 and s["groups"][0]["label"] == "" for s in tree)
+        # the index seeds over the custom corpus (tools + /search follow)
+        idx = mod.DocsIndex()
+        assert idx.seed() == 3
+        assert idx.has("runbooks/deploy.md")
+    finally:
+        corpus.set_docs_root(None)
+
+
+def test_custom_root_reset_restores_bundled_behavior(tmp_path) -> None:
+    _load_docs()
+    corpus = sys.modules["docs_plugin_under_test.corpus"]
+    docs_dir = tmp_path / "mydocs"
+    docs_dir.mkdir()
+    (docs_dir / "a.md").write_text("# A\n", encoding="utf-8")
+    corpus.set_docs_root(docs_dir)
+    corpus.set_docs_root(None)
+    # back on the bundled corpus: SECTIONS scan, real repo docs present
+    assert corpus.is_custom_root() is False
+    assert any(rel.startswith("guides/") for rel in corpus.valid_paths())
+
+
+def test_register_falls_back_loudly_on_bad_root(tmp_path, caplog) -> None:
+    mod = _load_docs()
+    corpus = sys.modules["docs_plugin_under_test.corpus"]
+
+    class _Reg:
+        config = {"root": str(tmp_path / "does-not-exist")}
+
+    try:
+        with caplog.at_level("WARNING"):
+            mod._resolve_custom_root(_Reg())
+        assert "is not a directory" in caplog.text
+        assert corpus.is_custom_root() is False
+    finally:
+        corpus.set_docs_root(None)

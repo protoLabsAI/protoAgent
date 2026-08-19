@@ -16,7 +16,9 @@ import logging
 
 from langchain_core.tools import tool
 
-from .corpus import grouped_tree, read_doc
+from pathlib import Path
+
+from .corpus import grouped_tree, read_doc, set_docs_root
 from .docs_index import DocsIndex
 from .render import render_markdown
 
@@ -125,9 +127,41 @@ def _build_data_router():
     return router
 
 
+def _resolve_custom_root(registry) -> None:
+    """Point the corpus at the operator's md tree when `docs.root` is set.
+
+    Empty/absent = the bundled protoAgent docs, unchanged. A configured path
+    that isn't a directory falls back to the bundled docs LOUDLY — losing the
+    Docs view over a typo'd path would be worse than the default corpus."""
+    global _INDEX
+    try:
+        cfg = registry.live_config() if hasattr(registry, "live_config") else registry.config
+        raw = str((cfg or {}).get("root") or "").strip()
+    except Exception:  # noqa: BLE001 — config access must never break registration
+        raw = ""
+    if not raw:
+        set_docs_root(None)
+        _INDEX = None
+        return
+    root = Path(raw).expanduser()
+    try:
+        root = root.resolve()
+    except OSError:
+        pass
+    if not root.is_dir():
+        log.warning("[docs] docs.root %r is not a directory — serving the bundled docs instead", raw)
+        set_docs_root(None)
+        _INDEX = None
+        return
+    set_docs_root(root)
+    _INDEX = None  # force a re-seed over the new corpus
+    log.info("[docs] serving operator docs root: %s", root)
+
+
 def register(registry) -> None:
     """Entry point — build the index (so the first turn is fast), expose the tools, and
     serve the reader view (page ungated, data gated). ``skills/`` is auto-discovered."""
+    _resolve_custom_root(registry)
     try:
         _index()
     except Exception as exc:  # noqa: BLE001 — plugin load must never fail on this

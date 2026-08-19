@@ -27,16 +27,56 @@ _SECTION_LABELS = {
 }
 
 
+# Operator-chosen docs root (config `docs.root`, set once at plugin register).
+# None = the bundled protoAgent docs, byte-for-byte today's behavior. When set,
+# the corpus switches to CUSTOM mode: every .md under the root (any layout, not
+# the Diátaxis SECTIONS), grouped by top-level directory, nav.json ignored.
+_CUSTOM_ROOT: Path | None = None
+
+
+def set_docs_root(path: Path | None) -> None:
+    """Point the whole corpus (tools, index, view) at an operator's md tree."""
+    global _CUSTOM_ROOT
+    _CUSTOM_ROOT = path
+
+
+def is_custom_root() -> bool:
+    return _CUSTOM_ROOT is not None
+
+
 def docs_root() -> Path:
-    """The `docs/` directory — repo root in dev/Docker, the bundle root when frozen."""
-    return Path(__file__).resolve().parent.parent.parent / "docs"
+    """The active docs root — the operator's configured tree when set, else the
+    bundled `docs/` (repo root in dev/Docker, the bundle root when frozen)."""
+    return _CUSTOM_ROOT or Path(__file__).resolve().parent.parent.parent / "docs"
+
+
+def _iter_custom(root: Path):
+    """Every markdown file under an operator-chosen root: any directory layout,
+    hidden dirs (.git, .vitepress, …) excluded, and — because this tree is
+    arbitrary, unlike the committed bundled corpus — a symlink that resolves
+    OUTSIDE the root is not a doc (it would smuggle unrelated files into the
+    readable set)."""
+    resolved_root = root.resolve()
+    for p in sorted(root.rglob("*.md")):
+        rel = p.relative_to(root)
+        if any(part.startswith(".") for part in rel.parts):
+            continue
+        try:
+            if not p.resolve().is_relative_to(resolved_root):
+                continue
+        except OSError:
+            continue
+        yield rel.as_posix(), p
 
 
 def iter_docs(root: Path | None = None):
     """Yield ``(rel_path, abs_path)`` for every indexed markdown file. ``rel_path`` is a
-    posix path rooted at `docs/` (e.g. ``guides/skills.md``) — it's the public handle the
-    tools + view use, and the membership set is the read-access gate."""
+    posix path rooted at the docs root (e.g. ``guides/skills.md``) — it's the public
+    handle the tools + view use, and the membership set is the read-access gate."""
     root = root or docs_root()
+    if is_custom_root() and root == _CUSTOM_ROOT:
+        yield from _iter_custom(root)
+        return
     for section in SECTIONS:
         base = root / section
         if not base.is_dir():
@@ -76,19 +116,28 @@ def doc_title(abs_path: Path) -> str:
 
 
 def doc_tree(root: Path | None = None) -> list[dict]:
-    """Ordered sections → items (`{path, title}`) for the reader's nav. Section order
-    follows `SECTIONS` (the Diátaxis arc, then ADRs); items sorted by title."""
+    """Ordered sections → items (`{path, title}`) for the reader's nav.
+
+    Bundled corpus: section order follows `SECTIONS` (the Diátaxis arc, then
+    ADRs). Custom root: sections are the DISCOVERED top-level directories
+    (sorted), with root-level files first under a plain "Docs" section — an
+    arbitrary md tree has no Diátaxis to assume. Items sorted by title."""
     root = root or docs_root()
-    by_section: dict[str, list[dict]] = {s: [] for s in SECTIONS}
+    custom = is_custom_root() and root == _CUSTOM_ROOT
+    by_section: dict[str, list[dict]] = {} if custom else {s: [] for s in SECTIONS}
     for rel, abs_path in iter_docs(root):
-        section = rel.split("/", 1)[0]
-        if section in by_section:
+        section = rel.split("/", 1)[0] if "/" in rel else ("" if custom else rel.split("/", 1)[0])
+        if custom:
+            by_section.setdefault(section, []).append({"path": rel, "title": doc_title(abs_path)})
+        elif section in by_section:
             by_section[section].append({"path": rel, "title": doc_title(abs_path)})
+    order = ((["" ] if "" in by_section else []) + sorted(k for k in by_section if k)) if custom else list(SECTIONS)
     out: list[dict] = []
-    for section in SECTIONS:
-        items = sorted(by_section[section], key=lambda x: x["title"].lower())
+    for section in order:
+        items = sorted(by_section.get(section, []), key=lambda x: x["title"].lower())
         if items:
-            out.append({"id": section, "label": _SECTION_LABELS.get(section, section.title()), "items": items})
+            label = ("Docs" if section == "" else section.replace("-", " ").replace("_", " ").title()) if custom else _SECTION_LABELS.get(section, section.title())
+            out.append({"id": section or "root", "label": label, "items": items})
     return out
 
 
@@ -98,6 +147,13 @@ def grouped_tree(root: Path | None = None) -> list[dict]:
     against the live corpus (a stale nav entry is dropped). Falls back to a flat section
     tree (one unlabeled group per section) if nav.json is missing/unreadable."""
     root = root or docs_root()
+    if is_custom_root() and root == _CUSTOM_ROOT:
+        # An operator's tree has no VitePress sidebar to mirror — grouping IS
+        # the directory structure (one unlabeled group per discovered section).
+        return [
+            {"id": s["id"], "label": s["label"], "groups": [{"label": "", "items": s["items"]}]}
+            for s in doc_tree(root)
+        ]
     valid = valid_paths(root)
     try:
         nav = json.loads((Path(__file__).resolve().parent / "nav.json").read_text(encoding="utf-8"))
