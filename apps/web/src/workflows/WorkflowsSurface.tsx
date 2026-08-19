@@ -21,7 +21,7 @@ import {
   Workflow,
   X,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { StagePanel } from "../app/ErrorBoundary";
 import { PanelHeader } from "@protolabsai/ui/navigation";
@@ -311,6 +311,18 @@ function WorkflowsBody() {
     setInputs(seed);
   }
 
+  // Save & test: the just-saved recipe isn't in `workflows` until the
+  // invalidated list refetches — seed its run-form defaults the moment it is.
+  const [testIntent, setTestIntent] = useState<string | null>(null);
+  useEffect(() => {
+    if (!testIntent) return;
+    if (workflows.some((w) => w.name === testIntent)) {
+      selectRecipe(testIntent);
+      setTestIntent(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- selectRecipe is stable per render and reads current workflows
+  }, [testIntent, workflows]);
+
   const missingRequired = current
     ? current.inputs.filter((i) => i.required && !inputs[i.name]?.trim()).map((i) => i.name)
     : [];
@@ -374,6 +386,14 @@ function WorkflowsBody() {
             onCancel={closeBuilder}
             onSaved={(name) => {
               closeBuilder();
+              void queryClient.invalidateQueries({ queryKey: queryKeys.workflows });
+              setSelected(name);
+            }}
+            onTest={(name) => {
+              // Save & test (S3): same as save, but once the refreshed list
+              // carries the recipe, seed its run-form defaults too.
+              closeBuilder();
+              setTestIntent(name);
               void queryClient.invalidateQueries({ queryKey: queryKeys.workflows });
               setSelected(name);
             }}

@@ -999,7 +999,9 @@ const server = createServer(async (req, res) => {
       return sendJson(res, { errors: [] });
     }
     if (pathname === "/api/plugins/workflows/save") {
-      return sendJson(res, { saved: true, name: "demo" });
+      // Echo the posted recipe name (the real route does) so Save & test can
+      // select what it just saved. `body` is already parsed by readBody above.
+      return sendJson(res, { saved: true, name: String(body?.name || "demo") });
     }
     if (req.method === "DELETE" && /^\/api\/plugins\/workflows\/[^/]+$/.test(pathname)) {
       return sendJson(res, { deleted: true });

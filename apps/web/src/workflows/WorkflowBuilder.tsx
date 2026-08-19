@@ -1,6 +1,19 @@
 import { Checkbox, DropdownSelect, Input, Textarea } from "@protolabsai/ui/forms";
 import { Badge, Button } from "@protolabsai/ui/primitives";
-import { AlertTriangle, FileInput, FileOutput, Pause, Plus, Save, Settings2, Trash2, X } from "lucide-react";
+import {
+  AlertTriangle,
+  Copy,
+  FileInput,
+  FileOutput,
+  GripVertical,
+  Pause,
+  Play,
+  Plus,
+  Save,
+  Settings2,
+  Trash2,
+  X,
+} from "lucide-react";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -9,6 +22,7 @@ import { errMsg } from "../lib/format";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { useToast } from "@protolabsai/ui/overlays";
 import type { WorkflowRecipe } from "../lib/types";
+import { type BuilderStep, reorderSteps, uniqueStepId } from "./builderOps";
 import { computeLanes } from "./RunTimeline";
 
 // Author a workflow recipe from the console, or EDIT an existing one
@@ -23,7 +37,7 @@ import { computeLanes } from "./RunTimeline";
 // recipe/step/input fields the form doesn't manage (version, max_concurrency,
 // per-step timeout, input annotations beyond the managed set).
 
-type Step = { id: string; subagent: string; prompt: string; dependsOn: string[]; gate: boolean };
+type Step = BuilderStep;
 type InputRow = { name: string; required: boolean; default: string; type: string; description: string };
 // What's focused in the editor pane: a section, or a step by array index.
 type Focus = "workflow" | "inputs" | "output" | number;
@@ -74,11 +88,15 @@ export function WorkflowBuilder({
   onSaved,
   onCancel,
   initial,
+  onTest,
 }: {
   subagents: string[];
   onSaved: (name: string) => void;
   onCancel: () => void;
   initial?: WorkflowRecipe;
+  /** Save, then land on the run form with this recipe selected and its
+   * defaults seeded — the tightest author-iterate loop (S3). */
+  onTest?: (name: string) => void;
 }) {
   const toast = useToast();
   const editing = Boolean(initial);
@@ -107,6 +125,30 @@ export function WorkflowBuilder({
   const removeStep = (i: number) => {
     setSteps((s) => s.filter((_, j) => j !== i));
     setFocus(i > 0 ? i - 1 : "workflow");
+  };
+  const duplicateStep = (i: number) => {
+    const src = steps[i];
+    const clone: Step = { ...src, id: uniqueStepId(steps, src.id) };
+    setSteps((s) => [...s.slice(0, i + 1), clone, ...s.slice(i + 1)]);
+    setFocus(i + 1);
+  };
+
+  // Drag-reorder via a dedicated handle (a draggable CARD would swallow the
+  // click that focuses it — the #1755 class of bug). A strict linear chain is
+  // re-threaded to the new order; any other DAG keeps its depends_on.
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [dragOver, setDragOver] = useState<number | null>(null);
+  const dropOn = (to: number) => {
+    if (dragIndex == null) return;
+    const focusedId = typeof focus === "number" ? steps[focus]?.id : null;
+    const next = reorderSteps(steps, dragIndex, to);
+    setSteps(next);
+    if (focusedId != null) {
+      const at = next.findIndex((s) => s.id === focusedId);
+      if (at >= 0) setFocus(at);
+    }
+    setDragIndex(null);
+    setDragOver(null);
   };
 
   const toggleDep = (i: number, depId: string) =>
@@ -213,13 +255,13 @@ export function WorkflowBuilder({
   const errorsForStep = (id: string) => (id.trim() ? liveErrors.filter((e) => e.includes(id.trim())) : []);
   const unplacedErrors = liveErrors.filter((e) => !steps.some((s) => s.id.trim() && e.includes(s.id.trim())));
 
-  async function save() {
+  async function save(then: (name: string) => void = onSaved) {
     setSaving(true);
     try {
       const r = await api.saveWorkflow(buildRecipe());
       const saved = r.name || name.trim();
       toast({ tone: "success", title: editing ? "Workflow updated" : "Workflow saved", message: `${saved} is ready to run.` });
-      onSaved(saved);
+      then(saved);
     } catch (e) {
       toast({ tone: "error", title: "Couldn't save workflow", message: errMsg(e) });
     } finally {
@@ -302,11 +344,36 @@ export function WorkflowBuilder({
               type="button"
               role="tab"
               aria-selected={focus === i}
-              className={`builder-card builder-card-step ${focus === i ? "builder-card-sel" : ""}`}
+              className={`builder-card builder-card-step ${focus === i ? "builder-card-sel" : ""} ${dragOver === i ? "builder-card-dragover" : ""}`}
               key={i}
               onClick={() => setFocus(i)}
+              onDragOver={(e) => {
+                if (dragIndex == null) return;
+                e.preventDefault();
+                setDragOver(i);
+              }}
+              onDragLeave={() => setDragOver((d) => (d === i ? null : d))}
+              onDrop={(e) => {
+                e.preventDefault();
+                dropOn(i);
+              }}
             >
               <span className="builder-card-head">
+                <span
+                  className="builder-drag-handle"
+                  title="Drag to reorder"
+                  draggable
+                  onDragStart={(e) => {
+                    e.dataTransfer.effectAllowed = "move";
+                    setDragIndex(i);
+                  }}
+                  onDragEnd={() => {
+                    setDragIndex(null);
+                    setDragOver(null);
+                  }}
+                >
+                  <GripVertical size={11} />
+                </span>
                 {dot(!step.id.trim() || !step.prompt.trim() || errorsForStep(step.id).length > 0)}
                 <strong>{step.id.trim() || "(unnamed)"}</strong>
                 <Badge>{step.subagent}</Badge>
@@ -433,6 +500,9 @@ export function WorkflowBuilder({
                   label="operator gate"
                   title="Pause for operator approval before this step runs (gate: human)"
                 />
+                <Button icon variant="ghost" type="button" onClick={() => duplicateStep(focus)} title="Duplicate step">
+                  <Copy size={14} />
+                </Button>
                 {steps.length > 1 && (
                   <Button icon variant="ghost" type="button" onClick={() => removeStep(focus)} title="Remove step">
                     <Trash2 size={14} />
@@ -519,6 +589,16 @@ export function WorkflowBuilder({
         <Button variant="ghost" type="button" onClick={onCancel} disabled={saving}>
           Cancel
         </Button>
+        {onTest && (
+          <Button
+            type="button"
+            onClick={() => void save(onTest)}
+            disabled={!valid || saving}
+            title="Save, then land on the run form with this recipe selected"
+          >
+            <Play size={15} /> Save &amp; test
+          </Button>
+        )}
         <Button variant="primary" type="button" onClick={() => void save()} loading={saving} disabled={!valid}>
           {saving ? null : <Save size={16} />}
           {editing ? "Save changes" : "Save workflow"}

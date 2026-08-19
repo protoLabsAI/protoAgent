@@ -748,3 +748,20 @@
 .builder-row > .pl-checkbox {
   flex: none;
 }
+
+/* S3 — flow polish: drag handle, drop indicator. */
+.builder-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  color: var(--pl-color-fg-subtle);
+  cursor: grab;
+  flex: 0 0 auto;
+}
+
+.builder-drag-handle:active {
+  cursor: grabbing;
+}
+
+.builder-card-dragover {
+  border-top: 2px solid var(--pl-color-accent);
+}

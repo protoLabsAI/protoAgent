@@ -91,3 +91,25 @@ test("edit loads the full recipe into the builder", async ({ page }) => {
   await expect(page.getByPlaceholder("description — the run form's field hint").first()).toBeVisible();
 });
 
+
+test("duplicate step clones the focused step with a unique id", async ({ page }) => {
+  await openWorkflows(page);
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  // Edit opens on the first step (gather); duplicating inserts gather-copy after it.
+  await page.getByRole("button", { name: "Duplicate step" }).click();
+  await expect(page.locator(".builder-card-step")).toHaveCount(3);
+  await expect(page.locator(".builder-card-step", { hasText: "gather-copy" })).toBeVisible();
+  // Focus moved to the clone — its id fills the editor.
+  await expect(page.getByPlaceholder("step id")).toHaveValue("gather-copy");
+});
+
+test("save & test lands on the run form with the recipe selected", async ({ page }) => {
+  await openWorkflows(page);
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  await page.getByRole("button", { name: "Save & test" }).click();
+  // The builder closes onto the run view: recipe selected, inputs seeded
+  // (the optional input shows its default), Run available.
+  await expect(page.locator(".builder-prompt")).toHaveCount(0);
+  await expect(page.getByText("Research a topic, then write a brief.")).toBeVisible();
+  await expect(page.locator('input[placeholder="default: deep"]')).toBeVisible();
+});
