@@ -69,12 +69,25 @@ test("history lists recorded runs and reopens one in the timeline", async ({ pag
 test("edit loads the full recipe into the builder", async ({ page }) => {
   await openWorkflows(page);
   await page.getByRole("button", { name: "Edit", exact: true }).click();
-  // Name is fixed in edit mode; the step prompts came from GET /{name}/recipe.
+  // Edit opens focused on the FIRST STEP (outline-and-focus layout): its prompt
+  // came from GET /{name}/recipe and fills the editor pane.
+  await expect(page.locator(".builder-prompt").first()).toHaveValue(/Research \{\{inputs\.topic\}\}/);
+  // Template-ref chips render for inputs and the OTHER steps (the focused
+  // step never offers its own output).
+  await expect(page.locator(".builder-chip", { hasText: "{{inputs.topic}}" }).first()).toBeVisible();
+  await expect(page.locator(".builder-chip", { hasText: "{{steps.brief.output}}" }).first()).toBeVisible();
+  // Focusing the second step through the outline swaps the editor pane.
+  await expect(page.locator(".builder-card-step")).toHaveCount(2);
+  await page.locator(".builder-card-step", { hasText: "brief" }).click();
+  await expect(page.locator(".builder-chip", { hasText: "{{steps.gather.output}}" }).first()).toBeVisible();
+  // The outline lists the workflow's shape; focusing the workflow card shows
+  // the (fixed-in-edit) name.
+  await page.locator(".builder-card", { hasText: "research-and-brief" }).first().click();
   const name = page.getByPlaceholder("my-workflow");
   await expect(name).toHaveValue("research-and-brief");
   await expect(name).toBeDisabled();
-  await expect(page.locator(".builder-prompt").first()).toHaveValue(/Research \{\{inputs\.topic\}\}/);
-  // Template-ref chips render for inputs and sibling steps.
-  await expect(page.locator(".builder-chip", { hasText: "{{inputs.topic}}" }).first()).toBeVisible();
-  await expect(page.locator(".builder-chip", { hasText: "{{steps.gather.output}}" }).first()).toBeVisible();
+  // The inputs editor carries the typed-input contract fields.
+  await page.locator(".builder-card", { hasText: "Inputs" }).first().click();
+  await expect(page.getByPlaceholder("description — the run form's field hint").first()).toBeVisible();
 });
+

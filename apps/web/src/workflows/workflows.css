@@ -12,12 +12,170 @@
   margin: 4px 12px;
 }
 
-/* Workflow builder (Sprint C) — author a recipe in the console. */
+/* Workflow builder — "Outline & Focus": the workflow's shape as cards on the
+   left, a focused editor for the selected entry on the right. Sized by the
+   PANEL (container query), not the viewport — below 48rem the outline becomes
+   a horizontal strip above the editor. */
 .workflow-builder {
   display: flex;
   flex-direction: column;
   gap: 12px;
   padding: 0 12px;
+  container-type: inline-size;
+  container-name: builder;
+}
+
+.builder-split {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.builder-outline {
+  display: flex;
+  flex-direction: row;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.builder-outline .builder-card {
+  min-width: 150px;
+  max-width: 210px;
+  flex: 0 0 auto;
+}
+
+.builder-outline-lanes {
+  display: none; /* the strip layout has no room for lanes; the wide layout shows them */
+}
+
+.builder-focus {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+@container builder (min-width: 42rem) {
+  .builder-split {
+    flex-direction: row;
+    align-items: flex-start;
+  }
+  .builder-outline {
+    flex-direction: column;
+    flex: 0 0 232px;
+    overflow-x: visible;
+    position: sticky;
+    top: 0;
+  }
+  .builder-outline .builder-card {
+    min-width: 0;
+    max-width: none;
+  }
+  .builder-outline-lanes {
+    display: flex;
+    gap: 4px;
+    padding: 2px 0;
+  }
+  .builder-outline-lanes .workflow-lane {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    border: 1px dashed var(--pl-color-border);
+    border-radius: var(--pl-radius);
+    padding: 4px;
+    min-width: 0;
+  }
+  .builder-focus {
+    flex: 1;
+  }
+}
+
+.builder-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+  background: var(--pl-color-bg);
+  color: var(--pl-color-fg);
+  padding: 7px 9px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.builder-card:hover {
+  border-color: var(--pl-color-border-strong, var(--pl-color-border));
+}
+
+.builder-card-sel {
+  border-color: var(--pl-color-accent);
+  outline: 1px solid var(--pl-color-accent);
+}
+
+.builder-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.builder-card-head strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.builder-card-sub {
+  font-size: 10.5px;
+  color: var(--pl-color-fg-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.builder-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+}
+
+.builder-dot-ok {
+  background: var(--pl-color-success, #57b880);
+}
+
+.builder-dot-err {
+  background: var(--pl-color-error, #d8635b);
+}
+
+.builder-add-step {
+  align-self: center;
+}
+
+.builder-step-head {
+  flex-wrap: wrap;
+}
+
+.builder-input-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+  padding: 8px;
+}
+
+.builder-row-2 input {
+  flex: 1;
+}
+
+.builder-chip-on {
+  border-color: var(--pl-color-accent);
+  color: var(--pl-color-accent);
 }
 
 .builder-section {
