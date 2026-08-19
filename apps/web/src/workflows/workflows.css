@@ -35,149 +35,11 @@
   margin-top: 0;
 }
 
-.builder-split {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  min-width: 0;
-  max-width: 100%;
-}
-
-.builder-outline {
-  display: flex;
-  flex-direction: row;
-  gap: 6px;
-  overflow-x: auto;
-  padding-bottom: 4px;
-  min-width: 0;
-  max-width: 100%;
-}
-
-.builder-outline .builder-card {
-  min-width: 150px;
-  max-width: 210px;
-  flex: 0 0 auto;
-}
-
-.builder-outline-lanes {
-  display: none; /* the strip layout has no room for lanes; the wide layout shows them */
-}
-
 .builder-focus {
   display: flex;
   flex-direction: column;
   gap: 10px;
   min-width: 0;
-}
-
-@container builder (min-width: 42rem) {
-  .builder-split {
-    flex-direction: row;
-    align-items: stretch;
-  }
-  .builder-outline {
-    flex-direction: column;
-    flex: 0 0 232px;
-    width: 232px;
-    max-width: 232px;
-    overflow: hidden;
-    position: sticky;
-    top: 0;
-  }
-  .builder-outline .builder-card {
-    min-width: 0;
-    max-width: none;
-  }
-  .builder-outline-lanes {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    padding: 2px 0;
-    min-width: 0;
-  }
-  .builder-outline-lanes .workflow-lane {
-    flex: 0 0 auto;
-    max-width: 100%;
-    display: flex;
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 3px;
-    border: 1px dashed var(--pl-color-border);
-    border-radius: var(--pl-radius);
-    padding: 3px 4px;
-    min-width: 0;
-  }
-  .builder-outline-lanes .lane-chip {
-    min-width: 0;
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    display: block;
-  }
-  .builder-focus {
-    flex: 1;
-  }
-}
-
-.builder-card {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-  max-width: 100%;
-  text-align: left;
-  border: 1px solid var(--pl-color-border);
-  border-radius: var(--pl-radius);
-  background: var(--pl-color-bg);
-  color: var(--pl-color-fg);
-  padding: 7px 9px;
-  cursor: pointer;
-  font: inherit;
-}
-
-.builder-card:hover {
-  border-color: var(--pl-color-border-strong, var(--pl-color-border));
-}
-
-.builder-card-sel {
-  border-color: var(--pl-color-accent);
-  outline: 1px solid var(--pl-color-accent);
-}
-
-.builder-card-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  min-width: 0;
-}
-
-.builder-card-head strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.builder-card-head > * {
-  min-width: 0;
-}
-
-.builder-card-head .pl-badge,
-.builder-card-head [class*="badge"] {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 12ch;
-  flex: 0 1 auto;
-}
-
-.builder-card-sub {
-  font-size: 10.5px;
-  color: var(--pl-color-fg-subtle);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .builder-dot {
@@ -193,10 +55,6 @@
 
 .builder-dot-err {
   background: var(--pl-color-error, #d8635b);
-}
-
-.builder-add-step {
-  align-self: center;
 }
 
 .builder-step-head {
@@ -814,22 +672,6 @@
   flex: none;
 }
 
-/* S3 — flow polish: drag handle, drop indicator. */
-.builder-drag-handle {
-  display: inline-flex;
-  align-items: center;
-  color: var(--pl-color-fg-subtle);
-  cursor: grab;
-  flex: 0 0 auto;
-}
-
-.builder-drag-handle:active {
-  cursor: grabbing;
-}
-
-.builder-card-dragover {
-  border-top: 2px solid var(--pl-color-accent);
-}
 
 /* The prompt is the work surface — it absorbs the pane's slack height. */
 .builder-prompt-box {
@@ -842,4 +684,173 @@
   flex: 1;
   height: 100%;
   min-height: 200px;
+}
+
+/* ── DAG canvas (node-and-edge builder) ───────────────────────────────────── */
+.builder-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.builder-toolbar-spacer {
+  flex: 1;
+}
+
+.builder-toolchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border: 1px solid var(--pl-color-border);
+  border-radius: 999px;
+  background: var(--pl-color-bg);
+  color: var(--pl-color-fg-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  max-width: 220px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.builder-toolchip-on {
+  border-color: var(--pl-color-accent);
+  color: var(--pl-color-fg);
+}
+
+.builder-toolchip-bad {
+  border-color: var(--pl-color-error, #d8635b);
+}
+
+/* Mobile-first: canvas on top, editor below; side-by-side once the PANEL is
+   wide enough (container query — the viewport lies inside the rail/proxy). */
+.builder-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.dag-canvas {
+  height: 340px;
+  min-width: 0;
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+  overflow: hidden;
+  background: var(--pl-color-bg-inset, var(--pl-color-bg));
+}
+
+.builder-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+@container builder (min-width: 48rem) {
+  .builder-stage {
+    flex-direction: row;
+    align-items: stretch;
+  }
+  .dag-canvas {
+    flex: 1;
+    height: auto;
+    min-height: 440px;
+  }
+  .builder-editor {
+    flex: 0 0 400px;
+    width: 400px;
+    max-width: 400px;
+    overflow: hidden auto;
+  }
+}
+
+/* nodes — DS tokens over React Flow's defaults */
+.dag-node {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 150px;
+  max-width: 200px;
+  padding: 7px 10px;
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+  background: var(--pl-color-bg);
+  color: var(--pl-color-fg);
+  font-size: 12px;
+}
+
+.dag-node-sel {
+  border-color: var(--pl-color-accent);
+  box-shadow: 0 0 0 1px var(--pl-color-accent);
+}
+
+.dag-node-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.dag-node-head strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dag-node-sub {
+  display: flex;
+  min-width: 0;
+}
+
+.dag-handle {
+  width: 9px;
+  height: 9px;
+  background: var(--pl-color-accent);
+  border: 2px solid var(--pl-color-bg);
+}
+
+.dag-canvas .react-flow__background {
+  background: transparent;
+}
+
+.dag-canvas .react-flow__edge-path {
+  stroke: var(--pl-color-border-strong, var(--pl-color-fg-subtle));
+  stroke-width: 1.5;
+}
+
+.dag-canvas .react-flow__edge.selected .react-flow__edge-path {
+  stroke: var(--pl-color-accent);
+}
+
+.dag-canvas .react-flow__controls {
+  background: var(--pl-color-bg);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+  box-shadow: none;
+}
+
+.dag-canvas .react-flow__controls-button {
+  background: var(--pl-color-bg);
+  border-bottom: 1px solid var(--pl-color-border);
+}
+
+.dag-canvas .react-flow__controls-button svg {
+  fill: var(--pl-color-fg-muted);
+}
+
+.builder-insert-row {
+  display: flex;
+}
+
+.builder-menu-label {
+  padding: 4px 10px 2px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--pl-color-fg-subtle);
 }

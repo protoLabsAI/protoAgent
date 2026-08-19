@@ -1,12 +1,10 @@
 import { Checkbox, DropdownSelect, Input, Textarea } from "@protolabsai/ui/forms";
-import { Badge, Button } from "@protolabsai/ui/primitives";
+import { Button } from "@protolabsai/ui/primitives";
 import {
   AlertTriangle,
   Copy,
   FileInput,
   FileOutput,
-  GripVertical,
-  Pause,
   Play,
   Plus,
   Save,
@@ -22,28 +20,30 @@ import { errMsg } from "../lib/format";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { useToast } from "@protolabsai/ui/overlays";
 import type { WorkflowRecipe } from "../lib/types";
-import { type BuilderStep, downstreamOf, reorderSteps, uniqueStepId } from "./builderOps";
-import { computeLanes } from "./RunTimeline";
+import { Menu, MenuItem, MenuSeparator } from "@protolabsai/ui/menu";
+
+import { type BuilderStep, downstreamOf, uniqueStepId, upstreamOf } from "./builderOps";
+import { DagCanvas } from "./DagCanvas";
 
 // Author a workflow recipe from the console, or EDIT an existing one
-// (`initial` = the full recipe from GET /{name}/recipe). "Outline & Focus"
-// layout: the LEFT column is the workflow's shape — step cards in order, the
-// parallelism lanes, and entries for the workflow header, inputs, and output —
-// and the RIGHT pane is a focused editor for whichever entry is selected, so
-// the selected step's prompt (the actual work) gets the whole pane. The server
-// stays the source of truth for validity: the same checks that gate save run
-// live while authoring (POST /validate, debounced) and land as dots on the
-// outline cards + inline messages in the focused editor. Editing preserves
-// recipe/step/input fields the form doesn't manage (version, max_concurrency,
-// per-step timeout, input annotations beyond the managed set).
+// (`initial` = the full recipe from GET /{name}/recipe). The structure surface
+// is a node-and-edge DAG canvas (n8n/ComfyUI shape — the operator's call after
+// living with the outline): nodes are steps, edges are `depends_on`, dragging
+// a connection creates a dependency (cycle-guarded), deleting an edge removes
+// one, and node positions persist on the step's unmanaged `ui` key. Selecting
+// a node opens the focused editor beside the canvas, where the prompt gets
+// real room; the workflow header, inputs, and output open from the toolbar.
+// The server stays the source of truth for validity: the same checks that
+// gate save run live while authoring (POST /validate, debounced) and land as
+// dots on the nodes + inline messages in the open editor. Editing preserves
+// recipe/step/input fields the form doesn't manage.
 
 type Step = BuilderStep;
 type InputRow = { name: string; required: boolean; default: string; type: string; description: string };
-// What's focused in the editor pane: a section, or a step by array index.
-type Focus = "workflow" | "inputs" | "output" | number;
+// What the editor pane shows: a section, a step by index, or nothing (full canvas).
+type Focus = "workflow" | "inputs" | "output" | number | null;
 
 const MANAGED_KEYS = ["name", "description", "version", "inputs", "steps", "output"] as const;
-// The managed slice of an input row; anything else an author wrote rides along untouched.
 const INPUT_TYPES = ["string", "object", "array", "number", "boolean"].map((t) => ({ value: t, label: t }));
 
 function fromInitial(initial: WorkflowRecipe | undefined, fallback: string): { inputs: InputRow[]; steps: Step[] } {
@@ -79,6 +79,10 @@ function fromInitial(initial: WorkflowRecipe | undefined, fallback: string): { i
       prompt: String(s.prompt ?? ""),
       dependsOn: typeof s.depends_on === "string" ? [s.depends_on] : [...(s.depends_on ?? [])],
       gate: s.gate === "human",
+      ui:
+        s.ui && typeof s.ui === "object" && Number.isFinite(Number(s.ui.x)) && Number.isFinite(Number(s.ui.y))
+          ? { x: Number(s.ui.x), y: Number(s.ui.y) }
+          : undefined,
     })),
   };
 }
@@ -95,7 +99,7 @@ export function WorkflowBuilder({
   onCancel: () => void;
   initial?: WorkflowRecipe;
   /** Save, then land on the run form with this recipe selected and its
-   * defaults seeded — the tightest author-iterate loop (S3). */
+   * defaults seeded — the tightest author-iterate loop. */
   onTest?: (name: string) => void;
 }) {
   const toast = useToast();
@@ -119,37 +123,41 @@ export function WorkflowBuilder({
   const setInput = (i: number, patch: Partial<InputRow>) =>
     setInputs((x) => x.map((v, j) => (j === i ? { ...v, ...patch } : v)));
   const addStep = () => {
-    setSteps((s) => [...s, { id: `step${s.length + 1}`, subagent: fallback, prompt: "", dependsOn: [], gate: false }]);
+    setSteps((s) => [...s, { id: uniqueStepId(s, "step"), subagent: fallback, prompt: "", dependsOn: [], gate: false }]);
     setFocus(steps.length);
   };
   const removeStep = (i: number) => {
-    setSteps((s) => s.filter((_, j) => j !== i));
-    setFocus(i > 0 ? i - 1 : "workflow");
+    const goneId = steps[i]?.id.trim();
+    setSteps((s) =>
+      s
+        .filter((_, j) => j !== i)
+        .map((st) => (goneId && st.dependsOn.includes(goneId) ? { ...st, dependsOn: st.dependsOn.filter((d) => d !== goneId) } : st)),
+    );
+    setFocus(null);
   };
   const duplicateStep = (i: number) => {
     const src = steps[i];
-    const clone: Step = { ...src, id: uniqueStepId(steps, src.id) };
+    const clone: Step = {
+      ...src,
+      id: uniqueStepId(steps, src.id),
+      ui: src.ui ? { x: src.ui.x + 40, y: src.ui.y + 56 } : undefined,
+    };
     setSteps((s) => [...s.slice(0, i + 1), clone, ...s.slice(i + 1)]);
     setFocus(i + 1);
   };
 
-  // Drag-reorder via a dedicated handle (a draggable CARD would swallow the
-  // click that focuses it — the #1755 class of bug). A strict linear chain is
-  // re-threaded to the new order; any other DAG keeps its depends_on.
-  const [dragIndex, setDragIndex] = useState<number | null>(null);
-  const [dragOver, setDragOver] = useState<number | null>(null);
-  const dropOn = (to: number) => {
-    if (dragIndex == null) return;
-    const focusedId = typeof focus === "number" ? steps[focus]?.id : null;
-    const next = reorderSteps(steps, dragIndex, to);
-    setSteps(next);
-    if (focusedId != null) {
-      const at = next.findIndex((s) => s.id === focusedId);
-      if (at >= 0) setFocus(at);
-    }
-    setDragIndex(null);
-    setDragOver(null);
-  };
+  const connect = (sourceId: string, targetId: string) =>
+    setSteps((s) =>
+      s.map((st) =>
+        st.id.trim() === targetId && !st.dependsOn.includes(sourceId)
+          ? { ...st, dependsOn: [...st.dependsOn, sourceId] }
+          : st,
+      ),
+    );
+  const disconnect = (sourceId: string, targetId: string) =>
+    setSteps((s) =>
+      s.map((st) => (st.id.trim() === targetId ? { ...st, dependsOn: st.dependsOn.filter((d) => d !== sourceId) } : st)),
+    );
 
   const toggleDep = (i: number, depId: string) =>
     setStep(i, {
@@ -224,6 +232,7 @@ export function WorkflowBuilder({
         else delete step.depends_on;
         if (st.gate) step.gate = "human";
         else delete step.gate;
+        if (st.ui) step.ui = st.ui;
         return step;
       }),
       output: output.trim() || `{{steps.${last}.output}}`,
@@ -249,9 +258,9 @@ export function WorkflowBuilder({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- buildRecipe reads all form state below
   }, [name, description, inputs, steps, output, valid]);
 
-  // Advisory mapping of server error strings onto outline cards: an error that
-  // names a step id lands on that card; everything else lands on the workflow
-  // card (and renders in whatever editor is open, so nothing hides).
+  // Advisory mapping of server error strings onto nodes: an error naming a
+  // step id lands on that node's dot; everything else surfaces in whatever
+  // editor is open (and reddens the workflow toolbar chip).
   const errorsForStep = (id: string) => (id.trim() ? liveErrors.filter((e) => e.includes(id.trim())) : []);
   const unplacedErrors = liveErrors.filter((e) => !steps.some((s) => s.id.trim() && e.includes(s.id.trim())));
 
@@ -269,14 +278,20 @@ export function WorkflowBuilder({
     }
   }
 
-  const inputChips = inputs.filter((i) => i.name.trim()).map((i) => `{{inputs.${i.name.trim()}}}`);
-  const laneSteps = steps
-    .filter((s) => s.id.trim())
-    .map((s) => ({ id: s.id.trim(), subagent: s.subagent, depends_on: s.dependsOn, gate: s.gate ? "human" : undefined }));
-  const lanes = useMemo(() => computeLanes(laneSteps), [steps]); // eslint-disable-line react-hooks/exhaustive-deps -- laneSteps derives from steps
   const focusedStep = typeof focus === "number" ? steps[focus] : undefined;
+  const stepFlags = steps.map((st) => ({
+    error: !st.id.trim() || !st.prompt.trim() || errorsForStep(st.id).length > 0,
+  }));
 
-  const dot = (bad: boolean) => <span className={`builder-dot ${bad ? "builder-dot-err" : "builder-dot-ok"}`} />;
+  const chip = (key: Exclude<Focus, number | null>, icon: React.ReactNode, label: string, bad = false) => (
+    <button
+      type="button"
+      className={`builder-toolchip ${focus === key ? "builder-toolchip-on" : ""} ${bad ? "builder-toolchip-bad" : ""}`}
+      onClick={() => setFocus(focus === key ? null : key)}
+    >
+      {icon} {label}
+    </button>
+  );
 
   return (
     <div className="workflow-builder">
@@ -290,303 +305,231 @@ export function WorkflowBuilder({
         }
       />
 
-      <div className="builder-split">
-        {/* ── outline: the workflow's shape, always visible ─────────────── */}
-        <div className="builder-outline" role="tablist" aria-label="workflow outline">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={focus === "workflow"}
-            className={`builder-card ${focus === "workflow" ? "builder-card-sel" : ""}`}
-            onClick={() => setFocus("workflow")}
-          >
-            <span className="builder-card-head">
-              {dot(name.trim() === "" || unplacedErrors.length > 0)}
-              <Settings2 size={12} />
-              <strong>{name.trim() || "untitled workflow"}</strong>
-            </span>
-            <span className="builder-card-sub">{description.trim() || "name & description"}</span>
-          </button>
+      <div className="builder-toolbar">
+        {chip("workflow", <Settings2 size={12} />, name.trim() || "workflow", name.trim() === "" || unplacedErrors.length > 0)}
+        {chip("inputs", <FileInput size={12} />, `inputs · ${inputs.filter((i) => i.name.trim()).length}`)}
+        {chip("output", <FileOutput size={12} />, "output")}
+        <span className="builder-toolbar-spacer" />
+        <Button variant="ghost" type="button" onClick={addStep}>
+          <Plus size={13} /> add step
+        </Button>
+      </div>
 
-          <button
-            type="button"
-            role="tab"
-            aria-selected={focus === "inputs"}
-            className={`builder-card ${focus === "inputs" ? "builder-card-sel" : ""}`}
-            onClick={() => setFocus("inputs")}
-          >
-            <span className="builder-card-head">
-              <FileInput size={12} />
-              <strong>Inputs</strong>
-              <Badge>{inputs.filter((i) => i.name.trim()).length}</Badge>
-            </span>
-            <span className="builder-card-sub">
-              {inputs.filter((i) => i.name.trim()).map((i) => i.name.trim()).join(", ") || "none declared"}
-            </span>
-          </button>
+      <div className="builder-stage">
+        <DagCanvas
+          steps={steps}
+          focusIndex={typeof focus === "number" ? focus : null}
+          stepFlags={stepFlags}
+          onSelect={(i) => setFocus(i)}
+          onConnect={connect}
+          onDisconnect={disconnect}
+          onMove={(i, pos) => setStep(i, { ui: pos })}
+          onCycleRefused={() =>
+            toast({ tone: "error", title: "That edge would loop", message: "The target already runs before the source." })
+          }
+        />
 
-          {lanes.length > 1 && (
-            <div className="builder-outline-lanes" aria-label="step order (columns run in parallel)">
-              {lanes.map((lane, i) => (
-                <div className="workflow-lane" key={i}>
-                  {lane.map((id) => (
-                    <span key={id} className="lane-chip">
-                      {id}
-                    </span>
-                  ))}
+        {focus != null && (
+          <div className="builder-editor">
+            {focus === "workflow" && (
+              <>
+                <label className="field">
+                  <span>Name *{editing ? " (fixed)" : ""}</span>
+                  <Input value={name} disabled={editing} onChange={(e) => setName(e.target.value)} placeholder="my-workflow" />
+                </label>
+                <label className="field">
+                  <span>Description</span>
+                  <Textarea
+                    rows={2}
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    placeholder="what this workflow does — shown in the run view"
+                  />
+                </label>
+              </>
+            )}
+
+            {focus === "inputs" && (
+              <div className="builder-inputs">
+                <div className="builder-section-head">
+                  <span>Declared inputs</span>
+                  <Button
+                    variant="ghost"
+                    type="button"
+                    onClick={() => {
+                      setInputs((x) => [...x, { name: "", required: false, default: "", type: "string", description: "" }]);
+                    }}
+                  >
+                    <Plus size={13} /> add input
+                  </Button>
                 </div>
-              ))}
-            </div>
-          )}
+                {inputs.map((inp, i) => (
+                  <div className="builder-input-card" key={i}>
+                    <div className="builder-row">
+                      <Input value={inp.name} placeholder="input name" onChange={(e) => setInput(i, { name: e.target.value })} />
+                      <DropdownSelect value={inp.type} onValueChange={(v) => setInput(i, { type: v })} options={INPUT_TYPES} />
+                      <Checkbox
+                        className="checkbox-field"
+                        checked={inp.required}
+                        onCheckedChange={(c) => setInput(i, { required: Boolean(c) })}
+                        label="required"
+                      />
+                      <Button icon variant="ghost" type="button" onClick={() => setInputs((x) => x.filter((_, j) => j !== i))} title="Remove">
+                        <Trash2 size={14} />
+                      </Button>
+                    </div>
+                    <div className="builder-row builder-row-2">
+                      <Input value={inp.default} placeholder="default (optional)" onChange={(e) => setInput(i, { default: e.target.value })} />
+                      <Input
+                        value={inp.description}
+                        placeholder="description — the run form's field hint"
+                        onChange={(e) => setInput(i, { description: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
 
-          {steps.map((step, i) => (
-            <button
-              type="button"
-              role="tab"
-              aria-selected={focus === i}
-              className={`builder-card builder-card-step ${focus === i ? "builder-card-sel" : ""} ${dragOver === i ? "builder-card-dragover" : ""}`}
-              key={i}
-              onClick={() => setFocus(i)}
-              onDragOver={(e) => {
-                if (dragIndex == null) return;
-                e.preventDefault();
-                setDragOver(i);
-              }}
-              onDragLeave={() => setDragOver((d) => (d === i ? null : d))}
-              onDrop={(e) => {
-                e.preventDefault();
-                dropOn(i);
-              }}
-            >
-              <span className="builder-card-head">
-                <span
-                  className="builder-drag-handle"
-                  title="Drag to reorder"
-                  draggable
-                  onDragStart={(e) => {
-                    e.dataTransfer.effectAllowed = "move";
-                    setDragIndex(i);
-                  }}
-                  onDragEnd={() => {
-                    setDragIndex(null);
-                    setDragOver(null);
-                  }}
-                >
-                  <GripVertical size={11} />
-                </span>
-                {dot(!step.id.trim() || !step.prompt.trim() || errorsForStep(step.id).length > 0)}
-                <strong>{step.id.trim() || "(unnamed)"}</strong>
-                <Badge>{step.subagent}</Badge>
-                {step.gate ? <Pause size={11} aria-label="operator gate" /> : null}
-              </span>
-              <span className="builder-card-sub">
-                {step.dependsOn.length ? `after ${step.dependsOn.join(", ")} · ` : ""}
-                {step.prompt.trim().split("\n")[0] || "empty prompt"}
-              </span>
-            </button>
-          ))}
-
-          <Button variant="ghost" type="button" className="builder-add-step" onClick={addStep}>
-            <Plus size={13} /> add step
-          </Button>
-
-          <button
-            type="button"
-            role="tab"
-            aria-selected={focus === "output"}
-            className={`builder-card ${focus === "output" ? "builder-card-sel" : ""}`}
-            onClick={() => setFocus("output")}
-          >
-            <span className="builder-card-head">
-              <FileOutput size={12} />
-              <strong>Output</strong>
-            </span>
-            <span className="builder-card-sub">
-              {output.trim() || `{{steps.${steps[steps.length - 1]?.id.trim() || "lastStep"}.output}}`}
-            </span>
-          </button>
-        </div>
-
-        {/* ── focus editor: the selected thing gets the whole pane ──────── */}
-        <div className="builder-focus">
-          {focus === "workflow" && (
-            <>
+            {focus === "output" && (
               <label className="field">
-                <span>Name *{editing ? " (fixed)" : ""}</span>
-                <Input value={name} disabled={editing} onChange={(e) => setName(e.target.value)} placeholder="my-workflow" />
-              </label>
-              <label className="field">
-                <span>Description</span>
-                <Textarea
-                  rows={2}
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  placeholder="what this workflow does — shown in the run view"
+                <span>Output template</span>
+                <Input
+                  value={output}
+                  onChange={(e) => setOutput(e.target.value)}
+                  placeholder={`default: {{steps.${steps[steps.length - 1]?.id.trim() || "lastStep"}.output}}`}
                 />
               </label>
-            </>
-          )}
+            )}
 
-          {focus === "inputs" && (
-            <div className="builder-inputs">
-              <div className="builder-section-head">
-                <span>Declared inputs</span>
-                <Button
-                  variant="ghost"
-                  type="button"
-                  onClick={() => {
-                    setInputs((x) => [...x, { name: "", required: false, default: "", type: "string", description: "" }]);
-                  }}
-                >
-                  <Plus size={13} /> add input
-                </Button>
-              </div>
-              {inputs.map((inp, i) => (
-                <div className="builder-input-card" key={i}>
-                  <div className="builder-row">
-                    <Input value={inp.name} placeholder="input name" onChange={(e) => setInput(i, { name: e.target.value })} />
-                    <DropdownSelect
-                      value={inp.type}
-                      onValueChange={(v) => setInput(i, { type: v })}
-                      options={INPUT_TYPES}
-                    />
-                    <Checkbox
-                      className="checkbox-field"
-                      checked={inp.required}
-                      onCheckedChange={(c) => setInput(i, { required: Boolean(c) })}
-                      label="required"
-                    />
-                    <Button icon variant="ghost" type="button" onClick={() => setInputs((x) => x.filter((_, j) => j !== i))} title="Remove">
+            {focusedStep && typeof focus === "number" && (
+              <>
+                <div className="builder-row builder-step-head">
+                  <Input value={focusedStep.id} placeholder="step id" onChange={(e) => setStep(focus, { id: e.target.value })} />
+                  <DropdownSelect
+                    value={focusedStep.subagent}
+                    onValueChange={(v) => setStep(focus, { subagent: v })}
+                    options={(subagents.length ? subagents : [fallback]).map((s) => ({ value: s, label: s }))}
+                  />
+                  <Checkbox
+                    className="checkbox-field"
+                    checked={focusedStep.gate}
+                    onCheckedChange={(c) => setStep(focus, { gate: Boolean(c) })}
+                    label="operator gate"
+                    title="Pause for operator approval before this step runs (gate: human)"
+                  />
+                  <Button icon variant="ghost" type="button" onClick={() => duplicateStep(focus)} title="Duplicate step">
+                    <Copy size={14} />
+                  </Button>
+                  {steps.length > 1 && (
+                    <Button icon variant="ghost" type="button" onClick={() => removeStep(focus)} title="Remove step">
                       <Trash2 size={14} />
                     </Button>
-                  </div>
-                  <div className="builder-row builder-row-2">
-                    <Input value={inp.default} placeholder="default (optional)" onChange={(e) => setInput(i, { default: e.target.value })} />
-                    <Input
-                      value={inp.description}
-                      placeholder="description — the run form's field hint"
-                      onChange={(e) => setInput(i, { description: e.target.value })}
-                    />
-                  </div>
+                  )}
                 </div>
-              ))}
-            </div>
-          )}
 
-          {focus === "output" && (
-            <label className="field">
-              <span>Output template</span>
-              <Input
-                value={output}
-                onChange={(e) => setOutput(e.target.value)}
-                placeholder={`default: {{steps.${steps[steps.length - 1]?.id.trim() || "lastStep"}.output}}`}
-              />
-            </label>
-          )}
+                {(() => {
+                  // The pills mirror the canvas edges for anyone who'd rather
+                  // click than drag a connection; same cycle guard.
+                  const cyclic = downstreamOf(steps, focusedStep.id);
+                  const candidates = steps.filter((other, j) => j !== focus && !cyclic.has(other.id));
+                  return candidates.length > 0 ? (
+                    <div className="builder-deps">
+                      <span>after:</span>
+                      {candidates.map((other) => (
+                        <button
+                          key={other.id}
+                          type="button"
+                          className={`builder-chip ${focusedStep.dependsOn.includes(other.id) ? "builder-chip-on" : ""}`}
+                          onClick={() => toggleDep(focus, other.id)}
+                          title={focusedStep.dependsOn.includes(other.id) ? "runs after this step — click to remove" : "click to run after this step"}
+                        >
+                          {other.id || "(unnamed)"}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null;
+                })()}
 
-          {focusedStep && typeof focus === "number" && (
-            <>
-              <div className="builder-row builder-step-head">
-                <Input value={focusedStep.id} placeholder="step id" onChange={(e) => setStep(focus, { id: e.target.value })} />
-                <DropdownSelect
-                  value={focusedStep.subagent}
-                  onValueChange={(v) => setStep(focus, { subagent: v })}
-                  options={(subagents.length ? subagents : [fallback]).map((s) => ({ value: s, label: s }))}
-                />
-                <Checkbox
-                  className="checkbox-field"
-                  checked={focusedStep.gate}
-                  onCheckedChange={(c) => setStep(focus, { gate: Boolean(c) })}
-                  label="operator gate"
-                  title="Pause for operator approval before this step runs (gate: human)"
-                />
-                <Button icon variant="ghost" type="button" onClick={() => duplicateStep(focus)} title="Duplicate step">
-                  <Copy size={14} />
-                </Button>
-                {steps.length > 1 && (
-                  <Button icon variant="ghost" type="button" onClick={() => removeStep(focus)} title="Remove step">
-                    <Trash2 size={14} />
-                  </Button>
+                {(() => {
+                  // One compact grouped picker instead of a chip wall (13 pills
+                  // on code-review was unreadable). It offers only what the
+                  // prompt can actually READ at run time: declared inputs, and
+                  // the outputs of ANCESTOR steps — a non-upstream step's
+                  // output would render empty.
+                  const inputNames = inputs.map((i) => i.name.trim()).filter(Boolean);
+                  const ancestors = upstreamOf(steps, focusedStep.id);
+                  const upstreamSteps = steps.filter((s) => ancestors.has(s.id.trim()));
+                  if (!inputNames.length && !upstreamSteps.length) return null;
+                  return (
+                    <div className="builder-insert-row">
+                      <Menu
+                        trigger={
+                          <button type="button" className="builder-toolchip" title="Insert a template variable at the cursor">
+                            {"{{…}}"} insert variable
+                          </button>
+                        }
+                        align="start"
+                      >
+                        {inputNames.length > 0 && (
+                          <div className="builder-menu-label" role="presentation">
+                            Inputs
+                          </div>
+                        )}
+                        {inputNames.map((n) => (
+                          <MenuItem key={n} onSelect={() => insertRef(focus, `{{inputs.${n}}}`)}>
+                            {`{{inputs.${n}}}`}
+                          </MenuItem>
+                        ))}
+                        {inputNames.length > 0 && upstreamSteps.length > 0 ? <MenuSeparator /> : null}
+                        {upstreamSteps.length > 0 && (
+                          <div className="builder-menu-label" role="presentation">
+                            Upstream step outputs
+                          </div>
+                        )}
+                        {upstreamSteps.map((s) => (
+                          <MenuItem key={s.id} onSelect={() => insertRef(focus, `{{steps.${s.id.trim()}.output}}`)}>
+                            {`{{steps.${s.id.trim()}.output}}`}
+                          </MenuItem>
+                        ))}
+                      </Menu>
+                    </div>
+                  );
+                })()}
+                <div className="builder-prompt-box" ref={promptBoxRef}>
+                  <Textarea
+                    className="builder-prompt"
+                    value={focusedStep.prompt}
+                    rows={10}
+                    placeholder="Prompt for this step — use {{inputs.x}} and {{steps.other.output}}"
+                    onChange={(e) => setStep(focus, { prompt: e.target.value })}
+                  />
+                </div>
+                {errorsForStep(focusedStep.id).length > 0 && (
+                  <div className="builder-errors" role="alert">
+                    <AlertTriangle size={13} />
+                    <ul>
+                      {errorsForStep(focusedStep.id).map((e) => (
+                        <li key={e}>{e}</li>
+                      ))}
+                    </ul>
+                  </div>
                 )}
-              </div>
+              </>
+            )}
 
-              {(() => {
-                // Never offer a dependency that would create a cycle: steps
-                // downstream of the focused one are not "after:" candidates.
-                const cyclic = downstreamOf(steps, focusedStep.id);
-                const candidates = steps.filter((other, j) => j !== focus && !cyclic.has(other.id));
-                return candidates.length > 0 ? (
-                  <div className="builder-deps">
-                    <span>after:</span>
-                    {candidates.map((other) => (
-                      <button
-                        key={other.id}
-                        type="button"
-                        className={`builder-chip ${focusedStep.dependsOn.includes(other.id) ? "builder-chip-on" : ""}`}
-                        onClick={() => toggleDep(focus, other.id)}
-                        title={focusedStep.dependsOn.includes(other.id) ? "runs after this step — click to remove" : "click to run after this step"}
-                      >
-                        {other.id || "(unnamed)"}
-                      </button>
-                    ))}
-                  </div>
-                ) : null;
-              })()}
-
-              {(inputChips.length > 0 || steps.length > 1) && (
-                <div className="builder-chips">
-                  {inputChips.map((chip) => (
-                    <button key={chip} type="button" className="builder-chip" onClick={() => insertRef(focus, chip)}>
-                      {chip}
-                    </button>
+            {unplacedErrors.length > 0 && typeof focus !== "number" && (
+              <div className="builder-errors" role="alert">
+                <AlertTriangle size={13} />
+                <ul>
+                  {unplacedErrors.map((e) => (
+                    <li key={e}>{e}</li>
                   ))}
-                  {steps
-                    .filter((other, j) => j !== focus && other.id.trim())
-                    .map((other) => (
-                      <button
-                        key={`step-${other.id}`}
-                        type="button"
-                        className="builder-chip"
-                        onClick={() => insertRef(focus, `{{steps.${other.id.trim()}.output}}`)}
-                      >
-                        {`{{steps.${other.id.trim()}.output}}`}
-                      </button>
-                    ))}
-                </div>
-              )}
-              <div className="builder-prompt-box" ref={promptBoxRef}>
-                <Textarea
-                  className="builder-prompt"
-                  value={focusedStep.prompt}
-                  rows={12}
-                  placeholder="Prompt for this step — use {{inputs.x}} and {{steps.other.output}}"
-                  onChange={(e) => setStep(focus, { prompt: e.target.value })}
-                />
+                </ul>
               </div>
-              {errorsForStep(focusedStep.id).length > 0 && (
-                <div className="builder-errors" role="alert">
-                  <AlertTriangle size={13} />
-                  <ul>
-                    {errorsForStep(focusedStep.id).map((e) => (
-                      <li key={e}>{e}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </>
-          )}
-
-          {unplacedErrors.length > 0 && typeof focus !== "number" && (
-            <div className="builder-errors" role="alert">
-              <AlertTriangle size={13} />
-              <ul>
-                {unplacedErrors.map((e) => (
-                  <li key={e}>{e}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="panel-actions">

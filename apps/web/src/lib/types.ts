@@ -420,6 +420,8 @@ export type WorkflowRecipe = {
     depends_on?: string[] | string;
     gate?: string;
     timeout?: number;
+    /** Builder canvas position — unmanaged authoring metadata, engine-inert. */
+    ui?: { x: number; y: number };
   }[];
   output?: string;
   max_concurrency?: number;

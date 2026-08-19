@@ -69,25 +69,30 @@ test("history lists recorded runs and reopens one in the timeline", async ({ pag
 test("edit loads the full recipe into the builder", async ({ page }) => {
   await openWorkflows(page);
   await page.getByRole("button", { name: "Edit", exact: true }).click();
-  // Edit opens focused on the FIRST STEP (outline-and-focus layout): its prompt
-  // came from GET /{name}/recipe and fills the editor pane.
+  // Edit opens focused on the FIRST STEP: its prompt came from
+  // GET /{name}/recipe and fills the editor pane beside the canvas.
   await expect(page.locator(".builder-prompt").first()).toHaveValue(/Research \{\{inputs\.topic\}\}/);
-  // Template-ref chips render for inputs and the OTHER steps (the focused
-  // step never offers its own output).
-  await expect(page.locator(".builder-chip", { hasText: "{{inputs.topic}}" }).first()).toBeVisible();
-  await expect(page.locator(".builder-chip", { hasText: "{{steps.brief.output}}" }).first()).toBeVisible();
-  // Focusing the second step through the outline swaps the editor pane.
-  await expect(page.locator(".builder-card-step")).toHaveCount(2);
-  await page.locator(".builder-card-step", { hasText: "brief" }).click();
-  await expect(page.locator(".builder-chip", { hasText: "{{steps.gather.output}}" }).first()).toBeVisible();
-  // The outline lists the workflow's shape; focusing the workflow card shows
-  // the (fixed-in-edit) name.
-  await page.locator(".builder-card", { hasText: "research-and-brief" }).first().click();
+  // The insert-variable menu offers only what THIS step can read: declared
+  // inputs, and upstream step outputs (gather has none — brief is downstream).
+  await page.locator(".builder-insert-row button").click();
+  await expect(page.getByRole("menuitem", { name: "{{inputs.topic}}" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "{{steps.brief.output}}" })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  // The DAG canvas holds one node per step, edges from depends_on; focusing
+  // the second step through its NODE swaps the editor pane.
+  await expect(page.locator(".dag-node")).toHaveCount(2);
+  await expect(page.locator(".react-flow__edge")).toHaveCount(1);
+  await page.locator('.react-flow__node[data-id="brief"]').click();
+  await page.locator(".builder-insert-row button").click();
+  await expect(page.getByRole("menuitem", { name: "{{steps.gather.output}}" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  // The toolbar chips open the section editors: workflow (fixed-in-edit name)…
+  await page.locator(".builder-toolchip", { hasText: "research-and-brief" }).click();
   const name = page.getByPlaceholder("my-workflow");
   await expect(name).toHaveValue("research-and-brief");
   await expect(name).toBeDisabled();
-  // The inputs editor carries the typed-input contract fields.
-  await page.locator(".builder-card", { hasText: "Inputs" }).first().click();
+  // …and inputs, carrying the typed-input contract fields.
+  await page.locator(".builder-toolchip", { hasText: "inputs" }).click();
   await expect(page.getByPlaceholder("description — the run form's field hint").first()).toBeVisible();
 });
 
@@ -97,8 +102,8 @@ test("duplicate step clones the focused step with a unique id", async ({ page })
   await page.getByRole("button", { name: "Edit", exact: true }).click();
   // Edit opens on the first step (gather); duplicating inserts gather-copy after it.
   await page.getByRole("button", { name: "Duplicate step" }).click();
-  await expect(page.locator(".builder-card-step")).toHaveCount(3);
-  await expect(page.locator(".builder-card-step", { hasText: "gather-copy" })).toBeVisible();
+  await expect(page.locator(".dag-node")).toHaveCount(3);
+  await expect(page.locator('.react-flow__node[data-id="gather-copy"]')).toBeVisible();
   // Focus moved to the clone — its id fills the editor.
   await expect(page.getByPlaceholder("step id")).toHaveValue("gather-copy");
 });
