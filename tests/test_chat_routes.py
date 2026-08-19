@@ -765,3 +765,72 @@ def test_fork_session_route(monkeypatch):
     assert seen == [("s1", "s2", "answer1", 1)]
     assert body["found"] is True and body["kept"] == 4
     assert "real context" in body["message"]
+
+
+# ── ADR 0104: the session turns read API (Swap & Resume S5) ────────────────────
+
+
+def test_session_turns_reads_the_task_store(monkeypatch, tmp_path):
+    """Turns come back by context_id, ordered, with the raw wire pieces the
+    console dispatcher replays (status/artifacts/history) + joined text."""
+    import asyncio
+
+    from a2a.server.tasks.database_task_store import Base, TaskModel
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/tasks.db")
+
+    async def _seed():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            from datetime import datetime, timezone
+
+            def row(task_id, minute, state, text, history=None):
+                return {
+                    "id": task_id,
+                    "context_id": "sess-1",
+                    "kind": "task",
+                    "status": {"state": state},
+                    "artifacts": [{"parts": [{"text": text}]}],
+                    "history": history or [],
+                    "last_updated": datetime(2026, 8, 19, 12, minute, tzinfo=timezone.utc),
+                }
+
+            await conn.execute(
+                TaskModel.__table__.insert(),
+                [
+                    row("t-2", 5, "TASK_STATE_COMPLETED", "second answer"),
+                    row("t-1", 1, "TASK_STATE_COMPLETED", "first answer", history=[{"role": "ROLE_AGENT", "parts": []}]),
+                    {  # a different session must not leak in
+                        "id": "t-x",
+                        "context_id": "sess-OTHER",
+                        "kind": "task",
+                        "status": {"state": "TASK_STATE_COMPLETED"},
+                        "artifacts": [{"parts": [{"text": "foreign"}]}],
+                        "history": [],
+                        "last_updated": datetime(2026, 8, 19, 12, 3, tzinfo=timezone.utc),
+                    },
+                ],
+            )
+
+    asyncio.get_event_loop().run_until_complete(_seed()) if False else asyncio.run(_seed())
+
+    import runtime.state as rs
+
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
+    c = _client(monkeypatch)
+    body = c.get("/api/chat/sessions/sess-1/turns").json()
+    assert [t["task_id"] for t in body["turns"]] == ["t-1", "t-2"]  # ordered, scoped
+    assert body["turns"][0]["text"] == "first answer"
+    assert body["turns"][0]["history"] == [{"role": "ROLE_AGENT", "parts": []}]
+    assert body["turns"][1]["state"] == "TASK_STATE_COMPLETED"
+    assert all(t["task_id"] != "t-x" for t in body["turns"])
+
+
+def test_session_turns_degrades_without_a_store(monkeypatch):
+    import runtime.state as rs
+
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", None, raising=False)
+    c = _client(monkeypatch)
+    body = c.get("/api/chat/sessions/whatever/turns").json()
+    assert body["turns"] == [] and "not initialized" in body["reason"]

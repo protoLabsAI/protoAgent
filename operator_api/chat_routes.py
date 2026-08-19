@@ -367,6 +367,69 @@ def register_chat_routes(app, ui: str) -> None:
         Redaction is a safety net, not a guarantee."""
         return await export_session(session_id, title=title)
 
+    @app.get("/api/chat/sessions/{session_id}/turns")
+    async def _api_session_turns(session_id: str, limit: int = 50):
+        """The session's durable turns from the A2A task store (ADR 0104, Swap &
+        Resume S5) — status/artifacts/history untransformed (the same wire shapes
+        the console's frame dispatcher replays) plus a joined ``text`` convenience.
+        Turns are keyed by ``context_id`` = the console session id; an in-flight
+        turn appears with its accumulated pieces and a non-terminal state.
+
+        **Read-only** over the store the SDK already persists; no checkpoint
+        access, no flag gate (the export sibling's rule)."""
+        from runtime.state import STATE
+
+        engine = getattr(STATE, "a2a_task_engine", None)
+        if engine is None:
+            return {"turns": [], "reason": "task store not initialized"}
+        limit = max(1, min(int(limit), 200))
+        try:
+            from sqlalchemy import select
+
+            from a2a.server.tasks.database_task_store import TaskModel
+
+            async with engine.connect() as conn:
+                rows = (
+                    await conn.execute(
+                        select(
+                            TaskModel.id,
+                            TaskModel.status,
+                            TaskModel.artifacts,
+                            TaskModel.history,
+                            TaskModel.last_updated,
+                        )
+                        .where(TaskModel.context_id == session_id)
+                        .order_by(TaskModel.last_updated.asc())
+                        .limit(limit)
+                    )
+                ).fetchall()
+        except Exception as exc:  # noqa: BLE001 — a read API must degrade, not 500 the console
+            log.warning("[chat] session turns read failed for %s: %s", session_id, exc)
+            return {"turns": [], "reason": f"read failed: {type(exc).__name__}"}
+
+        def _text(artifacts) -> str:
+            out: list[str] = []
+            for artifact in artifacts or []:
+                for part in (artifact or {}).get("parts") or []:
+                    t = part.get("text") if isinstance(part, dict) else None
+                    if t:
+                        out.append(t)
+            return "".join(out)
+
+        turns = [
+            {
+                "task_id": r.id,
+                "state": ((r.status or {}).get("state") or "") if isinstance(r.status, dict) else "",
+                "last_updated": r.last_updated.isoformat() if r.last_updated else None,
+                "text": _text(r.artifacts),
+                "status": r.status,
+                "artifacts": r.artifacts or [],
+                "history": r.history or [],
+            }
+            for r in rows
+        ]
+        return {"turns": turns}
+
     @app.get("/api/chat/sessions/{session_id}/publish/preview")
     async def _api_publish_preview(session_id: str, title: str | None = None):
         """Build the structured chat-bundle for the pre-publish review (#2179 P2, #2682)

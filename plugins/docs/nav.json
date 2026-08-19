@@ -814,6 +814,10 @@
           "title": "0103 — Programmatic tool calls: agent tools callable from execute_code"
         },
         {
+          "path": "adr/0104-session-turns-read-api.md",
+          "title": "0104 — The session turns read API: durable chat history has a server-side reader"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
