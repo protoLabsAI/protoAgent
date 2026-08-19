@@ -399,6 +399,19 @@ def _build_file_tools(config: dict | None) -> list:
             return f"✗ {e}"
         if len(content) > _WRITE_CAP:
             return f"✗ content too large ({len(content)} chars > {_WRITE_CAP}) — split the file"
+        # Execution-side skill gate: a SKILL.md the loader would SKIP is never worth
+        # writing — the failure is silent at load time (a warning in a log nobody
+        # reads), so refuse HERE with the loader's own reasons and let the author fix
+        # the frontmatter. Validated by the loader's single-source contract, not a mirror.
+        if target.name == "SKILL.md" and "skills" in Path(path).parts:
+            from graph.skills.loader import skill_md_problems
+
+            problems = skill_md_problems(content)
+            if problems:
+                return (
+                    f"✗ {path} would be SKIPPED by the skills loader — not written. "
+                    f"Fix and re-write: {'; '.join(problems)}"
+                )
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content)
         return (
@@ -433,6 +446,37 @@ def _test_interpreter() -> tuple[str | None, str | None]:
     if err:
         return None, err
     return pytest_interpreter()
+
+
+def _lint_skills(pdir: Path) -> str | None:
+    """Verification-side skill gate: every ``skills/*/SKILL.md`` must satisfy the
+    loader's contract, or the plugin ships skills that silently never load (the
+    reddit-plugin failure: two frontmatter-less skills, skipped with only a boot
+    log warning). Returns a ✗ report naming each broken file, or ``None``."""
+    from graph.skills.loader import skill_md_problems
+
+    problems: list[str] = []
+    for f in sorted((pdir / "skills").glob("*/SKILL.md")) if (pdir / "skills").is_dir() else []:
+        try:
+            text = f.read_text(encoding="utf-8")
+        except OSError as exc:
+            problems.append(f"{f.relative_to(pdir)}: unreadable ({exc})")
+            continue
+        for p in skill_md_problems(text):
+            problems.append(f"{f.relative_to(pdir)}: {p}")
+    if not problems:
+        return None
+    return "✗ skill lint: " + str(len(problems)) + " problem(s) — these skills would NEVER load:\n" + "\n".join(
+        f"  - {p}" for p in problems
+    )
+
+
+def _verify_plugin(pdir: Path) -> str:
+    """The verify step: skill lint FIRST (a broken skill fails fast and loudly),
+    then the pytest suite. One string, ✗-prefixed when anything failed."""
+    lint = _lint_skills(pdir)
+    out = _run_pytest(pdir)
+    return f"{lint}\n{out}" if lint else out
 
 
 def _run_pytest(pdir: Path) -> str:
@@ -506,7 +550,7 @@ def _build_test_tool(config: dict | None):
             pdir = _plugin_dir(plugin_id, target_dir)
         except ValueError as e:
             return f"✗ {e}"
-        return await asyncio.to_thread(_run_pytest, pdir)
+        return await asyncio.to_thread(_verify_plugin, pdir)
 
     return test_plugin
 
@@ -525,7 +569,9 @@ _DEVELOP_PROMPT = """You are implementing a protoAgent plugin. Your working dire
 directory — edit ONLY files inside it. The contract: `protoagent.plugin.yaml` is the
 manifest (data, read without importing); `__init__.py` exposes `register(registry)`
 (registry.register_tool / register_subagent / register_router / emit); `skills/` and
-`workflows/` are auto-discovered data. Keep it the smallest change that satisfies the
+`workflows/` are auto-discovered data. Every `skills/<name>/SKILL.md` MUST start with
+a `---` YAML frontmatter block carrying non-empty `name:` and `description:` — the
+loader silently skips the skill without it, and the host's verify step fails on it. Keep it the smallest change that satisfies the
 task. Write or update tests under `tests/` when the plugin has a suite. Do NOT run
 git, do NOT create commits or PRs, do NOT touch anything outside this directory —
 the host runs the tests and reloads the plugin after you finish.
@@ -616,7 +662,7 @@ async def _develop_and_verify(coder, adapter, scoped, prompt: str, timeout: floa
 
     # Re-join the spine at *test* (D5): verify, then hot-swap.
     lines.append("— test_plugin —")
-    lines.append(await asyncio.to_thread(_run_pytest, pdir))
+    lines.append(await asyncio.to_thread(_verify_plugin, pdir))
 
     from runtime.state import STATE
 

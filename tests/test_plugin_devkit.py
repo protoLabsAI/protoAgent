@@ -1016,3 +1016,67 @@ def test_ops_applier_guards_a_raising_reload(monkeypatch):
     applier = mod._ops_applier()
     ok, msgs = applier(None)
     assert ok is False and any("reload exploded" in str(m) for m in msgs)
+
+
+# ── skill frontmatter gate (#reddit incident): execution + verification ────────
+
+GOOD_SKILL = "---\nname: greeter\ndescription: Say hello when asked.\n---\n\n# Greeter\nSay hi.\n"
+BAD_SKILL = "# Greeter\nSay hi — no frontmatter at all.\n"
+
+
+def test_write_file_refuses_a_skill_the_loader_would_skip(tmp_path):
+    """Execution-side gate: a frontmatter-less SKILL.md is refused AT WRITE TIME with
+    the loader's own reasons (graph.skills.loader.skill_md_problems — single source,
+    not a mirror), so the silent skills-never-load failure can't be authored."""
+    mod = _load_devkit_module(tmp_path)
+    out_root = tmp_path / "plugins"
+    out_root.mkdir()
+    _run(mod._build_scaffold_tool({"target_dir": str(out_root)}).ainvoke({"name": "Sk", "enable": False}))
+    tools = {t.name: t for t in mod._build_file_tools({"target_dir": str(out_root)})}
+
+    out = tools["plugin_write_file"].invoke(
+        {"plugin_id": "sk", "path": "skills/greeter/SKILL.md", "content": BAD_SKILL}
+    )
+    assert "✗" in out and "SKIPPED by the skills loader" in out and "frontmatter" in out
+    assert not (out_root / "sk" / "skills" / "greeter" / "SKILL.md").exists()  # refused = not written
+
+    ok = tools["plugin_write_file"].invoke(
+        {"plugin_id": "sk", "path": "skills/greeter/SKILL.md", "content": GOOD_SKILL}
+    )
+    assert ok.startswith("✓")
+    # a non-skill markdown file is untouched by the gate
+    assert tools["plugin_write_file"].invoke({"plugin_id": "sk", "path": "notes.md", "content": "# no frontmatter"}).startswith("✓")
+
+
+def test_verify_plugin_lints_skills_before_pytest(tmp_path, monkeypatch):
+    """Verification-side gate: _verify_plugin (test_plugin + develop_plugin's re-join)
+    fails loudly on a skill the loader would skip — naming the file — instead of
+    letting a green pytest suite hide a skill that never loads."""
+    mod = _load_devkit_module(tmp_path)
+    pdir = tmp_path / "p"
+    (pdir / "skills" / "broken").mkdir(parents=True)
+    (pdir / "skills" / "broken" / "SKILL.md").write_text(BAD_SKILL)
+    (pdir / "skills" / "fine").mkdir(parents=True)
+    (pdir / "skills" / "fine" / "SKILL.md").write_text(GOOD_SKILL)
+    monkeypatch.setattr(mod, "_run_pytest", lambda p: "✓ 3 passed")
+
+    out = mod._verify_plugin(pdir)
+    assert out.startswith("✗ skill lint")
+    assert "skills/broken/SKILL.md" in out and "frontmatter" in out
+    assert "skills/fine" not in out  # only the broken one is named
+    assert "✓ 3 passed" in out  # pytest still runs and reports
+
+    (pdir / "skills" / "broken" / "SKILL.md").write_text(GOOD_SKILL)
+    assert mod._verify_plugin(pdir) == "✓ 3 passed"  # clean lint adds nothing
+
+
+def test_skill_md_problems_is_the_loader_contract():
+    """The validator and the loader agree by construction — a text with problems
+    parses to None, a problem-free text parses to a real skill."""
+    from graph.skills.loader import skill_md_problems
+
+    assert skill_md_problems(GOOD_SKILL) == []
+    assert skill_md_problems(BAD_SKILL)
+    assert skill_md_problems("---\nname: x\n---\nbody")  # missing description
+    assert skill_md_problems("---\n- not\n- a\n- mapping\n---\nbody")
+    assert skill_md_problems("---\nname: [unclosed\n---\nbody")  # YAML error

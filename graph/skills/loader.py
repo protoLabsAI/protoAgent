@@ -32,6 +32,34 @@ log = logging.getLogger("protoagent.skills.loader")
 _MAX_DESCRIPTION = 1024
 
 
+def skill_md_problems(text: str) -> list[str]:
+    """Why this SKILL.md text would be SKIPPED by the loader — [] when it loads.
+
+    The single source of the fatal half of the contract (``parse_skill_md``
+    enforces exactly this list), so authoring surfaces — the plugin-devkit's
+    write/test gates — can refuse or flag a skill file with the loader's own
+    rules instead of a drifting mirror. Advisory behaviors (description
+    truncation at ``_MAX_DESCRIPTION``) are deliberately not "problems"."""
+    problems: list[str] = []
+    frontmatter, _body = _split_frontmatter(text)
+    if frontmatter is None:
+        return [
+            "no YAML frontmatter — start the file with a `---` block carrying "
+            "`name:` and `description:` (the loader skips the skill without it)"
+        ]
+    try:
+        meta = yaml.safe_load(frontmatter) or {}
+    except yaml.YAMLError as exc:
+        return [f"frontmatter is not valid YAML: {exc}"]
+    if not isinstance(meta, dict):
+        return ["frontmatter is not a mapping (must be `key: value` lines)"]
+    if not str(meta.get("name", "")).strip():
+        problems.append("frontmatter is missing a non-empty `name:`")
+    if not str(meta.get("description", "")).strip():
+        problems.append("frontmatter is missing a non-empty `description:` (the retrieval trigger)")
+    return problems
+
+
 def parse_skill_md(path: Path) -> SkillV1Artifact | None:
     """Parse one ``SKILL.md`` into a ``SkillV1Artifact`` (or ``None`` if invalid).
 
@@ -44,25 +72,16 @@ def parse_skill_md(path: Path) -> SkillV1Artifact | None:
         log.warning("[skills] cannot read %s: %s", path, exc)
         return None
 
-    frontmatter, body = _split_frontmatter(text)
-    if frontmatter is None:
-        log.warning("[skills] %s has no YAML frontmatter — skipping", path)
+    problems = skill_md_problems(text)
+    if problems:
+        log.warning("[skills] %s skipped: %s", path, "; ".join(problems))
         return None
 
-    try:
-        meta = yaml.safe_load(frontmatter) or {}
-    except yaml.YAMLError as exc:
-        log.warning("[skills] %s frontmatter is not valid YAML: %s", path, exc)
-        return None
-    if not isinstance(meta, dict):
-        log.warning("[skills] %s frontmatter is not a mapping — skipping", path)
-        return None
+    frontmatter, body = _split_frontmatter(text)
+    meta = yaml.safe_load(frontmatter) or {}
 
     name = str(meta.get("name", "")).strip()
     description = str(meta.get("description", "")).strip()
-    if not name or not description:
-        log.warning("[skills] %s missing required 'name'/'description' — skipping", path)
-        return None
     if len(description) > _MAX_DESCRIPTION:
         log.warning("[skills] %s description exceeds %d chars — truncating", path, _MAX_DESCRIPTION)
         description = description[:_MAX_DESCRIPTION]
