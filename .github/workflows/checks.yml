@@ -293,22 +293,33 @@ jobs:
           # held by process N (apt-get)"). Be impolite instead: stop the background
           # services first (they're useless on a throwaway runner), THEN wait out
           # any in-flight lock holder across all four lock files, up to 5 minutes.
+          # Stop the TIMERS too and mask the services — a stopped service is
+          # re-fired by its timer a minute later (observed: a fresh apt-get pid
+          # appeared 4 minutes after the stop, mid-install).
+          sudo systemctl disable --now apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
           sudo systemctl stop unattended-upgrades.service apt-daily.service apt-daily-upgrade.service 2>/dev/null || true
+          sudo systemctl mask apt-daily.service apt-daily-upgrade.service unattended-upgrades.service 2>/dev/null || true
           sudo pkill -TERM -f unattended-upgrade 2>/dev/null || true
           LOCKS="/var/lib/apt/lists/lock /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock"
-          for i in $(seq 1 60); do
-            if ! sudo fuser $LOCKS >/dev/null 2>&1; then
-              break
-            fi
-            echo "apt lock held by a background process — waiting (${i}/60)…"
-            sleep 5
-          done
+          wait_apt() {
+            for i in $(seq 1 60); do
+              if ! sudo fuser $LOCKS >/dev/null 2>&1; then
+                return 0
+              fi
+              echo "apt lock held by a background process — waiting (${i}/60)…"
+              sleep 5
+            done
+          }
+          wait_apt
           if [ "${{ steps.pw-cache.outputs.cache-hit }}" = "true" ]; then
             cmd="playwright install-deps chromium"   # binary cached → apt deps only
           else
             cmd="playwright install --with-deps chromium"
           fi
           for attempt in 1 2 3 4; do
+            # Re-wait before EVERY attempt: a lock acquired during a slow
+            # browser download made attempt 2 collide instantly last round.
+            wait_apt
             if timeout 240 npm --workspace @protoagent/web exec -- $cmd; then
               exit 0
             fi
