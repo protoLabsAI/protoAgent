@@ -129,3 +129,52 @@ def test_preview_degrades_without_graph_stamps(monkeypatch):
     assert body["enabled"] is True and body["call"] is None and body["reason"]
     c2 = _client(monkeypatch, capture=False)
     assert c2.get("/api/prompts/preview").json()["enabled"] is False
+
+
+def test_breakdown_sizes_history_and_ignores_capture_flag(monkeypatch):
+    """/breakdown reads the checkpoint, not the snapshot store — it must answer
+    even with prompts.capture OFF, and count tool args exactly once (the
+    graph.message_blocks contract; content also carries the tool_use blocks)."""
+    import runtime.state as rs
+    from langchain_core.messages import AIMessage, ToolMessage
+
+    big = {"path": "tools.py", "content": "x" * 4000}
+    msgs = [
+        AIMessage(
+            content=[
+                {"type": "text", "text": "writing"},
+                {"type": "tool_use", "id": "tu1", "name": "plugin_write_file", "input": big},
+            ],
+            tool_calls=[{"id": "tu1", "name": "plugin_write_file", "args": big, "type": "tool_call"}],
+        ),
+        ToolMessage(content="✓ wrote tools.py", tool_call_id="tu1", name="plugin_write_file"),
+    ]
+
+    class _Snap:
+        values = {"messages": msgs}
+
+    async def aget_state(cfg):
+        assert "thread_id" in cfg["configurable"]
+        return _Snap()
+
+    c = _client(monkeypatch, capture=False)  # capture OFF on purpose
+    monkeypatch.setattr(rs.STATE, "graph", SimpleNamespace(aget_state=aget_state), raising=False)
+    body = c.get("/api/prompts/breakdown", params={"session_id": "chat-x"}).json()
+    assert body["found"] is True
+    b = body["breakdown"]
+    args_tok = b["tool_call_args"]["plugin_write_file"]
+    assert args_tok >= 900
+    assert b["total_est_tokens"] < args_tok * 1.2  # counted once, not mirrored
+    assert b["tool_results"]["plugin_write_file"]["calls"] == 1
+
+
+def test_breakdown_degrades_honestly(monkeypatch):
+    import runtime.state as rs
+
+    c = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "graph", None, raising=False)
+    assert c.get("/api/prompts/breakdown", params={"session_id": "s"}).json() == {
+        "found": False,
+        "reason": "no live agent",
+    }
+    assert c.get("/api/prompts/breakdown").json()["reason"] == "session_id required"

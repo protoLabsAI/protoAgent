@@ -1,7 +1,21 @@
 import { describe, expect, it } from "vitest";
 
 import type { PromptCall } from "../lib/types";
-import { budgetRows, callTabs, diffLine, fmtTok, promptNoteMarkdown, promptText, sectionDiff, sectionsLine, splitLine, usageLine } from "./promptView";
+import {
+  budgetRows,
+  callTabs,
+  diffLine,
+  fmtTok,
+  historyLine,
+  historyRows,
+  historyTopToolsLine,
+  promptNoteMarkdown,
+  promptText,
+  sectionDiff,
+  sectionsLine,
+  splitLine,
+  usageLine,
+} from "./promptView";
 
 function mk(over: Partial<PromptCall> = {}): PromptCall {
   return {
@@ -188,5 +202,47 @@ describe("diffLine (#2388 P3)", () => {
     expect(line).toContain("− B");
     expect(line).toContain("C +1.2k chars");
     expect(line).toContain("1 more");
+  });
+});
+
+describe("history breakdown helpers (#2843)", () => {
+  const breakdown = {
+    total_est_tokens: 73700,
+    message_count: 101,
+    categories: {
+      tool_call_args: 36400,
+      tool_results: 23800,
+      injected_context_frames: 11400,
+      assistant_text: 2100,
+      operator_messages: 0,
+    },
+    tool_call_args: { plugin_write_file: 22600, develop_plugin: 9100, write_note: 1500, task: 900 },
+    tool_results: { plugin_read_file: { est_tokens: 6000, calls: 4 } },
+    top_blocks: [],
+  };
+
+  it("historyRows drops zero categories and shares pct like budgetRows", () => {
+    const rows = historyRows(breakdown);
+    expect(rows.map((r) => r.label)).toEqual([
+      "Tool call args",
+      "Tool results",
+      "Injected memory frames",
+      "Assistant text",
+    ]);
+    expect(rows[0].pct).toBeGreaterThan(rows[3].pct);
+    expect(rows.every((r) => r.pct >= 1)).toBe(true);
+  });
+
+  it("historyTopToolsLine caps at three", () => {
+    expect(historyTopToolsLine(breakdown)).toBe(
+      "top: plugin_write_file 22.6k · develop_plugin 9.1k · write_note 1.5k",
+    );
+  });
+
+  it("historyLine reads as one sentence with totals, categories, and top tools", () => {
+    const line = historyLine(breakdown);
+    expect(line).toContain("73.7k across 101 messages");
+    expect(line).toContain("tool call args 36.4k");
+    expect(line).not.toContain("operator messages"); // zero categories collapse away
   });
 });

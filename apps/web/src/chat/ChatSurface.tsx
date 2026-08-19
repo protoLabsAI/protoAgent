@@ -1845,6 +1845,7 @@ function ChatSessionSlot({
               onCancelDelegation={cancelDelegation}
               actions={{
                 copiedId,
+                sessionId: session?.id,
                 onCopy: copyMessage,
                 onFork: forkAtMessage,
                 onRewind: rewindAtMessage,

@@ -1308,6 +1308,18 @@ export type PromptCall = {
   usage: PromptCallUsage;
 };
 
+// The /api/prompts/breakdown payload (#2843): what a session's HISTORY is made
+// of — checkpoint-sized categories (tool args counted exactly once), per-tool
+// totals, and the biggest single blocks. Token figures are chars//4 estimates.
+export type PromptBreakdown = {
+  total_est_tokens: number;
+  message_count: number;
+  categories: Record<string, number>;
+  tool_call_args: Record<string, number>;
+  tool_results: Record<string, { est_tokens: number; calls: number }>;
+  top_blocks: { est_tokens: number; kind: string; preview: string }[];
+};
+
 // The /api/prompts/{task_id} payload (#2388 P3: subagents + prev are additive;
 // optional for skew with older servers).
 export type PromptTaskResponse = {

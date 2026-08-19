@@ -80,8 +80,44 @@ def _shape(row: dict) -> dict:
 def register_prompt_routes(app) -> None:
     """Register the ``/api/prompts/*`` read-only routes on ``app``."""
 
-    # NOTE: /last is registered before /{task_id} — FastAPI matches in
-    # registration order, and "last" must not be swallowed by the path param.
+    # NOTE: the static paths (/last, /preview, /breakdown) are registered before
+    # /{task_id} — FastAPI matches in registration order, and none of them must
+    # be swallowed by the path param.
+    @app.get("/api/prompts/breakdown")
+    async def _api_prompts_breakdown(session_id: str = ""):
+        """What the session's HISTORY is made of (#2843's audit, console-reachable):
+        sizes the thread's checkpoint messages into categories — assistant text,
+        tool-call args (counted exactly once, the graph.message_blocks contract),
+        tool results, injected memory frames — plus per-tool totals and the biggest
+        blocks. Deliberately independent of ``prompts.capture``: it reads the
+        checkpoint, not the snapshot store, so it answers even with capture off.
+        Cheap (one aget_state + string sums) — no speculative retrieval."""
+        import asyncio
+
+        from runtime.state import STATE
+
+        sid = session_id.strip()
+        if not sid:
+            return {"found": False, "reason": "session_id required"}
+        graph = STATE.graph
+        aget_state = getattr(graph, "aget_state", None)
+        if graph is None or aget_state is None:
+            return {"found": False, "reason": "no live agent"}
+        from operator_api.chat_routes import _resolve_thread_id
+
+        try:
+            snapshot = await aget_state({"configurable": {"thread_id": _resolve_thread_id(None, sid)}})
+        except Exception:  # noqa: BLE001 — an unreadable thread is an answer, not a 500
+            log.debug("[prompts] breakdown aget_state failed", exc_info=True)
+            return {"found": False, "reason": "thread unreadable"}
+        messages = list((getattr(snapshot, "values", None) or {}).get("messages") or [])
+        if not messages:
+            return {"found": False, "reason": "no history yet"}
+        from graph.context_audit_op import audit_messages
+
+        report = await asyncio.to_thread(audit_messages, messages, top_n=8)
+        return {"found": True, "breakdown": report}
+
     @app.get("/api/prompts/last")
     async def _api_prompts_last(session_id: str = ""):
         """The most recent captured model call — of one session when

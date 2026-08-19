@@ -12,10 +12,11 @@ import "./coreSlashCommands";
 
 vi.mock("../lib/api", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../lib/api")>();
-  return { ...mod, api: { ...mod.api, promptLast: vi.fn() } };
+  return { ...mod, api: { ...mod.api, promptLast: vi.fn(), promptBreakdown: vi.fn() } };
 });
 
 const promptLast = vi.mocked(api.promptLast);
+const promptBreakdown = vi.mocked(api.promptBreakdown);
 
 function ctx(over: Partial<SlashContext> = {}): SlashContext {
   return {
@@ -38,6 +39,9 @@ function call(over: Partial<SlashContext> = {}) {
 
 beforeEach(() => {
   promptLast.mockReset();
+  promptBreakdown.mockReset();
+  // Default: no breakdown — pre-#2843 server / empty thread; the note must render without it.
+  promptBreakdown.mockResolvedValue({ found: false });
 });
 
 describe("/prompt", () => {
@@ -89,5 +93,36 @@ describe("/prompt", () => {
     await vi.waitFor(() => expect(noted.length).toBe(1));
     expect(noted[0].tone).toBe("danger");
     expect(noted[0].md).toContain("boom");
+  });
+});
+
+describe("/prompt history line (#2843)", () => {
+  it("appends the breakdown when the server has one", async () => {
+    promptLast.mockResolvedValue({ enabled: true, call: null });
+    promptBreakdown.mockResolvedValue({
+      found: true,
+      breakdown: {
+        total_est_tokens: 73700,
+        message_count: 101,
+        categories: { tool_call_args: 36400, tool_results: 23800 },
+        tool_call_args: { plugin_write_file: 22600 },
+        tool_results: {},
+        top_blocks: [],
+      },
+    });
+    const { noted } = call();
+    await vi.waitFor(() => expect(noted.length).toBe(1));
+    expect(noted[0].md).toContain("History (≈tokens)");
+    expect(noted[0].md).toContain("73.7k across 101 messages");
+    expect(noted[0].md).toContain("plugin_write_file 22.6k");
+  });
+
+  it("never sinks the note when the breakdown fetch fails", async () => {
+    promptLast.mockResolvedValue({ enabled: true, call: null });
+    promptBreakdown.mockRejectedValue(new Error("older server"));
+    const { noted } = call();
+    await vi.waitFor(() => expect(noted.length).toBe(1));
+    expect(noted[0].md).toContain("Nothing captured");
+    expect(noted[0].md).not.toContain("History");
   });
 });

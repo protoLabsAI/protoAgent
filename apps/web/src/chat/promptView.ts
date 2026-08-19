@@ -141,3 +141,52 @@ export function diffLine(deltas: SectionDelta[] | null, anchor: string): string 
   const more = deltas.length > 4 ? ` · ${deltas.length - 4} more` : "";
   return `vs ${anchor}: ${bits.join(" · ")}${more}`;
 }
+
+// ── #2843: conversation-history breakdown (the context audit, console-side) ──
+
+import type { PromptBreakdown } from "../lib/types";
+
+/** Human labels for the audit's category keys — anything unknown title-cases. */
+const CATEGORY_LABELS: Record<string, string> = {
+  tool_call_args: "Tool call args",
+  tool_results: "Tool results",
+  injected_context_frames: "Injected memory frames",
+  assistant_text: "Assistant text",
+  operator_messages: "Operator messages",
+};
+
+export const categoryLabel = (key: string): string =>
+  CATEGORY_LABELS[key] ?? key.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
+
+/** Budget-row shape for the history block — same proportional-bar contract as
+ *  budgetRows, so the dialog renders both groups identically. */
+export function historyRows(b: PromptBreakdown): BudgetRow[] {
+  const entries = Object.entries(b.categories).filter(([, tok]) => tok > 0);
+  const total = entries.reduce((n, [, tok]) => n + tok, 0);
+  if (!total) return [];
+  return entries.map(([key, tok]) => ({
+    label: categoryLabel(key),
+    chars: tok * 4, // the audit reports ≈tokens (chars//4); bars use chars like budgetRows
+    approx_tokens: tok,
+    scope: "context",
+    pct: Math.max(1, Math.round((tok / total) * 100)),
+  }));
+}
+
+/** "top: plugin_write_file 22.6k · develop_plugin 9.1k · write_note 1.5k" — the
+ *  three biggest arg producers; "" when the thread has no tool calls. */
+export function historyTopToolsLine(b: PromptBreakdown, n = 3): string {
+  const top = Object.entries(b.tool_call_args).slice(0, n);
+  if (!top.length) return "";
+  return `top: ${top.map(([name, tok]) => `${name} ${fmtTok(tok)}`).join(" · ")}`;
+}
+
+/** The /prompt note's history line: total + categories + top arg producers. */
+export function historyLine(b: PromptBreakdown): string {
+  const cats = Object.entries(b.categories)
+    .filter(([, tok]) => tok > 0)
+    .map(([key, tok]) => `${categoryLabel(key).toLowerCase()} ${fmtTok(tok)}`)
+    .join(" · ");
+  const top = historyTopToolsLine(b);
+  return `_History (≈tokens):_ ${fmtTok(b.total_est_tokens)} across ${b.message_count} messages — ${cats}${top ? ` — ${top}` : ""}`;
+}

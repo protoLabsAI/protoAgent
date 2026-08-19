@@ -133,3 +133,16 @@
 .prompt-viewer__md pre {
   overflow-x: auto;
 }
+
+/* #2843: the conversation-history block reuses the budget-row grammar; these two
+   carry its header and the muted footnotes (top tools, the as-of-now caveat). */
+.prompt-viewer__history-head {
+  font-size: 12px;
+  font-weight: 600;
+  margin-top: 4px;
+}
+.prompt-viewer__history-note {
+  font-size: 11px;
+  color: var(--pl-color-fg-muted);
+  font-weight: 400;
+}

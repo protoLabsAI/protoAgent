@@ -33,6 +33,9 @@ import { foldPlan, toolsForGroup } from "./parts";
 // chat) and no actions render. Each callback is independently optional.
 export type ChatMessageActions = {
   copiedId?: string | null;
+  // Session the message belongs to — lets View prompt (#2843) fetch the history
+  // breakdown alongside the captured prompt.
+  sessionId?: string;
   onCopy?: (m: ChatMessage) => void;
   onFork?: (m: ChatMessage) => void;
   onRewind?: (m: ChatMessage) => void;
@@ -211,7 +214,7 @@ export function ChatMessageView({
             <MessageAction
               label="View prompt"
               icon={<FileText size={14} />}
-              onClick={() => openPromptViewer(message.taskId!)}
+              onClick={() => openPromptViewer(message.taskId!, actions.sessionId)}
             />
           ) : null}
           {actions.onRegenerate && message.id === actions.lastAssistantId ? (

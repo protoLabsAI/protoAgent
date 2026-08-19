@@ -37,6 +37,7 @@ import type {
   MemoryInjectionDetail,
   MemoryInjectionRow,
   MemorySessionDigest,
+  PromptBreakdown,
   PromptCall,
   PromptTaskResponse,
   PublishedLink,
@@ -1093,6 +1094,15 @@ export const api = {
     if (sessionId) q.set("session_id", sessionId);
     return request<{ enabled: boolean; call: PromptCall | null; reason?: string }>(
       `/api/prompts/preview?${q}`,
+    );
+  },
+  // What the session's HISTORY is made of (#2843): checkpoint-sized categories,
+  // per-tool totals, biggest blocks. Independent of prompts.capture (reads the
+  // checkpoint, not the snapshot store) and cheap — no speculative retrieval.
+  promptBreakdown(sessionId: string) {
+    const q = new URLSearchParams({ session_id: sessionId });
+    return request<{ found: boolean; reason?: string; breakdown?: PromptBreakdown }>(
+      `/api/prompts/breakdown?${q}`,
     );
   },
   // The most recent captured call of one session (backs /prompt). `call` is

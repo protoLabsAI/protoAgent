@@ -11,19 +11,30 @@ import { useEffect, useState } from "react";
 
 import { openDocument } from "../docviewer";
 import { api, ApiError } from "../lib/api";
-import type { PromptCall } from "../lib/types";
+import type { PromptBreakdown, PromptCall } from "../lib/types";
 import { Markdown } from "./LazyMarkdown";
-import { budgetRows, callTabs, diffLine, fmtTok, promptText, sectionDiff, splitLine, usageLine } from "./promptView";
+import {
+  budgetRows,
+  callTabs,
+  diffLine,
+  fmtTok,
+  historyRows,
+  historyTopToolsLine,
+  promptText,
+  sectionDiff,
+  splitLine,
+  usageLine,
+} from "./promptView";
 
-export function openPromptViewer(taskId: string): void {
+export function openPromptViewer(taskId: string, sessionId?: string): void {
   openDocument({
     title: "System prompt",
     subtitle: "what the model actually received on this turn",
-    render: () => <PromptViewerBody taskId={taskId} />,
+    render: () => <PromptViewerBody taskId={taskId} sessionId={sessionId} />,
   });
 }
 
-function PromptViewerBody({ taskId }: { taskId: string }) {
+function PromptViewerBody({ taskId, sessionId }: { taskId: string; sessionId?: string }) {
   const [calls, setCalls] = useState<PromptCall[] | null>(null);
   const [subs, setSubs] = useState<PromptCall[]>([]);
   const [prev, setPrev] = useState<PromptCall | null>(null);
@@ -35,6 +46,24 @@ function PromptViewerBody({ taskId }: { taskId: string }) {
   // Raw stays one click away (and Copy always copies the exact bytes) because
   // this dialog's whole identity is "the exact prompt".
   const [raw, setRaw] = useState(false);
+  // History breakdown (#2843) — the session's CURRENT window composition, so it's
+  // labeled "as of now" rather than pinned to this turn. Best-effort: absent
+  // (older server, dead thread) just hides the block.
+  const [history, setHistory] = useState<PromptBreakdown | null>(null);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    let alive = true;
+    api
+      .promptBreakdown(sessionId)
+      .then((res) => {
+        if (alive && res.found && res.breakdown) setHistory(res.breakdown);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [sessionId]);
 
   useEffect(() => {
     let alive = true;
@@ -169,6 +198,26 @@ function PromptViewerBody({ taskId }: { taskId: string }) {
               <span className="prompt-viewer__budget-tokens">≈{fmtTok(row.approx_tokens)}</span>
             </div>
           ))}
+        </div>
+      ) : null}
+      {history ? (
+        <div className="prompt-viewer__budget" aria-label="conversation history composition (as of now)">
+          <div className="prompt-viewer__history-head">
+            Conversation history — ≈{fmtTok(history.total_est_tokens)} tok across {history.message_count} messages{" "}
+            <span className="prompt-viewer__history-note">(as of now, not this call)</span>
+          </div>
+          {historyRows(history).map((row, i) => (
+            <div className="prompt-viewer__budget-row" key={i} title={`≈${row.approx_tokens.toLocaleString()} tokens`}>
+              <span className="prompt-viewer__budget-label">{row.label}</span>
+              <span className="prompt-viewer__budget-bar">
+                <span className="prompt-viewer__budget-fill prompt-viewer__budget-fill--context" style={{ width: `${row.pct}%` }} />
+              </span>
+              <span className="prompt-viewer__budget-tokens">≈{fmtTok(row.approx_tokens)}</span>
+            </div>
+          ))}
+          {historyTopToolsLine(history) ? (
+            <div className="prompt-viewer__history-note">{historyTopToolsLine(history)}</div>
+          ) : null}
         </div>
       ) : null}
       {call.system.wire_differs ? (
