@@ -89,7 +89,8 @@ class KnowledgeMiddleware(AgentMiddleware):
         knowledge_store,
         top_k: int = 5,
         skills_index: "SkillsIndex | None" = None,
-        skills_top_k: int = 5,
+        skills_top_k: int = 24,
+        skills_index_chars: int = 8192,
         inject_namespaces: list[str] | None = None,
         inject_min_trust: int = 1,
     ):
@@ -105,11 +106,13 @@ class KnowledgeMiddleware(AgentMiddleware):
         # on demand, with the tier visible in the tool output.
         self._inject_min_trust = max(1, int(inject_min_trust))
         self._skills_index = skills_index
-        # Max skills listed in the always-on <available_skills> index (the rest
-        # are reachable via list_skills). The model loads any one's full body on
-        # demand via load_skill — so this caps the per-turn "table of contents",
-        # not what's usable.
+        # #2867: every discoverable skill is ALWAYS listed. skills_top_k caps how
+        # many carry their full DESCRIPTION (compat with the old count knob);
+        # skills_index_chars is the char ceiling for the block (~2% of the model
+        # window, 8KB when the window is unknown; <=0 = uncapped). Overflow rows
+        # keep their name+slash — identities never drop.
         self._skills_top_k = skills_top_k
+        self._skills_index_chars = int(skills_index_chars)
         # Namespace scope for the auto-inject RAG search (ADR 0069 D3a,
         # `knowledge.inject_namespaces`). Empty/None = unfiltered (today's
         # behavior — box-commons sharing keeps working); "" in the list matches
@@ -157,22 +160,31 @@ class KnowledgeMiddleware(AgentMiddleware):
     # ---------------------------------------------------------------------------
 
     def _skill_index_block(self) -> str:
-        """Build the always-on ``<available_skills>`` index.
+        """Build the always-on ``<available_skills>`` index — EVERY skill listed.
 
-        Lists the ``{name, description}`` (and ``/slash`` when user-facing) of up
-        to ``self._skills_top_k`` discoverable skills, most-recently-used first —
-        the cheap "table of contents" the model scans every turn. It calls
-        ``load_skill(name)`` to pull a skill's full procedure only when it decides
-        one is relevant, so nothing is matched against the conversation here (the
-        old BM25 retrieval guessed relevance from the agent's own recent output
-        and mis-loaded skills every turn — ADR 0060). Returns an empty string when
-        no index is configured or it holds no discoverable skills; never raises.
+        #2867 (design surveyed across Claude Code / Codex / OpenClaw / opencode /
+        Hermes / deepagents — the whole AgentSkills ecosystem): identities NEVER
+        drop. A count-capped index made a fresh cowork instance's headline skill
+        invisible, and the model cannot ``load_skill`` a name it has never seen.
+        The budget model instead:
+
+        - every discoverable skill appears, most-recently-used first;
+        - full ``description`` rows until the CHAR budget
+          (``skills_index_chars`` — ~2% of the model window, 8KB fallback) or the
+          ``skills.top_k`` full-row cap runs out;
+        - the remainder appear as name(+slash)-only rows the model can still
+          ``load_skill`` by name.
+
+        Nothing is matched against the conversation (the old BM25 retrieval
+        guessed relevance from the agent's own output and mis-loaded skills —
+        ADR 0060); the description is the trigger surface, which is why it is
+        never silently absent for the freshest entries. Returns "" when no index
+        is configured or it holds nothing; never raises.
         """
         if self._skills_index is None:
             return ""
         try:
-            summaries = self._skills_index.skill_summaries(limit=self._skills_top_k)
-            total = self._skills_index.discoverable_count()
+            summaries = self._skills_index.skill_summaries()
         except Exception as exc:  # noqa: BLE001 — never break a turn on skill listing
             log.warning("[knowledge] skill index error: %s", exc)
             return ""
@@ -182,14 +194,23 @@ class KnowledgeMiddleware(AgentMiddleware):
         lines = [
             "<available_skills>",
             "  <!-- Learned procedures you can use. Each is a name + one-line summary; "
-            "call load_skill(name) to read the full steps before following one. Don't guess its contents. -->",
+            "call load_skill(name) to read the full steps before following one. Don't guess its contents. "
+            "A self-closing <skill name=…/> row is one whose summary didn't fit the index budget — "
+            "load_skill works on it all the same. -->",
         ]
+        budget = self._skills_index_chars
+        spent = 0
+        full_rows = 0
         for s in summaries:
             slash = (s.get("slash") or "").strip()
             slash_attr = f' slash="/{slash}"' if slash else ""
-            lines.append(f'  <skill name="{s["name"]}"{slash_attr}>{s.get("description", "")}</skill>')
-        if total > len(summaries):
-            lines.append(f"  <!-- +{total - len(summaries)} more — call list_skills to see them all. -->")
+            full = f'  <skill name="{s["name"]}"{slash_attr}>{s.get("description", "")}</skill>'
+            if full_rows < self._skills_top_k and (budget <= 0 or spent + len(full) <= budget):
+                lines.append(full)
+                spent += len(full)
+                full_rows += 1
+            else:
+                lines.append(f'  <skill name="{s["name"]}"{slash_attr}/>')
         lines.append("</available_skills>")
         return "\n".join(lines)
 

@@ -614,7 +614,7 @@ FIELDS: list[Field] = [
     # coherent middle ground vs skills.enabled:false (which kills everything). The
     # runtime (KnowledgeMiddleware + runtime/context.py) honors 0, so the schema must
     # let it through validation (ADR 0060).
-    Field("skills.top_k", "skills_top_k", "Skills listed in context", "number", "Knowledge", minimum=0),
+    Field("skills.top_k", "skills_top_k", "Skills shown with full summaries (all are always listed)", "number", "Knowledge", minimum=0),
     Field(
         "checkpoint.db_path",
         "checkpoint_db_path",

@@ -884,11 +884,12 @@ class LangGraphConfig:
     # ``<config_dir>/skills``); shipped example skills live in ``config/skills``.
     skills_enabled: bool = True
     skills_db_path: str = "/sandbox/skills.db"
-    # Max skills listed in the always-on <available_skills> index the model scans
-    # each turn (ADR 0060); the rest stay reachable via list_skills, and any one's
-    # full procedure is loaded on demand via load_skill. Caps the per-turn "table
-    # of contents", not what's usable.
-    skills_top_k: int = 5
+    # Max skills carrying their FULL description in the always-on
+    # <available_skills> index (ADR 0060, re-shaped by #2867): every discoverable
+    # skill is always LISTED (overflow rows keep name+slash — identities never
+    # drop, so load_skill always has a visible target); this caps descriptions,
+    # alongside a ~2%-of-window char ceiling computed at graph build.
+    skills_top_k: int = 24
     skills_dir: str = ""
     # Tiered stores (ADR 0041) — `shared` lifts a store out of per-instance scoping
     # into the COMMONS (read by every agent on the host); `scoped` keeps it private.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import types
+from unittest.mock import MagicMock
 
 from graph.skills.index import SkillsIndex
 from graph.skills.layered import LayeredSkillsIndex
@@ -203,3 +204,31 @@ def test_layered_user_facing_union_private_wins(tmp_path):
     assert ufs["research"]["tier"] == "private"  # private wins
     assert ufs["triage"]["tier"] == "commons"
     idx.close()
+
+
+def test_union_resorts_by_recency_across_tiers(tmp_path):
+    """#2867: the cap used to bite an UNSORTED union — commons' head won every
+    slot regardless of recency. A recently-used private skill must now lead a
+    never-used commons one."""
+    from graph.skills.layered import LayeredSkillsIndex
+
+    commons = MagicMock()
+    commons.skill_summaries.return_value = [
+        {"name": "stale-commons", "description": "c", "slash": "", "last_used": "2026-01-01T00:00:00", "confidence": 1.0},
+    ]
+    private = MagicMock()
+    private.skill_summaries.return_value = [
+        {"name": "fresh-private", "description": "p", "slash": "", "last_used": "2026-08-19T00:00:00", "confidence": 1.0},
+    ]
+    idx = LayeredSkillsIndex.__new__(LayeredSkillsIndex)
+    idx._commons = commons
+    idx._private = private
+    rows = idx.skill_summaries(limit=1)
+    assert [r["name"] for r in rows] == ["fresh-private"]
+    # and name ASC still tiebreaks when keys match
+    commons.skill_summaries.return_value = [
+        {"name": "b-skill", "description": "c", "slash": "", "last_used": "", "confidence": 1.0},
+        {"name": "a-skill", "description": "c", "slash": "", "last_used": "", "confidence": 1.0},
+    ]
+    private.skill_summaries.return_value = []
+    assert [r["name"] for r in idx.skill_summaries()] == ["a-skill", "b-skill"]

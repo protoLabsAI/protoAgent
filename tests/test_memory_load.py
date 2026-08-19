@@ -661,3 +661,57 @@ def test_frame_message_is_tagged_and_enveloped(tmp_path):
     assert frame.additional_kwargs["protoagent_injected_context"] is True
     assert frame.content.startswith("<injected_context>")
     assert frame.content.rstrip().endswith("</injected_context>")
+
+
+# ── #2867: identities never drop — budget squeezes descriptions, not names ─────
+
+
+def _mw_with_skills(summaries, **kw):
+    from graph.middleware.knowledge import KnowledgeMiddleware
+
+    store = MagicMock()
+    store.get_hot_memory.return_value = ""
+    store.get_hot_memory_entries.return_value = []
+    store.search.return_value = []
+    idx = MagicMock()
+    idx.skill_summaries.return_value = summaries
+    mw = KnowledgeMiddleware(store, top_k=5, skills_index=idx, **kw)
+    import time
+
+    mw._prior_sessions_cache = ""
+    mw._prior_sessions_loaded_at = time.monotonic()
+    return mw
+
+
+def _skills(n):
+    return [{"name": f"skill-{i:02d}", "description": f"does thing {i} " + "x" * 80, "slash": ""} for i in range(n)]
+
+
+def test_every_skill_is_always_listed():
+    """The 18-skill fresh-cowork failure: the model can't load_skill a name it
+    has never seen. All identities appear even far past the full-row cap."""
+    block = _mw_with_skills(_skills(18), skills_top_k=5)._skill_index_block()
+    for i in range(18):
+        assert f'name="skill-{i:02d}"' in block
+    # first 5 carry descriptions; the rest are self-closing name-only rows
+    assert block.count("</skill>") == 5
+    assert block.count('"/>') == 13
+
+
+def test_char_budget_squeezes_descriptions_not_names():
+    block = _mw_with_skills(_skills(10), skills_top_k=24, skills_index_chars=400)._skill_index_block()
+    for i in range(10):
+        assert f'name="skill-{i:02d}"' in block  # every identity survives
+    assert 0 < block.count("</skill>") < 10  # budget cut descriptions somewhere
+    assert "load_skill works on it all the same" in block  # the name-only rows are explained
+
+
+def test_small_roster_fits_whole_under_defaults():
+    block = _mw_with_skills(_skills(3))._skill_index_block()
+    assert block.count("</skill>") == 3 and '"/>'.encode() not in block.encode()
+
+
+def test_slash_survives_on_squeezed_rows():
+    rows = [{"name": f"s{i}", "description": "d" * 200, "slash": "go" if i == 9 else ""} for i in range(10)]
+    block = _mw_with_skills(rows, skills_top_k=1)._skill_index_block()
+    assert '<skill name="s9" slash="/go"/>' in block  # identity AND trigger kept

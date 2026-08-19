@@ -29,14 +29,28 @@ class LayeredSkillsIndex:
 
     # ── read: the always-on index — commons ∪ private, de-duped (private wins) ──
     def skill_summaries(self, limit: int | None = None) -> list[dict]:
-        """Union the two tiers' lightweight ``{name, description, slash}`` index,
-        de-duped by name (private shadows commons), then cap at ``limit``. Ordering
-        follows each backend (most-recently-used first); private entries lead."""
+        """Union the two tiers' lightweight summary index, de-duped by name
+        (private shadows commons), RE-SORTED on the backends' own key
+        (``last_used DESC, confidence DESC, name ASC``), then capped at ``limit``.
+
+        The re-sort is load-bearing (#2867): each backend sorts internally, but a
+        dict union is insertion-ordered — capping that let the commons tier's head
+        win every slot regardless of recency (and a private skill shadowing a
+        commons name inherited the COMMONS position)."""
         merged: dict[str, dict] = {}
-        for backend in (self._commons, self._private):  # private listed last → wins
+        for backend in (self._commons, self._private):  # private listed last → wins the VALUE
             for rec in backend.skill_summaries():
                 merged[rec["name"]] = rec
         rows = list(merged.values())
+        rows.sort(
+            key=lambda r: (
+                str(r.get("last_used") or ""),
+                float(r.get("confidence") or 0.0),
+                # name DESCENDS in this key because the whole sort is reversed.
+                _reversed_text(str(r.get("name") or "")),
+            ),
+            reverse=True,
+        )
         return rows[:limit] if limit is not None else rows
 
     def discoverable_count(self) -> int:
@@ -140,3 +154,9 @@ class LayeredSkillsIndex:
     def close(self) -> None:
         self._private.close()
         self._commons.close()
+
+
+def _reversed_text(s: str) -> tuple:
+    """A key that makes ``name ASC`` survive a ``reverse=True`` sort — negate each
+    codepoint so lexicographic order flips exactly once."""
+    return tuple(-ord(c) for c in s)

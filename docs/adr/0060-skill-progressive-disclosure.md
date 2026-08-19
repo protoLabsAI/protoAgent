@@ -1,6 +1,6 @@
 # 0060 — Skills: progressive disclosure (always-on index + load on demand)
 
-Status: **Accepted**
+Status: **Accepted** — amended by [#2867](https://github.com/protoLabsAI/protoAgent/issues/2867): the always-on index lists EVERY discoverable skill (identities never drop); a char budget + `skills.top_k` govern which rows carry full descriptions, replacing the count-capped MRU window that hid skills on fresh instances.
 
 ## Context
 

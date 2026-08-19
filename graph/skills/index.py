@@ -286,14 +286,23 @@ class SkillsIndex:
         try:
             cur = conn.execute(
                 """
-                SELECT name, description, slash
+                SELECT name, description, slash, last_used, confidence
                 FROM skills_fts
                 WHERE user_only = '0'
                 ORDER BY last_used DESC, confidence DESC, name ASC
                 """
             )
+            # last_used/confidence ride along so the LAYERED union can re-sort the
+            # merged tiers on the same key (#2867 — the union used to cap an
+            # unsorted merge, letting tier order beat recency).
             rows = [
-                {"name": r["name"], "description": r["description"], "slash": r["slash"]}
+                {
+                    "name": r["name"],
+                    "description": r["description"],
+                    "slash": r["slash"],
+                    "last_used": r["last_used"],
+                    "confidence": r["confidence"],
+                }
                 for r in cur.fetchall()
             ]
         except Exception as exc:  # noqa: BLE001 — degrade to empty, never raise on the per-turn hot path
