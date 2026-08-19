@@ -175,7 +175,13 @@ registerSlashCommand({
     // fetch is a local read, so no optimistic pending note (unlike /btw).
     // The history breakdown (#2843) rides along: it reads the checkpoint (works
     // even with capture off) and is cheap; its failure never sinks the note.
-    void Promise.all([api.promptLast(ctx.sessionId), api.promptBreakdown(ctx.sessionId).catch(() => null)])
+    // request() has no timeout, so a HUNG (never-settling) breakdown must not
+    // stall the note either — race a 3s cap alongside the rejection catch.
+    const breakdown = Promise.race([
+      api.promptBreakdown(ctx.sessionId).catch(() => null),
+      new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 3000)),
+    ]);
+    void Promise.all([api.promptLast(ctx.sessionId), breakdown])
       .then(([res, bd]) => {
         const history = bd?.found && bd.breakdown ? `\n\n${historyLine(bd.breakdown)}` : "";
         if (!res.enabled) {

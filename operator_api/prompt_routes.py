@@ -89,8 +89,11 @@ def register_prompt_routes(app) -> None:
         sizes the thread's checkpoint messages into categories — assistant text,
         tool-call args (counted exactly once, the graph.message_blocks contract),
         tool results, injected memory frames — plus per-tool totals and the biggest
-        blocks. Deliberately independent of ``prompts.capture``: it reads the
-        checkpoint, not the snapshot store, so it answers even with capture off.
+        blocks. MOSTLY independent of ``prompts.capture``: it reads the checkpoint,
+        not the snapshot store, so the SIZES (pure metadata) answer even with
+        capture off — but the ``top_blocks`` previews are content slices, so a
+        capture-locked console gets them redacted (the locked contract every
+        sibling route honors, applied to the one content-bearing field).
         Cheap (one aget_state + string sums) — no speculative retrieval."""
         import asyncio
 
@@ -116,6 +119,10 @@ def register_prompt_routes(app) -> None:
         from graph.context_audit_op import audit_messages
 
         report = await asyncio.to_thread(audit_messages, messages, top_n=8)
+        if not _capture_enabled():
+            for block in report.get("top_blocks") or []:
+                block["preview"] = ""
+            report["previews_redacted"] = True
         return {"found": True, "breakdown": report}
 
     @app.get("/api/prompts/last")

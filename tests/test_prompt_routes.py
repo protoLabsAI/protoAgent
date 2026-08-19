@@ -162,6 +162,10 @@ def test_breakdown_sizes_history_and_ignores_capture_flag(monkeypatch):
     body = c.get("/api/prompts/breakdown", params={"session_id": "chat-x"}).json()
     assert body["found"] is True
     b = body["breakdown"]
+    # capture is OFF: sizes are metadata and stay, but the content-bearing
+    # previews are redacted — the locked contract, scoped to the one such field.
+    assert b["previews_redacted"] is True
+    assert all(blk["preview"] == "" for blk in b["top_blocks"])
     args_tok = b["tool_call_args"]["plugin_write_file"]
     assert args_tok >= 900
     assert b["total_est_tokens"] < args_tok * 1.2  # counted once, not mirrored

@@ -2,7 +2,7 @@
 // component-free so the tab mapping, usage line, and note markdown are unit
 // testable (the vitest harness is .test.ts only).
 
-import type { PromptCall, PromptSection } from "../lib/types";
+import type { PromptBreakdown, PromptCall, PromptSection } from "../lib/types";
 
 /** How much prompt text the /prompt system note shows before deferring to the
  *  full viewer — a note is a glance, not a reading surface. */
@@ -144,7 +144,6 @@ export function diffLine(deltas: SectionDelta[] | null, anchor: string): string 
 
 // ── #2843: conversation-history breakdown (the context audit, console-side) ──
 
-import type { PromptBreakdown } from "../lib/types";
 
 /** Human labels for the audit's category keys — anything unknown title-cases. */
 const CATEGORY_LABELS: Record<string, string> = {
