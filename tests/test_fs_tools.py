@@ -1291,3 +1291,89 @@ def test_the_newline_translation_that_bit_windows_is_disabled(tmp_path):
 
     _write_text_verbatim(p, "a\nb\n")
     assert p.read_bytes() == b"a\nb\n"  # ← the fix, same platform, same call shape
+
+
+# ── live registry lookup: mid-turn registrations are visible same-turn (#2836) ─
+
+
+def _wire_live_config(monkeypatch, initial):
+    """Wire ``HOST.config`` the way the server does (a getter for the LIVE config)
+    and return a setter that swaps in a replacement — what ``apply_settings``'
+    reload does to ``STATE.graph_config`` while the old tool closures keep running."""
+    from graph.plugins.host import HOST
+
+    state = {"cfg": initial}
+    monkeypatch.setattr(HOST, "config", lambda: state["cfg"])
+
+    def swap(cfg):
+        state["cfg"] = cfg
+
+    return swap
+
+
+def test_project_registered_mid_turn_is_visible_same_turn(workspace, monkeypatch):
+    """The #2836 fix: the tools are built ONCE (long-lived closures), then the live
+    config gains a project — the way onboard_project's apply_settings lands mid-turn.
+    Every fs tool must see it on its very next call, without a graph rebuild."""
+    _, a, b = workspace
+    entry_a = {"name": "a", "path": str(a), "write": True}
+    swap = _wire_live_config(monkeypatch, _Cfg(filesystem_projects=[entry_a]))
+    t = _tools(_Cfg(filesystem_projects=[entry_a]))
+
+    assert "projB" not in t["list_projects"].invoke({})
+    assert "unknown project" in t["list_dir"].invoke({"project": "b", "path": "."})
+
+    # onboard_project succeeded: the live config now carries b. Same closures.
+    swap(_Cfg(filesystem_projects=[entry_a, {"name": "b", "path": str(b)}]))
+
+    listed = t["list_projects"].invoke({})
+    assert "- b " in listed and str(b) in listed
+    assert "notes.txt" in t["list_dir"].invoke({"project": "b", "path": "."})
+    assert "read only" in t["read_file"].invoke({"project": "b", "path": "notes.txt"})
+    assert "notes.txt" in t["find_files"].invoke({"project": "b", "pattern": "**/*.txt"})
+    assert "notes.txt" in t["search_files"].invoke({"project": "b", "query": "read only"})
+
+    # The refreshed registry is a real fence, not just a name list: the new
+    # project keeps its mode (registered read-only) and its path containment.
+    assert "read-only" in t["write_file"].invoke({"project": "b", "path": "x.txt", "content": "hi"})
+    assert "escapes" in t["read_file"].invoke({"project": "b", "path": "../projA/README.md"})
+    # ... and the pre-registered project is untouched by the refresh.
+    assert "hello" in t["read_file"].invoke({"project": "a", "path": "src/main.py"})
+
+    # Symmetric: a project dropped from the live config disappears immediately too.
+    swap(_Cfg(filesystem_projects=[entry_a]))
+    assert "unknown project" in t["list_dir"].invoke({"project": "b", "path": "."})
+
+
+def test_unwired_or_broken_host_falls_back_to_build_config(workspace, monkeypatch):
+    """No server (``HOST.config`` unwired) → the build-time config is the registry
+    source, exactly the old snapshot behavior. A getter that RAISES (a mid-reload
+    race) must degrade the same way — the live seam never breaks a tool call."""
+    from graph.plugins.host import HOST
+
+    _, a, _ = workspace
+    cfg = _Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}])
+
+    monkeypatch.setattr(HOST, "config", None)  # headless/test: the seam is not wired
+    t = _tools(cfg)
+    assert "hello" in t["read_file"].invoke({"project": "a", "path": "src/main.py"})
+
+    def _boom():
+        raise RuntimeError("config store mid-reload")
+
+    monkeypatch.setattr(HOST, "config", _boom)  # wired but broken: fall back, don't raise
+    assert "- a " in t["list_projects"].invoke({})
+    assert "hello" in t["read_file"].invoke({"project": "a", "path": "src/main.py"})
+    assert "README.md" in t["list_dir"].invoke({"project": "a", "path": "."})
+
+
+def test_live_getter_returning_none_falls_back_to_build_config(workspace, monkeypatch):
+    """A wired getter that returns ``None`` (server mid-swap) is the third seam
+    failure shape — same fallback, same snapshot behavior."""
+    from graph.plugins.host import HOST
+
+    _, a, _ = workspace
+    monkeypatch.setattr(HOST, "config", lambda: None)
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
+
+    assert "hello" in t["read_file"].invoke({"project": "a", "path": "src/main.py"})

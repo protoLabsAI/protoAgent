@@ -300,6 +300,55 @@ def _registry_from_config(config) -> ProjectRegistry:
     return ProjectRegistry(projects)
 
 
+class _RegistryRef:
+    """Live project-registry handle — every fs tool resolves through this (#2836).
+
+    ``build_fs_tools`` runs once per graph build and the tools it returns are
+    long-lived closures, so a ``ProjectRegistry`` captured there is a SNAPSHOT:
+    when ``onboard_project`` registered a project mid-turn (``HOST.apply_settings``
+    reloads the config), the in-flight turn kept executing the old closures and
+    the new project stayed invisible until the next turn. ``get()`` re-resolves
+    the registry from the live config (the same ``HOST.config`` seam plugin
+    routes read) on every call, so a mid-turn registration is visible to the
+    very next tool call.
+
+    The build-time config is the fallback, not just a default: headless/test
+    contexts never wire the seam, and a RAISING getter (a mid-reload race) must
+    degrade to the snapshot behavior — a broken seam never breaks a tool call.
+    """
+
+    def __init__(self, build_config):
+        self._build_config = build_config
+        # The build-time snapshot: the bind/no-bind gate in ``build_fs_tools``
+        # is a build-time question, and it doubles as the fallback registry.
+        self.build_registry = _registry_from_config(build_config)
+        # Identity cache — the server swaps in a whole NEW config object on
+        # reload, so ``is`` distinguishes generations without re-statting every
+        # project dir (and re-logging skip warnings) on each tool call. Holding
+        # the config object keeps its id() from being recycled.
+        self._cached_config = build_config
+        self._cached_registry = self.build_registry
+
+    def _live_config(self):
+        try:
+            from graph.plugins.host import HOST
+
+            if HOST.config is not None:
+                live = HOST.config()
+                if live is not None:
+                    return live
+        except Exception:  # noqa: BLE001 — degrade to the snapshot, never raise into a tool
+            log.warning("[fs] live config read failed — falling back to the build-time config", exc_info=True)
+        return self._build_config
+
+    def get(self) -> ProjectRegistry:
+        cfg = self._live_config()
+        if cfg is not self._cached_config:
+            self._cached_registry = _registry_from_config(cfg)
+            self._cached_config = cfg
+        return self._cached_registry
+
+
 def _bypass_requested() -> bool:
     """True when the in-flight turn carries the per-turn ``bypass_permissions`` flag — the
     operator's explicit /bypass toggle, sent in the A2A request metadata (read live, so it's
@@ -400,8 +449,10 @@ def _memoized_read(state, project: str, path: str, offset: int, limit: int, limi
 def build_fs_tools(config) -> list:
     """Build the fenced filesystem tools from config. Empty list when no valid
     projects are registered (so the primitive is inert by default)."""
-    registry = _registry_from_config(config)
-    if not registry.names():
+    # The tools are long-lived closures; they resolve the registry through the
+    # ref on EVERY call so a mid-turn registration (#2836) is visible same-turn.
+    registry_ref = _RegistryRef(config)
+    if not registry_ref.build_registry.names():
         # Configured-but-all-unusable is an OPERATOR MISTAKE, not the inert default: every
         # fs tool unbinds and the agent just... can't read files anymore. Warn, and
         # name the folders, so the log says why instead of only that it happened.
@@ -434,6 +485,7 @@ def build_fs_tools(config) -> list:
     def list_projects() -> str:
         """List the project workspaces you manage (name, path, and access mode:
         ``ro`` read-only, ``rw`` read-write, ``rw/no-delete`` read-write but deletes off)."""
+        registry = registry_ref.get()
         lines = ["Managed projects:"]
         for name in registry.names():
             p = registry.get(name)
@@ -443,6 +495,7 @@ def build_fs_tools(config) -> list:
     @tool
     def list_dir(project: str, path: str = ".") -> str:
         """List a directory inside a managed project (path is relative to the project root)."""
+        registry = registry_ref.get()
         try:
             target = registry.resolve(project, path)
         except ValueError as exc:
@@ -481,6 +534,7 @@ def build_fs_tools(config) -> list:
         line longer than ~50K chars (e.g. a minified bundle) is itself cut short
         either way — prefer `search_files` over paging through a line like that.
         """
+        registry = registry_ref.get()
         try:
             target = registry.resolve(project, path)
         except ValueError as exc:
@@ -560,6 +614,7 @@ def build_fs_tools(config) -> list:
     @tool
     def find_files(project: str, pattern: str = "**/*") -> str:
         """Glob for files in a managed project (e.g. '**/*.py', '.tasks/*.jsonl')."""
+        registry = registry_ref.get()
         try:
             root = registry.resolve(project, ".")
         except ValueError as exc:
@@ -604,6 +659,7 @@ def build_fs_tools(config) -> list:
         node_modules, dist, .next, coverage. Set include_generated=true to search them
         too (e.g. to grep a vendored dependency).
         """
+        registry = registry_ref.get()
         try:
             base = registry.resolve(project, path)
         except ValueError as exc:
@@ -728,6 +784,7 @@ def build_fs_tools(config) -> list:
     @tool
     def write_file(project: str, path: str, content: str) -> str:
         """Write (create/overwrite) a text file in a read-write managed project."""
+        registry = registry_ref.get()
         try:
             target = registry.resolve(project, path)
         except ValueError as exc:
@@ -746,6 +803,7 @@ def build_fs_tools(config) -> list:
     @tool
     def edit_file(project: str, path: str, old: str, new: str) -> str:
         """Replace the first exact occurrence of `old` with `new` in a file (read-write project)."""
+        registry = registry_ref.get()
         try:
             target = registry.resolve(project, path)
         except ValueError as exc:
@@ -781,6 +839,7 @@ def build_fs_tools(config) -> list:
         floor that even bypass-permissions mode can't skip, because deletion is irreversible.
         Removes one file, not a directory (use ``run_command`` for directory trees).
         """
+        registry = registry_ref.get()
         try:
             target = registry.resolve(project, path)
         except ValueError as exc:
@@ -831,6 +890,7 @@ def build_fs_tools(config) -> list:
             (``Set-Content``, cmdlets, ``$vars``) REQUIRES shell="powershell" —
             on Windows the default grammar is cmd.exe and will not run it.
             """
+            registry = registry_ref.get()
             try:
                 root = registry.resolve(project, ".")
             except ValueError as exc:
@@ -888,5 +948,5 @@ def build_fs_tools(config) -> list:
 
         tools.append(run_command)
 
-    log.info("[fs] %d project(s), %d tool(s), run=%s", len(registry.names()), len(tools), allow_run)
+    log.info("[fs] %d project(s), %d tool(s), run=%s", len(registry_ref.build_registry.names()), len(tools), allow_run)
     return tools

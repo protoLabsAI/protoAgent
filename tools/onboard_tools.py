@@ -188,7 +188,24 @@ def build_onboard_tools(config) -> list:
         rw = "read-write" if write_effective else "read-only"
         project_name = name or target.name
 
-        existing = list(getattr(config, "filesystem_projects", []) or [])
+        # Merge against the LIVE registry — the same ``HOST.config`` seam the fs
+        # tools resolve through (#2836) — so a second onboarding in one turn sees
+        # the first instead of silently dropping it from filesystem.projects.
+        # Guarded exactly like ``fs_tools._RegistryRef._live_config``: a raising
+        # getter (e.g. a mid-reload race) must fall back to the build-time config,
+        # never crash a call that already cloned to disk — that would strand a
+        # cloned-but-unregistered directory.
+        from graph.plugins.host import HOST
+
+        live_config = None
+        if HOST.config is not None:
+            try:
+                live_config = HOST.config()
+            except Exception:  # noqa: BLE001 — degrade to the build-time config, never raise into the turn
+                log.warning("[onboard] live config read failed — merging against the build-time config", exc_info=True)
+        source = live_config if live_config is not None else config
+
+        existing = list(getattr(source, "filesystem_projects", []) or [])
         if any(_same_path(e.get("path"), target) for e in existing if isinstance(e, dict)):
             return (
                 f"{project_name} is already registered at {target} ({rw}). "
@@ -216,8 +233,6 @@ def build_onboard_tools(config) -> list:
         # _apply_settings_changes) — tools/ must never import server/ (import-linter),
         # the same reason HOST.publish / reload_callback exist. Heavy (a full reload),
         # so off the event loop.
-        from graph.plugins.host import HOST
-
         if HOST.apply_settings is None:
             return (
                 f"Error: cloned to {target} but registration is unavailable — the host is not wired "

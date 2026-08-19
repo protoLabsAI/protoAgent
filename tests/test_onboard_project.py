@@ -186,6 +186,47 @@ async def test_already_registered_is_idempotent(tmp_path, mocks):
     assert "already registered" in out
 
 
+# ---------------------------------------------------------------------------
+# live-registry merge (#2836)
+# ---------------------------------------------------------------------------
+
+
+async def test_merges_against_live_config_not_build_snapshot(tmp_path, mocks, monkeypatch):
+    """A second onboarding in the same turn merges against the LIVE registry:
+    the build-time snapshot doesn't know about the first registration, and a
+    merge against it would silently drop that project from filesystem.projects."""
+    first = {"name": "widget", "path": str(tmp_path / "widget"), "write": False, "github": "acme/widget"}
+    live = _cfg(tmp_path, filesystem_projects=[first])
+    monkeypatch.setattr(HOST, "config", lambda: live)
+
+    tool = _tool(_cfg(tmp_path))  # build-time config: no projects registered yet
+    await tool.ainvoke({"github_repo": "acme/gadget"})
+
+    projects = mocks.apply_calls[0]["filesystem"]["projects"]
+    assert first in projects  # the mid-turn registration survives the merge
+    assert any(p["path"] == str(tmp_path / "gadget") for p in projects)
+
+
+async def test_raising_live_config_falls_back_and_still_registers(tmp_path, mocks, monkeypatch):
+    """A raising ``HOST.config`` (a mid-reload race) must NOT crash the tool after
+    a successful clone — that would strand a cloned-but-unregistered directory on
+    disk. It falls back to the build-time config and finishes the registration."""
+
+    def _boom():
+        raise RuntimeError("config store mid-reload")
+
+    monkeypatch.setattr(HOST, "config", _boom)
+
+    prior = {"name": "keep", "path": str(tmp_path / "keep"), "write": True}
+    tool = _tool(_cfg(tmp_path, filesystem_projects=[prior]))
+    out = await tool.ainvoke({"github_repo": "acme/widget"})
+
+    assert "registered" in out  # the call completed — no raise into the turn
+    projects = mocks.apply_calls[0]["filesystem"]["projects"]
+    assert prior in projects  # merged against the build-time fallback
+    assert any(p["path"] == str(tmp_path / "widget") for p in projects)
+
+
 async def test_clone_failure_surfaces_error(tmp_path, monkeypatch):
     m = _Mocks(returncode=128, stderr="fatal: repository 'https://github.com/acme/nope.git' not found")
     monkeypatch.setattr(onboard_tools.subprocess, "run", m.fake_run)
