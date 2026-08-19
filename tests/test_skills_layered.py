@@ -232,3 +232,20 @@ def test_union_resorts_by_recency_across_tiers(tmp_path):
     ]
     private.skill_summaries.return_value = []
     assert [r["name"] for r in idx.skill_summaries()] == ["a-skill", "b-skill"]
+
+
+def test_union_name_tiebreak_handles_prefix_pairs():
+    """Review round: the reversed-codepoint key sorted 'ab' before 'a' — the
+    stable two-pass sort must keep plain name ASC for prefix pairs too."""
+    commons = MagicMock()
+    commons.skill_summaries.return_value = [
+        {"name": "ab", "description": "", "slash": "", "last_used": "", "confidence": 1.0},
+        {"name": "a", "description": "", "slash": "", "last_used": "", "confidence": 1.0},
+        {"name": "abc", "description": "", "slash": "", "last_used": "", "confidence": 1.0},
+    ]
+    private = MagicMock()
+    private.skill_summaries.return_value = []
+    idx = LayeredSkillsIndex.__new__(LayeredSkillsIndex)
+    idx._commons = commons
+    idx._private = private
+    assert [r["name"] for r in idx.skill_summaries()] == ["a", "ab", "abc"]

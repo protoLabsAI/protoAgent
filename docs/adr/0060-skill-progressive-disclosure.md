@@ -31,11 +31,17 @@ relevance per turn.
 Replace per-turn retrieval with **progressive disclosure**:
 
 1. **Always-on index.** `before_model` injects an `<available_skills>` block listing
-   the `{name, description}` (and `/slash` when user-facing) of up to `skills.top_k`
-   discoverable skills, most-recently-used first, with a `+N more (call list_skills)`
-   hint when truncated. It is **query-independent** — the same table of contents every
-   turn — so there is no relevance guess to misfire, and no skill body in context until
-   one is asked for. Backed by the new `SkillsIndex.skill_summaries(limit)` /
+   **every** discoverable skill, most-recently-used first (re-shaped by
+   [#2867](https://github.com/protoLabsAI/protoAgent/issues/2867) — the original
+   count-capped window hid skills entirely on fresh instances, and the model cannot
+   `load_skill` a name it has never seen). Degradation is three-tier: full
+   `{name, description, /slash}` rows until the char budget (~2% of the model window,
+   8KB fallback) or the `skills.top_k` full-row cap runs out; then self-closing
+   name(+slash)-only rows against a 2× budget hard ceiling; only past THAT does a
+   `+N more (call list_skills)` hint stand in for the true tail — identities drop only
+   at pathological skill counts. It is **query-independent** — the same table of
+   contents every turn — so there is no relevance guess to misfire, and no skill body
+   in context until one is asked for. Backed by `SkillsIndex.skill_summaries()` /
    `discoverable_count()`.
 
 2. **Load on demand.** A new lead-agent tool **`load_skill(name)`** returns one skill's

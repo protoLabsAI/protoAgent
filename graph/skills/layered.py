@@ -42,13 +42,13 @@ class LayeredSkillsIndex:
             for rec in backend.skill_summaries():
                 merged[rec["name"]] = rec
         rows = list(merged.values())
+        # Two stable passes: name ASC first, then the primary key DESC — the
+        # stable second pass preserves name order within equal primaries. (A
+        # single reversed composite with a negated-codepoint name key inverted
+        # the tiebreak for prefix pairs — "ab" sorted before "a".)
+        rows.sort(key=lambda r: str(r.get("name") or ""))
         rows.sort(
-            key=lambda r: (
-                str(r.get("last_used") or ""),
-                float(r.get("confidence") or 0.0),
-                # name DESCENDS in this key because the whole sort is reversed.
-                _reversed_text(str(r.get("name") or "")),
-            ),
+            key=lambda r: (str(r.get("last_used") or ""), float(r.get("confidence") or 0.0)),
             reverse=True,
         )
         return rows[:limit] if limit is not None else rows
@@ -154,9 +154,3 @@ class LayeredSkillsIndex:
     def close(self) -> None:
         self._private.close()
         self._commons.close()
-
-
-def _reversed_text(s: str) -> tuple:
-    """A key that makes ``name ASC`` survive a ``reverse=True`` sort — negate each
-    codepoint so lexicographic order flips exactly once."""
-    return tuple(-ord(c) for c in s)

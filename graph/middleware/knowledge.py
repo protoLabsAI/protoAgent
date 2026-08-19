@@ -201,16 +201,28 @@ class KnowledgeMiddleware(AgentMiddleware):
         budget = self._skills_index_chars
         spent = 0
         full_rows = 0
+        skipped = 0
         for s in summaries:
             slash = (s.get("slash") or "").strip()
             slash_attr = f' slash="/{slash}"' if slash else ""
             full = f'  <skill name="{s["name"]}"{slash_attr}>{s.get("description", "")}</skill>'
+            bare = f'  <skill name="{s["name"]}"{slash_attr}/>'
             if full_rows < self._skills_top_k and (budget <= 0 or spent + len(full) <= budget):
                 lines.append(full)
                 spent += len(full)
                 full_rows += 1
+            elif budget <= 0 or spent + len(bare) <= 2 * budget:
+                # Name-only rows spend the budget too (against a 2× ceiling): the
+                # block must stay hard-bounded per turn — a pathological
+                # thousand-skill instance can't emit a thousand rows.
+                lines.append(bare)
+                spent += len(bare)
             else:
-                lines.append(f'  <skill name="{s["name"]}"{slash_attr}/>')
+                skipped += 1
+        if skipped:
+            # Only past the hard ceiling does the old hint return — the true tail
+            # is countable and reachable, just not enumerable in-context.
+            lines.append(f"  <!-- +{skipped} more — call list_skills to see them all. -->")
         lines.append("</available_skills>")
         return "\n".join(lines)
 

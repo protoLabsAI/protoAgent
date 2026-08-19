@@ -715,3 +715,13 @@ def test_slash_survives_on_squeezed_rows():
     rows = [{"name": f"s{i}", "description": "d" * 200, "slash": "go" if i == 9 else ""} for i in range(10)]
     block = _mw_with_skills(rows, skills_top_k=1)._skill_index_block()
     assert '<skill name="s9" slash="/go"/>' in block  # identity AND trigger kept
+
+
+def test_block_stays_hard_bounded_at_pathological_counts():
+    """Review round: name-only rows spend the budget too (2x ceiling) — a
+    thousand-skill instance emits a bounded block plus the list_skills hint,
+    never a thousand rows."""
+    block = _mw_with_skills(_skills(1000), skills_top_k=5, skills_index_chars=2000)._skill_index_block()
+    assert len(block) < 3 * 2000 + 500  # 2x row ceiling + header/hint slack
+    assert "more — call list_skills" in block
+    assert block.count("</skill>") <= 5
