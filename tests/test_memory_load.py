@@ -725,3 +725,19 @@ def test_block_stays_hard_bounded_at_pathological_counts():
     assert len(block) < 3 * 2000 + 500  # 2x row ceiling + header/hint slack
     assert "more — call list_skills" in block
     assert block.count("</skill>") <= 5
+
+
+def test_top_k_zero_means_no_index_at_all():
+    """skills.top_k: 0 keeps its documented 'list none' meaning post-#2868 —
+    the operator turned the index off; not even name-only rows emit."""
+    from graph.middleware.knowledge import KnowledgeMiddleware
+
+    store = MagicMock()
+    store.get_hot_memory.return_value = ""
+    store.get_hot_memory_entries.return_value = []
+    store.search.return_value = []
+    idx = MagicMock()
+    idx.skill_summaries.return_value = [{"name": "x", "description": "d", "slash": ""}]
+    mw = KnowledgeMiddleware(store, top_k=5, skills_index=idx, skills_top_k=0)
+    assert mw._skill_index_block() == ""
+    idx.skill_summaries.assert_not_called()  # off means off — no fetch either

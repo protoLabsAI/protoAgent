@@ -183,6 +183,11 @@ class KnowledgeMiddleware(AgentMiddleware):
         """
         if self._skills_index is None:
             return ""
+        # skills.top_k: 0 keeps its documented "list none" meaning — the operator
+        # turned the index off; without this, the identities-never-drop path would
+        # still emit every name (post-#2868 review catch).
+        if self._skills_top_k <= 0:
+            return ""
         try:
             summaries = self._skills_index.skill_summaries()
         except Exception as exc:  # noqa: BLE001 — never break a turn on skill listing

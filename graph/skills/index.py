@@ -65,7 +65,7 @@ class SkillsIndex:
 
         index = SkillsIndex("/sandbox/skills.db")
         index.add_skill(artifact)           # SkillV1Artifact from extensions.skills
-        index.skill_summaries()                 # always-on {name, description} index
+        index.skill_summaries()                 # always-on index rows: {name, description, slash, last_used, confidence}
         full = index.get_skill("web-research")  # on-demand full procedure
     """
 
