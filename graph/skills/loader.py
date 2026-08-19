@@ -32,32 +32,42 @@ log = logging.getLogger("protoagent.skills.loader")
 _MAX_DESCRIPTION = 1024
 
 
-def skill_md_problems(text: str) -> list[str]:
-    """Why this SKILL.md text would be SKIPPED by the loader — [] when it loads.
-
-    The single source of the fatal half of the contract (``parse_skill_md``
-    enforces exactly this list), so authoring surfaces — the plugin-devkit's
-    write/test gates — can refuse or flag a skill file with the loader's own
-    rules instead of a drifting mirror. Advisory behaviors (description
-    truncation at ``_MAX_DESCRIPTION``) are deliberately not "problems"."""
-    problems: list[str] = []
-    frontmatter, _body = _split_frontmatter(text)
+def _checked_parse(text: str) -> tuple[list[str], dict, str]:
+    """One parse, two consumers: ``(problems, meta, body)``. ``problems`` is the
+    fatal half of the contract; when non-empty, ``meta``/``body`` are unusable."""
+    frontmatter, body = _split_frontmatter(text)
     if frontmatter is None:
-        return [
-            "no YAML frontmatter — start the file with a `---` block carrying "
-            "`name:` and `description:` (the loader skips the skill without it)"
-        ]
+        return (
+            [
+                "no YAML frontmatter — start the file with a `---` block carrying "
+                "`name:` and `description:` (the loader skips the skill without it)"
+            ],
+            {},
+            body,
+        )
     try:
         meta = yaml.safe_load(frontmatter) or {}
     except yaml.YAMLError as exc:
-        return [f"frontmatter is not valid YAML: {exc}"]
+        return ([f"frontmatter is not valid YAML: {exc}"], {}, body)
     if not isinstance(meta, dict):
-        return ["frontmatter is not a mapping (must be `key: value` lines)"]
+        return (["frontmatter is not a mapping (must be `key: value` lines)"], {}, body)
+    problems: list[str] = []
     if not str(meta.get("name", "")).strip():
         problems.append("frontmatter is missing a non-empty `name:`")
     if not str(meta.get("description", "")).strip():
         problems.append("frontmatter is missing a non-empty `description:` (the retrieval trigger)")
-    return problems
+    return (problems, meta, body)
+
+
+def skill_md_problems(text: str) -> list[str]:
+    """Why this SKILL.md text would be SKIPPED by the loader — [] when it loads.
+
+    The single source of the fatal half of the contract (``parse_skill_md``
+    enforces exactly this list — one shared parse, not a mirror), so authoring
+    surfaces — the plugin-devkit's write/test gates — can refuse or flag a skill
+    file with the loader's own rules. Advisory behaviors (description truncation
+    at ``_MAX_DESCRIPTION``) are deliberately not "problems"."""
+    return _checked_parse(text)[0]
 
 
 def parse_skill_md(path: Path) -> SkillV1Artifact | None:
@@ -72,13 +82,10 @@ def parse_skill_md(path: Path) -> SkillV1Artifact | None:
         log.warning("[skills] cannot read %s: %s", path, exc)
         return None
 
-    problems = skill_md_problems(text)
+    problems, meta, body = _checked_parse(text)
     if problems:
         log.warning("[skills] %s skipped: %s", path, "; ".join(problems))
         return None
-
-    frontmatter, body = _split_frontmatter(text)
-    meta = yaml.safe_load(frontmatter) or {}
 
     name = str(meta.get("name", "")).strip()
     description = str(meta.get("description", "")).strip()

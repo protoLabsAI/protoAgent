@@ -403,7 +403,9 @@ def _build_file_tools(config: dict | None) -> list:
         # writing — the failure is silent at load time (a warning in a log nobody
         # reads), so refuse HERE with the loader's own reasons and let the author fix
         # the frontmatter. Validated by the loader's single-source contract, not a mirror.
-        if target.name == "SKILL.md" and "skills" in Path(path).parts:
+        # ANY file named SKILL.md is a skill to the loader (register_skill_dir
+        # accepts any directory; discovery is recursive) — gate on the name alone.
+        if target.name == "SKILL.md":
             from graph.skills.loader import skill_md_problems
 
             problems = skill_md_problems(content)
@@ -456,18 +458,25 @@ def _lint_skills(pdir: Path) -> str | None:
     from graph.skills.loader import skill_md_problems
 
     problems: list[str] = []
-    for f in sorted((pdir / "skills").glob("*/SKILL.md")) if (pdir / "skills").is_dir() else []:
+    # Recursive, and over the WHOLE plugin dir: the loader discovers `**/SKILL.md`
+    # under whatever dirs register_skill_dir names (nested grouping folders allowed,
+    # and the dir needn't be called `skills/`) — the honest lint is every SKILL.md
+    # in the tree, matching discover_skill_files' recursion.
+    for f in sorted(pdir.glob("**/SKILL.md")):
         try:
             text = f.read_text(encoding="utf-8")
-        except OSError as exc:
+        except (OSError, UnicodeDecodeError) as exc:
             problems.append(f"{f.relative_to(pdir)}: unreadable ({exc})")
             continue
         for p in skill_md_problems(text):
             problems.append(f"{f.relative_to(pdir)}: {p}")
     if not problems:
         return None
-    return "✗ skill lint: " + str(len(problems)) + " problem(s) — these skills would NEVER load:\n" + "\n".join(
-        f"  - {p}" for p in problems
+    return (
+        "✗ skill lint: "
+        + str(len(problems))
+        + " problem(s) — these skills would NEVER load:\n"
+        + "\n".join(f"  - {p}" for p in problems)
     )
 
 
@@ -945,10 +954,14 @@ async def install_plugin(url: str, ref: str = "", activate: bool = True) -> str:
         return f"✗ install failed: {exc}"
     live = applier is not None
     s = res.summary
-    what = f"bundle {s['bundle']} ({len(s.get('installed') or [])} member(s))" if "bundle" in s else s.get("id", "plugin")
+    what = (
+        f"bundle {s['bundle']} ({len(s.get('installed') or [])} member(s))" if "bundle" in s else s.get("id", "plugin")
+    )
     lines = [f"✓ installed {what}"]
     if res.enabled:
-        lines.append(f"  enabled + live: {', '.join(res.enabled)}" if res.reloaded else f"  enabled: {', '.join(res.enabled)}")
+        lines.append(
+            f"  enabled + live: {', '.join(res.enabled)}" if res.reloaded else f"  enabled: {', '.join(res.enabled)}"
+        )
     elif res.enable_error:
         # The enable-reload FAILED (enabled=[] + enable_error set) — saying "fetched
         # only (activate=False)" here contradicted the ⚠ line below and misinformed
@@ -1124,7 +1137,9 @@ async def verify_bundle(url: str) -> str:
     arch = peek.get("archetype") or {}
     unknown = sorted(set(arch) - _ARCHETYPE_KEYS) if arch else []
     if unknown:
-        lines.append(f"  ⚠ archetype: unknown key(s): {', '.join(unknown)} — known: {', '.join(sorted(_ARCHETYPE_KEYS))}")
+        lines.append(
+            f"  ⚠ archetype: unknown key(s): {', '.join(unknown)} — known: {', '.join(sorted(_ARCHETYPE_KEYS))}"
+        )
     if arch and not arch.get("label"):
         lines.append("  ⚠ archetype: no label — the block won't register in the new-agent picker")
     return "\n".join(lines)

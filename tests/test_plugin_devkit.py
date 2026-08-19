@@ -826,7 +826,9 @@ def test_update_plugin_tool_routes_bundles_to_update_bundle(monkeypatch):
     async def fake_update(bid, **kw):
         from types import SimpleNamespace
 
-        return SimpleNamespace(install=_install_result(installed_ids=["a", "b"]), removed_members=["dead"], retire_error=None)
+        return SimpleNamespace(
+            install=_install_result(installed_ids=["a", "b"]), removed_members=["dead"], retire_error=None
+        )
 
     monkeypatch.setattr(op, "update_bundle", fake_update)
     out = _run(mod.update_plugin.ainvoke({"plugin_id": "stacky"}))
@@ -981,7 +983,9 @@ def test_live_apply_guards_a_raising_reload(monkeypatch):
 
     monkeypatch.setattr(STATE, "graph", object(), raising=False)
     monkeypatch.setattr(STATE, "plugin_meta", [{"id": "demo", "loaded": True}], raising=False)
-    monkeypatch.setattr(STATE, "graph_config", types.SimpleNamespace(plugins_enabled=["demo"], plugins_disabled=[]), raising=False)
+    monkeypatch.setattr(
+        STATE, "graph_config", types.SimpleNamespace(plugins_enabled=["demo"], plugins_disabled=[]), raising=False
+    )
 
     fake = types.ModuleType("server.agent_init")
 
@@ -1045,7 +1049,11 @@ def test_write_file_refuses_a_skill_the_loader_would_skip(tmp_path):
     )
     assert ok.startswith("✓")
     # a non-skill markdown file is untouched by the gate
-    assert tools["plugin_write_file"].invoke({"plugin_id": "sk", "path": "notes.md", "content": "# no frontmatter"}).startswith("✓")
+    assert (
+        tools["plugin_write_file"]
+        .invoke({"plugin_id": "sk", "path": "notes.md", "content": "# no frontmatter"})
+        .startswith("✓")
+    )
 
 
 def test_verify_plugin_lints_skills_before_pytest(tmp_path, monkeypatch):
@@ -1066,17 +1074,33 @@ def test_verify_plugin_lints_skills_before_pytest(tmp_path, monkeypatch):
     assert "skills/fine" not in out  # only the broken one is named
     assert "✓ 3 passed" in out  # pytest still runs and reports
 
+    # nested grouping folders are discovered recursively, like the loader
+    (pdir / "skills" / "group" / "deep").mkdir(parents=True)
+    (pdir / "skills" / "group" / "deep" / "SKILL.md").write_text(BAD_SKILL)
+    assert "skills/group/deep/SKILL.md" in mod._verify_plugin(pdir)
+
     (pdir / "skills" / "broken" / "SKILL.md").write_text(GOOD_SKILL)
+    (pdir / "skills" / "group" / "deep" / "SKILL.md").write_text(GOOD_SKILL)
     assert mod._verify_plugin(pdir) == "✓ 3 passed"  # clean lint adds nothing
 
 
-def test_skill_md_problems_is_the_loader_contract():
-    """The validator and the loader agree by construction — a text with problems
-    parses to None, a problem-free text parses to a real skill."""
-    from graph.skills.loader import skill_md_problems
+def test_skill_md_problems_is_the_loader_contract(tmp_path):
+    """The validator and the loader agree BY EXECUTION, not just construction:
+    for every case, problems == [] exactly when parse_skill_md returns a skill."""
+    from graph.skills.loader import parse_skill_md, skill_md_problems
 
-    assert skill_md_problems(GOOD_SKILL) == []
-    assert skill_md_problems(BAD_SKILL)
-    assert skill_md_problems("---\nname: x\n---\nbody")  # missing description
-    assert skill_md_problems("---\n- not\n- a\n- mapping\n---\nbody")
-    assert skill_md_problems("---\nname: [unclosed\n---\nbody")  # YAML error
+    cases = [
+        GOOD_SKILL,
+        BAD_SKILL,
+        "---\nname: x\n---\nbody",  # missing description
+        "---\n- not\n- a\n- mapping\n---\nbody",  # frontmatter not a mapping
+        "---\nname: [unclosed\n---\nbody",  # YAML error
+        "---\nname: ok\ndescription: fine\nslash: go\n---\nbody",  # extras are fine
+    ]
+    for i, text in enumerate(cases):
+        f = tmp_path / f"case{i}" / "SKILL.md"
+        f.parent.mkdir()
+        f.write_text(text, encoding="utf-8")
+        problems = skill_md_problems(text)
+        parsed = parse_skill_md(f)
+        assert (parsed is not None) == (problems == []), (i, problems, parsed)
