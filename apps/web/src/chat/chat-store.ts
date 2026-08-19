@@ -382,10 +382,34 @@ export function ensureActiveSessions(state: ChatState, sessionId: string | null)
 }
 
 let initial = loadPersisted();
+
+// Swap & Resume S2 — derive live status from the persisted transcripts instead
+// of booting blind. A session whose last assistant message is still `streaming`
+// with a durable taskId has a server-owned turn in flight: it must come back
+// ACTIVE (so its slot mounts and the reattach fires — previously only the
+// focused tab reconciled) and marked `streaming` (so the composer stays locked
+// and Stop stays visible — previously the map reset to {} and the operator
+// could fire a second concurrent turn into the same session). Derivation, not
+// persistence: the transcript is already the durable truth, and a persisted
+// status map could lie about a turn that ended while the tab was closed —
+// the reattach settles each derived `streaming` to idle/error from the task.
+function sessionsWithLiveTurns(persisted: PersistedChatState): string[] {
+  return persisted.sessions
+    .filter((session) => {
+      const last = [...session.messages].reverse().find((m) => m.role === "assistant");
+      return last?.status === "streaming" && !!last.taskId;
+    })
+    .map((session) => session.id);
+}
+
+const resumeIds = sessionsWithLiveTurns(initial);
 let state: ChatState = {
   ...initial,
-  activeSessions: initial.currentSessionId ? [initial.currentSessionId] : [],
-  sessionStatusMap: {},
+  activeSessions: [
+    ...(initial.currentSessionId ? [initial.currentSessionId] : []),
+    ...resumeIds.filter((id) => id !== initial.currentSessionId),
+  ].slice(0, MAX_ACTIVE_SESSIONS),
+  sessionStatusMap: Object.fromEntries(resumeIds.map((id) => [id, "streaming" as SessionStatus])),
   pendingDeleteRequest: null,
 };
 

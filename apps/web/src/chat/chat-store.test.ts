@@ -557,3 +557,65 @@ describe("incognito sessions", () => {
     expect(next.id).not.toBe(s.id);
   });
 });
+
+// ── Swap & Resume S2: live status derived from persisted transcripts ──────────
+// A session whose last assistant message is still `streaming` with a durable
+// taskId has a server-owned turn in flight. On load it must come back ACTIVE
+// (its slot mounts → the reattach fires; previously only the focused tab
+// reconciled) and marked `streaming` (composer locked, Stop visible; previously
+// the status map booted empty and a second concurrent turn could be fired).
+describe("boot-time status derivation (Swap & Resume S2)", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    vi.resetModules();
+  });
+
+  function seed(sessions: unknown[], currentSessionId: string) {
+    window.localStorage.setItem(
+      "protoagent.chat.sessions",
+      JSON.stringify({ version: 1, sessions, currentSessionId }),
+    );
+  }
+
+  const streamingSession = (id: string) => ({
+    id,
+    title: id,
+    createdAt: 1,
+    updatedAt: 1,
+    messages: [
+      { id: `${id}-u`, role: "user", content: "go", status: "done" },
+      { id: `${id}-a`, role: "assistant", content: "part", status: "streaming", taskId: `task-${id}` },
+    ],
+  });
+
+  const idleSession = (id: string) => ({
+    id,
+    title: id,
+    createdAt: 1,
+    updatedAt: 1,
+    messages: [{ id: `${id}-a`, role: "assistant", content: "done", status: "done" }],
+  });
+
+  it("marks sessions with in-flight turns streaming and re-activates them", async () => {
+    seed([idleSession("s-cur"), streamingSession("s-bg1"), streamingSession("s-bg2")], "s-cur");
+    const { chatStore } = await import("./chat-store");
+    const state = chatStore.getSnapshot();
+    expect(state.sessionStatusMap["s-bg1"]).toBe("streaming");
+    expect(state.sessionStatusMap["s-bg2"]).toBe("streaming");
+    expect(state.sessionStatusMap["s-cur"]).toBeUndefined();
+    // Both background sessions mount (reattach per tab), current stays first.
+    expect(state.activeSessions[0]).toBe("s-cur");
+    expect(state.activeSessions).toContain("s-bg1");
+    expect(state.activeSessions).toContain("s-bg2");
+  });
+
+  it("does not derive streaming without a durable taskId (nothing to reattach)", async () => {
+    const orphan = {
+      ...streamingSession("s-orphan"),
+      messages: [{ id: "o-a", role: "assistant", content: "x", status: "streaming" }],
+    };
+    seed([orphan], "s-orphan");
+    const { chatStore } = await import("./chat-store");
+    expect(chatStore.getSnapshot().sessionStatusMap["s-orphan"]).toBeUndefined();
+  });
+});

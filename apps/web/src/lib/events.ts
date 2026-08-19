@@ -26,7 +26,32 @@ let source: EventSource | null = null;
 let connected = false;
 let connecting = false;
 // Highest bus seq we've dispatched — replayed via `?since=` on reconnect.
-let lastSeq: number | null = null;
+// Persisted per agent in sessionStorage (Swap & Resume S2): an agent switch is
+// a full navigation, and a module-global cursor reset to null meant ZERO replay
+// of retained topics (input-required raised while away, background completions)
+// even though the server's ring had them. sessionStorage is per-tab — exactly
+// the "this tab navigated away and came back" scope; a fresh tab starting live
+// is correct. Keyed by slug: bus seqs are per-agent streams.
+const SINCE_KEY = (() => {
+  try {
+    const m = window.location.pathname.match(/\/agent\/([^/?#]+)/);
+    return m ? `protoagent.events.since:${decodeURIComponent(m[1])}` : "protoagent.events.since";
+  } catch {
+    return "protoagent.events.since";
+  }
+})();
+
+function loadLastSeq(): number | null {
+  try {
+    const raw = window.sessionStorage.getItem(SINCE_KEY);
+    const n = raw === null ? NaN : Number(raw);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+let lastSeq: number | null = loadLastSeq();
 // Client-side mirror of the server's ring buffer (events/bus.py retains 128): every seq'd
 // frame this console has received, so the plugin-view bridge can replay "what did I miss?"
 // to an iframe that re-subscribes with `since` (#1640) WITHOUT a second server fetch. Sized
@@ -154,7 +179,14 @@ async function connect() {
   };
   es.onmessage = (event) => {
     const seq = dispatch((event as MessageEvent).data);
-    if (seq !== null) lastSeq = seq;
+    if (seq !== null) {
+      lastSeq = seq;
+      try {
+        window.sessionStorage.setItem(SINCE_KEY, String(seq));
+      } catch {
+        /* hardened contexts: live-only, same as before */
+      }
+    }
   };
 }
 
