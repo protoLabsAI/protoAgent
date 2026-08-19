@@ -403,22 +403,31 @@ def _build_file_tools(config: dict | None) -> list:
         # writing — the failure is silent at load time (a warning in a log nobody
         # reads), so refuse HERE with the loader's own reasons and let the author fix
         # the frontmatter. Validated by the loader's single-source contract, not a mirror.
-        # ANY file named SKILL.md is a skill to the loader (register_skill_dir
-        # accepts any directory; discovery is recursive) — gate on the name alone.
+        # Skill gate, scoped like _lint_skills: a SKILL.md under the conventional
+        # skills/ root that the loader would SKIP is refused (the failure is silent
+        # at load time); one elsewhere only loads if register_skill_dir names its
+        # root, so it writes with an advisory instead of a false refusal.
+        skill_note = ""
         if target.name == "SKILL.md":
             from graph.skills.loader import skill_md_problems
 
             problems = skill_md_problems(content)
             if problems:
-                return (
-                    f"✗ {path} would be SKIPPED by the skills loader — not written. "
-                    f"Fix and re-write: {'; '.join(problems)}"
+                rel = Path(path)
+                if rel.parts and rel.parts[0] == "skills":
+                    return (
+                        f"✗ {path} would be SKIPPED by the skills loader — not written. "
+                        f"Fix and re-write: {'; '.join(problems)}"
+                    )
+                skill_note = (
+                    " (note: this SKILL.md has frontmatter problems and would be skipped "
+                    f"if its root is registered as a skill dir: {'; '.join(problems)})"
                 )
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content)
         return (
             f"✓ wrote {path} ({len(content)} chars) — call reload_plugins to make it live, "
-            f"test_plugin({plugin_id!r}) to run its suite"
+            f"test_plugin({plugin_id!r}) to run its suite" + skill_note
         )
 
     return [plugin_list_files, plugin_read_file, plugin_write_file]
@@ -451,33 +460,43 @@ def _test_interpreter() -> tuple[str | None, str | None]:
 
 
 def _lint_skills(pdir: Path) -> str | None:
-    """Verification-side skill gate: every ``skills/*/SKILL.md`` must satisfy the
-    loader's contract, or the plugin ships skills that silently never load (the
-    reddit-plugin failure: two frontmatter-less skills, skipped with only a boot
-    log warning). Returns a ✗ report naming each broken file, or ``None``."""
+    """Verification-side skill gate. Every ``SKILL.md`` under the conventional
+    ``skills/`` root — RECURSIVELY, matching the loader's ``**/SKILL.md``
+    discovery — must satisfy the loader's contract, or the plugin ships skills
+    that silently never load (the reddit-plugin failure: two frontmatter-less
+    skills, skipped with only a boot-log warning). A ``SKILL.md`` OUTSIDE
+    ``skills/`` only loads if ``register_skill_dir`` names its root — a thing
+    this static lint can't know — so problems there are ADVISORY notes, never
+    failures (a fixture or vendored copy must not fail the dev commands with a
+    verdict the loader would never issue). Returns the report, or ``None``."""
     from graph.skills.loader import skill_md_problems
 
     problems: list[str] = []
-    # Recursive, and over the WHOLE plugin dir: the loader discovers `**/SKILL.md`
-    # under whatever dirs register_skill_dir names (nested grouping folders allowed,
-    # and the dir needn't be called `skills/`) — the honest lint is every SKILL.md
-    # in the tree, matching discover_skill_files' recursion.
+    advisories: list[str] = []
     for f in sorted(pdir.glob("**/SKILL.md")):
+        rel = f.relative_to(pdir).as_posix()
+        bucket = problems if rel.startswith("skills/") else advisories
         try:
             text = f.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
-            problems.append(f"{f.relative_to(pdir)}: unreadable ({exc})")
+            bucket.append(f"{rel}: unreadable ({exc})")
             continue
         for p in skill_md_problems(text):
-            problems.append(f"{f.relative_to(pdir)}: {p}")
-    if not problems:
-        return None
-    return (
-        "✗ skill lint: "
-        + str(len(problems))
-        + " problem(s) — these skills would NEVER load:\n"
-        + "\n".join(f"  - {p}" for p in problems)
-    )
+            bucket.append(f"{rel}: {p}")
+    lines: list[str] = []
+    if problems:
+        lines.append(
+            "✗ skill lint: "
+            + str(len(problems))
+            + " problem(s) — these skills would NEVER load:\n"
+            + "\n".join(f"  - {p}" for p in problems)
+        )
+    if advisories:
+        lines.append(
+            "note: SKILL.md outside skills/ with frontmatter problems (loads only if "
+            "register_skill_dir names its root):\n" + "\n".join(f"  - {p}" for p in advisories)
+        )
+    return "\n".join(lines) if lines else None
 
 
 def _verify_plugin(pdir: Path) -> str:

@@ -1048,6 +1048,11 @@ def test_write_file_refuses_a_skill_the_loader_would_skip(tmp_path):
         {"plugin_id": "sk", "path": "skills/greeter/SKILL.md", "content": GOOD_SKILL}
     )
     assert ok.startswith("✓")
+    # OUTSIDE skills/ the loader may never read it — write succeeds with an
+    # advisory instead of a false refusal (fixtures/vendored copies stay writable).
+    noted = tools["plugin_write_file"].invoke({"plugin_id": "sk", "path": "fixtures/SKILL.md", "content": BAD_SKILL})
+    assert noted.startswith("✓") and "frontmatter problems" in noted
+    assert (out_root / "sk" / "fixtures" / "SKILL.md").exists()
     # a non-skill markdown file is untouched by the gate
     assert (
         tools["plugin_write_file"]
@@ -1079,8 +1084,16 @@ def test_verify_plugin_lints_skills_before_pytest(tmp_path, monkeypatch):
     (pdir / "skills" / "group" / "deep" / "SKILL.md").write_text(BAD_SKILL)
     assert "skills/group/deep/SKILL.md" in mod._verify_plugin(pdir)
 
+    # outside skills/: advisory note, never a ✗ failure (fixture/vendored copies)
+    (pdir / "fixtures").mkdir()
+    (pdir / "fixtures" / "SKILL.md").write_text(BAD_SKILL)
     (pdir / "skills" / "broken" / "SKILL.md").write_text(GOOD_SKILL)
     (pdir / "skills" / "group" / "deep" / "SKILL.md").write_text(GOOD_SKILL)
+    out = mod._verify_plugin(pdir)
+    assert not out.startswith("✗") and "note: SKILL.md outside skills/" in out
+    assert "fixtures/SKILL.md" in out and "✓ 3 passed" in out
+
+    (pdir / "fixtures" / "SKILL.md").write_text(GOOD_SKILL)
     assert mod._verify_plugin(pdir) == "✓ 3 passed"  # clean lint adds nothing
 
 
