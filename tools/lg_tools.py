@@ -440,12 +440,74 @@ def _extract_text_from_html(content: bytes) -> str:
         return re.sub(r"\s+", " ", raw)
 
     soup = BeautifulSoup(content, "html.parser")
+
+    # <header> is dual-use: page banners are chrome, but article/section headers
+    # hold the title and byline. Decide per-header BEFORE the generic <nav> strip
+    # below — "wraps a <nav>" is the strongest chrome signal and would be invisible
+    # afterwards. A header inside sectioning content (main/article/section/aside)
+    # is content and survives. On pages WITHOUT <main>/<article> (div-soup pages),
+    # only banner-position headers (direct children of <body>/<html>) and
+    # nav-wrapping headers are chrome — a header nested deeper is presumed to be
+    # an article header (title/byline) and is kept.
+    has_semantic = soup.find(["main", "article"]) is not None
+    page_top = [t for t in (soup, soup.html, soup.body) if t is not None]
+    for el in soup.find_all("header"):
+        if el.decomposed:
+            continue
+        if el.find_parent(["main", "article", "section", "aside"]) is not None:
+            continue
+        if has_semantic or any(el.parent is t for t in page_top) or el.find("nav") is not None:
+            el.decompose()
+
     for el in soup(["script", "style", "nav", "footer", "noscript"]):
         el.decompose()
-    # Prefer <main> / <article> when the page uses them; otherwise whole body
-    main = soup.find("main") or soup.find("article") or soup.body or soup
+
+    # ARIA landmark chrome — explicit roles mark nav/banner/footer regions even
+    # when the page is all <div>s (Reddit-style).
+    for role in ("navigation", "banner", "contentinfo"):
+        for el in soup.find_all(attrs={"role": role}):
+            if not el.decomposed:
+                el.decompose()
+
+    # Widget chrome by exact class token — bs4 matches whole tokens, so
+    # class="sidebar" is stripped while class="sidebar-open" survives.
+    for cls in ("sidebar", "menu", "breadcrumb"):
+        for el in soup.find_all(class_=cls):
+            if not el.decomposed:
+                el.decompose()
+
+    # Prefer <main> / <article> when the page uses them, then an explicit
+    # role="main"; otherwise the dominant <div> (readability-lite) before body.
+    main = (
+        soup.find("main")
+        or soup.find("article")
+        or soup.find(attrs={"role": "main"})
+        or _dominant_content_node(soup.body or soup)
+    )
     lines = [line.strip() for line in main.get_text("\n").splitlines() if line.strip()]
     return "\n".join(lines)
+
+
+def _dominant_content_node(node):
+    """Readability-lite fallback for pages without <main>/<article>/role="main":
+    starting at <body>, descend into the single child <div> holding the majority
+    of the text, and return the tightest such container. A step that would drop a
+    kept <header> or <h1> (the article title/byline on wrapper-less pages) stops
+    the descent instead — narrowing must never cost content, only chrome."""
+    while True:
+        total = len(node.get_text())
+        if not total:
+            return node
+        nxt = None
+        for child in node.find_all("div", recursive=False):
+            if 2 * len(child.get_text()) > total:
+                nxt = child
+                break
+        if nxt is None:
+            return node
+        if any(len(nxt.find_all(t)) != len(node.find_all(t)) for t in ("header", "h1")):
+            return node
+        node = nxt
 
 
 # ── memory tools ─────────────────────────────────────────────────────────────
