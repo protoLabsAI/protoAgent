@@ -22,7 +22,7 @@ import { errMsg } from "../lib/format";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { useToast } from "@protolabsai/ui/overlays";
 import type { WorkflowRecipe } from "../lib/types";
-import { type BuilderStep, reorderSteps, uniqueStepId } from "./builderOps";
+import { type BuilderStep, downstreamOf, reorderSteps, uniqueStepId } from "./builderOps";
 import { computeLanes } from "./RunTimeline";
 
 // Author a workflow recipe from the console, or EDIT an existing one
@@ -510,12 +510,15 @@ export function WorkflowBuilder({
                 )}
               </div>
 
-              {steps.filter((_, j) => j !== focus).length > 0 && (
-                <div className="builder-deps">
-                  <span>after:</span>
-                  {steps
-                    .filter((_, j) => j !== focus)
-                    .map((other) => (
+              {(() => {
+                // Never offer a dependency that would create a cycle: steps
+                // downstream of the focused one are not "after:" candidates.
+                const cyclic = downstreamOf(steps, focusedStep.id);
+                const candidates = steps.filter((other, j) => j !== focus && !cyclic.has(other.id));
+                return candidates.length > 0 ? (
+                  <div className="builder-deps">
+                    <span>after:</span>
+                    {candidates.map((other) => (
                       <button
                         key={other.id}
                         type="button"
@@ -526,18 +529,10 @@ export function WorkflowBuilder({
                         {other.id || "(unnamed)"}
                       </button>
                     ))}
-                </div>
-              )}
+                  </div>
+                ) : null;
+              })()}
 
-              <div className="builder-prompt-box" ref={promptBoxRef}>
-                <Textarea
-                  className="builder-prompt"
-                  value={focusedStep.prompt}
-                  rows={12}
-                  placeholder="Prompt for this step — use {{inputs.x}} and {{steps.other.output}}"
-                  onChange={(e) => setStep(focus, { prompt: e.target.value })}
-                />
-              </div>
               {(inputChips.length > 0 || steps.length > 1) && (
                 <div className="builder-chips">
                   {inputChips.map((chip) => (
@@ -559,6 +554,15 @@ export function WorkflowBuilder({
                     ))}
                 </div>
               )}
+              <div className="builder-prompt-box" ref={promptBoxRef}>
+                <Textarea
+                  className="builder-prompt"
+                  value={focusedStep.prompt}
+                  rows={12}
+                  placeholder="Prompt for this step — use {{inputs.x}} and {{steps.other.output}}"
+                  onChange={(e) => setStep(focus, { prompt: e.target.value })}
+                />
+              </div>
               {errorsForStep(focusedStep.id).length > 0 && (
                 <div className="builder-errors" role="alert">
                   <AlertTriangle size={13} />

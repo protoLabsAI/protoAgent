@@ -42,3 +42,21 @@ export function uniqueStepId(steps: BuilderStep[], base: string): string {
   while (taken.has(`${stem}${n}`)) n += 1;
   return `${stem}${n}`;
 }
+
+/** Ids of every step that (transitively) depends on `id` — offering one of
+ * these as an "after:" target would create a cycle, so the editor hides them. */
+export function downstreamOf(steps: BuilderStep[], id: string): Set<string> {
+  const out = new Set<string>();
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const s of steps) {
+      if (out.has(s.id)) continue;
+      if (s.dependsOn.includes(id) || s.dependsOn.some((d) => out.has(d))) {
+        out.add(s.id);
+        grew = true;
+      }
+    }
+  }
+  return out;
+}

@@ -25,6 +25,16 @@
   container-name: builder;
 }
 
+.workflow-builder > .panel-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  background: var(--pl-color-bg);
+  border-top: 1px solid var(--pl-color-border);
+  padding: 8px 0;
+  margin-top: 0;
+}
+
 .builder-split {
   display: flex;
   flex-direction: column;
@@ -63,7 +73,7 @@
 @container builder (min-width: 42rem) {
   .builder-split {
     flex-direction: row;
-    align-items: flex-start;
+    align-items: stretch;
   }
   .builder-outline {
     flex-direction: column;
@@ -80,20 +90,21 @@
   }
   .builder-outline-lanes {
     display: flex;
-    gap: 4px;
+    flex-direction: column;
+    gap: 3px;
     padding: 2px 0;
     min-width: 0;
-    overflow-x: auto;
   }
   .builder-outline-lanes .workflow-lane {
     flex: 0 0 auto;
     max-width: 100%;
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
+    flex-wrap: wrap;
     gap: 3px;
     border: 1px dashed var(--pl-color-border);
     border-radius: var(--pl-radius);
-    padding: 4px;
+    padding: 3px 4px;
     min-width: 0;
   }
   .builder-outline-lanes .lane-chip {
@@ -190,6 +201,18 @@
 
 .builder-step-head {
   flex-wrap: wrap;
+}
+
+.builder-step-head > * {
+  min-width: 0;
+}
+
+.builder-step-head input {
+  flex: 1 1 130px;
+}
+
+.builder-step-head .checkbox-field {
+  flex: 0 0 auto;
 }
 
 .builder-input-card {
@@ -806,4 +829,17 @@
 
 .builder-card-dragover {
   border-top: 2px solid var(--pl-color-accent);
+}
+
+/* The prompt is the work surface — it absorbs the pane's slack height. */
+.builder-prompt-box {
+  flex: 1;
+  display: flex;
+  min-height: 200px;
+}
+
+.builder-prompt-box .builder-prompt {
+  flex: 1;
+  height: 100%;
+  min-height: 200px;
 }
