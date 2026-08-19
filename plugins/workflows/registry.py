@@ -22,6 +22,35 @@ def _slug(name: str) -> str:
     return re.sub(r"[^a-z0-9_-]+", "-", (name or "").lower()).strip("-") or "workflow"
 
 
+def _canon_inputs(raw: Any) -> list[dict[str, Any]]:
+    """The one inputs shape everything downstream may assume:
+    ``[{name, required, default?}]``.
+
+    Accepts the documented list-of-dicts AND the natural YAML mapping shape —
+    ``inputs: {topic: {required: true}}`` (or ``topic:`` bare) — which authors
+    reach for constantly; anything else degrades to no declared inputs rather
+    than a raw shape leaking through ``get()``.
+    """
+    if isinstance(raw, dict):
+        rows: list[dict[str, Any]] = [
+            {"name": key, **(spec if isinstance(spec, dict) else {})} for key, spec in raw.items()
+        ]
+    elif isinstance(raw, list):
+        rows = [dict(item) for item in raw if isinstance(item, dict)]
+    else:
+        rows = []
+    out = []
+    for row in rows:
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        entry: dict[str, Any] = {"name": name, "required": bool(row.get("required"))}
+        if row.get("default") is not None:
+            entry["default"] = row["default"]
+        out.append(entry)
+    return out
+
+
 class WorkflowRegistry:
     def __init__(self, dirs: list[str] | None = None, writable_dir: str | None = None):
         self._dirs = [Path(d) for d in (dirs or [])]
@@ -44,6 +73,12 @@ class WorkflowRegistry:
                     log.warning("[workflows] skipping %s: %s", path, exc)
                     continue
                 if isinstance(data, dict) and isinstance(data.get("name"), str):
+                    # Canonicalize ONCE at the boundary: get() hands the recipe
+                    # verbatim to the Studio's edit loader and the engine's
+                    # {{inputs.x}} validation — a mapping-authored `inputs:`
+                    # (the natural YAML shape) crashed the first and silently
+                    # emptied the second (#2834).
+                    data["inputs"] = _canon_inputs(data.get("inputs"))
                     recipes[data["name"]] = data
                 else:
                     log.warning("[workflows] skipping %s: not a named recipe", path)
@@ -92,6 +127,8 @@ class WorkflowRegistry:
         if self._writable is None:
             raise RuntimeError("no writable workflow directory configured")
         self._writable.mkdir(parents=True, exist_ok=True)
+        # Canonical on disk too (idempotent for the builder's already-list shape).
+        recipe = {**recipe, "inputs": _canon_inputs(recipe.get("inputs"))}
         path = self._writable / f"{_slug(recipe['name'])}.yaml"
         path.write_text(yaml.safe_dump(recipe, sort_keys=False, allow_unicode=True), encoding="utf-8")
         self.reload()
