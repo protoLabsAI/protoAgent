@@ -29,6 +29,8 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .builder-outline {
@@ -37,6 +39,8 @@
   gap: 6px;
   overflow-x: auto;
   padding-bottom: 4px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .builder-outline .builder-card {
@@ -64,7 +68,9 @@
   .builder-outline {
     flex-direction: column;
     flex: 0 0 232px;
-    overflow-x: visible;
+    width: 232px;
+    max-width: 232px;
+    overflow: hidden;
     position: sticky;
     top: 0;
   }
@@ -76,9 +82,12 @@
     display: flex;
     gap: 4px;
     padding: 2px 0;
+    min-width: 0;
+    overflow-x: auto;
   }
   .builder-outline-lanes .workflow-lane {
-    flex: 1;
+    flex: 0 0 auto;
+    max-width: 100%;
     display: flex;
     flex-direction: column;
     gap: 3px;
@@ -86,6 +95,14 @@
     border-radius: var(--pl-radius);
     padding: 4px;
     min-width: 0;
+  }
+  .builder-outline-lanes .lane-chip {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: block;
   }
   .builder-focus {
     flex: 1;
@@ -96,6 +113,8 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
+  min-width: 0;
+  max-width: 100%;
   text-align: left;
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
@@ -127,6 +146,19 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.builder-card-head > * {
+  min-width: 0;
+}
+
+.builder-card-head .pl-badge,
+.builder-card-head [class*="badge"] {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 12ch;
+  flex: 0 1 auto;
 }
 
 .builder-card-sub {
@@ -167,6 +199,16 @@
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   padding: 8px;
+  min-width: 0;
+}
+
+.builder-input-card .builder-row {
+  flex-wrap: wrap;
+}
+
+.builder-input-card .builder-row input {
+  flex: 1 1 140px;
+  min-width: 0;
 }
 
 .builder-row-2 input {
