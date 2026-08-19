@@ -5,13 +5,12 @@ extract angles → write a brief, each step feeding the next, some running in
 parallel. Define it once as YAML, run it many times with different inputs. See
 [ADR 0002](/adr/0002-reusable-subagent-workflows) for the design.
 
-::: tip Workflows is a first-party plugin (GA — shipped on)
+::: tip Workflows is an opt-in plugin
 As of [ADR 0043](/adr/0043-plugin-consumption-sdk-workflows-extraction), workflows ship as
 the `plugins/workflows` plugin — the engine, the `run_workflow`/`save_workflow` tools, the
-`/api/plugins/workflows` API, and the **Studio** console surface all come from it. It's
-**enabled by default**; an instance that doesn't want it adds `workflows` to
-`plugins.disabled`. The plugin taps core through the consumption SDK
-(`graph.sdk.run_subagent`).
+`/api/plugins/workflows` API, and the **Studio** console surface all come from it, and only
+load when the plugin is enabled. Turn it on by adding `workflows` to `plugins.enabled`.
+The plugin taps core through the consumption SDK (`graph.sdk.run_subagent`).
 :::
 
 ## Run one (the short path)
