@@ -189,7 +189,9 @@ def test_skill_summaries_lists_name_description_slash(populated_index) -> None:
     assert len(rows) == 3
     r = next(r for r in rows if r["name"] == "web-research")
     assert r["description"] == "Research a topic using web search tools"
-    assert set(r) == {"name", "description", "slash"}
+    # last_used/confidence ride along (#2867) so the layered union can re-sort
+    # merged tiers on the backends' own key.
+    assert set(r) == {"name", "description", "slash", "last_used", "confidence"}
     assert "prompt_template" not in r  # body is loaded on demand, not listed
 
 
@@ -336,8 +338,10 @@ def test_before_model_index_independent_of_query(tmp_db) -> None:
     assert "web-research" in _frame(a)
 
 
-def test_before_model_truncates_and_hints_more(tmp_db) -> None:
-    """With more skills than skills_top_k, the block caps the list and hints at the rest."""
+def test_before_model_lists_all_with_full_rows_capped(tmp_db) -> None:
+    """#2867: past skills_top_k the block STILL lists every skill — full rows for
+    the cap, self-closing name-only rows for the rest (identities never drop; the
+    old "+N more" hint hid names the model then couldn't load_skill)."""
     idx = SkillsIndex(db_path=tmp_db)
     for i in range(5):
         idx.add_skill(_make_artifact(name=f"skill-{i}", description=f"does thing {i}"))
@@ -347,8 +351,11 @@ def test_before_model_truncates_and_hints_more(tmp_db) -> None:
     km._prior_sessions_cache = ""
 
     ctx = _frame(km.before_agent({"messages": [HumanMessage(content="hi")]}, runtime=None))
-    assert ctx.count("<skill ") == 2
-    assert "+3 more" in ctx
+    assert ctx.count("<skill ") == 5  # every identity present
+    assert ctx.count("</skill>") == 2  # full descriptions capped at top_k
+    for i in range(5):
+        assert f'name="skill-{i}"' in ctx
+    assert "+3 more" not in ctx
 
 
 def test_before_model_user_facing_skill_shows_slash(tmp_db) -> None:

@@ -195,7 +195,7 @@ class KnowledgeMiddleware(AgentMiddleware):
             "<available_skills>",
             "  <!-- Learned procedures you can use. Each is a name + one-line summary; "
             "call load_skill(name) to read the full steps before following one. Don't guess its contents. "
-            "A self-closing <skill name=…/> row is one whose summary didn't fit the index budget — "
+            "A self-closing, name-only row is one whose summary didn't fit the index budget — "
             "load_skill works on it all the same. -->",
         ]
         budget = self._skills_index_chars
