@@ -250,6 +250,14 @@ jobs:
   web-e2e:
     name: Web E2E smoke
     runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
+    # Browsers + system deps come PREINSTALLED in the Playwright job container —
+    # ZERO apt at runtime. This retires the apt lock-contention flake class that
+    # failed five runs across 2026-08-18/19 and outlived two rounds of runner
+    # hardening (#2845/#2849): background apt could hold the dpkg locks (or just
+    # fetch slowly) longer than any polite wait. The tag is pinned to the LOCKED
+    # @playwright/test version — a guard step below fails loudly on drift.
+    container:
+      image: mcr.microsoft.com/playwright:v1.61.1-noble
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
@@ -269,76 +277,18 @@ jobs:
         # the uiStore persist migration). Fast — runs before the heavier
         # Playwright path so a reducer regression fails the job early.
         run: npm run test:unit --workspace @protoagent/web
-      - name: Resolve Playwright version
-        id: pw
-        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
-      - name: Cache Playwright browsers
-        id: pw-cache
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
-      - name: Install Playwright browser + deps
-        # The chromium binary is the slow ~100MB CDN download that intermittently
-        # stalled ~10min until the job-level orphan-kill fired (#1167). Cache it keyed
-        # on the Playwright version (skips the download entirely on a hit — only the
-        # fast apt system-deps run then), and hard-cap each attempt with `timeout` so
-        # a stalled download fails fast and retries instead of hanging the whole job.
-        timeout-minutes: 8
+      - name: Playwright version must match the container image
+        # The pinned container ships the browsers for exactly one Playwright
+        # version. When package-lock bumps @playwright/test, bump the job's
+        # `container.image` tag in lockstep — this guard turns silent drift
+        # (subtle browser-mismatch failures) into a one-line fix instruction.
         run: |
-          # The runner's own background apt (unattended-upgrades / apt-daily) holds
-          # the apt locks right after boot — and on some image builds it runs for
-          # MINUTES, so a bounded 2-min wait + quick retries still collided four
-          # separate times across 2026-08-18/19 (exit 100: "Could not get lock …
-          # held by process N (apt-get)"). Be impolite instead: stop the background
-          # services first (they're useless on a throwaway runner), THEN wait out
-          # any in-flight lock holder across all four lock files, up to 5 minutes.
-          # Stop the TIMERS too and mask the services — a stopped service is
-          # re-fired by its timer a minute later (observed: a fresh apt-get pid
-          # appeared 4 minutes after the stop, mid-install).
-          sudo systemctl disable --now apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
-          sudo systemctl stop unattended-upgrades.service apt-daily.service apt-daily-upgrade.service 2>/dev/null || true
-          sudo systemctl mask apt-daily.service apt-daily-upgrade.service unattended-upgrades.service 2>/dev/null || true
-          sudo pkill -TERM -f unattended-upgrade 2>/dev/null || true
-          # Belt and braces on top of the stop/mask: teach EVERY apt-get in this
-          # step to wait up to 120s for the dpkg locks instead of exiting 100 the
-          # instant a straggler holds them. The apt.conf.d drop-in is the only
-          # way to reach the apt-get calls Playwright's install-deps runs
-          # internally — the CLI forwards env vars, not apt options.
-          echo 'DPkg::Lock::Timeout "120";' | sudo tee /etc/apt/apt.conf.d/99dpkg-lock-timeout >/dev/null
-          export DEBIAN_FRONTEND=noninteractive
-          LOCKS="/var/lib/apt/lists/lock /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock"
-          wait_apt() {
-            for i in $(seq 1 60); do
-              if ! sudo fuser $LOCKS >/dev/null 2>&1; then
-                return 0
-              fi
-              echo "apt lock held by a background process — waiting (${i}/60)…"
-              sleep 5
-            done
-          }
-          wait_apt
-          # Prime the package lists once up front with an explicit lock-wait, so
-          # the first install attempt starts from fresh lists and any remaining
-          # lock holder is waited out here rather than inside Playwright.
-          sudo apt-get -o DPkg::Lock::Timeout=120 update 2>/dev/null || true
-          if [ "${{ steps.pw-cache.outputs.cache-hit }}" = "true" ]; then
-            cmd="playwright install-deps chromium"   # binary cached → apt deps only
-          else
-            cmd="playwright install --with-deps chromium"
+          want="1.61.1"
+          have=$(node -p "require('@playwright/test/package.json').version")
+          if [ "$have" != "$want" ]; then
+            echo "::error::@playwright/test is $have but the web-e2e container is pinned to v$want — update the container image tag in checks.yml (job web-e2e) to mcr.microsoft.com/playwright:v$have-noble"
+            exit 1
           fi
-          for attempt in 1 2 3 4; do
-            # Re-wait before EVERY attempt: a lock acquired during a slow
-            # browser download made attempt 2 collide instantly last round.
-            wait_apt
-            if timeout 240 npm --workspace @protoagent/web exec -- $cmd; then
-              exit 0
-            fi
-            echo "::warning::playwright install attempt $attempt stalled/failed; retrying…"
-            sleep 45
-          done
-          echo "::error::playwright install failed after 4 attempts"
-          exit 1
       - name: Run E2E smoke (built SPA vs mock backend)
         # Builds the web app, then drives it with Playwright against the
         # deterministic mock backend (apps/web/e2e/mock-server.mjs) — no Python,
