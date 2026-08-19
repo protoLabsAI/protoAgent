@@ -419,7 +419,7 @@ def _acp_raw(name, tmp_path, **extra):
 
 def test_resolve_coder_degrades_honestly(monkeypatch, tmp_path):
     """develop_plugin's delegate resolution (ADR 0096 D5): no roster / wrong name /
-    wrong type / ambiguity each name the fix instead of guessing."""
+    wrong type each name the fix instead of guessing; an explicit pick still wins."""
     import plugins.delegates as delegates_mod
 
     mod = _load_devkit_module(tmp_path)
@@ -440,10 +440,44 @@ def test_resolve_coder_degrades_honestly(monkeypatch, tmp_path):
         "_load_delegates_config",
         lambda: [_acp_raw("proto", tmp_path), _acp_raw("opus", tmp_path)],
     )
-    d, err = mod._resolve_coder(None)
-    assert d is None and "multiple acp delegates" in err
     d, err = mod._resolve_coder({"coder": "opus"})
     assert err is None and d.name == "opus"
+
+
+def test_resolve_coder_multi_default_picks_instead_of_refusing(monkeypatch, tmp_path, caplog):
+    """Several acp delegates + no plugin_devkit.coder must default-pick (a
+    `sonnet`/`claude-code`-named delegate, else first alphabetically) and log the
+    choice — the old refusal text reached the MODEL, which fell back to hand-writing
+    the plugin inline, defeating the heavy-build lane."""
+    import logging
+
+    import plugins.delegates as delegates_mod
+
+    mod = _load_devkit_module(tmp_path)
+
+    # No conventional name → first alphabetically ("opus" < "proto").
+    monkeypatch.setattr(
+        delegates_mod,
+        "_load_delegates_config",
+        lambda: [_acp_raw("proto", tmp_path), _acp_raw("opus", tmp_path)],
+    )
+    with caplog.at_level(logging.INFO, logger="protoagent.plugins.plugin_devkit"):
+        d, err = mod._resolve_coder(None)
+    assert err is None and d.name == "opus"
+    assert any("defaulting to 'opus'" in r.message for r in caplog.records)
+
+    # A conventionally named coder beats alphabetical order.
+    monkeypatch.setattr(
+        delegates_mod,
+        "_load_delegates_config",
+        lambda: [_acp_raw("aardvark", tmp_path), _acp_raw("zeta-sonnet", tmp_path)],
+    )
+    d, err = mod._resolve_coder(None)
+    assert err is None and d.name == "zeta-sonnet"
+
+    # The explicit config pick still overrides the heuristic.
+    d, err = mod._resolve_coder({"coder": "aardvark"})
+    assert err is None and d.name == "aardvark"
 
 
 class _FakeAcpAdapter:
@@ -476,7 +510,9 @@ class _FakeAcpAdapter:
 def test_develop_plugin_dispatches_scoped_and_rejoins_the_spine(monkeypatch, tmp_path):
     """develop_plugin (ADR 0096 D5): the coder is dispatched with a per-call scoped
     copy (workdir = the plugin dir, manage_git off, fresh session, teardown), then
-    the host re-joins the spine at test (+ reload when live)."""
+    the host re-joins the spine at test (+ reload when live). No BackgroundManager
+    wired here → the inline degrade path (the ADR 0050 fallback), so the whole
+    spine runs in the call."""
     import plugins.delegates as delegates_mod
     from plugins.delegates import adapters as adapters_mod
     from runtime.state import STATE
@@ -492,6 +528,7 @@ def test_develop_plugin_dispatches_scoped_and_rejoins_the_spine(monkeypatch, tmp
     fake = _FakeAcpAdapter()
     monkeypatch.setitem(adapters_mod.ADAPTERS, "acp", fake)
     monkeypatch.setattr(STATE, "graph", None, raising=False)
+    monkeypatch.setattr(STATE, "background_mgr", None, raising=False)
 
     dev = mod._build_develop_tool({"target_dir": str(out_root)})
     out = _run(dev.ainvoke({"plugin_id": "coded-up", "instructions": "add a frobnicate tool"}))
@@ -505,6 +542,62 @@ def test_develop_plugin_dispatches_scoped_and_rejoins_the_spine(monkeypatch, tmp
     assert "done: implemented the feature" in out
     assert "— test_plugin —" in out  # re-joined the spine at *test*
     assert "reload skipped (no live agent)" in out
+
+
+class _FakeBgManager:
+    """Records spawn_work calls WITHOUT running the work — the test asserts the
+    detach happened, then awaits the captured coroutine itself to see the spine."""
+
+    def __init__(self):
+        self.calls = []
+
+    async def spawn_work(self, *, origin_session, kind, description, work, detail="", **kw):
+        self.calls.append(
+            {"origin_session": origin_session, "kind": kind, "description": description, "detail": detail, "work": work}
+        )
+        return "job-dev42"
+
+
+def test_develop_plugin_backgrounds_through_the_manager(monkeypatch, tmp_path):
+    """develop_plugin with a BackgroundManager wired (ADR 0050): the call returns a
+    job handle IMMEDIATELY — no coder dispatch inline — and the queued work, when it
+    runs, does the coder dispatch AND still re-joins the spine at test (+ reload)."""
+    import plugins.delegates as delegates_mod
+    from plugins.delegates import adapters as adapters_mod
+    from runtime.state import STATE
+
+    mod = _load_devkit_module(tmp_path)
+    out_root = tmp_path / "out"
+    out_root.mkdir()
+    scaffold = mod._build_scaffold_tool({"target_dir": str(out_root)})
+    _run(scaffold.ainvoke({"name": "Bg Built", "enable": False}))
+
+    monkeypatch.setattr(delegates_mod, "_load_delegates_config", lambda: [_acp_raw("proto", tmp_path)])
+    fake = _FakeAcpAdapter()
+    monkeypatch.setitem(adapters_mod.ADAPTERS, "acp", fake)
+    monkeypatch.setattr(STATE, "graph", None, raising=False)
+    mgr = _FakeBgManager()
+    monkeypatch.setattr(STATE, "background_mgr", mgr, raising=False)
+
+    dev = mod._build_develop_tool({"target_dir": str(out_root)})
+    out = _run(dev.ainvoke({"plugin_id": "bg-built", "instructions": "add a frobnicate tool"}))
+
+    # Returned immediately with the handle — the coder was NOT dispatched inline.
+    assert "job-dev42" in out and "END my turn" in out
+    assert "delegate" not in fake.calls
+    assert len(mgr.calls) == 1
+    call = mgr.calls[0]
+    assert call["kind"] == "develop"
+    assert "proto" in call["description"] and "bg-built" in call["description"]
+    assert call["detail"] == "add a frobnicate tool"
+
+    # The queued work, when awaited, dispatches the coder and re-joins the spine.
+    result = _run(call["work"]())
+    assert fake.calls["forgot"] and fake.calls["torn"]
+    assert fake.calls["delegate"].workdir == str(out_root / "bg-built")
+    assert "done: implemented the feature" in result
+    assert "— test_plugin —" in result
+    assert "reload skipped (no live agent)" in result
 
 
 def test_develop_plugin_without_delegate_names_the_fix(monkeypatch, tmp_path):

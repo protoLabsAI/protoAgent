@@ -19,16 +19,21 @@ agent-facing half + the live-enable that needs the running graph.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re as _re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Annotated, Any
 
 from langchain_core.tools import tool
+from langgraph.prebuilt import InjectedState
 
 from graph.plugins import scaffold
 from graph.subagents.config import SubagentConfig
+
+log = logging.getLogger("protoagent.plugins.plugin_devkit")
 
 # Captured at register() so the scaffold tools can broadcast on the event bus (ADR 0039) —
 # the devkit dogfoods its own lesson.
@@ -529,11 +534,21 @@ Task:
 {instructions}"""
 
 
+# Default-pick preference when several acp delegates are configured and
+# `plugin_devkit.coder` is unset: a conventionally named coder wins (substring match,
+# in this order), else the first alphabetically. Documented in the tool docstring.
+_PREFERRED_CODERS = ("sonnet", "claude-code", "claude")
+
+
 def _resolve_coder(config: dict | None):
     """``(delegate, error)`` — the ACP coding delegate develop_plugin dispatches to.
     ``plugin_devkit.coder`` names one; otherwise the sole configured acp delegate
-    wins; anything else is an actionable error, mirroring the delegates plugin's own
-    degrade posture (no roster → say what to configure, don't guess)."""
+    wins, and with SEVERAL configured we default-pick one (``_PREFERRED_CODERS``
+    substring, else first alphabetically) and log the choice — the old "set
+    plugin_devkit.coder" refusal was operator guidance delivered to the MODEL, which
+    then hand-wrote the plugin inline, defeating the heavy-build lane. Only a truly
+    empty roster (or a bad explicit pick) is an error, mirroring the delegates
+    plugin's degrade posture (no roster → say what to configure, don't guess)."""
     try:
         from plugins.delegates import _load_delegates_config
         from plugins.delegates.registry import DelegateRegistry
@@ -549,31 +564,107 @@ def _resolve_coder(config: dict | None):
         if d.type != "acp":
             return None, f"{want!r} is type {d.type!r} — develop_plugin needs an `acp` coding delegate"
         return d, None
-    acp = [d for d in (reg.get(n) for n in reg.names()) if d is not None and d.type == "acp"]
-    if len(acp) == 1:
-        return acp[0], None
+    acp = sorted(
+        (d for d in (reg.get(n) for n in reg.names()) if d is not None and d.type == "acp"),
+        key=lambda d: d.name,
+    )
     if not acp:
         return None, (
             "no `acp` coding delegate configured — add one under `delegates:` "
             "(docs/guides/coding-agents.md) or set plugin_devkit.coder"
         )
-    return None, f"multiple acp delegates ({', '.join(d.name for d in acp)}) — set plugin_devkit.coder to pick one"
+    if len(acp) == 1:
+        return acp[0], None
+    pick = next((d for pref in _PREFERRED_CODERS for d in acp if pref in d.name.lower()), acp[0])
+    log.info(
+        "[plugin-devkit] multiple acp delegates (%s) and plugin_devkit.coder unset — defaulting to %r "
+        "(set plugin_devkit.coder to override)",
+        ", ".join(d.name for d in acp),
+        pick.name,
+    )
+    return pick, None
+
+
+async def _develop_and_verify(coder, adapter, scoped, prompt: str, timeout: float, plugin_id: str, pdir: Path) -> str:
+    """The coder dispatch + the spine re-join at *test* (D5): verify, then hot-swap.
+
+    This is the body of a develop_plugin job — it runs DETACHED under the background
+    manager when one is wired (ADR 0050) and inline only in the lean/CLI/test
+    fallback, so a 15-minute coder run never holds a chat turn open either way."""
+    from plugins.delegates.adapters import DelegateError
+
+    try:
+        await adapter.forget_session(scoped)  # fresh session — no stale memory of prior runs
+    except Exception:  # noqa: BLE001 — best-effort; a stale session must not block the build
+        pass
+    try:
+        reply = await asyncio.wait_for(adapter.dispatch(scoped, prompt, timeout=timeout), timeout)
+    except asyncio.TimeoutError:
+        return f"✗ coder timed out after {int(timeout)}s — split the task or raise the delegate's timeout_s"
+    except DelegateError as e:
+        return f"✗ coder dispatch failed: {e}"
+    finally:
+        try:
+            await adapter.teardown(scoped)  # reap the workdir-scoped subprocess
+        except Exception:  # noqa: BLE001 — never let teardown mask the result
+            pass
+
+    reply = (reply or "").strip()
+    if len(reply) > _CODER_REPLY_CAP:
+        reply = reply[:_CODER_REPLY_CAP] + " … ✂"
+    lines = [f"✓ coder ({coder.name}) finished on {plugin_id!r}:", reply or "(no reply text)", ""]
+
+    # Re-join the spine at *test* (D5): verify, then hot-swap.
+    lines.append("— test_plugin —")
+    lines.append(await asyncio.to_thread(_run_pytest, pdir))
+
+    from runtime.state import STATE
+
+    if getattr(STATE, "graph", None) is None:
+        lines.append("— reload skipped (no live agent) — call enable_plugin when running")
+        return "\n".join(lines)
+    meta = _plugin_meta(plugin_id)
+    if meta is not None and meta.get("enabled"):
+        from server.agent_init import _apply_settings_changes
+
+        ok, msgs = await asyncio.to_thread(_apply_settings_changes)  # D9: off the loop
+        fresh = _plugin_meta(plugin_id)
+        if not ok:
+            lines.append(f"— reload failed: {'; '.join(msgs)}")
+        elif fresh is not None and not fresh.get("loaded"):
+            lines.append(f"— reloaded, but it FAILED to load: {_failure_detail(fresh)}")
+        elif fresh is not None and (warn := _zero_contribution_warning(fresh)):
+            lines.append(f"— reloaded, but {warn}")
+        else:
+            summary = _contribution_summary(fresh) if fresh else ""
+            lines.append(
+                "— reloaded: the coder's changes are live on the next turn" + (f" ({summary})" if summary else "")
+            )
+    else:
+        lines.append(f"— not enabled yet: call enable_plugin({plugin_id!r}) to load it live")
+    return "\n".join(lines)
 
 
 def _build_develop_tool(config: dict | None):
     target_dir = (config or {}).get("target_dir") or None
 
     @tool
-    async def develop_plugin(plugin_id: str, instructions: str) -> str:
+    async def develop_plugin(plugin_id: str, instructions: str, state: Annotated[Any, InjectedState] = None) -> str:
         """Hand a plugin's implementation to the configured ACP coding delegate — the
         heavy-build lane of the loop. The coder works directly in the plugin dir
         (scoped: fresh session, git lifecycle off), then the host automatically runs
         ``test_plugin`` and ``reload_plugins`` and reports all three results.
 
+        The build runs as a DETACHED background job (ADR 0050): you get a job handle
+        back immediately, and the full coder + test + reload report is delivered to
+        you automatically on a later turn. **After dispatching, END YOUR TURN** — do
+        not wait, poll, or hand-write the plugin yourself in the meantime.
+
         Use for substantial changes (multi-file logic, a real feature); for small
         edits prefer ``plugin_write_file`` yourself. Requires an ``acp`` delegate
-        (docs/guides/coding-agents.md); ``plugin_devkit.coder`` picks one when
-        several are configured."""
+        (docs/guides/coding-agents.md); with several configured,
+        ``plugin_devkit.coder`` names the pick, otherwise one is chosen for you
+        (a `sonnet`/`claude-code`-named delegate, else the first alphabetically)."""
         import dataclasses
 
         try:
@@ -586,7 +677,7 @@ def _build_develop_tool(config: dict | None):
         if coder is None:
             return f"✗ {err}"
 
-        from plugins.delegates.adapters import ADAPTERS, DelegateError
+        from plugins.delegates.adapters import ADAPTERS
 
         adapter = ADAPTERS["acp"]
         # The projectBoard dispatch pattern: a per-call scoped copy (registry
@@ -598,56 +689,43 @@ def _build_develop_tool(config: dict | None):
         scoped = dataclasses.replace(coder, **overrides)
         timeout = float(getattr(coder, "timeout_s", 0) or _DEVELOP_TIMEOUT_S)
         prompt = _DEVELOP_PROMPT.format(instructions=instructions.strip())
+
+        async def _work() -> str:
+            return await _develop_and_verify(coder, adapter, scoped, prompt, timeout, plugin_id, pdir)
+
         try:
-            await adapter.forget_session(scoped)  # fresh session — no stale memory of prior runs
-        except Exception:  # noqa: BLE001 — best-effort; a stale session must not block the build
-            pass
+            from runtime.state import STATE
+
+            mgr = getattr(STATE, "background_mgr", None)
+        except Exception:  # noqa: BLE001 — no runtime state (e.g. a unit test) → inline
+            mgr = None
+        if mgr is None:
+            # Lean/CLI/test context — the delegate_to degrade posture (ADR 0050):
+            # no manager to detach into, so inline is never worse than before.
+            return await _work()
+
         try:
-            reply = await asyncio.wait_for(adapter.dispatch(scoped, prompt, timeout=timeout), timeout)
-        except asyncio.TimeoutError:
-            return f"✗ coder timed out after {int(timeout)}s — split the task or raise the delegate's timeout_s"
-        except DelegateError as e:
-            return f"✗ coder dispatch failed: {e}"
-        finally:
-            try:
-                await adapter.teardown(scoped)  # reap the workdir-scoped subprocess
-            except Exception:  # noqa: BLE001 — never let teardown mask the result
-                pass
+            from tools.lg_tools import _session_id_from
 
-        reply = (reply or "").strip()
-        if len(reply) > _CODER_REPLY_CAP:
-            reply = reply[:_CODER_REPLY_CAP] + " … ✂"
-        lines = [f"✓ coder ({coder.name}) finished on {plugin_id!r}:", reply or "(no reply text)", ""]
-
-        # Re-join the spine at *test* (D5): verify, then hot-swap.
-        lines.append("— test_plugin —")
-        lines.append(await asyncio.to_thread(_run_pytest, pdir))
-
-        from runtime.state import STATE
-
-        if getattr(STATE, "graph", None) is None:
-            lines.append("— reload skipped (no live agent) — call enable_plugin when running")
-            return "\n".join(lines)
-        meta = _plugin_meta(plugin_id)
-        if meta is not None and meta.get("enabled"):
-            from server.agent_init import _apply_settings_changes
-
-            ok, msgs = await asyncio.to_thread(_apply_settings_changes)  # D9: off the loop
-            fresh = _plugin_meta(plugin_id)
-            if not ok:
-                lines.append(f"— reload failed: {'; '.join(msgs)}")
-            elif fresh is not None and not fresh.get("loaded"):
-                lines.append(f"— reloaded, but it FAILED to load: {_failure_detail(fresh)}")
-            elif fresh is not None and (warn := _zero_contribution_warning(fresh)):
-                lines.append(f"— reloaded, but {warn}")
-            else:
-                summary = _contribution_summary(fresh) if fresh else ""
-                lines.append(
-                    "— reloaded: the coder's changes are live on the next turn" + (f" ({summary})" if summary else "")
-                )
-        else:
-            lines.append(f"— not enabled yet: call enable_plugin({plugin_id!r}) to load it live")
-        return "\n".join(lines)
+            # Injected graph state, not the tracing contextvar (empty in a tool
+            # body) — the session id is what the completion drains back to.
+            session = _session_id_from(state) or ""
+        except Exception:  # noqa: BLE001 — best-effort; job still runs, drain is degraded
+            session = ""
+        snippet = " ".join(instructions.split())[:80]
+        job_id = await mgr.spawn_work(
+            origin_session=session,
+            kind="develop",
+            description=f"develop_plugin → {coder.name} on {plugin_id!r}: {snippet}",
+            detail=instructions.strip(),
+            work=_work,
+        )
+        return (
+            f"✓ handed {plugin_id!r} to coder {coder.name!r} as background job `{job_id}`. It runs "
+            f"detached — the coder + test_plugin + reload report comes back to me automatically on a "
+            f"later turn, so I should END my turn now and NOT wait, poll, or hand-write the plugin "
+            f"myself. In-flight jobs are listed in the background panel (GET /api/background)."
+        )
 
     return develop_plugin
 
