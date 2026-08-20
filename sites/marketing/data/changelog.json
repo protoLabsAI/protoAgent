@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.142.1",
+    "date": "2026-08-20",
+    "changes": [
+      "The Linux desktop release builds again (#2915)."
+    ]
+  },
+  {
     "version": "v0.142.0",
     "date": "2026-08-20",
     "changes": [

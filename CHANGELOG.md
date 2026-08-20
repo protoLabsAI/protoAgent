@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.142.1] - 2026-08-20
+
+### Fixed
+- **The Linux desktop release builds again (#2915).** The new webview smoke test spoke only weston 10's CLI; the release runner's weston 9 rejected it (`unknown backend "headless"`) and the all-or-nothing manifest design held the whole v0.142.0 desktop release. The smoke now version-gates its weston invocation, so both dialects boot the compositor.
+
 ## [0.142.0] - 2026-08-20
 
 ### Added
