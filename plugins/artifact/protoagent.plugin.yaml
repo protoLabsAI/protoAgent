@@ -63,3 +63,8 @@ emits:
 # exposing the subtree can't be walked.
 public_paths:
   - "/plugins/artifact/vendor/"
+  # The shell's own module script (#2822 split it out of the view page). Same trap as the
+  # vendor files: <script src="shell.js"> carries no Authorization header, so a gated route
+  # 401s and the panel boots DEAD — empty picker, no artifacts, on the hub and every fleet
+  # member. Static plugin code, no secrets; exact path, nothing nests under it.
+  - "/plugins/artifact/shell.js"
