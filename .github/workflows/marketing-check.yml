@@ -15,7 +15,10 @@ on:
     paths:
       - 'sites/marketing/**'
       - '.github/workflows/marketing-check.yml'
-    types: [opened, synchronize, reopened, ready_for_review]
+    # `edited` included deliberately: GitHub emits it when a PR's BASE BRANCH
+    # changes, so without it a marketing PR opened against another branch and
+    # then retargeted to main would skip this check entirely.
+    types: [opened, synchronize, reopened, ready_for_review, edited]
 
 permissions:
   contents: read

@@ -105,9 +105,14 @@ for _ in $(seq 1 90); do
   kill -0 "$APP_PID" 2>/dev/null || { echo "FAIL: app exited before serving /app"; tail -40 "$APP_LOG"; exit 1; }
   sleep 1
 done
-curl -sf -o /dev/null "http://127.0.0.1:${PORT}/app" || {
-  echo "FAIL: /app never returned 200"; tail -40 "$APP_LOG"; exit 1; }
-echo "==> console served"
+BODY="$(curl -sf "http://127.0.0.1:${PORT}/app" || true)"
+[ -n "$BODY" ] || { echo "FAIL: /app never returned 200"; tail -40 "$APP_LOG"; exit 1; }
+# A 200 alone proves a server is listening, not that it served the console. The
+# SPA shell must reference its own bundle, or we're smoking an error page.
+grep -q '/app/assets/' <<<"$BODY" || {
+  echo "FAIL: /app responded but the document is not the console shell"
+  printf '%s\n' "${BODY:0:400}"; tail -40 "$APP_LOG"; exit 1; }
+echo "==> console served (SPA shell verified)"
 
 # The crash this guards against lands a few seconds AFTER the console renders, so
 # a boot check alone would miss it. Soak.
@@ -119,7 +124,7 @@ for _ in $(seq 1 "$SOAK"); do
   sleep 1
 done
 
-curl -sf -o /dev/null "http://127.0.0.1:${PORT}/app" || {
-  echo "FAIL: console stopped responding during soak"; tail -40 "$APP_LOG"; exit 1; }
+curl -sf "http://127.0.0.1:${PORT}/app" | grep -q '/app/assets/' || {
+  echo "FAIL: console stopped serving its shell during soak"; tail -40 "$APP_LOG"; exit 1; }
 
 echo "PASS: app alive ${SOAK}s after render, console serving on ${PORT}"

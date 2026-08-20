@@ -311,7 +311,14 @@ jobs:
         # build. No GPU or DRI device is required; llvmpipe is enough.
         run: |
           set -euo pipefail
-          APPIMAGE="$(ls apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage | head -1)"
+          shopt -s nullglob
+          APPIMAGES=(apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage)
+          # Exactly one, or the smoke is testing something other than what we ship.
+          if [ "${#APPIMAGES[@]}" -ne 1 ]; then
+            echo "expected exactly 1 AppImage, found ${#APPIMAGES[@]}: ${APPIMAGES[*]:-<none>}"
+            exit 1
+          fi
+          APPIMAGE="${APPIMAGES[0]}"
           echo "Smoking bundled app: ${APPIMAGE}"
           scripts/desktop_webview_smoke.sh "${APPIMAGE}" 45
 
