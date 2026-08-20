@@ -29,6 +29,21 @@ export function canAddRemote(name: string, url: string): boolean {
  * so the row link's destination is unit-tested without rendering the panel. */
 export const slugOf = (a: { id: string; host?: boolean }) => (a.host ? "host" : a.id);
 
+/** The Box-runtime chip's field set (bind interface · ports · discovery · keep-warm ·
+ * autostart) — every key host-scoped, so the QuickSetting saves to the host layer
+ * (ADR 0047 D8 / 0048). Exported so the chip's contents are unit-tested without
+ * rendering the panel. */
+export const BOX_RUNTIME_KEYS: string[] = [
+  "network.bind",
+  "fleet.port_base",
+  "fleet.discovery.port_min",
+  "fleet.discovery.port_max",
+  "fleet.discovery.mdns",
+  "fleet.warm.max",
+  "fleet.warm.grace_seconds",
+  "fleet.autostart",
+];
+
 // Fleet manager (ADR 0042) — Settings → Agents. Lists the workspace agents with live
 // status (the query polls every 3s, so a crashed agent flips to stopped on its own) and
 // per-row start / stop / remove. "+ New agent" opens the archetype picker via `onNew`.
@@ -251,18 +266,10 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
         kicker={`${agents.length} agent${agents.length === 1 ? "" : "s"} on this host · the fleet`}
         actions={
           <>
-            {/* Box-runtime knobs (bind interface · ports · discovery · keep-warm) — host-scoped
-                box defaults, set right where you manage the fleet (ADR 0047 D8 / 0048). */}
+            {/* Box-runtime knobs — host-scoped box defaults, set right where you manage
+                the fleet (ADR 0047 D8 / 0048). */}
             <QuickSetting
-              keys={[
-                "network.bind",
-                "fleet.port_base",
-                "fleet.discovery.port_min",
-                "fleet.discovery.port_max",
-                "fleet.discovery.mdns",
-                "fleet.warm.max",
-                "fleet.warm.grace_seconds",
-              ]}
+              keys={BOX_RUNTIME_KEYS}
               title="Box runtime"
               label="Box runtime settings"
               icon={<Server size={15} />}
