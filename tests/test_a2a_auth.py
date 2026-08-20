@@ -886,3 +886,56 @@ def test_set_federation_token_explicit_empty_disables_federation(monkeypatch):
     auth._BEARER[0] = "op-token"  # configure operator bearer directly
     auth.set_federation_token("")
     assert auth._FEDERATION[0] is None
+
+
+def test_artifact_view_chrome_is_reachable_without_a_bearer(monkeypatch):
+    """The 2026-08-20 incident, pinned END TO END through the real gate: the
+    artifact view's page AND its shell.js module must be reachable with NO
+    Authorization header when a bearer gates the instance — a <script src>
+    can't carry one, and a gated shell.js renders every panel as a dead
+    'No artifact yet' while the data routes work fine. This test uses the
+    REAL manifest's parsed public paths, so it also fails if the manifest
+    declaration or the parser/validator ever drops the exemption."""
+    import yaml
+    from pathlib import Path
+
+    from graph.plugins.manifest import _parse_public_paths, _view_public_paths
+
+    manifest_path = Path(__file__).parent.parent / "plugins" / "artifact" / "protoagent.plugin.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    declared = _parse_public_paths(manifest.get("public_paths"), "artifact")
+    views = _view_public_paths(manifest.get("views") or [])
+
+    from starlette.applications import Starlette
+    from starlette.responses import PlainTextResponse
+    from starlette.routing import Route
+
+    ok = PlainTextResponse("ok")
+    app = Starlette(
+        routes=[
+            Route(path, lambda r: ok)
+            for path in (
+                "/plugins/artifact/view",
+                "/plugins/artifact/shell.js",
+                "/plugins/artifact/vendor/react.js",
+                "/api/plugins/artifact/history",
+                "/api/plugins/artifact/current",
+            )
+        ]
+    )
+    app.add_middleware(auth.A2AAuthMiddleware)
+
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
+    try:
+        auth.set_public_prefixes(_parse_public_paths(views, "artifact") + declared)
+        c = TestClient(app)
+        # Public chrome: the iframe navigation and its module load, header-less.
+        assert c.get("/plugins/artifact/view").status_code == 200
+        assert c.get("/plugins/artifact/shell.js").status_code == 200
+        assert c.get("/plugins/artifact/vendor/react.js").status_code == 200
+        # The DATA stays gated — public chrome must never widen it.
+        assert c.get("/api/plugins/artifact/history").status_code == 401
+        assert c.get("/api/plugins/artifact/current").status_code == 401
+    finally:
+        auth.set_public_prefixes([])

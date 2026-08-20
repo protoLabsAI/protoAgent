@@ -352,3 +352,49 @@ def test_cowork_archetype_requires_python_runtime() -> None:
     catalog = json.loads((CONFIG / "archetype-catalog.json").read_text())
     (row,) = (a for a in catalog["archetypes"] if a["id"] == "cowork")
     assert row.get("requires") == ["python_runtime"]
+
+
+def test_view_page_subresources_are_declared_public():
+    """Every same-origin subresource a plugin's view PAGE references (script src,
+    stylesheet href) must be auth-exempt: the page itself is public chrome
+    (auto-exempted), but a <script src> load carries no Authorization header —
+    a gated subresource 401s silently and the panel renders as a dead empty
+    state (the 2026-08-20 artifact incident: #2822 moved the shell out of the
+    inline HTML into shell.js and nothing exempted the new route; every
+    bearer-gated instance showed 'No artifact yet' with data present).
+
+    Guards the CLASS for the real-files view pattern: any plugin shipping an
+    .html page that references plugin-namespace files must exempt each one.
+    """
+    import re
+    from pathlib import Path
+
+    import yaml
+
+    plugins_dir = Path(__file__).parent.parent / "plugins"
+    offenders: list[str] = []
+    checked = 0
+
+    for entry in sorted(plugins_dir.iterdir()):
+        manifest_path = entry / "protoagent.plugin.yaml"
+        if not manifest_path.is_file():
+            continue
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+        public = [str(p) for p in (manifest.get("public_paths") or [])]
+        pid = manifest.get("id") or entry.name
+        for page in sorted(entry.glob("*.html")):
+            html = page.read_text(encoding="utf-8")
+            for ref in re.findall(r'(?:src|href)="([^"]+)"', html):
+                if ref.startswith(("http://", "https://", "data:", "#")):
+                    continue
+                if "'" in ref or "+" in ref or "{" in ref:
+                    continue  # a JS-constructed URL inside an inline script, not a static ref
+                resolved = ref if ref.startswith("/") else f"/plugins/{pid}/{ref}"
+                if not resolved.startswith(f"/plugins/{pid}/"):
+                    continue  # outside the namespace (e.g. /_ds/ kit) — core-owned
+                checked += 1
+                if not any(resolved.startswith(p) or resolved == p.rstrip("/") for p in public):
+                    offenders.append(f"{pid}: {page.name} references {resolved} — not in public_paths")
+
+    assert checked > 0, "expected at least one view-page subresource to check (artifact shell.js)"
+    assert not offenders, "gated view subresources (401 = dead panel):\n" + "\n".join(offenders)

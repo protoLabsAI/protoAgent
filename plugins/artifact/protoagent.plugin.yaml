@@ -63,3 +63,10 @@ emits:
 # exposing the subtree can't be walked.
 public_paths:
   - "/plugins/artifact/vendor/"
+  # shell.js is the view page's own module (#2822 moved it out of the inline
+  # HTML) — a <script src> load carries no Authorization header, exactly like
+  # the vendor imports above, so an unexempted shell.js 401s on every
+  # bearer-gated instance and the panel renders as a dead "No artifact yet"
+  # (the 2026-08-20 fleet-wide incident). Public CHROME only: the gated data
+  # routes stay bearer-gated.
+  - "/plugins/artifact/shell.js"
