@@ -2,8 +2,8 @@ import { Button } from "@protolabsai/ui/primitives";
 import { Message, MessageAction, MessageActions } from "@protolabsai/ui/ai";
 import { Tooltip } from "@protolabsai/ui/overlays";
 import { Spinner } from "@protolabsai/ui/data";
-import { ArrowDownToLine, Check, Clock, Coins, Copy, FileText, GitBranch, Gauge, History, Maximize2, RotateCcw, X } from "lucide-react";
-import { useLayoutEffect, useRef, useState } from "react";
+import { ArrowDownToLine, Check, Clock, Coins, Copy, FileText, GitBranch, Gauge, History, RotateCcw, X } from "lucide-react";
+import { useState } from "react";
 
 import { useQuery } from "@tanstack/react-query";
 
@@ -57,7 +57,7 @@ export type ChatMessageActions = {
 // The single chat message renderer (ADR 0035) — shared by the main chat (ChatSurface) and the
 // ⌘K palette chat (PaletteChat) so they never drift. Renders one user/assistant/system message:
 // live ordered `parts` (text↔tool interleave, WorkBlock fold) or the history-loaded grouped
-// fallback, plus the streaming loader, inline components, the background-report card, and the
+// fallback, plus the streaming loader, inline components, the background-report chip, and the
 // optional action row. Streaming state is read from `message.status`.
 export function ChatMessageView({
   message,
@@ -89,8 +89,8 @@ export function ChatMessageView({
         {text}
       </span>
     );
-  // Background-agent report (ADR 0050 → ADR 0070 D4): a finished job's report renders as a
-  // dedicated CARD — none of the streaming/parts machinery below applies (BackgroundWatch
+  // Background-agent report (ADR 0050 → ADR 0070 D4 → #2923): a finished job's report renders
+  // as a dedicated CHIP — none of the streaming/parts machinery below applies (BackgroundWatch
   // injects it display-only: role "system", plain content, never streams).
   if (message.report) {
     return <BackgroundReportCard message={message} report={message.report} />;
@@ -234,13 +234,43 @@ export function ChatMessageView({
   );
 }
 
-// The background-report CARD (ADR 0070 D4). A finished job's report is a document, not a
-// status pill: raised surface + shadow (styling in chat.css), a title header, a clamped
-// excerpt that fades out at the bottom (a teaser — the full text lives in the document
-// viewer), and an explicit "Open report" CTA. The full report is fetched BY ID
-// (GET /api/background/{id}); loadBackgroundReport keeps a legacy list-and-filter
-// fallback for pre-ADR-0070 servers. The whole card is click-to-open as a convenience
-// (guarded so a text selection is never stolen); the Button is the accessible control.
+// Dismissed report chips (#2923): jobIds the operator ✕'d out of the transcript.
+// localStorage (not sessionStorage) so a reload doesn't resurrect them — the report itself
+// stays retrievable in the Background agents panel (GET /api/background); dismissal only
+// affects chat rendering. Capped like the panel's seen-set (#2692).
+const DISMISSED_KEY = "protoagent.chat.dismissedReports";
+
+function dismissedSet(): Set<string> {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(DISMISSED_KEY) || "[]"));
+  } catch {
+    return new Set();
+  }
+}
+
+function useDismissedReports() {
+  const [dismissed, setDismissed] = useState<Set<string>>(dismissedSet);
+  const dismiss = (jobId: string) => {
+    // Read-merge-write so a dismiss in another tab sharing this key isn't clobbered.
+    const s = dismissedSet();
+    s.add(jobId);
+    try {
+      localStorage.setItem(DISMISSED_KEY, JSON.stringify([...s].slice(-300)));
+    } catch {
+      /* storage unavailable — the chip still hides for this page's lifetime */
+    }
+    setDismissed(s);
+  };
+  return { dismissed, dismiss };
+}
+
+// The background-report CHIP (#2923; supersedes the ADR 0070 D4 teaser card). A finished
+// job's report notification is ONE compact row — icon + title + "Open" + dismiss ✕ — the
+// document viewer is the whole reading experience, so there is no excerpt/expand state in
+// between. The full report is fetched BY ID (GET /api/background/{id});
+// loadBackgroundReport keeps a legacy list-and-filter fallback for pre-ADR-0070 servers.
+// Dismissing hides the chip from THIS transcript only (persisted per jobId); the
+// Background agents panel remains the durable place the report lives.
 function BackgroundReportCard({
   message,
   report,
@@ -248,61 +278,33 @@ function BackgroundReportCard({
   message: ChatMessage;
   report: NonNullable<ChatMessage["report"]>;
 }) {
+  const { dismissed, dismiss } = useDismissedReports();
+  if (dismissed.has(report.jobId)) return null;
   const open = () =>
     openDocument({
       title: report.title,
       subtitle: "Background agent report",
       load: () => loadBackgroundReport(report.jobId),
     });
-  // The bottom fade-out is a CLAMP indicator, not decoration: apply it only when the
-  // excerpt actually overflows its max-height. An unconditional mask scales to the
-  // element's own box, so a SHORT report (which fits entirely) would have its last
-  // line faded toward invisible — the report's conclusion, misread as truncation.
-  // Re-measured on resize (width changes rewrap the text and move the overflow point).
-  const excerptRef = useRef<HTMLDivElement | null>(null);
-  const [clamped, setClamped] = useState(false);
-  useLayoutEffect(() => {
-    const el = excerptRef.current;
-    if (!el) return;
-    const measure = () => setClamped(el.scrollHeight > el.clientHeight + 1);
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [message.content]);
   return (
     <Message role={message.role} className="chat-report">
-      <div
-        className="chat-report-card"
-        onClick={() => {
-          // Convenience click-anywhere — but selecting excerpt text must not open.
-          if (window.getSelection()?.isCollapsed !== false) open();
-        }}
-      >
-        <div className="chat-report-head">
-          <FileText size={16} aria-hidden />
-          <div className="chat-report-titles">
-            <span className="chat-report-title">{report.title}</span>
-            <span className="chat-report-sub">Background report</span>
-          </div>
-        </div>
-        {message.content ? (
-          <div ref={excerptRef} className={`chat-report-excerpt${clamped ? " chat-report-excerpt--clamped" : ""}`}>
-            <Markdown>{message.content}</Markdown>
-          </div>
-        ) : null}
-        <div className="chat-report-cta">
-          <Button
-            className="chat-report-open"
-            size="sm"
-            onClick={(e) => {
-              e.stopPropagation(); // the card's own click-to-open would double-fire
-              open();
-            }}
-          >
-            <Maximize2 size={14} /> Open report
-          </Button>
-        </div>
+      <div className="chat-report-chip">
+        <FileText size={14} aria-hidden />
+        <span className="chat-report-title" title={report.title}>
+          {report.title}
+        </span>
+        <Button className="chat-report-open" size="sm" variant="ghost" onClick={open}>
+          Open
+        </Button>
+        <button
+          type="button"
+          className="chat-report-dismiss"
+          onClick={() => dismiss(report.jobId)}
+          title="Dismiss — the report stays in the Background agents panel"
+          aria-label="Dismiss report"
+        >
+          <X size={14} />
+        </button>
       </div>
     </Message>
   );

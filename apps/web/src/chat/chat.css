@@ -2,7 +2,7 @@
    slash-command autocomplete, chat input sizing). Carved out of app/theme.css
    (#832, Axis-A step 2). Imported by ChatSurface.tsx. Move verbatim — no restyle. */
 
-/* Chat's raised automation surfaces — background-agent report cards (.chat-report-card)
+/* Chat's raised automation surfaces — background-agent report chips (.chat-report-chip)
    and local system notes (.chat-note) — use the DS resting-card elevation --pl-shadow-card
    (@protolabsai/ui ≥0.55.1, protoContent#457): a slight in-flow lift, the quiet counterpart
    to the lofted overlay --pl-shadow-popover (menus/dialogs). This started as a local
@@ -138,17 +138,17 @@
   display: contents;
 }
 
-/* Background-agent report card (ADR 0070 D4). The DS system message is a de-emphasized
-   centered near-black pill (bg-inset fill, 100px radius); a finished job's report is a
-   DOCUMENT teaser, not a status blip. The card itself is the bespoke .chat-report-card
-   inside the message content (raised surface, real corners, shadow, header row, clamped
-   fading excerpt, "Open report" CTA — built in ChatMessageView); here we only NEUTRALIZE
-   the DS pill on the content wrapper. Specificity is STACKED on the message root
-   (.pl-message--system.chat-report …) — the .chat-note pattern below — so the DS default
-   (.pl-message--system .pl-message__content, 0-2-0) can never win by load order; the
-   .chat-session-slot-anchored variant (0-4-0) also outranks our own base system-message
-   rule further down (0-3-0), and the bare variant covers a card rendered outside the
-   chat slot (the shared renderer also serves the ⌘K palette chat). */
+/* Background-agent report chip (#2923; supersedes the ADR 0070 D4 teaser card). A
+   finished job's report notification is ONE compact dismissable row — icon + title +
+   "Open" + ✕ — built in ChatMessageView; the document viewer is the reading experience,
+   so there is no excerpt block. The DS system message is a de-emphasized centered
+   near-black pill (bg-inset fill, 100px radius); here we only NEUTRALIZE that pill on
+   the content wrapper so the bespoke chip can render. Specificity is STACKED on the
+   message root (.pl-message--system.chat-report …) — the .chat-note pattern below — so
+   the DS default (.pl-message--system .pl-message__content, 0-2-0) can never win by
+   load order; the .chat-session-slot-anchored variant (0-4-0) also outranks our own
+   base system-message rule further down (0-3-0), and the bare variant covers a chip
+   rendered outside the chat slot (the shared renderer also serves the ⌘K palette chat). */
 .chat-report.pl-message--system {
   justify-content: stretch;
 }
@@ -163,63 +163,53 @@
   font-size: 0.9rem;
   color: var(--pl-color-fg);
 }
-.chat-report-card {
-  background: var(--pl-color-bg-raised); /* lifted OFF the surface — not the bg-inset well */
-  border: 1px solid var(--pl-color-border);
-  border-radius: var(--pl-radius);
-  /* A slight resting lift, NOT the lofted popover shadow (which read as too heavy for an
-     inline in-flow card). Shared with the system note so both raised surfaces match. */
-  box-shadow: var(--pl-shadow-card);
-  padding: 14px 16px;
-  cursor: pointer; /* the whole card opens the report (selection-guarded in JSX) */
-}
-.chat-report-head {
-  display: flex;
+/* One line, chip-sized (~40px tall): inline-flex hugs the content instead of stretching
+   the row. Raised surface + the resting --pl-shadow-card lift so it still reads as an
+   automation surface (matching .chat-note) — just a compact one. */
+.chat-report-chip {
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  max-width: 100%;
+  padding: 5px 6px 5px 12px;
+  background: var(--pl-color-bg-raised);
+  border: 1px solid var(--pl-color-border);
+  border-radius: 999px;
+  box-shadow: var(--pl-shadow-card);
 }
-.chat-report-head > svg {
+.chat-report-chip > svg {
   flex: 0 0 auto;
   color: var(--pl-color-fg-muted);
 }
-.chat-report-titles {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
+/* The title must stay on the chip's single line — ellipsize, with the full text on the
+   JSX title attribute (and the whole report one "Open" away). */
 .chat-report-title {
+  min-width: 0;
   font-weight: 600;
-  font-size: 0.95rem;
-  overflow-wrap: anywhere;
-}
-.chat-report-sub {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--pl-color-fg-muted);
-}
-/* The excerpt is a TEASER, not the content: clamp to ~7 text lines, and when the text
-   actually overflows (the --clamped modifier, measured in ChatMessageView) fade the tail
-   out so it visibly trails off into the card — the full report lives in the document
-   viewer behind the CTA. The mask is NOT unconditional: it scales to the element's own
-   box, so on a short, fully-visible report it would ghost the last line — the report's
-   conclusion — into a fake "there's more" truncation. */
-.chat-report-excerpt {
-  margin-top: 10px;
-  max-height: 10.5em; /* ≈7 lines at the markdown 1.5 line height */
+  font-size: 0.9rem;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.chat-report-excerpt--clamped {
-  -webkit-mask-image: linear-gradient(to bottom, black 55%, transparent 100%);
-  mask-image: linear-gradient(to bottom, black 55%, transparent 100%);
+/* Dismiss ✕ — removes the chip from THIS transcript only (jobId persisted in
+   localStorage); the report stays retrievable in the Background agents panel. */
+.chat-report-dismiss {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: none;
+  color: var(--pl-color-fg-muted);
+  cursor: pointer;
 }
-.chat-report-excerpt .markdown > :first-child,
-.chat-report-excerpt .pl-markdown > :first-child {
-  margin-top: 0;
-}
-.chat-report-cta {
-  margin-top: 10px;
+.chat-report-dismiss:hover {
+  color: var(--pl-color-fg);
+  background: var(--pl-color-bg-hover);
 }
 
 /* Per-turn token/cost footer under an assistant answer (#1372) — a quiet, monospace row of
