@@ -788,6 +788,20 @@ def _build_plugins(config, existing_tools=None):
     """
     try:
         from graph.plugins import load_plugins
+        from graph.plugins.host import HOST
+
+        # The LAZY host fields must be wired BEFORE register() runs: they're
+        # deferred reads (a lambda over STATE / the settings-apply seam), so
+        # assigning them early is safe — and a plugin that captures
+        # `registry.host.config` at register time otherwise silently gets None
+        # on a COLD boot while working on a hot-enable (the promptlab incident:
+        # broke on the first desktop-app restart after install). The eager
+        # fields (invoke / event bus) genuinely need the built server and stay
+        # in _populate_plugin_host.
+        if HOST.config is None:
+            HOST.config = lambda: STATE.graph_config
+        if HOST.apply_settings is None:
+            HOST.apply_settings = lambda patch: _apply_settings_changes(config=patch)
 
         core_names = {getattr(t, "name", None) for t in (existing_tools or [])}
         core_names.discard(None)
