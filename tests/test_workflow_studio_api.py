@@ -4,6 +4,7 @@ history + retention, live validation, and the resume precheck (#2143 family)."""
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -161,10 +162,43 @@ def test_recent_summarizes_newest_first(tmp_path):
     store.pause("brief", {})
 
     recent = store.recent()
+    # [b, a] holds even when both runs land in the same clock tick (Windows):
+    # the write seq tie-breaks identical updated_at values (#2883).
     assert [r["run_id"] for r in recent] == [b, a]
     assert recent[0]["status"] == STATUS_PAUSED and recent[0]["pending_step"] == "brief"
     assert recent[1]["steps_total"] == 2 and recent[1]["steps_done"] == 1
     assert "step_outputs" not in recent[0]  # summaries, not payloads
+
+
+def _freeze_updated_at(store, run_ids):
+    """Force the same-tick updated_at collision the Windows flake needs, on any
+    platform — seq (already persisted, later write = higher) must break the tie."""
+    for rid in run_ids:
+        state = store.load(rid)
+        state["updated_at"] = "2026-01-01T00:00:00+00:00"
+        store.path(rid).write_text(json.dumps(state), encoding="utf-8")
+
+
+def test_recent_tie_breaks_identical_updated_at_by_write_order(tmp_path):
+    store = WorkflowRunStore(tmp_path / ".runs")
+    a = store.start("one", {})
+    store.finish(STATUS_DONE, {"output": "", "failed": []})
+    b = store.start("two", {})
+    store.finish(STATUS_DONE, {"output": "", "failed": []})
+    _freeze_updated_at(store, [a, b])
+
+    assert [r["run_id"] for r in WorkflowRunStore(tmp_path / ".runs").recent()] == [b, a]
+
+
+def test_paused_tie_breaks_identical_updated_at_by_write_order(tmp_path):
+    store = WorkflowRunStore(tmp_path / ".runs")
+    a = store.start("one", {}, steps=RECIPE["steps"])
+    store.pause("gather", {})
+    b = store.start("two", {}, steps=RECIPE["steps"])
+    store.pause("brief", {})
+    _freeze_updated_at(store, [a, b])
+
+    assert [r["run_id"] for r in WorkflowRunStore(tmp_path / ".runs").paused()] == [b, a]
 
 
 def test_prune_removes_only_oldest_terminal_runs(tmp_path):

@@ -53,6 +53,20 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+_seq_counter: int = 0
+
+
+def _next_seq() -> int:
+    """Monotonic write sequence — the tie-breaker for same-tick ``updated_at``
+    values in ``recent()``/``paused()``. Coarse wall clocks (Windows) can stamp
+    two writes with an identical ISO timestamp; higher seq = written later.
+    Module-global so two stores in one process still get strictly-increasing
+    values (#2883)."""
+    global _seq_counter
+    _seq_counter += 1
+    return _seq_counter
+
+
 def _step_snapshot(steps: list[dict] | None) -> list[dict]:
     """The graph shape the timeline renders — never the prompts (they can be large
     and template-y; the rendered per-step text lands in ``step_outputs`` instead)."""
@@ -197,16 +211,18 @@ class WorkflowRunStore:
 
     def paused(self) -> list[dict[str, Any]]:
         """Every ``paused`` run on disk (full state dicts), newest-updated first —
-        the operator's "Pending Gates" queue. Corrupt/absent files are skipped."""
+        the operator's "Pending Gates" queue. Corrupt/absent files are skipped.
+        Same-tick ``updated_at`` ties break on the write seq (newest write first)."""
         runs = [state for rid in self.list_runs() if (state := self.load(rid)) and state.get("status") == STATUS_PAUSED]
-        runs.sort(key=lambda s: s.get("updated_at") or "", reverse=True)
+        runs.sort(key=lambda s: (s.get("updated_at") or "", s.get("seq", 0)), reverse=True)
         return runs
 
     def recent(self, limit: int = 50) -> list[dict[str, Any]]:
         """Run summaries (every status), newest-updated first — the Studio's history
-        list. Summaries only: outputs stay behind ``load(run_id)``."""
+        list. Summaries only: outputs stay behind ``load(run_id)``. Same-tick
+        ``updated_at`` ties break on the write seq (newest write first)."""
         runs = [state for rid in self.list_runs() if (state := self.load(rid))]
-        runs.sort(key=lambda s: s.get("updated_at") or "", reverse=True)
+        runs.sort(key=lambda s: (s.get("updated_at") or "", s.get("seq", 0)), reverse=True)
         out = []
         for s in runs[: max(0, limit)]:
             meta = s.get("step_meta") or {}
@@ -250,6 +266,7 @@ class WorkflowRunStore:
         return removed
 
     def _write(self) -> None:
+        self._state["seq"] = _next_seq()
         try:
             atomic_write(self.path(self._state["run_id"]), json.dumps(self._state, ensure_ascii=False, indent=2))
         except OSError as exc:
