@@ -1,5 +1,31 @@
 [
   {
+    "version": "v0.142.0",
+    "date": "2026-08-20",
+    "changes": [
+      "The desktop app ships for Linux — .AppImage and .deb are on the download page (#2866).",
+      "CI renders the desktop app now, and the marketing site builds on PRs (#2878).",
+      "Expose fleet autostart in Settings UI (#2880).",
+      "Archetype repos have a registry.",
+      "\"Stack\" is retired — archetype is the one product noun.",
+      "The download page no longer offers Android and ChromeOS an x86_64 desktop binary (#2866).",
+      "Turn telemetry includes subagent model calls (#2872).",
+      "The marketing site deploys from its lockfile again (#2875).",
+      "Plugins see the live host config at register time on cold boot (#2877).",
+      "Fix flaky Windows test for workflow run ordering (#2883).",
+      "The Artifact panel works again on bearer-gated instances (#2884).",
+      "Plugin view panels surface persistent fetch failures (#2885).",
+      "delegate_to's A2A poll loop speaks 1.0 now (#2892).",
+      "Unknown /commands are refused inline instead of becoming agent turns (#2893).",
+      "Delegation questions now flow back to the calling agent — and can be answered.",
+      "Discover no longer advertises coding_agent as an enableable plugin.",
+      "A delegate that parks its question inline no longer gets mistaken for an answer.",
+      "Parallel delegations no longer corrupt each other (#2899).",
+      "Renamed archetype repos never double up in the new-agent picker.",
+      "The marketing site no longer tells you to enable coding_agent (or delegates)."
+    ]
+  },
+  {
     "version": "v0.141.0",
     "date": "2026-08-20",
     "changes": [

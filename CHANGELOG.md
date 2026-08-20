@@ -15,6 +15,138 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.142.0] - 2026-08-20
+
+### Added
+- **The desktop app ships for Linux — `.AppImage` and `.deb` are on the download page (#2866).**
+  The Linux build compiled on every release but sat behind a notify-me signup pending a real
+  test of it. Tested: it runs clean on a normal desktop session, Wayland or X11. What held it
+  up was a WebKitGTK 2.52 crash that only fires where accelerated compositing can't initialize
+  — a bare `Xvfb`, some container/CI setups, X-forwarding or VNC without DRI3 — where the web
+  process sends `EnterAcceleratedCompositingMode`, the UI process never built a backing store,
+  and `AcceleratedBackingStore::update()` dereferences null ([WebKit #321683](https://bugs.webkit.org/show_bug.cgi?id=321683),
+  patch proposed upstream, not landed). Not our bundle: v0.132.0, v0.139.0
+  and v0.140.0 all crash identically on WebKitGTK 2.52.3 and are all clean on 2.44.0. On a
+  headless box, run the server directly (`python -m server --ui console`) and use the browser
+  console; `apps/desktop/README.md` has the detail, including why the webview can't be
+  smoke-tested under `xvfb-run` in CI.
+
+- **CI renders the desktop app now, and the marketing site builds on PRs (#2878).** Two blind
+  spots, both found the hard way. (1) Nothing ever rendered the webview — `live_smoke.py --bin`
+  boots the frozen sidecar only — so an app that died seconds after the console painted shipped
+  green through six launches (#2866). `scripts/desktop_webview_smoke.sh` now boots the bundled
+  AppImage against a real GL compositor (weston headless + Mesa llvmpipe; no GPU or DRI device
+  needed, so a stock hosted runner can do it), waits for `/app` to serve, and soaks to catch the
+  crash that lands *after* first paint. Wired into `desktop-build.yml`'s Linux leg. Don't run it
+  under `xvfb-run`: on a machine whose EGL loader can select a GPU vendor driver that's the
+  default outcome, and the smoke fails for reasons unrelated to the build.
+  (2) `sites/marketing` was only ever built by the deploy workflow on push to main, so a broken
+  download page or lockfile took main and the live site down together instead of failing the PR
+  — `marketing-check.yml` now builds it on any PR that touches it and asserts the page links a
+  real installer for all three platforms.
+
+- **Expose fleet autostart in Settings UI (#2880).** The "Box runtime" chip on the Fleet
+  panel now includes the `fleet.autostart` field, so operators can declare which members
+  start on boot without editing YAML.
+
+- **Archetype repos have a registry.** `config/plugin-directory.yaml` gains an `archetype_repos:` section listing the published archetype repos, and a guard test cross-checks the shipped archetype catalog against it — a renamed or retired repo now fails CI instead of drifting through docs and examples.
+
+### Changed
+- **"Stack" is retired — archetype is the one product noun (ADR 0100 amendment).** A *bundle* is the mechanism (how a pinned plugin set installs); an *archetype* is who an agent starts as (persona + optional bundle); a published bundle repo shipping an `archetype:` block is an *archetype repo*, named `<name>-archetype`. The published repos were renamed (`cowork-archetype`, `social-archetype`, `project-manager-archetype`, `design-system-archetype`, `portfolio-manager-archetype`, `product-archetype`) — GitHub redirects keep existing pins and old install URLs working, and the shipped archetype catalog now points at the new names.
+
+### Fixed
+- **The download page no longer offers Android and ChromeOS an x86_64 desktop binary (#2866).**
+  Both match `/linux/` in the user-agent, so the OS sniffer classified them as Linux. That was
+  harmless while Linux had no build to hand out; now that it does, they fall to the
+  unknown-platform block instead. The page also refuses to build unless the resolved release
+  carries the Linux installers, the same guarantee the macOS and Windows links already had
+  (#2514) — a visible download link can't 404.
+
+- **Turn telemetry includes subagent model calls (#2872).** The `task` tool now propagates each subagent's model, token usage, and cost into the parent turn's telemetry, so per-turn cost reporting no longer undercounts delegated work.
+
+- **The marketing site deploys from its lockfile again (#2875).** `sites/marketing/package-lock.json`
+  was missing `react`, `react-dom` and `scheduler` — `@protolabsai/ui` declares them as peer
+  dependencies, npm auto-installs peers, and the lockfile was never regenerated after that. Nobody
+  noticed because `marketing-deploy.yml` ran `npm install`, which silently re-resolves rather than
+  failing; the cost was that two deploys of identical source could ship different transitive
+  versions, and `npm ci` was broken for anyone working on the site locally. The lockfile is now
+  complete (98 entries added — the peers plus the platform-optional esbuild/sharp binaries — with
+  **zero** existing versions changed) and the workflow installs with `npm ci`, so what deploys is
+  what's locked. npm 11 is pinned once up front for both the marketing and docs installs.
+
+- **Plugins see the live host config at register time on cold boot
+  (#2877).** The lazy host fields (`HOST.config`, `HOST.apply_settings`)
+  are now wired before plugin loading — previously a plugin that captured
+  `registry.host.config` in `register()` silently got nothing on a fresh
+  boot while working after a console hot-enable, so it broke on the next
+  app restart (the promptlab playground incident).
+
+- **Fix flaky Windows test for workflow run ordering (#2883).** Added a monotonic sequence tie-breaker to `WorkflowRunStore.recent()` so same-tick `updated_at` values sort deterministically.
+
+- **The Artifact panel works again on bearer-gated instances (#2884).** Since
+  the shell moved out of the inline view HTML into a real `shell.js` (#2822),
+  every auth-gated instance — the whole desktop fleet — silently 401'd the
+  script (a `<script src>` carries no Authorization header) and every panel
+  rendered the "No artifact yet" empty state while the artifacts sat on disk
+  and every data route worked. The file is now declared public chrome like
+  the vendor modules beside it, and two regression tests guard the class:
+  every same-origin subresource a plugin view page references must be
+  auth-exempt, and the artifact chrome is asserted reachable header-less
+  through the real gate while the data routes stay gated.
+
+- **Plugin view panels surface persistent fetch failures (#2885).** The artifact panel now shows an error strip after 3+ consecutive poll failures instead of the misleading empty-state. Documented the error-vs-empty-state rule in the plugin views guide.
+
+- **`delegate_to`'s A2A poll loop speaks 1.0 now (#2892).** The GetTask poll
+  sent the v0.3 legacy `{"name": …}` param under a 1.0 version header — a 1.0
+  peer rejects it, so a delegation to any peer that answers asynchronously
+  (non-terminal task from SendMessage) could never converge. Latent because
+  protoAgent peers answer inline; real against other A2A implementations. The
+  poll now sends `{"id": …}` (pinned against the SDK proto), and a peer that
+  parks on a human-input interrupt fails fast with a legible "parked waiting
+  for operator input" error instead of burning the full poll timeout and then
+  claiming the peer was still running.
+
+- **Unknown `/commands` are refused inline instead of becoming agent turns (#2893).**
+  A chat message like `/foobar` whose token resolves to no registered slash command
+  (goal, lifecycle, plugin command, workflow, subagent, or user-facing skill) now
+  short-circuits with `Unknown command /foobar. Type / to see available commands.`
+  — in both the streaming and collected turn paths — instead of silently falling
+  through to a normal agent turn on the raw command text. Messages that merely
+  contain a `/` (paths like `/home/user/file.txt`, prose like `use uv/pip`) still
+  reach the agent unchanged.
+
+- **Delegation questions now flow back to the calling agent — and can be answered.**
+  When an A2A delegate parks on operator input (`TASK_STATE_INPUT_REQUIRED`),
+  `delegate_to` no longer fails the dispatch: it returns the delegate's question
+  together with the parked task id and instructions to resume. A new
+  `resume_task_id` parameter sends the answer back into the parked task (A2A
+  resume: `SendMessage` with the parked `taskId` + `contextId`), so agent X can
+  answer agent Y's question — or escalate it up its own chain via `ask_human`
+  first — and the delegated work continues where it stopped instead of starting
+  over. Resuming a task that already finished reports its result; resuming one
+  that is still running is refused legibly.
+
+- **Discover no longer advertises `coding_agent` as an enableable plugin.** It's a built-in library that ships through `delegates` (always on) — its catalog row carried an enable instruction that could never work. The row is now marketing-site-only, and a tightened guard test keeps any future manifest-less directory row out of the in-app catalog.
+
+- **A delegate that parks its question inline no longer gets mistaken for an answer.**
+  protoAgent peers answer `SendMessage` synchronously — a HITL park comes back inline
+  with the task already `input-required` and the question in `status.message`. The
+  dispatch's inline-text early-return handed that bare question back as if it were the
+  delegate's final reply, losing the parked task id and the resume protocol with it.
+  The park is now detected before the early-return, so the calling agent gets the
+  ⏸ question + resume handle in this (the common) shape too. Caught by a live
+  end-to-end smoke; the poll-path unit test alone missed it.
+
+- **Parallel delegations no longer corrupt each other (#2899).** Firing `delegate_to` at the same coder more than once at a time interleaved every prompt into one ACP session — each caller got doubled fragments of someone else's turn, which read as coder failure and invited wasted re-dispatches. The client now serializes turns itself: concurrent callers queue, bounded by their own timeout.
+
+- **Renamed archetype repos never double up in the new-agent picker.** Archetype
+  catalog rows can carry `bundle_aliases` (former URLs of a since-renamed bundle
+  repo); an agent that installed `cowork-stack`/`social-stack`/
+  `project-manager-stack`/`design-system-stack` before the `*-archetype` renames
+  keeps a single picker card after upgrading.
+
+- **The marketing site no longer tells you to enable `coding_agent` (or `delegates`).** Built-in library/always-on rows now render "built-in" instead of an `enable … in plugins.enabled` CTA that could never work — the app-hidden (`app: false`) directory rows carry an explicit `enable: null` through to the site overlay.
+
 ## [0.141.0] - 2026-08-20
 
 ### Added
