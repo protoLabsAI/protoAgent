@@ -115,7 +115,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
-            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
+            weston xwayland libgl1-mesa-dri
+          # weston/xwayland/mesa are for the post-bundle webview smoke below. They
+          # ride this single apt call deliberately: a second apt invocation later in
+          # the job is the lock-contention flake class retired in #2845/#2849.
 
       - name: Read version
         id: version
@@ -290,6 +294,26 @@ jobs:
           BIN="${APP}/Contents/MacOS/protoagent-server"
           echo "Smoking signed sidecar: ${BIN}"
           python scripts/live_smoke.py --bin "${BIN}" --timeout 180
+
+      - name: Smoke-test the bundled app under a GL compositor (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        timeout-minutes: 6
+        # The pre-bundle smoke boots the frozen sidecar only — it never renders the
+        # webview, so an app that dies seconds after the console paints still ships
+        # green. That is exactly what happened in #2866: six launches, six crashes,
+        # CI never saw it.
+        #
+        # Runs against a REAL GL compositor (weston headless + Mesa llvmpipe), NOT
+        # `xvfb-run`. Xvfb has no DRI3, WebKitGTK then fails to create an accelerated
+        # backing store, and 2.52 dereferences the null (bugs.webkit.org 321683) — so
+        # under Xvfb this would fail 100% of the time for reasons unrelated to the
+        # build. No GPU or DRI device is required; llvmpipe is enough.
+        run: |
+          set -euo pipefail
+          APPIMAGE="$(ls apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage | head -1)"
+          echo "Smoking bundled app: ${APPIMAGE}"
+          scripts/desktop_webview_smoke.sh "${APPIMAGE}" 45
 
       - name: Collect artifacts
         shell: bash

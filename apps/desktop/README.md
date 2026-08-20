@@ -77,28 +77,44 @@ Notes per platform:
 - **Linux** builds on `ubuntu-22.04`, so the frozen sidecar needs glibc ≥ 2.35 at runtime
   (PyInstaller binaries don't run on older glibc than they were built with). The tray icon
   needs `libayatana-appindicator3-1` — declared as a `.deb` dependency; the AppImage bundles it.
-- **Linux needs a GPU-accelerated display — it does NOT run under a bare `Xvfb`** (#2866).
-  WebKitGTK 2.52 hard-crashes at launch when accelerated compositing can't initialize: the
-  web process sends `EnterAcceleratedCompositingMode`, the UI process never created a
-  backing store, and `AcceleratedBackingStore::update()` dereferences null. Verified on
-  Ubuntu 24.04 / WebKitGTK 2.52.3:
-
-  | display | result |
-  |---|---|
-  | Xvfb (no DRI3) | segfault ~2 s after the console renders |
-  | weston headless + GL (Mesa) — Wayland | clean, 60/60 |
-  | same, via Xwayland — X11 | clean, 60/60 |
-  | AppImage in that session | clean, 120 s+ soak |
-
-  It is not our bundle: v0.132.0, v0.139.0 and v0.140.0 all crash identically on 2.52.3,
-  and the same console is clean on WebKitGTK 2.44.0. Upstream:
+- **Linux needs working accelerated compositing — it does NOT run under a bare `Xvfb`** (#2866).
+  WebKitGTK 2.52 hard-crashes at launch when it can't create an accelerated backing store:
+  the web process sends `EnterAcceleratedCompositingMode`, the UI process never built one,
+  and `AcceleratedBackingStore::update()` dereferences null. Upstream:
   [WebKit #321683](https://bugs.webkit.org/show_bug.cgi?id=321683) — three functions guard
-  the backing-store pointer with `ASSERT()`, which compiles out in release builds, while
-  the rest of the file uses runtime `if` checks. Patch proposed, not landed as of 2.52.5,
-  so don't wait on it. Practical fallout: **don't try to smoke-test the webview under
-  `xvfb-run` in CI** — it will fail for reasons that have nothing to do with the build.
-  Headless boxes should run the server directly (`python -m server --ui console`) and use
-  the browser console.
+  that pointer with `ASSERT()`, which compiles out in release builds, while the rest of the
+  file uses runtime `if` checks. Patch proposed, not landed as of 2.52.5, so don't wait on it.
+
+  The trigger is **which EGL driver gets selected**, not the display type alone. Measured on
+  Ubuntu 24.04 / WebKitGTK 2.52.3, same AppImage, 45 s soak each:
+
+  | display | EGL vendor | result |
+  |---|---|---|
+  | Xvfb | default (glvnd, NVIDIA installed) | **segfault** |
+  | Xvfb | forced Mesa (llvmpipe) | clean |
+  | weston headless, GL renderer | Mesa (llvmpipe, no GPU) | clean |
+  | weston headless, GL renderer | Mesa (AMD iGPU) | clean |
+
+  So on a headless box, pinning Mesa is a real workaround — you don't have to give up on
+  the app:
+
+  ```bash
+  export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json
+  export LIBGL_ALWAYS_SOFTWARE=1
+  ```
+
+  It is not our bundle: v0.132.0, v0.139.0 and v0.140.0 all crash identically on 2.52.3, and
+  the same console is clean on WebKitGTK 2.44.0.
+
+  **Don't smoke-test the webview under `xvfb-run` in CI.** Use
+  `scripts/desktop_webview_smoke.sh`, which boots the bundled app against a real GL compositor
+  (weston headless + Mesa llvmpipe — no GPU or DRI device needed), asserts the console serves,
+  and soaks to catch the crash that lands *after* first paint. It runs on a stock GH-hosted
+  runner and is wired into `desktop-build.yml`'s Linux leg. Note the script pins Mesa by
+  default, which suppresses this crash class on an NVIDIA workstation — set
+  `SMOKE_FORCE_MESA=0` when you want to reproduce what a user on such a box actually gets.
+  A box with no display at all should still just run the server directly
+  (`python -m server --ui console`) and use the browser console.
 - **Windows** PyInstaller onefile binaries are occasionally false-flagged by AV — a known
   PyInstaller issue; code-signing the sidecar/installer is the durable fix.
 - The real release version is stamped into `tauri.conf.json` at build time (in-tree it stays

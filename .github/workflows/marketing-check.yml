@@ -1,0 +1,70 @@
+name: Marketing site
+
+# PR gate for sites/marketing. Until now the site was ONLY ever built by
+# marketing-deploy.yml, which triggers on push to main — so a change to the
+# download page or its lockfile was first compiled *after* it merged, and a
+# breakage took main and the live deploy down together instead of failing the
+# PR (#2875).
+#
+# Paths-filtered: the marketing site is independent of the Python/console
+# suites, so this stays off every PR that doesn't touch it.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'sites/marketing/**'
+      - '.github/workflows/marketing-check.yml'
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build marketing site
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      # npm-11-shaped lockfile — npm 10's `ci` rejects it (see PROTO.md).
+      - name: Use npm 11
+        run: npm install -g npm@11
+
+      # `npm ci`, matching the deploy. This is the check that would have caught
+      # the lockfile drifting out of sync with package.json (#2875) — `npm install`
+      # re-resolves and would have stayed green through it.
+      - name: Build
+        run: |
+          npm ci
+          npm run build
+        working-directory: sites/marketing
+        env:
+          # The download page resolves the newest desktop release from the GitHub
+          # API at build time and hard-fails rather than emit a dead link (#2514),
+          # so this needs a token for the same reason the deploy does.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Assert the download page carries a real installer per platform
+        # The page is generated from live release data, so "it built" isn't the
+        # same as "it links anything". Fail if a platform's installer went missing
+        # from the resolved release.
+        run: |
+          set -euo pipefail
+          PAGE=sites/marketing/dist/download/index.html
+          test -s "$PAGE"
+          for pat in 'aarch64-apple-darwin\.dmg' 'x86_64-pc-windows-msvc-setup\.exe' \
+                     'x86_64-unknown-linux-gnu\.AppImage' 'x86_64-unknown-linux-gnu\.deb'; do
+            grep -qE "https://github\.com/[^\"]*${pat}" "$PAGE" \
+              || { echo "FAIL: no download link matching ${pat}"; exit 1; }
+          done
+          echo "PASS: macOS, Windows and Linux installers all linked"
