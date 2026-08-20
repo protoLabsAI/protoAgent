@@ -59,19 +59,52 @@ LangGraph's `create_agent` gives you:
 - Middleware hooks (before_model, after_model, before_tool, after_tool) for tracing, auditing, knowledge injection
 - Subagent delegation via the `task` tool, inheriting the parent's context
 
-The template's middleware chain (`_build_middleware` in `graph/agent.py`) is ordered (optional links are config-gated):
+The template's middleware chain (`_build_middleware` in `graph/agent.py`) is ordered — registration order IS the semantics for same-hook links. Optional links are config-gated; everything else is always on (each is a no-op when its trigger is absent):
 
-1. **PromptCacheMiddleware** — sets Anthropic cache breakpoints on the stable system+tools prefix (the knowledge context is delivered just after it)
-2. **EnforcementMiddleware** (optional) — capability/effect-domain enforcement
-3. **KnowledgeMiddleware** (optional) — injects retrieved knowledge + human-authored skills before each LLM call; also loads prior session memory
-4. **ToolDeferralMiddleware** (optional) — progressive tool disclosure (ADR 0005)
-5. **AuditMiddleware** — records every tool call to JSONL + Langfuse
-6. **SessionSummaryMiddleware** (optional) — persists a session summary on session end (read back as `<prior_sessions>`)
-7. **CountingSummarizationMiddleware** (optional) — context compaction with a Prometheus counter (ADR 0006)
-8. **ModelFallbackMiddleware** (optional) — retry on fallback models (`routing.fallback_models`)
-9. **MessageCaptureMiddleware** — captures `message()` tool calls; runs last so every upstream transformation is already applied
+**Turn hygiene & control**
 
-Order matters: prompt-cache + knowledge run before audit (so injected context is captured), and message capture runs last.
+1. **ToolCallRepairMiddleware** — heals a thread left with a dangling `tool_call` (hung tool, interrupted turn) so the provider doesn't 400 every later turn
+2. **WaitYieldMiddleware** — ends the turn after the `wait` tool (yield-and-resume instead of busy-polling)
+3. **StallGuardMiddleware** — breaks a no-progress tool loop (same tool + args + result repeating): one nudge, then end the turn
+4. **RoundGovernorMiddleware** — the stall guard's sibling for LONG turns: a re-grounding nudge at N rounds, optional hard cap (ADR 0101)
+5. **SteeringMiddleware** — folds queued mid-turn user input into the running turn at the next model call
+
+**Model-call decoration** (wrap_model_call — outermost first)
+
+6. **ModelOverrideMiddleware** — per-chat-tab model override; outermost so everything below sees the ACTUAL model
+7. **TrajectoryMiddleware** — one request/response ref event per model call (ADR 0102); outside PromptCache because refs hash stored bytes, not wire decoration
+8. **PromptCacheMiddleware** — cache breakpoints on the stable system+tools prefix
+9. **PromptCaptureMiddleware** (optional) — records the EXACT assembled system prompt per call; directly after PromptCache by contract
+10. **TraceContextMiddleware** — stamps the live trace context onto gateway calls so the gateway's spans nest in ours
+
+**Gates** (block before execution)
+
+11. **EnforcementMiddleware** (optional) — disallowed tools + per-tool rate limits
+12. **SubagentFenceMiddleware** — per-turn tool fence for detached background subagent runs
+
+**Context & tools**
+
+13. **Multimodal tool results** — a tool can return an image the vision model actually sees (degrades to text on text-only models)
+14. **KnowledgeMiddleware** (optional) — retrieved knowledge + the `<available_skills>` index + prior-session memory
+15. **ToolDeltaMiddleware** — notifies the model when its toolset changed mid-session
+16. **ToolDeferralMiddleware** (optional) — progressive tool disclosure (ADR 0005)
+
+**Recording**
+
+17. **AuditMiddleware** (optional, on by default) — every tool call to JSONL + trace spans
+18. **SessionSummaryMiddleware** (optional, on by default) — session summary on end (read back as `<prior_sessions>`)
+
+**Context-window relief** (ordered: prune near-lossless, THEN summarize lossy)
+
+19. **ToolResultPrunerMiddleware** (optional, on by default) — prunes old tool results at ~0.6 of the window so the compaction valve often never fires
+20. **CountingSummarizationMiddleware** (optional) — compaction near the limit, with archive-first transcript preservation and a Prometheus counter (ADR 0006/0101)
+
+**Failover & extension**
+
+21. **ModelFallbackMiddleware** (optional) — retry on `routing.fallback_models`
+22. **Plugin-contributed middleware** (ADR 0032) — appended after the core chain, before capture
+23. **Provider wire-shape middleware** — per-provider request shaping (e.g. the OAuth identity block)
+24. **MessageCaptureMiddleware** — captures `message()` tool calls; runs last so every upstream transformation is already applied
 
 ## Session memory
 
