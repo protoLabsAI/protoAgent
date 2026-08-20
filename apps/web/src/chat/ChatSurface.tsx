@@ -47,6 +47,7 @@ import { reattachTurn } from "./reattach";
 import { loadDraft, loadScroll, loadSteers, saveDraft, saveScroll, saveSteers } from "./scratchState";
 import { createStreamWatchdog } from "./streamWatchdog";
 import { ADD_SELECTOR, isIncognitoAddClick, trackShiftHeld } from "./shiftCue";
+import { composerPlaceholder } from "./composerPlaceholder";
 import { sessionsToClose } from "./bulkClose";
 
 function messageId() {
@@ -1930,8 +1931,9 @@ function ChatSessionSlot({
           onStop={() => void stop()}
           // Short hints only (#1699) — key/command discoverability lives in /help now, not
           // in a placeholder wall of text competing with the message being written. ("Steer
-          // the agent" is also an e2e anchor — chat-steer-cancel.spec.ts.)
-          placeholder={status === "streaming" ? "Steer the agent…" : "Message protoAgent…"}
+          // the agent" is also an e2e anchor — chat-steer-cancel.spec.ts.) With a steer
+          // queued mid-turn, the hint flips to ↑-recall discoverability (#2837).
+          placeholder={composerPlaceholder(status, steerQueue.length)}
           inputRef={textareaRef}
           onKeyDown={onComposerKeyDown}
           onPaste={(e) => {
