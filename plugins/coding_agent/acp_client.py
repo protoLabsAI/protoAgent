@@ -328,8 +328,12 @@ class AcpClient:
     """Drive a single ACP agent subprocess + session.
 
     Construct once per configured agent and reuse: the process + session persist
-    across turns. Not safe for concurrent prompts on one instance (a session is a
-    single conversation); callers serialize turns with a per-agent lock.
+    across turns. A session is a single conversation, so ``prompt()`` serializes
+    turns itself (``_turn_lock``) — concurrent callers queue rather than interleave.
+    The old contract delegated that to "callers hold a per-agent lock", and the one
+    caller that didn't (``delegate_to`` fan-outs) interleaved prompts into one
+    session: both waiters accumulated into the same ``_answer`` buffer and came back
+    with doubled fragments of whichever turn streamed first.
     """
 
     def __init__(
@@ -384,6 +388,9 @@ class AcpClient:
         self._reader_task: asyncio.Task | None = None
         self._stderr_task: asyncio.Task | None = None
         self._start_lock = asyncio.Lock()
+        # One turn at a time: the session is a single conversation, and prompt()
+        # swaps the per-turn accumulation state (_answer, callbacks) on entry.
+        self._turn_lock = asyncio.Lock()
         # Ring buffer of the agent's most recent stderr lines. Kept (not just logged)
         # so the errors we raise can say WHY the agent died — see `_STDERR_TAIL_LINES`.
         self._stderr_tail: deque[str] = deque(maxlen=_STDERR_TAIL_LINES)
@@ -1007,7 +1014,43 @@ class AcpClient:
         ``text_callback`` (token-ish streaming), and the coder's reasoning deltas to
         ``thought_callback`` (``agent_thought_chunk``; falls back to ``progress_callback``)
         as the agent works. Raises ``AcpError`` on transport/protocol failure.
+
+        Turns are serialized per client: a concurrent call queues (bounded by its own
+        ``timeout``) instead of interleaving prompts into the one session — the per-turn
+        state (``_answer``, the callbacks) lives on the instance, so an interleaved turn
+        corrupts both answers.
         """
+        if self._turn_lock.locked():
+            logger.info("[acp/%s] prompt queued behind an in-flight turn", self.name)
+        try:
+            await asyncio.wait_for(self._turn_lock.acquire(), timeout=timeout)
+        except TimeoutError:
+            raise AcpError(
+                f"{self.name}: still queued behind an in-flight turn after {int(timeout)}s"
+                " — dispatch serially or raise the timeout"
+            ) from None
+        try:
+            return await self._prompt_locked(
+                text,
+                progress_callback=progress_callback,
+                tool_callback=tool_callback,
+                text_callback=text_callback,
+                thought_callback=thought_callback,
+                timeout=timeout,
+            )
+        finally:
+            self._turn_lock.release()
+
+    async def _prompt_locked(
+        self,
+        text: str,
+        *,
+        progress_callback: ProgressCallback | None,
+        tool_callback: ToolCallback | None,
+        text_callback: ProgressCallback | None,
+        thought_callback: ProgressCallback | None,
+        timeout: float,
+    ) -> str:
         await self._ensure_started()
         self._answer = ""
         self._progress = progress_callback

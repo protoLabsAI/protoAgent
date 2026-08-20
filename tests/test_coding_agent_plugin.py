@@ -1128,3 +1128,70 @@ async def test_end_turn_is_not_a_dead_end(tmp_path):
 async def test_stop_reason_starts_empty_before_any_turn(tmp_path):
     client = AcpClient(sys.executable, ["-c", "pass"], cwd=str(tmp_path), name="fresh")
     assert client.last_stop_reason is None and client.dead_end() is None
+
+
+_ECHO_AGENT = r"""
+import sys, json
+
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method, mid = msg.get("method"), msg.get("id")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": mid, "result": {"protocolVersion": 1}})
+    elif method == "session/new":
+        send({"jsonrpc": "2.0", "id": mid, "result": {"sessionId": "s1"}})
+    elif method == "session/prompt":
+        text = msg["params"]["prompt"][0]["text"]
+        for chunk in ("echo:", text):
+            send({"jsonrpc": "2.0", "method": "session/update", "params": {
+                "sessionId": "s1",
+                "update": {"sessionUpdate": "agent_message_chunk",
+                           "content": {"type": "text", "text": chunk}}}})
+        send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
+"""
+
+
+async def test_concurrent_prompts_serialize_not_interleave(tmp_path):
+    """The protoEngineer 2026-08-19 incident: three parallel delegate_to calls to one
+    target shared the pooled client, all three session/prompt writes landed in ONE
+    session, and every waiter came back with doubled fragments of whichever turn
+    streamed first ('Let me read the relevant files first.Let me read the relevant
+    files first.'). prompt() now owns a per-client turn lock: concurrent callers
+    queue, and each gets exactly its own answer."""
+    script = tmp_path / "echo_acp_agent.py"
+    script.write_text(_ECHO_AGENT, encoding="utf-8")
+    client = AcpClient(sys.executable, [str(script)], cwd=str(tmp_path), name="echo")
+    try:
+        a, b, c = await asyncio.gather(
+            client.prompt("alpha", timeout=30.0),
+            client.prompt("beta", timeout=30.0),
+            client.prompt("gamma", timeout=30.0),
+        )
+    finally:
+        await client.close()
+    assert [a, b, c] == ["echo:alpha", "echo:beta", "echo:gamma"]
+
+
+async def test_queued_prompt_times_out_with_a_clear_error(tmp_path, monkeypatch):
+    """A queued turn must not wait unboundedly: the lock acquire is bounded by the
+    caller's own timeout and fails as an AcpError naming the cause."""
+    script = tmp_path / "echo_acp_agent.py"
+    script.write_text(_ECHO_AGENT, encoding="utf-8")
+    client = AcpClient(sys.executable, [str(script)], cwd=str(tmp_path), name="busy")
+    await client._turn_lock.acquire()  # simulate an in-flight turn that never ends
+    try:
+        with pytest.raises(AcpError, match="queued behind an in-flight turn"):
+            await client.prompt("hi", timeout=0.2)
+    finally:
+        client._turn_lock.release()
+        await client.close()
