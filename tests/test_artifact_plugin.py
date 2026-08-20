@@ -417,6 +417,48 @@ def test_shell_polls_adaptively_with_etag(monkeypatch, tmp_path):
     assert "setInterval(poll" not in html  # the flat 1.5s driver is gone
 
 
+def test_shell_surfaces_persistent_poll_failures(monkeypatch, tmp_path):
+    """#2885: a broken poll endpoint (401, 504, dead store) must not masquerade as the
+    empty state. The shell counts consecutive failures, drops an error strip naming the
+    HTTP status after 3, and clears it on the next successful poll (200 OR 304). A
+    single transient miss stays silent."""
+    art = _load(monkeypatch, tmp_path)
+    js = art._SHELL_JS
+    # threshold-of-3 counter + the strip's message naming the status.
+    assert "POLL_FAIL_LIMIT = 3" in js
+    assert "pollFails >= POLL_FAIL_LIMIT" in js
+    assert "Couldn't load artifacts: " in js and "retrying" in js
+    # a non-2xx must COUNT AS A FAILURE, not parse ({"detail":…} → arts=[]) into the
+    # empty-state lie — the exact bug this guards against.
+    assert "if (!r.ok) { pollFailed(" in js
+    # both success shapes reset the streak and remove the strip; 304 short-circuits first.
+    assert "if (r.status === 304) { pollOk(); return; }" in js
+    assert "pollFails=0" in js
+    # network-level errors (fetch threw — no response) count too; the bare swallow is gone.
+    assert 'pollFailed("")' in js
+    assert "catch (e) { /* transient */ }" not in js
+    # the strip is DS-tokened (danger text on a muted inset ground), not hardcoded chrome.
+    assert 'el.id="pollerr"' in js
+    assert "color:var(--pl-color-danger" in js
+    assert "background:var(--pl-color-bg-inset" in js
+
+
+def test_shell_delete_failure_flashes_on_the_button(monkeypatch, tmp_path):
+    """#2885: a failed DELETE must say so — flash "Delete failed" on the button (the
+    download button's pattern) and keep the selection (the artifact still exists),
+    instead of silently swallowing and resetting the panel."""
+    art = _load(monkeypatch, tmp_path)
+    js = art._SHELL_JS
+    assert '$del.textContent="Delete failed"' in js
+    assert "catch(e){}" not in js  # the silent swallow is gone (shell-wide)
+    # a non-2xx delete response is a failure too, not just a thrown fetch — the delete
+    # handler carries its own `if(!r.ok) throw 0` (pin it to the DELETE call, not the
+    # download/save handlers' pre-existing ones).
+    assert 'method:"DELETE"});\n      if(!r.ok) throw 0; }' in js
+    # the failure path bails BEFORE the selection reset + repoll.
+    assert js.index('"Delete failed"') < js.index("selId=null; selVer=null; followNewest=true; saveSel(); poll();")
+
+
 def test_delete_route_removes_the_artifact(monkeypatch, tmp_path):
     from fastapi.testclient import TestClient
 

@@ -213,6 +213,15 @@ const res = await kit.apiFetch("/api/chat", { method: "POST", body: ... });  // 
 Prefer the kit over hardcoding hex values, a theme map, or a CDN — colors and the handshake both come
 from the console's own DS, so your view always matches the operator's live theme.
 
+**Error states, not empty-state lies.** An empty state must only render on a successful empty
+response; failures must get an error state — silent catch-to-empty is a bug class (#2885). A
+persistently failing fetch (401, 504, dead store) that falls through to the default empty state is
+indistinguishable from "genuinely no data", so the operator never learns the panel is broken. In a
+poll loop, tolerate a one-off miss, but count consecutive failures and surface an error strip
+(HTTP status + a short "retrying" note, `--pl-color-danger` text on a muted ground) once they
+persist; clear it on the next success. The artifact panel's `poll()` is the reference
+implementation.
+
 ## Events — broadcast and subscribe (ADR 0039)
 
 Plugins talk to the rest of the app through the **event bus**, never by importing each other. You

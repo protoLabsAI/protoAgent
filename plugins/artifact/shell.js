@@ -377,13 +377,18 @@
   });
 
   // Inline two-click confirm (no confirm() — a sandboxed plugin iframe may block modals).
-  var delArm=null, delT=null;
+  var delArm=null, delT=null, delFlashT=null;
   $del.addEventListener("click", async function(){
     var a=selArt(); if(!a)return;
+    clearTimeout(delFlashT);  // an arm-click mid-flash must not get reverted under it
     if(delArm!==a.id){ delArm=a.id; $del.textContent="Confirm?";
       clearTimeout(delT); delT=setTimeout(function(){ if(delArm===a.id){delArm=null;$del.textContent="Delete";} },3000); return; }
     clearTimeout(delT); delArm=null; $del.textContent="Delete";
-    try{ await kit.apiFetch("/api/plugins/artifact/artifact/"+encodeURIComponent(a.id),{method:"DELETE"}); }catch(e){}
+    // A failed delete must SAY so (#2885) — flash the verdict on the button (the download
+    // button's pattern) and KEEP the selection: the artifact still exists.
+    try{ var r=await kit.apiFetch("/api/plugins/artifact/artifact/"+encodeURIComponent(a.id),{method:"DELETE"});
+      if(!r.ok) throw 0; }
+    catch(e){ $del.textContent="Delete failed"; delFlashT=setTimeout(function(){ $del.textContent="Delete"; },1800); return; }
     selId=null; selVer=null; followNewest=true; saveSel(); poll();
   });
 
@@ -425,7 +430,9 @@
     if(!$frame || e.source!==$frame.contentWindow) return;
     var m=e.data||{};
     // Render verdict from the sandbox (#1458) → relay to /render-status so the agent's
-    // create/edit reply + check_artifact can surface a render failure. Best-effort POST.
+    // create/edit reply + check_artifact can surface a render failure. Best-effort POST —
+    // intentionally silent on error (#2885 exempts it): a fire-and-forget status report,
+    // not user-facing data, so there's no lying empty state to correct.
     if(m.type==="protoArtifact:render"){
       if(renderingId){ try{ kit.apiFetch("/api/plugins/artifact/render-status",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:renderingId,version:renderingVer,ok:!!m.ok,error:String(m.error||"").slice(0,2000)})}); }catch(_){} kickPoll(); /* the verdict rewrites the store — pick it up from idle promptly (#2256) */ }
       return;
@@ -445,12 +452,33 @@
   // server answers without reading the store and the panel skips without re-rendering.
   var POLL_FAST_MS = 1500, POLL_IDLE_MS = 8000, POLL_ACTIVE_WINDOW_MS = 15000;
   var lastEtag = "", storeChangedAt = Date.now(), pollTimer = null;
+  // Persistent-failure surfacing (#2885): a broken poll endpoint (401, 504, dead store)
+  // must NOT masquerade as "no artifacts" — the default empty state on a failing panel is
+  // a lie the operator can't distinguish from a genuinely empty store. After
+  // POLL_FAIL_LIMIT consecutive failures, drop an honest error strip (DS danger token on
+  // a muted ground) over the stage naming the HTTP status; the NEXT successful poll
+  // (200 or 304) clears it. One-off misses stay silent — the strip never flashes on a blip.
+  var POLL_FAIL_LIMIT = 3, pollFails = 0;
+  function showPollError(status){
+    var el=document.getElementById("pollerr");
+    if(!el){ el=document.createElement("div"); el.id="pollerr";
+      el.style.cssText="position:absolute;left:0;right:0;top:0;z-index:3;padding:8px 12px;font-size:12px;"
+        + "color:var(--pl-color-danger,#f85149);background:var(--pl-color-bg-inset,rgba(127,127,127,.12));"
+        + "border-bottom:var(--pl-border-width,1px) solid var(--pl-color-border,rgba(255,255,255,.12))";
+      document.getElementById("stage").appendChild(el); }
+    el.textContent="Couldn't load artifacts: "+(status||"network error")+" — retrying.";
+  }
+  function pollFailed(status){ if(++pollFails >= POLL_FAIL_LIMIT) showPollError(status); }
+  function pollOk(){ pollFails=0; var el=document.getElementById("pollerr"); if(el) el.remove(); }
   async function poll() {
     if (document.hidden) return;  // don't poll while the window is hidden/minimized (desktop perf)
     try {
       var r = await kit.apiFetch("/api/plugins/artifact/history",
         lastEtag ? {headers:{"If-None-Match": lastEtag}} : undefined);
-      if (r.status === 304) return;  // unchanged — no parse, no DOM churn
+      if (r.status === 304) { pollOk(); return; }  // unchanged — no parse, no DOM churn
+      // A non-2xx parses as JSON too ({"detail":…} → arts=[]) — the exact empty-state
+      // lie #2885 fixes. Count it as a failure instead of feeding it to the store mirror.
+      if (!r.ok) { pollFailed(r.status + (r.statusText ? " " + r.statusText : "")); return; }
       lastEtag = (r.headers && r.headers.get && r.headers.get("ETag")) || "";
       storeChangedAt = Date.now();   // fresh payload ⇒ stay on the fast cadence for a bit
       var d = await r.json(); arts = (d && d.artifacts) || []; curId = (d && d.current) || null;
@@ -461,7 +489,8 @@
         followNewest = true; selId = curId || (arts[0] && arts[0].id) || null; selVer = null; saveSel();
       }
       rebuildArtSelect(); render();
-    } catch (e) { /* transient */ }
+      pollOk();
+    } catch (e) { pollFailed(""); /* network-level — no HTTP status to name */ }
   }
   function schedulePoll(){
     clearTimeout(pollTimer);
