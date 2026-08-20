@@ -38,10 +38,20 @@ jobs:
         with:
           node-version: 22
 
+      # Both lockfiles here are npm-11-shaped and npm 10's `ci` rejects them
+      # (see PROTO.md). Installed once, up front, for every install below.
+      - name: Pin npm 11
+        run: npm install -g npm@11
+
       # --- Marketing site (Astro) ---
+      # `npm ci`, not `npm install`: this build is what gets deployed, so it has
+      # to install the locked tree rather than re-resolving every semver range on
+      # each deploy. `npm install` here meant the published site could pick up new
+      # transitive versions between two deploys of identical source — and it hid a
+      # lockfile that was missing react/react-dom/scheduler entirely (#2866).
       - name: Build marketing site
         run: |
-          npm install
+          npm ci
           npm run build
         working-directory: sites/marketing
         env:
@@ -53,7 +63,6 @@ jobs:
       # --- Docs (VitePress) served at /docs ---
       - name: Build docs (base /docs/)
         run: |
-          npm install -g npm@11  # npm-11-shaped lockfile — npm 10's `ci` rejects it (see PROTO.md)
           npm ci
           DOCS_BASE=/docs/ npm run docs:build
 
