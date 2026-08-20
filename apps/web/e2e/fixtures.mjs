@@ -778,6 +778,33 @@ function scenarioFor(prompt) {
         { id: "kid-late", name: "web_search", phase: "end", output: "1 result(s) for 'late':\n1. Ex — https://example.com/x\n   snip.", parentId: "task-late" },
       ],
     };
+  if (t.includes("BGFAN"))
+    // Three background delegate_to dispatches (#2896) → they fold into ONE muted
+    // "3 background jobs" chip (never full-height cards), so the answer stays on screen.
+    return {
+      answer: "Dispatched three background jobs.",
+      events: [
+        { id: "bg-1", name: "delegate_to", phase: "start", input: JSON.stringify({ agent: "researcher", task: "Dig into A.", background: true }) },
+        { id: "bg-1", name: "delegate_to", phase: "end", output: "Started a background delegation (id: dl-1)." },
+        { id: "bg-2", name: "delegate_to", phase: "start", input: JSON.stringify({ agent: "writer", task: "Draft B.", background: true }) },
+        { id: "bg-2", name: "delegate_to", phase: "end", output: "Started a background delegation (id: dl-2)." },
+        { id: "bg-3", name: "delegate_to", phase: "start", input: JSON.stringify({ agent: "reviewer", task: "Check C.", background: true }) },
+        { id: "bg-3", name: "delegate_to", phase: "end", output: "Started a background delegation (id: dl-3)." },
+      ],
+    };
+  if (t.includes("BGMIX"))
+    // Mixed turn (#2896): a foreground search plus one background task dispatch — the fg
+    // card renders normally (lone settled tool = inline card, no "1 tool" chip) while the
+    // bg dispatch folds into its own "1 background job" chip.
+    return {
+      answer: "Searched, and kicked off a background job.",
+      events: [
+        { id: "mix-fg", name: "web_search", phase: "start", input: JSON.stringify({ query: "coding agents" }) },
+        { id: "mix-fg", name: "web_search", phase: "end", output: "1 result(s) for 'coding agents':\n1. Example — https://example.com/x\n   A snippet." },
+        { id: "mix-bg", name: "task", phase: "start", input: JSON.stringify({ description: "Deep dive", prompt: "Research deeply.", run_in_background: true }) },
+        { id: "mix-bg", name: "task", phase: "end", output: "Started a background delegation (id: bg-1)." },
+      ],
+    };
   if (t.includes("FANOUT"))
     // Two INDEPENDENT top-level tool calls (no task wrapping them) → both settle, so the
     // console folds them behind a single "2 tools" summary chip (clutter cleanup).

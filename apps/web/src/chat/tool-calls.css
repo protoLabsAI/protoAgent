@@ -20,6 +20,24 @@
 /* The summary-chip frame (`.pl-toolcard-summary*`) is the DS `ToolCardSummary` — styled
    by the `@protolabsai/ui` styles bundle imported in main.tsx (ships ≥0.47.1). */
 
+/* Background-dispatch chip (#2896) — delegate_to(background)/task(run_in_background) calls
+   fold here instead of rendering full-height cards, even a single one. The chip is a
+   RECEIPT ("3 background jobs" were fired), not work product — the results arrive later as
+   their own report messages — so it sits quieter than the normal "N tools" summary: dimmed
+   at rest, full strength on hover or while expanded (same quiet-until-intent treatment as
+   the card header actions). */
+.tool-bg-summary .pl-toolcard-summary__head {
+  opacity: 0.72;
+  transition: opacity 120ms ease;
+}
+.tool-bg-summary .pl-toolcard-summary__head:hover,
+.tool-bg-summary:has(.pl-toolcard) .pl-toolcard-summary__head {
+  opacity: 1;
+}
+.tool-bg-summary .pl-toolcard-summary__text {
+  color: var(--pl-color-fg-muted);
+}
+
 /* `task → researcher` — the subagent type in the delegation card header. */
 .tool-subagent {
   color: var(--pl-color-fg-muted);

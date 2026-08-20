@@ -75,6 +75,24 @@ function cardLabel(call: ToolCall): ReactNode {
   return call.name;
 }
 
+/** True when this call DISPATCHES background work — `delegate_to(background=true)` or
+ *  `task(run_in_background=true)` (#2896). Read from the call's args at render time (no
+ *  schema change): the flag rides `input` from the start frame. These calls are receipts,
+ *  not work — the tool returns "Started a background delegation…" immediately and the real
+ *  result arrives later as its own report message — so ToolCalls folds them into one compact
+ *  chip instead of full-height cards. A parse failure (args still streaming) reads as
+ *  foreground; the call migrates into the chip once the args parse. */
+function isBackgroundDispatch(call: ToolCall): boolean {
+  if (call.name !== "delegate_to" && call.name !== "task") return false;
+  if (!call.input) return false;
+  try {
+    const args = JSON.parse(call.input) as { background?: unknown; run_in_background?: unknown };
+    return call.name === "delegate_to" ? args.background === true : args.run_in_background === true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Renders the agent's tool activity as collapsible cards inside an assistant
  * message. Each card shows the tool name, a running→done/error state pill, and
@@ -118,8 +136,15 @@ export function ToolCalls({
       top.push(call);
     }
   }
-  const settled = top.filter((c) => c.status !== "running");
-  const failedCount = top.filter((c) => c.status === "error").length;
+  // Background dispatches (#2896) fold into their OWN chip — always, even a single one,
+  // and never the spotlight slot: a turn that fires 3+ would otherwise bury its answer
+  // under identical "Started a background delegation…" cards. Everything else (fg) keeps
+  // the existing spotlight/fold/settled behavior.
+  const bg = top.filter(isBackgroundDispatch);
+  const fg = top.filter((c) => !isBackgroundDispatch(c));
+
+  const settled = fg.filter((c) => c.status !== "running");
+  const failedCount = fg.filter((c) => c.status === "error").length;
 
   // Only TOP-LEVEL `task` groups get the cancel callback (the Stop affordance only shows
   // for a running task); nested children and settled cards never need it.
@@ -144,62 +169,100 @@ export function ToolCalls({
     </ToolCardSummary>
   );
 
-  // Inside the WorkBlock: just the plain cards, in order (the timeline is already folded).
+  // The background-dispatch chip (#2896) — the muted `.tool-bg-summary` variant: it reports
+  // that jobs were FIRED, not what they produced (the results arrive later as their own
+  // report messages). Expanding discloses the individual dispatch cards.
+  const bgFailedCount = bg.filter((c) => c.status === "error").length;
+  const bgChip =
+    bg.length > 0 ? (
+      <div className="tool-bg-summary">
+        <ToolCardSummary
+          count={bg.length}
+          label={bg.length === 1 ? "background job" : "background jobs"}
+          status={bgFailedCount > 0 ? "error" : "done"}
+          failedCount={bgFailedCount || undefined}
+        >
+          {bg.map(group)}
+        </ToolCardSummary>
+      </div>
+    ) : null;
+
+  // Inside the WorkBlock timeline / publish preview: just the plain cards, in order — no
+  // fold, no bg chip (the whole timeline is already behind one disclosure, and the publish
+  // preview renders history 1:1).
   if (flat) {
     return <ToolCardList className="tool-calls">{top.map(group)}</ToolCardList>;
   }
 
   // A single, identity-STABLE slot holding only the most-recent tool. The fixed key keeps
   // React updating one card in place as the current tool changes, so a fast fan-out advances
-  // smoothly instead of remounting (and strobing) on every new tool id.
+  // smoothly instead of remounting (and strobing) on every new tool id. Background
+  // dispatches never take the slot — they go straight into their chip below it.
   if (spotlight) {
     if (top.length === 0) return null;
-    const current = top[top.length - 1];
+    const current = fg[fg.length - 1];
     return (
       <ToolCardList className="tool-calls">
-        <div className="tool-spotlight">
-          <ToolGroup
-            key="__spotlight__"
-            call={current}
-            childrenByParent={childrenByParent}
-            onCancelDelegation={current.status === "running" ? onCancelDelegation : undefined}
-          />
-        </div>
+        {current ? (
+          <div className="tool-spotlight">
+            <ToolGroup
+              key="__spotlight__"
+              call={current}
+              childrenByParent={childrenByParent}
+              onCancelDelegation={current.status === "running" ? onCancelDelegation : undefined}
+            />
+          </div>
+        ) : null}
+        {bgChip}
       </ToolCardList>
     );
   }
 
-  // LIVE TURN: keep the MOST-RECENT tool in the spotlight slot until a newer one replaces
-  // it — so the slot is never empty (no blank gap between tools, or during the answer tail
-  // after the last tool finishes). Everything older folds into the running-total chip; a
-  // new tool crossfades into the slot and the previous one drops into the chip.
+  // LIVE TURN: keep the MOST-RECENT foreground tool in the spotlight slot until a newer one
+  // replaces it — so the slot is never empty (no blank gap between tools, or during the
+  // answer tail after the last tool finishes). Everything older folds into the running-total
+  // chip; a new tool crossfades into the slot and the previous one drops into the chip.
+  // Background dispatches bypass the slot entirely and land in their own chip.
   if (streaming) {
     if (top.length === 0) return null;
-    const current = top[top.length - 1];
-    const folded = top.slice(0, -1);
+    const current = fg[fg.length - 1];
+    const folded = fg.slice(0, -1);
     return (
       <ToolCardList className="tool-calls">
         {/* Stable key: the slot updates in place as the current tool advances (no remount
             strobe — see the `spotlight` prop note). */}
-        <div className="tool-spotlight">
-          <ToolGroup
-            key="__spotlight__"
-            call={current}
-            childrenByParent={childrenByParent}
-            onCancelDelegation={current.status === "running" ? onCancelDelegation : undefined}
-          />
-        </div>
-        {folded.length > 0 && chip(top.length, folded)}
+        {current ? (
+          <div className="tool-spotlight">
+            <ToolGroup
+              key="__spotlight__"
+              call={current}
+              childrenByParent={childrenByParent}
+              onCancelDelegation={current.status === "running" ? onCancelDelegation : undefined}
+            />
+          </div>
+        ) : null}
+        {folded.length > 0 && chip(fg.length, folded)}
+        {bgChip}
       </ToolCardList>
     );
   }
 
   // SETTLED (turn done for this block): a lone finished tool renders inline (no pointless
-  // "1 tool" chip); a real fan-out (≥2) stays folded.
+  // "1 tool" chip); a real fan-out (≥2) stays folded. The bg chip rides along either way.
   if (settled.length >= 2) {
-    return <ToolCardList className="tool-calls">{chip(settled.length, settled)}</ToolCardList>;
+    return (
+      <ToolCardList className="tool-calls">
+        {chip(settled.length, settled)}
+        {bgChip}
+      </ToolCardList>
+    );
   }
-  return <ToolCardList className="tool-calls">{top.map(group)}</ToolCardList>;
+  return (
+    <ToolCardList className="tool-calls">
+      {fg.map(group)}
+      {bgChip}
+    </ToolCardList>
+  );
 }
 
 /** A tool card. For a subagent `task`, its child tool cards collapse INSIDE the card's
