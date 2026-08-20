@@ -294,3 +294,37 @@ plugins:
     bundled: true
     tagline: "The agent records its own friction — missing or awkward tools, confusing errors, wrong paths — alongside auto-captured tool errors, so the improvement backlog writes itself from real use. Off by default."
     adds: [tool]
+
+# ── Archetype repos ──────────────────────────────────────────────────────────────
+# Published bundle repos that ship an `archetype:` block (ADR 0100, amended
+# 2026-08-19 — these were the "*-stack" repos before the term was retired).
+# This is the registry the guard test cross-checks archetype-catalog.json against,
+# so a catalog row can never point at an unregistered/renamed repo unnoticed (the
+# drift that let docs keep citing product-stack after the catalog moved on).
+# `archetype:` names the shipped catalog row the repo backs (null = published but
+# not in the starter catalog). Not derived into any app/site catalog today.
+archetype_repos:
+  - id: cowork-archetype
+    repo: protoLabsAI/cowork-archetype
+    archetype: cowork
+    tagline: "Cowork — document skills, Google connectors, schedules, memory, Claude Code state import (ADR 0083)."
+  - id: social-archetype
+    repo: protoLabsAI/social-archetype
+    archetype: social-marketing
+    tagline: "Social Marketing — brand voice, balanced calendar, native drafts per platform. Draft-only."
+  - id: project-manager-archetype
+    repo: protoLabsAI/project-manager-archetype
+    archetype: project-manager
+    tagline: "Project Manager — board-driven single-repo PM; ships through a verdict-gated board of coding agents."
+  - id: design-system-archetype
+    repo: protoLabsAI/design-system-archetype
+    archetype: design-system
+    tagline: "Design System Engineer — reads the DS live, enforces tokens + a11y, directs builder delegates."
+  - id: portfolio-manager-archetype
+    repo: protoLabsAI/portfolio-manager-archetype
+    archetype: null   # fleet-team persona (roxy's tier), not a starter-catalog row
+    tagline: "Portfolio Manager — manager-of-teams for the protoLabs.studio autonomous fleet."
+  - id: product-archetype
+    repo: protoLabsAI/product-archetype
+    archetype: null   # not in the starter catalog; fate tracked in the census follow-ups
+    tagline: "Product Manager — the PM toolkit (pm) + generative UI (artifact), one install."

@@ -139,3 +139,48 @@ def test_duplicate_ids_are_rejected(tmp_path: Path) -> None:
     f.write_text(json.dumps({"plugins": [e, dict(e)]}), encoding="utf-8")
     with pytest.raises(SystemExit):
         pd.load(f)
+
+
+# ── archetype-repo registry (census Fork B) ─────────────────────────────────────────
+
+
+def _load_directory_doc() -> dict:
+    import yaml
+
+    return yaml.safe_load(pd.DIRECTORY.read_text(encoding="utf-8")) or {}
+
+
+def test_archetype_repo_registry_shape() -> None:
+    rows = _load_directory_doc().get("archetype_repos") or []
+    assert rows, "archetype_repos registry missing from plugin-directory.yaml"
+    seen: set[str] = set()
+    for r in rows:
+        assert r["id"] not in seen, f"duplicate archetype repo id {r['id']}"
+        seen.add(r["id"])
+        assert r["repo"].count("/") == 1, f"{r['id']}: repo must be org/name"
+        assert r["repo"].endswith(r["id"]), f"{r['id']}: repo name must match the id"
+        assert r.get("tagline"), f"{r['id']}: tagline required"
+
+
+def test_archetype_catalog_bundles_are_registered() -> None:
+    """Every catalog row that installs a bundle must name a registered archetype repo —
+    the guard that would have caught docs/examples still citing product-stack after the
+    catalog moved to project-manager-stack (census F3), and any future rename drift."""
+    catalog = json.loads(
+        (Path(__file__).parent.parent / "config" / "archetype-catalog.json").read_text(encoding="utf-8")
+    )
+    rows = _load_directory_doc().get("archetype_repos") or []
+    registered_urls = {f"https://github.com/{r['repo']}".lower() for r in rows}
+    by_archetype = {r["archetype"] for r in rows if r.get("archetype")}
+    for entry in catalog.get("archetypes") or []:
+        bundle = entry.get("bundle")
+        if not bundle:
+            continue
+        url = bundle.rstrip("/").removesuffix(".git").lower()
+        assert url in registered_urls, (
+            f"archetype {entry['id']}: bundle {bundle} is not in the archetype_repos "
+            "registry (plugin-directory.yaml) — register it (or fix the catalog URL)"
+        )
+        assert entry["id"] in by_archetype, (
+            f"archetype {entry['id']}: no registry row claims this catalog id via `archetype:`"
+        )

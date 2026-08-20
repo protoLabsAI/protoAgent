@@ -123,6 +123,9 @@ warns when a running server keeps removed members live until its next reload.
 3. **Ship the archetype block** so installing your bundle puts a starter card in the
    new-agent picker ([ADR 0100](/adr/0100-agent-archetypes) has the full field set) —
    see [Fleet — bundles & archetypes](/guides/fleet#bundles--archetypes--start-from-a-type).
+4. **Register it** (first-party repos): add a row to `archetype_repos:` in
+   `config/plugin-directory.yaml`. A guard test cross-checks the shipped archetype
+   catalog against this registry, so a renamed or retired repo can't drift unnoticed.
 
 ## Related
 
