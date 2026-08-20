@@ -241,6 +241,29 @@ async def _acp_release(thread_id: str) -> None:
         _ACP_RUNTIME_ACCESS[thread_id] = time.monotonic()  # fresh access on release
 
 
+async def acp_sessions_snapshot() -> list[dict[str, Any]]:
+    """Read-only snapshot of the live ACP coding-agent registry (#2889).
+
+    Powers ``GET /api/acp/sessions`` so the operator can triage coding
+    delegation: which threads hold a runtime, which agent each speaks to, and
+    whether a turn is in flight. Taken under ``_ACP_LOCK`` so a concurrent
+    turn's get-or-create/evict can't tear the three registry dicts mid-read.
+    Deliberately does NOT bump ``_ACP_RUNTIME_ACCESS`` — observing a session
+    must not keep it alive past the idle TTL.
+    """
+    async with _ACP_LOCK:
+        now = time.monotonic()
+        return [
+            {
+                "thread_id": tid,
+                "agent": str(getattr(rt, "agent", "?")),
+                "busy": _ACP_BUSY.get(tid, 0) > 0,
+                "last_access_s_ago": round(now - _ACP_RUNTIME_ACCESS.get(tid, 0.0), 1),
+            }
+            for tid, rt in _ACP_RUNTIMES.items()
+        ]
+
+
 async def _acp_drive_turn(rt, message: str):
     """Drive one ACP turn over ``rt``, yielding the normalized frames (text /
     tool_start / tool_end, then usage + done, or an error) in arrival order. Extracted

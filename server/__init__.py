@@ -249,6 +249,7 @@ from server.chat import (  # noqa: E402,F401 — re-export of the extracted chat
     _run_turn_stream,
     _setup_required_message,
     _skill_directive,
+    acp_sessions_snapshot,
     chat,
 )
 
@@ -1029,6 +1030,13 @@ def _main():
     @fastapi_app.get("/api/sse-token", include_in_schema=False)
     async def _sse_token():
         return {"token": auth.generate_sse_token()}
+
+    # Live ACP coding-agent sessions (#2889): the per-thread runtime registry in
+    # server/chat.py had no read surface, leaving coding-delegation triage blind.
+    # Bearer-gated by the default-deny middleware like every /api/ path.
+    @fastapi_app.get("/api/acp/sessions")
+    async def _acp_sessions():
+        return await acp_sessions_snapshot()
 
     # Core media output channel (#1929): ONE route serves every artifact a plugin
     # tool saved via registry.save_media() — signed-URL / opt-in-public access is
