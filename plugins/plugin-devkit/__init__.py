@@ -1414,7 +1414,13 @@ def _build_guide_router():
           <p class="foot"><a id="guide-link" href="#">The plugin contract &amp; authoring guide →</a></p>
         <script type="module">
           const kit = await import(BASE + "/_ds/plugin-kit.js");
-          kit.initPluginView();
+          // First load rides the console handshake (the bearer arrives by postMessage
+          // after this script runs — a module-scope fetch 401s on a token-gated host);
+          // the timer is the fallback for a page that never gets one. See friction/view.html.
+          let started = false;
+          const start = () => { if (started) return; started = true; void load(); };
+          kit.initPluginView(start);
+          setTimeout(start, 1500);
           const list = document.getElementById("list");
           const el = (tag, cls, text) => { const n = document.createElement(tag);
             if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
@@ -1471,7 +1477,6 @@ def _build_guide_router():
               clearTimeout(t); t = setTimeout(load, 400);
             }
           });
-          await load();
         </script></div></body></html>"""
         return HTMLResponse(html)
 
