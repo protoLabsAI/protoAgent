@@ -1278,3 +1278,22 @@ def test_shell_trunc_marker_mirrors_python(monkeypatch, tmp_path):
     mark = "(preview truncated — download the file for the full content)"
     assert art._PREVIEW_TRUNC.endswith(mark)
     assert '"' + mark + '"' in art._SHELL_JS
+
+
+def test_every_view_subresource_is_auth_exempt(monkeypatch, tmp_path):
+    """The view PAGE is public, but the requests it spawns — <script src>, ES-module
+    imports — carry no Authorization header, so any gated subresource 401s and the
+    panel boots dead (empty picker, no artifacts). vendor/ learned this first; the
+    #2822 shell.js split re-hit it. Guard: every src the shell page references must
+    resolve under a manifest public_paths entry."""
+    import re
+
+    import yaml
+
+    art = _load(monkeypatch, tmp_path)
+    manifest = yaml.safe_load((ROOT / "protoagent.plugin.yaml").read_text())
+    public = manifest["public_paths"]
+    for src in re.findall(r'src="([^"]+)"', art._SHELL_HTML):
+        url = src if src.startswith("/") else f"/plugins/artifact/{src}"
+        assert any(url.startswith(p) for p in public), f"{url} is auth-gated but fetched tokenless"
+    assert "/plugins/artifact/shell.js" in public  # the concrete regression
