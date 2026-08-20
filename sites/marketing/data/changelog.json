@@ -1,5 +1,22 @@
 [
   {
+    "version": "v0.143.0",
+    "date": "2026-08-20",
+    "changes": [
+      "Queued-steer placeholder hint (#2837).",
+      "Auth-gated e2e mock lane (#2886).",
+      "ACP session observability (#2889).",
+      "Query keys are now slug-namespaced (#2887).",
+      "Background report cards shrink to dismissable chips (#2923).",
+      "Plugin form callbacks survive reload (#2889).",
+      "Background delegation dispatches collapse into a compact chip (#2896).",
+      "Changelog gate now blocks merge (#2906).",
+      "onboard_project registers into the managed-projects registry, so the GitHub plugin sees onboarded repos (#2925).",
+      "Friction and devkit plugin views no longer 401 on first load (#2926).",
+      "The Social Marketing archetype is held from the new-agent picker (#2921)."
+    ]
+  },
+  {
     "version": "v0.142.1",
     "date": "2026-08-20",
     "changes": [

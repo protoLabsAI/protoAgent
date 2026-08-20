@@ -15,6 +15,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.143.0] - 2026-08-20
+
+### Added
+- **Queued-steer placeholder hint (#2837).** The composer shows "Press ↑ to edit queued
+  message" when a mid-turn steer is queued, improving discoverability of the edit
+  affordance. Idle ("Message protoAgent…") and streaming-with-nothing-queued ("Steer the
+  agent…") placeholders are unchanged.
+
+- **Auth-gated e2e mock lane (#2886).** The console e2e mock server gains a real bearer-gate
+  mode (boot with `?gated=1` — a per-context cookie keeps parallel specs hermetic) mirroring
+  `a2a_impl/auth.py`'s default-deny + public allowlist: anonymous SPA/static chrome, anonymous
+  plugin view page chrome (`public_paths`), 401 everywhere else, plus the bearer-gated
+  `/api/sse-token` → `/api/events?token=` handshake. A new `auth-gated-views.spec.ts` boots the
+  console against it with NO injected headers and proves the real auth flow end to end — auth
+  dialog → chat surface → SSE connect → an authed chat turn with zero post-auth 401s — catching
+  the #2884 class of bug (a view subresource not covered by the auth handshake), which the
+  existing route-interception spec structurally cannot see.
+
+- **ACP session observability (#2889).** New `GET /api/acp/sessions` route surfaces live
+  coding-agent sessions (thread, agent, busy status) for delegation triage.
+
+### Changed
+- **Query keys are now slug-namespaced (#2887).** React Query cache keys include the agent slug, preventing stale cross-agent data if in-place agent switching is ever built.
+
+- **Background report cards shrink to dismissable chips (#2923).** A finished background job's report now renders in chat as a single compact row — 📄 title + "Open" + ✕ — instead of the ~200px clamped-excerpt card. "Open" still opens the full report in the document viewer; dismissing removes the chip from the transcript (persisted per job, so a reload doesn't resurrect it) while the report stays reviewable in the Background agents panel.
+
+### Fixed
+- **Plugin form callbacks survive reload (#2889).** Pending slash-command form
+  submissions no longer silently expire when plugins are hot-reloaded.
+
+- **Background delegation dispatches collapse into a compact chip (#2896).** `delegate_to(background=true)` / `task(run_in_background=true)` tool calls no longer render as full-height cards in the chat stream — a turn that fired several buried its answer under identical "Started a background delegation…" cards. They now fold into one muted, expandable "N background jobs" chip (even a single one) and never occupy the streaming spotlight slot; foreground tools keep the existing spotlight/fold behavior. Detection parses the call args at render time, so no schema change; unparseable mid-stream args read as foreground until they complete.
+
+- **Changelog gate now blocks merge (#2906).** A malformed changelog fragment (missing the top-level bullet) no longer slips through auto-merge.
+
+- **`onboard_project` registers into the managed-projects registry, so the GitHub plugin sees onboarded repos (#2925).** The tool wrote its entry into `filesystem.projects` — the fs-fence projection — which the GitHub plugin never reads, so every onboarded repo was missing from `/issue` and the GitHub board. It now writes the ADR 0095 `projects:` entry (`github` binding + `default_branch` probed from `origin/HEAD`) and mirrors the fence entry only where an explicit `filesystem.projects` override is in force; a repo living only in that legacy override is promoted into the registry on re-onboard.
+
+- **Friction and devkit plugin views no longer 401 on first load (#2926).** Both fired their first request before the console's bearer handshake had reached the iframe, so on any token-gated instance the Friction rail opened to "Couldn't load the friction ledger: 401 Unauthorized" until a manual refresh. The first load now rides the handshake (with a fallback for open-mode/top-level pages). Also fixed a stray NUL byte in `friction/view.html` that made git diff the file as binary.
+
+### Removed
+- **The Social Marketing archetype is held from the new-agent picker (#2921).** It isn't release-ready yet; the catalog row is parked (not deleted) so it returns in a future release with its bundle and persona intact. Existing agents created from it are unaffected.
+
 ## [0.142.1] - 2026-08-20
 
 ### Fixed
