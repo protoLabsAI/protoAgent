@@ -566,12 +566,17 @@ class A2aAdapter(Adapter):
                 if ptask.get("contextId"):
                     send_params["message"]["contextId"] = ptask["contextId"]
             result = await _rpc(client, "SendMessage", send_params)
-            text = _extract_text(result)
-            if text:
-                return text
             task = result.get("task", result) or {}
             task_id = task.get("id")
             state = (task.get("status") or {}).get("state")
+            # A park can come back INLINE: a synchronous peer answers SendMessage with
+            # the task already in INPUT_REQUIRED, its question in status.message. The
+            # text early-return must not swallow that — _extract_text would hand back
+            # the bare question as if it were the ANSWER, losing the task id and the
+            # resume protocol with it (caught live, 2026-08-20).
+            text = _extract_text(result)
+            if text and not _is_input_required(state):
+                return text
             deadline = time.monotonic() + poll_timeout
             while task_id and not _is_terminal(state) and not _is_input_required(state) and time.monotonic() < deadline:
                 await asyncio.sleep(1.0)

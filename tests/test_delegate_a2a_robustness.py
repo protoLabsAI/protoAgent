@@ -573,3 +573,32 @@ def test_resume_toward_a_non_a2a_delegate_is_refused(patched):
 
     with pytest.raises(DelegateError, match="resume_task_id only applies to a2a"):
         asyncio.run(reg.dispatch("gpt", "the answer", resume_task_id="t-9"))
+
+
+def test_inline_park_is_not_mistaken_for_an_answer(patched):
+    """A synchronous peer (protoAgent itself) answers SendMessage INLINE with the
+    task already parked — its question in status.message. The text early-return
+    must not hand that question back as if it were the delegate's ANSWER (it
+    would lose the task id and the whole resume protocol). Caught by the live
+    smoke on 2026-08-20; the poll-path park test alone missed it."""
+    inline_parked = {
+        "jsonrpc": "2.0",
+        "result": {
+            "task": {
+                "id": "t-9",
+                "contextId": "ctx-7",
+                "status": {
+                    "state": "TASK_STATE_INPUT_REQUIRED",
+                    "message": {"parts": [{"text": "Which repo should I use?"}]},
+                },
+            }
+        },
+    }
+    bodies = _install_capture_client(patched, send_resp=_Resp(inline_parked), get_resp=_Resp(inline_parked))
+
+    out = asyncio.run(A.dispatch(_parse(poll_timeout_s=10), "do the thing"))
+    assert "needs input" in out
+    assert "Which repo should I use?" in out
+    assert "resume_task_id='t-9'" in out
+    # the park was visible inline — no GetTask round-trips at all
+    assert [b.get("method") for b in bodies] == ["SendMessage"]
