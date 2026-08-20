@@ -447,3 +447,46 @@ def test_outbound_span_closes_even_when_the_dispatch_fails(patched):
         asyncio.run(A.dispatch(_parse(), "ping"))
 
     assert closed == ["a2a:peer"]
+
+
+# ── the GetTask wire shape + input-required convergence ────────────────────────
+
+
+def test_gettask_poll_uses_the_a2a_10_id_param(patched):
+    """A2A 1.0 GetTaskRequest is {tenant, id, history_length} — the v0.3 legacy
+    {"name": …} shape never worked against a 1.0 peer, so the poll loop could
+    not converge for an async-style delegate (latent behind protoAgent peers
+    answering SendMessage inline). Pin the wire shape."""
+    working = {"jsonrpc": "2.0", "result": {"task": {"id": "t-9", "status": {"state": "TASK_STATE_WORKING"}}}}
+    done = {
+        "jsonrpc": "2.0",
+        "result": {
+            "task": {
+                "id": "t-9",
+                "status": {"state": "TASK_STATE_COMPLETED"},
+                "artifacts": [{"parts": [{"text": "peer answer"}]}],
+            }
+        },
+    }
+    bodies = _install_capture_client(patched, send_resp=_Resp(working), get_resp=_Resp(done))
+
+    assert asyncio.run(A.dispatch(_parse(poll_timeout_s=10), "do the thing")) == "peer answer"
+
+    gettask = next(b for b in bodies if b.get("method") == "GetTask")
+    assert gettask["params"] == {"id": "t-9"}, f"1.0 GetTask must send id, got {gettask['params']}"
+
+
+def test_input_required_fails_fast_with_a_legible_park_error(patched):
+    """A peer parked on a HITL interrupt used to poll to the full deadline and
+    then claim 'still running'. It now fails fast, naming the park."""
+    working = {"jsonrpc": "2.0", "result": {"task": {"id": "t-9", "status": {"state": "TASK_STATE_WORKING"}}}}
+    parked = {
+        "jsonrpc": "2.0",
+        "result": {"task": {"id": "t-9", "status": {"state": "TASK_STATE_INPUT_REQUIRED"}}},
+    }
+    bodies = _install_capture_client(patched, send_resp=_Resp(working), get_resp=_Resp(parked))
+
+    with pytest.raises(DelegateError, match="parked waiting for operator input"):
+        asyncio.run(A.dispatch(_parse(poll_timeout_s=10), "do the thing"))
+    # fails fast: exactly one GetTask observed the park — no poll-to-deadline
+    assert [b.get("method") for b in bodies].count("GetTask") == 1

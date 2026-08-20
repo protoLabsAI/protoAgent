@@ -475,7 +475,7 @@ class A2aAdapter(Adapter):
 
         import httpx
 
-        from tools.a2a_parse import _extract_text, _is_terminal
+        from tools.a2a_parse import _extract_text, _is_input_required, _is_terminal
 
         # Mark protoAgent-originated peer delegation independently of tracing. The
         # receiver uses this only as operator-visible provenance; authorization is
@@ -532,11 +532,31 @@ class A2aAdapter(Adapter):
             task_id = task.get("id")
             state = (task.get("status") or {}).get("state")
             deadline = time.monotonic() + poll_timeout
-            while task_id and not _is_terminal(state) and time.monotonic() < deadline:
+            while task_id and not _is_terminal(state) and not _is_input_required(state) and time.monotonic() < deadline:
                 await asyncio.sleep(1.0)
-                result = await _rpc(client, "GetTask", {"name": task_id})
+                # A2A 1.0 GetTaskRequest is {tenant, id, history_length} — `id`, not
+                # the v0.3 legacy `name` (proto: a2a.types.a2a_pb2.GetTaskRequest).
+                # The old {"name": …} shape only ever worked against 0.3 peers; a 1.0
+                # peer rejects/ignores it, so the poll loop could never converge for
+                # an async-style peer (latent: protoAgent peers answer SendMessage
+                # inline, so this path rarely ran).
+                result = await _rpc(client, "GetTask", {"id": task_id})
                 task = result.get("task", result) or {}
                 state = (task.get("status") or {}).get("state")
+            if _is_input_required(state):
+                # The peer parked on a human-input interrupt. Polling to the deadline
+                # would burn poll_timeout and then lie ("still running") — surface the
+                # question so the DELEGATING agent can decide (rephrase and re-delegate,
+                # or bring it to its own operator).
+                question = _extract_text(result) or (task.get("status") or {}).get("message") or ""
+                if isinstance(question, dict):
+                    question = ""
+                raise DelegateError(
+                    f"delegate {d.name!r} parked waiting for operator input"
+                    + (f": {str(question)[:300]}" if question else "")
+                    + " — a delegated task can't answer interrupts; rephrase the query to be "
+                    "self-contained or handle it on the peer's own console."
+                )
             text = _extract_text(result)
             if text:
                 return text

@@ -31,6 +31,13 @@ def _extract_text(result) -> str | None:
 _TERMINAL = {"completed", "failed", "canceled"}  # v0.3 spellings (back-compat)
 
 
+def _is_input_required(state) -> bool:
+    """True when the task parked on a human-input interrupt (1.0
+    ``TASK_STATE_INPUT_REQUIRED`` / v0.3 ``input-required``) — not terminal, but
+    polling it can never converge without a human."""
+    return "INPUT" in str(state or "").upper().replace("-", "_")
+
+
 def _is_terminal(state) -> bool:
     """True for A2A 1.0 terminal task states (``TASK_STATE_COMPLETED`` / ``FAILED``
     / ``CANCELLED`` / ``REJECTED``) and their v0.3 lowercase spellings."""
