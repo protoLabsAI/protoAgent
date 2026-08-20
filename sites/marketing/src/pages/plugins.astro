@@ -225,7 +225,9 @@ const counts = Object.fromEntries(
               )}
               <div class="plugin-install">
                 {p.bundled
-                  ? <span>bundled · enable <strong>{p.enable}</strong> in <strong>plugins.enabled</strong></span>
+                  ? (p.enable
+                      ? <span>bundled · enable <strong>{p.enable}</strong> in <strong>plugins.enabled</strong></span>
+                      : <span>built-in</span>)
                   : <span>plugin install <strong>{p.install}</strong></span>}
               </div>
             </div>

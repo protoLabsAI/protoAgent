@@ -380,7 +380,7 @@
       "settings"
     ],
     "bundled": true,
-    "enable": "delegates",
+    "enable": null,
     "links": {
       "source": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/delegates",
       "docs": "/docs/guides/delegates"
@@ -396,7 +396,7 @@
       "tool"
     ],
     "bundled": true,
-    "enable": "coding_agent",
+    "enable": null,
     "links": {
       "source": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/coding_agent",
       "docs": "/docs/guides/coding-agents"
@@ -431,7 +431,7 @@
       "view"
     ],
     "bundled": true,
-    "enable": "hello",
+    "enable": null,
     "links": {
       "source": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/hello",
       "docs": "/docs/guides/plugins"

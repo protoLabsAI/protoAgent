@@ -24,7 +24,7 @@ function githubPreview(): ArchetypePreview {
     id: "project-manager-archetype",
     bundle: {
       kind: "bundle",
-      name: "Product stack",
+      name: "Project Manager",
       members: [],
       mcp: [
         {

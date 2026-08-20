@@ -78,6 +78,13 @@ def test_site_overlay_shapes() -> None:
         assert set(e) >= {"id", "name", "category", "official", "tagline", "adds", "bundled", "links"}
         if e["bundled"]:
             assert "install" not in e and e["links"]["source"].startswith(pd.TREE)
+            # app:false rows (libraries / always-on builtins) must carry an explicit
+            # null so the site's merge suppresses the auto-discovered enable CTA.
+            src = next(d for d in pd.load() if (d.get("site_id") or d["id"]) == e["id"])
+            if not src.get("app", True):
+                assert e["enable"] is None, f"{e['id']}: app:false row must not ship an enable CTA"
+            else:
+                assert e["enable"], f"{e['id']}: app-visible bundled row must name its enable id"
         else:
             assert e["install"].startswith("https://github.com/protoLabsAI/")
 

@@ -113,7 +113,10 @@ def render_site(entries: list[dict]) -> str:
             "bundled": bundled,
         }
         if bundled:
-            entry["enable"] = e.get("enable") or e["id"]
+            # app:false rows are libraries/always-on builtins — an "enable X in
+            # plugins.enabled" CTA is wrong or a no-op there (#2897 review). Explicit
+            # null so the site merge overrides the auto-discovered CTA too.
+            entry["enable"] = (e.get("enable") or e["id"]) if e.get("app", True) else None
         else:
             entry["install"] = e["repo"]
             if e.get("enable"):

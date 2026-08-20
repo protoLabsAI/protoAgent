@@ -72,7 +72,7 @@ enabled: [ … ]
 archetype:
   label: Project Manager
   icon: ClipboardList
-  blurb: Researches, strategizes, and specs products from evidence — renders roadmaps and personas inline.
+  blurb: Board-driven project manager — reads deeply, never holds the keyboard; ships through a verdict-gated board of coding agents.
   # optional persona: inline markdown, or a host preset stem under config/soul-presets/
   # (unknown preset → warns + the picker falls back to the base persona)
   soul_preset: project-manager
