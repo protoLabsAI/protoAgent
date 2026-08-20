@@ -170,14 +170,6 @@
       "tagline": "Build your own plugins — the authoring kit + reference plugin. A scaffold tool, an architect subagent, the building-plugins skill, and a console guide, in one bundle."
     },
     {
-      "id": "coding_agent",
-      "name": "CLI Coding Agent (ACP)",
-      "category": "Orchestration",
-      "official": true,
-      "repo": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/coding_agent",
-      "tagline": "Let the lead agent spawn a CLI coding agent — protoCLI, Claude Code, Codex, or Gemini CLI — and hand it a real coding job over the Agent Client Protocol."
-    },
-    {
       "id": "telegram",
       "name": "Telegram",
       "category": "Communication",

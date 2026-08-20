@@ -61,6 +61,15 @@ def test_bundled_entries_link_the_in_tree_plugin() -> None:
             assert pd._source_url(e) == f"{pd.TREE}/{e['id']}"
             plugin_dir = Path(__file__).parent.parent / "plugins" / e["id"]
             assert plugin_dir.is_dir(), f"{e['id']}: bundled but plugins/{e['id']} does not exist"
+            if e.get("app", True):
+                # An app-visible bundled row is an enable instruction — the loader must
+                # actually be able to see it. Library dirs (coding_agent) are app: false.
+                manifest = plugin_dir / "protoagent.plugin.yaml"
+                assert manifest.is_file(), (
+                    f"{e['id']}: app-visible bundled row but plugins/{e['id']} has no "
+                    "manifest — the loader can never enable it; mark the row app: false "
+                    "or add the manifest"
+                )
 
 
 def test_site_overlay_shapes() -> None:

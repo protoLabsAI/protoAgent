@@ -209,6 +209,11 @@ plugins:
     name: CLI Coding Agent (ACP)
     category: Orchestration
     bundled: true
+    # Library, not a loadable plugin: plugins/coding_agent has no manifest — the
+    # capability ships through `delegates` (always on). app:false keeps it off the
+    # in-app Discover catalog (where an "enable" instruction can't work) while the
+    # marketing site still lists the capability.
+    app: false
     tagline: "Let the lead agent spawn a CLI coding agent — protoCLI, Claude Code, Codex, or Gemini CLI — and hand it a real coding job over the Agent Client Protocol."
     adds: [tool]
     docs: /docs/guides/coding-agents
