@@ -167,6 +167,20 @@ def test_recent_summarizes_newest_first(tmp_path):
     assert "step_outputs" not in recent[0]  # summaries, not payloads
 
 
+def test_recent_tiebreaks_on_seq_when_updated_at_ties(tmp_path, monkeypatch):
+    import plugins.workflows.run_state as rs
+
+    monkeypatch.setattr(rs, "_now", lambda: "2024-01-01T00:00:00+00:00")
+    store = WorkflowRunStore(tmp_path / ".runs")
+    a = store.start("one", {})
+    store.finish(STATUS_DONE, {"output": "o", "failed": []})
+    b = store.start("two", {})
+    store.finish(STATUS_DONE, {"output": "o", "failed": []})
+
+    recent = store.recent()
+    assert [r["run_id"] for r in recent] == [b, a]
+
+
 def test_prune_removes_only_oldest_terminal_runs(tmp_path):
     store = WorkflowRunStore(tmp_path / ".runs")
     terminal = []

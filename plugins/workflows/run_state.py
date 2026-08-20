@@ -53,6 +53,15 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+_write_seq: int = 0
+
+
+def _next_seq() -> int:
+    global _write_seq
+    _write_seq += 1
+    return _write_seq
+
+
 def _step_snapshot(steps: list[dict] | None) -> list[dict]:
     """The graph shape the timeline renders — never the prompts (they can be large
     and template-y; the rendered per-step text lands in ``step_outputs`` instead)."""
@@ -199,14 +208,14 @@ class WorkflowRunStore:
         """Every ``paused`` run on disk (full state dicts), newest-updated first —
         the operator's "Pending Gates" queue. Corrupt/absent files are skipped."""
         runs = [state for rid in self.list_runs() if (state := self.load(rid)) and state.get("status") == STATUS_PAUSED]
-        runs.sort(key=lambda s: s.get("updated_at") or "", reverse=True)
+        runs.sort(key=lambda s: (s.get("updated_at") or "", s.get("seq", 0)), reverse=True)
         return runs
 
     def recent(self, limit: int = 50) -> list[dict[str, Any]]:
         """Run summaries (every status), newest-updated first — the Studio's history
         list. Summaries only: outputs stay behind ``load(run_id)``."""
         runs = [state for rid in self.list_runs() if (state := self.load(rid))]
-        runs.sort(key=lambda s: s.get("updated_at") or "", reverse=True)
+        runs.sort(key=lambda s: (s.get("updated_at") or "", s.get("seq", 0)), reverse=True)
         out = []
         for s in runs[: max(0, limit)]:
             meta = s.get("step_meta") or {}
@@ -250,6 +259,7 @@ class WorkflowRunStore:
         return removed
 
     def _write(self) -> None:
+        self._state["seq"] = _next_seq()
         try:
             atomic_write(self.path(self._state["run_id"]), json.dumps(self._state, ensure_ascii=False, indent=2))
         except OSError as exc:
