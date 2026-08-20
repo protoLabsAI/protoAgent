@@ -383,7 +383,8 @@
     if(delArm!==a.id){ delArm=a.id; $del.textContent="Confirm?";
       clearTimeout(delT); delT=setTimeout(function(){ if(delArm===a.id){delArm=null;$del.textContent="Delete";} },3000); return; }
     clearTimeout(delT); delArm=null; $del.textContent="Delete";
-    try{ await kit.apiFetch("/api/plugins/artifact/artifact/"+encodeURIComponent(a.id),{method:"DELETE"}); }catch(e){}
+    try{ await kit.apiFetch("/api/plugins/artifact/artifact/"+encodeURIComponent(a.id),{method:"DELETE"}); }
+    catch(e){ $del.textContent="Failed"; setTimeout(function(){ $del.textContent="Delete"; },1800); return; }
     selId=null; selVer=null; followNewest=true; saveSel(); poll();
   });
 
@@ -444,13 +445,18 @@
   // actually changing, decaying to a slow idle tick; unchanged polls are ETag 304s the
   // server answers without reading the store and the panel skips without re-rendering.
   var POLL_FAST_MS = 1500, POLL_IDLE_MS = 8000, POLL_ACTIVE_WINDOW_MS = 15000;
-  var lastEtag = "", storeChangedAt = Date.now(), pollTimer = null;
+  var lastEtag = "", storeChangedAt = Date.now(), pollTimer = null, pollFailCount = 0;
   async function poll() {
     if (document.hidden) return;  // don't poll while the window is hidden/minimized (desktop perf)
     try {
       var r = await kit.apiFetch("/api/plugins/artifact/history",
         lastEtag ? {headers:{"If-None-Match": lastEtag}} : undefined);
-      if (r.status === 304) return;  // unchanged — no parse, no DOM churn
+      if (r.status === 304) {  // unchanged — no parse, no DOM churn; still a healthy poll
+        pollFailCount = 0;
+        var errDiv = document.getElementById("__pollerr");
+        if (errDiv) errDiv.remove();
+        return;
+      }
       lastEtag = (r.headers && r.headers.get && r.headers.get("ETag")) || "";
       storeChangedAt = Date.now();   // fresh payload ⇒ stay on the fast cadence for a bit
       var d = await r.json(); arts = (d && d.artifacts) || []; curId = (d && d.current) || null;
@@ -461,7 +467,25 @@
         followNewest = true; selId = curId || (arts[0] && arts[0].id) || null; selVer = null; saveSel();
       }
       rebuildArtSelect(); render();
-    } catch (e) { /* transient */ }
+      pollFailCount = 0;
+      var okDiv = document.getElementById("__pollerr");
+      if (okDiv) okDiv.remove();
+    } catch (e) {
+      pollFailCount++;
+      // 3+ consecutive failures is no longer transient — surface an error strip so the
+      // operator sees a broken panel, not a plausible-looking empty one (#2885).
+      if (pollFailCount >= 3) {
+        var errDiv = document.getElementById("__pollerr");
+        if (!errDiv) {
+          errDiv = document.createElement("div");
+          errDiv.id = "__pollerr";
+          errDiv.style.cssText = "color:var(--pl-color-danger,#f85149);background:rgba(248,81,73,0.08);padding:10px 14px;font:13px/1.5 var(--pl-font-sans,system-ui);border-bottom:1px solid var(--pl-color-border,rgba(255,255,255,.08))";
+          document.body.prepend(errDiv);
+        }
+        var status = (e && e.status) ? e.status : "";
+        errDiv.textContent = "Couldn't load artifacts" + (status ? ": " + status : "") + " — retrying";
+      }
+    }
   }
   function schedulePoll(){
     clearTimeout(pollTimer);

@@ -213,6 +213,12 @@ const res = await kit.apiFetch("/api/chat", { method: "POST", body: ... });  // 
 Prefer the kit over hardcoding hex values, a theme map, or a CDN — colors and the handshake both come
 from the console's own DS, so your view always matches the operator's live theme.
 
+**Error vs. empty state.** An empty state ("No items yet…") must only render on a successful empty
+response (`200` with no data), never on a fetch failure. Track consecutive failures and surface an
+error strip after 3+ so the operator knows the panel is broken, not empty. Silent `catch {}` into
+empty-state rendering is a bug class — see
+[#2885](https://github.com/protoLabsAI/protoAgent/issues/2885).
+
 ## Events — broadcast and subscribe (ADR 0039)
 
 Plugins talk to the rest of the app through the **event bus**, never by importing each other. You
