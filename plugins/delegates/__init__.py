@@ -35,6 +35,7 @@ def _build_delegate_to(registry: DelegateRegistry):
         query: str,
         background: bool = False,
         item_id: str = "",
+        resume_task_id: str = "",
         state: Annotated[Any, InjectedState] = None,
     ) -> str:
         """Hand a question or task to one of your configured delegates and return its reply.
@@ -70,6 +71,15 @@ def _build_delegate_to(registry: DelegateRegistry):
                 agent — one PR per id, and a second dispatch of an in-flight id is
                 refused instead of duplicating the work. Use the issue/board id when
                 there is one; leave empty to derive one from the query text.
+            resume_task_id: answer a PARKED delegation. When a delegate replies
+                "⏸ … needs input" with a parked task id, it stopped mid-task to ask
+                a question — call this tool again with the SAME target, the ANSWER
+                as `query`, and that task id here: the delegate resumes exactly
+                where it parked. If you can't answer the question yourself, get the
+                answer first (ask your own operator with ask_human if you have it —
+                your question bubbles up the chain the same way), THEN resume.
+                Never re-delegate the original task instead of resuming — that
+                starts the work over.
         """
         if not str(query).strip():
             return "Error: `query` is empty — give the delegate something to do."
@@ -77,10 +87,15 @@ def _build_delegate_to(registry: DelegateRegistry):
         # hash/claim differently from their trimmed twin (that would silently defeat
         # the one-PR-per-item dedup).
         item_id = str(item_id or "").strip()
+        resume_task_id = str(resume_task_id or "").strip()
         if background:
-            return await _spawn_background_delegation(registry, target, query, state, item_id=item_id)
+            return await _spawn_background_delegation(
+                registry, target, query, state, item_id=item_id, resume_task_id=resume_task_id
+            )
         try:
-            return await registry.dispatch(target, query, item_id=item_id or None)
+            return await registry.dispatch(
+                target, query, item_id=item_id or None, resume_task_id=resume_task_id or None
+            )
         except DelegateError as exc:
             return f"Error: {exc}"
         except Exception as exc:  # noqa: BLE001 — surface as a tool error string
@@ -92,7 +107,13 @@ def _build_delegate_to(registry: DelegateRegistry):
 
 
 async def _spawn_background_delegation(
-    registry: DelegateRegistry, target: str, query: str, state: Any, *, item_id: str = ""
+    registry: DelegateRegistry,
+    target: str,
+    query: str,
+    state: Any,
+    *,
+    item_id: str = "",
+    resume_task_id: str = "",
 ) -> str:
     """Run a delegation as a detached background job (ADR 0050): return a handle now and
     drain the delegate's reply back into the spawning session on completion — the same
@@ -114,7 +135,7 @@ async def _spawn_background_delegation(
     except Exception:  # noqa: BLE001 — no runtime state (e.g. a unit test) → inline
         mgr = None
     if mgr is None:
-        return await registry.dispatch(target, query, item_id=item_id or None)
+        return await registry.dispatch(target, query, item_id=item_id or None, resume_task_id=resume_task_id or None)
 
     try:
         from tools.lg_tools import _session_id_from
@@ -129,7 +150,7 @@ async def _spawn_background_delegation(
         # item_id rides into the dispatch itself, so the managed-git claim/dedup
         # applies identically to background and foreground fan-out (one registry,
         # one event loop).
-        return await registry.dispatch(target, query, item_id=item_id or None)
+        return await registry.dispatch(target, query, item_id=item_id or None, resume_task_id=resume_task_id or None)
 
     snippet = " ".join(query.split())[:80]
     job_id = await mgr.spawn_work(

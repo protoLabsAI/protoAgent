@@ -223,11 +223,19 @@ class Adapter:
         raise NotImplementedError
 
     async def dispatch(
-        self, d: Delegate, query: str, *, timeout: float | None = None, item_id: str | None = None
+        self,
+        d: Delegate,
+        query: str,
+        *,
+        timeout: float | None = None,
+        item_id: str | None = None,
+        resume_task_id: str | None = None,
     ) -> str:
         """Dispatch ``query`` to ``d``. ``item_id`` is the work-item identity used by
-        adapters that manage a git lifecycle (acp, ADR 0076); identity-less adapters
-        accept and ignore it, so the registry can forward it uniformly."""
+        adapters that manage a git lifecycle (acp, ADR 0076); ``resume_task_id``
+        answers a PARKED a2a task (the HITL chain — see A2aAdapter). Adapters the
+        concept doesn't apply to accept and ignore both, so the registry can
+        forward them uniformly."""
         raise NotImplementedError
 
     async def probe(self, d: Delegate) -> dict:
@@ -386,7 +394,13 @@ class A2aAdapter(Adapter):
         return d
 
     async def dispatch(
-        self, d: Delegate, query: str, *, timeout: float | None = None, item_id: str | None = None
+        self,
+        d: Delegate,
+        query: str,
+        *,
+        timeout: float | None = None,
+        item_id: str | None = None,
+        resume_task_id: str | None = None,
     ) -> str:
         import httpx  # noqa: F401 — used by the pre-flight probe below
 
@@ -467,9 +481,11 @@ class A2aAdapter(Adapter):
             metadata={"url": d.url, "delegate": d.name, "poll_timeout_s": poll_timeout},
             as_type="agent",
         ):
-            return await self._dispatch_traced(d, query, send_timeout=timeout, poll_timeout=poll_timeout, _rpc=_rpc)
+            return await self._dispatch_traced(
+                d, query, send_timeout=timeout, poll_timeout=poll_timeout, _rpc=_rpc, resume_task_id=resume_task_id
+            )
 
-    async def _dispatch_traced(self, d, query, *, send_timeout, poll_timeout, _rpc) -> str:
+    async def _dispatch_traced(self, d, query, *, send_timeout, poll_timeout, _rpc, resume_task_id=None) -> str:
         """The wire half of ``dispatch``, inside the outbound span (see caller)."""
         import time
 
@@ -515,6 +531,14 @@ class A2aAdapter(Adapter):
         # enum, and a `result.task` envelope. (`message/send` + lowercase `user` is
         # the v0.3 legacy dialect, which 1.0 servers reject with -32601.)
         #
+        # Resume of a PARKED task (the HITL delegation chain): the caller answers a
+        # question the peer raised mid-task. Wire shape proven by the handler tests:
+        # SendMessage carrying the parked task's taskId + contextId re-enters
+        # execute() with resume=True. We GetTask first for the contextId and to be
+        # honest about state (already-terminal → return its text; gone → say so).
+        if resume_task_id:
+            send_params["message"]["taskId"] = resume_task_id
+
         # A *synchronous* peer — protoAgent's own A2A server answers SendMessage INLINE,
         # holding the connection open for the whole delegated turn before returning the final
         # Message — so the initial SendMessage READ must be allowed to run as long as the task
@@ -524,6 +548,23 @@ class A2aAdapter(Adapter):
         # poll loop, which returns quickly regardless. An explicit ``timeout`` still overrides.
         read_budget = send_timeout if send_timeout is not None else poll_timeout
         async with httpx.AsyncClient(timeout=httpx.Timeout(read_budget, connect=10.0)) as client:
+            if resume_task_id:
+                parked = await _rpc(client, "GetTask", {"id": resume_task_id})
+                ptask = parked.get("task", parked) or {}
+                pstate = (ptask.get("status") or {}).get("state")
+                if _is_terminal(pstate):
+                    done_text = _extract_text(parked)
+                    return (
+                        f"(task {resume_task_id} had already finished — state {pstate}; nothing to resume)"
+                        + (f"\n\n{done_text}" if done_text else "")
+                    )
+                if not _is_input_required(pstate):
+                    raise DelegateError(
+                        f"delegate {d.name!r}: task {resume_task_id} is {pstate or 'unknown'}, not parked "
+                        "for input — it can't be resumed with an answer."
+                    )
+                if ptask.get("contextId"):
+                    send_params["message"]["contextId"] = ptask["contextId"]
             result = await _rpc(client, "SendMessage", send_params)
             text = _extract_text(result)
             if text:
@@ -544,18 +585,29 @@ class A2aAdapter(Adapter):
                 task = result.get("task", result) or {}
                 state = (task.get("status") or {}).get("state")
             if _is_input_required(state):
-                # The peer parked on a human-input interrupt. Polling to the deadline
-                # would burn poll_timeout and then lie ("still running") — surface the
-                # question so the DELEGATING agent can decide (rephrase and re-delegate,
-                # or bring it to its own operator).
-                question = _extract_text(result) or (task.get("status") or {}).get("message") or ""
-                if isinstance(question, dict):
-                    question = ""
-                raise DelegateError(
-                    f"delegate {d.name!r} parked waiting for operator input"
-                    + (f": {str(question)[:300]}" if question else "")
-                    + " — a delegated task can't answer interrupts; rephrase the query to be "
-                    "self-contained or handle it on the peer's own console."
+                # The peer parked on an input interrupt. The HITL delegation chain
+                # (operator decision, 2026-08-20): the QUESTION comes back to the
+                # CALLING agent as a normal tool result with a resume handle — the
+                # caller answers it (delegate_to(..., resume_task_id=…)); a caller
+                # that can't answer escalates the same way to ITS caller (its own
+                # ask_human parks ITS task, which bubbles another hop), so a chain
+                # x→y→z ends at whichever console has a human. Never poll a park to
+                # the deadline, and never bury the question in an error.
+                question = _extract_text(result) or ""
+                if not task_id:
+                    raise DelegateError(
+                        f"delegate {d.name!r} asked for input but returned no task id to resume"
+                        + (f": {str(question)[:300]}" if question else "")
+                    )
+                return (
+                    f"⏸ delegate {d.name!r} needs input before it can continue.\n"
+                    + (f"Question: {str(question)[:1000]}\n" if question else "")
+                    + f"Parked task: {task_id}\n\n"
+                    f"To continue: answer with delegate_to(target={d.name!r}, "
+                    f"query='<your answer>', resume_task_id={str(task_id)!r}). "
+                    "If you can't answer it yourself, get the answer first — ask your own "
+                    "operator (ask_human) if you have one; your question bubbles up the same "
+                    "way — then resume with it."
                 )
             text = _extract_text(result)
             if text:
@@ -654,7 +706,13 @@ class OpenAiAdapter(Adapter):
         return d
 
     async def dispatch(
-        self, d: Delegate, query: str, *, timeout: float | None = None, item_id: str | None = None
+        self,
+        d: Delegate,
+        query: str,
+        *,
+        timeout: float | None = None,
+        item_id: str | None = None,
+        resume_task_id: str | None = None,
     ) -> str:
         import httpx
 
@@ -882,7 +940,13 @@ class AcpAdapter(Adapter):
         }
 
     async def dispatch(
-        self, d: Delegate, query: str, *, timeout: float | None = None, item_id: str | None = None
+        self,
+        d: Delegate,
+        query: str,
+        *,
+        timeout: float | None = None,
+        item_id: str | None = None,
+        resume_task_id: str | None = None,
     ) -> str:
         if d.manage_git:
             return await self._dispatch_managed(d, query, timeout=timeout, item_id=item_id)

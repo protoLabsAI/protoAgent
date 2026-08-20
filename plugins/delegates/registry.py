@@ -64,11 +64,20 @@ class DelegateRegistry:
             {"name": d.name, "type": d.type, "description": d.description, "url": d.url} for d in self._items.values()
         ]
 
-    async def dispatch(self, name: str, query: str, *, item_id: str | None = None, raw: bool = False) -> str:
+    async def dispatch(
+        self,
+        name: str,
+        query: str,
+        *,
+        item_id: str | None = None,
+        raw: bool = False,
+        resume_task_id: str | None = None,
+    ) -> str:
         """Dispatch ``query`` to the named delegate.
 
         ``item_id`` is the work-item identity for adapters that manage a git
-        lifecycle (ADR 0076); identity-less adapters ignore it. ``raw=True`` bypasses
+        lifecycle (ADR 0076); ``resume_task_id`` answers a PARKED a2a task (the
+        HITL delegation chain). ``raw=True`` bypasses
         the managed-git lifecycle for programmatic callers that consume the reply as
         DATA (e.g. the coder ladder's candidate generation, ADR 0064) — no branch, no
         commit, no PR, no claim; just the coder's text."""
@@ -79,13 +88,22 @@ class DelegateRegistry:
             import dataclasses
 
             d = dataclasses.replace(d, manage_git=False)
+        # Only a2a tasks can park-and-resume. Silently ignoring a resume id on any
+        # other adapter would run the ANSWER as a brand-new task (for a managed-git
+        # coder: a brand-new PR) — refuse instead.
+        if resume_task_id and d.type != "a2a":
+            raise DelegateError(
+                f"delegate {name!r} is type {d.type!r} — resume_task_id only applies to a2a "
+                "delegates (only they park tasks on questions). Did you mean the delegate "
+                "that asked the question?"
+            )
         # Record the outcome HERE — the one funnel every caller goes through (the
         # `delegate_to` tool, its background variant, the coder ladder, the board loop),
         # so the panel's picture doesn't depend on which surface triggered the dispatch.
         # A cancellation is deliberately not a failure: an operator stopping a turn says
         # nothing about the delegate (see status.py).
         try:
-            reply = await ADAPTERS[d.type].dispatch(d, query, item_id=item_id)
+            reply = await ADAPTERS[d.type].dispatch(d, query, item_id=item_id, resume_task_id=resume_task_id)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

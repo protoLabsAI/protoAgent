@@ -476,17 +476,100 @@ def test_gettask_poll_uses_the_a2a_10_id_param(patched):
     assert gettask["params"] == {"id": "t-9"}, f"1.0 GetTask must send id, got {gettask['params']}"
 
 
-def test_input_required_fails_fast_with_a_legible_park_error(patched):
-    """A peer parked on a HITL interrupt used to poll to the full deadline and
-    then claim 'still running'. It now fails fast, naming the park."""
-    working = {"jsonrpc": "2.0", "result": {"task": {"id": "t-9", "status": {"state": "TASK_STATE_WORKING"}}}}
-    parked = {
+def _parked_task(question="Which repo should I use?"):
+    return {
         "jsonrpc": "2.0",
-        "result": {"task": {"id": "t-9", "status": {"state": "TASK_STATE_INPUT_REQUIRED"}}},
+        "result": {
+            "task": {
+                "id": "t-9",
+                "contextId": "ctx-7",
+                "status": {
+                    "state": "TASK_STATE_INPUT_REQUIRED",
+                    "message": {"parts": [{"text": question}]},
+                },
+            }
+        },
     }
-    bodies = _install_capture_client(patched, send_resp=_Resp(working), get_resp=_Resp(parked))
 
-    with pytest.raises(DelegateError, match="parked waiting for operator input"):
-        asyncio.run(A.dispatch(_parse(poll_timeout_s=10), "do the thing"))
+
+def test_input_required_returns_the_question_with_a_resume_handle(patched):
+    """The HITL delegation chain (operator decision, 2026-08-20): a parked peer's
+    QUESTION comes back to the calling agent as a tool RESULT carrying the parked
+    task id and resume instructions — never buried in an error, never polled to
+    the deadline. Escalation is emergent: a caller that can't answer asks ITS
+    caller the same way."""
+    working = {"jsonrpc": "2.0", "result": {"task": {"id": "t-9", "status": {"state": "TASK_STATE_WORKING"}}}}
+    bodies = _install_capture_client(patched, send_resp=_Resp(working), get_resp=_Resp(_parked_task()))
+
+    out = asyncio.run(A.dispatch(_parse(poll_timeout_s=10), "do the thing"))
+    assert "needs input" in out
+    assert "Which repo should I use?" in out
+    assert "resume_task_id='t-9'" in out
     # fails fast: exactly one GetTask observed the park — no poll-to-deadline
     assert [b.get("method") for b in bodies].count("GetTask") == 1
+
+
+def test_resume_sends_the_answer_into_the_parked_task(patched):
+    """resume_task_id routes the caller's answer back into the parked task:
+    GetTask first (honest state + contextId), then SendMessage carrying the
+    parked taskId + contextId — the wire shape the handler's resume tests pin."""
+    done = {
+        "jsonrpc": "2.0",
+        "result": {
+            "task": {
+                "id": "t-9",
+                "status": {"state": "TASK_STATE_COMPLETED"},
+                "artifacts": [{"parts": [{"text": "resumed and finished"}]}],
+            }
+        },
+    }
+    bodies = _install_capture_client(patched, send_resp=_Resp(done), get_resp=_Resp(_parked_task()))
+
+    out = asyncio.run(A.dispatch(_parse(poll_timeout_s=10), "use the protoAgent repo", resume_task_id="t-9"))
+    assert out == "resumed and finished"
+    methods = [b.get("method") for b in bodies]
+    assert methods == ["GetTask", "SendMessage"]  # state check, then the answer
+    send = bodies[1]["params"]["message"]
+    assert send["taskId"] == "t-9"
+    assert send["contextId"] == "ctx-7"
+    assert send["parts"] == [{"text": "use the protoAgent repo"}]
+
+
+def test_resume_of_a_finished_task_reports_instead_of_resending(patched):
+    finished = {
+        "jsonrpc": "2.0",
+        "result": {
+            "task": {
+                "id": "t-9",
+                "status": {"state": "TASK_STATE_COMPLETED"},
+                "artifacts": [{"parts": [{"text": "already done answer"}]}],
+            }
+        },
+    }
+    bodies = _install_capture_client(patched, send_resp=_Resp(finished), get_resp=_Resp(finished))
+
+    out = asyncio.run(A.dispatch(_parse(poll_timeout_s=10), "the answer", resume_task_id="t-9"))
+    assert "already finished" in out and "already done answer" in out
+    assert [b.get("method") for b in bodies] == ["GetTask"]  # no answer sent into a done task
+
+
+def test_resume_of_a_running_task_refuses_legibly(patched):
+    running = {"jsonrpc": "2.0", "result": {"task": {"id": "t-9", "status": {"state": "TASK_STATE_WORKING"}}}}
+    _install_capture_client(patched, send_resp=_Resp(running), get_resp=_Resp(running))
+
+    with pytest.raises(DelegateError, match="not parked for input"):
+        asyncio.run(A.dispatch(_parse(poll_timeout_s=10), "the answer", resume_task_id="t-9"))
+
+
+def test_resume_toward_a_non_a2a_delegate_is_refused(patched):
+    """A resume id on an openai/acp delegate would silently run the ANSWER as a
+    brand-new task (managed-git coder: a brand-new PR). The registry refuses."""
+    from types import SimpleNamespace
+
+    from plugins.delegates.registry import DelegateRegistry
+
+    reg = DelegateRegistry.__new__(DelegateRegistry)
+    reg._items = {"gpt": SimpleNamespace(name="gpt", type="openai", manage_git=False)}
+
+    with pytest.raises(DelegateError, match="resume_task_id only applies to a2a"):
+        asyncio.run(reg.dispatch("gpt", "the answer", resume_task_id="t-9"))

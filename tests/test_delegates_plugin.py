@@ -344,11 +344,11 @@ async def test_delegate_to_background_falls_back_inline_without_manager(monkeypa
     assert out == "dispatched:quick q"
 
 
-async def _fake_dispatch(self, name, query, *, item_id=None):
+async def _fake_dispatch(self, name, query, *, item_id=None, resume_task_id=None):
     return f"dispatched:{query}"
 
 
-async def _unexpected_dispatch(self, name, query, *, item_id=None):
+async def _unexpected_dispatch(self, name, query, *, item_id=None, resume_task_id=None):
     raise AssertionError("dispatch must not run inline when a background job is spawned")
 
 
@@ -848,7 +848,7 @@ def _stub_registry(monkeypatch, behaviour):
 
     reg = DelegateRegistry([{"name": "codex", "type": "acp", "command": "x", "workdir": "/tmp"}])
 
-    async def _dispatch(d, query, *, timeout=None, item_id=None):
+    async def _dispatch(d, query, *, timeout=None, item_id=None, resume_task_id=None):
         return behaviour()
 
     monkeypatch.setattr(ADAPTERS["acp"], "dispatch", _dispatch)
