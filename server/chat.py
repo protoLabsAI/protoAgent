@@ -16,6 +16,7 @@ import cycle. ``server/__init__.py`` re-exports every public name so
 import asyncio
 import json
 import logging
+import re
 import time
 import weakref
 from typing import Any
@@ -942,6 +943,27 @@ from graph.slash_commands import (  # noqa: E402
     slash_kind as _slash_kind,
 )
 
+# What counts as a slash-command TOKEN — a letter then word chars/hyphens, the whole
+# first whitespace-separated word (mirrors the console's `slashCommandName` regex).
+# `/home/user/file.txt` fails the fullmatch (its token contains `/` and `.`), so a
+# path or prose with a `/` is never mistaken for a command.
+_SLASH_TOKEN_RE = re.compile(r"[A-Za-z][\w-]*")
+
+
+def _unknown_slash_command_reply(message: str) -> str | None:
+    """The short-circuit reply for a message that LOOKS like a slash command but
+    resolves to no registered one (#2893), else ``None`` (fall through to the normal
+    turn). Runs LAST in the dispatch chain, so every registered kind (goal /
+    lifecycle / plugin command / workflow / subagent / skill) keeps winning — only a
+    genuinely unknown ``/foobar`` is caught instead of silently becoming a plain
+    agent turn on the raw command text."""
+    name, _rest = _parse_slash_command(message)
+    if not name or _SLASH_TOKEN_RE.fullmatch(name) is None:
+        return None
+    if _slash_kind(name) is not None:
+        return None
+    return f"Unknown command /{name}. Type / to see available commands."
+
 # Per-thread_id locks (WeakValueDictionary so a lock is GC'd once no turn holds it,
 # bounding memory). See _thread_lock.
 _THREAD_LOCKS: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
@@ -1536,6 +1558,15 @@ async def _chat_langgraph_stream_impl(
             parsed_skill = _parse_skill_command(message)
             if parsed_skill is not None:
                 message = _skill_directive(*parsed_skill)
+
+            # Unknown /command (#2893) — the message looks like a slash command but
+            # matched nothing above: short-circuit with a hint instead of handing the
+            # raw `/foobar` text to the agent turn. Non-command uses of `/` (paths,
+            # prose) fall through — see _unknown_slash_command_reply.
+            unknown_reply = _unknown_slash_command_reply(message)
+            if unknown_reply is not None:
+                yield ("done", unknown_reply)
+                return
 
             # ACP runtime (ADR 0033 slice 4) — when `agent_runtime: acp:<agent>`, an
             # external coding agent (proto/codex/claude/…) drives the turn over ACP
@@ -2371,6 +2402,13 @@ async def _chat_langgraph_impl(
             parsed_skill = _parse_skill_command(message)
             if parsed_skill is not None:
                 message = _skill_directive(*parsed_skill)
+
+            # Unknown /command (#2893) — same guard as the streaming path: a message
+            # that looks like a slash command but matched nothing above returns a hint
+            # instead of running the agent turn on the raw `/foobar` text.
+            unknown_reply = _unknown_slash_command_reply(message)
+            if unknown_reply is not None:
+                return [{"role": "assistant", "content": unknown_reply}]
 
             # Non-native runtime (ADR 0033) — same switch as the streaming driver, same
             # position (after the control-plane short-circuits). Without it, an acp:*
