@@ -59,6 +59,59 @@ import {
 const PORT = Number(process.argv[2] || process.env.E2E_PORT || 4319);
 const DIST = fileURLToPath(new URL("../dist", import.meta.url));
 
+// ---------------------------------------------------------------------------
+// Optional bearer gate (auth-gated-views.spec.ts, #2886). The default mock is
+// OPEN — every existing spec runs ungated. A spec opts in by booting with
+// `?gated=1`: that first (public) document response arms a cookie, so every
+// subsequent same-origin request from that browser context — <script src>
+// module loads, API fetches, the EventSource — arrives gated, exactly like a
+// token-gated deployment. Cookie scoping is what keeps parallel spec files
+// hermetic: only the context that booted gated ever sees a 401, with no shared
+// server-side mode to leak across workers.
+//
+// Mirrors a2a_impl/auth.py's default-deny + public allowlist (NOT imported —
+// the mock stays Node-only): static SPA chrome is anonymous (the console must
+// load enough to SHOW the auth dialog), plugin view PAGES are anonymous chrome
+// (the manifest `public_paths` / `set_public_prefixes` pattern — a plugin can
+// only exempt its own /plugins/<id>/ namespace; its DATA still rides /api/*
+// with the bearer), and everything else 401s without the operator bearer.
+const GATE_TOKEN = "e2e-operator-token";
+const GATE_COOKIE = "pa_e2e_gated";
+// The `/api/events` query token minted by GET /api/sse-token (which is itself
+// bearer-gated, like the real route) — EventSource can't send an Authorization
+// header, so it authenticates via `?token=` (auth.py's HMAC sse-token contract).
+const GATE_SSE_TOKEN = "e2e-sse-token";
+// auth.py's _PUBLIC_PREFIXES, minus routes the mock doesn't serve. `/media/` is
+// exempt like the real signed-media route (#1929): an <img> can't carry a bearer;
+// the URL's signature is its credential.
+const GATE_PUBLIC_PREFIXES = [
+  "/app",
+  "/healthz",
+  "/.well-known/",
+  "/manifest.json",
+  "/sw.js",
+  "/favicon.svg",
+  "/favicon.ico",
+  "/static/",
+  "/_ds/",
+  "/media/",
+];
+// The mock's "plugin-declared public_paths": boardy's view pages (the fixture
+// view plugin) are public page chrome, matching what set_public_prefixes accepts.
+const GATE_PLUGIN_PUBLIC = ["/plugins/boardy/"];
+
+function gateIsPublic(pathname) {
+  return (
+    GATE_PUBLIC_PREFIXES.some((p) => pathname.startsWith(p)) ||
+    GATE_PLUGIN_PUBLIC.some((p) => pathname.startsWith(p))
+  );
+}
+
+function gateActive(req, url) {
+  if (url.searchParams.get("gated") === "1") return true;
+  return (req.headers.cookie || "").split(/;\s*/).includes(`${GATE_COOKIE}=1`);
+}
+
 const MIME = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -542,6 +595,28 @@ const server = createServer(async (req, res) => {
   // Fleet slug proxy (ADR 0042): /agents/<slug>/<path> is the hub re-proxying the console to a
   // specific agent. The mock strips the /agents/<slug> prefix and serves the same handlers.
   const pathname = url.pathname.replace(/^\/agents\/[^/]+/, "") || url.pathname;
+
+  // Bearer-gate mode (see the GATE_* block above): a context that booted with
+  // ?gated=1 gets real 401 semantics on everything non-public. No Playwright
+  // route interception anywhere, so subresource loads and EventSource face the
+  // same gate a real browser does against a token-gated deployment.
+  if (gateActive(req, url)) {
+    if (url.searchParams.get("gated") === "1") {
+      // Arm the cookie on the (public) boot document so the whole context stays gated.
+      res.setHeader("Set-Cookie", `${GATE_COOKIE}=1; Path=/; SameSite=Lax`);
+    }
+    const authed = (req.headers.authorization || "") === `Bearer ${GATE_TOKEN}`;
+    const sseAuthed = pathname === "/api/events" && url.searchParams.get("token") === GATE_SSE_TOKEN;
+    if (!authed && !sseAuthed && !gateIsPublic(pathname)) {
+      return sendJson(res, { detail: "Unauthorized" }, 401);
+    }
+    // The sse-token mint — BEHIND the bearer check above, like the real route.
+    // Gated mode only: the ungated default keeps 404ing it so events.spec.ts
+    // still covers the events client's tokenless open-mode fallback.
+    if (pathname === "/api/sse-token" && req.method === "GET") {
+      return sendJson(res, { token: GATE_SSE_TOKEN });
+    }
+  }
 
   // Non-streaming chat send — the Fleet Room address/broadcast (/api/chat) and the desktop
   // streaming fallback. A member send arrives here too: the /agents/<slug> prefix was already
