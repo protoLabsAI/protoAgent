@@ -11,7 +11,7 @@
 #            `verify`. But a PR opened with the repository GITHUB_TOKEN never
 #            auto-starts a `pull_request` run — GitHub holds it `action_required`
 #            until a maintainer approves it (see README.md "Pin-bump PR lifecycle",
-#            #2645). So this job (a) reuses ONE branch/PR per stack instead of
+#            #2645). So this job (a) reuses ONE branch/PR per bundle repo instead of
 #            piling up duplicates every week, and (b) fails loudly — PR comment +
 #            label + a red job — if the run it just pushed doesn't show up started
 #            within a bounded wait, so an unapproved candidate reads as a
@@ -66,9 +66,9 @@ jobs:
           python3 scripts/check_bundle_updates.py protoagent.bundle.yaml | tee "${BUMP_PINS_SCRATCH_DIR:-/tmp}/bumps.txt"
           echo "changed=$(git diff --quiet && echo false || echo true)" >> "$GITHUB_OUTPUT"
 
-      # ONE candidate per stack (#2645): a stable branch name means a later
+      # ONE candidate per bundle repo (#2645): a stable branch name means a later
       # scheduled run force-pushes and updates the existing open PR instead of
-      # opening a duplicate. One manifest per bundle repo, so "per stack" here is
+      # opening a duplicate. One manifest per bundle repo, so "per repo" here is
       # just "per repo" — see README.md "Pin-bump PR lifecycle" for the full
       # contract. Treat `bump-pins` as bot-owned: it is rewritten wholesale every
       # run, so hand edits to it don't survive the next bump. Logic lives in
@@ -89,7 +89,7 @@ jobs:
       # comment on the PR, label it, and fail this job so an unapproved candidate
       # turns the weekly schedule red instead of rotting quietly.
       #
-      # `bump-pins` is a permanently-reused branch (one candidate per stack,
+      # `bump-pins` is a permanently-reused branch (one candidate per bundle repo,
       # see the step above), so on a repeat run the branch name alone can
       # match a STALE prior run (already-approved from last week, or a
       # leftover from a since-closed PR) before GitHub has even registered a

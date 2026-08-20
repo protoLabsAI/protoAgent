@@ -133,13 +133,13 @@ describe("statusCounts", () => {
 describe("distinctBundles (#2718 bundle actions strip)", () => {
   it("dedupes by id, first name wins, name falls back to id", () => {
     const rows = [
-      { bundle: { id: "cowork-stack", name: "Cowork" } },
-      { bundle: { id: "cowork-stack", name: "Cowork (dup row)" } },
+      { bundle: { id: "cowork-archetype", name: "Cowork" } },
+      { bundle: { id: "cowork-archetype", name: "Cowork (dup row)" } },
       { bundle: { id: "bare-stack" } }, // pre-name lock — id is the label
       {}, // standalone plugin, no provenance
     ];
     expect(distinctBundles(rows)).toEqual([
-      { id: "cowork-stack", name: "Cowork" },
+      { id: "cowork-archetype", name: "Cowork" },
       { id: "bare-stack", name: "bare-stack" },
     ]);
   });

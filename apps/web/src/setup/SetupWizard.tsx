@@ -440,7 +440,7 @@ export function SetupWizard({
   }, [loaded, archetypeList, state.soul, state.archetype]);
 
   // The picked archetype drives the finish summary AND (Plan C) the bundle install:
-  // an archetype with a bundle (e.g. Product Manager → product-stack) installs its plugins
+  // an archetype with a bundle (e.g. Project Manager → project-manager-archetype) installs its plugins
   // into this host on finish, so the persona arrives WITH its tools.
   const pickedArchetype = archetypeList.find((a) => a.id === state.archetype);
 
@@ -557,8 +557,8 @@ export function SetupWizard({
       if (state.initTasks) {
         await api.initTasks();
       }
-      // Plan C: if the chosen archetype carries a plugin bundle (e.g. Product
-      // Manager → product-stack), install it into THIS host on finish — so the new user
+      // Plan C: if the chosen archetype carries a plugin bundle (e.g. Project
+      // Manager → project-manager-archetype), install it into THIS host on finish — so the new user
       // gets the persona AND its tools/board in one shot, not just the prose.
       // installPlugin auto-enables + hot-reloads the bundle's plugins (no restart).
       // A failure is non-fatal: setup is already written, so we finish anyway and

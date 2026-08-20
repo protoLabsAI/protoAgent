@@ -121,7 +121,7 @@ workflow, with the rules commented inline:
 > `git_init=True` (CLI: `--git`) to scaffold a repo from birth. With it on, ask the
 > agent to *"build a plugin that …"* and it scaffolds, edits, tests, and hot-swaps it
 > **in the same session — no restart**. Prefer the shell? `python -m server plugin
-> new "My Plugin" --view --skill` (and `plugin new-bundle` for an ADR-0040 stack)
+> new "My Plugin" --view --skill` (and `plugin new-bundle` for an ADR-0040 bundle)
 > scaffold without the plugin enabled.
 
 A plugin is a directory (its own repo) with a manifest + a `register()`. The

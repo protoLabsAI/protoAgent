@@ -41,13 +41,13 @@ or create the workspace from the CLI — the same flow as any
 [fleet](/guides/fleet) agent:
 
 ```bash
-python -m server workspace new pm --bundle https://github.com/protoLabsAI/project-manager-stack
+python -m server workspace new pm --bundle https://github.com/protoLabsAI/project-manager-archetype
 ```
 
 Either path assembles the same three pieces: the catalog row in
 `config/archetype-catalog.json`, the soul preset
 `config/soul-presets/project-manager.md`, and the
-[project-manager-stack](https://github.com/protoLabsAI/project-manager-stack)
+[project-manager-archetype](https://github.com/protoLabsAI/project-manager-archetype)
 bundle — the plugin set that includes the project board.
 
 Then point the new workspace at **one repository** in its

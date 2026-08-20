@@ -5,7 +5,7 @@
 settle* — as first-class mechanisms and gates across the three tiers, so leadEngineer /
 roxy-class agents run the same loop we run by hand.
 **Tiers (ADR 0055):** protoAgent core (mechanism) → projectBoard-plugin / leadEngineer
-(lifecycle policy) → portfolio-manager-stack (meta/observer).
+(lifecycle policy) → portfolio-manager-archetype (meta/observer).
 **Prior art this builds on:** ADR 0076 (managed git, shipped #1845/#1846/#1847), ADR 0064
 (execution-grounded solve), ADR 0002 (workflow recipes), ADR 0052/0060 (skills),
 `docs/plans/coding-agent-deterministic-git.md` (Phases 4–5 folded in here as M4).
@@ -144,10 +144,10 @@ bounce/budget/exhaustion.
 **Accept:** an architectural feature cannot reach `ready` without design+ADR; small features
 unaffected; `test_store.py` coverage.
 
-### M7 — Release + bundle roll-out  `projectBoard-plugin`, `leadEngineer`, `pm-stack`  [S]
-Board releases (M0 patch early; M5/M6 minor later); leadEngineer + pm-stack pin bumps
+### M7 — Release + bundle roll-out  `projectBoard-plugin`, `leadEngineer`, `portfolio-manager-archetype`  [S]
+Board releases (M0 patch early; M5/M6 minor later); leadEngineer + portfolio-manager-archetype pin bumps
 through `verify-bundle`; bundle `config.project_board` gains the recommended gate defaults
-(`review_gate: true` for leadEngineer; pm-stack ships teams with it). `verified_against`
+(`review_gate: true` for leadEngineer; portfolio-manager-archetype ships teams with it). `verified_against`
 bump if core moved.
 **Accept:** verify-bundle green on both bundles; a freshly spawned team has the gates on.
 

@@ -13,7 +13,7 @@
       "id": "cowork",
       "label": "Cowork",
       "icon": "Briefcase",
-      "bundle": "https://github.com/protoLabsAI/cowork-stack",
+      "bundle": "https://github.com/protoLabsAI/cowork-archetype",
       "blurb": "A knowledge-work copilot — office-document skills, Google connectors, schedules, and memory, prepackaged.",
       "soul_preset": "cowork",
       "requires": [
@@ -24,7 +24,7 @@
       "id": "social-marketing",
       "label": "Social Marketing",
       "icon": "Megaphone",
-      "bundle": "https://github.com/protoLabsAI/social-stack",
+      "bundle": "https://github.com/protoLabsAI/social-archetype",
       "blurb": "A social marketing manager — brand voice, a balanced calendar, native drafts per platform, and a copy-ready pack. Never posts on its own.",
       "soul_preset": "social-marketing"
     },
@@ -32,7 +32,7 @@
       "id": "project-manager",
       "label": "Project Manager",
       "icon": "ClipboardList",
-      "bundle": "https://github.com/protoLabsAI/project-manager-stack",
+      "bundle": "https://github.com/protoLabsAI/project-manager-archetype",
       "blurb": "Single-repo project manager — reads deeply, never holds the keyboard; ships every change through a board of coding agents and reports back as it merges.",
       "soul_preset": "project-manager",
       "tier": "advanced",
@@ -44,7 +44,7 @@
       "id": "design-system",
       "label": "Design System Engineer",
       "icon": "Component",
-      "bundle": "https://github.com/protoLabsAI/design-system-stack",
+      "bundle": "https://github.com/protoLabsAI/design-system-archetype",
       "blurb": "Owns a design system end to end — reads tokens and components live, watches for drift, enforces accessibility, and ships every change as a reviewed PR by directing builder delegates.",
       "soul_preset": "design-system",
       "tier": "advanced"

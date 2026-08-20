@@ -1421,7 +1421,7 @@ def check_updates() -> list[dict]:
 
 # ── Bundle-level lifecycle (ADR 0049 D4, #2718) ────────────────────────────────
 # A bundle was first-class at install and never again: `check_updates`/`sync` read
-# lock["plugins"] only, and uninstall had no bundle notion — so a published stack's
+# lock["plugins"] only, and uninstall had no bundle notion — so a published archetype repo's
 # pin never moved on an installed host, and removing one meant hand-uninstalling
 # members against a provenance row that slowly went stale.
 

@@ -6,9 +6,10 @@ hand-assembling URLs, refs, and `plugins.enabled`. That's a **bundle**
 ([ADR 0040](/adr/0040-plugin-bundles)): a repo whose `protoagent.bundle.yaml` *names*
 a pinned set of plugin repos plus everything needed to make them useful on arrival.
 
-A published bundle that ships an `archetype:` block is called a **stack**
-(`cowork-stack`, `social-stack`, …) — that's product naming for the starter catalog;
-the mechanism is always "bundle" ([ADR 0100](/adr/0100-agent-archetypes)).
+A published bundle repo that ships an `archetype:` block is an **archetype repo**
+(`cowork-archetype`, `social-archetype`, …) — the repo an agent starter type ships in.
+The mechanism is always "bundle"; the product noun is always "archetype". (The old
+term "stack" is retired — [ADR 0100](/adr/0100-agent-archetypes), amended 2026-08-19.)
 
 ## The manifest
 
@@ -17,8 +18,8 @@ The full annotated reference lives at
 The shape:
 
 ```yaml
-id: my-stack
-name: My Stack
+id: my-archetype
+name: My Archetype
 description: One line on what the set does together.
 verified_against: 0.135.0        # core version the pins were last verified on (ADR 0049)
 plugins:
@@ -36,10 +37,10 @@ mcp:                             # MCP servers to seed, catalog-shaped (#2011)
 secrets:                         # standalone secrets to prompt for / seed (#2041)
   - { key: acme_api_key, label: "Acme API key", secret: true }
 archetype:                       # optional: appear in the new-agent picker (ADR 0100)
-  label: My Stack
+  label: My Archetype
   icon: Boxes
   blurb: One-line pitch on the archetype card.
-  soul_preset: my-stack          # or inline `soul:` markdown
+  soul_preset: my-archetype      # or inline `soul:` markdown
 ```
 
 Every member is installed exactly as a direct install would be — allowlist-checked and
@@ -60,7 +61,7 @@ Where you install from decides what happens (ADR 0040, as amended):
 - **CLI** — fetch-only, never enables:
 
 ```sh
-python -m server plugin install https://github.com/protoLabsAI/cowork-stack
+python -m server plugin install https://github.com/protoLabsAI/cowork-archetype
 # → members pinned in plugins.lock; enable list + config printed as suggestions
 ```
 
@@ -77,8 +78,8 @@ the bundle *repo's manifest* moved — its member pins may have moved with it.
 Updating re-resolves the whole set (#2718):
 
 ```sh
-python -m server plugin update-bundle my-stack            # code + lock; live after reload
-python -m server plugin update-bundle my-stack --ref v2.0 # explicit target ref
+python -m server plugin update-bundle my-archetype            # code + lock; live after reload
+python -m server plugin update-bundle my-archetype --ref v2.0 # explicit target ref
 ```
 
 or `POST /api/plugins/bundles/{id}/update` (what the console uses), which also
@@ -101,8 +102,8 @@ disable**, and never clobbering operator values — and retired members unload l
 ## Uninstall one
 
 ```sh
-python -m server plugin uninstall-bundle my-stack           # members + lock row
-python -m server plugin uninstall-bundle my-stack --purge   # also config + secrets
+python -m server plugin uninstall-bundle my-archetype           # members + lock row
+python -m server plugin uninstall-bundle my-archetype --purge   # also config + secrets
 ```
 
 or `DELETE /api/plugins/bundles/{id}` (hot-reloads so tools/routes actually leave the
@@ -110,15 +111,15 @@ running agent). Only the bundle's **exclusively-owned** members are removed — 
 and re-owned members stay, and the report says which. The CLI, being out-of-process,
 warns when a running server keeps removed members live until its next reload.
 
-## Publish a stack
+## Publish an archetype repo
 
-1. **Scaffold**: `python -m server plugin new-bundle "My Stack" --member my_board=https://github.com/o/board-plugin@v0.3.0 --builtin delegates`
+1. **Scaffold**: `python -m server plugin new-bundle "My Archetype" --member my_board=https://github.com/o/board-plugin@v0.3.0 --builtin delegates`
    (or the devkit's `scaffold_bundle` tool from chat).
 2. **Pin + verify**: pins mean *"last verified working together"*
    ([ADR 0049](/adr/0049-bundle-pin-lifecycle)). Copy the reference CI at
    `examples/bundles/template/.github/workflows/verify-bundle.yml` — it smoke-installs
    the set against `verified_against`'s core and runs the scheduled **pin-bump** job
-   that maintains one always-current candidate PR per stack (#2645/#2669).
+   that maintains one always-current candidate PR per archetype repo (#2645/#2669).
 3. **Ship the archetype block** so installing your bundle puts a starter card in the
    new-agent picker ([ADR 0100](/adr/0100-agent-archetypes) has the full field set) —
    see [Fleet — bundles & archetypes](/guides/fleet#bundles--archetypes--start-from-a-type).

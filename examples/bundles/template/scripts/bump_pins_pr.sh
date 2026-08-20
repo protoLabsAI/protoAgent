@@ -8,7 +8,7 @@
 # repo — see that file's docstring for the harness shape.
 #
 # Two subcommands, mirroring the workflow's two `bump`-job steps:
-#   open-or-update            — reuse the ONE `bump-pins` branch/PR per stack (dedup;
+#   open-or-update            — reuse the ONE `bump-pins` branch/PR per bundle repo (dedup;
 #                                #2645) instead of piling up a dated branch every run.
 #   flag-approval <number> <branch> <sha>
 #                              — GitHub never auto-starts a `pull_request` run for a

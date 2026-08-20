@@ -314,7 +314,7 @@ def _build_scaffold_bundle_tool(config: dict | None):
         enabled: list[str] | None = None,
     ) -> str:
         """Scaffold a plugin BUNDLE (ADR 0040) — a ``protoagent.bundle.yaml`` that
-        names a set of plugins to install + enable together (like the PM stack).
+        names a set of plugins to install + enable together (like the Project Manager archetype).
 
         ``members`` is a list of ``{id, url, ref}`` (a git plugin) or
         ``{id, builtin: true}`` (one that ships with protoAgent); omit it for a
@@ -1528,7 +1528,7 @@ def _build_guide_router():
           <h2>From the CLI</h2>
           <ul>
             <li><code>python -m server plugin new "My Plugin" --view --skill</code> — scaffold from the shell</li>
-            <li><code>python -m server plugin new-bundle "My Stack" --member id=url@ref --builtin delegates</code></li>
+            <li><code>python -m server plugin new-bundle "My Archetype" --member id=url@ref --builtin delegates</code></li>
           </ul>
           <h2>The plugin contract</h2>
           <ul>

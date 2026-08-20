@@ -8,16 +8,17 @@
   note in Decision.)
 - Builds on: ADR 0027 (git-installable plugins — `plugin install <url>` + `plugins.lock` + `sync`).
 
-> **Terminology.** A *bundle* is the mechanism this ADR defines. A **stack** is a
-> *published* bundle repo that ships an `archetype:` block (`cowork-stack`,
-> `social-stack`, …) — product naming for the starter catalog (ADR 0100). Code, API,
-> and UI say `bundle`.
+> **Terminology** *(amended 2026-08-19)*. A *bundle* is the mechanism this ADR defines.
+> A published bundle repo that ships an `archetype:` block is an **archetype repo**
+> (`cowork-archetype`, `social-archetype`, …) — see ADR 0100. The old term "stack" is
+> **retired**; the former `*-stack` repos were renamed (GitHub redirects keep old URLs
+> working). Code, API, and UI say `bundle`.
 
 ## Context
 
 ADR 0027 made each plugin a standalone, git-URL-installable repo, pinned in a committed
 `plugins.lock`. That is the right *atom* — independent versioning, independent release cadence, one
-repo per capability. But a working agent is usually a **stack** of several plugins that are tested
+repo per capability. But a working agent usually composes **several plugins** that are tested
 *together*: e.g. a "project manager" agent = a board-orchestration plugin + a browser plugin + the
 delegate spine. Today, standing that up means hand-installing each URL at the right ref and
 hand-assembling the `plugins.enabled` list and recommended config — error-prone, and impossible to
@@ -34,8 +35,8 @@ A **bundle is a reference repo**, not a code monorepo. A bundle repo's root hold
 to install together, plus a suggested enable list + config:
 
 ```yaml
-id: pm-stack
-name: Project Manager Stack
+id: project-manager-archetype
+name: Project Manager
 description: Board orchestration + browser + delegate spine.
 plugins:
   - { id: delegates,     builtin: true }                       # ships with protoAgent
@@ -77,7 +78,7 @@ there IS the consent (ADR 0071's trust-by-default posture):
 
 - **Composition over duplication** — bundles reference the standalone plugin repos; no code is copied
   or moved. Plugins keep their own repos, CI, and release cadence; a bundle just pins a *tested combo*.
-- **One install entry point** — `plugin install <bundle-url>` brings up the whole stack; one repo to
+- **One install entry point** — `plugin install <bundle-url>` brings up the whole set; one repo to
   share, one ref to bump when the combo is re-validated.
 - **Lock is still the source of truth** — members appear in `plugins.lock` like any plugin; the
   `bundles:` entry is additive provenance. Existing `list`/`sync`/`uninstall` are unaffected.

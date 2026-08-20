@@ -25,7 +25,7 @@ claim true after authoring day:
 ## Pin-bump PR lifecycle (explicit-approval model, [#2645][issue-2645])
 
 The scheduled `bump` job pushes to a single, stable branch — `bump-pins` — and keeps **at
-most one** open pin-bump PR per stack (= per bundle repo: one manifest, one candidate). A
+most one** open pin-bump PR per bundle repo (one manifest, one candidate). A
 later scheduled run that finds more bumps force-pushes that same branch, updating the PR
 in place instead of piling up duplicates. Treat `bump-pins` as bot-owned: it's rewritten
 wholesale every run, so hand edits to it don't survive the next bump.
@@ -55,9 +55,10 @@ step entirely and this whole section stops applying.
 [issue-2645]: https://github.com/protoLabsAI/protoAgent/issues/2645
 [gh-token-docs]: https://docs.github.com/en/actions/concepts/security/github_token#when-github_token-triggers-workflow-runs
 
-**Out of scope here:** this is a template-only change. The four stacks published before
-this contract existed (`cowork-stack`, `design-system-stack`, `portfolio-manager-stack`,
-`product-stack`) still run the old duplicate-opening workflow and between them carry 17
+**Out of scope here:** this is a template-only change. The four archetype repos published
+before this contract existed (`cowork-archetype`, `design-system-archetype`,
+`portfolio-manager-archetype`, `product-archetype` — renamed from `*-stack` 2026-08-19)
+still run the old duplicate-opening workflow and between them carry 17
 open, unverified pin-bump PRs. Migrating each repo's workflow and reconciling that backlog
 is separate follow-up work, tracked on #2645 — each is its own repo with its own PR queue,
 not something a protoAgent-core PR touches.
@@ -66,10 +67,10 @@ not something a protoAgent-core PR touches.
 
 ```bash
 # Start a bundle repo from this template
-cp -r examples/bundles/template my-stack && cd my-stack && git init
+cp -r examples/bundles/template my-archetype && cd my-archetype && git init
 
 # Verify locally (from a protoAgent checkout with deps synced)
-uv run --no-sync python /path/to/my-stack/scripts/verify_bundle.py /path/to/my-stack
+uv run --no-sync python /path/to/my-archetype/scripts/verify_bundle.py /path/to/my-archetype
 
 # Check for newer member releases
 python3 scripts/check_bundle_updates.py protoagent.bundle.yaml
@@ -79,4 +80,4 @@ Why this exists: the first real bundle shipped pins that predated both members' 
 fixes — every agent spawned from the archetype got 404 panels out of the box, and nothing
 flagged it. The verify probe above catches exactly that, at authoring time and weekly
 thereafter. Full rationale: [ADR 0049](../../../docs/adr/0049-bundle-pin-lifecycle.md);
-the live adopter is [pm-stack](https://github.com/protoLabsAI/pm-stack).
+the live adopter is [portfolio-manager-archetype](https://github.com/protoLabsAI/portfolio-manager-archetype).

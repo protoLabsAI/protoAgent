@@ -57,7 +57,7 @@ export function contributionCount(p: Plugin): number {
 
 // Free-text search + status chip. Tool NAMES are searchable on purpose — "which
 // plugin ships tool X?" is a real question once dozens of plugins are installed —
-// and so is the BUNDLE ("show me everything cowork-stack installed") and the manifest
+// and so is the BUNDLE ("show me everything cowork-archetype installed") and the manifest
 // DESCRIPTION (#2248): "which plugin does X?" is the same question asked in prose, and
 // it only became answerable once the description was on the row.
 export function filterInstalled(rows: InstalledRow[], q: string, status: InstalledStatus): InstalledRow[] {

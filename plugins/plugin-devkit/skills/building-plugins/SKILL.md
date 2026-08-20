@@ -277,7 +277,7 @@ an unslugifiable name, a duplicate token), the fake **raises `ValueError`**, so 
 registration fails your suite instead of shipping green.
 
 From the shell (no agent): `python -m server plugin new "My Plugin" --view --skill --tests`
-scaffolds the skeleton; `plugin new-bundle "My Stack" --member id=url@ref --builtin delegates`
+scaffolds the skeleton; `plugin new-bundle "My Archetype" --member id=url@ref --builtin delegates`
 scaffolds an ADR-0040 bundle.
 
 ## 6b. Graduate it (optional — ADR 0096 D6)

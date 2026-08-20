@@ -21,7 +21,7 @@ describe("personaSoul", () => {
 
   it("falls back to the basic archetype's soul for a bundle archetype with no inline persona", () => {
     // A bundle archetype whose manifest omits `soul:` — must not blank the editor.
-    const bundle = { ...arch("product-stack", ""), bundle: "https://example/x" };
+    const bundle = { ...arch("project-manager-archetype", ""), bundle: "https://example/x" };
     expect(personaSoul(bundle, LIST)).toBe("# Base persona");
   });
 

@@ -22,8 +22,8 @@
 # `ref:` token in place (comment-preserving) and expects the `- { id, url, ref }`
 # inline form below.
 
-id: my-stack
-name: My Stack
+id: my-archetype
+name: My Archetype
 description: >-
   One-line pitch for the composed agent this bundle stands up.
 
@@ -77,14 +77,14 @@ secrets:
 # new-agent picker. Additive metadata; it doesn't change the bundle shape. Unknown
 # keys warn at install (#2715) — the full set is below.
 archetype:
-  label: My Stack
+  label: My Archetype
   icon: Boxes
   blurb: One-line pitch shown on the archetype card.
   # Persona: inline `soul` (markdown) OR `soul_preset` (a stem under the host's
   # config/soul-presets/ — warns + falls back to the base persona if the host
   # doesn't ship it). Omit both and a created agent keeps the default persona.
   # soul: |
-  #   # My Stack operator
+  #   # My Archetype operator
   #   …
   # soul_preset: cowork
   # Picker placement: "standard" (default, renders inline) or "advanced"

@@ -1,7 +1,10 @@
 # 0100 — Agent archetypes (starter agent types, ratified)
 
 - Status: Accepted
-- Date: 2026-08-14
+- Date: 2026-08-14 (amended 2026-08-19 — **"stack" is retired**: archetype is the one
+  product noun; a published bundle repo that ships an `archetype:` block is an
+  **archetype repo**, named `<name>-archetype`. The former `*-stack` repos were renamed
+  on GitHub (redirects keep old URLs and lock pins working). See Terminology.)
 - Builds on: ADR 0040 (plugin bundles), ADR 0042 §F (the four lines that originally named
   archetypes), ADR 0083 (Cowork — the first bundle-backed archetype), ADR 0091 (snapshots,
   the second new-agent source), ADR 0094 (managed runtime — the `requires` warning).
@@ -76,9 +79,9 @@ TTL-cached) enumerates a bundle's members/mcp/secrets without installing anythin
 ### Boundaries (what an archetype is NOT)
 
 - **Not a fork.** Operator personas that would ship domain doctrine in the template stay
-  downstream (ADR 0007) — the operator-stack proposal was deliberately superseded by
+  downstream (ADR 0007) — the "operator-stack" proposal was deliberately superseded by
   core fleet telemetry (#2537 → #2539). Monitoring is core; personas are forks or
-  stacks.
+  archetype repos.
 - **Not a team.** Declaring a whole fleet is ADR 0072 (team-via-config, Proposed) —
   archetypes are its per-member primitive. Note `blurb` is slated there (§B) to become
   the auto-derived delegate description; it currently has exactly one consumer (the
@@ -89,10 +92,26 @@ TTL-cached) enumerates a bundle's members/mcp/secrets without installing anythin
 
 ### Terminology
 
-A **bundle** is the mechanism (ADR 0040: manifest, lock row, install/seed paths). A
-**stack** is a *published* bundle repo that ships an archetype (`cowork-stack`,
-`social-stack`, …) — product naming for the starter catalog. Code, API, and UI say
-`bundle`; "stack" belongs in repo names and prose about the published catalog.
+*(Amended 2026-08-19.)* Three words used to reference the same object from three axes —
+archetype (the identity), bundle (the mechanism), stack (the repo) — and the third one
+never needed a noun of its own. The delineation is now two concepts and a retiree:
+
+- A **bundle** is the mechanism (ADR 0040: manifest, lock row, install/seed paths).
+  It is HOW a pinned set of plugins travels; it has no identity. Code, API, and UI say
+  `bundle`.
+- An **archetype** is the product noun — WHO an agent starts as: a persona plus an
+  optional bundle. It is the only term for "a prepackaged agent type" in the picker,
+  wizard, docs, and marketing.
+- A published bundle repo that ships an `archetype:` block is an **archetype repo**,
+  named `<name>-archetype` (`cowork-archetype`, `social-archetype`, …). **"Stack" is
+  retired** — it was product naming for exactly this repo shape and only blurred the
+  model. The former `*-stack` repos were renamed; GitHub redirects keep old URLs and
+  lock pins resolving.
+
+The surface decides which face you touch: installing into an *existing* agent is
+"installing the bundle"; creating a *new* agent is "starting from the archetype" —
+same artifact underneath. A bundle with no `archetype:` block is just a bundle; an
+archetype with no bundle (`basic`, `custom`) is a persona-only archetype.
 
 ## Consequences
 

@@ -21,7 +21,7 @@ import type { ArchetypePreview } from "./types";
 // declared standalone secret — the GitHub-style case from the acceptance criteria.
 function githubPreview(): ArchetypePreview {
   return {
-    id: "product-stack",
+    id: "project-manager-archetype",
     bundle: {
       kind: "bundle",
       name: "Product stack",

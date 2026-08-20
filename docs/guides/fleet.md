@@ -9,8 +9,7 @@ primitives:
 |---|---|---|
 | **Workspace** | a named agent — its own config, secrets, plugins, scoped data, port | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
 | **Bundle** | a curated, pinned set of plugins installed as one | [0040](../adr/0040-plugin-bundles.md) |
-| **Stack** | a *published* bundle repo that ships an archetype (`cowork-stack`, `social-stack`, …) — product naming for the starter catalog; the mechanism is always "bundle" | [0040](../adr/0040-plugin-bundles.md) / [0100](../adr/0100-agent-archetypes.md) |
-| **Archetype** | a starter *agent type* in the new-agent picker — the shipped catalog plus any installed bundle that declares one | [0100](../adr/0100-agent-archetypes.md) |
+| **Archetype** | a starter *agent type* in the new-agent picker — a persona plus an optional bundle; the shipped catalog plus any installed bundle that declares one. Ships in an **archetype repo** (`cowork-archetype`, `social-archetype`, …; the old "stack" term is retired) | [0100](../adr/0100-agent-archetypes.md) |
 | **Tiered stores** | per-agent private data + an opt-in shared **commons** | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
 | **Supervisor** | run agents as persistent background processes (start/stop/status) | [0042](../adr/0042-fleet-supervisor-unified-console.md) |
 | **Unified console** | one slug-routed console that hot-swaps between running agents (per-agent layout/theme) | [0042](../adr/0042-fleet-supervisor-unified-console.md) |
@@ -18,8 +17,8 @@ primitives:
 ## Quick start
 
 ```bash
-# an agent from a bundle archetype (the product-stack bundle: PM toolkit + generative UI)
-python -m server workspace new pm --bundle https://github.com/protoLabsAI/product-stack
+# an agent from a bundle-backed archetype (project-manager-archetype: board-driven PM)
+python -m server workspace new pm --bundle https://github.com/protoLabsAI/project-manager-archetype
 
 # a blank-slate agent (the built-in Basic archetype — core loop + tools, no plugins)
 python -m server workspace new scratch
@@ -27,7 +26,7 @@ python -m server workspace new scratch
 # run the whole fleet in the background, then look at it
 python -m server fleet up
 python -m server fleet ls
-#   ● pm        :7871  pid 12345  [product-stack]
+#   ● pm        :7871  pid 12345  [project-manager-archetype]
 #   ● scratch   :7872  pid 12346
 ```
 
@@ -55,11 +54,11 @@ workspace rm <name> [--purge] # --purge also deletes its scoped data
 A **bundle** ([ADR 0040](../adr/0040-plugin-bundles.md)) is a repo whose
 `protoagent.bundle.yaml` names a *pinned set of plugins* to install together, plus a
 suggested enable list + config — the full lifecycle (manifest reference, updating,
-uninstalling, publishing a stack) is in the [Bundles guide](./bundles.md). Install
+uninstalling, publishing an archetype repo) is in the [Bundles guide](./bundles.md). Install
 one into a workspace and you skip the plugin-by-plugin setup:
 
 ```bash
-python -m server plugin install https://github.com/protoLabsAI/product-stack   # fans out + pins each member
+python -m server plugin install https://github.com/protoLabsAI/project-manager-archetype   # fans out + pins each member
 ```
 
 A bundle that carries an **`archetype:`** block becomes a **starter agent type** the
@@ -67,12 +66,12 @@ new-agent picker offers — additive metadata, no change to the bundle shape:
 
 ```yaml
 # protoagent.bundle.yaml
-id: product-stack
+id: project-manager-archetype
 plugins: [ … ]
 enabled: [ … ]
 archetype:
-  label: Product Manager
-  icon: Compass
+  label: Project Manager
+  icon: ClipboardList
   blurb: Researches, strategizes, and specs products from evidence — renders roadmaps and personas inline.
   # optional persona: inline markdown, or a host preset stem under config/soul-presets/
   # (unknown preset → warns + the picker falls back to the base persona)
@@ -98,7 +97,7 @@ The picker draws from **two** sources:
 - **The archetype catalog** — `config/archetype-catalog.json`, served by `GET /api/archetypes`.
   The shipped catalog carries the starter set (2026-08: Basic, Cowork, Social Marketing,
   Project Manager, Design System, Custom — the two code-free personas are Basic and
-  Custom; the rest reference published stacks) and is **data-driven**: add or remove
+  Custom; the rest reference published archetype repos) and is **data-driven**: add or remove
   archetypes by editing the JSON, no code change. A fork or instance overrides it by
   dropping its own `archetype-catalog.json` in the live config dir (same rule as
   `plugin-catalog.json`); if the file is missing entirely, a hardcoded Basic + Custom

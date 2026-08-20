@@ -34,7 +34,7 @@ type Agent = {
 };
 
 type Archetype = {
-  id: string;            // "basic", or a bundle id e.g. "pm-stack"
+  id: string;            // "basic", or a bundle id e.g. "project-manager-archetype"
   label: string;         // "Basic", "Project Manager"
   icon: string;          // lucide-react icon name (e.g. "Sparkles", "LayoutGrid")
   blurb: string;

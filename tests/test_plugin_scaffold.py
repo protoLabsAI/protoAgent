@@ -120,7 +120,7 @@ def test_scaffold_comms_plugin(tmp_path):
 
 def test_scaffold_bundle_round_trips_through_loader(tmp_path):
     res = scaffold.scaffold_bundle(
-        "Project Manager Stack",
+        "Project Manager Archetype",
         summary="board + browser",
         members=[
             {"id": "delegates", "builtin": True},
@@ -128,11 +128,11 @@ def test_scaffold_bundle_round_trips_through_loader(tmp_path):
         ],
         target_dir=str(tmp_path),
     )
-    assert res.kind == "bundle" and res.id == "project-manager-stack"
-    bdir = tmp_path / "project-manager-stack"
+    assert res.kind == "bundle" and res.id == "project-manager-archetype"
+    bdir = tmp_path / "project-manager-archetype"
     bundle = installer.load_bundle(bdir)
     assert bundle is not None
-    assert bundle["id"] == "project-manager-stack"
+    assert bundle["id"] == "project-manager-archetype"
     ids = {p["id"] for p in bundle["plugins"]}
     assert ids == {"delegates", "project_board"}
     assert any(p.get("builtin") for p in bundle["plugins"])
