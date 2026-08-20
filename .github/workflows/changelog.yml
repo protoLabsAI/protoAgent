@@ -24,8 +24,11 @@ name: Changelog
 # passing it.
 #
 # The check name is unchanged (`Changelog entry`), which is what any required-checks
-# config would key on. As of the split it is NOT in main's ruleset
-# (`required_status_checks`), so this move carries no protection migration.
+# config would key on. It is NOT in main's ruleset (`required_status_checks`) — which
+# meant auto-merge ignored a red run here, and #2903 shipped a fragment the collator
+# silently dropped. Since #2906 the same two scripts ALSO run as steps of checks.yml's
+# required `workspace-config` job, and THAT is what blocks merge; this workflow remains
+# solely for the instant label-retrigger UX above. Keep the two call sites in lockstep.
 
 on:
   pull_request:

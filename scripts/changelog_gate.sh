@@ -7,9 +7,11 @@
 # cannot conflict. A direct CHANGELOG.md edit does NOT satisfy this gate: every such PR
 # writes to the same three lines under [Unreleased], so two in flight conflict by
 # construction (a 13-PR stack cost ~10 extra CI cycles to that one anchor). CHANGELOG.md
-# is written by the release process — `changelog.py collate` — not by feature PRs. Invoked by the `changelog` job in
-# .github/workflows/changelog.yml — its OWN workflow since #2293, not checks.yml, so that
-# labeling can re-trigger it without re-running the whole suite; kept as a script so
+# is written by the release process — `changelog.py collate` — not by feature PRs. Invoked twice in CI:
+# by the `changelog` job in .github/workflows/changelog.yml (its OWN workflow since #2293, so that
+# labeling can re-trigger it without re-running the whole suite) and, since #2906, as a step of
+# checks.yml's `workspace-config` job — the standalone check was never in main's
+# required_status_checks, so only the checks.yml run actually blocks merge. Kept as a script so
 # tests/test_changelog_gate.py can exercise it against throwaway git repos.
 #
 #   changelog_gate.sh <base-ref>     # e.g. origin/main

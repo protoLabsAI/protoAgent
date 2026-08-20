@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -199,6 +200,60 @@ def test_labeling_retriggers_the_gate() -> None:
     types = workflow.split("types:", 1)[1].split("\n", 1)[0]
     for action in ("opened", "synchronize", "reopened", "labeled", "unlabeled"):
         assert action in types, f"changelog.yml must trigger on {action!r}, got {types.strip()}"
+
+
+# ── #2906: the gate must ALSO run inside a check that is actually required ───
+
+
+def _checks_yml() -> str:
+    return (Path(__file__).parent.parent / ".github" / "workflows" / "checks.yml").read_text(encoding="utf-8")
+
+
+def _workspace_config_job(checks: str) -> str:
+    """The `workspace-config:` job body, up to the next top-level job key."""
+    body = checks.split("\n  workspace-config:\n", 1)[1]
+    return re.split(r"\n  [\w-]+:\n", body, maxsplit=1)[0]
+
+
+def test_checks_yml_runs_the_gate_as_required_steps() -> None:
+    """changelog.yml's `Changelog entry` check is NOT in main's
+    required_status_checks, so auto-merge ignored a red gate — #2903 shipped a
+    fragment the collator silently dropped. Both scripts therefore also run as
+    steps of the workspace-config job, which IS required: a missing or malformed
+    fragment now blocks merge, whatever the standalone workflow says."""
+    job = _workspace_config_job(_checks_yml())
+    assert "scripts/changelog_gate.sh" in job
+    assert "scripts/changelog_placement.py" in job
+    # merge-base diffing (base...HEAD) needs full history on the PR checkout.
+    assert "fetch-depth: 0" in job
+    # push-to-main has no PR diff to judge, and the guard must sit on the STEPS
+    # (both of them) — an `if` skipping the whole job would leave a required
+    # check unreported.
+    assert job.count("if: github.event_name == 'pull_request'") >= 2
+
+
+def test_checks_yml_gate_reads_labels_live_so_label_then_rerun_works() -> None:
+    """checks.yml cannot take labeled/unlabeled trigger types (see its comments:
+    every label flip would re-run the full suite), so here the skip-changelog
+    escape hatch is 'apply the label, press Re-run failed jobs'. A rerun replays
+    the ORIGINAL event payload, which can never contain a label applied after
+    the run was created — the step must fetch labels live from the API and point
+    the gate at them, or the hatch would demand an empty commit."""
+    job = _workspace_config_job(_checks_yml())
+    assert "pulls/${PR_NUMBER}" in job, "gate must fetch the PR's labels live, not trust the event snapshot"
+    assert "GITHUB_EVENT_PATH=" in job, "the fetched labels must be handed to changelog_gate.sh"
+    # The live fetch needs PR read on the job token; a job-level permissions
+    # block REPLACES the workflow-level `contents: read`, so both must appear.
+    assert "pull-requests: read" in job
+    assert "contents: read" in job
+
+
+def test_checks_yml_does_not_retrigger_on_label_changes() -> None:
+    """The label-retrigger UX belongs to changelog.yml ALONE: labeled/unlabeled
+    trigger types here would re-run the Python suite, fleet integration and web
+    E2E on every label flip (and the split exists to prevent exactly that)."""
+    triggers = _checks_yml().split("jobs:", 1)[0]
+    assert "labeled" not in triggers
 
 
 def test_passes_when_pr_adds_a_changelog_fragment(tmp_path: Path) -> None:

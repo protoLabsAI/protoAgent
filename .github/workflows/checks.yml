@@ -28,8 +28,19 @@ jobs:
     name: Verify workspace config
     runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     timeout-minutes: 5
+    permissions:
+      # A job-level block REPLACES the workflow-level one, so contents must be
+      # re-declared. pull-requests: read is for the changelog step's live label
+      # fetch (see its comment below) — still read-only.
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v5
+        with:
+          # Full history so the changelog steps below can resolve a merge-base —
+          # like changelog.yml, they judge only the PR's own diff (base...HEAD),
+          # not entries that landed on main since fork.
+          fetch-depth: 0
       - uses: actions/setup-node@v5
         with:
           node-version: "20"
@@ -73,11 +84,53 @@ jobs:
             exit 1
           fi
           echo "ok: no stale single-file launches in deploy artifacts or launchers"
+      - name: Changelog fragment must exist and survive collation (required twin of changelog.yml)
+        # changelog.yml runs the SAME script, but its check (`Changelog entry`)
+        # is not in main's required_status_checks — so auto-merge sailed straight
+        # past a red gate, and #2903 shipped a fragment the release collator
+        # silently dropped. This step runs inside a job that IS required, so a
+        # missing or malformed fragment (no top-level `- ` bullet) now blocks
+        # merge. The standalone workflow stays for UX: labeling re-triggers IT
+        # instantly, while this workflow must not add labeled/unlabeled trigger
+        # types (they'd re-run the whole suite on every label flip). Keep the
+        # two call sites in lockstep.
+        #
+        # Labels are read LIVE from the API rather than from $GITHUB_EVENT_PATH:
+        # a rerun replays the original event snapshot, which can never contain a
+        # label applied after the run was created — so with the snapshot alone,
+        # skip-changelog would demand an empty commit here. Live reads make the
+        # escape hatch "apply the label, press Re-run failed jobs".
+        if: github.event_name == 'pull_request'
+        env:
+          PR_HEAD_REF: ${{ github.head_ref }}
+          PR_ACTOR: ${{ github.actor }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
+               --jq '{pull_request: {labels: .labels}}' > "${RUNNER_TEMP}/pr_labels_event.json"; then
+            export GITHUB_EVENT_PATH="${RUNNER_TEMP}/pr_labels_event.json"
+          else
+            echo "warn: live label fetch failed — falling back to the event snapshot"
+          fi
+          bash scripts/changelog_gate.sh "origin/${GITHUB_BASE_REF}"
+      - name: Entries must be under [Unreleased], not an already-dated heading
+        # Same placement check as changelog.yml (the WHERE to the gate's WHETHER
+        # — see the comments there), made required for the same #2903 reason as
+        # the step above. skip-changelog deliberately does NOT skip it: a
+        # skip-labeled PR that touches CHANGELOG.md anyway can still misfile an
+        # entry under a closed section.
+        if: github.event_name == 'pull_request'
+        env:
+          PR_HEAD_REF: ${{ github.head_ref }}
+        run: python3 scripts/changelog_placement.py "origin/${GITHUB_BASE_REF}"
 
-  # The CHANGELOG gate lives in its own workflow (.github/workflows/changelog.yml)
-  # so that applying the `skip-changelog` label re-triggers it — it needs
+  # The CHANGELOG gate's own workflow (.github/workflows/changelog.yml) still
+  # exists so that applying the `skip-changelog` label re-triggers it — it needs
   # `types: [… labeled, unlabeled]`, and putting those here would re-run the whole
-  # Python suite, fleet integration and web E2E on every label change.
+  # Python suite, fleet integration and web E2E on every label change. But that
+  # workflow's check is NOT in main's required_status_checks, so only the
+  # workspace-config steps above actually block merge (#2906).
 
   lint:
     name: Lint (ruff + import contracts)
