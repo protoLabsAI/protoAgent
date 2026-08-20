@@ -24,17 +24,6 @@
       ]
     },
     {
-      "id": "social-marketing",
-      "label": "Social Marketing",
-      "icon": "Megaphone",
-      "bundle": "https://github.com/protoLabsAI/social-archetype",
-      "bundle_aliases": [
-        "https://github.com/protoLabsAI/social-stack"
-      ],
-      "blurb": "A social marketing manager — brand voice, a balanced calendar, native drafts per platform, and a copy-ready pack. Never posts on its own.",
-      "soul_preset": "social-marketing"
-    },
-    {
       "id": "project-manager",
       "label": "Project Manager",
       "icon": "ClipboardList",
@@ -68,6 +57,20 @@
       "bundle": null,
       "blurb": "Write your own — start from a SOUL template and fill it in.",
       "soul_preset": "blank"
+    }
+  ],
+  "held": [
+    {
+      "_held": "Not ready for release (Josh, 2026-08-20) — the JSON equivalent of commenting it out. To restore, move this row back into `archetypes` and re-invert test_social_marketing_archetype_row.",
+      "id": "social-marketing",
+      "label": "Social Marketing",
+      "icon": "Megaphone",
+      "bundle": "https://github.com/protoLabsAI/social-archetype",
+      "bundle_aliases": [
+        "https://github.com/protoLabsAI/social-stack"
+      ],
+      "blurb": "A social marketing manager — brand voice, a balanced calendar, native drafts per platform, and a copy-ready pack. Never posts on its own.",
+      "soul_preset": "social-marketing"
     }
   ]
 }

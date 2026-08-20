@@ -242,29 +242,33 @@ def test_design_system_archetype_row() -> None:
     assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
 
 
-def test_social_marketing_archetype_row() -> None:
-    """The Social Marketing archetype ships as catalog data only (ADR 0042) — same
-    invariants as the other rows, plus the two that are specific to it: it is a
-    STANDARD-tier card (it's a mainstream persona, not an advanced one, so it must
-    render inline rather than collapse under 'Advanced'), and it must NOT declare
-    `requires: [python_runtime]` — unlike Cowork it drives no document runtime, and a
-    spurious requirement would gate it behind a runtime install on desktop."""
+def test_social_marketing_archetype_is_held() -> None:
+    """The Social Marketing archetype is HELD from the picker (operator call,
+    2026-08-20: not ready for release). JSON has no comments, so 'commented out'
+    is a sibling ``held`` list the reader never serves. This pins BOTH directions:
+    the row must not ship in ``archetypes`` (it would become selectable again),
+    and it must survive intact in ``held`` — soul preset and bundle still valid —
+    so restoring it is one move, not an archaeology dig."""
     catalog = json.loads((CONFIG / "archetype-catalog.json").read_text())
     ids = [a["id"] for a in catalog["archetypes"]]
 
-    assert ids.count("social-marketing") == 1, f"'social-marketing' must appear exactly once, got {ids}"
+    assert "social-marketing" not in ids, (
+        f"'social-marketing' is held from release — it must not be in archetypes, got {ids}"
+    )
 
-    (row,) = (a for a in catalog["archetypes"] if a["id"] == "social-marketing")
+    held = [a["id"] for a in catalog.get("held") or []]
+    assert held.count("social-marketing") == 1, (
+        f"'social-marketing' must be parked exactly once in `held`, got {held}"
+    )
+    (row,) = (a for a in catalog["held"] if a["id"] == "social-marketing")
     preset = CONFIG / "soul-presets" / f"{row['soul_preset']}.md"
     assert preset.is_file(), (
-        f"archetype 'social-marketing' points at soul_preset '{row['soul_preset']}' "
-        f"but {preset} does not exist — the persona step would silently seed nothing."
+        f"held archetype 'social-marketing' points at soul_preset '{row['soul_preset']}' "
+        f"but {preset} does not exist — restoring the row would silently seed nothing."
     )
-
-    assert row.get("tier", "standard") == "standard", (
-        f"'social-marketing' must render inline (standard tier), got {row.get('tier')!r}"
+    assert row.get("bundle", "").startswith("https://github.com/protoLabsAI/"), (
+        "the held row must keep its bundle URL so restoration is one move"
     )
-    assert "requires" not in row, "the social stack drives no python runtime — it must not declare one"
 
     assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
 
