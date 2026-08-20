@@ -91,10 +91,14 @@ Notes per platform:
   | AppImage in that session | clean, 120 s+ soak |
 
   It is not our bundle: v0.132.0, v0.139.0 and v0.140.0 all crash identically on 2.52.3,
-  and the same console is clean on WebKitGTK 2.44.0. Practical fallout: **don't try to
-  smoke-test the webview under `xvfb-run` in CI** — it will fail for reasons that have
-  nothing to do with the build. Headless boxes should run the server directly
-  (`python -m server --ui console`) and use the browser console.
+  and the same console is clean on WebKitGTK 2.44.0. Upstream:
+  [WebKit #321683](https://bugs.webkit.org/show_bug.cgi?id=321683) — three functions guard
+  the backing-store pointer with `ASSERT()`, which compiles out in release builds, while
+  the rest of the file uses runtime `if` checks. Patch proposed, not landed as of 2.52.5,
+  so don't wait on it. Practical fallout: **don't try to smoke-test the webview under
+  `xvfb-run` in CI** — it will fail for reasons that have nothing to do with the build.
+  Headless boxes should run the server directly (`python -m server --ui console`) and use
+  the browser console.
 - **Windows** PyInstaller onefile binaries are occasionally false-flagged by AV — a known
   PyInstaller issue; code-signing the sidecar/installer is the durable fix.
 - The real release version is stamped into `tauri.conf.json` at build time (in-tree it stays
