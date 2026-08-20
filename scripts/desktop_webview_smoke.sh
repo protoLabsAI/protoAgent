@@ -62,7 +62,18 @@ fi
 export LIBSEAT_BACKEND=noop
 
 echo "==> starting weston (headless + GL)"
-weston --backend=headless --renderer=gl --width=1600 --height=1000 \
+# weston renamed its CLI at 10.0: before that the backend is addressed by its
+# module filename and GL is a headless-backend OPTION (--use-gl), not a
+# --renderer selector. ubuntu-22.04 — the desktop-build runner, pinned there
+# for the glibc baseline — ships weston 9, and feeding it the modern flags
+# dies with `unknown backend "headless"` (the v0.142.0 Linux-leg failure).
+WESTON_MAJOR="$(weston --version 2>/dev/null | grep -oE '[0-9]+' | head -1 || echo 0)"
+if [ "${WESTON_MAJOR:-0}" -ge 10 ]; then
+  WESTON_BACKEND_ARGS=(--backend=headless --renderer=gl)
+else
+  WESTON_BACKEND_ARGS=(--backend=headless-backend.so --use-gl)
+fi
+weston "${WESTON_BACKEND_ARGS[@]}" --width=1600 --height=1000 \
        --socket=wayland-smoke --xwayland >"$WESTON_LOG" 2>&1 &
 WESTON_PID=$!
 
