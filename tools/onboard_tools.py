@@ -17,6 +17,18 @@ precedent) so the tool reads the resolved onboarding config the graph was built
 from, not a re-read of disk. Registration goes through the injected
 ``HOST.apply_settings`` seam (``graph.plugins.host``), never a ``server`` import —
 ``tools/`` sits under the import-layering contract that forbids one.
+
+**Where a registration lands (ADR 0095).** The top-level ``projects:`` registry is
+the one place a project is declared; ``filesystem.projects`` (the fs fence) and the
+github plugin's ``repos`` picker are PROJECTIONS of it, and an explicitly configured
+projection wins over the derived one. So the tool writes the registry entry
+(``name`` / ``path`` / ``github`` / ``default_branch`` / ``write``) — that is what
+makes the repo reachable by every registry consumer, the github plugin included —
+and, only when this instance still carries an explicit ``filesystem.projects``
+override, appends the fence projection there too, because otherwise the override
+would shadow the new entry out of the fence. (Before this the tool wrote ONLY the
+fence override, which the github plugin never reads: an onboarded repo was invisible
+to ``/issue`` and the GitHub board no matter what.)
 """
 
 from __future__ import annotations
@@ -70,6 +82,27 @@ def _parse_repo(github_repo: str) -> tuple[str, str] | None:
     return owner, repo
 
 
+def _default_branch(checkout: Path) -> str:
+    """The checkout's remote default branch (``origin/HEAD`` → ``main``), or
+    ``"main"`` when git can't say (a reused directory that isn't a clone, an offline
+    remote). The registry's ``default_branch`` feeds the board's worktrees/PRs, so a
+    wrong guess costs a bad PR base — but a refusal to register would cost more."""
+    try:
+        proc = subprocess.run(
+            ["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+            cwd=str(checkout),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception:  # noqa: BLE001 — best-effort identity, never a failure path
+        return "main"
+    ref = (proc.stdout or "").strip() if proc.returncode == 0 else ""
+    if ref.startswith("origin/"):
+        ref = ref[len("origin/") :]
+    return ref or "main"
+
+
 def _same_path(a, b: Path) -> bool:
     """True when config entry path ``a`` names the same location as ``b``."""
     try:
@@ -98,10 +131,11 @@ def build_onboard_tools(config) -> list:
         """Clone a GitHub repo and register it as a managed project you can work in.
 
         Use this to onboard a repository the operator has consented to: it is
-        cloned into the configured onboarding root and added to the project
-        registry so your filesystem tools can reach it. Registration is
-        READ-ONLY unless the operator's default (or your ``write=true``) says
-        otherwise.
+        cloned into the configured onboarding root and added to the managed-
+        projects registry, which is what your filesystem tools, the GitHub
+        plugin's repo picker / ``/issue``, and the project board all read — one
+        registration reaches all of them. Registration is READ-ONLY unless the
+        operator's default (or your ``write=true``) says otherwise.
 
         Args:
             github_repo: The repo to onboard — ``owner/repo``,
@@ -180,13 +214,19 @@ def build_onboard_tools(config) -> list:
                 err = (proc.stderr or "").strip() or (proc.stdout or "").strip() or f"exit code {proc.returncode}"
                 return f"Error: git clone failed: {err}"
 
-        # (4) register via read-merge-write on filesystem.projects. Idempotent on
-        #     path; the new entry carries its `github` binding (ADR 0095), which is
-        #     what the github plugin's repo picker projects from — no separate
-        #     github.repos write is needed or possible without that plugin present.
+        # (4) register via read-merge-write on the ADR 0095 `projects:` registry —
+        #     the one declaration every consumer projects from (fs fence, the github
+        #     plugin's picker, the board). Idempotent on path. When this instance
+        #     still carries an EXPLICIT `filesystem.projects` override, that override
+        #     shadows the registry in the fence (D2: explicit wins), so the fence
+        #     projection is appended there as well — otherwise the repo would be
+        #     registered yet unreachable by the fs tools. Never the other way round:
+        #     the fence entry alone was the pre-#2925 behavior, and the github plugin
+        #     reads the registry, not the fence.
         write_effective = write if write is not None else bool(getattr(config, "onboarding_write_default", False))
         rw = "read-write" if write_effective else "read-only"
         project_name = name or target.name
+        default_branch = await asyncio.to_thread(_default_branch, target)
 
         # Merge against the LIVE registry — the same ``HOST.config`` seam the fs
         # tools resolve through (#2836) — so a second onboarding in one turn sees
@@ -205,29 +245,54 @@ def build_onboard_tools(config) -> list:
                 log.warning("[onboard] live config read failed — merging against the build-time config", exc_info=True)
         source = live_config if live_config is not None else config
 
-        existing = list(getattr(source, "filesystem_projects", []) or [])
-        if any(_same_path(e.get("path"), target) for e in existing if isinstance(e, dict)):
+        registry = [e for e in (getattr(source, "projects", []) or []) if isinstance(e, dict)]
+        fence = [e for e in (getattr(source, "filesystem_projects", []) or []) if isinstance(e, dict)]
+        in_registry = any(_same_path(e.get("path"), target) for e in registry)
+        in_fence = any(_same_path(e.get("path"), target) for e in fence)
+        if in_registry and (in_fence or not fence):
             return (
                 f"{project_name} is already registered at {target} ({rw}). "
                 "Reused the existing checkout — nothing changed."
             )
 
-        new_entry = {
-            "name": project_name,
-            "path": str(target),
-            "write": write_effective,
-            "github": f"{owner}/{repo_name}",
-        }
-        merged = existing + [new_entry]
+        github = f"{owner}/{repo_name}"
+        updates: dict = {}
+        if not in_registry:
+            updates["projects"] = registry + [
+                {
+                    "name": project_name,
+                    "path": str(target),
+                    "github": github,
+                    "default_branch": default_branch,
+                    "write": write_effective,
+                }
+            ]
+        if fence and not in_fence:
+            # An explicit fence override is in force — mirror the entry into it so
+            # the registry write actually reaches the fs tools (D2: explicit wins).
+            fence_entry = {"name": project_name, "path": str(target), "write": write_effective, "github": github}
+            updates["filesystem"] = {"projects": fence + [fence_entry], "enabled": True}
+        if not fence:
+            # The registry IS the fence on this instance; make sure the fence is on.
+            updates.setdefault("filesystem", {})["enabled"] = True
 
-        # Belt-and-suspenders safety invariant: the merged list must be a SUPERSET
-        # of what was there — a register must never DROP a project. (The POST 409
-        # guard is the server-side net; this is the tool-side one.)
-        before = {str(e.get("path")) for e in existing if isinstance(e, dict)}
-        after = {str(e.get("path")) for e in merged if isinstance(e, dict)}
-        if not before <= after:
-            log.error("[onboard] refusing to apply: merged project list would drop an existing entry")
-            return "Error: internal safety check failed — registration would have dropped an existing project; aborted."
+        # Belt-and-suspenders safety invariant: every list we write back must be a
+        # SUPERSET of what was there — a register must never DROP a project. (The
+        # POST 409 guard is the server-side net; this is the tool-side one.)
+        for label, before_list, after_list in (
+            ("projects", registry, updates.get("projects")),
+            ("filesystem.projects", fence, (updates.get("filesystem") or {}).get("projects")),
+        ):
+            if after_list is None:
+                continue
+            before = {str(e.get("path")) for e in before_list}
+            after = {str(e.get("path")) for e in after_list if isinstance(e, dict)}
+            if not before <= after:
+                log.error("[onboard] refusing to apply: merged %s would drop an existing entry", label)
+                return (
+                    "Error: internal safety check failed — registration would have dropped an existing "
+                    "project; aborted."
+                )
 
         # Apply through the injected HOST seam (server wires HOST.apply_settings to
         # _apply_settings_changes) — tools/ must never import server/ (import-linter),
@@ -238,14 +303,23 @@ def build_onboard_tools(config) -> list:
                 f"Error: cloned to {target} but registration is unavailable — the host is not wired "
                 "for config apply (no running server)."
             )
-        ok, messages = await asyncio.to_thread(
-            HOST.apply_settings,
-            {"filesystem": {"projects": merged, "enabled": True}},
-        )
+        ok, messages = await asyncio.to_thread(HOST.apply_settings, updates)
         if not ok:
             return f"Error: cloned to {target} but registration failed: {'; '.join(messages) or 'unknown error'}"
 
-        verb = "Reused existing checkout and registered" if reused_checkout else "Cloned and registered"
-        return f"{verb} {project_name} ({rw}) at {target}."
+        if in_fence and not in_registry:
+            verb = "Promoted the existing filesystem.projects entry for"
+        elif reused_checkout:
+            verb = "Reused existing checkout and registered"
+        else:
+            verb = "Cloned and registered"
+        where = "the managed-projects registry" + (
+            " + the explicit filesystem.projects override" if fence and not in_fence else ""
+        )
+        return (
+            f"{verb} {project_name} ({rw}) at {target} in {where} — GitHub {github}, "
+            f"default branch {default_branch}. The GitHub plugin's repo picker and the project board "
+            "read that registry; no further registration is needed."
+        )
 
     return [onboard_project]
