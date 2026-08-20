@@ -97,7 +97,7 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
   // Agent-to-agent flows (ADR 0042 + 0025): add another agent as a `delegate_to` target of the
   // FOCUSED agent (this window's slug), pointing at its A2A endpoint — then this agent can
   // delegate work to it. The delegates query/POST is slug-scoped, so it lands on the focused agent.
-  const delegatesQ = useQuery({ queryKey: ["delegates"], queryFn: () => api.delegates(), retry: false });
+  const delegatesQ = useQuery({ queryKey: queryKeys.delegates, queryFn: () => api.delegates(), retry: false });
   const delegateNames = new Set((delegatesQ.data?.delegates ?? []).map((d) => d.name));
   // When an add 404s (the focused agent doesn't serve /api/delegates), we keep the attempted
   // entry so "Enable delegates" can retry it after enabling the plugin. Fleet agents ship with
@@ -120,7 +120,7 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
       }
     },
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: ["delegates"] });
+      qc.invalidateQueries({ queryKey: queryKeys.delegates });
       void delegatesQ.refetch();
     },
   });

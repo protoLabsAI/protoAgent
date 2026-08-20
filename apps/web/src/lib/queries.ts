@@ -1,56 +1,133 @@
 import { queryOptions } from "@tanstack/react-query";
 
-import { api } from "./api";
+import { api, currentSlug } from "./api";
 import type { FleetTelemetry } from "./types";
 
 // Centralized query keys + option factories (ADR 0013). Surfaces read these via
 // `useSuspenseQuery(...)`; mutations invalidate the matching key. Keep keys
 // stable and hierarchical so a mutation can invalidate a whole subtree.
+//
+// Every key leads with the focused agent's slug (#2887). The QueryClient is shared
+// per window; today an agent switch is a full page navigation (the cache dies with
+// the page), but an in-place switch must never serve agent A's cached rows under
+// agent B for a staleTime window. `ns` reads the slug from the URL at ACCESS time —
+// the entries are getters/functions, never module-init arrays — and the slug is a
+// common prefix, so subtree invalidation (`queryKeys.goals` refreshing an open goal
+// drawer) keeps working within each agent's namespace.
+const ns = <const T extends readonly (string | number)[]>(...key: T) =>
+  [currentSlug(), ...key] as const;
+
 export const queryKeys = {
-  goals: ["goals"] as const,
+  get goals() {
+    return ns("goals");
+  },
   // One goal's detail (status + plan artifact). Prefixed under `goals` so the panel's
-  // `invalidateQueries(["goals"])` on the goal.* bus pushes also refreshes an open drawer.
-  goalDetail: (sessionId: string) => ["goals", "detail", sessionId] as const,
-  watches: ["watches"] as const,
-  verifiers: ["verifiers"] as const,
-  tasks: ["tasks", "issues"] as const,
-  workflows: ["workflows"] as const,
+  // `invalidateQueries(queryKeys.goals)` on the goal.* bus pushes also refreshes an open drawer.
+  goalDetail: (sessionId: string) => ns("goals", "detail", sessionId),
+  get watches() {
+    return ns("watches");
+  },
+  get verifiers() {
+    return ns("verifiers");
+  },
+  get tasks() {
+    return ns("tasks", "issues");
+  },
+  get workflows() {
+    return ns("workflows");
+  },
   // Paused workflow runs (F3 Pending Gates) — a distinct top-level key so a recipe-list
-  // save/delete invalidation (["workflows"]) doesn't disturb this queue, and vice versa.
-  workflowRuns: ["workflow-runs"] as const,
+  // save/delete invalidation (queryKeys.workflows) doesn't disturb this queue, and vice versa.
+  get workflowRuns() {
+    return ns("workflow-runs");
+  },
   // One run's live record (the Studio timeline) — under `workflow-runs` so gate
   // resume invalidations refresh an open timeline too.
-  workflowRun: (runId: string) => ["workflow-runs", "record", runId] as const,
-  workflowRunHistory: ["workflow-run-history"] as const,
-  subagents: ["subagents"] as const,
-  tools: ["tools"] as const,
-  telemetry: ["telemetry"] as const,
+  workflowRun: (runId: string) => ns("workflow-runs", "record", runId),
+  get workflowRunHistory() {
+    return ns("workflow-run-history");
+  },
+  get subagents() {
+    return ns("subagents");
+  },
+  get tools() {
+    return ns("tools");
+  },
+  get telemetry() {
+    return ns("telemetry");
+  },
   // Hub-side fleet rollup — a subkey of telemetry so a telemetry invalidation refreshes it too.
-  fleetTelemetry: ["telemetry", "fleet"] as const,
-  settings: ["settings", "schema"] as const,
-  inbox: ["inbox"] as const,
-  schedules: ["schedules"] as const,
-  runtime: ["runtime"] as const,
-  nodeRuntime: ["runtime", "node"] as const,
-  pythonRuntime: ["runtime", "python"] as const,
-  delegates: ["delegates"] as const,
-  delegateTypes: ["delegates", "types"] as const,
-  acpAgents: ["acp", "agents"] as const,
-  installedPlugins: ["plugins", "installed"] as const,
-  pluginUpdates: ["plugins", "updates"] as const,
-  fleet: ["fleet"] as const,
-  archetypes: ["archetypes"] as const,
-  playbooks: ["playbooks"] as const,
-  knowledge: ["knowledge"] as const,
-  flags: ["flags"] as const,
-  secretsStatus: ["secrets", "status"] as const,
-  publishedLinks: ["publish", "links"] as const,
+  get fleetTelemetry() {
+    return ns("telemetry", "fleet");
+  },
+  get settings() {
+    return ns("settings", "schema");
+  },
+  get inbox() {
+    return ns("inbox");
+  },
+  get schedules() {
+    return ns("schedules");
+  },
+  get runtime() {
+    return ns("runtime");
+  },
+  get nodeRuntime() {
+    return ns("runtime", "node");
+  },
+  get pythonRuntime() {
+    return ns("runtime", "python");
+  },
+  get delegates() {
+    return ns("delegates");
+  },
+  get delegateTypes() {
+    return ns("delegates", "types");
+  },
+  get acpAgents() {
+    return ns("acp", "agents");
+  },
+  get installedPlugins() {
+    return ns("plugins", "installed");
+  },
+  get pluginUpdates() {
+    return ns("plugins", "updates");
+  },
+  get fleet() {
+    return ns("fleet");
+  },
+  get archetypes() {
+    return ns("archetypes");
+  },
+  get playbooks() {
+    return ns("playbooks");
+  },
+  get knowledge() {
+    return ns("knowledge");
+  },
+  get flags() {
+    return ns("flags");
+  },
+  get secretsStatus() {
+    return ns("secrets", "status");
+  },
+  get publishedLinks() {
+    return ns("publish", "links");
+  },
   // Memory inspector (ADR 0069 D7) — subtree so one invalidate refreshes all panels.
-  memory: ["memory"] as const,
-  memorySessions: ["memory", "sessions"] as const,
-  memoryHot: ["memory", "hot"] as const,
-  memoryInjections: ["memory", "injections"] as const,
-  memoryInjectionDetail: (id: number) => ["memory", "injections", "detail", id] as const,
+  get memory() {
+    return ns("memory");
+  },
+  get memorySessions() {
+    return ns("memory", "sessions");
+  },
+  get memoryHot() {
+    return ns("memory", "hot");
+  },
+  get memoryInjections() {
+    return ns("memory", "injections");
+  },
+  memoryInjectionDetail: (id: number) => ns("memory", "injections", "detail", id),
 };
 
 // The fleet of workspace agents (ADR 0042). `running` is a live-pid probe, so poll
@@ -294,9 +371,9 @@ export const pythonRuntimeQuery = () =>
   });
 
 // The HUB's runtime status (never slug-routed) — used ONLY for the tenant uid, which
-// must track the origin's backend, not the focused agent. A separate key from the
-// slug-routed `runtime` so switching agents never confuses it; the uid is stable, so
-// it doesn't poll.
+// must track the origin's backend, not the focused agent. Deliberately OUTSIDE the
+// slug namespace (#2887) and separate from the slug-prefixed `runtime` key, so
+// switching agents never confuses it; the uid is stable, so it doesn't poll.
 export const hostRuntimeStatusQuery = () =>
   queryOptions({
     queryKey: ["runtime", "host"] as const,
