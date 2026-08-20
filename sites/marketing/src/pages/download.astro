@@ -4,9 +4,9 @@ import { fetchLatestDesktopRelease } from '../lib/desktop-release';
 
 const repo = 'https://github.com/protoLabsAI/protoAgent';
 
-// Buttondown newsletter — gates the not-yet-public platform (Linux) behind a
-// notify-me signup until that build is tested here. Set this to the account's
-// Buttondown username.
+// Buttondown newsletter — release announcements. This used to gate the Linux
+// build behind a notify-me signup; Linux ships as of #2866, so it's now just a
+// general announcement list. Set this to the account's Buttondown username.
 const BUTTONDOWN_USER = 'protoLabsAI';
 
 // Desktop and source/server releases share one tag sequence but ship on separate
@@ -16,7 +16,7 @@ const BUTTONDOWN_USER = 'protoLabsAI';
 // dead download link go out. Needs network (and GITHUB_TOKEN in CI, see
 // marketing-deploy.yml); other pages still render in `astro dev` if it fails.
 const desktop = await fetchLatestDesktopRelease();
-const { dmgUrl, setupExeUrl } = desktop;
+const { dmgUrl, setupExeUrl, appImageUrl, debUrl } = desktop;
 
 const subscribeAction = `https://buttondown.com/api/emails/embed-subscribe/${BUTTONDOWN_USER}`;
 const subscribePopup = `https://buttondown.com/${BUTTONDOWN_USER}`;
@@ -44,11 +44,23 @@ const winInstall = [
   'Launch protoAgent — it starts its own bundled server, nothing else to install.',
   'The setup wizard connects your model and you’re live.',
 ];
+
+const linuxRequirements = [
+  'x86_64, glibc 2.35 or newer (Ubuntu 22.04+, Fedora 36+, Debian 12+)',
+  'A desktop session — GNOME, KDE, or any compositor, on Wayland or X11',
+  'A model gateway or subscription — connect an OpenAI-compatible endpoint, an API key, or your ChatGPT/Claude plan in setup',
+];
+
+const linuxInstall = [
+  'Download the .AppImage above, chmod +x it, and run it — or install the .deb with apt.',
+  'Launch protoAgent — it starts its own bundled server, nothing else to install.',
+  'The setup wizard connects your model and you’re live.',
+];
 ---
 
 <BaseLayout
   title="Download protoAgent"
-  description="Download protoAgent — the lean, A2A-native operator agent for macOS and Windows. Linux coming soon."
+  description="Download protoAgent — the lean, A2A-native operator agent for macOS, Windows, and Linux."
 >
   <!-- Detect the OS before paint so the right block is visible with no flash. -->
   <script is:inline>
@@ -61,12 +73,16 @@ const winInstall = [
             '').toLowerCase();
         var s = plat + ' ' + ua;
         // iPadOS reports as a Mac in desktop Safari — touch-Macs can't run the
-        // desktop app, so route them to the "other" (notify-me) experience.
+        // desktop app, so route them to the "other" experience.
         if (/mac/.test(s) && navigator.maxTouchPoints > 1) return 'other';
         if (/iphone|ipad|ipod/.test(s)) return 'other';
         if (/mac/.test(s)) return 'mac';
         if (/win/.test(s)) return 'windows';
-        if (/linux|android|cros/.test(s)) return 'linux';
+        // Android and ChromeOS match /linux/ in the UA but can't run an x86_64
+        // AppImage — they have to lose to 'other' BEFORE the linux test, or the
+        // page hands a phone a desktop binary.
+        if (/android|cros/.test(s)) return 'other';
+        if (/linux/.test(s)) return 'linux';
         return 'other';
       }
       try {
@@ -105,18 +121,23 @@ const winInstall = [
         <p class="meta-note">Windows 11 x64 · unsigned build · updates itself in place.</p>
       </div>
 
-      <!-- ===== Linux / other: no desktop build yet ===== -->
-      <div class="dl-os dl-os-other">
-        <p class="pl-lead">
-          No Linux desktop build yet. It compiles on every release but is still being tested
-          before we hand it out. Leave your email below and we’ll tell you the moment it’s
-          ready — or run protoAgent from source today.
-        </p>
+      <!-- ===== Linux ===== -->
+      <div class="dl-os dl-os-linux">
         <div class="pl-hero__cta">
-          <a href={repo} target="_blank" rel="noopener noreferrer" class="pl-btn pl-btn--primary">Run it from source</a>
-          <a href={dmgUrl} class="pl-btn">macOS (.dmg)</a>
-          <a href={setupExeUrl} class="pl-btn">Windows (setup.exe)</a>
+          <a href={appImageUrl} class="pl-btn pl-btn--primary">Download for Linux (.AppImage)</a>
+          <a href={debUrl} class="pl-btn">Debian/Ubuntu (.deb)</a>
         </div>
+        <p class="meta-note">x86_64 · glibc 2.35+ · unsigned build · the AppImage updates itself in place.</p>
+      </div>
+
+      <!-- ===== Unknown OS: offer everything ===== -->
+      <div class="dl-os dl-os-other">
+        <div class="pl-hero__cta">
+          <a href={dmgUrl} class="pl-btn pl-btn--primary">macOS (.dmg)</a>
+          <a href={setupExeUrl} class="pl-btn">Windows (setup.exe)</a>
+          <a href={appImageUrl} class="pl-btn">Linux (.AppImage)</a>
+        </div>
+        <p class="meta-note">Couldn’t detect your platform — pick a build, or <a href={repo} target="_blank" rel="noopener noreferrer">run it from source</a>.</p>
       </div>
     </div>
   </section>
@@ -202,13 +223,57 @@ const winInstall = [
     </section>
   </div>
 
+  <!-- ===== Linux: requirements + install ===== -->
+  <div class="dl-os dl-os-linux">
+    <section class="pl-section">
+      <div class="pl-container">
+        <p class="pl-eyebrow">System requirements — Linux</p>
+        <div class="pl-checks">
+          {linuxRequirements.map((r) => (
+            <div class="pl-check">
+              <span class="pl-check__mark" aria-hidden="true">—</span>
+              <span>{r}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+
+    <section class="pl-section">
+      <div class="pl-container">
+        <p class="pl-eyebrow">Installation</p>
+        <div class="pl-steps">
+          {linuxInstall.map((step, i) => (
+            <div class="pl-step">
+              <div class="pl-step__num">{i + 1}</div>
+              <div class="pl-step__body">{step}</div>
+            </div>
+          ))}
+        </div>
+        <div class="pl-deliverable note-block">
+          <div class="pl-deliverable__title">Needs a real desktop session</div>
+          <div class="pl-deliverable__body">
+            The app renders through WebKitGTK, which requires working accelerated
+            compositing. In a normal GNOME/KDE session on Wayland or X11 that’s a given.
+            Over a display without GPU acceleration — a bare <code>Xvfb</code>, some
+            container and CI setups, X-forwarding or VNC without DRI3 — WebKitGTK 2.52
+            crashes on launch (<a href="https://github.com/protoLabsAI/protoAgent/issues/2866" target="_blank" rel="noopener noreferrer">#2866</a>).
+            Run the server headless there instead: <code>python -m server --ui console</code>.
+            protoAgent is in public beta and the AppImage updates itself in place; a
+            <code>.deb</code> install is apt’s job.
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
   <!-- ===== Mailing list (shown to everyone) ===== -->
   <section class="pl-section">
     <div class="pl-container">
-      <p class="pl-eyebrow">Get notified about Linux</p>
+      <p class="pl-eyebrow">Get release announcements</p>
       <p class="pl-section-intro">
-        The desktop app ships for macOS and Windows; Linux is still in testing. Leave your email
-        and we’ll let you know the moment it ships.
+        The desktop app ships for macOS, Windows, and Linux, and updates itself in place.
+        Leave your email if you’d rather hear about releases than watch the changelog.
       </p>
       <form
         action={subscribeAction}
@@ -219,7 +284,7 @@ const winInstall = [
       >
         <label for="bd-email" class="visually-hidden">Email</label>
         <input type="email" name="email" id="bd-email" required placeholder="you@example.com" class="pl-input" />
-        <button type="submit" class="pl-btn pl-btn--primary">Notify me</button>
+        <button type="submit" class="pl-btn pl-btn--primary">Subscribe</button>
       </form>
       <p class="meta-note">No spam — release announcements only. Unsubscribe anytime.</p>
     </div>
@@ -253,7 +318,9 @@ const winInstall = [
     :root[data-os='windows'] .dl-os-windows {
       display: block;
     }
-    :root[data-os='linux'] .dl-os-other,
+    :root[data-os='linux'] .dl-os-linux {
+      display: block;
+    }
     :root[data-os='other'] .dl-os-other {
       display: block;
     }

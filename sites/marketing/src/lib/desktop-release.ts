@@ -11,11 +11,13 @@
 const RELEASES_API =
   "https://api.github.com/repos/protoLabsAI/protoAgent/releases?per_page=30";
 
-// The page links exactly these two installers, so a release only counts as
-// desktop-complete when BOTH are present — that's what guarantees every visible
+// The page links exactly these installers, so a release only counts as
+// desktop-complete when ALL are present — that's what guarantees every visible
 // download URL resolves.
 const MAC_DMG = /^protoAgent-.+-aarch64-apple-darwin\.dmg$/;
 const WIN_SETUP = /^protoAgent-.+-x86_64-pc-windows-msvc-setup\.exe$/;
+const LINUX_APPIMAGE = /^protoAgent-.+-x86_64-unknown-linux-gnu\.AppImage$/;
+const LINUX_DEB = /^protoAgent-.+-x86_64-unknown-linux-gnu\.deb$/;
 
 interface ReleaseAsset {
   name: string;
@@ -36,6 +38,8 @@ export interface DesktopRelease {
   date: string; // "2026-08-10" (release published_at)
   dmgUrl: string;
   setupExeUrl: string;
+  appImageUrl: string;
+  debUrl: string;
   assets: ReleaseAsset[];
 }
 
@@ -64,20 +68,24 @@ export async function fetchLatestDesktopRelease(): Promise<DesktopRelease> {
     if (release.draft || release.prerelease) continue;
     const dmg = release.assets.find((a) => MAC_DMG.test(a.name));
     const setupExe = release.assets.find((a) => WIN_SETUP.test(a.name));
-    if (!dmg || !setupExe) continue;
+    const appImage = release.assets.find((a) => LINUX_APPIMAGE.test(a.name));
+    const deb = release.assets.find((a) => LINUX_DEB.test(a.name));
+    if (!dmg || !setupExe || !appImage || !deb) continue;
     return {
       tag: release.tag_name,
       version: release.tag_name.replace(/^v/, ""),
       date: (release.published_at ?? "").slice(0, 10),
       dmgUrl: dmg.browser_download_url,
       setupExeUrl: setupExe.browser_download_url,
+      appImageUrl: appImage.browser_download_url,
+      debUrl: deb.browser_download_url,
       assets: release.assets,
     };
   }
 
   throw new Error(
-    `download page: none of the ${releases.length} newest releases has both the ` +
-      `macOS DMG and the Windows setup.exe — refusing to publish a download link ` +
-      `that would 404 (#2514)`,
+    `download page: none of the ${releases.length} newest releases carries the ` +
+      `full installer set (macOS DMG, Windows setup.exe, Linux AppImage + .deb) — ` +
+      `refusing to publish a download link that would 404 (#2514)`,
   );
 }

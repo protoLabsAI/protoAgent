@@ -77,6 +77,24 @@ Notes per platform:
 - **Linux** builds on `ubuntu-22.04`, so the frozen sidecar needs glibc ≥ 2.35 at runtime
   (PyInstaller binaries don't run on older glibc than they were built with). The tray icon
   needs `libayatana-appindicator3-1` — declared as a `.deb` dependency; the AppImage bundles it.
+- **Linux needs a GPU-accelerated display — it does NOT run under a bare `Xvfb`** (#2866).
+  WebKitGTK 2.52 hard-crashes at launch when accelerated compositing can't initialize: the
+  web process sends `EnterAcceleratedCompositingMode`, the UI process never created a
+  backing store, and `AcceleratedBackingStore::update()` dereferences null. Verified on
+  Ubuntu 24.04 / WebKitGTK 2.52.3:
+
+  | display | result |
+  |---|---|
+  | Xvfb (no DRI3) | segfault ~2 s after the console renders |
+  | weston headless + GL (Mesa) — Wayland | clean, 60/60 |
+  | same, via Xwayland — X11 | clean, 60/60 |
+  | AppImage in that session | clean, 120 s+ soak |
+
+  It is not our bundle: v0.132.0, v0.139.0 and v0.140.0 all crash identically on 2.52.3,
+  and the same console is clean on WebKitGTK 2.44.0. Practical fallout: **don't try to
+  smoke-test the webview under `xvfb-run` in CI** — it will fail for reasons that have
+  nothing to do with the build. Headless boxes should run the server directly
+  (`python -m server --ui console`) and use the browser console.
 - **Windows** PyInstaller onefile binaries are occasionally false-flagged by AV — a known
   PyInstaller issue; code-signing the sidecar/installer is the durable fix.
 - The real release version is stamped into `tauri.conf.json` at build time (in-tree it stays
