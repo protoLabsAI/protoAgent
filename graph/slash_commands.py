@@ -20,6 +20,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
+from graph._form_state import PendingPluginForm, form_callbacks
 from runtime.state import STATE
 
 log = logging.getLogger("protoagent.server")
@@ -39,17 +40,13 @@ class PluginFormRequest:
     callback_id: str
 
 
-@dataclass
-class _PendingPluginForm:
-    on_submit: object  # async (answers: dict, session_id: str) -> str | dict | None
-    session_id: str
-    created: float  # time.monotonic() at registration — for TTL reaping
-
-
 # A plugin form's submit callback can't cross the HTTP boundary, so the runtime holds
 # it here between open and submit, keyed by an opaque callback_id. Single-use + TTL'd so
 # a form the user never submits can't leak the closure (and its captured plugin state).
-_PLUGIN_FORM_CALLBACKS: dict[str, _PendingPluginForm] = {}
+# The dict itself lives in graph._form_state (anchored in sys.modules), so a plugin
+# reload that re-imports this module rebinds the SAME dict — forms opened before the
+# reload stay submittable instead of expiring (#2889).
+_PLUGIN_FORM_CALLBACKS: dict[str, PendingPluginForm] = form_callbacks()
 _PLUGIN_FORM_TTL_S = 1800  # 30 min
 
 
@@ -114,7 +111,7 @@ def _coerce_command_result(result, session_id: str) -> str | PluginFormRequest |
             return None
         _reap_stale_plugin_forms()
         callback_id = uuid.uuid4().hex
-        _PLUGIN_FORM_CALLBACKS[callback_id] = _PendingPluginForm(
+        _PLUGIN_FORM_CALLBACKS[callback_id] = PendingPluginForm(
             on_submit=on_submit, session_id=session_id, created=time.monotonic()
         )
         return PluginFormRequest(form=result["form"], callback_id=callback_id)
