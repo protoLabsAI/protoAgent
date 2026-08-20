@@ -421,6 +421,12 @@ def _archetypes() -> list[dict]:
         seen_ids.add(aid)
         if bundle:
             seen_urls.add(_norm_url(bundle))
+        # A renamed bundle repo keeps resolving for installs pinned at the OLD URL
+        # (GitHub redirects), but URL-dedupe compares strings — without the alias the
+        # catalog card and the self-registered install would double up in the picker
+        # (the 2026-08-19 *-stack → *-archetype renames). Dedupe-only: never served.
+        for alias in entry.get("bundle_aliases") or []:
+            seen_urls.add(_norm_url(str(alias)))
         if aid == "custom":
             custom = rec  # hold it back so it stays last after bundle archetypes append
         else:

@@ -112,7 +112,14 @@ def test_archetypes_dedupe_installed_bundle_against_catalog(client, monkeypatch)
         "_load_archetype_catalog",
         lambda: [
             {"id": "basic", "label": "Basic", "bundle": None, "soul_preset": "base"},
-            {"id": "acme", "label": "Acme", "bundle": "https://github.com/acme/stack.git", "soul": "x"},
+            {
+                "id": "acme",
+                "label": "Acme",
+                "bundle": "https://github.com/acme/kit.git",
+                # former URL of the since-renamed bundle repo (dedupe-only)
+                "bundle_aliases": ["https://github.com/acme/oldkit"],
+                "soul": "x",
+            },
             {"id": "custom", "label": "Custom", "bundle": None, "soul_preset": "blank"},
         ],
     )
@@ -123,7 +130,10 @@ def test_archetypes_dedupe_installed_bundle_against_catalog(client, monkeypatch)
                 # same id as a catalog entry
                 {"id": "acme", "source_url": "https://other/url", "archetype": {"label": "Dup id"}},
                 # same URL (differing suffix) as the catalog's acme entry
-                {"id": "acme2", "source_url": "https://github.com/acme/stack", "archetype": {"label": "Dup url"}},
+                {"id": "acme2", "source_url": "https://github.com/acme/kit", "archetype": {"label": "Dup url"}},
+                # installed under the repo's FORMER URL (pre-rename pin; GitHub redirect
+                # keeps it resolving) — bundle_aliases must dedupe it too
+                {"id": "acme3", "source_url": "https://github.com/acme/oldkit.git", "archetype": {"label": "Dup alias"}},
                 # genuinely new → appended
                 {"id": "fresh", "source_url": "https://github.com/x/y", "archetype": {"label": "Fresh"}},
             ]
@@ -132,6 +142,7 @@ def test_archetypes_dedupe_installed_bundle_against_catalog(client, monkeypatch)
     monkeypatch.setattr("graph.plugins.installer._read_lock", fake_lock)
     ids = [a["id"] for a in client.get("/api/archetypes").json()["archetypes"]]
     assert ids.count("acme") == 1 and "acme2" not in ids  # both duplicates dropped
+    assert "acme3" not in ids  # old-URL install deduped via bundle_aliases
     assert "fresh" in ids
     assert ids[-1] == "custom"  # custom stays last even after bundle archetypes append
 

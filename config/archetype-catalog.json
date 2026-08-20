@@ -1,5 +1,5 @@
 {
-  "_comment": "Curated archetype directory for the new-agent picker + setup wizard (ADR 0042), served by GET /api/archetypes. Data-driven so archetypes can be added or removed WITHOUT a code change — a fork or instance overrides this file by dropping its own archetype-catalog.json in the live config dir (same override rule as plugin-catalog.json / mcp-catalog.json). Fields: id (also the RadioCard value + React key — keep unique), label, icon (a lucide-react name), blurb, bundle (a git URL installed into the agent on create, or null for a code-free persona), and the base SOUL.md the persona step seeds — either soul_preset (a file STEM under config/soul-presets/, resolved server-side) or an inline soul string. Optional tier ('standard' | 'advanced', default 'standard' when absent) controls picker placement: 'advanced' cards collapse under the picker's 'Advanced (N)' toggle instead of rendering inline. Optional requires (host capabilities, e.g. ['python_runtime']) makes the picker warn at choose-time when one isn't provisioned; optional requires_tools (tool names the persona commits to using, #2277) is persisted to the created agent's workspace.yaml and checked against its bound toolset at boot. Installed plugin bundles that declare an `archetype:` manifest block self-register on top of these and don't need an entry here (deduped by id + bundle URL); that block accepts the same optional fields (ADR 0100). Keep `custom` LAST — it's the catch-all write-your-own persona.",
+  "_comment": "Curated archetype directory for the new-agent picker + setup wizard (ADR 0042), served by GET /api/archetypes. Data-driven so archetypes can be added or removed WITHOUT a code change — a fork or instance overrides this file by dropping its own archetype-catalog.json in the live config dir (same override rule as plugin-catalog.json / mcp-catalog.json). Fields: id (also the RadioCard value + React key — keep unique), label, icon (a lucide-react name), blurb, bundle (a git URL installed into the agent on create, or null for a code-free persona), optional bundle_aliases (former URLs of a since-renamed bundle repo — dedupe-only, so an install pinned at the old URL never doubles the card; never served), and the base SOUL.md the persona step seeds — either soul_preset (a file STEM under config/soul-presets/, resolved server-side) or an inline soul string. Optional tier ('standard' | 'advanced', default 'standard' when absent) controls picker placement: 'advanced' cards collapse under the picker's 'Advanced (N)' toggle instead of rendering inline. Optional requires (host capabilities, e.g. ['python_runtime']) makes the picker warn at choose-time when one isn't provisioned; optional requires_tools (tool names the persona commits to using, #2277) is persisted to the created agent's workspace.yaml and checked against its bound toolset at boot. Installed plugin bundles that declare an `archetype:` manifest block self-register on top of these and don't need an entry here (deduped by id + bundle URL); that block accepts the same optional fields (ADR 0100). Keep `custom` LAST — it's the catch-all write-your-own persona.",
   "archetypes": [
     {
       "id": "basic",
@@ -14,6 +14,9 @@
       "label": "Cowork",
       "icon": "Briefcase",
       "bundle": "https://github.com/protoLabsAI/cowork-archetype",
+      "bundle_aliases": [
+        "https://github.com/protoLabsAI/cowork-stack"
+      ],
       "blurb": "A knowledge-work copilot — office-document skills, Google connectors, schedules, and memory, prepackaged.",
       "soul_preset": "cowork",
       "requires": [
@@ -25,6 +28,9 @@
       "label": "Social Marketing",
       "icon": "Megaphone",
       "bundle": "https://github.com/protoLabsAI/social-archetype",
+      "bundle_aliases": [
+        "https://github.com/protoLabsAI/social-stack"
+      ],
       "blurb": "A social marketing manager — brand voice, a balanced calendar, native drafts per platform, and a copy-ready pack. Never posts on its own.",
       "soul_preset": "social-marketing"
     },
@@ -33,6 +39,9 @@
       "label": "Project Manager",
       "icon": "ClipboardList",
       "bundle": "https://github.com/protoLabsAI/project-manager-archetype",
+      "bundle_aliases": [
+        "https://github.com/protoLabsAI/project-manager-stack"
+      ],
       "blurb": "Single-repo project manager — reads deeply, never holds the keyboard; ships every change through a board of coding agents and reports back as it merges.",
       "soul_preset": "project-manager",
       "tier": "advanced",
@@ -45,6 +54,9 @@
       "label": "Design System Engineer",
       "icon": "Component",
       "bundle": "https://github.com/protoLabsAI/design-system-archetype",
+      "bundle_aliases": [
+        "https://github.com/protoLabsAI/design-system-stack"
+      ],
       "blurb": "Owns a design system end to end — reads tokens and components live, watches for drift, enforces accessibility, and ships every change as a reviewed PR by directing builder delegates.",
       "soul_preset": "design-system",
       "tier": "advanced"
