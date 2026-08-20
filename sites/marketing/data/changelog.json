@@ -1,5 +1,36 @@
 [
   {
+    "version": "v0.141.0",
+    "date": "2026-08-20",
+    "changes": [
+      "The Docs view can point at any folder of markdown (#2842).",
+      "scripts/context_audit.py — one command for \"why is this thread at 121k\" (#2844).",
+      "The prompt viewer explains the whole window (#2847).",
+      "The plugin devkit enforces the SKILL.md contract (#2854).",
+      "A turn now provably survives the operator walking away (#2857, Swap & Resume S0).",
+      "Switching agents (or reloading) mid-turn now reattaches to the live turn (#2858, Swap & Resume S1).",
+      "Your half-written message survives an agent switch (#2860, Swap & Resume S3).",
+      "A session's chat history is finally readable server-side (#2865, ADR 0104, Swap & Resume S5).",
+      "The workflow builder becomes \"Outline & Focus\" (#2835).",
+      "Builder flow polish — reorder, duplicate, Save & test (#2839, S3 of the Outline & Focus redesign).",
+      "The workflow builder is a node-and-edge DAG canvas (#2846).",
+      "Workflows is opt-in again (#2848).",
+      "The console stops lying about busy agents after a swap (#2859, Swap & Resume S2).",
+      "Swapping agents can't kill a working agent, and abandoned streams unwind (#2862, Swap & Resume S4).",
+      "/prompt opens the prompt dialog (#2863).",
+      "A mapping-authored inputs: no longer breaks the Studio (#2834).",
+      "Fs tools see mid-turn project registrations (#2836).",
+      "develop_plugin no longer blocks the chat turn — and no longer refuses a multi-delegate roster (#2838).",
+      "plugin_read_file paginates by line (#2840).",
+      "fetch_url strips page chrome from HTML (#2841).",
+      "Web E2E's Playwright apt install waits for the dpkg lock (#2845).",
+      "Subagents declaring tools: [] now run as text-only transforms",
+      "The Web E2E job stops fighting apt (#2864).",
+      "skills.top_k: 0 means \"list none\" again (#2869).",
+      "The desktop updater can no longer install a stale release (#2832)."
+    ]
+  },
+  {
     "version": "v0.140.0",
     "date": "2026-08-19",
     "changes": [

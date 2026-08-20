@@ -15,6 +15,211 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.141.0] - 2026-08-20
+
+### Added
+- **The Docs view can point at any folder of markdown (#2842).** A new
+  `docs.root` config (also in the plugin's Settings) redirects the bundled
+  Docs plugin — reader view, ⌘K search, and the `docs_search`/`docs_read`
+  agent tools — at an operator-chosen directory tree of `.md` files:
+  runbooks, a team wiki, project notes, anything. Custom trees group by
+  top-level directory (no Diátaxis assumed), hidden directories are skipped,
+  and a symlink escaping the root is not a doc. Empty `root` keeps today's
+  bundled protoAgent docs byte-for-byte; a bad path falls back loudly instead
+  of losing the Docs view to a typo.
+
+- **`scripts/context_audit.py` — one command for "why is this thread at
+  121k" (#2844).** Sizes a chat thread's checkpoint into honest categories
+  (assistant text, tool args counted exactly once, tool results, injected
+  memory frames) and joins telemetry to expose the fixed per-call overhead
+  no checkpoint contains. Backed by `graph/message_blocks.py`, the now-
+  canonical message walk — `content` already contains the `tool_use`
+  blocks, and summing it with `tool_calls` double-counts.
+
+- **The prompt viewer explains the whole window (#2847).** `/prompt` and the
+  View-prompt dialog now include the conversation-history breakdown from the
+  #2844 context audit — categories, top tool-arg producers, honest "(as of
+  now)" framing — via a new cheap `GET /api/prompts/breakdown` that works
+  even with prompt capture off.
+
+- **The plugin devkit enforces the SKILL.md contract (#2854).** A
+  frontmatter-less skill file is now refused at write time with the
+  loader's own reasons, and `test_plugin`/`develop_plugin` lint every
+  skill before pytest — a green suite can no longer ship skills that
+  silently never load. Backed by `graph.skills.loader.skill_md_problems`,
+  the loader's contract as a reusable validator.
+
+- **A turn now provably survives the operator walking away (#2857, Swap &
+  Resume S0).** Characterization tests pin the server-owned-turn contract: an
+  A2A streaming turn whose SSE consumer disconnects mid-flight (agent switch,
+  reload, dropped connection) keeps running to completion, and the tool frames
+  it emits while nobody is watching land in the durable task history — the
+  ground the reattach work builds on. No behavior change; the contract was
+  true but untested.
+
+- **Switching agents (or reloading) mid-turn now reattaches to the live turn
+  (#2858, Swap & Resume S1).** The console calls A2A `tasks/resubscribe` on
+  return — the primitive was served and fleet-proxied all along, just never
+  called — replaying the durable task snapshot (every tool card, reasoning
+  step, and text the agent produced while nobody was watching) and then
+  streaming the live tail like a normal turn. A cold agent behind the fleet
+  proxy is retried with backoff instead of freezing the bubble forever on the
+  first 409, a turn that ended while detached replays once and finalizes, and
+  the reconcile ceiling now covers the proxy's full 600s turn budget instead
+  of two minutes.
+
+- **Your half-written message survives an agent switch (#2860, Swap & Resume
+  S3).** The composer draft and any queued mid-turn steers persist per session
+  (per tab, per agent) and come back after a swap or reload; a draft or ready
+  attachments prompt before the page unloads instead of vanishing silently —
+  while a merely-streaming turn never blocks navigation, because turns are
+  server-owned and reattach on return. Scroll position is remembered too:
+  returning to a transcript you'd scrolled back through restores your place,
+  and near-bottom keeps the default pin-to-latest.
+
+- **A session's chat history is finally readable server-side (#2865, ADR 0104,
+  Swap & Resume S5).** `GET /api/chat/sessions/{id}/turns` serves the durable
+  A2A task store's record of the session — every turn's status, artifacts, and
+  per-frame history (tool calls, HITL prompts) in the same wire shapes the
+  console's stream dispatcher already replays, in-flight turns included.
+  Until now the rendered history lived only in one browser's localStorage; a
+  second device saw an empty chat for a session the server knew everything
+  about. The console keeps localStorage as its primary store — this is the
+  recovery and multi-device substrate.
+
+### Changed
+- **The workflow builder becomes "Outline & Focus" (#2835).** Authoring was one
+  flat form — the recipe's shape and its prompts interleaved in a single
+  column. Now the outline (step cards with live validation dots, the
+  parallelism lanes, workflow/inputs/output entries) sits beside a focus
+  editor where the selected step's prompt fills the pane, `depends_on` is a
+  row of toggle pills, chips insert at the cursor, and inputs get a real
+  editor for the typed-input contract (type, description, default). Server
+  validation lands on the card that's wrong instead of a list at the bottom.
+  Panel-sized via container query: narrow panels get a horizontal outline
+  strip above the editor.
+
+- **Builder flow polish — reorder, duplicate, Save & test (#2839, S3 of the
+  Outline & Focus redesign).** Step cards drag-reorder by their grip handle: a
+  strict linear chain is re-threaded so execution order follows the new visual
+  order, while any other DAG keeps its `depends_on` untouched (the lanes stay
+  the truth). The focused step gains a Duplicate action (unique `-copy` id,
+  focus follows the clone), and "Save & test" saves the recipe and lands on
+  the run form with it selected and its input defaults seeded — the tightest
+  author-iterate loop.
+
+- **The workflow builder is a node-and-edge DAG canvas (#2846).** Steps are
+  nodes (validation dot, gate marker, subagent badge), `depends_on` is a real
+  edge you drag to create (cycle attempts refused) or delete to remove, and
+  node positions persist on the recipe — the n8n/ComfyUI shape, because a
+  graph you can see is the easiest to understand. Selecting a node opens the
+  editor beside the canvas; variable insertion became a grouped picker
+  offering inputs and **upstream** step outputs only (a non-ancestor's output
+  renders empty at run time, so the old chip wall was offering a mistake).
+  Includes the interim outline-era improvements: Save & test, duplicate step,
+  typed-input editing, per-step live validation.
+
+- **Workflows is opt-in again (#2848).** v0.140.0 shipped the plugin enabled
+  by default; that default is reverted — the engine, tools, and Studio load
+  only when an operator adds `workflows` to `plugins.enabled`, as before.
+  Nothing else from the GA batch changes. **Migration:** an instance that
+  updated through v0.140.0 and wants to keep workflows needs
+  `plugins.enabled: [workflows]` after this release.
+
+- **The console stops lying about busy agents after a swap (#2859, Swap &
+  Resume S2).** Sessions whose last assistant message is still streaming with
+  a durable task id come back **active and locked** on load — every such tab
+  reattaches (not just the focused one), the composer stays locked, and Stop
+  stays visible, so a returning operator can't accidentally fire a second
+  concurrent turn into a session whose first turn is still running. The event
+  bus's replay cursor now survives navigation too (per-agent, per-tab), so
+  retained topics — an approval request raised while you were away, a
+  background completion — replay on return instead of vanishing with the page.
+
+- **Swapping agents can't kill a working agent, and abandoned streams unwind
+  (#2862, Swap & Resume S4).** The warm-cap's LRU-eviction grace now defaults
+  to five minutes — and the hub refreshes a member's recency on every turn
+  start through the proxy, so the grace window tracks agents that are
+  *working*, not just ones the operator clicked (rapid A→B→A switching could
+  previously evict A mid-turn; `grace_seconds: 0` restores pure LRU). Proxied
+  SSE streams gain a 30s comment keepalive: a stream whose viewer walked away
+  now unwinds within one keepalive period instead of parking on the member
+  until its next write. The plugin-views guide documents the proxy's 20s read
+  lane (and the SSE/WS exemptions) for plugin authors.
+
+- **`/prompt` opens the prompt dialog (#2863).** The slash command now
+  opens the same full viewer the message row's View prompt action opens —
+  tabs, budget bars, history breakdown — instead of an inline note; the
+  note remains only as the degrade path when nothing is captured.
+
+### Fixed
+- **A mapping-authored `inputs:` no longer breaks the Studio (#2834).** Recipes
+  written with the natural YAML shape — `inputs: {topic: {required: true}}` —
+  crashed the builder's edit loader (taking the whole Studio view with it) and
+  silently emptied `{{inputs.x}}` validation, because `get()` handed the raw
+  YAML through. The registry now canonicalizes inputs to the documented
+  `[{name, required, default?}]` at load and save (so files converge on the
+  canonical shape), and the builder normalizes defensively so an unexpected
+  shape can never blank the surface again.
+
+- **Fs tools see mid-turn project registrations (#2836).** The fenced filesystem tools resolved their project registry from a snapshot captured at graph build, so a project registered by `onboard_project` stayed invisible until the next turn. The tool closures now resolve the registry through the live `HOST.config` seam on every call — `list_projects`, `list_dir`, `read_file`, `find_files`, and `search_files` see a just-onboarded project on the same turn, and `onboard_project` itself merges against the live registry, so a second onboarding in one turn no longer drops the first. Both live reads are guarded: an unwired, raising, or `None`-returning seam falls back to the build-time config instead of failing the tool call.
+
+- **`develop_plugin` no longer blocks the chat turn — and no longer refuses a
+  multi-delegate roster (#2838).** The ACP coder dispatch used to run inline for
+  up to 15 minutes with nothing visible; it now runs as a detached background
+  job (ADR 0050) — the tool returns a job handle immediately and the coder +
+  `test_plugin` + reload report drains back automatically on a later turn (the
+  spine is preserved; lean/CLI contexts without a manager still fall back to
+  the inline path). And with several `acp` delegates configured and
+  `plugin_devkit.coder` unset, `_resolve_coder` now default-picks one (a
+  `sonnet`/`claude-code`-named delegate, else the first alphabetically) and
+  logs the choice, instead of returning an operator-addressed refusal that
+  pushed the model into hand-writing the plugin inline.
+
+- **`plugin_read_file` paginates by line (#2840).** The devkit read tool now
+  takes optional `offset` (1-based line) and `limit` (max lines), matching the
+  core `read_file` addressing from #2709: a small file still comes back whole
+  in one call, and a truncated result names the next offset to continue from —
+  so build loops re-read just the region they're editing instead of burning
+  the full read cap after every write.
+
+- **fetch_url strips page chrome from HTML (#2841).** `_extract_text_from_html` now decomposes banner `<header>` elements while keeping article/section headers — a header survives inside `<main>`/`<article>`/`<section>`/`<aside>`, and on pages without those wrappers only banner-position (direct child of `<body>`) or nav-wrapping headers are treated as chrome, so a title/byline `<header>` nested in a plain `<div>` is preserved. It also strips ARIA-landmark chrome (`role="navigation"`, `"banner"`, `"contentinfo"`) and `sidebar`/`menu`/`breadcrumb` widgets by exact class token (`menu-item`/`sidebar-open` survive); pages without `<main>`/`<article>` fall back to `role="main"` and then the dominant `<div>` by text (never narrowing past a kept `<header>`/`<h1>`) before the whole `<body>` — so div-soup pages (Reddit-style) no longer drag global nav and sidebars into context. The no-bs4 regex fallback is unchanged.
+
+- **Web E2E's Playwright apt install waits for the dpkg lock (#2845).** The
+  runner's unattended-upgrades kept winning an apt-lock race against
+  `playwright install`, flaking 2 PRs in 2 days with exit 100 ("Could not get
+  lock"). The install step now drops `DPkg::Lock::Timeout "120"` into
+  `apt.conf.d` — the only channel that reaches the apt-get calls Playwright
+  runs internally — and primes the package lists with an explicit lock-wait
+  `apt-get update` before the retry loop, so stragglers are waited out instead
+  of failing the attempt instantly.
+
+- **Subagents declaring `tools: []` now run as text-only transforms** instead of
+  being refused with "No tools available". A declared-empty toolset is a
+  deliberate design (edit/summarize/classify passes — including model-pinned
+  passes against gateway lanes that reject tools-bearing requests); tools that
+  were declared but resolve to none still return the actionable error.
+
+- **The Web E2E job stops fighting apt (#2864).** It now runs in the
+  pinned Playwright container image — browsers and system deps
+  preinstalled, zero apt at runtime — retiring the lock-contention flake
+  that failed five runs in two days, with a guard that names the exact
+  tag bump whenever `@playwright/test` moves.
+
+- **`skills.top_k: 0` means "list none" again (#2869).** The #2868
+  identities-never-drop index would still emit every skill name when the
+  operator turned the index off entirely — off now means off.
+
+- **The desktop updater can no longer install a stale release (#2832).** The
+  update dialog could sit open while newer builds became Latest, and "Install
+  and Relaunch" would install the originally-offered version. Confirming now
+  re-checks the endpoint first: still-Latest installs the fresh object
+  (current URLs and signature), a superseded offer re-prompts against the
+  version that will actually install (never a silent swap), a withdrawn offer
+  says so, and a failed re-check installs nothing rather than gambling on a
+  stale download. Direct-to-Latest behavior and signature verification are
+  unchanged.
+
 ## [0.140.0] - 2026-08-19
 
 ### Added
