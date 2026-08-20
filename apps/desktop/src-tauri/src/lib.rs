@@ -666,6 +666,120 @@ async fn pick_path<R: Runtime>(app: AppHandle<R>, start: Option<String>, files: 
 /// as dialogs. The silent launch check only logs. On Linux the updater manages
 /// AppImage installs only (a .deb belongs to apt) — that limitation comes back
 /// as an error from the plugin and is handled like any other.
+/// What the pre-install freshness recheck (#2832) decided. Pure so the
+/// dialog-open-while-releases-advance contract is unit-testable: an offer for A
+/// must never install A once B is Latest without renewed confirmation.
+#[derive(Debug, PartialEq)]
+enum Freshness {
+    /// The offer is still Latest — install the FRESH object (fresh URLs/signature).
+    Install,
+    /// Latest moved past the offer while the dialog sat open — re-offer, never
+    /// silently install either version.
+    Superseded,
+    /// The endpoint no longer offers anything (we're current after all).
+    UpToDate,
+}
+
+fn classify_recheck(offered: &str, fresh: Option<&str>) -> Freshness {
+    match fresh {
+        None => Freshness::UpToDate,
+        Some(v) if v == offered => Freshness::Install,
+        Some(_) => Freshness::Superseded,
+    }
+}
+
+/// Offer `update` via the Install/Later dialog. On confirm, RE-CHECK the
+/// endpoint before downloading (#2832): the dialog can sit open across several
+/// releases, and the captured update object would otherwise install a stale,
+/// superseded build. A superseded offer re-enters this function with the fresh
+/// update so the operator confirms against the version that will actually
+/// install. Box::pin because the re-offer recursion makes the future cyclic.
+fn offer_update<R: Runtime>(
+    app: AppHandle<R>,
+    update: tauri_plugin_updater::Update,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+    Box::pin(async move {
+        let current = app.package_info().version.to_string();
+        let version = update.version.clone();
+        // Callback dialog → awaitable: the file-picker above uses the same
+        // capacity-1 tauri::async_runtime channel idiom.
+        let (tx, mut rx) = tauri::async_runtime::channel::<bool>(1);
+        app.dialog()
+            .message(format!(
+                "protoAgent {version} is available (you have {current}).\n\n\
+                 Download and install now? The app relaunches when it finishes \
+                 and your agent data is untouched."
+            ))
+            .title("Update available")
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "Install and Relaunch".to_string(),
+                "Later".to_string(),
+            ))
+            .show(move |confirmed| {
+                let _ = tx.try_send(confirmed);
+            });
+        if !rx.recv().await.unwrap_or(false) {
+            return;
+        }
+
+        // Freshness gate (#2832): revalidate against Latest before any download.
+        let recheck = match app.updater() {
+            Ok(u) => u.check().await,
+            Err(e) => Err(e),
+        };
+        let fresh = match recheck {
+            Ok(f) => f,
+            Err(e) => {
+                // Can't revalidate ⇒ don't gamble on a possibly-stale object; the
+                // download needs the same network the recheck just failed on.
+                log::warn!("updater: pre-install recheck failed: {e}");
+                app.dialog()
+                    .message(format!(
+                        "Couldn't re-confirm the latest version before installing.\n\n{e}\n\n\
+                         Nothing was installed — try Check for Updates again."
+                    ))
+                    .title("protoAgent updates")
+                    .show(|_| {});
+                return;
+            }
+        };
+        match classify_recheck(&version, fresh.as_ref().map(|u| u.version.as_str())) {
+            Freshness::Install => {
+                // Install the FRESH object — same version, but current URLs/signature.
+                let update = fresh.expect("Install implies a fresh update");
+                match update.download_and_install(|_, _| {}, || {}).await {
+                    Ok(()) => {
+                        log::info!("updater: installed {}, relaunching", update.version);
+                        app.restart();
+                    }
+                    Err(e) => {
+                        log::error!("updater: install failed: {e}");
+                        app.dialog()
+                            .message(format!("The update failed to install.\n\n{e}"))
+                            .title("protoAgent updates")
+                            .show(|_| {});
+                    }
+                }
+            }
+            Freshness::Superseded => {
+                let update = fresh.expect("Superseded implies a fresh update");
+                log::info!(
+                    "updater: offer {version} superseded by {} while the dialog was open — re-offering",
+                    update.version
+                );
+                offer_update(app, update).await;
+            }
+            Freshness::UpToDate => {
+                log::info!("updater: offer {version} withdrawn — endpoint reports up to date");
+                app.dialog()
+                    .message("You're already on the latest version — the offered update was withdrawn.")
+                    .title("protoAgent updates")
+                    .show(|_| {});
+            }
+        }
+    })
+}
+
 fn check_for_updates<R: Runtime>(app: AppHandle<R>, interactive: bool) {
     tauri::async_runtime::spawn(async move {
         let updater = match app.updater() {
@@ -688,39 +802,7 @@ fn check_for_updates<R: Runtime>(app: AppHandle<R>, interactive: bool) {
                 let current = app.package_info().version.to_string();
                 let version = update.version.clone();
                 log::info!("updater: {version} available (running {current})");
-                let app_for_install = app.clone();
-                app.dialog()
-                    .message(format!(
-                        "protoAgent {version} is available (you have {current}).\n\n\
-                         Download and install now? The app relaunches when it finishes \
-                         and your agent data is untouched."
-                    ))
-                    .title("Update available")
-                    .buttons(MessageDialogButtons::OkCancelCustom(
-                        "Install and Relaunch".to_string(),
-                        "Later".to_string(),
-                    ))
-                    .show(move |confirmed| {
-                        if !confirmed {
-                            return;
-                        }
-                        tauri::async_runtime::spawn(async move {
-                            match update.download_and_install(|_, _| {}, || {}).await {
-                                Ok(()) => {
-                                    log::info!("updater: installed, relaunching");
-                                    app_for_install.restart();
-                                }
-                                Err(e) => {
-                                    log::error!("updater: install failed: {e}");
-                                    app_for_install
-                                        .dialog()
-                                        .message(format!("The update failed to install.\n\n{e}"))
-                                        .title("protoAgent updates")
-                                        .show(|_| {});
-                                }
-                            }
-                        });
-                    });
+                offer_update(app.clone(), update).await;
             }
             Ok(None) => {
                 log::info!("updater: up to date");
@@ -1317,6 +1399,35 @@ pub fn run() {
         });
 }
 
+
+#[cfg(test)]
+mod updater_freshness_tests {
+    use super::{classify_recheck, Freshness};
+
+    // #2832 acceptance: dialog opened for A -> endpoint advances to B ->
+    // the install action must NEVER install A without renewed confirmation.
+    #[test]
+    fn superseded_offer_is_never_installed() {
+        assert_eq!(classify_recheck("0.137.1", Some("0.139.0")), Freshness::Superseded);
+    }
+
+    #[test]
+    fn still_latest_installs_the_fresh_object() {
+        assert_eq!(classify_recheck("0.140.0", Some("0.140.0")), Freshness::Install);
+    }
+
+    #[test]
+    fn withdrawn_offer_reports_up_to_date() {
+        assert_eq!(classify_recheck("0.140.0", None), Freshness::UpToDate);
+    }
+
+    #[test]
+    fn even_a_downgrade_offer_counts_as_superseded() {
+        // The endpoint is authoritative in both directions: never install an
+        // object the endpoint no longer serves.
+        assert_eq!(classify_recheck("0.141.0", Some("0.140.1")), Freshness::Superseded);
+    }
+}
 
 #[cfg(test)]
 mod auth_token_tests {
