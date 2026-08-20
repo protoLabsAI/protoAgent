@@ -14,7 +14,9 @@ The producer-event contract (unchanged from the hand-rolled handler) is::
     tool_start      a tool began      (dict {id,name,input} | str)
     tool_end        a tool finished   (dict {id,name,output} | str)
     delta           a worldstate-delta {domain,path,op,value}
-    usage           per-LLM-call token usage {input_tokens,output_tokens,...}
+    usage           per-LLM-call token usage {input_tokens,output_tokens,...};
+                    a `subagent_type` tag marks a delegated call (#2872) — summed
+                    into the turn's spend but excluded from context-fill tracking
     input_required  HITL pause {question}
     done            terminal; payload is the final text
     error           terminal; payload is the error string
@@ -733,9 +735,15 @@ class ProtoAgentExecutor(AgentExecutor):
                     if isinstance(payload, dict):
                         had_usage = True
                         llm_calls += 1
-                        context_tokens = max(context_tokens, int(payload.get("input_tokens", 0) or 0))
-                        last_call_input = int(payload.get("input_tokens", 0) or 0)
-                        last_call_output = int(payload.get("output_tokens", 0) or 0)
+                        # A delegated (subagent) call — tagged by the `task` tool
+                        # (#2872) — bills to the turn's token/cost sums and models
+                        # below, but not to the thread's context-window fill or the
+                        # next-turn projection: those describe the LEAD thread, and
+                        # a delegation's prompt size says nothing about either.
+                        if not payload.get("subagent_type"):
+                            context_tokens = max(context_tokens, int(payload.get("input_tokens", 0) or 0))
+                            last_call_input = int(payload.get("input_tokens", 0) or 0)
+                            last_call_output = int(payload.get("output_tokens", 0) or 0)
                         usage["input_tokens"] += int(payload.get("input_tokens", 0) or 0)
                         usage["output_tokens"] += int(payload.get("output_tokens", 0) or 0)
                         usage["cache_read_input_tokens"] += int(payload.get("cache_read_input_tokens", 0) or 0)

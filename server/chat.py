@@ -905,7 +905,24 @@ async def _run_turn_stream(
                 # for the cost-v1 artifact (accumulated across the turn's calls).
                 # The model name proves routing per turn — incl. aux/fallback
                 # models — vs. the statically-configured lead (ADR 0006 Slice 4b).
-                yield ("usage", {**usage_out, "cost_usd": cost, "model": model})
+                # A subagent's model call (parent_tool_id set) is NOT yielded here:
+                # its usage reaches the accumulator via the `task`/`task_batch`
+                # custom usage events instead (#2872) — collected from the
+                # sub-graph's final state, which also covers delegation paths whose
+                # callback-propagated end events never reach this loop. Yielding
+                # here too would double-bill the calls that DO bubble up. The
+                # per-call Prometheus record above still counts them.
+                if not parent_tool_id:
+                    yield ("usage", {**usage_out, "cost_usd": cost, "model": model})
+        elif kind == "on_custom_event" and name == "usage":
+            # A delegation's model usage, dispatched by the `task`/`task_batch`
+            # tool body after its sub-graph settles (#2872). Same shape as the
+            # on_chat_model_end frame above plus a `subagent_type` tag (the
+            # executor keeps tagged rows out of the lead thread's context-window
+            # fill); forwarded verbatim so the turn bills delegated work.
+            data = event.get("data")
+            if isinstance(data, dict):
+                yield ("usage", dict(data))
 
     # HITL pause (ADR 0003): the agent called ask_human → LangGraph interrupt().
     # The graph is checkpointed at the interrupt; surface the question so the A2A
