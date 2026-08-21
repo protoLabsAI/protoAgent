@@ -4,6 +4,12 @@ import { defineConfig } from "vitepress";
 // the docs in at /docs/ (DOCS_BASE=/docs/). Env-driven so both coexist.
 const base = process.env.DOCS_BASE || "/protoAgent/";
 
+// Social-card copy. Mirrors the marketing site's BaseLayout so a shared docs
+// link unfurls with the same card as a shared homepage link.
+const SOCIAL_DESCRIPTION =
+  "A lean, A2A-native agent on LangGraph. Ships a small core, grows with git-URL plugins. Run one agent or orchestrate a fleet; drive it from a console, the OpenAI API, or A2A. Local-first, yours to fork.";
+const SOCIAL_IMAGE = "https://agent.protolabs.studio/docs/social-preview.png";
+
 export default defineConfig({
   title: "protoAgent",
   description:
@@ -27,13 +33,19 @@ export default defineConfig({
 
   head: [
     ["link", { rel: "icon", type: "image/svg+xml", href: `${base}favicon.svg` }],
-    // Social cards — canonical absolute image (the dark protoAgent banner) so it
-    // resolves regardless of which base the build serves under.
+    // Social cards — the same 1280×640 card GitHub serves as the repo's social
+    // preview (docs/public/social-preview.png), as a canonical absolute URL so
+    // it resolves regardless of which base the build serves under.
     ["meta", { property: "og:type", content: "website" }],
     ["meta", { property: "og:title", content: "protoAgent" }],
-    ["meta", { property: "og:image", content: "https://agent.protolabs.studio/docs/protoagent-banner.png" }],
+    ["meta", { property: "og:description", content: SOCIAL_DESCRIPTION }],
+    ["meta", { property: "og:image", content: SOCIAL_IMAGE }],
+    ["meta", { property: "og:image:width", content: "1280" }],
+    ["meta", { property: "og:image:height", content: "640" }],
     ["meta", { name: "twitter:card", content: "summary_large_image" }],
-    ["meta", { name: "twitter:image", content: "https://agent.protolabs.studio/docs/protoagent-banner.png" }],
+    ["meta", { name: "twitter:title", content: "protoAgent" }],
+    ["meta", { name: "twitter:description", content: SOCIAL_DESCRIPTION }],
+    ["meta", { name: "twitter:image", content: SOCIAL_IMAGE }],
   ],
 
   themeConfig: {

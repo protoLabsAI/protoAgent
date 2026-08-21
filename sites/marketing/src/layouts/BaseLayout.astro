@@ -12,11 +12,14 @@ interface Props {
 const {
   title,
   description = 'protoAgent — a lean, A2A-native agent on LangGraph. Ships a small core, grows with git-URL plugins. Run one agent or orchestrate a fleet; drive it from a console, the OpenAI API, or A2A. Local-first, yours to fork.',
-  ogImage = '/og-protoagent.png',
+  // Same 1280×640 card GitHub serves as the repo's social preview.
+  ogImage = '/social-preview.png',
 } = Astro.props;
 
 // Absolute URL so social scrapers (Slack/Discord/Twitter) reliably render the card.
-const ogImageUrl = new URL(ogImage, Astro.site ?? 'https://agent.protolabs.studio').href;
+const siteUrl = Astro.site ?? 'https://agent.protolabs.studio';
+const ogImageUrl = new URL(ogImage, siteUrl).href;
+const canonicalUrl = new URL(Astro.url.pathname, siteUrl).href;
 ---
 
 <!doctype html>
@@ -32,8 +35,13 @@ const ogImageUrl = new URL(ogImage, Astro.site ?? 'https://agent.protolabs.studi
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
     <meta property="og:image" content={ogImageUrl} />
+    <meta property="og:image:width" content="1280" />
+    <meta property="og:image:height" content="640" />
     <meta property="og:type" content="website" />
+    <meta property="og:url" content={canonicalUrl} />
     <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
     <meta name="twitter:image" content={ogImageUrl} />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
