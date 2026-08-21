@@ -50,6 +50,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
+from scheduler.interface import is_cron
 from tools.fallbacks import with_fallback
 
 log = logging.getLogger("protoagent.tools")
@@ -1032,6 +1033,7 @@ def _build_scheduler_tools(scheduler) -> list:
         when: str,
         job_id: str | None = None,
         timezone: str | None = None,
+        state: Annotated[Any, InjectedState] = None,
     ) -> str:
         """Schedule a future task. The agent receives ``prompt`` as a
         new turn when the schedule fires.
@@ -1080,8 +1082,17 @@ def _build_scheduler_tools(scheduler) -> list:
                     )
         except Exception:  # noqa: BLE001 — dedup is best-effort; never block scheduling
             pass
+        # One-shot fires resume the ORIGINATING chat session (ADR 0053): stamp the
+        # turn's session id onto the job, same pattern as `wait` — read from the
+        # injected graph state, not the tracing contextvar (empty in a tool body).
+        # Crons deliberately stay context-free: a recurring job firing into a chat
+        # the operator closed days ago is wrong — recurring work lands in Activity.
+        ctx = _session_id_from(state) or None
+        context_id = ctx if not is_cron(when) else None
         try:
-            job = await asyncio.to_thread(scheduler.add_job, prompt, when, job_id=job_id, timezone=timezone)
+            job = await asyncio.to_thread(
+                scheduler.add_job, prompt, when, job_id=job_id, timezone=timezone, context_id=context_id
+            )
         except ValueError as exc:
             return f"Error: {exc}"
         except Exception as exc:  # noqa: BLE001
