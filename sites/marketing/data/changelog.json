@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.144.0",
+    "date": "2026-08-21",
+    "changes": [
+      "Bundles can declare config_inputs: — setup prompts wired to plugin config (#2934).",
+      "The marketing site no longer installs React for one stylesheet (#2930).",
+      "Fresh installs no longer show the per-turn token/cost footer under chat answers (#2931).",
+      "The Docs view no longer 401s on first load of a token-gated host (#2933).",
+      "Plugin views can no longer 401 on first load — the DS kit itself now waits for the bearer (#2935).",
+      "One-shot scheduled tasks resume the chat that scheduled them (#2939).",
+      "The Project Manager archetype is held from the new-agent picker (#2932)."
+    ]
+  },
+  {
     "version": "v0.143.0",
     "date": "2026-08-20",
     "changes": [

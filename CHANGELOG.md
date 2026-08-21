@@ -15,6 +15,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.144.0] - 2026-08-21
+
+### Added
+- **Bundles can declare `config_inputs:` — setup prompts wired to plugin config (#2934).** A
+  `protoagent.bundle.yaml` can now carry a `config_inputs:` list (`{key, label, type,
+  required?, default?}`, same shape as MCP catalog inputs) declaring plugin config keys the
+  operator should fill at create time. The SetupWizard and the fleet New Agent panel render
+  them in the Configure step — text for `string`/`path`, a dropdown of configured ACP
+  delegates for `delegate`, a toggle for `boolean` — and the install path writes the answers
+  into the host/member config at the declared dotted key paths (declared keys only; an
+  unanswered input falls back to its default without clobbering a live value). Bundles
+  without `config_inputs:` behave exactly as before.
+
+### Fixed
+- **The marketing site no longer installs React for one stylesheet (#2930).** `sites/marketing` is a pure Astro site, but it pulled the entire React runtime via `@protolabsai/ui` just to import `styles.css`. It now depends on `@protolabsai/ui-css` — the CSS-only split of the `.pl-*` component classes — so `react`/`react-dom` drop out of its dependency tree entirely. No visual change.
+
+- **Fresh installs no longer show the per-turn token/cost footer under chat answers (#2931).**
+  `showChatUsage` now defaults to off, so a new install gets a clean transcript out of the
+  box; Settings ▸ Chat still turns it on. Existing installs keep their current setting —
+  zustand/persist hydrates the flag from localStorage, so the new default only applies where
+  no persisted UI state exists.
+
+- **The Docs view no longer 401s on first load of a token-gated host (#2933).** Same race #2926 fixed for the friction and devkit views: the first fetch fired from module scope before the console's bearer handshake reached the iframe, so a fresh desktop member opened Docs to "Could not load docs — HTTP 401". The first load now rides the handshake, with a fallback for open-mode/top-level pages.
+
+- **Plugin views can no longer 401 on first load — the DS kit itself now waits for the bearer (#2935).** `@protolabsai/ui` 0.60.1's `apiFetch` awaits the console handshake (bounded) before its first request, covering every plugin view at the kit layer; the earlier per-view fixes (#2926, #2933) become belt-and-braces. Also picks up ui 0.60.0's React-free `ui-css` stylesheet split (no visual change).
+
+- **One-shot scheduled tasks resume the chat that scheduled them (#2939).** `schedule_task` never passed the originating session to the scheduler, so every fire — even a "remind me at 3pm" scoped to a conversation — landed in the `system:activity` thread. One-shot ISO schedules now carry the turn's session as `context_id` (the same injected-state pattern `wait` uses), so the fire resumes that conversation. Cron schedules deliberately stay context-free and keep firing into Activity — a recurring job resuming a chat the operator closed days ago would be wrong.
+
+### Removed
+- **The Project Manager archetype is held from the new-agent picker (#2932).** An operator first-run test hit the capability-contract banner (the bundle seeded `github.write: false` against its own `requires_tools: [github_create_issue]` contract) and a raw `br init` error from the unbound board on desktop. The catalog row is parked (not deleted) with its bundle, persona, and contract intact, and returns once the companion fixes land (project-manager-archetype#3, projectBoard-plugin#192). Existing agents created from it are unaffected.
+
 ## [0.143.0] - 2026-08-20
 
 ### Added
