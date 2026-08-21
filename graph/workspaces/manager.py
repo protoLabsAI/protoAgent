@@ -360,6 +360,7 @@ def create(
     soul: str | None = None,
     inputs: Mapping[str, str] | None = None,
     secrets: list[dict] | None = None,
+    config_inputs: Mapping[str, object] | None = None,
     requires_tools: list[str] | None = None,
 ) -> dict:
     """Scaffold a workspace: its config dir, ``workspace.yaml``, and (with ``bundle``)
@@ -385,8 +386,10 @@ def create(
     seed-time env, so an operator token seeds the server ENABLED instead of visible-but-inert.
     ``secrets`` (``[{key, value}]``) are operator-supplied values for the bundle's *declared*
     secrets, written to the member's ``config/secrets.yaml`` nested under the bundle's section.
-    Both are seeded AFTER install and only apply on the bundle path; operator-supplied only —
-    never auto-copied from the host's environment.
+    ``config_inputs`` (``{dotted_key: value}``, #2934) are the operator's answers to the
+    bundle's declared ``config_inputs:`` prompts, written into the workspace config at each
+    declared dotted key path. All are seeded AFTER install and only apply on the bundle path;
+    operator-supplied only — never auto-copied from the host's environment.
     """
     name = _safe(name)
     if name.lower() in _RESERVED_NAMES:
@@ -479,6 +482,10 @@ def create(
             # per-plugin config defaults (#1350) — a fresh workspace, so nothing to clobber.
             _enable_installed_in_config(cfg, ws / "plugins.lock")
             _apply_bundle_config_defaults(cfg, ws / "plugins.lock")
+            # Operator answers to the bundle's declared config_inputs prompts (#2934) —
+            # written AFTER the defaults overlay so an explicit answer wins over a
+            # bundle-recommended default for the same key.
+            _apply_bundle_config_inputs(cfg, ws / "plugins.lock", config_inputs or {})
             # Seed the bundle's MCP servers (ADR 0083 D5, #2011). Separate from the config
             # defaults above because `mcp.servers` is a LIST — the dict-leaf overlay can't
             # merge it — and because its `${input}` placeholders resolve from the env here.
@@ -694,11 +701,86 @@ def apply_bundle_secrets(cfg: Path, lock: Path, secrets_list: list[dict]) -> lis
     return written
 
 
+def apply_bundle_config_inputs(cfg: Path, lock: Path, values: Mapping[str, object] | None = None) -> list[str]:
+    """Write operator-supplied answers to a bundle's DECLARED ``config_inputs:`` (#2934)
+    into the config YAML at each declared dotted key path. The bundle declares its
+    prompts in the lock (``{key, label, type, required, default?}`` per bundle, cached by
+    the installer — same pattern as ``apply_bundle_mcp_servers``); ``values`` is the
+    operator's create-time ``{dotted_key: value}`` map from the SetupWizard/NewAgentPanel
+    Configure step.
+
+    Per declared input: an operator value is coerced to the declared type and written —
+    overwriting, because the operator just typed it for THIS install; with no operator
+    value, the declared ``default`` fills in only when the key is still absent, so a
+    re-install never clobbers a live setting. Only DECLARED keys are writable — an entry
+    in ``values`` no bundle declares is ignored, so the operator (or a compromised
+    caller) can't smuggle an arbitrary config path. Best-effort — a malformed lock or
+    config is a no-op. Returns the dotted keys written."""
+    import json
+
+    from graph.config_io import load_yaml_doc, save_yaml_doc
+    from graph.plugins.installer import coerce_config_input_value
+
+    try:
+        data = json.loads(lock.read_text(encoding="utf-8")) if lock.exists() else {}
+    except (json.JSONDecodeError, OSError):
+        return []
+    declared: dict[str, dict] = {}
+    for b in data.get("bundles") or []:
+        for dec in b.get("config_inputs") or []:
+            if isinstance(dec, dict) and str(dec.get("key", "")).strip():
+                declared.setdefault(str(dec["key"]).strip(), dec)
+    if not declared:
+        return []
+
+    doc = load_yaml_doc(cfg)
+    if not isinstance(doc, dict):
+        return []
+
+    def _dotted_get(dotted: str) -> object | None:
+        node: object = doc
+        for seg in dotted.split("."):
+            if not isinstance(node, dict) or seg not in node:
+                return None
+            node = node[seg]
+        return node
+
+    def _dotted_set(dotted: str, value: object) -> bool:
+        parts = dotted.split(".")
+        node = doc
+        for seg in parts[:-1]:
+            nxt = node.setdefault(seg, {})
+            if not isinstance(nxt, dict):
+                return False  # an operator scalar sits mid-path — never clobber it with a dict
+            node = nxt
+        node[parts[-1]] = value
+        return True
+
+    written: list[str] = []
+    for key, dec in declared.items():
+        typ = str(dec.get("type") or "string")
+        supplied = (values or {}).get(key)
+        if supplied is not None:
+            coerced = coerce_config_input_value(typ, supplied)
+            if coerced is not None and _dotted_set(key, coerced):
+                written.append(key)
+                continue
+        # No usable operator value → the declared default, and only into an absent key.
+        if "default" in dec and dec["default"] is not None and _dotted_get(key) is None:
+            coerced = coerce_config_input_value(typ, dec["default"])
+            if coerced is not None and _dotted_set(key, coerced):
+                written.append(key)
+    if written:
+        save_yaml_doc(doc, cfg)
+    return written
+
+
 # Public since #2118 — ops/plugins.py::install_and_activate seeds a HOST bundle install
 # with the same helpers (host config + host plugins.lock). The private aliases keep the
 # workspace-create call sites and existing tests unchanged.
 _apply_bundle_mcp_servers = apply_bundle_mcp_servers
 _apply_bundle_secrets = apply_bundle_secrets
+_apply_bundle_config_inputs = apply_bundle_config_inputs
 
 
 def _overlay_model(cfg: Path, ws: Path, src: str) -> None:

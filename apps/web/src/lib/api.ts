@@ -1805,6 +1805,9 @@ export const api = {
     // `secrets` carry values for the bundle's declared secrets. Omitted → env-only.
     inputs?: Record<string, string>;
     secrets?: { key: string; value: string }[];
+    // Answers to the bundle's declared config_inputs prompts (#2934), keyed by dotted
+    // config path — written into the member's config at those keys. Omitted → defaults.
+    config_inputs?: Record<string, string | boolean>;
     // The picked archetype's capability contract (#2277), persisted to the member's
     // workspace.yaml so it can warn at boot when its toolset doesn't cover the persona.
     requires_tools?: string[];
@@ -2514,10 +2517,15 @@ export const api = {
     url: string,
     ref?: string,
     force?: boolean,
-    // Bundle create-time seed values (#2041/#2118): `inputs` fill the bundle's MCP
-    // `${input}` placeholders, `secrets` its declared secrets — same body shapes as
-    // POST /api/fleet. Omitted → env-only seeding.
-    seed?: { inputs?: Record<string, string>; secrets?: { key: string; value: string }[] },
+    // Bundle create-time seed values (#2041/#2118/#2934): `inputs` fill the bundle's MCP
+    // `${input}` placeholders, `secrets` its declared secrets, `config_inputs` its
+    // declared config prompts (written at their dotted config paths) — same body shapes
+    // as POST /api/fleet. Omitted → env-only / declared-default seeding.
+    seed?: {
+      inputs?: Record<string, string>;
+      secrets?: { key: string; value: string }[];
+      config_inputs?: Record<string, string | boolean>;
+    },
   ) {
     return request<{
       installed: PluginInstallSummary;
@@ -2541,6 +2549,7 @@ export const api = {
           force: force || undefined,
           inputs: seed?.inputs,
           secrets: seed?.secrets,
+          config_inputs: seed?.config_inputs,
         },
       },
     );

@@ -601,6 +601,99 @@ def test_apply_bundle_secrets_noop_paths(root):
     assert not (ws / "secrets.yaml").exists()  # nothing written
 
 
+# ── bundle config_inputs on create (#2934) ────────────────────────────────────
+def _config_inputs_lock(ws):
+    """A lock whose bundle declares one prompt of each interesting shape: a required
+    string, a boolean with a default, and an optional delegate."""
+    import json
+
+    (ws / "plugins.lock").write_text(
+        json.dumps(
+            {
+                "bundles": [
+                    {
+                        "id": "stack",
+                        "config_inputs": [
+                            {"key": "board.repo", "label": "Board repo", "type": "string", "required": True},
+                            {"key": "board.auto_merge", "label": "Auto merge", "type": "boolean", "default": False},
+                            {"key": "acp.default_delegate", "label": "Delegate", "type": "delegate"},
+                        ],
+                    }
+                ]
+            }
+        )
+    )
+    return ws / "plugins.lock"
+
+
+def test_apply_bundle_config_inputs_writes_declared_dotted_keys(root):
+    """Operator answers land at the declared dotted paths (sections created as needed),
+    coerced to the declared type; an UNDECLARED key is ignored — the operator can't
+    smuggle an arbitrary config path. Unanswered inputs fall back to their default
+    (auto_merge) or write nothing (delegate)."""
+    ws = root / "agent"
+    cfg = _seed_config(ws)
+    lock = _config_inputs_lock(ws)
+    written = manager._apply_bundle_config_inputs(
+        cfg, lock, {"board.repo": "org/repo", "sneaky.path": "x"}
+    )
+    assert sorted(written) == ["board.auto_merge", "board.repo"]  # answer + defaulted toggle
+    doc = yaml.safe_load(cfg.read_text())
+    assert doc["board"] == {"repo": "org/repo", "auto_merge": False}
+    assert "sneaky" not in doc and "acp" not in doc
+
+
+def test_apply_bundle_config_inputs_default_never_clobbers_but_answer_wins(root):
+    """With no operator answer the declared default fills only an ABSENT key; an
+    explicit answer overwrites — the operator just typed it for this install. A
+    boolean answer arrives as a wire bool or a form "true"/"false" string alike."""
+    ws = root / "agent"
+    cfg = _seed_config(ws)
+    cfg.write_text(cfg.read_text() + "board:\n  repo: kept/repo\n  auto_merge: true\n")
+    lock = _config_inputs_lock(ws)
+    assert manager._apply_bundle_config_inputs(cfg, lock, {}) == []  # defaults lose to live values
+    assert yaml.safe_load(cfg.read_text())["board"] == {"repo": "kept/repo", "auto_merge": True}
+    written = manager._apply_bundle_config_inputs(cfg, lock, {"board.auto_merge": "false"})
+    assert written == ["board.auto_merge"]
+    assert yaml.safe_load(cfg.read_text())["board"]["auto_merge"] is False
+
+
+def test_apply_bundle_config_inputs_noop_and_guard_paths(root):
+    """Missing lock, no declarations, a blank answer with no default, and a scalar
+    sitting mid-path all write nothing — the config is left untouched."""
+    import json
+
+    ws = root / "agent"
+    cfg = _seed_config(ws)
+    before = cfg.read_text()
+    assert manager._apply_bundle_config_inputs(cfg, ws / "nope.lock", {"a.b": "x"}) == []
+    (ws / "plugins.lock").write_text(json.dumps({"bundles": [{"id": "stack", "plugins": ["a"]}]}))
+    assert manager._apply_bundle_config_inputs(cfg, ws / "plugins.lock", {"a.b": "x"}) == []
+    assert cfg.read_text() == before
+    (ws / "plugins.lock").write_text(
+        json.dumps(
+            {
+                "bundles": [
+                    {
+                        "id": "stack",
+                        "config_inputs": [
+                            {"key": "board.repo", "label": "Repo", "type": "string"},
+                            {"key": "other.key", "label": "Other", "type": "string"},
+                        ],
+                    }
+                ]
+            }
+        )
+    )
+    # a scalar where the declared section should be: never clobbered with a dict
+    cfg.write_text(before + "board: compact\n")
+    assert manager._apply_bundle_config_inputs(cfg, ws / "plugins.lock", {"board.repo": "org/x"}) == []
+    assert yaml.safe_load(cfg.read_text())["board"] == "compact"
+    # a blank answer with no declared default writes nothing
+    assert manager._apply_bundle_config_inputs(cfg, ws / "plugins.lock", {"other.key": "   "}) == []
+    assert "other" not in yaml.safe_load(cfg.read_text())
+
+
 def test_server_argv_frozen_vs_source(monkeypatch):
     """The spawn prefix must adapt to the frozen desktop sidecar: there
     ``sys.executable`` IS the server entrypoint, and a ``-m server`` prefix dies at

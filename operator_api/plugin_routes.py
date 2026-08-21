@@ -75,6 +75,18 @@ def _consent_needs_ack(url: str) -> dict | None:
     return {"needs_ack": True, "source": normalize_source(url)}
 
 
+def _config_inputs_from(body: dict) -> dict | None:
+    """Operator answers to a bundle's declared ``config_inputs:`` prompts (#2934) from
+    the install body — ``{dotted_key: value}``. Keys are str-coerced; values pass
+    through untouched (a boolean toggle must arrive as a bool — the seed helper
+    coerces per declared type). JSON nulls drop, so "not answered" falls through to
+    the declared default. Malformed → None (nothing to write), never a 500."""
+    raw = body.get("config_inputs")
+    if not isinstance(raw, dict):
+        return None
+    return {str(k): v for k, v in raw.items() if v is not None} or None
+
+
 def _install_no_enable() -> bool:
     """Opt out of auto-enable-on-install — back to ADR 0027's strict install ≠ enable.
     Default off: installing a plugin enables + runs it (trust-by-default, behind the
@@ -321,6 +333,11 @@ def register_plugin_routes(app) -> None:
                 # /api/fleet ({key: value} / [{key, value}]). Absent = env-only seeding.
                 mcp_inputs=body.get("inputs") or None,
                 bundle_secrets=body.get("secrets") or None,
+                # Operator answers to the bundle's declared config_inputs prompts
+                # (#2934) — {dotted_key: value}, written to the host config at the
+                # declared keys. Values stay untouched here (a boolean toggle must
+                # arrive as a bool); the seed helper coerces per declared type.
+                config_inputs=_config_inputs_from(body),
             )
         except installer.InstallError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -345,6 +362,8 @@ def register_plugin_routes(app) -> None:
             "load_errors": result.load_errors,
             # Bundle mcp: servers seeded into the host config this install (#2118).
             "mcp_seeded": result.mcp_seeded,
+            # Dotted config keys the bundle's declared config_inputs wrote (#2934).
+            "config_written": result.config_written,
         }
 
     @app.post("/api/plugins/{plugin_id}/enabled")

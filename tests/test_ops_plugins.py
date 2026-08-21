@@ -344,6 +344,10 @@ def _write_bundle_fixture(tmp_path):
         "  - { template: github, inputs: [ { key: token, label: GitHub Token, secret: true, required: true } ] }\n"
         "secrets:\n"
         "  - { key: openai_api_key, label: OpenAI API Key, placeholder: 'sk-...', secret: true, required: true }\n"
+        "config_inputs:\n"
+        "  - { key: board.repo, label: Board repo, type: string, required: true }\n"
+        "  - { key: board.auto_merge, label: Auto merge, type: boolean, default: false }\n"
+        "  - { key: bogus, label: Bad key }\n"
     )
 
     def fake_fetch(url, ref, dest):
@@ -454,6 +458,23 @@ async def test_peek_bundle_surfaces_mcp_and_secrets(tmp_path, monkeypatch):
     ]
 
 
+async def test_peek_bundle_surfaces_config_inputs(tmp_path, monkeypatch):
+    """The preview exposes the bundle's declared config_inputs (#2934), leniently
+    normalized — the un-dotted `bogus` entry drops instead of blanking the preview,
+    so the Configure step can render fields WITHOUT installing."""
+    import ops.plugins as plugin_ops
+    from graph.plugins import installer
+
+    plugin_ops._peek_cache.clear()
+    monkeypatch.setattr(installer, "_fetch", _write_bundle_fixture(tmp_path))
+    result = await plugin_ops.peek_bundle("https://example.test/stack-config-inputs")
+
+    assert result["config_inputs"] == [
+        {"key": "board.repo", "label": "Board repo", "type": "string", "required": True},
+        {"key": "board.auto_merge", "label": "Auto merge", "type": "boolean", "required": False, "default": False},
+    ]
+
+
 async def test_peek_single_plugin_reports_empty_mcp_and_secrets(tmp_path, monkeypatch):
     """A non-bundle (single-plugin repo) peek still carries the keys, both empty —
     so the dialog reads mcp/secrets uniformly across bundle + plugin previews."""
@@ -478,7 +499,7 @@ async def test_peek_single_plugin_reports_empty_mcp_and_secrets(tmp_path, monkey
     result = await plugin_ops.peek_bundle("https://example.test/solo")
 
     assert result["kind"] == "plugin"
-    assert result["mcp"] == [] and result["secrets"] == []
+    assert result["mcp"] == [] and result["secrets"] == [] and result["config_inputs"] == []
 
 
 async def test_peek_bundle_caches_by_url(tmp_path, monkeypatch):
@@ -598,6 +619,55 @@ async def test_host_bundle_secrets_reach_host_overlay(tmp_path, monkeypatch):
     overlay = yaml.safe_load((tmp_path / "secrets.yaml").read_text())
     assert overlay["stack"]["api_key"] == "s3cr3t"
     assert "undeclared" not in str(overlay)
+
+
+async def test_host_bundle_install_writes_config_inputs(tmp_path, monkeypatch):
+    """#2934 — operator answers to a bundle's declared config_inputs land in the HOST
+    config at the declared dotted keys (declared-only; an unanswered input falls back
+    to its default), and the written keys ride the result for the route to surface."""
+    import json
+
+    import yaml
+
+    from graph import config_io
+
+    cfg = tmp_path / "langgraph-config.yaml"
+    cfg.write_text("model:\n  name: m\n")
+    lock = tmp_path / "plugins.lock"
+    lock.write_text(
+        json.dumps(
+            {
+                "plugins": [],
+                "bundles": [
+                    {
+                        "id": "stack",
+                        "config_inputs": [
+                            {"key": "board.repo", "label": "Board repo", "type": "string", "required": True},
+                            {"key": "board.auto_merge", "label": "Auto merge", "type": "boolean", "default": False},
+                        ],
+                    }
+                ],
+            }
+        )
+    )
+    monkeypatch.setattr(config_io, "config_yaml_path", lambda: cfg)
+    monkeypatch.setattr(installer, "lock_path", lambda: lock)
+    monkeypatch.setattr(
+        installer, "install", lambda url, ref=None, **k: {"bundle": "stack", "installed": [{"id": "a"}], "enabled": []}
+    )
+    monkeypatch.setattr(loader, "purge_plugin_modules", lambda pid: None)
+    _, apply = _capture_apply()
+
+    res = await install_and_activate(
+        "https://x/stack",
+        ctx=_ctx(),
+        apply_settings=apply,
+        config_inputs={"board.repo": "org/repo", "not.declared": "nope"},
+    )
+    assert sorted(res.config_written) == ["board.auto_merge", "board.repo"]  # answer + defaulted toggle
+    doc = yaml.safe_load(cfg.read_text())
+    assert doc["board"] == {"repo": "org/repo", "auto_merge": False}
+    assert "not" not in doc  # undeclared keys never reach the config
 
 
 async def test_activate_false_skips_bundle_service_seeding(tmp_path, monkeypatch):

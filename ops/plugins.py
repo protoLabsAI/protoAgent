@@ -35,6 +35,9 @@ class InstallResult:
     # Bundle mcp: servers seeded into the HOST config this install (#2118) — empty for
     # single plugins, non-activated installs, and bundles that declare no servers.
     mcp_seeded: list[str] = field(default_factory=list)
+    # Dotted config keys the bundle's declared config_inputs wrote into the HOST config
+    # this install (#2934) — operator answers plus any defaults that filled absent keys.
+    config_written: list[str] = field(default_factory=list)
     # Per-plugin import/registration failures from the post-enable reload (#2716):
     # a plugin that fails to LOAD is skipped by the loader, so the reload itself still
     # succeeds — `reloaded=True` + an id in `enabled` is NOT proof the code is live.
@@ -79,6 +82,7 @@ async def install_and_activate(
     apply_settings: Callable[[dict], tuple[bool, list]] | None = None,
     mcp_inputs: dict | None = None,
     bundle_secrets: list | None = None,
+    config_inputs: dict | None = None,
 ) -> InstallResult:
     """Clone + pin the plugin (blocking git work off the event loop), then — when
     ``activate`` and an ``apply_settings`` applier is given — add it to ``plugins.enabled``,
@@ -87,8 +91,10 @@ async def install_and_activate(
     the workspace-create path), and apply (hot-reload). ``mcp_inputs`` (``{key: value}``)
     fills ``${input}`` placeholders with priority over the env; ``bundle_secrets``
     (``[{key, value}]``) writes DECLARED bundle secrets via ``save_secrets`` (0600,
-    merge-not-clobber). Raises ``installer.InstallError`` on a failed install (the
-    adapter maps it to its surface)."""
+    merge-not-clobber); ``config_inputs`` (``{dotted_key: value}``, #2934) writes the
+    operator's answers to the bundle's declared ``config_inputs:`` prompts into the
+    HOST config at the declared dotted key paths. Raises ``installer.InstallError``
+    on a failed install (the adapter maps it to its surface)."""
     from graph.plugins import installer
     from graph.plugins.loader import purge_plugin_modules
 
@@ -119,6 +125,19 @@ async def install_and_activate(
         if pid not in enabled:
             enabled.append(pid)
     config_updates: dict = {"plugins": {"enabled": enabled, "disabled": disabled}}
+
+    # Operator answers to the bundle's declared config_inputs prompts (#2934) — written
+    # to the HOST config at the declared dotted keys, same lock-anchored helper as the
+    # workspace-create path. BEFORE the `config:` overlay below reads the live YAML, so
+    # an answered key is "already set" there and a bundle default can never clobber it.
+    config_written: list[str] = []
+    if "bundle" in summary:
+        from graph.config_io import config_yaml_path
+        from graph.workspaces.manager import apply_bundle_config_inputs
+
+        config_written = await asyncio.to_thread(
+            apply_bundle_config_inputs, config_yaml_path(), installer.lock_path(), config_inputs or {}
+        )
 
     # Seed the bundle's recommended per-plugin config defaults (#1350), same trust gate as
     # auto-enable — defaults only, reduced against the live YAML so an operator value is
@@ -172,6 +191,7 @@ async def install_and_activate(
             enabled=ids,
             reloaded=True,
             mcp_seeded=mcp_seeded,
+            config_written=config_written,
             load_errors=load_errors,
         )
     # The install itself succeeded (code on disk + locked); surface the enable-reload
@@ -182,6 +202,7 @@ async def install_and_activate(
         enabled=[],
         reloaded=False,
         mcp_seeded=mcp_seeded,
+        config_written=config_written,
         enable_error="; ".join(messages) or "reload failed",
     )
 
@@ -398,6 +419,7 @@ def _peek_bundle_sync(url: str, ref: str | None = None) -> dict:
                 "members": [_peek_member_from(staging, {"id": None, "url": url, "ref": ref})],
                 "mcp": [],
                 "secrets": [],
+                "config_inputs": [],
             }
             _peek_cache[(url, ref or "")] = (now, result)
             return result
@@ -439,6 +461,12 @@ def _peek_bundle_sync(url: str, ref: str | None = None) -> dict:
             # up front, WITHOUT installing (this is a read-only peek). Slice 1 of #2041.
             "mcp": list(bundle.get("mcp") or []),
             "secrets": list(bundle.get("secrets") or []),
+            # The declared config_inputs prompts (#2934), normalized LENIENTLY — a
+            # typo'd entry drops from the preview instead of blanking it; the strict
+            # check runs at install time.
+            "config_inputs": installer.normalize_config_inputs(
+                str(bundle.get("id")), bundle.get("config_inputs"), strict=False
+            ),
             # The archetype: block, verbatim — so pre-install surfaces (the devkit's
             # verify_bundle, future preview UI) can sanity-check it without installing.
             "archetype": dict(bundle.get("archetype") or {}),

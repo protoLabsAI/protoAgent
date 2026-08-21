@@ -267,6 +267,20 @@ export type McpCatalogInput = {
   required?: boolean;
 };
 
+// A plugin config key a bundle asks the operator to fill at create time (#2934) —
+// the `config_inputs:` block of protoagent.bundle.yaml, same shape as an MCP catalog
+// input plus a `type` that picks the widget: string/path → text, delegate → dropdown
+// of configured ACP delegates, boolean → toggle. `key` is the dotted config path the
+// install writes the answer to; `default` fills an absent key when the operator skips.
+export type BundleConfigInputType = "string" | "path" | "delegate" | "boolean";
+export type BundleConfigInput = {
+  key: string;
+  label: string;
+  type?: BundleConfigInputType;
+  required?: boolean;
+  default?: string | boolean;
+};
+
 // An entry in the curated common-MCP-servers directory (GET /api/mcp/catalog).
 // `template` is a partial mcp.servers config with `${input}` placeholders; filling
 // the `inputs` and substituting yields the entry POSTed to /api/mcp/servers.
@@ -1460,6 +1474,9 @@ export type ArchetypePreview = {
     // Configure step can collect them WITHOUT installing (read-only peek).
     mcp?: McpCatalogEntry[];
     secrets?: McpCatalogInput[];
+    // The bundle's declared config_inputs prompts (#2934) — plugin config keys the
+    // Configure step collects and the install writes at their dotted paths.
+    config_inputs?: BundleConfigInput[];
   } | null;
 };
 

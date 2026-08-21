@@ -136,6 +136,7 @@ describe("splitConfigValues — collected form values back into create() channel
     expect(splitConfigValues(fields, values)).toEqual({
       inputs: { root: "/work", github_token: "ghp_1" },
       secrets: [],
+      config: {},
     });
   });
 
@@ -144,6 +145,7 @@ describe("splitConfigValues — collected form values back into create() channel
     expect(splitConfigValues(fields, values)).toEqual({
       inputs: {},
       secrets: [{ key: "BRAVE_API_KEY", value: "brv_9" }],
+      config: {},
     });
   });
 
@@ -165,6 +167,7 @@ describe("splitConfigValues — collected form values back into create() channel
     expect(splitConfigValues(clashFields, values)).toEqual({
       inputs: { TOKEN: "from-input" },
       secrets: [{ key: "TOKEN", value: "from-secret" }],
+      config: {},
     });
   });
 });
@@ -192,6 +195,7 @@ describe("collision-aware fieldId + splitConfigValues — two servers sharing a 
     expect(splitConfigValues(fields, values)).toEqual({
       inputs: { "gh:token": "ghp_1", "bb:token": "bbp_2", workspace: "acme" },
       secrets: [],
+      config: {},
     });
   });
 
@@ -215,7 +219,70 @@ describe("collision-aware fieldId + splitConfigValues — two servers sharing a 
     expect(splitConfigValues(single, values)).toEqual({
       inputs: { root: "/work", github_token: "ghp_1" },
       secrets: [],
+      config: {},
     });
+  });
+});
+
+// A bundle declaring config_inputs (#2934) — one of each widget type; the path input
+// carries a default and the boolean is required (a toggle always resolves, so required
+// must not block it).
+function configInputsPreview(): ArchetypePreview {
+  return {
+    id: "project-manager-archetype",
+    bundle: {
+      kind: "bundle",
+      name: "Project Manager",
+      members: [],
+      config_inputs: [
+        { key: "board.repo", label: "Board repo", type: "string", required: true },
+        { key: "board.workroot", label: "Work root", type: "path", required: true, default: "~/work" },
+        { key: "acp.default_delegate", label: "Coding delegate", type: "delegate" },
+        { key: "board.auto_merge", label: "Auto merge", type: "boolean", required: true, default: false },
+      ],
+    },
+  };
+}
+
+describe("config_inputs fields (#2934) — declared plugin config prompts", () => {
+  const fields = archetypeConfigFields(configInputsPreview());
+
+  it("flattens each declared input to an unmasked config-origin field carrying its widget kind", () => {
+    expect(fields.map((f) => [f.origin, f.key, f.kind])).toEqual([
+      ["config", "board.repo", "string"],
+      ["config", "board.workroot", "path"],
+      ["config", "acp.default_delegate", "delegate"],
+      ["config", "board.auto_merge", "boolean"],
+    ]);
+    expect(fields.every((f) => !f.secret)).toBe(true);
+    expect(fields.find((f) => f.key === "board.workroot")?.defaultValue).toBe("~/work");
+    expect(fieldId({ origin: "config", key: "board.repo" })).toBe("config:board.repo");
+  });
+
+  it("routes values to the config channel keyed by dotted path, booleans as real booleans", () => {
+    const values = {
+      [fieldId({ origin: "config", key: "board.repo" })]: "org/repo",
+      [fieldId({ origin: "config", key: "board.auto_merge" })]: "true",
+      [fieldId({ origin: "config", key: "acp.default_delegate" })]: "", // untouched → dropped
+    };
+    expect(splitConfigValues(fields, values)).toEqual({
+      inputs: {},
+      secrets: [],
+      config: { "board.repo": "org/repo", "board.auto_merge": true },
+    });
+  });
+
+  it("required gate: a blank required string blocks; a declared default or a toggle never does", () => {
+    // board.repo is the only blocker — workroot has a default (the backend writes it
+    // when skipped) and the boolean toggle always resolves to a value.
+    expect(isMissingRequiredConfig(fields, {})).toBe(true);
+    expect(
+      isMissingRequiredConfig(fields, { [fieldId({ origin: "config", key: "board.repo" })]: "org/repo" }),
+    ).toBe(false);
+  });
+
+  it("a bundle without config_inputs yields no config fields (backward compat)", () => {
+    expect(archetypeConfigFields(githubPreview()).some((f) => f.origin === "config")).toBe(false);
   });
 });
 

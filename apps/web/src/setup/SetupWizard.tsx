@@ -27,6 +27,7 @@ import { pythonRuntimeView } from "../app/pythonRuntime";
 import { archetypesQuery, pythonRuntimeQuery } from "../lib/queries";
 import { archetypeConfigFields, fieldId, isMissingRequiredConfig, splitConfigValues } from "../lib/archetypeConfig";
 import type { AgentConfig, Archetype, ConfigPayload } from "../lib/types";
+import { ArchetypeConfigField } from "./ArchetypeConfigField";
 import { ArchetypePreviewDialog } from "./ArchetypePreviewDialog";
 import { useOauthLifecycle } from "../oauth/OAuthAccount";
 import { personaSoul } from "./persona";
@@ -219,10 +220,11 @@ export function SetupWizard({
   // that self-registers) — the same GET /api/archetypes source the fleet new-agent picker
   // uses. Each carries a base SOUL the persona step seeds when picked (ADR 0042).
   const archetypes = useQuery(archetypesQuery());
-  // Inline Configure step for a bundle archetype's MCP inputs + declared secrets —
-  // NewAgentPanel parity (#2714; the fleet picker got this in #2041, the wizard —
-  // the surface a NEW user actually hits first — installed the bundle with no prompt).
-  // Collapsible: skipping falls back to this host's environment, same as the panel.
+  // Inline Configure step for a bundle archetype's MCP inputs + declared secrets +
+  // config_inputs (#2934) — NewAgentPanel parity (#2714; the fleet picker got this in
+  // #2041, the wizard — the surface a NEW user actually hits first — installed the
+  // bundle with no prompt). Collapsible: skipping falls back to this host's
+  // environment / the declared defaults, same as the panel.
   const [configOpen, setConfigOpen] = useState(true);
   const [configValues, setConfigValues] = useState<Record<string, string>>({});
   const [models, setModels] = useState<string[]>([]);
@@ -445,8 +447,9 @@ export function SetupWizard({
   const pickedArchetype = archetypeList.find((a) => a.id === state.archetype);
 
   // The picked archetype's read-only peek — the Configure form's fields (its bundle's
-  // MCP inputs + declared secrets), NewAgentPanel parity (#2714). Shares the preview
-  // dialog's cache key; only fetched for bundle-backed archetypes.
+  // MCP inputs, declared secrets, and config_inputs #2934), NewAgentPanel parity
+  // (#2714). Shares the preview dialog's cache key; only fetched for bundle-backed
+  // archetypes.
   const archetypePeek = useQuery({
     queryKey: ["archetype-preview", state.archetype],
     queryFn: () => api.archetypePreview(state.archetype),
@@ -571,15 +574,17 @@ export function SetupWizard({
       if (pickedBundle) {
         setMessage(`Setting up the ${personaLabel} tools — this can take a few seconds…`);
         try {
-          // Collected Configure values ride the install (#2714) — the same two seed
-          // channels POST /api/fleet uses (#2041). Collapsed/absent form → env-only.
-          const { inputs, secrets } =
+          // Collected Configure values ride the install (#2714) — the same seed
+          // channels POST /api/fleet uses (#2041/#2934). Collapsed/absent form →
+          // env-only / declared defaults.
+          const { inputs, secrets, config } =
             configOpen && configFields.length
               ? splitConfigValues(configFields, configValues)
-              : { inputs: {}, secrets: [] };
+              : { inputs: {}, secrets: [], config: {} };
           const r = await api.installPlugin(pickedBundle, undefined, undefined, {
             inputs: Object.keys(inputs).length ? inputs : undefined,
             secrets: secrets.length ? secrets : undefined,
+            config_inputs: Object.keys(config).length ? config : undefined,
           });
           const failedLoad = Object.keys(r.load_errors ?? {});
           // Consent gate (#2721) — only reachable when a fork's catalog points an
@@ -761,9 +766,9 @@ export function SetupWizard({
                   {runtimeWarning}
                 </p>
               ) : null}
-              {/* Inline Configure step — NewAgentPanel parity (#2714/#2041): appears only when
-                  the picked bundle declares MCP inputs or secrets. Collapsing skips it
-                  (→ env-only seeding on install). */}
+              {/* Inline Configure step — NewAgentPanel parity (#2714/#2041/#2934): appears only
+                  when the picked bundle declares MCP inputs, secrets, or config_inputs.
+                  Collapsing skips it (→ env-only / declared-default seeding on install). */}
               {configFields.length ? (
                 <div className="archetype-configure">
                   <button
@@ -784,22 +789,11 @@ export function SetupWizard({
                             {f.label}
                             {f.required ? " *" : ""}
                           </span>
-                          {f.secret ? (
-                            <SecretInput
-                              placeholder={f.placeholder}
-                              value={configValues[fieldId(f)] ?? ""}
-                              aria-label={f.label}
-                              onChange={(e) => setConfigValues((v) => ({ ...v, [fieldId(f)]: e.target.value }))}
-                            />
-                          ) : (
-                            <Input
-                              type="text"
-                              placeholder={f.placeholder}
-                              value={configValues[fieldId(f)] ?? ""}
-                              aria-label={f.label}
-                              onChange={(e) => setConfigValues((v) => ({ ...v, [fieldId(f)]: e.target.value }))}
-                            />
-                          )}
+                          <ArchetypeConfigField
+                            field={f}
+                            value={configValues[fieldId(f)] ?? ""}
+                            onChange={(val) => setConfigValues((v) => ({ ...v, [fieldId(f)]: val }))}
+                          />
                         </label>
                       ))}
                       {missingRequired ? (

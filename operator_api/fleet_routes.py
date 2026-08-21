@@ -158,7 +158,8 @@ def register_fleet_routes(app) -> None:
 
         Body: ``{name, bundle?: <git-url>, soul?: str, port?: int, start?: bool=true,
         shared_skills?: bool, inherit_config?: bool=true, inputs?: {key: value},
-        secrets?: [{key, value}]}``. ``soul`` is the archetype's base SOUL.md (persona), written
+        secrets?: [{key, value}], config_inputs?: {dotted_key: value}}``.
+        ``soul`` is the archetype's base SOUL.md (persona), written
         into the workspace so a bundle agent gets its persona too. A blank ``bundle`` is the
         built-in **Basic** archetype. By default a new agent is a **blank agent with the host's
         model config + secrets popped over** (the gateway only — NOT the host's plugins/skills),
@@ -169,8 +170,10 @@ def register_fleet_routes(app) -> None:
         (#2041) — an entry seeds ENABLED when its required inputs are filled here rather than
         landing visible-but-inert. ``secrets`` are operator-supplied values for the bundle's
         declared secrets, written to the new member's ``secrets.yaml`` under the bundle section.
-        Both apply only on the bundle path and are seeded after install; the operator supplies
-        them explicitly — nothing is auto-copied from the host's environment.
+        ``config_inputs`` (#2934) are the operator's answers to the bundle's declared
+        ``config_inputs:`` prompts, written into the member's config at the declared dotted
+        key paths. All apply only on the bundle path and are seeded after install; the
+        operator supplies them explicitly — nothing is auto-copied from the host's environment.
         """
         name = str(body.get("name", "")).strip()
         bundle = (str(body.get("bundle") or "").strip()) or None
@@ -183,6 +186,12 @@ def register_fleet_routes(app) -> None:
         inputs = {str(k): str(v) for k, v in raw_inputs.items() if v is not None} if isinstance(raw_inputs, dict) else None
         raw_secrets = body.get("secrets")
         secrets = [s for s in raw_secrets if isinstance(s, dict)] if isinstance(raw_secrets, list) else None
+        # Operator answers to the bundle's declared config_inputs prompts (#2934). Values
+        # pass through untouched (a boolean toggle must arrive as a bool — the seed helper
+        # coerces per declared type); JSON nulls drop so "not answered" falls through to
+        # the declared default.
+        raw_ci = body.get("config_inputs")
+        config_inputs = {str(k): v for k, v in raw_ci.items() if v is not None} if isinstance(raw_ci, dict) else None
         # The archetype's base SOUL.md (the persona picked in the new-agent picker), written
         # into the workspace so a bundle agent arrives WITH its persona, not just its tools.
         soul = (str(body.get("soul") or "").strip()) or None
@@ -215,6 +224,7 @@ def register_fleet_routes(app) -> None:
                 soul=soul,
                 inputs=inputs,
                 secrets=secrets,
+                config_inputs=config_inputs,
                 requires_tools=requires_tools,
             )
             agent = (

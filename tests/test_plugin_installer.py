@@ -639,6 +639,10 @@ def _make_bundle_repo(root: Path, members: list[Path]) -> Path:
         "  - { template: github, inputs: [ { key: token, label: Token } ] }",
         "secrets:",
         "  - { key: api_key, label: API Key, secret: true, required: true }",
+        "config_inputs:",
+        "  - { key: demo_a.board_repo, label: Board repo, type: string, required: true }",
+        "  - { key: demo_a.workroot, label: Work root, type: path, default: ~/work }",
+        "  - { key: demo_a.auto_merge, label: Auto merge, type: boolean, default: false }",
     ]
     (repo / "protoagent.bundle.yaml").write_text("\n".join(lines) + "\n")
     _git(repo, "init", "-q")
@@ -683,6 +687,15 @@ def test_install_bundle_fans_out_and_records_provenance(env):
     # create path can seed / prompt for these inputs without re-parsing the bundle.
     assert bundles[0]["mcp"] == [{"template": "github", "inputs": [{"key": "token", "label": "Token"}]}]
     assert bundles[0]["secrets"] == [{"key": "api_key", "label": "API Key", "secret": True, "required": True}]
+    # config_inputs (#2934): normalized + cached in the lock AND surfaced in the summary,
+    # so both the live install path and the lock-only create path can prompt/write them.
+    expected_config_inputs = [
+        {"key": "demo_a.board_repo", "label": "Board repo", "type": "string", "required": True},
+        {"key": "demo_a.workroot", "label": "Work root", "type": "path", "required": False, "default": "~/work"},
+        {"key": "demo_a.auto_merge", "label": "Auto merge", "type": "boolean", "required": False, "default": False},
+    ]
+    assert summary["config_inputs"] == expected_config_inputs
+    assert bundles[0]["config_inputs"] == expected_config_inputs
 
 
 # ── Bundle lifecycle past install (ADR 0049 D4, #2718) ─────────────────────────
@@ -890,6 +903,69 @@ def test_bundle_config_overlay_empty_and_malformed():
     assert installer.bundle_config_overlay({"x": "notadict"}, {}) == {}
     # no current → every key is unset, so all fill
     assert installer.bundle_config_overlay({"x": {"a": 1}}, {}) == {"x": {"a": 1}}
+
+
+# ── config_inputs — declared operator prompts in the bundle manifest (#2934) ──
+def test_normalize_config_inputs_normalizes_and_coerces():
+    """Valid entries normalize to {key, label, type, required, default?}: type defaults
+    to string, required coerces to bool, and a boolean default parses words — a quoted
+    "false" must come out False, never truthy."""
+    entries = installer.normalize_config_inputs(
+        "stack",
+        [
+            {"key": "board.repo", "label": "Repo"},
+            {"key": "board.auto", "label": "Auto", "type": "boolean", "required": 1, "default": "false"},
+            {"key": "acp.default_delegate", "label": "Delegate", "type": "delegate"},
+        ],
+    )
+    assert entries == [
+        {"key": "board.repo", "label": "Repo", "type": "string", "required": False},
+        {"key": "board.auto", "label": "Auto", "type": "boolean", "required": True, "default": False},
+        {"key": "acp.default_delegate", "label": "Delegate", "type": "delegate", "required": False},
+    ]
+    assert installer.normalize_config_inputs("stack", None) == []
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"label": "no key"},
+        {"key": "toplevel", "label": "not a dotted path"},  # a bare key would replace a whole section
+        {"key": "a..b", "label": "empty segment"},
+        {"key": "board.repo"},  # no label — nothing to prompt with
+        {"key": "board.repo", "label": "Repo", "type": "dropdown"},  # unknown type
+        "not-a-mapping",
+    ],
+)
+def test_normalize_config_inputs_strict_rejects_malformed(entry):
+    """The install path is strict: a typo'd manifest fails the install with a reason
+    instead of silently dropping the operator prompt."""
+    with pytest.raises(installer.InstallError):
+        installer.normalize_config_inputs("stack", [entry])
+
+
+def test_normalize_config_inputs_lenient_drops_malformed():
+    """The read-only peek is lenient: one bad entry drops, the rest still preview."""
+    entries = installer.normalize_config_inputs(
+        "stack", [{"key": "ok.key", "label": "OK"}, {"key": "bad", "label": "Bad"}], strict=False
+    )
+    assert [e["key"] for e in entries] == ["ok.key"]
+    assert installer.normalize_config_inputs("stack", "nonsense", strict=False) == []
+
+
+def test_install_bundle_rejects_malformed_config_inputs(env):
+    """A bundle whose config_inputs block is malformed fails BEFORE any member fetch."""
+    repo = env / "src-badinputs"
+    repo.mkdir(parents=True)
+    (repo / "protoagent.bundle.yaml").write_text(
+        "id: bad_inputs\nplugins:\n  - { id: delegates, builtin: true }\n"
+        "config_inputs:\n  - { key: notdotted, label: X }\n"
+    )
+    _git(repo, "init", "-q")
+    _git(repo, "add", "-A")
+    _git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init")
+    with pytest.raises(installer.InstallError, match="config_inputs"):
+        installer.install(str(repo))
 
 
 def test_install_bundle_member_missing_url_errors(env):

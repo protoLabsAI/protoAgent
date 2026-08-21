@@ -4,12 +4,13 @@ import { ArrowLeft, ChevronDown, ChevronRight } from "lucide-react";
 import { ImportSnapshotPanel } from "./ImportSnapshotPanel";
 import { useMemo, useState } from "react";
 
-import { Input, RadioCard, RadioCardGroup, SecretInput } from "@protolabsai/ui/forms";
+import { Input, RadioCard, RadioCardGroup } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import { PanelHeader } from "@protolabsai/ui/navigation";
 import { useToast } from "@protolabsai/ui/overlays";
 
 import { api } from "../lib/api";
+import { ArchetypeConfigField } from "../setup/ArchetypeConfigField";
 import { ArchetypePreviewDialog } from "../setup/ArchetypePreviewDialog";
 import { pythonRuntimeView } from "../app/pythonRuntime";
 import { archetypesQuery, pythonRuntimeQuery, queryKeys } from "../lib/queries";
@@ -103,14 +104,15 @@ export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) =>
     // agent on the default SOUL. When the Configure form is open, split the collected values
     // into the two seed channels (#2041); a collapsed/absent form sends nothing → env-only.
     mutationFn: () => {
-      const { inputs, secrets } =
-        configOpen && fields.length ? splitConfigValues(fields, values) : { inputs: {}, secrets: [] };
+      const { inputs, secrets, config } =
+        configOpen && fields.length ? splitConfigValues(fields, values) : { inputs: {}, secrets: [], config: {} };
       return api.createAgent({
         name: name.trim(),
         bundle: archetype?.bundle ?? null,
         soul: archetype?.soul || undefined,
         inputs: Object.keys(inputs).length ? inputs : undefined,
         secrets: secrets.length ? secrets : undefined,
+        config_inputs: Object.keys(config).length ? config : undefined,
         requires_tools: archetype?.requires_tools?.length ? archetype.requires_tools : undefined,
       });
     },
@@ -235,8 +237,9 @@ export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) =>
           </p>
         ) : null}
 
-        {/* Inline Configure step (#2041) — appears only when the picked bundle has MCP inputs
-            or declared secrets. Collapsible: skipping falls back to this host's environment. */}
+        {/* Inline Configure step (#2041/#2934) — appears only when the picked bundle has MCP
+            inputs, declared secrets, or config_inputs. Collapsible: skipping falls back to
+            this host's environment / the declared defaults. */}
         {fields.length ? (
           <div className="archetype-configure">
             <button
@@ -257,22 +260,11 @@ export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) =>
                       {f.label}
                       {f.required ? " *" : ""}
                     </span>
-                    {f.secret ? (
-                      <SecretInput
-                        placeholder={f.placeholder}
-                        value={values[fieldId(f)] ?? ""}
-                        aria-label={f.label}
-                        onChange={(e) => setValues((v) => ({ ...v, [fieldId(f)]: e.target.value }))}
-                      />
-                    ) : (
-                      <Input
-                        type="text"
-                        placeholder={f.placeholder}
-                        value={values[fieldId(f)] ?? ""}
-                        aria-label={f.label}
-                        onChange={(e) => setValues((v) => ({ ...v, [fieldId(f)]: e.target.value }))}
-                      />
-                    )}
+                    <ArchetypeConfigField
+                      field={f}
+                      value={values[fieldId(f)] ?? ""}
+                      onChange={(val) => setValues((v) => ({ ...v, [fieldId(f)]: val }))}
+                    />
                   </label>
                 ))}
                 {missingRequired ? (
