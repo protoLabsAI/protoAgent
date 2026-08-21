@@ -196,26 +196,34 @@ def test_plugins_dir_is_bundled_into_the_desktop_sidecar() -> None:
     )
 
 
-def test_project_manager_archetype_row() -> None:
-    """#2178 ships the Project Manager archetype as catalog data only (ADR 0042) —
-    pin the invariants the picker relies on: the id is unique (it's the RadioCard
-    value + React key), its `soul_preset` resolves to a preset file that is really
-    bundled, and `custom` is still the catch-all LAST row."""
+def test_project_manager_archetype_is_held() -> None:
+    """The Project Manager archetype is HELD from the picker (operator call,
+    2026-08-21: first-run isn't release-ready — the bundle's recommended config
+    gated the very tool its capability contract requires, and the board view
+    greets an unbound repo with a raw `br init` error). Same held mechanics as
+    social-marketing: this pins BOTH directions — the row must not ship in
+    ``archetypes`` (it would become selectable again), and it must survive intact
+    in ``held`` so restoring it is one move, not an archaeology dig."""
     catalog = json.loads((CONFIG / "archetype-catalog.json").read_text())
     ids = [a["id"] for a in catalog["archetypes"]]
 
-    assert ids.count("project-manager") == 1, f"'project-manager' must appear exactly once, got {ids}"
-
-    (row,) = (a for a in catalog["archetypes"] if a["id"] == "project-manager")
-    preset = CONFIG / "soul-presets" / f"{row['soul_preset']}.md"
-    assert preset.is_file(), (
-        f"archetype 'project-manager' points at soul_preset '{row['soul_preset']}' "
-        f"but {preset} does not exist — the persona step would silently seed nothing."
+    assert "project-manager" not in ids, (
+        f"'project-manager' is held from release — it must not be in archetypes, got {ids}"
     )
 
-    # It's an advanced-tier archetype (ADR 0042 picker placement) — the picker files it
-    # under the collapsed "Advanced" section rather than inline with Basic.
-    assert row.get("tier") == "advanced", f"'project-manager' must be tier 'advanced', got {row.get('tier')!r}"
+    held = [a["id"] for a in catalog.get("held") or []]
+    assert held.count("project-manager") == 1, (
+        f"'project-manager' must be parked exactly once in `held`, got {held}"
+    )
+    (row,) = (a for a in catalog["held"] if a["id"] == "project-manager")
+    preset = CONFIG / "soul-presets" / f"{row['soul_preset']}.md"
+    assert preset.is_file(), (
+        f"held archetype 'project-manager' points at soul_preset '{row['soul_preset']}' "
+        f"but {preset} does not exist — restoring the row would silently seed nothing."
+    )
+    assert row.get("bundle", "").startswith("https://github.com/protoLabsAI/"), (
+        "the held row must keep its bundle URL so restoration is one move"
+    )
 
     assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
 
