@@ -367,3 +367,20 @@ describe("openToolSettings", () => {
     expect(useUI.getState().globalSettingsOpen).toBe(true);
   });
 });
+
+// showChatUsage (#2931): the per-turn token/cost footer under chat answers is OFF for fresh
+// installs. The initializer only applies when there is no persisted state — zustand/persist
+// hydrates existing installs from localStorage, so flipping the default never touches them
+// (localStorage is empty here, which is exactly the fresh-install case).
+describe("showChatUsage", () => {
+  it("defaults to off on a fresh install (no persisted state)", () => {
+    expect(useUI.getState().showChatUsage).toBe(false);
+  });
+
+  it("setShowChatUsage toggles it both ways (the Settings ▸ Chat switch)", () => {
+    useUI.getState().setShowChatUsage(true);
+    expect(useUI.getState().showChatUsage).toBe(true);
+    useUI.getState().setShowChatUsage(false);
+    expect(useUI.getState().showChatUsage).toBe(false);
+  });
+});

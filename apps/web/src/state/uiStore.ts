@@ -152,7 +152,7 @@ type UIState = {
   pluginBackground: Record<string, boolean>;
   setPluginBackground: (key: string, on: boolean) => void;
   // Chat display: show the per-turn token/cost + context-window footer under each answer
-  // (#1372). On by default; operators who want a cleaner transcript turn it off (this device).
+  // (#1372). Off by default; operators who want per-turn cost visibility turn it on (this device).
   showChatUsage: boolean;
   setShowChatUsage: (b: boolean) => void;
 };
@@ -497,7 +497,7 @@ export const useUI = create<UIState>()(
           else delete next[key];
           return { pluginBackground: next };
         }),
-      showChatUsage: true,
+      showChatUsage: false,
       setShowChatUsage: (showChatUsage) => set({ showChatUsage }),
     }),
     {

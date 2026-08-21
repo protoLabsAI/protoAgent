@@ -81,8 +81,25 @@ test("expanded state is sticky and the assistant answer renders as markdown", as
   await expect(md.locator("pre code")).toContainText("const x = 1;");
 });
 
-test("a completed turn shows a context meter + token/cost footer (#1372)", async ({ page }) => {
+test("the token/cost footer is off by default; Settings ▸ Chat turns it on (#1372, #2931)", async ({ page }) => {
   await send(page, "what is the capital of France?");
+
+  // The turn completes (answer rendered, tool done) — but a fresh install (empty
+  // localStorage) renders NO footer: showChatUsage defaults to off (#2931), even though
+  // the terminal artifact carried the cost-v1 metadata + context-v1 DataPart.
+  await expect(page.locator(".pl-message--assistant .markdown")).toContainText("Done — found 8 results.");
+  await expect(page.locator(".pl-toolcard__status--done").first()).toBeVisible();
+  await expect(page.locator(".pl-message--assistant .chat-usage")).toHaveCount(0);
+
+  // Flip it on in Settings ▸ Chat — the chat stays mounted behind the overlay, so the
+  // footer appears live the moment the pref changes (no reload).
+  await page.getByTestId("settings-widget").click();
+  await page.locator(".settings-overlay .pl-sidenav").getByRole("tab", { name: "Chat", exact: true }).click();
+  await page.locator('.setting-row[data-key="chat.showUsage"] .pl-switch').click();
+  await expect(page.locator(".pl-message--assistant .chat-usage")).toHaveCount(1);
+  // Close the overlay so the hover assertions below reach the footer itself.
+  await page.locator(".settings-overlay .pl-dialog__close").click();
+  await expect(page.locator(".settings-overlay")).toHaveCount(0);
 
   // The terminal cost-v1 metadata + context-v1 DataPart → a quiet footer under the answer:
   // context-window fill (with a compaction bar) / output ↓ / $cost.
@@ -107,15 +124,18 @@ test("a completed turn shows a context meter + token/cost footer (#1372)", async
   await expect(tip).toContainText("Context is the live prompt size");
 });
 
-test("Settings ▸ Chat can hide the token/cost footer (#1372)", async ({ page }) => {
+test("Settings ▸ Chat hides the token/cost footer again (#1372)", async ({ page }) => {
   await send(page, "what is the capital of France?");
-  await expect(page.locator(".pl-message--assistant .chat-usage")).toBeVisible();
+  await expect(page.locator(".pl-message--assistant .markdown")).toContainText("Done — found 8 results.");
 
-  // Flip it off in Settings ▸ Chat — the chat stays mounted behind the overlay, so the footer
-  // clears live the moment the pref changes (no reload).
+  // Both directions apply live — the chat stays mounted behind the overlay, so the footer
+  // appears/clears the moment the pref changes (no reload).
   await page.getByTestId("settings-widget").click();
   await page.locator(".settings-overlay .pl-sidenav").getByRole("tab", { name: "Chat", exact: true }).click();
-  await page.locator('.setting-row[data-key="chat.showUsage"] .pl-switch').click();
+  const toggle = page.locator('.setting-row[data-key="chat.showUsage"] .pl-switch');
+  await toggle.click();
+  await expect(page.locator(".pl-message--assistant .chat-usage")).toHaveCount(1);
+  await toggle.click();
   await expect(page.locator(".pl-message--assistant .chat-usage")).toHaveCount(0);
 });
 
