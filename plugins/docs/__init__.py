@@ -230,7 +230,6 @@ catch(e){
     '(a source install without a web build, or a packaging regression). Docs cannot authenticate without it.</div>';
   throw e;
 }
-kit.initPluginView(()=>{});
 if (new URLSearchParams(location.search).get("mode")==="search") document.body.classList.add("mode-search");
 const $list=document.getElementById("list"), $reader=document.getElementById("reader"), $q=document.getElementById("q"), $back=document.getElementById("back");
 // On phones the view is master-detail: opening a doc swaps the list out for the reader.
@@ -322,6 +321,14 @@ async function showTree(){
 }
 let timer;
 $q.oninput=()=>{ clearTimeout(timer); timer=setTimeout(async()=>{ const q=$q.value.trim(); if(!q){ showTree(); return; } try{ const r=await api("/search?q="+encodeURIComponent(q)); renderResults((r&&r.results)||[]); }catch(e){ showErr($list,e); } }, 180); };
-showTree();
+// First load rides the console handshake — the bearer arrives by postMessage AFTER
+// this module script runs, so a module-scope fetch 401s on a token-gated host (the
+// #2926 friction/devkit race; docs had the same bug). The timer is the fallback for a
+// top-level / open-mode page that never receives a handshake, and the guard absorbs
+// the init callback re-firing on every live re-theme.
+let started=false;
+const start=()=>{ if(started) return; started=true; showTree(); };
+kit.initPluginView(start);
+setTimeout(start, 1500);
 </script></body></html>
 """
