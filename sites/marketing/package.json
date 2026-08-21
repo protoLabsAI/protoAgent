@@ -12,7 +12,7 @@
   "dependencies": {
     "@astrojs/check": "^0.9.4",
     "@protolabsai/design": "^0.9.0",
-    "@protolabsai/ui": "^0.59.1",
+    "@protolabsai/ui-css": "^0.60.1",
     "astro": "^5.7.12",
     "typescript": "~5.6.0",
     "yaml": "^2.9.0"

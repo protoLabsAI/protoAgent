@@ -2,8 +2,8 @@
  *
  * The page content is built from the shared design system:
  *   @protolabsai/design  → the --pl-* tokens + element base layer
- *   @protolabsai/ui      → the .pl-* component classes
- * …the exact two imports protolabs.studio's frontend layout uses, so this site
+ *   @protolabsai/ui-css  → the .pl-* component classes (CSS-only, no React)
+ * …the same styles protolabs.studio's frontend layout uses, so this site
  * tracks the brand instead of re-deriving it. Bump the two packages and the
  * design follows.
  *
@@ -17,7 +17,7 @@
  */
 
 @import "@protolabsai/design/css";
-@import "@protolabsai/ui/styles.css";
+@import "@protolabsai/ui-css";
 
 /* ───────────────────────────── nav (chrome) ───────────────────────────── */
 
