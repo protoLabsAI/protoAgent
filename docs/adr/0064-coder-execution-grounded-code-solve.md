@@ -8,7 +8,10 @@
   portfolio → Lead Engineer team tiers).
 - Composes (external plugins): `projectBoard-plugin` (beads board + ACP spawn loop —
   the Lead Engineer team's coding engine), the `leadEngineer` bundle (team tier),
-  `pm-stack` / `portfolio-plugin` (portfolio tier).
+  `pm-stack` / `portfolio-plugin` (portfolio tier). *Amendment (2026-08): the team
+  tier now ships as `project-manager-archetype` (`leadEngineer` remains its
+  development/reference host fork, not a published archetype); `pm-stack` is
+  `portfolio-manager-archetype`; `portfolio-plugin` is unchanged (ADR 0100 amendment, #2895).*
 - Inspired by: lab prototype [`experiments/code-tree-search/`](https://github.com/protoLabsAI/lab/tree/main/experiments/code-tree-search);
   `protolabs/fusion` (self-MoA, protoContent #351/#365); MARTI / MARS² (learned
   multi-agent tree search for code).

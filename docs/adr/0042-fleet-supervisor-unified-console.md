@@ -131,6 +131,12 @@ persona/accent). It rides the **settled bundle shape** — `load_bundle` already
 no schema change. pm-stack is archetype #1 ("Project Manager"); every future bundle that
 adds the block becomes a starter type for free.
 
+> **Amendment (2026-08) — naming.** `pm-stack` (then labelled "Project Manager") bundled
+> `project_board` *and* `portfolio`; it is now `portfolio-manager-archetype`, and the
+> single-repo **Project Manager** archetype ships from `project-manager-archetype`
+> (ADR 0100 amendment, #2895 — "stack" retired, archetype repos are `<name>-archetype`).
+> The archetype system itself is ratified in [ADR 0100](0100-agent-archetypes.md).
+
 ### G. Keep-alive policy
 Resource-bound: default **keep-N-warm** (recently-active agents stay running; the rest are
 stopped and resume from checkpoint on switch), with an opt-in **run-all** for small fleets.

@@ -28,7 +28,7 @@ grab-bag of "stale" symptoms with no common explanation.
 | Symptom (what the operator saw) | Root cause | Axis |
 |---|---|---|
 | "I rebuilt + restarted the hub but the agent is still old" | The member is a **detached process** (`start_new_session=True`) that survived the hub restart — it was never re-execed. | **1 — process** |
-| `project_board/board` 404; `agent_browser` no panel | Plugins **pinned to pre-fix SHAs** by the `pm-stack` bundle; a core rebuild never touches data-dir plugins, and the update button **skips pinned plugins**. | **2 — plugin** |
+| `project_board/board` 404; `agent_browser` no panel | Plugins **pinned to pre-fix SHAs** by the `pm-stack` bundle (the repo is now `portfolio-manager-archetype` — "stack" retired, ADR 0100 amendment #2895; the trap is bundle-generic); a core rebuild never touches data-dir plugins, and the update button **skips pinned plugins**. | **2 — plugin** |
 | Board/browser load but **styling is borked** (no DS) | `--ui none` members **don't serve `/_ds/plugin-kit.css`** — it's mounted only by the console tier — so plugin views render with no design system. | **3 — assets** |
 | `doom/panel` 404 on the **fresh host**, "I updated + enabled via UI" | The view plugin's router **failed to hot-mount on the live process** (a FastAPI mount/swap limit) and the failure was **swallowed** → bare 404. A restart mounts it. | **cross-cutting — mount reliability** |
 | (latent) desktop build would be worse on all of the above | `package_version()` returns **`0.0.0`** in the frozen binary, so no version-based detection can even fire. | **cross-cutting — version truth** |
@@ -109,7 +109,7 @@ bundle that pinned a sub-plugin to a SHA produces a plugin the UI can never adva
 (`loader.py:169-195`): plugin-too-new-for-host is refused. There is **no**
 plugin-too-old signal and **no** "core moved ahead, re-check freshness" step.
 
-> Evidence this session: `pm-stack` pinned `project_board` (→ pre-#2, the `/board`
+> Evidence this session (June 2026): the `pm-stack` bundle — today's `portfolio-manager-archetype` — pinned `project_board` (→ pre-#2, the `/board`
 > 404) and `agent_browser` (→ pre-#7, the missing panel) to old SHAs; the per-plugin
 > update button skipped both because they were SHA-pinned. Fixed by a manual
 > re-install at HEAD (which also un-pins → `requested_ref=""` → future freshness
@@ -225,7 +225,7 @@ Two failure modes shaped that order, both closed:
    → `installer.check_plugin_update`.
 7. **Bundle-level update / re-pin.** `POST /api/bundles/{id}/update` re-clones the
    bundle at its latest ref and re-runs `_install_bundle(force=True)` → re-pins the
-   whole tested combo. Closes the `pm-stack` trap. → `installer`, `plugin_routes`.
+   whole tested combo. Closes the `pm-stack` (now `portfolio-manager-archetype`) trap. → `installer`, `plugin_routes`.
 8. **Surface swallowed plugin mount failures.** The loader should record + surface a
    plugin whose router failed to mount (don't leave a bare 404); `PluginView` can then
    show the real reason. → `graph/plugins/loader.py`, plugin enable/update routes.

@@ -114,6 +114,10 @@ No new packaging primitive. A member's persona + tools stay in an **archetype bu
 archetypes plus team-level wiring (delegates, commons). `content-drafter` and
 `frontend-ds` archetypes are as reusable as `pm-stack`.
 
+> **Amendment (2026-08) — naming.** `pm-stack` is now `portfolio-manager-archetype`
+> (ADR 0100 amendment, #2895 — "stack" retired). Where this ADR says *plugin stack* it means
+> the generic plugin set a bundle installs, not the retired product noun.
+
 ### D. Shared knowledge commons (optional)
 
 A `commons:` block sets every member (and the lead) to a layered/shared store (ADR

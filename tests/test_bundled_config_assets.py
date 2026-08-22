@@ -203,7 +203,7 @@ def test_project_manager_archetype_is_listed() -> None:
     so the contract's tool binds (project-manager-archetype v0.2.0), the board
     view shows a setup card instead of a raw `br init` error (projectBoard
     v0.40.0), the Configure step ASKS for repo / coder / github repo (config_inputs,
-    #2938 + archetype v0.3.0), the review gate's runner ships in the bundle
+    #2934 — shipped by PR #2938 — + archetype v0.3.0), the review gate's runner ships in the bundle
     (archetype v0.4.0), and auto_merge works on a default board (projectBoard
     v0.41.4). This pins BOTH directions: the row ships in ``archetypes`` (advanced
     tier, before ``custom``), and it is NOT also parked in ``held`` — a row in

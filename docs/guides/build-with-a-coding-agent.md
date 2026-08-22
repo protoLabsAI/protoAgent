@@ -10,13 +10,51 @@ coding agent CLI is already installed, the first PR is about thirty minutes away
 
 ## Before you start
 
+Three host binaries have to exist *before* you create the agent — the Configure
+step can't install them, and two of them gate the create outright:
+
+- **A CLI coding agent**, installed and signed in: `proto`, Claude Code, opencode,
+  or Codex. The [coding agents guide](/guides/coding-agents) lists the ACP adapter
+  for each. It becomes the `acp` delegate the board dispatches to (step 2) — and
+  the Configure step **refuses to create the PM until one is picked**.
+- **`br`** — the [beads-rust](https://github.com/Dicklesworthstone/beads_rust) CLI
+  the board is built on: `cargo install beads_rust`. It is *not* the Homebrew
+  `bd`; the board checks `br` (or whatever `BR_BIN` names) on every store open
+  and refuses with *"beads CLI 'br' not on PATH — install beads-rust (`cargo
+  install beads_rust`), not the homebrew `bd`, or set BR_BIN"* when it's missing.
+- **`git` and `gh`**, authenticated for the target repo — the loop pushes
+  branches with `git` and opens (and, with `auto_merge`, merges) PRs with
+  `gh pr create`. Run `gh auth login` on the host; the GitHub rail resolves auth
+  in this order: the plugin's `token` secret (a *Settings ▸ GitHub* field once
+  github-plugin 0.6.0 ships — in flight), then `GITHUB_TOKEN` / `GH_TOKEN` from
+  the environment, then `gh`'s own keyring login.
+
+All three must be on the PATH *of the protoAgent process*. The desktop build
+hands its bundled server your **login-shell PATH**, so Homebrew, cargo, nvm, and
+Volta installs resolve out of the box; a `launchd` autostart, a systemd unit, or
+an unusual shell setup only sees the minimal system PATH — there, register the
+coder with an **absolute** `command` path and put `~/.cargo/bin` on the
+service's PATH ([details](/guides/coding-agents#configure-an-acp-delegate)).
+
+**What the console shows when one is missing.** The coder dropdown in the
+Configure step reads *No coding (acp) delegates configured*, and the create is
+refused until you register one. A missing `br` shows up on the **Board** view:
+the setup card's *Underlying error* line while the board is unbound, a red
+*Could not load the board* callout once it is — either way the exact `br`
+message above, never a blank panel. An unauthenticated `gh` fails at the first
+`gh pr create` — the error lands in the feature's attempt history, and the card
+blocks once its retry budget is spent. Core ≥ 0.146 (#2977) adds the seam that
+lifts all three into the operator **warning banner** (the same `warnings[]`
+that carries the capability-contract notice): a plugin calls
+`registry.report_setup_gap(key, message)` and the banner reads
+*"Project Board: beads CLI 'br' not on PATH …"* until the gap clears — live,
+no restart. The board release the archetype pins today (v0.41.4) doesn't call
+it yet; until a board release does, the Board view is where the message lands.
+
+You also need:
+
 - A running protoAgent fork ([fork the template](/guides/fork-the-template)) and
   a repository you want it to grow — usually that same fork.
-- A CLI coding agent installed and signed in: `proto`, Claude Code, opencode, or
-  Codex. The [coding agents guide](/guides/coding-agents) lists the ACP adapters
-  for each.
-- `git` and `gh` authenticated for the target repo — the loop pushes branches and
-  opens PRs with them.
 - CI on the target repo that can genuinely fail. The pipeline's safety is its
   gates (step 5); a repo with no failing checks has no gates.
 
@@ -41,53 +79,115 @@ it needs a repo and a coder, so it isn't a one-click archetype). The picker
 installs the [project-manager-archetype](https://github.com/protoLabsAI/project-manager-archetype)
 bundle — the project board, a GitHub rail with write on, a browser for
 verification, the review gate's workflow runner, and the friction ledger — seeds
-the `project-manager` soul preset, and then **asks** for the four things the
-bundle can't guess, as a Configure step:
+the `project-manager` soul preset, and then **asks** for the five things the
+bundle can't guess, as a Configure step (archetype v0.5.0):
 
 | Configure field | What it sets | Required |
 |---|---|---|
-| Repo this board manages | `project_board.repo` — absolute path to the git checkout | yes |
-| Coder delegate | `project_board.coder` — a dropdown of the host's registered `acp` delegates | yes |
+| Repo this board manages | `project_board.repo` — absolute path to the git checkout | **yes** |
+| Coder delegate | `project_board.coder` — a dropdown of the host's registered **`acp`** delegates (a2a peers and model endpoints are filtered out — they can't take a build) | **yes** |
 | GitHub repo (`owner/name`) | `github.default_repo` — where issues and PRs go | no |
 | Start the build loop now | `project_board.loop_enabled` — ships **off** until the two above are real | no |
+| Merge a PR yourself once review + CI are green | `project_board.auto_merge` — ships **on**; off means a human merges every PR (step 3) | no |
 
-If the coder dropdown says *No delegates configured*, that's honest: coding
-delegates are host-installed binaries, and the wizard can't conjure one. Step 2
-covers both ways to register one. Create the agent anyway — the loop stays off
-until you flip it.
+**The two required fields are a hard gate** (core ≥ 0.146, #2977). A create
+with either blank is refused — `400`, naming the field — and the half-made
+workspace is removed so a retry doesn't collide. The Setup Wizard's install onto
+the host itself refuses the same way, at *activate*: the plugins stay installed
+and re-running Configure with the answer activates them. There is no "create it
+anyway and fix it in Settings": a PM that boots green with no coder is exactly
+the failure this guards against.
 
-The CLI path is the same bundle without the Configure step:
+If the coder dropdown says *No coding (acp) delegates configured*, that's
+honest: coding delegates are host-installed binaries, and the wizard can't
+conjure one. Register one first (step 2 — Settings ▸ Delegates, or a
+`propose_delegate` from any running agent), then come back and pick it.
+
+**What the create does with your answers** (core ≥ 0.146, #2977) — nothing
+here is written by hand any more:
+
+- The picked coder is **copied into the member's own delegate registry** — its
+  entry *and* its secrets — because a member resolves delegates from its own
+  config ([ADR 0025](/adr/0025-unified-delegate-registry-and-panel)), not the
+  host's. Before #2977 only the name travelled, and the first dispatch failed
+  *not found*.
+- The repo path becomes a **managed project**: an
+  [ADR 0095](/adr/0095-managed-projects-registry) `projects:` entry (name = the
+  checkout's directory, `github: owner/name` parsed from its `origin` remote,
+  `write: false`) that the PM's read-only file tools, the GitHub rail's repo
+  picker, and the board all read. When you haven't configured `onboarding:` at
+  all, it also enables onboarding **rooted at the checkout's parent**, so
+  `onboard_project` can bind exactly that tree and nothing wider. This rides a
+  `project: true` flag on the bundle's repo input — the archetype's next
+  release flags it (v0.5.0 predates the flag). Until then the board still binds
+  through `project_board.repo`, but the file tools and the GitHub picker only
+  see the repo if you add the `projects:` entry yourself
+  ([reference](/reference/configuration#projects)).
+
+The CLI has no Configure step:
 
 ```bash
 python -m server workspace new pm --bundle https://github.com/protoLabsAI/project-manager-archetype
 ```
 
-…after which you set the same keys by hand in the workspace's
-`langgraph-config.yaml` (or in Settings once it's running):
+…installs the bundle and nothing else — **no persona** (the soul preset is the
+picker's doing), **no host model** carried over, **no capability contract**
+recorded, and no way to answer the required inputs, so on core ≥ 0.146 this
+exact command is **refused** (*"the bundle needs these Configure answers before
+the agent can work: Repo this board manages …; Coder delegate …"*). Script the
+create through the API instead — the same body the picker sends:
+
+```bash
+curl -s -X POST localhost:7870/api/fleet -H 'content-type: application/json' -d '{
+  "name": "pm",
+  "bundle": "https://github.com/protoLabsAI/project-manager-archetype",
+  "soul": "<contents of config/soul-presets/project-manager.md>",
+  "requires_tools": ["github_create_issue"],
+  "config_inputs": {
+    "project_board.repo":  "/Users/you/dev/my-agent",
+    "project_board.coder": "claude-code",
+    "github.default_repo": "you/my-agent",
+    "project_board.loop_enabled": false,
+    "project_board.auto_merge":   true
+  }
+}'
+```
+
+For reference, this is what those answers (plus the bundle's seeded defaults)
+leave in the member's `langgraph-config.yaml` — editable any time in Settings:
 
 ```yaml
 project_board:
   coder: claude-code         # the acp delegate the loop dispatches (step 2)
-  repo: ~/dev/my-agent       # the checkout this PM owns
+  repo: /Users/you/dev/my-agent   # the checkout this PM owns
   base_branch: main
-  loop_enabled: true         # the background puller: ready → worktree → coder → PR
+  loop_enabled: false        # the background puller: ready → worktree → coder → PR — flip once the coder probes green
   max_concurrent: 1          # raise once the repo parallelizes cleanly
   local_gate_cmd: "auto"     # the pre-PR gate — see step 5
   auto_merge: true           # the loop merges a reviewed, green PR itself — see step 3
 github:
   write: true                # seeded by the bundle — the PM files issues and reviews PRs
   default_repo: you/my-agent
+delegates:
+  - { name: claude-code, type: acp, command: /opt/homebrew/bin/claude-agent-acp, workdir: /Users/you/dev/my-agent }   # copied from the host
+projects:
+  - { name: my-agent, path: /Users/you/dev/my-agent, github: you/my-agent, write: false }   # registered from the repo input
+onboarding: { enabled: true, root: /Users/you/dev }   # only seeded when you had no onboarding: section
 ```
 
 One PM, one repo. An agent that sits above several PMs is the Portfolio Manager —
 a different archetype, over A2A ([portfolio](/guides/portfolio)).
 
-**What a clean first boot looks like.** Operator status shows no warnings. (A
+**What a clean first boot looks like.** Operator status shows no warnings. A
 *capability contract* banner means the archetype declared a tool — for the PM,
 `github_create_issue` — that didn't bind; the one way to get it today is
-`github.write: false`, which the bundle seeds true.) The **Board** view shows a
-setup card naming the bound repo, not a beads error; if the repo has never had a
-board, the plugin runs `br init` there on first use.
+`github.write: false`, which the bundle seeds true. That banner exists **only
+for fleet members**: the contract is recorded on the member's `workspace.yaml`
+at create, so a PM the Setup Wizard installs onto the host itself has no record
+to check and never shows it — on a host PM, confirm the tool bound by looking
+for `github_create_issue` under Settings ▸ Capabilities ▸ Tools. The **Board**
+view shows a setup card naming the bound repo, not a beads error; if the repo
+has never had a board, the plugin runs `br init` there on first use.
 
 > **Why the PM can't edit files.** Its file tools are read-only by design — a PM
 > that can edit files can ship unreviewed changes around every gate below, so the
@@ -109,11 +209,21 @@ delegates:
   - { name: opencode,    type: acp, command: opencode,    args: ["acp"],   workdir: ~/dev/my-agent, permissions: allowlist }
 ```
 
-Two ways to get one onto the host. **Settings ▸ Delegates** registers it by hand
-— use an *absolute* command path (a GUI host doesn't inherit your shell's PATH).
-Or ask the PM: *"register Claude Code as our coder"* — its `propose_delegate`
+Two ways to get one onto the host. **Settings ▸ Delegates** registers it by hand.
+Or ask any running agent — the PM itself, once it exists, or the host agent
+before that: *"register Claude Code as our coder"* — its `propose_delegate`
 tool validates and probes the entry, then **parks for your approval** with the
-command path front and center; nothing registers without you (core ≥ 0.145).
+command path front and center; nothing registers without you (core ≥ 0.145,
+[delegates guide](/guides/delegates#let-the-agent-propose-one-propose-delegate)).
+
+On the **command path**: the desktop build passes its server your login-shell
+PATH, so a bare `claude-agent-acp` / `npx` resolves there. An *absolute* path
+(`/opt/homebrew/bin/claude-agent-acp`) is the safe fallback for every other
+launch — a `launchd` autostart, a Linux service, a shell whose PATH the desktop
+shim didn't capture — and it passes the probe either way
+([coding agents ▸ PATH](/guides/coding-agents#configure-an-acp-delegate)).
+Remember the Configure step copies this entry into the new member verbatim, so
+fix the path on the host *before* you create the PM.
 
 Before going further, open the delegates panel and hit **Test** on the delegate
 you named in `project_board.coder` — it must probe green. The
@@ -160,15 +270,18 @@ check. The card's labels tell you where it is: `review-pending` while the panel
 runs, `changes-requested` when blocking findings went back to the coder on the
 same branch, `review-clean` when none survived.
 
-**Then it merges — if you let it.** `project_board.auto_merge` is the knob. On,
-the loop squash-merges a PR the moment every gate it owns is green and current
-(`review-clean`, CI green, GitHub reports the PR mergeable, no `merge-hold`
-label) and the merge reconcile moves the card to **done** and reaps the
-worktree. **Off (the plugin's default), nothing merges** — the card waits in
-**in_review** for a human to merge the PR, and the merge webhook (or
+**Then it merges — the archetype's default.** `project_board.auto_merge` is the
+knob, and the archetype ships it **on** (the fifth Configure field; the bare
+plugin defaults it off). On, the loop squash-merges a PR the moment every gate
+it owns is green and current (`review-clean`, CI green, GitHub reports the PR
+mergeable, no `merge-hold` label) and the merge reconcile moves the card to
+**done** and reaps the worktree — the PM preset treats a board with
+`auto_merge` on as its authorization to merge *its own reviewed PRs*, and
+nothing more. **Off means a human merges**: nothing merges on its own, the card
+waits in **in_review** for you to merge the PR, and the merge webhook (or
 `merge_poll` where GitHub can't reach you) notices afterwards. Pick one
-deliberately: the archetype's Configure step asks; a board whose cards
-"sit in review" has almost always just never been told who merges.
+deliberately — a board whose cards "sit in review" has almost always been
+switched off without anyone taking the merge.
 
 That's one full pass: you spoke an outcome, and a reviewed, gated PR merged. Ask
 the PM to `board_list` any time, or watch the board view — the card's state *is*
@@ -306,7 +419,15 @@ thing in every chat, the instruction has outgrown the conversation:
 - Doctrine that survives contact with real runs belongs in the **archetype**:
   commit it into `config/soul-presets/project-manager.md` so every future PM
   starts with it. That's how the preset's fix-round rule and its
-  never-claim-an-untooled-action rule landed (#2273).
+  never-claim-an-untooled-action rule landed (#2273), and how three rules from
+  protoEngineer's live runs followed (#2978): *a colleague, not a typist* (push
+  back on a mistaken ask before boarding it), *the smallest action that solves
+  the problem wins*, and *irreversible or outward-facing actions get confirmed*
+  — with a board's `auto_merge` counting as the authorization for its own
+  reviewed PRs and nothing else. The same pass made the preset ground-first
+  through the managed-projects registry (the repo the Configure step
+  registered) and taught it that an absent `list_agents` *is* the empty bench —
+  not an error to retry.
 
 That's the full loop: briefs go down, PRs come up, gates decide, friction gets
 filed, and what the pipeline learns gets frozen where the next run inherits it.

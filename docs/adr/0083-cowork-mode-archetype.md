@@ -48,7 +48,9 @@ left.
 
 1. **Catalog archetype + bundle (chosen)** — a `cowork` soul preset + catalog
    row pointing at a `cowork-stack` bundle repo; skills ship inside a
-   `cowork-plugin` listed by the bundle.
+   `cowork-plugin` listed by the bundle. *(Amendment 2026-08: `cowork-stack` was
+   renamed `cowork-archetype` — the catalog row points there; GitHub redirects
+   keep the URL below and existing lock pins working. ADR 0100 amendment, #2895.)*
 2. Fork-style "cowork edition" of protoAgent — rejected: modes are
    configuration, not forks; the operator-fork contract reserves forks for
    domain rewrites.

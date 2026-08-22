@@ -17,8 +17,8 @@ primitives:
 ## Quick start
 
 ```bash
-# an agent from a bundle-backed archetype (project-manager-archetype: board-driven PM)
-python -m server workspace new pm --bundle https://github.com/protoLabsAI/project-manager-archetype
+# an agent from a bundle-backed archetype (design-system-archetype: DS engineer)
+python -m server workspace new ds --bundle https://github.com/protoLabsAI/design-system-archetype
 
 # a blank-slate agent (the built-in Basic archetype — core loop + tools, no plugins)
 python -m server workspace new scratch
@@ -26,7 +26,7 @@ python -m server workspace new scratch
 # run the whole fleet in the background, then look at it
 python -m server fleet up
 python -m server fleet ls
-#   ● pm        :7871  pid 12345  [project-manager-archetype]
+#   ● ds        :7871  pid 12345  [design-system-archetype]
 #   ● scratch   :7872  pid 12346
 ```
 
@@ -48,6 +48,12 @@ workspace rm <name> [--purge] # --purge also deletes its scoped data
 
 `--from <dir>` clones an existing agent's config + secrets (re-stamping identity/instance);
 `--bundle <url>` installs a bundle into it (next section); `--port auto` picks a free port.
+
+The CLI installs the bundle and stops there — no persona, no host model, no capability
+contract, and no **Configure step**. A bundle that declares `required: true`
+`config_inputs` (the Project Manager archetype: its repo and coder) is therefore
+**refused** by `workspace new --bundle` on core ≥ 0.146 (#2977) — use the console picker,
+or `POST /api/fleet` with `config_inputs` ([the body](./build-with-a-coding-agent#_1-stand-up-the-pm)).
 
 ## Bundles & archetypes — start from a type
 
@@ -95,10 +101,12 @@ Unknown keys in the block warn at install time; the full annotated field set liv
 The picker draws from **two** sources:
 
 - **The archetype catalog** — `config/archetype-catalog.json`, served by `GET /api/archetypes`.
-  The shipped catalog carries the starter set (2026-08: Basic, Cowork, Social Marketing,
-  Project Manager, Design System, Custom — the two code-free personas are Basic and
-  Custom; the rest reference published archetype repos) and is **data-driven**: add or remove
-  archetypes by editing the JSON, no code change. A fork or instance overrides it by
+  The shipped catalog carries the starter set (2026-08: Basic, Cowork, and — under the
+  *Advanced* toggle — Design System Engineer and Project Manager, then Custom; the two
+  code-free personas are Basic and Custom, the rest reference published archetype repos)
+  and is **data-driven**: add or remove archetypes by editing the JSON, no code change. A
+  row the operator has pulled from the picker without deleting it sits in the file's
+  `held:` array (Social Marketing is parked there today) — held rows are never served. A fork or instance overrides it by
   dropping its own `archetype-catalog.json` in the live config dir (same rule as
   `plugin-catalog.json`); if the file is missing entirely, a hardcoded Basic + Custom
   fallback keeps the picker from rendering empty. Each entry names a `soul_preset` (a

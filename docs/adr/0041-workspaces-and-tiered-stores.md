@@ -55,6 +55,11 @@ workspaces/
     …
 ```
 
+> **Amendment (2026-08) — naming.** `pm-stack` is the bundle id as it was in June 2026;
+> that repo is now `portfolio-manager-archetype` (ADR 0100 amendment, #2895 — "stack" is retired;
+> the product noun is *archetype* and archetype repos are named `<name>-archetype`).
+> The `bundle?:` field records whatever id/URL the bundle declared at create time.
+
 Running a workspace = set `PROTOAGENT_CONFIG_DIR=<ws>`, `PROTOAGENT_INSTANCE=<id>`, `--port <port>`,
 and point the private store paths at `<ws>/data/`. Because everything lives under one dir, a
 workspace is **portable** (zip it, copy it to another box) and **disposable** (`rm -rf`).

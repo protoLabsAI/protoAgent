@@ -81,6 +81,37 @@ delegates:
 Editing it and hitting **Save & Reload** rebuilds the roster live — no restart
 (protoAgent re-runs the plugin's `register()` with the new config).
 
+## Let the agent propose one (`propose_delegate`)
+
+An empty roster used to be a dead end: the agent could see nobody was configured
+and could only describe, in prose, what it needed. Since core 0.145 (#2953) the
+`delegates` plugin registers **`propose_delegate(entry, reason)`** —
+*unconditionally*, even when the roster is empty and `delegate_to` /
+`list_agents` therefore aren't bound — so *"register Claude Code as our coder"*
+has a real move behind it. Registration stays **consent-gated**:
+
+1. **Validate** — the entry goes through the same per-type schema the panel and
+   `POST /api/delegates` use; a malformed entry or a name that already exists
+   returns an error to the agent (*"read `list_agents` instead of re-registering"*).
+2. **Probe** — the adapter's reachability probe runs (for `acp`, the ACP
+   `initialize` handshake). A failed probe is **shown, not hidden**: you approve
+   something proven runnable, or knowingly approve one that isn't.
+3. **Park for approval** — the turn pauses with a form (A2A `input-required` /
+   the console's approval card) showing the agent's reason, the full proposed
+   entry with the **command path front and center** (an `acp` entry is a binary
+   this agent may run), and the probe result. Only an explicit **approve: true**
+   writes it — through the same seam as Settings ▸ Delegates, followed by a live
+   roster reload, so the new delegate is usable on the next turn. Anything else
+   declines, and your optional note goes back to the agent, which must not
+   re-propose the same entry.
+
+Autonomous turns (scheduled, inbox, background) **fail closed**: there is no
+operator to approve, the runtime auto-answers the pause, and the auto-answer
+declines. The Project Manager preset relies on this tool for its empty-bench
+rule (an absent `list_agents` *is* the answer — propose, don't retry); the
+[coding-agent guide](/guides/build-with-a-coding-agent#_2-wire-a-coder) shows it
+in that flow, and the archetype's Configure step can pick whatever it registered.
+
 ## Use it
 
 ```

@@ -9,7 +9,9 @@
 
 ADR 0040 made a bundle a *curated, pinned* set of plugin repos. The pin is the point: a
 bundle's promise is "this combo was tested together". But the first real bundle (pm-stack,
-the "Project Manager" archetype) shipped pins that were **already stale at authoring time**
+the "Project Manager" archetype — *amendment 2026-08: that repo is now
+`portfolio-manager-archetype`; the single-repo Project Manager ships from
+`project-manager-archetype`; ADR 0100 amendment, #2895*) shipped pins that were **already stale at authoring time**
 — both members had landed console-view fixes (`projectBoard-plugin#2`,
 `agent-browser-plugin#7`) that the pinned SHAs predated, so every agent spawned from the
 archetype got 404s on its Board and Browser panels out of the box.

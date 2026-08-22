@@ -116,7 +116,10 @@ registry:
   (explicit beads location; `db_path` wires through; per-(db,repo) store; `br` runs in
   the configured repo). *Also fixed the dev-env isolation gap.* projectBoard-plugin
   v0.19.0 (#46) + pm-stack pin (#6) + the host fix protoAgent #1105 (scoped instances
-  now resolve installed-plugin config from the unscoped plugins dir).
+  now resolve installed-plugin config from the unscoped plugins dir). *Amendment
+  (2026-08): the `pm-stack` bundle is now `portfolio-manager-archetype`; the team tier
+  ships as `project-manager-archetype`; `portfolio-plugin` keeps its name — it is a
+  plugin, not an archetype repo (ADR 0100 amendment, #2895).*
 - **P1** ✅ *(shipped + live-verified)* — PM portfolio capability: the `portfolio`
   plugin (#1107) — `portfolio_boards` / `portfolio_dispatch` (A2A) / `portfolio_board_read`.
   Pure composition of fleet × delegates × project_board. Live-verified end-to-end

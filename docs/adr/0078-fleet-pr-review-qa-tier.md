@@ -38,7 +38,11 @@ Role-specific machinery goes in a new **pr-reviewer-plugin**: webhook ingress, t
 dispatch chokepoint, structural-trigger recipe sizing, the approve-on-green policy
 layer + sweep, prior-review recall, the protoPatch client, and the review eval. The
 agent itself is a new **qaEngineer bundle** (pins + archetype + persona + defaults),
-the leadEngineer pattern applied to QA.
+the leadEngineer pattern applied to QA. *(Amendment 2026-08: the leadEngineer
+pattern — a published bundle + persona — is what became the archetype repos;
+the team-tier one is `project-manager-archetype`, `pm-stack` is
+`portfolio-manager-archetype`; `leadEngineer` itself remains a reference host
+fork. ADR 0100 amendment, #2895.)*
 
 **D2 — Guards live below the model, verbatim from Quinn's ledger.** The CI-terminal
 guard is enforced INSIDE the verdict tools (refuse APPROVE/REQUEST_CHANGES while any

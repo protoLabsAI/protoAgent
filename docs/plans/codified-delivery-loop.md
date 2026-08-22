@@ -1,6 +1,10 @@
 # Program: the Codified Delivery Loop (two sprints)
 
 **Status:** scoped by due diligence 2026-07-06, ready to execute.
+**Naming (2026-08):** the team-tier bundle this plan calls `leadEngineer` ships today as
+`project-manager-archetype` (the Project Manager archetype); `leadEngineer` is its
+development/reference host fork. "Stack" is retired — archetype repos are `<name>-archetype`
+(ADR 0100 amendment, #2895). Tier names below are kept as written.
 **Goal:** encode the working delivery loop — *plan → due-diligence → ADR → build → review →
 settle* — as first-class mechanisms and gates across the three tiers, so leadEngineer /
 roxy-class agents run the same loop we run by hand.
@@ -144,10 +148,10 @@ bounce/budget/exhaustion.
 **Accept:** an architectural feature cannot reach `ready` without design+ADR; small features
 unaffected; `test_store.py` coverage.
 
-### M7 — Release + bundle roll-out  `projectBoard-plugin`, `leadEngineer`, `portfolio-manager-archetype`  [S]
-Board releases (M0 patch early; M5/M6 minor later); leadEngineer + portfolio-manager-archetype pin bumps
+### M7 — Release + bundle roll-out  `projectBoard-plugin`, `project-manager-archetype`, `portfolio-manager-archetype`  [S]
+Board releases (M0 patch early; M5/M6 minor later); project-manager-archetype + portfolio-manager-archetype pin bumps
 through `verify-bundle`; bundle `config.project_board` gains the recommended gate defaults
-(`review_gate: true` for leadEngineer; portfolio-manager-archetype ships teams with it). `verified_against`
+(`review_gate: true` for project-manager-archetype — shipped in its v0.4.0; portfolio-manager-archetype ships teams with it). `verified_against`
 bump if core moved.
 **Accept:** verify-bundle green on both bundles; a freshly spawned team has the gates on.
 
