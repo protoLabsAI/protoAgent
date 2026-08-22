@@ -153,7 +153,7 @@ def _deny_reason(name: str, gate, fence) -> str | None:
         # Same reason text as SubagentFenceMiddleware._deny_reason — the script
         # (and the model reading its stderr) sees the identical policy message.
         return (
-            f"tool '{name}' is outside this background subagent's allowlist "
+            f"tool '{name}' is outside this turn's tool allowlist "
             f"({', '.join(sorted(fence))}) — work within the allowed tools."
         )
     if gate is not None:
