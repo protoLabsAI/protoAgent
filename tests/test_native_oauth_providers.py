@@ -600,6 +600,52 @@ def test_anthropic_models_fall_back_without_creds(monkeypatch, tmp_path):
     assert error  # explains why the live probe was skipped
 
 
+class _CaptureStreamLLM:
+    """Records the messages handed to `.stream()` and yields one chunk."""
+
+    def __init__(self):
+        self.captured = None
+
+    def stream(self, messages):
+        self.captured = list(messages)
+        yield "ok"
+
+
+def test_validate_oauth_sends_identity_prefix_for_anthropic(monkeypatch):
+    """Anthropic's OAuth infra refuses traffic whose system prompt doesn't lead with
+    the Claude Code identity line (429). Real turns get it from
+    ClaudeCodeIdentityMiddleware; the probe bypasses the middleware stack, so it must
+    carry the prefix itself — a bare HumanMessage made "Test connection" fail while
+    real turns worked."""
+    from langchain_core.messages import SystemMessage
+
+    from graph.providers import discovery
+    from graph.providers.anthropic_oauth import CLAUDE_CODE_SYSTEM_PREFIX
+
+    llm = _CaptureStreamLLM()
+    monkeypatch.setattr("graph.providers.build_native_oauth_llm", lambda *a, **k: llm)
+    ok, error = discovery.validate_oauth_connection("anthropic-oauth", "claude-sonnet-4-5", LangGraphConfig())
+    assert ok is True and error == ""
+    first = llm.captured[0]
+    assert isinstance(first, SystemMessage)
+    assert first.content == CLAUDE_CODE_SYSTEM_PREFIX
+
+
+def test_validate_oauth_no_system_message_for_codex(monkeypatch):
+    """The Codex Responses backend rejects system-role items — the probe must stay a
+    bare user prompt for openai-codex."""
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    from graph.providers import discovery
+
+    llm = _CaptureStreamLLM()
+    monkeypatch.setattr("graph.providers.build_native_oauth_llm", lambda *a, **k: llm)
+    ok, error = discovery.validate_oauth_connection("openai-codex", "gpt-5-codex", LangGraphConfig())
+    assert ok is True and error == ""
+    assert not any(isinstance(m, SystemMessage) for m in llm.captured)
+    assert isinstance(llm.captured[0], HumanMessage)
+
+
 # ── settings schema: provider is a suggest-dropdown, not a strict enum ───────────
 
 

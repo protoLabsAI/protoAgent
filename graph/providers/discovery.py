@@ -270,19 +270,26 @@ def validate_oauth_connection(provider: str, model: str, config: "LangGraphConfi
     """The wizard/Settings "Test connection" for a native OAuth provider.
 
     Builds the real client and streams a 1-token turn (Codex requires streaming and
-    forbids a system message, so we send a bare user prompt). Returns ``(ok, error)``.
+    forbids a system message, so it gets a bare user prompt; Anthropic OAuth requires
+    the Claude Code identity prefix, so it gets one). Returns ``(ok, error)``.
     """
     provider = (provider or "").strip().lower()
     if provider not in NATIVE_OAUTH_PROVIDERS:
         return False, f"not a native OAuth provider: {provider!r}"
     try:
-        from langchain_core.messages import HumanMessage
+        from langchain_core.messages import HumanMessage, SystemMessage
 
         from graph.providers import build_native_oauth_llm
+        from graph.providers.anthropic_oauth import CLAUDE_CODE_SYSTEM_PREFIX
 
         llm = build_native_oauth_llm(provider, config, model_name=(model or "").strip() or None)
+        messages = [HumanMessage("Reply with: ok")]
+        # Anthropic OAuth requires the Claude Code identity prefix (ClaudeCodeIdentityMiddleware
+        # adds it in real turns; this probe bypasses the middleware stack).
+        if provider == "anthropic-oauth":
+            messages.insert(0, SystemMessage(content=CLAUDE_CODE_SYSTEM_PREFIX))
         got = False
-        for _chunk in llm.stream([HumanMessage("Reply with: ok")]):
+        for _chunk in llm.stream(messages):
             got = True
             break
         if not got:
