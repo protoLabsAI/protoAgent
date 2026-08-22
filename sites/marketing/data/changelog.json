@@ -1,5 +1,23 @@
 [
   {
+    "version": "v0.145.0",
+    "date": "2026-08-22",
+    "changes": [
+      "ACP plan session updates are recorded instead of dropped (#2945).",
+      "Agents can now propose_delegate — registration still needs your explicit approval (#2953).",
+      "The Project Manager archetype is listed again — the flagship for demos — and the first-run docs now match what the wizard actually does (#2963).",
+      "Creating an agent now lands you in it (#2952).",
+      "The Project Manager persona grounds first and proposes its own bench (#2954).",
+      "A failed conversation harvest no longer costs the thread its knowledge (#2950).",
+      "Parked (HITL) turns now appear in telemetry (#2951).",
+      "Model fallback is no longer silent (#2956).",
+      "\"Test connection\" now works for a Claude subscription (#2957).",
+      "Infisical host tolerates the CLI's /api suffix (#2958).",
+      "A show_component widget is never hidden inside a folded turn (#2965).",
+      "The docs and marketing sites now unfurl with the same branded social card as the GitHub repo (#2942)."
+    ]
+  },
+  {
     "version": "v0.144.0",
     "date": "2026-08-21",
     "changes": [

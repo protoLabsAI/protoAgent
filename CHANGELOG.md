@@ -15,6 +15,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.145.0] - 2026-08-22
+
+### Added
+- **ACP `plan` session updates are recorded instead of dropped (#2945).** Coding agents like Claude Code stream their live todo list over ACP; `AcpClient` now keeps the latest plan as `last_plan` (sanitized, capped, latest-wins — the same contract as `last_usage`) so consumers can sample it. The project board's live coder-monitor drawer (projectBoard-plugin v0.41.0) is the first: it renders the coder's plan as a checklist beside its streamed narration and current tool.
+
+- **Agents can now `propose_delegate` — registration still needs your explicit approval (#2953).** An empty delegate roster was a dead end: the agent could see nobody was configured but could only describe what it needed in prose. The new tool validates the proposed entry, probes it, and pauses with an approval card showing exactly what would run (command path included) plus the probe result; only an explicit approval writes it, through the same seam as Settings ▸ Delegates, with a live roster reload. Autonomous turns fail closed — the auto-answered pause declines. Pairs with the archetype `config_inputs` delegate picker so a board agent's coder can be set up end to end without hand-editing config.
+
+- **The Project Manager archetype is listed again — the flagship for demos — and the first-run docs now match what the wizard actually does (#2963).**
+  Held on 08-21 for first-run friction, every item has since shipped (github.write seeded, setup card instead of a raw beads error, a Configure step that asks for repo / coder / GitHub repo / loop toggle, the review-gate runner in the bundle, auto-merge reachable on a default board). The build-with-a-coding-agent guide gains the Configure-step flow, the merge step (`auto_merge` off means nobody merges), and a "stuck in review" decoder; `projects:` and `onboarding:` get reference sections; the first-agent tutorial describes the archetype picker instead of the retired persona presets.
+
+### Changed
+- **Creating an agent now lands you in it (#2952).** Create-from-archetype and snapshot
+  import used to drop the operator back on the fleet list — one click short of the agent
+  they were obviously about to configure. Both flows now navigate straight into the new
+  agent's own console (its id is the URL slug, the same full-page navigation the
+  FleetSwitcher uses). One deliberate exception: a snapshot import that comes back
+  incomplete (credentials missing, plugins failed) stays put on an in-page summary naming
+  exactly what's still needed — navigating immediately would unload that detail before it
+  could be read — with an Open button to move in once it has been. Also fixes a crash
+  typing into the import panel's credential fields (the event target was read after React
+  had already nulled it, so the first keystroke unmounted the panel).
+
+- **The Project Manager persona grounds first and proposes its own bench (#2954).** Two live first-run gaps: the preset now runs `onboard_project` on first contact with a repo (registry-backed local reads instead of per-file HTTP fetches), and treats an empty delegate roster as a `propose_delegate` moment — a validated, probed entry the operator approves — instead of a dead end it can only narrate. Pairs with project-manager-archetype v0.4.0, which now ships the review gate runnable (workflows member) and the friction ledger on.
+
+### Fixed
+- **A failed conversation harvest no longer costs the thread its knowledge (#2950).** The retire path deleted checkpoints even when the harvest had failed (its swallowed `None` was indistinguishable from "nothing to harvest"), so a transient 429 at retire time — the normal case on a shared fleet OAuth account — permanently skipped capture; 8 threads were lost this way in one day. Sweep-path failures now keep the thread for the next sweep (capped at 3 consecutive failures, then a loud delete), explicit chat deletions still delete but log the loss, and sweep harvests space themselves with jittered gaps so back-to-back model calls stop manufacturing rate-limit bursts.
+
+- **Parked (HITL) turns now appear in telemetry (#2951).** A turn that paused for operator input never recorded a row, so every model call made before the pause vanished from usage/cost numbers — the most expensive turn class, systematically undercounted. The park leg now records its own outcome with the pre-pause spend (state `input_required`, success left NULL so failure-rate queries stay honest); the resumed leg keeps recording separately as before.
+
+- **Model fallback is no longer silent (#2956).** `ModelFallbackMiddleware` failed over without a trace — a successful fallback was indistinguishable from a normal turn, so the operator's first clue of a degraded primary was a quality drop days later. The routing wiring now uses `ObservableModelFallbackMiddleware`, a drop-in subclass that logs a WARNING naming the primary failure and the fallback model that served, and publishes a `model.fallback` event (primary exception class, fallback model, fallback index) on the event bus (ADR 0039) for plugins/telemetry to consume. A HITL interrupt (`GraphBubbleUp`) now also propagates untouched instead of triggering fallback retries, and when every fallback fails the primary exception — the failure worth diagnosing — is the one re-raised.
+
+- **"Test connection" now works for a Claude subscription (#2957).** The OAuth connection probe streamed a bare user prompt, but Anthropic's OAuth infra refuses traffic whose system prompt doesn't lead with the Claude Code identity line — so the probe 429'd while real turns (which get the line from `ClaudeCodeIdentityMiddleware`) worked fine. The probe now sends the identity prefix as its system message for `anthropic-oauth`; Codex keeps its bare user prompt, since the Responses backend rejects system-role items.
+
+- **Infisical host tolerates the CLI's `/api` suffix (#2958).** The Infisical CLI's
+  `--domain` value includes `/api`, but `secrets_manager.host` must not — the provider
+  appends `/api/v1/...` itself, so a pasted CLI value produced `…/api/api/v1/…` and a
+  bare 404. The host is now normalized (a trailing `/api` is stripped,
+  case-insensitively), and a 404 on universal-auth login with an `/api`-suffixed host
+  gets an explicit hint in the error string.
+
+- **A `show_component` widget is never hidden inside a folded turn (#2965).**
+  A reasoning model thinks between the component and its final sentence, so the widget landed in the collapsed "Worked" timeline instead of the answer — the tool ran, the server emitted it, nothing visible happened. Components now always lead the answer, streaming or settled.
+
+### Docs
+- **The docs and marketing sites now unfurl with the same branded social card as the GitHub repo (#2942).**
+  Both were serving the unbranded robot banner as `og:image`, with no `og:description` on docs and no
+  `twitter:title`/`twitter:description` on either; shared links now show the 1280×640 wordmark card
+  with the tagline, and the marketing card moved to a new URL so stale scraper caches refresh.
+
 ## [0.144.0] - 2026-08-21
 
 ### Added
