@@ -722,7 +722,7 @@ async def test_host_bundle_install_refuses_missing_required_input(tmp_path, monk
     assert "updates" in captured
     doc = yaml.safe_load(cfg.read_text())
     assert doc["projects"] == [{"name": "proj", "path": str(repo), "github": "acme/proj", "write": False}]
-    assert doc["onboarding"] == {"enabled": True, "root": str(tmp_path)}
+    assert doc["onboarding"] == {"enabled": True, "root": str(tmp_path), "allow": ["github.com/acme/proj"]}
 
 
 async def test_activate_false_skips_bundle_service_seeding(tmp_path, monkeypatch):

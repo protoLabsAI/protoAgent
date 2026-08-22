@@ -21,6 +21,8 @@ from __future__ import annotations
 import threading
 
 _LOCK = threading.Lock()
+MAX_MESSAGE_CHARS = 300
+MAX_GAPS_PER_PLUGIN = 16
 # (plugin_id, key) -> {"plugin": plugin_id, "label": display name, "key": key, "message": text}
 _GAPS: dict[tuple[str, str], dict] = {}
 
@@ -33,8 +35,12 @@ def report(plugin_id: str, key: str, message: str | None, *, label: str | None =
     if not pid or not k:
         return
     text = str(message).strip() if message is not None else ""
+    if len(text) > MAX_MESSAGE_CHARS:
+        text = text[: MAX_MESSAGE_CHARS - 1] + "…"
     with _LOCK:
         if text:
+            if (pid, k) not in _GAPS and sum(1 for kk in _GAPS if kk[0] == pid) >= MAX_GAPS_PER_PLUGIN:
+                return  # a plugin keying gaps by timestamp must not flood the banner strip
             _GAPS[(pid, k)] = {"plugin": pid, "label": (label or pid).strip() or pid, "key": k, "message": text}
         else:
             _GAPS.pop((pid, k), None)
@@ -46,6 +52,15 @@ def clear_plugin(plugin_id: str) -> None:
     pid = str(plugin_id or "").strip()
     with _LOCK:
         for k in [k for k in _GAPS if k[0] == pid]:
+            _GAPS.pop(k, None)
+
+
+def retain(plugin_ids: set[str] | list[str]) -> None:
+    """Drop gaps from plugins that are no longer present at all (uninstalled between
+    reloads) — the disabled-branch clear can't see a plugin the loader never visits."""
+    keep = {str(p) for p in plugin_ids}
+    with _LOCK:
+        for k in [k for k in _GAPS if k[0] not in keep]:
             _GAPS.pop(k, None)
 
 

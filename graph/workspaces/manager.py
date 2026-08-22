@@ -496,7 +496,15 @@ def create(
                 raise WorkspaceError(f"the bundle needs these Configure answers before the agent can work: {labels}")
             # The coder the operator PICKED must exist in the MEMBER's registry, not just
             # the host's — copy the entry (+ its secrets) across. Host-dir aware only.
-            copy_host_delegates(cfg, ws / "plugins.lock", config_inputs or {}, inherit_model)
+            copied = copy_host_delegates(cfg, ws / "plugins.lock", config_inputs or {}, inherit_model)
+            if inherit_model:
+                ghosts = _uncopied_required_delegates(ws / "plugins.lock", config_inputs or {}, copied)
+                if ghosts:
+                    raise WorkspaceError(
+                        "the picked coder delegate is not configured on this host: "
+                        + ", ".join(ghosts)
+                        + " — register it in Settings ▸ Delegates first"
+                    )
             # A path input flagged `project: true` is a repo the agent manages — register
             # it (projects: entry + GitHub slug + scoped onboarding root).
             register_project_inputs(cfg, ws / "plugins.lock")
@@ -816,14 +824,24 @@ def _dotted_lookup(doc: object, dotted: str) -> object | None:
     return node
 
 
-def missing_required_config_inputs(cfg: Path, lock: Path) -> list[dict]:
-    """The bundle's ``required: true`` config_inputs that have NO value in the config
-    after the operator's answers were applied — ``[{key, label}]``. Run AFTER
+def missing_required_config_inputs(cfg: Path, lock: Path, overlay: Mapping[str, object] | None = None) -> list[dict]:
+    """The bundle's ``required: true`` config_inputs that have NO usable value in the
+    config after the operator's answers were applied — ``[{key, label}]``. Run AFTER
     ``apply_bundle_config_inputs``: an answer, a bundle default, or a pre-existing
-    operator value all satisfy it; blank/None does not. A create that proceeds past a
-    missing required input ships a member that cannot do its job (a board with no coder
-    was the 2026-08-22 first-run failure), so callers treat a non-empty result as a
-    refusal, not a warning."""
+    operator value all satisfy it; blank/None does not. ``overlay`` is a pending
+    ``{section: {key: value}}`` defaults overlay the caller will apply LATER (the host
+    install path computes the bundle's ``config:`` overlay after this gate) — a key it
+    fills counts as present, so both paths gate on the same effective config.
+
+    Booleans never gate: the console's toggle always resolves to a value and never
+    sends an untouched one, so a ``required`` boolean with no default would be
+    unsatisfiable from the UI. A ``path`` input flagged ``project: true`` must be
+    ABSOLUTE (after ``~`` expansion): a relative one would register junk and seed
+    ``onboarding.root: "."`` against whatever the server's cwd happens to be.
+
+    A create that proceeds past a missing required input ships a member that cannot
+    do its job (a board with no coder was the 2026-08-22 first-run failure), so
+    callers treat a non-empty result as a refusal, not a warning."""
     from graph.config_io import load_yaml_doc
 
     declared = _declared_config_inputs(lock)
@@ -836,9 +854,17 @@ def missing_required_config_inputs(cfg: Path, lock: Path) -> list[dict]:
     for key, dec in declared.items():
         if not bool(dec.get("required")):
             continue
+        typ = str(dec.get("type") or "string")
+        if typ == "boolean":
+            continue
         val = _dotted_lookup(doc, key)
+        if val is None and overlay:
+            val = _dotted_lookup(overlay, key)
+        label = str(dec.get("label") or key)
         if val is None or (isinstance(val, str) and not val.strip()):
-            missing.append({"key": key, "label": str(dec.get("label") or key)})
+            missing.append({"key": key, "label": label})
+        elif typ == "path" and bool(dec.get("project")) and not Path(str(val).strip()).expanduser().is_absolute():
+            missing.append({"key": key, "label": f"{label} — must be an absolute path"})
     return missing
 
 
@@ -853,9 +879,15 @@ def copy_host_delegates(cfg: Path, lock: Path, values: Mapping[str, object] | No
     resolves delegates from its OWN config (ADR 0025 — per-instance registry). Before
     this, only the NAME travelled: ``project_board.coder: claude-code`` landed in a
     member whose ``delegates:`` was empty, and the first dispatch failed "not found"
-    (2026-08-22 fresh-setup audit). Only names the operator actually picked are copied
-    — never the whole roster — and only when the host config is known (``inherit_config``
-    on the create call); a name the host doesn't have is skipped. Returns copied names."""
+    (2026-08-22 fresh-setup audit). Only names the operator actually picked are added to
+    the member's ``delegates:`` — never the whole roster — and only when the host config
+    is known (``inherit_config`` on the create call; with it OFF nothing can travel and
+    ``create`` refuses a required delegate input). Note the member's ``secrets.yaml`` is
+    already the host overlay's copy under ``inherit_config`` (``_overlay_model``), so the
+    per-delegate secret merge here matters for the non-inherited overlay shape, not as a
+    secrecy boundary. The copy is a one-time SNAPSHOT: a later host edit to the entry
+    (rotated key, new ``command``/``workdir``) does not propagate to the member. Returns
+    copied names."""
     if not values or not host_config_dir:
         return []
     declared = _declared_config_inputs(lock)
@@ -900,9 +932,14 @@ def copy_host_delegates(cfg: Path, lock: Path, values: Mapping[str, object] | No
             continue
         member_list = [e for e in member_list if not (isinstance(e, dict) and str(e.get("name") or "") == name)]
         member_list.append(_copy.deepcopy(entry))
+        # Structured match only — the delegates store keys env secrets ``<name>.env.<VAR>``
+        # and the adapter secret ``<name>.<field>``; a bare ``<name>.`` prefix would also
+        # swallow a sibling whose dotted name extends this one (``cc`` vs ``cc.prod``).
+        secret_fields = {f"{name}.auth.token", f"{name}.api_key", f"{name}.token"}
         for skey, sval in host_overlay.items():
-            if str(skey).startswith(f"{name}.") and sval not in (None, ""):
-                secret_updates[str(skey)] = str(sval)
+            k = str(skey)
+            if (k.startswith(f"{name}.env.") or k in secret_fields) and sval not in (None, ""):
+                secret_updates[k] = str(sval)
         copied.append(name)
     if not copied:
         return []
@@ -913,7 +950,21 @@ def copy_host_delegates(cfg: Path, lock: Path, values: Mapping[str, object] | No
     return copied
 
 
-_GITHUB_REMOTE_RE = re.compile(r"github\.com[:/]([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$")
+def _uncopied_required_delegates(lock: Path, values: Mapping[str, object], copied: list[str]) -> list[str]:
+    """Names answered for a REQUIRED ``type: delegate`` input that ``copy_host_delegates``
+    could not find on the host — the member would boot with the name but no entry, the
+    exact pre-#2977 failure, so the create refuses instead."""
+    out: list[str] = []
+    for key, dec in _declared_config_inputs(lock).items():
+        if str(dec.get("type") or "") != "delegate" or not bool(dec.get("required")):
+            continue
+        name = str(values.get(key) or "").strip()
+        if name and name not in copied and name not in out:
+            out.append(name)
+    return out
+
+
+_GITHUB_REMOTE_RE = re.compile(r"(?<![A-Za-z0-9.-])github\.com[:/]([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$")
 
 
 def github_slug_for_checkout(path: Path) -> str:
@@ -957,26 +1008,46 @@ def register_project_inputs(cfg: Path, lock: Path) -> list[str]:
     projects = doc.get("projects")
     if not isinstance(projects, list):
         projects = []
-    known = {str(p.get("path") or "") for p in projects if isinstance(p, dict)}
+
+    def _norm(p: object) -> str:
+        try:
+            return str(Path(str(p)).expanduser().resolve())
+        except (OSError, RuntimeError, ValueError):
+            return str(p)
+
+    known = {_norm(p.get("path")) for p in projects if isinstance(p, dict) and p.get("path")}
+    onboarding = doc.get("onboarding")
+    # Registration mirrors ``onboard_project``: read-only unless the operator's
+    # ``onboarding.write_default`` says otherwise. (A non-empty ``projects:`` registry
+    # IS the fs fence from then on — ADR 0095 — same as a tool-driven onboarding.)
+    write_default = bool(onboarding.get("write_default")) if isinstance(onboarding, dict) else False
     registered: list[str] = []
     for key in keys:
         raw = _dotted_lookup(doc, key)
         if not isinstance(raw, str) or not raw.strip():
             continue
         path = Path(raw.strip()).expanduser()
+        if not path.is_absolute():
+            continue  # the gate refuses these; never register a cwd-relative checkout
         text = str(path)
-        if text in known or str(path.resolve()) in known:
+        if _norm(text) in known:
             continue
         entry: dict = {"name": path.name or text, "path": text}
         slug = github_slug_for_checkout(path) if path.is_dir() else ""
         if slug:
             entry["github"] = slug
-        entry["write"] = False
+        entry["write"] = write_default
         projects.append(entry)
-        known.add(text)
+        known.add(_norm(text))
         registered.append(text)
-        if "onboarding" not in doc:
-            doc["onboarding"] = {"enabled": True, "root": str(path.parent)}
+        # Enable onboarding only when the operator hasn't configured it AND we know the
+        # repo's GitHub owner: ``onboard_project`` matches against ``onboarding.allow``
+        # and an EMPTY allowlist matches nothing — a bound tool that can only refuse is
+        # exactly what the tool's own gate avoids. Scope = EXACTLY the repo the operator
+        # typed (consent to manage that repo is not consent to clone its siblings), rooted
+        # beside this checkout so the idempotent "already registered" path resolves.
+        if "onboarding" not in doc and slug:
+            doc["onboarding"] = {"enabled": True, "root": str(path.parent), "allow": [f"github.com/{slug}"]}
     if not registered:
         return []
     doc["projects"] = projects
@@ -1017,6 +1088,11 @@ def _overlay_model(cfg: Path, ws: Path, src: str) -> None:
     src_sec = (src_path if src_path.is_dir() else src_path.parent) / "secrets.yaml"
     if src_sec.exists():  # carries the api_key so the gateway actually works — sits next to cfg
         shutil.copyfile(src_sec, cfg.parent / "secrets.yaml")
+        # copyfile does not carry mode — the member's overlay must be owner-only like
+        # every other secrets file (it holds the host's gateway key + delegate secrets).
+        from infra.paths import harden_private_file
+
+        harden_private_file(cfg.parent / "secrets.yaml")
 
 
 def _stamp_identity(cfg: Path, name: str, shared_skills: bool, *, instance_id: str | None = None) -> None:

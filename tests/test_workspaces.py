@@ -956,7 +956,7 @@ def test_register_project_inputs_registers_checkout_and_scopes_onboarding(root, 
     assert manager.register_project_inputs(cfg, lock) == [str(repo)]
     doc = yaml.safe_load(cfg.read_text())
     assert doc["projects"] == [{"name": "ORBIS", "path": str(repo), "github": "protoLabsAI/ORBIS", "write": False}]
-    assert doc["onboarding"] == {"enabled": True, "root": str(repo.parent)}
+    assert doc["onboarding"] == {"enabled": True, "root": str(repo.parent), "allow": ["github.com/protoLabsAI/ORBIS"]}
     # Re-running registers nothing new and never touches onboarding again.
     doc["onboarding"] = {"enabled": False}
     cfg.write_text(yaml.safe_dump(doc))
@@ -983,6 +983,20 @@ def test_github_slug_for_checkout_parses_origin(tmp_path):
     subprocess.run(["git", "-C", str(repo), "remote", "set-url", "origin", "https://github.com/acme/thing"], check=True)
     assert manager.github_slug_for_checkout(repo) == "acme/thing"
     assert manager.github_slug_for_checkout(tmp_path / "nope") == ""
+    # A look-alike host is NOT GitHub.
+    subprocess.run(["git", "-C", str(repo), "remote", "set-url", "origin", "https://mygithub.com/a/b"], check=True)
+    assert manager.github_slug_for_checkout(repo) == ""
+
+
+def test_overlay_model_copies_secrets_owner_only(root, tmp_path):
+    """The inherited host overlay lands 0600 on the member (copyfile drops the mode)."""
+    host = tmp_path / "host"
+    host.mkdir()
+    (host / "langgraph-config.yaml").write_text("model:\n  name: m\n  provider: openai\n")
+    (host / "secrets.yaml").write_text("model:\n  api_key: sk-host\n")
+    (host / "secrets.yaml").chmod(0o644)
+    rec = manager.create("kid", inherit_model=str(host))
+    assert_owner_only(root / rec["id"] / "config" / "secrets.yaml")
 
 
 def test_create_from_bundle_refuses_missing_required_input_and_cleans_up(root, tmp_path, monkeypatch):
@@ -1013,4 +1027,95 @@ def test_create_from_bundle_refuses_missing_required_input_and_cleans_up(root, t
     assert doc["board"]["repo"] == str(repo) and doc["board"]["coder"] == "claude-code"
     assert [d["name"] for d in doc["delegates"]] == ["claude-code"]
     assert doc["projects"][0]["github"] == "acme/proj"
-    assert doc["onboarding"]["root"] == str(repo.parent)
+    assert doc["onboarding"] == {"enabled": True, "root": str(repo.parent), "allow": ["github.com/acme/proj"]}
+
+    # A picked delegate the host does NOT have is refused too (the name alone would ship
+    # the pre-fix broken member).
+    with pytest.raises(manager.WorkspaceError, match="ghost"):
+        manager.create(
+            "pm2",
+            bundle="https://example/pm",
+            config_inputs={"board.repo": str(repo), "board.coder": "ghost"},
+            inherit_model=str(host),
+        )
+    assert not (root / "pm2").exists()
+
+
+def test_register_project_inputs_no_slug_means_no_onboarding_and_write_default_honoured(root, tmp_path, monkeypatch):
+    """Without a parsable GitHub remote, onboarding is NOT enabled (an empty allowlist
+    would bind an `onboard_project` that can only refuse); the entry still registers.
+    `onboarding.write_default` decides the entry's write flag, like the tool does."""
+    ws = root / "agent"
+    cfg = _seed_config(ws)
+    lock = _pm_lock(ws)
+    repo = tmp_path / "local-only"
+    repo.mkdir()
+    monkeypatch.setattr(manager, "github_slug_for_checkout", lambda p: "")
+    manager._apply_bundle_config_inputs(cfg, lock, {"board.repo": str(repo), "board.coder": "x"})
+    assert manager.register_project_inputs(cfg, lock) == [str(repo)]
+    doc = yaml.safe_load(cfg.read_text())
+    assert doc["projects"] == [{"name": "local-only", "path": str(repo), "write": False}]
+    assert "onboarding" not in doc
+    # write_default flips the registered entry to read-write.
+    ws2 = root / "agent2"
+    cfg2 = _seed_config(ws2)
+    cfg2.write_text(cfg2.read_text() + "onboarding:\n  write_default: true\n")
+    lock2 = _pm_lock(ws2)
+    manager._apply_bundle_config_inputs(cfg2, lock2, {"board.repo": str(repo), "board.coder": "x"})
+    manager.register_project_inputs(cfg2, lock2)
+    doc2 = yaml.safe_load(cfg2.read_text())
+    assert doc2["projects"][0]["write"] is True
+    assert doc2["onboarding"] == {"write_default": True}  # an existing section is never touched
+
+
+def test_required_gate_edge_cases(root, tmp_path):
+    """A required boolean never gates (the toggle always has a value); a relative
+    `project` path is reported with the reason; a pending defaults overlay counts."""
+    import json
+
+    ws = root / "agent"
+    cfg = _seed_config(ws)
+    (ws / "plugins.lock").write_text(
+        json.dumps(
+            {
+                "bundles": [
+                    {
+                        "id": "b",
+                        "config_inputs": [
+                            {"key": "board.flag", "label": "Flag", "type": "boolean", "required": True},
+                            {"key": "board.repo", "label": "Repo", "type": "path", "required": True, "project": True},
+                            {"key": "board.coder", "label": "Coder", "type": "delegate", "required": True},
+                        ],
+                    }
+                ]
+            }
+        )
+    )
+    lock = ws / "plugins.lock"
+    manager._apply_bundle_config_inputs(cfg, lock, {"board.repo": "./rel", "board.coder": ""})
+    missing = manager.missing_required_config_inputs(cfg, lock)
+    assert [m["key"] for m in missing] == ["board.repo", "board.coder"]
+    assert missing[0]["label"] == "Repo — must be an absolute path"
+    # The host path passes the bundle's pending `config:` overlay — a key it fills is present.
+    missing = manager.missing_required_config_inputs(cfg, lock, {"board": {"coder": "cc"}})
+    assert [m["key"] for m in missing] == ["board.repo"]
+    # A relative project path is never registered either.
+    assert manager.register_project_inputs(cfg, lock) == []
+
+
+def test_copy_host_delegates_never_swallows_a_sibling_secret(root, tmp_path):
+    """`cc` vs `cc.prod`: only `cc.env.*` / `cc.<secret field>` keys travel."""
+    ws = root / "agent"
+    cfg = _seed_config(ws)
+    lock = _pm_lock(ws)
+    host = tmp_path / "host"
+    host.mkdir()
+    (host / "langgraph-config.yaml").write_text(
+        "delegates:\n  - name: cc\n    type: acp\n    command: /x\n  - name: cc.prod\n    type: acp\n    command: /y\n"
+    )
+    (host / "secrets.yaml").write_text(
+        "delegate_secrets:\n  cc.env.KEY: sk-cc\n  cc.prod.env.KEY: sk-PROD\n  cc.auth.token: tok\n"
+    )
+    assert manager.copy_host_delegates(cfg, lock, {"board.coder": "cc"}, str(host)) == ["cc"]
+    sec = yaml.safe_load((ws / "secrets.yaml").read_text())
+    assert sec["delegate_secrets"] == {"cc.env.KEY": "sk-cc", "cc.auth.token": "tok"}

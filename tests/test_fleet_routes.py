@@ -660,3 +660,19 @@ def test_purge_that_cannot_delete_the_workspace_is_409_not_500(client, monkeypat
     assert resp.status_code == 409  # not 500, and not the 400 a rejected request gets
     detail = resp.json()["detail"]
     assert "IS stopped" in detail and "retry" in detail.lower()
+
+
+def test_create_refusal_is_a_400_with_the_prompt_named(client, monkeypatch):
+    """A required Configure answer missing (or a picked delegate the host lacks) is a
+    WorkspaceError from manager.create → 400 carrying the message the panel toasts."""
+    from graph.workspaces import manager
+
+    def refuse(name, **kwargs):
+        raise manager.WorkspaceError(
+            "the bundle needs these Configure answers before the agent can work: Coder delegate (board.coder)"
+        )
+
+    monkeypatch.setattr(manager, "create", refuse)
+    r = client.post("/api/fleet", json={"name": "pm", "start": False, "bundle": "https://github.com/x/stack"})
+    assert r.status_code == 400
+    assert "Coder delegate (board.coder)" in r.json()["detail"]

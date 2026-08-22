@@ -926,6 +926,15 @@ def test_normalize_config_inputs_normalizes_and_coerces():
     assert installer.normalize_config_inputs("stack", None) == []
 
 
+def test_normalize_config_inputs_rejects_core_sections():
+    """A bundle may prompt for ITS sections, never core ones — a Configure field that
+    lands in `model.api_key` or widens `projects`/`egress` is a lying form."""
+    with pytest.raises(installer.InstallError, match="core section"):
+        installer.normalize_config_inputs("b", [{"key": "model.api_key", "label": "API key", "type": "string"}])
+    assert installer.normalize_config_inputs("b", [{"key": "egress.allowed_hosts", "label": "x"}], strict=False) == []
+    assert installer.normalize_config_inputs("b", [{"key": "project_board.repo", "label": "Repo", "type": "path"}])
+
+
 def test_normalize_config_inputs_keeps_project_flag_on_path_only():
     """`project: true` survives normalization on a `path` input (the create path
     registers the answered checkout as a managed project); on any other type it is

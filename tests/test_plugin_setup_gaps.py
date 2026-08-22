@@ -39,3 +39,20 @@ def test_registry_method_uses_display_name_and_clear_plugin(tmp_path):
     assert setup_gaps.warnings() == ["Project Board: br missing", "Project Board: no coder configured"]
     setup_gaps.clear_plugin("project_board")  # the loader's disable hook
     assert setup_gaps.active() == []
+
+
+def test_retain_drops_gaps_from_plugins_no_longer_present():
+    setup_gaps.report("gone", "br", "x")
+    setup_gaps.report("kept", "br", "y")
+    setup_gaps.retain({"kept"})
+    assert [g["plugin"] for g in setup_gaps.active()] == ["kept"]
+
+
+def test_caps_message_length_and_gaps_per_plugin():
+    setup_gaps.report("p", "k", "x" * 1000)
+    assert len(setup_gaps.active()[0]["message"]) == setup_gaps.MAX_MESSAGE_CHARS
+    for i in range(setup_gaps.MAX_GAPS_PER_PLUGIN + 5):
+        setup_gaps.report("p", f"ts-{i}", "flood")
+    assert sum(1 for g in setup_gaps.active() if g["plugin"] == "p") == setup_gaps.MAX_GAPS_PER_PLUGIN
+    setup_gaps.report("p", "k", "updated")  # updating an existing key is always allowed
+    assert any(g["message"] == "updated" for g in setup_gaps.active())

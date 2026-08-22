@@ -57,14 +57,25 @@ the agent exists, written into its config at the declared dotted keys (`type`:
 `string` · `path` · `delegate` · `boolean`). `required: true` is a hard gate — a create
 (or a host install) with a required answer missing is refused with the prompt's label,
 rather than shipping an agent that boots green and fails at first use. A `delegate`
-answer does more than write the name: the picked delegate's entry (and its secrets)
-is **copied from the host into the new member's own registry**, because a member
-resolves delegates from its own config (ADR 0025). A `path` input flagged
-`project: true` makes the answered checkout a **managed project** — an ADR 0095
-`projects:` entry (with its GitHub `owner/name` parsed from the `origin` remote, read-
-only) that the filesystem fence, the GitHub plugin's repo picker and the board all read
-— and, when the operator hasn't configured onboarding at all, enables `onboarding`
-rooted at the checkout's parent so `onboard_project` binds against exactly that tree.
+answer does more than write the name: the picked delegate's entry is **copied from
+the host into the new member's own registry**, because a member resolves delegates
+from its own config (ADR 0025 — the Host layer of the settings cascade can't carry the
+`delegates:` list, ADR 0047). It is a one-time **snapshot**: a later host edit (rotated
+key, new `command`/`workdir`) does not propagate. The copy needs the host config
+(`inherit_config: true`, the default); a required delegate answer the host doesn't
+have — or can't be copied because inheritance is off — refuses the create rather than
+shipping a member with a name and no entry. A `path` input flagged `project: true`
+makes the answered checkout a **managed project** — an ADR 0095 `projects:` entry
+(with its GitHub `owner/name` parsed from the `origin` remote; read-only unless
+`onboarding.write_default` says otherwise) that the filesystem fence, the GitHub
+plugin's repo picker and the board all read. Note the fence consequence, same as a
+tool-driven `onboard_project`: once `projects:` is non-empty it *is* the fence, so the
+agent's default writable workspace entry no longer applies. When the operator hasn't
+configured `onboarding:` at all and a GitHub remote was found, onboarding is enabled
+rooted at the checkout's parent with `allow: [github.com/<owner>/<name>]` — exactly
+the typed repo, so `onboard_project` resolves it idempotently and nothing wider is
+clonable until the operator widens the allowlist. Keys under core sections (`model`,
+`plugins`, `projects`, `egress`, …) can't be declared as inputs at all.
 
 ## Install one
 

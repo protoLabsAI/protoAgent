@@ -143,7 +143,12 @@ async def install_and_activate(
         # installed; re-running the Configure step with the answer activates them).
         from graph.workspaces.manager import missing_required_config_inputs, register_project_inputs
 
-        missing = await asyncio.to_thread(missing_required_config_inputs, config_yaml_path(), installer.lock_path())
+        # The bundle's `config:` defaults are only applied below (apply_settings), but a key
+        # they fill must count as answered here — same effective config as the create path.
+        _pending = summary.get("config") or {}
+        missing = await asyncio.to_thread(
+            missing_required_config_inputs, config_yaml_path(), installer.lock_path(), _pending
+        )
         if missing:
             labels = "; ".join(f"{m['label']} ({m['key']})" for m in missing)
             raise installer.InstallError(

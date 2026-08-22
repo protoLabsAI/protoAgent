@@ -266,3 +266,20 @@ def test_chat_commands_skill_defers_to_subagent_name(monkeypatch):
     # The command exists from the subagent, not the skill (skill description dropped).
     cmd = next(c for c in out["commands"] if c["name"] == collide)
     assert cmd["description"] != "shadow"
+
+
+async def test_runtime_status_carries_plugin_setup_gaps(monkeypatch):
+    """A plugin's `report_setup_gap` lands in the operator status `warnings[]` as
+    `<Plugin>: <message>` and disappears once cleared — the seam's whole point."""
+    from graph.plugins import setup_gaps
+
+    setup_gaps.reset()
+    try:
+        setup_gaps.report("project_board", "br", "beads CLI 'br' not found on PATH", label="Project Board")
+        status = await ch._operator_runtime_status()
+        assert "Project Board: beads CLI 'br' not found on PATH" in status["warnings"]
+        setup_gaps.report("project_board", "br", None)
+        status = await ch._operator_runtime_status()
+        assert not [w for w in status["warnings"] if w.startswith("Project Board:")]
+    finally:
+        setup_gaps.reset()

@@ -700,6 +700,14 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
             len(registry.chat_commands),
         )
 
+    # Setup gaps (setup_gaps seam) from plugins that are no longer on disk at all must
+    # not outlive them — the disabled-branch clear above never visits an uninstalled id.
+    try:
+        from graph.plugins import setup_gaps as _setup_gaps
+
+        _setup_gaps.retain({str(m.get("id")) for m in result.meta})
+    except Exception:  # noqa: BLE001 — hygiene must never break plugin loading
+        pass
     return result
 
 
