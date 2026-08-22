@@ -92,10 +92,10 @@ def test_create_without_a_contract_omits_the_key(tmp_path, monkeypatch):
 def test_project_manager_archetype_declares_the_tool_its_doctrine_needs():
     """The archetype whose doctrine sent a PM chasing an unbindable tool now says so.
 
-    The row is currently HELD from the picker (first-run friction, 2026-08-21 —
-    see test_project_manager_archetype_is_held), but the contract must ride along
-    in `held` so restoration brings it back intact."""
+    The row is LISTED again (2026-08-22, see test_project_manager_archetype_is_listed)
+    and the contract rides with it: the bundle seeds `github.write: true`, so the
+    tool binds and the banner stays quiet on a fresh agent."""
     catalog = json.loads((Path(__file__).resolve().parents[1] / "config" / "archetype-catalog.json").read_text())
-    pm = next(a for a in catalog.get("held", []) if a["id"] == "project-manager")
+    pm = next(a for a in catalog["archetypes"] if a["id"] == "project-manager")
 
     assert "github_create_issue" in pm.get("requires_tools", [])

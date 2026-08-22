@@ -347,6 +347,56 @@ The four toggles are editable per agent in the console via the **Shell & filesys
 
 **Security:** the project roots are the **hard fence** — every tool resolves paths under a root and refuses escapes; `write_file`/`edit_file` need `write:true`; `delete_file` additionally needs `no_delete:false` and **always** pauses for approval (a permanent-delete floor the `/bypass` toggle can't skip); the agent's own repo is not a project unless you add it. All mutations are audited. See ADR 0007 §4 and ADR 0083 D5.
 
+## `projects`
+
+The managed-projects registry ([ADR 0095](../adr/0095-managed-projects-registry.md)) — the **one** place a repository the agent works on is declared: where it lives on this host, what it is on GitHub, and what the agent may do to it. Consumers *project* from it instead of re-declaring: the filesystem fence (`filesystem.projects` above), the GitHub plugin's repo picker, and the project board's repo / base branch. An explicit `filesystem.projects`, `github.repos`, or `project_board.repo` still wins, so existing config is untouched.
+
+```yaml
+projects:
+  - name: my-agent                    # the identifier the fs tools address it by
+    path: ~/dev/my-agent
+    github: you/my-agent              # feeds the github repo picker + the board's PRs
+    default_branch: main              # feeds the board's worktrees
+  - name: notes
+    path: ~/dev/notes
+    write: false                      # read-only
+  - name: theirs
+    path: ~/dev/theirs
+    github: them/theirs
+    fs: false                         # tracked for github/board only — no filesystem reach
+```
+
+| Key | Default | What |
+|---|---|---|
+| `name` | — | Identifier; becomes the fs project name and the board's `project:` handle. |
+| `path` | — | Absolute (or `~`) path to the checkout on this host. A missing path is skipped with a warning. |
+| `github` | — | `owner/name`. Feeds the GitHub plugin's repo picker and the board's `Fixes #N` / PR target. |
+| `default_branch` | `main` | The branch the board cuts worktrees from and opens PRs against. |
+| `write` | `true` | A registered project is fenced **read-write** by default — set `false` for read-only. |
+| `no_delete` | `false` | With `write: true`, forbid `delete_file` (create/edit, never delete). |
+| `fs` | `true` | `false` keeps the entry for GitHub/board consumers only — no filesystem tools reach it. |
+
+The project-manager archetype's `onboard_project` tool writes entries here (when `onboarding` below allows it); `show_config(section="projects")` shows what the running agent resolved.
+
+## `onboarding`
+
+The consent gate for an agent **registering a repository itself** — the `onboard_project` tool (and the `onboard-project` skill the project-manager archetype ships) scans a repo for what a coding-agent loop needs, can clone it, and registers it in `projects` above. Off by default: an agent that can add project roots can widen its own filesystem fence, so the operator declares where that is allowed.
+
+```yaml
+onboarding:
+  enabled: true
+  root: ~/dev                         # clones land here; every registration must resolve UNDER it
+  allow: ["github.com/protoLabsAI/*"] # clone sources the agent may onboard (glob); empty = local paths only
+  write_default: false                # registered read-only unless the call asks for write
+```
+
+| Key | Default | What |
+|---|---|---|
+| `enabled` | `false` | Off → the `onboard_project` tool is **absent from the toolset entirely** (the skill's readiness scan still works read-only through the fs tools). |
+| `root` | `""` | Required when enabled. Clones go here; a path outside it is refused. |
+| `allow` | `[]` | Glob allowlist for clone URLs. Empty = no cloning, local paths under `root` only. |
+| `write_default` | `false` | Whether a registration is fenced read-write unless the call says otherwise. |
+
 ## `egress`
 
 Deny-by-default outbound-host allowlist ([ADR 0008](../adr/0008-sandboxing-and-openshell.md)) enforced in `fetch_url` — the tool where the model picks an arbitrary host (the in-process exfiltration / SSRF vector). Also the single source of truth the OpenShell network policy is generated from (`scripts/gen_openshell_policy.py`). Editable in the console at **Settings ▸ Box ▸ Network** (host-scoped, hot-reloads).

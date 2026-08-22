@@ -60,9 +60,9 @@ def _sidecar_bundled_sources() -> set[str]:
     """
     tree = ast.parse((ROOT / "apps" / "desktop" / "sidecar" / "build_sidecar.py").read_text())
     for node in ast.walk(tree):
-        target_is_bundled = (
-            isinstance(node, ast.AnnAssign) and getattr(node.target, "id", "") == "BUNDLED_DATA"
-        ) or (isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "BUNDLED_DATA" for t in node.targets))
+        target_is_bundled = (isinstance(node, ast.AnnAssign) and getattr(node.target, "id", "") == "BUNDLED_DATA") or (
+            isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "BUNDLED_DATA" for t in node.targets)
+        )
         if target_is_bundled:
             return {el.elts[0].value for el in node.value.elts}  # type: ignore[attr-defined]
     raise AssertionError("could not find BUNDLED_DATA in build_sidecar.py")
@@ -196,36 +196,38 @@ def test_plugins_dir_is_bundled_into_the_desktop_sidecar() -> None:
     )
 
 
-def test_project_manager_archetype_is_held() -> None:
-    """The Project Manager archetype is HELD from the picker (operator call,
-    2026-08-21: first-run isn't release-ready — the bundle's recommended config
-    gated the very tool its capability contract requires, and the board view
-    greets an unbound repo with a raw `br init` error). Same held mechanics as
-    social-marketing: this pins BOTH directions — the row must not ship in
-    ``archetypes`` (it would become selectable again), and it must survive intact
-    in ``held`` so restoring it is one move, not an archaeology dig."""
+def test_project_manager_archetype_is_listed() -> None:
+    """The Project Manager archetype is LISTED again (operator call, 2026-08-22 —
+    it is the flagship demo archetype). It was held on 2026-08-21 for first-run
+    friction; every item on that list shipped: the bundle seeds github.write:true
+    so the contract's tool binds (project-manager-archetype v0.2.0), the board
+    view shows a setup card instead of a raw `br init` error (projectBoard
+    v0.40.0), the Configure step ASKS for repo / coder / github repo (config_inputs,
+    #2938 + archetype v0.3.0), the review gate's runner ships in the bundle
+    (archetype v0.4.0), and auto_merge works on a default board (projectBoard
+    v0.41.4). This pins BOTH directions: the row ships in ``archetypes`` (advanced
+    tier, before ``custom``), and it is NOT also parked in ``held`` — a row in
+    both would render twice the moment the picker merged them."""
     catalog = json.loads((CONFIG / "archetype-catalog.json").read_text())
     ids = [a["id"] for a in catalog["archetypes"]]
 
-    assert "project-manager" not in ids, (
-        f"'project-manager' is held from release — it must not be in archetypes, got {ids}"
+    assert ids.count("project-manager") == 1, f"'project-manager' must ship exactly once in archetypes, got {ids}"
+    held = [a["id"] for a in catalog.get("held") or []]
+    assert "project-manager" not in held, (
+        f"'project-manager' is listed — it must not also be parked in `held`, got {held}"
     )
 
-    held = [a["id"] for a in catalog.get("held") or []]
-    assert held.count("project-manager") == 1, (
-        f"'project-manager' must be parked exactly once in `held`, got {held}"
-    )
-    (row,) = (a for a in catalog["held"] if a["id"] == "project-manager")
+    (row,) = (a for a in catalog["archetypes"] if a["id"] == "project-manager")
+    assert row.get("tier") == "advanced", "Project Manager stays under Advanced — it needs a repo + a coder delegate"
+    assert ids.index("project-manager") < ids.index("custom"), "`custom` stays LAST"
     preset = CONFIG / "soul-presets" / f"{row['soul_preset']}.md"
     assert preset.is_file(), (
-        f"held archetype 'project-manager' points at soul_preset '{row['soul_preset']}' "
-        f"but {preset} does not exist — restoring the row would silently seed nothing."
+        f"'project-manager' points at soul_preset '{row['soul_preset']}' but {preset} does not exist"
     )
-    assert row.get("bundle", "").startswith("https://github.com/protoLabsAI/"), (
-        "the held row must keep its bundle URL so restoration is one move"
+    assert row.get("bundle", "").startswith("https://github.com/protoLabsAI/project-manager-archetype"), (
+        "the listed row must point at the project-manager-archetype bundle"
     )
-
-    assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
+    assert "_held" not in row, "a listed row must not carry the `_held` parking note"
 
 
 def test_design_system_archetype_row() -> None:
@@ -265,9 +267,7 @@ def test_social_marketing_archetype_is_held() -> None:
     )
 
     held = [a["id"] for a in catalog.get("held") or []]
-    assert held.count("social-marketing") == 1, (
-        f"'social-marketing' must be parked exactly once in `held`, got {held}"
-    )
+    assert held.count("social-marketing") == 1, f"'social-marketing' must be parked exactly once in `held`, got {held}"
     (row,) = (a for a in catalog["held"] if a["id"] == "social-marketing")
     preset = CONFIG / "soul-presets" / f"{row['soul_preset']}.md"
     assert preset.is_file(), (
@@ -286,9 +286,9 @@ def _sidecar_cli_hidden_imports() -> set[str]:
     the dynamically-dispatched CLI modules the frozen build must hidden-import."""
     tree = ast.parse((ROOT / "apps" / "desktop" / "sidecar" / "build_sidecar.py").read_text())
     for node in ast.walk(tree):
-        is_it = (
-            isinstance(node, ast.AnnAssign) and getattr(node.target, "id", "") == "CLI_FORWARD_MODULES"
-        ) or (isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "CLI_FORWARD_MODULES" for t in node.targets))
+        is_it = (isinstance(node, ast.AnnAssign) and getattr(node.target, "id", "") == "CLI_FORWARD_MODULES") or (
+            isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "CLI_FORWARD_MODULES" for t in node.targets)
+        )
         if is_it:
             return {el.value for el in node.value.elts}  # type: ignore[attr-defined]
     raise AssertionError("could not find CLI_FORWARD_MODULES in build_sidecar.py")

@@ -36,17 +36,6 @@
       "tier": "advanced"
     },
     {
-      "id": "custom",
-      "label": "Custom",
-      "icon": "PenLine",
-      "bundle": null,
-      "blurb": "Write your own — start from a SOUL template and fill it in.",
-      "soul_preset": "blank"
-    }
-  ],
-  "held": [
-    {
-      "_held": "Not ready for release (Josh, 2026-08-21) — first-run friction: the bundle's own recommended config gated the tool its capability contract requires (github.write false vs requires_tools github_create_issue → contract banner on every fresh agent), and the board view dumps a raw `br init` error when project_board.repo is unbound (the desktop member's cwd is read-only). To restore, move this row back into `archetypes` and re-invert test_project_manager_archetype_is_held + the catalog test in test_archetype_capability_contract.py.",
       "id": "project-manager",
       "label": "Project Manager",
       "icon": "ClipboardList",
@@ -61,6 +50,16 @@
         "github_create_issue"
       ]
     },
+    {
+      "id": "custom",
+      "label": "Custom",
+      "icon": "PenLine",
+      "bundle": null,
+      "blurb": "Write your own — start from a SOUL template and fill it in.",
+      "soul_preset": "blank"
+    }
+  ],
+  "held": [
     {
       "_held": "Not ready for release (Josh, 2026-08-20) — the JSON equivalent of commenting it out. To restore, move this row back into `archetypes` and re-invert test_social_marketing_archetype_row.",
       "id": "social-marketing",

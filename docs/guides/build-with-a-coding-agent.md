@@ -36,35 +36,58 @@ PR, and walks it through review. Code reaches the repo through exactly one door.
 
 ## 1. Stand up the PM
 
-Pick **Project Manager** in the new-agent picker (under the *Advanced* toggle),
-or create the workspace from the CLI — the same flow as any
-[fleet](/guides/fleet) agent:
+Pick **Project Manager** in the new-agent picker (under the *Advanced* toggle —
+it needs a repo and a coder, so it isn't a one-click archetype). The picker
+installs the [project-manager-archetype](https://github.com/protoLabsAI/project-manager-archetype)
+bundle — the project board, a GitHub rail with write on, a browser for
+verification, the review gate's workflow runner, and the friction ledger — seeds
+the `project-manager` soul preset, and then **asks** for the four things the
+bundle can't guess, as a Configure step:
+
+| Configure field | What it sets | Required |
+|---|---|---|
+| Repo this board manages | `project_board.repo` — absolute path to the git checkout | yes |
+| Coder delegate | `project_board.coder` — a dropdown of the host's registered `acp` delegates | yes |
+| GitHub repo (`owner/name`) | `github.default_repo` — where issues and PRs go | no |
+| Start the build loop now | `project_board.loop_enabled` — ships **off** until the two above are real | no |
+
+If the coder dropdown says *No delegates configured*, that's honest: coding
+delegates are host-installed binaries, and the wizard can't conjure one. Step 2
+covers both ways to register one. Create the agent anyway — the loop stays off
+until you flip it.
+
+The CLI path is the same bundle without the Configure step:
 
 ```bash
 python -m server workspace new pm --bundle https://github.com/protoLabsAI/project-manager-archetype
 ```
 
-Either path assembles the same three pieces: the catalog row in
-`config/archetype-catalog.json`, the soul preset
-`config/soul-presets/project-manager.md`, and the
-[project-manager-archetype](https://github.com/protoLabsAI/project-manager-archetype)
-bundle — the plugin set that includes the project board.
-
-Then point the new workspace at **one repository** in its
-`langgraph-config.yaml`:
+…after which you set the same keys by hand in the workspace's
+`langgraph-config.yaml` (or in Settings once it's running):
 
 ```yaml
 project_board:
-  coder: proto               # the acp delegate the loop dispatches (next step)
-  repo: ~/dev/my-agent       # the fork this PM owns
+  coder: claude-code         # the acp delegate the loop dispatches (step 2)
+  repo: ~/dev/my-agent       # the checkout this PM owns
   base_branch: main
   loop_enabled: true         # the background puller: ready → worktree → coder → PR
   max_concurrent: 1          # raise once the repo parallelizes cleanly
   local_gate_cmd: "auto"     # the pre-PR gate — see step 5
+  auto_merge: true           # the loop merges a reviewed, green PR itself — see step 3
+github:
+  write: true                # seeded by the bundle — the PM files issues and reviews PRs
+  default_repo: you/my-agent
 ```
 
 One PM, one repo. An agent that sits above several PMs is the Portfolio Manager —
 a different archetype, over A2A ([portfolio](/guides/portfolio)).
+
+**What a clean first boot looks like.** Operator status shows no warnings. (A
+*capability contract* banner means the archetype declared a tool — for the PM,
+`github_create_issue` — that didn't bind; the one way to get it today is
+`github.write: false`, which the bundle seeds true.) The **Board** view shows a
+setup card naming the bound repo, not a beads error; if the repo has never had a
+board, the plugin runs `br init` there on first use.
 
 > **Why the PM can't edit files.** Its file tools are read-only by design — a PM
 > that can edit files can ship unreviewed changes around every gate below, so the
@@ -85,6 +108,12 @@ delegates:
   - { name: claude-code, type: acp, command: claude-code, args: [],        workdir: ~/dev/my-agent, permissions: allowlist }
   - { name: opencode,    type: acp, command: opencode,    args: ["acp"],   workdir: ~/dev/my-agent, permissions: allowlist }
 ```
+
+Two ways to get one onto the host. **Settings ▸ Delegates** registers it by hand
+— use an *absolute* command path (a GUI host doesn't inherit your shell's PATH).
+Or ask the PM: *"register Claude Code as our coder"* — its `propose_delegate`
+tool validates and probes the entry, then **parks for your approval** with the
+command path front and center; nothing registers without you (core ≥ 0.145).
 
 Before going further, open the delegates panel and hit **Test** on the delegate
 you named in `project_board.coder` — it must probe green. The
@@ -125,10 +154,21 @@ runs `local_gate_cmd` in the worktree — most failures die here, before a PR
 exists — then commits, pushes, and opens the PR. The card moves to **review**
 with the PR link on it.
 
-**The gates decide.** CI runs; if you enabled the review gate (step 5) the
-adversarial review runs as a blocking check. When everything is green and the PR
-merges, the merge webhook (or `merge_poll` where GitHub can't reach you) moves
-the card to **done** and reaps the worktree.
+**The gates decide.** CI runs, and the review gate (on by default in the
+archetype) runs the host's adversarial `code-review` workflow as a blocking
+check. The card's labels tell you where it is: `review-pending` while the panel
+runs, `changes-requested` when blocking findings went back to the coder on the
+same branch, `review-clean` when none survived.
+
+**Then it merges — if you let it.** `project_board.auto_merge` is the knob. On,
+the loop squash-merges a PR the moment every gate it owns is green and current
+(`review-clean`, CI green, GitHub reports the PR mergeable, no `merge-hold`
+label) and the merge reconcile moves the card to **done** and reaps the
+worktree. **Off (the plugin's default), nothing merges** — the card waits in
+**in_review** for a human to merge the PR, and the merge webhook (or
+`merge_poll` where GitHub can't reach you) notices afterwards. Pick one
+deliberately: the archetype's Configure step asks; a board whose cards
+"sit in review" has almost always just never been told who merges.
 
 That's one full pass: you spoke an outcome, and a reviewed, gated PR merged. Ask
 the PM to `board_list` any time, or watch the board view — the card's state *is*
@@ -157,6 +197,16 @@ The loop has reflexes. The discipline is not preempting them:
 - **Merge reconcile** — merged → done, closed-unmerged → blocked, worktree
   reaped.
 
+**"It's been in review for an hour."** Decode it from the card before touching
+the PR: no `review-*` label and `auto_merge` off → it's waiting on *you* to
+merge; `review-clean` + `auto_merge` on and still parked → the PR isn't
+mergeable on GitHub's side (a **draft** the coder opened itself, a required check
+still running, branch protection) — `gh pr ready` / wait / fix the rule;
+`changes-requested` → a fix round is in flight; **blocked** with *"review
+findings persist after N fix attempts"* → the panel out-argued the coder's
+budget — read the last findings on the card, fix or dismiss them yourself, then
+**Unblock**, which re-arms the gate with a fresh budget.
+
 Your cue is the **blocked** flag — never a red check. A red PR is not your cue to
 push a commit, and it is not the PM's cue to open a new card (the preset's rule:
 *a fix to an open PR is a fix round, never a new feature*). Blocked means every
@@ -176,7 +226,10 @@ review does not ship less — it ships unreviewed work faster. What ships today:
   mechanical gates.
 - **The pre-PR local gate** (`local_gate_cmd`) — runs in the coder's worktree
   before a PR opens. `"auto"` discovers the repo's declared `gate` target instead
-  of hand-transcribing one that rots.
+  of hand-transcribing one that rots. It also powers the *merged-state verify*:
+  with a local gate declared, an open PR whose base moved under it is re-gated on
+  the state that will actually land before `auto_merge` touches it; without one,
+  CI and GitHub's mergeability are the only merge gates.
 - **The blocking review gate** (`review_gate: true`) — after each PR opens, the
   host's `code-review` workflow
   ([ADR 0077](/adr/0077-adversarial-code-review-workflow)) runs as a blocking
