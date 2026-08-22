@@ -103,10 +103,11 @@ export function hasConfigFields(preview: ArchetypePreview | undefined): boolean 
   return archetypeConfigFields(preview).length > 0;
 }
 
-// A required field left blank blocks create while the form is OPEN — the operator either
-// fills it or collapses the form to skip (→ env-only). Trims so whitespace isn't "filled".
-// A config field with a declared default is never missing (the backend writes the default
-// when skipped), and a boolean toggle always resolves to a value.
+// The SOFT hint: a required MCP input / declared secret left blank while the form is open.
+// Those have an environment fallback, so the operator may collapse the form to skip them.
+// Required bundle config_inputs do NOT (server refuses, #2977) — see
+// isMissingRequiredBundleConfig below, which is what gates the Create button. Trims so
+// whitespace isn't "filled"; a declared default is never missing; booleans never gate.
 export function isMissingRequiredConfig(fields: ConfigField[], values: Record<string, string>): boolean {
   return fields.some(
     (f) => f.required && f.kind !== "boolean" && f.defaultValue === undefined && !fieldValue(values, f),
