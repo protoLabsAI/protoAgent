@@ -36,6 +36,10 @@ mcp:                             # MCP servers to seed, catalog-shaped (#2011)
       - { key: token, env: GITHUB_MCP_TOKEN, required: true, secret: true }
 secrets:                         # standalone secrets to prompt for / seed (#2041)
   - { key: acme_api_key, label: "Acme API key", secret: true }
+config_inputs:                   # Configure-step prompts at create time (#2934)
+  - { key: my_board.repo,  label: "Repo this board manages", type: path, required: true, project: true }
+  - { key: my_board.coder, label: "Coder delegate",          type: delegate, required: true }
+  - { key: my_board.loop,  label: "Start the loop now",      type: boolean, default: false }
 archetype:                       # optional: appear in the new-agent picker (ADR 0100)
   label: My Archetype
   icon: Boxes
@@ -47,6 +51,20 @@ Every member is installed exactly as a direct install would be — allowlist-che
 SHA-pinned in `plugins.lock` — and the bundle itself is recorded in the lock's
 `bundles:` section (that row powers provenance chips, the update check, and uninstall).
 Unknown `archetype:` keys warn at install rather than vanishing.
+
+**`config_inputs:`** are the questions the Setup Wizard / New Agent panel asks *before*
+the agent exists, written into its config at the declared dotted keys (`type`:
+`string` · `path` · `delegate` · `boolean`). `required: true` is a hard gate — a create
+(or a host install) with a required answer missing is refused with the prompt's label,
+rather than shipping an agent that boots green and fails at first use. A `delegate`
+answer does more than write the name: the picked delegate's entry (and its secrets)
+is **copied from the host into the new member's own registry**, because a member
+resolves delegates from its own config (ADR 0025). A `path` input flagged
+`project: true` makes the answered checkout a **managed project** — an ADR 0095
+`projects:` entry (with its GitHub `owner/name` parsed from the `origin` remote, read-
+only) that the filesystem fence, the GitHub plugin's repo picker and the board all read
+— and, when the operator hasn't configured onboarding at all, enables `onboarding`
+rooted at the checkout's parent so `onboard_project` binds against exactly that tree.
 
 ## Install one
 

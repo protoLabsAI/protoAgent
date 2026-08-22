@@ -50,6 +50,10 @@ config:
 #   verified_against: <core version the pins were last verified on>   # ADR 0049
 #   mcp:      [{ template, inputs }]      # MCP servers to seed (#2011, ADR 0083 D5)
 #   secrets:  [{ key, label, … }]         # declared secrets to prompt for/seed (#2041)
+#   config_inputs: [{ key, label, type, required?, default?, project? }]
+#                                         # Configure-step prompts (#2934); required = hard gate,
+#                                         # delegate answers are copied into the member, path+project
+#                                         # answers register a managed project (see guides/bundles.md)
 #   archetype: { label, icon, blurb, soul/soul_preset, tier, requires, requires_tools }
 #                                         # starter-type self-registration (ADR 0100)
 ```

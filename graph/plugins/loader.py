@@ -510,6 +510,10 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
             # can't see it). Pre-setup loads run before the scheduler is wired
             # (STATE.scheduler is None → no-op).
             _sweep_plugin_jobs(manifest.id)
+            # A disabled plugin's setup-gap banners must not outlive it (setup_gaps seam).
+            from graph.plugins import setup_gaps as _setup_gaps
+
+            _setup_gaps.clear_plugin(manifest.id)
             result.meta.append(entry)
             continue
 
@@ -542,6 +546,7 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
                 section = manifest.config_section or manifest.id
                 pconf = (getattr(config, "plugin_config", {}) or {}).get(section) or dict(manifest.config or {})
                 registry = PluginRegistry(manifest.id, manifest.path, config=pconf, config_section=section)
+                registry.display_name = str(manifest.name or manifest.id)
             with timed_lifecycle_phase(manifest.id, "registration"):
                 register(registry)
         except Exception as exc:  # noqa: BLE001 — a bad plugin must not break boot

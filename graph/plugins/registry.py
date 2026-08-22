@@ -51,6 +51,8 @@ class PluginRegistry:
         self, plugin_id: str, plugin_dir: Path, config: dict | None = None, config_section: str | None = None
     ):
         self.plugin_id = plugin_id
+        # Display name for operator-facing banners; the loader sets it from the manifest.
+        self.display_name: str = plugin_id
         self.plugin_dir = plugin_dir
         # The plugin's resolved config section (ADR 0019) — manifest defaults ⊕
         # YAML ⊕ secrets. Read it in register() and close over it for your
@@ -88,6 +90,19 @@ class PluginRegistry:
         self.knowledge_stores: dict = {}  # name -> (config) -> KnowledgeBackend (ADR 0031)
         self.embedders: dict = {}  # name -> (config) -> (text -> vector) embed_fn (ADR 0031)
         self.chat_commands: dict = {}  # token -> async (rest, session_id) -> str|None (user-only control commands)
+
+    def report_setup_gap(self, key: str, message: str | None, *, label: str | None = None) -> None:
+        """Tell the operator this plugin can't do its job until something is fixed
+        (a missing binary, no coder delegate, an unauthenticated CLI) — or clear that
+        notice with ``message=None``. Surfaces as a banner line in the console's
+        operator status ``warnings[]`` (``GET /api/runtime/status``) and self-clears
+        live, so a plugin that re-checks each tick heals the banner without a restart.
+        ``key`` namespaces one gap per concern (``"br"``, ``"auth"``); ``label`` is the
+        display name for the banner (defaults to the plugin id). Plugins that also run
+        on older hosts guard with ``getattr(registry, "report_setup_gap", None)``."""
+        from graph.plugins import setup_gaps
+
+        setup_gaps.report(self.plugin_id, key, message, label=label or self.display_name)
 
     def live_config(self) -> dict:
         """The plugin's CURRENT resolved config, re-read from the host on each call.

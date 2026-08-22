@@ -926,6 +926,22 @@ def test_normalize_config_inputs_normalizes_and_coerces():
     assert installer.normalize_config_inputs("stack", None) == []
 
 
+def test_normalize_config_inputs_keeps_project_flag_on_path_only():
+    """`project: true` survives normalization on a `path` input (the create path
+    registers the answered checkout as a managed project); on any other type it is
+    dropped rather than rejected, so an older-style manifest never fails to install."""
+    out = installer.normalize_config_inputs(
+        "b",
+        [
+            {"key": "board.repo", "label": "Repo", "type": "path", "project": True},
+            {"key": "gh.repo", "label": "GH", "type": "string", "project": True},
+            {"key": "board.other", "label": "Other", "type": "path"},
+        ],
+    )
+    assert out[0].get("project") is True
+    assert "project" not in out[1] and "project" not in out[2]
+
+
 @pytest.mark.parametrize(
     "entry",
     [

@@ -39,14 +39,16 @@ export function ArchetypeConfigField({
     );
   }
   if (field.kind === "delegate") {
-    const names = (delegates.data?.delegates ?? []).map((d) => d.name);
+    // Only CODING (acp) delegates can take a build — an a2a peer or an openai endpoint in
+    // this list would be picked, written as the coder, and fail at first dispatch.
+    const names = (delegates.data?.delegates ?? []).filter((d) => d.type === "acp").map((d) => d.name);
     return (
       <DropdownSelect
         id={fieldId(field)}
         value={value}
         onValueChange={onChange}
         options={[
-          { value: "", label: names.length ? "Pick a delegate…" : "No delegates configured" },
+          { value: "", label: names.length ? "Pick a coding delegate…" : "No coding (acp) delegates configured" },
           ...names.map((n) => ({ value: n, label: n })),
         ]}
       />

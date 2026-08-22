@@ -138,6 +138,19 @@ async def install_and_activate(
         config_written = await asyncio.to_thread(
             apply_bundle_config_inputs, config_yaml_path(), installer.lock_path(), config_inputs or {}
         )
+        # Same refusal as the workspace-create path: a `required` config input with no
+        # answer means the bundle can't do its job — refuse to ACTIVATE (the plugins stay
+        # installed; re-running the Configure step with the answer activates them).
+        from graph.workspaces.manager import missing_required_config_inputs, register_project_inputs
+
+        missing = await asyncio.to_thread(missing_required_config_inputs, config_yaml_path(), installer.lock_path())
+        if missing:
+            labels = "; ".join(f"{m['label']} ({m['key']})" for m in missing)
+            raise installer.InstallError(
+                f"the bundle needs these Configure answers before it can be activated: {labels}"
+            )
+        # A path input flagged `project: true` is a repo the agent manages — register it.
+        await asyncio.to_thread(register_project_inputs, config_yaml_path(), installer.lock_path())
 
     # Seed the bundle's recommended per-plugin config defaults (#1350), same trust gate as
     # auto-enable — defaults only, reduced against the live YAML so an operator value is

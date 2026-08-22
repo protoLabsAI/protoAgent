@@ -73,6 +73,18 @@ mcp:
 secrets:
   - { key: acme_api_key, label: "Acme API key", placeholder: "ak-…", secret: true, required: false }
 
+# Create-time Configure step (#2934) — questions the Setup Wizard / New Agent panel asks
+# BEFORE the agent exists, written into its config at the dotted keys. `required: true`
+# is a hard gate (a create with no answer is refused, naming the prompt). A `delegate`
+# answer is COPIED from the host into the new member's own registry; a `path` answer
+# flagged `project: true` is registered as a managed project (ADR 0095 `projects:` +
+# GitHub slug from its origin remote + a scoped `onboarding.root`). Older cores ignore
+# the whole block; `project:` is ignored by cores that predate it.
+config_inputs:
+  - { key: my_board.repo,  label: "Repo this board manages (absolute path)", type: path, required: true, project: true }
+  - { key: my_board.coder, label: "Coder delegate the board dispatches to",  type: delegate, required: true }
+  - { key: my_board.loop_enabled, label: "Start the loop now", type: boolean, default: false }
+
 # Agent archetype (ADR 0042) — presents this bundle as a starter "agent type" in the
 # new-agent picker. Additive metadata; it doesn't change the bundle shape. Unknown
 # keys warn at install (#2715) — the full set is below.

@@ -670,6 +670,61 @@ async def test_host_bundle_install_writes_config_inputs(tmp_path, monkeypatch):
     assert "not" not in doc  # undeclared keys never reach the config
 
 
+async def test_host_bundle_install_refuses_missing_required_input(tmp_path, monkeypatch):
+    """A `required` config input with no answer (and no default / live value) refuses
+    ACTIVATION — InstallError names the missing prompt, apply_settings is never called
+    (plugins stay installed-but-off), so a re-run with the answer activates cleanly.
+    A `project: true` path answer is registered as a managed project on the way."""
+    import json
+
+    import yaml
+
+    from graph import config_io
+    from graph.workspaces import manager as ws_manager
+
+    cfg = tmp_path / "langgraph-config.yaml"
+    cfg.write_text("model:\n  name: m\n")
+    lock = tmp_path / "plugins.lock"
+    lock.write_text(
+        json.dumps(
+            {
+                "plugins": [],
+                "bundles": [
+                    {
+                        "id": "pm",
+                        "config_inputs": [
+                            {"key": "board.repo", "label": "Repo", "type": "path", "required": True, "project": True},
+                            {"key": "board.coder", "label": "Coder", "type": "delegate", "required": True},
+                        ],
+                    }
+                ],
+            }
+        )
+    )
+    monkeypatch.setattr(config_io, "config_yaml_path", lambda: cfg)
+    monkeypatch.setattr(installer, "lock_path", lambda: lock)
+    monkeypatch.setattr(
+        installer, "install", lambda url, ref=None, **k: {"bundle": "pm", "installed": [{"id": "a"}], "enabled": ["a"]}
+    )
+    monkeypatch.setattr(loader, "purge_plugin_modules", lambda pid: None)
+    monkeypatch.setattr(ws_manager, "github_slug_for_checkout", lambda p: "acme/proj")
+    captured, apply = _capture_apply()
+    repo = tmp_path / "proj"
+    repo.mkdir()
+
+    with pytest.raises(installer.InstallError, match="Coder \\(board.coder\\)"):
+        await install_and_activate("https://x/pm", ctx=_ctx(), apply_settings=apply, config_inputs={"board.repo": str(repo)})
+    assert "updates" not in captured
+
+    await install_and_activate(
+        "https://x/pm", ctx=_ctx(), apply_settings=apply, config_inputs={"board.repo": str(repo), "board.coder": "cc"}
+    )
+    assert "updates" in captured
+    doc = yaml.safe_load(cfg.read_text())
+    assert doc["projects"] == [{"name": "proj", "path": str(repo), "github": "acme/proj", "write": False}]
+    assert doc["onboarding"] == {"enabled": True, "root": str(tmp_path)}
+
+
 async def test_activate_false_skips_bundle_service_seeding(tmp_path, monkeypatch):
     """The CLI's fetch-only install (activate=False) must stay fetch-only — no mcp
     seeding, config untouched (#2118 keeps the ADR 0027 install ≠ enable line)."""

@@ -821,6 +821,13 @@ def normalize_config_inputs(bundle_id: str, raw: object, *, strict: bool = True)
             bad(f"{key!r} has unknown type {entry.get('type')!r} (known: {', '.join(CONFIG_INPUT_TYPES)})")
             continue
         norm: dict = {"key": key, "label": label, "type": typ, "required": bool(entry.get("required"))}
+        # `project: true` on a `path` input (#PM-first-run): the answered path is a repo
+        # the agent MANAGES — the create path also registers it in the ADR 0095
+        # `projects:` registry (fs fence, GitHub picker, board), records its GitHub
+        # remote, and scopes `onboarding.root` to its parent. A plain flag, ignored by
+        # hosts that predate it, so a bundle can declare it without a core-version gate.
+        if typ == "path" and bool(entry.get("project")):
+            norm["project"] = True
         if "default" in entry and entry["default"] is not None:
             default = coerce_config_input_value(typ, entry["default"])
             if default is not None:

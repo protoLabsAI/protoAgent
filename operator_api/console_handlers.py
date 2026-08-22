@@ -113,6 +113,16 @@ async def _operator_runtime_status():
             warnings.append(drift)
     except Exception:  # noqa: BLE001 — status must never raise
         pass
+    # Plugin-reported setup gaps (setup_gaps seam): a plugin that is installed and
+    # enabled but can't do its job — no `br` binary, no coder delegate, gh not
+    # authenticated — says so HERE, where the operator looks, instead of only in
+    # agent.log. Live + self-clearing: the plugin clears its gap when it recovers.
+    try:
+        from graph.plugins import setup_gaps as _setup_gaps
+
+        warnings.extend(_setup_gaps.warnings())
+    except Exception:  # noqa: BLE001 — status must never raise
+        pass
     return _build_operator_status(
         config=STATE.graph_config,
         setup_complete=_operator_setup_complete(),

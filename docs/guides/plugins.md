@@ -683,6 +683,24 @@ A plugin declares its required config with `required: true` (above) and the cons
 surfaces the **incomplete** state so an operator knows to finish setup; a guided
 install **wizard** over those fields is the frontend follow-up (#1719).
 
+**Setup gaps the config can't see — `registry.report_setup_gap(key, message)`.** A
+required setting catches a *blank field*; it can't catch a missing binary on PATH, a
+coder delegate the member doesn't have, or a CLI that isn't logged in. For those a
+plugin reports the gap itself and the console shows it as an operator **warning
+banner** (`GET /api/runtime/status` → `warnings[]`, rendered as `"<Plugin>: <message>"`).
+Pass `message=None` to clear it — re-check on each tick or request and the banner
+self-heals the moment the operator installs the binary / adds the delegate, no
+restart. One key per concern (`"br"`, `"coder"`, `"auth"`); a disabled plugin's gaps
+are dropped on the next reload. Guard it for hosts that predate the seam:
+
+```python
+def _preflight(registry):
+    fn = getattr(registry, "report_setup_gap", None)
+    if not callable(fn):
+        return
+    fn("br", None if shutil.which("br") else "beads CLI 'br' not on PATH — install beads-rust and restart")
+```
+
 **Routes now hot-reload; surfaces still don't.** On a config reload a newly-enabled
 plugin's **routers, public paths, verifiers, hooks, tools, subagents, chat commands,
 and MCP servers re-apply** without a restart (#1752/#1890). A **surface** does not — the

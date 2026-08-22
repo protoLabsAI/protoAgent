@@ -861,3 +861,156 @@ def test_purge_clears_a_read_only_file(root):
 
     assert manager.remove("alpha", purge=True)["removed"] == ["workspace"]
     assert not ws.exists()
+
+
+# ── first-run hardening: required inputs, delegate copy, project registration ──
+def _pm_lock(ws, *, project=True):
+    """A lock shaped like the Project Manager archetype's Configure step: a required
+    path (flagged `project`), a required delegate, an optional string, a toggle."""
+    import json
+
+    (ws / "plugins.lock").write_text(
+        json.dumps(
+            {
+                "bundles": [
+                    {
+                        "id": "pm",
+                        "config_inputs": [
+                            {"key": "board.repo", "label": "Repo", "type": "path", "required": True, "project": project},
+                            {"key": "board.coder", "label": "Coder delegate", "type": "delegate", "required": True},
+                            {"key": "gh.default_repo", "label": "GitHub repo", "type": "string"},
+                            {"key": "board.loop_enabled", "label": "Loop", "type": "boolean", "default": False},
+                        ],
+                    }
+                ]
+            }
+        )
+    )
+    return ws / "plugins.lock"
+
+
+def _host_dir(tmp_path):
+    """A host config dir with one acp delegate + its per-env secret."""
+    host = tmp_path / "host"
+    host.mkdir()
+    (host / "langgraph-config.yaml").write_text(
+        "delegates:\n"
+        "  - name: claude-code\n    type: acp\n    command: /abs/claude-agent-acp\n    workdir: /tmp/x\n"
+        "  - name: peer\n    type: a2a\n    url: http://peer\n"
+    )
+    (host / "secrets.yaml").write_text("delegate_secrets:\n  claude-code.env.ANTHROPIC_API_KEY: sk-host\n  peer.auth.token: t\n")
+    return host
+
+
+def test_missing_required_config_inputs_after_apply(root):
+    """A required input with no answer, no default, and no live value is reported; an
+    answered one, or one the config already carried, is not. Blank answers count as
+    missing (the helper never writes them)."""
+    ws = root / "agent"
+    cfg = _seed_config(ws)
+    lock = _pm_lock(ws)
+    manager._apply_bundle_config_inputs(cfg, lock, {"board.repo": "  ", "board.coder": None})
+    missing = manager.missing_required_config_inputs(cfg, lock)
+    assert [m["key"] for m in missing] == ["board.repo", "board.coder"]
+    assert missing[1]["label"] == "Coder delegate"
+    manager._apply_bundle_config_inputs(cfg, lock, {"board.repo": str(ws), "board.coder": "claude-code"})
+    assert manager.missing_required_config_inputs(cfg, lock) == []
+    # No lock / no declarations → nothing is required.
+    assert manager.missing_required_config_inputs(cfg, ws / "nope.lock") == []
+
+
+def test_copy_host_delegates_carries_only_the_picked_entry_and_its_secrets(root, tmp_path):
+    """The delegate the operator PICKED travels from the host registry into the member's
+    own config + secrets overlay; the rest of the host roster does not; an unknown
+    name and a missing host dir copy nothing."""
+    ws = root / "agent"
+    cfg = _seed_config(ws)
+    lock = _pm_lock(ws)
+    host = _host_dir(tmp_path)
+    assert manager.copy_host_delegates(cfg, lock, {"board.coder": "claude-code"}, str(host)) == ["claude-code"]
+    doc = yaml.safe_load(cfg.read_text())
+    assert [d["name"] for d in doc["delegates"]] == ["claude-code"]
+    assert doc["delegates"][0]["command"] == "/abs/claude-agent-acp"
+    sec = yaml.safe_load((ws / "secrets.yaml").read_text())
+    assert sec["delegate_secrets"] == {"claude-code.env.ANTHROPIC_API_KEY": "sk-host"}
+    assert_owner_only(ws / "secrets.yaml")
+    # Idempotent: a second copy replaces, never duplicates.
+    manager.copy_host_delegates(cfg, lock, {"board.coder": "claude-code"}, str(host))
+    assert len(yaml.safe_load(cfg.read_text())["delegates"]) == 1
+    assert manager.copy_host_delegates(cfg, lock, {"board.coder": "ghost"}, str(host)) == []
+    assert manager.copy_host_delegates(cfg, lock, {"board.coder": "claude-code"}, None) == []
+
+
+def test_register_project_inputs_registers_checkout_and_scopes_onboarding(root, tmp_path, monkeypatch):
+    """A `project: true` path input becomes a `projects:` entry (name = dir name,
+    GitHub slug from the origin remote, read-only) and — only when the operator has no
+    `onboarding:` section — enables onboarding rooted at the checkout's PARENT. An
+    existing entry for the path and an explicit onboarding section are left alone."""
+    ws = root / "agent"
+    cfg = _seed_config(ws)
+    lock = _pm_lock(ws)
+    repo = tmp_path / "dev" / "ORBIS"
+    repo.mkdir(parents=True)
+    monkeypatch.setattr(manager, "github_slug_for_checkout", lambda p: "protoLabsAI/ORBIS" if p == repo else "")
+    manager._apply_bundle_config_inputs(cfg, lock, {"board.repo": str(repo), "board.coder": "x"})
+    assert manager.register_project_inputs(cfg, lock) == [str(repo)]
+    doc = yaml.safe_load(cfg.read_text())
+    assert doc["projects"] == [{"name": "ORBIS", "path": str(repo), "github": "protoLabsAI/ORBIS", "write": False}]
+    assert doc["onboarding"] == {"enabled": True, "root": str(repo.parent)}
+    # Re-running registers nothing new and never touches onboarding again.
+    doc["onboarding"] = {"enabled": False}
+    cfg.write_text(yaml.safe_dump(doc))
+    assert manager.register_project_inputs(cfg, lock) == []
+    assert yaml.safe_load(cfg.read_text())["onboarding"] == {"enabled": False}
+    # Not flagged `project` → no registry side effect.
+    ws2 = root / "agent2"
+    cfg2 = _seed_config(ws2)
+    lock2 = _pm_lock(ws2, project=False)
+    manager._apply_bundle_config_inputs(cfg2, lock2, {"board.repo": str(repo), "board.coder": "x"})
+    assert manager.register_project_inputs(cfg2, lock2) == []
+    assert "projects" not in yaml.safe_load(cfg2.read_text())
+
+
+def test_github_slug_for_checkout_parses_origin(tmp_path):
+    """ssh + https remotes parse to owner/name; a non-repo dir yields ''."""
+    import subprocess
+
+    repo = tmp_path / "r"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", "git@github.com:protoLabsAI/ORBIS.git"], check=True)
+    assert manager.github_slug_for_checkout(repo) == "protoLabsAI/ORBIS"
+    subprocess.run(["git", "-C", str(repo), "remote", "set-url", "origin", "https://github.com/acme/thing"], check=True)
+    assert manager.github_slug_for_checkout(repo) == "acme/thing"
+    assert manager.github_slug_for_checkout(tmp_path / "nope") == ""
+
+
+def test_create_from_bundle_refuses_missing_required_input_and_cleans_up(root, tmp_path, monkeypatch):
+    """The create path: a required Configure answer missing → WorkspaceError (→ 400)
+    and the half-made workspace is removed, so a retry with the answer succeeds — and
+    that retry carries the picked delegate into the member and registers the repo."""
+    host = _host_dir(tmp_path)
+    repo = tmp_path / "dev" / "proj"
+    repo.mkdir(parents=True)
+    monkeypatch.setattr(manager, "github_slug_for_checkout", lambda p: "acme/proj")
+
+    def fake_install(ws, bundle):
+        _pm_lock(ws)
+        return ["board"]
+
+    monkeypatch.setattr(manager, "_install_bundle_into", fake_install)
+    with pytest.raises(manager.WorkspaceError, match="Coder delegate \\(board.coder\\)"):
+        manager.create("pm", bundle="https://example/pm", config_inputs={"board.repo": str(repo)}, inherit_model=str(host))
+    assert not (root / "pm").exists()
+
+    rec = manager.create(
+        "pm",
+        bundle="https://example/pm",
+        config_inputs={"board.repo": str(repo), "board.coder": "claude-code"},
+        inherit_model=str(host),
+    )
+    doc = yaml.safe_load((root / rec["id"] / "config" / "langgraph-config.yaml").read_text())
+    assert doc["board"]["repo"] == str(repo) and doc["board"]["coder"] == "claude-code"
+    assert [d["name"] for d in doc["delegates"]] == ["claude-code"]
+    assert doc["projects"][0]["github"] == "acme/proj"
+    assert doc["onboarding"]["root"] == str(repo.parent)
