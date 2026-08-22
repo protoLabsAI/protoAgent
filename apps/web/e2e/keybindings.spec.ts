@@ -6,13 +6,24 @@ import { seedCurrentChat } from "./chat-helpers";
 // headless Chromium there's no browser chrome, so even browser-reserved combos (⌘T, ⌘1)
 // reach the page. `ControlOrMeta` matches our `mod` (⌘ on mac / Ctrl elsewhere).
 
-test("mod+K toggles the command palette", async ({ page }) => {
+test("mod+shift+K toggles the command palette (mod+K no longer does, #2949)", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await expect(page.locator(".pl-cmdk__panel")).toHaveCount(0);
-  await page.keyboard.press("ControlOrMeta+k");
+  await page.keyboard.press("ControlOrMeta+Shift+k");
   await expect(page.locator(".pl-cmdk__panel")).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+Shift+k");
+  await expect(page.locator(".pl-cmdk__panel")).toHaveCount(0);
+  // The old chord went to Clear conversation (chat-scoped) — it must NOT open the palette.
   await page.keyboard.press("ControlOrMeta+k");
   await expect(page.locator(".pl-cmdk__panel")).toHaveCount(0);
+});
+
+test("mod+K clears the current conversation (chat-scoped, #2949)", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await seedCurrentChat(page);
+  await page.getByPlaceholder(/Message protoAgent/i).focus(); // focus inside the chat scope
+  await page.keyboard.press("ControlOrMeta+k");
+  await expect(page.locator(".pl-message--user")).toHaveCount(0);
 });
 
 test("'/' focuses the chat composer when not already typing (global, gated)", async ({ page }) => {

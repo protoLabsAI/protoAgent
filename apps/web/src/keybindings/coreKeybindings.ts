@@ -35,7 +35,7 @@ registerKeybinding({
   id: "palette.toggle",
   label: "Command palette",
   group: "General",
-  defaultKeys: "mod+k",
+  defaultKeys: "mod+shift+k",
   allowInInput: true,
   run: () => useKbIntents.getState().togglePalette(),
 });
@@ -78,7 +78,7 @@ registerKeybinding({
   id: "chat.clear",
   label: "Clear conversation",
   group: "Chat",
-  defaultKeys: "mod+shift+k",
+  defaultKeys: "mod+k",
   scope: "chat",
   allowInInput: true,
   run: () => {
