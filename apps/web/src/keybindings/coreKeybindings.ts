@@ -11,6 +11,7 @@
 // remap to non-reserved combos in Settings ▸ Keyboard.
 import { api } from "../lib/api";
 import { chatStore } from "../chat/chat-store";
+import { runChatEscape } from "../chat/escapeStop";
 import { toggleLatestToolBlock } from "../chat/toolCollapse";
 import { useUI } from "../state/uiStore";
 import { registerKeybinding } from "../ext/keybindingRegistry";
@@ -87,6 +88,21 @@ registerKeybinding({
     void api.deleteChatSession(currentSessionId, false).catch(() => {});
     chatStore.updateMessages(currentSessionId, []);
   },
+});
+// Escape-to-stop (#2968, the Claude.ai/ChatGPT convention): streaming → stop the turn;
+// streaming with queued steers → cancel the newest steer first (LIFO, one per press);
+// idle → no-op. The behavior lives with the state it reads (ChatSurface registers an
+// imperative handler on the escapeStop seam); this binding just invokes it. When the
+// slash menu is open, the composer's own onKeyDown preventDefaults Escape (dismissing
+// the menu) and the keydown host skips defaultPrevented events — no double-fire.
+registerKeybinding({
+  id: "chat.stop",
+  label: "Stop response / cancel queued steer",
+  group: "Chat",
+  defaultKeys: "escape",
+  scope: "chat",
+  allowInInput: true,
+  run: () => runChatEscape(),
 });
 registerKeybinding({
   id: "chat.tab.next",
