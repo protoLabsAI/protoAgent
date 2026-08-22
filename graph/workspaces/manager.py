@@ -362,6 +362,7 @@ def create(
     inputs: Mapping[str, str] | None = None,
     secrets: list[dict] | None = None,
     config_inputs: Mapping[str, object] | None = None,
+    delegate_source: str | None = None,
     requires_tools: list[str] | None = None,
 ) -> dict:
     """Scaffold a workspace: its config dir, ``workspace.yaml``, and (with ``bundle``)
@@ -496,8 +497,12 @@ def create(
                 raise WorkspaceError(f"the bundle needs these Configure answers before the agent can work: {labels}")
             # The coder the operator PICKED must exist in the MEMBER's registry, not just
             # the host's — copy the entry (+ its secrets) across. Host-dir aware only.
-            copied = copy_host_delegates(cfg, ws / "plugins.lock", config_inputs or {}, inherit_model)
-            if inherit_model:
+            # Where a picked `type: delegate` answer is copied FROM: the host config dir —
+            # the inherited-model source on the console path, or an explicit source (the
+            # CLI, which creates a blank-template workspace but still runs inside the host).
+            source = delegate_source or inherit_model
+            copied = copy_host_delegates(cfg, ws / "plugins.lock", config_inputs or {}, source)
+            if source:
                 ghosts = _uncopied_required_delegates(ws / "plugins.lock", config_inputs or {}, copied)
                 if ghosts:
                     raise WorkspaceError(

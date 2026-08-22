@@ -1119,3 +1119,35 @@ def test_copy_host_delegates_never_swallows_a_sibling_secret(root, tmp_path):
     assert manager.copy_host_delegates(cfg, lock, {"board.coder": "cc"}, str(host)) == ["cc"]
     sec = yaml.safe_load((ws / "secrets.yaml").read_text())
     assert sec["delegate_secrets"] == {"cc.env.KEY": "sk-cc", "cc.auth.token": "tok"}
+
+
+def test_cli_new_answers_config_inputs_and_copies_the_delegate(root, tmp_path, monkeypatch, capsys):
+    """`workspace new --bundle … --input k=v` answers the Configure prompts the console
+    would ask; the picked delegate is copied from the HOST config (the CLI runs inside
+    the host) without inheriting the host model; a malformed --input is a usage error."""
+    from graph import config_io
+    from graph.workspaces import cli
+
+    host = _host_dir(tmp_path)
+    monkeypatch.setattr(config_io, "config_yaml_path", lambda: host / "langgraph-config.yaml")
+    monkeypatch.setattr(manager, "github_slug_for_checkout", lambda p: "")
+
+    def fake_install(ws, bundle):
+        _pm_lock(ws)
+        return ["board"]
+
+    monkeypatch.setattr(manager, "_install_bundle_into", fake_install)
+    repo = tmp_path / "dev" / "r"
+    repo.mkdir(parents=True)
+    assert cli.run_workspace_cli(["new", "cli-pm", "--bundle", "https://x/pm", "--input", "nonsense"]) == 2
+    rc = cli.run_workspace_cli(
+        ["new", "cli-pm", "--bundle", "https://x/pm", "--input", f"board.repo={repo}", "--input", "board.coder=claude-code"]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "created workspace cli-pm" in out
+    ws = next(p for p in root.iterdir() if p.name.startswith("cli-pm"))
+    doc = yaml.safe_load((ws / "config" / "langgraph-config.yaml").read_text())
+    assert doc["board"] == {"repo": str(repo), "coder": "claude-code", "loop_enabled": False}
+    assert [d["name"] for d in doc["delegates"]] == ["claude-code"]
+    assert doc["projects"][0]["path"] == str(repo)

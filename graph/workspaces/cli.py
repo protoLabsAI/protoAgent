@@ -26,6 +26,21 @@ def _build_parser() -> argparse.ArgumentParser:
     pn.add_argument("--bundle", default=None, help="install a plugin bundle/plugin git URL into it")
     pn.add_argument("--port", type=int, default=None, help="bind port (default: auto)")
     pn.add_argument("--shared-skills", action="store_true", help="share the skills commons across the fleet (ADR 0041)")
+    pn.add_argument(
+        "--input",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="answer a bundle Configure prompt (config_inputs, #2934), e.g. "
+        "--input project_board.repo=/abs/repo --input project_board.coder=claude-code; "
+        "a bundle's required prompts must be answered or the create is refused",
+    )
+    pn.add_argument(
+        "--soul",
+        default=None,
+        metavar="FILE",
+        help="persona file written as the workspace's SOUL.md (the picker does this from the archetype preset)",
+    )
 
     sub.add_parser("ls", help="list workspaces")
 
@@ -47,12 +62,32 @@ def run_workspace_cli(argv: list[str]) -> int:
     args = _build_parser().parse_args(argv)
     try:
         if args.cmd == "new":
+            config_inputs: dict[str, object] = {}
+            for item in args.input:
+                key, sep, value = str(item).partition("=")
+                if not sep or not key.strip():
+                    print(f"✗ --input expects KEY=VALUE, got {item!r}", file=sys.stderr)
+                    return 2
+                config_inputs[key.strip()] = value
+            soul = None
+            if args.soul:
+                from pathlib import Path as _Path
+
+                soul = _Path(args.soul).expanduser().read_text(encoding="utf-8")
+            # The CLI creates from inside the host process tree, so the host config dir is
+            # the delegate source for a `type: delegate` answer — same as the console path.
+            from graph.config_io import config_yaml_path
+
+            host_cfg = config_yaml_path()
             s = manager.create(
                 args.name,
                 from_config=args.from_config,
                 bundle=args.bundle,
                 port=args.port,
                 shared_skills=args.shared_skills,
+                soul=soul,
+                config_inputs=config_inputs or None,
+                delegate_source=str(host_cfg.parent) if host_cfg.exists() else None,
             )
             print(f"✓ created workspace {s['name']} (id={s['id']}, port={s['port']})")
             print(f"  {s['path']}")
