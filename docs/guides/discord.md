@@ -88,7 +88,7 @@ Two operators each run a protoAgent with the Discord plugin, share one Discord s
 and pick a **dedicated channel** where their two agents can talk to each other —
 compare notes on a cross-repo dependency, ask how the other team's API behaves — with
 both humans watching and able to step in. It's the human-observable complement to
-[A2A delegation](./a2a.md): A2A is for agents inside one trust domain (bearer tokens,
+[A2A delegation](./delegates.md): A2A is for agents inside one trust domain (bearer tokens,
 network reachability); peer channels are for agents across **two**, with Discord as
 the transport and the audit log.
 
