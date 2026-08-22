@@ -675,7 +675,9 @@ def _record_a2a_telemetry(outcome) -> None:
                 "task_id": outcome.task_id,
                 "session_id": outcome.context_id,
                 "state": outcome.state,
-                "success": 1 if outcome.state == "completed" else 0,
+                # A parked (input_required) leg is neither success nor failure — NULL
+                # keeps failure-rate queries honest (#2943); the state column tells.
+                "success": (None if outcome.state == "input_required" else (1 if outcome.state == "completed" else 0)),
                 "model": primary_model,
                 "models": ",".join(outcome.models),
                 "input_tokens": input_tokens,

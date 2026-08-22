@@ -1275,3 +1275,51 @@ async def test_turn_teardown_retires_real_producer_task(monkeypatch):
     for active in retired:
         assert active._producer_task is not None and active._producer_task.done()
         assert active._consumer_task is not None and active._consumer_task.done()
+
+
+@pytest.mark.asyncio
+async def test_terminal_hook_fires_on_park_and_again_on_resume():
+    """#2943: BOTH legs of a park/resume are real turns with real spend — the park
+    leg (model calls made before the pause) and the resumed leg each owe a
+    TurnOutcome, or HITL flows are invisible in telemetry (the most expensive turn
+    class, systematically undercounted)."""
+    outcomes: list[TurnOutcome] = []
+    set_terminal_hook(outcomes.append)
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        if resume:
+            yield ("usage", {"input_tokens": 70, "output_tokens": 30, "cost_usd": 0.004, "model": "claude-x"})
+            yield ("done", "resumed fine")
+        else:
+            yield ("usage", {"input_tokens": 40, "output_tokens": 5, "cost_usd": 0.001, "model": "claude-x"})
+            yield ("input_required", {"question": "go?"})
+
+    app = _build_app(stream)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:
+        task = (await _send_msg(c)).json()["result"]["task"]
+        parked = await _poll_terminal(c, task["id"])
+        assert parked["status"]["state"] == "TASK_STATE_INPUT_REQUIRED"
+        assert [o.state for o in outcomes] == ["input_required"]  # the park leg's row
+        assert outcomes[0].usage["input_tokens"] == 40  # pre-park spend captured
+        await c.post(
+            "/a2a",
+            headers=A2A_HEADERS,
+            json={
+                "jsonrpc": "2.0",
+                "id": "r2",
+                "method": "SendMessage",
+                "params": {
+                    "message": {
+                        "messageId": "m2",
+                        "role": "ROLE_USER",
+                        "taskId": task["id"],
+                        "contextId": task["contextId"],
+                        "parts": [{"text": "yes"}],
+                    }
+                },
+            },
+        )
+        final = await _poll_terminal(c, task["id"])
+    assert final["status"]["state"] == "TASK_STATE_COMPLETED"
+    assert [o.state for o in outcomes] == ["input_required", "completed"]
+    assert outcomes[1].usage["input_tokens"] == 70  # the resumed leg's own spend

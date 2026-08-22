@@ -771,6 +771,11 @@ class ProtoAgentExecutor(AgentExecutor):
                     if isinstance(payload, dict):
                         parts.append(_data_part_proto(payload, HITL_MIME))
                     await updater.requires_input(message=updater.new_agent_message(parts))
+                    # The park leg is a real turn with real spend (#2943): every model
+                    # call made before the pause belongs to a row of its own, or HITL
+                    # flows — the expensive turn class — vanish from telemetry. The
+                    # resumed execute() records its own outcome separately.
+                    _notify_terminal(_outcome("input_required", accumulated))
                     return  # parked — the caller resumes via message/send on this task
 
                 elif event_type == "done":
