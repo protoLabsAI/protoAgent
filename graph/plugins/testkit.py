@@ -284,11 +284,21 @@ class FakeRegistry:
         self.emitted: list = []  # (topic, data)
         self.navigations: list = []
         self.thread_id_resolver = None
+        self.setup_gaps: dict[str, str] = {}  # key -> message reported via report_setup_gap
 
     def live_config(self) -> dict:
         """The real registry re-reads host state here; with no host that falls back to
         the register-time snapshot — which is all the fake has."""
         return self.config
+
+    def report_setup_gap(self, key: str, message: str | None, *, label: str | None = None) -> None:
+        """Records what the plugin reported (``self.setup_gaps[key]``; ``None`` clears) so a
+        smoke test can assert a preflight found — or cleared — its gap. The real
+        registry forwards to the operator-status warnings seam."""
+        if message is None or not str(message).strip():
+            self.setup_gaps.pop(key, None)
+        else:
+            self.setup_gaps[key] = str(message).strip()
 
     # contributions
     def register_tool(self, tool) -> None:
