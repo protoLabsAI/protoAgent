@@ -110,32 +110,51 @@ here is written by hand any more:
   entry *and* its secrets — because a member resolves delegates from its own
   config ([ADR 0025](/adr/0025-unified-delegate-registry-and-panel)), not the
   host's. Before #2977 only the name travelled, and the first dispatch failed
-  *not found*.
+  *not found*. It's a one-time **snapshot**: a later host edit (a rotated key,
+  a new `command`) doesn't propagate — re-edit the member's delegate. A picked
+  name the host doesn't actually have refuses the create too.
 - The repo path becomes a **managed project**: an
   [ADR 0095](/adr/0095-managed-projects-registry) `projects:` entry (name = the
   checkout's directory, `github: owner/name` parsed from its `origin` remote,
-  `write: false`) that the PM's read-only file tools, the GitHub rail's repo
-  picker, and the board all read. When you haven't configured `onboarding:` at
-  all, it also enables onboarding **rooted at the checkout's parent**, so
-  `onboard_project` can bind exactly that tree and nothing wider. This rides a
-  `project: true` flag on the bundle's repo input — the archetype's next
-  release flags it (v0.5.0 predates the flag). Until then the board still binds
-  through `project_board.repo`, but the file tools and the GitHub picker only
-  see the repo if you add the `projects:` entry yourself
+  read-only unless `onboarding.write_default` says otherwise) that the PM's
+  file tools, the GitHub rail's repo picker, and the board all read. When you
+  haven't configured `onboarding:` at all *and* a GitHub remote was found, it
+  also enables onboarding scoped to **exactly that repo** — rooted at the
+  checkout's parent with `allow: [github.com/<owner>/<name>]` — so
+  `onboard_project` resolves the typed repo and nothing wider is clonable until
+  you widen the allowlist (no remote → registered only, onboarding untouched).
+  The canonical wording, including the fence consequence — once `projects:` is
+  non-empty it *is* the filesystem fence — is in the
+  [bundles guide](/guides/bundles#the-manifest). This rides a `project: true`
+  flag on the bundle's repo input — the archetype's next release flags it
+  (v0.5.0 predates the flag). Until then the board still binds through
+  `project_board.repo`, but the file tools and the GitHub picker only see the
+  repo if you add the `projects:` entry yourself
   ([reference](/reference/configuration#projects)).
 
-The CLI has no Configure step:
+The CLI answers the same Configure step with `--input` (core ≥ 0.146, #2977):
 
 ```bash
-python -m server workspace new pm --bundle https://github.com/protoLabsAI/project-manager-archetype
+python -m server workspace new pm \
+  --bundle https://github.com/protoLabsAI/project-manager-archetype \
+  --input project_board.repo=/Users/you/dev/my-agent \
+  --input project_board.coder=claude-code \
+  --input github.default_repo=you/my-agent \
+  --soul config/soul-presets/project-manager.md
 ```
 
-…installs the bundle and nothing else — **no persona** (the soul preset is the
-picker's doing), **no host model** carried over, **no capability contract**
-recorded, and no way to answer the required inputs, so on core ≥ 0.146 this
-exact command is **refused** (*"the bundle needs these Configure answers before
-the agent can work: Repo this board manages …; Coder delegate …"*). Script the
-create through the API instead — the same body the picker sends:
+Each `--input KEY=VALUE` answers one of the bundle's `config_inputs` prompts —
+the required ones included, so a create that skips `project_board.repo` or
+`project_board.coder` is refused with the same message as the picker
+(*"the bundle needs these Configure answers before the agent can work: …"*),
+and a malformed `--input` (no `=`) is a usage error. The `type: delegate` answer
+is copied from the **host** config, because the CLI runs inside the host — but
+the CLI does **not** carry the host model over, so set the member's `model` (or
+run it with `--from`) before it can chat. `--soul FILE` writes the persona the
+picker would have seeded; **without it the workspace has no persona** — a PM
+with the bundle's tools and a blank `SOUL.md` — and the CLI never records the
+archetype's capability contract either way. The API is the third door, with the
+exact body the picker sends:
 
 ```bash
 curl -s -X POST localhost:7870/api/fleet -H 'content-type: application/json' -d '{
@@ -172,7 +191,7 @@ delegates:
   - { name: claude-code, type: acp, command: /opt/homebrew/bin/claude-agent-acp, workdir: /Users/you/dev/my-agent }   # copied from the host
 projects:
   - { name: my-agent, path: /Users/you/dev/my-agent, github: you/my-agent, write: false }   # registered from the repo input
-onboarding: { enabled: true, root: /Users/you/dev }   # only seeded when you had no onboarding: section
+onboarding: { enabled: true, root: /Users/you/dev, allow: ["github.com/you/my-agent"] }   # seeded only when you had no onboarding: section AND a GitHub remote was found
 ```
 
 One PM, one repo. An agent that sits above several PMs is the Portfolio Manager —

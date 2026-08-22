@@ -17,8 +17,11 @@ primitives:
 ## Quick start
 
 ```bash
-# an agent from a bundle-backed archetype (design-system-archetype: DS engineer)
-python -m server workspace new ds --bundle https://github.com/protoLabsAI/design-system-archetype
+# an agent from a bundle-backed archetype (project-manager-archetype: board-driven PM) —
+# --input answers the bundle's Configure prompts, --soul seeds the persona the picker would
+python -m server workspace new pm --bundle https://github.com/protoLabsAI/project-manager-archetype \
+  --input project_board.repo=/abs/path/to/repo --input project_board.coder=claude-code \
+  --soul config/soul-presets/project-manager.md
 
 # a blank-slate agent (the built-in Basic archetype — core loop + tools, no plugins)
 python -m server workspace new scratch
@@ -26,7 +29,7 @@ python -m server workspace new scratch
 # run the whole fleet in the background, then look at it
 python -m server fleet up
 python -m server fleet ls
-#   ● ds        :7871  pid 12345  [design-system-archetype]
+#   ● pm        :7871  pid 12345  [project-manager-archetype]
 #   ● scratch   :7872  pid 12346
 ```
 
@@ -40,7 +43,7 @@ agents on one host never collide (the leak that motivated this; see
 [multi-instance](./multi-instance.md)).
 
 ```bash
-workspace new <name> [--from <cfg>] [--bundle <url>] [--port auto] [--shared-skills]
+workspace new <name> [--from <cfg>] [--bundle <url>] [--input KEY=VALUE …] [--soul FILE] [--port auto] [--shared-skills]
 workspace ls
 workspace run <name>          # foreground: execs the normal server, env wired in
 workspace rm <name> [--purge] # --purge also deletes its scoped data
@@ -48,12 +51,14 @@ workspace rm <name> [--purge] # --purge also deletes its scoped data
 
 `--from <dir>` clones an existing agent's config + secrets (re-stamping identity/instance);
 `--bundle <url>` installs a bundle into it (next section); `--port auto` picks a free port.
-
-The CLI installs the bundle and stops there — no persona, no host model, no capability
-contract, and no **Configure step**. A bundle that declares `required: true`
-`config_inputs` (the Project Manager archetype: its repo and coder) is therefore
-**refused** by `workspace new --bundle` on core ≥ 0.146 (#2977) — use the console picker,
-or `POST /api/fleet` with `config_inputs` ([the body](./build-with-a-coding-agent#_1-stand-up-the-pm)).
+`--input KEY=VALUE` (repeatable, core ≥ 0.146, #2977) answers a bundle's `config_inputs`
+prompts — the required ones must be answered or the create is refused, a `KEY=VALUE`
+without `=` is a usage error, and a `type: delegate` answer is copied from the host config
+(the CLI runs inside the host) **without** inheriting the host model. `--soul FILE` writes
+the persona the picker would have seeded; without it the workspace has **no persona**, and
+the CLI never records an archetype's capability contract. The picker and
+`POST /api/fleet` do all of that in one step
+([the body](./build-with-a-coding-agent#_1-stand-up-the-pm)).
 
 ## Bundles & archetypes — start from a type
 
