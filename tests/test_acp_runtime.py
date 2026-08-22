@@ -727,3 +727,33 @@ def test_operator_mcp_spec_pins_resolved_instance_root(monkeypatch, tmp_path):
     spec = operator_mcp_server_spec(_types.SimpleNamespace(operator_mcp_tools=[]))
     env = {e["name"]: e["value"] for e in spec["env"]}
     assert env["PROTOAGENT_HOME"] == str(tmp_path / "scoped-home")
+
+
+async def test_acp_client_records_plan_updates_latest_wins():
+    """ACP `plan` updates (the coder's live todo list) are recorded, not dropped —
+    each carries the ENTIRE current plan, so latest wins; entries are sanitized to
+    content/status/priority and capped. The project board's live monitor samples
+    `last_plan` exactly like `last_usage`."""
+    from plugins.coding_agent.acp_client import AcpClient
+
+    client = AcpClient("noop", cwd="/tmp", name="t")
+    assert client.last_plan is None
+    await client._handle_update(
+        {"update": {"sessionUpdate": "plan", "entries": [{"content": "read the failing test", "status": "completed"}]}}
+    )
+    await client._handle_update(
+        {
+            "update": {
+                "sessionUpdate": "plan",
+                "entries": [
+                    {"content": "read the failing test", "status": "completed", "priority": "high"},
+                    {"content": "fix the off-by-one", "status": "in_progress"},
+                    "not-a-dict",
+                ],
+            }
+        }
+    )
+    assert client.last_plan == [
+        {"content": "read the failing test", "status": "completed", "priority": "high"},
+        {"content": "fix the off-by-one", "status": "in_progress", "priority": ""},
+    ]

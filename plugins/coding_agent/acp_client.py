@@ -376,6 +376,11 @@ class AcpClient:
         # Latest ACP-native context pressure ({used, size} tokens) from a
         # ``usage_update`` session update — None until the agent sends one.
         self.last_usage: dict | None = None
+        # Latest ACP `plan` update — the coder's own live todo list ({content, status,
+        # priority} entries, entire plan each time so latest-wins). Consumers (the
+        # project board's live monitor) sample it like last_usage; None until the
+        # agent sends one (not every coder plans).
+        self.last_plan: list | None = None
         # Captured from the `initialize` response (was previously discarded).
         self._auth_methods: list[dict] = []
         self._agent_capabilities: dict = {}
@@ -723,8 +728,24 @@ class AcpClient:
                 self.last_usage = {"used": int(update.get("used") or 0), "size": int(update.get("size") or 0)}
             except (TypeError, ValueError):
                 logger.debug("[acp/%s] unparseable usage_update %r", self.name, update)
+        elif kind == "plan":
+            # The coder's execution plan (its live todo list) — the sharpest
+            # "where is it in the work" signal an ACP agent sends. The update carries
+            # the ENTIRE current plan each time, so replace; sanitized + capped so a
+            # malformed agent can't bloat the client.
+            entries = update.get("entries")
+            if isinstance(entries, list):
+                self.last_plan = [
+                    {
+                        "content": str(e.get("content") or "")[:200],
+                        "status": str(e.get("status") or ""),
+                        "priority": str(e.get("priority") or ""),
+                    }
+                    for e in entries[:40]
+                    if isinstance(e, dict)
+                ]
         elif kind:
-            # plan / current_mode_update / available_commands_update —
+            # current_mode_update / available_commands_update —
             # not surfaced yet, but logged so they're visibly dropped, not silent.
             logger.debug("[acp/%s] unhandled session update %r", self.name, kind)
 
