@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest";
 
 import {
   archetypeConfigFields,
+  isMissingRequiredBundleConfig,
   isMissingRequiredConfig,
+  requiresToolsNotice,
   fieldId,
   hasConfigFields,
   mcpItemLabel,
@@ -308,5 +310,44 @@ describe("preview summaries — read-only display in ArchetypePreviewDialog", ()
       ]),
     ).toBe("GitHub token, Brave API key");
     expect(previewSecretsSummary(undefined)).toBe("");
+  });
+});
+
+describe("isMissingRequiredBundleConfig — the hard gate (#2977)", () => {
+  const base = githubPreview();
+  const preview = {
+    ...base,
+    bundle: {
+      ...base.bundle!,
+      config_inputs: [
+        { key: "board.repo", label: "Repo", type: "path", required: true },
+        { key: "board.coder", label: "Coder", type: "delegate", required: true },
+        { key: "board.loop", label: "Loop", type: "boolean", required: false, default: false },
+      ],
+    },
+  } as ArchetypePreview;
+  const fields = archetypeConfigFields(preview);
+
+  it("only counts required bundle config_inputs — a blank required MCP input is soft", () => {
+    const values = {
+      [fieldId({ origin: "config", key: "board.repo" })]: "/work/repo",
+      [fieldId({ origin: "config", key: "board.coder" })]: "claude-code",
+    };
+    expect(isMissingRequiredBundleConfig(fields, values)).toBe(false); // MCP `root` still blank
+    expect(isMissingRequiredConfig(fields, values)).toBe(true);
+  });
+
+  it("is true while a required config answer is blank; a boolean toggle never gates", () => {
+    expect(isMissingRequiredBundleConfig(fields, { [fieldId({ origin: "config", key: "board.repo" })]: "/r" })).toBe(true);
+  });
+});
+
+describe("requiresToolsNotice", () => {
+  it("names the contract, or nothing when there is none", () => {
+    expect(requiresToolsNotice("Project Manager", ["github_create_issue"])).toBe(
+      "Project Manager commits to a tool its bundle must provide: github_create_issue.",
+    );
+    expect(requiresToolsNotice("Basic", [])).toBeNull();
+    expect(requiresToolsNotice("Basic", undefined)).toBeNull();
   });
 });

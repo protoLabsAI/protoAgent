@@ -25,7 +25,14 @@ import { errMsg } from "../lib/format";
 import { lucideIcon } from "../lib/lucideIcon";
 import { pythonRuntimeView } from "../app/pythonRuntime";
 import { archetypesQuery, pythonRuntimeQuery } from "../lib/queries";
-import { archetypeConfigFields, fieldId, isMissingRequiredConfig, splitConfigValues } from "../lib/archetypeConfig";
+import {
+  archetypeConfigFields,
+  fieldId,
+  isMissingRequiredBundleConfig,
+  isMissingRequiredConfig,
+  requiresToolsNotice,
+  splitConfigValues,
+} from "../lib/archetypeConfig";
 import type { AgentConfig, Archetype, ConfigPayload } from "../lib/types";
 import { ArchetypeConfigField } from "./ArchetypeConfigField";
 import { ArchetypePreviewDialog } from "./ArchetypePreviewDialog";
@@ -461,6 +468,10 @@ export function SetupWizard({
   // A required field left blank is a soft hint, NOT a hard gate — skipping the Configure
   // step (or a field) falls back to this host's environment, same as NewAgentPanel.
   const missingRequired = configOpen && isMissingRequiredConfig(configFields, configValues);
+  // Hard gate (#2977): a required bundle config_inputs answer has no env fallback — the host
+  // install refuses to activate without it, so Finish waits for it too.
+  const missingHard = isMissingRequiredBundleConfig(configFields, configValues);
+  const contractNotice = pickedArchetype ? requiresToolsNotice(pickedArchetype.label, pickedArchetype.requires_tools) : null;
 
   // Runtime requirement at CHOOSE-time (#2186): same affordance as NewAgentPanel —
   // the wizard's first-run pick of Cowork on a runtime-less desktop otherwise ends at
@@ -766,6 +777,11 @@ export function SetupWizard({
                   {runtimeWarning}
                 </p>
               ) : null}
+              {contractNotice ? (
+                <p className="archetype-runtime-notice" role="note">
+                  {contractNotice}
+                </p>
+              ) : null}
               {/* Inline Configure step — NewAgentPanel parity (#2714/#2041/#2934): appears only
                   when the picked bundle declares MCP inputs, secrets, or config_inputs.
                   Collapsing skips it (→ env-only / declared-default seeding on install). */}
@@ -796,7 +812,9 @@ export function SetupWizard({
                           />
                         </label>
                       ))}
-                      {missingRequired ? (
+                      {missingHard ? (
+                        <span className="field-hint">Fields marked * are needed before setup can finish.</span>
+                      ) : missingRequired ? (
                         <span className="field-hint">
                           Fields marked * connect their server — fill them, or skip to use this host&apos;s environment.
                         </span>
@@ -1078,7 +1096,7 @@ export function SetupWizard({
                   Open console
                 </Button>
               ) : (
-                <Button variant="primary" type="button" onClick={() => void finishSetup()} disabled={busy}>
+                <Button variant="primary" type="button" onClick={() => void finishSetup()} disabled={busy || missingHard}>
                   {busy ? <Spinner size={15} /> : <Check size={15} />}
                   Finish
                 </Button>

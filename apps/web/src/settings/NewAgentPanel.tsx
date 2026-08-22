@@ -15,7 +15,14 @@ import { ArchetypePreviewDialog } from "../setup/ArchetypePreviewDialog";
 import { pythonRuntimeView } from "../app/pythonRuntime";
 import { archetypesQuery, pythonRuntimeQuery, queryKeys } from "../lib/queries";
 import { lucideIcon } from "../lib/lucideIcon";
-import { archetypeConfigFields, isMissingRequiredConfig, fieldId, splitConfigValues } from "../lib/archetypeConfig";
+import {
+  archetypeConfigFields,
+  fieldId,
+  isMissingRequiredBundleConfig,
+  isMissingRequiredConfig,
+  requiresToolsNotice,
+  splitConfigValues,
+} from "../lib/archetypeConfig";
 import type { Archetype } from "../lib/types";
 
 const NAME_RE = /^[A-Za-z0-9-_]+$/;
@@ -97,9 +104,12 @@ export function NewAgentPanel({
         ? `Python runtime is installing — ${pickedArchetype.label}'s document skills will work when it finishes.`
         : `${pickedArchetype.label} needs the managed Python runtime for its document skills — install it in Settings ▸ Tools first, or create the agent now and provision later.`
       : null;
-  // A required field left blank is a soft hint, NOT a hard gate — skipping the Configure step
-  // (or an individual required field) is a first-class path that falls back to env-only.
+  // A required MCP input / secret left blank is a soft hint (skip → env fallback); a required
+  // bundle config_inputs answer is a HARD gate (#2977) — the server refuses the create, so the
+  // button does too, whether or not the Configure step is open.
   const missingRequired = configOpen && isMissingRequiredConfig(fields, values);
+  const missingHard = isMissingRequiredBundleConfig(fields, values);
+  const contractNotice = pickedArchetype ? requiresToolsNotice(pickedArchetype.label, pickedArchetype.requires_tools) : null;
 
   function pick(id: string) {
     setPicked(id);
@@ -192,7 +202,7 @@ export function NewAgentPanel({
         <div className="panel-actions">
           <Button
             variant="primary"
-            disabled={!nameOk || create.isPending}
+            disabled={!nameOk || missingHard || create.isPending}
             onClick={() => create.mutate()}
           >
             {create.isPending ? "Creating…" : archetype?.bundle ? `Create from ${archetype.label}` : "Create agent"}
@@ -247,6 +257,11 @@ export function NewAgentPanel({
             {runtimeWarning}
           </p>
         ) : null}
+        {contractNotice ? (
+          <p className="archetype-runtime-notice" role="note">
+            {contractNotice}
+          </p>
+        ) : null}
 
         {/* Inline Configure step (#2041/#2934) — appears only when the picked bundle has MCP
             inputs, declared secrets, or config_inputs. Collapsible: skipping falls back to
@@ -278,7 +293,9 @@ export function NewAgentPanel({
                     />
                   </label>
                 ))}
-                {missingRequired ? (
+                {missingHard ? (
+                  <span className="field-hint">Fields marked * are needed before this agent can be created.</span>
+                ) : missingRequired ? (
                   <span className="field-hint">
                     Fields marked * connect their server — fill them, or skip to use this host's environment.
                   </span>

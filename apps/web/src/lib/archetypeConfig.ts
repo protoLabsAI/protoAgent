@@ -113,6 +113,30 @@ export function isMissingRequiredConfig(fields: ConfigField[], values: Record<st
   );
 }
 
+// The HARD gate (#2977): a required bundle `config_inputs` answer (origin "config") has no
+// environment fallback — the server refuses the create/install and names the prompt — so
+// the picker must not offer a Create that can only 400. MCP inputs and declared secrets
+// keep their soft semantics (skip → env), which is what isMissingRequiredConfig hints at.
+export function isMissingRequiredBundleConfig(fields: ConfigField[], values: Record<string, string>): boolean {
+  return fields.some(
+    (f) =>
+      f.origin === "config" &&
+      f.required &&
+      f.kind !== "boolean" &&
+      f.defaultValue === undefined &&
+      !fieldValue(values, f),
+  );
+}
+
+// One line for the archetype card: the tools its persona COMMITS to (the capability
+// contract, ADR 0100). Shown at choose-time so a contract break is a known trade-off,
+// not a post-boot surprise banner. Empty when the archetype declares none.
+export function requiresToolsNotice(label: string, requiresTools: string[] | undefined): string | null {
+  const tools = (requiresTools ?? []).map((t) => t.trim()).filter(Boolean);
+  if (!tools.length) return null;
+  return `${label} commits to ${tools.length === 1 ? "a tool" : "tools"} its bundle must provide: ${tools.join(", ")}.`;
+}
+
 // Split the collected form values back into the three create() channels. Blank values are
 // dropped so the backend's env/default fallthrough (#2041/#2934) still applies to whatever
 // the operator skipped — only explicitly-entered values are sent.
