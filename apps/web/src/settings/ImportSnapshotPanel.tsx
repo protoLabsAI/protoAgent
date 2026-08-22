@@ -11,7 +11,7 @@ import { queryKeys } from "../lib/queries";
 import { importButtonLabel, neededSecrets, planSummary } from "./importPlan";
 import "./snapshot.css";
 
-import type { SnapshotImportPlan } from "../lib/types";
+import type { SnapshotImportPlan, SnapshotImportResult } from "../lib/types";
 
 const NAME_RE = /^[A-Za-z0-9-_]+$/;
 
@@ -30,7 +30,7 @@ const NAME_RE = /^[A-Za-z0-9-_]+$/;
  * would produce a duplicate that behaves differently for reasons this panel couldn't
  * enumerate (ADR 0071 D1: trust, not sandbox).
  */
-export function ImportSnapshotPanel({ onDone }: { onDone?: (name: string) => void }) {
+export function ImportSnapshotPanel({ onDone }: { onDone?: (name: string, id: string) => void }) {
   const toast = useToast();
   const qc = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
@@ -39,6 +39,11 @@ export function ImportSnapshotPanel({ onDone }: { onDone?: (name: string) => voi
   const [secrets, setSecrets] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<"" | "planning" | "importing">("");
   const [error, setError] = useState("");
+  // An applied-but-incomplete import (missing secrets / failed plugins). Held here so its
+  // detail renders IN the page: onDone is a full-page navigation into the new agent now
+  // (ADR 0042 slug routing), which would unload this tree — and any toast with it — before
+  // the operator could read which secrets are still needed.
+  const [needsSetup, setNeedsSetup] = useState<SnapshotImportResult | null>(null);
 
   async function pickFile(f: File | null) {
     setFile(f);
@@ -66,9 +71,14 @@ export function ImportSnapshotPanel({ onDone }: { onDone?: (name: string) => voi
       qc.invalidateQueries({ queryKey: queryKeys.fleet });
       if (res.complete) {
         toast({ tone: "success", title: "Agent imported", message: `${res.name} is ready.` });
+        onDone?.(res.name, res.workspace_id);
       } else {
         // Not a failure — ADR 0091 D3's "incomplete until its credentials are provided".
-        // Saying "ready" here would send the operator to a agent that can't reach its gateway.
+        // Saying "ready" here would send the operator to a agent that can't reach its
+        // gateway. And it must NOT navigate yet either: onDone is a full page load into
+        // the duplicate, which would unload this toast before it renders — so the
+        // incomplete path stays here, on the durable summary below, and the operator
+        // moves into the agent with its Open button once the detail has been read.
         toast({
           tone: "info",
           title: `${res.name} imported — needs setup`,
@@ -76,8 +86,8 @@ export function ImportSnapshotPanel({ onDone }: { onDone?: (name: string) => voi
             ? `Still needs: ${res.missing_secrets.join(", ")}`
             : `${res.failed.length} plugin(s) failed to install.`,
         });
+        setNeedsSetup(res);
       }
-      onDone?.(res.name);
     } catch (e) {
       toast({
         tone: "error",
@@ -91,6 +101,57 @@ export function ImportSnapshotPanel({ onDone }: { onDone?: (name: string) => voi
 
   const needed = neededSecrets(plan);
   const nameOk = NAME_RE.test(name.trim());
+
+  // The import has been APPLIED but the duplicate isn't ready — show what's still needed
+  // where it can be read at leisure (a toast auto-dismisses; a navigation would unload it),
+  // then let the operator open the agent deliberately. The form is gone: the snapshot has
+  // already been consumed, pressing Install again would double-create.
+  if (needsSetup) {
+    return (
+      <div className="snapshot-import">
+        <section className="snapshot-section">
+          <h3>
+            <KeyRound size={14} /> {needsSetup.name} imported — needs setup
+          </h3>
+          {needsSetup.missing_secrets.length ? (
+            <>
+              <p className="snapshot-hint">
+                Still needs these credentials (add them in its Settings ▸ Secrets — until
+                then it can&apos;t reach its gateway):
+              </p>
+              <ul className="snapshot-list">
+                {needsSetup.missing_secrets.map((s) => (
+                  <li key={s} className="snapshot-row">
+                    <code>{s}</code>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+          {needsSetup.failed.length ? (
+            <>
+              <p className="snapshot-hint">
+                {needsSetup.failed.length} plugin(s) failed to install:
+              </p>
+              <ul className="snapshot-list">
+                {needsSetup.failed.map((f) => (
+                  <li key={f.id} className="snapshot-row">
+                    <code>{f.id}</code>
+                    <span className="snapshot-kinds">{f.error}</span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+        </section>
+        <div className="snapshot-import-actions">
+          <Button onClick={() => onDone?.(needsSetup.name, needsSetup.workspace_id)}>
+            Open {needsSetup.name}
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="snapshot-import">
@@ -184,7 +245,13 @@ export function ImportSnapshotPanel({ onDone }: { onDone?: (name: string) => voi
                   <span>{s.name}</span>
                   <SecretInput
                     value={secrets[s.name] ?? ""}
-                    onChange={(e) => setSecrets((v) => ({ ...v, [s.name]: e.currentTarget.value }))}
+                    onChange={(e) => {
+                      // Read the value NOW: the functional updater runs after dispatch,
+                      // when React has already nulled e.currentTarget — reading it there
+                      // threw on the first keystroke and unmounted the panel.
+                      const value = e.currentTarget.value;
+                      setSecrets((v) => ({ ...v, [s.name]: value }));
+                    }}
                     placeholder="paste the value"
                   />
                 </label>

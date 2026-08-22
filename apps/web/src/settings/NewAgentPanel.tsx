@@ -32,7 +32,16 @@ const NAME_RE = /^[A-Za-z0-9-_]+$/;
 // because "where do new agents come from" should be one question with two answers. The
 // snapshot path is its own component: it has to show a plan and take consent before it can
 // create anything, which is a different shape from picking a card.
-export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) => void; onCancel?: () => void }) {
+export function NewAgentPanel({
+  onDone,
+  onCancel,
+}: {
+  // `id` is the created agent's slug — FleetSurface navigates into the new agent's own
+  // console with it. Optional because a success response may omit the agent record; the
+  // caller must degrade (back to the list) rather than navigate to nowhere.
+  onDone?: (name: string, id?: string) => void;
+  onCancel?: () => void;
+}) {
   const qc = useQueryClient();
   const toast = useToast();
   const archetypes = useQuery(archetypesQuery());
@@ -121,7 +130,9 @@ export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) =>
       qc.invalidateQueries({ queryKey: queryKeys.fleet });
       const created = res.agent?.name ?? name.trim();
       toast({ tone: "success", title: "Agent created", message: `${created} is ready.` });
-      onDone?.(created);
+      // Same guard as the name above: a success response without the agent record must
+      // not throw here — it hands back no id and the caller falls back to the list.
+      onDone?.(created, res.agent?.id);
     },
   });
 
@@ -160,7 +171,7 @@ export function NewAgentPanel({ onDone, onCancel }: { onDone?: (name: string) =>
           </button>
         </div>
         {source === "snapshot" ? (
-          <ImportSnapshotPanel onDone={(created) => onDone?.(created)} />
+          <ImportSnapshotPanel onDone={onDone} />
         ) : (
         <>
         <label className="field archetype-name-field">

@@ -57,10 +57,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function mountPanel() {
+async function mountPanel(props: Parameters<typeof NewAgentPanel>[0] = {}) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   await act(async () => {
-    root.render(h(QueryClientProvider, { client: qc }, h(ToastProvider, null, h(NewAgentPanel, {}))));
+    root.render(h(QueryClientProvider, { client: qc }, h(ToastProvider, null, h(NewAgentPanel, props))));
   });
   // react-query commits the resolved archetypes on a follow-up tick (its notify batching
   // isn't a plain microtask) — wait for the panel's own data-dependent markup, bounded.
@@ -366,5 +366,83 @@ describe("NewAgentPanel — create forwards the archetype's capability contract 
 
     expect(create).toHaveBeenCalledTimes(1);
     expect(create.mock.calls[0][0].requires_tools).toBeUndefined();
+  });
+});
+
+describe("NewAgentPanel — onDone hands over the created agent's name AND id", () => {
+  // The id is the navigation slug (ADR 0042): FleetSurface navigates into the new agent's
+  // own console with it. The name alone can't get there — the slug is `name-<4hex>`, an
+  // opaque immutable id, never the editable display name.
+
+  async function typeName(name: string) {
+    const input = container.querySelector<HTMLInputElement>(".archetype-name-field input");
+    if (!input) throw new Error("no name input rendered");
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
+    await act(async () => {
+      setter.call(input, name);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+
+  // The mutation's onSuccess/onError land a tick after the click (mockResolvedValue →
+  // microtask → react-query callback chain) — wait for the observable outcome, bounded,
+  // the same way mountPanel waits for the archetypes to commit.
+  async function settle(done: () => boolean) {
+    for (let i = 0; i < 50 && !done(); i++) {
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 10));
+      });
+    }
+  }
+
+  it("calls onDone with both the name and the id on a successful create", async () => {
+    const onDone = vi.fn();
+    vi.spyOn(api, "createAgent").mockResolvedValue({
+      ok: true,
+      agent: { id: "newbot-ab12", name: "newbot" } as never,
+      installed: [],
+    });
+    await mountPanel({ onDone });
+
+    await typeName("newbot");
+    await act(async () => {
+      createButton().click();
+    });
+    await settle(() => onDone.mock.calls.length > 0);
+
+    expect(onDone).toHaveBeenCalledWith("newbot", "newbot-ab12");
+  });
+
+  it("survives a success response with no agent record: name lands, id is undefined", async () => {
+    // The guard under test: onSuccess must not throw reading `.id` off a missing record
+    // (the API contract nominally always returns it, but the name line already hedges
+    // with `res.agent?.name` — the id access must hedge the same way). No id → the
+    // caller falls back to the list instead of navigating.
+    const onDone = vi.fn();
+    vi.spyOn(api, "createAgent").mockResolvedValue({ ok: true } as never);
+    await mountPanel({ onDone });
+
+    await typeName("ghostbot");
+    await act(async () => {
+      createButton().click();
+    });
+    await settle(() => onDone.mock.calls.length > 0);
+
+    expect(onDone).toHaveBeenCalledWith("ghostbot", undefined);
+  });
+
+  it("does not call onDone when the create fails — the error toast shows instead", async () => {
+    const onDone = vi.fn();
+    vi.spyOn(api, "createAgent").mockRejectedValue(new Error("bundle clone failed"));
+    await mountPanel({ onDone });
+
+    await typeName("failbot");
+    await act(async () => {
+      createButton().click();
+    });
+    await settle(() => document.querySelector(".pl-toast") !== null);
+
+    expect(document.querySelector(".pl-toast")?.textContent).toContain("Couldn't create agent");
+    expect(onDone).not.toHaveBeenCalled();
   });
 });

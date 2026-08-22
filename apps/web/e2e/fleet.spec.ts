@@ -51,7 +51,7 @@ test("Agents tab lists the host (this instance) + peers, host active by default"
   await expect(page.locator(".fleet-row", { hasText: "main" }).getByRole("button")).toHaveCount(0);
 });
 
-test("New agent → archetype picker → create returns to the list", async ({ page }) => {
+test("New agent → archetype picker → create navigates into the new agent", async ({ page }) => {
   await openAgents(page);
   await page.getByRole("button", { name: "New agent" }).click();
   await expect(page.getByRole("heading", { name: "New agent" })).toBeVisible();
@@ -59,7 +59,11 @@ test("New agent → archetype picker → create returns to the list", async ({ p
   await page.locator(".pl-radiocard", { hasText: "Product Manager" }).click();
   await page.getByLabel("Agent name").fill("newbot");
   await page.getByRole("button", { name: /Create/ }).click();
-  await expect(page.locator(".fleet-row", { hasText: "newbot" })).toBeVisible();
+  // Create lands the operator IN the new agent's console — the id is the URL slug
+  // (ADR 0042, the same navigation the FleetSwitcher uses) — because the next move is
+  // configuring the agent just made, not re-reading the fleet list.
+  await expect(page).toHaveURL(/\/app\/agent\/newbot-ab12\//);
+  await expect(page.getByTestId("fleet-switcher")).toContainText("newbot");
 });
 
 test("New agent → configure a bundle's MCP inputs → create seeds them (#2041)", async ({ page }) => {
@@ -85,7 +89,9 @@ test("New agent → configure a bundle's MCP inputs → create seeds them (#2041
   await page.getByLabel("Agent name").fill("ghbot");
   await page.getByRole("button", { name: /Create/ }).click();
 
-  await expect(page.locator(".fleet-row", { hasText: "ghbot" })).toBeVisible();
+  // Create navigates into the new agent (see the picker test above); reaching the slug
+  // URL also proves the POST has been captured before the payload assertions below.
+  await expect(page).toHaveURL(/\/app\/agent\/ghbot-ab12\//);
   expect(posted?.inputs).toEqual({ github_token: "ghp_secret" });
   // The Brave secret was left blank → dropped (env-only fallback), not sent as an empty value.
   expect(posted?.secrets ?? []).toEqual([]);

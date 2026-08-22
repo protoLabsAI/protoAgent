@@ -76,6 +76,29 @@ test("imports and reports an agent that still needs setup as such", async ({ pag
   await attachSnapshot(page);
   await page.getByRole("button", { name: "Install 2 plugins and create agent" }).click();
   // No credential supplied → imported but NOT ready. Saying "ready" would send the operator
-  // to an agent that can't reach its gateway.
+  // to an agent that can't reach its gateway — and NAVIGATING now would unload the page
+  // before this could be read. So the incomplete path stays put: the toast, plus a durable
+  // in-page summary naming exactly which secrets are still missing.
   await expect(page.locator(".pl-toast", { hasText: "needs setup" })).toBeVisible();
+  const summary = page.locator(".snapshot-import .snapshot-section", { hasText: "needs setup" });
+  await expect(summary).toContainText("model.api_key");
+  // The operator then moves into the duplicate deliberately, detail in hand — its
+  // workspace_id is the URL slug (ADR 0042), where the remaining setup happens.
+  await page.getByRole("button", { name: "Open vera" }).click();
+  await expect(page).toHaveURL(/\/app\/agent\/vera-ab12\//);
+});
+
+test("a complete import navigates straight into the duplicate's own console", async ({ page }) => {
+  await openNewAgent(page);
+  await attachSnapshot(page);
+  // Supply the one credential the source agent had set → the import comes back complete.
+  await page
+    .locator(".snapshot-import label", { hasText: "model.api_key" })
+    .locator("input")
+    .first()
+    .fill("sk-live-key");
+  await page.getByRole("button", { name: "Install 2 plugins and create agent" }).click();
+  // A ready duplicate lands the operator IN it (workspace_id is the URL slug, ADR 0042) —
+  // the same navigation the archetype create flow does — not back on the fleet list.
+  await expect(page).toHaveURL(/\/app\/agent\/vera-ab12\//);
 });
