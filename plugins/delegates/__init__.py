@@ -198,6 +198,101 @@ def _build_list_agents(registry: DelegateRegistry):
     return list_agents
 
 
+def _build_propose_delegate():
+    @tool
+    async def propose_delegate(entry: dict, reason: str = "") -> str:
+        """Propose a NEW delegate (a coding agent or peer this agent could
+        delegate to) for the OPERATOR to approve. Registration is consent-gated:
+        this call validates the entry, probes it, then PAUSES with an approval
+        card showing exactly what would be registered — the command path front
+        and center — and only the operator's explicit approval writes it. It can
+        never register silently, and you cannot skip the pause.
+
+        Use when the roster is empty (or missing the delegate a task needs) and
+        you know what should fill it — e.g. an ACP coding agent:
+        ``{"name": "claude-code", "type": "acp", "command": "/abs/path/to/claude-agent-acp",
+        "workdir": "/abs/path/to/repo"}``. ``reason`` is shown to the operator —
+        say what the delegate is FOR. On approval the roster hot-reloads and the
+        new delegate is usable the same turn's follow-up; on decline you get the
+        operator's answer back — respect it, don't re-propose the same entry.
+
+        Don't call this in an autonomous turn (scheduled / inbox / background):
+        there is no operator to approve, the runtime auto-answers the pause, and
+        anything but an explicit approval declines — fail-closed by design."""
+        import json as _json
+
+        from langgraph.types import interrupt
+
+        from . import store
+        from .api import _list_payload, _reload, _validate
+
+        if not isinstance(entry, dict):
+            return "Error: entry must be an object — e.g. {name, type, command, workdir}."
+        entry = dict(entry)
+        try:
+            name, adapter = _validate(entry)
+        except ValueError as e:
+            return f"Error: {e}"
+        if any(isinstance(e, dict) and e.get("name") == name for e in store.read_delegates_raw()):
+            return f"Error: delegate {name!r} already exists — read list_agents instead of re-registering."
+
+        # Probe best-effort so the operator approves something PROVEN runnable —
+        # a failed probe is shown, not hidden, and the operator decides anyway.
+        try:
+            probed = await adapter.probe(adapter.parse(dict(entry)))
+            probe_line = f"Probe: {_json.dumps(probed, default=str)[:400]}"
+        except Exception as e:  # noqa: BLE001 — the probe informs consent, it doesn't gate it
+            probe_line = f"Probe FAILED: {e}"
+
+        response = interrupt(
+            {
+                "kind": "form",
+                "title": f"Register delegate {name!r}?",
+                "description": (
+                    (f"Why: {reason}\n\n" if reason else "")
+                    + "Approving registers a delegate THIS AGENT CAN EXECUTE "
+                    + "(an ACP entry is a binary it may run). Proposed entry:\n\n"
+                    + _json.dumps(entry, indent=2, default=str)[:2000]
+                    + "\n\n"
+                    + probe_line
+                ),
+                "steps": [
+                    {
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "approve": {
+                                    "type": "boolean",
+                                    "title": f"Register {name!r} on this agent",
+                                    "default": False,
+                                },
+                                "note": {"type": "string", "title": "Note back to the agent (optional)"},
+                            },
+                            "required": ["approve"],
+                        }
+                    }
+                ],
+            }
+        )
+        # Fail-closed: ONLY an explicit boolean true registers. An auto-answered
+        # autonomous turn, a bare string, or an unchecked box all decline.
+        if not (isinstance(response, dict) and response.get("approve") is True):
+            note = response.get("note") if isinstance(response, dict) else response
+            suffix = f" Operator note: {note}" if note else ""
+            return f"Declined — delegate {name!r} was NOT registered.{suffix}"
+        if any(isinstance(e, dict) and e.get("name") == name for e in store.read_delegates_raw()):
+            return f"Error: delegate {name!r} was registered by someone else while parked — nothing written."
+        store.upsert_delegate(entry)
+        ok, msg = await _reload()
+        names = ", ".join(str(e.get("name")) for e in _list_payload().get("delegates", []) if isinstance(e, dict))
+        reload_note = "roster reloaded" if ok else f"reload FAILED ({msg}) — a restart may be needed"
+        note = response.get("note") or ""
+        suffix = f" Operator note: {note}" if note else ""
+        return f"Registered delegate {name!r} ({reload_note}). Roster now: {names or name}.{suffix}"
+
+    return propose_delegate
+
+
 def _load_delegates_config() -> list:
     """Read the top-level ``delegates: [...]`` list from the live config doc.
 
@@ -241,16 +336,30 @@ def register(registry) -> None:
         if isinstance(nested, list):
             delegates = nested
     reg = DelegateRegistry(delegates)
+
+    def _register_propose():
+        # propose_delegate registers UNCONDITIONALLY — an empty roster is exactly
+        # its moment (#2944): the agent's only move used to be prose when it
+        # discovered nobody was configured to delegate to. Registered LAST so
+        # delegate_to/list_agents keep their long-standing positions.
+        try:
+            registry.register_tool(_build_propose_delegate())
+        except Exception:  # noqa: BLE001 — the consent tool must not break the plugin
+            log.exception("[delegates] registering propose_delegate failed")
+
     if not reg.names():
         # The default state for a fresh install (the plugin is always-on): no
         # delegates declared ⇒ no `delegate_to` tool. Not an anomaly — debug, not warn.
         log.debug(
-            "[delegates] no delegates declared — `delegate_to` not registered. Add "
-            "entries under `delegates` (docs/guides/delegates.md) or use the Delegates panel."
+            "[delegates] no delegates declared — `delegate_to` not registered "
+            "(propose_delegate is). Add entries under `delegates` "
+            "(docs/guides/delegates.md) or use the Delegates panel."
         )
+        _register_propose()
         return
     registry.register_tool(_build_delegate_to(reg))
     registry.register_tool(_build_list_agents(reg))
+    _register_propose()
     log.info(
         "[delegates] registered delegate_to + list_agents for %d delegate(s): %s",
         len(reg.names()),

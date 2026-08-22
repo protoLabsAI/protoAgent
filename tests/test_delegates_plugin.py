@@ -244,14 +244,16 @@ def _register(delegates, monkeypatch):
     return r
 
 
-def test_register_no_delegates_registers_nothing(monkeypatch):
+def test_register_no_delegates_registers_only_propose(monkeypatch):
+    """An empty roster still gets propose_delegate (#2944) — the consent-gated way
+    OUT of the empty-roster dead end — and nothing else."""
     r = _register([], monkeypatch)
-    assert r.tools == []
+    assert [t.name for t in r.tools] == ["propose_delegate"]
 
 
 def test_register_exposes_delegate_to_and_list_agents(monkeypatch):
     r = _register([{"name": "opus", "type": "openai", "url": "https://g/v1", "model": "m"}], monkeypatch)
-    assert [t.name for t in r.tools] == ["delegate_to", "list_agents"]
+    assert [t.name for t in r.tools] == ["delegate_to", "list_agents", "propose_delegate"]
     assert "opus" in r.tools[0].description
 
 
@@ -1052,3 +1054,98 @@ async def test_empty_reply_at_the_limit_still_explains_itself(monkeypatch):
     out = await _dispatch_with(monkeypatch, "   ", "max_tokens")
     assert out.startswith("[no reply —")
     assert "output-token limit" in out
+
+
+# ── propose_delegate (#2944): consent-gated registration ─────────────────────────
+
+
+def _propose_tool():
+    return P._build_propose_delegate()
+
+
+def _acp_entry(name="cc"):
+    return {"name": name, "type": "acp", "command": "/abs/claude-agent-acp", "workdir": "/abs/repo"}
+
+
+async def test_propose_delegate_rejects_bad_entries_without_parking(monkeypatch):
+    """Garbage never reaches the operator: shape/type errors return immediately."""
+    parked = []
+    monkeypatch.setattr("langgraph.types.interrupt", lambda payload: parked.append(payload))
+    t = _propose_tool()
+    assert (await t.ainvoke({"entry": {"name": "x", "type": "nope"}})).startswith("Error:")
+    assert (await t.ainvoke({"entry": {"type": "acp"}})).startswith("Error:")  # no name
+    assert parked == []
+
+
+async def test_propose_delegate_refuses_a_duplicate(monkeypatch):
+    from plugins.delegates import store as dstore
+
+    monkeypatch.setattr(dstore, "read_delegates_raw", lambda: [_acp_entry()])
+    parked = []
+    monkeypatch.setattr("langgraph.types.interrupt", lambda payload: parked.append(payload))
+    t = _propose_tool()
+    out = await t.ainvoke({"entry": _acp_entry()})
+    assert out.startswith("Error:") and "already exists" in out
+    assert parked == []
+
+
+async def test_propose_delegate_declines_unless_approve_is_exactly_true(monkeypatch):
+    """Fail-closed: an auto-answered autonomous turn (string), an unchecked box, or
+    a truthy-but-not-True value must all decline — nothing is written."""
+    from plugins.delegates import store as dstore
+
+    monkeypatch.setattr(dstore, "read_delegates_raw", lambda: [])
+    writes = []
+    monkeypatch.setattr(dstore, "upsert_delegate", lambda e: writes.append(e))
+
+    async def _probe(d):
+        return {"ok": True}
+
+    monkeypatch.setattr(ADAPTERS["acp"], "probe", _probe)
+    t = _propose_tool()
+    for answer in ("ok sure", {"approve": False}, {"approve": "true"}, {}):
+        monkeypatch.setattr("langgraph.types.interrupt", lambda payload, _a=answer: _a)
+        out = await t.ainvoke({"entry": _acp_entry(), "reason": "board coder"})
+        assert "NOT registered" in out, answer
+    assert writes == []
+
+
+async def test_propose_delegate_registers_on_explicit_approval(monkeypatch):
+    """The approval path writes through the same store seam as the console CRUD,
+    hot-reloads, and reports the new roster. The consent card carries the entry
+    (command path visible) and the probe result."""
+    from plugins.delegates import store as dstore
+
+    monkeypatch.setattr(dstore, "read_delegates_raw", lambda: [])
+    writes = []
+    monkeypatch.setattr(dstore, "upsert_delegate", lambda e: writes.append(e))
+
+    async def _probe(d):
+        return {"ok": True, "detail": "handshake fine"}
+
+    monkeypatch.setattr(ADAPTERS["acp"], "probe", _probe)
+
+    async def _fake_reload():
+        return True, "reloaded"
+
+    import plugins.delegates.api as dapi
+
+    monkeypatch.setattr(dapi, "_reload", _fake_reload)
+    monkeypatch.setattr(dapi, "_list_payload", lambda: {"delegates": [{"name": "cc"}]})
+
+    seen = {}
+
+    def _interrupt(payload):
+        seen.update(payload)
+        return {"approve": True, "note": "go"}
+
+    monkeypatch.setattr("langgraph.types.interrupt", _interrupt)
+    t = _propose_tool()
+    out = await t.ainvoke({"entry": _acp_entry(), "reason": "the board needs a coder"})
+
+    assert writes and writes[0]["name"] == "cc"
+    assert "Registered delegate 'cc'" in out and "roster reloaded" in out and "go" in out
+    assert seen["kind"] == "form"
+    assert "/abs/claude-agent-acp" in seen["description"]  # command path front and center
+    assert "handshake fine" in seen["description"]  # probe result shown
+    assert "the board needs a coder" in seen["description"]  # the agent's why
