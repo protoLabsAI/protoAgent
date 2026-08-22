@@ -4,11 +4,14 @@ Builds the agent graph with middleware, tools, and subagent support.
 Uses langchain's create_agent() with AgentMiddleware for the DeerFlow pattern.
 """
 
+import logging
 from typing import Annotated, Any
 
 from langchain.agents import create_agent
+from langchain.agents.middleware import ModelFallbackMiddleware
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import BaseTool
+from langgraph.errors import GraphBubbleUp
 from langgraph.prebuilt import InjectedState
 
 from graph.config import LangGraphConfig
@@ -21,6 +24,106 @@ from graph.middleware.message_capture import MessageCaptureMiddleware
 from graph.state import ProtoAgentState
 from graph.subagents.config import SUBAGENT_REGISTRY
 from tools.lg_tools import HITL_TOOL_NAMES, _session_id_from, drop_disabled_tools, get_all_tools
+
+logger = logging.getLogger(__name__)
+
+
+def _model_label(model) -> str:
+    """A human-readable name for a chat-model instance (gateway clients expose
+    ``model_name``; fall back to ``model``, then the class name)."""
+    return getattr(model, "model_name", None) or getattr(model, "model", None) or model.__class__.__name__
+
+
+def _emit_fallback_event(primary_exc: Exception, fallback_model, index: int) -> None:
+    """Publish ``model.fallback`` to the event bus (ADR 0039) — best-effort.
+
+    The bus is server-owned; graph code reaches it through the plugin-host seam
+    (``HOST.publish``), which is ``None`` outside a running server (tests, CLI).
+    A missing or failing bus never touches the turn — the fallback already served it.
+    """
+    try:
+        from graph.plugins.host import HOST
+
+        if HOST.publish is not None:
+            HOST.publish(
+                "model.fallback",
+                {
+                    "primary_error": primary_exc.__class__.__name__,
+                    "fallback_model": _model_label(fallback_model),
+                    "fallback_index": index,
+                },
+            )
+    except Exception:  # noqa: BLE001 — observability must never break the turn
+        logger.exception("[routing] failed to publish model.fallback event")
+
+
+class ObservableModelFallbackMiddleware(ModelFallbackMiddleware):
+    """langchain's ModelFallbackMiddleware with logging + event emission (#2956).
+
+    The upstream middleware fails over SILENTLY — a successful fallback is
+    indistinguishable from a normal turn, so the operator's first clue of a
+    degraded primary is a quality drop days later. Same retry semantics (try
+    fallbacks in order, re-raise when all fail), plus two signals when a
+    fallback actually serves the turn: a WARNING log line and a
+    ``model.fallback`` bus event (ADR 0039) for plugins/telemetry.
+
+    Unlike the base class, a ``GraphBubbleUp`` (a HITL interrupt propagating
+    out of the model call) is re-raised untouched — it is control flow, not a
+    model failure, and must never trigger a fallback retry. All-fallbacks-fail
+    re-raises the PRIMARY exception (the failure worth diagnosing), not the
+    last fallback's.
+    """
+
+    def _observe_fallback(self, primary_exc: Exception, fallback_model, index: int) -> None:
+        logger.warning(
+            "Fallback activated: primary failed (%s), using fallback[%d] %s",
+            primary_exc.__class__.__name__,
+            index,
+            _model_label(fallback_model),
+        )
+        _emit_fallback_event(primary_exc, fallback_model, index)
+
+    def wrap_model_call(self, request, handler):
+        try:
+            return handler(request)
+        except GraphBubbleUp:
+            raise
+        except Exception as primary_exc:
+            logger.warning(
+                "Primary model failed, trying fallback models: %s",
+                primary_exc.__class__.__name__,
+            )
+            for i, fallback_model in enumerate(self.models):
+                try:
+                    result = handler(request.override(model=fallback_model))
+                except GraphBubbleUp:
+                    raise
+                except Exception:  # noqa: BLE001 — try the next fallback
+                    continue
+                self._observe_fallback(primary_exc, fallback_model, i)
+                return result
+            raise primary_exc
+
+    async def awrap_model_call(self, request, handler):
+        try:
+            return await handler(request)
+        except GraphBubbleUp:
+            raise
+        except Exception as primary_exc:
+            logger.warning(
+                "Primary model failed, trying fallback models: %s",
+                primary_exc.__class__.__name__,
+            )
+            for i, fallback_model in enumerate(self.models):
+                try:
+                    result = await handler(request.override(model=fallback_model))
+                except GraphBubbleUp:
+                    raise
+                except Exception:  # noqa: BLE001 — try the next fallback
+                    continue
+                self._observe_fallback(primary_exc, fallback_model, i)
+                return result
+            raise primary_exc
 
 
 def _build_middleware(
@@ -263,11 +366,10 @@ def _build_middleware(
         middleware.append(mw)
 
     # Model routing / failover — retry on fallback models (same gateway).
+    # Observable wrapper (#2956): the stock middleware fails over silently.
     if config.routing_fallback_models:
-        from langchain.agents.middleware import ModelFallbackMiddleware
-
         fallbacks = [create_llm(config, model_name=m) for m in config.routing_fallback_models]
-        middleware.append(ModelFallbackMiddleware(*fallbacks))
+        middleware.append(ObservableModelFallbackMiddleware(*fallbacks))
 
     # Plugin-contributed middleware (ADR 0032) — appended after the core chain but
     # before MessageCapture, so their before/after-model + tool hooks run and the
