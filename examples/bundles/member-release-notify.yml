@@ -1,0 +1,89 @@
+# Member-side half of the immediate pin-bump loop (#2960) — the counterpart of
+# the `repository_dispatch: types: [member-released]` trigger in
+# template/.github/workflows/verify-bundle.yml. Under examples/ in protoAgent
+# this file is inert; it documents the step a member plugin repo's release.yml
+# adds AFTER the step that publishes the release (the surrounding jobs here are
+# the minimal standard shape, so the snippet is runnable as-is).
+#
+# Why: a plugin release is otherwise fire-and-forget — the tag + GitHub release
+# exist, but no archetype pinning the plugin hears about it until its weekly
+# `bump` cron. A member can ship four releases on a Tuesday and every one waits
+# for Monday. With the "Notify archetype repos" step below, each archetype in
+# `archetype_repos` gets a `member-released` dispatch the moment the release
+# ships, and its verify-bundle.yml `bump` job opens/updates the pin-bump PR
+# immediately. Best-effort by design (`|| true`): the dispatch is a hint, the
+# archetype's schedule is the backstop.
+#
+# Wiring notes:
+#   - `archetype_repos` is a space-separated `owner/repo` list and DEFAULTS TO
+#     EMPTY — the loop body never runs, so plugins that aren't in any archetype
+#     carry the step as a no-op. Member repos (projectBoard-plugin,
+#     github-plugin, agent-browser-plugin) set it to
+#     `protoLabsAI/project-manager-archetype`.
+#   - The repo-scoped `GITHUB_TOKEN` cannot dispatch to ANOTHER repo, so a real
+#     cross-repo notify needs a `GH_PAT` secret with access to the archetype
+#     repos. The `|| secrets.GITHUB_TOKEN` fallback plus `|| true` keep the
+#     member's release green when no PAT is provisioned — the notify silently
+#     degrades to "wait for the cron".
+
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      archetype_repos:
+        description: >-
+          Space-separated owner/repo archetype (bundle) repos to notify on
+          release. Empty = this plugin is in no archetype; the notify no-ops.
+        type: string
+        required: false
+        default: "" # members: "protoLabsAI/project-manager-archetype"
+  workflow_call:
+    inputs:
+      archetype_repos:
+        type: string
+        required: false
+        default: ""
+    secrets:
+      GH_PAT:
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Standard member release.yml shape: the manifest version is the tag, and
+      # a tag that already exists makes the whole run a no-op (safe re-runs).
+      - name: Resolve version
+        id: v
+        run: |
+          TAG="v$(python3 -c 'import yaml; print(yaml.safe_load(open("protoagent.plugin.yaml"))["version"])')"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create tag + GitHub release
+        if: steps.v.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ steps.v.outputs.tag }}" --generate-notes
+
+      # The #2960 addition — everything above is context, this step is the point.
+      - name: Notify archetype repos
+        if: steps.v.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          for repo in ${{ inputs.archetype_repos || '' }}; do
+            gh api repos/$repo/dispatches -f event_type=member-released -f "client_payload[plugin]=${{ github.repository }}" -f "client_payload[tag]=${{ steps.v.outputs.tag }}" || true
+          done

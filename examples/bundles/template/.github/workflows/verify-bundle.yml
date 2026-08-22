@@ -6,7 +6,9 @@
 #            protoAgent checkout and probes every declared console view. Runs on
 #            every PR (so a pin-bump must prove itself), on demand, and weekly
 #            (so a rotted pin set turns the schedule red instead of rotting silently).
-#   bump   — (schedule/dispatch only) checks each tag-pinned member for a newer
+#   bump   — (every trigger except pull_request: the schedule, manual dispatch,
+#            and the `member-released` repository_dispatch member repos send on
+#            release, #2960) checks each tag-pinned member for a newer
 #            release tag and opens/updates a PR with the bump; that PR then runs
 #            `verify`. But a PR opened with the repository GITHUB_TOKEN never
 #            auto-starts a `pull_request` run — GitHub holds it `action_required`
@@ -22,6 +24,12 @@ name: verify-bundle
 on:
   pull_request:
   workflow_dispatch:
+  # Sent by a member repo's release.yml the moment it publishes a release (the
+  # member-side step lives in protoAgent's examples/bundles/member-release-notify.yml,
+  # #2960), so pins bump within minutes of a member release instead of at the
+  # next cron. The dispatch is a hint; the schedule below stays the backstop.
+  repository_dispatch:
+    types: [member-released]
   schedule:
     - cron: "17 6 * * 1" # weekly, Monday 06:17 UTC
 

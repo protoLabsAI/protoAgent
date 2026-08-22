@@ -10,7 +10,7 @@ claim true after authoring day:
 | `protoagent.bundle.yaml` | The manifest — tag pins + `verified_against:` (the rules are commented inline) |
 | `scripts/verify_bundle.py` | Installs the pin set into a scratch agent, loads every member, probes every declared console view for 200 |
 | `scripts/check_bundle_updates.py` | Rewrites tag pins to the newest release tag (comment-preserving) |
-| `.github/workflows/verify-bundle.yml` | Wires both into CI: verify on every PR + weekly; open/update ONE pin-bump PR |
+| `.github/workflows/verify-bundle.yml` | Wires both into CI: verify on every PR + weekly; open/update ONE pin-bump PR on schedule, manual dispatch, or a member's `member-released` dispatch |
 
 ## The core rules
 
@@ -62,6 +62,36 @@ still run the old duplicate-opening workflow and between them carry 17
 open, unverified pin-bump PRs. Migrating each repo's workflow and reconciling that backlog
 is separate follow-up work, tracked on #2645 — each is its own repo with its own PR queue,
 not something a protoAgent-core PR touches.
+
+## Members poke the bundle on release ([#2960][issue-2960])
+
+On its own, `bump` only notices a new member release at the next scheduled run — a member
+can cut four releases in a day and the pins lag until Monday. So `verify-bundle.yml` also
+listens for a `repository_dispatch` with event type `member-released` (which passes the
+`bump` job's `!= 'pull_request'` gate), and a member plugin repo sends exactly that from
+its release workflow the moment a release is published:
+
+```yaml
+# In the member repo's release.yml, after the release-creating step —
+# full runnable context: ../member-release-notify.yml
+- name: Notify archetype repos
+  if: steps.v.outputs.exists == 'false'
+  env:
+    GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+  run: |
+    for repo in ${{ inputs.archetype_repos || '' }}; do
+      gh api repos/$repo/dispatches -f event_type=member-released -f "client_payload[plugin]=${{ github.repository }}" -f "client_payload[tag]=${{ steps.v.outputs.tag }}" || true
+    done
+```
+
+`archetype_repos` defaults to empty, so the step no-ops in plugins that aren't in any
+archetype; members list their archetypes (e.g. `protoLabsAI/project-manager-archetype`).
+The member's repo-scoped `GITHUB_TOKEN` can't dispatch cross-repo, so a real notify needs
+a `GH_PAT` secret — without one the `|| true` keeps the member's release green and the
+weekly cron still catches up. Best-effort by design: the dispatch is a hint, the schedule
+is the backstop.
+
+[issue-2960]: https://github.com/protoLabsAI/protoAgent/issues/2960
 
 ## Using it
 
