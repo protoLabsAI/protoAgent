@@ -2345,10 +2345,12 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     return True, f"reloaded • model={STATE.graph_config.model_name}{fleet_label_note}"
 
 
-async def _plugin_agent_invoke(prompt: str, session_id: str) -> str:
+async def _plugin_agent_invoke(prompt: str, session_id: str, *, tool_fence: list[str] | None = None) -> str:
     """Agent invoke exposed to plugin surfaces via the plugin host (ADR 0018) — a
-    chat turn joined to its assistant text (mirrors the Discord surface invoker)."""
-    result = await chat(prompt, session_id)
+    chat turn joined to its assistant text (mirrors the Discord surface invoker).
+    ``tool_fence`` (#2972) restricts the turn to that tool allowlist — for a surface
+    relaying a message from an untrusted party (another operator's agent)."""
+    result = await chat(prompt, session_id, tool_fence=tool_fence)
     return "\n\n".join(m["content"] for m in result if m.get("role") == "assistant" and m.get("content"))
 
 

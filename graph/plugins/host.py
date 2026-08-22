@@ -28,9 +28,14 @@ log = logging.getLogger("protoagent.plugins")
 
 @dataclass
 class PluginHost:
-    # async (prompt, session_id) -> str — invoke the agent as a chat surface
-    # (one conversation per session_id, the LangGraph thread key).
-    invoke: Optional[Callable[[str, str], Awaitable[str]]] = None
+    # async (prompt, session_id, *, tool_fence=None) -> str — invoke the agent as
+    # a chat surface (one conversation per session_id, the LangGraph thread key).
+    # ``tool_fence`` (#2972, optional keyword) is a per-turn tool allowlist for a
+    # turn that originated with an untrusted party — e.g. a surface relaying
+    # another operator's agent; the host blocks tool calls outside it. Surfaces
+    # that need it should feature-detect (``inspect.signature``) and refuse to
+    # run unfenced on an older host.
+    invoke: Optional[Callable[..., Awaitable[str]]] = None
     # (event: str, data: dict) -> None — publish to the server→client event bus.
     publish: Optional[Callable[[str, dict], Any]] = None
     # () -> subscription — subscribe to the event bus (e.g. return-address delivery).

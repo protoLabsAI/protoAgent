@@ -321,8 +321,14 @@ A surface or route often needs to **call the agent** or the **event bus** — ho
 services it can't build. `registry.host` exposes them (the server populates them
 before any surface starts; guard for `None`):
 
-- `host.invoke(prompt, session_id)` — run a chat turn (one conversation per
-  `session_id`), returns the assistant text.
+- `host.invoke(prompt, session_id, *, tool_fence=None)` — run a chat turn (one
+  conversation per `session_id`), returns the assistant text. `tool_fence` (host ≥ 0.146,
+  #2972) is a per-turn **tool allowlist** for a turn that originated with an untrusted
+  party — a surface relaying another operator's agent, an inbound webhook — so the host
+  blocks any tool call outside it (the model sees a `Blocked by policy` tool result and
+  adapts). A surface that *needs* the fence should feature-detect it
+  (`"tool_fence" in inspect.signature(host.invoke).parameters`) and refuse to run
+  unfenced on an older host rather than run with the agent's full toolset.
 - `host.publish(event, data)` / `host.subscribe()` — the server→client event bus.
 - `host.on(topic, handler)` — subscribe an in-process handler to bus topics (ADR 0039); prefer the
   `registry.emit` / `registry.on` wrappers, which namespace + guard for you.

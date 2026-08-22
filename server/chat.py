@@ -416,6 +416,7 @@ async def chat(
     incognito: bool = False,
     hitl_resume: bool = False,
     images: list[tuple[str, str]] | None = None,
+    tool_fence: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Route a user message through LangGraph and return the final assistant
     response as a list of ``{"role": "assistant", "content": ...}`` dicts.
@@ -431,12 +432,22 @@ async def chat(
     fallback's analogue of the streaming path's ``hitl_resume`` metadata).
     ``images`` (#1943) carries inbound vision parts as ``[(media_type, uri)]``,
     same shape and gating as the streaming path's — forwarded to the model only
-    when it's vision-capable.
+    when it's vision-capable. ``tool_fence`` (#2972) is a per-turn tool allowlist
+    for a turn that originated with an untrusted party (a plugin surface relaying
+    another operator's agent, say): it rides the state as ``subagent_fence`` — the
+    same channel a detached background subagent run uses (#1639) — so
+    ``SubagentFenceMiddleware`` blocks any tool call outside it. Unset → no fence.
     """
     if STATE.graph is None:
         return _setup_required_message()
     return await _chat_langgraph(
-        message, session_id, model=model, incognito=incognito, hitl_resume=hitl_resume, images=images
+        message,
+        session_id,
+        model=model,
+        incognito=incognito,
+        hitl_resume=hitl_resume,
+        images=images,
+        tool_fence=tool_fence,
     )
 
 
@@ -2357,6 +2368,7 @@ async def _chat_langgraph(
     incognito: bool = False,
     hitl_resume: bool = False,
     images: list[tuple[str, str]] | None = None,
+    tool_fence: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Idle-beacon wrapper (#1720): mark a turn in flight for the call's lifetime,
     then delegate. Keeps the public name/signature for every caller."""
@@ -2364,7 +2376,13 @@ async def _chat_langgraph(
     _note_agent_active(session_id)  # ADR 0074 — idle→active lifecycle event (debounced)
     try:
         return await _chat_langgraph_impl(
-            message, session_id, model=model, incognito=incognito, hitl_resume=hitl_resume, images=images
+            message,
+            session_id,
+            model=model,
+            incognito=incognito,
+            hitl_resume=hitl_resume,
+            images=images,
+            tool_fence=tool_fence,
         )
     finally:
         _turn_ended()
@@ -2378,6 +2396,7 @@ async def _chat_langgraph_impl(
     incognito: bool = False,
     hitl_resume: bool = False,
     images: list[tuple[str, str]] | None = None,
+    tool_fence: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Non-streaming LangGraph entry — used by the console + OpenAI-compat."""
     from observability import tracing
@@ -2391,6 +2410,11 @@ async def _chat_langgraph_impl(
     # checkpointer — an omitted key would inherit the previous turn's value).
     _state_extra = {"model": model} if (model or "").strip() else {}
     _state_extra["incognito"] = bool(incognito)
+    # The tool fence (#2972) is stamped every turn for the same reason: a fenced
+    # turn on a session must not leave the NEXT (unfenced) turn on that session
+    # fenced — and an unfenced turn must not inherit a fence. Empty list = no
+    # fence (SubagentFenceMiddleware treats falsy as "untouched").
+    _state_extra["subagent_fence"] = [str(t) for t in tool_fence] if tool_fence else []
 
     from graph.config_io import soul_revision
 
