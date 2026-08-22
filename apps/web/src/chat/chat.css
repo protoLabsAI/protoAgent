@@ -488,6 +488,17 @@
   animation: none;
 }
 
+/* Mid-turn activity indicator (#2967): the small spinner ChatMessageView pins to the BOTTOM
+   of a streaming message once content exists (a fully-empty turn keeps its own larger
+   spinner). Deliberately subtle — dimmed, tight top margin, zero line-height so the wrapper
+   adds no phantom text row — it signals "still generating" through the gaps (between tool
+   calls, long tool runs, large tool-call args) without competing with the content above. */
+.chat-streaming-indicator {
+  margin-top: 6px;
+  line-height: 0;
+  opacity: 0.45;
+}
+
 /* Stop (while streaming) and the queued-steer bubble are now the DS busy mode +
    <Message queued> (0.42.0) — see ChatSurface. No bespoke CSS needed here. */
 

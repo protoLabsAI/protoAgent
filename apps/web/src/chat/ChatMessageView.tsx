@@ -192,6 +192,17 @@ export function ChatMessageView({
       {message.components && message.components.length > 0 && !message.parts?.some((p) => p.kind === "component")
         ? message.components.map((spec, i) => <ChatComponent key={i} spec={spec} />)
         : null}
+      {/* Mid-turn activity cue (#2967): once ANY content has landed, the empty-message spinner
+          above never renders again — so a generation pause (between tool calls, during a long
+          tool run, while large tool-call args stream) reads as a dead stall. A smaller, subtle
+          spinner sits at the BOTTOM of the streaming message: DOM order pushes it below each
+          new part as it arrives, and it unmounts when `streaming` flips false. Reasoning-only
+          turns are deliberately excluded — their live ReasoningCard already animates. */}
+      {streaming && (message.parts?.length || message.content || message.toolCalls?.length) ? (
+        <div className="chat-streaming-indicator">
+          <Spinner size={12} />
+        </div>
+      ) : null}
       {showChatUsage && message.role === "assistant" && !streaming && (message.usage || message.contextWindow) ? (
         <UsageFooter usage={message.usage} context={message.contextWindow} />
       ) : null}
