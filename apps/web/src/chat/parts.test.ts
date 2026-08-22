@@ -225,9 +225,43 @@ describe("foldPlan", () => {
     expect(foldPlan(parts, true)).toEqual({ fold: true, workParts: parts, answerParts: [] });
   });
 
-  it("keeps a trailing component as work while streaming a folded turn", () => {
+  it("surfaces a component IMMEDIATELY while streaming a folded turn — it is never work", () => {
+    // Unlike interim narration, a component can't flash-then-jump-back: it is always promoted,
+    // streaming or settled, so showing it live is stable (show_component's "renders immediately").
     const parts = [reasoning("think"), tools("a"), component()];
-    expect(foldPlan(parts, true)).toEqual({ fold: true, workParts: parts, answerParts: [] });
+    expect(foldPlan(parts, true)).toEqual({
+      fold: true,
+      workParts: [reasoning("think"), tools("a")],
+      answerParts: [component()],
+    });
+  });
+
+  it("lifts a component out of the fold when reasoning follows it (#2964 — the reasoning-model shape)", () => {
+    // opus thinks between the component and its final text: …component → reasoning → text. The
+    // trailing-run walk stops at the reasoning part, so without the lift the component is
+    // stranded behind the collapsed "Worked" disclosure — the tool ran, nothing rendered.
+    const parts = [reasoning("plan"), tools("a"), component(), reasoning("summarize"), text("the answer")];
+    expect(foldPlan(parts, false)).toEqual({
+      fold: true,
+      workParts: [reasoning("plan"), tools("a"), reasoning("summarize")],
+      answerParts: [component(), text("the answer")],
+    });
+    // …and while that final reasoning is still streaming, the component is already up.
+    expect(foldPlan(parts.slice(0, 4), true)).toEqual({
+      fold: true,
+      workParts: [reasoning("plan"), tools("a"), reasoning("summarize")],
+      answerParts: [component()],
+    });
+  });
+
+  it("keeps a component that is followed by MORE tools visible in a folded turn, ahead of the answer", () => {
+    // protoEngineer's other two calls: status widget mid-turn, then more tool calls, then text.
+    const parts = [reasoning("r1"), tools("a"), component(), tools("b"), text("done")];
+    expect(foldPlan(parts, false)).toEqual({
+      fold: true,
+      workParts: [reasoning("r1"), tools("a"), tools("b")],
+      answerParts: [component(), text("done")],
+    });
   });
 
   it("does NOT fold a tool-only turn — a simple tool result keeps its card inline (no reasoning to batch)", () => {

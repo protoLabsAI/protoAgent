@@ -114,8 +114,23 @@ export function foldPlan(
   while (split > 0 && (parts[split - 1].kind === "text" || parts[split - 1].kind === "component")) split--;
   const baseWork = parts.slice(0, split);
   const fold = baseWork.some((p) => p.kind === "tools") && baseWork.some((p) => p.kind === "reasoning");
-  if (fold && streaming) return { fold, workParts: parts, answerParts: [] };
-  return { fold, workParts: baseWork, answerParts: parts.slice(split) };
+  if (!fold) return { fold, workParts: baseWork, answerParts: parts.slice(split) };
+  // A folded turn NEVER hides a component. `show_component` is a render directive for the
+  // user — "renders immediately" is its contract — and a reasoning model thinks between the
+  // component and its final text (…component → reasoning → text), so the trailing-run walk
+  // above stops at the reasoning part and the component would be stranded inside the
+  // collapsed "Worked" disclosure: the tool ran, the server emitted it, and nothing visible
+  // happened (#2964 — protoEngineer on opus: three show_component calls, nothing rendered).
+  // So components are lifted out of the work timeline and lead the answer, in emission
+  // order — while streaming too: a component can't "flash then jump back" the way interim
+  // narration does (the settle guard's reason), because it is always promoted.
+  const isComponent = (p: ChatPart) => p.kind === "component";
+  if (streaming) return { fold, workParts: parts.filter((p) => !isComponent(p)), answerParts: parts.filter(isComponent) };
+  return {
+    fold,
+    workParts: baseWork.filter((p) => !isComponent(p)),
+    answerParts: [...baseWork.filter(isComponent), ...parts.slice(split)],
+  };
 }
 
 /** The tool calls to render for a `tools` part: its top-level calls (by id) plus any
