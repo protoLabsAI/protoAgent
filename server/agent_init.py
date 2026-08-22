@@ -221,6 +221,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
                 _pre.meta,
             )
             STATE.plugin_public_paths = _pre.public_paths
+            STATE.plugin_federation_paths = _pre.federation_paths
             _register_plugin_subagents(_pre.subagents)
             log.info(
                 "Setup wizard has not been completed — graph not compiled "
@@ -289,6 +290,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # (`global STATE.plugin_routers, STATE.plugin_surfaces` is declared at the top of the fn.)
     STATE.plugin_routers, STATE.plugin_surfaces = _plugins.routers, _plugins.surfaces
     STATE.plugin_public_paths = _plugins.public_paths
+    STATE.plugin_federation_paths = _plugins.federation_paths
     _register_plugin_subagents(_plugins.subagents)
     _apply_config_subagents(STATE.graph_config)  # YAML subagent overrides (tools/max_turns/model)
     STATE.plugin_middleware = _resolve_plugin_middleware(STATE.graph_config, _plugins.middleware)  # ADR 0032
@@ -2319,6 +2321,10 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
         from a2a_impl import auth as _a2a_auth
 
         _a2a_auth.set_public_prefixes(new_plugins.public_paths)
+        # Federation-tier prefixes ride the same re-push (#2747): replacing the set is
+        # what makes a disabled plugin's route fall back to operator-only at once.
+        STATE.plugin_federation_paths = new_plugins.federation_paths
+        _a2a_auth.set_federation_prefixes(new_plugins.federation_paths)
         # Re-publish the remaining boot-time plugin wiring that consumers read fresh from
         # STATE (same #1752/#1890 rule). Each was assigned only at init, so a hot
         # enable/update left it stale until a full restart: the thread_id resolver

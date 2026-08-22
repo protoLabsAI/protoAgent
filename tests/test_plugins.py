@@ -310,6 +310,43 @@ def test_public_paths_namespace_scoped(tmp_path) -> None:
     assert m.public_paths == ["/plugins/wh/webhook", "/api/plugins/wh/data"]
 
 
+def test_federation_paths_namespace_scoped_and_separate(tmp_path) -> None:
+    # federation_paths (#2747) use the public_paths namespace validator but land in their
+    # own list: they lower the /api operator ceiling, they never exempt auth — so a view
+    # page is NOT auto-added, and a core / foreign path is dropped just like public_paths.
+    _make_plugin(
+        tmp_path, "room", enabled=True,
+        manifest_extra=(
+            "federation_paths:\n"
+            "  - /api/plugins/room/v1/\n"
+            "  - /api/plugins/room/v1/\n"
+            "  - /api/config\n"
+            "  - /api/plugins/other/v1/\n"
+            "  - /api/plugins/install\n"
+        ),
+    )
+    m = load_manifest(tmp_path / "room")
+    assert m.federation_paths == ["/api/plugins/room/v1/"]
+    assert m.public_paths == []
+
+
+def test_load_plugins_aggregates_federation_paths_from_enabled_only(tmp_path, monkeypatch) -> None:
+    # The loader hands the server one flat list for the auth middleware — enabled plugins
+    # only, so a disabled plugin can't lower the ceiling on a route it no longer serves.
+    root = tmp_path / "plugins"
+    _make_plugin(root, "room", enabled=True, tool="room_tool", manifest_extra="federation_paths:\n  - /api/plugins/room/v1/\n")
+    _make_plugin(root, "off", enabled=False, tool="off_tool", manifest_extra="federation_paths:\n  - /api/plugins/off/v1/\n")
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
+    res = load_plugins(_cfg())
+    assert res.federation_paths == ["/api/plugins/room/v1/"]
+    assert res.public_paths == []
+
+
+def test_federation_paths_default_empty(tmp_path) -> None:
+    _make_plugin(tmp_path, "plain", enabled=True)
+    assert load_manifest(tmp_path / "plain").federation_paths == []
+
+
 def test_public_paths_reject_core_route_prefix(tmp_path) -> None:
     # The historical bypass: a plugin id that prefix-matches a core /api/plugins/<verb>
     # route (e.g. "install") could exempt that RCE route from the auth gate. Such an

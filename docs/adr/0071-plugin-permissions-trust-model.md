@@ -55,7 +55,7 @@ baseline, the **only hard boundaries** that exist today are:
 |---|---|---|---|
 | a | **Enable gate + `plugins.disabled`** — a third-party plugin loads only via `plugins.enabled` or its own `enabled: true`; `disabled` wins over both | `graph/plugins/loader.py:315` | Whole-plugin on/off |
 | b | **`tools.disabled` denylist** (ADR 0005) applied over the fully assembled set | `tools/lg_tools.py`, `graph/agent.py` | A plugin **tool**, by name only |
-| c | **Route auth default-deny** + namespace-scoped `public_paths` (a plugin may exempt only paths under its own `/plugins/<id>/` · `/api/plugins/<id>/`) | `a2a_impl/auth.py`, `graph/plugins/manifest.py` | HTTP surface |
+| c | **Route auth default-deny** + namespace-scoped `public_paths` / `federation_paths` (a plugin may exempt, or lower to the federation tier, only paths under its own `/plugins/<id>/` · `/api/plugins/<id>/`) | `a2a_impl/auth.py`, `graph/plugins/manifest.py` | HTTP surface |
 | d | **Load gates** — `requires_env` (missing ⇒ skip) and `min_protoagent_version` (refused before import) | `graph/plugins/loader.py` | Load-time only |
 | e | **Install gates** — optional, **default-open** source allowlist (`plugins.sources.allow` globs), SHA pinning in `plugins.lock`, tar-traversal / pip-spec / ref / URL validation | `graph/plugins/installer.py` | Install-time only |
 

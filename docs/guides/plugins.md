@@ -67,6 +67,9 @@ subscribes: []            # topics it listens for (declarative — for discovera
 public_paths: []          # auth-exempt prefixes under THIS plugin's own namespace
                           # (/plugins/<id>/… or /api/plugins/<id>/…) — for an inbound
                           # webhook (no bearer; you verify its signature). See below.
+federation_paths: []      # prefixes under THIS plugin's own namespace that accept the
+                          # federation credential (ADR 0066) — still authenticated, only
+                          # the /api operator ceiling is lowered. See below.
 ```
 
 **Every field, at a glance** — most have a dedicated section below or in a linked guide:
@@ -84,6 +87,7 @@ public_paths: []          # auth-exempt prefixes under THIS plugin's own namespa
 | `guide_url` | A **Setup guide** link the console shows next to the plugin's settings (ADR 0059). |
 | `views` | Console rail views ([Building a plugin view](/guides/building-react-plugin-views)); a view's `palette` may be a string or a dict with its own `path`. |
 | `public_paths` | Auth-exempt prefixes under the plugin's own namespace — the escape hatch for an inbound webhook or a public asset ([below](#public-paths)). |
+| `federation_paths` | Prefixes under the plugin's own namespace that a **federation** credential may call — a peer-reachable deterministic plugin RPC without issuing the operator bearer ([below](#federation-paths)). |
 | `emits` · `subscribes` · `emits_schemas` | Event-bus contract ([Typed event contracts](#typed-event-contracts)). |
 | `requires_pip` · `optional_pip` | Declared pip deps ([publish guide](/guides/plugin-registry)) — the `optional` tier degrades gracefully when absent. |
 | `repository` · `homepage` · `min_protoagent_version` | Provenance + the host-compat gate ([publish guide](/guides/plugin-registry)). |
@@ -219,6 +223,55 @@ signature in the handler; the exemption only removes the bearer requirement. Con
 pages are auto-exempted (a view page is public chrome), so you don't list those here — only
 webhooks and any non-view asset the browser must fetch anonymously. Its DATA stays gated under
 `/api/plugins/<id>/*`.
+
+### Federation paths — a peer-reachable plugin RPC {#federation-paths}
+
+[ADR 0066](/adr/0066-goal-trust-operator-channel) splits credentials into two tiers: the
+**operator** bearer (everything) and an optional **federation** token (`auth.federation_token`)
+that is confined to `/a2a` + `/v1` — every `/api/…` path, plugin routes included, answers it
+with 403. That ceiling is what stops a peer credential from being host code-exec via
+`/api/plugins/install`. It also means a *second instance* that holds only the federation token
+can't call a plugin's own route — so a plugin that wants a peer to sync a plugin-owned store
+deterministically (a second device, a fleet PM reading a board) has historically had only two
+bad options: hand the peer the operator bearer, or tunnel RPC through the A2A task envelope.
+
+`federation_paths` is the third option (#2747). Declare the prefixes — under this plugin's own
+namespace, same boundary as `public_paths` — on which the federation credential is accepted:
+
+```yaml
+# protoagent.plugin.yaml
+federation_paths:
+  - /api/plugins/room/v1/        # a versioned, plugin-owned RPC prefix
+```
+
+What changes, precisely: on a matching path the middleware lowers the tier **ceiling** from
+operator to federation. Nothing else. The route is **not** public — a request with no or a
+wrong credential is still 401 — and a path a plugin didn't declare (including its own other
+routes, another plugin's identical shape, and the fleet-proxied `/active/<slug>/api/…` variant)
+keeps the full ceiling. View pages are *not* auto-added here (they're chrome, not RPC).
+
+Inside the handler, read the verified tier and bind identity **by tier**, never from the
+payload:
+
+```python
+@router.post("/v1/sync")
+async def sync(request: Request, body: SyncBody):
+    tier = request.state.trust_tier          # "operator" | "federation"
+    principal = LOCAL_PRINCIPAL if tier == "operator" else PEER_PRINCIPAL
+    ...
+```
+
+Two consequences worth designing for. **Open mode has no federation tier** — with no
+`auth.token` configured every caller is the operator, so a plugin that distinguishes a peer
+should refuse to enable its peer identity until a bearer is set (`a2a_impl.auth.bearer_configured()`).
+And there is **one federation token**, so the tier identifies *a* peer, not *which* peer;
+per-token peer identity is the #1504 follow-up and should not be reinvented inside a plugin.
+
+The set is replaced wholesale on every plugin reload (the same #1890 rule as `public_paths`):
+disable or uninstall the plugin and its lowered prefixes vanish immediately — the router may
+stay mounted until restart, but the path is operator-only again, so a peer gets 403 rather
+than a stale door. The live set is visible alongside the public prefixes on the member
+well-known path.
 
 ### Middleware — `register_middleware` (ADR 0032)
 

@@ -988,6 +988,9 @@ def _main():
     # — registered before the gate is installed so an inbound webhook / public view
     # page passes under a token-gated deployment.
     auth.set_public_prefixes(getattr(STATE, "plugin_public_paths", []) or [])
+    # Plugin-declared federation-tier prefixes (#2747) — same lifecycle, lowers the
+    # ADR 0066 /api ceiling on the plugin's own routes instead of exempting auth.
+    auth.set_federation_prefixes(getattr(STATE, "plugin_federation_paths", []) or [])
     # Fleet service token (ADR 0089): the instance's internal, loopback-only credential. A
     # member reads it from PROTOAGENT_FLEET_TOKEN (injected by the hub at spawn); a hub /
     # standalone instance reads-or-creates the persisted file. Accepted as operator so the
@@ -1021,7 +1024,7 @@ def _main():
 
     @fastapi_app.get(_member_public.WELL_KNOWN_PATH, include_in_schema=False)
     async def _plugin_public_paths():
-        return {"public_paths": auth.public_prefixes()}
+        return {"public_paths": auth.public_prefixes(), "federation_paths": auth.federation_prefixes()}
 
     # Short-lived SSE token endpoint (Part 3 of auth inversion): the React
     # console fetches a 30s HMAC token here (bearer-gated under /api/) and

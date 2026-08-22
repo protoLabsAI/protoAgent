@@ -73,6 +73,14 @@ class PluginManifest:
     # in a browser iframe under a token-gated deployment. Namespace-scoped by the
     # parser so a plugin can never exempt a core route.
     public_paths: list[str] = field(default_factory=list)
+    # Federation-tier paths (#2747) — prefixes under THIS plugin's own namespace that
+    # accept the *federation* credential (ADR 0066) where the ``/api`` operator ceiling
+    # would otherwise 403 it. NOT auth-exempt: a valid bearer is still required; only
+    # the tier ceiling is lowered. The seam for a deterministic plugin-owned RPC that a
+    # peer holding only the federation token must reach (a second device syncing a
+    # plugin-owned store) without being issued the operator bearer. Same
+    # namespace-scoping as ``public_paths`` — a plugin can never lower a core route.
+    federation_paths: list[str] = field(default_factory=list)
     # Event contract (ADR 0039) — the topics this plugin broadcasts / listens for.
     # Declarative for discoverability (surfaced in /api/runtime/status): a plugin
     # "ships" its events as its public API so others subscribe by topic without
@@ -161,14 +169,17 @@ _VALID_PLUGIN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _RESERVED_PLUGIN_IDS = frozenset({"install", "installed", "sync", "updates", "catalog", "enabled"})
 
 
-def _parse_public_paths(paths, plugin_id: str) -> list[str]:
+def _parse_public_paths(paths, plugin_id: str, *, kind: str = "public_path") -> list[str]:
     """Keep auth-exempt paths that live under THIS plugin's namespace SUBTREE
     (``/plugins/<id>/…`` or ``/api/plugins/<id>/…``); drop + warn on anything else.
 
     Namespace-scoping is the security boundary: a plugin can exempt only its own
     routes from the auth gate, never a core path like ``/api/config`` or the core
     ``/api/plugins/<verb>`` routes. The trailing slash is load-bearing — without
-    it, id ``install`` would prefix-match the core ``/api/plugins/install`` route."""
+    it, id ``install`` would prefix-match the core ``/api/plugins/install`` route.
+
+    ``federation_paths`` (#2747) share this exact boundary — ``kind`` only labels
+    the warning so an operator can tell which manifest key was rejected."""
     if not isinstance(paths, (list, tuple)):
         return []
     roots = (f"/plugins/{plugin_id}/", f"/api/plugins/{plugin_id}/")
@@ -179,9 +190,9 @@ def _parse_public_paths(paths, plugin_id: str) -> list[str]:
             kept.append(s)
         elif s:
             log.warning(
-                "[plugins] %s: public_path %r is outside the plugin namespace "
+                "[plugins] %s: %s %r is outside the plugin namespace "
                 "(/plugins/%s/… or /api/plugins/%s/…) — ignored",
-                plugin_id, s, plugin_id, plugin_id,
+                plugin_id, kind, s, plugin_id, plugin_id,
             )
     return kept
 
@@ -452,6 +463,10 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
             ]
         )
     )
+    # federation_paths (#2747): same namespace validator, separate list — these
+    # lower the tier ceiling, they never exempt auth, so a view page is NOT
+    # auto-added here the way it is for public_paths.
+    federation_paths = list(dict.fromkeys(_parse_public_paths(data.get("federation_paths"), pid, kind="federation_path")))
     emits, emits_schemas = _parse_emits(data.get("emits"), plugin_dir, pid)
     subscribes = data.get("subscribes")
     requires_pip, optional_pip, pip_scopes = _parse_requires_pip(data.get("requires_pip"), pid)
@@ -474,6 +489,7 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
         guide_url=str(data.get("guide_url", "") or "").strip(),
         views=views,
         public_paths=public_paths,
+        federation_paths=federation_paths,
         emits=emits,
         emits_schemas=emits_schemas,
         subscribes=[str(x) for x in subscribes] if isinstance(subscribes, (list, tuple)) else [],

@@ -104,3 +104,22 @@ operational step.
 **Operational follow-ups (the federation token itself)** — management UI, peer rotation + an
 optional `require_federation_token` enforce flag, fleet-member tokens, and `trust_tier`
 observability — are tracked in #1504.
+
+## Amendment — plugin `federation_paths` (#2747)
+
+R1's ceiling ("`/api` is always operator") held `/api/plugins/<id>/…` too, which left a peer
+holding only the federation credential unable to reach a plugin-owned route at all — the only
+federation-accessible surfaces were `/a2a` and `/v1`, so a plugin needing a deterministic,
+peer-callable RPC (a second device syncing a plugin-owned store) had to tunnel it through the
+A2A task envelope or be issued the operator bearer. Neither is acceptable: the first is RPC
+wearing an agent-turn costume; the second is R1's whole reason for existing.
+
+A plugin may now declare `federation_paths` in its manifest — prefixes under its **own**
+namespace (`/plugins/<id>/` · `/api/plugins/<id>/`, the exact `public_paths` boundary) on which
+the middleware lowers the ceiling from operator to federation. The paths stay authenticated
+(401 without a valid credential), are matched directly (fleet-proxied variants keep the
+ceiling), and the set is replaced on every plugin reload so a disabled plugin's contribution
+disappears at once. The handler reads `request.state.trust_tier` and binds identity by tier.
+"`/api` is always operator" becomes "`/api` is operator unless a plugin lowers *its own*
+subtree" — the same shape `public_paths` already gave the auth-exempt case. Per-token peer
+identity remains #1504.

@@ -29,6 +29,7 @@ def _reset_guard():
     auth._API_KEY[0] = ""
     auth._ALLOWED_ORIGINS[0] = None
     auth._MEMBER_PUBLIC[0] = None
+    auth._PLUGIN_FEDERATION[:] = []
     yield
     auth._BEARER[0] = None
     auth._FEDERATION[0] = None
@@ -36,6 +37,7 @@ def _reset_guard():
     auth._API_KEY[0] = ""
     auth._ALLOWED_ORIGINS[0] = None
     auth._MEMBER_PUBLIC[0] = None
+    auth._PLUGIN_FEDERATION[:] = []
 
 
 def _client() -> TestClient:
@@ -568,6 +570,86 @@ def test_federation_inert_in_open_mode():
     auth.configure(bearer_token=None, api_key="", allowed_origins_raw="", federation_token="fed-secret")
     assert auth._BEARER[0] is None
     assert _client_multi().post("/api/config").status_code == 200  # open — no 403
+
+
+# ── 8b. plugin federation_paths — a plugin lowers the ceiling on its OWN routes (#2747) ──
+
+
+def _fed_routes_client() -> TestClient:
+    routes = [
+        Route(p, lambda r: PlainTextResponse(r.state.trust_tier), methods=["GET", "POST"])
+        for p in (
+            "/api/plugins/room/v1/sync",
+            "/api/plugins/room/admin",
+            "/api/plugins/other/v1/sync",
+            "/active/slug/api/plugins/room/v1/sync",
+            "/api/config",
+            "/a2a",
+        )
+    ]
+    app = Starlette(routes=routes)
+    app.add_middleware(auth.A2AAuthMiddleware)
+    return TestClient(app)
+
+
+def test_federation_path_lowers_ceiling_only_on_declared_prefix():
+    _fed_configured()
+    auth.set_federation_prefixes(["/api/plugins/room/v1/"])
+    c = _fed_routes_client()
+    fed = {"Authorization": "Bearer fed-secret"}
+    # The declared subtree accepts the federation credential — and the handler can read the tier.
+    r = c.post("/api/plugins/room/v1/sync", headers=fed)
+    assert (r.status_code, r.text) == (200, "federation")
+    # Everything else under /api keeps the ADR 0066 ceiling: the plugin's own undeclared route,
+    # another plugin's identical shape, the core surface, and the fleet-proxied variant.
+    assert c.post("/api/plugins/room/admin", headers=fed).status_code == 403
+    assert c.post("/api/plugins/other/v1/sync", headers=fed).status_code == 403
+    assert c.post("/api/config", headers=fed).status_code == 403
+    assert c.post("/active/slug/api/plugins/room/v1/sync", headers=fed).status_code == 403
+
+
+def test_federation_path_is_not_public():
+    # Lowering the ceiling never exempts auth: no credential → 401, wrong credential → 401.
+    _fed_configured()
+    auth.set_federation_prefixes(["/api/plugins/room/v1/"])
+    c = _fed_routes_client()
+    assert c.post("/api/plugins/room/v1/sync").status_code == 401
+    assert c.post("/api/plugins/room/v1/sync", headers={"Authorization": "Bearer nope"}).status_code == 401
+    assert auth._is_public("/api/plugins/room/v1/sync") is False
+
+
+def test_federation_path_operator_still_operator():
+    # The local console hits the same route with the operator bearer and sees its own tier —
+    # the plugin binds identity BY tier (operator → local principal, federation → peer).
+    _fed_configured()
+    auth.set_federation_prefixes(["/api/plugins/room/v1/"])
+    r = _fed_routes_client().post("/api/plugins/room/v1/sync", headers={"Authorization": "Bearer op-secret"})
+    assert (r.status_code, r.text) == (200, "operator")
+
+
+def test_set_federation_prefixes_replaces_and_rejects_core_routes():
+    _fed_configured()
+    c = _fed_routes_client()
+    fed = {"Authorization": "Bearer fed-secret"}
+    # A plugin can only lower its own namespace — a core route or a bare /api/plugins/<verb> is dropped.
+    auth.set_federation_prefixes(["/api/config", "/api/plugins/install", "/api/plugins/", "/api/plugins/room/v1/"])
+    assert auth.federation_prefixes() == ["/api/plugins/room/v1/"]
+    assert c.post("/api/config", headers=fed).status_code == 403
+    assert c.post("/api/plugins/room/v1/sync", headers=fed).status_code == 200
+    # Replace (the reload/disable path) — the previously lowered route is operator-only again,
+    # even though its router is still mounted: fail-closed.
+    auth.set_federation_prefixes([])
+    assert auth.federation_prefixes() == []
+    assert c.post("/api/plugins/room/v1/sync", headers=fed).status_code == 403
+
+
+def test_federation_path_single_token_mode_unaffected():
+    # No federation token configured → nothing is classified federation; the prefix is inert.
+    auth.configure(bearer_token="op-secret", api_key="", allowed_origins_raw="")
+    auth.set_federation_prefixes(["/api/plugins/room/v1/"])
+    c = _fed_routes_client()
+    assert c.post("/api/plugins/room/v1/sync", headers={"Authorization": "Bearer op-secret"}).status_code == 200
+    assert c.post("/api/plugins/room/v1/sync", headers={"Authorization": "Bearer fed-secret"}).status_code == 401
 
 
 @pytest.mark.parametrize(

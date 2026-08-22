@@ -108,6 +108,17 @@ _PUBLIC_EXACT = frozenset(
 # defence-in-depth.
 _PLUGIN_PUBLIC: list[str] = []
 
+# Plugin-declared FEDERATION-tier prefixes (#2747). Same namespace rule and same
+# set-on-startup/reload lifecycle as ``_PLUGIN_PUBLIC``, opposite effect: these
+# paths are NOT exempt from auth — a valid credential is still required — they
+# only lower the ADR 0066 ``/api`` operator ceiling so a federation credential
+# reaches a plugin-owned route. The seam for a deterministic plugin RPC that a
+# peer holding only the federation token must call (a second device syncing a
+# plugin-owned store) without being issued the operator bearer, which would hand
+# it host code-exec via ``/api/plugins/install``. Direct paths only — the fleet
+# proxy variants (``/active/<slug>/api/…``) are never lifted.
+_PLUGIN_FEDERATION: list[str] = []
+
 # SSE token lifetime (seconds).
 _SSE_TOKEN_LIFETIME = 30
 
@@ -146,6 +157,37 @@ def public_prefixes() -> list[str]:
     ``_is_public`` enforces. Served on the public-paths well-known endpoint so a fleet
     hub can defer its public decision to this member (#1890)."""
     return list(_PLUGIN_PUBLIC)
+
+
+def set_federation_prefixes(prefixes) -> None:
+    """Replace the plugin-declared federation-tier prefix set (idempotent + reload-safe).
+
+    Same boundary as ``set_public_prefixes`` — a plugin may lower the ceiling only on
+    its own ``/plugins/<id>/`` / ``/api/plugins/<id>/`` subtree, never a core route.
+    Non-conforming entries are dropped with a warning. Replacing (not merging) is what
+    makes a disabled/uninstalled/reloaded plugin's contribution vanish immediately: its
+    router may stay mounted, but the path reverts to operator-only and a federation
+    caller gets 403 — fail-closed (#2747)."""
+    cleaned: list[str] = []
+    for p in prefixes or []:
+        s = str(p).strip()
+        if not s:
+            continue
+        if _PLUGIN_NS_RE.match(s):
+            cleaned.append(s)
+        else:
+            logger.warning(
+                "[a2a] ignoring plugin federation prefix %r — must be under /plugins/<id>/ or /api/plugins/<id>/", s
+            )
+    _PLUGIN_FEDERATION[:] = cleaned
+    if cleaned:
+        logger.info("[a2a] %d plugin-declared federation-tier path(s): %s", len(cleaned), ", ".join(cleaned))
+
+
+def federation_prefixes() -> list[str]:
+    """The live plugin-declared federation-tier prefixes (post-validation) — exactly what
+    ``_requires_operator`` exempts from the operator ceiling."""
+    return list(_PLUGIN_FEDERATION)
 
 
 # Fleet-proxied member view pages (#1890). A member's plugin view page is public
@@ -213,7 +255,14 @@ def _requires_operator(path: str) -> bool:
     configured federation token is denied it (403). ``/a2a`` + ``/v1`` are the
     federation/consumer surfaces and are NOT operator-only. Public + SSE-token paths never
     reach the ceiling (handled earlier in dispatch). The substring form also catches the
-    fleet-proxy variants (``/active/<slug>/api/…``, ``/agents/<slug>/api/…``)."""
+    fleet-proxy variants (``/active/<slug>/api/…``, ``/agents/<slug>/api/…``).
+
+    A plugin may lower the ceiling on its OWN namespaced routes via manifest
+    ``federation_paths`` (#2747) — matched as a direct prefix, so the proxied variants
+    stay operator-only; the plugin route itself still sees a verified credential and
+    reads the tier from ``request.state.trust_tier``."""
+    if any(path.startswith(p) for p in _PLUGIN_FEDERATION):
+        return False
     return "/api/" in path or path == "/api" or path.endswith("/api")
 
 

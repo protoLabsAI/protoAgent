@@ -46,6 +46,7 @@ class PluginLoadResult:
     a2a_skill_plugins: dict = field(default_factory=dict)  # skill id -> plugin id (ownership, #2754)
     routers: list = field(default_factory=list)  # {plugin_id, router, prefix} (ADR 0018)
     public_paths: list = field(default_factory=list)  # manifest-declared auth-exempt prefixes
+    federation_paths: list = field(default_factory=list)  # manifest-declared federation-tier prefixes (#2747)
     surfaces: list = field(default_factory=list)  # {plugin_id, name, start, stop}
     subagents: list = field(default_factory=list)  # SubagentConfig
     middleware: list = field(default_factory=list)  # factories: (config) -> AgentMiddleware|None (ADR 0032)
@@ -626,6 +627,9 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
         # parser) — the server hands these to the auth middleware so an inbound
         # webhook / public view page works under a token gate.
         result.public_paths.extend(manifest.public_paths)
+        # Federation-tier prefixes (#2747) — same namespace scoping; the auth middleware
+        # lowers the /api operator ceiling to the federation tier on these, nothing more.
+        result.federation_paths.extend(manifest.federation_paths)
         # Cross-check: every declared view must be served by one of this plugin's
         # routers, else the iframe renders blank/404. Catches "declared a view but
         # forgot register_router" / a path typo that fails silently today.
