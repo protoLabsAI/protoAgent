@@ -38,7 +38,11 @@ class InfisicalProvider(SecretsProvider):
     # -- internals ----------------------------------------------------------------
 
     def _host(self, cfg: SourceConfig) -> str:
-        return (cfg.host or DEFAULT_HOST).rstrip("/")
+        h = (cfg.host or DEFAULT_HOST).rstrip("/")
+        # The Infisical CLI's --domain includes /api; ours appends /api/v1/... itself.
+        if h.lower().endswith("/api"):
+            h = h[:-4]
+        return h
 
     def _cache_key(self, cfg: SourceConfig) -> tuple:
         # The client_secret fingerprint is part of the identity: without it, a cached
@@ -116,7 +120,13 @@ class InfisicalProvider(SecretsProvider):
                 return FetchResult(values=_merge_listing(r.json()))
         except _LoginRejected as e:
             kind = ErrorKind.AUTH_FAILED if e.status in (400, 401, 403) else ErrorKind.BAD_RESPONSE
-            return FetchResult(error=f"universal-auth login: HTTP {e.status}", error_kind=kind)
+            msg = f"universal-auth login: HTTP {e.status}"
+            if e.status == 404 and (cfg.host or "").rstrip("/").lower().endswith("/api"):
+                msg += (
+                    " — host should not include the '/api' suffix "
+                    "(the Infisical CLI's --domain does; this field appends /api/v1/... itself)"
+                )
+            return FetchResult(error=msg, error_kind=kind)
         except httpx.TimeoutException:
             return FetchResult(
                 error=f"timed out after {cfg.timeout_seconds:g}s talking to {self._host(cfg)}",

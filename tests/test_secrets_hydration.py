@@ -438,3 +438,32 @@ def test_infisical_changed_secret_does_not_reuse_cached_token():
     bad = provider.fetch(_infisical_cfg(client_secret="wrong"))
     assert not bad.ok and bad.error_kind == ErrorKind.AUTH_FAILED
     assert calls["login"] == 2
+
+
+def test_infisical_host_strips_trailing_api_suffix():
+    """The Infisical CLI's --domain includes /api; the provider appends /api/v1/...
+    itself, so a pasted CLI value must not produce .../api/api/v1/... (a bare 404)."""
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.host, request.url.path))
+        if request.url.path == "/api/v1/auth/universal-auth/login":
+            return httpx.Response(200, json={"accessToken": "tok", "expiresIn": 3600})
+        return httpx.Response(200, json={"secrets": [{"secretKey": "K", "secretValue": "v-123456"}]})
+
+    result = _mock_provider(handler).fetch(_infisical_cfg(host="https://example.com/api"))
+    assert result.ok and result.values == {"K": "v-123456"}
+    assert seen == [
+        ("example.com", "/api/v1/auth/universal-auth/login"),
+        ("example.com", "/api/v3/secrets/raw"),
+    ]
+
+
+def test_infisical_404_with_api_suffix_hints():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"message": "not found"})
+
+    result = _mock_provider(handler).fetch(_infisical_cfg(host="https://example.com/api"))
+    assert not result.ok and result.error_kind == ErrorKind.BAD_RESPONSE
+    assert "universal-auth login: HTTP 404" in result.error
+    assert "should not include the '/api' suffix" in result.error
