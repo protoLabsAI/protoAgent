@@ -341,7 +341,7 @@ async def test_fence_blocks_bridged_call_outside_allowlist():
     code = "try:\n    tools.echo_tool(text='x')\nexcept Exception as e:\n    print('err:', e)"
     out = await run_code(code, _TOOL_MAP, fence=frozenset({"execute_code", "web_search"}))
     assert "Blocked by policy" in out
-    assert "outside this background subagent's allowlist" in out
+    assert "outside this turn's tool allowlist" in out
 
 
 @pytest.mark.asyncio

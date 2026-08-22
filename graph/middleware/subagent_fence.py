@@ -31,8 +31,10 @@ class SubagentFenceMiddleware(AgentMiddleware):
         name = request.tool_call.get("name", "")
         if name in fence:
             return None
+        # Turn-neutral wording: the fence also rides peer-channel turns (#2972),
+        # not only background subagent runs — the model reads this to adapt.
         return (
-            f"tool '{name}' is outside this background subagent's allowlist "
+            f"tool '{name}' is outside this turn's tool allowlist "
             f"({', '.join(sorted(fence))}) — work within the allowed tools."
         )
 
