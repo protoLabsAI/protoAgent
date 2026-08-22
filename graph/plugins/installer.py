@@ -910,7 +910,30 @@ def _install_bundle(
         purl = entry.get("url")
         if not purl:
             raise InstallError(f"bundle {bid!r}: plugin {entry.get('id', '?')!r} has no url")
-        installed.append(install(str(purl), entry.get("ref"), force=force, by=f"bundle:{bid}", allow=allow))
+
+        member_ref = entry.get("ref")
+        # Independent member semver chase (#2960): a release-tag pin in the bundle
+        # manifest is a FLOOR, not the answer — an operator may have force-installed
+        # the member ahead of the archetype's pin, and blindly re-pinning to the
+        # manifest would DOWNGRADE it. ls-remote the member repo (via
+        # check_plugin_update, the same newest-semver-tag logic the single-plugin
+        # update route rides) and install the newest tag when one exists. SHA pins
+        # and branch refs pass through untouched.
+        if member_ref and is_release_tag(member_ref):
+            try:
+                member_lock = {
+                    "id": str(entry.get("id", "")),
+                    "source_url": str(purl),
+                    "requested_ref": member_ref,
+                    "resolved_sha": "",
+                }
+                status = check_plugin_update(member_lock)
+                if status.get("latest_ref"):
+                    member_ref = status["latest_ref"]
+            except Exception:  # noqa: BLE001 — best-effort; fall back to the manifest pin
+                pass
+
+        installed.append(install(str(purl), member_ref, force=force, by=f"bundle:{bid}", allow=allow))
 
     lock = _read_lock()
     lock.setdefault("bundles", [])

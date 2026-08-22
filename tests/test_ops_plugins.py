@@ -706,3 +706,148 @@ async def test_peek_cache_is_keyed_by_url_and_ref(tmp_path, monkeypatch):
     assert len(calls) == n_first
     await plugin_ops.peek_bundle("https://example.test/stack", ref="v2")  # new ref → fresh peek
     assert len(calls) > n_first
+
+
+# ── _install_bundle member semver chase (#2960 S3) ────────────────────────────
+# A bundle update re-pins every member to the manifest's ref — which DOWNGRADED a
+# member an operator had force-installed ahead of the archetype's pin. Release-tag
+# members now ls-remote their own repo (via check_plugin_update) and install the
+# newest semver tag when one exists; SHA/branch refs and builtins are untouched.
+
+
+def _member_chase_env(tmp_path, monkeypatch):
+    """Sandbox the lock + capture install() calls for direct _install_bundle tests."""
+    monkeypatch.setattr(installer, "lock_path", lambda: tmp_path / "plugins.lock")
+    calls: list[tuple] = []
+
+    def fake_install(url, ref=None, **k):
+        calls.append((url, ref))
+        return {"id": url.rsplit("/", 1)[-1]}
+
+    monkeypatch.setattr(installer, "install", fake_install)
+    return calls
+
+
+def _stack(members):
+    return {"id": "stack", "name": "Stack", "plugins": members}
+
+
+def test_bundle_member_release_tag_chases_newest_semver(tmp_path, monkeypatch):
+    """The manifest pins v1.0.0 but a newer tag exists on the member repo — the
+    bundle install must NOT downgrade the member; it installs the newest tag."""
+    calls = _member_chase_env(tmp_path, monkeypatch)
+    checked: list[dict] = []
+
+    def fake_check(entry):
+        checked.append(entry)
+        return {"latest_ref": "v1.2.0", "latest_sha": "b" * 40, "behind": True}
+
+    monkeypatch.setattr(installer, "check_plugin_update", fake_check)
+
+    res = installer._install_bundle(
+        _stack([{"id": "board", "url": "https://x/board", "ref": "v1.0.0"}]),
+        "https://x/stack",
+        "a" * 40,
+        None,
+        force=True,
+        by="test",
+        allow=None,
+    )
+    assert calls == [("https://x/board", "v1.2.0")]  # chased tag, not the manifest pin
+    # the check ran against the MEMBER repo with the manifest pin as the baseline
+    assert checked == [{"id": "board", "source_url": "https://x/board", "requested_ref": "v1.0.0", "resolved_sha": ""}]
+    assert [p["id"] for p in res["installed"]] == ["board"]
+
+
+def test_bundle_member_no_newer_tag_uses_manifest_pin(tmp_path, monkeypatch):
+    calls = _member_chase_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        installer, "check_plugin_update", lambda entry: {"latest_ref": None, "latest_sha": None, "behind": False}
+    )
+
+    installer._install_bundle(
+        _stack([{"id": "board", "url": "https://x/board", "ref": "v1.0.0"}]),
+        "https://x/stack",
+        "a" * 40,
+        None,
+        force=True,
+        by="test",
+        allow=None,
+    )
+    assert calls == [("https://x/board", "v1.0.0")]
+
+
+def test_bundle_member_chase_failure_falls_back_to_manifest_pin(tmp_path, monkeypatch):
+    """A network error / timeout in the chase must not fail the bundle install —
+    the member falls back to the manifest pin (the pre-#2960 behavior)."""
+    calls = _member_chase_env(tmp_path, monkeypatch)
+
+    def boom(entry):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(installer, "check_plugin_update", boom)
+
+    installer._install_bundle(
+        _stack([{"id": "board", "url": "https://x/board", "ref": "v1.0.0"}]),
+        "https://x/stack",
+        "a" * 40,
+        None,
+        force=True,
+        by="test",
+        allow=None,
+    )
+    assert calls == [("https://x/board", "v1.0.0")]
+
+
+def test_bundle_member_non_release_refs_pass_through(tmp_path, monkeypatch):
+    """SHA pins, branch refs, and ref-less members never trigger the network chase."""
+    calls = _member_chase_env(tmp_path, monkeypatch)
+
+    def boom(entry):
+        raise AssertionError("check_plugin_update must not run for a non-release-tag ref")
+
+    monkeypatch.setattr(installer, "check_plugin_update", boom)
+    sha = "0123456789abcdef0123456789abcdef01234567"
+
+    installer._install_bundle(
+        _stack(
+            [
+                {"id": "a", "url": "https://x/a", "ref": sha},
+                {"id": "b", "url": "https://x/b", "ref": "main"},
+                {"id": "c", "url": "https://x/c"},
+            ]
+        ),
+        "https://x/stack",
+        "a" * 40,
+        None,
+        force=True,
+        by="test",
+        allow=None,
+    )
+    assert calls == [("https://x/a", sha), ("https://x/b", "main"), ("https://x/c", None)]
+
+
+def test_bundle_member_builtin_skips_fetch_and_chase(tmp_path, monkeypatch):
+    calls = _member_chase_env(tmp_path, monkeypatch)
+
+    def boom(entry):
+        raise AssertionError("check_plugin_update must not run for a builtin member")
+
+    monkeypatch.setattr(installer, "check_plugin_update", boom)
+
+    res = installer._install_bundle(
+        _stack(
+            [
+                {"id": "delegates", "builtin": True, "ref": "v1.0.0"},
+                {"id": "board", "url": "https://x/board", "ref": "main"},
+            ]
+        ),
+        "https://x/stack",
+        "a" * 40,
+        None,
+        force=True,
+        by="test",
+        allow=None,
+    )
+    assert res["skipped_builtin"] == ["delegates"]
+    assert calls == [("https://x/board", "main")]
