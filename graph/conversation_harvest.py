@@ -78,6 +78,7 @@ async def harvest_thread(
     summarizer=_default_summarizer,
     namespace: str | None = None,
     fact_extractor=None,
+    raise_on_error: bool = False,
 ) -> str | None:
     """Retire ``thread_id``'s conversation into the knowledge base (ADR 0021).
 
@@ -88,8 +89,9 @@ async def harvest_thread(
 
     Returns the summary chunk id, or None when there's nothing to harvest (no
     store, no checkpoint, incognito thread — ADR 0069 D3b, empty transcript,
-    or a summarizer failure). Never raises — harvesting is best-effort and
-    must not block retirement.
+    or a summarizer failure). Best-effort by default (a failure logs and returns
+    None); ``raise_on_error=True`` re-raises instead, so a caller that must tell
+    FAILURE from legitimately-nothing (#2946: the retire path) can.
     """
     if knowledge_store is None:
         return None
@@ -169,4 +171,10 @@ async def harvest_thread(
         return chunk_id
     except Exception:
         log.exception("[harvest] failed for thread %s", thread_id)
+        # `None` also means "legitimately nothing to harvest" (no store, incognito,
+        # background worker, empty transcript) — a FAILURE is only distinguishable when
+        # the caller opts into the raise (#2946: the retire path must not delete a
+        # thread whose harvest failed transiently, so it needs to tell the two apart).
+        if raise_on_error:
+            raise
         return None

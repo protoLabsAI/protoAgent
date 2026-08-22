@@ -227,3 +227,113 @@ def test_find_aged_threads_and_delete(tmp_path):
     assert aged == ["stale"]
     assert delete_thread(db, "stale") == 1
     assert find_aged_threads(db, max_age_seconds=86400) == []
+
+
+# ── #2946: a FAILED harvest must not cost the conversation its knowledge ────────
+
+
+def _retire_env(monkeypatch, tmp_path, harvest_behavior):
+    """Point server.agent_init.STATE at a minimal retire-able world and record
+    deletions. ``harvest_behavior`` is the fake harvest_thread."""
+    from types import SimpleNamespace
+
+    import graph.conversation_harvest as ch
+    import server.agent_init as ai
+    from graph import checkpoint_prune
+
+    monkeypatch.setattr(ai.STATE, "graph_config", SimpleNamespace(checkpoint_harvest_enabled=True), raising=False)
+    monkeypatch.setattr(ai.STATE, "checkpointer", object(), raising=False)
+    monkeypatch.setattr(ai.STATE, "knowledge_store", object(), raising=False)
+    monkeypatch.setattr(ai.STATE, "checkpoint_path", str(tmp_path / "ck.db"), raising=False)
+    monkeypatch.setattr(ch, "harvest_thread", harvest_behavior)
+    deleted = []
+    monkeypatch.setattr(checkpoint_prune, "delete_thread", lambda path, tid, cascade=True: deleted.append(tid))
+    ai._HARVEST_FAILURES.clear()
+    return ai, deleted
+
+
+async def test_sweep_retire_keeps_the_thread_when_harvest_fails(monkeypatch, tmp_path):
+    """The TTL sweep path (#2946): a transient harvest failure (the shared-account
+    429 burst) keeps the thread for the next sweep instead of deleting it — the old
+    flow deleted anyway, permanently skipping knowledge capture."""
+
+    async def _boom(thread_id, **kw):
+        raise RuntimeError("429 burst")
+
+    ai, deleted = _retire_env(monkeypatch, tmp_path, _boom)
+
+    assert await ai._retire_thread("t-1") is None
+    assert deleted == []  # kept for retry
+    assert ai._HARVEST_FAILURES["t-1"] == 1
+
+
+async def test_sweep_retire_deletes_after_the_failure_cap(monkeypatch, tmp_path):
+    """A permanently-broken harvest can't pin checkpoints forever: at the cap the
+    thread deletes anyway (loudly)."""
+
+    async def _boom(thread_id, **kw):
+        raise RuntimeError("still broken")
+
+    ai, deleted = _retire_env(monkeypatch, tmp_path, _boom)
+
+    for _ in range(ai._HARVEST_FAILURE_CAP - 1):
+        await ai._retire_thread("t-1")
+    assert deleted == []
+    await ai._retire_thread("t-1")  # cap reached → delete proceeds
+    assert deleted == ["t-1"]
+    assert "t-1" not in ai._HARVEST_FAILURES  # counter cleared with the thread
+
+
+async def test_explicit_delete_still_deletes_when_harvest_fails(monkeypatch, tmp_path):
+    """The delete-chat dialog path (explicit harvest bool): the operator asked for
+    deletion — a failed harvest is logged loudly but must not block it."""
+
+    async def _boom(thread_id, **kw):
+        raise RuntimeError("boom")
+
+    ai, deleted = _retire_env(monkeypatch, tmp_path, _boom)
+
+    await ai._retire_thread("t-x", harvest=True)
+    assert deleted == ["t-x"]
+    assert "t-x" not in ai._HARVEST_FAILURES
+
+
+async def test_successful_harvest_clears_the_failure_counter(monkeypatch, tmp_path):
+    """A success between failures resets the retry budget — the cap is for
+    CONSECUTIVE failures, not lifetime ones."""
+    calls = {"n": 0}
+
+    async def _flaky(thread_id, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("transient")
+        return "chunk-1"
+
+    ai, deleted = _retire_env(monkeypatch, tmp_path, _flaky)
+
+    await ai._retire_thread("t-2")  # fails → kept
+    assert deleted == [] and ai._HARVEST_FAILURES["t-2"] == 1
+    assert await ai._retire_thread("t-2") == "chunk-1"  # succeeds → harvested + deleted
+    assert deleted == ["t-2"]
+    assert "t-2" not in ai._HARVEST_FAILURES
+
+
+async def test_harvest_thread_raise_on_error_reraises(tmp_path):
+    """The flag that lets the retire path tell FAILURE from legitimately-nothing:
+    default swallows (None), raise_on_error re-raises."""
+    import pytest as _pytest
+
+    from graph.conversation_harvest import harvest_thread
+
+    class _BoomCheckpointer:
+        async def aget_tuple(self, cfg):
+            raise RuntimeError("checkpointer exploded")
+
+    kwargs = dict(
+        checkpointer=_BoomCheckpointer(),
+        knowledge_store=object(),
+        config=object(),
+    )
+    assert await harvest_thread("t-e", **kwargs) is None  # default: swallowed
+    with _pytest.raises(RuntimeError):
+        await harvest_thread("t-e", raise_on_error=True, **kwargs)
