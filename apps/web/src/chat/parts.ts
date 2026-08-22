@@ -120,7 +120,7 @@ export function foldPlan(
   // component and its final text (…component → reasoning → text), so the trailing-run walk
   // above stops at the reasoning part and the component would be stranded inside the
   // collapsed "Worked" disclosure: the tool ran, the server emitted it, and nothing visible
-  // happened (#2964 — protoEngineer on opus: three show_component calls, nothing rendered).
+  // happened (#2965 — protoEngineer on opus: three show_component calls, nothing rendered).
   // So components are lifted out of the work timeline and lead the answer, in emission
   // order — while streaming too: a component can't "flash then jump back" the way interim
   // narration does (the settle guard's reason), because it is always promoted.

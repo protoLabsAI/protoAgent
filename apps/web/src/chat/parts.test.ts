@@ -236,7 +236,7 @@ describe("foldPlan", () => {
     });
   });
 
-  it("lifts a component out of the fold when reasoning follows it (#2964 — the reasoning-model shape)", () => {
+  it("lifts a component out of the fold when reasoning follows it (#2965 — the reasoning-model shape)", () => {
     // opus thinks between the component and its final text: …component → reasoning → text. The
     // trailing-run walk stops at the reasoning part, so without the lift the component is
     // stranded behind the collapsed "Worked" disclosure — the tool ran, nothing rendered.
