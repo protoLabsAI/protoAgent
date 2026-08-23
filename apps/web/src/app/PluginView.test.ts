@@ -15,7 +15,9 @@ import { act, createElement as h } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { consoleTheme, PL_TOKEN_VARS, PluginView } from "./PluginView";
+import { resolveMenu } from "../contextMenu/registry";
+import { useContextMenuStore } from "../contextMenu/store";
+import { consoleTheme, PL_TOKEN_VARS, PluginView, pluginIdFromView, pluginMenuType } from "./PluginView";
 import type { PluginView as PluginViewType } from "../lib/types";
 
 // Tell React we're inside an act-capable environment so effect flushing is clean.
@@ -74,6 +76,31 @@ describe("consoleTheme() — the bridge payload (#2225)", () => {
     expect(consoleTheme().mode).toBe("light");
     document.documentElement.setAttribute("data-theme", "dark");
     expect(consoleTheme().mode).toBe("dark");
+  });
+});
+
+// The plugin id is the namespace EVERYTHING a page declares is forced into — the topics it
+// publishes (ADR 0039), the chords it declares (#1457), its menu item ids (#3030) — so
+// resolving it to "" doesn't degrade those features, it silently disables them.
+describe("pluginIdFromView — the namespace source", () => {
+  it("reads the surface key App stamps on", () => {
+    expect(pluginIdFromView({ key: "plugin:boardy:board", path: "/plugins/boardy/board" })).toBe("boardy");
+  });
+
+  it("resolves a view page path — the PUBLIC namespace real plugins serve from", () => {
+    // Manifests declare `path: /plugins/<id>/view` (ADR 0026); `/api/plugins/<id>/…` is the
+    // plugin's gated DATA router. Matching only the /api form left every real view with no
+    // namespace at all.
+    expect(pluginIdFromView({ path: "/plugins/docs/view" })).toBe("docs");
+    expect(pluginIdFromView({ path: "/plugins/notes/view?tab=open" })).toBe("notes");
+    // …and the gated form still resolves, for a view served from the data router.
+    expect(pluginIdFromView({ path: "/api/plugins/boardy/board" })).toBe("boardy");
+    // A fleet-proxied slug prefix doesn't hide it either.
+    expect(pluginIdFromView({ path: "/a/orbis/plugins/boardy/board" })).toBe("boardy");
+  });
+
+  it("has no namespace to offer for a path that isn't a plugin route", () => {
+    expect(pluginIdFromView({ path: "/app/chat" })).toBe("");
   });
 });
 
@@ -174,5 +201,184 @@ describe("PluginView — the protoagent:theme re-post carries updated values", (
       window.dispatchEvent(new Event("protoagent:theme"));
     });
     expect(post.mock.calls.some((c) => (c[0] as { type?: string })?.type === "protoagent:theme")).toBe(true);
+  });
+});
+
+// ── The context-menu bridge (#3030) ─────────────────────────────────────────────────────
+// A right-click inside a plugin's iframe is invisible to the host (another document, and
+// cross-origin under the desktop app), so the PAGE reports it. These pin the host half:
+// what it accepts, where the menu lands, what the item does when chosen, and that nothing
+// outlives the frame.
+describe("PluginView — the plugin context-menu bridge (#3030)", () => {
+  let container: HTMLElement;
+  let root: Root;
+
+  const view: PluginViewType = {
+    id: "main", label: "Boardy", path: "/api/plugins/boardy/main", key: "plugin:boardy:main",
+  };
+
+  // Mount, flush the reachability probe, and fire the frame's load — the state every
+  // bridge message arrives in.
+  async function mountLoaded() {
+    await act(async () => {
+      root.render(h(PluginView, { view }));
+    });
+    for (let i = 0; i < 10 && !container.querySelector("iframe"); i++) {
+      await act(async () => {
+        await Promise.resolve();
+      });
+    }
+    const frame = container.querySelector("iframe")!;
+    await act(async () => {
+      frame.dispatchEvent(new Event("load"));
+    });
+    // jsdom lays nothing out, so pin a real frame rect: the menu lands in HOST coordinates
+    // (rect origin + the page's own clientX/clientY), and a 0×0 frame is treated as hidden.
+    vi.spyOn(frame, "getBoundingClientRect").mockReturnValue({
+      left: 300, top: 80, width: 900, height: 600,
+    } as DOMRect);
+    return frame;
+  }
+
+  // A message as the console sees it: from THIS frame's window (the host's trust check).
+  const fromFrame = (frame: HTMLIFrameElement, data: unknown) =>
+    act(() => {
+      window.dispatchEvent(new MessageEvent("message", { data, source: frame.contentWindow }));
+    });
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 200 })));
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    useContextMenuStore.getState().close();
+    vi.unstubAllGlobals();
+  });
+
+  it("opens the console menu for a right-click the page reported, positioned in the frame", async () => {
+    const frame = await mountLoaded();
+
+    await fromFrame(frame, {
+      type: "protoagent:contextmenu:open",
+      x: 120,
+      y: 40,
+      items: [{ id: "copy-id", label: "Copy ID", icon: "clipboard" }, { divider: true }, { id: "delete", label: "Delete", danger: true }],
+    });
+
+    const state = useContextMenuStore.getState();
+    expect(state.open).toBe(true);
+    expect(state.type).toBe(pluginMenuType("boardy"));
+    expect([state.x, state.y]).toEqual([420, 120]);
+
+    // What the renderer would show: the plugin's items, namespaced, plus the console's own
+    // Configure… — a page that suppressed the browser menu never leaves an empty one.
+    const entries = resolveMenu(state.type, state.ctx);
+    expect(entries.map((e) => e.id)).toEqual([
+      "plugin.boardy.copy-id",
+      "plugin.boardy.delete.__divider",
+      "plugin.boardy.delete",
+      "plugin-view-div",
+      "plugin-view-configure",
+    ]);
+  });
+
+  it("clamps a page-supplied position into the frame — a plugin can't menu over the console", async () => {
+    const frame = await mountLoaded();
+
+    await fromFrame(frame, { type: "protoagent:contextmenu:open", x: 99999, y: 99999, items: [{ id: "a" }] });
+
+    const state = useContextMenuStore.getState();
+    expect([state.x, state.y]).toEqual([300 + 900, 80 + 600]);
+  });
+
+  it("posts the chosen item back with the id the PAGE knows, not the namespaced one", async () => {
+    const frame = await mountLoaded();
+    const post = vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation(() => {});
+
+    await fromFrame(frame, {
+      type: "protoagent:contextmenu:open",
+      x: 10, y: 10,
+      items: [{ id: "copy-id", label: "Copy ID" }],
+    });
+    const state = useContextMenuStore.getState();
+    const item = resolveMenu(state.type, state.ctx).find((e) => e.id === "plugin.boardy.copy-id");
+    act(() => {
+      (item as { run: (ctx: unknown, helpers: { close: () => void }) => void }).run(state.ctx, {
+        close: () => useContextMenuStore.getState().close(),
+      });
+    });
+
+    expect(post.mock.calls.map((c) => c[0])).toContainEqual({
+      type: "protoagent:contextmenu:action",
+      itemId: "copy-id",
+    });
+    expect(useContextMenuStore.getState().open).toBe(false); // choosing an item closes it
+  });
+
+  it("a bare open uses the set the page registered earlier; re-registering replaces it", async () => {
+    const frame = await mountLoaded();
+    await fromFrame(frame, {
+      type: "protoagent:contextmenu:register",
+      items: [{ id: "one", label: "One" }, { id: "two", label: "Two" }],
+    });
+    await fromFrame(frame, { type: "protoagent:contextmenu:open", x: 5, y: 5 });
+    let state = useContextMenuStore.getState();
+    expect(resolveMenu(state.type, state.ctx).map((e) => e.id)).toContain("plugin.boardy.two");
+
+    // A view that drops an item must not leave a ghost entry firing into a page that
+    // forgot about it (the keybinding bridge's rule).
+    await fromFrame(frame, { type: "protoagent:contextmenu:register", items: [{ id: "one", label: "One" }] });
+    await fromFrame(frame, { type: "protoagent:contextmenu:open", x: 5, y: 5 });
+    state = useContextMenuStore.getState();
+    const ids = resolveMenu(state.type, state.ctx).map((e) => e.id);
+    expect(ids).toContain("plugin.boardy.one");
+    expect(ids).not.toContain("plugin.boardy.two");
+  });
+
+  it("won't open a menu for a hidden view — a background-delivery frame measures 0×0", async () => {
+    // `background: true` (#1640) keeps a view mounted while another surface is showing; App
+    // display:none's it. Its right-click would otherwise land in the console's top-left.
+    const frame = await mountLoaded();
+    vi.spyOn(frame, "getBoundingClientRect").mockReturnValue({
+      left: 0, top: 0, width: 0, height: 0,
+    } as DOMRect);
+
+    await fromFrame(frame, { type: "protoagent:contextmenu:open", x: 5, y: 5, items: [{ id: "a" }] });
+    expect(useContextMenuStore.getState().open).toBe(false);
+  });
+
+  it("ignores a menu message that didn't come from this frame's window", async () => {
+    const frame = await mountLoaded();
+    await act(() => {
+      // Another frame / an opener page trying to drive this view's menu.
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: { type: "protoagent:contextmenu:open", x: 1, y: 1, items: [{ id: "spoofed" }] },
+          source: window,
+        }),
+      );
+    });
+    expect(useContextMenuStore.getState().open).toBe(false);
+    void frame;
+  });
+
+  it("closes its menu and drops its registration when the view goes away", async () => {
+    const frame = await mountLoaded();
+    await fromFrame(frame, { type: "protoagent:contextmenu:open", x: 5, y: 5, items: [{ id: "a" }] });
+    const type = useContextMenuStore.getState().type;
+    expect(useContextMenuStore.getState().open).toBe(true);
+
+    act(() => root.unmount());
+    // An open menu whose items post into a dead frame must not survive it…
+    expect(useContextMenuStore.getState().open).toBe(false);
+    // …nor the registration that would resolve them.
+    expect(resolveMenu(type, { entries: [] })).toEqual([]);
+
+    root = createRoot(container); // afterEach unmounts again — harmless on a fresh root
   });
 });

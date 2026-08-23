@@ -1,63 +1,19 @@
 import {
   Activity,
-  BarChart3,
-  BookMarked,
-  Database,
-  BookOpen,
-  Boxes,
-  CalendarClock,
-  FileText,
-  Gauge,
-  Inbox,
-  LayoutDashboard,
   MessageSquare,
   PanelBottom,
   PanelLeft,
   PanelRight,
   Plus,
-  Puzzle,
   Save,
   Settings2,
-  Sparkles,
-  Target,
   Undo2,
   Trash2,
   Wrench,
-  // Plugin-view rail icons (ADR 0026) — a broader lucide allowlist so plugins
-  // (dashboards, data, comms, dev, finance, space/fleet, AI) find a fitting glyph.
-  Bot,
-  Brain,
-  Code,
-  Coins,
-  Compass,
-  Cpu,
-  DollarSign,
-  Folder,
-  GitBranch,
-  Globe,
-  Layers,
-  LineChart,
-  Map,
-  Network,
-  Package,
-  PieChart,
-  Plug,
-  Radar,
-  Rocket,
-  Satellite,
-  Shield,
-  Ship,
-  Table,
-  Terminal,
-  TrendingUp,
-  Wallet,
-  Workflow,
-  Zap,
 } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import type { ComponentType, LazyExoticComponent, MouseEvent as ReactMouseEvent, ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { FleetTurnWatch } from "./FleetTurnWatch";
 import { UpdateNotice } from "./UpdateNotice";
 import { BackgroundWatch } from "./BackgroundWatch";
@@ -71,6 +27,7 @@ import { bootGatePhase, bootGateReady } from "./bootGate";
 import { dedupeRailById } from "./rail";
 import { AuthGate } from "./AuthGate";
 import { authRequired, subscribeAuth } from "../lib/auth";
+import { pluginViewIcon } from "../lib/pluginIcon";
 import { TenantGuard } from "./TenantGuard";
 import { Splash, BootGate } from "@protolabsai/ui/splash";
 import { Button } from "@protolabsai/ui/primitives";
@@ -142,63 +99,6 @@ import { listen } from "../lib/desktop";
 // surfaces keyed `plugin:<pluginId>:<viewId>`. The `(string & {})` keeps literal
 // autocomplete while allowing those runtime keys.
 
-// A plugin view names its rail glyph by lucide icon name. The curated set below
-// is the common-case fast path (already bundled); anything else falls back to the
-// full lucide set by name, so a plugin author can use ANY lucide icon — PascalCase
-// (`LineChart`) or kebab-case (`line-chart`) — without us extending an allowlist.
-// Unknown/missing → a generic plugin glyph.
-const PLUGIN_VIEW_ICONS: Record<string, LucideIcon> = {
-  // general
-  Sparkles, LayoutDashboard, Puzzle, Boxes, Gauge, Target, Activity, Settings2,
-  // data / viz
-  BarChart3, LineChart, PieChart, TrendingUp, Database, Table, Layers,
-  // comms / content
-  MessageSquare, Inbox, CalendarClock, FileText, Folder, BookOpen, BookMarked,
-  // dev / tools
-  Code, Terminal, GitBranch, Package, Plug, Workflow, Network, Cpu, Zap,
-  // ai
-  Bot, Brain,
-  // finance
-  DollarSign, Coins, Wallet,
-  // space / fleet / geo
-  Rocket, Ship, Satellite, Radar, Globe, Compass, Map,
-  // security
-  Shield,
-};
-// "line-chart" / "line_chart" / "LineChart" → "LineChart" (lucide's key style).
-function toPascalCase(name: string): string {
-  return name.replace(/(^|[-_ ])([a-z0-9])/g, (_m, _sep, ch: string) => ch.toUpperCase());
-}
-
-// Off the curated path, resolve ANY lucide icon by name — but lazily: the dynamic
-// import pulls the full lucide set into a separate chunk that only loads when a
-// plugin actually uses a non-curated glyph, so the main bundle stays lean.
-type IconComp = LazyExoticComponent<ComponentType<{ size?: number }>>;
-// NB: `Map` is shadowed by the lucide Map icon import — use the global explicitly.
-const lazyIconCache = new globalThis.Map<string, IconComp>();
-function lazyLucideIcon(key: string): IconComp {
-  let comp = lazyIconCache.get(key);
-  if (!comp) {
-    comp = lazy(async () => {
-      const m = await import("lucide-react");
-      const Icon = (m.icons as Record<string, LucideIcon>)[key] || m.Puzzle;
-      return { default: Icon as ComponentType<{ size?: number }> };
-    });
-    lazyIconCache.set(key, comp);
-  }
-  return comp;
-}
-function pluginViewIcon(name?: string, size = 18): ReactNode {
-  if (!name) return <Puzzle size={size} />;
-  const Curated = PLUGIN_VIEW_ICONS[name];
-  if (Curated) return <Curated size={size} />;
-  const Lazy = lazyLucideIcon(toPascalCase(name));
-  return (
-    <Suspense fallback={<Puzzle size={size} />}>
-      <Lazy size={size} />
-    </Suspense>
-  );
-}
 // Studio = the workflow authoring/inspection surface. Per ADR 0020 execution is
 // a chat gesture (run subagents/workflows via /<name>), not a surface — so the
 // old "Run" tab is gone and Studio is just Workflows.

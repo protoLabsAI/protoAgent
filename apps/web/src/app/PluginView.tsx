@@ -1,23 +1,49 @@
 import designTokens from "@protolabsai/design/tokens.json";
 import { Spinner } from "@protolabsai/ui/data";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { apiUrl, authToken } from "../lib/api";
+import { registerContextMenu } from "../contextMenu/registry";
+import { useContextMenuStore } from "../contextMenu/store";
+import type { MenuEntry } from "../contextMenu/types";
 import { onTopic, replaySince } from "../lib/events";
 import { registerKeybinding } from "../ext/keybindingRegistry";
 import { runForwardedCombo } from "../keybindings/useKeybindings";
 import { createPluginEventRelay, parseSubscribe } from "../lib/pluginEventRelay";
+import {
+  parsePluginMenuOpen,
+  parsePluginMenuRegistration,
+  type PluginMenuEntry,
+  type PluginMenuOpen,
+} from "../lib/pluginContextMenu";
+import { pluginViewIcon } from "../lib/pluginIcon";
 import { parseForwardedKey, parsePluginKeybindings } from "../lib/pluginKeybindings";
 import { useUI } from "../state/uiStore";
 import { Tabs } from "@protolabsai/ui/navigation";
 import type { PluginView as PluginViewType } from "../lib/types";
 
-// Derive the plugin id from a view path (`/api/plugins/<id>/...`) — used to namespace-stamp
-// any events the sandboxed page publishes (ADR 0039 — a plugin only publishes under its own
-// namespace; the no-cross-dependency clause).
-function pluginIdFromPath(path: string): string {
-  return path.match(/\/api\/plugins\/([^/]+)\b/)?.[1] ?? "";
+// The owning plugin's id — the namespace every page-declared thing is forced into: the
+// topics it publishes (ADR 0039's no-cross-dependency clause), the chords it declares
+// (#1457), and its context-menu item ids (#3030).
+//
+// The surface key App stamps on (`plugin:<id>:<viewId>`) is authoritative; the path is the
+// fallback for a raw manifest-shaped view that never passed through App's mapping. A view
+// PAGE serves from the public namespace — `/plugins/<id>/view` (ADR 0026); `/api/plugins/
+// <id>/…` is the plugin's GATED DATA router — so the path form accepts both. Matching only
+// the /api form (as this did before #3030) resolved to "" for every real view, which
+// silently refused the whole keybinding batch and published page topics UNNAMESPACED.
+export function pluginIdFromView(view: Pick<PluginViewType, "key" | "path">): string {
+  const fromKey = view.key?.match(/^plugin:([^:]+):/)?.[1];
+  if (fromKey) return fromKey;
+  return view.path?.match(/\/(?:api\/)?plugins\/([^/]+)\b/)?.[1] ?? "";
+}
+
+// The context-menu type a plugin view's in-frame menu resolves under (#3030). ADR 0036
+// keys menus by type, so giving each plugin its own — rather than letting pages register
+// into `rail-surface` & co. — is what keeps one view's items out of every other menu.
+export function pluginMenuType(pluginId: string): string {
+  return `plugin-view:${pluginId}`;
 }
 
 // The `--pl-*` custom-property names the design package publishes, derived from its
@@ -110,6 +136,12 @@ export function PluginView({ view }: { view: PluginViewType }) {
   // handler can replace the set in place, and dropped on teardown — a keybinding that
   // outlived its iframe would post into a dead window.
   const pluginBindings = useRef<Array<() => void>>([]);
+  // The item set the page declared with `protoagent:contextmenu:register` (#3030) — the
+  // default a bare `:open` uses. Held in a ref so a re-register swaps it without a
+  // re-render, and so the open path reads the CURRENT set rather than a captured one.
+  const pluginMenuItems = useRef<PluginMenuEntry[]>([]);
+  // Disarms the open menu's "focus went back into the frame" watcher (see openPluginMenu).
+  const menuDismiss = useRef<(() => void) | null>(null);
   // Has the frame navigated to the plugin page? Gates the posts below: a mounted-but-not-yet
   // -navigated iframe is still on about:blank, which INHERITS the console's origin — under the
   // desktop app that's `tauri://localhost`, so a post targeted at the sidecar origin is refused
@@ -124,7 +156,7 @@ export function PluginView({ view }: { view: PluginViewType }) {
   // catch-up (#1640). A message can only come from the navigated page; about:blank has no
   // script. Reset when the frame is re-pointed.
   const navigatedRef = useRef(false);
-  const pluginId = useMemo(() => pluginIdFromPath(view.path), [view.path]);
+  const pluginId = useMemo(() => pluginIdFromView(view), [view.key, view.path]);
   // Background delivery (#1640): a `background: true` subscribe from the page asks App
   // to keep this view mounted (hidden) when another surface is active. Store-reported;
   // App owns the mount policy.
@@ -140,6 +172,105 @@ export function PluginView({ view }: { view: PluginViewType }) {
       /* cross-origin / detached — best effort */
     }
   };
+
+  // Open the console's context menu (ADR 0036) for a right-click the PAGE reported (#3030).
+  //
+  // The page owns the event — a right-click inside the frame never bubbles to the host, and
+  // under the desktop app the frame is cross-origin, so the host can't listen on its document
+  // either. So the page calls preventDefault() and posts `:open` with the cursor in its own
+  // viewport; we translate through the iframe's rect and open the menu there, clamped INTO
+  // the frame (a plugin doesn't get to place a console menu over the console's chrome).
+  const openPluginMenu = (req: PluginMenuOpen) => {
+    const frame = frameRef.current;
+    if (!frame || !pluginId) return;
+    const rect = frame.getBoundingClientRect();
+    // A view kept mounted for background delivery (#1640) is `display: none`'d by App, so
+    // its frame measures 0×0. Opening its menu would drop it in the console's top-left,
+    // over whatever surface IS showing — an off-screen page doesn't get to pop menus.
+    if (!rect.width || !rect.height) return;
+    // Items for THIS menu if the page sent some, else whatever it registered earlier.
+    const specs = req.entries ?? pluginMenuItems.current;
+    const origin = (() => {
+      try {
+        return new URL(apiUrl(src), window.location.href).origin;
+      } catch {
+        return window.location.origin;
+      }
+    })();
+    const entries: MenuEntry[] = specs.map((spec) =>
+      "divider" in spec
+        ? { id: spec.id, divider: true }
+        : {
+            id: spec.id,
+            label: spec.label,
+            // A NAME, resolved against the console's own icon set — no plugin markup.
+            icon: spec.icon ? pluginViewIcon(spec.icon, 14) : undefined,
+            danger: spec.danger,
+            disabled: spec.disabled,
+            run: (_ctx, helpers) => {
+              helpers.close();
+              try {
+                // Fire back with the id the PAGE knows, not our namespaced one.
+                frameRef.current?.contentWindow?.postMessage(
+                  { type: "protoagent:contextmenu:action", itemId: spec.pluginLocalId },
+                  origin,
+                );
+              } catch {
+                /* cross-origin / detached — best effort */
+              }
+            },
+          },
+    );
+    // The plugin's own affordances, then the console's. Configure… is the same action the
+    // rail icon's menu offers (ADR 0036 D6) — a view that suppressed the browser menu should
+    // never leave the operator with an EMPTY menu, so this is appended even for an empty set.
+    if (entries.length) entries.push({ id: "plugin-view-div", divider: true });
+    entries.push({
+      id: "plugin-view-configure",
+      label: "Configure…",
+      icon: <SlidersHorizontal size={14} />,
+      // The view's label stands in for the plugin's display name — App resolves the real
+      // one from runtime status for the rail menu, which isn't worth a query from here.
+      run: () => useUI.getState().openPluginConfig(pluginId, view.label),
+    });
+
+    useContextMenuStore.getState().openMenu(
+      pluginMenuType(pluginId),
+      rect.left + Math.min(Math.max(req.x, 0), rect.width),
+      rect.top + Math.min(Math.max(req.y, 0), rect.height),
+      { entries },
+    );
+
+    // A click back inside the frame is invisible to the host's dismiss listener (it's another
+    // document), so the menu would hang there until Escape. Focus moving into the frame DOES
+    // blur the host window — close on that. Armed a tick late so the menu taking focus on
+    // open doesn't immediately trip it.
+    menuDismiss.current?.();
+    const onBlur = () => {
+      useContextMenuStore.getState().close();
+      disarm();
+    };
+    const disarm = () => {
+      window.removeEventListener("blur", onBlur);
+      menuDismiss.current = null;
+    };
+    const armed = window.setTimeout(() => window.addEventListener("blur", onBlur), 0);
+    menuDismiss.current = () => {
+      clearTimeout(armed);
+      disarm();
+    };
+  };
+
+  // This view's menu type exists only while the view is mounted. `items` reads the entries
+  // off the ctx the open passes, so the resolved menu is always the one built for THAT
+  // right-click — including the frame-specific `run` closures that post the action back.
+  useEffect(() => {
+    if (!pluginId) return;
+    return registerContextMenu({
+      type: pluginMenuType(pluginId),
+      items: (ctx: { entries?: MenuEntry[] } | undefined) => ctx?.entries ?? [],
+    });
+  }, [pluginId]);
 
   // Probe the view URL before mounting the iframe. A same-origin HTTP error (a 404 from an
   // unmounted /api/plugins/<id>/<view>, FastAPI's {"detail":"Not Found"}) fires the iframe's
@@ -273,6 +404,19 @@ export function PluginView({ view }: { view: PluginViewType }) {
             },
           }),
         );
+      } else if (m.type === "protoagent:contextmenu:register") {
+        // The page declares a DEFAULT item set (#3030). Ids are namespaced in the parser —
+        // a view can't register over a core menu item or collide with another plugin. Like
+        // the keybinding bridge, re-registering REPLACES the previous set (`items: []`
+        // clears it), so a dropped item doesn't linger as a ghost entry.
+        const entries = parsePluginMenuRegistration(m, pluginId);
+        if (entries) pluginMenuItems.current = entries;
+      } else if (m.type === "protoagent:contextmenu:open") {
+        // "The operator right-clicked here" — the only way the host learns about a
+        // right-click inside the frame. Items may ride along (a menu for whatever is under
+        // the cursor) or be omitted to use the registered set.
+        const req = parsePluginMenuOpen(m, pluginId);
+        if (req) openPluginMenu(req);
       } else if (m.type === "protoagent:keydown") {
         // A chord the page didn't handle. Without this, every host shortcut was dead
         // while a plugin view had focus — the iframe is a separate document, so its
@@ -306,6 +450,13 @@ export function PluginView({ view }: { view: PluginViewType }) {
       // …and the chords it registered, for the same reason.
       pluginBindings.current.forEach((off) => off());
       pluginBindings.current = [];
+      // A menu whose items post into a frame that's going away must go with it — the
+      // registration itself is dropped by its own effect.
+      menuDismiss.current?.();
+      pluginMenuItems.current = [];
+      if (useContextMenuStore.getState().type === pluginMenuType(pluginId)) {
+        useContextMenuStore.getState().close();
+      }
     };
   }, [src, pluginId, view.key, setPluginBackground]);
 

@@ -322,3 +322,83 @@ test("a plugin view with utility:{...} is a bottom-left widget (hover info + cli
   await expect(dialog).toBeVisible();
   await expect(dialog.locator(".plugin-view-frame")).toHaveAttribute("src", /\/plugins\/boardy\/snap/);
 });
+
+// ── Context menus inside a plugin view (#3030) ──────────────────────────────────────────
+// The console's context-menu system (ADR 0036) stopped at the iframe edge: a right-click
+// inside the frame fires in the frame's own document and never reaches the host. The mock
+// plugin page does what a real view does — preventDefault, then post the click to the host
+// with the items for whatever is under the cursor.
+
+test("right-click inside a plugin view opens the console menu, and choosing an item fires back (#3030)", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.locator(".pl-rail").getByRole("button", { name: "Board", exact: true }).click();
+  const frame = page.frameLocator(".plugin-view-frame");
+  const card = frame.locator("#card");
+  await expect(card).toBeVisible();
+
+  await card.click({ button: "right" });
+
+  // The console's own styled menu — not the browser's — carrying the page's items plus the
+  // host-appended Configure… (a view that suppressed the native menu never leaves an empty one).
+  const menu = page.locator(".pl-menu");
+  await expect(menu).toBeVisible();
+  await expect(menu.getByText("Copy ID", { exact: true })).toBeVisible();
+  await expect(menu.getByText("Delete card", { exact: true })).toBeVisible();
+  await expect(menu.getByText("Configure…", { exact: true })).toBeVisible();
+
+  // Choosing it posts the action back with the id the PAGE knows (not the namespaced one),
+  // which the page records — the round trip the whole bridge exists for.
+  await menu.getByText("Copy ID", { exact: true }).click();
+  await expect(frame.locator("body")).toHaveAttribute("data-menu-action", "copy-id");
+});
+
+test("the menu opens at the cursor — page coordinates translated through the iframe's rect", async ({ page }) => {
+  // The page reports clientX/clientY in ITS viewport; the host adds the frame's offset. Get
+  // that wrong and the menu lands in the wrong corner of the console.
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.locator(".pl-rail").getByRole("button", { name: "Board", exact: true }).click();
+  const frameEl = page.locator(".plugin-view-frame");
+  const card = page.frameLocator(".plugin-view-frame").locator("#card");
+  await expect(card).toBeVisible();
+
+  const cardBox = (await card.boundingBox())!; // page-space, even for a frame locator
+  const frameBox = (await frameEl.boundingBox())!;
+  await card.click({ button: "right" });
+
+  const menu = page.locator(".pl-menu");
+  await expect(menu).toBeVisible();
+  const menuBox = (await menu.boundingBox())!;
+  const clickX = cardBox.x + cardBox.width / 2;
+  const clickY = cardBox.y + cardBox.height / 2;
+  // Anchored at the click point (the DS menu offsets a few px), and inside the view.
+  expect(Math.abs(menuBox.x - clickX)).toBeLessThan(40);
+  expect(Math.abs(menuBox.y - clickY)).toBeLessThan(40);
+  expect(menuBox.x).toBeGreaterThanOrEqual(frameBox.x - 1);
+});
+
+test("a right-click with no items opens the set the page registered on load (#3030)", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.locator(".pl-rail").getByRole("button", { name: "Board", exact: true }).click();
+  const plain = page.frameLocator(".plugin-view-frame").locator("#plain");
+  await expect(plain).toBeVisible();
+
+  await plain.click({ button: "right" });
+  const menu = page.locator(".pl-menu");
+  await expect(menu).toBeVisible();
+  await expect(menu.getByText("Refresh board", { exact: true })).toBeVisible();
+  await expect(menu.getByText("Copy ID", { exact: true })).toHaveCount(0); // the card's set, not this one
+});
+
+test("clicking back inside the frame dismisses the plugin menu", async ({ page }) => {
+  // A click inside the iframe never reaches the host's dismiss listener (another document),
+  // so without the focus watch the menu would hang there until Escape.
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.locator(".pl-rail").getByRole("button", { name: "Board", exact: true }).click();
+  const frame = page.frameLocator(".plugin-view-frame");
+  await frame.locator("#card").click({ button: "right" });
+  const menu = page.locator(".pl-menu");
+  await expect(menu).toBeVisible();
+
+  await frame.locator("#p").click();
+  await expect(menu).toHaveCount(0);
+});

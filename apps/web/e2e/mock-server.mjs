@@ -1311,11 +1311,19 @@ const server = createServer(async (req, res) => {
   if (pathname.startsWith("/plugins/") && req.method === "GET") {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     res.end(
-      `<!doctype html><html><body data-bridge="pending" data-events="">` +
-      `<p id="p">${pathname}</p><script>` +
+      `<!doctype html><html><body data-bridge="pending" data-events="" data-menu-action="">` +
+      `<p id="p">${pathname}</p>` +
+      // Two right-click targets for the context-menu bridge (#3030): a "card" that ships the
+      // items for whatever is under the cursor, and a plain area that opens the set the page
+      // registered once. Sized/spaced so Playwright can right-click each away from the edges.
+      `<div id="card" style="width:220px;height:80px;background:#334">card</div>` +
+      `<div id="plain" style="width:220px;height:80px;background:#443">plain</div>` +
+      `<script>` +
       `window.addEventListener("message",function(e){var m=e.data||{};` +
       `if(m.type==="protoagent:init"){` +
       `document.body.setAttribute("data-bridge",m.token?"authed":"anon");}` +
+      `else if(m.type==="protoagent:contextmenu:action"){` +
+      `document.body.setAttribute("data-menu-action",String(m.itemId));}` +
       `else if(m.type==="protoagent:event"&&typeof m.seq==="number"){` +
       `var s=document.body.getAttribute("data-events")||"";` +
       `document.body.setAttribute("data-events",s?s+","+m.seq:String(m.seq));}});` +
@@ -1325,6 +1333,17 @@ const server = createServer(async (req, res) => {
       // The recommended #1640 pattern: subscribe with a `since` high-water mark so a
       // freshly (re)mounted page catches up from the host's ring instead of polling.
       `try{parent&&parent!==window&&parent.postMessage({type:"protoagent:subscribe",patterns:["boardy.#"],since:0},"*");}catch(_){}` +
+      // Context menus (#3030): declare a default set once, then hand the host each
+      // right-click — suppressing the browser menu, as a real view does.
+      `try{parent&&parent!==window&&parent.postMessage({type:"protoagent:contextmenu:register",` +
+      `items:[{id:"refresh",label:"Refresh board",icon:"refresh-cw"}]},"*");}catch(_){}` +
+      `function pm(o){try{parent&&parent!==window&&parent.postMessage(o,"*");}catch(_){}}` +
+      `document.getElementById("card").addEventListener("contextmenu",function(e){e.preventDefault();` +
+      `pm({type:"protoagent:contextmenu:open",x:e.clientX,y:e.clientY,items:[` +
+      `{id:"copy-id",label:"Copy ID",icon:"clipboard"},{divider:true},` +
+      `{id:"delete-card",label:"Delete card",danger:true}]});});` +
+      `document.getElementById("plain").addEventListener("contextmenu",function(e){e.preventDefault();` +
+      `pm({type:"protoagent:contextmenu:open",x:e.clientX,y:e.clientY});});` +
       `</script></body></html>`,
     );
     return;
