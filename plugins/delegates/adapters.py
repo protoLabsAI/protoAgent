@@ -15,9 +15,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import re
 import uuid
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 
 logger = logging.getLogger("protoagent.plugins.delegates")
@@ -335,6 +337,141 @@ def _advertised_a2a_versions(card: dict) -> list[str]:
     return seen
 
 
+# ── the peer's own cost-v1 telemetry (#3016) ──────────────────────────────────
+#
+# A protoAgent peer measures the turn it just ran for us and ships the numbers back on
+# the wire (``tools/a2a_parse._extract_cost`` reads them off the terminal artifact).
+# This is the one delegation whose spend we never have to estimate — the peer already
+# computed it, with its own pricing, for the work we caused — so the adapter takes it
+# verbatim and bills it to the calling turn instead of dropping it on the floor.
+
+
+def _wire_number(value) -> float:
+    """A wire number as a finite float, or ``0.0`` for anything that isn't one.
+
+    Proto-JSON round-trips numbers as floats and a foreign peer may send them as
+    strings, so every field is coerced rather than trusted. Non-finite values are
+    rejected here too, and not only for tidiness: JSON parses ``Infinity`` (and
+    ``1e400``, which overflows to it), ``int(inf)`` raises ``OverflowError`` rather
+    than the ``ValueError`` a coercion guard expects, and an infinite ``cost_usd``
+    would poison the turn's sums all the way into the stored row.
+    """
+    try:
+        n = float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return n if math.isfinite(n) else 0.0
+
+
+def _wire_int(value) -> int:
+    """A wire number as an int — :func:`_wire_number` truncated toward zero."""
+    return int(_wire_number(value))
+
+
+def _peer_usage_row(result, delegate: str) -> dict | None:
+    """A peer's cost-v1 payload as a turn-accumulator usage row (#3016), or ``None``.
+
+    The shape is the one the A2A executor's ``usage`` lane already sums —
+    ``{input_tokens, output_tokens, cache_read_input_tokens,
+    cache_creation_input_tokens, cost_usd, model}`` — plus a ``peer`` tag: the #2872
+    precedent applied to a peer, so delegated spend bills to the PARENT turn while
+    staying identifiable, and the tag keeps the peer's prompt size out of the lead
+    thread's context-window fill (a peer's context is not ours).
+
+    ``input_tokens`` is carried through cache-INCLUSIVE, the LangChain
+    ``usage_metadata`` convention the peer accumulated it under and the one this side's
+    accumulator and ``record_turn`` expect (#3003) — so the stored row's disjoint
+    prompt split stays correct with a peer's tokens in it.
+
+    ``cost_usd`` is the peer's OWN ``costUsd``, never re-derived here: the peer knows
+    which models it actually routed to and we don't, so re-pricing would be a guess
+    dressed as a measurement. A peer that reports tokens but no ``costUsd`` therefore
+    contributes tokens and no cost — a visible undercount rather than an invented number.
+
+    ``None`` when the peer emitted no cost-v1 (any non-protoAgent A2A agent) or when the
+    payload carries neither tokens nor a cost: the caller then behaves exactly as before.
+    """
+    from tools.a2a_parse import PEER_MODEL_PREFIX, _extract_cost
+
+    payload = _extract_cost(result)
+    if not payload:
+        return None
+    usage = payload.get("usage")
+    usage = usage if isinstance(usage, dict) else {}
+    row = {
+        "input_tokens": _wire_int(usage.get("input_tokens")),
+        "output_tokens": _wire_int(usage.get("output_tokens")),
+        "cache_read_input_tokens": _wire_int(usage.get("cache_read_input_tokens")),
+        "cache_creation_input_tokens": _wire_int(usage.get("cache_creation_input_tokens")),
+        "cost_usd": _wire_number(payload.get("costUsd")),
+    }
+    if not any(row.values()):
+        return None
+    # A marker, not a model name: cost-v1 carries no model, and inventing one would break
+    # the promise that `models` proves which model actually ran (ADR 0006 Slice 4b). The
+    # prefix is what makes "what did this turn spend on peers" answerable from the stored
+    # row without a second telemetry row per delegation — it is the only durable trace a
+    # peer leaves, since the `peer` tag below is a stream-only routing hint. Every reader
+    # that picks the model that RAN filters markers out with `a2a_parse.drop_peer_markers`.
+    row["model"] = f"{PEER_MODEL_PREFIX}{delegate}"
+    row["peer"] = delegate
+    return row
+
+
+# A detached background delegation must bill NOTHING, and saying so takes a flag (#3016).
+#
+# ``asyncio.create_task`` COPIES the spawning context, so the job that
+# ``_spawn_background_delegation`` fires from inside the ``delegate_to`` tool body inherits
+# that body's LangChain run context — the callback manager ``adispatch_custom_event`` reads.
+# Left alone, a detached delegation therefore bills the spawning turn *if the peer answers
+# while that turn is still streaming* and is silently dropped if it answers after: the same
+# delegation producing two different telemetry rows depending on how fast the peer was.
+# A detached job is not the spawning turn's work — it is delivered to a LATER turn — so it
+# is excluded deterministically instead, which is also what ADR 0006 documents.
+_DETACHED_DELEGATION: ContextVar[bool] = ContextVar("protoagent_detached_delegation", default=False)
+
+
+def mark_delegation_detached() -> None:
+    """Mark this coroutine's context as a detached background delegation (ADR 0050).
+
+    Called at the top of the background job's own coroutine, so the flag is set in the
+    context ``asyncio.create_task`` copied for it and never leaks back to the spawning
+    turn (a contextvar set inside a task is that task's alone)."""
+    _DETACHED_DELEGATION.set(True)
+
+
+async def _bill_peer_usage(result, delegate: str) -> None:
+    """Surface a peer's reported spend onto the CALLING turn's stream (#3016).
+
+    Dispatched as a custom ``usage`` event from inside the ``delegate_to`` tool body's
+    call stack — the lane #2872 built for subagents: ``server/chat.py`` forwards each one
+    verbatim as a ``("usage", …)`` frame and the A2A executor's accumulator sums it into
+    the turn's tokens, cost, and models. Reusing that lane is what lets
+    ``Adapter.dispatch`` keep its ``-> str`` contract (stable across three adapters), and
+    is why nothing is stashed on the adapter: ``ADAPTERS`` holds one instance per type for
+    the whole process, so last-call state on it would race across a concurrent fan-out.
+
+    Best-effort **end to end** — reading the payload included. A peer with no cost-v1
+    emits nothing, having no run context at all (a unit test, the CLI runner) is not an
+    error, and neither is a payload this cannot parse: telemetry must never turn a
+    delegation that succeeded into one that failed. That is not hypothetical here — a
+    raise would propagate through ``registry.dispatch``, which records the delegate as
+    failing before re-raising, so a malformed number would discard an answer already in
+    hand *and* put a red mark on a healthy peer.
+    """
+    if _DETACHED_DELEGATION.get():
+        return
+    try:
+        row = _peer_usage_row(result, delegate)
+        if not row:
+            return
+        from langchain_core.callbacks import adispatch_custom_event
+
+        await adispatch_custom_event("usage", dict(row))
+    except Exception:  # noqa: BLE001 — telemetry must never break a delegation
+        logger.debug("[delegates] peer usage row not billed to the turn stream", exc_info=True)
+
+
 class A2aAdapter(Adapter):
     type = "a2a"
     label = "A2A agent"
@@ -580,6 +717,9 @@ class A2aAdapter(Adapter):
             # resume protocol with it (caught live, 2026-08-20).
             text = _extract_text(result)
             if text and not _is_input_required(state):
+                # Bill the peer's own cost-v1 telemetry to this turn before returning
+                # the answer (#3016) — the synchronous path a protoAgent peer takes.
+                await _bill_peer_usage(result, d.name)
                 return text
             deadline = time.monotonic() + poll_timeout
             while task_id and not _is_terminal(state) and not _is_input_required(state) and time.monotonic() < deadline:
@@ -620,6 +760,15 @@ class A2aAdapter(Adapter):
                 )
             text = _extract_text(result)
             if text:
+                # Same billing as the inline path (#3016), for the peer that made us
+                # poll. Deliberately NOT done on the two branches above. A park emits no
+                # terminal artifact — only a status message — so its leg's spend is not
+                # on the wire at all; the peer keeps its own row for it (#2943) and this
+                # side undercounts a HITL chain by that much, documented in ADR 0006. And
+                # the "already finished, nothing to resume" branch reports work an EARLIER
+                # dispatch caused — billing it here would double-count it into a second
+                # turn.
+                await _bill_peer_usage(result, d.name)
                 return text
             if task_id and not _is_terminal(state):
                 raise DelegateError(

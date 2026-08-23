@@ -976,11 +976,14 @@ async def _run_turn_stream(
                 if not parent_tool_id:
                     yield ("usage", {**usage_out, "cost_usd": cost, "model": model})
         elif kind == "on_custom_event" and name == "usage":
-            # A delegation's model usage, dispatched by the `task`/`task_batch`
-            # tool body after its sub-graph settles (#2872). Same shape as the
-            # on_chat_model_end frame above plus a `subagent_type` tag (the
-            # executor keeps tagged rows out of the lead thread's context-window
-            # fill); forwarded verbatim so the turn bills delegated work.
+            # A delegation's model usage. Two producers dispatch into this lane:
+            # the `task`/`task_batch` tool body after its sub-graph settles
+            # (#2872), and the delegates a2a adapter with an A2A peer's OWN
+            # cost-v1 telemetry read off the terminal artifact (#3016). Same
+            # shape as the on_chat_model_end frame above plus a `subagent_type`
+            # or `peer` tag (the executor keeps tagged rows out of the lead
+            # thread's context-window fill); forwarded verbatim so the turn bills
+            # delegated work.
             data = event.get("data")
             if isinstance(data, dict):
                 yield ("usage", dict(data))

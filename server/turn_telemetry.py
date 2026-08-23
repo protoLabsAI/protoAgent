@@ -24,6 +24,7 @@ import logging
 import uuid
 
 from runtime.state import STATE
+from tools.a2a_parse import drop_peer_markers
 
 log = logging.getLogger(__name__)
 
@@ -57,7 +58,10 @@ def _soul_revision() -> str:
 
 def _publish_usage(row: dict, models: list[str], soul_rev: str) -> None:
     """Realtime cost/usage on the bus (ADR 0051 Slice 3) so a per-turn HUD can
-    show live spend without polling the store. Independent of the SQL store."""
+    show live spend without polling the store. Independent of the SQL store.
+
+    ``models`` is the turn's REAL models — the caller has already dropped the
+    ``peer:`` markers (#3016), which name a delegate rather than a model."""
     try:
         from server import _event_bus
 
@@ -159,7 +163,12 @@ def record_turn(
     # (against the documented contract) must not drive this negative.
     input_tokens = max(0, int(u.get("input_tokens", 0) or 0) - cache_read - cache_creation)
     output_tokens = int(u.get("output_tokens", 0) or 0)
-    primary_model = models[0] if models else ((STATE.graph_config.model_name if STATE.graph_config else "") or "")
+    # The `model` column names the model that ran this turn, so it must skip the
+    # `peer:<delegate>` markers a delegation contributes (#3016); `models` below keeps
+    # them, which is where peer spend stays legible. See `drop_peer_markers` for why.
+    real_models = drop_peer_markers(models)
+    configured_model = (STATE.graph_config.model_name if STATE.graph_config else "") or ""
+    primary_model = real_models[0] if real_models else configured_model
 
     ended = datetime.now(timezone.utc)
     created = ended - timedelta(milliseconds=duration_ms)
@@ -194,7 +203,7 @@ def record_turn(
     }
 
     if publish_usage_event:
-        _publish_usage(row, models, soul_rev)
+        _publish_usage(row, real_models, soul_rev)
 
     store = STATE.telemetry_store
     if store is None:

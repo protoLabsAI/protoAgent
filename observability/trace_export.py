@@ -40,6 +40,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from tools.a2a_parse import drop_peer_markers
+
 log = logging.getLogger(__name__)
 
 _enabled = False
@@ -308,6 +310,11 @@ def export_turn(outcome: Any, *, checkpointer: Any, graph_config: Any, bound_too
 
         verified, reward = _reward(state)
         models = list(getattr(outcome, "models", None) or [])
+        # `meta.model` is the row's teacher model — the lab trains against it — so it
+        # picks from the REAL models, never from a `peer:<delegate>` marker a delegation
+        # contributed (#3016). `meta.models` keeps the full list, markers included: that
+        # is where the row records that a peer did some of this turn's work.
+        real_models = drop_peer_markers(models)
 
         # Trace id ties this row to the distributed Langfuse trace (and to any
         # cross-agent delegation rows that share it). Best-effort — the trace
@@ -338,7 +345,7 @@ def export_turn(outcome: Any, *, checkpointer: Any, graph_config: Any, bound_too
                 "session_id": session_id,
                 "task_id": task_id,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "model": models[0] if models else "",
+                "model": real_models[0] if real_models else "",
                 "models": models,
                 "origin": getattr(outcome, "origin", "") or "",
                 "trigger": getattr(outcome, "trigger", "") or "",

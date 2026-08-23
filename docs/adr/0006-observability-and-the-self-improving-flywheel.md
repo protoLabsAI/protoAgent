@@ -240,6 +240,93 @@ Resolved as:
   Not backfilled: quietly rewriting recorded history is worse than a documented
   seam, and the error is conservative.
 
+### Amendment — a peer's `cost-v1` bills to the calling turn (#3016, 2026-08-23)
+
+We emitted `cost-v1` on every terminal artifact and then ignored it in our own
+client: `plugins/delegates/adapters.py::A2aAdapter.dispatch` read
+`_extract_text(result)` and returned a bare `str`, so a delegation to a
+protoAgent peer spent real money that appeared in no row on the *calling* side.
+A hub fanning work out to members reported only its own thinking, and ADR 0055
+multi-team orchestration was uncountable by construction. Of every delegation
+kind this is the one where the number is already computed, already correct, and
+already on the wire — an ACP coder's spend genuinely isn't observable from here
+(#3015), a peer's is.
+
+**Where a peer's spend lands: the calling turn, tagged — not a row of its own.**
+This follows #2872, which settled the same question for subagents: a delegated
+model call bills to the parent turn while carrying a tag, and the tag excludes it
+from the parent's context-window fill. One row per turn keeps "what did this turn
+cost" answerable without a join, and the tag keeps the delegated share
+separable. A peer row is `{…tokens…, cost_usd, model: "peer:<delegate>", peer:
+"<delegate>"}`.
+
+The mechanics, and why each is what it is:
+
+- **Read at the terminal artifact.** `tools/a2a_parse.py::_extract_cost` takes the
+  cost-v1 payload off the terminal artifact's metadata map keyed by the extension
+  URI (protolabs-a2a 0.3.0 — the shape `a2a_impl/executor.py::_terminal_parts`
+  emits), falling back to the terminal status message's metadata. It sits beside
+  `_extract_text` — the wire reader belongs with the other wire readers, in a layer
+  core surfaces can import without reaching into `plugins/`.
+- **Attributed through the existing `usage` custom-event lane** (#2872,
+  `server/chat.py`'s `on_custom_event` branch → the executor's accumulator).
+  `Adapter.dispatch`'s `-> str` return type is a stable interface across three
+  adapters and does not change; nothing is stashed on the adapter either, since
+  `ADAPTERS` holds one instance per type process-wide and last-call state on it
+  would race across a concurrent fan-out.
+- **The peer's `costUsd` is used verbatim, never re-derived.** The peer knows
+  which models it routed to; we don't. A peer reporting tokens but no `costUsd`
+  contributes tokens and no cost — a visible undercount beats an invented number.
+- **`model` carries a `peer:` marker, not a model name.** cost-v1 has no model
+  field, and `models` exists to prove which model actually ran (Slice 4b). The
+  prefix keeps "what did this turn spend on peers" answerable from the stored row —
+  it is the only durable trace a delegation leaves, since the `peer` tag itself is a
+  stream-only routing hint. Because a marker is not a model, **every field that names
+  the model that ran picks from `tools.a2a_parse.drop_peer_markers(models)`, never
+  from the raw list**: the row's `model` column and the `turn.usage` bus event
+  (`server.turn_telemetry`), and the fleet trace export's `meta.model`
+  (`observability.trace_export`), which the lab consumes as the row's teacher model.
+  One helper because a fourth reader is a matter of time, and a marker leaking into
+  any of them is the same defect. Normally the lead's own call is first anyway, but a
+  provider that reports no usage leaves the marker leading the list — and a per-model
+  breakdown (or a training row) that says `peer:orbis` is simply wrong. The raw
+  `models` list keeps its markers everywhere.
+- **Silent degradation is the contract.** A peer that emits no cost-v1 — any
+  non-protoAgent A2A agent — behaves exactly as before: no row, no cost, same
+  text. So is a payload we can't read: **reading and dispatching are both inside the
+  best-effort guard**, because a raise would propagate through `registry.dispatch`,
+  which records the delegate as failing before re-raising — discarding an answer
+  already in hand and red-flagging a healthy peer over a bad number. Telemetry must
+  never break a delegation (#2872's rule, and it applies to the parse half too).
+
+Known limits, deliberately left rather than papered over:
+
+- A peer delegation counts as **one** `llm_calls` however many calls the peer
+  really made — cost-v1 reports no call count.
+- A **background** delegation (ADR 0050) bills nothing — and that takes a deliberate
+  flag, not the absence of one. `asyncio.create_task` COPIES the spawning context, so
+  the detached job inherits the `delegate_to` tool body's LangChain run context and
+  *can* reach the spawning turn's stream: left alone it would bill that turn whenever
+  the peer answered before the turn closed and drop the row when it answered after —
+  the same delegation writing two different rows depending on the peer's latency. A
+  contextvar set at the top of the job's own coroutine (`mark_delegation_detached`)
+  makes the exclusion deterministic. Detached spend belongs to the later turn the
+  reply is drained into, not to the turn that spawned it; billing it there properly
+  means carrying the peer's row through the background job's completion into that
+  turn, which is a separate change.
+- **Only spend that reached a terminal artifact is billable here.** A peer leg that
+  ends without one — a HITL park (#2943's `input_required` leg, which emits a status
+  message and no artifact) or a failed turn — put no cost-v1 on the wire, so the
+  caller cannot bill it. It is not lost: the peer records that leg in its own store
+  as a row of its own. The consequence is that a HITL delegation chain undercounts on
+  the calling side by the peer's pre-park spend. Closing it means emitting cost-v1 on
+  the park and failure paths too — an emitting-side change, and a separate one.
+- Nothing is deduplicated across dispatches. Correct today because each billed
+  return path corresponds to one leg the caller just caused (a resumed task's
+  terminal artifact is REPLACED in place under `{task_id}-answer`, so it carries the
+  resumed leg only), and the "already finished, nothing to resume" branch returns
+  without billing. A peer that accumulated across legs would double-count.
+
 ## 6. Consequences
 
 **Positive**
