@@ -855,9 +855,10 @@ FIELDS: list[Field] = [
         "Tracing",
         "Base URL of the Langfuse instance to send to, e.g. https://cloud.langfuse.com. "
         "Blank falls back to http://host.docker.internal:3001, which only resolves inside the "
-        "bundled Docker compose — a desktop-launched agent needs a real URL here. Applies to the "
-        "key pair below; credentials from LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY go to "
-        "LANGFUSE_HOST instead, never here (#3039).",
+        "bundled Docker compose — a desktop-launched agent needs a real URL here, or a "
+        "LANGFUSE_HOST in the environment, which blank falls back to first. Applies to the key "
+        "pair below; credentials from LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY use "
+        "LANGFUSE_HOST instead and never this (#3039).",
         restart=True,
         depends_on={"key": "tracing.enabled"},
     ),

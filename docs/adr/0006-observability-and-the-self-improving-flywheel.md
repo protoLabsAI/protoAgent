@@ -421,3 +421,41 @@ And the surface now states its own state: `/api/telemetry/recent` reports `traci
 and the console's Trace column reads `off` rather than `—` when tracing is disabled. A column
 of dashes reads as "these turns weren't traced" — the failure mode that let a month of dark
 tracing pass for normal.
+
+### Amendment — env keys never follow a config host (#3039, 2026-08-23)
+
+The amendment above made `tracing.host` config, and left the host resolving as one
+`env_host or cfg_host or _DEFAULT_HOST` chain regardless of which layer answered for the
+*keys*. `docker-compose.yml` passes `LANGFUSE_HOST=${LANGFUSE_HOST:-}` — set and **empty**
+for an operator who exports only the key pair — so `cfg_host` won that chain, and the
+deployment's credentials left the process as a Basic auth header aimed wherever
+`tracing.host` said, carrying prompts, tool IO and span bodies with them. `tracing.host` is
+not a secret field, so it carries none of the handling `public_key`/`secret_key` get, and
+config reaches an instance through more paths than deployment env does: snapshot import, a
+fork's committed YAML, any write to `langgraph-config.yaml`. Before #3017 the host was
+env-only and config *could not* redirect deployment credentials; that property is restored.
+
+**The block is directional, and the direction is the whole decision.** Env keys resolve to
+`LANGFUSE_HOST`/`LANGFUSE_URL` or `_DEFAULT_HOST` and stop. Config keys still fall back to
+`env_host` (`cfg_host or env_host or _DEFAULT_HOST`). Env is the *more trusted* layer — only
+whoever starts the process sets it — so an env host aiming config-owned keys was never the
+hole, and refusing that fallback would break a shape this repo actively tells operators to
+run: compose persists `/sandbox/config` while
+`config/langgraph-config.example.yaml` says the two keys are secrets that belong in
+Settings ▸ Tracing, i.e. host-in-env + keys-in-Settings. The fleet has the same shape —
+`graph/fleet/supervisor.py` spawns members with `full_env = {**os.environ, **env}`, so every
+member inherits the hub's `LANGFUSE_HOST` while its keys come from its own per-agent
+Settings. Mirroring the block would have sent those members to `host.docker.internal:3001`,
+an address that resolves only inside compose, and taken their tracing dark to fix nothing.
+
+**A host that loses is named, not dropped.** Both discard paths worked before the upgrade,
+so without a line the operator's only other signal is a Trace column that quietly stops
+filling — precisely the failure this ADR's #3017 amendment exists to remove, one layer down.
+`resolve_credentials` prints the ignored value, why it lost, and where the traces went
+instead, beside the `initialized from {source} -> {host}` line that already says which layer
+answered.
+
+Snapshot import lists `tracing.host` in `CAPABILITY_KEYS`, so an import plan names it
+alongside `filesystem.allow_run`: "the config you accepted chooses where your prompts and
+tool IO get shipped" is consent-shaped, not config trivia
+([ADR 0071](0071-plugin-permissions-trust-model.md) D1 — show it, don't neuter it).

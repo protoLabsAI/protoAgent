@@ -191,11 +191,28 @@ class TestInspect:
         assert "tracing.host" in keys
         assert "filesystem.allow_run" in keys and "delegates" in keys
 
-    def test_tracing_enabled_without_a_host_grants_nothing(self):
-        """Tracing switched on with no host goes to the module default, which is the
-        bundled compose service — nothing left the box, so nothing to flag."""
-        plan = inspect_snapshot(_snapshot(config={"tracing": {"enabled": True, "host": ""}}))
-        assert plan.capabilities == []
+    def test_tracing_enabled_without_a_host_is_not_flagged(self):
+        """Tracing switched on with no host names no destination — it falls back to the
+        environment's LANGFUSE_HOST or the bundled compose service (#3039) — so there is
+        nothing for the plan to warn about.
+
+        Asserted as ``tracing.host`` being absent, NOT as an empty capability list: every
+        real exported snapshot carries ordinary capability keys alongside its tracing block,
+        so ``== []`` would pass only in a clean room and fail the moment this fixture looked
+        like a live agent. The fixture carries that company deliberately."""
+        plan = inspect_snapshot(
+            _snapshot(
+                config={
+                    "model": {"name": "protolabs/reasoning"},
+                    "operator": {"allowed_dirs": ["/srv/work"]},
+                    "mcp": {"servers": {"github": {"command": "npx"}}},
+                    "tracing": {"enabled": True, "host": ""},
+                }
+            )
+        )
+        keys = [k for k, _ in plan.capabilities]
+        assert "tracing.host" not in keys
+        assert "operator.allowed_dirs" in keys and "mcp.servers" in keys
 
     def test_a_plain_config_grants_nothing(self):
         assert inspect_snapshot(_snapshot()).capabilities == []

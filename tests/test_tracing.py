@@ -549,30 +549,34 @@ def test_legacy_langfuse_url_env_still_names_the_host(monkeypatch):
     assert tracing._langfuse.host == "https://legacy.langfuse.example"
 
 
-# ── the host is paired with the layer that supplied the keys (#3039) ──────────
+# ── env keys never follow a config host (#3039) ───────────────────────────────
 #
 # #3017 resolved the host as ``env_host or cfg_host or _DEFAULT_HOST``, independently
 # of which layer answered for the KEYS — so config data chose the destination for
 # deployment-owned credentials. docker-compose.yml passes ``LANGFUSE_HOST=${LANGFUSE_HOST:-}``,
 # which is SET AND EMPTY for an operator who exports only the key pair, so ``cfg_host``
 # won that chain and the deployment's keys left the process as a Basic auth header aimed
-# wherever ``tracing.host`` said. These pin the pairing on the shapes it actually runs in:
-# a populated instance config loaded off disk through ``LangGraphConfig.from_yaml`` with
-# the credentials in ``secrets.yaml`` (where a Settings save puts them), against the
-# compose environment block verbatim — empty ``LANGFUSE_HOST`` included.
+# wherever ``tracing.host`` said. The block is DIRECTIONAL: env is the more trusted layer,
+# so config keys still fall back to ``env_host`` — host-in-env + keys-in-Settings is the
+# shape compose and the example YAML tell operators to use, and it is how every fleet member
+# runs. These pin both halves on the shapes they actually run in: a populated instance config
+# loaded off disk through ``LangGraphConfig.from_yaml`` with the credentials in ``secrets.yaml``
+# (where a Settings save puts them), against the compose environment block verbatim — the
+# set-and-empty ``LANGFUSE_*`` vars included.
 
 
 def _compose_env(monkeypatch, *, langfuse_host: str = "", with_keys: bool = True):
-    """The environment docker-compose.yml exports, not a minimal one. ``LANGFUSE_HOST``
-    is ``${LANGFUSE_HOST:-}`` — present and EMPTY unless the operator names one, which is
-    the shape that made #3039 reachable."""
+    """The environment docker-compose.yml exports, not a minimal one. Every ``LANGFUSE_*``
+    var is ``${VAR:-}`` — PRESENT AND EMPTY unless the operator exports one, which is both
+    the shape that made #3039 reachable and the shape an operator who keeps the key pair in
+    Settings ▸ Tracing actually runs (compose persists /sandbox/config, so secrets.yaml is
+    where those two land)."""
     _clear_langfuse_env(monkeypatch)
     monkeypatch.setenv("AGENT_NAME", "protoagent")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-deployment-openai")
     monkeypatch.setenv("A2A_AUTH_TOKEN", "deployment-bearer")
-    if with_keys:
-        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-deployment")
-        monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-deployment")
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-deployment" if with_keys else "")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-deployment" if with_keys else "")
     monkeypatch.setenv("LANGFUSE_HOST", langfuse_host)
 
 
@@ -647,24 +651,48 @@ def test_config_keys_go_to_the_config_host(monkeypatch, tmp_path):
     assert tracing._langfuse.host == "https://cloud.langfuse.com"
 
 
-def test_config_keys_do_not_follow_an_env_host(monkeypatch, tmp_path):
-    """The mirror of the leak. The host travels with the keys in BOTH directions, so a
-    LANGFUSE_HOST left in the environment does not silently redirect credentials the
-    operator entered in Settings — with no config host, that is the module default."""
+def test_config_keys_still_follow_an_env_host_when_settings_names_none(monkeypatch, tmp_path):
+    """The block does NOT mirror, and this is the deployment the mirror would have broken:
+    host in the environment, key pair in Settings ▸ Tracing (secrets.yaml), ``tracing.host``
+    left blank — exactly what config/langgraph-config.example.yaml tells operators to do,
+    and what compose's persisted /sandbox/config gives them. env is the MORE trusted layer
+    — only whoever starts the process sets it — so an env host aiming config-owned keys was
+    never the #3039 hole. Refusing it would send these traces to _DEFAULT_HOST, which does
+    not resolve outside compose, and take tracing silently dark."""
     tracing = _reload_tracing()
     _install_fake_langfuse(monkeypatch)
-    _compose_env(monkeypatch, langfuse_host="https://langfuse.deployment.example", with_keys=False)
+    _compose_env(monkeypatch, langfuse_host="https://langfuse.company.example", with_keys=False)
     config = _instance_config(tmp_path, tracing_host="", tracing_keys=True)
 
     tracing.init(config=config)
 
     assert tracing._langfuse.public_key == "pk-lf-settings"
-    assert tracing._langfuse.host == "http://host.docker.internal:3001"
+    assert tracing._langfuse.secret_key == "sk-lf-settings"
+    assert tracing._langfuse.host == "https://langfuse.company.example"
+
+
+def test_a_fleet_member_inherits_the_hubs_host_with_its_own_settings_keys(monkeypatch, tmp_path):
+    """The #3017 target shape, and the one the mirror direction hit hardest. A member is
+    spawned by ``graph/fleet/supervisor.py`` with ``full_env = {**os.environ, **env}`` and
+    ``run_exec`` adds only PROTOAGENT_HOME / PROTOAGENT_INSTANCE, so it inherits the hub's
+    LANGFUSE_HOST while its keys come from its own per-agent Settings and its own config
+    names no host. Its traces belong on the hub's Langfuse, not on host.docker.internal."""
+    tracing = _reload_tracing()
+    _install_fake_langfuse(monkeypatch)
+    _compose_env(monkeypatch, langfuse_host="https://langfuse.company.example", with_keys=False)
+    monkeypatch.setenv("PROTOAGENT_HOME", str(tmp_path / "member-home"))
+    monkeypatch.setenv("PROTOAGENT_INSTANCE", "member-a")
+    config = _instance_config(tmp_path, tracing_host="", tracing_keys=True)
+
+    tracing.init(config=config)
+
+    assert tracing._langfuse.host == "https://langfuse.company.example"
 
 
 def test_a_config_host_beats_a_leftover_env_host_when_config_supplied_the_keys(monkeypatch, tmp_path):
-    """Same pairing from the operator's side: the host typed into Settings beside those
-    keys is the one used, not an unrelated LANGFUSE_HOST in the environment."""
+    """The pairing from the operator's side: the host typed into Settings beside those keys
+    is the one used, not an unrelated LANGFUSE_HOST in the environment. env_host is the
+    FALLBACK for config keys, not an override of them."""
     tracing = _reload_tracing()
     _install_fake_langfuse(monkeypatch)
     _compose_env(monkeypatch, langfuse_host="https://langfuse.deployment.example", with_keys=False)
@@ -673,6 +701,63 @@ def test_a_config_host_beats_a_leftover_env_host_when_config_supplied_the_keys(m
     tracing.init(config=config)
 
     assert tracing._langfuse.host == "https://cloud.langfuse.com"
+
+
+# ── a losing host is NAMED, never dropped on the floor (#3039) ────────────────
+#
+# Both discards land on paths that worked before the upgrade, so without a line the
+# operator's first signal is a Trace column that stops filling — the silence #3017 exists
+# to remove, one layer down. The boot log is where this module already says which layer
+# answered, so it is where the ignored value belongs too.
+
+
+def test_a_discarded_config_host_is_named_on_the_boot_line(monkeypatch, tmp_path, capsys):
+    """Env keys + a config host: the config host loses, and boot says so with the value it
+    ignored, why, and where the traces went instead."""
+    tracing = _reload_tracing()
+    _install_fake_langfuse(monkeypatch)
+    _compose_env(monkeypatch, langfuse_host="")
+    config = _instance_config(tmp_path, tracing_host="https://collector.attacker.example", tracing_keys=True)
+
+    tracing.init(config=config)
+    out = capsys.readouterr().out
+
+    assert "ignoring tracing.host=https://collector.attacker.example" in out
+    assert "LANGFUSE_HOST" in out
+    assert "http://host.docker.internal:3001" in out
+    assert "[tracing] Langfuse initialized from env -> http://host.docker.internal:3001" in out
+
+
+def test_a_discarded_env_host_is_named_on_the_boot_line(monkeypatch, tmp_path, capsys):
+    """Config keys + hosts on both layers: tracing.host wins and the ignored LANGFUSE_HOST
+    is named, so an operator upgrading off #3017 (where env_host won this pair) can see the
+    destination moved rather than discover it from an empty Trace column."""
+    tracing = _reload_tracing()
+    _install_fake_langfuse(monkeypatch)
+    _compose_env(monkeypatch, langfuse_host="https://langfuse.deployment.example", with_keys=False)
+    config = _instance_config(tmp_path, tracing_host="https://cloud.langfuse.com", tracing_keys=True)
+
+    tracing.init(config=config)
+    out = capsys.readouterr().out
+
+    assert "ignoring LANGFUSE_HOST=https://langfuse.deployment.example" in out
+    assert "tracing.host" in out
+    assert "[tracing] Langfuse initialized from config -> https://cloud.langfuse.com" in out
+
+
+def test_no_ignored_host_line_when_the_two_layers_agree(monkeypatch, tmp_path, capsys):
+    """The line is a diagnostic, not noise: naming the same host on both layers discards
+    nothing, so nothing is reported."""
+    tracing = _reload_tracing()
+    _install_fake_langfuse(monkeypatch)
+    _compose_env(monkeypatch, langfuse_host="https://langfuse.company.example")
+    config = _instance_config(tmp_path, tracing_host="https://langfuse.company.example", tracing_keys=True)
+
+    tracing.init(config=config)
+    out = capsys.readouterr().out
+
+    assert tracing._langfuse.host == "https://langfuse.company.example"
+    assert "ignoring" not in out
 
 
 def test_init_is_reentrant_and_never_replaces_a_live_client(monkeypatch):
