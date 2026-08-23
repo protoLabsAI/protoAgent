@@ -1,10 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { findSlashCommand } from "../ext/slashRegistry";
 import "./coreSlashCommands"; // side-effect: registers /new, /clear, /effort
 
 import type { ComposerFormSpec, SlashContext } from "../ext/slashRegistry";
-import { REASONING_EFFORTS } from "./chat-store";
+import { api } from "../lib/api";
+import { chatStore, REASONING_EFFORTS } from "./chat-store";
 
 function ctx(over: Partial<SlashContext> = {}): SlashContext {
   return { rest: "", sessionId: null, noteToThread: () => {}, setDraft: () => {}, focusComposer: () => {}, ...over };
@@ -15,6 +16,10 @@ function effortField(spec: ComposerFormSpec): { oneOf: { const: string }[]; defa
   const props = (spec.payload.steps![0].schema as { properties: Record<string, unknown> }).properties;
   return props.effort as { oneOf: { const: string }[]; default?: string };
 }
+
+afterEach(() => {
+  vi.restoreAllMocks(); // undo the /clear spies on chatStore / api
+});
 
 describe("core slash commands (dogfood the seam, ADR 0061)", () => {
   it("registers /new, /clear, /effort, /compact, /help through the same registry a fork uses", () => {
@@ -39,6 +44,30 @@ describe("core slash commands (dogfood the seam, ADR 0061)", () => {
     expect(findSlashCommand("effort")!.run(ctx())).toBe(false);
     expect(findSlashCommand("compact")!.run(ctx())).toBe(false);
     expect(findSlashCommand("help")!.run(ctx())).toBe(false);
+  });
+
+  it("/clear parks a clear request for confirmation instead of wiping inline (#2996)", () => {
+    const request = vi.spyOn(chatStore, "requestClearSession");
+    const del = vi.spyOn(api, "deleteChatSession").mockResolvedValue({ deleted: true, harvested: false });
+    const wipe = vi.spyOn(chatStore, "updateMessages");
+    let focused = false;
+
+    const handled = findSlashCommand("clear")!.run(
+      ctx({ sessionId: "s1", focusComposer: () => (focused = true) }),
+    );
+
+    expect(handled).toBe(true); // still claims the /clear token
+    expect(request).toHaveBeenCalledWith("s1");
+    // The destructive work waits on ChatSurface's confirm dialog — NOT the command.
+    expect(del).not.toHaveBeenCalled();
+    expect(wipe).not.toHaveBeenCalled();
+    expect(focused).toBe(true);
+  });
+
+  it("/clear without a session falls through AND parks no request", () => {
+    const request = vi.spyOn(chatStore, "requestClearSession");
+    expect(findSlashCommand("clear")!.run(ctx())).toBe(false);
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("/effort with an unknown level notes the error and still handles it", () => {

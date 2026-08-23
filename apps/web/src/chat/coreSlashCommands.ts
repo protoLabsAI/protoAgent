@@ -44,8 +44,10 @@ registerSlashCommand({
   description: "Clear this chat's history",
   run: (ctx) => {
     if (!ctx.sessionId) return false; // no session → not handled (falls through)
-    void api.deleteChatSession(ctx.sessionId, false).catch(() => {});
-    chatStore.updateMessages(ctx.sessionId, []);
+    // Clearing wipes the whole conversation, so confirm first (#2996): park the request in
+    // the store; ChatSurface's "Clear this conversation?" dialog (harvest opt-in) runs the
+    // destructive deleteChatSession + updateMessages only once the operator confirms.
+    chatStore.requestClearSession(ctx.sessionId);
     ctx.focusComposer();
     return true;
   },

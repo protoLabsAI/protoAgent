@@ -57,6 +57,12 @@ export type ChatState = PersistedChatState & {
   // its Harvest opt-in, server-side purge, and goal Stop-vs-Detach fork — so surfaces
   // that can't render that dialog park the id here instead of deleting directly (#2512).
   pendingDeleteRequest: string | null;
+  // A "clear this conversation" asked for from a surface that can't render a dialog —
+  // the ⌘K chat.clear keybinding and the /clear slash command, both of which run OUTSIDE
+  // React (#2996). ChatSurface owns the "Clear this conversation?" ConfirmDialog (Harvest
+  // opt-in, same as delete). Distinct from the delete request: clear wipes the history but
+  // KEEPS the tab open, so it can't ride the delete-request path. Ephemeral, never persisted.
+  pendingClearRequest: string | null;
 };
 
 // Chat sessions are PER AGENT — namespace the persisted key by the URL slug (ADR 0042 slug
@@ -413,6 +419,7 @@ let state: ChatState = {
   ].slice(0, MAX_ACTIVE_SESSIONS),
   sessionStatusMap: Object.fromEntries(resumeIds.map((id) => [id, "streaming" as SessionStatus])),
   pendingDeleteRequest: null,
+  pendingClearRequest: null,
 };
 
 const listeners = new Set<() => void>();
@@ -553,6 +560,24 @@ export const chatStore = {
   clearDeleteRequest() {
     setState((current) =>
       current.pendingDeleteRequest === null ? current : { ...current, pendingDeleteRequest: null },
+    );
+  },
+
+  /** Ask for a session's history to be CLEARED (wiped, tab kept) through the confirm
+   *  lifecycle rather than wiping it here. The ⌘K keybinding and the /clear slash command
+   *  run outside React, so they park the id here; ChatSurface consumes it into a
+   *  "Clear this conversation?" dialog (harvest opt-in) and only then wipes (#2996). */
+  requestClearSession(sessionId: string) {
+    setState((current) =>
+      current.pendingClearRequest === sessionId
+        ? current
+        : { ...current, pendingClearRequest: sessionId },
+    );
+  },
+
+  clearClearRequest() {
+    setState((current) =>
+      current.pendingClearRequest === null ? current : { ...current, pendingClearRequest: null },
     );
   },
 

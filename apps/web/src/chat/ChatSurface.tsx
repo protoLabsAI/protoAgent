@@ -28,6 +28,7 @@ import {
   takeGoalKickoff,
 } from "./chat-store";
 import "./coreSlashCommands"; // registers /new, /clear, /effort via the slash-command seam (ADR 0061)
+import { ClearConversationDialog } from "./ClearConversationDialog";
 import { exportChatToFile } from "./exportChat";
 import { PublishDialog } from "./PublishDialog";
 import { openPublishDialog } from "./publishDialogStore";
@@ -143,6 +144,9 @@ export function ChatSurface({
   // goal + close its task backlog) instead.
   const [stopGoalOnClose, setStopGoalOnClose] = useState(false);
   const pendingCloseSession = chat.sessions.find((s) => s.id === pendingClose) || null;
+  // Clear conversation (⌘K / /clear, #2996): wipe THIS tab's history but keep the tab open —
+  // gated behind the same confirm+harvest dialog as delete, since it's just as destructive.
+  const [pendingClear, setPendingClear] = useState<string | null>(null);
   // Active goals keyed by session — a tab whose session is driving a goal gets a different
   // close flow (detach + keep running) instead of the plain delete. Cached; refetches on
   // focus. `status: "active"` is the only in-flight state.
@@ -177,6 +181,23 @@ export function ChatSurface({
     // the dialog's checkbox opted in), best-effort, then drop the tab locally.
     void api.deleteChatSession(id, harvest).catch(() => {});
     chatStore.deleteSession(id);
+  }
+
+  // Clear requests from ⌘K / /clear (both run outside React, so they park the id in the store
+  // and we fold it into the confirm dialog here, #2996). Consumed only while no clear dialog is
+  // open; a stale id (tab vanished) is dropped without a dialog.
+  useEffect(() => {
+    const requested = chat.pendingClearRequest;
+    if (!requested || pendingClear !== null) return;
+    chatStore.clearClearRequest();
+    if (chat.sessions.some((s) => s.id === requested)) setPendingClear(requested);
+  }, [chat.pendingClearRequest, pendingClear, chat.sessions]);
+
+  function clearSession(id: string, harvest: boolean) {
+    // Purge the server checkpoint (harvest into knowledge ONLY when the dialog's checkbox opted
+    // in), best-effort, then wipe this tab's history locally — but KEEP the tab (unlike delete).
+    void api.deleteChatSession(id, harvest).catch(() => {});
+    chatStore.updateMessages(id, []);
   }
 
   // Kick off a bulk close (Close others/left/right). `ids` is the already-resolved target list
@@ -453,6 +474,18 @@ export function ChatSurface({
           )
         ) : undefined}
       </ConfirmDialog>
+
+      {/* Clear conversation (⌘K / /clear, #2996): destructive, so it's gated behind the
+          same confirm+harvest dialog as delete — but on confirm it wipes history and keeps
+          the tab, rather than closing it. */}
+      <ClearConversationDialog
+        open={pendingClear !== null}
+        onConfirm={(harvest) => {
+          if (pendingClear) clearSession(pendingClear, harvest);
+          setPendingClear(null);
+        }}
+        onCancel={() => setPendingClear(null)}
+      />
     </section>
   );
 }

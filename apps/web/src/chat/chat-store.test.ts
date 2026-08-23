@@ -619,3 +619,34 @@ describe("boot-time status derivation (Swap & Resume S2)", () => {
     expect(chatStore.getSnapshot().sessionStatusMap["s-orphan"]).toBeUndefined();
   });
 });
+
+// The clear-request handoff that ⌘K (chat.clear) and /clear ride (#2996): both run outside
+// React, so they park a session id here and ChatSurface folds it into the confirm dialog —
+// the same shape as the existing pendingDeleteRequest, but for clear (wipe history, keep tab).
+describe("clear-conversation request (#2996)", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    vi.resetModules(); // fresh module-level store per test
+  });
+
+  it("starts null and requestClearSession parks the id", async () => {
+    const { chatStore } = await import("./chat-store");
+    expect(chatStore.getSnapshot().pendingClearRequest).toBeNull();
+    chatStore.requestClearSession("s-clear");
+    expect(chatStore.getSnapshot().pendingClearRequest).toBe("s-clear");
+  });
+
+  it("clearClearRequest resolves it back to null", async () => {
+    const { chatStore } = await import("./chat-store");
+    chatStore.requestClearSession("s-clear");
+    chatStore.clearClearRequest();
+    expect(chatStore.getSnapshot().pendingClearRequest).toBeNull();
+  });
+
+  it("is independent of the delete request (clearing keeps the tab)", async () => {
+    const { chatStore } = await import("./chat-store");
+    chatStore.requestClearSession("s-clear");
+    // A clear must not spill into the delete lifecycle — the two dialogs are separate.
+    expect(chatStore.getSnapshot().pendingDeleteRequest).toBeNull();
+  });
+});

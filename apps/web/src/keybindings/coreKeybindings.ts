@@ -9,7 +9,6 @@
 // NOTE: ⌘T / ⌘1–9 / ⌃Tab are browser-reserved — they work in the Tauri desktop app but a
 // plain browser tab swallows them. Because every binding is rebindable, browser users can
 // remap to non-reserved combos in Settings ▸ Keyboard.
-import { api } from "../lib/api";
 import { chatStore } from "../chat/chat-store";
 import { runChatEscape } from "../chat/escapeStop";
 import { toggleLatestToolBlock } from "../chat/toolCollapse";
@@ -82,11 +81,13 @@ registerKeybinding({
   defaultKeys: "mod+k",
   scope: "chat",
   allowInInput: true,
+  // Clearing wipes the whole conversation, so ask first (#2996): park the request in the
+  // store and let ChatSurface's "Clear this conversation?" dialog (harvest opt-in) do the
+  // destructive deleteChatSession + updateMessages only once the operator confirms.
   run: () => {
     const { currentSessionId } = chatStore.getSnapshot();
     if (!currentSessionId) return;
-    void api.deleteChatSession(currentSessionId, false).catch(() => {});
-    chatStore.updateMessages(currentSessionId, []);
+    chatStore.requestClearSession(currentSessionId);
   },
 });
 // Escape-to-stop (#2968, the Claude.ai/ChatGPT convention): streaming → stop the turn;

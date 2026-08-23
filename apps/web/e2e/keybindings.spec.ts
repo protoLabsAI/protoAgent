@@ -18,12 +18,32 @@ test("mod+shift+K toggles the command palette (mod+K no longer does, #2949)", as
   await expect(page.locator(".pl-cmdk__panel")).toHaveCount(0);
 });
 
-test("mod+K clears the current conversation (chat-scoped, #2949)", async ({ page }) => {
+test("mod+K asks before clearing, then wipes only on confirm (#2949, #2996)", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await seedCurrentChat(page);
+  const userMsg = page.locator(".pl-message--user");
+  await expect(userMsg).toHaveCount(1);
+
+  // ⌘K no longer wipes on the keypress (#2996) — it opens a confirm dialog with a Harvest
+  // opt-in, and the conversation stays intact until the operator confirms.
   await page.getByPlaceholder(/Message protoAgent/i).focus(); // focus inside the chat scope
   await page.keyboard.press("ControlOrMeta+k");
-  await expect(page.locator(".pl-message--user")).toHaveCount(0);
+  const dialog = page.getByRole("dialog").filter({ hasText: "Clear this conversation?" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText("This cannot be undone.");
+  await expect(dialog.getByText(/Harvest/i)).toBeVisible(); // the opt-in checkbox
+  await expect(userMsg).toHaveCount(1); // still there — the dialog is merely open
+
+  // Dismissing SHALL NOT delete the conversation.
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(userMsg).toHaveCount(1);
+
+  // Reopen and confirm → the conversation is wiped.
+  await page.getByPlaceholder(/Message protoAgent/i).focus();
+  await page.keyboard.press("ControlOrMeta+k");
+  await page.getByRole("button", { name: "Clear conversation" }).click();
+  await expect(userMsg).toHaveCount(0);
 });
 
 test("'/' focuses the chat composer when not already typing (global, gated)", async ({ page }) => {
