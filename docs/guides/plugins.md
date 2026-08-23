@@ -7,9 +7,9 @@ verifiers — plus its own **config / secrets / Settings** (ADR 0018/0019/0032).
 Plugins run **in-process** with the agent's privileges, so they're **disabled by
 default** and you opt in explicitly — only enable plugins you trust.
 
-> The first-party **Telegram** and **GitHub** integrations ship bundled as plugins
-> (`plugins/telegram/`, `plugins/github/`), opt-in via `plugins: { enabled: [telegram] }`.
-> Integrations like **Discord**, **Google** Gmail/Calendar, and **Slack** install as
+> The first-party **Telegram** integration ships bundled as a plugin
+> (`plugins/telegram/`), opt-in via `plugins: { enabled: [telegram] }`.
+> Integrations like **Discord**, **GitHub**, **Google** Gmail/Calendar, and **Slack** install as
 > **external** plugins from their own repos (browse + install them in Settings ▸
 > Plugins ▸ Discover). To drive a **CLI coding agent over ACP**, enable the **delegates**
 > plugin and declare an `acp` delegate — see
@@ -709,8 +709,9 @@ calls each running surface's `reload(cfg)` callback. Everything is best-effort: 
 plugin/route/surface logs and never breaks boot. The shipped [`plugins/hello`](https://github.com/protoLabsAI/protoAgent/tree/main/plugins/hello)
 example demonstrates the contribution types. Plugin contributions show in
 `GET /api/runtime/status`. The bundled `plugins/telegram` (the reference
-`ChatAdapter`) and `plugins/github` first-party plugins are worked examples of the
-contribution types; the external `discord-plugin` is a fuller surface + route + tools.
+`ChatAdapter`) and `plugins/friction` first-party plugins are worked examples of the
+contribution types; the external `discord-plugin` and `github-plugin` are fuller
+surface + route + tools (+ status probe) examples.
 
 ## Where plugins live & how they're enabled {#enable-one}
 

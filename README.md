@@ -175,16 +175,18 @@ First-party plugins ship in `plugins/` — `delegates` is a built-in, `notes`, `
 | [`plugin-devkit`](./plugins/plugin-devkit/) | tool · subagent · skill · workflow · view | The authoring kit + reference plugin — the agent can scaffold and build its own plugins |
 | [`workflows`](./plugins/workflows/) | tools · view | Declarative multi-step subagent workflows (DAG recipes) with the **Studio** console surface for authoring and live-watching runs; a step can carry `gate: human`, pausing for operator approval before it runs. Opt-in via `plugins.enabled` |
 | [`telegram`](./plugins/telegram/) | surface | Run the agent as a Telegram bot — the reference [communication plugin](./docs/guides/communication-plugins.md) |
-| [`github`](./plugins/github/) | tools | Read-only GitHub tools over the `gh` CLI |
 | [`execute_code`](./plugins/execute_code/) | tool · settings | A Python interpreter the agent runs code in — on desktop, provision the one-click [managed runtime](./docs/guides/python-runtime.md) and the document skills (docx · xlsx · pptx · pdf) light up |
 | [`coder`](./plugins/coder/) | tool · settings | Verifier-grounded code-solve (`coder_solve`) — an execution-grounded search ladder for testable coding tasks ([guide](./docs/guides/coder.md)) |
 | [`friction`](./plugins/friction/) | tools | Friction log — the agent records its own missing/awkward tooling and confusing errors, so you can fix the sharp edges |
 | [`orgchart`](./plugins/orgchart/) | view | Live diagram of the agent fleet — every agent a node, delegation edges drawn as they happen |
 | [`hello`](./plugins/hello/) | tool · skill · view | Minimal example — copy it to start your own |
 
-Integrations like **Discord**, **Slack** (Socket Mode `ChatAdapter`) and **Google**
-Gmail/Calendar (managed MCP server with in-app OAuth) install as **external plugins** from
-their own repos — see the [plugin directory](https://agent.protolabs.studio/plugins).
+Integrations like **Discord**, **Slack** (Socket Mode `ChatAdapter`), **Google**
+Gmail/Calendar (managed MCP server with in-app OAuth), and **GitHub**
+([github-plugin](https://github.com/protoLabsAI/github-plugin): issues/PR rail over `gh`,
+read-only until `github.write: true` — the Project Manager archetype ships it on) install
+as **external plugins** from their own repos — see the
+[plugin directory](https://agent.protolabs.studio/plugins).
 
 **Chat integrations** (Discord, Telegram, Slack, …) share a contract — implement a
 small `ChatAdapter` (connect / receive / send) + a manifest and the admin-gating,

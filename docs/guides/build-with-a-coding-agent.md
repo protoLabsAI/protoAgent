@@ -19,15 +19,16 @@ step can't install them, and two of them gate the create outright:
   the Configure step **refuses to create the PM until one is picked**.
 - **`br`** — the [beads-rust](https://github.com/Dicklesworthstone/beads_rust) CLI
   the board is built on: `cargo install beads_rust`. It is *not* the Homebrew
-  `bd`; the board checks `br` (or whatever `BR_BIN` names) on every store open
-  and refuses with *"beads CLI 'br' not on PATH — install beads-rust (`cargo
-  install beads_rust`), not the homebrew `bd`, or set BR_BIN"* when it's missing.
+  `bd`; the board checks `br` (or whatever `BR_BIN` names) at register time and
+  on every loop tick and reports *"beads CLI 'br' not found on PATH — install
+  beads-rust (`cargo install beads_rust`), not the homebrew `bd`, and restart (or
+  set BR_BIN); the board is paused until then"* when it's missing.
 - **`git` and `gh`**, authenticated for the target repo — the loop pushes
   branches with `git` and opens (and, with `auto_merge`, merges) PRs with
   `gh pr create`. Run `gh auth login` on the host; the GitHub rail resolves auth
-  in this order: the plugin's `token` secret (a *Settings ▸ GitHub* field once
-  github-plugin 0.6.0 ships — in flight), then `GITHUB_TOKEN` / `GH_TOKEN` from
-  the environment, then `gh`'s own keyring login.
+  in this order: the plugin's `token` secret (a *Settings ▸ GitHub* field,
+  github-plugin ≥ 0.6.0) wins; otherwise `gh`'s own precedence applies —
+  `GH_TOKEN`, then `GITHUB_TOKEN`, then the `gh auth login` keyring.
 
 All three must be on the PATH *of the protoAgent process*. The desktop build
 hands its bundled server your **login-shell PATH**, so Homebrew, cargo, nvm, and
@@ -47,9 +48,13 @@ blocks once its retry budget is spent. Core ≥ 0.146 (#2977) adds the seam that
 lifts all three into the operator **warning banner** (the same `warnings[]`
 that carries the capability-contract notice): a plugin calls
 `registry.report_setup_gap(key, message)` and the banner reads
-*"Project Board: beads CLI 'br' not on PATH …"* until the gap clears — live,
-no restart. The board release the archetype pins today (v0.41.4) doesn't call
-it yet; until a board release does, the Board view is where the message lands.
+*"Project Board: beads CLI 'br' not found on PATH …"* until the gap clears — live,
+no restart. The releases the archetype pins (projectBoard ≥ 0.42.0, github-plugin
+≥ 0.6.0) both report through it — the board's *setup preflight* keys `br` /
+`gh` / `coder` / `repo`, and **pauses the loop** on `br` / `coder` / `repo`
+with the reason instead of ticking into errors, resuming by itself once the
+gap clears; the GitHub rail's status probe keys `gh` / `auth`. On a core older
+than 0.146 the seam is a no-op and the Board view is where the message lands.
 
 You also need:
 
@@ -80,7 +85,7 @@ installs the [project-manager-archetype](https://github.com/protoLabsAI/project-
 bundle — the project board, a GitHub rail with write on, a browser for
 verification, the review gate's workflow runner, and the friction ledger — seeds
 the `project-manager` soul preset, and then **asks** for the five things the
-bundle can't guess, as a Configure step (archetype v0.5.0):
+bundle can't guess, as a Configure step (archetype ≥ v0.5.0):
 
 | Configure field | What it sets | Required |
 |---|---|---|
@@ -126,11 +131,10 @@ here is written by hand any more:
   The canonical wording, including the fence consequence — once `projects:` is
   non-empty it *is* the filesystem fence — is in the
   [bundles guide](/guides/bundles#the-manifest). This rides a `project: true`
-  flag on the bundle's repo input — the archetype's next release flags it
-  (v0.5.0 predates the flag). Until then the board still binds through
-  `project_board.repo`, but the file tools and the GitHub picker only see the
-  repo if you add the `projects:` entry yourself
-  ([reference](/reference/configuration#projects)).
+  flag on the bundle's repo input — archetype ≥ v0.6.0 sets it (v0.5.0 predates
+  the flag: there, the board still binds through `project_board.repo`, but the
+  file tools and the GitHub picker only see the repo if you add the `projects:`
+  entry yourself — [reference](/reference/configuration#projects)).
 
 The CLI answers the same Configure step with `--input` (core ≥ 0.146, #2977):
 

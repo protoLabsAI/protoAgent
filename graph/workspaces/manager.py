@@ -202,7 +202,9 @@ def capability_contract_warning(bound_tool_names) -> str | None:
     silent by construction: the model fills the impossible instruction with narration and
     reports the action as completed, so nothing errors and nothing crashes. The shipped
     case was ``project-manager``'s "pain points get filed as issues" against a
-    ``github.write`` that defaults false, so ``github_create_issue`` was never registered.
+    ``github.write`` that defaults false, so ``github_create_issue`` was never registered
+    (the archetype has seeded ``github.write: true`` since v0.4.x and its verify script
+    checks the contract binds — this warning is now the fork/override safety net).
 
     The archetype records the tools its doctrine depends on (``requires_tools`` in
     ``archetype-catalog.json`` / a bundle's ``archetype:`` block); ``create()`` copies

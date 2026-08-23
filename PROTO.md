@@ -187,6 +187,19 @@ These are the failures that actually recur — read them before you edit.
   are intentionally ignored — lazy/late imports and 120-col comment lines are
   idiomatic here. Config: `pyproject.toml [tool.ruff]`.)
 
+- **Bundle `config_inputs` can't target core sections.** A bundle's Configure-step
+  prompts (`config_inputs:` in `protoagent.bundle.yaml`) write the operator's answer
+  straight into the tracked config at the dotted key, and `required: true` is a hard
+  gate (create → 400, host install → refuses to activate). So the first segment of a
+  key must be a *plugin* section (`project_board.repo`, `github.default_repo`) —
+  `CONFIG_INPUT_RESERVED_SECTIONS` in `graph/plugins/installer.py` rejects `model`,
+  `plugins`, `projects`, `onboarding`, `delegates`, `egress`, … at install. Don't
+  "fix" a failing bundle by adding its section to that set; give the plugin its own.
+  Related seam: a plugin that is enabled but can't work (missing binary, no coder, CLI
+  not logged in) reports it with `registry.report_setup_gap(key, message)` (clear with
+  `None`) — it lands in `GET /api/runtime/status` `warnings[]`, not only in the log.
+  Plugins that also run on older hosts guard it with `getattr`.
+
 - **Config dataclass ↔ golden field map.** Adding or removing a field on the
   graph config dataclass (`graph/config.py`) requires updating the golden field
   map in **`tests/test_config_roundtrip.py`**, or the test fails with "golden
