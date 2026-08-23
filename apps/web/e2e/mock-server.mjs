@@ -283,6 +283,10 @@ function handleApiGet(pathname, fleet = FLEET, params = new URLSearchParams(), m
         config: { identity: { name: "mock-agent", operator: "" } },
         soul: "# Mock agent\nYou are a helpful test agent.",
       };
+    case "/api/config/oauth-status":
+      // The setup wizard's Brain step polls this on entry (ADR 0097); nobody is signed
+      // in to a native OAuth provider in e2e, so the gateway path stays the default.
+      return { providers: [] };
     case "/api/subagents":
       return { subagents: SUBAGENTS };
     case "/api/tools":
@@ -933,6 +937,15 @@ const server = createServer(async (req, res) => {
     }
     if (pathname === "/api/config/test-model" && req.method === "POST") {
       return sendJson(res, { ok: true, error: "" });
+    }
+    if (pathname === "/api/config/setup" && req.method === "POST") {
+      // The setup wizard's terminal action (setup-wizard.spec). The real route writes
+      // config + SOUL, flips the marker, and reloads; here it just acknowledges — a spec
+      // that needs the wizard to STAY open keeps /api/runtime/status at setup_complete:false.
+      return sendJson(res, { ok: true, message: "config saved • setup marked complete" });
+    }
+    if (pathname === "/api/tasks/init" && req.method === "POST") {
+      return sendJson(res, { initialized: true, already_initialized: true });
     }
     if (pathname === "/api/knowledge/attach" && req.method === "POST") {
       // Chat attachment upload (#1002) — multipart, so DON'T JSON-parse the body.

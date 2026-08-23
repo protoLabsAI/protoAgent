@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { HARD_GATE_HINT, PM_CONTRACT_NOTICE } from "./fixtures.mjs";
+
 // Fleet manager + archetype picker (Settings → Agents, ADR 0042). Drives the live
 // control-plane endpoints (mocked): list, create from an archetype, stop. The mock
 // FLEET is shared module state, so run serially + assert by presence (not exact counts).
@@ -106,6 +108,127 @@ test("New agent preview dialog lists the bundle's MCP servers + secrets (#2041)"
   const dialog = page.locator(".pl-dialog", { hasText: "What's included" });
   await expect(dialog.getByText("MCP servers: GitHub (needs token)")).toBeVisible();
   await expect(dialog.getByText("Secrets: Brave API key")).toBeVisible();
+});
+
+// ── The archetype picker's hard gate (#2977/#2979/#2984) ──────────────────────────
+// A required bundle `config_inputs` answer has no env fallback — the server refuses the
+// create — so the picker must not offer a Create that can only 400. The Project Manager
+// fixture is the contract-carrying, advanced archetype with two such answers.
+
+// Open the picker and pick the (advanced, collapsed) Project Manager card.
+async function pickProjectManager(page) {
+  await page.getByRole("button", { name: "New agent" }).click();
+  await page.getByRole("button", { name: /^Advanced \(1\)/ }).click();
+  await page.locator(".pl-radiocard", { hasText: "Project Manager" }).click();
+  // The Configure step is open by default; its fields come from the preview peek.
+  await expect(page.getByLabel("Repository path")).toBeVisible();
+}
+
+// The DS DropdownSelect trigger carries the field id (origin:key — escape the colon/dot).
+const coderTrigger = (page) => page.locator('[id="config:project_board.coder"]');
+const createButton = (page) => page.getByRole("button", { name: /^Create/ });
+
+test("picking the Project Manager archetype shows its capability contract under the card (#2979)", async ({ page }) => {
+  await openAgents(page);
+  await pickProjectManager(page);
+  // The contract note names the tool the persona commits to — at choose-time, so a
+  // contract break is a known trade-off rather than a post-boot banner.
+  await expect(page.getByRole("note").filter({ hasText: PM_CONTRACT_NOTICE })).toBeVisible();
+  // The toggle copy says the answers are required, not "optional — skip".
+  await expect(page.getByRole("button", { name: /Configure Project Manager/ })).toContainText("answers marked * are required");
+});
+
+test("Create stays disabled while a required bundle answer is blank; the hint says why (#2977)", async ({ page }) => {
+  await openAgents(page);
+  await pickProjectManager(page);
+  await page.getByLabel("Agent name").fill("pmbot");
+  // A valid name alone isn't enough: the two hard-required answers are blank.
+  await expect(createButton(page)).toBeDisabled();
+  await expect(page.getByText(HARD_GATE_HINT, { exact: true })).toBeVisible();
+  // Required fields are starred; the optional string and the defaulted boolean are not.
+  await expect(page.locator(".archetype-configure-fields label", { hasText: "Repository path *" })).toBeVisible();
+  await expect(page.locator(".archetype-configure-fields label", { hasText: "Coding delegate *" })).toBeVisible();
+  await expect(page.locator(".archetype-configure-fields label", { hasText: "Default branch" })).not.toContainText("*");
+  await expect(page.locator(".archetype-configure-fields label", { hasText: "Auto-merge green PRs" })).not.toContainText("*");
+  // Filling just ONE of the two keeps the gate shut.
+  await page.getByLabel("Repository path").fill("/Users/me/dev/repo");
+  await expect(createButton(page)).toBeDisabled();
+});
+
+test("the coding-delegate dropdown lists ONLY acp delegates (#2934)", async ({ page }) => {
+  await openAgents(page);
+  await pickProjectManager(page);
+  // DropdownSelect (#274): open the trigger, then read the portaled menu items.
+  await coderTrigger(page).click();
+  await expect(page.getByRole("menuitemradio", { name: "coder", exact: true })).toBeVisible();
+  // /api/delegates also serves an openai endpoint ("opus") and an a2a peer ("peer-pm") —
+  // neither can take a build, so neither may be offered as the coder.
+  await expect(page.getByRole("menuitemradio", { name: "opus", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("menuitemradio", { name: "peer-pm", exact: true })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+});
+
+test("Enter in the Name field does NOT submit while a required answer is blank (#2979)", async ({ page }) => {
+  await openAgents(page);
+  let posts = 0;
+  await page.route("**/api/fleet", async (route) => {
+    if (route.request().method() === "POST") posts += 1;
+    return route.continue();
+  });
+  await pickProjectManager(page);
+  const name = page.getByLabel("Agent name");
+  await name.fill("pmbot");
+  await name.press("Enter");
+  // Still on the picker, nothing posted — the keyboard path honours the same gate as the button.
+  await expect(page.getByRole("heading", { name: "New agent" })).toBeVisible();
+  await expect(createButton(page)).toBeDisabled();
+  expect(posts).toBe(0);
+  await expect(page).not.toHaveURL(/\/app\/agent\/pmbot/);
+});
+
+test("collapsing Configure with a required answer blank shows the collapsed-state hint (#2979)", async ({ page }) => {
+  await openAgents(page);
+  await pickProjectManager(page);
+  await page.getByLabel("Agent name").fill("pmbot");
+  const toggle = page.getByRole("button", { name: /Configure Project Manager/ });
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  // The fields are gone but the explanation is not — the hint moved OUT of the collapsible
+  // block so a disabled Create never reads as a mystery.
+  await expect(page.getByLabel("Repository path")).toHaveCount(0);
+  await expect(page.getByText(/Fields marked \* are needed before this agent can be created — open Configure\./)).toBeVisible();
+  await expect(createButton(page)).toBeDisabled();
+});
+
+test("filling both required answers enables Create; config_inputs ride the POST even after collapsing Configure (#2979)", async ({ page }) => {
+  await openAgents(page);
+  let posted = null;
+  await page.route("**/api/fleet", async (route) => {
+    if (route.request().method() === "POST") posted = route.request().postDataJSON();
+    return route.continue();
+  });
+  await pickProjectManager(page);
+  await page.getByLabel("Agent name").fill("pmbot");
+
+  await page.getByLabel("Repository path").fill("/Users/me/dev/repo");
+  await coderTrigger(page).click();
+  await page.getByRole("menuitemradio", { name: "coder", exact: true }).click();
+  await expect(createButton(page)).toBeEnabled();
+  await expect(page.getByText(HARD_GATE_HINT, { exact: true })).toHaveCount(0);
+
+  // The fill-then-collapse regression (QA panel on #2979): the answers were collected but
+  // the mutation only sent config values while Configure was open → server 400.
+  await page.getByRole("button", { name: /Configure Project Manager/ }).click();
+  await expect(page.getByLabel("Repository path")).toHaveCount(0);
+  await expect(createButton(page)).toBeEnabled();
+  await createButton(page).click();
+
+  // Create navigates into the new agent; reaching the slug URL proves the POST was captured.
+  await expect(page).toHaveURL(/\/app\/agent\/pmbot-ab12\//);
+  expect(posted?.config_inputs).toEqual({ "project_board.repo": "/Users/me/dev/repo", "project_board.coder": "coder" });
+  // The contract rides along so the member's workspace.yaml records it (ADR 0100).
+  expect(posted?.requires_tools).toEqual(["github_create_issue"]);
+  expect(posted?.bundle).toBe("https://github.com/protoLabsAI/project-manager-archetype");
 });
 
 test("stop a running agent flips its status dot", async ({ page }) => {

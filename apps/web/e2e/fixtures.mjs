@@ -107,26 +107,48 @@ export const FLEET = {
   agents: [
     { name: "main", id: "main", port: 7871, pid: 3000, running: true, bundle: "", host: true },
     { name: "ava", id: "ava", port: 7890, pid: 4001, running: true, bundle: "" },
-    { name: "roxy", id: "roxy", port: 7891, pid: null, running: false, bundle: "pm-stack" },
+    { name: "roxy", id: "roxy", port: 7891, pid: null, running: false, bundle: "https://github.com/protoLabsAI/project-manager-archetype" },
   ],
   active: null,
 };
 
+// GET /api/archetypes — the picker's catalog (ADR 0100). Bundle ids follow the
+// `<name>-archetype` repo convention of config/archetype-catalog.json ("stack" is retired).
+// `project-manager` is the advanced, contract-carrying one: `requires_tools` is the
+// capability contract the card shows at choose-time (#2979), and its preview below
+// declares `config_inputs` whose REQUIRED answers hard-gate Create (#2977).
 export const ARCHETYPES = [
   { id: "basic", label: "Basic", icon: "Sparkles", blurb: "A plain agent — add tools later.", bundle: null, soul: "# Identity\n\nI am a general-purpose agent." },
-  { id: "product-stack", label: "Product Manager", icon: "Compass", blurb: "Research, strategy, and specs — rendered inline.", bundle: "https://github.com/protoLabsAI/product-stack", soul: "# Identity\n\nI am a product-management agent." },
+  { id: "product-archetype", label: "Product Manager", icon: "Compass", blurb: "Research, strategy, and specs — rendered inline.", bundle: "https://github.com/protoLabsAI/product-archetype", soul: "# Identity\n\nI am a product-management agent." },
+  {
+    id: "project-manager", label: "Project Manager", icon: "ClipboardList",
+    blurb: "Single-repo project manager — ships every change through a board of coding agents.",
+    bundle: "https://github.com/protoLabsAI/project-manager-archetype",
+    soul: "# Identity\n\nI am a project-management agent.",
+    tier: "advanced",
+    requires_tools: ["github_create_issue"],
+  },
   { id: "custom", label: "Custom", icon: "PenLine", blurb: "Write your own — fill in a template.", bundle: null, soul: "# Identity\n\n_Describe your agent in one paragraph._" },
 ];
 
-// GET /api/archetypes/{id}/preview — the read-only bundle peek (#2041). product-stack asks
-// for a GitHub MCP server (needs a token) + a standalone Brave secret, so it exercises the
-// enriched preview dialog AND the new-agent Configure step. Code-free ids return bundle:null.
+// The choose-time note the picker renders under the card for a contract-carrying
+// archetype (lib/archetypeConfig.ts requiresToolsNotice) — asserted verbatim by the specs.
+export const PM_CONTRACT_NOTICE = "Project Manager commits to a tool its bundle must provide: github_create_issue.";
+// The hard-gate hint (#2977/#2979) — shown open or collapsed while a required answer is blank.
+export const HARD_GATE_HINT = "Fields marked * are needed before this agent can be created.";
+
+// GET /api/archetypes/{id}/preview — the read-only bundle peek (#2041). product-archetype
+// asks for a GitHub MCP server (needs a token) + a standalone Brave secret, so it exercises
+// the enriched preview dialog AND the new-agent Configure step's SOFT gate (skip → env).
+// project-manager declares `config_inputs` (#2934): two hard-required answers (a repo path
+// + a coding delegate), an optional string, and a defaulted boolean — the HARD gate.
+// Code-free ids return bundle:null.
 export const ARCHETYPE_PREVIEWS = {
-  "product-stack": {
-    id: "product-stack",
+  "product-archetype": {
+    id: "product-archetype",
     bundle: {
       kind: "bundle",
-      id: "product-stack",
+      id: "product-archetype",
       name: "Product Manager",
       description: "Research, strategy, and specs.",
       enabled: ["github"],
@@ -161,6 +183,28 @@ export const ARCHETYPE_PREVIEWS = {
         },
       ],
       secrets: [{ key: "BRAVE_API_KEY", label: "Brave API key", placeholder: "brv_…", secret: true, required: false }],
+    },
+  },
+  "project-manager": {
+    id: "project-manager",
+    bundle: {
+      kind: "bundle",
+      id: "project-manager-archetype",
+      name: "Project Manager",
+      description: "Single-repo project manager over a board of coding agents.",
+      enabled: ["github", "project-board"],
+      members: [
+        { id: "github", builtin: false, ref: "v0.5.0", name: "GitHub", version: "0.5.0", description: "GitHub issues + PR tools.", skills: [] },
+        { id: "project-board", builtin: false, ref: "v0.41.4", name: "Project Board", version: "0.41.4", description: "A board of coding agents.", skills: [] },
+      ],
+      mcp: [],
+      secrets: [],
+      config_inputs: [
+        { key: "project_board.repo", label: "Repository path", type: "path", required: true },
+        { key: "project_board.coder", label: "Coding delegate", type: "delegate", required: true },
+        { key: "project_board.default_branch", label: "Default branch", type: "string", required: false },
+        { key: "project_board.auto_merge", label: "Auto-merge green PRs", type: "boolean", default: false },
+      ],
     },
   },
 };
@@ -1464,6 +1508,14 @@ export const DELEGATES = {
       env: { ANTHROPIC_BASE_URL: "https://gw/v1", ANTHROPIC_AUTH_TOKEN: "***" },
       env_remove: ["PROTOAGENT_", "A2A_AUTH_TOKEN"],
       health: { ok: true, latency_ms: 30, detail: "ACP handshake OK" },
+    },
+    // An A2A peer — NOT a coder. The archetype Configure step's `type: delegate` dropdown
+    // must list only acp delegates (#2934), so this one proves the filter.
+    {
+      name: "peer-pm", type: "a2a", description: "A sibling agent over A2A.",
+      configured: true, error: null, has_secret: false,
+      url: "http://127.0.0.1:7891/a2a",
+      health: { ok: true, latency_ms: 12, detail: "agent card fetched" },
     },
   ],
 };
