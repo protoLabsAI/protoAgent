@@ -361,6 +361,59 @@ respect the same typing gate it applies to its own inputs. A forwarded chord rea
 **global** bindings — the host can't see inside your iframe, so it can't know which of its
 panels is focused, and firing another panel's scoped chord would be worse than not firing.
 
+## Context menus (#3030)
+
+Right-click inside your view and the operator gets the **browser's** menu, not the console's
+— that event fires in your document and never reaches the host (and under the desktop app
+your frame is cross-origin, so the host can't listen on it either). You're the only party
+that sees the click, so you hand it over: suppress the native menu and post the position.
+
+```js
+document.getElementById("card").addEventListener("contextmenu", (e) => {
+  e.preventDefault();                                  // your document, your event
+  parent.postMessage({
+    type: "protoagent:contextmenu:open",
+    x: e.clientX, y: e.clientY,                        // YOUR viewport — the host translates
+    items: [
+      { id: "copy-id", label: "Copy ID", icon: "clipboard" },
+      { id: "open-pr", label: "Open PR", icon: "external-link" },
+      { divider: true },
+      { id: "delete", label: "Delete…", danger: true },
+    ],
+  }, "*");
+});
+
+addEventListener("message", (e) => {
+  if (e.data?.type === "protoagent:contextmenu:action") act(e.data.itemId); // "copy-id"
+});
+```
+
+The menu is the console's own (ADR 0036) — same styling, same keyboard behaviour, and it
+closes when you click back into your page. Because you build the items at right-click time,
+they can describe **whatever is under the cursor**: a card, a row, a selection.
+
+**Or declare a set once** and post a bare open for a menu that doesn't change:
+
+```js
+parent.postMessage({
+  type: "protoagent:contextmenu:register",
+  items: [{ id: "refresh", label: "Refresh board", icon: "refresh-cw" }],
+}, "*");
+parent.postMessage({ type: "protoagent:contextmenu:open", x: e.clientX, y: e.clientY }, "*");
+```
+
+Re-posting `protoagent:contextmenu:register` **replaces** your previous set (post
+`items: []` to clear). An `:open` that carries `items` uses those instead, for that menu only.
+
+An item is **data**, never code: `id`, `label`, an optional `icon` NAME (any lucide icon,
+`PascalCase` or `kebab-case`, resolved against the console's own icon set — markup and URLs
+are dropped), plus `danger` (destructive styling) and `disabled`. `{ divider: true }`
+separates groups; leading, trailing and repeated dividers are collapsed for you. Up to 32
+entries. Like chords, your ids are namespaced to `plugin.<your-id>.<id>` by the host — you
+can't shadow a core menu item or collide with another plugin — and the action fires back
+with **your** id. The console appends its own **Configure…** below your items, so a view
+that suppressed the native menu never leaves the operator with an empty one.
+
 ## Fleet-proxied requests: the 20-second read lane
 
 When your view runs on a fleet **member**, every request rides the hub's reverse

@@ -56,7 +56,8 @@ React plugin adds items to a **core** menu type (e.g. an extra action on `"bead"
 its **own** type for its surfaces. Items run with console privileges, so this rides the **same
 trust gate as `ui: react`** (ADR 0034 D5 — trusted/first-party; untrusted third-party doesn't get
 in-process menu items). A manifest-declared *static* item path (label + a tool/route to invoke)
-is a later, lower-trust option for iframe plugins.
+is a later, lower-trust option for iframe plugins — realized as a postMessage bridge rather than
+a manifest; see the 2026-08-23 addendum.
 
 ### D5 — Renderer → shadcn Radix `DropdownMenu` (superseded by ADR 0037)
 
@@ -136,6 +137,38 @@ index. Until then, the stable `pl-*` classnames are the contract.
   App-side `onRailContextMenu` resolves the owning plugin's id + name from the `plugin:<id>:<view>`
   rail id and passes them in `ctx`; the action sets a store-driven `configurePlugin`, mounted once at
   the app root — the same per-plugin dialog the Plugins manager uses, now reached from the rail.
+
+## Addendum (2026-08-23) — iframe plugin views (#3030)
+
+D4's "lower-trust option for iframe plugins" landed as **three messages on the ADR 0026
+postMessage bridge**, not a manifest entry — because a manifest is static, and the useful menu
+is the one that describes *what's under the cursor*.
+
+**The host can't see the right-click.** It fires in the frame's own document and doesn't bubble
+across the boundary; wrapping the iframe element in `onContextMenu` never fires. Listening on
+`frame.contentDocument` would work in the browser console (the view is same-origin) but not in
+the desktop app, where the console is `tauri://localhost` and the sidecar is `http://127.0.0.1`
+— so that path was rejected as one that works until someone opens the desktop build. The page
+is therefore the reporter: it calls `preventDefault()` on its own event and posts the position.
+
+- `protoagent:contextmenu:register {items}` — a default set, replacing the previous one
+  (`items: []` clears it), for a view whose menu doesn't change.
+- `protoagent:contextmenu:open {x, y, items?}` — a right-click, in the PAGE's viewport
+  coordinates; the host translates through `getBoundingClientRect()` and clamps into the frame,
+  so a plugin can't place a console menu over the console's chrome. `items` overrides the
+  registered set for that menu only.
+- `protoagent:contextmenu:action {itemId}` — the chosen item, carrying the id the PAGE knows.
+
+**Trust.** Items are data — label, an optional lucide icon NAME (resolved host-side against the
+console's icon set; markup and URLs are dropped), `danger`, `disabled` — so nothing executable
+crosses the sandbox and D4's in-process trust gate isn't touched. Ids are forced into
+`plugin.<id>.`, the same containment `protoagent:publish` (ADR 0039) and `protoagent:keybindings`
+(#1457) apply, so a page can neither shadow a core item (`configure`, `uninstall`) nor collide
+with another plugin. Each view registers under its own `plugin-view:<id>` ContextType (D2), so
+one view's items can never resolve into another menu, and the registration dies with the mount.
+
+**Console-appended items.** The resolved menu ends with the console's own **Configure…** — the
+page suppressed the native menu, so the host guarantees the menu is never empty.
 
 ## References
 
