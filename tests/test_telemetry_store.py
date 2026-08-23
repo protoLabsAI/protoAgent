@@ -351,9 +351,13 @@ def test_outliers_empty_store(store):
 def test_cache_read_savings_usd():
     from observability import pricing
 
-    # opus input rate 0.000015, discount 0.9 → 10000 cached reads save ~0.135
+    # A cached read saves `CACHE_READ_DISCOUNT` of what that token would otherwise
+    # cost at the model's input rate. Derived from the table, not a hardcoded rate:
+    # this assertion previously pinned the literal 0.000015 and so had to be edited
+    # in lockstep with every price correction (#3002).
+    rate = pricing.rate_for("claude-opus-4-8")["input"]
     saved = pricing.cache_read_savings_usd("claude-opus-4-8", 10000)
-    assert saved == round(10000 * 0.000015 * 0.9, 6)
+    assert saved == round(10000 * rate * pricing.CACHE_READ_DISCOUNT, 6)
     assert pricing.cache_read_savings_usd("claude-opus-4-8", 0) == 0.0
 
 

@@ -15,27 +15,59 @@ semantics are validated end-to-end (different gateways disagree on whether
 
 from __future__ import annotations
 
-# USD per token, (input, output).
+import logging
+
+log = logging.getLogger(__name__)
+
+
+def _per_mtok(inp: float, out: float) -> dict[str, float]:
+    """A rate written the way vendors publish it — USD per MILLION tokens — stored
+    as USD per token (#3002).
+
+    The table below used to be hand-written in per-token scientific notation, where
+    a stale entry is invisible: ``0.000015`` and ``0.000005`` differ by one glyph
+    but by 3x in the cost column, and nothing on the line says which vendor number
+    it was meant to be. Writing ``_per_mtok(5, 25)`` makes an entry checkable
+    against a published price list at a glance, which is what stops the next drift.
+    """
+    return {"input": inp / 1_000_000, "output": out / 1_000_000}
+
+
+# USD per MILLION tokens, (input, output) — see `_per_mtok`. Current Anthropic
+# first-party rates; partner platforms (Bedrock / Vertex) price separately and are
+# not modelled here.
 MODEL_RATES: dict[str, dict[str, float]] = {
-    "claude-opus-4-8": {"input": 0.000015, "output": 0.000075},
-    "claude-opus-4-6": {"input": 0.000015, "output": 0.000075},
-    "claude-sonnet-4-6": {"input": 0.000003, "output": 0.000015},
-    "claude-haiku-4-5": {"input": 0.00000025, "output": 0.00000125},
-    "claude-haiku-4-5-20251001": {"input": 0.00000025, "output": 0.00000125},
-    "gpt-4o": {"input": 0.0000025, "output": 0.00001},
-    "gpt-4o-mini": {"input": 0.00000015, "output": 0.0000006},
+    # Claude 5 family.
+    "claude-fable-5": _per_mtok(10, 50),
+    "claude-mythos-5": _per_mtok(10, 50),
+    "claude-opus-5": _per_mtok(5, 25),
+    "claude-sonnet-5": _per_mtok(3, 15),
+    # Claude 4.x. Opus 4.6 dropped to the $5/$25 tier — the pre-4.6 $15/$75 rate
+    # that used to sit here billed every Opus turn at 3x (#3002).
+    "claude-opus-4-8": _per_mtok(5, 25),
+    "claude-opus-4-7": _per_mtok(5, 25),
+    "claude-opus-4-6": _per_mtok(5, 25),
+    "claude-sonnet-4-6": _per_mtok(3, 15),
+    "claude-haiku-4-5": _per_mtok(1, 5),
+    "gpt-4o": _per_mtok(2.5, 10),
+    "gpt-4o-mini": _per_mtok(0.15, 0.6),
     # protolabs/* are self-hosted vLLM (RTX 6000 Blackwell) — no per-token API
     # spend, so these are a low nominal local-compute estimate (trackable, not
     # billing) rather than the Claude-ish `default` which would overstate cost
     # ~30x. Substring match covers the gateway aliases (protolabs/reasoning →
     # protolabs/smart backend, etc.).
-    "protolabs/reasoning": {"input": 0.0000001, "output": 0.0000004},
-    "protolabs/smart": {"input": 0.0000001, "output": 0.0000004},
-    "protolabs/fast": {"input": 0.00000005, "output": 0.0000002},
-    "protolabs/nano": {"input": 0.00000003, "output": 0.0000001},
-    "protolabs": {"input": 0.0000001, "output": 0.0000004},
-    "default": {"input": 0.000003, "output": 0.000015},
+    "protolabs/reasoning": _per_mtok(0.1, 0.4),
+    "protolabs/smart": _per_mtok(0.1, 0.4),
+    "protolabs/fast": _per_mtok(0.05, 0.2),
+    "protolabs/nano": _per_mtok(0.03, 0.1),
+    "protolabs": _per_mtok(0.1, 0.4),
+    "default": _per_mtok(3, 15),
 }
+
+# Models already reported as unpriced. A miss is a per-TURN event, so warning every
+# time would flood the log for the whole life of the process; warning once per
+# distinct model name is enough to make the gap discoverable (#3002).
+_WARNED_UNKNOWN: set[str] = set()
 
 
 def rate_for(model: str | None) -> dict[str, float]:
@@ -44,16 +76,32 @@ def rate_for(model: str | None) -> dict[str, float]:
     Exact match first, then substring (so a gateway alias like
     ``anthropic/claude-opus-4-8`` or ``claude-opus-4-8-20260115`` still
     resolves), else the ``default`` rate.
+
+    A model that reaches ``default`` logs once (#3002). The fallback is the
+    dangerous direction: an unrecognised model is silently billed at the mid-tier
+    rate, and the models most likely to be missing are the newest and most
+    expensive — which is exactly how Opus 5 and Fable 5 came to be undercounted.
     """
     if not model:
         return MODEL_RATES["default"]
     m = str(model).lower()
     if m in MODEL_RATES:
         return MODEL_RATES[m]
-    # Longest key first so "claude-haiku-4-5-20251001" wins over a shorter key.
+    # Longest key first so a more specific key wins over a shorter prefix of it
+    # (e.g. "claude-opus-4-8" over a hypothetical "claude-opus").
     for key in sorted((k for k in MODEL_RATES if k != "default"), key=len, reverse=True):
         if key in m:
             return MODEL_RATES[key]
+    if m not in _WARNED_UNKNOWN:
+        _WARNED_UNKNOWN.add(m)
+        log.warning(
+            "[pricing] no rate for model %r — billing it at the default rate "
+            "($%.2f/$%.2f per Mtok). Cost telemetry for this model is an estimate; "
+            "add it to observability/pricing.MODEL_RATES.",
+            model,
+            MODEL_RATES["default"]["input"] * 1_000_000,
+            MODEL_RATES["default"]["output"] * 1_000_000,
+        )
     return MODEL_RATES["default"]
 
 
