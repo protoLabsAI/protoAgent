@@ -13,7 +13,7 @@ cost-v1 is the measurement. Every terminal task carries a DataPart with:
 - `usage.input_tokens`, `usage.output_tokens`, `usage.total_tokens`
 - `usage.cache_read_input_tokens`, `usage.cache_creation_input_tokens` — Anthropic-shaped prompt-cache tokens (ADR 0006)
 - `durationMs`
-- `costUsd` — the in-process estimate accumulated across the turn's LLM calls (`pricing.py`); consumers prefer it over recomputing from tokens
+- `costUsd` — the in-process estimate accumulated across the turn's LLM calls (`pricing.py`), plus any A2A peer's own reported `costUsd` taken verbatim (#3016); consumers prefer it over recomputing from tokens
 
 The agent also **declares the extension** in its card (`capabilities.extensions`, URI `https://proto-labs.ai/a2a/ext/cost-v1`), which is what gates a consumer's cost interceptor.
 

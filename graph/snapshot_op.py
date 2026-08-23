@@ -244,7 +244,7 @@ def redact_config_for_export(
         required.append(
             SecretRequirement(
                 name=f"{section}.{key}",
-                kind="plugin" if section not in ("model", "auth") else "config",
+                kind="plugin" if section not in ("model", "auth", "tracing", "secrets_manager") else "config",
                 description=f"Credential for `{section}` (stripped on export).",
                 was_set=was_set,
             )

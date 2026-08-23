@@ -10,9 +10,9 @@ One row per turn LEG, not per task: a HITL park/resume is two legs sharing one
 A2A task id, and each owns its own spend (#3001). Row identity is the surrogate
 ``row_id``; ``task_id`` is an ordinary indexed column several rows may share.
 
-Written from the single terminal chokepoint (``server.a2a._a2a_terminal``, the
-executor's terminal hook), so completed/failed/canceled/parked turns are all
-captured.
+Written through the shared writer ``server/turn_telemetry.py::record_turn`` — the A2A
+executor's terminal hook (completed/failed/canceled/parked legs), the non-streaming
+driver behind ``/v1`` and ``HOST.invoke()`` (#3000), and CLI coding-agent runs (#3015).
 Best-effort: a write failure never breaks a turn. Instance-scoped via the path
 the host resolves (ADR 0004). No TTL — history is the point; ``prune`` exists for
 hosts that want to cap retention.

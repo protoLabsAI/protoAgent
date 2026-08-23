@@ -15,6 +15,13 @@ plain fields rather than a ``TurnOutcome``: the non-streaming path has no such
 object, and typing the seam to one driver's data structure is how the two came
 apart in the first place.
 
+A THIRD producer joins them, and it is not a turn driver at all: ``AcpClient.prompt``
+(#3015) records one row per CLI coding-agent run under a ``coder:`` key. Those runs are
+dispatched from a plugin's background loop rather than from a turn, which is exactly why
+they were invisible until they were routed through here. If you are adding a new surface
+that spends tokens, this function is the seam — anything that does not reach it is, by
+construction, unmeasured.
+
 Best-effort throughout — a telemetry failure must never affect a turn.
 """
 
