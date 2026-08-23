@@ -37,6 +37,8 @@ container deploy is untouched, while a desktop-launched fleet member (which has
 no ``LANGFUSE_*`` in its environment and so could not enable tracing at all
 before #3017) can be configured from Settings ▸ Tracing. The two keys are
 declared secrets, stored in ``secrets.yaml`` and never in the tracked YAML.
+The host travels with the keys — whichever layer supplies the pair supplies the
+destination, so config can't redirect deployment-owned credentials (#3039).
 
 Graceful degrade
 ────────────────
@@ -117,9 +119,17 @@ def resolve_credentials(config: Any = None) -> tuple[str, str, str, str]:
     ``tracing.enabled`` AND a full key pair — an enabled toggle with no keys is
     the operator having started but not finished, not a reason to connect.
 
-    ``host`` falls back env → config → ``_DEFAULT_HOST`` independently of which
-    layer supplied the keys, so an env-only deploy that sets just the pair keeps
-    landing on the compose default it always did.
+    ``host`` is PAIRED with the layer that supplied the keys (#3039): env keys go to
+    ``LANGFUSE_HOST``/``LANGFUSE_URL`` (or ``_DEFAULT_HOST``), config keys go to
+    ``tracing.host`` (or ``_DEFAULT_HOST``). #3017 resolved it as one env → config →
+    default chain regardless of which layer answered, which let config data choose the
+    destination for DEPLOYMENT-owned credentials: ``docker-compose.yml`` passes
+    ``LANGFUSE_HOST=${LANGFUSE_HOST:-}``, so an operator who exports only the key pair
+    has an empty env host, ``cfg_host`` won the chain, and the deployment's keys left
+    the process as a Basic auth header aimed wherever ``tracing.host`` said. That host
+    is not a secret field, and config reaches an instance through more paths than
+    deployment env does (snapshot import, a fork's committed config, any write to
+    ``langgraph-config.yaml``) — so the two halves travel together, in both directions.
 
     ``source`` is ``"env"``, ``"config"``, or ``""`` (nothing usable); it only
     feeds the boot log line so an operator can see which layer answered.
@@ -133,12 +143,11 @@ def resolve_credentials(config: Any = None) -> tuple[str, str, str, str]:
     cfg_public = str(getattr(config, "tracing_public_key", "") or "").strip()
     cfg_secret = str(getattr(config, "tracing_secret_key", "") or "").strip()
     cfg_host = str(getattr(config, "tracing_host", "") or "").strip()
-    host = env_host or cfg_host or _DEFAULT_HOST
 
     if env_public and env_secret:
-        return env_public, env_secret, host, "env"
+        return env_public, env_secret, env_host or _DEFAULT_HOST, "env"
     if getattr(config, "tracing_enabled", False) and cfg_public and cfg_secret:
-        return cfg_public, cfg_secret, host, "config"
+        return cfg_public, cfg_secret, cfg_host or _DEFAULT_HOST, "config"
     return "", "", "", ""
 
 
