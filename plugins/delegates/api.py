@@ -41,7 +41,7 @@ def _public_view(raw: dict) -> dict:
         except DelegateError as e:
             configured, error = False, str(e)
     name = raw.get("name")
-    scope = store.SCOPE_HOST if raw.get("scope") == store.SCOPE_HOST else store.SCOPE_AGENT
+    scope = store._scope_of(raw)
     overlay = store.secret_overlay(scope)
     has_secret = bool(adapter and adapter.secret_field and overlay.get(f"{name}.{adapter.secret_field}"))
     # Per-env secret var names stored for this delegate (`<name>.env.<VAR>`) — masked
@@ -127,7 +127,7 @@ def _inject_stored_secret(entry: dict, adapter) -> dict:
     if store._pop_dotted(copy.deepcopy(entry), adapter.secret_field):
         return entry  # caller supplied one
     # Layer-aware: a Test of an agent-scoped entry must not borrow a fleet-shared key.
-    scope = store.SCOPE_HOST if entry.get("scope") == store.SCOPE_HOST else store.SCOPE_AGENT
+    scope = store._scope_of(entry)
     val = store.secret_overlay(scope).get(f"{entry.get('name')}.{adapter.secret_field}")
     if val:
         store._set_dotted(entry, adapter.secret_field, val)
@@ -187,7 +187,7 @@ def build_router():
         # Same-name collision is checked within the target layer; a member may shadow a
         # fleet-shared entry with its own (agent wins at read time), a hub may not
         # double-register — it would silently move the entry between layers instead.
-        scope = store.SCOPE_HOST if str(entry.get("scope") or "") == store.SCOPE_HOST else store.SCOPE_AGENT
+        scope = store._scope_of(entry)
         existing = store.read_delegates_raw()
         clash = next((e for e in existing if isinstance(e, dict) and e.get("name") == name), None)
         if clash is not None and (clash.get("scope") == scope or store.can_write_host_layer()):
