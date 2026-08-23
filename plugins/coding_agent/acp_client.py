@@ -437,12 +437,25 @@ class AcpClient:
         # so the errors we raise can say WHY the agent died — see `_STDERR_TAIL_LINES`.
         self._stderr_tail: deque[str] = deque(maxlen=_STDERR_TAIL_LINES)
 
+        # Which agent stream this client is currently listening to (#3040). Bumped by
+        # ``_fence_stream`` when a turn is abandoned mid-generation; a reader task keeps
+        # the id it was started with, so anything the disowned stream emits afterwards
+        # is dropped instead of being counted against the next run.
+        self._stream_gen = 0
+        # Set with that bump: the agent was still working when we walked away, so the
+        # next dispatch respawns it rather than sharing a stream with it.
+        self._stream_fenced = False
+
         # Per-turn state (one turn at a time).
         self._answer = ""
         # How many tool calls the coder made this turn — counted in ``_handle_update``
         # off the wire, NOT off ``tool_callback``, because the delegates adapter wires
         # no callback at all and its runs would otherwise all record zero (#3015).
         self._turn_tool_calls = 0
+        # The ACP session THIS turn actually ran in — None until ``_ensure_started``
+        # returns, which is how a run that dies before then records no session id
+        # instead of inheriting the previous run's (#3040).
+        self._turn_session_id: str | None = None
         # Why the last turn ended, straight from ACP's `session/prompt` result (#2279).
         # `prompt()` is typed -> str and cannot carry it; an orchestrator reads it here
         # (or via `dead_end()`) to tell "declined" from "ran out of room" from "done".
@@ -456,11 +469,38 @@ class AcpClient:
 
     async def _ensure_started(self) -> None:
         """Start the agent for a real dispatch: spawn + ``initialize`` + open the
-        session (reattach or new). Idempotent — a no-op when already up."""
+        session (reattach or new). Idempotent — a no-op when already up, *except* after
+        an abandoned turn, which forces a respawn (see ``_fence_stream``)."""
         async with self._start_lock:
-            if self._proc is not None and self._proc.returncode is None:
+            if self._proc is not None and self._proc.returncode is None and not self._stream_fenced:
                 return
+            if self._stream_fenced:
+                # The last turn was walked away from while the agent was still
+                # generating. Reusing that subprocess means this run shares a stdout
+                # stream with a coder that is still running tools, and the reader that
+                # counts them is not bound by `_turn_lock` — so its work would be booked
+                # here (#3040). Reap it and start clean; the session id is persisted, so
+                # a `loadSession` agent still reattaches the thread.
+                logger.info("[acp/%s] respawning — the previous turn was abandoned mid-generation", self.name)
+                with contextlib.suppress(Exception):
+                    await self.close()
             await self._start()
+
+    def _fence_stream(self) -> None:
+        """Disown the agent stream the just-abandoned turn was reading (#3040).
+
+        Called when a turn ends without the agent telling us it stopped — internal
+        timeout, external cancel, transport failure. ``session/cancel`` asks it to
+        drain, but the agent is under no obligation to comply promptly, and a coder that
+        blew a ten-minute budget is typically still mid-tool. Bumping the generation
+        mutes the reader that served this turn (it holds the id it was started with) and
+        the flag makes the next dispatch respawn instead of inheriting its output.
+
+        Synchronous on purpose: it runs from the cancellation path, where an ``await``
+        would be interrupted before the fence went up.
+        """
+        self._stream_gen += 1
+        self._stream_fenced = True
 
     async def handshake(self) -> None:
         """Start the agent for a *liveness check only*: spawn + run the ACP
@@ -480,6 +520,9 @@ class AcpClient:
         # A pooled client that respawns must not report the PREVIOUS process's dying
         # words as this one's — that would be worse than saying nothing.
         self._stderr_tail.clear()
+        # This is a live stream again: whatever the previous one is still shouting into
+        # a dead pipe stays fenced off by its older generation id (#3040).
+        self._stream_fenced = False
         try:
             self._proc = await asyncio.create_subprocess_exec(
                 self.command,
@@ -510,7 +553,9 @@ class AcpClient:
         # cancels us mid-initialize (the health prober's 45s probe timeout), reap the
         # tree we just spawned instead of leaking it — close() is idempotent.
         try:
-            self._reader_task = asyncio.create_task(self._read_loop())
+            # The reader is stamped with the generation it was born into, so a fence
+            # raised later can tell its messages from the next process's (#3040).
+            self._reader_task = asyncio.create_task(self._read_loop(self._stream_gen))
             self._stderr_task = asyncio.create_task(self._drain_stderr())
             await self._initialize()
             # The probe path (handshake) stops here — a liveness check must NOT open a
@@ -630,7 +675,7 @@ class AcpClient:
         tail = self.stderr_tail()
         return f" ({how})" + (f"; last stderr:\n{tail}" if tail else "; no stderr output")
 
-    async def _read_loop(self) -> None:
+    async def _read_loop(self, gen: int) -> None:
         assert self._proc and self._proc.stdout
         cancelled = False
         try:
@@ -642,6 +687,13 @@ class AcpClient:
                     msg = json.loads(line)
                 except json.JSONDecodeError:
                     logger.warning("[acp/%s] non-JSON line: %.200s", self.name, line)
+                    continue
+                # A fenced stream (#3040): this reader served a turn that was abandoned
+                # mid-generation, so its `session/update` notifications describe work
+                # nobody is waiting for — dropping them is what stops the next run being
+                # charged for it. Responses still go through: an orphaned request has to
+                # be able to fail its future either way.
+                if gen != self._stream_gen and msg.get("method") == "session/update":
                     continue
                 # One bad message (an update shape we mishandle, a callback raising)
                 # must NOT tear down the session — that aborts the turn mid-build with
@@ -1097,6 +1149,10 @@ class AcpClient:
         # Stays 0 unless this call actually got the lock and ran — a queue timeout must
         # not inherit the count of the in-flight turn it was waiting behind.
         tool_calls = 0
+        # Likewise empty unless this run got as far as opening (or reattaching) a
+        # session. Read per-run rather than off `self._session_id`, which on a POOLED
+        # client still names the last run that managed to start (#3040).
+        session_id = ""
         try:
             if self._turn_lock.locked():
                 logger.info("[acp/%s] prompt queued behind an in-flight turn", self.name)
@@ -1117,9 +1173,12 @@ class AcpClient:
                     timeout=timeout,
                 )
             finally:
-                # Read while the lock is still held: the counter is per-turn instance
-                # state, and the next queued turn resets it the moment it acquires.
+                # Read while the lock is still held: these are per-turn instance state,
+                # and the next queued turn resets them on the way in — before its first
+                # await, so a turn that never starts still reports its own nothing
+                # rather than this one's numbers (#3040).
                 tool_calls = self._turn_tool_calls
+                session_id = self._turn_session_id or ""
                 self._turn_lock.release()
             # Returning is not the same as succeeding: `prompt()` is typed -> str, so a
             # refusal, a deliberate cancel and a reply truncated at the output-token
@@ -1132,9 +1191,9 @@ class AcpClient:
             state = "completed" if self.unfinished_reason() is None else "failed"
             return answer
         finally:
-            self._record_run_telemetry(state, started, tool_calls)
+            self._record_run_telemetry(state, started, tool_calls, session_id)
 
-    def _record_run_telemetry(self, state: str, started: float, tool_calls: int) -> None:
+    def _record_run_telemetry(self, state: str, started: float, tool_calls: int, session_id: str) -> None:
         """One durable telemetry row per coder run (#3015). Best-effort; never raises.
 
         The project-board loop dispatches coders from a background loop rather than from
@@ -1172,8 +1231,10 @@ class AcpClient:
                 # distinguishable from a console or /v1 turn by its key alone.
                 task_id=local_task_id(f"coder:{self.name}"),
                 # The ACP session is the run's stable thread id across turns; empty when
-                # the agent never opened one (the failure-before-handshake case).
-                session_id=self._session_id or "",
+                # THIS run never opened one (the failure-before-handshake case). Passed
+                # in rather than read off the client: the client is pooled, so its
+                # `_session_id` outlives the run that opened it (#3040).
+                session_id=session_id,
                 state=state,
                 models=[f"acp:{self.name}"],
                 # Wall clock around the whole call. On the one path that fails before the
@@ -1205,35 +1266,50 @@ class AcpClient:
         thought_callback: ProgressCallback | None,
         timeout: float,
     ) -> str:
-        await self._ensure_started()
+        # Per-turn state is cleared BEFORE the start attempt, not after it. This client
+        # is pooled, and `_ensure_started` raises on every start-failure mode there is —
+        # a workdir managed-git already deleted, a binary an upgrade moved, a 30s
+        # handshake timeout, a protocol mismatch. Reset it afterwards and a run that dies
+        # there books the last successful run's tool calls and session id as its own
+        # (#3040); the clearing has to happen before the first await that can fail.
         self._answer = ""
         self._turn_tool_calls = 0
+        self._turn_session_id = None
         self._progress = progress_callback
         self._on_tool = tool_callback
         self._on_text = text_callback
         self._on_thought = thought_callback
-        logger.info(
-            "[acp/%s] → session/prompt (session=%s, %d chars, timeout=%ss)",
-            self.name,
-            self._session_id,
-            len(text),
-            int(timeout),
-        )
         try:
-            result = await self._request(
-                "session/prompt",
-                {
-                    "sessionId": self._session_id,
-                    "prompt": [{"type": "text", "text": text}],
-                },
-                timeout=timeout,
+            await self._ensure_started()
+            # Now — and only now — does this run have a session of its own to be
+            # recorded against.
+            self._turn_session_id = self._session_id
+            logger.info(
+                "[acp/%s] → session/prompt (session=%s, %d chars, timeout=%ss)",
+                self.name,
+                self._session_id,
+                len(text),
+                int(timeout),
             )
-        except (AcpError, asyncio.CancelledError):
-            # Turn abandoned — internal timeout, external cancel (e.g. an
-            # orchestrator's wait_for watchdog), or transport failure. Tell the
-            # agent to drain it so the reused session isn't left mid-generation.
-            await self._cancel_session()
-            raise
+            try:
+                result = await self._request(
+                    "session/prompt",
+                    {
+                        "sessionId": self._session_id,
+                        "prompt": [{"type": "text", "text": text}],
+                    },
+                    timeout=timeout,
+                )
+            except (AcpError, asyncio.CancelledError):
+                # Turn abandoned — internal timeout, external cancel (e.g. an
+                # orchestrator's wait_for watchdog), or transport failure. Tell the
+                # agent to drain it so the reused session isn't left mid-generation,
+                # and fence the stream: the ask is advisory, the agent may well still be
+                # running tools, and its updates would otherwise be counted against
+                # whichever run holds this pooled client next (#3040).
+                self._fence_stream()
+                await self._cancel_session()
+                raise
         finally:
             self._progress = None
             self._on_tool = None

@@ -15,6 +15,7 @@ in the store — not that a writer function was called.
 from __future__ import annotations
 
 import asyncio
+import shutil
 import sys
 import types
 
@@ -433,3 +434,248 @@ async def test_the_read_surface_answers_the_acceptance_question(wired, tmp_path)
     assert len(coder_runs) == 2
     # …"and how many failed" — the refusal, and only the refusal.
     assert sum(1 for t in coder_runs if t["state"] == "failed") == 1
+
+
+# ── run attribution: no run books another run's effort (#3040) ────────────────
+# The counter and the session id above live on a client that is POOLED across
+# dispatches, and both are per-turn state reset on the way in. Two mechanisms let
+# that reset miss. A run that dies inside `_ensure_started` — workdir gone, binary
+# gone, handshake timeout — never reaches it. And the stdout reader that increments
+# the counter is not bound by `_turn_lock`, so a turn abandoned on timeout goes on
+# feeding the tally of whichever run holds the client next.
+#
+# Both are asserted against a store that already holds a month of this instance's
+# real traffic: PM chat turns, this same delegate's earlier runs, a peer delegation.
+# In an empty store an inherited count is conspicuous; next to thirty rows that all
+# carry a plausible `tool_calls` and a plausible session id, it is not — which is
+# how it survived #3015's own tests.
+
+
+def _seed_a_month_of_traffic(store) -> None:
+    """Thirty days of the traffic a live instance actually accumulates.
+
+    Every seeded row carries a non-zero ``tool_calls`` and a real session id, including
+    rows for the *same* delegate the tests below dispatch — so a run that inherits its
+    predecessor's numbers looks exactly like ordinary history rather than standing out.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    for day in range(1, 31):
+        ended = now - timedelta(days=day)
+        started = ended - timedelta(seconds=45)
+        for task_id, session_id, model, tools, cost in (
+            (f"a2a:pm-turn-{day}", f"ctx-pm-{day}", "anthropic:claude-opus-4", 4, 0.31),
+            (f"coder:claude-code:hist{day:02d}", f"sess-hist-{day}", "acp:claude-code", 7, 0.0),
+            (f"coder:codex:hist{day:02d}", f"sess-codex-{day}", "acp:codex", 12, 0.0),
+        ):
+            store.record(
+                {
+                    "task_id": task_id,
+                    "session_id": session_id,
+                    "state": "completed",
+                    "success": 1,
+                    "model": model,
+                    "models": model,
+                    "input_tokens": 4200,
+                    "output_tokens": 900,
+                    "total_tokens": 5100,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation_input_tokens": 0,
+                    "cost_usd": cost,
+                    "duration_ms": 45_000,
+                    "llm_calls": 3,
+                    "tool_calls": tools,
+                    "created_at": started.isoformat(),
+                    "ended_at": ended.isoformat(),
+                    "soul_rev": "abc1234",
+                    "trace_id": "",
+                    "tool_durations": "{}",
+                    "context_tokens": 4200,
+                }
+            )
+
+
+def _rows_written_by(store, before: set) -> list[dict]:
+    """The rows this test produced, told apart from the seeded history by row id — not
+    by position, which a month of same-prefix history makes meaningless."""
+    return [r for r in store.recent(500) if r["row_id"] not in before]
+
+
+async def test_a_run_that_dies_before_it_starts_books_none_of_the_previous_runs_effort(wired, tmp_path):
+    """The reported case, end to end: run A does three tool calls in session
+    ``sess-run-a``; run B's worktree is gone before it starts, so it never gets past
+    ``_ensure_started``. B must record its own nothing — 0 tool calls, no session — not
+    A's three and A's session id.
+
+    The workdir being gone is routine rather than exotic: managed-git dispatch (ADR
+    0076) creates a disposable per-call worktree and the client that outlives it is
+    pooled. The agent dying between dispatches is what makes ``_ensure_started``
+    reachable on a warm client at all.
+    """
+    _seed_a_month_of_traffic(wired)
+    before = {r["row_id"] for r in wired.recent(500)}
+
+    worktree = tmp_path / "wt-feature-1"
+    worktree.mkdir()
+    client = AcpClient(
+        sys.executable,
+        _agent(tmp_path, "pooled", _TOOLS_BODY, session="sess-run-a"),
+        cwd=str(worktree),
+        name="claude-code",
+    )
+    try:
+        assert await client.prompt("first feature", timeout=30.0) == "wrote the patch"
+
+        # The pooled client's agent died between dispatches, and managed-git already
+        # threw the worktree away. Next dispatch, same client.
+        await client.close()
+        shutil.rmtree(worktree)
+
+        with pytest.raises(AcpError, match="workdir does not exist"):
+            await client.prompt("second feature", timeout=30.0)
+    finally:
+        await client.close()
+
+    fresh = _rows_written_by(wired, before)
+    assert len(fresh) == 2, "both dispatches record — a dispatch that never ran is a failed dispatch"
+    ran = [r for r in fresh if r["state"] == "completed"][0]
+    died = [r for r in fresh if r["state"] == "failed"][0]
+
+    assert ran["tool_calls"] == 3
+    assert ran["session_id"] == "sess-run-a"
+
+    # The run that never started did no work and opened no session of its own.
+    assert died["tool_calls"] == 0
+    assert died["session_id"] == ""
+    assert died["session_id"] != ran["session_id"]
+
+
+# An agent that keeps working after the client gives up on the turn. The flood runs on
+# its own thread precisely because the real failure needs it: a coder that blew its
+# timeout is not paused waiting to be collected, it is still running tools and still
+# writing `session/update` notifications down the same stdout the next run reads.
+_FLOODING_AGENT = r'''
+import json, sys, threading, time
+
+_out = threading.Lock()
+
+
+def send(obj):
+    with _out:
+        sys.stdout.write(json.dumps(obj) + "\n")
+        sys.stdout.flush()
+
+
+def tool(tag):
+    send({"jsonrpc": "2.0", "method": "session/update", "params": {
+        "sessionId": "__SESSION__",
+        "update": {"sessionUpdate": "tool_call", "toolCallId": "t-%s" % tag,
+                   "title": "Edit(%s.py)" % tag, "kind": "edit"}}})
+
+
+def chunk():
+    send({"jsonrpc": "2.0", "method": "session/update", "params": {
+        "sessionId": "__SESSION__",
+        "update": {"sessionUpdate": "agent_message_chunk",
+                   "content": {"type": "text", "text": "wrote the patch"}}}})
+
+
+def flood():
+    for n in range(2000):
+        tool("late%d" % n)
+        time.sleep(0.01)
+
+
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method, mid = msg.get("method"), msg.get("id")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": mid, "result": {"protocolVersion": 1}})
+    elif method == "session/new":
+        send({"jsonrpc": "2.0", "id": mid, "result": {"sessionId": "__SESSION__"}})
+    elif method == "session/prompt":
+        blocks = (msg.get("params") or {}).get("prompt") or []
+        text = "".join(b.get("text", "") for b in blocks)
+        if "runaway" in text:
+            # Never answers. The client's own timeout abandons the turn while this
+            # thread carries on emitting.
+            threading.Thread(target=flood, daemon=True).start()
+        else:
+            tool("own")
+            time.sleep(0.25)
+            chunk()
+            send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
+'''
+
+# A healthy peer coder working the whole time the runaway turn is being abandoned —
+# the board dispatches several coders at once, so attribution has to hold across
+# clients as well as across turns on one client.
+_PEER_TOOLS_BODY = "\n        ".join(
+    [_tool_call(1), "time.sleep(0.2)", _tool_call(2), "time.sleep(0.2)", _tool_call(3), _OK_BODY]
+)
+
+
+def _flooding_agent(tmp_path, session: str = "sess-runaway") -> list[str]:
+    script = tmp_path / "acp_agent_runaway.py"
+    script.write_text(_FLOODING_AGENT.replace("__SESSION__", session), encoding="utf-8")
+    return [str(script)]
+
+
+async def test_a_timed_out_turn_cannot_spend_the_next_runs_tool_budget(wired, tmp_path):
+    """A dispatch that blows its timeout leaves the coder running. The counter is
+    incremented by the stdout reader, which ``_turn_lock`` does not bind — so those
+    late ``session/update`` notifications land wherever the pooled client goes next.
+
+    Run A is abandoned mid-flood; run B does exactly one tool call. B's row must say
+    one. Asserted with a second delegate dispatched concurrently and a month of history
+    already in the store, because that is the shape the number is read in.
+    """
+    _seed_a_month_of_traffic(wired)
+    before = {r["row_id"] for r in wired.recent(500)}
+
+    peer = _client(tmp_path, "codex", _PEER_TOOLS_BODY, session="sess-peer-live")
+    client = AcpClient(sys.executable, _flooding_agent(tmp_path), cwd=str(tmp_path), name="claude-code")
+    try:
+        peer_task = asyncio.create_task(peer.prompt("peer feature", timeout=30.0))
+        with pytest.raises(AcpError, match="session/prompt timed out"):
+            await client.prompt("runaway feature", timeout=0.8)
+        assert await peer_task == "wrote the patch"
+
+        # The stream is disowned the moment we give up, not merely when the next
+        # dispatch respawns the agent — between those two points the flood is still
+        # arriving and the reader that counts it is still alive, so a run B that clears
+        # the counter and *then* awaits its respawn would already be accruing. Pinned
+        # here rather than through a row because there is no row until run B ends, by
+        # which point the respawn would hide which half of the fence did the work.
+        settled = client._turn_tool_calls
+        await asyncio.sleep(0.3)
+        assert client._turn_tool_calls == settled
+
+        assert await client.prompt("second feature", timeout=30.0) == "wrote the patch"
+    finally:
+        await client.close()
+        await peer.close()
+
+    fresh = _rows_written_by(wired, before)
+    mine = [r for r in fresh if r["model"] == "acp:claude-code"]
+    peer_rows = [r for r in fresh if r["model"] == "acp:codex"]
+    assert len(mine) == 2 and len(peer_rows) == 1
+
+    abandoned = [r for r in mine if r["state"] == "failed"][0]
+    following = [r for r in mine if r["state"] == "completed"][0]
+
+    # The agent really was mid-work when we walked away — otherwise this test would
+    # pass just as well against a client that never counted anything at all.
+    assert abandoned["tool_calls"] >= 1
+    # …and none of that work is the next run's.
+    assert following["tool_calls"] == 1
+    # The concurrent peer's own count is untouched by either.
+    assert peer_rows[0]["tool_calls"] == 3
+    assert peer_rows[0]["session_id"] == "sess-peer-live"
