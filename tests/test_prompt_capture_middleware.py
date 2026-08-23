@@ -6,6 +6,7 @@ capture directly after): capture's handler sees the request PromptCache built.
 """
 
 import asyncio
+import contextlib
 from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage, SystemMessage
@@ -182,6 +183,52 @@ def test_both_caps_travel_from_config_through_the_graph_build():
         _run_chained(req, _response(), capture=capture)
     store = prompt_snapshots()
     assert (store.retention_days, store.max_calls) == (11, 3)
+
+
+def test_the_subagent_stack_carries_the_row_cap_too(monkeypatch):
+    """#2388's subagent stack builds its OWN middleware list, so a cap wired only
+    into `_build_middleware` would leave every delegation writing at the
+    hardcoded default — and delegation-heavy turns are precisely where the row
+    cap fills fastest (#3019). Proof is eviction through the middleware the
+    subagent path actually constructed, not the argument it was handed."""
+    import graph.agent as agent_mod
+    from graph.config import LangGraphConfig
+
+    seen: dict = {}
+
+    def fake_create_agent(**kwargs):
+        seen["middleware"] = kwargs.get("middleware") or []
+
+        class _Agent:
+            async def ainvoke(self, *_a, **_kw):
+                return {"messages": [SimpleNamespace(content="ok", type="ai")]}
+
+        return _Agent()
+
+    monkeypatch.setattr(agent_mod, "create_agent", fake_create_agent)
+    monkeypatch.setattr(agent_mod, "create_llm", lambda *_a, **_kw: object())
+    cfg = LangGraphConfig(api_key="k", prompt_capture_retention_days=0, prompt_capture_max_calls=1)
+    # The run dies past create_agent on the fake agent (no astream) — the
+    # test_subagent_native_oauth harness does the same. All we need is the
+    # middleware list the real code path built, and the assert below fails
+    # loudly if construction never got that far.
+    with contextlib.suppress(Exception):
+        asyncio.run(
+            agent_mod._run_subagent(
+                config=cfg,
+                tool_map={"current_time": SimpleNamespace(name="current_time")},
+                available_subagents="researcher",
+                prompt="go",
+                subagent_type="researcher",
+                description="delegation under test",
+                parent_task_id="call-xyz",
+            )
+        )
+    capture = next(m for m in seen["middleware"] if type(m).__name__ == "PromptCaptureMiddleware")
+    for _ in range(2):
+        _run_chained(_Req("claude-opus-4-7", SystemMessage(content="S"), state={}), _response(), capture=capture)
+    rows = prompt_snapshots().calls_for_parent("call-xyz")
+    assert [r["call_index"] for r in rows] == [1]  # max_calls=1 → only the newest survives
 
 
 # --- middleware-order contract -----------------------------------------------

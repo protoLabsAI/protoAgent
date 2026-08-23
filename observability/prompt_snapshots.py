@@ -347,7 +347,7 @@ class PromptSnapshotStore:
             db.close()
         return self._decode(row) if row is not None else None
 
-    def retention_stats(self) -> dict:
+    def retention_stats(self, *, retention_days: int | None = None, max_calls: int | None = None) -> dict:
         """Which cap is ACTUALLY governing the retained window right now (#3019).
 
         Both caps trim on every write, so a configured ``retention_days`` is only
@@ -356,23 +356,44 @@ class PromptSnapshotStore:
         and the operator had no way to see that short of opening the SQLite file
         (the live PM sat at 4,968 rows = ~3 days against a configured 30).
 
+        ``retention_days``/``max_calls`` override the store's own attributes for
+        the report. The reader NEEDS that: those attributes are set by the
+        *writer* (``PromptCaptureMiddleware._store``) on each capture, so a
+        process that has not captured yet — a console hitting ``/prompt`` on an
+        old session right after a restart — still holds the construction
+        defaults. Reporting them would answer with 30/5000 no matter what the
+        operator configured, which for a knob-is-inert diagnostic is worse than
+        not answering: it would keep crying ``max_calls`` at someone who had
+        already raised it. The route passes the live config; ``None`` means
+        "whatever this store is set to" (the writer's own view).
+
         ``binding_cap`` is ``"max_calls"`` only when the row cap is at its limit
-        AND the surviving history is younger than ``retention_days`` — that is
-        the state where the age knob is inert. ``"retention_days"`` means the age
-        cap is what ends the window; ``"none"`` means nothing is stored yet or
-        neither cap can evict. ``effective_days`` is how far back the store
-        actually reaches, so "my 30 days is really 3" reads off the payload.
+        and nothing rules the age cap in ahead of it — the state where the age
+        knob is inert. ``"retention_days"`` means the age cap is the one that
+        ends the window and the row cap still has headroom; ``"none"`` means
+        nothing is stored yet or neither cap can evict. ``effective_days`` is how
+        far back the store actually reaches, so "my 30 days is really 3" reads
+        off the payload.
         """
+        days = self.retention_days if retention_days is None else int(retention_days)
+        rows = self.max_calls if max_calls is None else int(max_calls)
         stats: dict = {
-            "retention_days": self.retention_days,
-            "max_calls": self.max_calls,
+            "retention_days": days,
+            "max_calls": rows,
             "calls": 0,
             "oldest_ts": "",
             "newest_ts": "",
             "effective_days": None,
             "binding_cap": "none",
         }
-        db = self._connect()
+        try:
+            db = self._connect()
+        except sqlite3.DatabaseError:
+            # A diagnostic must never cost its caller the thing it diagnoses:
+            # this rides GET /api/prompts/last, and a locked/unreadable DB has
+            # to degrade to honest zeros rather than 500 the prompt read.
+            log.warning("[prompt-snapshots] retention_stats connect failed at %s", self.path)
+            return stats
         try:
             calls, oldest, newest = db.execute("SELECT COUNT(*), MIN(ts), MAX(ts) FROM calls").fetchone()
         except sqlite3.DatabaseError as exc:
@@ -392,13 +413,15 @@ class PromptSnapshotStore:
         except (TypeError, ValueError):
             pass  # an unparseable stamp costs the span, not the rest of the answer
         stats["effective_days"] = effective_days
-        at_row_cap = self.max_calls > 0 and stats["calls"] >= self.max_calls
-        row_cap_bites_first = self.retention_days <= 0 or (
-            effective_days is not None and effective_days < self.retention_days
-        )
+        at_row_cap = rows > 0 and stats["calls"] >= rows
+        # Sitting AT the row cap is observed eviction — every write past this
+        # point drops a row. The span only refines whether the age cap would
+        # have kept it, so a span we could not compute must not talk us out of
+        # the alarm; it degrades toward reporting the cap we can see biting.
+        row_cap_bites_first = days <= 0 or effective_days is None or effective_days < days
         if at_row_cap and row_cap_bites_first:
             stats["binding_cap"] = "max_calls"
-        elif self.retention_days > 0:
+        elif days > 0:
             stats["binding_cap"] = "retention_days"
         return stats
 

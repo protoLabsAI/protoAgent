@@ -326,8 +326,11 @@ Both caps trim inside the same write, so **the smaller one is the real window** 
 few hundred model calls a day the row cap is reached in days and `retention_days` never
 bites (#3019). `GET /api/prompts/last` returns a `retention` block
 (`{retention_days, max_calls, calls, oldest_ts, newest_ts, effective_days, binding_cap}`)
-naming which cap is currently governing, so the effective window is readable without
-opening the SQLite file.
+naming which cap is currently governing — the caps as **configured**, against the rows
+actually held — so the effective window is readable without opening the SQLite file.
+`/prompt` in chat surfaces the same thing: when the row cap is what ends the window, the
+"nothing captured" note says so rather than implying the session was simply never
+captured.
 
 ## `filesystem`
 

@@ -2,7 +2,7 @@
 // component-free so the tab mapping, usage line, and note markdown are unit
 // testable (the vitest harness is .test.ts only).
 
-import type { PromptBreakdown, PromptCall, PromptSection } from "../lib/types";
+import type { PromptBreakdown, PromptCall, PromptRetention, PromptSection } from "../lib/types";
 
 /** How much prompt text the /prompt system note shows before deferring to the
  *  full viewer — a note is a glance, not a reading surface. */
@@ -188,4 +188,23 @@ export function historyLine(b: PromptBreakdown): string {
     .join(" · ");
   const top = historyTopToolsLine(b);
   return `_History (≈tokens):_ ${fmtTok(b.total_est_tokens)} across ${b.message_count} messages — ${cats}${top ? ` — ${top}` : ""}`;
+}
+
+/** The /prompt note's retention line — "" unless the server says the ROW cap is
+ *  what ends the window (#3019).
+ *
+ *  "Nothing captured for this session yet" is the wrong story when the store is
+ *  full: the captures existed and the row cap threw them away, and before this
+ *  the only way to learn that was to open prompt-snapshots.db. Deliberately does
+ *  NOT claim this session HAD captures — the store reports its own window, not
+ *  per-session history — and stays silent on an older server, which sends no
+ *  `retention` block at all. */
+export function retentionLine(r?: PromptRetention): string {
+  if (!r || r.binding_cap !== "max_calls") return "";
+  const span = r.effective_days == null ? "" : `, ~${r.effective_days}d held`;
+  return (
+    `_Retention:_ the snapshot store is full at its row cap (\`prompts.max_calls\` = ${r.max_calls}${span}), ` +
+    `so older captures are already evicted no matter what \`prompts.retention_days\` is set to — ` +
+    `raise the cap in Settings ▸ Telemetry to keep a longer window.`
+  );
 }

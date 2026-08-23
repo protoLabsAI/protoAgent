@@ -10,10 +10,16 @@ from observability.prompt_snapshots import prompt_snapshots
 from operator_api.prompt_routes import register_prompt_routes
 
 
-def _client(monkeypatch, *, capture=True):
+def _client(monkeypatch, *, capture=True, caps=None):
     import runtime.state as rs
 
-    monkeypatch.setattr(rs.STATE, "graph_config", SimpleNamespace(prompt_capture_enabled=capture), raising=False)
+    # `caps` = (retention_days, max_calls) on the live config, the source of
+    # truth for the #3019 retention report. Omitted → a config that carries
+    # neither key, which is the pre-#3019 shape the routes still tolerate.
+    cfg = SimpleNamespace(prompt_capture_enabled=capture)
+    if caps is not None:
+        cfg.prompt_capture_retention_days, cfg.prompt_capture_max_calls = caps
+    monkeypatch.setattr(rs.STATE, "graph_config", cfg, raising=False)
     app = FastAPI()
     register_prompt_routes(app)
     return TestClient(app)
@@ -93,6 +99,32 @@ def test_last_reports_which_retention_cap_is_binding(monkeypatch):
     # Capture off keeps the {enabled:false} contract — no retention block to report.
     off = _client(monkeypatch, capture=False)
     assert off.get("/api/prompts/last").json() == {"enabled": False, "call": None}
+
+
+def test_last_reports_the_configured_caps_not_the_stores_own(monkeypatch):
+    """The caps living on the store object are the WRITER's view — the capture
+    middleware stamps them on each model call — so a process that has not
+    captured yet holds whatever it was constructed with. The report has to
+    follow config instead (#3019), or it answers the one question it exists for
+    with a stale number.
+
+    The scenario that makes this concrete: an operator reads `binding_cap:
+    "max_calls"`, raises the row cap, restarts, and opens `/prompt` on an old
+    session. No capture has happened in the new process; the rows in the DB are
+    still the ones the OLD cap trimmed to. Reporting the store's own caps would
+    tell them the row cap is still 2 and still binding — the fix they just made,
+    reported as unmade."""
+    store = prompt_snapshots()
+    store.retention_days, store.max_calls = 30, 2  # the pre-restart policy
+    for i in range(4):
+        store.record(task_id=f"t{i}", session_id="s1", stable_text="P")
+    c = _client(monkeypatch, caps=(90, 40000))  # …what the operator configured since
+    retention = c.get("/api/prompts/last?session_id=s1").json()["retention"]
+    assert (retention["retention_days"], retention["max_calls"]) == (90, 40000)
+    assert retention["calls"] == 2  # the rows the old cap left behind, reported honestly
+    # 2 rows against a 40,000-row cap is headroom: the row cap is no longer what
+    # ends the window, and the alarm must clear rather than echo the old state.
+    assert retention["binding_cap"] == "retention_days"
 
 
 # ── #2388 P3: subagents + prev on the task route; the preview route ───────────

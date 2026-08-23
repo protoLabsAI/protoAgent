@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { PromptCall } from "../lib/types";
+import type { PromptCall, PromptRetention } from "../lib/types";
 import {
   budgetRows,
   callTabs,
@@ -11,6 +11,7 @@ import {
   historyTopToolsLine,
   promptNoteMarkdown,
   promptText,
+  retentionLine,
   sectionDiff,
   sectionsLine,
   splitLine,
@@ -244,5 +245,40 @@ describe("history breakdown helpers (#2843)", () => {
     expect(line).toContain("73.7k across 101 messages");
     expect(line).toContain("tool call args 36.4k");
     expect(line).not.toContain("operator messages"); // zero categories collapse away
+  });
+});
+
+describe("retentionLine (#3019)", () => {
+  const mkR = (over: Partial<PromptRetention> = {}): PromptRetention => ({
+    retention_days: 30,
+    max_calls: 5000,
+    calls: 5000,
+    oldest_ts: "2026-08-20T00:00:00+00:00",
+    newest_ts: "2026-08-23T00:00:00+00:00",
+    effective_days: 3.1,
+    binding_cap: "max_calls",
+    ...over,
+  });
+
+  it("names the row cap and the real window when the row cap is what evicts", () => {
+    const line = retentionLine(mkR());
+    expect(line).toContain("prompts.max_calls` = 5000");
+    expect(line).toContain("~3.1d held");
+    // The point of the line: retention_days is NOT the window, and the operator
+    // is told which knob to move instead.
+    expect(line).toContain("prompts.retention_days");
+    expect(line).toContain("Settings ▸ Telemetry");
+  });
+
+  it("says nothing when the age cap governs, or on a server that omits the block", () => {
+    expect(retentionLine(mkR({ binding_cap: "retention_days" }))).toBe("");
+    expect(retentionLine(mkR({ binding_cap: "none" }))).toBe("");
+    expect(retentionLine(undefined)).toBe(""); // pre-#3019 server
+  });
+
+  it("drops the span rather than the warning when the store could not compute one", () => {
+    const line = retentionLine(mkR({ effective_days: null }));
+    expect(line).toContain("prompts.max_calls` = 5000");
+    expect(line).not.toContain("held");
   });
 });

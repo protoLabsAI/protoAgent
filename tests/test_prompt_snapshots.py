@@ -175,6 +175,39 @@ def test_retention_stats_names_the_age_cap_when_the_row_cap_is_not_binding(tmp_p
     assert roomy.retention_stats()["binding_cap"] == "retention_days"
 
 
+def test_retention_stats_reports_the_caps_it_is_given(tmp_path):
+    # The READER knows the live config; the store object only knows what the last
+    # writer stamped on it, which on a process that has not captured yet is the
+    # construction default. Passing the caps in is what stops the report from
+    # answering "is my retention knob inert?" with a number nobody configured
+    # (#3019) — here: the operator has since raised the row cap well clear of the
+    # rows an older, smaller cap left behind, so the alarm must clear.
+    s = _store(tmp_path, retention_days=30, max_calls=2)
+    for i in range(4):
+        s.record(task_id=f"t{i}", stable_text="P")
+    assert s.retention_stats()["binding_cap"] == "max_calls"
+    asked = s.retention_stats(retention_days=90, max_calls=40000)
+    assert (asked["retention_days"], asked["max_calls"]) == (90, 40000)
+    assert asked["calls"] == 2  # the rows really held, whatever the caps say
+    assert asked["binding_cap"] == "retention_days"
+
+
+def test_retention_stats_degrades_toward_the_alarm_on_an_unreadable_stamp(tmp_path):
+    # `ts` is always written by _now_iso(), so this is a defensive path — but it
+    # pins WHICH WAY it degrades. The span only refines the verdict ("would the
+    # age cap have kept the row?"); sitting at the row cap is observed eviction
+    # on its own, so losing the span must not talk the report out of the alarm.
+    s = _store(tmp_path, retention_days=30, max_calls=1)
+    s.record(task_id="t1", stable_text="P")
+    db = sqlite3.connect(s.path)
+    db.execute("UPDATE calls SET ts = 'not-a-timestamp'")
+    db.commit()
+    db.close()
+    stats = s.retention_stats()
+    assert stats["effective_days"] is None
+    assert stats["binding_cap"] == "max_calls"
+
+
 def test_retention_stats_on_an_uncapped_and_on_an_empty_store(tmp_path):
     # Both caps disabled: nothing can evict, so no cap is binding.
     s = _store(tmp_path, retention_days=0, max_calls=0)

@@ -1356,7 +1356,10 @@ export type PromptCall = {
 // trims on BOTH caps per write, so the smaller one is the real window —
 // `binding_cap` says which is currently governing ("max_calls" = the row cap is
 // discarding calls the day cap would have kept, i.e. retention_days is inert),
-// and `effective_days` is how far back the store actually reaches.
+// and `effective_days` is how far back the store actually reaches. The two cap
+// fields are what the instance has CONFIGURED, measured against `calls`/`*_ts`,
+// which are what it really holds. Optional on the response: a pre-#3019 server
+// sends no block, so treat its absence as "unknown", never as "not binding".
 export type PromptRetention = {
   retention_days: number;
   max_calls: number;

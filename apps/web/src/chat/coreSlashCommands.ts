@@ -19,7 +19,7 @@ import { buildWatchCreateBody, watchFormPayload } from "./watchForm";
 import type { VerifierCatalog } from "../lib/types";
 import { modelChoices, modelFormPayload, modelPickerData, resolveModelArg, type ModelPickerData } from "./modelForm";
 import { openPromptViewer } from "./PromptViewer";
-import { historyLine, promptNoteMarkdown } from "./promptView";
+import { historyLine, promptNoteMarkdown, retentionLine } from "./promptView";
 import { perfNoteMarkdown } from "./perfView";
 import { trajectoryNoteMarkdown } from "./trajectoryView";
 
@@ -202,8 +202,14 @@ registerSlashCommand({
           return;
         }
         if (!res.call) {
+          // "yet" is a guess, and the wrong one when the store is at its row cap
+          // (#3019) — the captures existed and were evicted. Say which it is when
+          // the server tells us; an older server sends no retention block and this
+          // reads exactly as it did before.
+          const retention = retentionLine(res.retention);
           ctx.noteToThread(
             "Nothing captured for this session yet — send a message first, then `/prompt` shows what the model received." +
+              (retention ? `\n\n${retention}` : "") +
               history,
             { tone: "info" },
           );
