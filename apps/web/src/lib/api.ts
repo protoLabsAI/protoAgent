@@ -1011,10 +1011,14 @@ export const api = {
   telemetryRecent(limit = 50) {
     // `langfuse_trace_url_template` carries a `{trace_id}` placeholder (null when
     // Langfuse isn't configured) — see telemetry/traceUrl.ts.
+    // `tracing_enabled` says whether Langfuse is on at all (#3017), so a blank Trace
+    // cell can say "tracing is off" instead of implying this turn simply wasn't
+    // traced. Optional: an older backend omits it and the surface stays as it was.
     return request<{
       enabled: boolean;
       turns: TelemetryTurn[];
       langfuse_trace_url_template?: string | null;
+      tracing_enabled?: boolean;
     }>(`/api/telemetry/recent?limit=${limit}`);
   },
 

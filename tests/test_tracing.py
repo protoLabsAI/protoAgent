@@ -389,6 +389,229 @@ def test_trace_span_sdk_error_yields_none_and_body_runs():
     assert ran
 
 
+# ── init: env-or-config credentials (#3017) ───────────────────────────────────
+#
+# Before #3017 ``init`` read LANGFUSE_{PUBLIC,SECRET}_KEY from os.environ and nowhere
+# else, so tracing could not be enabled on a desktop-launched fleet member (nothing in
+# that launch path sets those vars). These lock the precedence the fix chose: the
+# environment still WINS so container deploys are untouched, and config is the fallback
+# beneath it — asserted on the resulting client/state, never on "a helper was called".
+
+
+class _FakeLangfuse:
+    """Stands in for the real SDK client so init() can be driven without langfuse
+    installed. Records the kwargs it was constructed with — those ARE the outcome
+    under test (which credentials and host actually reached the client)."""
+
+    def __init__(self, public_key="", secret_key="", host=""):
+        self.public_key = public_key
+        self.secret_key = secret_key
+        self.host = host
+
+
+def _install_fake_langfuse(monkeypatch):
+    """Make ``from langfuse import Langfuse`` resolve to _FakeLangfuse."""
+    import types
+
+    mod = types.ModuleType("langfuse")
+    mod.Langfuse = _FakeLangfuse
+    monkeypatch.setitem(sys.modules, "langfuse", mod)
+
+
+class _Cfg:
+    """The tracing-relevant slice of LangGraphConfig. ``resolve_credentials`` reads
+    it via getattr (observability/ sits below graph/ in the import layering), so a
+    plain object is the honest stand-in."""
+
+    def __init__(self, enabled=False, host="", public_key="", secret_key=""):
+        self.tracing_enabled = enabled
+        self.tracing_host = host
+        self.tracing_public_key = public_key
+        self.tracing_secret_key = secret_key
+
+
+def _clear_langfuse_env(monkeypatch):
+    for var in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST", "LANGFUSE_URL"):
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_init_with_no_env_and_no_config_stays_disabled(monkeypatch):
+    tracing = _reload_tracing()
+    _clear_langfuse_env(monkeypatch)
+    _install_fake_langfuse(monkeypatch)
+
+    tracing.init()
+
+    assert tracing.is_enabled() is False
+    assert tracing._langfuse is None
+
+
+def test_init_from_config_only_credentials_enables_tracing(monkeypatch):
+    """The #3017 acceptance: a desktop-launched fleet member has no LANGFUSE_* in its
+    environment, so the config layer is the only one that can turn tracing on."""
+    tracing = _reload_tracing()
+    _clear_langfuse_env(monkeypatch)
+    _install_fake_langfuse(monkeypatch)
+
+    tracing.init(config=_Cfg(enabled=True, host="https://cloud.langfuse.com", public_key="pk-cfg", secret_key="sk-cfg"))
+
+    assert tracing.is_enabled() is True
+    assert tracing._langfuse.public_key == "pk-cfg"
+    assert tracing._langfuse.secret_key == "sk-cfg"
+    assert tracing._langfuse.host == "https://cloud.langfuse.com"
+
+
+def test_env_credentials_beat_config_credentials(monkeypatch):
+    """Container deploys rely on the env pair; config must never shadow it."""
+    tracing = _reload_tracing()
+    _clear_langfuse_env(monkeypatch)
+    _install_fake_langfuse(monkeypatch)
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-env")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-env")
+    monkeypatch.setenv("LANGFUSE_HOST", "https://env.langfuse.example")
+
+    tracing.init(config=_Cfg(enabled=True, host="https://cfg.langfuse.example", public_key="pk-cfg", secret_key="sk-cfg"))
+
+    assert tracing._langfuse.public_key == "pk-env"
+    assert tracing._langfuse.secret_key == "sk-env"
+    assert tracing._langfuse.host == "https://env.langfuse.example"
+
+
+def test_env_credentials_win_even_when_the_config_toggle_is_off(monkeypatch):
+    """``tracing.enabled`` is a fallback toggle, not a kill switch — an env-configured
+    deploy has no config file to flip and must keep tracing."""
+    tracing = _reload_tracing()
+    _clear_langfuse_env(monkeypatch)
+    _install_fake_langfuse(monkeypatch)
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-env")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-env")
+
+    tracing.init(config=_Cfg(enabled=False))
+
+    assert tracing.is_enabled() is True
+    assert tracing._langfuse.public_key == "pk-env"
+
+
+def test_config_credentials_ignored_while_the_toggle_is_off(monkeypatch):
+    """Stored keys with the toggle off = deliberately not tracing, not "connect anyway"."""
+    tracing = _reload_tracing()
+    _clear_langfuse_env(monkeypatch)
+    _install_fake_langfuse(monkeypatch)
+
+    tracing.init(config=_Cfg(enabled=False, public_key="pk-cfg", secret_key="sk-cfg"))
+
+    assert tracing.is_enabled() is False
+    assert tracing._langfuse is None
+
+
+def test_config_with_half_a_key_pair_stays_disabled(monkeypatch):
+    """Half-configured is the operator mid-setup, not a reason to build a client that
+    would 401 on every span."""
+    tracing = _reload_tracing()
+    _clear_langfuse_env(monkeypatch)
+    _install_fake_langfuse(monkeypatch)
+
+    tracing.init(config=_Cfg(enabled=True, public_key="pk-cfg"))
+
+    assert tracing.is_enabled() is False
+    assert tracing._langfuse is None
+
+
+def test_env_keys_without_an_env_host_fall_back_to_the_config_host(monkeypatch):
+    tracing = _reload_tracing()
+    _clear_langfuse_env(monkeypatch)
+    _install_fake_langfuse(monkeypatch)
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-env")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-env")
+
+    tracing.init(config=_Cfg(enabled=False, host="https://cfg.langfuse.example"))
+
+    assert tracing._langfuse.host == "https://cfg.langfuse.example"
+
+
+def test_env_keys_with_no_host_anywhere_keep_the_legacy_default(monkeypatch):
+    """The pre-#3017 behavior for an env-only deploy that sets just the pair."""
+    tracing = _reload_tracing()
+    _clear_langfuse_env(monkeypatch)
+    _install_fake_langfuse(monkeypatch)
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-env")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-env")
+
+    tracing.init()
+
+    assert tracing._langfuse.host == "http://host.docker.internal:3001"
+
+
+def test_legacy_langfuse_url_env_still_names_the_host(monkeypatch):
+    tracing = _reload_tracing()
+    _clear_langfuse_env(monkeypatch)
+    _install_fake_langfuse(monkeypatch)
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-env")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-env")
+    monkeypatch.setenv("LANGFUSE_URL", "https://legacy.langfuse.example")
+
+    tracing.init()
+
+    assert tracing._langfuse.host == "https://legacy.langfuse.example"
+
+
+def test_init_is_reentrant_and_never_replaces_a_live_client(monkeypatch):
+    """init() runs once at boot today, but the config-aware call site moved (#3017) —
+    a second call must not swap the client out from under a running turn."""
+    tracing = _reload_tracing()
+    _clear_langfuse_env(monkeypatch)
+    _install_fake_langfuse(monkeypatch)
+
+    tracing.init(config=_Cfg(enabled=True, public_key="pk-first", secret_key="sk-first"))
+    first = tracing._langfuse
+
+    tracing.init(config=_Cfg(enabled=True, public_key="pk-second", secret_key="sk-second"))
+
+    assert tracing._langfuse is first
+    assert tracing._langfuse.public_key == "pk-first"
+
+
+def test_init_survives_a_client_that_raises(monkeypatch):
+    """Tracing never fails a boot: an unreachable/rejecting Langfuse degrades to off."""
+    import types
+
+    tracing = _reload_tracing()
+    _clear_langfuse_env(monkeypatch)
+
+    mod = types.ModuleType("langfuse")
+
+    def _boom(**kwargs):
+        raise RuntimeError("langfuse rejected the credentials")
+
+    mod.Langfuse = _boom
+    monkeypatch.setitem(sys.modules, "langfuse", mod)
+
+    tracing.init(config=_Cfg(enabled=True, public_key="pk", secret_key="sk"))
+
+    assert tracing.is_enabled() is False
+
+
+def test_server_inits_tracing_with_the_loaded_config():
+    """Wiring lock: tracing.init must be called WITH the config, and after it loads.
+
+    The whole bug was that init ran in the early observability block, before any
+    config existed — so the config fallback could never be read. server/__init__.py
+    is only importable inside a full boot, so lock the source contract (the same way
+    the shutdown-flush test above does).
+    """
+    from pathlib import Path
+
+    src = (Path(__file__).parents[1] / "server" / "__init__.py").read_text()
+    assert "tracing.init(config=STATE.graph_config)" in src, (
+        "tracing.init no longer receives the loaded config — the config fallback is dead again"
+    )
+    # It must come AFTER the config is loaded. _init_langgraph_agent is what sets
+    # STATE.graph_config, so the call has to sit below that line.
+    assert src.index("_init_langgraph_agent(headless_setup=headless_setup)") < src.index(
+        "tracing.init(config=STATE.graph_config)"
+    ), "tracing.init runs before the config loads — it can only see the environment there"
+
+
 # ── shutdown flush wiring ─────────────────────────────────────────────────────
 
 

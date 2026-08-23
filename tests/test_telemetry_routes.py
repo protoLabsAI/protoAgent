@@ -8,10 +8,14 @@ from fastapi.testclient import TestClient
 from operator_api.telemetry_routes import register_telemetry_routes
 
 
-def _client(monkeypatch, store):
+def _client(monkeypatch, store, tracing_enabled=False):
     import runtime.state as rs
+    from observability import tracing
 
     monkeypatch.setattr(rs.STATE, "telemetry_store", store, raising=False)
+    # Pin the tracing flag rather than reading whatever a sibling test file left on the
+    # module — the response now reports it (#3017), so it has to be deterministic here.
+    monkeypatch.setattr(tracing, "is_enabled", lambda: tracing_enabled)
     app = FastAPI()
     register_telemetry_routes(app)
     return TestClient(app)
@@ -20,7 +24,13 @@ def _client(monkeypatch, store):
 def test_routes_disabled_when_store_off(monkeypatch):
     c = _client(monkeypatch, None)
     assert c.get("/api/telemetry/summary").json() == {"enabled": False, "summary": None}
-    assert c.get("/api/telemetry/recent").json() == {"enabled": False, "turns": []}
+    # tracing_enabled rides along even with the store off — the two are independent
+    # switches, and the console needs the answer to explain an empty Trace column.
+    assert c.get("/api/telemetry/recent").json() == {
+        "enabled": False,
+        "turns": [],
+        "tracing_enabled": False,
+    }
     assert c.get("/api/telemetry/insights").json() == {"enabled": False, "insights": None}
 
 
@@ -42,7 +52,30 @@ def test_summary_and_recent_delegate_to_store(monkeypatch):
         "enabled": True,
         "turns": [{"task_id": "t1"}],
         "langfuse_trace_url_template": None,
+        "tracing_enabled": False,
     }
+
+
+def test_recent_reports_tracing_off_so_an_empty_trace_column_can_say_why(monkeypatch):
+    """#3017: with Langfuse off EVERY row's trace_id is blank, and a column of dashes
+    reads as "these turns weren't traced" rather than "tracing is disabled". The
+    response carries the distinction so the console can state it."""
+
+    class _Store:
+        def recent(self, limit=50):
+            return [{"task_id": "t1", "trace_id": None}]
+
+    c = _client(monkeypatch, _Store(), tracing_enabled=False)
+    assert c.get("/api/telemetry/recent").json()["tracing_enabled"] is False
+
+
+def test_recent_reports_tracing_on_when_langfuse_is_live(monkeypatch):
+    class _Store:
+        def recent(self, limit=50):
+            return [{"task_id": "t1", "trace_id": "abc"}]
+
+    c = _client(monkeypatch, _Store(), tracing_enabled=True)
+    assert c.get("/api/telemetry/recent").json()["tracing_enabled"] is True
 
 
 def test_recent_limit_is_clamped(monkeypatch):

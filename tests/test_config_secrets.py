@@ -311,3 +311,160 @@ def test_unrelated_save_relocates_seeded_secret(monkeypatch, tmp_path: Path) -> 
     # The rebuild that follows the save still has credentials (this is what
     # failed live: "config saved; graph rebuild failed: Missing credentials").
     assert LangGraphConfig.from_yaml(str(leaf)).api_key == "sk-seeded"
+
+
+# ── Langfuse tracing credentials (#3017) ──────────────────────────────────────
+#
+# tracing.public_key / tracing.secret_key are declared secrets, so they must follow
+# model.api_key exactly: split out of a save, stored 0600 in secrets.yaml, relocated
+# if an older YAML holds them inline, overlaid back at load, and never echoed by the
+# config read the console/export path uses. Asserted on the FILES and the loaded
+# config, not on the helpers.
+
+
+def test_split_routes_langfuse_keys_to_secrets() -> None:
+    from graph.config_io import split_secret_updates
+
+    main, secrets = split_secret_updates(
+        {
+            "tracing": {
+                "enabled": True,
+                "host": "https://cloud.langfuse.com",
+                "public_key": "pk-live",
+                "secret_key": "sk-live",
+            }
+        }
+    )
+
+    assert main["tracing"] == {"enabled": True, "host": "https://cloud.langfuse.com"}
+    assert secrets == {"tracing": {"public_key": "pk-live", "secret_key": "sk-live"}}
+
+
+def test_strip_secrets_from_doc_relocates_inline_langfuse_keys(monkeypatch, tmp_path: Path) -> None:
+    """A hand-edited YAML that put the keys inline gets them MOVED to the overlay
+    (#1645's relocate-don't-drop rule), so the operator doesn't silently lose them."""
+    from graph import config_io
+
+    secrets_path = _isolate_secrets_file(monkeypatch, tmp_path)
+    doc = {"tracing": {"enabled": True, "public_key": "pk-inline", "secret_key": "sk-inline"}}
+
+    config_io.strip_secrets_from_doc(doc)
+
+    assert doc["tracing"] == {"enabled": True}
+    stored = config_io.load_secrets(secrets_path)
+    assert stored["tracing"] == {"public_key": "pk-inline", "secret_key": "sk-inline"}
+
+
+def test_from_yaml_overlays_langfuse_keys(tmp_path: Path) -> None:
+    from graph.config import LangGraphConfig
+
+    (tmp_path / "langgraph-config.yaml").write_text(
+        "tracing:\n  enabled: true\n  host: https://cloud.langfuse.com\n"
+    )
+    (tmp_path / "secrets.yaml").write_text("tracing:\n  public_key: pk-overlay\n  secret_key: sk-overlay\n")
+
+    cfg = LangGraphConfig.from_yaml(tmp_path / "langgraph-config.yaml")
+
+    assert cfg.tracing_enabled is True
+    assert cfg.tracing_host == "https://cloud.langfuse.com"
+    assert cfg.tracing_public_key == "pk-overlay"
+    assert cfg.tracing_secret_key == "sk-overlay"
+
+
+def test_config_to_dict_never_echoes_the_langfuse_keys() -> None:
+    """The dict the Settings API returns (and agent-snapshot/export read) must carry
+    the non-secret half and BLANK the credentials — blank-means-unchanged on save."""
+    from graph.config import LangGraphConfig
+    from graph.config_io import config_to_dict
+
+    cfg = LangGraphConfig(
+        tracing_enabled=True,
+        tracing_host="https://cloud.langfuse.com",
+        tracing_public_key="pk-live",
+        tracing_secret_key="sk-live",
+    )
+
+    d = config_to_dict(cfg)
+
+    assert d["tracing"]["enabled"] is True
+    assert d["tracing"]["host"] == "https://cloud.langfuse.com"
+    assert d["tracing"]["public_key"] == ""
+    assert d["tracing"]["secret_key"] == ""
+    assert "pk-live" not in str(d) and "sk-live" not in str(d)
+
+
+def test_settings_save_stores_langfuse_keys_as_secrets(tmp_path, monkeypatch) -> None:
+    """End-to-end through the real settings write path: enabling tracing from the
+    console must leave the tracked YAML credential-free and land the pair in
+    secrets.yaml — and a fresh load must read all four values back. This is the
+    #3017 acceptance for "keys are stored as secrets, never in tracked config"."""
+    import yaml as _yaml
+
+    from graph import config_io
+    from graph.config import LangGraphConfig
+    from server.agent_init import _apply_settings_changes
+    from tests.privacy_asserts import assert_owner_only
+
+    leaf = tmp_path / "langgraph-config.yaml"
+    secrets_path = tmp_path / "secrets.yaml"
+    monkeypatch.setattr(config_io, "config_yaml_path", lambda: leaf)
+    monkeypatch.setattr(config_io, "secrets_yaml_path", lambda: secrets_path)
+    # Keep the cascade off the developer's real host file.
+    monkeypatch.setenv("PROTOAGENT_HOST_CONFIG", str(tmp_path / "host-config.yaml"))
+    import server.agent_init as agent_init
+
+    monkeypatch.setattr(agent_init, "_reload_langgraph_agent", lambda: (True, "reloaded"))
+
+    ok, _msg = _apply_settings_changes(
+        config={
+            "tracing": {
+                "enabled": True,
+                "host": "https://cloud.langfuse.com",
+                "public_key": "pk-live",
+                "secret_key": "sk-live",
+            }
+        }
+    )
+    assert ok
+
+    tracked = leaf.read_text()
+    assert "pk-live" not in tracked and "sk-live" not in tracked
+    written = _yaml.safe_load(tracked)
+    assert written["tracing"]["enabled"] is True
+    assert "public_key" not in written["tracing"]
+    assert "secret_key" not in written["tracing"]
+
+    stored = _yaml.safe_load(secrets_path.read_text())
+    assert stored["tracing"] == {"public_key": "pk-live", "secret_key": "sk-live"}
+    assert_owner_only(secrets_path)
+
+    reloaded = LangGraphConfig.from_yaml(leaf)
+    assert reloaded.tracing_enabled is True
+    assert reloaded.tracing_host == "https://cloud.langfuse.com"
+    assert reloaded.tracing_public_key == "pk-live"
+    assert reloaded.tracing_secret_key == "sk-live"
+
+
+def test_a_config_only_instance_resolves_credentials_for_init(tmp_path, monkeypatch) -> None:
+    """The deployment shape the issue is about: a fleet member launched from the
+    desktop bundle with NO LANGFUSE_* in its environment. The config it loads must be
+    enough for tracing.init to connect."""
+    from graph.config import LangGraphConfig
+    from observability import tracing
+
+    for var in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST", "LANGFUSE_URL"):
+        monkeypatch.delenv(var, raising=False)
+
+    (tmp_path / "langgraph-config.yaml").write_text(
+        "tracing:\n  enabled: true\n  host: https://cloud.langfuse.com\n"
+    )
+    (tmp_path / "secrets.yaml").write_text("tracing:\n  public_key: pk-live\n  secret_key: sk-live\n")
+
+    cfg = LangGraphConfig.from_yaml(tmp_path / "langgraph-config.yaml")
+
+    assert tracing.resolve_credentials(cfg) == (
+        "pk-live",
+        "sk-live",
+        "https://cloud.langfuse.com",
+        "config",
+    )

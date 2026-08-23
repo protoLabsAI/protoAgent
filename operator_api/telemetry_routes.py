@@ -51,6 +51,19 @@ def _resolve_trace_url_template() -> str | None:
     return url.replace(_TRACE_ID_PLACEHOLDER, "{trace_id}")
 
 
+def _tracing_enabled() -> bool:
+    """Whether Langfuse tracing is live on this instance (#3017).
+
+    Reported alongside the rows so the console can tell "tracing is off" from "this
+    turn has no trace". Without it a blank Trace cell reads as the latter, which is
+    how a fleet ran a month of turns with tracing dark and nothing said so. Cheap
+    and always current — ``is_enabled()`` is the module flag ``init`` set at boot.
+    """
+    from observability import tracing
+
+    return tracing.is_enabled()
+
+
 async def _trace_url_template() -> str | None:
     """Cached ``langfuse_trace_url_template`` for the recent-turns response."""
     global _TRACE_URL_TEMPLATE_CACHE
@@ -276,11 +289,12 @@ def register_telemetry_routes(app) -> None:
         # Rows come through wholesale (SELECT *), so ``trace_id`` is already on
         # each turn; the template is what lets the console turn it into a link.
         if STATE.telemetry_store is None:
-            return {"enabled": False, "turns": []}
+            return {"enabled": False, "turns": [], "tracing_enabled": _tracing_enabled()}
         return {
             "enabled": True,
             "turns": STATE.telemetry_store.recent(limit=min(max(1, limit), 500)),
             "langfuse_trace_url_template": await _trace_url_template(),
+            "tracing_enabled": _tracing_enabled(),
         }
 
     @app.get("/api/telemetry/export")

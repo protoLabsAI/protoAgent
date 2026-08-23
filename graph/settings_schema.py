@@ -819,6 +819,58 @@ FIELDS: list[Field] = [
         restart=True,
         scope="host",
     ),
+    # ── Tracing (Langfuse deep traces — ADR 0006's other half, #3017) ─────────
+    # Deliberately the same section as telemetry.*: the SQL rollup and the trace tree
+    # are the two halves of ADR 0006, and they used to be configured in different
+    # places — one here, the other only via LANGFUSE_* env vars, which nothing sets on
+    # a desktop-launched fleet member, so tracing was unreachable on that shape.
+    # All four stay scope="agent": ADR 0047 D5 keeps secrets at the agent leaf, and a
+    # toggle promoted to the Host layer while its credentials stayed here would let a
+    # box turn tracing "on" with no keys to turn it on with.
+    Field(
+        "tracing.enabled",
+        "tracing_enabled",
+        "Send traces to Langfuse",
+        "bool",
+        "Telemetry",
+        "Emit the per-turn trace tree (tool calls, model calls, subagent spans) to Langfuse "
+        "so a telemetry row can deep-link to its trace. Needs the key pair below. "
+        "LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY in the environment still win — an "
+        "env-configured deploy traces whether or not this is on.",
+        restart=True,
+    ),
+    Field(
+        "tracing.host",
+        "tracing_host",
+        "Langfuse host",
+        "string",
+        "Telemetry",
+        "Base URL of the Langfuse instance to send to, e.g. https://cloud.langfuse.com. "
+        "Blank uses http://host.docker.internal:3001 (the bundled compose default); "
+        "LANGFUSE_HOST / LANGFUSE_URL override it.",
+        restart=True,
+        depends_on={"key": "tracing.enabled"},
+    ),
+    Field(
+        "tracing.public_key",
+        "tracing_public_key",
+        "Langfuse public key",
+        "secret",
+        "Telemetry",
+        "Stored in secrets.yaml, never echoed back. Leave blank to keep the stored value.",
+        restart=True,
+        depends_on={"key": "tracing.enabled"},
+    ),
+    Field(
+        "tracing.secret_key",
+        "tracing_secret_key",
+        "Langfuse secret key",
+        "secret",
+        "Telemetry",
+        "Stored in secrets.yaml, never echoed back. Leave blank to keep the stored value.",
+        restart=True,
+        depends_on={"key": "tracing.enabled"},
+    ),
     # ── Prompt snapshots (#2243) ──────────────────────────────────────────────
     Field(
         "prompts.capture",

@@ -468,6 +468,8 @@ function handleApiGet(pathname, fleet = FLEET, params = new URLSearchParams(), m
         enabled: true,
         turns: TELEMETRY_TURNS,
         langfuse_trace_url_template: "https://langfuse.example.com/project/p1/traces/{trace_id}",
+        // #3017 — the surface renders "off" in the Trace column when this is false.
+        tracing_enabled: true,
       };
     case "/api/telemetry/insights":
       return { enabled: true, insights: TELEMETRY_INSIGHTS };

@@ -28,10 +28,23 @@ appears any time an SSE consumer closes the stream early (e.g. an A2A
 client breaks out of the `for await` loop after capturing the initial
 task event). Keep it.
 
+Configuration
+─────────────
+``init`` takes the credentials from the environment (``LANGFUSE_PUBLIC_KEY`` /
+``LANGFUSE_SECRET_KEY`` / ``LANGFUSE_HOST``) and falls back to the config's
+``tracing.{enabled,host,public_key,secret_key}`` — the env layer WINS, so a
+container deploy is untouched, while a desktop-launched fleet member (which has
+no ``LANGFUSE_*`` in its environment and so could not enable tracing at all
+before #3017) can be configured from Settings ▸ Telemetry. The two keys are
+declared secrets, stored in ``secrets.yaml`` and never in the tracked YAML.
+
 Graceful degrade
 ────────────────
 When Langfuse isn't configured (or its client errors), every helper in
 this module is a no-op. The agent continues; tracing just doesn't land.
+``is_enabled()`` is the honest read of that state — the telemetry API reports
+it so the console can say "tracing is off" instead of rendering an empty trace
+column that reads as "this turn wasn't traced".
 """
 
 from __future__ import annotations
@@ -45,6 +58,12 @@ from typing import Any, AsyncIterator, Iterator
 
 _langfuse = None
 _enabled = False
+
+# Where Langfuse is assumed to live when neither the environment nor the config
+# names a host — the bundled compose service. Kept as the default so an env-only
+# deploy that exports only the key pair connects exactly where it did before the
+# config fallback existed (#3017).
+_DEFAULT_HOST = "http://host.docker.internal:3001"
 
 # W3C/OTel id shapes (what Langfuse v3+/v4 uses on the wire). A caller's ids
 # must match these to be JOINable — anything else falls back to a fresh trace
@@ -82,13 +101,64 @@ _session_id_ctx: contextvars.ContextVar[str] = contextvars.ContextVar(
 )
 
 
-def init() -> None:
-    """Connect to Langfuse if LANGFUSE_{PUBLIC,SECRET}_KEY are set. Idempotent."""
+def resolve_credentials(config: Any = None) -> tuple[str, str, str, str]:
+    """The Langfuse credentials to connect with: ``(public_key, secret_key, host, source)``.
+
+    **The environment wins** (#3017). A container / systemd deploy exports
+    ``LANGFUSE_PUBLIC_KEY`` + ``LANGFUSE_SECRET_KEY`` and has no config file to
+    consult, so a complete env pair is used exactly as it was before this seam
+    existed — including the case where ``tracing.enabled`` is off, which is a
+    fallback toggle and not a kill switch for an env-configured deploy.
+
+    Config is the FALLBACK, and it is the only path that reaches the shape the
+    fleet actually deploys: a desktop-app member (``protoagent-server --port …
+    --ui none``) is spawned with no ``LANGFUSE_*`` in its environment, so before
+    #3017 tracing could not be turned on there at all. The config path needs both
+    ``tracing.enabled`` AND a full key pair — an enabled toggle with no keys is
+    the operator having started but not finished, not a reason to connect.
+
+    ``host`` falls back env → config → ``_DEFAULT_HOST`` independently of which
+    layer supplied the keys, so an env-only deploy that sets just the pair keeps
+    landing on the compose default it always did.
+
+    ``source`` is ``"env"``, ``"config"``, or ``""`` (nothing usable); it only
+    feeds the boot log line so an operator can see which layer answered.
+    """
+    env_public = (os.environ.get("LANGFUSE_PUBLIC_KEY") or "").strip()
+    env_secret = (os.environ.get("LANGFUSE_SECRET_KEY") or "").strip()
+    env_host = (os.environ.get("LANGFUSE_HOST") or os.environ.get("LANGFUSE_URL") or "").strip()
+
+    # getattr, not attribute access: callers pass a LangGraphConfig, but this module
+    # sits below graph/ in the import layering and must not depend on that type.
+    cfg_public = str(getattr(config, "tracing_public_key", "") or "").strip()
+    cfg_secret = str(getattr(config, "tracing_secret_key", "") or "").strip()
+    cfg_host = str(getattr(config, "tracing_host", "") or "").strip()
+    host = env_host or cfg_host or _DEFAULT_HOST
+
+    if env_public and env_secret:
+        return env_public, env_secret, host, "env"
+    if getattr(config, "tracing_enabled", False) and cfg_public and cfg_secret:
+        return cfg_public, cfg_secret, host, "config"
+    return "", "", "", ""
+
+
+def init(config: Any = None) -> None:
+    """Connect to Langfuse from the environment, falling back to ``config``.
+
+    ``config`` is the live ``LangGraphConfig`` (``tracing.{enabled,host,public_key,
+    secret_key}``); omit it and this is the env-only behavior that predates #3017.
+    See ``resolve_credentials`` for the precedence.
+
+    Idempotent, and re-entrant on purpose: once connected this returns immediately
+    rather than rebuilding the client, so a later config-aware call can't replace a
+    live client (or double-register the SDK's OTel provider) behind a running turn.
+    """
     global _langfuse, _enabled
 
-    public_key = os.environ.get("LANGFUSE_PUBLIC_KEY")
-    secret_key = os.environ.get("LANGFUSE_SECRET_KEY")
-    host = os.environ.get("LANGFUSE_HOST") or os.environ.get("LANGFUSE_URL", "http://host.docker.internal:3001")
+    if _enabled:
+        return
+
+    public_key, secret_key, host, source = resolve_credentials(config)
 
     if not public_key or not secret_key:
         print("[tracing] Langfuse not configured. Tracing disabled.")
@@ -103,7 +173,7 @@ def init() -> None:
             host=host,
         )
         _enabled = True
-        print(f"[tracing] Langfuse initialized -> {host}")
+        print(f"[tracing] Langfuse initialized from {source} -> {host}")
     except ImportError:
         print("[tracing] langfuse not installed. Tracing disabled.")
     except Exception as e:

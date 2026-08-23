@@ -284,6 +284,10 @@ export const telemetryQuery = () =>
         summary: s.summary,
         turns: r.turns || [],
         traceUrlTemplate: r.langfuse_trace_url_template ?? null,
+        // #3017: an older backend omits the flag. Treat that as "tracing on" so the
+        // surface keeps its pre-#3017 behavior (a blank cell) rather than claiming
+        // tracing is off on a backend that never told us either way.
+        tracingEnabled: r.tracing_enabled ?? true,
         insights: i.insights,
       };
     },
