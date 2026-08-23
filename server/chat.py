@@ -417,6 +417,7 @@ async def chat(
     hitl_resume: bool = False,
     images: list[tuple[str, str]] | None = None,
     tool_fence: list[str] | None = None,
+    origin: str = "local",
 ) -> list[dict[str, Any]]:
     """Route a user message through LangGraph and return the final assistant
     response as a list of ``{"role": "assistant", "content": ...}`` dicts.
@@ -437,6 +438,11 @@ async def chat(
     another operator's agent, say): it rides the state as ``subagent_fence`` — the
     same channel a detached background subagent run uses (#1639) — so
     ``SubagentFenceMiddleware`` blocks any tool call outside it. Unset → no fence.
+    ``origin`` (#3000) names the surface this turn came from — ``v1``, ``api-chat``,
+    ``plugin`` — and prefixes the telemetry row's key, since these turns have no A2A
+    task to name them. Without it a row from the OpenAI-compat endpoint is
+    indistinguishable from one the console produced, and "which surface is spending
+    this" is the question those rows exist to answer.
     """
     if STATE.graph is None:
         return _setup_required_message()
@@ -448,6 +454,7 @@ async def chat(
         hitl_resume=hitl_resume,
         images=images,
         tool_fence=tool_fence,
+        origin=origin,
     )
 
 
@@ -2283,6 +2290,124 @@ def _fork_message(result: dict) -> str:
     return "Fork unavailable — the branch starts fresh (display copy only)."
 
 
+def _record_local_turn(sink: dict, *, session_id: str, origin: str, state: str, started: float) -> None:
+    """Write the telemetry row for one non-streaming turn (#3000). Best-effort.
+
+    ``sink`` is populated by ``_chat_langgraph_impl`` with the turn's usage
+    callback. It stays empty when the turn short-circuited before reaching the
+    graph — a `/help` command, an unknown slash command, "setup not complete", a
+    HITL hold. Those spend nothing, so they get no row: a telemetry surface that
+    counts control-plane replies as turns is worse than one that doesn't.
+    """
+    try:
+        usage_cb = sink.get("usage_cb")
+        if usage_cb is None:
+            return
+        per_model = getattr(usage_cb, "usage_metadata", None) or {}
+        models, usage, cost = _telemetry_usage(per_model)
+        if not models and not usage["input_tokens"] and not usage["output_tokens"]:
+            return  # reached the graph but made no model call (an ACP turn, a tool-only short-circuit)
+
+        from observability import tracing
+        from server.turn_telemetry import local_task_id, record_turn
+
+        record_turn(
+            task_id=local_task_id(origin),
+            session_id=session_id,
+            state=state,
+            models=models,
+            usage=usage,
+            cost_usd=cost,
+            duration_ms=int((time.monotonic() - started) * 1000),
+            llm_calls=int(getattr(usage_cb, "llm_calls", 0) or 0),
+            tool_calls=int(getattr(usage_cb, "tool_calls", 0) or 0),
+            trace_id=tracing.current_trace_id() or "",
+            # No per-call breakdown on this path: LangChain's usage callback
+            # aggregates PER MODEL across the turn, so the peak single-call prompt
+            # size (context fill) and per-tool durations aren't recoverable from it.
+            # Left at their empty values rather than filled with a plausible-looking
+            # number derived from the wrong thing.
+            context_tokens=0,
+            tool_durations=None,
+            # See record_turn: the fleet roster's running count pairs a +1 on
+            # turn.started with a -1 on the terminal turn.usage, and this driver
+            # emits no turn.started.
+            publish_usage_event=False,
+        )
+    except Exception:  # noqa: BLE001 — telemetry must never break a turn
+        log.debug("[telemetry] failed to record a non-streaming turn", exc_info=True)
+
+
+def _make_usage_callback():
+    """LangChain's per-model usage collector, plus the call counts a telemetry row
+    needs (#3000).
+
+    Subclassed rather than attached as a SECOND handler on purpose: the goal
+    continuation re-attaches this object explicitly by name
+    (``callbacks: [usage_cb]``), so a separate counter handler would have to be
+    remembered there too — and the one that got forgotten would undercount
+    silently. One object, one attachment site to keep right.
+    """
+    from langchain_core.callbacks import UsageMetadataCallbackHandler
+
+    class _TurnUsageCallback(UsageMetadataCallbackHandler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.llm_calls = 0
+            self.tool_calls = 0
+
+        def on_llm_end(self, *args, **kwargs):
+            # The base does the real work here (folding usage_metadata per model),
+            # so forward whatever we were handed, unexamined.
+            self.llm_calls += 1
+            return super().on_llm_end(*args, **kwargs)
+
+        def on_tool_end(self, *args, **kwargs):
+            # Deliberately does NOT call super(). The base's `on_tool_end` is an
+            # empty stub whose signature requires a keyword-only `run_id`, so
+            # delegating buys nothing and couples a telemetry counter to a
+            # signature that can raise inside a live turn's callback path.
+            self.tool_calls += 1
+            return None
+
+    return _TurnUsageCallback()
+
+
+def _telemetry_usage(per_model: dict[str, Any]) -> tuple[list[str], dict[str, int], float]:
+    """Fold LangChain's per-model ``usage_metadata`` into the telemetry-row shape:
+    ``(models, summed usage, cost_usd)`` (#3000).
+
+    Distinct from :func:`_sum_usage`, which produces the OpenAI wire shape and drops
+    the cache fields. Cost is summed PER MODEL rather than computed once on the
+    totals — a turn that routed across a pinned subagent and the lead bills each at
+    its own rate, and collapsing them first would price the whole turn at whichever
+    model happened to be listed.
+    """
+    from observability import pricing
+
+    models = list(per_model or {})
+    totals = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+    }
+    cost = 0.0
+    for model, u in (per_model or {}).items():
+        u = u or {}
+        details = u.get("input_token_details") or {}
+        one = {
+            "input_tokens": int(u.get("input_tokens", 0) or 0),
+            "output_tokens": int(u.get("output_tokens", 0) or 0),
+            "cache_read_input_tokens": int(details.get("cache_read", 0) or 0),
+            "cache_creation_input_tokens": int(details.get("cache_creation", 0) or 0),
+        }
+        for k, v in one.items():
+            totals[k] += v
+        cost += pricing.cost_usd(model, one)
+    return models, totals, round(cost, 6)
+
+
 def _sum_usage(per_model: dict[str, Any]) -> dict[str, int]:
     """Fold LangChain's per-model ``usage_metadata`` (``{input,output,total}_tokens``) into
     the OpenAI ``usage`` shape, summed across every model call in the turn — the lead model
@@ -2388,13 +2513,26 @@ async def _chat_langgraph(
     hitl_resume: bool = False,
     images: list[tuple[str, str]] | None = None,
     tool_fence: list[str] | None = None,
+    origin: str = "local",
 ) -> list[dict[str, Any]]:
     """Idle-beacon wrapper (#1720): mark a turn in flight for the call's lifetime,
-    then delegate. Keeps the public name/signature for every caller."""
+    then delegate. Keeps the public name/signature for every caller.
+
+    Also the telemetry seam for this driver (#3000). The non-streaming path used
+    to record nothing at all — no store row, no Prometheus sample — so every turn
+    from ``/v1/chat/completions``, ``/api/chat``, and the plugin ``HOST.invoke()``
+    seam was invisible to the cost, latency, and success-rate surfaces that claim
+    to describe the agent. The row is written HERE rather than inside the impl
+    because the impl has a dozen return points; the wrapper has exactly one exit.
+    """
     _turn_started()
     _note_agent_active(session_id)  # ADR 0074 — idle→active lifecycle event (debounced)
+    started = time.monotonic()
+    sink: dict[str, Any] = {}
+    result: list[dict[str, Any]] = []
+    state = "failed"
     try:
-        return await _chat_langgraph_impl(
+        result = await _chat_langgraph_impl(
             message,
             session_id,
             model=model,
@@ -2402,9 +2540,16 @@ async def _chat_langgraph(
             hitl_resume=hitl_resume,
             images=images,
             tool_fence=tool_fence,
+            _telemetry_sink=sink,
         )
+        # The impl catches its own exceptions and reports them as an assistant
+        # bubble carrying a structured `error` (server.chat.turn_error), so the
+        # error key — not an exception — is what distinguishes a failed turn.
+        state = "failed" if any(isinstance(m, dict) and m.get("error") for m in result) else "completed"
+        return result
     finally:
         _turn_ended()
+        _record_local_turn(sink, session_id=session_id, origin=origin, state=state, started=started)
 
 
 async def _chat_langgraph_impl(
@@ -2416,10 +2561,15 @@ async def _chat_langgraph_impl(
     hitl_resume: bool = False,
     images: list[tuple[str, str]] | None = None,
     tool_fence: list[str] | None = None,
+    _telemetry_sink: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Non-streaming LangGraph entry — used by the console + OpenAI-compat."""
+    """Non-streaming LangGraph entry — used by the console + OpenAI-compat.
+
+    ``_telemetry_sink`` (private, set by the ``_chat_langgraph`` wrapper) receives
+    this turn's usage callback so the wrapper can write the telemetry row from its
+    single exit point rather than at each of this function's many returns (#3000).
+    """
     from observability import tracing
-    from langchain_core.callbacks import UsageMetadataCallbackHandler
     from langchain_core.messages import HumanMessage, AIMessage
 
     from graph.goals.goal_turn import goal_turn
@@ -2514,7 +2664,12 @@ async def _chat_langgraph_impl(
             # returned assistant dict; /api/chat ignores the extra key, the /v1 OpenAI-compat
             # handler reads it for `usage` (ADR 0075 D4). Mirrors the streaming path's
             # per-call usage accounting, which sums `on_chat_model_end` events for the turn.
-            usage_cb = UsageMetadataCallbackHandler()
+            usage_cb = _make_usage_callback()
+            if _telemetry_sink is not None:
+                # Handed over as soon as it exists, not at the end: the wrapper reads
+                # it from a `finally`, so a turn that raises still bills what it spent
+                # before it died.
+                _telemetry_sink["usage_cb"] = usage_cb
             config = {
                 "configurable": {"thread_id": _resolve_thread_id(None, session_id)},
                 "callbacks": [usage_cb],

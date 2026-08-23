@@ -46,7 +46,7 @@ def _client(monkeypatch, *, graph, chat_reply=None):
     import operator_api.chat_routes as cr
     import runtime.state as rs
 
-    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False, images=None):
+    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False, images=None, **_kw):
         return chat_reply or [{"role": "assistant", "content": f"echo:{message}"}]
 
     monkeypatch.setattr(cr, "chat", _fake_chat)
@@ -104,7 +104,7 @@ def test_v1_multi_tool_board_batch_regression(monkeypatch):
         ("board_mark_ready", "Marking feature B ready…"),
     ]
 
-    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False, images=None):
+    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False, images=None, **_kw):
         graph.messages.append(HumanMessage(content=message))
         narrations = []
         for i, (tool, narration) in enumerate(script):
@@ -197,7 +197,7 @@ def test_v1_max_iterations_cutoff_reports_length(monkeypatch):
         ("board_mark_ready", "Marking feature B ready…"),
     ]
 
-    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False, images=None):
+    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False, images=None, **_kw):
         narrations = []
         for i, (tool, narration) in enumerate(script):
             narrations.append(narration)
@@ -228,7 +228,7 @@ def test_v1_finish_reason_inspects_the_turns_own_thread(monkeypatch):
     graph = _FakeGraph([AIMessage(content="done")])
     seen_sessions: list[str] = []
 
-    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False, images=None):
+    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False, images=None, **_kw):
         seen_sessions.append(session_id)
         return [{"role": "assistant", "content": "done"}]
 

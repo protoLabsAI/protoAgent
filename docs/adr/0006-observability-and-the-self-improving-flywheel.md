@@ -109,9 +109,15 @@ outbound telemetry with the fleet so the data is useful beyond protoAgent.
    `test_no_legacy_shims_exist`). Emit cache fields + `costUsd` on `cost-v1` and
    declare the extension URI in the card. *(fixes 1–4)*
 2. ✅ **Persist & aggregate — shipped.** `telemetry_store.py` (`TelemetryStore`)
-   writes one per-turn row (tokens incl. cache, cost, duration, LLM/tool call
-   counts, model, outcome) at the single terminal chokepoint
-   (`A2ATaskStore.update_state`), instance-scoped (ADR 0004). Read via
+   writes one row per turn **leg** (tokens incl. cache, cost, duration, LLM/tool
+   call counts, model, outcome) — a HITL park/resume is two legs sharing one task
+   id, and each owns its spend (#3001). Rows come from **both** turn drivers
+   through the shared writer `server/turn_telemetry.py::record_turn`: the A2A
+   executor's terminal hook, and the non-streaming `_chat_langgraph` behind
+   `/v1/chat/completions`, `/api/chat`, and the plugin `HOST.invoke()` seam.
+   Instrumenting only the first is how the second's spend stayed invisible for so
+   long (#3000) — a new turn surface must route through that writer or it is not
+   measured. Instance-scoped (ADR 0004). Read via
    `/api/telemetry/summary` (totals, success rate, cache-hit ratio, p50/p95
    latency, per-model split) + `/api/telemetry/recent`. Survives restart; no TTL
    (history is the substrate), `prune()` available. *(fixes 5)*

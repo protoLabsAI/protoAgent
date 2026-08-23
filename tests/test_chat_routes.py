@@ -7,11 +7,17 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 
-def _client(monkeypatch, *, graph=object(), goal=None, chat_reply=None):
+def _client(monkeypatch, *, graph=object(), goal=None, chat_reply=None, seen=None):
     import operator_api.chat_routes as cr
     import runtime.state as rs
 
-    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False, images=None):
+    async def _fake_chat(
+        message, session_id, *, model=None, incognito=False, hitl_resume=False, images=None, origin="local", **_kw
+    ):
+        # `origin` names the calling surface for the turn's telemetry row (#3000) —
+        # captured here so a test can assert each route tags its own turns.
+        if seen is not None:
+            seen["origin"] = origin
         suffix = f"@{model}" if model else ""
         return chat_reply or [{"role": "assistant", "content": f"echo:{message}{suffix}"}]
 
@@ -39,7 +45,7 @@ def test_api_chat_mints_unique_session_id_when_omitted(monkeypatch):
 
     seen: list[str] = []
 
-    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False, images=None):
+    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False, images=None, **_kw):
         seen.append(session_id)
         return [{"role": "assistant", "content": "ok"}]
 
@@ -74,7 +80,7 @@ def test_api_chat_passes_incognito_flag(monkeypatch):
 
     seen: list[bool] = []
 
-    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False, images=None):
+    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False, images=None, **_kw):
         seen.append(incognito)
         return [{"role": "assistant", "content": "ok"}]
 
@@ -154,7 +160,7 @@ def test_openai_completion_accepts_multimodal_content_list(monkeypatch):
 
     seen: list[tuple] = []
 
-    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False, images=None):
+    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False, images=None, **_kw):
         seen.append((message, images))
         return [{"role": "assistant", "content": "a red square"}]
 
@@ -186,7 +192,7 @@ def test_openai_completion_string_content_forwards_no_images(monkeypatch):
 
     seen: list[tuple] = []
 
-    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False, images=None):
+    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False, images=None, **_kw):
         seen.append((message, images))
         return [{"role": "assistant", "content": "ok"}]
 
@@ -494,7 +500,7 @@ def test_openai_completions_threads_incognito(monkeypatch):
 
     seen: list[bool] = []
 
-    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False, images=None):
+    async def _fake_chat(message, session_id, *, model=None, incognito=False, hitl_resume=False, images=None, **_kw):
         seen.append(incognito)
         return [{"role": "assistant", "content": "ok"}]
 
@@ -834,3 +840,19 @@ def test_session_turns_degrades_without_a_store(monkeypatch):
     c = _client(monkeypatch)
     body = c.get("/api/chat/sessions/whatever/turns").json()
     assert body["turns"] == [] and "not initialized" in body["reason"]
+
+
+def test_api_chat_tags_its_turns_with_an_origin(monkeypatch):
+    # #3000: these turns have no A2A task, so the telemetry row is keyed by origin.
+    # Without it a /v1 row is indistinguishable from a console one.
+    seen = {}
+    c = _client(monkeypatch, seen=seen)
+    c.post("/api/chat", json={"message": "hi"})
+    assert seen["origin"] == "api-chat"
+
+
+def test_v1_completions_tags_its_turns_with_an_origin(monkeypatch):
+    seen = {}
+    c = _client(monkeypatch, seen=seen)
+    c.post("/v1/chat/completions", json={"model": "protoagent", "messages": [{"role": "user", "content": "hi"}]})
+    assert seen["origin"] == "v1"

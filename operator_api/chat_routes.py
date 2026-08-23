@@ -285,7 +285,12 @@ def register_chat_routes(app, ui: str) -> None:
         # session — additive key, existing consumers unaffected.
         session_id = req.session_id.strip() or _mint_session_id()
         result = await chat(
-            req.message, session_id, model=req.model, incognito=req.incognito, hitl_resume=req.hitl_resume
+            req.message,
+            session_id,
+            model=req.model,
+            incognito=req.incognito,
+            hitl_resume=req.hitl_resume,
+            origin="api-chat",
         )
         parts = [m["content"] for m in result if m.get("role") == "assistant" and m.get("content")]
         return {"response": "\n\n".join(parts), "messages": result, "session_id": session_id}
@@ -724,7 +729,9 @@ def register_chat_routes(app, ui: str) -> None:
         # runs. A2A and /api/chat already expose this; /v1 was the gap.
         incognito = bool(req.get("incognito", False))
 
-        result = await _run_v1_turn(prompt, session_id, model=model, incognito=incognito, images=images or None)
+        result = await _run_v1_turn(
+            prompt, session_id, model=model, incognito=incognito, images=images or None, origin="v1"
+        )
 
         # A turn that raised comes back as an assistant bubble carrying a structured
         # `error` (server.chat.turn_error). Answering 200 with that text as the content

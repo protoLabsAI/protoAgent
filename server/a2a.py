@@ -15,7 +15,6 @@ imports from ``server`` (``agent_name``, ``_event_bus``) are all defined in
 """
 
 import asyncio
-import json
 import logging
 import os
 
@@ -612,102 +611,37 @@ def refresh_served_card() -> None:
 
 def _record_a2a_telemetry(outcome) -> None:
     """Write one per-turn telemetry row from an executor ``TurnOutcome``
-    (ADR 0006 Slice 2). No-op when the telemetry store is off; best-effort so a
-    failure never affects the turn."""
-    # Prometheus turn counter (independent of the SQL telemetry store) — lets
-    # /metrics alert on a failing/backed-up agent. Best-effort.
-    try:
-        from observability import metrics
+    (ADR 0006 Slice 2).
 
-        metrics.record_a2a_turn(outcome.state, (outcome.duration_ms or 0) / 1000.0)
-    except Exception:  # noqa: BLE001 — the Prometheus metric must never break a turn
-        pass
+    The A2A adapter over the shared writer: unpack the outcome, hand its fields to
+    ``server.turn_telemetry.record_turn``, then do the one thing that is genuinely
+    A2A-only (fleet trace export, which needs the outcome object itself). The
+    non-streaming driver calls the same writer with its own fields, so the two
+    surfaces cannot drift into recording different shapes (#3000).
 
-    # Which persona (SOUL.md) was live for this turn (#1691), so telemetry can be correlated
-    # with a soul-history version. Deliberately NOT a Prometheus label — a content hash is
-    # high-cardinality and would explode the metric series. Best-effort: never break a turn.
-    try:
-        from graph.config_io import soul_revision
+    Best-effort throughout — a failure never affects the turn.
+    """
+    from server.turn_telemetry import record_turn
 
-        soul_rev = soul_revision()
-    except Exception:  # noqa: BLE001
-        soul_rev = ""
-
-    # Realtime cost/usage on the bus (ADR 0051 Slice 3) — a per-turn HUD can show live
-    # spend without polling the telemetry store. Independent of the SQL store.
-    try:
-        _u = outcome.usage or {}
-        _event_bus.publish(
-            "turn.usage",
-            {
-                "task_id": getattr(outcome, "task_id", "") or "",
-                "context_id": getattr(outcome, "context_id", "") or "",
-                "state": getattr(outcome, "state", "") or "",
-                "model": outcome.models[0] if getattr(outcome, "models", None) else "",
-                "input_tokens": int(_u.get("input_tokens", 0) or 0),
-                "output_tokens": int(_u.get("output_tokens", 0) or 0),
-                "cost_usd": round(float(getattr(outcome, "cost_usd", 0.0) or 0.0), 6),
-                "duration_ms": int(getattr(outcome, "duration_ms", 0) or 0),
-                "soul_rev": soul_rev,
-            },
-        )
-    except Exception:  # noqa: BLE001 — best-effort
-        pass
-
-    store = STATE.telemetry_store
-    if store is None:
-        return
-    try:
-        u = outcome.usage or {}
-        primary_model = (
-            outcome.models[0]
-            if outcome.models
-            else ((STATE.graph_config.model_name if STATE.graph_config else "") or "")
-        )
-        input_tokens = int(u.get("input_tokens", 0) or 0)
-        output_tokens = int(u.get("output_tokens", 0) or 0)
-        from datetime import datetime, timedelta, timezone
-
-        ended = datetime.now(timezone.utc)
-        created = ended - timedelta(milliseconds=int(outcome.duration_ms or 0))
-        store.record(
-            {
-                "task_id": outcome.task_id,
-                "session_id": outcome.context_id,
-                "state": outcome.state,
-                # A parked (input_required) leg is neither success nor failure — NULL
-                # keeps failure-rate queries honest (#2943); the state column tells.
-                "success": (None if outcome.state == "input_required" else (1 if outcome.state == "completed" else 0)),
-                "model": primary_model,
-                "models": ",".join(outcome.models),
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "total_tokens": input_tokens + output_tokens,
-                "cache_read_input_tokens": int(u.get("cache_read_input_tokens", 0) or 0),
-                "cache_creation_input_tokens": int(u.get("cache_creation_input_tokens", 0) or 0),
-                "cost_usd": float(outcome.cost_usd or 0.0),
-                "duration_ms": int(outcome.duration_ms or 0),
-                "llm_calls": int(outcome.llm_calls),
-                "tool_calls": int(outcome.tool_calls),
-                "created_at": created.isoformat(),
-                "ended_at": ended.isoformat(),
-                "soul_rev": soul_rev,
-                # Captured by the executor DURING the stream (the trace contextvar is
-                # already reset by the time this hook runs) — lets the console pivot a
-                # telemetry row straight to its Langfuse trace tree.
-                "trace_id": getattr(outcome, "trace_id", "") or "",
-                # Per-tool durations this turn, tool name → [ms, ...] (#2697). JSON, not
-                # comma-joined like `models` above — durations need real structure
-                # (name AND numbers), not just a flat list.
-                "tool_durations": json.dumps(outcome.tool_durations) if outcome.tool_durations else None,
-                # Peak single-call prompt size = context-window fill this turn (#2773,
-                # ADR 0101 D6). getattr-guarded like trace_id: an older/alternate
-                # producer's outcome object may predate the field.
-                "context_tokens": int(getattr(outcome, "context_tokens", 0) or 0),
-            }
-        )
-    except Exception:  # noqa: BLE001 — telemetry is best-effort
-        log.exception("[telemetry] failed to record turn %s", outcome.task_id)
+    record_turn(
+        task_id=getattr(outcome, "task_id", "") or "",
+        session_id=getattr(outcome, "context_id", "") or "",
+        state=getattr(outcome, "state", "") or "",
+        models=list(getattr(outcome, "models", None) or []),
+        usage=outcome.usage or {},
+        cost_usd=float(getattr(outcome, "cost_usd", 0.0) or 0.0),
+        duration_ms=int(getattr(outcome, "duration_ms", 0) or 0),
+        llm_calls=int(outcome.llm_calls),
+        tool_calls=int(outcome.tool_calls),
+        # Captured by the executor DURING the stream (the trace contextvar is already
+        # reset by the time this hook runs) — lets the console pivot a telemetry row
+        # straight to its Langfuse trace tree.
+        trace_id=getattr(outcome, "trace_id", "") or "",
+        tool_durations=getattr(outcome, "tool_durations", None),
+        # getattr-guarded like trace_id: an older/alternate producer's outcome object
+        # may predate the field.
+        context_tokens=int(getattr(outcome, "context_tokens", 0) or 0),
+    )
 
     # Fleet trace export → lab (the flywheel Observe, #1897). Off unless
     # PROTOAGENT_FLEET_TRACE_EXPORT is set; best-effort, never touches the turn.

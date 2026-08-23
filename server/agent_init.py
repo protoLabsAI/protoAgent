@@ -2356,7 +2356,7 @@ async def _plugin_agent_invoke(prompt: str, session_id: str, *, tool_fence: list
     chat turn joined to its assistant text (mirrors the Discord surface invoker).
     ``tool_fence`` (#2972) restricts the turn to that tool allowlist — for a surface
     relaying a message from an untrusted party (another operator's agent)."""
-    result = await chat(prompt, session_id, tool_fence=tool_fence)
+    result = await chat(prompt, session_id, tool_fence=tool_fence, origin="plugin")
     return "\n\n".join(m["content"] for m in result if m.get("role") == "assistant" and m.get("content"))
 
 
