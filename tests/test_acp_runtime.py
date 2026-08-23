@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 import types
 
@@ -10,6 +11,7 @@ import pytest
 from runtime.acp_runtime import (
     AcpRuntime,
     adapter_for,
+    is_empty_delegate_reply,
     make_acp_aux_model,
     operator_mcp_server_spec,
     resolve_runtime,
@@ -89,6 +91,32 @@ class _FakeClient:
         self.closed = True
 
 
+class _ScriptedClient:
+    """Fake ACP client: each ``prompt()`` consumes one scripted turn — streaming its text
+    deltas then its tool start/end pairs through the callbacks, and returning its answer.
+    Records every prompt it was sent, so a retry is observable as a second entry."""
+
+    def __init__(self, turns):
+        self._turns = list(turns)
+        self.prompts = []
+        self.closed = False
+
+    async def prompt(self, text, progress_callback=None, tool_callback=None, text_callback=None):
+        self.prompts.append(text)
+        turn = self._turns.pop(0) if self._turns else {}
+        for delta in turn.get("text_deltas", []):
+            if text_callback is not None:
+                await text_callback(delta)
+        for name in turn.get("tools", []):
+            if tool_callback is not None:
+                await tool_callback({"phase": "start", "id": name, "name": name, "input": ""})
+                await tool_callback({"phase": "end", "id": name, "name": name, "output": "ok"})
+        return turn.get("answer", "")
+
+    async def close(self):
+        self.closed = True
+
+
 async def test_run_turn_sends_delta_plus_message_no_prefix(tmp_path):
     client, ctx = _FakeClient(), _FakeCtx()
     rt = AcpRuntime(_cfg(), cwd=str(tmp_path), client_factory=lambda: client, context=ctx)
@@ -102,6 +130,134 @@ async def test_run_turn_sends_delta_plus_message_no_prefix(tmp_path):
     assert ctx.after == [("hello", "ANSWER"), ("again", "ANSWER")]
     await rt.close()
     assert client.closed
+
+
+# ---------------------------------------------------------------------------
+# Empty-reply detection + same-delegate retry (#2991)
+# ---------------------------------------------------------------------------
+
+
+def test_is_empty_delegate_reply_classification():
+    # Nothing at all, or whitespace only → empty.
+    assert is_empty_delegate_reply("", 0) is True
+    assert is_empty_delegate_reply("   \n\t ", 0) is True
+    # Boilerplate preamble with zero tool calls → empty (the #2991 case).
+    assert is_empty_delegate_reply("Let me read the relevant files first.", 0) is True
+    assert is_empty_delegate_reply("Sure! I'll take a look.", 0) is True
+    assert is_empty_delegate_reply("Okay, first let me check the config.", 0) is True
+    assert is_empty_delegate_reply("- Let me start by reading the tests\n- Then I'll check the config", 0) is True
+    assert is_empty_delegate_reply("I'll take a look at the code and get back to you.", 0) is True
+    assert is_empty_delegate_reply("On it — looking into it now.", 0) is True
+    # A bare conversational acknowledgement with no work is empty too.
+    assert is_empty_delegate_reply("Sure.", 0) is True
+    # Any tool call makes even a boilerplate string non-empty (a file edit IS a tool call).
+    assert is_empty_delegate_reply("Let me read the files.", 1) is False
+    # Substantive prose with no tools is a real answer — not empty.
+    assert is_empty_delegate_reply("The bug is a missing await in graph/config.py; here is the patch.", 0) is False
+    # Long text is substantive by length alone.
+    assert is_empty_delegate_reply("x" * (400 + 1), 0) is False
+
+
+def test_is_empty_delegate_reply_keeps_short_answers_with_a_lead_in():
+    # Regression for the #2991 false-positive: a genuine short answer (≤400 chars, zero
+    # tool calls) that merely OPENS with a conversational lead-in must NOT be flagged — the
+    # lead-in is stripped and the surviving clause carries real content.
+    assert is_empty_delegate_reply("Sure, the fix is: change line 42 from x to y.", 0) is False
+    assert is_empty_delegate_reply("OK, the answer is 42.", 0) is False
+    assert is_empty_delegate_reply("First, the config is already wired.", 0) is False
+    assert is_empty_delegate_reply("Sure! It's a null deref in foo().", 0) is False
+    # A lead+verb clause followed by a delivered thought is substantive, not a bare preamble.
+    assert is_empty_delegate_reply("Let me check — yes, that's correct.", 0) is False
+
+
+async def test_run_turn_retries_empty_reply_and_hides_first_attempt(tmp_path):
+    # First attempt: a boilerplate preamble, no tools → empty. Retry: real work + answer.
+    client = _ScriptedClient(
+        [
+            {
+                "text_deltas": ["Let me read the relevant files first."],
+                "answer": "Let me read the relevant files first.",
+            },
+            {
+                "tools": ["edit"],
+                "text_deltas": ["Fixed the off-by-one in graph/config.py."],
+                "answer": "Fixed the off-by-one in graph/config.py.",
+            },
+        ]
+    )
+    seen_text: list[str] = []
+    seen_tools: list[str] = []
+
+    async def on_text(d):
+        seen_text.append(d)
+
+    async def on_tool(ev):
+        seen_tools.append(ev["phase"])
+
+    rt = AcpRuntime(_cfg(), cwd=str(tmp_path), client_factory=lambda: client, context=_FakeCtx())
+    answer = await rt.run_turn("fix it", text_callback=on_text, tool_callback=on_tool)
+
+    assert answer == "Fixed the off-by-one in graph/config.py."  # r2: the caller gets the retry's result
+    assert len(client.prompts) == 2  # r1: the same delegate was retried exactly once
+    # r2: the empty first attempt's boilerplate NEVER reached the caller's callbacks.
+    assert "".join(seen_text) == "Fixed the off-by-one in graph/config.py."
+    assert seen_tools == ["start", "end"]
+
+
+async def test_run_turn_retry_also_empty_returns_it_without_looping(tmp_path):
+    client = _ScriptedClient(
+        [
+            {"answer": "Let me take a look at the code."},
+            {"answer": "I'll get started on that."},
+        ]
+    )
+    rt = AcpRuntime(_cfg(), cwd=str(tmp_path), client_factory=lambda: client, context=_FakeCtx())
+    answer = await rt.run_turn("do it")
+    assert len(client.prompts) == 2  # r3: exactly one retry, never an infinite loop
+    assert answer == "I'll get started on that."  # the (still-empty) retry result, returned as-is
+
+
+async def test_run_turn_empty_reply_logs_diagnostics(tmp_path, caplog):
+    client = _ScriptedClient(
+        [
+            {"answer": "Let me read the relevant files first."},
+            {"tools": ["edit"], "answer": "Done."},
+        ]
+    )
+    rt = AcpRuntime(
+        _cfg(agent_runtime="acp:claude"), cwd=str(tmp_path), client_factory=lambda: client, context=_FakeCtx()
+    )
+    with caplog.at_level(logging.WARNING):
+        await rt.run_turn("fix it")
+    warns = [r.getMessage() for r in caplog.records if "empty reply" in r.getMessage()]
+    assert warns, "an empty reply must log a warning"
+    assert "claude" in warns[0]  # r4: delegate name
+    assert "tool_calls=0" in warns[0]  # r4: tool-call count
+    assert "output_len=" in warns[0]  # r4: output length
+
+
+async def test_run_turn_normal_reply_passes_through_unchanged(tmp_path):
+    client = _ScriptedClient(
+        [
+            {"tools": ["read", "edit"], "text_deltas": ["Here", " is", " the fix."], "answer": "Here is the fix."},
+        ]
+    )
+    seen: list = []
+
+    async def on_text(d):
+        seen.append(("text", d))
+
+    async def on_tool(ev):
+        seen.append(("tool", ev["phase"]))
+
+    rt = AcpRuntime(_cfg(), cwd=str(tmp_path), client_factory=lambda: client, context=_FakeCtx())
+    answer = await rt.run_turn("do it", text_callback=on_text, tool_callback=on_tool)
+
+    assert answer == "Here is the fix."
+    assert len(client.prompts) == 1  # r5: a normal reply is never retried
+    # r5: every frame is delivered — nothing buffered away.
+    assert ("text", "Here") in seen and ("text", " is") in seen and ("text", " the fix.") in seen
+    assert seen.count(("tool", "start")) == 2 and seen.count(("tool", "end")) == 2
 
 
 async def test_persona_written_as_agents_md(tmp_path, monkeypatch):
@@ -702,6 +858,41 @@ async def test_drive_turn_usage_frame_carries_no_unconsumed_context_fields(monke
     assert usage["model"] == "acp:mock"  # the honest "not gateway-metered" signal
     assert not [k for k in usage if k.startswith("context_")]
     assert ("done", "done-text") in frames
+
+
+async def test_acp_drive_turn_warns_when_delivered_reply_still_empty(caplog):
+    """Boundary observability (#2991): when the reply that actually reaches the caller is
+    still empty after the runtime's retry, the drive layer logs delegate + output_len +
+    tool_calls at the delivery point (a normal reply logs nothing)."""
+    chat = _chat_module()
+
+    class _Rt(_MockRuntime):
+        async def run_turn(self, message, *, progress_callback=None, tool_callback=None, text_callback=None):
+            return "Let me read the relevant files first."  # still boilerplate, no tool calls
+
+    with caplog.at_level(logging.WARNING):
+        frames = [f async for f in chat._acp_drive_turn(_Rt("codex"), "m")]
+
+    assert ("done", "Let me read the relevant files first.") in frames
+    warns = [r.getMessage() for r in caplog.records if "empty reply after retry" in r.getMessage()]
+    assert warns and "codex" in warns[0] and "tool_calls=0" in warns[0]
+
+
+async def test_acp_drive_turn_no_warn_on_normal_reply(caplog):
+    chat = _chat_module()
+
+    class _Rt(_MockRuntime):
+        async def run_turn(self, message, *, progress_callback=None, tool_callback=None, text_callback=None):
+            if tool_callback is not None:
+                await tool_callback({"phase": "start", "id": "e", "name": "edit", "input": ""})
+                await tool_callback({"phase": "end", "id": "e", "name": "edit", "output": "ok"})
+            return "Fixed it."
+
+    with caplog.at_level(logging.WARNING):
+        frames = [f async for f in chat._acp_drive_turn(_Rt("codex"), "m")]
+
+    assert ("done", "Fixed it.") in frames
+    assert not [r for r in caplog.records if "empty reply" in r.getMessage()]
 
 
 def test_operator_mcp_spec_is_frozen_aware(monkeypatch):
