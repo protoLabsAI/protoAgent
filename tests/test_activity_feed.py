@@ -283,3 +283,18 @@ def test_resumed_chat_turn_defaults_to_completed(tmp_path, monkeypatch):
     assert resumed is not None
     assert resumed["state"] == "completed"
     assert resumed["error"] == ""
+
+
+def test_resumed_chat_turn_carries_origin_for_the_result_card(tmp_path, monkeypatch):
+    # #3028: the settled turn's trigger origin rides chat.resumed so the console can render it
+    # as a compact, expandable result card instead of a full-size operator answer.
+    monkeypatch.setattr(server.STATE, "activity_log", ActivityLog(str(tmp_path / "a.db")))
+    published: list = []
+    monkeypatch.setattr(server._event_bus, "publish", lambda ev, data: published.append((ev, data)))
+
+    server._a2a_terminal(
+        TurnOutcome(task_id="t15", context_id="chat-xyz", state="completed", text="done", origin="scheduler")
+    )
+    resumed = next((d for ev, d in published if ev == "chat.resumed"), None)
+    assert resumed is not None
+    assert resumed["origin"] == "scheduler"

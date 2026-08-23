@@ -879,6 +879,10 @@ def _surface_resumed_chat_turn(outcome) -> None:
             "trigger": getattr(outcome, "trigger", "") or "",
             "state": state,
             "error": error,
+            # Trigger origin (#3028) so the console can render this settled turn as a compact
+            # result card instead of a full-size operator answer. The console also has a store
+            # fallback (the origin captured at turn.started), so this is additive, not required.
+            "origin": str(getattr(outcome, "origin", "") or ""),
         },
     )
 

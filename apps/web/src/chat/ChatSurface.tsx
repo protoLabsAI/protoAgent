@@ -43,7 +43,7 @@ import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
 import { inputHistory, pushInputHistory } from "./inputHistory";
 import { registerChatEscapeHandler, resolveEscapeAction } from "./escapeStop";
 import { finalizeStoppedMessages, resolveStopTarget } from "./stopTurn";
-import { rewindableTailId, replaceText } from "./parts";
+import { lastOperatorAssistantId, rewindableTailId, replaceText } from "./parts";
 import { createRevealQueue } from "./revealQueue";
 import { applyComponent, applyReasoning, applyText, applyToolEvent } from "./turnReducers";
 import { reattachTurn } from "./reattach";
@@ -1024,11 +1024,11 @@ function ChatSessionSlot({
   }, [sessionId]);
 
   const messages = session?.messages || [];
-  // Regenerate is offered only on the most recent assistant reply.
-  const lastAssistantId = useMemo(
-    () => [...messages].reverse().find((m) => m.role === "assistant")?.id,
-    [messages],
-  );
+  // Regenerate is offered only on the most recent OPERATOR-initiated assistant reply — a
+  // server-initiated result (scheduled fire / watch / autonomous wake, #3028) is role
+  // "assistant" too but is excluded, so it can't steal the slot and strip Regenerate off
+  // the operator's real last reply when it lands after it.
+  const lastAssistantId = useMemo(() => lastOperatorAssistantId(messages), [messages]);
   // The conversational tail — "Rewind to here" hides on it (nothing below to discard).
   const rewindTailId = useMemo(() => rewindableTailId(messages), [messages]);
 

@@ -264,6 +264,94 @@
   justify-content: flex-end;
 }
 
+/* Server-initiated RESULT card (#3028) — a SETTLED scheduled fire, watch reaction, or
+   autonomous wake, delivered back to the chat that set it up. Visually SECONDARY to an
+   operator's own answer: a muted, COLLAPSED one-line summary (icon · label · preview · time)
+   that expands to the full result. Built in ChatMessageView (ServerResultCard). The DS
+   assistant message is plain (no bubble), so we only let its content wrapper host a full-width
+   card; specificity is stacked on the message root the same way .chat-report neutralizes the
+   system pill, and the bare variant covers a card rendered outside the chat slot (the shared
+   renderer also serves the ⌘K palette chat). */
+.chat-server-result.pl-message--assistant {
+  justify-content: stretch;
+}
+.chat-session-slot .pl-message--assistant.chat-server-result .pl-message__content,
+.pl-message--assistant.chat-server-result .pl-message__content {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+}
+/* A quiet raised surface (recessed fill + hairline border) so it reads as an automation
+   by-product, not a first-class reply. */
+.chat-server-result-card {
+  border: 1px solid var(--pl-color-border);
+  border-radius: 10px;
+  background: var(--pl-color-bg-inset, var(--pl-color-bg-raised));
+  overflow: hidden;
+}
+.chat-server-result-card--failed {
+  border-color: var(--pl-color-border-danger, var(--pl-color-status-error));
+}
+/* Collapsed summary — one clickable line. The whole row is the disclosure toggle. */
+.chat-server-result-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  background: none;
+  color: var(--pl-color-fg-muted);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.chat-server-result-summary:hover {
+  background: var(--pl-color-bg-hover);
+}
+.chat-server-result-icon {
+  flex: 0 0 auto;
+  color: var(--pl-color-fg-muted);
+}
+.chat-server-result-label {
+  flex: 0 0 auto;
+  font-weight: 600;
+  font-size: 0.82rem;
+  color: var(--pl-color-fg);
+}
+/* The preview takes the slack and ellipsizes on one line; the full text is in the body below. */
+.chat-server-result-preview {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.82rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-server-result-time {
+  flex: 0 0 auto;
+  font-size: 0.76rem;
+  color: var(--pl-color-fg-muted);
+}
+.chat-server-result-chevron {
+  flex: 0 0 auto;
+  color: var(--pl-color-fg-muted);
+  transition: transform 0.15s ease;
+}
+.chat-server-result--open .chat-server-result-chevron {
+  transform: rotate(180deg);
+}
+/* Expanded body — the FULL markdown answer + tool cards, no truncation. A hairline separates
+   it from the summary; the CONTENT reads at full foreground strength (only the chrome is muted). */
+.chat-server-result-body {
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--pl-color-border);
+  color: var(--pl-color-fg);
+  font-size: 0.9rem;
+}
+.chat-server-result-body .markdown > :first-child { margin-top: 0; }
+.chat-server-result-body .markdown > :last-child { margin-bottom: 0; }
+
 /* Per-turn token/cost footer under an assistant answer (#1372) — a quiet, monospace row of
    prompt ↑ / output ↓ / cost chips; full breakdown lives in the title tooltip. */
 .chat-usage {
