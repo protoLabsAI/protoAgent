@@ -50,7 +50,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
-from scheduler.interface import is_cron
+from scheduler.interface import is_cron, parse_ttl
 from tools.fallbacks import with_fallback
 
 log = logging.getLogger("protoagent.tools")
@@ -1033,6 +1033,8 @@ def _build_scheduler_tools(scheduler) -> list:
         when: str,
         job_id: str | None = None,
         timezone: str | None = None,
+        ttl: str | None = None,
+        max_fires: int | None = None,
         state: Annotated[Any, InjectedState] = None,
     ) -> str:
         """Schedule a future task. The agent receives ``prompt`` as a
@@ -1043,6 +1045,13 @@ def _build_scheduler_tools(scheduler) -> list:
         9am"), recurring sweeps ("every Monday morning, summarize last
         week's logs"), one-off check-ins ("at 3pm today, ask whether
         the deploy is healthy").
+
+        Recurring (cron) schedules expire automatically: they get a
+        default TTL of 7 days unless you override it with ``ttl``
+        and/or ``max_fires``, so a forgotten schedule doesn't run
+        indefinitely. Set a longer ``ttl`` for genuinely long-lived
+        recurring work. One-shot ISO schedules are unaffected — they
+        fire once and are removed.
 
         Args:
             prompt: The text the agent should receive when the schedule
@@ -1059,10 +1068,32 @@ def _build_scheduler_tools(scheduler) -> list:
                 the cron expression is evaluated in, handling DST — so
                 ``"0 9 * * *"`` means 9am local. Omit for UTC. Ignored
                 for one-shot ISO times (those carry their own offset).
+            ttl: Optional lifetime for a recurring schedule — a human
+                shorthand (``"7d"``, ``"24h"``, ``"2w"``) or an ISO-8601
+                duration (``"P7D"``). The job auto-cancels once this long
+                has passed since it was created. Defaults to ``"7d"`` for
+                cron schedules when omitted.
+            max_fires: Optional cap on firings — the job auto-cancels
+                after this many successful fires.
 
         Returns ``"Scheduled job <id> next at <iso>."`` on success,
-        an error string on malformed ``when`` / ``timezone`` or backend failure.
+        an error string on malformed ``when`` / ``timezone`` / ``ttl`` or
+        backend failure.
         """
+        # Validate expiry knobs up front — a clean error string beats a
+        # backend-specific failure surfacing later.
+        if ttl is not None:
+            try:
+                parse_ttl(ttl)
+            except ValueError as exc:
+                return f"Error: {exc}"
+        if max_fires is not None and int(max_fires) < 1:
+            return f"Error: max_fires must be >= 1, got {max_fires}."
+        # Auto-expiry default (#2992): a recurring schedule the caller didn't
+        # bound gets 7 days, so forgotten crons don't run forever. One-shots
+        # fire once and are removed, so they carry no TTL.
+        if ttl is None and is_cron(when):
+            ttl = "7d"
         # Dedup guard: don't create a second job identical to an existing active
         # one (same prompt + schedule + timezone). This is the common cause of
         # scheduled-task spam — a loop that re-schedules itself on each run/restart
@@ -1091,7 +1122,14 @@ def _build_scheduler_tools(scheduler) -> list:
         context_id = ctx if not is_cron(when) else None
         try:
             job = await asyncio.to_thread(
-                scheduler.add_job, prompt, when, job_id=job_id, timezone=timezone, context_id=context_id
+                scheduler.add_job,
+                prompt,
+                when,
+                job_id=job_id,
+                timezone=timezone,
+                context_id=context_id,
+                ttl=ttl,
+                max_fires=max_fires,
             )
         except ValueError as exc:
             return f"Error: {exc}"
@@ -1104,8 +1142,9 @@ def _build_scheduler_tools(scheduler) -> list:
     async def list_schedules() -> str:
         """List the current scheduled jobs for this agent.
 
-        Returns one job per line with id, next-fire timestamp, and a
-        prompt preview. Returns ``"No scheduled jobs."`` when empty.
+        Returns one job per line with id, next-fire timestamp, expiry
+        state (ttl / max_fires / fires so far), and a prompt preview.
+        Returns ``"No scheduled jobs."`` when empty.
         """
         jobs = await asyncio.to_thread(scheduler.list_jobs)
         if not jobs:
@@ -1114,7 +1153,13 @@ def _build_scheduler_tools(scheduler) -> list:
         for j in jobs:
             preview = (j.prompt or "")[:80]
             next_fire = j.next_fire or "(managed remotely)"
-            lines.append(f"{j.id}  next={next_fire}  schedule={j.schedule!r}  {preview}")
+            # Expiry state (#2992) — so the agent can see how long a schedule
+            # has left before extending or capping it.
+            ttl = getattr(j, "ttl", None) or "-"
+            max_fires = getattr(j, "max_fires", None)
+            fires = getattr(j, "fire_count", 0) or 0
+            expiry = f"ttl={ttl}  max_fires={max_fires if max_fires is not None else '-'}  fires={fires}"
+            lines.append(f"{j.id}  next={next_fire}  schedule={j.schedule!r}  {expiry}  {preview}")
         return "\n".join(lines)
 
     @tool

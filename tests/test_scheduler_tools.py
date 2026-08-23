@@ -18,9 +18,13 @@ class _FakeJob:
 class _FakeScheduler:
     def __init__(self):
         self.last_context_id: str | None = "__unset__"
+        self.last_ttl: str | None = "__unset__"
+        self.last_max_fires: int | None = "__unset__"
 
-    def add_job(self, prompt, schedule, *, job_id=None, timezone=None, context_id=None):
+    def add_job(self, prompt, schedule, *, job_id=None, timezone=None, context_id=None, ttl=None, max_fires=None):
         self.last_context_id = context_id
+        self.last_ttl = ttl
+        self.last_max_fires = max_fires
         return _FakeJob(schedule)
 
     def cancel_job(self, job_id):

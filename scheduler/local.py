@@ -7,7 +7,8 @@ doesn't cross-fire prompts.
 Architecture:
 
 - One ``jobs`` table — ``id``, ``prompt``, ``schedule``, ``next_fire``,
-  ``agent_name``, ``last_fire``, ``enabled``, ``created_at``.
+  ``agent_name``, ``last_fire``, ``enabled``, ``created_at``, plus the
+  auto-expiry columns ``ttl`` / ``max_fires`` / ``fire_count`` (#2992).
 - Polling coroutine runs on FastAPI's startup hook (``server.py``)
   and ticks once per ``_POLL_INTERVAL_S`` (1s default). Cheap because
   sqlite reads with an indexed ``next_fire`` filter cost microseconds.
@@ -37,7 +38,7 @@ from typing import Any
 from croniter import croniter
 
 from events import ACTIVITY_CONTEXT
-from scheduler.interface import Job, is_cron, parse_iso_to_utc
+from scheduler.interface import Job, is_cron, parse_iso_to_utc, parse_ttl
 
 log = logging.getLogger(__name__)
 
@@ -211,7 +212,10 @@ CREATE TABLE IF NOT EXISTS jobs (
     enabled     INTEGER NOT NULL DEFAULT 1,
     created_at  TEXT NOT NULL,
     timezone    TEXT,
-    context_id  TEXT
+    context_id  TEXT,
+    ttl         TEXT,
+    max_fires   INTEGER,
+    fire_count  INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_next_fire   ON jobs(next_fire);
@@ -295,6 +299,16 @@ class LocalScheduler:
                 db.execute("ALTER TABLE jobs ADD COLUMN context_id TEXT")
             except sqlite3.OperationalError:
                 pass  # column already present
+            # …and before auto-expiry (#2992 ttl / max_fires / fire_count).
+            for ddl in (
+                "ALTER TABLE jobs ADD COLUMN ttl TEXT",
+                "ALTER TABLE jobs ADD COLUMN max_fires INTEGER",
+                "ALTER TABLE jobs ADD COLUMN fire_count INTEGER NOT NULL DEFAULT 0",
+            ):
+                try:
+                    db.execute(ddl)
+                except sqlite3.OperationalError:
+                    pass  # column already present
             # Re-key rows written under a previous display name (#2382). Every jobs.db is
             # single-agent by construction — the path carries either the constant segment or
             # the agent's own name segment — so every row in THIS file is ours, whatever name
@@ -325,11 +339,22 @@ class LocalScheduler:
         job_id: str | None = None,
         timezone: str | None = None,
         context_id: str | None = None,
+        ttl: str | None = None,
+        max_fires: int | None = None,
     ) -> Job:
         if not prompt or not prompt.strip():
             raise ValueError("scheduler: prompt is required")
         # Computes in `timezone` for cron (raises ValueError for a bad tz or schedule).
         next_fire = _compute_next_fire(schedule, tz=timezone)
+        # Validate the TTL up front (raises ValueError for nonsense like "abc")
+        # but store the original text — the expiry check re-parses against
+        # created_at at fire time.
+        if ttl is not None:
+            parse_ttl(ttl)
+        if max_fires is not None:
+            max_fires = int(max_fires)
+            if max_fires < 1:
+                raise ValueError(f"scheduler: max_fires must be >= 1, got {max_fires}")
 
         job = Job(
             id=job_id or self._generate_id(),
@@ -339,13 +364,15 @@ class LocalScheduler:
             next_fire=next_fire,
             timezone=timezone,
             context_id=context_id,
+            ttl=ttl,
+            max_fires=max_fires,
         )
         db = self._connect()
         try:
             db.execute(
                 "INSERT INTO jobs (id, prompt, schedule, agent_name, next_fire, "
-                "last_fire, enabled, created_at, timezone, context_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "last_fire, enabled, created_at, timezone, context_id, ttl, max_fires, fire_count) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     job.id,
                     job.prompt,
@@ -357,6 +384,9 @@ class LocalScheduler:
                     job.created_at,
                     job.timezone,
                     job.context_id,
+                    job.ttl,
+                    job.max_fires,
+                    job.fire_count,
                 ),
             )
             db.commit()
@@ -561,13 +591,74 @@ class LocalScheduler:
                         "[scheduler] one-shot fire failed for job %s; leaving for retry",
                         job.id,
                     )
-            elif not ok:
+            elif ok:
+                # Auto-expiry (#2992): bump fire_count, then cancel the job once it
+                # hits max_fires or outlives its TTL. One-shots don't need this —
+                # they fire once and are removed above.
+                self._settle_cron_expiry(job)
+            else:
                 log.warning(
                     "[scheduler] cron fire failed for job %s; will fire next slot",
                     job.id,
                 )
         finally:
             self._inflight_ids.discard(job.id)
+
+    def _settle_cron_expiry(self, job: Job) -> None:
+        """Post-fire bookkeeping for a recurring job (#2992): increment its
+        ``fire_count`` and auto-cancel it once it reaches ``max_fires`` or its
+        TTL (measured from ``created_at``) has elapsed."""
+        fire_count = self._increment_fire_count(job.id)
+        if job.max_fires is not None and fire_count >= job.max_fires:
+            self._delete_job(job.id)
+            log.info(
+                "[scheduler] Job %s expired: reached max_fires (%d/%d)",
+                job.id,
+                fire_count,
+                job.max_fires,
+            )
+            return
+        if not job.ttl:
+            return
+        try:
+            created = datetime.fromisoformat(job.created_at)
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=UTC)
+            deadline = created + parse_ttl(job.ttl)
+        except ValueError:
+            # A row hand-edited into an unparseable state must not crash the
+            # settle path (add_job validates, so this shouldn't happen).
+            log.warning("[scheduler] job %s has unparseable ttl %r; ignoring", job.id, job.ttl)
+            return
+        if datetime.now(UTC) > deadline:
+            self._delete_job(job.id)
+            log.info(
+                "[scheduler] Job %s expired: reached TTL (%s from %s)",
+                job.id,
+                job.ttl,
+                job.created_at,
+            )
+
+    def _increment_fire_count(self, job_id: str) -> int:
+        """Bump ``fire_count`` for a fired job and return the new value (0 if
+        the row vanished — e.g. cancelled mid-turn — so no expiry triggers)."""
+        db = self._connect()
+        try:
+            db.execute(
+                "UPDATE jobs SET fire_count = fire_count + 1 WHERE id = ? AND agent_name = ?",
+                (job_id, self.agent_name),
+            )
+            db.commit()
+            row = db.execute(
+                "SELECT fire_count FROM jobs WHERE id = ? AND agent_name = ?",
+                (job_id, self.agent_name),
+            ).fetchone()
+            return int(row["fire_count"]) if row else 0
+        except sqlite3.DatabaseError:
+            log.exception("[scheduler] fire_count increment failed for job %s", job_id)
+            return 0
+        finally:
+            db.close()
 
     def _delete_job(self, job_id: str, *, next_fire: str | None = None) -> None:
         db = self._connect()
@@ -827,4 +918,7 @@ def _row_to_job(row: Any) -> Job:
         created_at=row["created_at"],
         timezone=row["timezone"] if "timezone" in keys else None,
         context_id=row["context_id"] if "context_id" in keys else None,
+        ttl=row["ttl"] if "ttl" in keys else None,
+        max_fires=row["max_fires"] if "max_fires" in keys else None,
+        fire_count=int(row["fire_count"] or 0) if "fire_count" in keys else 0,
     )
