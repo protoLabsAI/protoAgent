@@ -135,15 +135,23 @@ def register_prompt_routes(app) -> None:
         ``session_id`` is given, else across all sessions. Backs the client's
         ``/prompt`` command ("the prompt as of the last call" — exact and
         cheap; a true next-call preview would need speculative retrieval).
-        ``call`` is null when nothing has been captured yet."""
+        ``call`` is null when nothing has been captured yet.
+
+        Also carries ``retention`` (#3019): the two in-write caps, the rows and
+        span actually held, and which cap is binding. It rides this route rather
+        than a new one because this is the always-answers read (it returns a body
+        even with nothing captured), so "is my 30 days really 3?" is one request
+        away instead of a SQLite session against the instance store."""
         import asyncio
 
         from observability.prompt_snapshots import prompt_snapshots
 
         if not _capture_enabled():
             return {"enabled": False, "call": None}
-        row = await asyncio.to_thread(prompt_snapshots().last_for_session, session_id.strip())
-        return {"enabled": True, "call": _shape(row) if row else None}
+        store = prompt_snapshots()
+        row = await asyncio.to_thread(store.last_for_session, session_id.strip())
+        retention = await asyncio.to_thread(store.retention_stats)
+        return {"enabled": True, "call": _shape(row) if row else None, "retention": retention}
 
     @app.get("/api/prompts/preview")
     async def _api_prompts_preview(session_id: str = ""):

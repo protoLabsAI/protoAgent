@@ -18,6 +18,17 @@ def _count(store, table):
         db.close()
 
 
+def _indexes(store, table):
+    db = sqlite3.connect(store.path)
+    try:
+        rows = db.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ?", (table,)
+        ).fetchall()
+    finally:
+        db.close()
+    return {r[0] for r in rows}
+
+
 def test_stable_blob_hash_dedupe(tmp_path):
     # The same stable prefix across calls is stored ONCE — that's the whole
     # point of the hash split (the blob is tens of KB, the tail is small).
@@ -117,6 +128,64 @@ def test_purge_session_deletes_rows_and_sweeps_blobs(tmp_path):
     assert len(s.calls_for_task("t2")) == 1
     assert _count(s, "stable_blobs") == 1  # s1's blob swept, s2's kept
     assert s.purge_session("") == 0
+
+
+def test_stable_hash_index_migrates_onto_an_existing_store(tmp_path):
+    # The orphan sweep resolves blobs BY stable_hash, and once the store sits at
+    # the row cap it runs on every single write — so the column has to be indexed
+    # (#3019). Dropping the index reproduces a store created before it existed;
+    # reopening must put it back, not only create it on a fresh DB.
+    s = _store(tmp_path)
+    s.record(task_id="t1", stable_text="P")
+    assert "ix_calls_stable_hash" in _indexes(s, "calls")
+    db = sqlite3.connect(s.path)
+    db.execute("DROP INDEX ix_calls_stable_hash")
+    db.commit()
+    db.close()
+    assert "ix_calls_stable_hash" not in _indexes(s, "calls")
+
+    again = PromptSnapshotStore(s.path)
+    assert "ix_calls_stable_hash" in _indexes(again, "calls")
+    assert len(again.calls_for_task("t1")) == 1  # migration keeps the data
+
+
+def test_retention_stats_names_the_row_cap_when_it_evicts_inside_the_age_window(tmp_path):
+    # The #3019 failure mode, made reportable: a generous age cap plus a row cap
+    # the volume blows through means the ROW cap is the real window. The stat has
+    # to say so — that is the whole point of the field.
+    s = _store(tmp_path, retention_days=30, max_calls=2)
+    for i in range(4):
+        s.record(task_id=f"t{i}", stable_text="P")
+    stats = s.retention_stats()
+    assert stats["calls"] == 2
+    assert (stats["retention_days"], stats["max_calls"]) == (30, 2)
+    assert stats["binding_cap"] == "max_calls"
+    # Rows just written are hours old at most, nowhere near the configured 30 days —
+    # that gap IS the "my 30 days is really 3" the operator could not see before.
+    assert stats["effective_days"] is not None and stats["effective_days"] < 30
+    assert stats["oldest_ts"] and stats["newest_ts"]
+
+
+def test_retention_stats_names_the_age_cap_when_the_row_cap_is_not_binding(tmp_path):
+    # Row cap off (or nowhere near it) → the age cap is what ends the window.
+    s = _store(tmp_path, retention_days=30, max_calls=0)
+    s.record(task_id="t1", stable_text="P")
+    assert s.retention_stats()["binding_cap"] == "retention_days"
+    roomy = _store(tmp_path, retention_days=30, max_calls=1000)
+    assert roomy.retention_stats()["binding_cap"] == "retention_days"
+
+
+def test_retention_stats_on_an_uncapped_and_on_an_empty_store(tmp_path):
+    # Both caps disabled: nothing can evict, so no cap is binding.
+    s = _store(tmp_path, retention_days=0, max_calls=0)
+    s.record(task_id="t1", stable_text="P")
+    assert s.retention_stats()["binding_cap"] == "none"
+    # Nothing captured yet: honest zeros rather than a fabricated window.
+    empty = _store(tmp_path / "empty", retention_days=30, max_calls=5000)
+    stats = empty.retention_stats()
+    assert stats["calls"] == 0
+    assert stats["effective_days"] is None
+    assert stats["oldest_ts"] == "" and stats["binding_cap"] == "none"
 
 
 def test_reopen_is_idempotent(tmp_path):

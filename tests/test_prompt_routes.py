@@ -71,7 +71,28 @@ def test_last_returns_sessions_newest_call(monkeypatch):
     assert body["call"]["system"]["context"] == "newer"
     # No captures yet for an unknown session → null call, not a 404 (the
     # /prompt note renders "nothing captured yet").
-    assert c.get("/api/prompts/last?session_id=empty").json() == {"enabled": True, "call": None}
+    empty = c.get("/api/prompts/last?session_id=empty").json()
+    assert empty["enabled"] is True and empty["call"] is None
+
+
+def test_last_reports_which_retention_cap_is_binding(monkeypatch):
+    """#3019: the effective window is readable off the existing /last payload —
+    an operator should not have to open prompt-snapshots.db to learn that a
+    generous retention_days is being overruled by the row cap."""
+    store = prompt_snapshots()
+    store.retention_days, store.max_calls = 30, 2
+    for i in range(4):
+        store.record(task_id=f"t{i}", session_id="s1", stable_text="P")
+    c = _client(monkeypatch)
+    retention = c.get("/api/prompts/last?session_id=s1").json()["retention"]
+    assert retention["retention_days"] == 30
+    assert retention["max_calls"] == 2
+    assert retention["calls"] == 2  # the row cap already threw the rest away
+    assert retention["binding_cap"] == "max_calls"
+    assert retention["effective_days"] < 30
+    # Capture off keeps the {enabled:false} contract — no retention block to report.
+    off = _client(monkeypatch, capture=False)
+    assert off.get("/api/prompts/last").json() == {"enabled": False, "call": None}
 
 
 # ── #2388 P3: subagents + prev on the task route; the preview route ───────────

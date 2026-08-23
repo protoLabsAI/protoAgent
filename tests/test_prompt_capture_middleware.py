@@ -152,6 +152,38 @@ def test_retention_knob_reaches_the_store():
     assert prompt_snapshots().retention_days == 7
 
 
+def test_max_calls_knob_reaches_the_store_and_actually_evicts():
+    # #3019: the row cap is what governs retention at real volume, so it must
+    # travel the same path retention_days does — and the proof is EVICTION, not
+    # an attribute set on the store.
+    capture = PromptCaptureMiddleware(retention_days=0, max_calls=2)
+    for i in range(3):
+        req = _Req("claude-opus-4-7", SystemMessage(content="S"), state={})
+        with request_metadata_scope({"a2a.task_id": f"t{i}"}):
+            _run_chained(req, _response(), capture=capture)
+    store = prompt_snapshots()
+    assert store.max_calls == 2
+    assert store.calls_for_task("t0") == []  # oldest dropped by the row cap
+    assert len(store.calls_for_task("t2")) == 1
+    assert store.retention_stats()["binding_cap"] == "max_calls"
+
+
+def test_both_caps_travel_from_config_through_the_graph_build():
+    # The whole delivery path in one assertion: prompts.max_calls on the config →
+    # _build_middleware → PromptCaptureMiddleware → the live store. retention_days
+    # was already wired; max_calls was the half that never arrived (#3019).
+    from graph.agent import _build_middleware
+    from graph.config import LangGraphConfig
+
+    cfg = LangGraphConfig(api_key="k", prompt_capture_retention_days=11, prompt_capture_max_calls=3)
+    capture = next(m for m in _build_middleware(cfg, None) if type(m).__name__ == "PromptCaptureMiddleware")
+    req = _Req("claude-opus-4-7", SystemMessage(content="S"), state={})
+    with request_metadata_scope({"a2a.task_id": "t"}):
+        _run_chained(req, _response(), capture=capture)
+    store = prompt_snapshots()
+    assert (store.retention_days, store.max_calls) == (11, 3)
+
+
 # --- middleware-order contract -----------------------------------------------
 
 

@@ -838,7 +838,21 @@ FIELDS: list[Field] = [
         "Prompt retention (days)",
         "number",
         "Telemetry",
-        "Auto-prune captured prompts older than this on each new capture (0 = keep forever).",
+        "Auto-prune captured prompts older than this on each new capture (0 = keep forever). "
+        "The row cap below applies too — whichever is hit first ends the window.",
+        minimum=0,
+        restart=True,
+        scope="host",
+    ),
+    Field(
+        "prompts.max_calls",
+        "prompt_capture_max_calls",
+        "Prompt retention (calls)",
+        "number",
+        "Telemetry",
+        "Hard ceiling on stored snapshots — only the newest this many calls are kept "
+        "(0 = unlimited). On a busy agent this cap, not the day cap, is what ends the "
+        "window; GET /api/prompts/last reports which of the two is binding.",
         minimum=0,
         restart=True,
         scope="host",

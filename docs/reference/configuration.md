@@ -313,12 +313,21 @@ its snapshots. Read surface: `GET /api/prompts/{task_id}` + `GET /api/prompts/la
 prompts:
   capture: true                 # one hashed blob + a small tail per model call
   retention_days: 30
+  max_calls: 5000
 ```
 
 | Key | Default | What |
 |---|---|---|
 | `capture` | `true` | Snapshot each model call's final system prompt. `false` → nothing recorded; the viewer reports capture disabled. |
-| `retention_days` | `30` | Prune snapshots older than this on each new capture (`0` = keep forever; a 5000-row cap also applies). |
+| `retention_days` | `30` | Prune snapshots older than this on each new capture (`0` = keep forever). |
+| `max_calls` | `5000` | Keep at most this many snapshots, newest first (`0` = unlimited). |
+
+Both caps trim inside the same write, so **the smaller one is the real window** — at a
+few hundred model calls a day the row cap is reached in days and `retention_days` never
+bites (#3019). `GET /api/prompts/last` returns a `retention` block
+(`{retention_days, max_calls, calls, oldest_ts, newest_ts, effective_days, binding_cap}`)
+naming which cap is currently governing, so the effective window is readable without
+opening the SQLite file.
 
 ## `filesystem`
 

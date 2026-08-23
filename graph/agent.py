@@ -212,6 +212,7 @@ def _build_middleware(
         middleware.append(
             PromptCaptureMiddleware(
                 retention_days=config.prompt_capture_retention_days,
+                max_calls=config.prompt_capture_max_calls,
                 stable_sections=stable_sections,
             )
         )
@@ -677,6 +678,7 @@ async def _run_subagent(
         sub_middleware.append(
             PromptCaptureMiddleware(
                 retention_days=getattr(config, "prompt_capture_retention_days", 30),
+                max_calls=getattr(config, "prompt_capture_max_calls", 5000),
                 stable_sections=[{"label": f"{subagent_type} system prompt", "chars": len(_sub_prompt)}],
                 parent_task_id=parent_task_id or "",
                 subagent_type=subagent_type,

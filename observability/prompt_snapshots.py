@@ -14,7 +14,10 @@ SQLite at ``instance_root/prompt-snapshots.db``, following the
 Retention is the ``MetricsStore`` in-write cap — age AND row-count trimmed
 inside the same write transaction, no maintenance loop: snapshots are an
 inspection substrate, not an archive. Stable blobs orphaned by a trim are
-swept opportunistically in the same transaction.
+swept opportunistically in the same transaction. BOTH caps are operator
+config (``prompts.retention_days`` / ``prompts.max_calls``) because on a busy
+agent the row cap binds first and an age-only knob is inert (#3019);
+``retention_stats`` reports which of the two is actually governing.
 """
 
 from __future__ import annotations
@@ -29,9 +32,11 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-# Defaults for the in-write retention cap. ``prompts.retention_days`` overrides
-# the age cap; the row cap is a guardrail against pathological turn volume and
-# stays constructor-only (the metrics-store precedent). <= 0 disables either.
+# Defaults for the in-write retention cap: ``prompts.retention_days`` overrides
+# the age cap, ``prompts.max_calls`` the row cap. Both are operator-reachable
+# because they are NOT independent — whichever bites first is the real window,
+# and at even moderate turn volume that is the row cap, which made the age knob
+# look broken (#3019). <= 0 disables either.
 RETENTION_DAYS = 30
 MAX_CALLS = 5000
 
@@ -98,6 +103,11 @@ class PromptSnapshotStore:
             db.execute("CREATE INDEX IF NOT EXISTS ix_calls_task ON calls(task_id)")
             db.execute("CREATE INDEX IF NOT EXISTS ix_calls_session ON calls(session_id)")
             db.execute("CREATE INDEX IF NOT EXISTS ix_calls_ts ON calls(ts)")
+            # stable_hash is the orphan sweep's lookup column: once the store sits at
+            # the row cap that sweep runs on EVERY write, and unindexed it re-scanned
+            # the whole calls table each time (#3019). IF NOT EXISTS means an existing
+            # store picks the index up on its next open, like the ALTERs below.
+            db.execute("CREATE INDEX IF NOT EXISTS ix_calls_stable_hash ON calls(stable_hash)")
             # Lightweight migrations for stores created before a column existed
             # (the TelemetryStore idiom): each ALTER fires once on an older DB and
             # no-ops after. `sections` (#2243 P2) hold JSON [{label, chars}] — on
@@ -336,6 +346,61 @@ class PromptSnapshotStore:
         finally:
             db.close()
         return self._decode(row) if row is not None else None
+
+    def retention_stats(self) -> dict:
+        """Which cap is ACTUALLY governing the retained window right now (#3019).
+
+        Both caps trim on every write, so a configured ``retention_days`` is only
+        the real window while the row count stays below ``max_calls``. On a busy
+        agent it does not: the row cap evicts rows the age cap would have kept,
+        and the operator had no way to see that short of opening the SQLite file
+        (the live PM sat at 4,968 rows = ~3 days against a configured 30).
+
+        ``binding_cap`` is ``"max_calls"`` only when the row cap is at its limit
+        AND the surviving history is younger than ``retention_days`` — that is
+        the state where the age knob is inert. ``"retention_days"`` means the age
+        cap is what ends the window; ``"none"`` means nothing is stored yet or
+        neither cap can evict. ``effective_days`` is how far back the store
+        actually reaches, so "my 30 days is really 3" reads off the payload.
+        """
+        stats: dict = {
+            "retention_days": self.retention_days,
+            "max_calls": self.max_calls,
+            "calls": 0,
+            "oldest_ts": "",
+            "newest_ts": "",
+            "effective_days": None,
+            "binding_cap": "none",
+        }
+        db = self._connect()
+        try:
+            calls, oldest, newest = db.execute("SELECT COUNT(*), MIN(ts), MAX(ts) FROM calls").fetchone()
+        except sqlite3.DatabaseError as exc:
+            log.warning("[prompt-snapshots] retention_stats failed: %s", exc)
+            return stats
+        finally:
+            db.close()
+        stats["calls"] = int(calls or 0)
+        stats["oldest_ts"] = oldest or ""
+        stats["newest_ts"] = newest or ""
+        if not stats["calls"]:
+            return stats
+        effective_days = None
+        try:
+            age = datetime.now(UTC) - datetime.fromisoformat(stats["oldest_ts"])
+            effective_days = round(age.total_seconds() / 86400.0, 2)
+        except (TypeError, ValueError):
+            pass  # an unparseable stamp costs the span, not the rest of the answer
+        stats["effective_days"] = effective_days
+        at_row_cap = self.max_calls > 0 and stats["calls"] >= self.max_calls
+        row_cap_bites_first = self.retention_days <= 0 or (
+            effective_days is not None and effective_days < self.retention_days
+        )
+        if at_row_cap and row_cap_bites_first:
+            stats["binding_cap"] = "max_calls"
+        elif self.retention_days > 0:
+            stats["binding_cap"] = "retention_days"
+        return stats
 
     # ------------------------------------------------------------------ purge
 
