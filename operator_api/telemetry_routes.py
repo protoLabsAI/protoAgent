@@ -121,20 +121,26 @@ async def _fetch_member_json(slug: str, path: str) -> dict | None:
     non-200, non-JSON — returns None: the caller REPORTS the member unreachable,
     it never retries into it or restarts it.
     """
-    import httpx
-
-    from graph.fleet import proxy
-
-    target = proxy._target_for_slug(slug)
-    if target is None:
-        return None
-    base, extra = target
-    headers = dict(extra)
-    if not any(k.lower() == "authorization" for k in headers):
-        from graph.fleet.service_token import resolve_service_token
-
-        headers["authorization"] = f"Bearer {resolve_service_token()}"
+    # Every step is inside the boundary, resolution included (#3018).
+    # ``_target_for_slug`` reads supervisor state, and a corrupt or
+    # half-written state file makes it RAISE rather than return None; with the
+    # resolution and token-minting calls sitting outside the try, one member's
+    # bad state 500'd the whole rollup — the exact opposite of the contract
+    # this docstring states.
     try:
+        import httpx
+
+        from graph.fleet import proxy
+
+        target = proxy._target_for_slug(slug)
+        if target is None:
+            return None
+        base, extra = target
+        headers = dict(extra)
+        if not any(k.lower() == "authorization" for k in headers):
+            from graph.fleet.service_token import resolve_service_token
+
+            headers["authorization"] = f"Bearer {resolve_service_token()}"
         resp = await proxy._get_client().get(
             f"{base}/{path}",
             headers=headers,
@@ -181,6 +187,38 @@ def _flag_entry(slug: str, row: dict, template: str | None) -> dict:
     }
 
 
+def _slug_of(rec: object) -> str:
+    """A roster record's slug — its immutable id (ADR 0042 slug routing).
+
+    Total by construction: the fleet rollup also reads it on the failure path
+    (#3018), where raising a second time would defeat the containment.
+    """
+    rec = rec if isinstance(rec, dict) else {}
+    return str(rec.get("id") or rec.get("name") or "")
+
+
+def _unreachable_entry(rec: object, slug: str) -> dict:
+    """The roster-only row for a member we could not read: identity from the
+    roster record, ``reachable: false``, no telemetry.
+
+    Total by construction for the same reason as ``_slug_of`` — this is what a
+    member whose read RAISED degrades to (#3018), so it must not be able to
+    raise itself.
+    """
+    rec = rec if isinstance(rec, dict) else {}
+    return {
+        "name": rec.get("name", slug),
+        "label": rec.get("label") or rec.get("name") or slug,
+        "host": bool(rec.get("host")),
+        "remote": bool(rec.get("remote")),
+        "running": bool(rec.get("running")),
+        "reachable": False,
+        "telemetry_enabled": False,
+        "rollup": None,
+        "flags": [],
+    }
+
+
 def _member_entry(
     rec: dict,
     slug: str,
@@ -191,7 +229,12 @@ def _member_entry(
     """One member's merged fleet read: roster identity + live telemetry. A
     member whose reads both failed is a ``reachable: False`` row — reported,
     never raised."""
-    reachable = summary_payload is not None or insights_payload is not None
+    if summary_payload is None and insights_payload is None:
+        # Both reads failed. One shape for "we could not read this member",
+        # shared with the raised-read path so the two can never drift.
+        return _unreachable_entry(rec, slug)
+    # Past that early return at least one read came back, so the member IS
+    # reachable; only the state of its telemetry store is still in question.
     enabled = bool((summary_payload or {}).get("enabled") or (insights_payload or {}).get("enabled"))
     flagged = ((insights_payload or {}).get("insights") or {}).get("flagged") or []
     return {
@@ -200,7 +243,7 @@ def _member_entry(
         "host": bool(rec.get("host")),
         "remote": bool(rec.get("remote")),
         "running": bool(rec.get("running")),
-        "reachable": reachable,
+        "reachable": True,
         "telemetry_enabled": enabled,
         "rollup": _rollup_of((summary_payload or {}).get("summary")),
         "flags": [_flag_entry(slug, row, template) for row in flagged],
@@ -346,15 +389,27 @@ def register_telemetry_routes(app) -> None:
         peers = [a for a in roster if not a.get("host")]
 
         async def _read(rec: dict) -> tuple[str, dict]:
-            # The member's slug is its immutable id (ADR 0042 slug routing).
-            slug = str(rec.get("id") or rec.get("name") or "")
+            slug = _slug_of(rec)
             s, i = await asyncio.gather(
                 _fetch_member_json(slug, "api/telemetry/summary"),
                 _fetch_member_json(slug, "api/telemetry/insights"),
             )
             return slug, _member_entry(rec, slug, s, i, template)
 
-        for slug, entry in await asyncio.gather(*(_read(r) for r in peers)):
+        # ``return_exceptions=True`` is the second half of the #3018 fix, belt
+        # and braces over ``_fetch_member_json``'s own containment: a raise
+        # anywhere in one member's read — the merge step included — must not
+        # take every other member's rollup and the host's own numbers down with
+        # it. Results come back positionally, so the roster record is still in
+        # hand to REPORT that member unreachable; dropping it from ``members``
+        # would just be a quieter lie about the fleet.
+        results = await asyncio.gather(*(_read(r) for r in peers), return_exceptions=True)
+        for rec, result in zip(peers, results, strict=True):
+            if isinstance(result, BaseException):
+                slug = _slug_of(rec)
+                members[slug] = _unreachable_entry(rec, slug)
+                continue
+            slug, entry = result
             members[slug] = entry
 
         return {

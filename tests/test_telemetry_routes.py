@@ -254,6 +254,84 @@ def test_fleet_rollup_reports_unreachable_member(monkeypatch):
     assert members["w1"]["reachable"] is True
 
 
+def test_fleet_rollup_survives_member_that_raises_during_resolution(monkeypatch):
+    # #3018: `_target_for_slug` reads supervisor state and RAISES on a corrupt
+    # or half-written state file rather than returning None. That call sat
+    # outside `_fetch_member_json`'s try, so one bad member 500'd the whole
+    # rollup and took every healthy member's data — and the host's own numbers
+    # — down with it. Exercises the REAL `_fetch_member_json`, not the fake.
+    from graph.fleet import proxy, supervisor
+
+    roster = [
+        _HOST_REC,
+        {"name": "bad", "label": "Bad", "id": "bad", "running": True},
+        {"name": "okay", "label": "Okay", "id": "okay", "running": True},
+    ]
+
+    def _resolve(slug):
+        if slug == "bad":
+            raise RuntimeError("corrupt supervisor state for this member")
+        return None  # "okay" resolves cleanly to not-running: merely unreachable
+
+    monkeypatch.setattr(supervisor, "status", lambda: roster)
+    monkeypatch.setattr(proxy, "_target_for_slug", _resolve)
+    c = _client(monkeypatch, _FleetHostStore())
+
+    res = c.get("/api/telemetry/fleet")
+    assert res.status_code == 200
+    body = res.json()
+
+    # The member that raised is REPORTED unreachable — not dropped, not fatal.
+    assert body["members"]["bad"]["reachable"] is False
+    assert body["members"]["bad"]["label"] == "Bad"
+    assert body["members"]["okay"]["reachable"] is False
+    # ...and the host's own telemetry still renders, which is what the 500 ate.
+    assert body["enabled"] is True
+    assert body["members"]["host"]["rollup"]["turns"] == 4
+    assert body["members"]["host"]["flags"][0]["evidence"]["trace_id"] == "trace-host"
+
+
+def test_fleet_rollup_survives_raise_after_the_fetch_boundary(monkeypatch):
+    # Belt and braces on the same contract (#3018): the peers gather runs with
+    # return_exceptions=True, so a raise anywhere in one member's read — here
+    # in the merge step, past `_fetch_member_json` entirely — still degrades to
+    # one unreachable row. Silently omitting the member would be its own lie.
+    import operator_api.telemetry_routes as tr
+
+    roster = [
+        _HOST_REC,
+        {"name": "bad", "label": "Bad", "id": "bad", "running": True, "remote": True},
+        {"name": "worker", "label": "Worker", "id": "w1", "running": True},
+    ]
+    real_member_entry = tr._member_entry
+
+    def _boom(rec, slug, summary_payload, insights_payload, template):
+        if slug == "bad":
+            raise RuntimeError("merge step blew up")
+        return real_member_entry(rec, slug, summary_payload, insights_payload, template)
+
+    c, _ = _fleet_client(monkeypatch, _FleetHostStore(), roster, _WORKER_PAYLOADS)
+    monkeypatch.setattr(tr, "_member_entry", _boom)
+
+    res = c.get("/api/telemetry/fleet")
+    assert res.status_code == 200
+    members = res.json()["members"]
+    # Present, and shaped exactly like any other member we could not read.
+    assert members["bad"] == {
+        "name": "bad",
+        "label": "Bad",
+        "host": False,
+        "remote": True,
+        "running": True,
+        "reachable": False,
+        "telemetry_enabled": False,
+        "rollup": None,
+        "flags": [],
+    }
+    assert members["w1"]["reachable"] is True and members["w1"]["rollup"]["turns"] == 7
+    assert members["host"]["rollup"]["turns"] == 4
+
+
 def test_fleet_rollup_member_with_store_off_is_reachable(monkeypatch):
     # A member that RESPONDS with {enabled: false} is reachable — telemetry off
     # is its store's state, not a connectivity failure.
