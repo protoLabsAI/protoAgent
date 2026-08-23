@@ -286,6 +286,9 @@ The mechanics, and why each is what it is:
   from the raw list**: the row's `model` column and the `turn.usage` bus event
   (`server.turn_telemetry`), and the fleet trace export's `meta.model`
   (`observability.trace_export`), which the lab consumes as the row's teacher model.
+  One deliberate exception: `acp:<delegate>` (#3015, and `server.chat._acp_drive_turn`
+  before it) stays in the `model` column, because unlike a `peer:` marker it *is* the
+  model that ran, in the only sense we can observe from this side.
   One helper because a fourth reader is a matter of time, and a marker leaking into
   any of them is the same defect. Normally the lead's own call is first anyway, but a
   provider that reports no usage leaves the marker leading the list — and a per-model
@@ -372,7 +375,13 @@ Known limits, deliberately left rather than papered over:
   `protoWorkstacean/lib/types/cost-v1.ts`,
   `protoWorkstacean/docs/extensions/cost-v1.md`.
 
-## Amendment — Langfuse credentials are configurable (#3017)
+## 9. Amendments
+
+Slice-2 and Slice-4 decisions revised after the fact. Each is dated and
+cites the issue that forced it; the sections above are left as originally
+written so the change of mind stays legible.
+
+### Amendment — Langfuse credentials are configurable (#3017, 2026-08-23)
 
 The state table above says tracing is "working; graceful no-op when unconfigured". Both
 halves were true and together they hid a hole: `tracing.init` read `LANGFUSE_PUBLIC_KEY` /

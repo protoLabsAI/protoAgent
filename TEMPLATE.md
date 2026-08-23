@@ -171,7 +171,7 @@ Required runtime env:
 - `AGENT_NAME` — slug from step 0
 - `OPENAI_API_KEY` (or `LITELLM_MASTER_KEY`) — gateway auth
 - `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` — optional,
-  for tracing
+  for tracing (or set them in Settings ▸ Tracing; env wins)
 - `PUSH_NOTIFICATION_ALLOWED_HOSTS` — comma-separated hosts
   allowed as webhook targets (default blocks private IPs)
 

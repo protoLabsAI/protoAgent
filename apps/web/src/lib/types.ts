@@ -1449,7 +1449,8 @@ export type FleetAgent = {
   pid: number | null; // null when stopped
   running: boolean;
   bundle: string; // "" for a Basic agent
-  a2a?: string; // the agent's own A2A endpoint (focus-independent)
+  /** null = a registered remote with no URL — never reachable (#3018). */
+  a2a?: string | null; // the agent's own A2A endpoint (focus-independent)
   host?: boolean; // the instance serving this console — can't be stopped/removed from itself
   // Only ever set on the `host` entry, by the instance itself: this instance is a workspace
   // member SPAWNED by another hub's supervisor (its instance root carries a workspace.yaml).

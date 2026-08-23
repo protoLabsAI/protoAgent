@@ -246,7 +246,7 @@ test suite covers both.
 |---|---|---|
 | Prometheus metrics | `/metrics` | Scrape; metric prefix is `AGENT_NAME_*` (sanitised) |
 | JSONL audit log | `/sandbox/audit/audit.jsonl` | `jq` for forensic replay; every entry has `trace_id` |
-| Langfuse traces | `LANGFUSE_*` env vars | Trace tag is `AGENT_NAME`, so filter by tag to find this agent's runs |
+| Langfuse traces | `LANGFUSE_*` env vars, or **Settings ▸ Tracing** (env wins) | Trace tag is `AGENT_NAME`, so filter by tag to find this agent's runs |
 | Container logs | `docker logs <container>` | INFO is the default — `LOG_LEVEL=DEBUG` for more |
 
 ## Release pipeline

@@ -19,7 +19,7 @@ where ``meta`` carries the OODA signal the lab asked for — ``loop_shape``
 
 Config
 ──────
-Env-gated like Langfuse (``tracing.init``), off by default, graceful no-op:
+Config-or-env gated like Langfuse (``tracing.init``, #3017), off by default, graceful no-op:
 
     PROTOAGENT_FLEET_TRACE_EXPORT  unset / "0" / "off"  → disabled
                                    "1" / "on" / "true"  → enabled at the default

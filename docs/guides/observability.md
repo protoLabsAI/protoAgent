@@ -120,7 +120,7 @@ scrape_configs:
 
 ## Local telemetry store
 
-Prometheus is live-scrape-only and Langfuse is opt-in/external — so protoAgent also keeps a **durable, queryable per-turn rollup** of its own (ADR 0006 Slice 2). One row is written per terminal A2A turn (completed / failed / canceled) with accumulated token usage (incl. prompt-cache), USD cost, wall-clock duration, and LLM-call + tool-call counts. This is the substrate for "what was expensive/slow over time" and the self-improving flywheel.
+Prometheus is live-scrape-only and Langfuse is opt-in/external — so protoAgent also keeps a **durable, queryable per-turn rollup** of its own (ADR 0006 Slice 2). One row is written per terminal turn leg (completed / failed / canceled / parked) — from either turn driver through the shared writer `server/turn_telemetry.py::record_turn`, plus one per CLI coding-agent run since #3015 — with accumulated token usage (incl. prompt-cache), USD cost, wall-clock duration, and LLM-call + tool-call counts. This is the substrate for "what was expensive/slow over time" and the self-improving flywheel.
 
 ON by default (one cheap write per turn). The SQLite path follows the usual `/sandbox` → `~/.protoagent` fallback and is instance-scoped (ADR 0004). Disable or relocate via config:
 
@@ -144,7 +144,7 @@ curl 'localhost:7870/api/telemetry/recent?limit=20'
 curl localhost:7870/api/telemetry/insights
 ```
 
-`summary` returns `{turns, input_tokens, output_tokens, total_tokens, cache_read_input_tokens, cache_creation_input_tokens, cost_usd, llm_calls, tool_calls, avg_duration_ms, p50_duration_ms, p95_duration_ms, success_rate, cache_hit_ratio, by_model[]}`. `insights` flags turns ≥ 5× the rolling-median cost/latency and proves the cache lever (`{levers: {cache: {hit_ratio, est_savings_usd}, …}}`) — **advise-only**, no autonomous config changes. The operator console surfaces all of this under **Settings ▸ Overview** (Slices 3–4). History is pruned by `telemetry.retention_days` (default 90; `TelemetryStore.prune` runs on the maintenance loop), and `/api/telemetry/export` downloads it as CSV.
+`summary` returns `{turns, input_tokens, output_tokens, total_tokens, cache_read_input_tokens, cache_creation_input_tokens, cost_usd, llm_calls, tool_calls, avg_duration_ms, p50_duration_ms, p95_duration_ms, success_rate, cache_hit_ratio, by_model[]}`. `insights` flags turns ≥ 5× the median cost/latency **for their own model** (falling back to the overall median for a model with fewer than 3 sampled rows, #3015) and proves the cache lever (`{levers: {cache: {hit_ratio, est_savings_usd}, …}}`) — **advise-only**, no autonomous config changes. The operator console surfaces all of this under **Settings ▸ Overview** (Slices 3–4). History is pruned by `telemetry.retention_days` (default 90; `TelemetryStore.prune` runs on the maintenance loop), and `/api/telemetry/export` downloads it as CSV.
 
 ::: tip Plugin metric timeseries are a separate store
 Named numeric series a plugin records (`sdk.record_metric` — treasury, net worth, fleet size, #1632) live in their own always-on per-instance `metrics.db`, **not** in this turn-rollup store: they're functional plugin state (history-dependent watch verifiers read them), so the `telemetry.enabled` toggle never affects them. See [Plugins ▸ consumption SDK](/guides/plugins#consumption-sdk).

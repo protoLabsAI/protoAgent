@@ -286,7 +286,7 @@ settings:
 
 ## `telemetry`
 
-Local per-turn cost/latency rollup ([ADR 0006](../adr/0006-observability-and-the-self-improving-flywheel.md)). One row per terminal A2A turn (tokens incl. cache, USD cost, duration, LLM/tool call counts), queryable at `/api/telemetry/summary` + `/api/telemetry/recent`.
+Local per-turn cost/latency rollup ([ADR 0006](../adr/0006-observability-and-the-self-improving-flywheel.md)). One row per terminal turn leg — from either turn driver (`server/turn_telemetry.py::record_turn`) and, since #3015, one per CLI coding-agent run (tokens incl. cache, USD cost, duration, LLM/tool call counts), queryable at `/api/telemetry/summary` + `/api/telemetry/recent`.
 
 ```yaml
 telemetry:

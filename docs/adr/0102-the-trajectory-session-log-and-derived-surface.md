@@ -111,7 +111,7 @@ telemetry keeps aggregates. Nothing is migrated; the trajectory joins them.
   forensic questions at a fraction of the cost, and the flag exists for the
   rest.
 - **Extending prompt snapshots with message lists** — snapshots are a
-  per-CALL system-prompt store with 30-day/5000-row trimming; the trajectory
+  per-CALL system-prompt store with 30-day/`prompts.max_calls`-row trimming; the trajectory
   needs per-SESSION ordering, surface ops, and checkpoint-aligned retention.
   Bolting those on would make one store serve two contracts badly.
 
