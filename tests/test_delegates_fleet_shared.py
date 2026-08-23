@@ -4,10 +4,11 @@ an agent entry shadows it by name, and only the hub writes it."""
 
 from __future__ import annotations
 
-import os
-
 import pytest
 import yaml
+
+from infra.paths import harden_private_file
+from tests.privacy_asserts import assert_owner_only
 
 from plugins.delegates import store
 
@@ -42,7 +43,7 @@ def box(tmp_path, monkeypatch):
         for sec, vals in (upd or {}).items():
             cur.setdefault(sec, {}).update(vals)
         p.write_text(yaml.safe_dump(cur))
-        os.chmod(p, 0o600)
+        harden_private_file(p)  # what the real save_secrets does (0600 / Windows ACL)
 
     monkeypatch.setattr(cio, "load_secrets", _load_secrets)
     monkeypatch.setattr(cio, "save_secrets", _save_secrets)
@@ -61,7 +62,7 @@ def test_host_scoped_entry_lands_in_the_box_and_reads_back_on_every_instance(box
     assert host["delegates"][0]["env"] == {"ANTHROPIC_API_KEY": ""}  # value routed out
     hs = yaml.safe_load((box["root"] / "host-secrets.yaml").read_text())
     assert hs["delegate_secrets"] == {"cc.env.ANTHROPIC_API_KEY": "sk-shared"}
-    assert oct(os.stat(box["root"] / "host-secrets.yaml").st_mode & 0o777) == "0o600"
+    assert_owner_only(box["root"] / "host-secrets.yaml")  # 0600 on POSIX; ACL-checked on Windows
     # The leaf is untouched; the effective roster carries it as scope=host with secrets overlaid.
     assert "delegates" not in yaml.safe_load((box["leaf"] / "langgraph-config.yaml").read_text())
     eff = store.read_delegates_raw()

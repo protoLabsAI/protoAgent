@@ -435,4 +435,11 @@ def delete_delegate(name: str) -> list:
             if not can_write_host_layer():
                 raise DelegateScopeError("fleet-shared delegates are managed on the hub — this agent can't delete them")
             _remove_from_layer(name, SCOPE_HOST)
+        else:
+            # Not in either layer: still sweep orphaned secrets for the name (the
+            # pre-0105 delete always pruned, entry or not — a half-removed delegate
+            # must not leave its key behind).
+            _prune_secrets(name, None, scope=SCOPE_AGENT)
+            if can_write_host_layer():
+                _prune_secrets(name, None, scope=SCOPE_HOST)
     return read_delegates_raw()
