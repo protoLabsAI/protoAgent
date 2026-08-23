@@ -43,6 +43,7 @@ import { inputHistory, pushInputHistory } from "./inputHistory";
 import { registerChatEscapeHandler, resolveEscapeAction } from "./escapeStop";
 import { finalizeStoppedMessages, resolveStopTarget } from "./stopTurn";
 import { rewindableTailId, replaceText } from "./parts";
+import { createRevealQueue } from "./revealQueue";
 import { applyComponent, applyReasoning, applyText, applyToolEvent } from "./turnReducers";
 import { reattachTurn } from "./reattach";
 import { loadDraft, loadScroll, loadSteers, saveDraft, saveScroll, saveSteers } from "./scratchState";
@@ -499,6 +500,9 @@ function ChatSessionSlot({
     setHitlState(payload);
   };
   const abortRef = useRef<AbortController | null>(null);
+  // The live turn's reveal-queue flush (#2993): stop() settles bubbles outside
+  // runTurn's closure, and it must drain any withheld answer tail first.
+  const revealFlushRef = useRef<(() => void) | null>(null);
   // Auto-drive a goal created from the Work panel: that flow opens this tab (`kick:false`)
   // and, once the goal is set on the server, registers a kickoff on the chat-store seam. Fire
   // it as a HIDDEN turn so the drive loop streams live INTO this tab (the server's iteration-0
@@ -1491,6 +1495,34 @@ function ChatSessionSlot({
     let sawAuthoritativeText = false;
     let turnTaskId = "";
 
+    // Reveal queue (#2993): streamed answer deltas don't render the instant
+    // their frame arrives — they drip out at a steady ~word cadence. Diagnosis
+    // (measured; see revealQueue.ts and server/chat.py's [stream-delta] log):
+    // the Claude OAuth SDK delivers multi-word chunks upstream of the server's
+    // executor, so its (correct) flush logic can't smooth them — only the
+    // renderer can. Everything that needs text at its true position or must
+    // settle the turn flushes the queue first: tool / reasoning / component
+    // frames (part ordering), the terminal REPLACE frame, the watchdog
+    // finalize, Stop, and the turn's `finally` — so the final answer is never
+    // delayed by the pacing.
+    const reveal = createRevealQueue({
+      apply: (text) => {
+        const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
+        if (!latest) return;
+        chatStore.updateMessages(
+          session.id,
+          latest.messages.map((message) => {
+            if (message.id !== assistantId) return message;
+            const next = applyText(message, text, true);
+            // A late drip must never resurrect a bubble something else already
+            // settled (Stop / watchdog): keep the terminal status, land the text.
+            return message.status === "streaming" ? next : { ...next, status: message.status };
+          }),
+        );
+      },
+    });
+    revealFlushRef.current = reveal.flush;
+
     // Stalled-stream watchdog (hung-workblock fix). The chat's only "turn done"
     // signal is the SSE stream closing (onDone) — there is no standalone terminal
     // event. If the stream stalls open mid-turn — a large answer whose terminal
@@ -1540,6 +1572,9 @@ function ChatSessionSlot({
       onTerminal: (task) => {
         if (settledByWatchdog || controller.signal.aborted) return;
         settledByWatchdog = true;
+        // Reveal the withheld tail first so the finalize's replaceText compares
+        // the task text against the COMPLETE client accumulation.
+        reveal.flush();
         finalizeFromTask(task.state, task.text);
         controller.abort(); // release the stalled socket; unwinds via catch → finally
       },
@@ -1572,6 +1607,7 @@ function ChatSessionSlot({
           setStatusMessage(m);
         },
         onFailed: (detail) => {
+          reveal.flush(); // settle what streamed before the error overwrites the bubble
           // The turn failed terminally (e.g. the model 401'd on a bad key).
           // Surface it as an errored assistant message + an actionable hint,
           // instead of a silent "no response" with the error lost to the
@@ -1601,7 +1637,18 @@ function ChatSessionSlot({
         },
         onText: (text, append) => {
           bumpWatchdog();
-          if (!append) sawAuthoritativeText = true;
+          if (append) {
+            // Streamed delta — paced word-by-word through the reveal queue.
+            reveal.push(text);
+            return;
+          }
+          // A REPLACE (the turn's first frame, or the terminal canonical
+          // re-send, #1709) is authoritative: reveal anything still queued
+          // first — so replaceText compares against the complete accumulation
+          // instead of "diverging" and rebuilding — then land it instantly.
+          // The final answer is never delayed by the queue.
+          sawAuthoritativeText = true;
+          reveal.flush();
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
           chatStore.updateMessages(
@@ -1611,6 +1658,7 @@ function ChatSessionSlot({
         },
         onReasoning: (delta) => {
           bumpWatchdog();
+          reveal.flush(); // part ordering — the reasoning run opens AFTER the text already streamed
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
           chatStore.updateMessages(
@@ -1620,6 +1668,7 @@ function ChatSessionSlot({
         },
         onToolCall: (evt) => {
           bumpWatchdog();
+          reveal.flush(); // part ordering — the tool card opens AFTER the text already streamed
           // `show_component` is a render directive, not a real action — its output IS the
           // inline component (delivered via onComponent / message.components). Suppress its
           // tool card so it doesn't add noise to the collapsed work timeline (#1323).
@@ -1632,6 +1681,7 @@ function ChatSessionSlot({
           );
         },
         onComponent: (spec) => {
+          reveal.flush(); // part ordering — the component lands AFTER the text already streamed
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
           chatStore.updateMessages(
@@ -1665,6 +1715,9 @@ function ChatSessionSlot({
         },
         onDone: () => {
           clearWatchdog();
+          // Stream over — reveal everything still queued before the settle
+          // below, so the done bubble never withholds tail text (#2993).
+          reveal.flush();
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
           const now = Date.now();
@@ -1703,6 +1756,11 @@ function ChatSessionSlot({
         // Marks this message as the answer to the pending HITL interrupt (#1560).
         hitlResume: opts.hitlResume,
       });
+      // Stream returned: reveal any withheld tail NOW, before the reconcile
+      // below — flushing after it would append the tail on top of the
+      // canonical replace and double that text. (Redundant after onDone, which
+      // already flushed; this covers a stream that closed without one.)
+      reveal.flush();
       // The stream closed without the terminal canonical text (#1938): the settled
       // bubble is only this client's delta accumulation, so reconcile it against
       // the durable task — the server's artifact is the source of truth and a
@@ -1758,6 +1816,11 @@ function ChatSessionSlot({
         return;
       }
     } finally {
+      // Whatever path unwound (done / error / abort / watchdog), never strand
+      // withheld text in the reveal queue. Already-settled bubbles keep their
+      // terminal status (the apply's status guard).
+      reveal.flush();
+      revealFlushRef.current = null;
       clearWatchdog();
       abortRef.current = null;
       setTaskId("");
@@ -1769,6 +1832,10 @@ function ChatSessionSlot({
     // must never gate the UI stopping (#1617: Stop appeared dead while a long
     // reasoning chain streamed).
     abortRef.current?.abort();
+    // Drain the reveal queue BEFORE settling bubbles below: finalizeStoppedMessages
+    // flips streaming→done, and text the server already delivered must not stay
+    // withheld behind the word-cadence drip (#2993).
+    revealFlushRef.current?.();
     // The task to cancel: this slot's live turn, or — when the slot re-attached
     // to a turn it didn't start (reload / remount / the desktop relay, all of
     // which leave taskId state empty and abortRef null) — the streaming

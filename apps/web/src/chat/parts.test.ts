@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ChatPart, ToolCall } from "../lib/types";
-import { rewindableTailId, addComponent, addToolRef, appendReasoning, appendText, foldPlan, replaceText, toolsForGroup } from "./parts";
+import { rewindableTailId, addComponent, addToolRef, appendReasoning, appendText, foldPlan, replaceText, splitRevealChunks, toolsForGroup } from "./parts";
 
 describe("addComponent", () => {
   it("appends a component part at its emission point (before the answer text streams in)", () => {
@@ -333,5 +333,44 @@ describe("rewindableTailId", () => {
   it("empty / id-less transcripts yield undefined (gate fails open)", () => {
     expect(rewindableTailId([])).toBeUndefined();
     expect(rewindableTailId([m("assistant")])).toBeUndefined();
+  });
+});
+
+describe("splitRevealChunks", () => {
+  it("splits a multi-word delta into word chunks that re-join losslessly", () => {
+    const text = "The quick  brown\nfox";
+    const chunks = splitRevealChunks(text);
+    expect(chunks).toEqual(["The", " quick", "  brown", "\nfox"]);
+    expect(chunks.join("")).toBe(text);
+  });
+
+  it("keeps a trailing whitespace run as its own chunk (markdown breaks survive)", () => {
+    expect(splitRevealChunks("done. \n\n")).toEqual(["done.", " \n\n"]);
+  });
+
+  it("a pure-whitespace delta is one chunk, not dropped", () => {
+    expect(splitRevealChunks("\n\n")).toEqual(["\n\n"]);
+  });
+
+  it("glues leading whitespace to the word it precedes", () => {
+    expect(splitRevealChunks("  hello")).toEqual(["  hello"]);
+  });
+
+  it("is empty-safe", () => {
+    expect(splitRevealChunks("")).toEqual([]);
+  });
+
+  it("paced append equals the instant append — chunked replay through appendText matches the whole delta", () => {
+    // The reveal queue's core invariant (#2993): pacing changes WHEN text
+    // lands, never WHAT lands — even across the tool-group boundary where
+    // appendText trims a new run's leading whitespace.
+    const deltas = ["Here's ", "the plan:\n\n", "1. do it ", "\n", "2. done"];
+    let instant: ReturnType<typeof appendText> | undefined = [{ kind: "tools", ids: ["t1"] }];
+    let paced: ReturnType<typeof appendText> | undefined = [{ kind: "tools", ids: ["t1"] }];
+    for (const d of deltas) {
+      instant = appendText(instant, d, true);
+      for (const c of splitRevealChunks(d)) paced = appendText(paced, c, true);
+    }
+    expect(paced).toEqual(instant);
   });
 });

@@ -69,6 +69,16 @@ export function appendReasoning(parts: ChatPart[] | undefined, text: string): Ch
   return next;
 }
 
+/** Split a streamed text delta into word-granular reveal chunks (revealQueue.ts, #2993):
+ *  each chunk is a whitespace run glued to the word it precedes, and a pure-whitespace
+ *  tail rides as its own chunk — so `chunks.join("") === text` exactly, and the
+ *  reveal-paced appendText path accumulates byte-identical content to the instant path.
+ *  Pacing changes WHEN text lands, never what lands. A word split across two SSE deltas
+ *  reveals as two chunks; they concatenate in the open run, so nothing is held back. */
+export function splitRevealChunks(text: string): string[] {
+  return text.match(/\s*\S+|\s+$/g) ?? (text ? [text] : []);
+}
+
 /** Record a new TOP-LEVEL tool call in emission order: extend the current tool
  *  group if the last block is one, else open a new group after the preceding text.
  *  Child calls (parentId set) don't open a block — they nest under their parent's

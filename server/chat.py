@@ -874,6 +874,25 @@ async def _run_turn_stream(
                 # "[{'type': 'text', ...}]" list. A reasoning-only chunk yields "".
                 text = chunk.content if isinstance(chunk.content, str) else chunk.text
                 if text:
+                    # Delta-profile diagnostic (#2993). What this log showed: the LiteLLM
+                    # gateway path yields ~1-4 char per-token deltas (so the executor's
+                    # _FLUSH_CHARS=24 / _FLUSH_INTERVAL_S=0.1 batching does the smoothing),
+                    # while the anthropic-oauth path (the Anthropic SDK via
+                    # langchain-anthropic) yields multi-word bursts — ~40-60 chars, 8-9
+                    # words per AIMessageChunk. The SDK coalesces stream events UPSTREAM of
+                    # this loop, so there is nothing finer for the executor to flush and
+                    # each burst reaches the console as one artifact-update frame. Fixed
+                    # client-side: the console paces rendering through a reveal queue
+                    # (apps/web/src/chat/revealQueue.ts). The server flush behavior is
+                    # correct and unchanged (tests/test_a2a_flush_granularity.py).
+                    if log.isEnabledFor(logging.DEBUG):
+                        log.debug(
+                            "[stream-delta] t=%.3f chars=%d words=%d preview=%r",
+                            time.monotonic(),
+                            len(text),
+                            len(text.split()),
+                            text[:40],
+                        )
                     accumulated_raw += text
                     yield ("text", text)
         elif kind == "on_chat_model_end":

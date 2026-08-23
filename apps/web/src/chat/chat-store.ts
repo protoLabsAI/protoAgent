@@ -295,7 +295,9 @@ function persist(state: ChatState) {
 
 // ── debounced persistence ─────────────────────────────────────────────────────
 // The server flushes SSE every ~24 chars, and every streamed frame lands in
-// updateMessages → setState. Serializing EVERY session to localStorage per frame
+// updateMessages → setState — as does every tick of the client reveal queue
+// (#2993), which re-paces answer text into ~word-sized updates up to ~30/s.
+// Serializing EVERY session to localStorage per update
 // is the dominant main-thread cost of a streaming turn (and each write fires a
 // cross-window `storage` event that FleetTurnWatch re-parses). So streaming
 // updates persist on a trailing ~300ms timer; structural changes (session
@@ -582,9 +584,10 @@ export const chatStore = {
   },
 
   updateMessages(sessionId: string, messages: ChatMessage[]) {
-    // Fires per streamed SSE frame (~24 chars) — debounce the localStorage
-    // write. The stream-done path flushes via setSessionStatus right after the
-    // final updateMessages, so the terminal state always lands immediately.
+    // Fires per streamed SSE frame (~24 chars) and per reveal-queue tick
+    // (~word-sized, #2993) — debounce the localStorage write. The stream-done
+    // path flushes via setSessionStatus right after the final updateMessages,
+    // so the terminal state always lands immediately.
     const deduped = dedupeMessages(messages);
     setState(
       (current) => ({
