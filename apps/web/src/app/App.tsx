@@ -77,7 +77,6 @@ import { Button } from "@protolabsai/ui/primitives";
 
 import { ActivityWidget } from "../activity/ActivityWidget";
 import { ConfirmDialog, Tooltip } from "@protolabsai/ui/overlays";
-import { InboxWidget } from "../inbox/InboxWidget";
 import { AgentDownBanner } from "./AgentDownBanner";
 import { SignedOutBanner } from "./SignedOutBanner";
 import { ChatSlot } from "./ChatSlot";
@@ -1209,11 +1208,10 @@ export function App() {
                     <Settings2 size={14} />
                   </button>
                 </Tooltip>
-                {/* Widgets (bottom-left): background subagents (ADR 0050 Phase 3), the
-                    inbox, and the read-only Activity feed — each a pill with a hover info
-                    popover + a click dialog. */}
+                {/* Widgets (bottom-left): background subagents (ADR 0050 Phase 3) and the
+                    unified feed (#3029) — one pill merging the former inbox + read-only
+                    Activity feeds. Each is a pill with a hover info popover + a click dialog. */}
                 <BackgroundJobs />
-                <InboxWidget />
                 <ActivityWidget />
                 {/* Plugin-contributed utility widgets (`views[].utility`): a pill that opens
                     the plugin's iframe in a dialog, with hover info. Reuses PluginView. */}

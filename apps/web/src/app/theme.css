@@ -1100,8 +1100,9 @@ textarea {
    unread count rides as the DS `badge` slot (.pl-tab__badge). Local .stage-subnav
    + .subnav-badge retired. */
 
-/* Inbox panel (ADR 0003) — moved to src/inbox/inbox.css (#832), except .inbox-pri*
-   which is shared with the Activity surface (ActivitySurface renders inbox-pri badges). */
+/* Inbox styles — folded into src/activity/activity.css with the unified feed (#3029),
+   except .inbox-pri* below, which stay here since the completed-entry provenance badge
+   renders them too (the unified feed's pending items reuse the same classes). */
 .inbox-pri {
   font-size: 10px;
   text-transform: uppercase;
@@ -1124,7 +1125,7 @@ textarea {
   background: var(--pl-color-fg-subtle, #555);
 }
 
-/* Live event-stream indicator (ADR 0003) — moved to src/inbox/inbox.css (#832). */
+/* Live event-stream indicator (ADR 0003) — retired with the standalone inbox surface (#3029). */
 
 /* Workflows surface — moved to src/workflows/workflows.css (#832), except
    .workflow-failed below which is shared (TasksPanel renders it too). */

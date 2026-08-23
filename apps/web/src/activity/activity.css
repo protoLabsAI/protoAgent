@@ -148,3 +148,58 @@
 .activity-origin-operator  { color: var(--pl-color-accent, #7c8cff); border-color: color-mix(in srgb, var(--pl-color-accent, #7c8cff) 45%, var(--pl-color-border)); }
 .activity-trigger { font-family: var(--pl-font-mono, ui-monospace, monospace); color: var(--pl-color-fg-muted); }
 .activity-time { margin-left: auto; color: var(--pl-color-fg-subtle, var(--pl-color-fg-muted)); }
+
+/* Unified feed (#3029) ------------------------------------------------------
+   One dialog body merging the former Inbox and Activity widgets. The PENDING
+   inbox section sits above the COMPLETED activity timeline; the pill + badge +
+   dialog host is unchanged (UtilityWidget). `.inbox-*` styles folded in from the
+   retired src/inbox/inbox.css (except .inbox-pri*, which live in theme.css since
+   the completed-entry provenance badge renders them too). */
+.unified-feed {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Pending section: sized to its content (capped + scrollable) so the completed
+   timeline below keeps the remaining height. */
+.unified-feed .inbox-list {
+  flex: none;
+  max-height: 45%;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-bottom: 1px solid var(--pl-color-border);
+}
+
+.inbox-item {
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+  background: var(--pl-color-bg-raised, #111114);
+  padding: 8px 10px;
+}
+
+.inbox-item-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.inbox-source {
+  font-size: 11px;
+  color: var(--pl-color-fg-muted);
+  font-family: var(--pl-font-mono);
+}
+
+.inbox-dismiss {
+  margin-left: auto;
+}
+
+.inbox-text {
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
