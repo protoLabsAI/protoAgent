@@ -48,7 +48,7 @@ export function perfNoteMarkdown(summary: TelemetrySummary | null, insights: Tel
 
   const flagged = insights?.flagged ?? [];
   const outlierLine = flagged.length
-    ? `\n\n⚠️ ${flagged.length} outlier turn${flagged.length === 1 ? "" : "s"} flagged — cost or duration far above the recent median.`
+    ? `\n\n⚠️ ${flagged.length} outlier turn${flagged.length === 1 ? "" : "s"} flagged — cost or duration far above the recent median for their model.`
     : "";
 
   return `${header}\n\n${stats}${modelLine}${toolLine}${outlierLine}`;

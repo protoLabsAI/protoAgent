@@ -1144,7 +1144,7 @@ export const TELEMETRY_INSIGHTS = {
   flagged: [
     {
       ...TELEMETRY_TURNS[0],
-      reasons: ["cost 0.12 ≥ 5× median 0.012", "latency 8100ms ≥ 5× median 700ms"],
+      reasons: ["cost 0.12 ≥ 5× claude-opus-4-8 median 0.012", "latency 8100ms ≥ 5× claude-opus-4-8 median 700ms"],
     },
   ],
   levers: {
@@ -1204,7 +1204,7 @@ export const FLEET_TELEMETRY = {
       flags: [
         fleetFlag(
           "host",
-          ["cost 0.12 ≥ 5× median 0.012", "latency 8100ms ≥ 5× median 700ms"],
+          ["cost 0.12 ≥ 5× claude-opus-4-8 median 0.012", "latency 8100ms ≥ 5× claude-opus-4-8 median 700ms"],
           {
             task_id: "task-3", session_id: "s1", state: "completed", success: 1,
             model: "claude-opus-4-8", cost_usd: 0.12, duration_ms: 8100,
@@ -1224,7 +1224,7 @@ export const FLEET_TELEMETRY = {
       flags: [
         fleetFlag(
           "protoEngineer-ba4c",
-          ["latency 15200ms ≥ 5× median 900ms"],
+          ["latency 15200ms ≥ 5× claude-sonnet-4-6 median 900ms"],
           {
             task_id: "pe-turn-9", session_id: "s9", state: "completed", success: 1,
             model: "claude-sonnet-4-6", cost_usd: 0.31, duration_ms: 15200,
@@ -1244,7 +1244,7 @@ export const FLEET_TELEMETRY = {
       flags: [
         fleetFlag(
           "ava",
-          ["cost 0.09 ≥ 5× median 0.008"],
+          ["cost 0.09 ≥ 5× claude-haiku-4-5 median 0.008"],
           {
             task_id: "ava-turn-2", session_id: "sa", state: "completed", success: 1,
             model: "claude-haiku-4-5", cost_usd: 0.09, duration_ms: 2100,

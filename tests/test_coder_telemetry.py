@@ -22,6 +22,7 @@ import pytest
 
 from observability.telemetry_store import TelemetryStore
 from plugins.coding_agent.acp_client import AcpClient, AcpError
+from plugins.delegates.adapters import _INCOMPLETE_STOP_REASONS, _mark_incomplete
 
 
 @pytest.fixture
@@ -70,7 +71,18 @@ _CHUNK = (
 # A slow-but-fine turn: the sleep is what makes `duration_ms` a measurement rather
 # than a constant zero the assertions could not tell apart from a broken clock.
 _OK_BODY = f'time.sleep(0.08)\n        {_CHUNK}\n        send({{"jsonrpc": "2.0", "id": mid, "result": {{"stopReason": "end_turn"}}}})'
-_REFUSAL_BODY = f'{_CHUNK}\n        send({{"jsonrpc": "2.0", "id": mid, "result": {{"stopReason": "refusal"}}}})'
+
+
+def _stop_body(reason: str) -> str:
+    """A turn that streams its (possibly half-written) text and then reports ``reason``.
+
+    Every outcome these tests assert is read off that one wire field, so varying it is
+    how a refusal, a truncation and a clean finish are told apart.
+    """
+    return f'{_CHUNK}\n        send({{"jsonrpc": "2.0", "id": mid, "result": {{"stopReason": "{reason}"}}}})'
+
+
+_REFUSAL_BODY = _stop_body("refusal")
 _ERROR_BODY = 'send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32000, "message": "the coder blew up"}})'
 # Streams one chunk and then never answers — so a test can cancel a turn that is
 # genuinely in flight instead of racing a sleep against the handshake.
@@ -163,12 +175,58 @@ async def test_a_failed_coder_run_is_recorded_as_failed(wired, tmp_path):
 
 async def test_a_refusal_is_recorded_as_failed(wired, tmp_path):
     """`prompt()` is typed -> str, so a refusal returns normally. The recorded outcome
-    follows the wire stop reason (`dead_end()`, #2279) rather than "did it return"."""
+    follows the wire stop reason rather than "did it return"."""
     client = _client(tmp_path, "coder", _REFUSAL_BODY)
     try:
         await client.prompt("ship it", timeout=30.0)
     finally:
         await client.close()
+
+    row = wired.recent()[0]
+    assert row["state"] == "failed"
+    assert row["success"] == 0
+
+
+@pytest.mark.parametrize("stop_reason", sorted(_INCOMPLETE_STOP_REASONS))
+async def test_a_reply_the_delegate_surface_calls_incomplete_is_recorded_as_failed(wired, tmp_path, stop_reason):
+    """Parametrized off the delegate surface's OWN list of cut-off stop reasons, so the
+    two readings of the same wire field cannot drift apart.
+
+    They did drift: the row was classified with `dead_end()`, the retry-worthiness test,
+    which deliberately excludes `max_tokens`. So a run the delegate surface stamped
+    "do not treat it as complete" — and the orchestrator re-dispatched — booked a
+    `completed`, `success=1` row, undercounting the truncation failure mode in the very
+    number the issue asks for (#3015)."""
+    client = _client(tmp_path, "coder", _stop_body(stop_reason))
+    try:
+        reply = await client.prompt("ship it", timeout=30.0)
+    finally:
+        await client.close()
+
+    # What the orchestrator is told about this same reply, from the same wire field.
+    marked = _mark_incomplete(reply, client.last_stop_reason)
+    assert "incomplete reply" in marked
+
+    row = wired.recent()[0]
+    assert row["state"] == "failed"
+    assert row["success"] == 0
+
+
+async def test_a_truncated_run_is_a_failed_row_and_still_worth_retrying(wired, tmp_path):
+    """The two classifications answer different questions and must be free to disagree.
+
+    `max_tokens` is NOT a dead end (#2279 — hitting the limit is exactly when escalating
+    a tier or splitting the work is the right move), and it IS a failed run: the reply is
+    cut off mid-generation. One classifier cannot serve both, which is why the outcome
+    reads `unfinished_reason()`."""
+    client = _client(tmp_path, "claude-code", _stop_body("max_tokens"))
+    try:
+        await client.prompt("ship it", timeout=30.0)
+    finally:
+        await client.close()
+
+    assert client.dead_end() is None  # still retryable
+    assert client.unfinished_reason() == "max_tokens"  # still not a success
 
     row = wired.recent()[0]
     assert row["state"] == "failed"

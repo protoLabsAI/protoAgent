@@ -227,11 +227,14 @@ class AcpRuntime:
             cwd=self.cwd,
             name=self.agent,
             mcp_servers=[mcp] if mcp else [],
-            # This client drives the agent's OWN chat turn, not a coder dispatch, and
-            # `server.chat._acp_drive_turn` already books that turn under the same
-            # `acp:<agent>` model label. Letting the client record one too would double
-            # every ACP-runtime turn in the per-model rollup — in the same table #3015
-            # exists to make trustworthy.
+            # This client drives the agent's OWN chat turn, not a coder dispatch. On the
+            # streaming/A2A path that turn is already booked under the same `acp:<agent>`
+            # label (`server.chat._acp_drive_turn` yields the usage frame the executor's
+            # terminal hook records), so a row from here would double it in the very
+            # rollup #3015 exists to make trustworthy. On the non-streaming driver the
+            # turn is booked nowhere — a gap #3015 neither opens nor closes, because a
+            # chat turn recorded HERE would file under a `coder:` key and count as coder
+            # work. See `AcpClient.record_runs` for why that is left to #3000.
             record_runs=False,
         )
 

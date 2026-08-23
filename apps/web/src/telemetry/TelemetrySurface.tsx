@@ -89,7 +89,7 @@ function TelemetryBody() {
               <div className="telemetry-insights" data-testid="telemetry-insights">
                 <div className={`insight-row ${insights.flagged_count ? "warn" : "ok"}`}>
                   {insights.flagged_count ? (
-                    <><AlertTriangle size={15} /> {insights.flagged_count} turn{insights.flagged_count > 1 ? "s" : ""} flagged (≥5× median cost or latency)</>
+                    <><AlertTriangle size={15} /> {insights.flagged_count} turn{insights.flagged_count > 1 ? "s" : ""} flagged (≥5× that model's median cost or latency)</>
                   ) : (
                     <><CheckCircle2 size={15} /> No cost or latency outliers</>
                   )}

@@ -51,6 +51,15 @@ ProgressCallback = Callable[[str], Awaitable[None]]
 #: the work is the right response, and `end_turn` is a normal completion whose
 #: productivity is the caller's call (commits), not the transport's.
 _DEAD_END_STOP_REASONS = frozenset({"refusal", "cancelled"})
+
+#: ACP ``stopReason`` values that mean the turn did NOT deliver a finished answer.
+#: A different question from ``_DEAD_END_STOP_REASONS`` above, which answers "is a retry
+#: worth making" — and the two disagree on exactly one value, which is why they cannot
+#: share a set: a ``max_tokens`` turn is cut off mid-generation (the delegates adapter's
+#: ``_INCOMPLETE_STOP_REASONS`` stamps "do not treat it as complete" on that reply and
+#: the orchestrator re-dispatches it) AND is worth retrying at a bigger tier. Reading the
+#: retry classifier as the outcome booked every truncated run as a success (#3015).
+_UNFINISHED_STOP_REASONS = frozenset({"refusal", "cancelled", "max_tokens"})
 ToolCallback = Callable[[dict], Awaitable[None]]  # structured tool start/end events
 
 
@@ -381,11 +390,22 @@ class AcpClient:
         #
         # ``runtime/acp_runtime.py`` is the exception and turns it OFF at both of its
         # construction sites. Its clients are not coder dispatches: one drives the
-        # agent's OWN chat turn, which ``server.chat._acp_drive_turn`` already books
-        # under the same ``acp:<agent>`` label (recording here too would double every
-        # turn an ACP-runtime agent takes, in the very rollup this issue exists to make
-        # trustworthy), and the other is the aux model (compaction, goal verification),
-        # which is not a coder run at all and would be a lie under a ``coder:`` key.
+        # agent's OWN chat turn, the other is the aux model (compaction, goal
+        # verification, fact extraction). Neither is coder work, and both would be a lie
+        # under a ``coder:`` key.
+        #
+        # For the chat turn, note what the exclusion does and does not buy. On the
+        # streaming/A2A path that turn is ALREADY booked under the same ``acp:<agent>``
+        # label — ``server.chat._acp_drive_turn`` yields a usage frame the executor's
+        # terminal hook records — so a row from here would double it. On the
+        # NON-streaming driver (``/v1/chat/completions``, ``/api/chat``, the ADR 0018
+        # ``HOST.invoke()`` seam) that turn is booked NOWHERE: the ACP branch of
+        # ``server.chat._chat_langgraph_impl`` returns before the usage callback exists,
+        # so ``_record_local_turn``'s sink is empty and it bails. That blind spot
+        # predates #3015 and survives it — recording it from here would file a CHAT turn
+        # under a ``coder:`` key and count it as coder work, which is a worse answer than
+        # no row. Closing it belongs to #3000's non-streaming recorder, and ACP runtime
+        # mode is deprecated (#2548), which is why this is documented rather than wired.
         self.record_runs = bool(record_runs)
 
         self._proc: asyncio.subprocess.Process | None = None
@@ -1102,11 +1122,14 @@ class AcpClient:
                 tool_calls = self._turn_tool_calls
                 self._turn_lock.release()
             # Returning is not the same as succeeding: `prompt()` is typed -> str, so a
-            # refusal and a deliberate cancel both come back as (usually empty) text.
-            # `dead_end()` is the existing reading of the wire stop reason for exactly
-            # that distinction, so the recorded outcome matches what the orchestrator
-            # already acts on rather than inventing a second classification (#2279).
-            state = "completed" if self.dead_end() is None else "failed"
+            # refusal, a deliberate cancel and a reply truncated at the output-token
+            # limit all come back as (usually empty or half-written) text. The outcome
+            # is read from the wire stop reason — `unfinished_reason()`, NOT `dead_end()`:
+            # that one answers "is a retry worth making", and a `max_tokens` run is both
+            # retryable and unsuccessful, so reusing it booked every truncated run as a
+            # success while the delegate surface was telling the orchestrator the same
+            # reply was cut off (#2279, #2352, #3015).
+            state = "completed" if self.unfinished_reason() is None else "failed"
             return answer
         finally:
             self._record_run_telemetry(state, started, tool_calls)
@@ -1241,3 +1264,20 @@ class AcpClient:
         """
         reason = (self.last_stop_reason or "").strip()
         return reason if reason in _DEAD_END_STOP_REASONS else None
+
+    def unfinished_reason(self) -> str | None:
+        """Why the last turn did not deliver a finished answer — ``None`` when it did.
+
+        The OUTCOME question, as against ``dead_end()``'s retry question. They differ on
+        ``max_tokens``: the coder hit its output-token limit mid-generation, so the reply
+        is truncated — ``plugins.delegates.adapters`` stamps that on it and the caller
+        re-dispatches — while a bigger tier or a narrower query is still worth trying.
+        A run that ends that way is a failed run and a retryable one at the same time,
+        so "did it succeed" cannot be answered by asking "should we retry" (#3015).
+
+        A turn that reports NO stop reason (an agent that sends none) counts as finished:
+        absence is not evidence of truncation, and treating it as one would book every
+        run from such an agent as a failure.
+        """
+        reason = (self.last_stop_reason or "").strip()
+        return reason if reason in _UNFINISHED_STOP_REASONS else None

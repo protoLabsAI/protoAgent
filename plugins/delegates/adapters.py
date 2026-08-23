@@ -781,6 +781,11 @@ class OpenAiAdapter(Adapter):
 #: to what the caller should do about it. ``prompt()`` returns text either way, so without
 #: this an interrupted reply is indistinguishable from a complete one — the orchestrator
 #: acts on a half-answer and the operator only finds out downstream (#2352).
+#:
+#: Its sibling is ``acp_client._UNFINISHED_STOP_REASONS``, which decides whether the run
+#: RECORDS as a success. A reason marked incomplete here must be a failure there, or the
+#: telemetry rollup books a success for a reply this module is telling the model not to
+#: trust — pinned by a test, since the two lists live a package apart (#3015).
 _INCOMPLETE_STOP_REASONS = {
     "max_tokens": (
         "the coding agent hit its output-token limit mid-generation, so this reply is CUT OFF "

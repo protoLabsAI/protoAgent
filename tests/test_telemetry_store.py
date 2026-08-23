@@ -443,6 +443,61 @@ def test_outliers_empty_store(store):
     assert store.outliers() == []
 
 
+def _stamp(i: int) -> str:
+    """Distinct `ended_at` values so `recent()`'s newest-first order is deterministic."""
+    return f"2026-06-01T00:{i // 60:02d}:{i % 60:02d}+00:00"
+
+
+def test_outliers_does_not_flag_a_whole_population_as_anomalous(store):
+    """A coding-agent run is minutes where a chat turn is seconds (#3015). Against one
+    shared median every coder run clears 5× BY CONSTRUCTION, which filled all 20 slots of
+    an advise-only list and pushed the real anomalies out of it. Each turn is compared
+    against its own model's median instead, so a normal coder run is normal."""
+    for i in range(30):
+        store.record(_row(f"chat{i}", model="claude-opus-4-8", duration_ms=20_000, ended_at=_stamp(i)))
+    for i in range(20):
+        store.record(
+            _row(f"coder{i}", model="acp:claude-code", cost_usd=0.0, duration_ms=400_000, ended_at=_stamp(40 + i))
+        )
+
+    flagged = store.outliers()
+    assert flagged == [], "an ordinary run of a slower KIND of turn is not an anomaly"
+
+
+def test_outliers_flags_a_turn_that_is_slow_for_its_own_model(store):
+    """The other half of the same rule: the panel must still surface the coder run that
+    is genuinely out of line — and the chat outlier it used to crowd out."""
+    for i in range(30):
+        store.record(_row(f"chat{i}", model="claude-opus-4-8", duration_ms=20_000, ended_at=_stamp(i)))
+    for i in range(20):
+        store.record(
+            _row(f"coder{i}", model="acp:claude-code", cost_usd=0.0, duration_ms=400_000, ended_at=_stamp(40 + i))
+        )
+    store.record(
+        _row("runaway-coder", model="acp:claude-code", cost_usd=0.0, duration_ms=3_000_000, ended_at=_stamp(70))
+    )
+    store.record(_row("slow-chat", model="claude-opus-4-8", duration_ms=200_000, ended_at=_stamp(71)))
+
+    flagged = {f["task_id"]: f for f in store.outliers()}
+    assert set(flagged) == {"runaway-coder", "slow-chat"}
+    # The reason names the baseline, so a flag is never ambiguous about what it beat.
+    assert any("acp:claude-code median" in r for r in flagged["runaway-coder"]["reasons"])
+    assert any("claude-opus-4-8 median" in r for r in flagged["slow-chat"]["reasons"])
+
+
+def test_outliers_falls_back_to_the_overall_median_for_a_barely_seen_model(store):
+    """A model with almost no history has no baseline of its own. It is compared against
+    everything else rather than exempted: the first runs of a newly-configured model are
+    exactly when a surprise bill should surface."""
+    for i in range(30):
+        store.record(_row(f"chat{i}", model="claude-opus-4-8", cost_usd=0.03, ended_at=_stamp(i)))
+    store.record(_row("first-run", model="brand-new-model", cost_usd=1.50, ended_at=_stamp(40)))
+
+    flagged = {f["task_id"]: f for f in store.outliers()}
+    assert "first-run" in flagged
+    assert any("all turns median" in r for r in flagged["first-run"]["reasons"])
+
+
 def test_cache_read_savings_usd():
     from observability import pricing
 
