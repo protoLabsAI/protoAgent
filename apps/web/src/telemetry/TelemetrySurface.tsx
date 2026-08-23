@@ -274,9 +274,12 @@ function TraceCell({
         </Button>
       );
     case "off":
+      // The half-finished setup lands here too (toggle on, keys stored blank), so the
+      // title names what it takes rather than just "turn it on" — the same distinction
+      // observability/tracing.py draws in its boot log.
       return (
         <span className="trace-none" data-testid="telemetry-trace-off"
-              title="Tracing is disabled on this agent — turn it on in Settings ▸ Telemetry ▸ Send traces to Langfuse">
+              title="Tracing is disabled on this agent — Settings ▸ Telemetry ▸ Send traces to Langfuse needs the toggle AND both Langfuse keys">
           off
         </span>
       );

@@ -161,7 +161,16 @@ def init(config: Any = None) -> None:
     public_key, secret_key, host, source = resolve_credentials(config)
 
     if not public_key or not secret_key:
-        print("[tracing] Langfuse not configured. Tracing disabled.")
+        # Name the half-finished case rather than folding it into "not configured"
+        # (#3017). An operator who flipped tracing.enabled in Settings and saved
+        # without both keys has done the visible half of the work; telling them
+        # "Langfuse not configured" reads as "your toggle didn't take". This whole
+        # issue is about something being off with nothing saying so — don't add a
+        # new instance of it one layer down.
+        if getattr(config, "tracing_enabled", False):
+            print("[tracing] tracing.enabled is on but the Langfuse key pair is incomplete. Tracing disabled.")
+        else:
+            print("[tracing] Langfuse not configured. Tracing disabled.")
         return
 
     try:

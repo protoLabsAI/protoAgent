@@ -317,11 +317,11 @@ tracing:
 | Key | Default | What |
 |---|---|---|
 | `enabled` | `false` | Connect to Langfuse using the key pair below. Ignored when `LANGFUSE_{PUBLIC,SECRET}_KEY` are both in the environment — an env-configured deploy traces regardless, so this is a fallback toggle, not a kill switch. |
-| `host` | `http://host.docker.internal:3001` | Base URL of the Langfuse instance. `LANGFUSE_HOST` / `LANGFUSE_URL` override it. |
+| `host` | `http://host.docker.internal:3001` | Base URL of the Langfuse instance. The default only resolves inside the bundled Docker compose — a desktop-launched agent needs a real URL. `LANGFUSE_HOST` / `LANGFUSE_URL` override it. |
 | `public_key` | `""` | Langfuse public key. **Secret** → `secrets.yaml`. |
 | `secret_key` | `""` | Langfuse secret key. **Secret** → `secrets.yaml`. |
 
-Changing any of these needs a **restart** — the client is built once at boot. With tracing off, `/api/telemetry/recent` reports `tracing_enabled: false` and the console's Trace column says `off` rather than showing a blank that reads as "this turn wasn't traced".
+Changing any of these needs a **restart** — the client is built once at boot. With tracing off, `/api/telemetry/recent` reports `tracing_enabled: false` and the console's Trace column says `off` rather than showing a blank that reads as "this turn wasn't traced". A toggle turned on without a full key pair is not silent either: the boot log says `tracing.enabled is on but the Langfuse key pair is incomplete`. Walkthrough: [Wire Langfuse + Prometheus](/guides/observability#langfuse-distributed-traces).
 
 ## `prompts`
 

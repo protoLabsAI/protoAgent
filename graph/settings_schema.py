@@ -846,7 +846,8 @@ FIELDS: list[Field] = [
         "string",
         "Telemetry",
         "Base URL of the Langfuse instance to send to, e.g. https://cloud.langfuse.com. "
-        "Blank uses http://host.docker.internal:3001 (the bundled compose default); "
+        "Blank falls back to http://host.docker.internal:3001, which only resolves inside the "
+        "bundled Docker compose — a desktop-launched agent needs a real URL here. "
         "LANGFUSE_HOST / LANGFUSE_URL override it.",
         restart=True,
         depends_on={"key": "tracing.enabled"},

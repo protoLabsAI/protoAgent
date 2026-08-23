@@ -271,7 +271,7 @@ checkpoint:
 # here. Needs a restart (the client is built once at boot).
 # tracing:
 #   enabled: true
-#   host: https://cloud.langfuse.com   # blank → http://host.docker.internal:3001
+#   host: https://cloud.langfuse.com   # blank → http://host.docker.internal:3001 (compose only)
 
 # Background jobs (ADR 0050/0070) — delegations fired with run_in_background.
 # auto_resume: when a job finishes, immediately run a turn in the session that

@@ -122,6 +122,18 @@ def test_env_var_redaction_langfuse_secret():
     assert result["LANGFUSE_SECRET_KEY"] == "[REDACTED]"
 
 
+def test_env_var_redaction_langfuse_public_key():
+    """#3017 routed BOTH halves of the Langfuse pair into secrets.yaml, because the
+    "public" key authenticates the ingest client server-side. The audit layer has to
+    agree — under either spelling, or reading the file leaks half the credential."""
+    assert redact({"LANGFUSE_PUBLIC_KEY": "pk-lf-1234567890abcdef"})["LANGFUSE_PUBLIC_KEY"] == "[REDACTED]"
+    assert redact({"public_key": "pk-lf-1234567890abcdef"})["public_key"] == "[REDACTED]"
+    # The shape a tool sees when it reads secrets.yaml or dumps the settings payload.
+    scrubbed = redact("tracing:\n  public_key: pk-lf-1234567890abcdef\n  secret_key: sk-lf-abcdef1234567890\n")
+    assert "pk-lf-1234567890abcdef" not in scrubbed
+    assert "sk-lf-abcdef1234567890" not in scrubbed
+
+
 def test_env_var_redaction_a2a_auth_token():
     data = {"A2A_AUTH_TOKEN": "bearer-token-value-here"}
     result = redact(data)

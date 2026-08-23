@@ -435,7 +435,7 @@ def _clear_langfuse_env(monkeypatch):
         monkeypatch.delenv(var, raising=False)
 
 
-def test_init_with_no_env_and_no_config_stays_disabled(monkeypatch):
+def test_init_with_no_env_and_no_config_stays_disabled(monkeypatch, capsys):
     tracing = _reload_tracing()
     _clear_langfuse_env(monkeypatch)
     _install_fake_langfuse(monkeypatch)
@@ -444,6 +444,7 @@ def test_init_with_no_env_and_no_config_stays_disabled(monkeypatch):
 
     assert tracing.is_enabled() is False
     assert tracing._langfuse is None
+    assert "Langfuse not configured" in capsys.readouterr().out
 
 
 def test_init_from_config_only_credentials_enables_tracing(monkeypatch):
@@ -504,9 +505,12 @@ def test_config_credentials_ignored_while_the_toggle_is_off(monkeypatch):
     assert tracing._langfuse is None
 
 
-def test_config_with_half_a_key_pair_stays_disabled(monkeypatch):
+def test_config_with_half_a_key_pair_stays_disabled_and_says_why(monkeypatch, capsys):
     """Half-configured is the operator mid-setup, not a reason to build a client that
-    would 401 on every span."""
+    would 401 on every span — and the boot log has to NAME that, not fold it into the
+    same "Langfuse not configured" an untouched instance prints. Someone who flipped
+    the toggle and saved would otherwise read that as "my setting didn't take", which
+    is the same silence #3017 exists to remove."""
     tracing = _reload_tracing()
     _clear_langfuse_env(monkeypatch)
     _install_fake_langfuse(monkeypatch)
@@ -515,6 +519,8 @@ def test_config_with_half_a_key_pair_stays_disabled(monkeypatch):
 
     assert tracing.is_enabled() is False
     assert tracing._langfuse is None
+    out = capsys.readouterr().out
+    assert "tracing.enabled is on" in out and "key pair is incomplete" in out
 
 
 def test_env_keys_without_an_env_host_fall_back_to_the_config_host(monkeypatch):
