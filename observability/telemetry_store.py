@@ -61,6 +61,11 @@ _COLUMNS = (
 #: is the confusion that filled the flag list (#3015).
 _OUTLIER_MIN_COHORT = 3
 
+#: Label for the instance-wide cost baseline `outliers()` falls back to, and keeps as an
+#: absolute second signal. Named "priced" because zero-cost rows are excluded from it —
+#: see the function's docstring for why they have to be (#3041).
+_ALL_PRICED = "all priced turns"
+
 
 class TelemetryStore:
     def __init__(self, db_path: str) -> None:
@@ -398,12 +403,11 @@ class TelemetryStore:
         limit: int = 20,
         min_cohort: int = _OUTLIER_MIN_COHORT,
     ) -> list[dict]:
-        """Flag recent turns whose cost or duration exceeds ``N×`` the median for
-        turns of THEIR OWN model (over the last ``sample`` turns). Advise-only
-        signal for the flywheel — read-only, no action taken. Each flagged turn
-        carries a ``reasons`` list naming the baseline it beat. Newest first.
+        """Flag recent turns whose cost or duration is anomalous over the last ``sample``
+        turns. Advise-only signal for the flywheel — read-only, no action taken. Each
+        flagged turn carries a ``reasons`` list naming the baseline it beat. Newest first.
 
-        The baseline is per model because the store holds several populations that
+        **Latency is judged per model**, because the store holds several populations that
         are not comparable. A gateway chat turn is seconds; a CLI coding-agent run
         recorded under ``acp:<delegate>`` (#3015) is minutes, and against one shared
         median EVERY coder run clears 5× by construction — which silently filled all
@@ -412,42 +416,76 @@ class TelemetryStore:
         turn against its own kind asks the question the panel claims to answer: not
         "is this slower than a chat turn" but "is this slow for what it is".
 
-        A model with fewer than ``min_cohort`` rows in the sample has no baseline of
-        its own and falls back to the median across all sampled turns. Deliberate:
-        the first runs of a newly-configured model are exactly when a $40 turn should
-        surface, and suppressing them until a cohort builds would hide it. The reason
-        string names which baseline was used, so a flag is never ambiguous.
+        **Cost is judged twice.** A cohort median answers "unusual FOR THIS MODEL" and by
+        construction cannot answer "this model is expensive" — past ``min_cohort`` rows a
+        uniformly expensive model is measured against itself and goes quiet, so the third
+        $40 run used to DELETE the flags the first two raised (#3041). More evidence,
+        fewer alerts. A turn is therefore flagged if it beats its own model's median OR
+        the median across every priced turn on the instance. That absolute test is safe
+        against the flood the cohort rule was written to stop: the flood was latency (a
+        coder run is minutes by construction), and coder runs cost nothing. It is also
+        self-limiting — a model can only clear 5× the population median while being a
+        minority of that population.
+
+        **Zero-cost rows are excluded from every cost median.** A coder run records cost 0
+        — it bills its own subscription, not the gateway — and on a coder-dispatching
+        instance those rows are most of the sample. Their median is structurally 0, and no
+        multiplicative threshold can use it: the ``med_cost > 0`` guard just goes False and
+        the cost half of this function stops flagging anything at all (#3041).
+
+        A model with fewer than ``min_cohort`` rows in the sample has no baseline of its
+        own and falls back — for cost to the priced-turn median, for latency to the median
+        of its OWN KIND (``acp:`` coder run vs gateway turn), never the mixed sample.
+        Deliberate: the first runs of a newly-configured model are exactly when a $40 turn
+        should surface, and suppressing them until a cohort builds would hide it. The
+        reason string names which baseline was used, so a flag is never ambiguous.
+
+        What this deliberately does not answer is "which model costs the most in
+        aggregate": that is ``summary()["by_model"]``, which the insights payload already
+        carries next to this list.
         """
         recent = self.recent(limit=sample)
         if not recent:
             return []
-        overall_cost = _median([float(r.get("cost_usd") or 0.0) for r in recent])
-        overall_dur = _median([int(r.get("duration_ms") or 0) for r in recent])
+        min_cohort = max(1, int(min_cohort))
+        priced_median = _median([c for c in (_row_cost(r) for r in recent) if c > 0])
         cohorts: dict[str, list[dict]] = {}
+        durations_by_kind: dict[str, list[int]] = {}
         for r in recent:
             cohorts.setdefault(str(r.get("model") or ""), []).append(r)
-        # (median cost, median duration, label) per model, resolved once per cohort
-        # rather than per row.
-        baselines: dict[str, tuple[float, float, str]] = {}
+            durations_by_kind.setdefault(_turn_kind(r), []).append(_row_duration(r))
+        fallback_dur = {kind: _median(values) for kind, values in durations_by_kind.items()}
+        # (baseline, label) per model, resolved once per cohort rather than per row.
+        cost_base: dict[str, tuple[float, str]] = {}
+        dur_base: dict[str, tuple[float, str]] = {}
         for model, rows in cohorts.items():
-            if len(rows) < max(1, int(min_cohort)):
-                baselines[model] = (overall_cost, overall_dur, "all turns")
-                continue
-            baselines[model] = (
-                _median([float(r.get("cost_usd") or 0.0) for r in rows]),
-                _median([int(r.get("duration_ms") or 0) for r in rows]),
-                model or "unknown model",
+            label = model or "unknown model"
+            # A cohort needs ``min_cohort`` PRICED rows before it can price itself: a model
+            # whose sampled rows are mostly free says nothing about what an expensive turn
+            # on it looks like.
+            priced = [c for c in (_row_cost(r) for r in rows) if c > 0]
+            cost_base[model] = (_median(priced), label) if len(priced) >= min_cohort else (priced_median, _ALL_PRICED)
+            kind = _turn_kind(rows[0])  # one model, one kind
+            dur_base[model] = (
+                (_median([_row_duration(r) for r in rows]), label)
+                if len(rows) >= min_cohort
+                else (fallback_dur.get(kind, 0), f"all {kind} turns")
             )
         flagged = []
         for r in recent:
-            med_cost, med_dur, label = baselines[str(r.get("model") or "")]
+            model = str(r.get("model") or "")
             reasons = []
-            cost = float(r.get("cost_usd") or 0.0)
-            dur = int(r.get("duration_ms") or 0)
+            cost, dur = _row_cost(r), _row_duration(r)
+            med_cost, cost_label = cost_base[model]
             if med_cost > 0 and cost >= med_cost * cost_multiple:
-                reasons.append(f"cost {cost:.4g} ≥ {cost_multiple:g}× {label} median {med_cost:.4g}")
+                reasons.append(f"cost {cost:.4g} ≥ {cost_multiple:g}× {cost_label} median {med_cost:.4g}")
+            elif priced_median > 0 and cost >= priced_median * cost_multiple:
+                # The absolute backstop, reached only when the cohort baseline was the
+                # model's OWN — i.e. exactly the uniformly-expensive case it cannot see.
+                reasons.append(f"cost {cost:.4g} ≥ {cost_multiple:g}× {_ALL_PRICED} median {priced_median:.4g}")
+            med_dur, dur_label = dur_base[model]
             if med_dur > 0 and dur >= med_dur * latency_multiple:
-                reasons.append(f"latency {dur}ms ≥ {latency_multiple:g}× {label} median {med_dur}ms")
+                reasons.append(f"latency {dur}ms ≥ {latency_multiple:g}× {dur_label} median {med_dur}ms")
             if reasons:
                 flagged.append({**r, "reasons": reasons})
             if len(flagged) >= limit:
@@ -501,6 +539,26 @@ def _percentile(values: list[int], pct: float) -> int:
         return 0
     k = max(0, min(len(values) - 1, math.ceil(pct / 100.0 * len(values)) - 1))
     return int(values[k])
+
+
+def _row_cost(row: dict) -> float:
+    return float(row.get("cost_usd") or 0.0)
+
+
+def _row_duration(row: dict) -> int:
+    return int(row.get("duration_ms") or 0)
+
+
+def _turn_kind(row: dict) -> str:
+    """Which non-comparable population a row belongs to, for `outliers()` baselines.
+
+    ``acp:<delegate>`` is this repo's marker for "this turn was not gateway-metered"
+    (plugins/coding_agent/acp_client.py, server.chat._acp_drive_turn). Such a run takes
+    minutes where a gateway turn takes seconds, so a model too new to have a baseline of
+    its own falls back to the median of its OWN kind rather than the mixed sample —
+    otherwise a first coder run is flagged for being a coder run (#3041, #3015).
+    """
+    return "coder" if str(row.get("model") or "").startswith("acp:") else "gateway"
 
 
 def _median(values: list):

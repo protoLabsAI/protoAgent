@@ -427,14 +427,21 @@ def test_prune(store):
 
 
 def test_outliers_flags_expensive_and_slow_turns(store):
-    # A baseline of cheap/fast turns + one expensive + one slow.
+    # A baseline of cheap/fast turns + one expensive + one slow — alongside the coder rows
+    # a real instance holds (#3041), which are the majority of the sample and must not move
+    # the baseline the gateway turns are judged against.
     for i in range(8):
-        store.record(_row(f"base{i}", cost_usd=0.01, duration_ms=500))
-    store.record(_row("pricey", cost_usd=0.20, duration_ms=500))  # ≥5× median cost
-    store.record(_row("slow", cost_usd=0.01, duration_ms=9000))  # ≥5× median latency
+        store.record(_row(f"base{i}", cost_usd=0.01, duration_ms=500, ended_at=_stamp(i)))
+    store.record(_row("pricey", cost_usd=0.20, duration_ms=500, ended_at=_stamp(8)))  # ≥5× median cost
+    store.record(_row("slow", cost_usd=0.01, duration_ms=9000, ended_at=_stamp(9)))  # ≥5× median latency
+    for i in range(40):
+        store.record(
+            _row(f"coder{i}", model="acp:claude-code", cost_usd=0.0, duration_ms=300_000, ended_at=_stamp(20 + i))
+        )
     flagged = {f["task_id"]: f for f in store.outliers(cost_multiple=5, latency_multiple=5)}
     assert "pricey" in flagged and "slow" in flagged
     assert "base0" not in flagged
+    assert [t for t in flagged if t.startswith("coder")] == []
     assert any("cost" in r for r in flagged["pricey"]["reasons"])
     assert any("latency" in r for r in flagged["slow"]["reasons"])
 
@@ -495,7 +502,53 @@ def test_outliers_falls_back_to_the_overall_median_for_a_barely_seen_model(store
 
     flagged = {f["task_id"]: f for f in store.outliers()}
     assert "first-run" in flagged
-    assert any("all turns median" in r for r in flagged["first-run"]["reasons"])
+    assert any("all priced turns median" in r for r in flagged["first-run"]["reasons"])
+
+
+def test_outliers_fallback_survives_a_sample_dominated_by_coder_rows(store):
+    """The production twin of the test above (#3041). On a coder-dispatching instance most
+    of the last 200 turns are `acp:` rows — cost 0 by construction, duration in the hundreds
+    of thousands of ms. The fallback used to take its medians over the WHOLE sample, so once
+    coder rows passed half of it the cost median went to 0, the `med_cost > 0` guard went
+    False, and this file's barely-seen-model flag silently disappeared — on exactly the
+    agent the per-model rewrite (#3015) was written for."""
+    for i in range(30):
+        store.record(_row(f"chat{i}", model="claude-opus-4-8", cost_usd=0.03, ended_at=_stamp(i)))
+    for i in range(120):
+        store.record(
+            _row(f"coder{i}", model="acp:claude-code", cost_usd=0.0, duration_ms=300_000, ended_at=_stamp(40 + i))
+        )
+    store.record(_row("first-run", model="brand-new-model", cost_usd=1.50, ended_at=_stamp(170)))
+
+    flagged = {f["task_id"]: f for f in store.outliers()}
+    assert "first-run" in flagged, "a $1.50 first run must still surface with 120 coder rows in the sample"
+    assert any("all priced turns median" in r for r in flagged["first-run"]["reasons"])
+    # ...and the coder rows stay ordinary, so the fix does not reopen #3015's flood.
+    assert [t for t in flagged if t.startswith("coder")] == []
+
+
+def test_outliers_still_flags_a_model_that_is_uniformly_expensive(store):
+    """A cohort median answers "unusual FOR THIS MODEL" and by construction cannot answer
+    "this model is expensive": past `_OUTLIER_MIN_COHORT` rows a model is measured against
+    itself, so the third $40 run DELETED the flags the first two raised — more evidence,
+    fewer alerts (#3041). Cost keeps a second, absolute baseline for that reason."""
+    for i in range(50):
+        store.record(_row(f"gw{i}", model="claude-opus-4-8", cost_usd=0.20, duration_ms=20_000, ended_at=_stamp(i)))
+    for i in range(120):
+        store.record(
+            _row(f"coder{i}", model="acp:claude-code", cost_usd=0.0, duration_ms=300_000, ended_at=_stamp(50 + i))
+        )
+    for i in range(4):
+        store.record(
+            _row(f"spendy{i}", model="pricey-new-model", cost_usd=40.0, duration_ms=20_000, ended_at=_stamp(175 + i))
+        )
+
+    flagged = {f["task_id"]: f for f in store.outliers()}
+    assert {f"spendy{i}" for i in range(4)} <= set(flagged), "past the cohort threshold the flags must not vanish"
+    assert any("all priced turns median" in r for r in flagged["spendy3"]["reasons"])
+    # The absolute baseline must not re-flood the list with the population it is drawn
+    # from: the ordinary gateway turns ARE that median, so none of them clear it.
+    assert [t for t in flagged if t.startswith("gw")] == []
 
 
 def test_cache_read_savings_usd():
