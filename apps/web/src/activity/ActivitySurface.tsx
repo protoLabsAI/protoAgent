@@ -1,7 +1,17 @@
 import "./activity.css";
 
-import { Empty } from "@protolabsai/ui/primitives";
-import { Clock, CornerDownRight, Inbox, Maximize2, MessageSquare, Users, Webhook, Zap } from "lucide-react";
+import { Button, Empty } from "@protolabsai/ui/primitives";
+import {
+  Check,
+  Clock,
+  CornerDownRight,
+  Inbox,
+  Maximize2,
+  MessageSquare,
+  Users,
+  Webhook,
+  Zap,
+} from "lucide-react";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -11,13 +21,17 @@ import { useUtilityHeaderReload } from "../app/UtilityWidget";
 import { api } from "../lib/api";
 import { ago, errMsg } from "../lib/format";
 import { onServerEvent } from "../lib/events";
-import type { ActivityEntry } from "../lib/types";
+import type { ActivityEntry, InboxItem } from "../lib/types";
 
-// The Activity provenance feed (ADR 0022): a READ-ONLY timeline of agent-initiated
-// turns, each tagged with what triggered it (scheduled job / webhook / inbox /
-// sister agent). Loads from GET /api/activity and appends live via the
-// `activity.message` push event. Read-only since the 2026-06 IA pass — Activity is a
-// utility-bar widget now (ActivityWidget), not a rail surface you reply into.
+// The unified feed (#3029) merges the two former utility-bar widgets — the inbound
+// Inbox (ADR 0003) and the read-only Activity provenance timeline (ADR 0022) — into
+// one dialog body behind a single pill. PENDING inbound stimuli render at the top
+// (priority + dismiss); COMPLETED agent-initiated turns render below (provenance
+// badges, markdown, open-in-reader), appending live via the `activity.message` push.
+//
+// The two feeds are fetched and error-handled INDEPENDENTLY (separate state, separate
+// try/catch): a transient failure of GET /api/inbox or GET /api/activity surfaces its
+// own error strip and never blanks the other section.
 
 // origin → badge (icon + label). "" / unknown falls back to a generic agent turn.
 const ORIGIN: Record<string, { icon: typeof Clock; label: string }> = {
@@ -27,6 +41,9 @@ const ORIGIN: Record<string, { icon: typeof Clock; label: string }> = {
   a2a: { icon: Users, label: "sister-agent" },
   operator: { icon: MessageSquare, label: "you" },
 };
+
+// inbox priority tier → tone class (shared with the completed-entry priority badge).
+const PRIORITY_TONE: Record<string, string> = { now: "now", next: "next", later: "later" };
 
 function Badge({ entry }: { entry: ActivityEntry }) {
   const o = ORIGIN[entry.origin] ?? { icon: Zap, label: entry.origin || "agent" };
@@ -44,37 +61,67 @@ function Badge({ entry }: { entry: ActivityEntry }) {
 }
 
 export function ActivitySurface() {
-  // Held newest-first (as the API returns), rendered oldest-first.
+  // --- Completed activity timeline. Held newest-first (as the API returns), rendered
+  //     oldest-first. Persisted rows use positive database IDs; live-only rows count
+  //     downward so a same-millisecond event burst cannot collide with a React key or
+  //     an entry loaded from the API. ---
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [activityLoading, setActivityLoading] = useState(true);
+  const [activityError, setActivityError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  // Persisted Activity rows use positive database IDs. Live-only rows count
-  // downward so a same-millisecond event burst cannot collide with React keys
-  // or with an entry loaded from the API.
   const nextLiveId = useRef(0);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  // --- Pending inbox. `dismissed` survives the live-event refetch cycle so a delivered
+  //     item stays hidden even if the server briefly re-includes it before dropping it. ---
+  const [items, setItems] = useState<InboxItem[]>([]);
+  const [inboxLoading, setInboxLoading] = useState(true);
+  const [inboxError, setInboxError] = useState<string | null>(null);
+  const dismissed = useRef<Set<number>>(new Set());
+
+  const loadActivity = useCallback(async () => {
+    setActivityLoading(true);
     try {
       const r = await api.activity();
       setEntries(r.entries || []);
-      setError(null);
+      setActivityError(null);
     } catch (e) {
-      setError(errMsg(e));
+      setActivityError(errMsg(e));
     } finally {
-      setLoading(false);
+      setActivityLoading(false);
     }
   }, []);
+
+  const loadInbox = useCallback(async () => {
+    setInboxLoading(true);
+    try {
+      const r = await api.inbox();
+      setItems((r.items || []).filter((i) => !dismissed.current.has(i.id)));
+      setInboxError(null);
+    } catch (e) {
+      setInboxError(errMsg(e));
+    } finally {
+      setInboxLoading(false);
+    }
+  }, []);
+
+  // Independent initial loads — one rejecting never blocks or blanks the other.
   useEffect(() => {
-    void load();
-  }, [load]);
+    void loadActivity();
+  }, [loadActivity]);
+  useEffect(() => {
+    void loadInbox();
+  }, [loadInbox]);
 
-  // The reload lives in the dialog header (UtilityWidget) — no second panel header here.
-  useUtilityHeaderReload(load, loading);
+  // The reload lives in the dialog header (UtilityWidget) — it refetches BOTH feeds,
+  // still independently. No second panel header here.
+  const reload = useCallback(() => {
+    void loadActivity();
+    void loadInbox();
+  }, [loadActivity, loadInbox]);
+  useUtilityHeaderReload(reload, activityLoading || inboxLoading);
 
-  // Live append: every completed Activity turn pushes `activity.message` with
-  // the assistant text + provenance. Prepend (newest-first store order).
+  // Live append: every completed Activity turn pushes `activity.message` with the
+  // assistant text + provenance. Prepend (newest-first store order).
   useEffect(
     () =>
       onServerEvent("activity.message", (data) => {
@@ -96,75 +143,123 @@ export function ActivitySurface() {
     [],
   );
 
-  // Keep the newest (bottom, since we render chronological) in view.
+  // Live: a new inbound item pushes `inbox.item` — refetch to pick it up with its
+  // server id (already-dismissed ids stay filtered out).
+  useEffect(() => onServerEvent("inbox.item", () => void loadInbox()), [loadInbox]);
+
+  // Dismiss = mark delivered (POST /api/inbox/{id}/deliver). Optimistic: hide on click
+  // and remember the id so the live refetch can't bring it back (it won't return once
+  // delivered anyway; the server-side deliver is idempotent).
+  const dismiss = useCallback((id: number) => {
+    dismissed.current.add(id);
+    setItems((prev) => prev.filter((i) => i.id !== id));
+    void api.deliverInbox(id).catch(() => {});
+  }, []);
+
+  // Keep the newest completed entry (bottom, since we render chronological) in view.
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [entries]);
 
   const chronological = [...entries].reverse();
+  const nothing =
+    items.length === 0 && chronological.length === 0 && !activityLoading && !inboxLoading;
 
   return (
-    <div className="activity-body util-dialog-fill" data-testid="activity-surface">
-      {error ? (
+    <div className="unified-feed util-dialog-fill" data-testid="unified-feed">
+      {/* PENDING (top): inbound stimuli awaiting processing (ADR 0003). */}
+      {inboxError ? (
         <div className="activity-error" role="alert">
-          {error}
+          {inboxError}
         </div>
       ) : null}
-      <div className="activity-feed" ref={scrollRef}>
-          {chronological.length === 0 && !loading ? (
-            <Empty
-              className="activity-empty"
-              title="Nothing yet"
-              description="Scheduled fires, inbox items, and sister-agent pushes land here — each tagged with what triggered it."
-            />
-          ) : null}
-          {chronological.map((e) => (
-            <div
-              className="activity-entry"
-              key={e.id}
-              data-entry-id={e.id}
-              data-origin={e.origin}
-              data-state={e.state}
-            >
-              <div className="activity-entry-head">
-                <Badge entry={e} />
-                {/* Open the full entry in the shared full-screen reader (ADR 0062) —
-                    the same view the chat report card opens. */}
-                <button
+      {items.length > 0 ? (
+        <div className="inbox-list" data-testid="feed-pending">
+          {items.map((item) => (
+            <div className="inbox-item" key={item.id}>
+              <div className="inbox-item-head">
+                <span className={`inbox-pri inbox-pri-${PRIORITY_TONE[item.priority] || "next"}`}>
+                  {item.priority}
+                </span>
+                {item.source ? <span className="inbox-source">{item.source}</span> : null}
+                <Button
+                  icon
+                  variant="ghost"
+                  className="inbox-dismiss"
                   type="button"
-                  className="pl-iconbtn activity-entry-open"
-                  aria-label="Open in reader"
-                  title="Open in reader"
-                  onClick={() =>
-                    openDocument({
-                      title: ORIGIN[e.origin]?.label ?? e.origin ?? "Activity",
-                      subtitle:
-                        [e.trigger, e.task_id ? `task ${e.task_id}` : "", e.created_at ? ago(e.created_at) : ""]
-                          .filter(Boolean)
-                          .join(" · ") || undefined,
-                      content: e.stimulus
-                        ? `> **In response to**\n>\n> ${e.stimulus.replace(/\n/g, "\n> ")}\n\n---\n\n${e.text}`
-                        : e.text,
-                    })
-                  }
+                  onClick={() => dismiss(item.id)}
+                  title="Mark delivered (dismiss)"
                 >
-                  <Maximize2 size={13} />
-                </button>
+                  <Check size={15} />
+                </Button>
               </div>
-              {/* Explicit stimulus attribution (#1375): the input this response is replying to,
-                  so the feed isn't an unanchored wall of agent output. Full text on hover. */}
-              {e.stimulus ? (
-                <div className="activity-stimulus" title={e.stimulus}>
-                  <CornerDownRight size={12} aria-hidden />
-                  <span className="activity-stimulus-label">in response to</span>
-                  <span className="activity-stimulus-text">{e.stimulus}</span>
-                </div>
-              ) : null}
-              <div className="activity-content">
-                <Markdown>{e.text}</Markdown>
-              </div>
+              <div className="inbox-text">{item.text}</div>
             </div>
           ))}
+        </div>
+      ) : null}
+
+      {/* COMPLETED (below): the read-only provenance timeline (ADR 0022). */}
+      {activityError ? (
+        <div className="activity-error" role="alert">
+          {activityError}
+        </div>
+      ) : null}
+      <div className="activity-feed" ref={scrollRef} data-testid="feed-completed">
+        {nothing ? (
+          <Empty
+            className="activity-empty"
+            title="Nothing yet"
+            description="Pending inbound items and completed agent turns land here — each tagged with what triggered it."
+          />
+        ) : null}
+        {chronological.map((e) => (
+          <div
+            className="activity-entry"
+            key={e.id}
+            data-entry-id={e.id}
+            data-origin={e.origin}
+            data-state={e.state}
+          >
+            <div className="activity-entry-head">
+              <Badge entry={e} />
+              {/* Open the full entry in the shared full-screen reader (ADR 0062) —
+                  the same view the chat report card opens. */}
+              <button
+                type="button"
+                className="pl-iconbtn activity-entry-open"
+                aria-label="Open in reader"
+                title="Open in reader"
+                onClick={() =>
+                  openDocument({
+                    title: ORIGIN[e.origin]?.label ?? e.origin ?? "Activity",
+                    subtitle:
+                      [e.trigger, e.task_id ? `task ${e.task_id}` : "", e.created_at ? ago(e.created_at) : ""]
+                        .filter(Boolean)
+                        .join(" · ") || undefined,
+                    content: e.stimulus
+                      ? `> **In response to**\n>\n> ${e.stimulus.replace(/\n/g, "\n> ")}\n\n---\n\n${e.text}`
+                      : e.text,
+                  })
+                }
+              >
+                <Maximize2 size={13} />
+              </button>
+            </div>
+            {/* Explicit stimulus attribution (#1375): the input this response is replying to,
+                so the feed isn't an unanchored wall of agent output. Full text on hover. */}
+            {e.stimulus ? (
+              <div className="activity-stimulus" title={e.stimulus}>
+                <CornerDownRight size={12} aria-hidden />
+                <span className="activity-stimulus-label">in response to</span>
+                <span className="activity-stimulus-text">{e.stimulus}</span>
+              </div>
+            ) : null}
+            <div className="activity-content">
+              <Markdown>{e.text}</Markdown>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
