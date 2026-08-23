@@ -4,10 +4,14 @@ resolves per-subagent → routing.aux_model → main model."""
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
+from types import SimpleNamespace
 
 import yaml
+from langchain.agents.middleware import ModelFallbackMiddleware
 
+import graph.agent as agent_mod
 from graph.config import LangGraphConfig
 from graph.subagents.config import RESEARCHER_CONFIG, SUBAGENT_REGISTRY
 from server.agent_init import _apply_config_subagents
@@ -133,3 +137,119 @@ def test_disabled_removes_subagent():
     finally:
         if original is not None:
             SUBAGENT_REGISTRY["researcher"] = original
+
+
+# ── routing.fallback_models failover on the subagent stack (#2995) ────────────
+#
+# routing.fallback_models used to wire the failover chain onto the LEAD agent's
+# middleware only (_build_middleware); a subagent's model error therefore failed
+# the whole delegation instead of retrying the next model. The subagent stack
+# now mirrors the lead: it appends ObservableModelFallbackMiddleware (built from
+# the same routing.fallback_models) when the list is non-empty, and stays
+# unchanged when it's empty.
+
+
+def _names(mws) -> list[str]:
+    return [type(m).__name__ for m in mws]
+
+
+def _capture_subagent_middleware(monkeypatch, **cfg_kwargs) -> list:
+    """Drive _run_subagent far enough to capture the middleware list it hands to
+    create_agent, without a model or a real graph (same harness as
+    test_subagent_native_oauth.py)."""
+    seen: dict = {}
+
+    def fake_create_agent(**kwargs):
+        seen["middleware"] = kwargs.get("middleware") or []
+
+        class _Agent:
+            async def ainvoke(self, *_a, **_kw):
+                return {"messages": [SimpleNamespace(content="ok", type="ai")]}
+
+        return _Agent()
+
+    monkeypatch.setattr(agent_mod, "create_agent", fake_create_agent)
+    monkeypatch.setattr(agent_mod, "create_llm", lambda *_a, **_kw: object())
+
+    cfg = LangGraphConfig(**cfg_kwargs)
+    tool = SimpleNamespace(name="current_time")
+    try:
+        asyncio.run(
+            agent_mod._run_subagent(
+                config=cfg,
+                tool_map={"current_time": tool},
+                available_subagents="researcher",
+                prompt="go",
+                subagent_type="researcher",
+                description="delegation under test",
+            )
+        )
+    except Exception:  # noqa: BLE001 — the run may fail past create_agent; we only need the list
+        pass
+    return seen.get("middleware", [])
+
+
+def test_subagent_carries_fallback_middleware_when_configured(monkeypatch):
+    """GIVEN routing.fallback_models WHEN a delegation runs THEN the subagent's
+    middleware carries ModelFallbackMiddleware — the same failover chain the lead
+    agent gets — so a primary-model error retries the next model instead of
+    failing the delegation."""
+    mws = _capture_subagent_middleware(
+        monkeypatch, model_provider="openai", routing_fallback_models=["gpt-4o-mini", "gpt-4o"]
+    )
+    # ObservableModelFallbackMiddleware subclasses the stock middleware, so an
+    # isinstance check pins the failover contract regardless of the wrapper name.
+    assert any(isinstance(m, ModelFallbackMiddleware) for m in mws), _names(mws)
+
+
+def test_subagent_has_no_fallback_when_unconfigured(monkeypatch):
+    """AND when routing.fallback_models is empty, subagent behavior is unchanged —
+    no fallback middleware is mounted."""
+    mws = _capture_subagent_middleware(monkeypatch, model_provider="openai", routing_fallback_models=[])
+    assert not any(isinstance(m, ModelFallbackMiddleware) for m in mws), _names(mws)
+
+
+def test_subagent_fallback_is_built_from_configured_models(monkeypatch):
+    """The failover chain is built from routing.fallback_models — one fallback LLM
+    per configured model name, resolved via create_llm(config, model_name=m)."""
+    created: list = []
+
+    def fake_create_llm(_cfg, *, model_name=None, **_kw):
+        created.append(model_name)
+        return object()
+
+    monkeypatch.setattr(agent_mod, "create_agent", lambda **_kw: _StubAgent())
+    monkeypatch.setattr(agent_mod, "create_llm", fake_create_llm)
+
+    seen: dict = {}
+    orig_fallback = agent_mod.ObservableModelFallbackMiddleware
+
+    def record_fallback(*models):
+        seen["count"] = len(models)
+        return orig_fallback(*models)
+
+    monkeypatch.setattr(agent_mod, "ObservableModelFallbackMiddleware", record_fallback)
+
+    cfg = LangGraphConfig(model_provider="openai", routing_fallback_models=["fast", "slow"])
+    tool = SimpleNamespace(name="current_time")
+    try:
+        asyncio.run(
+            agent_mod._run_subagent(
+                config=cfg,
+                tool_map={"current_time": tool},
+                available_subagents="researcher",
+                prompt="go",
+                subagent_type="researcher",
+                description="delegation under test",
+            )
+        )
+    except Exception:  # noqa: BLE001 — only the fallback construction matters here
+        pass
+    # One fallback LLM per configured model name, and both names were resolved.
+    assert seen.get("count") == 2, seen
+    assert "fast" in created and "slow" in created, created
+
+
+class _StubAgent:
+    async def ainvoke(self, *_a, **_kw):
+        return {"messages": [SimpleNamespace(content="ok", type="ai")]}

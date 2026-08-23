@@ -694,6 +694,17 @@ async def _run_subagent(
                 rate_limits=config.enforcement_rate_limits,
             ),
         )
+    # Model routing / failover mirrors the lead chain (#2995). Without it a
+    # subagent's primary-model error fails the whole delegation, while the lead
+    # would have transparently retried on the configured fallbacks — the failover
+    # chain covered only `_build_middleware()`, never `task()`/`task_batch()`.
+    # Same gateway, same observable wrapper, built from the same
+    # routing.fallback_models. Appended before the provider-shape transforms so a
+    # fallback retry still runs through the native-OAuth wire shaping. No-op when
+    # routing.fallback_models is empty — the subagent stack is then unchanged.
+    if config.routing_fallback_models:
+        sub_fallbacks = [create_llm(config, model_name=m) for m in config.routing_fallback_models]
+        sub_middleware.append(ObservableModelFallbackMiddleware(*sub_fallbacks))
     # Native-OAuth wire shape — LAST, so the transform sees the final system
     # message (and sits inside PromptCapture above). Without these, a Claude/
     # ChatGPT-subscription instance could chat but every delegation failed:
