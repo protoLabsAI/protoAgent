@@ -15,6 +15,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.146.0] - 2026-08-23
+
+### Added
+- **Plugins can declare `federation_paths` — a peer-reachable, still-authenticated plugin RPC (#2747).**
+  The ADR 0066 `/api` operator ceiling kept a federation-tier credential out of every plugin
+  route, so a second instance syncing a plugin-owned store had to either hold the operator
+  bearer or tunnel RPC through the A2A task envelope. A manifest `federation_paths` list —
+  namespace-scoped exactly like `public_paths` — now lowers the ceiling to the federation tier
+  on the plugin's own declared prefixes only. The paths are not public (401 without a valid
+  credential), fleet-proxied variants keep the ceiling, and the set is replaced on every
+  plugin reload so a disabled plugin's routes fall back to operator-only at once. Handlers read
+  `request.state.trust_tier` and bind identity by tier.
+
+- **Plugin releases now poke their archetypes (#2960).** The bundle template's
+  `verify-bundle.yml` listens for a `member-released` `repository_dispatch` and runs its
+  pin-bump job immediately, and the new `examples/bundles/member-release-notify.yml`
+  snippet is the member-side release.yml step that sends it (`gh api
+  repos/<archetype>/dispatches`, no-op unless the plugin lists its archetypes).
+  Previously a member could ship four releases in a day and the archetype wouldn't
+  notice until the Monday cron. Template-only: propagating to live archetype and plugin
+  repos is separate follow-up, and the weekly cron cadence itself is unchanged (S2).
+
+- **Chat shows a streaming activity indicator through mid-turn generation pauses (#2967).**
+  Once a streaming turn had any content, the only motion was the text itself — so the gaps
+  (between tool calls, during a long tool run, while the model generates large tool-call
+  arguments like `show_component` JSON) read as a dead stall. A small dimmed spinner now
+  sits at the bottom of the streaming message: DOM order pushes it below each new part as
+  it arrives, and it disappears when the turn settles. The fully-empty streaming turn keeps
+  its original larger spinner.
+
+- **Escape now stops the streaming response — or cancels the newest queued steer first
+  (#2968).** A new `chat.stop` keybinding (default `Esc`, chat-scoped, live while typing in
+  the composer) matches the Claude.ai/ChatGPT convention: while a turn streams, Escape stops
+  it (same as the Stop button); with messages queued into the running turn, each press
+  cancels the most recent queued steer first (LIFO) and only stops the turn once none
+  remain. When idle, Escape does nothing — it never clears the draft or blurs the composer.
+  The slash-menu and HITL-form Escape behaviors are unchanged (they take precedence, no
+  double-fire), and the binding is rebindable in Settings ▸ Keyboard.
+
+- **Plugin surfaces can fence a turn to a tool allowlist (#2972).** `host.invoke(prompt,
+  session_id, tool_fence=[...])` — and `server.chat.chat(..., tool_fence=...)` underneath —
+  runs that one turn with only the listed tools callable; anything else is blocked before
+  execution with a `Blocked by policy` tool result. It reuses the existing per-turn
+  `subagent_fence` state channel (#1639), stamped every turn so a fenced turn never leaves the
+  next unfenced turn on the same session fenced. Built for surfaces that relay messages from
+  an untrusted party — the Discord plugin's upcoming cross-operator peer channels — where a
+  turn triggered by another operator's agent must not be able to run code, write files, or
+  delegate on that agent's say-so. Existing two-argument `host.invoke` callers are unchanged.
+
+- **A Project Manager member created from the picker works out of the box (#2977).** A fresh-setup run proved a new member booted with `warnings: []` while its coder, board, and GitHub rail were all dead. Now a `type: delegate` Configure answer **copies the picked host delegate (and its secrets) into the member's own registry** instead of only its name; `required: true` config inputs are a **hard gate** (create → 400 + cleanup, host install → refuses to activate); a `path` input flagged `project: true` **registers the checkout as a managed project** (ADR 0095 `projects:` entry with its GitHub slug, plus a scoped `onboarding.root`) so `onboard_project` and the fs fence see it; and plugins gain `registry.report_setup_gap()` to surface "br missing / no coder / gh unauthenticated" as **self-clearing operator warnings**. The delegate dropdown now lists coding (`acp`) delegates only.
+
+### Changed
+- **Plugins can invoke named ACP delegates with isolated conversations and a host-enforced read-only ceiling (#2747).**
+  `PluginHost.invoke_delegate` keeps plugins out of delegate internals, supports stable per-conversation ACP sessions, clears stale roster services on reload, and can require a per-call policy that blocks writes, execution, and framework-managed Git without mutating the configured delegate.
+
+- **⌘K now clears the chat; the command palette moved to ⌘⇧K (#2949).** The default
+  keybindings were swapped to match the Claude.ai/ChatGPT convention: `mod+k` clears the
+  current conversation when focus is in the chat panel (same behavior as `/clear`), and
+  `mod+shift+k` opens the command palette from anywhere. Outside the chat panel ⌘K now does
+  nothing by default. Both bindings remain rebindable in Settings ▸ Keyboard, and existing
+  user overrides are untouched.
+
+- **The Project Manager soul preset no longer commands tools a fresh member can't hold (#2978).** Ground-first reads the Configure-step repo through the managed-projects registry instead of claiming `onboard_project` writes the grounding doc; the empty-bench rule treats a missing `list_agents` as the answer; and three rules protoEngineer learned live are now in the preset — a colleague not a typist, the smallest action wins, irreversible/outward actions get confirmed (a board's `auto_merge` is the authorization for its own reviewed PRs).
+
+- **The archetype picker no longer offers a Create that can only fail (#2979).** A required bundle Configure answer (the Project Manager's repo and coder delegate) disables Create / Finish until it's filled, matching the server-side gate from #2977; MCP inputs and secrets keep their skip-to-environment semantics. The archetype's capability contract (`requires_tools`) now shows under the picked card at choose-time instead of only as a post-boot banner.
+
+- **One hard-required predicate behind the archetype picker gate (#2984).** `isHardRequiredField` in `archetypeConfig.ts` now backs the Create/Finish gate and both pickers' toggle copy instead of three hand-copies.
+
+### Fixed
+- **Bundle updates no longer downgrade a member that moved ahead of the archetype's pin
+  (#2960).** `_install_bundle` used to re-pin every member to the ref in the bundle
+  manifest, so a member an operator had force-installed ahead of the archetype (e.g.
+  projectBoard v0.41.3 against a manifest still pinning v0.41.2) was silently rolled
+  back on the next bundle update. Release-tag members now chase their own repo's newest
+  semver tag (the same `check_plugin_update` ls-remote logic the single-plugin update
+  route uses) and install that when it's newer. The chase is best-effort — a network
+  error or timeout falls back to the manifest pin — and SHA pins, branch refs, and
+  builtin members are untouched.
+
+### Docs
+- **The Project Manager first-run guide matches what ships (#2980).** `docs/guides/build-with-a-coding-agent.md` now opens with the host binaries the Configure step can't install — a coder, `br` (beads-rust, not Homebrew `bd`), and an authenticated `gh` — and what the console shows when each is missing; lists all **five** Configure fields (the `auto_merge` toggle ships on — off means a human merges); states that the repo and coder are a hard gate (the create is refused, and `workspace new --bundle` can't answer them, so the API body is shown instead); describes the #2977 create-time work (the picked delegate is copied into the member, the repo is registered as a managed project) and the #2978 preset rules; and reconciles the PATH advice with the coding-agents guide (desktop passes the login-shell PATH; absolute paths are the fallback). `propose_delegate` is documented in the delegates guide and the starter-tools reference; the fleet guide and README list exactly the catalog's archetypes (Social Marketing is held); and the retired `pm-stack` / `cowork-stack` / `leadEngineer` names carry amendment notes in ADRs 0041/0042/0049/0055/0064/0072/0078/0083 (`pm-stack` → `portfolio-manager-archetype`, per #2895).
+
+- **Project Manager first-run docs match today's releases (#2982).** The coding-agent guide no longer calls github-plugin 0.6.0 "in flight" or says the pinned board "doesn't call the seam yet": archetype v0.6.0 pins projectBoard 0.42.0 (setup preflight keys `br`/`gh`/`coder`/`repo`, loop pauses and resumes itself) and github-plugin 0.6.0 (status probe keys `gh`/`auth`), and sets `project: true` on the repo input, so the "add the `projects:` entry yourself" fallback applies only to v0.5.0. The GitHub auth order now reads as the plugin resolves it — the `token` secret wins, then `gh`'s own `GH_TOKEN` → `GITHUB_TOKEN` → keyring. README and the plugins guide stop listing a first-party `plugins/github/` "read-only GitHub tools" row (extracted to github-plugin; write rail on for the PM archetype). PROTO.md gains the gotcha for bundle `config_inputs` reserved sections (`CONFIG_INPUT_RESERVED_SECTIONS`) and the `registry.report_setup_gap` seam.
+
 ## [0.145.0] - 2026-08-22
 
 ### Added

@@ -1,5 +1,25 @@
 [
   {
+    "version": "v0.146.0",
+    "date": "2026-08-23",
+    "changes": [
+      "Plugins can declare federation_paths — a peer-reachable, still-authenticated plugin RPC (#2747).",
+      "Plugin releases now poke their archetypes (#2960).",
+      "Chat shows a streaming activity indicator through mid-turn generation pauses (#2967).",
+      "Escape now stops the streaming response — or cancels the newest queued steer first (#2968).",
+      "Plugin surfaces can fence a turn to a tool allowlist (#2972).",
+      "A Project Manager member created from the picker works out of the box (#2977).",
+      "Plugins can invoke named ACP delegates with isolated conversations and a host-enforced read-only ceiling (#2747).",
+      "⌘K now clears the chat; the command palette moved to ⌘⇧K (#2949).",
+      "The Project Manager soul preset no longer commands tools a fresh member can't hold (#2978).",
+      "The archetype picker no longer offers a Create that can only fail (#2979).",
+      "One hard-required predicate behind the archetype picker gate (#2984).",
+      "Bundle updates no longer downgrade a member that moved ahead of the archetype's pin (#2960).",
+      "The Project Manager first-run guide matches what ships (#2980).",
+      "Project Manager first-run docs match today's releases (#2982)."
+    ]
+  },
+  {
     "version": "v0.145.0",
     "date": "2026-08-22",
     "changes": [
