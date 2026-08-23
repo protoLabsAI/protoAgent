@@ -42,6 +42,18 @@ REPO_ROOT = Path(__file__).parent.resolve()
 # ---------------------------------------------------------------------------
 
 
+
+def _launchd_path() -> str:
+    """The PATH a launchd-started agent gets: launchd's minimal set plus the per-user
+    tool dirs a login shell would add — `~/.cargo/bin` (beads-rust `br`), `~/.local/bin`
+    (pip/npm `--user` installs: `gh`, ACP adapters), Homebrew. A launchd job inherits no
+    shell, so without these the board and coder delegates fail "not on PATH"."""
+    import os
+
+    home = os.path.expanduser("~")
+    dirs = ["/usr/local/bin", "/usr/bin", "/bin", "/opt/homebrew/bin", f"{home}/.cargo/bin", f"{home}/.local/bin"]
+    return ":".join(dict.fromkeys(dirs))
+
 def autostart_supported() -> tuple[bool, str]:
     """Is this platform a supported autostart target?
 
@@ -259,7 +271,7 @@ def _render_launchagent_plist(
         <key>AGENT_NAME</key>
         <string>{e(agent_name)}</string>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+        <string>{e(_launchd_path())}</string>
         <key>PYTHONPATH</key>
         <string>{e(working_dir)}</string>
     </dict>

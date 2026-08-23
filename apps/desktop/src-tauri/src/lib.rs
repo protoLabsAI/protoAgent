@@ -282,7 +282,7 @@ fn sidecar_alert<R: Runtime>(app: &AppHandle<R>, detail: &str) {
 
 /// Split a `:`-delimited PATH string and append each new, non-empty dir to `entries`,
 /// preserving order and skipping duplicates.
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 fn dedup_push_path(entries: &mut Vec<String>, raw: &str) {
     for dir in raw.split(':') {
         if !dir.is_empty() && !entries.iter().any(|e| e == dir) {
@@ -294,9 +294,9 @@ fn dedup_push_path(entries: &mut Vec<String>, raw: &str) {
 /// Ask the user's interactive login shell for its `PATH`
 /// (`$SHELL -ilc 'printf %s "$PATH"'`). `None` if `$SHELL` is unknown, the shell
 /// errors, or it returns nothing — callers fall back to a fixed prefix.
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 fn login_shell_path() -> Option<String> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
     let output = std::process::Command::new(&shell)
         .args(["-ilc", "printf %s \"$PATH\""])
         .output()
@@ -320,13 +320,22 @@ fn login_shell_path() -> Option<String> {
 /// "binary not on PATH" (#1299). Compose: the login-shell PATH (covers nvm/Volta/asdf),
 /// then the common Homebrew/local dirs (belt-and-suspenders if shell resolution failed),
 /// then whatever the process already inherited (never drop a dir that already worked).
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 fn augmented_sidecar_path() -> String {
     let mut entries: Vec<String> = Vec::new();
     if let Some(shell_path) = login_shell_path() {
         dedup_push_path(&mut entries, &shell_path);
     }
     dedup_push_path(&mut entries, "/opt/homebrew/bin:/usr/local/bin");
+    // Per-user tool dirs the login shell usually adds but a .desktop/launchd launch
+    // never sees: `br` (cargo), `gh`/`claude-agent-acp` installed per-user (pip/npm
+    // `--user`, Linux Homebrew). Same belt-and-suspenders as the Homebrew dirs above.
+    if let Ok(home) = std::env::var("HOME") {
+        dedup_push_path(
+            &mut entries,
+            &format!("{home}/.cargo/bin:{home}/.local/bin:/home/linuxbrew/.linuxbrew/bin"),
+        );
+    }
     if let Ok(existing) = std::env::var("PATH") {
         dedup_push_path(&mut entries, &existing);
     }
@@ -389,10 +398,11 @@ fn spawn_sidecar<R: Runtime>(app: &AppHandle<R>, port: u16) {
         .env("PROTOAGENT_HOME", config_dir.to_string_lossy().to_string())
         .env("PROTOAGENT_BOX_ROOT", config_dir.to_string_lossy().to_string());
 
-    // A Finder/Dock/launchd launch strips PATH down to launchd's minimal set, hiding
-    // Homebrew/nvm/Volta/asdf — so delegate launch commands (`npx`, ACP adapters) fail
+    // A Finder/Dock/launchd launch (macOS) or a .desktop launch (Linux) strips PATH
+    // down to the session's minimal set, hiding Homebrew/nvm/Volta/asdf/cargo — so
+    // delegate launch commands (`npx`, ACP adapters) and the board's `br`/`gh` fail
     // with "binary not on PATH" (#1299). Hand the sidecar the user's real PATH.
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     {
         command = command.env("PATH", augmented_sidecar_path());
     }
