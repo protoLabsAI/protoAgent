@@ -1,6 +1,8 @@
 import { expect, test } from "@playwright/test";
 
-import { HARD_GATE_HINT, PM_CONTRACT_NOTICE } from "./fixtures.mjs";
+import { requiresToolsNotice } from "../src/lib/archetypeConfig";
+import { CONFIGURE_REQUIRED_COPY, HARD_GATE_HINT, HARD_GATE_HINT_COLLAPSED } from "../src/lib/pickerCopy";
+import { ARCHETYPES } from "./fixtures.mjs";
 
 // Fleet manager + archetype picker (Settings → Agents, ADR 0042). Drives the live
 // control-plane endpoints (mocked): list, create from an archetype, stop. The mock
@@ -127,6 +129,10 @@ async function pickProjectManager(page) {
 // The DS DropdownSelect trigger carries the field id (origin:key — escape the colon/dot).
 const coderTrigger = (page) => page.locator('[id="config:project_board.coder"]');
 const createButton = (page) => page.getByRole("button", { name: /^Create/ });
+// The contract note, computed by the same helper the card renders with — the spec and
+// the component can't drift apart on wording.
+const PM = ARCHETYPES.find((a) => a.id === "project-manager");
+const PM_CONTRACT_NOTICE = requiresToolsNotice(PM.label, PM.requires_tools);
 
 test("picking the Project Manager archetype shows its capability contract under the card (#2979)", async ({ page }) => {
   await openAgents(page);
@@ -135,7 +141,7 @@ test("picking the Project Manager archetype shows its capability contract under 
   // contract break is a known trade-off rather than a post-boot banner.
   await expect(page.getByRole("note").filter({ hasText: PM_CONTRACT_NOTICE })).toBeVisible();
   // The toggle copy says the answers are required, not "optional — skip".
-  await expect(page.getByRole("button", { name: /Configure Project Manager/ })).toContainText("answers marked * are required");
+  await expect(page.getByRole("button", { name: /Configure Project Manager/ })).toContainText(CONFIGURE_REQUIRED_COPY);
 });
 
 test("Create stays disabled while a required bundle answer is blank; the hint says why (#2977)", async ({ page }) => {
@@ -170,20 +176,31 @@ test("the coding-delegate dropdown lists ONLY acp delegates (#2934)", async ({ p
 
 test("Enter in the Name field does NOT submit while a required answer is blank (#2979)", async ({ page }) => {
   await openAgents(page);
-  let posts = 0;
+  const posted = [];
   await page.route("**/api/fleet", async (route) => {
-    if (route.request().method() === "POST") posts += 1;
+    if (route.request().method() === "POST") posted.push(route.request().postDataJSON());
     return route.continue();
   });
   await pickProjectManager(page);
   const name = page.getByLabel("Agent name");
   await name.fill("pmbot");
   await name.press("Enter");
-  // Still on the picker, nothing posted — the keyboard path honours the same gate as the button.
   await expect(page.getByRole("heading", { name: "New agent" })).toBeVisible();
   await expect(createButton(page)).toBeDisabled();
-  expect(posts).toBe(0);
-  await expect(page).not.toHaveURL(/\/app\/agent\/pmbot/);
+
+  // Positive control, and the proof the gated press above has fully run: the console
+  // keeps an event stream open so there is no network-idle to wait for — instead, fill
+  // the answers and press Enter AGAIN. The keyboard path still submits when ungated, and
+  // the one POST that lands carries the answers; a gated press that had fired would have
+  // landed first (same page, same handler) and be sitting in `posted` ahead of it.
+  await page.getByLabel("Repository path").fill("/Users/me/dev/repo");
+  await coderTrigger(page).click();
+  await page.getByRole("menuitemradio", { name: "coder", exact: true }).click();
+  await expect(createButton(page)).toBeEnabled();
+  await name.press("Enter");
+  await expect(page).toHaveURL(/\/app\/agent\/pmbot-ab12\//);
+  expect(posted).toHaveLength(1);
+  expect(posted[0].config_inputs).toEqual({ "project_board.repo": "/Users/me/dev/repo", "project_board.coder": "coder" });
 });
 
 test("collapsing Configure with a required answer blank shows the collapsed-state hint (#2979)", async ({ page }) => {
@@ -196,7 +213,7 @@ test("collapsing Configure with a required answer blank shows the collapsed-stat
   // The fields are gone but the explanation is not — the hint moved OUT of the collapsible
   // block so a disabled Create never reads as a mystery.
   await expect(page.getByLabel("Repository path")).toHaveCount(0);
-  await expect(page.getByText(/Fields marked \* are needed before this agent can be created — open Configure\./)).toBeVisible();
+  await expect(page.getByText(HARD_GATE_HINT_COLLAPSED, { exact: true })).toBeVisible();
   await expect(createButton(page)).toBeDisabled();
 });
 

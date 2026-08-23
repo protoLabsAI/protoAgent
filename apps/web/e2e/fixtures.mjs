@@ -131,12 +131,6 @@ export const ARCHETYPES = [
   { id: "custom", label: "Custom", icon: "PenLine", blurb: "Write your own — fill in a template.", bundle: null, soul: "# Identity\n\n_Describe your agent in one paragraph._" },
 ];
 
-// The choose-time note the picker renders under the card for a contract-carrying
-// archetype (lib/archetypeConfig.ts requiresToolsNotice) — asserted verbatim by the specs.
-export const PM_CONTRACT_NOTICE = "Project Manager commits to a tool its bundle must provide: github_create_issue.";
-// The hard-gate hint (#2977/#2979) — shown open or collapsed while a required answer is blank.
-export const HARD_GATE_HINT = "Fields marked * are needed before this agent can be created.";
-
 // GET /api/archetypes/{id}/preview — the read-only bundle peek (#2041). product-archetype
 // asks for a GitHub MCP server (needs a token) + a standalone Brave secret, so it exercises
 // the enriched preview dialog AND the new-agent Configure step's SOFT gate (skip → env).

@@ -34,6 +34,13 @@ import {
   requiresToolsNotice,
   splitConfigValues,
 } from "../lib/archetypeConfig";
+import {
+  CONFIGURE_OPTIONAL_COPY,
+  CONFIGURE_REQUIRED_COPY,
+  HARD_GATE_HINT_WIZARD,
+  HARD_GATE_HINT_WIZARD_COLLAPSED,
+  SOFT_GATE_HINT,
+} from "../lib/pickerCopy";
 import type { AgentConfig, Archetype, ConfigPayload } from "../lib/types";
 import { ArchetypeConfigField } from "./ArchetypeConfigField";
 import { ArchetypePreviewDialog } from "./ArchetypePreviewDialog";
@@ -801,13 +808,9 @@ export function SetupWizard({
                   >
                     {configOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
                     <span>Configure {pickedArchetype?.label}</span>
-                    <span className="field-hint">
-                      {hasHardRequired ? "answers marked * are required" : "optional — skip to use this host's environment"}
-                    </span>
+                    <span className="field-hint">{hasHardRequired ? CONFIGURE_REQUIRED_COPY : CONFIGURE_OPTIONAL_COPY}</span>
                   </button>
-                  {missingHard && !configOpen ? (
-                    <span className="field-hint">Fields marked * are needed before setup can finish — open Configure.</span>
-                  ) : null}
+                  {missingHard && !configOpen ? <span className="field-hint">{HARD_GATE_HINT_WIZARD_COLLAPSED}</span> : null}
                   {configOpen ? (
                     <div className="archetype-configure-fields">
                       {configFields.map((f) => (
@@ -824,11 +827,9 @@ export function SetupWizard({
                         </label>
                       ))}
                       {missingHard ? (
-                        <span className="field-hint">Fields marked * are needed before setup can finish.</span>
+                        <span className="field-hint">{HARD_GATE_HINT_WIZARD}</span>
                       ) : missingRequired ? (
-                        <span className="field-hint">
-                          Fields marked * connect their server — fill them, or skip to use this host&apos;s environment.
-                        </span>
+                        <span className="field-hint">{SOFT_GATE_HINT}</span>
                       ) : null}
                     </div>
                   ) : null}

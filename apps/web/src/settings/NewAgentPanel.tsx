@@ -24,6 +24,13 @@ import {
   requiresToolsNotice,
   splitConfigValues,
 } from "../lib/archetypeConfig";
+import {
+  CONFIGURE_OPTIONAL_COPY,
+  CONFIGURE_REQUIRED_COPY,
+  HARD_GATE_HINT,
+  HARD_GATE_HINT_COLLAPSED,
+  SOFT_GATE_HINT,
+} from "../lib/pickerCopy";
 import type { Archetype } from "../lib/types";
 
 const NAME_RE = /^[A-Za-z0-9-_]+$/;
@@ -283,13 +290,9 @@ export function NewAgentPanel({
             >
               {configOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
               <span>Configure {pickedArchetype?.label}</span>
-              <span className="field-hint">
-                {hasHardRequired ? "answers marked * are required" : "optional — skip to use this host's environment"}
-              </span>
+              <span className="field-hint">{hasHardRequired ? CONFIGURE_REQUIRED_COPY : CONFIGURE_OPTIONAL_COPY}</span>
             </button>
-            {missingHard && !configOpen ? (
-              <span className="field-hint">Fields marked * are needed before this agent can be created — open Configure.</span>
-            ) : null}
+            {missingHard && !configOpen ? <span className="field-hint">{HARD_GATE_HINT_COLLAPSED}</span> : null}
             {configOpen ? (
               <div className="archetype-configure-fields">
                 {fields.map((f) => (
@@ -306,11 +309,9 @@ export function NewAgentPanel({
                   </label>
                 ))}
                 {missingHard ? (
-                  <span className="field-hint">Fields marked * are needed before this agent can be created.</span>
+                  <span className="field-hint">{HARD_GATE_HINT}</span>
                 ) : missingRequired ? (
-                  <span className="field-hint">
-                    Fields marked * connect their server — fill them, or skip to use this host's environment.
-                  </span>
+                  <span className="field-hint">{SOFT_GATE_HINT}</span>
                 ) : null}
               </div>
             ) : null}
