@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from plugins.friction import FrictionMiddleware, friction_review, record_friction
+from plugins.friction import FrictionMiddleware, friction_review, record_friction, resolve_friction
 
 
 @pytest.fixture
@@ -230,3 +230,110 @@ def test_read_api_returns_grouped_items(monkeypatch, tmp_path):
     raw = client.get("/api/friction", params={"grouped": False}).json()
     assert raw["total"] == 4  # ungrouped returns every record
     assert client.get("/api/friction", params={"kind": "bogus"}).json()["items"] == []
+
+
+# ── #2990: resolve_friction — dismiss resolved entries from the backlog ──────
+
+
+def _record(kind, summary):
+    asyncio.run(record_friction.ainvoke({"kind": kind, "summary": summary}))
+
+
+def test_resolve_marks_all_matching_entries_in_place(ledger):
+    """Substring match stamps EVERY matching record with resolved_at; nothing is deleted —
+    the ledger is append-only and the audit trail must survive a resolve."""
+    from datetime import datetime
+
+    _record("harness", "board_cancel_feature is missing")
+    _record("harness", "board_cancel_feature raised")
+    _record("model", "took a wrong path")
+
+    out = asyncio.run(resolve_friction.ainvoke({"summary": "board_cancel_feature", "reason": "tool shipped in #2984"}))
+
+    assert "resolved 2" in out
+    recs = _recs(ledger)
+    assert len(recs) == 3  # in-place stamp, not a delete
+    resolved = [r for r in recs if r.get("resolved_at")]
+    assert {r["summary"] for r in resolved} == {"board_cancel_feature is missing", "board_cancel_feature raised"}
+    for r in resolved:
+        datetime.fromisoformat(r["resolved_at"])  # a real ISO timestamp
+        assert r["resolved_reason"] == "tool shipped in #2984"
+    assert not next(r for r in recs if r["summary"] == "took a wrong path").get("resolved_at")
+
+
+def test_resolve_with_no_match_reports_it(ledger):
+    _record("harness", "something real")
+    assert "no matching entries found" in asyncio.run(resolve_friction.ainvoke({"summary": "never recorded"}))
+    assert not _recs(ledger)[0].get("resolved_at")  # and it touched nothing
+
+
+def test_resolve_on_empty_ledger(tmp_path, monkeypatch):
+    monkeypatch.setenv("FRICTION_LOG", str(tmp_path / "friction.jsonl"))
+    assert "no matching entries found" in asyncio.run(resolve_friction.ainvoke({"summary": "anything"}))
+
+
+def test_review_excludes_resolved_by_default(ledger):
+    _record("harness", "fixed thing")
+    _record("harness", "still broken")
+    asyncio.run(resolve_friction.ainvoke({"summary": "fixed thing"}))
+
+    out = asyncio.run(friction_review.ainvoke({}))
+
+    assert "still broken" in out and "fixed thing" not in out
+    assert "harness=1" in out  # counts reflect the live backlog, not history
+
+
+def test_review_includes_resolved_with_marker(ledger):
+    _record("harness", "fixed thing")
+    _record("harness", "still broken")
+    asyncio.run(resolve_friction.ainvoke({"summary": "fixed thing"}))
+
+    out = asyncio.run(friction_review.ainvoke({"include_resolved": True}))
+
+    resolved_line = next(ln for ln in out.splitlines() if "fixed thing" in ln)
+    live_line = next(ln for ln in out.splitlines() if "still broken" in ln)
+    assert "[resolved]" in resolved_line
+    assert "[resolved]" not in live_line
+
+
+def test_review_all_resolved_reads_as_empty_backlog(ledger):
+    _record("harness", "fixed thing")
+    asyncio.run(resolve_friction.ainvoke({"summary": "fixed thing"}))
+    assert "no  friction recorded" in asyncio.run(friction_review.ainvoke({}))
+
+
+def test_grouped_entries_respect_the_resolved_filter(ledger):
+    from plugins import friction
+
+    _record("harness", "fixed thing")
+    _record("harness", "fixed thing")
+    asyncio.run(resolve_friction.ainvoke({"summary": "fixed thing"}))
+
+    assert friction.grouped_entries() == []
+    groups = friction.grouped_entries(include_resolved=True)
+    assert groups[0]["count"] == 2 and groups[0]["resolved_at"]
+
+
+def test_read_api_filters_resolved(ledger):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from plugins import friction
+
+    _record("harness", "fixed thing")
+    _record("harness", "still broken")
+    asyncio.run(resolve_friction.ainvoke({"summary": "fixed thing"}))
+    app = FastAPI()
+    app.include_router(friction._build_router())
+    client = TestClient(app)
+
+    body = client.get("/api/friction").json()
+    assert {i["summary"] for i in body["items"]} == {"still broken"}
+    assert body["counts"] == {"harness": 1, "model": 0}
+
+    both = client.get("/api/friction", params={"resolved": True}).json()
+    assert {i["summary"] for i in both["items"]} == {"fixed thing", "still broken"}
+
+    raw = client.get("/api/friction", params={"resolved": True, "grouped": False}).json()
+    assert next(i for i in raw["items"] if i["summary"] == "fixed thing")["resolved_at"]
+    assert not next(i for i in raw["items"] if i["summary"] == "still broken").get("resolved_at")

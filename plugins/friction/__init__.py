@@ -15,8 +15,10 @@ agent captures where it hit friction and feeds that back into improving its harn
     pausing for approval or delegating is not friction).
 
 `kind` splits the backlog: `"harness"` → an improvement to the tools/framework;
-`"model"` → a labeled trace worth learning from. `friction_review` surfaces it. Enable
-via `plugins: { enabled: [friction] }`. The ledger path is `$FRICTION_LOG` or, by
+`"model"` → a labeled trace worth learning from. `friction_review` surfaces it;
+`resolve_friction` dismisses entries once fixed (a `resolved_at` stamp in place — the
+ledger stays append-only, so the audit trail survives). Enable via
+`plugins: { enabled: [friction] }`. The ledger path is `$FRICTION_LOG` or, by
 default, `<instance data dir>/friction/friction.jsonl`.
 """
 
@@ -93,8 +95,10 @@ def _trim(path: Path) -> None:
         pass
 
 
-def read_entries(kind: str = "") -> list[dict]:
-    """Every ledger record, oldest first; ``kind`` filters to one channel."""
+def read_entries(kind: str = "", include_resolved: bool = False) -> list[dict]:
+    """Ledger records, oldest first; ``kind`` filters to one channel. Entries stamped
+    ``resolved_at`` (by ``resolve_friction``) are hidden unless ``include_resolved`` —
+    a resolved entry is history, not backlog."""
     path = _ledger_path()
     if not path.exists():
         return []
@@ -108,12 +112,17 @@ def read_entries(kind: str = "") -> list[dict]:
             rec = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if isinstance(rec, dict) and (not kind or rec.get("kind") == kind):
-            out.append(rec)
+        if not isinstance(rec, dict):
+            continue
+        if kind and rec.get("kind") != kind:
+            continue
+        if not include_resolved and rec.get("resolved_at"):
+            continue
+        out.append(rec)
     return out
 
 
-def grouped_entries(kind: str = "") -> list[dict]:
+def grouped_entries(kind: str = "", include_resolved: bool = False) -> list[dict]:
     """Ledger records grouped by (kind, summary), newest-seen first.
 
     Five identical "reached for escape hatch 'shell'" entries are ONE signal repeated, not
@@ -123,7 +132,7 @@ def grouped_entries(kind: str = "") -> list[dict]:
     how often, and since when.
     """
     groups: dict[tuple[str, str], dict] = {}
-    for idx, rec in enumerate(read_entries(kind)):
+    for idx, rec in enumerate(read_entries(kind, include_resolved)):
         key = (str(rec.get("kind", "")), str(rec.get("summary", "")))
         ts = str(rec.get("ts", ""))
         g = groups.get(key)
@@ -138,6 +147,10 @@ def grouped_entries(kind: str = "") -> list[dict]:
                 "count": 1,
                 "first_seen": ts,
                 "last_seen": ts,
+                # Set only while EVERY record in the group is resolved — one unresolved
+                # occurrence means the friction is still live, however many stamped
+                # records surround it.
+                "resolved_at": str(rec.get("resolved_at", "")),
                 # Ledger POSITION of the newest record in this group. `ts` alone cannot
                 # order a burst: Windows' wall clock is coarse enough that records appended
                 # in one turn share an identical isoformat string, and a stable sort then
@@ -152,6 +165,8 @@ def grouped_entries(kind: str = "") -> list[dict]:
         g["last_seen"] = max(g["last_seen"], ts)
         g["_last_idx"] = idx
         g["first_seen"] = min(g["first_seen"], ts) if g["first_seen"] else ts
+        rec_resolved = str(rec.get("resolved_at", ""))
+        g["resolved_at"] = max(g["resolved_at"], rec_resolved) if (g["resolved_at"] and rec_resolved) else ""
         # Keep the worst severity seen for this summary — one major occurrence makes the
         # whole group worth looking at, however many minor ones surround it.
         if _SEVERITY_RANK.get(str(rec.get("severity")), 0) > _SEVERITY_RANK.get(str(g["severity"]), 0):
@@ -187,18 +202,55 @@ async def record_friction(kind: str, summary: str, detail: str = "", severity: s
 
 
 @tool
-async def friction_review(kind: str = "") -> str:
+async def resolve_friction(summary: str, reason: str = "") -> str:
+    """Mark friction entries as resolved so they drop out of the review backlog — call this
+    once the underlying rough edge is actually fixed, not to silence a live signal.
+
+    ``summary`` is a substring match: EVERY unresolved entry whose summary contains it is
+    stamped with a ``resolved_at`` timestamp (and ``reason``, if given) in place. Nothing
+    is deleted — the ledger stays append-only and the audit trail survives."""
+    if not summary.strip():
+        return "summary is required (a substring of the entries to resolve)"
+    path = _ledger_path()
+    if not path.exists():
+        return "no matching entries found — the friction backlog is empty."
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return "no matching entries found — the ledger could not be read."
+    needle = summary.strip()
+    stamp = datetime.now(timezone.utc).isoformat()
+    out_lines: list[str] = []
+    matched = 0
+    for line in text.splitlines():
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            out_lines.append(line)  # foreign lines pass through untouched
+            continue
+        if isinstance(rec, dict) and not rec.get("resolved_at") and needle in str(rec.get("summary", "")):
+            rec["resolved_at"] = stamp
+            if reason.strip():
+                rec["resolved_reason"] = reason.strip()[:300]
+            out_lines.append(json.dumps(rec, default=str))
+            matched += 1
+        else:
+            out_lines.append(line)
+    if not matched:
+        return f"no matching entries found for “{needle}”."
+    path.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
+    return f"resolved {matched} {'entry' if matched == 1 else 'entries'} matching “{needle}”."
+
+
+@tool
+async def friction_review(kind: str = "", include_resolved: bool = False) -> str:
     """Review the friction backlog (the improvement leads). No kind → counts by channel +
-    the most recent entries; kind='harness'|'model' → that channel's entries."""
+    the most recent entries; kind='harness'|'model' → that channel's entries. Entries
+    dismissed via resolve_friction are hidden unless include_resolved=True."""
     path = _ledger_path()
     if not path.exists():
         return "friction backlog is empty — nothing recorded yet."
-    recs = []
-    for line in path.read_text().splitlines():
-        try:
-            recs.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
+    recs = read_entries(include_resolved=include_resolved)
     if kind in _KINDS:
         recs = [r for r in recs if r.get("kind") == kind]
     if not recs:
@@ -208,7 +260,7 @@ async def friction_review(kind: str = "") -> str:
     lines = [f"friction backlog: {len(recs)} total  ·  harness={harness}  model={model}", ""]
     for r in recs[-12:]:
         lines.append(f"  [{r.get('kind', '?'):<7} {r.get('severity', '?'):<5} {r.get('source', '?'):<5}] "
-                     f"{r.get('summary', '')}")
+                     f"{r.get('summary', '')}{' [resolved]' if r.get('resolved_at') else ''}")
     return "\n".join(lines)
 
 
@@ -261,21 +313,25 @@ def _build_router():
     router = APIRouter()
 
     @router.get("/api/friction")
-    async def _friction(kind: str = "", grouped: bool = True, limit: int = 100) -> dict:
+    async def _friction(kind: str = "", grouped: bool = True, limit: int = 100, resolved: bool = False) -> dict:
         """Recorded friction, newest first. ``grouped`` (default) collapses repeats of the
         same summary into one item with a count — five identical escape-hatch reaches are
         one signal, and reading them as five rows is what made the raw log feel like noise.
+        ``resolved`` includes entries already dismissed via resolve_friction (hidden by
+        default — they're history, not backlog).
         """
         if kind and kind not in _KINDS:
             return {"error": f"kind must be one of {_KINDS}", "items": [], "total": 0}
-        items = grouped_entries(kind) if grouped else list(reversed(read_entries(kind)))
+        items = (grouped_entries(kind, include_resolved=resolved) if grouped
+                 else list(reversed(read_entries(kind, include_resolved=resolved))))
         capped = items[: max(1, min(int(limit or 100), 500))]
         return {
             "items": capped,
             "total": len(items),
             "returned": len(capped),
             "grouped": bool(grouped),
-            "counts": {k: sum(1 for r in read_entries() if r.get("kind") == k) for k in _KINDS},
+            "counts": {k: sum(1 for r in read_entries(include_resolved=resolved) if r.get("kind") == k)
+                       for k in _KINDS},
         }
 
     return router
@@ -314,7 +370,7 @@ def _build_view_router():
 
 def register(registry):
     """protoAgent plugin entrypoint."""
-    registry.register_tools([record_friction, friction_review])
+    registry.register_tools([record_friction, friction_review, resolve_friction])
     registry.register_middleware(lambda config: FrictionMiddleware())
     registry.register_router(_build_router(), prefix="")
     # Default prefix (None) resolves to /plugins/friction — the canonical public
