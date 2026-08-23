@@ -346,8 +346,53 @@ def _advertised_a2a_versions(card: dict) -> list[str]:
 # verbatim and bills it to the calling turn instead of dropping it on the floor.
 
 
-def _wire_number(value) -> float:
-    """A wire number as a finite float, or ``0.0`` for anything that isn't one.
+# Bounds on the numbers a peer reports about itself (#3038).
+#
+# This is the first path in the codebase where a REMOTE party's number reaches local
+# storage, so magnitude is a trust boundary and not tidiness. A peer answering with
+# ``{"usage": {"input_tokens": 1e308}}`` becomes a 309-digit Python int, which the
+# executor accumulates, ``record_turn`` folds into ``total_tokens``, and SQLite then
+# refuses: ``OverflowError: Python int too large to convert to SQLite INTEGER``.
+# ``record_turn`` swallows that because telemetry is best-effort — correct in isolation,
+# and it handed a peer a way to delete the CALLING turn's whole row, the lead agent's
+# own genuine spend with it, silently.
+#
+# SQLite's signed-64-bit INTEGER is the hard wall; these ceilings sit far below it,
+# because a per-turn count that large is not a real turn and a bound you can reason
+# about beats one that merely avoids the crash. Negatives floor at zero: no peer gets to
+# issue a token credit, and a negative would drive ``record_turn``'s disjoint prompt
+# split (#3003) somewhere no consumer expects.
+_MAX_WIRE_TOKENS = 1_000_000_000_000  # 1e12 tokens in one turn is not a turn
+_MAX_WIRE_COST_USD = 1_000_000.0  # …nor is a million dollars of it
+
+#: Whether this process has already warned about a clamp. See :func:`_note_clamped`.
+_clamp_logged = False
+
+
+def _note_clamped(delegate: str, fields: list[str]) -> None:
+    """Say ONCE that a peer's reported numbers were out of range (#3038).
+
+    A peer sending absurd numbers is worth knowing about — silence is exactly what kept
+    the dropped-row bug invisible. Once per process, though: the clamp sits on the hot
+    path of every delegation and a peer that reports garbage reports it on every reply,
+    so an unguarded warning would be a log flood a hostile party controls the volume of.
+    """
+    global _clamp_logged
+    detail = ", ".join(fields)
+    if _clamp_logged:
+        logger.debug("[delegates] clamped out-of-range cost-v1 from %r: %s", delegate, detail)
+        return
+    _clamp_logged = True
+    logger.warning(
+        "[delegates] peer %r reported out-of-range cost-v1 values (%s) — clamped to sane bounds (#3038). "
+        "Later clamps in this process are logged at DEBUG.",
+        delegate,
+        detail,
+    )
+
+
+def _wire_number(value, ceiling: float = _MAX_WIRE_COST_USD, *, field: str = "", clamped: list | None = None) -> float:
+    """A wire number as a finite float bounded to ``[0, ceiling]``.
 
     Proto-JSON round-trips numbers as floats and a foreign peer may send them as
     strings, so every field is coerced rather than trusted. Non-finite values are
@@ -355,17 +400,34 @@ def _wire_number(value) -> float:
     ``1e400``, which overflows to it), ``int(inf)`` raises ``OverflowError`` rather
     than the ``ValueError`` a coercion guard expects, and an infinite ``cost_usd``
     would poison the turn's sums all the way into the stored row.
+
+    A value that was out of range appends ``field`` to ``clamped``, so the caller — the
+    one that knows WHICH peer sent it — can report it once.
     """
     try:
         n = float(value or 0)
     except (TypeError, ValueError):
         return 0.0
-    return n if math.isfinite(n) else 0.0
+    if not math.isfinite(n):
+        # Unknown, not huge: infinity says the peer lost track, so bill nothing for it
+        # rather than bill the ceiling.
+        bounded = 0.0
+    elif n < 0:
+        bounded = 0.0
+    elif n > ceiling:
+        bounded = ceiling
+    else:
+        return n
+    if clamped is not None and field:
+        clamped.append(field)
+    return bounded
 
 
-def _wire_int(value) -> int:
-    """A wire number as an int — :func:`_wire_number` truncated toward zero."""
-    return int(_wire_number(value))
+def _wire_int(value, ceiling: int = _MAX_WIRE_TOKENS, *, field: str = "", clamped: list | None = None) -> int:
+    """A wire number as an int in ``[0, ceiling]`` — :func:`_wire_number` truncated
+    toward zero. The default ceiling is exactly representable as a float, so the round
+    trip through :func:`_wire_number` cannot land the clamp above the bound."""
+    return int(_wire_number(value, float(ceiling), field=field, clamped=clamped))
 
 
 def _peer_usage_row(result, delegate: str) -> dict | None:
@@ -388,6 +450,10 @@ def _peer_usage_row(result, delegate: str) -> dict | None:
     dressed as a measurement. A peer that reports tokens but no ``costUsd`` therefore
     contributes tokens and no cost — a visible undercount rather than an invented number.
 
+    Every field is BOUNDED on the way in (#3038): a peer is a remote party, and an
+    unbounded number of its choosing used to take the calling turn's whole telemetry
+    row down with it. See :data:`_MAX_WIRE_TOKENS`.
+
     ``None`` when the peer emitted no cost-v1 (any non-protoAgent A2A agent) or when the
     payload carries neither tokens nor a cost: the caller then behaves exactly as before.
     """
@@ -398,13 +464,20 @@ def _peer_usage_row(result, delegate: str) -> dict | None:
         return None
     usage = payload.get("usage")
     usage = usage if isinstance(usage, dict) else {}
+    clamped: list[str] = []
+
+    def _tokens(name: str) -> int:
+        return _wire_int(usage.get(name), field=name, clamped=clamped)
+
     row = {
-        "input_tokens": _wire_int(usage.get("input_tokens")),
-        "output_tokens": _wire_int(usage.get("output_tokens")),
-        "cache_read_input_tokens": _wire_int(usage.get("cache_read_input_tokens")),
-        "cache_creation_input_tokens": _wire_int(usage.get("cache_creation_input_tokens")),
-        "cost_usd": _wire_number(payload.get("costUsd")),
+        "input_tokens": _tokens("input_tokens"),
+        "output_tokens": _tokens("output_tokens"),
+        "cache_read_input_tokens": _tokens("cache_read_input_tokens"),
+        "cache_creation_input_tokens": _tokens("cache_creation_input_tokens"),
+        "cost_usd": _wire_number(payload.get("costUsd"), field="costUsd", clamped=clamped),
     }
+    if clamped:
+        _note_clamped(delegate, clamped)
     if not any(row.values()):
         return None
     # A marker, not a model name: cost-v1 carries no model, and inventing one would break
