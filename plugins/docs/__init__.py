@@ -258,7 +258,8 @@ async function api(p){
 // A fetch that never reached the server rejects with no status at all (the agent stopped,
 // or this tab outlived it) — that is not the doc's fault, and saying "could not read
 // <doc>" sends you looking in the wrong place. Name the real cause.
-const causeOf=e=>{ const m=String((e&&e.message)||e); return /^HTTP /.test(m) ? m : "the agent is not reachable (is it still running?)"; };
+const isHttpErr=e=>/^HTTP /.test(String((e&&e.message)||e));   // ONE place decides which kind it is
+const causeOf=e=>isHttpErr(e) ? String((e&&e.message)||e) : "the agent is not reachable (is it still running?)";
 const showErr=(el,e)=>{ el.innerHTML='<div class="empty">Could not load docs — '+esc(causeOf(e))+'</div>'; };
 const LIVE_DOCS="https://agent.protolabs.studio/docs/";  // Cloudflare build folds the docs in here (config.mts)
 const slugify=s=>String(s).normalize("NFKD").replace(/[\u0300-\u036f]/g,"").replace(/[^\w\- ]+/g,"").trim().replace(/\s+/g,"-").toLowerCase();
@@ -413,7 +414,7 @@ addEventListener("message", async (e)=>{
   if(id==="copy-path"){ copyText(path, "Copied "+path); return; }
   if(id==="copy-md"){
     try{ const d=await api("/doc?raw=1&path="+encodeURIComponent(path)); if(d&&d.md) copyText(d.md, "Copied "+path+" as markdown"); }
-    catch(err){ toast(/^HTTP /.test(String((err&&err.message)||err)) ? ("Could not read "+path+" — "+causeOf(err)) : ("Could not copy — "+causeOf(err))); }
+    catch(err){ toast(isHttpErr(err) ? ("Could not read "+path+" — "+causeOf(err)) : ("Could not copy — "+causeOf(err))); }
     return;
   }
   if(id==="open-live"){ window.open(liveDocsUrl("", "/"+path, ""), "_blank", "noopener,noreferrer"); return; }

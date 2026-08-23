@@ -204,6 +204,25 @@ def test_view_is_four_rules_compliant() -> None:
     assert "https://" not in html.split("<style>")[0]  # no CDN in the head
 
 
+def test_view_error_messages_name_the_cause() -> None:
+    """A fetch that never reached the server must not be reported as an unreadable doc.
+
+    `api()` rejects two ways — an HTTP error (the request reached the server and it refused)
+    and a network-layer rejection with no status (the agent stopped, or the tab outlived it).
+    Collapsing them sent the reader looking at the corpus when the problem was the process.
+    """
+    html = _load_docs()._VIEW_HTML
+    # One place decides which kind of failure it is — the predicate is not re-derived at
+    # each call site, where a future change to it would be missed.
+    assert html.count("/^HTTP /.test(") == 1
+    # Both branches are reachable: the no-status case names the agent...
+    assert "the agent is not reachable (is it still running?)" in html
+    # ...and an HTTP failure still names the doc AND its status.
+    assert '"Could not read "+path+" — "+causeOf(err)' in html
+    # The message that blamed the doc for an unreachable agent is gone.
+    assert 'toast("Could not read "+path)' not in html
+
+
 # ── operator-chosen docs root (`docs.root`) ───────────────────────────────────
 
 
