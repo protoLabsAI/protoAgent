@@ -11,16 +11,17 @@ from graph.workspaces import manager
 
 
 def _member(tmp_path, monkeypatch, record: dict | None):
-    """Make THIS process look like a workspace member whose record is `record`."""
+    """Make THIS process look like a workspace member whose record is `record` — the
+    way the hub's supervisor does it: ``PROTOAGENT_HOME=<ws>`` (ADR 0042/0065), so every
+    instance path (the record, the config dir, the setup marker) resolves under it."""
+    from infra.paths import reset_instance_paths
+
     ws = tmp_path / "ws"
     ws.mkdir(parents=True, exist_ok=True)
     if record is not None:
         (ws / "workspace.yaml").write_text(yaml.safe_dump(record), encoding="utf-8")
-
-    class _Paths:
-        instance_root = ws
-
-    monkeypatch.setattr("infra.paths.instance_paths", lambda: _Paths())
+    monkeypatch.setenv("PROTOAGENT_HOME", str(ws))
+    reset_instance_paths()
     return ws
 
 
@@ -66,6 +67,78 @@ def test_an_empty_bound_set_still_reports_rather_than_crashing(tmp_path, monkeyp
     _member(tmp_path, monkeypatch, {"id": "pm", "requires_tools": ["x"]})
 
     assert manager.capability_contract_warning(None)
+
+
+# ── the host path: archetype.yaml next to the setup marker ────────────────────
+# The setup wizard installs an archetype onto the HOST, which has no workspace.yaml;
+# POST /api/config/setup records the contract in <config_dir>/archetype.yaml instead
+# (graph.config_io.write_host_archetype) and the warning falls back to it.
+def _host(tmp_path, monkeypatch):
+    """THIS process is the host: an instance root with no workspace.yaml."""
+    return _member(tmp_path, monkeypatch, None)
+
+
+def test_a_wizard_installed_contract_is_checked_on_the_host(tmp_path, monkeypatch):
+    """The gap #2980 documented: a wizard-created host Project Manager got no banner."""
+    from graph.config_io import write_host_archetype
+
+    _host(tmp_path, monkeypatch)
+    write_host_archetype(["github_create_issue"])
+
+    warning = manager.capability_contract_warning(["read_file", "task"])
+
+    assert warning and "github_create_issue" in warning
+
+
+def test_a_satisfied_host_contract_is_silent(tmp_path, monkeypatch):
+    from graph.config_io import write_host_archetype
+
+    _host(tmp_path, monkeypatch)
+    write_host_archetype(["github_create_issue"])
+
+    assert manager.capability_contract_warning(["github_create_issue"]) is None
+
+
+def test_a_host_without_a_record_is_silent(tmp_path, monkeypatch):
+    _host(tmp_path, monkeypatch)
+    assert manager.capability_contract_warning([]) is None
+
+
+def test_the_workspace_record_wins_over_a_host_record(tmp_path, monkeypatch):
+    """A member with a contract-free workspace.yaml must not inherit a stray host
+    record from the same config dir — the fallback is for NO workspace record only."""
+    from graph.config_io import write_host_archetype
+
+    _member(tmp_path, monkeypatch, {"id": "plain"})
+    write_host_archetype(["github_create_issue"])
+
+    assert manager.capability_contract_warning([]) is None
+
+
+def test_write_host_archetype_round_trips_and_an_empty_contract_removes_the_file(tmp_path, monkeypatch):
+    from graph.config_io import host_archetype_path, read_host_archetype, setup_marker_path, write_host_archetype
+
+    ws = _host(tmp_path, monkeypatch)
+    write_host_archetype(["a", "b"])
+    assert read_host_archetype() == {"requires_tools": ["a", "b"]}
+    # Sibling of the setup marker, under this instance's config dir — the same place the
+    # wizard's other state lives.
+    assert host_archetype_path() == ws / "config" / "archetype.yaml"
+    assert host_archetype_path().parent == setup_marker_path().parent
+    write_host_archetype([])
+    assert not host_archetype_path().exists()
+    assert read_host_archetype() is None
+
+
+def test_read_host_archetype_tolerates_garbage(tmp_path, monkeypatch):
+    from graph.config_io import host_archetype_path, read_host_archetype
+
+    _host(tmp_path, monkeypatch)
+    host_archetype_path().parent.mkdir(parents=True, exist_ok=True)
+    host_archetype_path().write_text("- just\n- a list\n", encoding="utf-8")
+    assert read_host_archetype() is None
+    host_archetype_path().write_text("{{{ not yaml", encoding="utf-8")
+    assert read_host_archetype() is None
 
 
 # ── create() records the contract ─────────────────────────────────────────────

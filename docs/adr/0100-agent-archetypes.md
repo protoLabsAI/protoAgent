@@ -63,14 +63,18 @@ Two consumers, two targets:
   archetype's persona, and on finish installs its bundle into the host
   (`POST /api/plugins/install` — config defaults, `mcp:` servers, and declared secrets
   all seed, #1350/#2118), collecting the bundle's `${input}`s/secrets in a Configure
-  step (#2714).
+  step (#2714). The finish (`POST /api/config/setup`) also records `requires_tools`
+  host-side in `<config_dir>/archetype.yaml` — the host's twin of the member's
+  `workspace.yaml` record — so `capability_contract_warning()` covers a
+  wizard-installed archetype too (it was members-only before).
 - **New-agent picker** (Settings ▸ Agents) targets a **new workspace**:
   `POST /api/fleet` → `manager.create` writes the persona to `<ws>/config/SOUL.md`,
   installs the bundle, enables its curated `enabled:` set, seeds config/mcp/secrets, and
   persists `requires_tools` to `workspace.yaml`; the whole create rolls back (`rmtree`)
-  on any failure. At member boot, `capability_contract_warning()` compares the contract
-  against the tools that actually bound and warns on gaps — the check is advisory,
-  matching ADR 0071's trust posture.
+  on any failure. At status time, `capability_contract_warning()` compares the contract
+  (the workspace record, else the host's `archetype.yaml`) against the tools that
+  actually bound and warns on gaps — the check is advisory, matching ADR 0071's trust
+  posture.
 
 **Preview before picking**: `GET /api/archetypes/{id}/preview` (`peek_bundle`,
 TTL-cached) enumerates a bundle's members/mcp/secrets without installing anything;

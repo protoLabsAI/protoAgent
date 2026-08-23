@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from graph.config import LangGraphConfig, _deep_merge_dicts
-from infra.paths import harden_private_file, instance_paths
+from infra.paths import atomic_write, harden_private_file, instance_paths
 
 log = logging.getLogger("protoagent.config_io")
 
@@ -75,6 +75,14 @@ def secrets_yaml_path() -> Path:
 def setup_marker_path() -> Path:
     """Setup-complete marker — presence ⇒ the wizard has been run."""
     return instance_paths().setup_marker
+
+
+def host_archetype_path() -> Path:
+    """The host's archetype record — ``<config_dir>/archetype.yaml``, sibling of the
+    setup marker. The host-side mirror of a fleet member's ``workspace.yaml``
+    (``requires_tools``, ADR 0100): written by the setup wizard's finish, read by
+    ``capability_contract_warning`` when there is no workspace record."""
+    return setup_marker_path().parent / "archetype.yaml"
 
 
 def theme_json_path() -> Path:
@@ -1706,6 +1714,44 @@ def mark_setup_complete() -> None:
     marker = setup_marker_path()
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.touch()
+
+
+def write_host_archetype(requires_tools) -> None:
+    """Record the archetype capability contract the setup wizard installed onto THIS
+    host (#2277 / ADR 0100).
+
+    ``POST /api/fleet`` copies an archetype's ``requires_tools`` onto the new member's
+    ``workspace.yaml`` at create; the wizard's host path had nowhere to put it, so a
+    wizard-installed Project Manager never got the contract banner. This is that
+    somewhere: the same ``requires_tools`` key, in ``archetype.yaml`` next to the setup
+    marker. An empty/absent list removes the record (a re-run of the wizard onto a
+    code-free persona must not keep yesterday's contract)."""
+    import yaml
+
+    tools = [str(t).strip() for t in (requires_tools or []) if str(t).strip()]
+    path = host_archetype_path()
+    if not tools:
+        path.unlink(missing_ok=True)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write(path, yaml.safe_dump({"requires_tools": tools}, sort_keys=False))
+
+
+def read_host_archetype() -> dict | None:
+    """The host archetype record written by :func:`write_host_archetype`, or ``None``
+    when there is none (a host that never ran the wizard onto a contract-carrying
+    archetype — the common case) or it's unreadable. Never raises: it feeds a
+    status-time warning."""
+    import yaml
+
+    path = host_archetype_path()
+    if not path.exists():
+        return None
+    try:
+        d = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return None
+    return d if isinstance(d, dict) else None
 
 
 def validate_for_headless(config) -> tuple[bool, str]:

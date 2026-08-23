@@ -563,6 +563,10 @@ export function SetupWizard({
           // untouched (the YAML write merges, never replaces).
         },
         state.soul,
+        // The archetype's capability contract (ADR 0100) — recorded host-side so the
+        // operator-status banner can check it against the tools that actually bound,
+        // exactly as a member created from POST /api/fleet gets (#2277).
+        pickedArchetype?.requires_tools ?? [],
       );
       if (!response.ok) {
         setError(response.message);

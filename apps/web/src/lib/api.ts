@@ -1464,10 +1464,14 @@ export const api = {
   },
 
 
-  finishSetup(config: Partial<AgentConfig>, soul: string) {
+  // `requires_tools` is the picked archetype's capability contract (ADR 0100) — the
+  // host-side twin of what createAgent records on a member's workspace.yaml, so a
+  // wizard-installed archetype gets the same contract banner. Always sent (an empty
+  // list clears a stale record from an earlier wizard run).
+  finishSetup(config: Partial<AgentConfig>, soul: string, requiresTools: string[] = []) {
     return request<{ ok: boolean; message: string }>("/api/config/setup", {
       method: "POST",
-      body: { config, soul },
+      body: { config, soul, requires_tools: requiresTools },
     });
   },
 

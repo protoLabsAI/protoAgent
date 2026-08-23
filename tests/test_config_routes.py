@@ -851,6 +851,49 @@ def test_finish_setup_delegates_offloaded(monkeypatch):
     assert seen == {"config": {"a": 1}, "soul": "S"}
 
 
+def test_finish_setup_records_the_host_capability_contract(monkeypatch):
+    """#2277 / ADR 0100: the wizard's host path had no twin of the member's
+    workspace.yaml `requires_tools`, so a wizard-installed Project Manager never got
+    the contract banner. POST /api/config/setup now persists it — after a successful
+    finish only."""
+    import operator_api.config_routes as cr
+    from graph.config_io import read_host_archetype
+
+    monkeypatch.setattr(cr, "_build_settings_callbacks", lambda: {"finish_setup": lambda c, s: (True, "ready")})
+    body = _client().post(
+        "/api/config/setup",
+        json={"config": {}, "soul": "S", "requires_tools": ["github_create_issue", " ", ""]},
+    ).json()
+    assert body == {"ok": True, "message": "ready"}
+    assert read_host_archetype() == {"requires_tools": ["github_create_issue"]}
+
+
+def test_finish_setup_failure_leaves_no_contract_behind(monkeypatch):
+    import operator_api.config_routes as cr
+    from graph.config_io import read_host_archetype
+
+    monkeypatch.setattr(cr, "_build_settings_callbacks", lambda: {"finish_setup": lambda c, s: (False, "model connection failed")})
+    body = _client().post("/api/config/setup", json={"config": {}, "soul": "S", "requires_tools": ["x"]}).json()
+    assert body["ok"] is False
+    assert read_host_archetype() is None
+
+
+def test_finish_setup_clears_or_keeps_the_contract_by_payload_shape(monkeypatch):
+    """`[]` (the console picked a contract-free persona) clears a stale record; an
+    omitted field (an older console) leaves whatever is there alone."""
+    import operator_api.config_routes as cr
+    from graph.config_io import read_host_archetype, write_host_archetype
+
+    monkeypatch.setattr(cr, "_build_settings_callbacks", lambda: {"finish_setup": lambda c, s: (True, "ready")})
+    write_host_archetype(["github_create_issue"])
+
+    _client().post("/api/config/setup", json={"config": {}, "soul": "S"})
+    assert read_host_archetype() == {"requires_tools": ["github_create_issue"]}
+
+    _client().post("/api/config/setup", json={"config": {}, "soul": "S", "requires_tools": []})
+    assert read_host_archetype() is None
+
+
 def test_config_explain_delegates(monkeypatch):
     """#2486 coverage gap: GET /api/config/explain returns build_config_explain's
     dict for the LIVE config verbatim."""

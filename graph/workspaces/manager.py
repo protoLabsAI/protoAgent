@@ -213,13 +213,25 @@ def capability_contract_warning(bound_tool_names) -> str | None:
     knowable at once, so the contract is checked against ground truth rather than against
     manifest metadata that can't see a config-gated registration.
 
-    Returns ``None`` for a non-member, a member with no declared contract, or a satisfied
-    one. Deliberately a warning, not a refusal: the operator may have turned a capability
-    off on purpose, and an agent that boots degraded beats one that won't boot.
+    The HOST has the same doctrine problem with no ``workspace.yaml``: the setup wizard
+    installs an archetype's bundle onto the host itself, so its ``requires_tools`` is
+    recorded in ``<config_dir>/archetype.yaml`` instead (``graph.config_io
+    .write_host_archetype``, written by ``POST /api/config/setup``). A workspace record
+    wins when present; the host record is the fallback, so a wizard-installed Project
+    Manager gets the same banner a member does.
+
+    Returns ``None`` for an instance with no record of either kind, one with no declared
+    contract, or a satisfied one. Deliberately a warning, not a refusal: the operator may
+    have turned a capability off on purpose, and an agent that boots degraded beats one
+    that won't boot.
     """
     from infra.paths import instance_paths
 
     rec = _read_record(instance_paths().instance_root)
+    if rec is None:
+        from graph.config_io import read_host_archetype
+
+        rec = read_host_archetype()
     declared = [str(t) for t in (rec or {}).get("requires_tools") or []]
     if not declared:
         return None

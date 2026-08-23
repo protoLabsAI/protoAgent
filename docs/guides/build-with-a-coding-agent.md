@@ -204,13 +204,14 @@ a different archetype, over A2A ([portfolio](/guides/portfolio)).
 **What a clean first boot looks like.** Operator status shows no warnings. A
 *capability contract* banner means the archetype declared a tool — for the PM,
 `github_create_issue` — that didn't bind; the one way to get it today is
-`github.write: false`, which the bundle seeds true. That banner exists **only
-for fleet members**: the contract is recorded on the member's `workspace.yaml`
-at create, so a PM the Setup Wizard installs onto the host itself has no record
-to check and never shows it — on a host PM, confirm the tool bound by looking
-for `github_create_issue` under Settings ▸ Capabilities ▸ Tools. The **Board**
-view shows a setup card naming the bound repo, not a beads error; if the repo
-has never had a board, the plugin runs `br init` there on first use.
+`github.write: false`, which the bundle seeds true. The banner fires on **both
+doors**: a fleet member records the contract on its `workspace.yaml` at create,
+and a PM the Setup Wizard installs onto the host itself records it in the host's
+`config/archetype.yaml` (next to the setup marker) — so either way, a quiet
+status means the tool bound. To double-check, look for `github_create_issue`
+under Settings ▸ Capabilities ▸ Tools. The **Board** view shows a setup card
+naming the bound repo, not a beads error; if the repo has never had a board,
+the plugin runs `br init` there on first use.
 
 > **Why the PM can't edit files.** Its file tools are read-only by design — a PM
 > that can edit files can ship unreviewed changes around every gate below, so the
