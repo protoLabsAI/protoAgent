@@ -188,13 +188,23 @@ def test_context_tokens_roundtrips_and_migrates(tmp_path):
 
 
 def test_recent_derives_per_turn_cache_hit_ratio(store):
-    # #2773: cached reads / prompt tokens, derived per row — 400/1000 from the
-    # fixture; a zero-input row reads 0.0, never a ZeroDivisionError.
-    store.record(_row("t1"))
+    # #2773 / #3003: cached reads / the WHOLE prompt. The three token columns are
+    # disjoint as of #3003 (`input_tokens` is the uncached share), so the
+    # denominator is input + cache_read + cache_creation — here 600 + 400 = 1000.
+    # A zero-prompt row reads 0.0, never a ZeroDivisionError.
+    store.record(_row("t1", input_tokens=600, cache_read_input_tokens=400))
     store.record(_row("t2", input_tokens=0, cache_read_input_tokens=0, ended_at="2026-06-01T00:02:00+00:00"))
     recent = {r["task_id"]: r for r in store.recent()}
     assert recent["t1"]["cache_hit_ratio"] == 0.4
     assert recent["t2"]["cache_hit_ratio"] == 0.0
+
+
+def test_cache_hit_ratio_counts_cache_writes_in_the_prompt(store):
+    # A cache WRITE is prompt the turn actually sent (at 1.25x), so it belongs in
+    # the denominator — otherwise the first turn of a cached thread reports a
+    # hit ratio computed against a prompt far smaller than the one it paid for.
+    store.record(_row("t1", input_tokens=100, cache_read_input_tokens=300, cache_creation_input_tokens=600))
+    assert store.recent()[0]["cache_hit_ratio"] == 0.3  # 300 / (100 + 300 + 600)
 
 
 def test_summary_context_fill_stats_exclude_zero_rows(store):
@@ -251,8 +261,8 @@ def test_summary_aggregates(store):
     assert s["cost_usd"] == 0.06
     assert s["input_tokens"] == 4000
     assert s["success_rate"] == 0.5
-    # cache-hit ratio = cached reads / total input = 500 / 4000
-    assert s["cache_hit_ratio"] == round(500 / 4000, 4)
+    # cache-hit ratio = cached reads / the whole prompt = 500 / (4000 + 500) (#3003)
+    assert s["cache_hit_ratio"] == round(500 / 4500, 4)
     assert s["p50_duration_ms"] in (1000, 3000)
     assert s["p95_duration_ms"] == 3000
     assert s["p99_duration_ms"] == 3000

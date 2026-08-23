@@ -86,3 +86,48 @@ def test_rate_for_protolabs_gateway_models() -> None:
     # Claude-ish default (which would overstate ~30x). Aliases resolve by substring.
     assert pricing.rate_for("protolabs/reasoning") == pricing.MODEL_RATES["protolabs/reasoning"]
     assert pricing.rate_for("protolabs/fast")["input"] < pricing.MODEL_RATES["default"]["input"]
+
+
+# ── Prompt-cache pricing (#3003) ──────────────────────────────────────────────
+# `cost_usd` takes LangChain-shaped usage, where `input_tokens` is "the sum of all
+# input token types" and the cache counts are SUBSETS of it — not additions.
+
+
+def test_cached_reads_are_billed_at_a_tenth_not_full_price():
+    rate = pricing.rate_for("claude-opus-5")["input"]
+    usage = {"input_tokens": 1000, "output_tokens": 0, "cache_read_input_tokens": 900}
+    # 100 uncached at full rate + 900 cached at 10%.
+    assert pricing.cost_usd("claude-opus-5", usage) == pytest.approx(round(100 * rate + 900 * rate * 0.1, 6))
+    # The whole point: a 90%-cached turn is not billed like an uncached one.
+    assert pricing.cost_usd("claude-opus-5", usage) < 0.25 * (1000 * rate)
+
+
+def test_cache_writes_cost_more_than_plain_input():
+    rate = pricing.rate_for("claude-opus-5")["input"]
+    usage = {"input_tokens": 1000, "output_tokens": 0, "cache_creation_input_tokens": 1000}
+    assert pricing.cost_usd("claude-opus-5", usage) == pytest.approx(round(1000 * rate * 1.25, 6))
+
+
+def test_langchain_nested_cache_details_are_understood():
+    # The producers hand over `usage_metadata` directly, whose cache counts are
+    # nested under `input_token_details` rather than the flat telemetry-row names.
+    flat = {"input_tokens": 1000, "output_tokens": 10, "cache_read_input_tokens": 800}
+    nested = {"input_tokens": 1000, "output_tokens": 10, "input_token_details": {"cache_read": 800}}
+    assert pricing.cost_usd("claude-opus-5", nested) == pricing.cost_usd("claude-opus-5", flat)
+
+
+def test_uncached_usage_is_unchanged_by_the_cache_split():
+    # A turn with no cache activity must cost exactly what it always did.
+    rate = pricing.rate_for("claude-opus-5")
+    usage = {"input_tokens": 1000, "output_tokens": 500}
+    assert pricing.cost_usd("claude-opus-5", usage) == pytest.approx(
+        round(1000 * rate["input"] + 500 * rate["output"], 6)
+    )
+
+
+def test_cache_counts_exceeding_input_cannot_refund_the_turn():
+    # Defensive: a provider that reports cache counts NOT included in input_tokens
+    # (against the documented contract) must not drive the full-price component
+    # negative and hand back a credit.
+    usage = {"input_tokens": 100, "output_tokens": 0, "cache_read_input_tokens": 5000}
+    assert pricing.cost_usd("claude-opus-5", usage) > 0

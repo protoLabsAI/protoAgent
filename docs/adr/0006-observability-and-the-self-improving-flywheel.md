@@ -191,6 +191,45 @@ This ADR closes the remaining gaps so they meet the *same* contract.
 > samples/key), explicitly *not billing*. protoAgent's Slice 2 local store is
 > the durable, queryable half on our side; the two are complementary.
 
+### Amendment — prompt-cache pricing resolved (#3003, 2026-08-23)
+
+Decision 2 above said cost is computed in-process and **cache-aware**. The
+implementation shipped without the cache half and left a note in `pricing.py`
+deferring it *"until the gateway's cache-token semantics are validated
+end-to-end — different gateways disagree on whether `input_tokens` already
+includes cached reads."* The deferral outlived its reason and the code drifted
+from this ADR: every cached token was billed at the full input rate, roughly
+tenfold its real cost, on stores running a **73% cache-hit ratio**.
+
+The gateways do disagree at the raw provider layer, and they are reconciled
+before the shape we consume. LangChain's `UsageMetadata` is documented as *"a
+standard representation of token usage that is consistent across models"* in
+which `input_tokens` is *"the sum of all input token types"* and
+`input_token_details.cache_read` / `.cache_creation` are **subsets** of it. Every
+producer in the tree reads that shape, so no provider branch is needed.
+
+Resolved as:
+
+- **`pricing.cost_usd` takes LangChain-shaped (cache-inclusive) usage** and does
+  the disjoint split internally — full input rate for uncached prompt tokens,
+  ×0.1 for cache reads, ×1.25 for cache writes, output at the output rate. One
+  place knows the arithmetic.
+- **The stored `input_tokens` column is cache-EXCLUSIVE**, normalised once in the
+  shared writer `server/turn_telemetry.py::record_turn`. `input_tokens +
+  cache_read_input_tokens + cache_creation_input_tokens` is the turn's true
+  prompt size and the three are disjoint, so a consumer summing them can't
+  double-count. `total_tokens` re-adds the cache components, so it still means
+  every token the turn moved.
+- **The `cost-v1` A2A extension is unchanged.** Its `inputTokens` is a fleet wire
+  contract (protolabs-a2a 0.3.0) that consumers read with OpenAI-ish
+  cache-inclusive semantics; normalising at the store writer rather than at the
+  producers keeps that contract intact.
+- **`cache_hit_ratio` is `cache_read / (input + cache_read + cache_creation)`.**
+  Rows written before this change carry the old cache-inclusive column, so their
+  denominator double-counts the cached reads and the ratio reads slightly low.
+  Not backfilled: quietly rewriting recorded history is worse than a documented
+  seam, and the error is conservative.
+
 ## 6. Consequences
 
 **Positive**

@@ -213,10 +213,9 @@ class TelemetryStore:
             for r in rows:
                 d = dict(r)
                 # Per-turn cache-hit ratio, derived — cached reads / total prompt tokens
-                # the turn sent (#2773). Kept out of the schema: both operands are
-                # already columns, so a derived key can't drift from them.
-                inp = d.get("input_tokens", 0) or 0
-                d["cache_hit_ratio"] = round((d.get("cache_read_input_tokens", 0) or 0) / inp, 4) if inp else 0.0
+                # the turn sent (#2773). Kept out of the schema: every operand is
+                # already a column, so a derived key can't drift from them.
+                d["cache_hit_ratio"] = _cache_hit_ratio(d)
                 out.append(d)
             return out
         finally:
@@ -283,9 +282,8 @@ class TelemetryStore:
             # Kept alongside `turns` (every recorded row) so the gap is visible rather
             # than merely excluded: turns - resolved = legs parked awaiting a human.
             out["resolved"] = resolved
-            # Cache-hit ratio: cached reads / total input tokens seen.
-            inp = out.get("input_tokens", 0) or 0
-            out["cache_hit_ratio"] = round((out.get("cache_read_input_tokens", 0) or 0) / inp, 4) if inp else 0.0
+            # Cache-hit ratio over the window — same definition as the per-row one.
+            out["cache_hit_ratio"] = _cache_hit_ratio(out)
             # Latency percentiles (Python-side; bounded by typical volumes).
             durations = [
                 r[0]
@@ -423,6 +421,25 @@ class TelemetryStore:
             return cur.rowcount
         finally:
             db.close()
+
+
+def _cache_hit_ratio(row: dict) -> float:
+    """Cached reads / the turn's whole prompt (#3003).
+
+    The denominator is ``input_tokens + cache_read + cache_creation`` because the
+    three columns are DISJOINT as of #3003 — ``input_tokens`` is the uncached
+    share only. Dividing by ``input_tokens`` alone (what this used to do, back
+    when the column was cache-inclusive) would now report far above 1.0 on a
+    cache-heavy turn.
+
+    Rows written before #3003 still carry the cache-inclusive column, so their
+    denominator double-counts the cached reads and the ratio reads a little low.
+    Not backfilled, by decision: quietly rewriting recorded history is worse than
+    a documented seam, and the direction is conservative.
+    """
+    cache_read = row.get("cache_read_input_tokens", 0) or 0
+    prompt = (row.get("input_tokens", 0) or 0) + cache_read + (row.get("cache_creation_input_tokens", 0) or 0)
+    return round(cache_read / prompt, 4) if prompt else 0.0
 
 
 def _percentile(values: list[int], pct: float) -> int:

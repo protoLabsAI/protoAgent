@@ -157,15 +157,31 @@ def test_extract_subagent_usage_rows_shape_tagging_and_model_fallback():
     rows = _extract_subagent_usage(messages, subagent_type="creative", fallback_model="protolabs/creative")
     assert len(rows) == 2
     first, second = rows
+    # The expected cost is computed from the SAME row the extractor built, cache
+    # fields included. Passing a cache-less dict here (what this used to do) stopped
+    # being equivalent once cost_usd learned the cache discount (#3003): a delegated
+    # call that is 89% cache reads costs a fraction of its full-rate price, and an
+    # expectation that quietly drops the cache fields would assert the old,
+    # ten-times-too-high number while looking like it was derived.
     assert first == {
         "input_tokens": 120,
         "output_tokens": 30,
         "cache_read_input_tokens": 100,
         "cache_creation_input_tokens": 7,
-        "cost_usd": pricing.cost_usd("protolabs/creative", {"input_tokens": 120, "output_tokens": 30}),
+        "cost_usd": pricing.cost_usd(
+            "protolabs/creative",
+            {
+                "input_tokens": 120,
+                "output_tokens": 30,
+                "cache_read_input_tokens": 100,
+                "cache_creation_input_tokens": 7,
+            },
+        ),
         "model": "protolabs/creative",  # the pinned/aux fallback — a model-pinned subagent bills to ITS model
         "subagent_type": "creative",
     }
+    # ...and that really is the discounted price, not the full-rate one.
+    assert first["cost_usd"] < pricing.cost_usd("protolabs/creative", {"input_tokens": 120, "output_tokens": 30})
     # A gateway-reported per-reply model name wins over the fallback.
     assert second["model"] == "claude-haiku-4-5"
     assert second["input_tokens"] == 10 and second["output_tokens"] == 5

@@ -139,7 +139,25 @@ def record_turn(
 
     soul_rev = _soul_revision()
 
-    input_tokens = int(u.get("input_tokens", 0) or 0)
+    # Normalise the prompt split so the stored columns are DISJOINT (#3003).
+    #
+    # LangChain's `usage_metadata` — the shape every producer here reads — defines
+    # `input_tokens` as "the sum of all input token types", with cache reads and
+    # cache writes as SUBSETS of it. Carrying that shape into the store made
+    # `input_tokens` mean "all prompt tokens" on one row and left every consumer to
+    # guess whether adding the cache columns double-counts. It does. So the column
+    # is stored cache-EXCLUSIVE: uncached + cache_read + cache_creation is the
+    # turn's true prompt size, and each part is billed at its own rate.
+    #
+    # Rows written before this change keep the old cache-inclusive meaning; they
+    # are not backfilled, so a `cache_hit_ratio` computed over pre-#3003 history
+    # reads slightly low. Deliberate — a silent rewrite of recorded history is
+    # worse than a documented seam.
+    cache_read = int(u.get("cache_read_input_tokens", 0) or 0)
+    cache_creation = int(u.get("cache_creation_input_tokens", 0) or 0)
+    # Clamped: a provider that reports cache counts NOT included in `input_tokens`
+    # (against the documented contract) must not drive this negative.
+    input_tokens = max(0, int(u.get("input_tokens", 0) or 0) - cache_read - cache_creation)
     output_tokens = int(u.get("output_tokens", 0) or 0)
     primary_model = models[0] if models else ((STATE.graph_config.model_name if STATE.graph_config else "") or "")
 
@@ -154,9 +172,12 @@ def record_turn(
         "models": ",".join(models),
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
-        "total_tokens": input_tokens + output_tokens,
-        "cache_read_input_tokens": int(u.get("cache_read_input_tokens", 0) or 0),
-        "cache_creation_input_tokens": int(u.get("cache_creation_input_tokens", 0) or 0),
+        # Every token the turn moved. Must re-add the cache components, since
+        # `input_tokens` above is now the UNCACHED share only (#3003) — summing
+        # just input+output would silently drop the cached prompt from the total.
+        "total_tokens": input_tokens + cache_read + cache_creation + output_tokens,
+        "cache_read_input_tokens": cache_read,
+        "cache_creation_input_tokens": cache_creation,
         "cost_usd": float(cost_usd or 0.0),
         "duration_ms": duration_ms,
         "llm_calls": int(llm_calls or 0),

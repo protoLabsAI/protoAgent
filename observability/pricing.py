@@ -5,12 +5,13 @@ per-call cost. Best-effort: an unknown model resolves by substring match (gatewa
 aliases like ``anthropic/claude-opus-4-8``), else falls back to the ``default``
 rate. Never raises.
 
-``costUsd`` here bills ``input_tokens`` + ``output_tokens`` at the base rates —
-the portion every consumer agrees on. Prompt-cache tokens are captured + emitted
-separately (so the cache-hit ratio + savings are *visible*), but folding a
-cache discount into ``costUsd`` is deferred until the gateway's cache-token
-semantics are validated end-to-end (different gateways disagree on whether
-``input_tokens`` already includes cached reads). See ADR 0006.
+``costUsd`` bills the three input components at their own rates — full price for
+uncached prompt tokens, ~10% for cache reads, ~125% for cache writes — plus
+output at the output rate (#3003). The cache discount used to be deferred here
+"until the gateway's cache-token semantics are validated end-to-end". They now
+are: gateways do disagree at the raw provider layer, but LangChain reconciles
+them before ``usage_metadata`` reaches us, and that is the only shape callers
+pass. See ADR 0006 Slice 4.
 """
 
 from __future__ import annotations
@@ -105,16 +106,57 @@ def rate_for(model: str | None) -> dict[str, float]:
     return MODEL_RATES["default"]
 
 
-def cost_usd(model: str | None, usage: dict) -> float:
-    """USD cost for one usage dict ``{input_tokens, output_tokens, ...}``.
+# Prompt-cache multipliers on the INPUT rate. A cached read costs ~10% of what the
+# token would cost uncached; writing a token into the cache costs ~25% MORE than
+# sending it plain, which is what makes caching a bet that pays off on reuse rather
+# than a free lunch. Estimates — the exact figures vary by provider and tier — used
+# to make the cache lever legible in dollars, not to bill anyone (#3003, ADR 0006).
+CACHE_READ_MULTIPLIER = 0.1
+CACHE_CREATION_MULTIPLIER = 1.25
 
-    Billed at base input/output rates (fleet-consistent). Returns a value
-    rounded to 6 decimals; 0.0 for empty usage.
+
+def cost_usd(model: str | None, usage: dict) -> float:
+    """USD cost for one LangChain-shaped usage dict.
+
+    Expects the shape LangChain normalises every provider into, where
+    ``input_tokens`` is *"the sum of all input token types"* and the
+    ``cache_read`` / ``cache_creation`` counts are SUBSETS of it — not additions
+    to it. The three components are split apart here and billed at their own
+    rates: full price for uncached prompt tokens, ~10% for cache reads, ~125% for
+    cache writes.
+
+    Before #3003 the whole of ``input_tokens`` was billed at the full input rate,
+    which overcharged every cached token roughly tenfold. That was not an
+    oversight but a deliberate deferral, "until the gateway's cache-token
+    semantics are validated end-to-end" — the concern being that gateways
+    disagree about whether ``input_tokens`` already includes cached reads. They
+    do disagree, at the raw provider layer; they are reconciled by the time
+    LangChain hands us ``usage_metadata``, which is the only shape any caller
+    here passes. On live stores the dominant model was running a 73% cache-hit
+    ratio, so this was the largest single error in the cost column.
+
+    Accepts a dict whose cache fields use either the telemetry-row names
+    (``cache_read_input_tokens``) or LangChain's nested
+    ``input_token_details``. Returns a value rounded to 6 decimals; 0.0 for empty
+    usage. Never raises.
     """
     rate = rate_for(model)
+    details = usage.get("input_token_details") or {}
+    cache_read = int(usage.get("cache_read_input_tokens", details.get("cache_read", 0)) or 0)
+    cache_creation = int(usage.get("cache_creation_input_tokens", details.get("cache_creation", 0)) or 0)
     inp = int(usage.get("input_tokens", 0) or 0)
     out = int(usage.get("output_tokens", 0) or 0)
-    return round(inp * rate["input"] + out * rate["output"], 6)
+    # Clamp rather than trust the arithmetic: a provider that reports cache counts
+    # NOT included in input_tokens (against the documented contract) would
+    # otherwise drive the full-price component negative and refund the turn.
+    uncached = max(0, inp - cache_read - cache_creation)
+    return round(
+        uncached * rate["input"]
+        + cache_read * rate["input"] * CACHE_READ_MULTIPLIER
+        + cache_creation * rate["input"] * CACHE_CREATION_MULTIPLIER
+        + out * rate["output"],
+        6,
+    )
 
 
 # Anthropic prompt-cache reads are billed at ~10% of the input rate, so a cached

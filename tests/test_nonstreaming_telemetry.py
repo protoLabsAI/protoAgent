@@ -80,8 +80,12 @@ def test_a_non_streaming_turn_writes_a_row(wired):
     assert row["session_id"] == "sess-1"
     assert row["state"] == "completed" and row["success"] == 1
     assert row["model"] == "claude-opus-4-8"
-    assert (row["input_tokens"], row["output_tokens"], row["total_tokens"]) == (1000, 200, 1200)
-    assert (row["cache_read_input_tokens"], row["cache_creation_input_tokens"]) == (400, 100)
+    # LangChain reports `input_tokens` cache-INCLUSIVE (1000, of which 400 were read
+    # from cache and 100 written to it). The store column is the uncached share, so
+    # the three are disjoint and sum back to the real prompt (#3003).
+    assert (row["input_tokens"], row["cache_read_input_tokens"], row["cache_creation_input_tokens"]) == (500, 400, 100)
+    assert row["output_tokens"] == 200
+    assert row["total_tokens"] == 1200  # 500 + 400 + 100 + 200 — the whole turn, still
     assert (row["llm_calls"], row["tool_calls"]) == (3, 2)
     assert row["cost_usd"] > 0  # priced from the model's real rate, not left at zero
 
@@ -228,4 +232,5 @@ def test_the_usage_callback_works_against_the_real_langchain_base():
     models, totals, cost = chat._telemetry_usage(cb.usage_metadata)
     assert models == ["claude-opus-5"]
     assert totals["input_tokens"] == 2000 and totals["cache_read_input_tokens"] == 800
-    assert cost == pytest.approx(2 * 1000 * 5e-6 + 2 * 200 * 25e-6)
+    # 2000 prompt tokens of which 800 were cache reads, billed at 10% of input rate.
+    assert cost == pytest.approx(1200 * 5e-6 + 800 * 5e-6 * 0.1 + 400 * 25e-6)
