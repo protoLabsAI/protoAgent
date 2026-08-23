@@ -63,6 +63,18 @@ function TelemetryBody() {
             {/* Quick-set the box-shared telemetry policy (ADR 0048) — both host-scoped,
                 so this saves to the host layer. */}
             <QuickSetting keys={["telemetry.enabled", "telemetry.retention_days"]} title="Telemetry" label="Telemetry settings" />
+            {/* Tracing's shortcut to the same four fields Settings ▸ Tracing owns (#3017), so
+                both halves of ADR 0006 are one click apart from the column that reports them.
+                A SEPARATE chip rather than four more keys on the one above: QuickSetting saves
+                to the host layer only when EVERY key it edits is host-scoped, and tracing.* is
+                agent-scoped — folding them together would have quietly demoted telemetry.enabled
+                to the agent leaf. */}
+            <QuickSetting
+              keys={["tracing.enabled", "tracing.host", "tracing.public_key", "tracing.secret_key"]}
+              title="Langfuse tracing"
+              label="Langfuse tracing settings"
+              icon={<Activity size={15} />}
+            />
             <Button icon variant="ghost" type="button" onClick={() => void downloadTelemetryCsv()}
                     disabled={!enabled || !summary?.turns} title="Export CSV" data-testid="telemetry-export">
               <Download size={16} />
@@ -276,10 +288,12 @@ function TraceCell({
     case "off":
       // The half-finished setup lands here too (toggle on, keys stored blank), so the
       // title names what it takes rather than just "turn it on" — the same distinction
-      // observability/tracing.py draws in its boot log.
+      // observability/tracing.py draws in its boot log. It names Settings ▸ Tracing, the
+      // section that actually renders these fields in every console window; the gear beside
+      // this table is the same four fields (#3017).
       return (
         <span className="trace-none" data-testid="telemetry-trace-off"
-              title="Tracing is disabled on this agent — Settings ▸ Telemetry ▸ Send traces to Langfuse needs the toggle AND both Langfuse keys">
+              title="Tracing is disabled on this agent — Settings ▸ Tracing ▸ Send traces to Langfuse needs the toggle AND both Langfuse keys">
           off
         </span>
       );

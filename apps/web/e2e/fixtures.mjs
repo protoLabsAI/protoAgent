@@ -522,6 +522,20 @@ export const SETTINGS_SCHEMA = [
     ],
   },
   {
+    // Langfuse tracing (#3017) — its own "Observability" category / sidenav section, in the
+    // AGENT group. Agent-scoped on purpose: these are per-agent credentials, and the Box group
+    // (where the telemetry rollup lives) is host-console-only, so a fleet member could never
+    // reach them there. depends_on keeps the host + key pair folded until the toggle is on.
+    section: "Tracing",
+    category: "Observability",
+    fields: [
+      { key: "tracing.enabled", label: "Send traces to Langfuse", type: "bool", section: "Tracing", restart: true, description: "Emit the per-turn trace tree to Langfuse.", options: [], value: false, default: false, scope: "agent", source: "agent" },
+      { key: "tracing.host", label: "Langfuse host", type: "string", section: "Tracing", restart: true, description: "", options: [], value: "", default: "", scope: "agent", source: "agent", depends_on: { key: "tracing.enabled" } },
+      { key: "tracing.public_key", label: "Langfuse public key", type: "secret", section: "Tracing", restart: true, description: "Stored in secrets.yaml, never echoed back.", options: [], value: "", is_set: false, scope: "agent", source: "agent", depends_on: { key: "tracing.enabled" } },
+      { key: "tracing.secret_key", label: "Langfuse secret key", type: "secret", section: "Tracing", restart: true, description: "Stored in secrets.yaml, never echoed back.", options: [], value: "", is_set: false, scope: "agent", source: "agent", depends_on: { key: "tracing.enabled" } },
+    ],
+  },
+  {
     // External secrets manager (ADR 0080) — its own "Secrets" category / sidenav section.
     section: "Secrets manager",
     category: "Secrets",

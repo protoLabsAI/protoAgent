@@ -7,7 +7,7 @@ The template has three independent observability layers: Langfuse traces, Promet
 There are two ways in, and the environment always wins.
 
 **From config — the one that reaches a desktop-launched agent.** Turn it on in
-**Settings ▸ Telemetry ▸ Send traces to Langfuse**, then paste the host and the key
+**Settings ▸ Tracing ▸ Send traces to Langfuse**, then paste the host and the key
 pair. The keys are secrets: the save writes them to the untracked `secrets.yaml`,
 never to `langgraph-config.yaml`. Equivalent YAML:
 
@@ -18,9 +18,15 @@ tracing:
   # public_key / secret_key live in secrets.yaml — the Settings save puts them there
 ```
 
-This is the only path that reaches a **fleet member started by the desktop app**
+This is the path that reaches a **fleet member started by the desktop app**
 (`protoagent-server --port … --ui none`): nothing in that launch path sets
-`LANGFUSE_*`, so before #3017 tracing could not be enabled there at all.
+`LANGFUSE_*`, so before #3017 tracing could not be enabled there at all. That member
+serves no console of its own — you reach it through the hub at
+`/app/agent/<slug>/`, and **Settings ▸ Tracing** is in that window's Agent group.
+(It is deliberately *not* filed under Box ▸ Telemetry beside the cost rollup: the Box
+group is host-console-only, so a member's window never shows it — which would have
+left tracing exactly as unreachable as the environment variables. The Telemetry
+surface keeps a gear onto the same four fields for the host console.)
 
 **From the environment — containers.** Set these on the running container:
 

@@ -85,8 +85,27 @@ test("Box ▸ Telemetry says tracing is off rather than showing an empty trace c
   const off = surface.getByTestId("telemetry-trace-off");
   await expect(off).toHaveCount(2);           // one per untraced row, not a blank dash
   await expect(off.first()).toHaveText("off");
+  // The title has to name a control that EXISTS. It used to say "Settings ▸ Telemetry",
+  // whose gear holds two unrelated fields — an operator following it found no tracing.
   await expect(off.first()).toHaveAttribute("title", /Tracing is disabled/);
+  await expect(off.first()).toHaveAttribute("title", /Settings ▸ Tracing/);
   // And no link/copy affordance is fabricated for a turn that has no trace.
   await expect(surface.getByTestId("telemetry-trace-link")).toHaveCount(0);
   await expect(surface.getByTestId("telemetry-trace-copy")).toHaveCount(0);
+
+  // The gear beside this table is the same four fields Settings ▸ Tracing owns, so the fix
+  // is one click from the column that reported the problem (ADR 0048 chip-is-a-shortcut).
+  await surface.getByRole("button", { name: "Langfuse tracing settings" }).click();
+  const dialog = page.getByRole("dialog", { name: "Langfuse tracing" });
+  await expect(dialog.locator('.setting-row[data-key="tracing.enabled"]')).toBeVisible();
+  // Same depends_on fold as the full section: the keys appear once the toggle is on.
+  await expect(dialog.locator('.setting-row[data-key="tracing.public_key"]')).toHaveCount(0);
+  await dialog.locator('.setting-row[data-key="tracing.enabled"] .pl-switch').click();
+  await expect(dialog.locator('.setting-row[data-key="tracing.host"]')).toBeVisible();
+  await expect(dialog.locator('.setting-row[data-key="tracing.public_key"]')).toBeVisible();
+  await expect(dialog.locator('.setting-row[data-key="tracing.secret_key"]')).toBeVisible();
+  // The client is built once at boot, so every row carries the restart badge — and none
+  // carries "box-shared": these are agent-scoped credentials, not a box default (ADR 0047 D5).
+  await expect(dialog.locator(".pl-badge", { hasText: "restart" }).first()).toBeVisible();
+  await expect(dialog.locator(".pl-badge", { hasText: "box-shared" })).toHaveCount(0);
 });

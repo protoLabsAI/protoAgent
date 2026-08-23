@@ -390,12 +390,23 @@ it. With that half dark, the SQL rollup was the *only* observability an operator
 condition under which the defects in #3000–#3006 went unnoticed as long as they did.
 
 `tracing.{enabled,host,public_key,secret_key}` now sit in `LangGraphConfig`, editable at
-**Settings ▸ Telemetry** beside `telemetry.enabled`, with the two keys declared in
+**Settings ▸ Tracing**, with the two keys declared in
 `config_io.SECRET_PATHS` so they live in the untracked `secrets.yaml` (the Langfuse "public"
 key authenticates the ingest client server-side — it is a credential here, not a browser
 token). **The environment still wins**: a complete `LANGFUSE_{PUBLIC,SECRET}_KEY` pair is
 used as-is, including when `tracing.enabled` is false, because a container deploy has no
 config file to flip. `tracing.enabled` is the fallback toggle, not a kill switch.
+
+Settings ▸ **Tracing**, not Box ▸ Telemetry beside `telemetry.enabled`, and the difference is
+the whole acceptance rather than a taxonomy preference. `telemetry.*` is host-scoped box
+config, so the console files it under a `hostOnly` section that renders on the host console
+alone; the four tracing fields are agent-scoped credentials, and the deployment shape this
+amendment exists for — a member launched `--ui none`, seen only through the hub's slug-scoped
+window — is exactly where a `hostOnly` section is dropped. Filed there, the setting would have
+been as unreachable from the console as it already was from the environment. The Telemetry
+surface instead carries a `QuickSetting` onto the same four fields (ADR 0048's chip-is-a-
+shortcut, same fields, same save path), so the two halves of this ADR still meet in one place
+on the host console.
 
 And the surface now states its own state: `/api/telemetry/recent` reports `tracing_enabled`,
 and the console's Trace column reads `off` rather than `—` when tracing is disabled. A column

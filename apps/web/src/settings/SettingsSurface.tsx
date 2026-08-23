@@ -1,4 +1,4 @@
-import { BarChart3, Bot, BookMarked, Boxes, Brain, Cpu, Database, FlaskConical, Gauge, Keyboard, KeyRound, Lock, MessageSquare, Network, Package, Palette, Plug, Puzzle, Server, Share2, Smartphone, Sparkles, Store, Wrench } from "lucide-react";
+import { Activity, BarChart3, Bot, BookMarked, Boxes, Brain, Cpu, Database, FlaskConical, Gauge, Keyboard, KeyRound, Lock, MessageSquare, Network, Package, Palette, Plug, Puzzle, Server, Share2, Smartphone, Sparkles, Store, Wrench } from "lucide-react";
 import { useFlagPredicate } from "../flags/flags";
 import { visibleSections } from "./sectionGate";
 import type { LucideIcon } from "lucide-react";
@@ -40,7 +40,7 @@ import { ThemeSurface } from "./ThemeSurface";
 // (ADR 0047), never a nav axis. The sidenav splits into labeled groups:
 //
 //   Agent        — what defines the focused agent: Identity · Model · Behavior · Knowledge ·
-//                  Plugins. Schema-driven domains carry the ADR 0047 badge.
+//                  Tracing · Plugins. Schema-driven domains carry the ADR 0047 badge.
 //   Capabilities — what the agent is wired to: Tools · MCP · Skills · Subagents · Delegates.
 //                  Each manager owns its sharing/tier knob via a contextual chip (no extra panel).
 //   Box          — box-wide ops: Overview · Fleet · Telemetry. Overview + Telemetry are host
@@ -107,6 +107,13 @@ const AGENT_SECTIONS: Section[] = [
   ) },
   { id: "behavior", label: "Behavior", icon: Brain, render: () => <SettingsCategoryPanel category="Behavior" title="Behavior" /> },
   { id: "knowledge", label: "Knowledge", icon: Database, render: () => <SettingsCategoryPanel category="Knowledge" title="Knowledge" /> },
+  // Langfuse tracing (#3017) — ADR 0006's deep-trace half. It sits in the AGENT group rather
+  // than beside Box ▸ Telemetry because its four fields are AGENT-scoped credentials and Box ▸
+  // Telemetry is `hostOnly`: a fleet member launched by the desktop app (`--ui none`) serves no
+  // console of its own and is only ever seen through a member window, which is precisely where
+  // tracing had no reachable switch. Telemetry keeps a QuickSetting chip on the same four keys
+  // for the host console, so both halves of ADR 0006 still meet in one place there.
+  { id: "tracing", label: "Tracing", icon: Activity, render: () => <SettingsCategoryPanel category="Observability" title="Tracing" /> },
   // External secrets manager (ADR 0080) — schema fields + the status/test/sync card.
   // Behind `secrets-panel` (ADR 0068), dev channel only — see the flag in runtime/flags.py.
   // Flag-off: `shown()` drops it from the nav AND from id resolution, so a persisted "secrets"

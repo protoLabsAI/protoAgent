@@ -820,10 +820,18 @@ FIELDS: list[Field] = [
         scope="host",
     ),
     # ── Tracing (Langfuse deep traces — ADR 0006's other half, #3017) ─────────
-    # Deliberately the same section as telemetry.*: the SQL rollup and the trace tree
-    # are the two halves of ADR 0006, and they used to be configured in different
-    # places — one here, the other only via LANGFUSE_* env vars, which nothing sets on
-    # a desktop-launched fleet member, so tracing was unreachable on that shape.
+    # Its OWN section, not shared with telemetry.* above, and the reason is reachability
+    # rather than taxonomy. `telemetry.*` is host-scoped box config, so the console files
+    # it under Box ▸ Telemetry — a `hostOnly` section that never renders in a fleet
+    # member's console window (apps/web/src/settings/SettingsSurface.tsx). These four are
+    # AGENT-scoped per-agent credentials, and the deployment shape #3017 exists for is a
+    # desktop-launched member (`protoagent-server --port … --ui none`) whose only console
+    # IS a member window. Filed under Box they would have been as unreachable from the
+    # console as they already were from the environment — the same bug, one layer up.
+    # So: category "Observability" → Settings ▸ Tracing, which renders in every window.
+    # The Telemetry surface keeps a QuickSetting chip on these same four keys (ADR 0048's
+    # chip-is-a-shortcut pattern, same fields and same save path), so the two halves of
+    # ADR 0006 still meet in one place on the host console.
     # All four stay scope="agent": ADR 0047 D5 keeps secrets at the agent leaf, and a
     # toggle promoted to the Host layer while its credentials stayed here would let a
     # box turn tracing "on" with no keys to turn it on with.
@@ -832,7 +840,7 @@ FIELDS: list[Field] = [
         "tracing_enabled",
         "Send traces to Langfuse",
         "bool",
-        "Telemetry",
+        "Tracing",
         "Emit the per-turn trace tree (tool calls, model calls, subagent spans) to Langfuse "
         "so a telemetry row can deep-link to its trace. Needs the key pair below. "
         "LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY in the environment still win — an "
@@ -844,7 +852,7 @@ FIELDS: list[Field] = [
         "tracing_host",
         "Langfuse host",
         "string",
-        "Telemetry",
+        "Tracing",
         "Base URL of the Langfuse instance to send to, e.g. https://cloud.langfuse.com. "
         "Blank falls back to http://host.docker.internal:3001, which only resolves inside the "
         "bundled Docker compose — a desktop-launched agent needs a real URL here. "
@@ -857,7 +865,7 @@ FIELDS: list[Field] = [
         "tracing_public_key",
         "Langfuse public key",
         "secret",
-        "Telemetry",
+        "Tracing",
         "Stored in secrets.yaml, never echoed back. Leave blank to keep the stored value.",
         restart=True,
         depends_on={"key": "tracing.enabled"},
@@ -867,7 +875,7 @@ FIELDS: list[Field] = [
         "tracing_secret_key",
         "Langfuse secret key",
         "secret",
-        "Telemetry",
+        "Tracing",
         "Stored in secrets.yaml, never echoed back. Leave blank to keep the stored value.",
         restart=True,
         depends_on={"key": "tracing.enabled"},
@@ -1517,7 +1525,18 @@ def _plugin_group(sch, spec) -> str:
 # (host vs agent) is a per-field badge (ADR 0047), NOT a category. Order here is the
 # domain order the console renders. Unknown sections (notably plugin-contributed ones,
 # ADR 0019) default to "Plugins" (the Integrations surface).
-_CATEGORY_ORDER = ["Identity", "Model", "Behavior", "Capabilities", "Knowledge", "Secrets", "Publish", "Plugins", "Box"]
+_CATEGORY_ORDER = [
+    "Identity",
+    "Model",
+    "Behavior",
+    "Capabilities",
+    "Knowledge",
+    "Observability",
+    "Secrets",
+    "Publish",
+    "Plugins",
+    "Box",
+]
 _SECTION_CATEGORY = {
     # Identity — who the agent is (name + persona live in the dedicated Identity panel;
     # these are the operator/org/access fields rendered beneath it).
@@ -1550,6 +1569,11 @@ _SECTION_CATEGORY = {
     "Recall": "Knowledge",
     "Ingestion": "Knowledge",
     "History": "Knowledge",
+    # Observability — the AGENT-scoped half of ADR 0006 (#3017). The Langfuse credentials
+    # are per-agent, so they must render in a fleet member's console window; "Box" below is
+    # host-console-only, which is exactly where tracing was unreachable before. The
+    # box-wide SQL rollup (`telemetry.*`) stays under Box.
+    "Tracing": "Observability",
     # Secrets — the external secrets manager (ADR 0080); the console renders this
     # category as its own sidenav section with a status/test/sync card.
     "Secrets manager": "Secrets",

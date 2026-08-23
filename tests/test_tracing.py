@@ -618,6 +618,87 @@ def test_server_inits_tracing_with_the_loaded_config():
     ), "tracing.init runs before the config loads — it can only see the environment there"
 
 
+# ── console reachability (the half the issue was actually about) ──────────────
+
+
+def _console_source(*parts: str) -> str:
+    from pathlib import Path
+
+    return (Path(__file__).parents[1] / "apps" / "web" / "src" / Path(*parts)).read_text()
+
+
+def test_tracing_fields_are_grouped_for_a_console_section_that_exists():
+    """The four fields must land in a category the console actually renders.
+
+    A field's `section` decides its `category` (graph/settings_schema.py `_SECTION_CATEGORY`),
+    and the console renders a category only where some surface names it — either a
+    `SettingsCategoryPanel category=…` or a `QuickSetting` chip listing the keys. A field in a
+    category nobody names reaches `/api/settings` and no DOM, which is #3017's failure mode
+    (something is off and nothing says so) reproduced one layer up.
+    """
+    from graph.config import LangGraphConfig
+    from graph.settings_schema import build_schema
+
+    groups = build_schema(LangGraphConfig())
+    by_key = {f["key"]: f for g in groups for f in g["fields"]}
+    section_cat = {g["section"]: g["category"] for g in groups}
+
+    for key in ("tracing.enabled", "tracing.host", "tracing.public_key", "tracing.secret_key"):
+        f = by_key[key]
+        assert f["section"] == "Tracing", f"{key} moved out of the section the console renders"
+        # Agent-scoped is what forces the section out of Box: see the next test.
+        assert f["scope"] == "agent", f"{key} is a per-agent credential (ADR 0047 D5)"
+        assert f["restart"] is True, f"{key} is read once at boot — the badge must say so"
+    assert section_cat["Tracing"] == "Observability"
+    # And NOT the host-console-only Box domain the telemetry rollup lives in.
+    assert section_cat["Telemetry"] == "Box"
+
+
+def test_tracing_is_reachable_from_a_fleet_members_console():
+    """#3017 acceptance: a desktop-launched member can be switched on from a console.
+
+    That member (`protoagent-server --port … --ui none`) serves no `/app` of its own, so the
+    only console that sees it is the hub's slug-scoped member window — where every `hostOnly:`
+    section is dropped (apps/web/src/settings/sectionGate.ts). Box ▸ Telemetry is `hostOnly`,
+    so a Settings home filed there would have been exactly as unreachable as the environment
+    variables the issue is about. The Agent-group "Tracing" section is the fix, and this pins
+    the two properties that make it work: it renders the right category, and it carries no
+    host gate. The console-side behaviour of the filter itself is covered by
+    apps/web/src/settings/tracingSectionGate.test.ts.
+    """
+    import re
+
+    src = _console_source("settings", "SettingsSurface.tsx")
+    section = re.search(r'\{[^{}]*id: "tracing"[^{}]*\}', src)
+    assert section, "Settings has no 'tracing' section — the fields render in no console surface"
+    body = section.group(0)
+    assert 'category="Observability"' in body, "the Tracing section renders some other category"
+    assert "hostOnly" not in body, (
+        "the Tracing section is host-console-only again — a fleet member (the deployment shape "
+        "#3017 exists for) can no longer reach it"
+    )
+    # The contrast that makes the point, and the reason this section is not simply folded in
+    # beside the telemetry rollup.
+    telemetry_section = re.search(r'\{[^{}]*id: "telemetry"[^{}]*\}', src)
+    assert telemetry_section and "hostOnly: true" in telemetry_section.group(0)
+
+
+def test_telemetry_surface_chips_the_tracing_keys():
+    """The Trace column's "off" cell sends the operator to a control, so one must be there.
+
+    On the host console that control is the gear beside the telemetry table. It has to list
+    every key the setup needs — a chip carrying only the toggle would open a dialog that can't
+    finish the job, since `tracing.enabled` alone does nothing without the key pair.
+    """
+    src = _console_source("telemetry", "TelemetrySurface.tsx")
+    for key in ("tracing.enabled", "tracing.host", "tracing.public_key", "tracing.secret_key"):
+        assert f'"{key}"' in src, f"the telemetry surface no longer offers {key}"
+    # The cell's title has to name a section that renders these fields.
+    assert "Settings ▸ Tracing" in src, (
+        "the disabled-trace cell points at a settings path that does not render tracing"
+    )
+
+
 # ── shutdown flush wiring ─────────────────────────────────────────────────────
 
 

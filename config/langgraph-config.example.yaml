@@ -267,7 +267,7 @@ checkpoint:
 # LANGFUSE_SECRET_KEY / LANGFUSE_HOST keeps working untouched and those vars WIN.
 # This block is the fallback — and the only path that reaches a desktop-launched
 # fleet member, which is spawned with no LANGFUSE_* in its environment. The two keys
-# are SECRETS: set them in Settings ▸ Telemetry and they land in secrets.yaml, never
+# are SECRETS: set them in Settings ▸ Tracing and they land in secrets.yaml, never
 # here. Needs a restart (the client is built once at boot).
 # tracing:
 #   enabled: true

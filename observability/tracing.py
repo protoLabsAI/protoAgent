@@ -35,7 +35,7 @@ Configuration
 ``tracing.{enabled,host,public_key,secret_key}`` — the env layer WINS, so a
 container deploy is untouched, while a desktop-launched fleet member (which has
 no ``LANGFUSE_*`` in its environment and so could not enable tracing at all
-before #3017) can be configured from Settings ▸ Telemetry. The two keys are
+before #3017) can be configured from Settings ▸ Tracing. The two keys are
 declared secrets, stored in ``secrets.yaml`` and never in the tracked YAML.
 
 Graceful degrade
