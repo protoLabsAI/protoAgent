@@ -290,3 +290,12 @@ vA.B.C — features may misbehave"). Upgrade the lagging side to clear it.
   [multi-instance scoping](./multi-instance.md) · [plugins](./plugins.md) ·
   [install & publish plugins](./plugin-registry.md) · [skills](./skills.md) ·
   [operating a fleet (health, rollout, triage, recovery)](./operating-a-fleet.md)
+
+## What the box shares with every member
+
+Every agent on the machine reads the box's `host-config.yaml` (the Host layer of
+the settings cascade, ADR 0047 — gateway/model defaults) and, since ADR 0105, its
+`delegates:` list: a delegate the hub saved with **Share with fleet** is on every
+member's bench without a copy, its secrets in the owner-only `host-secrets.yaml`
+beside it. Members read both files and never write them; the hub's Settings ▸
+Delegates is the editor. The `dev` sandbox shares the same box.

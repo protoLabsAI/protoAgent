@@ -1033,7 +1033,7 @@ def test_list_payload_exposes_last_dispatch(monkeypatch):
     monkeypatch.setattr(
         S, "read_delegates_raw", lambda: [{"name": "codex", "type": "acp", "command": "x", "workdir": "/tmp"}]
     )
-    monkeypatch.setattr(S, "secret_overlay", lambda: {})
+    monkeypatch.setattr(S, "secret_overlay", lambda *a, **k: {})
     monkeypatch.setattr(S, "env_secret_values", lambda overlay, name: {})
     status.record_failure("codex", "Internal error (JSON-RPC -32603)")
     row = api._list_payload()["delegates"][0]

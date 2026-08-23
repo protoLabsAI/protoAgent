@@ -35,7 +35,11 @@ Nothing is copied: a member resolves a shared coder from the box file at each
 load, so a change on the hub reaches every member on its next config reload.
 
 **Only the hub writes the host layer.** A fleet member never writes box state
-(the rule `sync_host_model_layer` already follows); a member's attempt to
+(the rule `sync_host_model_layer` already follows). This is an *advisory fence*,
+not a security boundary: members run as the same OS user in the same trust
+domain (ADR 0089) and can read `host-secrets.yaml` by design; the guard keeps
+the roster's single writer obvious, it does not defend against a member. A
+member's attempt to
 create, edit, or delete a shared entry is refused (`DelegateScopeError`, HTTP
 403), while it may still register its own agent-scoped entry of the same name
 to shadow the shared one. The console's Delegates panel offers a **Share with
@@ -60,6 +64,12 @@ keeps today's behaviour.
   shared entry again.
 - The `PROTOAGENT_HOST_CONFIG` override (read-only sidecar setups) applies to
   the host secrets path too (it is derived from the host config path).
+- The `dev` sandbox instance (`PROTOAGENT_INSTANCE=dev`) shares the box, so a
+  delegate shared from it lands on prod and every member — by the box tier's
+  design (ADR 0047); share from the instance you mean.
+- An unparseable `host-config.yaml` refuses a shared-delegate save rather than
+  being overwritten; a read-only host config (`PROTOAGENT_HOST_CONFIG` on a
+  sidecar mount) refuses with a clear message (HTTP 403), not a 500.
 - Out of scope: per-member *selection* of which shared delegates to expose
   (every member sees all of them) and remote members (ADR 0042 §I), which run
   their own box.

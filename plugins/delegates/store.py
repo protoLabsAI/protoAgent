@@ -77,32 +77,37 @@ def can_write_host_layer() -> bool:
         return False
 
 
-def _read_host_doc() -> dict:
-    """The raw ``host-config.yaml`` mapping, or ``{}`` (absent / unreadable / not a map —
-    the cascade ignores those too)."""
+def _read_host_doc_for_write() -> dict:
+    """The raw ``host-config.yaml`` mapping as the base for a rewrite. An ABSENT file is
+    ``{}``; a file that exists but doesn't parse to a mapping REFUSES — rewriting it
+    would destroy whatever the operator had there (the Host ``model:`` group), the same
+    rule ``sync_host_model_layer`` follows."""
     import yaml as _yaml
 
     from infra.paths import host_config_path, read_text_utf8
 
     hp = host_config_path()
-    try:
-        if not hp.exists():
-            return {}
-        doc = _yaml.safe_load(read_text_utf8(hp)) or {}
-    except (OSError, _yaml.YAMLError):
+    if not hp.exists():
         return {}
-    return doc if isinstance(doc, dict) else {}
+    try:
+        doc = _yaml.safe_load(read_text_utf8(hp)) or {}
+    except (OSError, _yaml.YAMLError) as exc:
+        raise DelegateScopeError(f"host-config.yaml at {hp} is unreadable ({exc}) — not overwriting it") from exc
+    if not isinstance(doc, dict):
+        raise DelegateScopeError(f"host-config.yaml at {hp} is not a mapping — not overwriting it")
+    return doc
 
 
 def read_host_delegates_raw() -> list:
     """The fleet-shared roster from the box's ``host-config.yaml`` (no secret values),
-    every entry stamped ``scope: host``."""
+    every entry stamped ``scope: host``. Tolerant read (absent/unreadable → ``[]``)."""
+    from graph.config_io import read_host_delegates
+
     out = []
-    for e in _read_host_doc().get("delegates") or []:
-        if isinstance(e, dict):
-            e = dict(e)
-            e["scope"] = SCOPE_HOST
-            out.append(e)
+    for e in read_host_delegates():
+        e = dict(e)
+        e["scope"] = SCOPE_HOST
+        out.append(e)
     return out
 
 
@@ -131,22 +136,34 @@ def read_delegates_raw() -> list:
     return agent + [e for e in read_host_delegates_raw() if str(e.get("name") or "") not in names]
 
 
-def secret_overlay() -> dict:
-    """``delegate_secrets`` from the host overlay ∪ this instance's overlay (instance
-    wins on a key collision — same precedence as the rosters)."""
+def _host_secret_overlay() -> dict:
     from graph.config_io import load_secrets
     from infra.paths import host_secrets_path
 
-    merged: dict = {}
     try:
         host = (load_secrets(host_secrets_path()) or {}).get(SECRETS_SECTION)
-        if isinstance(host, dict):
-            merged.update(host)
     except Exception:  # noqa: BLE001 — an unreadable host overlay just contributes nothing
-        pass
+        return {}
+    return dict(host) if isinstance(host, dict) else {}
+
+
+def _agent_secret_overlay() -> dict:
+    from graph.config_io import load_secrets
+
     sec = (load_secrets() or {}).get(SECRETS_SECTION)
-    if isinstance(sec, dict):
-        merged.update(sec)
+    return dict(sec) if isinstance(sec, dict) else {}
+
+
+def secret_overlay(scope: str | None = None) -> dict:
+    """``delegate_secrets`` for one LAYER'S entries: an agent-scoped entry resolves
+    against this instance's overlay only (a member that shadows a shared coder must be
+    able to opt OUT of the shared key); a host-scoped entry against host ∪ instance
+    (instance wins). ``scope=None`` = the merged view, for callers that don't know the
+    entry's layer."""
+    if scope == SCOPE_AGENT:
+        return _agent_secret_overlay()
+    merged = _host_secret_overlay()
+    merged.update(_agent_secret_overlay())
     return merged
 
 
@@ -160,11 +177,12 @@ def env_secret_values(overlay: dict, name: str) -> dict:
 def merged_delegates() -> list:
     """Delegates with their secrets overlaid from ``secrets.yaml`` — the registry
     loader's input. Does not mutate the stored config (deep-copies before inject)."""
-    overlay = secret_overlay()
+    overlays = {SCOPE_AGENT: secret_overlay(SCOPE_AGENT), SCOPE_HOST: secret_overlay(SCOPE_HOST)}
     out = []
     for raw in read_delegates_raw():
         if not isinstance(raw, dict):
             continue
+        overlay = overlays[_scope_of(raw)]
         adapter = ADAPTERS.get(str(raw.get("type", "")))
         name = raw.get("name")
         copied = False
@@ -210,10 +228,13 @@ def _save_list(delegates: list, scope: str = SCOPE_AGENT) -> None:
         from infra.paths import atomic_write, host_config_path
 
         hp = host_config_path()
-        doc = _read_host_doc()
+        doc = _read_host_doc_for_write()
         doc["delegates"] = _strip_scope(delegates)
-        hp.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write(hp, _yaml.safe_dump(doc, sort_keys=False))
+        try:
+            hp.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write(hp, _yaml.safe_dump(doc, sort_keys=False))
+        except OSError as exc:  # a read-only sidecar mount (PROTOAGENT_HOST_CONFIG) is a refusal, not a 500
+            raise DelegateScopeError(f"host layer is not writable ({exc}) — fleet-shared delegates can't be saved here") from exc
         return
     from graph.config_io import load_yaml_doc, save_yaml_doc
 
@@ -271,6 +292,7 @@ def _route_secret(name: str, entry: dict, scope: str = SCOPE_AGENT) -> dict:
             save_secrets({SECRETS_SECTION: secrets}, _secrets_path_for(scope))
         else:
             save_secrets({SECRETS_SECTION: secrets})
+    entry["_routed_keys"] = set(secrets)  # consumed by upsert_delegate; never persisted
     return entry
 
 
@@ -329,6 +351,29 @@ def _other(scope: str) -> str:
     return SCOPE_AGENT if scope == SCOPE_HOST else SCOPE_HOST
 
 
+def _migrate_secrets(name: str, from_scope: str, to_scope: str, already: set[str]) -> None:
+    """Carry a delegate's stored secrets across layers on a scope change, except keys
+    the incoming entry just supplied (``already``). Without this, flipping *Share with
+    fleet* on an entry whose key the form left blank ("keep stored") would prune the
+    old layer and write nothing to the new one — no layer holding the credential."""
+    from graph.config_io import save_secrets
+
+    src = _host_secret_overlay() if from_scope == SCOPE_HOST else _agent_secret_overlay()
+    env_prefix = f"{name}{ENV_KEY_SEP}"
+    adapter_keys = {f"{name}.{a.secret_field}" for a in ADAPTERS.values() if a.secret_field}
+    moving = {
+        k: v
+        for k, v in src.items()
+        if (k.startswith(env_prefix) or k in adapter_keys) and k not in already and v not in (None, "")
+    }
+    if not moving:
+        return
+    if to_scope == SCOPE_HOST:
+        save_secrets({SECRETS_SECTION: moving}, _secrets_path_for(SCOPE_HOST))
+    else:
+        save_secrets({SECRETS_SECTION: moving})
+
+
 def _remove_from_layer(name: str, scope: str) -> bool:
     """Drop ``name`` (and its secrets) from one layer; True when something was removed."""
     layer = _layer(scope)
@@ -358,18 +403,24 @@ def upsert_delegate(entry: dict) -> list:
     marked = {str(k) for k in (entry.get("env_secret") or [])}
     env_in = entry.get("env") if isinstance(entry.get("env"), dict) else {}
     keep = {v for v in env_in if v in marked or is_secretish(v)}
+    # A scope change is a MOVE: the same name must not linger in the other layer —
+    # but only when this instance may write that layer (a member shadowing a host
+    # entry with its own is legitimate and leaves the host copy alone). Detect it
+    # BEFORE writing so the old layer's stored secrets can travel with the entry.
+    other = _other(scope)
+    moving = (scope == SCOPE_HOST or can_write_host_layer()) and any(
+        isinstance(e, dict) and e.get("name") == name for e in _layer(other)
+    )
     entry = _route_secret(name, entry, scope)
+    routed = set(entry.pop("_routed_keys", set()))
+    if moving:
+        _migrate_secrets(name, other, scope, already=routed)
     _prune_secrets(name, keep, scope=scope)
     lst = [e for e in _layer(scope) if not (isinstance(e, dict) and e.get("name") == name)]
     lst.append(entry)
     _save_list(lst, scope)
-    # A scope change is a MOVE: the same name must not linger in the other layer —
-    # but only when this instance may write that layer (a member shadowing a host
-    # entry with its own is legitimate and leaves the host copy alone).
-    if scope == SCOPE_AGENT and can_write_host_layer():
-        _remove_from_layer(name, SCOPE_HOST)
-    elif scope == SCOPE_HOST:
-        _remove_from_layer(name, SCOPE_AGENT)
+    if moving:
+        _remove_from_layer(name, other)
     return read_delegates_raw()
 
 

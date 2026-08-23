@@ -42,7 +42,7 @@ def _public_view(raw: dict) -> dict:
             configured, error = False, str(e)
     name = raw.get("name")
     scope = store.SCOPE_HOST if raw.get("scope") == store.SCOPE_HOST else store.SCOPE_AGENT
-    overlay = store.secret_overlay()
+    overlay = store.secret_overlay(scope)
     has_secret = bool(adapter and adapter.secret_field and overlay.get(f"{name}.{adapter.secret_field}"))
     # Per-env secret var names stored for this delegate (`<name>.env.<VAR>`) — masked
     # in the returned env so the form shows them set-but-masked (#2114).
@@ -82,10 +82,14 @@ def _list_payload() -> dict:
     # handshake, so a coder that launches but fails every session shows a green dot.
     dispatched = status.snapshot()
     out = []
+    shared_names = {str(e.get("name") or "") for e in store.read_host_delegates_raw()}
     for r in store.read_delegates_raw():
         if not isinstance(r, dict):
             continue
         view = _public_view(r)
+        # An agent entry that hides a same-name fleet-shared one: deleting it REVEALS
+        # the shared entry rather than removing the name — the console says so.
+        view["shadows_host"] = bool(view.get("scope") == store.SCOPE_AGENT and view.get("name") in shared_names)
         h = health.get(view.get("name"))
         if h:
             view["health"] = h
@@ -122,7 +126,9 @@ def _inject_stored_secret(entry: dict, adapter) -> dict:
     entry = copy.deepcopy(entry)
     if store._pop_dotted(copy.deepcopy(entry), adapter.secret_field):
         return entry  # caller supplied one
-    val = store.secret_overlay().get(f"{entry.get('name')}.{adapter.secret_field}")
+    # Layer-aware: a Test of an agent-scoped entry must not borrow a fleet-shared key.
+    scope = store.SCOPE_HOST if entry.get("scope") == store.SCOPE_HOST else store.SCOPE_AGENT
+    val = store.secret_overlay(scope).get(f"{entry.get('name')}.{adapter.secret_field}")
     if val:
         store._set_dotted(entry, adapter.secret_field, val)
     return entry
@@ -185,7 +191,10 @@ def build_router():
         existing = store.read_delegates_raw()
         clash = next((e for e in existing if isinstance(e, dict) and e.get("name") == name), None)
         if clash is not None and (clash.get("scope") == scope or store.can_write_host_layer()):
-            raise HTTPException(409, f"delegate {name!r} already exists")
+            where = "fleet-shared" if clash.get("scope") == store.SCOPE_HOST else "this agent's"
+            raise HTTPException(
+                409, f"delegate {name!r} already exists in {where} list — edit it and toggle 'Share with fleet' to move it"
+            )
         try:
             store.upsert_delegate(entry)
         except store.DelegateScopeError as e:

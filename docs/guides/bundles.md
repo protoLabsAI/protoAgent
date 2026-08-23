@@ -59,9 +59,10 @@ the agent exists, written into its config at the declared dotted keys (`type`:
 rather than shipping an agent that boots green and fails at first use. A `delegate`
 answer does more than write the name: the picked delegate's entry is **copied from
 the host into the new member's own registry**, because a member resolves delegates
-from its own config (ADR 0025 — the Host layer of the settings cascade can't carry the
-`delegates:` list, ADR 0047). It is a one-time **snapshot**: a later host edit (rotated
-key, new `command`/`workdir`) does not propagate. The copy needs the host config
+from its own config (ADR 0025). A delegate the hub marked **Share with fleet** (ADR
+0105) is already on every member's bench and is *not* copied — the pick resolves live
+and a rotated key propagates. An agent-scoped pick is copied as a one-time
+**snapshot**: a later host edit (rotated key, new `command`/`workdir`) does not propagate. The copy needs the host config
 (`inherit_config: true`, the default); a required delegate answer the host doesn't
 have — or can't be copied because inheritance is off — refuses the create rather than
 shipping a member with a name and no entry. A `path` input flagged `project: true`

@@ -110,12 +110,22 @@ export function DelegatesSection() {
   const toast = useToast();
 
   const invalidate = () => qc.invalidateQueries({ queryKey: queryKeys.delegates });
+  const delegates = list.data?.delegates ?? [];
+  const typeSpecs = types.data?.types ?? [];
+  // May THIS instance edit fleet-shared entries? The hub can; a member sees them read-only.
+  const canShare = list.data?.can_share ?? true;
   const closeForm = () => { setAdding(false); setEditing(null); };
 
   const remove = useMutation({
     mutationFn: (name: string) => api.deleteDelegate(name),
-    onSuccess: (r) => {
-      toast({ tone: "success", title: "Delegate removed", message: r.message || "Removed." });
+    onSuccess: (r, name) => {
+      // Deleting an override of a fleet-shared entry REVEALS the shared one (ADR 0105).
+      const wasShadow = delegates.find((d) => d.name === name)?.shadows_host;
+      toast({
+        tone: "success",
+        title: wasShadow ? "Override removed" : "Delegate removed",
+        message: wasShadow ? `Your own "${name}" is gone — the fleet-shared one is back.` : r.message || "Removed.",
+      });
       void invalidate();
     },
     onError: (e) => toast({ tone: "error", title: "Remove failed", message: errMsg(e) }),
@@ -142,10 +152,6 @@ export function DelegatesSection() {
     );
   }
 
-  const delegates = list.data?.delegates ?? [];
-  const typeSpecs = types.data?.types ?? [];
-  // May THIS instance edit fleet-shared entries? The hub can; a member sees them read-only.
-  const canShare = list.data?.can_share ?? true;
 
   return (
     <SettingsSubPanel label="delegates" title="Delegates">

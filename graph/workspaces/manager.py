@@ -933,12 +933,9 @@ def copy_host_delegates(cfg: Path, lock: Path, values: Mapping[str, object] | No
         member_list = []
     # Fleet-shared (host-layer) entries are INHERITED by every member live (ADR 0105)
     # — nothing to copy, and no snapshot to drift. They still count as "travelled".
-    try:
-        from plugins.delegates.store import read_host_delegates_raw
+    from graph.config_io import read_host_delegates
 
-        shared = {str(e.get("name") or "") for e in read_host_delegates_raw()}
-    except Exception:  # noqa: BLE001 — no delegates plugin / no box layer → nothing shared
-        shared = set()
+    shared = {str(e.get("name") or "") for e in read_host_delegates()}
     copied: list[str] = []
     secret_updates: dict[str, str] = {}
     wrote_entry = False

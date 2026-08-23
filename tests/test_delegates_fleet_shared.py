@@ -107,3 +107,67 @@ def test_unreadable_or_absent_box_layer_contributes_nothing(box):
     assert store.read_host_delegates_raw() == []
     (box["root"] / "host-config.yaml").write_text("- a list\n")
     assert store.read_host_delegates_raw() == []
+
+
+def test_scope_flip_carries_the_stored_secret_both_ways(box):
+    """Flipping *Share with fleet* on an entry whose key the form left blank ("keep
+    stored") must move the credential with it — never leave no layer holding it."""
+    store.upsert_delegate({"name": "gw", "type": "openai", "api_base": "https://gw/v1", "model": "m", "api_key": "sk-1"})
+    assert yaml.safe_load((box["leaf"] / "secrets.yaml").read_text())["delegate_secrets"] == {"gw.api_key": "sk-1"}
+    # → host, key omitted
+    store.upsert_delegate({"name": "gw", "type": "openai", "api_base": "https://gw/v1", "model": "m", "scope": "host"})
+    hs = yaml.safe_load((box["root"] / "host-secrets.yaml").read_text())
+    assert hs["delegate_secrets"] == {"gw.api_key": "sk-1"}
+    assert not (yaml.safe_load((box["leaf"] / "secrets.yaml").read_text()) or {}).get("delegate_secrets")
+    assert store.merged_delegates()[0]["api_key"] == "sk-1"
+    # → back to agent, key omitted again
+    store.upsert_delegate({"name": "gw", "type": "openai", "api_base": "https://gw/v1", "model": "m", "scope": "agent"})
+    assert yaml.safe_load((box["leaf"] / "secrets.yaml").read_text())["delegate_secrets"] == {"gw.api_key": "sk-1"}
+    assert not (yaml.safe_load((box["root"] / "host-secrets.yaml").read_text()) or {}).get("delegate_secrets")
+    # a supplied key on the flip wins over the migrated one
+    store.upsert_delegate({"name": "gw", "type": "openai", "api_base": "https://gw/v1", "model": "m", "api_key": "sk-2", "scope": "host"})
+    assert yaml.safe_load((box["root"] / "host-secrets.yaml").read_text())["delegate_secrets"] == {"gw.api_key": "sk-2"}
+
+
+def test_host_write_preserves_other_keys_and_refuses_an_unparseable_file(box):
+    hp = box["root"] / "host-config.yaml"
+    hp.write_text("model:\n  name: protolabs/smart\n  provider: openai\n")
+    store.upsert_delegate({"name": "cc", "type": "acp", "command": "/x", "workdir": "/w", "scope": "host"})
+    doc = yaml.safe_load(hp.read_text())
+    assert doc["model"] == {"name": "protolabs/smart", "provider": "openai"}
+    assert [d["name"] for d in doc["delegates"]] == ["cc"]
+    hp.write_text(": not yaml [")
+    with pytest.raises(store.DelegateScopeError, match="unreadable"):
+        store.upsert_delegate({"name": "dd", "type": "acp", "command": "/x", "workdir": "/w", "scope": "host"})
+    assert hp.read_text() == ": not yaml ["  # untouched
+    hp.write_text("- a list\n")
+    with pytest.raises(store.DelegateScopeError, match="not a mapping"):
+        store.upsert_delegate({"name": "dd", "type": "acp", "command": "/x", "workdir": "/w", "scope": "host"})
+
+
+def test_a_shadow_does_not_borrow_the_shared_secret(box, monkeypatch):
+    """A member that shadows a shared coder to opt OUT of its key must not have the
+    host key injected into its own entry."""
+    store.upsert_delegate({"name": "cc", "type": "acp", "command": "/hub", "workdir": "/w", "scope": "host", "env": {"ANTHROPIC_API_KEY": "sk-shared"}})
+    monkeypatch.setattr(store, "can_write_host_layer", lambda: False)
+    store.upsert_delegate({"name": "cc", "type": "acp", "command": "/mine", "workdir": "/w"})
+    merged = store.merged_delegates()
+    assert merged[0]["scope"] == "agent"
+    assert "ANTHROPIC_API_KEY" not in (merged[0].get("env") or {})
+
+
+def test_real_member_guard_reads_workspace_yaml(tmp_path, monkeypatch):
+    """The host-layer write guard rides the real member detection: a workspace.yaml at
+    the instance root = member = read-only; none = hub = may write."""
+    import infra.paths as paths
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+
+    class _Paths:
+        instance_root = ws
+
+    monkeypatch.setattr(paths, "instance_paths", lambda: _Paths())
+    assert store.can_write_host_layer() is True
+    (ws / "workspace.yaml").write_text("id: pm\nname: pm\n")
+    assert store.can_write_host_layer() is False

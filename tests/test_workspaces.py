@@ -1156,7 +1156,7 @@ def test_cli_new_answers_config_inputs_and_copies_the_delegate(root, tmp_path, m
 def test_copy_host_delegates_treats_a_fleet_shared_pick_as_inherited(root, tmp_path, monkeypatch):
     """A picked delegate that lives in the box's host layer (ADR 0105) is reachable by
     the member live — nothing is copied, nothing is refused."""
-    from plugins.delegates import store as dstore
+    from graph import config_io
 
     ws = root / "agent"
     cfg = _seed_config(ws)
@@ -1164,7 +1164,7 @@ def test_copy_host_delegates_treats_a_fleet_shared_pick_as_inherited(root, tmp_p
     host = tmp_path / "host"
     host.mkdir()
     (host / "langgraph-config.yaml").write_text("model:\n  name: m\n")  # no agent-scoped delegates
-    monkeypatch.setattr(dstore, "read_host_delegates_raw", lambda: [{"name": "cc", "type": "acp", "command": "/x", "scope": "host"}])
+    monkeypatch.setattr(config_io, "read_host_delegates", lambda: [{"name": "cc", "type": "acp", "command": "/x"}])
     assert manager.copy_host_delegates(cfg, lock, {"board.coder": "cc"}, str(host)) == ["cc"]
     assert "delegates" not in yaml.safe_load(cfg.read_text())  # inherited, not copied
     assert manager._uncopied_required_delegates(lock, {"board.coder": "cc"}, ["cc"]) == []

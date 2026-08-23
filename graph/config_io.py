@@ -1106,6 +1106,28 @@ def soul_revision() -> str:
     return hashlib.sha1(text.encode("utf-8")).hexdigest()[:8] if text else ""
 
 
+def read_host_delegates() -> list[dict]:
+    """The fleet-shared ``delegates:`` list from the box's ``host-config.yaml`` (ADR 0105),
+    secret-free, ``[]`` when the file is absent / unreadable / not a mapping — the same
+    tolerance the cascade's read side has. Pure file read: the delegates plugin's store
+    and the workspace create path both resolve through here, so ``graph/`` never
+    imports plugin code for it."""
+    import yaml as _y
+
+    from infra.paths import host_config_path, read_text_utf8
+
+    hp = host_config_path()
+    try:
+        if not hp.exists():
+            return []
+        doc = _y.safe_load(read_text_utf8(hp)) or {}
+    except (OSError, _y.YAMLError):
+        return []
+    if not isinstance(doc, dict):
+        return []
+    return [dict(e) for e in (doc.get("delegates") or []) if isinstance(e, dict)]
+
+
 def sync_host_model_layer(config) -> bool:
     """Mirror the host's model group into the Host layer (``host-config.yaml``, #2528).
 

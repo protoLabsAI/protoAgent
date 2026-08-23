@@ -19,6 +19,7 @@
   (delegates over a2a/openai/acp), [ADR 0041](./0041-workspaces-and-tiered-stores.md)
   (workspace == agent), and [ADR 0042](./0042-fleet-supervisor-unified-console.md)
   (fleet supervisor, slug routing, model-only inheritance, remote members).
+  **Amended 2026-08-23 by [ADR 0105](0105-fleet-shared-delegates.md):** `host-config.yaml` also carries one raw top-level list, `delegates:` (fleet-shared delegates) — read by the delegates store directly; the cascade's field filter still ignores it.
 
 > Proposed. Today an agent's config is a single per-agent
 > `langgraph-config.yaml` parsed into a flat dataclass, where each attribute
