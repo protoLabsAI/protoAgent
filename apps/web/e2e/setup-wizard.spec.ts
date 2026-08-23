@@ -84,6 +84,14 @@ test("both required answers enable Finish; config_inputs ride the bundle install
   // module-global plugin state (INSTALLED_PLUGINS / RUNTIME_STATUS.plugins / the settings
   // schema — not header-scoped like fleet/mcp), which other specs read under fullyParallel.
   let installed = null;
+  let setup = null;
+  // #2989: Finish also records the archetype's capability contract on the host —
+  // the wire body of POST /api/config/setup must carry requires_tools.
+  await page.route("**/api/config/setup", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    setup = route.request().postDataJSON();
+    return route.continue();
+  });
   await page.route("**/api/plugins/install", async (route) => {
     if (route.request().method() !== "POST") return route.continue();
     installed = route.request().postDataJSON();
@@ -121,4 +129,8 @@ test("both required answers enable Finish; config_inputs ride the bundle install
   await expect.poll(() => installed).not.toBeNull();
   expect(installed?.url).toBe("https://github.com/protoLabsAI/project-manager-archetype");
   expect(installed?.config_inputs).toEqual({ "project_board.repo": "/Users/me/dev/repo", "project_board.coder": "coder" });
+  // The host records the contract the persona commits to (#2989) — the post-boot
+  // capability banner has something to check against on the wizard path too.
+  await expect.poll(() => setup).not.toBeNull();
+  expect(setup?.requires_tools).toEqual(["github_create_issue"]);
 });
