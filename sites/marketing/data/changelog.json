@@ -1,5 +1,29 @@
 [
   {
+    "version": "v0.147.0",
+    "date": "2026-08-23",
+    "changes": [
+      "Fleet-shared delegates — register a coder once on the hub, it's on every member's bench (#2987, ADR 0105).",
+      "Scheduled-task results come back to the chat that asked for them (#2990).",
+      "resolve_friction dismisses fixed entries from the friction backlog (#2990).",
+      "Scheduled tasks auto-expire (#2992).",
+      "The console e2e harness covers the archetype picker's hard gate and choose-time capability contract on both pickers (#2986).",
+      "The wizard's capability contract is pinned on the wire (#2998).",
+      "Linux desktop: the server sees your login-shell PATH — gh, br, and per-user ACP adapters resolve (#2988).",
+      "A wizard-installed archetype now gets the capability-contract banner too (#2989).",
+      "Chat answers stream smoothly word-by-word on every provider (#2993).",
+      "Subagent LLM calls now share the lead agent's model failover chain (#2995).",
+      "Clearing a conversation now asks first (#2996).",
+      "Turns from /v1, /api/chat, and plugin surfaces are no longer invisible to telemetry (#3000).",
+      "A HITL turn's pre-approval spend no longer disappears when it resumes (#3001).",
+      "Cost telemetry now prices every current Claude model correctly (#3002).",
+      "Cached prompt tokens are no longer billed at full price (#3003).",
+      "A turn waiting on a human no longer counts as a failed turn (#3004).",
+      "Latency percentiles are percentiles again (#3005).",
+      "Dropped the ACP usage frame's unconsumed context_used_tokens / context_window_tokens fields (#3006)."
+    ]
+  },
+  {
     "version": "v0.146.0",
     "date": "2026-08-23",
     "changes": [

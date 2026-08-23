@@ -15,6 +15,132 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.147.0] - 2026-08-23
+
+### Added
+- **Fleet-shared delegates — register a coder once on the hub, it's on every member's bench (#2987, ADR 0105).** A delegate saved with *Share with fleet* (`scope: host`) lives in the box's `host-config.yaml` (secrets in an owner-only `host-secrets.yaml`) and every agent on the machine reads it live — no per-member copy to drift when a key rotates. Members see shared rows read-only and may shadow one with their own; only the hub writes the shared layer. A Project Manager created with a shared coder picked needs no copy at all.
+
+- **Scheduled-task results come back to the chat that asked for them (#2990).** A schedule created in a chat now stamps that session as the job's `origin_session` — distinct from `context_id` (which still controls *where* the fire runs: a cron in Activity, a `wait`/resume back in its thread). When the fire completes, the server pushes a `scheduler.completed` event carrying a result summary (job id, fire time, truncated turn text, link to the full Activity turn) to that chat, where the console renders it as a **ScheduledReportCard** — a calendar/clock card (distinct from the background-report chip). A recurring schedule's first fire renders the full card; later fires collapse to a compact, dismissable **ScheduledChip** ("Scheduled task {id} ran — …") so an hourly check can't spam the thread. A chat idle for >24h is skipped (the result stays in Activity — no ghost sessions), and a schedule created outside a chat carries no origin and delivers nothing (backward compatible).
+
+- **`resolve_friction` dismisses fixed entries from the friction backlog (#2990).** Resolving stamps every ledger record whose summary contains the given substring with `resolved_at` in place — the JSONL ledger stays append-only, so the audit trail survives. `friction_review`, `grouped_entries` and `GET /api/friction` now hide resolved entries by default; `include_resolved=True` / `?resolved=true` shows them, marked `[resolved]` in the review.
+
+- **Scheduled tasks auto-expire (#2992).** `schedule_task` now takes optional `ttl` (a
+  duration like `7d` / `24h` / `2w` or ISO-8601 `P7D`) and `max_fires`; the scheduler
+  bumps a per-job `fire_count` after each successful fire and auto-cancels the job once
+  it outlives its TTL (from creation) or hits its firing cap, logging the expiry.
+  Recurring cron schedules default to a 7-day TTL unless overridden, so a forgotten
+  schedule no longer runs indefinitely; one-shots are unaffected. `list_schedules`
+  shows the expiry state (`ttl=` / `max_fires=` / `fires=`) per job.
+
+### Changed
+- **The console e2e harness covers the archetype picker's hard gate and choose-time capability contract on both pickers (#2986).** The mock catalog gained a Project-Manager-shaped archetype (`tier: advanced`, `requires_tools`, a preview with required `path` + `delegate` `config_inputs`) and an a2a delegate, and the fixtures' bundle ids follow the `<name>-archetype` convention. New specs prove Create/Finish stay disabled while a required answer is blank, the coder dropdown lists only acp delegates, Enter honours the gate, the collapsed-state hint shows, and the answers ride the request even after collapsing Configure — in the New-agent panel and, for the first time, the Setup Wizard.
+
+- **The wizard's capability contract is pinned on the wire (#2998).** The setup-wizard e2e now asserts `requires_tools` rides `POST /api/config/setup` (#2989's host-path record), closing the #2986 follow-up.
+
+### Fixed
+- **Linux desktop: the server sees your login-shell PATH — `gh`, `br`, and per-user ACP adapters resolve (#2988).** The sidecar PATH augmentation was macOS-only; it now applies on every unix desktop and adds `~/.cargo/bin`, `~/.local/bin` and linuxbrew. launchd autostart jobs get the same per-user dirs.
+
+- **A wizard-installed archetype now gets the capability-contract banner too (#2989).** `POST /api/fleet` recorded an archetype's `requires_tools` on the member's `workspace.yaml`, but the Setup Wizard installs onto the host — which has no such record — so a host Project Manager whose `github_create_issue` never bound stayed silent. `POST /api/config/setup` now accepts `requires_tools` (the wizard sends the picked archetype's) and records it in the host's `config/archetype-contract.yaml` (gitignored runtime state, cleared by re-running setup); the operator-status check falls back to that record when there's no workspace one.
+
+- **Chat answers stream smoothly word-by-word on every provider (#2993).** Claude OAuth models rendered answer text in visible ~8-9 word blocks: the Anthropic SDK (via langchain-anthropic) yields multi-word chunks upstream of the server's executor, so its (correct, unchanged) `_FLUSH_CHARS=24` flush logic had nothing finer to send. The console now paces streamed answer deltas through a client-side reveal queue — word-sized chunks dripped on a requestAnimationFrame loop at ~35ms/word, with elapsed-time catch-up and a backlog ceiling so the render never lags the wire by more than ~2s. Tool/reasoning/component frames, the terminal REPLACE frame, Stop, and the stream-end paths all flush the queue instantly, so part ordering and the final answer are never delayed. A `[stream-delta]` DEBUG log in `server/chat.py` records each model delta's size/timing for future provider profiling.
+
+- **Subagent LLM calls now share the lead agent's model failover chain (#2995).** `routing.fallback_models` wired `ObservableModelFallbackMiddleware` onto the lead agent only, so a subagent whose primary model errored failed the whole `task()`/`task_batch()` delegation instead of retrying the next model. The subagent middleware stack now mirrors the lead: when `routing.fallback_models` is non-empty it appends the same observable failover middleware (built from the same model list, before the native-OAuth wire-shape transforms), and stays byte-for-byte unchanged when the list is empty.
+
+- **Clearing a conversation now asks first (#2996).** The ⌘K/⌃K `chat.clear` keybinding and the `/clear` slash command used to purge the session and wipe every message the instant they fired — no undo, no prompt. Both now open the same confirm dialog tab-close uses (`Clear this conversation? This cannot be undone.`) with an opt-in "Harvest into the knowledge base first" checkbox; the destructive `deleteChatSession` + history wipe runs only after you confirm, and dismissing the dialog leaves the conversation untouched.
+
+- **Turns from `/v1`, `/api/chat`, and plugin surfaces are no longer invisible to
+  telemetry (#3000).** Only A2A turns were ever recorded. Everything running
+  through the non-streaming driver — the OpenAI-compatible
+  `/v1/chat/completions` (how the agent registers into a LiteLLM gateway or
+  OpenWebUI, and how the evals harness drives it), the `/api/chat` fallback, and
+  the ADR 0018 plugin `HOST.invoke()` seam behind Discord peer channels and every
+  relaying plugin view — produced no store row, no Prometheus sample, and no cost
+  at all. It computed real token usage and threw it away after filling the OpenAI
+  response body, so every cost total, success rate, and latency percentile
+  silently described a subset of real traffic with no sign that it was a subset.
+  Both drivers now record through one shared writer
+  (`server/turn_telemetry.py::record_turn`), so a new turn surface either routes
+  through it or is visibly unmeasured. Each row is tagged with the surface that
+  spent the tokens (`v1:`, `api-chat:`, `plugin:`), and cost is summed per model
+  so a turn that routed across a pinned subagent bills each at its own rate.
+
+- **A HITL turn's pre-approval spend no longer disappears when it resumes (#3001).**
+  Both legs of a park/resume carry the same A2A task id, and the telemetry store
+  upserted on `task_id` — so the resumed leg overwrote the parked one. #2943 fired
+  the terminal hook for both legs, but only one row survived: a turn that paused
+  for approval reported just what happened *after* the human answered. The tool
+  calls were the worst of it, since an approval-gated turn does all its tool work
+  before it asks — the surviving row showed `tool_calls: 0`. The store now keeps
+  one row per turn **leg**, identified by a new surrogate `row_id`, with `task_id`
+  an ordinary indexed column that several rows may share. Existing stores are
+  rebuilt in place on open, preserving history. The console keys its telemetry
+  rows on `row_id` (two legs sharing a `task_id` would otherwise collide as
+  duplicate React keys), and the #2943 regression test now asserts the durable
+  rows rather than stopping at the hook that writes them.
+
+- **Cost telemetry now prices every current Claude model correctly (#3002).**
+  The rate table had drifted badly: Opus 4.6/4.8 were still billed at the pre-4.6
+  $15/$75 per-Mtok rate (**3x over**), Haiku 4.5 at $0.25/$1.25 against a real
+  $1/$5 (**a quarter**), and the Claude 5 family had no entry at all, so
+  `claude-opus-5` and `claude-fable-5` silently fell through to the mid-tier
+  `default` rate and were undercounted. Every `cost_usd` in the telemetry store,
+  the console dashboard, the CSV export, the A2A cost-v1 extension, and the
+  `*_llm_cost_usd_total` Prometheus counter derives from this table, so all of
+  them were wrong for the models most people actually run. Rates are now written
+  in the units vendors publish (USD per **million** tokens) so an entry can be
+  checked against a price list at a glance, the current set is pinned by test,
+  and a model that resolves to `default` logs once instead of being billed at the
+  wrong rate in silence — the fallback direction that hid Opus 5 and Fable 5.
+
+- **Cached prompt tokens are no longer billed at full price (#3003).** `cost_usd`
+  charged the whole of `input_tokens` at the full input rate — but that count
+  already *includes* the tokens served from the prompt cache, which really cost
+  about a tenth as much. On live stores the dominant model was running a **73%
+  cache-hit ratio**, making this the largest single error in the cost column, and
+  it pointed the wrong way from the "cache savings" figure shown right next to
+  it. Cost is now split by component: full rate for uncached prompt tokens, ×0.1
+  for cache reads, ×1.25 for cache writes. The deferral note in `pricing.py`
+  ("until the gateway's cache-token semantics are validated end-to-end") is
+  retired — gateways disagree at the raw provider layer, but LangChain reconciles
+  them before the shape protoAgent reads, so no provider branch is needed.
+  The stored `input_tokens` column is now cache-EXCLUSIVE, so it, the cache-read
+  count, and the cache-write count are disjoint and sum to the turn's real prompt
+  size; `cache_hit_ratio` divides by that sum. Rows recorded before this change
+  keep the old meaning and are not rewritten, so a hit ratio over older history
+  reads slightly low. The `cost-v1` A2A extension is unchanged.
+
+- **A turn waiting on a human no longer counts as a failed turn (#3004).**
+  `#2943` wrote `success = NULL` for a parked HITL leg so it would stay out of
+  the success numerator — but the denominator was still every recorded row, so
+  the parked leg was counted anyway. Any agent using approvals showed a
+  permanently depressed success rate, and the metric most likely to be watched
+  for "is this agent healthy" instead tracked how often it politely asked.
+  `success_rate` is now over turns that actually **resolved**; the summary also
+  carries a `resolved` count alongside `turns`, so the gap (legs awaiting a
+  human) is visible rather than merely excluded.
+
+- **Latency percentiles are percentiles again (#3005).** `_percentile` sat one
+  rank above nearest-rank — but only sometimes, because Python's banker's
+  rounding flipped the error with the parity of the half-value. At a 100-turn
+  sample that made p50 correct and **p99 return the maximum**, so the column an
+  operator reads to decide whether a tool is slow was really "the single worst
+  turn in the window". Affects the summary cards, the per-model breakdown
+  (`#2678`), the per-tool breakdown (`#2697` — which is also *sorted* by p95, so
+  the "slowest tools" ordering shifted), and the context-fill series (`#2773`).
+  Reported percentiles will move by one rank; they are now correct.
+
+### Removed
+- **Dropped the ACP usage frame's unconsumed `context_used_tokens` /
+  `context_window_tokens` fields (#3006).** They were built on every ACP turn and
+  documented as being there "so the console can render a context indicator" — but
+  nothing consumed them: the executor's usage handler reads a fixed key set and
+  drops the rest, and no console surface was ever built. The unit test asserted
+  the dict the producer had just constructed, so it stayed green while the fields
+  went nowhere. Removed rather than wired up, since ACP runtime mode is deprecated
+  (`#2548`) — a comment describing an indicator that doesn't exist is worse than
+  no comment. The runtime's `last_usage()` accessor is unchanged and still reads
+  live client state for any caller that wants to sample it.
+
 ## [0.146.0] - 2026-08-23
 
 ### Added
