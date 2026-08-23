@@ -39,6 +39,7 @@ import type {
   MemorySessionDigest,
   PromptBreakdown,
   PromptCall,
+  PromptRetention,
   PromptTaskResponse,
   PublishedLink,
   NodeRuntimePayload,
@@ -1208,11 +1209,14 @@ export const api = {
     );
   },
   // The most recent captured call of one session (backs /prompt). `call` is
-  // null when nothing has been captured yet; `enabled:false` = capture off.
+  // null when nothing has been captured yet; `enabled:false` = capture off (and
+  // then there is no `retention` block — #3019's effective-window report).
   promptLast(sessionId = "") {
     const q = new URLSearchParams();
     if (sessionId) q.set("session_id", sessionId);
-    return request<{ enabled: boolean; call: PromptCall | null }>(`/api/prompts/last?${q}`);
+    return request<{ enabled: boolean; call: PromptCall | null; retention?: PromptRetention }>(
+      `/api/prompts/last?${q}`,
+    );
   },
 
   // Chat attachment — extract + TIER a dropped file (FormData: `file` + `session_id`).

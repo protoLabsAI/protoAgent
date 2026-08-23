@@ -111,6 +111,34 @@ describe("/prompt", () => {
     await vi.waitFor(() => expect(noted.length).toBe(1));
     expect(noted[0].tone).toBe("info");
     expect(noted[0].md).toContain("Nothing captured");
+    expect(noted[0].md).not.toContain("Retention"); // no block from the server → unchanged note
+  });
+
+  it("blames the row cap instead of 'yet' when the store is full (#3019)", async () => {
+    // The empty note used to say "send a message first" even when the captures
+    // HAD existed and the row cap evicted them — the operator's only way to
+    // learn otherwise was to open prompt-snapshots.db.
+    promptLast.mockResolvedValue({
+      enabled: true,
+      call: null,
+      retention: {
+        retention_days: 30,
+        max_calls: 5000,
+        calls: 5000,
+        oldest_ts: "2026-08-20T00:00:00+00:00",
+        newest_ts: "2026-08-23T00:00:00+00:00",
+        effective_days: 3.1,
+        binding_cap: "max_calls",
+      },
+    });
+    const { noted } = call();
+    await vi.waitFor(() => expect(noted.length).toBe(1));
+    expect(noted[0].md).toContain("prompts.max_calls` = 5000");
+    expect(noted[0].md).toContain("~3.1d held");
+    // The cap story REPLACES the "yet" one rather than being appended under it —
+    // a note that asserts both at once tells the operator nothing.
+    expect(noted[0].md).not.toContain("yet");
+    expect(noted[0].md).not.toContain("send a message first");
   });
 
   it("surfaces fetch failures as a danger note", async () => {

@@ -25,6 +25,23 @@ def _capture_enabled() -> bool:
     return bool(getattr(STATE.graph_config, "prompt_capture_enabled", True))
 
 
+def _configured_caps() -> tuple[int | None, int | None]:
+    """The live ``prompts.retention_days`` / ``prompts.max_calls`` (#3019).
+
+    The store's own attributes are the WRITER's view — ``PromptCaptureMiddleware``
+    stamps them on each capture — so a process that hasn't captured yet still
+    holds the construction defaults, and a reader trusting them would report
+    30/5000 to an operator who had already raised both. Config is the source of
+    truth for what governs the next write, exactly as it is for ``capture``
+    above. ``None`` = the key isn't on this config; fall back to the store."""
+    from runtime.state import STATE
+
+    cfg = STATE.graph_config
+    days = getattr(cfg, "prompt_capture_retention_days", None)
+    calls = getattr(cfg, "prompt_capture_max_calls", None)
+    return (days if days is None else int(days), calls if calls is None else int(calls))
+
+
 def _sections(row: dict) -> list[dict]:
     """The call's labeled sections in prompt order — stable prefix first, then
     the dynamic tail — as ``{label, chars, approx_tokens, scope}`` rows (#2243
@@ -135,15 +152,32 @@ def register_prompt_routes(app) -> None:
         ``session_id`` is given, else across all sessions. Backs the client's
         ``/prompt`` command ("the prompt as of the last call" — exact and
         cheap; a true next-call preview would need speculative retrieval).
-        ``call`` is null when nothing has been captured yet."""
+        ``call`` is null when nothing has been captured yet.
+
+        Also carries ``retention`` (#3019): the two in-write caps AS CONFIGURED,
+        the rows and span actually held, and which cap is binding. It rides this
+        route rather than a new one because this is the always-answers read (it
+        returns a body even with nothing captured), so "is my 30 days really 3?"
+        is one request away instead of a SQLite session against the instance
+        store."""
         import asyncio
 
         from observability.prompt_snapshots import prompt_snapshots
 
         if not _capture_enabled():
             return {"enabled": False, "call": None}
-        row = await asyncio.to_thread(prompt_snapshots().last_for_session, session_id.strip())
-        return {"enabled": True, "call": _shape(row) if row else None}
+        store = prompt_snapshots()
+        days, max_calls = _configured_caps()
+        # One hop for both reads: the retention block is a claim about the rows
+        # this answer just returned, so they should be taken at the same instant
+        # (and a diagnostic shouldn't double the route's executor round trips).
+        row, retention = await asyncio.to_thread(
+            lambda: (
+                store.last_for_session(session_id.strip()),
+                store.retention_stats(retention_days=days, max_calls=max_calls),
+            )
+        )
+        return {"enabled": True, "call": _shape(row) if row else None, "retention": retention}
 
     @app.get("/api/prompts/preview")
     async def _api_prompts_preview(session_id: str = ""):

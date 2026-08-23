@@ -839,6 +839,11 @@ class LangGraphConfig:
     # Retention is trimmed in-write (no maintenance loop); 0 = keep forever.
     prompt_capture_enabled: bool = True
     prompt_capture_retention_days: int = 30
+    # The row cap that trims in the same write (#3019). It is NOT independent of
+    # retention_days — both apply per write, so on a busy agent this one evicts
+    # long before the age cap and raising retention_days alone changes nothing.
+    # 0 = unlimited rows (age cap only).
+    prompt_capture_max_calls: int = 5000
     # Fleet trace export (ADR 0006 / #1897) — write one per-turn trajectory JSONL
     # row (OpenAI chat format) to ``<instance>/fleet-traces/`` for the agent-fleet
     # flywheel. OFF by default; ``PROTOAGENT_FLEET_TRACE_EXPORT`` env overrides in
@@ -1556,6 +1561,7 @@ class LangGraphConfig:
             prompt_capture_retention_days=data.get("prompts", {}).get(
                 "retention_days", cls.prompt_capture_retention_days
             ),
+            prompt_capture_max_calls=data.get("prompts", {}).get("max_calls", cls.prompt_capture_max_calls),
             fleet_trace_export_enabled=data.get("telemetry", {}).get("fleet_trace_export", cls.fleet_trace_export_enabled),
             inbox_retention_days=data.get("inbox", {}).get("retention_days", cls.inbox_retention_days),
             activity_retention_days=data.get("activity", {}).get("retention_days", cls.activity_retention_days),

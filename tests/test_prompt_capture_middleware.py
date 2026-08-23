@@ -6,6 +6,7 @@ capture directly after): capture's handler sees the request PromptCache built.
 """
 
 import asyncio
+import contextlib
 from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage, SystemMessage
@@ -150,6 +151,84 @@ def test_retention_knob_reaches_the_store():
     with request_metadata_scope({"a2a.task_id": "t"}):
         _run_chained(req, _response(), capture=capture)
     assert prompt_snapshots().retention_days == 7
+
+
+def test_max_calls_knob_reaches_the_store_and_actually_evicts():
+    # #3019: the row cap is what governs retention at real volume, so it must
+    # travel the same path retention_days does — and the proof is EVICTION, not
+    # an attribute set on the store.
+    capture = PromptCaptureMiddleware(retention_days=0, max_calls=2)
+    for i in range(3):
+        req = _Req("claude-opus-4-7", SystemMessage(content="S"), state={})
+        with request_metadata_scope({"a2a.task_id": f"t{i}"}):
+            _run_chained(req, _response(), capture=capture)
+    store = prompt_snapshots()
+    assert store.max_calls == 2
+    assert store.calls_for_task("t0") == []  # oldest dropped by the row cap
+    assert len(store.calls_for_task("t2")) == 1
+    assert store.retention_stats()["binding_cap"] == "max_calls"
+
+
+def test_both_caps_travel_from_config_through_the_graph_build():
+    # The whole delivery path in one assertion: prompts.max_calls on the config →
+    # _build_middleware → PromptCaptureMiddleware → the live store. retention_days
+    # was already wired; max_calls was the half that never arrived (#3019).
+    from graph.agent import _build_middleware
+    from graph.config import LangGraphConfig
+
+    cfg = LangGraphConfig(api_key="k", prompt_capture_retention_days=11, prompt_capture_max_calls=3)
+    capture = next(m for m in _build_middleware(cfg, None) if type(m).__name__ == "PromptCaptureMiddleware")
+    req = _Req("claude-opus-4-7", SystemMessage(content="S"), state={})
+    with request_metadata_scope({"a2a.task_id": "t"}):
+        _run_chained(req, _response(), capture=capture)
+    store = prompt_snapshots()
+    assert (store.retention_days, store.max_calls) == (11, 3)
+
+
+def test_the_subagent_stack_carries_the_row_cap_too(monkeypatch):
+    """#2388's subagent stack builds its OWN middleware list, so a cap wired only
+    into `_build_middleware` would leave every delegation writing at the
+    hardcoded default — and delegation-heavy turns are precisely where the row
+    cap fills fastest (#3019). Proof is eviction through the middleware the
+    subagent path actually constructed, not the argument it was handed."""
+    import graph.agent as agent_mod
+    from graph.config import LangGraphConfig
+
+    seen: dict = {}
+
+    def fake_create_agent(**kwargs):
+        seen["middleware"] = kwargs.get("middleware") or []
+
+        class _Agent:
+            async def ainvoke(self, *_a, **_kw):
+                return {"messages": [SimpleNamespace(content="ok", type="ai")]}
+
+        return _Agent()
+
+    monkeypatch.setattr(agent_mod, "create_agent", fake_create_agent)
+    monkeypatch.setattr(agent_mod, "create_llm", lambda *_a, **_kw: object())
+    cfg = LangGraphConfig(api_key="k", prompt_capture_retention_days=0, prompt_capture_max_calls=1)
+    # The run dies past create_agent on the fake agent (no astream) — the
+    # test_subagent_native_oauth harness does the same. All we need is the
+    # middleware list the real code path built, and the assert below fails
+    # loudly if construction never got that far.
+    with contextlib.suppress(Exception):
+        asyncio.run(
+            agent_mod._run_subagent(
+                config=cfg,
+                tool_map={"current_time": SimpleNamespace(name="current_time")},
+                available_subagents="researcher",
+                prompt="go",
+                subagent_type="researcher",
+                description="delegation under test",
+                parent_task_id="call-xyz",
+            )
+        )
+    capture = next(m for m in seen["middleware"] if type(m).__name__ == "PromptCaptureMiddleware")
+    for _ in range(2):
+        _run_chained(_Req("claude-opus-4-7", SystemMessage(content="S"), state={}), _response(), capture=capture)
+    rows = prompt_snapshots().calls_for_parent("call-xyz")
+    assert [r["call_index"] for r in rows] == [1]  # max_calls=1 → only the newest survives
 
 
 # --- middleware-order contract -----------------------------------------------

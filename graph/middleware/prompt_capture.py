@@ -86,12 +86,17 @@ class PromptCaptureMiddleware(AgentMiddleware):
         self,
         *,
         retention_days: int = 30,
+        max_calls: int = 5000,
         stable_sections: list | None = None,
         parent_task_id: str = "",
         subagent_type: str = "",
     ):
         super().__init__()
         self._retention_days = int(retention_days)
+        # The store's OTHER cap (#3019). It travels with retention_days because
+        # the two are one policy: whichever bites first is the real window, and
+        # at real turn volume that is this one. Defaults mirror the store's.
+        self._max_calls = int(max_calls)
         # Labeled section boundaries of the stable prefix (#2243 P2) —
         # [{label, chars}], computed at graph build from the SAME parts list the
         # prompt is joined from, persisted once per blob hash. None = unsegmented
@@ -112,6 +117,7 @@ class PromptCaptureMiddleware(AgentMiddleware):
 
         store = prompt_snapshots()
         store.retention_days = self._retention_days
+        store.max_calls = self._max_calls
         return store
 
     def _capture(self, request, response) -> None:

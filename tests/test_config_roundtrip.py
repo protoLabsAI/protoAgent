@@ -254,6 +254,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "telemetry_retention_days": 90,
     "prompt_capture_enabled": True,
     "prompt_capture_retention_days": 30,
+    "prompt_capture_max_calls": 5000,
     "inbox_retention_days": 90,
     "activity_retention_days": 90,
     "temperature": 0.2,
@@ -773,6 +774,30 @@ def test_plugins_disabled_and_sources_allow_survive_config_to_dict():
 from types import SimpleNamespace  # noqa: E402
 
 from graph import config_io  # noqa: E402
+
+
+def test_prompts_caps_parse_together(tmp_path):
+    """Both in-write retention caps parse onto the dataclass (#3019).
+
+    ``prompts.max_calls`` is the one that actually governs on a busy agent, so it
+    has to be settable — it was hardcoded at 5000 with no YAML key at all, which
+    made the long-standing ``retention_days`` knob inert at volume."""
+    path = _write_yaml(
+        tmp_path,
+        """
+        prompts:
+          capture: true
+          retention_days: 90
+          max_calls: 40000
+        """,
+    )
+    cfg = LangGraphConfig.from_yaml(path)
+    assert cfg.prompt_capture_enabled is True
+    assert cfg.prompt_capture_retention_days == 90
+    assert cfg.prompt_capture_max_calls == 40000
+    # Absent section → the shipped defaults, unchanged.
+    bare = LangGraphConfig.from_yaml(_write_yaml(tmp_path, "model:\n  name: m\n"))
+    assert (bare.prompt_capture_retention_days, bare.prompt_capture_max_calls) == (30, 5000)
 
 
 def test_soul_drift_config_knobs_parse(tmp_path):

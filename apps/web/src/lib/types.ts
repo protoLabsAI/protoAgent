@@ -1352,6 +1352,27 @@ export type PromptCall = {
   usage: PromptCallUsage;
 };
 
+// The `retention` block on GET /api/prompts/last (#3019). The snapshot store
+// trims on BOTH caps per write, so the smaller one is the real window —
+// `binding_cap` names the cap actually ending the window right now: "max_calls"
+// = the row cap is discarding calls the day cap would have kept (retention_days
+// is inert), "retention_days" = the oldest row has reached the age cutoff,
+// "none" = nothing is being evicted yet — a store still filling under caps it
+// has not reached, or both caps disabled. `effective_days` is how far back the
+// store actually reaches. The two cap fields are what the instance has
+// CONFIGURED, measured against `calls`/`*_ts`, which are what it really holds.
+// Optional on the response: a pre-#3019 server sends no block, so treat its
+// absence as "unknown", never as "not binding".
+export type PromptRetention = {
+  retention_days: number;
+  max_calls: number;
+  calls: number;
+  oldest_ts: string;
+  newest_ts: string;
+  effective_days: number | null;
+  binding_cap: "max_calls" | "retention_days" | "none";
+};
+
 // The /api/prompts/breakdown payload (#2843): what a session's HISTORY is made
 // of — checkpoint-sized categories (tool args counted exactly once), per-tool
 // totals, and the biggest single blocks. Token figures are chars//4 estimates.

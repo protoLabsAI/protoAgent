@@ -19,7 +19,7 @@ import { buildWatchCreateBody, watchFormPayload } from "./watchForm";
 import type { VerifierCatalog } from "../lib/types";
 import { modelChoices, modelFormPayload, modelPickerData, resolveModelArg, type ModelPickerData } from "./modelForm";
 import { openPromptViewer } from "./PromptViewer";
-import { historyLine, promptNoteMarkdown } from "./promptView";
+import { historyLine, promptNoteMarkdown, retentionLine } from "./promptView";
 import { perfNoteMarkdown } from "./perfView";
 import { trajectoryNoteMarkdown } from "./trajectoryView";
 
@@ -202,11 +202,20 @@ registerSlashCommand({
           return;
         }
         if (!res.call) {
-          ctx.noteToThread(
-            "Nothing captured for this session yet — send a message first, then `/prompt` shows what the model received." +
-              history,
-            { tone: "info" },
-          );
+          // "yet" is a guess, and the wrong one when the store is at its row cap
+          // (#3019) — the captures existed and were evicted. So when the server
+          // says the row cap is what ends the window, REPLACE that lead rather
+          // than appending to it: "send a message first" is advice that would
+          // not help, and the two stories together are worse than either. The
+          // replacement still does not claim this session HAD captures — the
+          // store reports its own window, not per-session history — it just
+          // stops ruling the possibility out. An older server sends no retention
+          // block and this reads exactly as it did before.
+          const retention = retentionLine(res.retention);
+          const lead = retention
+            ? "No capture for this session — it either predates the window the snapshot store still holds, or has not sent a message."
+            : "Nothing captured for this session yet — send a message first, then `/prompt` shows what the model received.";
+          ctx.noteToThread(lead + (retention ? `\n\n${retention}` : "") + history, { tone: "info" });
           return;
         }
         ctx.noteToThread(promptNoteMarkdown(res.call) + history, { tone: "info" });
