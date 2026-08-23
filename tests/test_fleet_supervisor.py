@@ -921,3 +921,78 @@ def test_stop_on_a_recycled_pid_reaps_without_signalling(fleet, monkeypatch):
 
     assert res["stopped"] is True and "no signal sent" in res["note"]
     assert signalled == []
+
+
+def _write_remotes(tmp_path, payload) -> None:
+    """Put a raw remotes.json on disk — the file an operator can hand-edit."""
+    import json
+
+    root = manager.workspaces_root()
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "remotes.json").write_text(json.dumps(payload))
+
+
+def test_status_reports_a_malformed_remote_instead_of_raising(tmp_path, monkeypatch):
+    """A hand-edited remotes.json must not take the whole roster down (#3018).
+
+    ``status()`` is the FIRST read of every console fleet surface — /api/fleet
+    and the telemetry rollup both start there — so a KeyError on one record used
+    to cost an HTTP 500 carrying every healthy member's data with it. Each class
+    of damage a real file can carry is exercised here against the real loader.
+    """
+    monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
+    supervisor._probe_cache.clear()
+    _write_remotes(
+        tmp_path,
+        {
+            # No url: the operator deleted the field (or an older schema never
+            # wrote one). Reportable — it just can't be dialed.
+            "no-url": {"id": "no-url", "name": "ava", "label": "Ava"},
+            # No id: recoverable from the registry key, which IS the slug.
+            "no-id": {"name": "bo", "url": "http://100.64.0.9:7870"},
+            # Not a record at all: nothing to recover, so it's dropped.
+            "junk": "not-a-record",
+        },
+    )
+
+    rows = {a["id"]: a for a in supervisor.status() if a.get("remote")}
+
+    assert set(rows) == {"no-url", "no-id"}  # the junk value is dropped, not fatal
+    assert rows["no-url"] == {
+        "name": "ava",
+        "label": "Ava",
+        "id": "no-url",
+        "port": None,
+        "pid": None,
+        "running": False,  # never probed, never reachable — which is the truth
+        "bundle": "",
+        "remote": True,
+        "url": "",
+        "version": "",
+        "a2a": None,  # no url ⇒ no endpoint to advertise, rather than "/a2a"
+    }
+    assert rows["no-id"]["name"] == "bo" and rows["no-id"]["url"] == "http://100.64.0.9:7870"
+    # The same records must not blow up the probe sweep either — /api/fleet runs
+    # it over every remote BEFORE reading the roster, so a raise there would 500
+    # the surface just as surely.
+    import httpx
+
+    monkeypatch.setattr(httpx, "get", lambda url, timeout: (_ for _ in ()).throw(httpx.ConnectError("down")))
+    supervisor.refresh_remote_probes()
+    assert supervisor._probe_cache["no-url"][0] is False
+
+
+def test_list_shaped_remotes_file_is_treated_as_empty(tmp_path, monkeypatch):
+    """remotes.json holding a JSON LIST parses fine, then breaks every reader on
+    the first ``.values()`` — an AttributeError that used to escape ``status()``
+    as a 500 (#3018). The registry is an ``{id: record}`` map; a wrong-shaped
+    top level is unrecoverable, so it degrades to empty like an unreadable file.
+    """
+    monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
+    _write_remotes(tmp_path, [{"id": "r1", "url": "http://h:1"}])
+
+    assert supervisor.list_remotes() == []
+    rows = supervisor.status()
+    assert not any(a.get("remote") for a in rows)
+    assert rows[0]["host"] is True  # the host still reports, which is the point
+    supervisor.refresh_remote_probes()  # and the probe sweep is a no-op, not a raise

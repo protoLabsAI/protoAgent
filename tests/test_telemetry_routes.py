@@ -377,6 +377,84 @@ def test_fleet_rollup_survives_raise_after_the_fetch_boundary(monkeypatch):
     assert members["host"]["rollup"]["turns"] == 4
 
 
+def _real_registry_client(monkeypatch, tmp_path, remotes):
+    """A rollup client whose roster comes from the REAL fleet registry.
+
+    ``supervisor.status`` is NOT stubbed and neither is target resolution: the
+    only input is a raw ``remotes.json`` on disk — the file an operator can (and
+    per #3018 did) hand-edit. That is the whole point of these two tests: the
+    roster read sits OUTSIDE the rollup's containment boundary, so it has to be
+    total on its own, and a stub would prove nothing about that.
+    """
+    import json
+
+    from graph.fleet import proxy, supervisor
+    from graph.workspaces import manager
+
+    monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
+    root = manager.workspaces_root()
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "remotes.json").write_text(json.dumps(remotes))
+    supervisor._probe_cache.clear()
+    monkeypatch.setattr(proxy, "_slug_cache", {})  # 1s memo — never inherit a neighbour's
+    return _client(monkeypatch, _FleetHostStore())
+
+
+def test_fleet_rollup_survives_a_malformed_remote_record(tmp_path, monkeypatch):
+    # #3018, the half that lives in the ROSTER read rather than the member read:
+    # ``status()`` subscripted every remote record while building the roster
+    # (``rec["url"]``), and the route's first statement is that read — so a
+    # single field missing from one hand-edited record 500'd the entire rollup
+    # before any member was ever contacted. Fixed at the source in graph/fleet,
+    # because /api/fleet reads the same registry and broke on the same input.
+    from graph.fleet import proxy
+
+    c = _real_registry_client(monkeypatch, tmp_path, {"ava-1a2b": {"id": "ava-1a2b", "name": "ava", "label": "Ava"}})
+
+    # Guard the mechanism: a record with no url still genuinely raises during
+    # resolution, so the assertions below cannot go quietly vacuous. It reaching
+    # that boundary at all is what the roster fix bought.
+    with pytest.raises(KeyError):
+        proxy._target_for_slug("ava-1a2b")
+
+    res = c.get("/api/telemetry/fleet")
+    assert res.status_code == 200
+    body = res.json()
+    # Reported, in the same shape every other unreadable member gets — the
+    # acceptance criterion #3018 states: unreachable, not a failed rollup.
+    assert body["members"]["ava-1a2b"] == {
+        "name": "ava",
+        "label": "Ava",
+        "host": False,
+        "remote": True,
+        "running": False,
+        "reachable": False,
+        "telemetry_enabled": False,
+        "rollup": None,
+        "flags": [],
+    }
+    # ...and the host's own telemetry still renders, which is what the 500 ate.
+    assert body["enabled"] is True
+    assert body["members"]["host"]["rollup"]["turns"] == 4
+    assert body["members"]["host"]["flags"][0]["evidence"]["trace_id"] == "trace-host"
+
+
+def test_fleet_rollup_survives_a_list_shaped_remotes_file(tmp_path, monkeypatch):
+    # The other roster-read input (#3018): remotes.json holding a JSON LIST.
+    # It parses, then breaks the first reader — an AttributeError out of
+    # ``list_remotes()`` that escaped ``status()`` as a 500. A wrong-shaped top
+    # level names no members recoverably, so it degrades to a members-less
+    # fleet; what must NOT happen is losing the host's numbers with it.
+    c = _real_registry_client(monkeypatch, tmp_path, [{"id": "r1", "url": "http://h:1"}])
+
+    res = c.get("/api/telemetry/fleet")
+    assert res.status_code == 200
+    body = res.json()
+    assert list(body["members"]) == ["host"]
+    assert body["enabled"] is True
+    assert body["members"]["host"]["rollup"]["turns"] == 4
+
+
 def test_fleet_rollup_member_with_store_off_is_reachable(monkeypatch):
     # A member that RESPONDS with {enabled: false} is reachable — telemetry off
     # is its store's state, not a connectivity failure.

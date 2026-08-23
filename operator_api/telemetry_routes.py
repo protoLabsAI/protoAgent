@@ -124,14 +124,16 @@ async def _fetch_member_json(slug: str, path: str) -> dict | None:
     # Every step is inside the boundary, resolution and token minting included
     # (#3018). Both used to sit ABOVE the try, so a raise there escaped as a 500
     # for the WHOLE rollup — the exact opposite of the contract this docstring
-    # states. Not hypothetical: ``_target_for_slug`` subscripts fleet-registry
-    # records straight through (``rec["port"]``, ``remote["url"]``), and
-    # ``supervisor._load_remotes`` returns whatever the JSON held with no dict
-    # check — so one malformed record (an older-schema state entry, a
-    # hand-edited remotes file) raises KeyError/AttributeError instead of
-    # returning None. Both loaders are already tolerant of an unreadable FILE
-    # (they log and return {}), so it is a bad RECORD that gets here: hardening
-    # them would not make this boundary redundant.
+    # states. Not hypothetical: ``_target_for_slug`` still subscripts registry
+    # records straight through (``rec["port"]`` on a local state entry the hub
+    # believes is running, ``remote["url"]`` on a remote record), so one field
+    # missing from one hand-edited record raises KeyError here rather than
+    # resolving to None. The loaders are tolerant of an unreadable FILE (they
+    # log and return {}), so what reaches this line is a bad RECORD — and the
+    # ROSTER read is total over those now (``supervisor.list_remotes``/
+    # ``status``, same fix), which is what lets such a member get this far at
+    # all instead of taking the roster down. Here is where it becomes the
+    # ``reachable: false`` row the caller reports.
     try:
         import httpx
 
@@ -371,9 +373,14 @@ def register_telemetry_routes(app) -> None:
         from graph.fleet import supervisor
 
         # Deliberately NOT inside a containment boundary (#3018 covers the
-        # per-member reads): if the roster read itself fails there is no fleet
-        # to report, and quietly degrading to host-only here would hide a broken
-        # registry that every other /api/fleet surface is already failing on.
+        # per-member reads). It is safe to leave open because the roster read is
+        # now TOTAL over the malformed records #3018 was really about — fixed at
+        # the source in ``graph/fleet`` so /api/fleet, which reads the same
+        # registry, degrades identically instead of this route alone papering
+        # over it. What is left to raise here is a wholesale registry failure,
+        # and then there is no fleet to report: degrading to host-only would
+        # hide that from the one surface that could still show the operator
+        # something is wrong.
         roster = await asyncio.to_thread(supervisor.status)
         template = await _trace_url_template()
         summary_payload = _local_summary_payload()
