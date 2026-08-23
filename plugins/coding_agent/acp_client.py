@@ -349,6 +349,7 @@ class AcpClient:
         permission: Callable[[dict], str | None] | None = None,
         mcp_servers: list[dict] | None = None,
         session_id_path: Path | None = None,
+        record_runs: bool = True,
     ) -> None:
         self.command = command
         self.args = list(args or [])
@@ -371,6 +372,21 @@ class AcpClient:
         # cancel/deny). Defaults to ``_auto_allow`` — the coding agent self-governs
         # within its workdir. The plugin injects a by-kind policy here (ADR 0024).
         self._permission = permission
+        # Whether a finished ``prompt()`` writes its own telemetry row (#3015).
+        #
+        # On by default, because the callers that need it are the ones that would
+        # otherwise be invisible: every coder dispatch — the delegates adapter and the
+        # project board's tapped seam alike — goes through ``_client_for``'s pool, runs
+        # outside any agent turn, and so reaches no terminal hook.
+        #
+        # ``runtime/acp_runtime.py`` is the exception and turns it OFF at both of its
+        # construction sites. Its clients are not coder dispatches: one drives the
+        # agent's OWN chat turn, which ``server.chat._acp_drive_turn`` already books
+        # under the same ``acp:<agent>`` label (recording here too would double every
+        # turn an ACP-runtime agent takes, in the very rollup this issue exists to make
+        # trustworthy), and the other is the aux model (compaction, goal verification),
+        # which is not a coder run at all and would be a lie under a ``coder:`` key.
+        self.record_runs = bool(record_runs)
 
         self._proc: asyncio.subprocess.Process | None = None
         self._session_id: str | None = None
@@ -403,6 +419,10 @@ class AcpClient:
 
         # Per-turn state (one turn at a time).
         self._answer = ""
+        # How many tool calls the coder made this turn — counted in ``_handle_update``
+        # off the wire, NOT off ``tool_callback``, because the delegates adapter wires
+        # no callback at all and its runs would otherwise all record zero (#3015).
+        self._turn_tool_calls = 0
         # Why the last turn ended, straight from ACP's `session/prompt` result (#2279).
         # `prompt()` is typed -> str and cannot carry it; an orchestrator reads it here
         # (or via `dead_end()`) to tell "declined" from "ran out of room" from "done".
@@ -683,6 +703,7 @@ class AcpClient:
             if text:
                 await self._emit_thought(text)
         elif kind == "tool_call":
+            self._turn_tool_calls += 1
             # A tool call STARTED — narrate its title + emit a structured start event so the
             # UI can render a card (parity with the native runtime's tool_start). The card
             # NAME is a short label; the verbose args (structured rawInput, else the title's
@@ -1042,8 +1063,9 @@ class AcpClient:
         state (``_answer``, the callbacks) lives on the instance, so an interleaved turn
         corrupts both answers.
 
-        Every completed, failed, or cancelled run writes one telemetry row here — see
-        ``_record_run_telemetry`` for why this method, of all of them, is the seam (#3015).
+        Every completed, failed, or cancelled run writes one telemetry row here, unless
+        the client was built with ``record_runs=False`` — see ``_record_run_telemetry``
+        for why this method, of all of them, is the seam (#3015).
         """
         started = time.monotonic()
         # "failed" until proven otherwise, and read from a `finally`, so a transport
@@ -1052,6 +1074,9 @@ class AcpClient:
         # reason the row exists: a coder run that burned ten minutes and delivered
         # nothing is exactly what #3015 could not see.
         state = "failed"
+        # Stays 0 unless this call actually got the lock and ran — a queue timeout must
+        # not inherit the count of the in-flight turn it was waiting behind.
+        tool_calls = 0
         try:
             if self._turn_lock.locked():
                 logger.info("[acp/%s] prompt queued behind an in-flight turn", self.name)
@@ -1072,6 +1097,9 @@ class AcpClient:
                     timeout=timeout,
                 )
             finally:
+                # Read while the lock is still held: the counter is per-turn instance
+                # state, and the next queued turn resets it the moment it acquires.
+                tool_calls = self._turn_tool_calls
                 self._turn_lock.release()
             # Returning is not the same as succeeding: `prompt()` is typed -> str, so a
             # refusal and a deliberate cancel both come back as (usually empty) text.
@@ -1081,9 +1109,9 @@ class AcpClient:
             state = "completed" if self.dead_end() is None else "failed"
             return answer
         finally:
-            self._record_run_telemetry(state, started)
+            self._record_run_telemetry(state, started, tool_calls)
 
-    def _record_run_telemetry(self, state: str, started: float) -> None:
+    def _record_run_telemetry(self, state: str, started: float, tool_calls: int) -> None:
         """One durable telemetry row per coder run (#3015). Best-effort; never raises.
 
         The project-board loop dispatches coders from a background loop rather than from
@@ -1093,18 +1121,23 @@ class AcpClient:
         contributed zero rows. Both dispatch paths (``plugins.delegates.adapters``, and
         the project board's tapped seam, which deliberately bypasses that adapter) funnel
         through ``prompt()``, which is why the instrumentation lives here and not one
-        layer up where half the callers would miss it.
+        layer up where half the callers would miss it — and why ``record_runs`` exists to
+        exclude the callers here that are *not* coder dispatches.
 
         Tokens and cost are recorded as ZERO deliberately. The coding agent bills its own
         subscription and protoAgent never observes those numbers; the ``acp:<name>`` model
         label is the honest "this turn was not gateway-metered" marker, the same
         convention ``server.chat._acp_drive_turn`` uses, and #3006 settled that a
-        half-wired or invented field here is worse than an absent one.
+        half-wired or invented field here is worse than an absent one. ``tool_calls`` is
+        the one non-zero effort figure we can honestly claim: it is counted off the wire,
+        not inferred.
 
         Synchronous on purpose. It is called from a ``finally`` that can run while the
         task is already being cancelled, and an ``await`` there would be interrupted
         before the row landed — losing precisely the cancelled runs worth seeing.
         """
+        if not self.record_runs:
+            return
         try:
             # Lazily, inside the call: `plugins` is outside the import-layering contract,
             # but importing the server package at plugin import time would still drag the
@@ -1120,7 +1153,16 @@ class AcpClient:
                 session_id=self._session_id or "",
                 state=state,
                 models=[f"acp:{self.name}"],
+                # Wall clock around the whole call. On the one path that fails before the
+                # turn starts — the lock-acquire timeout — that is queue-wait time, not
+                # coder time; the row is still worth having (a dispatch that never ran is
+                # a failed dispatch), but its duration means something different.
                 duration_ms=int((time.monotonic() - started) * 1000),
+                # How much the coder actually did. Zero tokens and zero cost are honest
+                # but say nothing about effort, and the issue's own evidence table is
+                # `turns | tool_calls | cost` — this is the column that stops a coder run
+                # reading as a no-op next to a PM turn that made four.
+                tool_calls=tool_calls,
                 # The console's fleet roster counts a member running with +1 on
                 # `turn.started` and -1 on the terminal `turn.usage`. A coder run emits no
                 # `turn.started`, so publishing only the -1 half would drive that count
@@ -1142,6 +1184,7 @@ class AcpClient:
     ) -> str:
         await self._ensure_started()
         self._answer = ""
+        self._turn_tool_calls = 0
         self._progress = progress_callback
         self._on_tool = tool_callback
         self._on_text = text_callback

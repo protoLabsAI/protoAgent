@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import types
 
 import pytest
 
@@ -74,6 +75,19 @@ _ERROR_BODY = 'send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32000, "mes
 # Streams one chunk and then never answers — so a test can cancel a turn that is
 # genuinely in flight instead of racing a sleep against the handshake.
 _HANG_BODY = f"{_CHUNK}\n        continue"
+
+
+def _tool_call(n: int) -> str:
+    """One ACP ``tool_call`` update — the wire event a coder emits per tool it runs."""
+    return (
+        'send({"jsonrpc": "2.0", "method": "session/update", "params": {'
+        '"sessionId": "__SESSION__", "update": {"sessionUpdate": "tool_call",'
+        f' "toolCallId": "t{n}", "title": "Read(file{n}.py)", "kind": "read"}}}}}})'
+    )
+
+
+# Three tool calls, then a clean finish.
+_TOOLS_BODY = "\n        ".join([_tool_call(1), _tool_call(2), _tool_call(3), _OK_BODY])
 
 
 def _agent(tmp_path, name: str, body: str, session: str = "sess-acp-1") -> list[str]:
@@ -233,3 +247,131 @@ async def test_a_coder_run_publishes_no_turn_usage_event(wired, tmp_path, monkey
 
     assert wired.recent(), "the durable row is the point — it must still be written"
     assert "turn.usage" not in published
+
+
+async def test_the_coders_tool_calls_are_counted(wired, tmp_path):
+    """Zero tokens and zero cost are honest but say nothing about effort, and the
+    issue's evidence table is `turns | tool_calls | cost`. The count comes off the wire,
+    not off `tool_callback` — the delegates adapter wires no callback at all, so a
+    callback-derived count would have recorded zero for the commonest dispatch path."""
+    client = _client(tmp_path, "claude-code", _TOOLS_BODY)
+    try:
+        await client.prompt("ship it", timeout=30.0)  # no tool_callback, deliberately
+    finally:
+        await client.close()
+
+    row = wired.recent()[0]
+    assert row["tool_calls"] == 3
+    assert row["cost_usd"] == 0.0  # still no invented spend
+
+
+async def test_a_second_run_does_not_inherit_the_first_runs_tool_count(wired, tmp_path):
+    """The counter is per-turn state on a client that is POOLED and reused across runs.
+    Without a reset the second dispatch would report the first one's work as its own."""
+    client = _client(tmp_path, "claude-code", _TOOLS_BODY)
+    try:
+        await client.prompt("first", timeout=30.0)
+        await client.prompt("second", timeout=30.0)
+    finally:
+        await client.close()
+
+    rows = wired.recent()
+    assert len(rows) == 2
+    assert [r["tool_calls"] for r in rows] == [3, 3]
+
+
+# ── the runs that are NOT coder dispatches ────────────────────────────────────
+# `AcpClient.prompt` catches every caller, which is the point — and two of those
+# callers are not coder dispatches at all. Both live in `runtime/acp_runtime.py`,
+# and both would corrupt the very rollup this issue exists to make trustworthy.
+
+
+async def test_the_agents_own_acp_runtime_turn_writes_no_coder_row(wired, tmp_path, monkeypatch):
+    """Under `agent_runtime: acp:<agent>` the coding agent IS the brain, and
+    `server.chat._acp_drive_turn` already books that turn under the same `acp:<agent>`
+    label. A row from here too would double every ACP-runtime turn — and misfile a chat
+    turn as a coder run. Drives the REAL client factory against a real fake agent, so
+    this fails if the production wiring stops opting out."""
+    import runtime.acp_runtime as rt_mod
+    from runtime.context import AssembledContext
+
+    monkeypatch.setattr(rt_mod, "persona_doc", lambda config: "")  # no SOUL.md read
+
+    class _Ctx:
+        def assemble(self, *, query=""):
+            return AssembledContext(stable_prefix="", volatile_delta="", sources=[])
+
+        def after_turn(self, *, user="", response=""): ...
+
+    cfg = types.SimpleNamespace(
+        agent_runtime="acp:codex",
+        operator_mcp_tools=[],
+        acp_agents={"codex": {"command": sys.executable, "args": _agent(tmp_path, "brain", _OK_BODY)}},
+    )
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    rt = rt_mod.AcpRuntime(cfg, cwd=str(workspace), context=_Ctx())
+    try:
+        assert await rt.run_turn("hello") == "wrote the patch"
+    finally:
+        await rt.close()
+
+    assert wired.recent() == [], "the chat turn's own recorder owns this row, not the client"
+
+
+async def test_the_acp_aux_model_writes_no_coder_row(wired, tmp_path, monkeypatch):
+    """The aux slots (compaction, goal verification, fact extraction) run on the same
+    ACP client when there is no gateway. They are internal housekeeping, not coder work:
+    counting them as coder runs would inflate the one number the issue asks for."""
+    import runtime.acp_runtime as rt_mod
+
+    monkeypatch.setattr(rt_mod, "_AUX_CLIENTS", {})
+    cfg = types.SimpleNamespace(
+        acp_agents={"codex": {"command": sys.executable, "args": _agent(tmp_path, "aux", _OK_BODY)}},
+    )
+    try:
+        assert await rt_mod._aux_prompt("codex", cfg, "summarise this") == "wrote the patch"
+    finally:
+        for c in list(rt_mod._AUX_CLIENTS.values()):
+            await c.close()
+
+    assert wired.recent() == []
+
+
+async def test_the_read_surface_answers_the_acceptance_question(wired, tmp_path):
+    """The acceptance criterion, asserted through the HTTP surface an operator actually
+    queries — not through the store the writer just wrote to. Two dispatches on one
+    delegate, one of which the coder refused: `/api/telemetry/summary?since=` must show
+    two coder runs at zero cost, and `/api/telemetry/recent` must show which one failed."""
+    from datetime import datetime, timedelta, timezone
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from operator_api.telemetry_routes import register_telemetry_routes
+
+    since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    # One delegate, two runs — different scripts, same client name, exactly as the
+    # pooled client would look across two dispatches.
+    for script, body in (("ok", _OK_BODY), ("refused", _REFUSAL_BODY)):
+        client = AcpClient(sys.executable, _agent(tmp_path, script, body), cwd=str(tmp_path), name="claude-code")
+        try:
+            await client.prompt("ship it", timeout=30.0)
+        finally:
+            await client.close()
+
+    app = FastAPI()
+    register_telemetry_routes(app)
+    http = TestClient(app)
+
+    summary = http.get("/api/telemetry/summary", params={"since": since}).json()["summary"]
+    by_model = {m["model"]: m for m in summary["by_model"]}
+    # "How many coder runs in the last 24h" — answerable today, no route changes.
+    assert by_model["acp:claude-code"]["turns"] == 2
+    assert by_model["acp:claude-code"]["cost_usd"] == 0.0  # zero recorded as zero
+
+    turns = http.get("/api/telemetry/recent", params={"limit": 50}).json()["turns"]
+    coder_runs = [t for t in turns if t["task_id"].startswith("coder:claude-code:")]
+    assert len(coder_runs) == 2
+    # …"and how many failed" — the refusal, and only the refusal.
+    assert sum(1 for t in coder_runs if t["state"] == "failed") == 1

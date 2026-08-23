@@ -227,6 +227,12 @@ class AcpRuntime:
             cwd=self.cwd,
             name=self.agent,
             mcp_servers=[mcp] if mcp else [],
+            # This client drives the agent's OWN chat turn, not a coder dispatch, and
+            # `server.chat._acp_drive_turn` already books that turn under the same
+            # `acp:<agent>` model label. Letting the client record one too would double
+            # every ACP-runtime turn in the per-model rollup — in the same table #3015
+            # exists to make trustworthy.
+            record_runs=False,
         )
 
     def _ensure_client(self):
@@ -289,7 +295,11 @@ async def _aux_prompt(agent: str, config, text: str) -> str:
         spec = adapter_for(agent, config)
         from plugins.coding_agent.acp_client import AcpClient
 
-        client = AcpClient(spec["command"], spec.get("args"), cwd=os.getcwd(), name=f"{agent}-aux")
+        # Not a coder run: this is the auxiliary model (compaction, goal verification,
+        # fact extraction) for an ACP-only setup with no gateway. Recording it under a
+        # `coder:` key would put an internal housekeeping call in the coder-run count
+        # (#3015). It is unmetered either way — a separate row shape, if anyone wants it.
+        client = AcpClient(spec["command"], spec.get("args"), cwd=os.getcwd(), name=f"{agent}-aux", record_runs=False)
         _AUX_CLIENTS[agent] = client
     return await client.prompt(text)
 
