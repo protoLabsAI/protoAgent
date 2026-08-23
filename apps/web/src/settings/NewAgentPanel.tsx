@@ -18,6 +18,7 @@ import { lucideIcon } from "../lib/lucideIcon";
 import {
   archetypeConfigFields,
   fieldId,
+  hasHardRequiredBundleConfig,
   isMissingRequiredBundleConfig,
   isMissingRequiredConfig,
   requiresToolsNotice,
@@ -109,7 +110,7 @@ export function NewAgentPanel({
   // button does too, whether or not the Configure step is open.
   const missingRequired = configOpen && isMissingRequiredConfig(fields, values);
   const missingHard = isMissingRequiredBundleConfig(fields, values);
-  const hasHardRequired = fields.some((f) => f.origin === "config" && f.required && f.kind !== "boolean" && f.defaultValue === undefined);
+  const hasHardRequired = hasHardRequiredBundleConfig(fields);
   const contractNotice = pickedArchetype ? requiresToolsNotice(pickedArchetype.label, pickedArchetype.requires_tools) : null;
 
   function pick(id: string) {

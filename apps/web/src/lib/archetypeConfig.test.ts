@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 
 import {
   archetypeConfigFields,
+  hasHardRequiredBundleConfig,
   isMissingRequiredBundleConfig,
   isMissingRequiredConfig,
   requiresToolsNotice,
@@ -335,6 +336,11 @@ describe("isMissingRequiredBundleConfig — the hard gate (#2977)", () => {
     };
     expect(isMissingRequiredBundleConfig(fields, values)).toBe(false); // MCP `root` still blank
     expect(isMissingRequiredConfig(fields, values)).toBe(true);
+  });
+
+  it("knows whether the bundle has any hard-required answer at all", () => {
+    expect(hasHardRequiredBundleConfig(fields)).toBe(true);
+    expect(hasHardRequiredBundleConfig(archetypeConfigFields(githubPreview()))).toBe(false); // MCP-only bundle
   });
 
   it("is true while a required config answer is blank; a boolean toggle never gates", () => {

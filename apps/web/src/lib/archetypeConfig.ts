@@ -118,15 +118,18 @@ export function isMissingRequiredConfig(fields: ConfigField[], values: Record<st
 // environment fallback — the server refuses the create/install and names the prompt — so
 // the picker must not offer a Create that can only 400. MCP inputs and declared secrets
 // keep their soft semantics (skip → env), which is what isMissingRequiredConfig hints at.
+export function isHardRequiredField(f: ConfigField): boolean {
+  return f.origin === "config" && f.required && f.kind !== "boolean" && f.defaultValue === undefined;
+}
+
+// Does the picked bundle have ANY hard-required answer? Drives the Configure toggle's copy
+// ("answers marked * are required" vs "optional — skip …") in both pickers.
+export function hasHardRequiredBundleConfig(fields: ConfigField[]): boolean {
+  return fields.some(isHardRequiredField);
+}
+
 export function isMissingRequiredBundleConfig(fields: ConfigField[], values: Record<string, string>): boolean {
-  return fields.some(
-    (f) =>
-      f.origin === "config" &&
-      f.required &&
-      f.kind !== "boolean" &&
-      f.defaultValue === undefined &&
-      !fieldValue(values, f),
-  );
+  return fields.some((f) => isHardRequiredField(f) && !fieldValue(values, f));
 }
 
 // One line for the archetype card: the tools its persona COMMITS to (the capability

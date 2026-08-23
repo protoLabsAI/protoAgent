@@ -28,6 +28,7 @@ import { archetypesQuery, pythonRuntimeQuery } from "../lib/queries";
 import {
   archetypeConfigFields,
   fieldId,
+  hasHardRequiredBundleConfig,
   isMissingRequiredBundleConfig,
   isMissingRequiredConfig,
   requiresToolsNotice,
@@ -471,9 +472,7 @@ export function SetupWizard({
   // Hard gate (#2977): a required bundle config_inputs answer has no env fallback — the host
   // install refuses to activate without it, so Finish waits for it too.
   const missingHard = isMissingRequiredBundleConfig(configFields, configValues);
-  const hasHardRequired = configFields.some(
-    (f) => f.origin === "config" && f.required && f.kind !== "boolean" && f.defaultValue === undefined,
-  );
+  const hasHardRequired = hasHardRequiredBundleConfig(configFields);
   const contractNotice = pickedArchetype ? requiresToolsNotice(pickedArchetype.label, pickedArchetype.requires_tools) : null;
 
   // Runtime requirement at CHOOSE-time (#2186): same affordance as NewAgentPanel —
