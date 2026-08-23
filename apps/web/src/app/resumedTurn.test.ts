@@ -78,4 +78,14 @@ describe("resumedTurnRender", () => {
     expect(r!.failed).toBe(true);
     expect(r!.status).toBe("error");
   });
+
+  it("carries the trigger origin so the settled message renders as a compact result card (#3028)", () => {
+    // ChatResumeWatch tags the assistant message with this origin; ChatMessageView then renders a
+    // compact, expandable ServerResultCard instead of a full-size bubble.
+    expect(resumedTurnRender({ session_id: "chat-1", text: "hi", origin: "scheduler" })!.origin).toBe("scheduler");
+    expect(resumedTurnRender({ session_id: "chat-1", text: "hi", origin: "watch-42" })!.origin).toBe("watch-42");
+    // A pre-#3028 server that never sets the field → "" (ChatResumeWatch falls back to the
+    // origin the server-turn store captured at turn.started).
+    expect(resumedTurnRender({ session_id: "chat-1", text: "hi" })!.origin).toBe("");
+  });
 });

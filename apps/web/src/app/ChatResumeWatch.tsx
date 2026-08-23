@@ -7,6 +7,7 @@ import { notifyIfHidden } from "../lib/notify";
 import type { ChatMessage } from "../lib/types";
 import { resumedTurnRender } from "./resumedTurn";
 import { isLiveServerTurn } from "./serverTurnProgress";
+import { originForSession } from "../chat/server-turn-store";
 
 // Live surfacing of a `wait` / scheduled RESUME (ADR 0053, bd-k02) into the chat tab.
 // A `wait` yields and is re-triggered server-side by the scheduler, which fires a fresh
@@ -64,6 +65,11 @@ export function ChatResumeWatch() {
         createdAt: live?.createdAt ?? Date.now(),
         status: render.status,
         taskId: render.taskId || undefined,
+        // Tag the settled message with its trigger origin (#3028) so ChatMessageView renders it
+        // as a compact, expandable result card, not a full-size bubble. The server stamps `origin`
+        // on the event; fall back to what the store captured at `turn.started` for an older server.
+        // Persisted on the message, so the card treatment survives a reload.
+        origin: render.origin || originForSession(render.session) || undefined,
         // Keep the tool cards the live view already rendered — the resume payload carries
         // the final TEXT only, so dropping these would erase the turn's visible work.
         // `parts` is deliberately not carried over: it interleaves the streamed text, which

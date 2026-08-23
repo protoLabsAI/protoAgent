@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ChatPart, ToolCall } from "../lib/types";
-import { rewindableTailId, addComponent, addToolRef, appendReasoning, appendText, foldPlan, replaceText, splitRevealChunks, toolsForGroup } from "./parts";
+import { lastOperatorAssistantId, rewindableTailId, addComponent, addToolRef, appendReasoning, appendText, foldPlan, replaceText, splitRevealChunks, toolsForGroup } from "./parts";
 
 describe("addComponent", () => {
   it("appends a component part at its emission point (before the answer text streams in)", () => {
@@ -333,6 +333,45 @@ describe("rewindableTailId", () => {
   it("empty / id-less transcripts yield undefined (gate fails open)", () => {
     expect(rewindableTailId([])).toBeUndefined();
     expect(rewindableTailId([m("assistant")])).toBeUndefined();
+  });
+});
+
+describe("lastOperatorAssistantId (#3028 — Regenerate stays on the operator's real reply)", () => {
+  const m = (role: string, id?: string, origin?: string) => ({ role, id, origin });
+
+  it("is the last operator-initiated assistant reply", () => {
+    expect(
+      lastOperatorAssistantId([m("user", "u1"), m("assistant", "a1"), m("user", "u2"), m("assistant", "a2")]),
+    ).toBe("a2");
+  });
+
+  it("SKIPS a trailing server-initiated result — it must not steal Regenerate", () => {
+    // A scheduled/watch/autonomous result (role assistant + origin) lands after the operator's
+    // last answer. It renders as an action-less ServerResultCard, so Regenerate stays on a1.
+    expect(
+      lastOperatorAssistantId([
+        m("user", "u1"),
+        m("assistant", "a1"),
+        m("assistant", "sched1", "scheduler"),
+      ]),
+    ).toBe("a1");
+  });
+
+  it("skips server results interleaved anywhere, matching the operator reply beneath them", () => {
+    expect(
+      lastOperatorAssistantId([
+        m("assistant", "a1"),
+        m("assistant", "watch1", "watch-42"),
+        m("assistant", "a2"),
+        m("assistant", "wake1", "background-resume"),
+      ]),
+    ).toBe("a2");
+  });
+
+  it("yields undefined when every assistant message is server-initiated (no Regenerate target)", () => {
+    expect(
+      lastOperatorAssistantId([m("user", "u1"), m("assistant", "sched1", "scheduler")]),
+    ).toBeUndefined();
   });
 });
 

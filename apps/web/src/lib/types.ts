@@ -869,6 +869,13 @@ export type ChatMessage = {
   /** A2A task id for this turn — persisted so a stuck `streaming` message can be
    *  reconciled against the server's task state on reload (self-heal). */
   taskId?: string;
+  /** Trigger origin of a SERVER-INITIATED turn (#3028): a scheduled fire ("scheduler"), a
+   *  watch reaction ("watch" / "watch-<id>"), a background push-resume ("background-resume"),
+   *  or another autonomous wake. Set by ChatResumeWatch on the SETTLED message (never the live
+   *  streaming preview), so ChatMessageView renders it as a compact, expandable result card
+   *  instead of a full-size assistant bubble. Persisted, so the card treatment survives reload;
+   *  absent on operator-initiated turns, which stay full-size. */
+  origin?: string;
   /** Background-agent report (ADR 0050/0062): the spawning job's id + title. The bubble
    *  shows the server's preview; this lets the card open the FULL report in the document
    *  viewer (fetched by id) instead of forcing a trip to the Activity/Background panel. */

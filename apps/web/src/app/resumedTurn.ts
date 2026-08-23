@@ -14,11 +14,18 @@ export type ResumedTurnEvent = {
   task_id?: unknown;
   state?: unknown;
   error?: unknown;
+  /** The turn's trigger origin ("scheduler" / "watch-<id>" / "background-resume" / …), stamped
+   *  by the server (#3028) so the settled message can render as a compact result card. "" on an
+   *  older backend, where ChatResumeWatch falls back to the server-turn store's remembered origin. */
+  origin?: unknown;
 };
 
 export type ResumedTurnRender = {
   session: string;
   taskId: string;
+  /** Trigger origin for the settled message's compact result-card treatment (#3028) — "" when
+   *  the server didn't stamp it (ChatResumeWatch then falls back to the store's remembered origin). */
+  origin: string;
   /** Dedup key for the ADR 0039 ring-buffer replay on reconnect. */
   key: string;
   failed: boolean;
@@ -41,6 +48,7 @@ export function resumedTurnRender(data: ResumedTurnEvent): ResumedTurnRender | n
   const session = String(data.session_id ?? "");
   const text = String(data.text ?? "");
   const taskId = String(data.task_id ?? "");
+  const origin = String(data.origin ?? "");
   // `||`, not `??`: an EMPTY state must fall back too. `??` would leave "" in place, and
   // "" !== "completed" reads as failed — so a payload from a publisher that sets the key
   // but not a value would put a false "Turn failed" on a turn that went fine. A signal
@@ -57,6 +65,7 @@ export function resumedTurnRender(data: ResumedTurnEvent): ResumedTurnRender | n
   return {
     session,
     taskId,
+    origin,
     key: taskId || `${session}:${(text || error).slice(0, 32)}`,
     failed,
     content,

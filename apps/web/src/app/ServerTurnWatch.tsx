@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 
 import { chatStore } from "../chat/chat-store";
-import { labelForOrigin, noteTurnFinished, noteTurnStarted } from "../chat/server-turn-store";
+import { labelForOrigin, noteTurnFinished, noteTurnStarted, rememberOrigin } from "../chat/server-turn-store";
 import { onTopic } from "../lib/events";
 import { applyProgressFrame, parseProgress } from "./serverTurnProgress";
 
@@ -27,7 +27,12 @@ export function ServerTurnWatch() {
     const offStarted = onTopic("turn.started", (data) => {
       const session = String(data.session_id ?? "");
       const origin = String(data.origin ?? "");
-      if (session) noteTurnStarted(session, labelForOrigin(origin));
+      if (session) {
+        // Remember the RAW origin (#3028) so the terminal `chat.resumed` can tag its settled
+        // message as a server result even after `turn.finished` clears the live indicator below.
+        rememberOrigin(session, origin);
+        noteTurnStarted(session, labelForOrigin(origin));
+      }
     });
     const offFinished = onTopic("turn.finished", (data) => {
       const session = String(data.session_id ?? "");
