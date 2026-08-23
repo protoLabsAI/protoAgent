@@ -109,6 +109,7 @@ export function NewAgentPanel({
   // button does too, whether or not the Configure step is open.
   const missingRequired = configOpen && isMissingRequiredConfig(fields, values);
   const missingHard = isMissingRequiredBundleConfig(fields, values);
+  const hasHardRequired = fields.some((f) => f.origin === "config" && f.required && f.kind !== "boolean" && f.defaultValue === undefined);
   const contractNotice = pickedArchetype ? requiresToolsNotice(pickedArchetype.label, pickedArchetype.requires_tools) : null;
 
   function pick(id: string) {
@@ -123,8 +124,13 @@ export function NewAgentPanel({
     // agent on the default SOUL. When the Configure form is open, split the collected values
     // into the two seed channels (#2041); a collapsed/absent form sends nothing → env-only.
     mutationFn: () => {
-      const { inputs, secrets, config } =
-        configOpen && fields.length ? splitConfigValues(fields, values) : { inputs: {}, secrets: [], config: {} };
+      // MCP inputs + secrets are skippable (collapsed form → env fallback); bundle config
+      // answers are NOT (the server gates on them, #2977) — they ride the request whether
+      // or not the section is open, so fill-then-collapse can't drop them.
+      const split = fields.length ? splitConfigValues(fields, values) : { inputs: {}, secrets: [], config: {} };
+      const inputs = configOpen ? split.inputs : {};
+      const secrets = configOpen ? split.secrets : [];
+      const config = split.config;
       return api.createAgent({
         name: name.trim(),
         bundle: archetype?.bundle ?? null,
@@ -193,7 +199,7 @@ export function NewAgentPanel({
             aria-label="Agent name"
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && nameOk && !create.isPending) create.mutate();
+              if (e.key === "Enter" && nameOk && !missingHard && !create.isPending) create.mutate();
             }}
           />
           <span className="field-hint">Letters, numbers, dashes and underscores — it's the agent's id and URL.</span>
@@ -276,8 +282,13 @@ export function NewAgentPanel({
             >
               {configOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
               <span>Configure {pickedArchetype?.label}</span>
-              <span className="field-hint">optional — skip to use this host's environment</span>
+              <span className="field-hint">
+                {hasHardRequired ? "answers marked * are required" : "optional — skip to use this host's environment"}
+              </span>
             </button>
+            {missingHard && !configOpen ? (
+              <span className="field-hint">Fields marked * are needed before this agent can be created — open Configure.</span>
+            ) : null}
             {configOpen ? (
               <div className="archetype-configure-fields">
                 {fields.map((f) => (
