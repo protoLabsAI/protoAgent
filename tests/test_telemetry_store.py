@@ -43,12 +43,97 @@ def test_record_and_recent(store):
     assert recent[0]["cost_usd"] == 0.03
 
 
-def test_record_upserts_by_task_id(store):
+def test_record_keeps_every_leg_of_a_task(store):
+    # #3001: one row per turn LEG, not per task. `task_id` used to be the PRIMARY
+    # KEY with an upsert, so the second record() silently replaced the first.
     store.record(_row("t1", cost_usd=0.01))
-    store.record(_row("t1", cost_usd=0.05))  # same task_id → update, not dup
+    store.record(_row("t1", cost_usd=0.05))
     recent = store.recent()
-    assert len(recent) == 1
-    assert recent[0]["cost_usd"] == 0.05
+    assert len(recent) == 2
+    assert sorted(r["cost_usd"] for r in recent) == [0.01, 0.05]
+
+
+def test_rows_carry_a_stable_surrogate_id(store):
+    # The console keys its table rows on this. `task_id` cannot serve — two legs of
+    # one HITL turn share it, and duplicate React keys break rendering (#3001).
+    store.record(_row("t1"))
+    store.record(_row("t1"))
+    ids = [r["row_id"] for r in store.recent()]
+    assert len(set(ids)) == 2 and all(isinstance(i, int) for i in ids)
+
+
+def test_hitl_park_and_resume_are_two_rows_that_sum(store):
+    """#3001 / #2943 — the audit's reproduction, as a regression test.
+
+    A parked leg and the resume that follows carry the SAME A2A task id. Both are
+    real turns with real spend, and the park leg is where an approval-gated turn
+    does all its tool work — so collapsing them lost the tool calls entirely.
+    """
+    store.record(
+        _row(
+            "task-1",
+            state="input_required",
+            success=None,
+            input_tokens=40,
+            output_tokens=5,
+            total_tokens=45,
+            cost_usd=0.001,
+            tool_calls=2,
+            ended_at="2026-06-01T00:00:01+00:00",
+        )
+    )
+    store.record(
+        _row(
+            "task-1",
+            state="completed",
+            success=1,
+            input_tokens=70,
+            output_tokens=30,
+            total_tokens=100,
+            cost_usd=0.004,
+            tool_calls=0,
+            ended_at="2026-06-01T00:00:03+00:00",
+        )
+    )
+    assert len(store.recent()) == 2
+    s = store.summary()
+    assert s["input_tokens"] == 110  # not 70 — the park leg's prompt tokens survive
+    assert s["cost_usd"] == 0.005  # not 0.004
+    assert s["tool_calls"] == 2  # not 0 — every pre-approval tool call was erased
+
+
+def test_pre_3001_store_migrates_without_losing_rows(tmp_path):
+    # The pre-#3001 shape had `task_id TEXT PRIMARY KEY`; SQLite cannot alter a
+    # primary key, so opening such a store rebuilds the table. Existing history
+    # must survive that rebuild, and the new per-leg semantics must apply after it.
+    import sqlite3
+
+    path = str(tmp_path / "old.db")
+    cols = (
+        "task_id TEXT PRIMARY KEY, session_id TEXT, state TEXT, success INTEGER, model TEXT, "
+        "models TEXT, input_tokens INTEGER, output_tokens INTEGER, total_tokens INTEGER, "
+        "cache_read_input_tokens INTEGER, cache_creation_input_tokens INTEGER, cost_usd REAL, "
+        "duration_ms INTEGER, llm_calls INTEGER, tool_calls INTEGER, created_at TEXT, ended_at TEXT"
+    )
+    db = sqlite3.connect(path)
+    db.execute(f"CREATE TABLE turns ({cols})")
+    db.execute(
+        "INSERT INTO turns (task_id, state, model, input_tokens, cost_usd, ended_at) "
+        "VALUES ('legacy-1', 'completed', 'm', 11, 0.02, '2026-05-01T00:00:00+00:00')"
+    )
+    db.commit()
+    db.close()
+
+    store = TelemetryStore(path)
+    rows = store.recent()
+    assert [r["task_id"] for r in rows] == ["legacy-1"]  # history preserved
+    assert rows[0]["input_tokens"] == 11 and rows[0]["cost_usd"] == 0.02
+    assert isinstance(rows[0]["row_id"], int)  # backfilled a surrogate id
+
+    # Re-opening is a no-op, and the new semantics hold on the migrated store.
+    TelemetryStore(path)
+    store.record(_row("legacy-1", cost_usd=0.07))
+    assert len(store.recent()) == 2
 
 
 def test_record_persists_soul_rev(store):
@@ -668,3 +753,49 @@ def test_retention_config_default_is_bounded():
     from graph.config import LangGraphConfig
 
     assert LangGraphConfig().telemetry_retention_days == 90  # guardrail on by default
+
+
+def test_park_and_resume_write_two_rows_through_the_real_writer(store, telemetry_server):
+    """#3001 — the same park/resume, driven through ``_record_a2a_telemetry``.
+
+    The #2943 regression test asserts the two ``TurnOutcome`` objects the terminal
+    hook receives and stops there, so it stayed green while the store collapsed
+    them. This asserts the durable end: the writer is fed both legs exactly as the
+    executor feeds it, and both must survive.
+    """
+    server = telemetry_server
+    common = dict(context_id="sess-hitl", text="", models=["claude-opus-4-8"])
+    server._record_a2a_telemetry(
+        _outcome(
+            task_id="task-hitl",
+            state="input_required",
+            usage={"input_tokens": 40, "output_tokens": 5},
+            cost_usd=0.001,
+            duration_ms=900,
+            llm_calls=1,
+            tool_calls=2,
+            **common,
+        )
+    )
+    server._record_a2a_telemetry(
+        _outcome(
+            task_id="task-hitl",
+            state="completed",
+            usage={"input_tokens": 70, "output_tokens": 30},
+            cost_usd=0.004,
+            duration_ms=1200,
+            llm_calls=1,
+            tool_calls=0,
+            **common,
+        )
+    )
+
+    rows = store.recent()
+    assert len(rows) == 2
+    assert {r["state"] for r in rows} == {"input_required", "completed"}
+    assert all(r["task_id"] == "task-hitl" for r in rows)  # still joinable to the task
+
+    s = store.summary()
+    assert (s["input_tokens"], s["output_tokens"]) == (110, 35)
+    assert s["cost_usd"] == 0.005
+    assert s["tool_calls"] == 2

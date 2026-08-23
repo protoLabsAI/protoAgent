@@ -79,7 +79,7 @@ export function FleetTelemetrySection({ fleet }: { fleet: FleetTelemetry }) {
               const href = langfuseTraceUrl(template, traceId);
               const ts = row.evidence.timestamp;
               return (
-                <li key={`${row.slug}-${turn.task_id ?? i}`} data-testid="fleet-flag">
+                <li key={`${row.slug}-${turn.row_id ?? turn.task_id ?? i}-${i}`} data-testid="fleet-flag">
                   <span className="flag-member" data-testid="fleet-flag-member">{row.memberLabel}</span>
                   <span className="flag-when" title={localStampTitle(ts)}>{localStamp(ts)}</span>
                   <span className="flag-model">{turn.model || "—"}</span>

@@ -1078,6 +1078,10 @@ export type TrajectoryCall = {
 };
 
 export type TelemetryTurn = {
+  /** Stable per-ROW identity (#3001). A HITL park/resume is two rows sharing one
+   *  `task_id`, so `task_id` is not unique and must not be used as a React key.
+   *  Absent only on rows from a pre-#3001 fleet member. */
+  row_id?: number;
   task_id: string;
   session_id: string;
   state: string;

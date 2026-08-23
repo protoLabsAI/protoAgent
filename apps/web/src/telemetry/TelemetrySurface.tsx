@@ -100,8 +100,8 @@ function TelemetryBody() {
                 </div>
                 {insights.flagged.length ? (
                   <ul className="insight-flags">
-                    {insights.flagged.slice(0, 5).map((f) => (
-                      <li key={f.task_id}>
+                    {insights.flagged.slice(0, 5).map((f, i) => (
+                      <li key={f.row_id ?? `${f.task_id}-${i}`}>
                         <span className="flag-when" title={localStampTitle(f.ended_at)}>{localStamp(f.ended_at)}</span>
                         <span className="flag-model">{f.model || "—"}</span>
                         <span className="flag-reason">{f.reasons.join(" · ")}</span>
@@ -191,8 +191,8 @@ function TelemetryBody() {
                   </Tr>
                 </THead>
                 <TBody>
-                  {turns.map((t) => (
-                    <Tr key={t.task_id} className={t.success ? "" : "turn-failed"}>
+                  {turns.map((t, i) => (
+                    <Tr key={t.row_id ?? `${t.task_id}-${i}`} className={t.success ? "" : "turn-failed"}>
                       <Td title={localStampTitle(t.ended_at)}>{localStamp(t.ended_at)}</Td>
                       <Td title={t.models || t.model}>
                         {t.model || "—"}
