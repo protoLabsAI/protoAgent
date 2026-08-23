@@ -316,14 +316,14 @@ async def _acp_drive_turn(rt, message: str):
         "cache_creation_input_tokens": 0,
         "cost_usd": 0.0,
     }
-    # Context pressure is a different axis than billing: when the agent reports
-    # ACP-native usage_update ({used, size} tokens — hermes-acp does), surface it as
-    # context_* fields so the console can render a context indicator, tokens/cost
-    # stay 0 (estimates must not pollute cost telemetry).
-    ctx = rt.last_usage() if hasattr(rt, "last_usage") else None
-    if isinstance(ctx, dict) and ctx.get("size"):
-        usage_frame["context_used_tokens"] = int(ctx.get("used") or 0)
-        usage_frame["context_window_tokens"] = int(ctx.get("size") or 0)
+    # No context_* fields here (#3006). This used to attach `context_used_tokens` /
+    # `context_window_tokens` from the runtime's ACP-native usage_update, commented
+    # "so the console can render a context indicator" — but nothing ever consumed
+    # them: the executor's usage handler reads a fixed key set and drops the rest,
+    # and no console surface was ever built. The unit test asserted the dict this
+    # function had just constructed, so it stayed green while the fields went
+    # nowhere. Removed rather than wired up: ACP runtime mode is deprecated (#2548),
+    # so a comment promising a shipped indicator was the actively harmful part.
     yield ("usage", usage_frame)
     # The answer already streamed as text deltas; `done` finalizes (executor appends only
     # meta when text was streamed, so no duplication).

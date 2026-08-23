@@ -255,7 +255,13 @@ class AcpRuntime:
     def last_usage(self) -> dict | None:
         """Latest ACP-native context pressure ({used, size} tokens) the agent reported
         via ``usage_update`` — None when the agent hasn't sent one (most coding agents
-        don't; hermes-acp does after each response)."""
+        don't; hermes-acp does after each response).
+
+        A live-state accessor for a caller that wants to sample it (the coding-agent
+        client exposes the same attribute for the project board's monitor). Nothing on
+        the chat path reads it: the turn's usage frame deliberately carries no
+        context_* fields, because no consumer was ever built for them (#3006).
+        """
         return getattr(self._client, "last_usage", None)
 
     async def close(self) -> None:

@@ -677,9 +677,16 @@ async def test_acp_client_records_usage_update():
     assert client.last_usage == {"used": 1234, "size": 128000}
 
 
-async def test_drive_turn_usage_frame_carries_context_pressure(monkeypatch):
-    """When the runtime reports usage_update data, the usage frame carries context_*
-    fields — tokens/cost stay 0 (estimates must not pollute cost telemetry)."""
+async def test_drive_turn_usage_frame_carries_no_unconsumed_context_fields(monkeypatch):
+    """#3006: the usage frame carries only keys the executor actually reads.
+
+    This test used to assert `context_used_tokens` / `context_window_tokens` — a
+    pair the producer built, this test checked, and nothing downstream ever
+    consumed. Asserting the dict the function under test just constructed is not a
+    contract; it stays green whether or not anyone receives the fields. What IS a
+    contract is that an ACP turn reports zero tokens and zero cost (the external
+    agent's own subscription meters it), which is what this now pins.
+    """
     chat = _chat_module()
 
     class _Rt(_MockRuntime):
@@ -691,8 +698,9 @@ async def test_drive_turn_usage_frame_carries_context_pressure(monkeypatch):
 
     frames = [f async for f in chat._acp_drive_turn(_Rt(), "m")]
     usage = next(p for k, p in frames if k == "usage")
-    assert usage["context_used_tokens"] == 123 and usage["context_window_tokens"] == 1000
     assert usage["input_tokens"] == 0 and usage["cost_usd"] == 0.0
+    assert usage["model"] == "acp:mock"  # the honest "not gateway-metered" signal
+    assert not [k for k in usage if k.startswith("context_")]
     assert ("done", "done-text") in frames
 
 
