@@ -20,7 +20,7 @@ from typing import Annotated, Any
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
-from .adapters import DelegateError
+from .adapters import DelegateError, mark_delegation_detached
 from .registry import DelegateRegistry
 
 log = logging.getLogger("protoagent.plugins.delegates")
@@ -147,6 +147,13 @@ async def _spawn_background_delegation(
         session = ""
 
     async def _work() -> str:
+        # This coroutine runs in a COPY of the tool body's context (asyncio.create_task),
+        # LangChain run context and all — so without saying otherwise it could still
+        # dispatch a peer's cost row into the spawning turn's stream, but only when the
+        # peer happens to answer before that turn closes (#3016). Detached work is not
+        # the spawning turn's spend; mark it so the billing is skipped either way rather
+        # than decided by the peer's latency.
+        mark_delegation_detached()
         # item_id rides into the dispatch itself, so the managed-git claim/dedup
         # applies identically to background and foreground fan-out (one registry,
         # one event loop).

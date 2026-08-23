@@ -19,10 +19,28 @@ import protolabs_a2a as pa
 # cost-v1 carries no model field, so the delegates adapter tags the usage row it
 # builds with ``peer:<delegate>`` — a MARKER, not a model name. It rides the turn's
 # ``models`` list into the stored telemetry row, which is the only durable trace a
-# delegation leaves. Defined here, in the lowest layer both ends can import: the
-# adapter (``plugins/delegates``) writes it, ``server.turn_telemetry`` recognises it
-# so a marker never becomes a row's primary ``model``.
+# delegation leaves. Defined here, in the lowest layer every end can import: the
+# adapter (``plugins/delegates``) writes it, and the readers below recognise it so a
+# marker never becomes a turn's primary ``model``.
 PEER_MODEL_PREFIX = "peer:"
+
+
+def drop_peer_markers(models) -> list[str]:
+    """A turn's model list with the ``peer:`` markers removed (#3016).
+
+    Every field that names *the model that ran this turn* has to pick from this rather
+    than from the raw list — the telemetry row's ``model`` column and the ``turn.usage``
+    bus event (``server.turn_telemetry``), and the fleet trace export's ``meta.model``
+    (``observability.trace_export``), which the lab consumes as the teacher model. A
+    marker names an agent, so a per-model breakdown or a training row that says
+    ``peer:orbis`` is simply wrong. The raw list keeps its markers either way: that CSV
+    is where a delegation's spend stays legible.
+
+    Usually a no-op, because the lead's own call precedes any delegation. It earns its
+    keep in the edge that isn't: a provider reporting no usage at all yields no frame
+    for the lead, and the marker then leads the list.
+    """
+    return [m for m in (models or []) if not str(m).startswith(PEER_MODEL_PREFIX)]
 
 
 def _task_of(result) -> dict:

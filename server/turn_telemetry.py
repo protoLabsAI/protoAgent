@@ -24,7 +24,7 @@ import logging
 import uuid
 
 from runtime.state import STATE
-from tools.a2a_parse import PEER_MODEL_PREFIX
+from tools.a2a_parse import drop_peer_markers
 
 log = logging.getLogger(__name__)
 
@@ -164,12 +164,9 @@ def record_turn(
     input_tokens = max(0, int(u.get("input_tokens", 0) or 0) - cache_read - cache_creation)
     output_tokens = int(u.get("output_tokens", 0) or 0)
     # The `model` column names the model that ran this turn, so it must skip the
-    # `peer:<delegate>` MARKERS a delegation contributes (#3016) — those name an agent,
-    # not a model, and a per-model breakdown that lists "peer:orbis" is just wrong.
-    # Usually moot (the lead's own call precedes any delegation), but a provider that
-    # reports no usage at all yields no frame for the lead, and the marker would lead
-    # the list. `models` keeps them either way — that CSV is where peer spend is legible.
-    real_models = [m for m in models if not str(m).startswith(PEER_MODEL_PREFIX)]
+    # `peer:<delegate>` markers a delegation contributes (#3016); `models` below keeps
+    # them, which is where peer spend stays legible. See `drop_peer_markers` for why.
+    real_models = drop_peer_markers(models)
     configured_model = (STATE.graph_config.model_name if STATE.graph_config else "") or ""
     primary_model = real_models[0] if real_models else configured_model
 

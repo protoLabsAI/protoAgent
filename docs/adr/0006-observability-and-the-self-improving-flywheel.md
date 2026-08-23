@@ -281,21 +281,39 @@ The mechanics, and why each is what it is:
   field, and `models` exists to prove which model actually ran (Slice 4b). The
   prefix keeps "what did this turn spend on peers" answerable from the stored row —
   it is the only durable trace a delegation leaves, since the `peer` tag itself is a
-  stream-only routing hint. Because a marker is not a model, `record_turn` skips
-  markers when picking the row's primary `model` column and the `turn.usage` bus
-  event's `model`: normally the lead's own call is first anyway, but a provider that
-  reports no usage leaves the marker leading the list, and a per-model breakdown that
-  lists `peer:orbis` is simply wrong.
+  stream-only routing hint. Because a marker is not a model, **every field that names
+  the model that ran picks from `tools.a2a_parse.drop_peer_markers(models)`, never
+  from the raw list**: the row's `model` column and the `turn.usage` bus event
+  (`server.turn_telemetry`), and the fleet trace export's `meta.model`
+  (`observability.trace_export`), which the lab consumes as the row's teacher model.
+  One helper because a fourth reader is a matter of time, and a marker leaking into
+  any of them is the same defect. Normally the lead's own call is first anyway, but a
+  provider that reports no usage leaves the marker leading the list — and a per-model
+  breakdown (or a training row) that says `peer:orbis` is simply wrong. The raw
+  `models` list keeps its markers everywhere.
 - **Silent degradation is the contract.** A peer that emits no cost-v1 — any
   non-protoAgent A2A agent — behaves exactly as before: no row, no cost, same
-  text.
+  text. So is a payload we can't read: **reading and dispatching are both inside the
+  best-effort guard**, because a raise would propagate through `registry.dispatch`,
+  which records the delegate as failing before re-raising — discarding an answer
+  already in hand and red-flagging a healthy peer over a bad number. Telemetry must
+  never break a delegation (#2872's rule, and it applies to the parse half too).
 
 Known limits, deliberately left rather than papered over:
 
 - A peer delegation counts as **one** `llm_calls` however many calls the peer
   really made — cost-v1 reports no call count.
-- A **background** delegation (ADR 0050) runs detached from the turn's callback
-  context, so its peer row has no run context to dispatch into and is dropped.
+- A **background** delegation (ADR 0050) bills nothing — and that takes a deliberate
+  flag, not the absence of one. `asyncio.create_task` COPIES the spawning context, so
+  the detached job inherits the `delegate_to` tool body's LangChain run context and
+  *can* reach the spawning turn's stream: left alone it would bill that turn whenever
+  the peer answered before the turn closed and drop the row when it answered after —
+  the same delegation writing two different rows depending on the peer's latency. A
+  contextvar set at the top of the job's own coroutine (`mark_delegation_detached`)
+  makes the exclusion deterministic. Detached spend belongs to the later turn the
+  reply is drained into, not to the turn that spawned it; billing it there properly
+  means carrying the peer's row through the background job's completion into that
+  turn, which is a separate change.
 - **Only spend that reached a terminal artifact is billable here.** A peer leg that
   ends without one — a HITL park (#2943's `input_required` leg, which emits a status
   message and no artifact) or a failed turn — put no cost-v1 on the wire, so the

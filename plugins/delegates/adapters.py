@@ -15,9 +15,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import re
 import uuid
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 
 logger = logging.getLogger("protoagent.plugins.delegates")
@@ -344,21 +346,26 @@ def _advertised_a2a_versions(card: dict) -> list[str]:
 # verbatim and bills it to the calling turn instead of dropping it on the floor.
 
 
-def _wire_int(value) -> int:
-    """A wire number as an int. Proto-JSON round-trips numbers as floats and a foreign
-    peer may send them as strings, so every field is coerced rather than trusted."""
-    try:
-        return int(float(value or 0))
-    except (TypeError, ValueError):
-        return 0
+def _wire_number(value) -> float:
+    """A wire number as a finite float, or ``0.0`` for anything that isn't one.
 
-
-def _wire_float(value) -> float:
-    """A wire number as a float — same coercion contract as :func:`_wire_int`."""
+    Proto-JSON round-trips numbers as floats and a foreign peer may send them as
+    strings, so every field is coerced rather than trusted. Non-finite values are
+    rejected here too, and not only for tidiness: JSON parses ``Infinity`` (and
+    ``1e400``, which overflows to it), ``int(inf)`` raises ``OverflowError`` rather
+    than the ``ValueError`` a coercion guard expects, and an infinite ``cost_usd``
+    would poison the turn's sums all the way into the stored row.
+    """
     try:
-        return float(value or 0.0)
+        n = float(value or 0)
     except (TypeError, ValueError):
         return 0.0
+    return n if math.isfinite(n) else 0.0
+
+
+def _wire_int(value) -> int:
+    """A wire number as an int — :func:`_wire_number` truncated toward zero."""
+    return int(_wire_number(value))
 
 
 def _peer_usage_row(result, delegate: str) -> dict | None:
@@ -396,7 +403,7 @@ def _peer_usage_row(result, delegate: str) -> dict | None:
         "output_tokens": _wire_int(usage.get("output_tokens")),
         "cache_read_input_tokens": _wire_int(usage.get("cache_read_input_tokens")),
         "cache_creation_input_tokens": _wire_int(usage.get("cache_creation_input_tokens")),
-        "cost_usd": _wire_float(payload.get("costUsd")),
+        "cost_usd": _wire_number(payload.get("costUsd")),
     }
     if not any(row.values()):
         return None
@@ -404,11 +411,33 @@ def _peer_usage_row(result, delegate: str) -> dict | None:
     # the promise that `models` proves which model actually ran (ADR 0006 Slice 4b). The
     # prefix is what makes "what did this turn spend on peers" answerable from the stored
     # row without a second telemetry row per delegation — it is the only durable trace a
-    # peer leaves, since the `peer` tag below is a stream-only routing hint. Marker rows
-    # are kept out of the row's `model` column by `server/turn_telemetry.record_turn`.
+    # peer leaves, since the `peer` tag below is a stream-only routing hint. Every reader
+    # that picks the model that RAN filters markers out with `a2a_parse.drop_peer_markers`.
     row["model"] = f"{PEER_MODEL_PREFIX}{delegate}"
     row["peer"] = delegate
     return row
+
+
+# A detached background delegation must bill NOTHING, and saying so takes a flag (#3016).
+#
+# ``asyncio.create_task`` COPIES the spawning context, so the job that
+# ``_spawn_background_delegation`` fires from inside the ``delegate_to`` tool body inherits
+# that body's LangChain run context — the callback manager ``adispatch_custom_event`` reads.
+# Left alone, a detached delegation therefore bills the spawning turn *if the peer answers
+# while that turn is still streaming* and is silently dropped if it answers after: the same
+# delegation producing two different telemetry rows depending on how fast the peer was.
+# A detached job is not the spawning turn's work — it is delivered to a LATER turn — so it
+# is excluded deterministically instead, which is also what ADR 0006 documents.
+_DETACHED_DELEGATION: ContextVar[bool] = ContextVar("protoagent_detached_delegation", default=False)
+
+
+def mark_delegation_detached() -> None:
+    """Mark this coroutine's context as a detached background delegation (ADR 0050).
+
+    Called at the top of the background job's own coroutine, so the flag is set in the
+    context ``asyncio.create_task`` copied for it and never leaks back to the spawning
+    turn (a contextvar set inside a task is that task's alone)."""
+    _DETACHED_DELEGATION.set(True)
 
 
 async def _bill_peer_usage(result, delegate: str) -> None:
@@ -422,19 +451,25 @@ async def _bill_peer_usage(result, delegate: str) -> None:
     is why nothing is stashed on the adapter: ``ADAPTERS`` holds one instance per type for
     the whole process, so last-call state on it would race across a concurrent fan-out.
 
-    Best-effort in both halves: a peer with no cost-v1 emits nothing, and having no run
-    context (a background delegation detached from the turn, a unit test, the CLI runner)
-    is not an error.
+    Best-effort **end to end** — reading the payload included. A peer with no cost-v1
+    emits nothing, having no run context at all (a unit test, the CLI runner) is not an
+    error, and neither is a payload this cannot parse: telemetry must never turn a
+    delegation that succeeded into one that failed. That is not hypothetical here — a
+    raise would propagate through ``registry.dispatch``, which records the delegate as
+    failing before re-raising, so a malformed number would discard an answer already in
+    hand *and* put a red mark on a healthy peer.
     """
-    row = _peer_usage_row(result, delegate)
-    if not row:
+    if _DETACHED_DELEGATION.get():
         return
     try:
+        row = _peer_usage_row(result, delegate)
+        if not row:
+            return
         from langchain_core.callbacks import adispatch_custom_event
 
         await adispatch_custom_event("usage", dict(row))
     except Exception:  # noqa: BLE001 — telemetry must never break a delegation
-        logger.debug("[delegates] peer usage row not dispatched to the turn stream", exc_info=True)
+        logger.debug("[delegates] peer usage row not billed to the turn stream", exc_info=True)
 
 
 class A2aAdapter(Adapter):
