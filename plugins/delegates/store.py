@@ -6,6 +6,15 @@ each delegate's secret (a2a ``auth.token``, openai ``api_key``) is stored in
 ``secrets.yaml`` under a ``delegate_secrets`` map keyed ``<name>.<field>`` and
 overlaid back at load. So the tracked config never holds a secret, and the panel
 never has to round-trip one it already stored.
+
+Two layers (ADR 0105): an entry is either **agent**-scoped (this instance's
+``langgraph-config.yaml`` + ``secrets.yaml`` — the default) or **host**-scoped
+(``scope: host``: the box's ``host-config.yaml`` ``delegates:`` list + the 0600
+``host-secrets.yaml`` beside it). Every instance under the box READS both — agent
+entries shadow host entries by name — so a coder registered once on the hub is on
+every member's bench without a per-member copy, and a rotated key reaches them all.
+Only the hub WRITES the host layer (members never write box state); a member that
+tries gets :class:`DelegateScopeError`.
 """
 
 from __future__ import annotations
@@ -15,6 +24,14 @@ import copy
 from .adapters import ADAPTERS, is_secretish
 
 SECRETS_SECTION = "delegate_secrets"
+
+SCOPE_AGENT = "agent"
+SCOPE_HOST = "host"
+SCOPES = (SCOPE_AGENT, SCOPE_HOST)
+
+
+class DelegateScopeError(ValueError):
+    """A write to the host (fleet-shared) layer from an instance that may not write it."""
 
 # A per-delegate env secret is keyed ``<name>.env.<VARNAME>`` in the overlay — the
 # secret VALUE lives in secrets.yaml while the tracked config keeps only an empty
@@ -45,20 +62,92 @@ def _pop_dotted(d: dict, dotted: str):
     return cur.pop(parts[-1], None) if isinstance(cur, dict) else None
 
 
-def read_delegates_raw() -> list:
-    """The delegates list as stored in the live config (no secret values)."""
+def _scope_of(entry: dict) -> str:
+    return SCOPE_HOST if str(entry.get("scope") or "").strip().lower() == SCOPE_HOST else SCOPE_AGENT
+
+
+def can_write_host_layer() -> bool:
+    """Only a hub / standalone instance writes the box's host layer — a fleet member
+    never writes box state (the same rule ``sync_host_model_layer`` follows)."""
+    try:
+        from graph.workspaces.manager import is_workspace_member
+
+        return not is_workspace_member()
+    except Exception:  # noqa: BLE001 — unknown → behave like a member (refuse)
+        return False
+
+
+def _read_host_doc() -> dict:
+    """The raw ``host-config.yaml`` mapping, or ``{}`` (absent / unreadable / not a map —
+    the cascade ignores those too)."""
+    import yaml as _yaml
+
+    from infra.paths import host_config_path, read_text_utf8
+
+    hp = host_config_path()
+    try:
+        if not hp.exists():
+            return {}
+        doc = _yaml.safe_load(read_text_utf8(hp)) or {}
+    except (OSError, _yaml.YAMLError):
+        return {}
+    return doc if isinstance(doc, dict) else {}
+
+
+def read_host_delegates_raw() -> list:
+    """The fleet-shared roster from the box's ``host-config.yaml`` (no secret values),
+    every entry stamped ``scope: host``."""
+    out = []
+    for e in _read_host_doc().get("delegates") or []:
+        if isinstance(e, dict):
+            e = dict(e)
+            e["scope"] = SCOPE_HOST
+            out.append(e)
+    return out
+
+
+def read_agent_delegates_raw() -> list:
+    """This instance's own roster from ``langgraph-config.yaml`` (no secret values),
+    every entry stamped ``scope: agent``."""
     from graph.config_io import load_yaml_doc
 
     doc = load_yaml_doc() or {}
     val = doc.get("delegates")
-    return list(val) if isinstance(val, list) else []
+    out = []
+    for e in (val if isinstance(val, list) else []):
+        if isinstance(e, dict):
+            e = dict(e)
+            e["scope"] = SCOPE_AGENT
+            out.append(e)
+    return out
+
+
+def read_delegates_raw() -> list:
+    """The EFFECTIVE roster: this instance's entries ∪ the fleet-shared ones, an agent
+    entry shadowing a host entry of the same name (ADR 0105). Every entry carries
+    ``scope``. No secret values."""
+    agent = read_agent_delegates_raw()
+    names = {str(e.get("name") or "") for e in agent}
+    return agent + [e for e in read_host_delegates_raw() if str(e.get("name") or "") not in names]
 
 
 def secret_overlay() -> dict:
+    """``delegate_secrets`` from the host overlay ∪ this instance's overlay (instance
+    wins on a key collision — same precedence as the rosters)."""
     from graph.config_io import load_secrets
+    from infra.paths import host_secrets_path
 
+    merged: dict = {}
+    try:
+        host = (load_secrets(host_secrets_path()) or {}).get(SECRETS_SECTION)
+        if isinstance(host, dict):
+            merged.update(host)
+    except Exception:  # noqa: BLE001 — an unreadable host overlay just contributes nothing
+        pass
     sec = (load_secrets() or {}).get(SECRETS_SECTION)
-    return sec if isinstance(sec, dict) else {}
+    if isinstance(sec, dict):
+        merged.update(sec)
+    return merged
 
 
 def env_secret_values(overlay: dict, name: str) -> dict:
@@ -100,17 +189,49 @@ def merged_delegates() -> list:
     return out
 
 
-def _save_list(delegates: list) -> None:
+def _strip_scope(delegates: list) -> list:
+    out = []
+    for e in delegates:
+        if isinstance(e, dict):
+            e = dict(e)
+            e.pop("scope", None)
+        out.append(e)
+    return out
+
+
+def _save_list(delegates: list, scope: str = SCOPE_AGENT) -> None:
+    """Persist one LAYER's roster: the agent layer into ``langgraph-config.yaml``, the
+    host layer into the box's ``host-config.yaml`` (other keys preserved, atomic)."""
+    if scope == SCOPE_HOST:
+        if not can_write_host_layer():
+            raise DelegateScopeError("fleet-shared delegates are managed on the hub — this agent can't edit them")
+        import yaml as _yaml
+
+        from infra.paths import atomic_write, host_config_path
+
+        hp = host_config_path()
+        doc = _read_host_doc()
+        doc["delegates"] = _strip_scope(delegates)
+        hp.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write(hp, _yaml.safe_dump(doc, sort_keys=False))
+        return
     from graph.config_io import load_yaml_doc, save_yaml_doc
 
     doc = load_yaml_doc() or {}
     if not isinstance(doc, dict):
         doc = {}
-    doc["delegates"] = delegates
+    doc["delegates"] = _strip_scope(delegates)
     save_yaml_doc(doc)
 
 
-def _route_secret(name: str, entry: dict) -> dict:
+def _secrets_path_for(scope: str):
+    from graph.config_io import secrets_yaml_path
+    from infra.paths import host_secrets_path
+
+    return host_secrets_path() if scope == SCOPE_HOST else secrets_yaml_path()
+
+
+def _route_secret(name: str, entry: dict, scope: str = SCOPE_AGENT) -> dict:
     """Route the entry's secret value(s) into ``secrets.yaml`` (if present); return
     the entry with the secrets stripped, safe to persist in the tracked config.
 
@@ -146,11 +267,16 @@ def _route_secret(name: str, entry: dict) -> dict:
             env[var] = ""
 
     if secrets:
-        save_secrets({SECRETS_SECTION: secrets})
+        if scope == SCOPE_HOST:
+            save_secrets({SECRETS_SECTION: secrets}, _secrets_path_for(scope))
+        else:
+            save_secrets({SECRETS_SECTION: secrets})
     return entry
 
 
-def _prune_secrets(name: str, keep_env: set[str] | None, secret_field: str | None = None) -> None:
+def _prune_secrets(
+    name: str, keep_env: set[str] | None, secret_field: str | None = None, scope: str = SCOPE_AGENT
+) -> None:
     """Drop stored secrets for delegate ``name`` that are no longer referenced.
 
     ``keep_env`` = the env var names still SECRET-ROUTED on the entry (marked by the
@@ -166,10 +292,10 @@ def _prune_secrets(name: str, keep_env: set[str] | None, secret_field: str | Non
 
     import yaml as _yaml
 
-    from graph.config_io import load_secrets, secrets_yaml_path
+    from graph.config_io import load_secrets
 
-    path = secrets_yaml_path()
-    current = load_secrets()
+    path = _secrets_path_for(scope)
+    current = load_secrets(path) if scope == SCOPE_HOST else load_secrets()
     section = current.get(SECRETS_SECTION)
     if not isinstance(section, dict) or not section:
         return
@@ -195,29 +321,66 @@ def _prune_secrets(name: str, keep_env: set[str] | None, secret_field: str | Non
     os.replace(tmp, path)
 
 
+def _layer(scope: str) -> list:
+    return read_host_delegates_raw() if scope == SCOPE_HOST else read_agent_delegates_raw()
+
+
+def _other(scope: str) -> str:
+    return SCOPE_AGENT if scope == SCOPE_HOST else SCOPE_HOST
+
+
+def _remove_from_layer(name: str, scope: str) -> bool:
+    """Drop ``name`` (and its secrets) from one layer; True when something was removed."""
+    layer = _layer(scope)
+    doomed = next((e for e in layer if isinstance(e, dict) and e.get("name") == name), None)
+    if doomed is None:
+        return False
+    adapter = ADAPTERS.get(str(doomed.get("type", "")))
+    _prune_secrets(name, None, secret_field=adapter.secret_field if adapter else None, scope=scope)
+    _save_list([e for e in layer if not (isinstance(e, dict) and e.get("name") == name)], scope)
+    return True
+
+
 def upsert_delegate(entry: dict) -> list:
-    """Add or replace a delegate by name; route its secret; persist. Returns the
-    new list (secret-free, as stored)."""
+    """Add or replace a delegate by name in its layer (``scope: host`` = fleet-shared,
+    default ``agent``); route its secret to that layer's overlay; persist. Moving an
+    entry between layers (re-saving with the other scope) removes it from the old one
+    — a name lives in one layer at a time as far as the writer is concerned. Returns
+    the EFFECTIVE roster (secret-free, scope-stamped)."""
+    entry = dict(entry)
     name = str(entry.get("name", "")).strip()
+    scope = _scope_of(entry)
+    entry.pop("scope", None)
+    if scope == SCOPE_HOST and not can_write_host_layer():
+        raise DelegateScopeError("fleet-shared delegates are managed on the hub — this agent can't edit them")
     # Which env vars remain SECRET-routed after this save — captured BEFORE
     # _route_secret pops the form's env_secret marker list.
     marked = {str(k) for k in (entry.get("env_secret") or [])}
     env_in = entry.get("env") if isinstance(entry.get("env"), dict) else {}
     keep = {v for v in env_in if v in marked or is_secretish(v)}
-    entry = _route_secret(name, entry)
-    _prune_secrets(name, keep)
-    lst = [e for e in read_delegates_raw() if not (isinstance(e, dict) and e.get("name") == name)]
+    entry = _route_secret(name, entry, scope)
+    _prune_secrets(name, keep, scope=scope)
+    lst = [e for e in _layer(scope) if not (isinstance(e, dict) and e.get("name") == name)]
     lst.append(entry)
-    _save_list(lst)
-    return lst
+    _save_list(lst, scope)
+    # A scope change is a MOVE: the same name must not linger in the other layer —
+    # but only when this instance may write that layer (a member shadowing a host
+    # entry with its own is legitimate and leaves the host copy alone).
+    if scope == SCOPE_AGENT and can_write_host_layer():
+        _remove_from_layer(name, SCOPE_HOST)
+    elif scope == SCOPE_HOST:
+        _remove_from_layer(name, SCOPE_AGENT)
+    return read_delegates_raw()
 
 
 def delete_delegate(name: str) -> list:
-    # A deleted delegate leaves no secrets behind — env entries plus its adapter's
-    # secret_field, matched structurally (never a bare name prefix).
-    doomed = next((e for e in read_delegates_raw() if isinstance(e, dict) and e.get("name") == name), None)
-    adapter = ADAPTERS.get(str(doomed.get("type", ""))) if isinstance(doomed, dict) else None
-    _prune_secrets(name, None, secret_field=adapter.secret_field if adapter else None)
-    lst = [e for e in read_delegates_raw() if not (isinstance(e, dict) and e.get("name") == name)]
-    _save_list(lst)
-    return lst
+    """Remove ``name`` from whichever layer holds it (agent first — a member deleting
+    a name that exists only in the host layer is refused). Secrets go with it,
+    matched structurally (never a bare name prefix)."""
+    if not _remove_from_layer(name, SCOPE_AGENT):
+        host_has = any(isinstance(e, dict) and e.get("name") == name for e in read_host_delegates_raw())
+        if host_has:
+            if not can_write_host_layer():
+                raise DelegateScopeError("fleet-shared delegates are managed on the hub — this agent can't delete them")
+            _remove_from_layer(name, SCOPE_HOST)
+    return read_delegates_raw()

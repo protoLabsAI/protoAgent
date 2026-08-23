@@ -1151,3 +1151,20 @@ def test_cli_new_answers_config_inputs_and_copies_the_delegate(root, tmp_path, m
     assert doc["board"] == {"repo": str(repo), "coder": "claude-code", "loop_enabled": False}
     assert [d["name"] for d in doc["delegates"]] == ["claude-code"]
     assert doc["projects"][0]["path"] == str(repo)
+
+
+def test_copy_host_delegates_treats_a_fleet_shared_pick_as_inherited(root, tmp_path, monkeypatch):
+    """A picked delegate that lives in the box's host layer (ADR 0105) is reachable by
+    the member live — nothing is copied, nothing is refused."""
+    from plugins.delegates import store as dstore
+
+    ws = root / "agent"
+    cfg = _seed_config(ws)
+    lock = _pm_lock(ws)
+    host = tmp_path / "host"
+    host.mkdir()
+    (host / "langgraph-config.yaml").write_text("model:\n  name: m\n")  # no agent-scoped delegates
+    monkeypatch.setattr(dstore, "read_host_delegates_raw", lambda: [{"name": "cc", "type": "acp", "command": "/x", "scope": "host"}])
+    assert manager.copy_host_delegates(cfg, lock, {"board.coder": "cc"}, str(host)) == ["cc"]
+    assert "delegates" not in yaml.safe_load(cfg.read_text())  # inherited, not copied
+    assert manager._uncopied_required_delegates(lock, {"board.coder": "cc"}, ["cc"]) == []

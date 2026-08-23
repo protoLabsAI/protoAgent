@@ -2492,7 +2492,7 @@ export const api = {
     return request<{ agents: AcpAgent[] }>("/api/acp-agents");
   },
   delegates() {
-    return request<{ delegates: DelegateView[] }>("/api/delegates");
+    return request<{ delegates: DelegateView[]; can_share?: boolean }>("/api/delegates");
   },
   // Git-installed plugins (ADR 0027). install fetches code only (does NOT enable).
   installedPlugins() {

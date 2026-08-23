@@ -471,3 +471,30 @@ def test_untoggling_a_secret_prunes_its_stale_stored_value(tmp_path, monkeypatch
     # MYVAR still exists on the entry but is no longer secret-routed → keep excludes it.
     store._prune_secrets("d1", set())
     assert not (yaml.safe_load(sp.read_text()) or {}).get("delegate_secrets", {})
+
+
+# ── fleet-shared layer through the routes (ADR 0105) ──────────────────────────
+
+
+def test_list_carries_scope_and_can_share_and_member_mutations_are_403(client, fake_io, monkeypatch):
+    """`scope` rides every row and `can_share` says whether THIS instance may edit the
+    host layer; a member editing/deleting a shared entry gets a 403, not a silent
+    no-op — and may still register its own (shadowing) entry of the same name."""
+    monkeypatch.setattr(store, "read_host_delegates_raw", lambda: [{"name": "cc", "type": "acp", "command": "/x", "workdir": "/w", "scope": "host"}])
+    monkeypatch.setattr(store, "can_write_host_layer", lambda: False)
+    rows = client.get("/api/delegates").json()
+    assert rows["can_share"] is False
+    assert [(d["name"], d["scope"]) for d in rows["delegates"]] == [("cc", "host")]
+    r = client.put("/api/delegates/cc", json={"type": "acp", "command": "/y", "workdir": "/w"})
+    assert r.status_code == 403
+    assert client.delete("/api/delegates/cc").status_code == 403
+    r = client.post("/api/delegates", json={"name": "cc", "type": "acp", "command": "/mine", "workdir": "/w"})
+    assert r.status_code == 200, r.text
+    assert [(d["name"], d["scope"]) for d in r.json()["delegates"]] == [("cc", "agent")]
+
+
+def test_hub_create_with_scope_host_is_refused_as_duplicate_when_name_exists(client, fake_io, monkeypatch):
+    monkeypatch.setattr(store, "read_host_delegates_raw", lambda: [{"name": "cc", "type": "acp", "command": "/x", "workdir": "/w", "scope": "host"}])
+    assert client.get("/api/delegates").json()["can_share"] is True
+    r = client.post("/api/delegates", json={"name": "cc", "type": "acp", "command": "/mine", "workdir": "/w"})
+    assert r.status_code == 409

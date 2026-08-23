@@ -327,6 +327,14 @@ def host_config_path() -> Path:
     return instance_paths().host_config
 
 
+def host_secrets_path() -> Path:
+    """The Host-layer SECRETS overlay (ADR 0105) — ``box_root/host-secrets.yaml``, the
+    owner-only (0600) sibling of ``host-config.yaml`` that carries the secret values of
+    fleet-shared ``delegates:`` entries. Like the Host layer itself it is optional and
+    hub-written: members read it, never write it."""
+    return host_config_path().with_name("host-secrets.yaml")
+
+
 def workspace_dir(*, create: bool = False) -> Path:
     """The agent's default fenced workspace — where the on-by-default filesystem
     toolset can read/write/edit (the fence the agent lives inside).

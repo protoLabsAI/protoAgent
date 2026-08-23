@@ -1,6 +1,6 @@
 # 0025 — Unified delegate registry + hot-swappable management panel
 
-Status: **Accepted** (sliced; PR1 = backend registry)
+Status: **Accepted** (sliced; PR1 = backend registry). *Amended by [ADR 0105](./0105-fleet-shared-delegates.md): a delegate may be `scope: host` — fleet-shared from the box's `host-config.yaml`, read by every instance, written only by the hub.*
 
 ## Context
 

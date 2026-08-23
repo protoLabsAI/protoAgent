@@ -38,3 +38,6 @@
   padding-top: 10px;
   border-top: 1px solid var(--pl-color-border);
 }
+
+/* ADR 0105: the "Share with fleet" switch sits with the name/description fields. */
+.delegate-share { display: flex; align-items: center; justify-content: space-between; gap: 12px; }

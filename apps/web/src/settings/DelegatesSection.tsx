@@ -1,7 +1,7 @@
 import "./settings.css";
 import "./delegates.css";
 
-import { DropdownSelect, Input, RadioCard, RadioCardGroup, SecretInput, Textarea } from "@protolabsai/ui/forms";
+import { DropdownSelect, Input, RadioCard, RadioCardGroup, SecretInput, Switch, Textarea } from "@protolabsai/ui/forms";
 import { Badge, Button } from "@protolabsai/ui/primitives";
 import { Dialog, useToast } from "@protolabsai/ui/overlays";
 
@@ -144,6 +144,8 @@ export function DelegatesSection() {
 
   const delegates = list.data?.delegates ?? [];
   const typeSpecs = types.data?.types ?? [];
+  // May THIS instance edit fleet-shared entries? The hub can; a member sees them read-only.
+  const canShare = list.data?.can_share ?? true;
 
   return (
     <SettingsSubPanel label="delegates" title="Delegates">
@@ -169,6 +171,11 @@ export function DelegatesSection() {
                       </span>
                     ) : null}
                     {d.name} <Badge status="neutral">{d.type}</Badge>
+                    {d.scope === "host" ? (
+                      <span title={canShare ? "Shared with every agent on this machine (host layer)" : "Shared by the hub — edit it there"}>
+                        <StatusPill label="fleet" tone="muted" />
+                      </span>
+                    ) : null}
                     {!d.configured ? <StatusPill label="unconfigured" tone="warning" /> : null}
                     {/* The health dot can be green while every real call fails — an acp probe
                         only runs the ACP handshake, not a session. Surface the last actual
@@ -186,12 +193,16 @@ export function DelegatesSection() {
                   <Button icon variant="ghost" title="Test" onClick={() => testRow.mutate(d)} loading={testRow.isPending && testRow.variables?.name === d.name} disabled={testRow.isPending}>
                     <ShieldCheck size={15} />
                   </Button>
-                  <Button icon variant="ghost" title="Edit" onClick={() => { setEditing(d); setAdding(false); }}>
-                    <Pencil size={15} />
-                  </Button>
-                  <Button icon variant="ghost" title="Delete" onClick={() => remove.mutate(d.name)} disabled={remove.isPending}>
-                    <Trash2 size={15} />
-                  </Button>
+                  {d.scope === "host" && !canShare ? null : (
+                    <>
+                      <Button icon variant="ghost" title="Edit" onClick={() => { setEditing(d); setAdding(false); }}>
+                        <Pencil size={15} />
+                      </Button>
+                      <Button icon variant="ghost" title="Delete" onClick={() => remove.mutate(d.name)} disabled={remove.isPending}>
+                        <Trash2 size={15} />
+                      </Button>
+                    </>
+                  )}
                 </div>
               </div>
             );
@@ -219,6 +230,7 @@ export function DelegatesSection() {
             key={editing?.name ?? "_new"}
             spec={typeSpecs}
             initial={editing}
+            canShare={canShare}
             onClose={closeForm}
             onSaved={(msg) => { closeForm(); toast({ tone: "success", title: "Delegate saved", message: msg }); void invalidate(); }}
           />
@@ -231,15 +243,19 @@ export function DelegatesSection() {
 function DelegateForm({
   spec,
   initial,
+  canShare,
   onClose,
   onSaved,
 }: {
   spec: DelegateTypeSpec[];
   initial: DelegateView | null;
+  canShare: boolean;
   onClose: () => void;
   onSaved: (msg: string) => void;
 }) {
   const editing = Boolean(initial);
+  // Fleet-shared (host layer, ADR 0105): registered once on the hub, on every member's bench.
+  const [shared, setShared] = useState(initial?.scope === "host");
   const [type, setType] = useState(initial?.type || spec[0]?.type || "a2a");
   const [name, setName] = useState(initial?.name || "");
   const [description, setDescription] = useState(initial?.description || "");
@@ -314,7 +330,7 @@ function DelegateForm({
   }
 
   function buildEntry(): Record<string, unknown> {
-    const entry: Record<string, unknown> = { name, type, description };
+    const entry: Record<string, unknown> = { name, type, description, scope: shared ? "host" : "agent" };
     for (const f of current?.fields ?? []) {
       if (f.kind === "envmap") continue; // serialized from form-level env state below
       const v = coerce(f, vals[f.key]);
@@ -380,6 +396,17 @@ function DelegateForm({
         <span>Description</span>
         <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What it's for (the model reads this to pick it)." />
       </label>
+      {canShare ? (
+        <div className="field delegate-share">
+          <span>Share with fleet</span>
+          <Switch
+            id="delegate-share-fleet"
+            checked={shared}
+            onCheckedChange={setShared}
+            label={shared ? "every agent on this machine sees it" : "only this agent"}
+          />
+        </div>
+      ) : null}
 
       {type === "acp" && (acpAgents.data?.agents?.length ?? 0) > 0 ? (
         <label className="field">

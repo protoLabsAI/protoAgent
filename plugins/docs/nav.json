@@ -818,6 +818,10 @@
           "title": "0104 — The session turns read API: durable chat history has a server-side reader"
         },
         {
+          "path": "adr/0105-fleet-shared-delegates.md",
+          "title": "0105 — Fleet-shared delegates: one roster on the box, every member's bench"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }

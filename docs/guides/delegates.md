@@ -179,9 +179,33 @@ note appended, so the delegating agent can tell a truncated answer from a finish
 one and re-dispatch the remainder rather than acting on half a result. A normal
 completion carries no marker.
 
+## Share a delegate with the whole fleet (ADR 0105)
+
+A delegate is per-agent by default. On the **hub**, the form's **Share with
+fleet** switch (or `scope: host` over the API) puts the entry in the box's
+`host-config.yaml` instead — its secrets go to the owner-only
+`host-secrets.yaml` beside it — and **every agent on this machine** sees it on
+its bench, including members created later. Nothing is copied: a rotated key or
+a new `command` on the hub reaches every member on its next config reload. A
+member sees shared rows with a `fleet` badge, read-only; it may register its
+own entry of the same name, which shadows the shared one for that member only.
+`GET /api/delegates` carries `scope` per row and `can_share` (may this instance
+edit the host layer). A Project Manager member created from the picker with a
+shared coder picked needs no copy at all — the pick resolves live.
+
+```yaml
+# <box>/host-config.yaml  — written by the hub's Delegates panel
+delegates:
+  - name: claude-code
+    type: acp
+    command: /Users/you/.nvm/versions/node/v22/bin/claude-agent-acp
+    workdir: /Users/you/dev
+```
+
 ## Secrets
 
-Auth tokens / API keys are stored in the gitignored `config/secrets.yaml`, never
+Auth tokens / API keys are stored in the gitignored `config/secrets.yaml` (or
+`host-secrets.yaml` for fleet-shared delegates), never
 in the tracked config or in API responses — the same handling as the Discord /
 Google tokens. For PR1 you can either:
 

@@ -931,12 +931,24 @@ def copy_host_delegates(cfg: Path, lock: Path, values: Mapping[str, object] | No
     member_list = doc.get("delegates")
     if not isinstance(member_list, list):
         member_list = []
+    # Fleet-shared (host-layer) entries are INHERITED by every member live (ADR 0105)
+    # — nothing to copy, and no snapshot to drift. They still count as "travelled".
+    try:
+        from plugins.delegates.store import read_host_delegates_raw
+
+        shared = {str(e.get("name") or "") for e in read_host_delegates_raw()}
+    except Exception:  # noqa: BLE001 — no delegates plugin / no box layer → nothing shared
+        shared = set()
     copied: list[str] = []
     secret_updates: dict[str, str] = {}
+    wrote_entry = False
     for name in wanted:
         entry = host_entries.get(name)
         if entry is None:
+            if name in shared:
+                copied.append(name)  # reachable through the box layer, not copied
             continue
+        wrote_entry = True
         member_list = [e for e in member_list if not (isinstance(e, dict) and str(e.get("name") or "") == name)]
         member_list.append(_copy.deepcopy(entry))
         # Structured match only — the delegates store keys env secrets ``<name>.env.<VAR>``
@@ -950,6 +962,8 @@ def copy_host_delegates(cfg: Path, lock: Path, values: Mapping[str, object] | No
         copied.append(name)
     if not copied:
         return []
+    if not wrote_entry:
+        return copied  # every pick was fleet-shared — nothing to write
     doc["delegates"] = member_list
     save_yaml_doc(doc, cfg)
     if secret_updates:
