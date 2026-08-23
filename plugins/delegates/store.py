@@ -27,7 +27,6 @@ SECRETS_SECTION = "delegate_secrets"
 
 SCOPE_AGENT = "agent"
 SCOPE_HOST = "host"
-SCOPES = (SCOPE_AGENT, SCOPE_HOST)
 
 
 class DelegateScopeError(ValueError):
@@ -253,8 +252,10 @@ def _secrets_path_for(scope: str):
 
 
 def _route_secret(name: str, entry: dict, scope: str = SCOPE_AGENT) -> dict:
-    """Route the entry's secret value(s) into ``secrets.yaml`` (if present); return
-    the entry with the secrets stripped, safe to persist in the tracked config.
+    """Route the entry's secret value(s) into the layer's secrets overlay (if present);
+    return the entry with the secrets stripped. The returned dict also carries a
+    transient ``_routed_keys`` set (the overlay keys just written) that
+    ``upsert_delegate`` pops before persisting — it is NOT persist-ready as returned.
 
     Two secret tiers: the adapter's single ``secret_field`` (auth.token / api_key),
     and per-``env`` values (#2114) — any env row the form marked secret (carried in
