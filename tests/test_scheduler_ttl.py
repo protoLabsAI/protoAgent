@@ -273,7 +273,18 @@ class _FakeScheduler:
         self.last_ttl: str | None = "__unset__"
         self.last_max_fires: int | None = "__unset__"
 
-    def add_job(self, prompt, schedule, *, job_id=None, timezone=None, context_id=None, ttl=None, max_fires=None):
+    def add_job(
+        self,
+        prompt,
+        schedule,
+        *,
+        job_id=None,
+        timezone=None,
+        context_id=None,
+        origin_session=None,
+        ttl=None,
+        max_fires=None,
+    ):
         self.last_ttl = ttl
         self.last_max_fires = max_fires
         return _FakeJob(schedule)

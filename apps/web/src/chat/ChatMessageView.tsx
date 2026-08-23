@@ -2,7 +2,7 @@ import { Button } from "@protolabsai/ui/primitives";
 import { Message, MessageAction, MessageActions } from "@protolabsai/ui/ai";
 import { Tooltip } from "@protolabsai/ui/overlays";
 import { Spinner } from "@protolabsai/ui/data";
-import { ArrowDownToLine, Check, Clock, Coins, Copy, FileText, GitBranch, Gauge, History, RotateCcw, X } from "lucide-react";
+import { ArrowDownToLine, CalendarClock, Check, Clock, Coins, Copy, FileText, GitBranch, Gauge, History, RotateCcw, X } from "lucide-react";
 import { useState } from "react";
 
 import { useQuery } from "@tanstack/react-query";
@@ -94,6 +94,17 @@ export function ChatMessageView({
   // injects it display-only: role "system", plain content, never streams).
   if (message.report) {
     return <BackgroundReportCard message={message} report={message.report} />;
+  }
+  // Scheduled-task result (#2990): a fire's outcome delivered back to the chat that set
+  // the schedule up. First fire → a full ScheduledReportCard (calendar/clock icon, distinct
+  // from the background FileText chip); recurring re-fires → a compact one-line ScheduledChip
+  // so an hourly check can't fill the thread. Injected display-only, like the report card.
+  if (message.scheduled) {
+    return message.scheduled.collapse ? (
+      <ScheduledChip message={message} scheduled={message.scheduled} />
+    ) : (
+      <ScheduledReportCard message={message} scheduled={message.scheduled} />
+    );
   }
   return (
     <Message
@@ -313,6 +324,137 @@ function BackgroundReportCard({
           onClick={() => dismiss(report.jobId)}
           title="Dismiss — the report stays in the Background agents panel"
           aria-label="Dismiss report"
+        >
+          <X size={14} />
+        </button>
+      </div>
+    </Message>
+  );
+}
+
+// Dismissed scheduled fires (#2990): keyed per FIRE (`jobId:firedAt`), not per job — a
+// recurring schedule delivers many chips and dismissing one must not hide the rest.
+// localStorage so a reload doesn't resurrect them; the fire's turn stays in Activity.
+const DISMISSED_SCHEDULED_KEY = "protoagent.chat.dismissedScheduled";
+
+function dismissedScheduledSet(): Set<string> {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(DISMISSED_SCHEDULED_KEY) || "[]"));
+  } catch {
+    return new Set();
+  }
+}
+
+function useDismissedScheduled() {
+  const [dismissed, setDismissed] = useState<Set<string>>(dismissedScheduledSet);
+  const dismiss = (key: string) => {
+    const s = dismissedScheduledSet();
+    s.add(key);
+    try {
+      localStorage.setItem(DISMISSED_SCHEDULED_KEY, JSON.stringify([...s].slice(-300)));
+    } catch {
+      /* storage unavailable — the card still hides for this page's lifetime */
+    }
+    setDismissed(s);
+  };
+  return { dismissed, dismiss };
+}
+
+/** Short local time for a fire's ISO timestamp ("2:00 PM"); falls back to the raw string. */
+function fmtFiredAt(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+/** Collapse a result to one line — whitespace squeezed, truncated for the chip. */
+function oneLine(text: string, max = 90): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max).trimEnd()}…` : flat;
+}
+
+// The scheduled-task RESULT CARD (#2990) — parallel to BackgroundReportCard, but a
+// distinct visual: a calendar/clock icon (not FileText) and a full card body carrying the
+// job id, fire time, result summary, and a "View full result" link into the Activity turn.
+// Rendered for the FIRST fire in a session; recurring re-fires collapse to ScheduledChip.
+function ScheduledReportCard({
+  message,
+  scheduled,
+}: {
+  message: ChatMessage;
+  scheduled: NonNullable<ChatMessage["scheduled"]>;
+}) {
+  const { dismissed, dismiss } = useDismissedScheduled();
+  const key = `${scheduled.jobId}:${scheduled.firedAt}`;
+  if (dismissed.has(key)) return null;
+  const failed = scheduled.status === "failed";
+  const title = `Scheduled task ${scheduled.jobId} ${failed ? "failed" : "ran"}`;
+  const summary = scheduled.summary?.trim() || "(no output)";
+  const open = () =>
+    openDocument({
+      title,
+      subtitle: `Fired ${fmtFiredAt(scheduled.firedAt)} — full turn in Activity`,
+      load: () => Promise.resolve(summary),
+    });
+  return (
+    <Message role={message.role} className="chat-report chat-scheduled">
+      <div className={`chat-scheduled-card${failed ? " chat-scheduled-card--failed" : ""}`}>
+        <div className="chat-scheduled-head">
+          <CalendarClock size={14} aria-hidden />
+          <span className="chat-scheduled-title" title={title}>
+            {title}
+          </span>
+          <span className="chat-scheduled-time">{fmtFiredAt(scheduled.firedAt)}</span>
+          <button
+            type="button"
+            className="chat-report-dismiss"
+            onClick={() => dismiss(key)}
+            title="Dismiss — the full turn stays in the Activity log"
+            aria-label="Dismiss scheduled result"
+          >
+            <X size={14} />
+          </button>
+        </div>
+        <div className="chat-scheduled-summary">{summary}</div>
+        <div className="chat-scheduled-actions">
+          <Button size="sm" variant="ghost" onClick={open}>
+            View full result
+          </Button>
+        </div>
+      </div>
+    </Message>
+  );
+}
+
+// The compact recurring variant (#2990): a second-or-later fire of the same schedule into
+// this session renders as ONE dismissable line ("Scheduled task <id> ran — <summary>")
+// instead of a full card, so an hourly check can't fill the chat with 24 cards/day.
+function ScheduledChip({
+  message,
+  scheduled,
+}: {
+  message: ChatMessage;
+  scheduled: NonNullable<ChatMessage["scheduled"]>;
+}) {
+  const { dismissed, dismiss } = useDismissedScheduled();
+  const key = `${scheduled.jobId}:${scheduled.firedAt}`;
+  if (dismissed.has(key)) return null;
+  const failed = scheduled.status === "failed";
+  const verb = failed ? "failed" : "ran";
+  const line = `Scheduled task ${scheduled.jobId} ${verb} — ${oneLine(scheduled.summary || "(no output)")}`;
+  return (
+    <Message role={message.role} className="chat-report chat-scheduled-chip-msg">
+      <div className="chat-report-chip">
+        <CalendarClock size={14} aria-hidden />
+        <span className="chat-report-title" title={line}>
+          {line}
+        </span>
+        <button
+          type="button"
+          className="chat-report-dismiss"
+          onClick={() => dismiss(key)}
+          title="Dismiss — the full turn stays in the Activity log"
+          aria-label="Dismiss scheduled result"
         >
           <X size={14} />
         </button>

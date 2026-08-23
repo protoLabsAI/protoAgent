@@ -212,6 +212,58 @@
   background: var(--pl-color-bg-hover);
 }
 
+/* Scheduled-task RESULT card (#2990) — the first fire of a schedule, delivered back to the
+   chat that created it. A full card (not the one-line report chip): calendar/clock head,
+   summary body, and a "View full result" action. Recurring re-fires use .chat-report-chip
+   above (via ScheduledChip) instead, so the two share the compact chrome. */
+.chat-scheduled-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 100%;
+  padding: 10px 12px;
+  background: var(--pl-color-bg-raised);
+  border: 1px solid var(--pl-color-border);
+  border-radius: 12px;
+  box-shadow: var(--pl-shadow-card);
+}
+.chat-scheduled-card--failed {
+  border-color: var(--pl-color-border-danger, var(--pl-color-border));
+}
+.chat-scheduled-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.chat-scheduled-head > svg {
+  flex: 0 0 auto;
+  color: var(--pl-color-fg-muted);
+}
+.chat-scheduled-title {
+  min-width: 0;
+  flex: 1 1 auto;
+  font-weight: 600;
+  font-size: 0.9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-scheduled-time {
+  flex: 0 0 auto;
+  font-size: 0.8rem;
+  color: var(--pl-color-fg-muted);
+}
+.chat-scheduled-summary {
+  font-size: 0.9rem;
+  color: var(--pl-color-fg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.chat-scheduled-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 /* Per-turn token/cost footer under an assistant answer (#1372) — a quiet, monospace row of
    prompt ↑ / output ↓ / cost chips; full breakdown lives in the title tooltip. */
 .chat-usage {

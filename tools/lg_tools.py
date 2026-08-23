@@ -1113,11 +1113,17 @@ def _build_scheduler_tools(scheduler) -> list:
                     )
         except Exception:  # noqa: BLE001 — dedup is best-effort; never block scheduling
             pass
-        # One-shot fires resume the ORIGINATING chat session (ADR 0053): stamp the
-        # turn's session id onto the job, same pattern as `wait` — read from the
-        # injected graph state, not the tracing contextvar (empty in a tool body).
-        # Crons deliberately stay context-free: a recurring job firing into a chat
-        # the operator closed days ago is wrong — recurring work lands in Activity.
+        # Two DISTINCT session stamps derive from the same turn session id:
+        #  - ``context_id`` controls WHERE the fire RUNS (ADR 0053). A one-shot resumes
+        #    the ORIGINATING chat; a cron deliberately stays context-free so recurring
+        #    work lands in Activity, not a chat the operator closed days ago.
+        #  - ``origin_session`` is WHERE the RESULT is DELIVERED (#2990): the chat that
+        #    created the schedule. Stamped for BOTH crons and one-shots so even a cron
+        #    firing into Activity reports back to that conversation as a
+        #    ScheduledReportCard. Read from the injected graph state, not the tracing
+        #    contextvar (which reads empty in a tool body under LangGraph).
+        # A schedule created outside a chat (Activity-origin turn) has ctx=None → no
+        # origin, no delivery attempted (backward compatible).
         ctx = _session_id_from(state) or None
         context_id = ctx if not is_cron(when) else None
         try:
@@ -1128,6 +1134,7 @@ def _build_scheduler_tools(scheduler) -> list:
                 job_id=job_id,
                 timezone=timezone,
                 context_id=context_id,
+                origin_session=ctx,
                 ttl=ttl,
                 max_fires=max_fires,
             )

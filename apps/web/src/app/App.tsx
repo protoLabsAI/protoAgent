@@ -61,6 +61,7 @@ import type { ComponentType, LazyExoticComponent, MouseEvent as ReactMouseEvent,
 import { FleetTurnWatch } from "./FleetTurnWatch";
 import { UpdateNotice } from "./UpdateNotice";
 import { BackgroundWatch } from "./BackgroundWatch";
+import { ScheduledWatch } from "./ScheduledWatch";
 import { ChatResumeWatch } from "./ChatResumeWatch";
 import { PluginChangeWatch } from "./PluginChangeWatch";
 import { ServerTurnWatch } from "./ServerTurnWatch";
@@ -859,6 +860,10 @@ export function App() {
           live into the spawning chat (a system message + toast) if it's still open —
           instead of waiting for the next message to surface it. */}
       <BackgroundWatch />
+      {/* Scheduled tasks (#2990): when a fire completes, deliver its result back to the
+          chat that created the schedule as a ScheduledReportCard (or a compact chip on
+          recurring re-fires) if that chat is open — instead of it hiding in Activity. */}
+      <ScheduledWatch />
       {/* wait/scheduled resumes (ADR 0053, bd-k02): a server-fired resume turn lands in
           the chat thread; surface it live in the open tab instead of on next interaction. */}
       <ChatResumeWatch />

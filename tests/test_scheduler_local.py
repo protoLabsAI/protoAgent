@@ -151,6 +151,52 @@ class TestAddJob:
         job = s.add_job("hi", "0 9 * * *")
         assert job.id.startswith("ginavision-")
 
+    def test_origin_session_persisted_and_read_back(self, tmp_path):
+        # #2990 r1/r8: origin_session (where a fire's RESULT is delivered) survives a
+        # DB round-trip via add_job → list_jobs and the get_job single-row read.
+        s = _make_scheduler(tmp_path)
+        s.add_job("sweep", "0 9 * * *", job_id="j-origin", origin_session="chat-42")
+        assert s.list_jobs()[0].origin_session == "chat-42"
+        assert s.get_job("j-origin").origin_session == "chat-42"
+
+    def test_origin_session_defaults_none(self, tmp_path):
+        # r6: a schedule created without a chat carries no origin_session.
+        s = _make_scheduler(tmp_path)
+        s.add_job("sweep", "0 9 * * *", job_id="j-noorigin")
+        assert s.get_job("j-noorigin").origin_session is None
+
+    def test_get_job_missing_returns_none(self, tmp_path):
+        s = _make_scheduler(tmp_path)
+        assert s.get_job("nope") is None
+
+    def test_origin_session_column_migrates_onto_a_legacy_db(self, tmp_path):
+        # A jobs.db created before #2990 (no origin_session column) must gain it via the
+        # lightweight ALTER on init — a pre-existing row reads back origin_session=None
+        # rather than crashing the row mapper.
+        db_dir = tmp_path / "legacy"
+        db_dir.mkdir()
+        path = db_dir / "gina-test" / "jobs.db"
+        path.parent.mkdir(parents=True)
+        legacy = sqlite3.connect(str(path))
+        legacy.execute(
+            "CREATE TABLE jobs (id TEXT PRIMARY KEY, prompt TEXT NOT NULL, schedule TEXT NOT NULL, "
+            "agent_name TEXT NOT NULL, next_fire TEXT NOT NULL, last_fire TEXT, "
+            "enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL)"
+        )
+        legacy.execute(
+            "INSERT INTO jobs (id, prompt, schedule, agent_name, next_fire, created_at) "
+            "VALUES ('old', 'p', '0 9 * * *', 'gina-test', ?, ?)",
+            (_FUTURE_ISO, datetime.now(UTC).isoformat()),
+        )
+        legacy.commit()
+        legacy.close()
+        # Init runs the migration; the pre-existing row now has the column, defaulted None.
+        s = _make_scheduler(db_dir)
+        assert s.get_job("old").origin_session is None
+        # …and a new job can store one.
+        s.add_job("new", "0 9 * * *", job_id="new", origin_session="chat-9")
+        assert s.get_job("new").origin_session == "chat-9"
+
 
 class TestListAndCancel:
     def test_list_filters_by_agent(self, tmp_path):

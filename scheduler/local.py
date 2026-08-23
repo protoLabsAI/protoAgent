@@ -213,6 +213,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     created_at  TEXT NOT NULL,
     timezone    TEXT,
     context_id  TEXT,
+    origin_session TEXT,
     ttl         TEXT,
     max_fires   INTEGER,
     fire_count  INTEGER NOT NULL DEFAULT 0
@@ -299,6 +300,11 @@ class LocalScheduler:
                 db.execute("ALTER TABLE jobs ADD COLUMN context_id TEXT")
             except sqlite3.OperationalError:
                 pass  # column already present
+            # …and before origin_session (#2990 deliver-result-to-origin-chat).
+            try:
+                db.execute("ALTER TABLE jobs ADD COLUMN origin_session TEXT")
+            except sqlite3.OperationalError:
+                pass  # column already present
             # …and before auto-expiry (#2992 ttl / max_fires / fire_count).
             for ddl in (
                 "ALTER TABLE jobs ADD COLUMN ttl TEXT",
@@ -339,6 +345,7 @@ class LocalScheduler:
         job_id: str | None = None,
         timezone: str | None = None,
         context_id: str | None = None,
+        origin_session: str | None = None,
         ttl: str | None = None,
         max_fires: int | None = None,
     ) -> Job:
@@ -364,6 +371,7 @@ class LocalScheduler:
             next_fire=next_fire,
             timezone=timezone,
             context_id=context_id,
+            origin_session=origin_session,
             ttl=ttl,
             max_fires=max_fires,
         )
@@ -371,8 +379,9 @@ class LocalScheduler:
         try:
             db.execute(
                 "INSERT INTO jobs (id, prompt, schedule, agent_name, next_fire, "
-                "last_fire, enabled, created_at, timezone, context_id, ttl, max_fires, fire_count) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "last_fire, enabled, created_at, timezone, context_id, origin_session, "
+                "ttl, max_fires, fire_count) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     job.id,
                     job.prompt,
@@ -384,6 +393,7 @@ class LocalScheduler:
                     job.created_at,
                     job.timezone,
                     job.context_id,
+                    job.origin_session,
                     job.ttl,
                     job.max_fires,
                     job.fire_count,
@@ -454,6 +464,25 @@ class LocalScheduler:
         finally:
             db.close()
         return [_row_to_job(r) for r in rows]
+
+    def get_job(self, job_id: str) -> Job | None:
+        """Fetch a single job by id (namespaced by agent), or ``None`` if absent.
+
+        The result-delivery hook (#2990) uses this to read a fired job's
+        ``origin_session`` + ``fire_count`` at terminal time — one indexed row
+        read rather than scanning ``list_jobs``."""
+        db = self._connect()
+        try:
+            row = db.execute(
+                "SELECT * FROM jobs WHERE id = ? AND agent_name = ?",
+                (job_id, self.agent_name),
+            ).fetchone()
+        except sqlite3.DatabaseError as exc:
+            log.warning("[scheduler] get_job failed: %s", exc)
+            return None
+        finally:
+            db.close()
+        return _row_to_job(row) if row else None
 
     async def start(self) -> None:
         if self._task is not None:
@@ -918,6 +947,7 @@ def _row_to_job(row: Any) -> Job:
         created_at=row["created_at"],
         timezone=row["timezone"] if "timezone" in keys else None,
         context_id=row["context_id"] if "context_id" in keys else None,
+        origin_session=row["origin_session"] if "origin_session" in keys else None,
         ttl=row["ttl"] if "ttl" in keys else None,
         max_fires=row["max_fires"] if "max_fires" in keys else None,
         fire_count=int(row["fire_count"] or 0) if "fire_count" in keys else 0,

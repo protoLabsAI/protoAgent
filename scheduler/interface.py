@@ -40,6 +40,14 @@ class Job:
     # chat session so a yield-and-resume continues that conversation's thread
     # rather than landing in Activity (ADR 0053 same-session resume).
     context_id: str | None = None
+    # The chat session that CREATED this schedule (#2990). DISTINCT from
+    # ``context_id``: ``context_id`` controls WHERE a fire runs (a normal cron runs in
+    # Activity; a `wait`/resume runs back in its chat), whereas ``origin_session`` is
+    # WHERE the RESULT is delivered — the host injects a ScheduledReportCard into this
+    # session after the fire completes so the chat that asked for the schedule sees the
+    # outcome without digging through Activity. None → the schedule wasn't created from
+    # a chat (e.g. an Activity-origin turn) → no result delivery (backward compatible).
+    origin_session: str | None = None
     enabled: bool = True
     # Auto-expiry (#2992): a recurring schedule shouldn't run forever by default.
     # ``ttl`` is a duration — human shorthand ("7d", "24h", "2w") or ISO-8601
@@ -70,6 +78,7 @@ class SchedulerBackend(Protocol):
         job_id: str | None = None,
         timezone: str | None = None,
         context_id: str | None = None,
+        origin_session: str | None = None,
         ttl: str | None = None,
         max_fires: int | None = None,
     ) -> Job:
@@ -82,6 +91,11 @@ class SchedulerBackend(Protocol):
         ``context_id`` is the A2A contextId to fire into (None → the durable
         Activity thread). Used for same-session resume (ADR 0053); backends that
         can't target a context (remote schedulers) may ignore it.
+
+        ``origin_session`` is the chat session that created the schedule (#2990) —
+        distinct from ``context_id`` (where the fire runs): the host delivers the
+        fire's RESULT back to this session as a ScheduledReportCard. None → no
+        delivery. Backends that can't deliver may ignore it.
 
         ``ttl`` / ``max_fires`` auto-expire the job (#2992): after
         ``created_at + ttl`` elapses, or after ``max_fires`` firings, the

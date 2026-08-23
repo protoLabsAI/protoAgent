@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import os
+from datetime import UTC, datetime
 
 from events import ACTIVITY_CONTEXT
 from graph.output_format import extract_output
@@ -948,6 +949,150 @@ def _surface_resumed_chat_turn(outcome) -> None:
     )
 
 
+# Scheduled-result delivery (#2990): a fire's result summary surfaces in the chat that
+# CREATED the schedule as a ScheduledReportCard. The full-card summary is truncated to
+# this many chars (the whole turn stays readable in Activity via the "View full result"
+# link). The stale window skips delivery to a chat that's had no turn in this long — very
+# likely closed, so the card would land nowhere useful (the result is still in Activity).
+_SCHEDULED_SUMMARY_CAP = 500
+_SCHEDULED_STALE_WINDOW_S = 24 * 60 * 60  # 24h
+
+
+def _scheduled_delivery_payload(outcome) -> dict | None:
+    """Build the ``scheduler.completed`` event payload for a scheduled fire whose
+    result should surface in the chat that created it (#2990), or ``None`` when this
+    turn isn't such a fire. Pure + sync so the guards + shaping are unit-testable
+    without a task store or event loop.
+
+    Returns ``None`` (no delivery) when: the turn isn't a ``scheduler`` fire; it's a
+    ``wait:`` resume (already runs IN its chat, surfaced by chat.resumed); the job has
+    no ``origin_session`` (created outside a chat — r6, backward compatible); the origin
+    is the Activity thread itself (nothing to surface there); or the fire already ran IN
+    the origin session (a one-shot resume — chat.resumed covers it, no double-delivery)."""
+    if getattr(outcome, "origin", "") != "scheduler":
+        return None
+    job_id = (getattr(outcome, "trigger", "") or "").strip()
+    if not job_id or job_id.startswith("wait:"):
+        return None
+    scheduler = getattr(STATE, "scheduler", None)
+    getter = getattr(scheduler, "get_job", None)
+    job = None
+    if callable(getter):
+        try:
+            job = getter(job_id)
+        except Exception:  # noqa: BLE001 — a lookup failure just means no card
+            job = None
+    origin = (getattr(job, "origin_session", "") or "").strip() if job else ""
+    if not origin or origin == ACTIVITY_CONTEXT:
+        return None
+    context_id = str(getattr(outcome, "context_id", "") or "")
+    if context_id == origin:
+        return None
+    text = extract_output(outcome.text) or outcome.text or ""
+    summary = text.strip()
+    if len(summary) > _SCHEDULED_SUMMARY_CAP:
+        summary = summary[:_SCHEDULED_SUMMARY_CAP].rstrip() + "…"
+    state = str(getattr(outcome, "state", "") or "completed")
+    status = state if state in ("completed", "canceled") else "failed"
+    # Recurring collapse (r4): the FIRST fire renders a full card; subsequent fires into
+    # the same session collapse to a compact chip. ``fire_count`` is the PRE-fire value at
+    # terminal time — the scheduler bumps it only after the fire lands — so 0 == first fire.
+    collapse = bool(getattr(job, "fire_count", 0))
+    return {
+        "job_id": job_id,
+        "origin_session": origin,
+        "fired_at": datetime.now(UTC).isoformat(),
+        "summary": summary,
+        "status": status,
+        "collapse": collapse,
+        "schedule": str(getattr(job, "schedule", "") or ""),
+        "activity_context": context_id or ACTIVITY_CONTEXT,
+        "task_id": getattr(outcome, "task_id", "") or "",
+    }
+
+
+def _is_recent(last_updated, now, window_s: int) -> bool:
+    """Whether ``last_updated`` is within ``window_s`` seconds of ``now`` (#2990 r3).
+    A ``None`` timestamp counts as recent (can't prove staleness → don't suppress);
+    naive datetimes are read as UTC (the task store persists UTC)."""
+    if last_updated is None:
+        return True
+    if getattr(last_updated, "tzinfo", None) is None:
+        last_updated = last_updated.replace(tzinfo=UTC)
+    return (now - last_updated).total_seconds() <= window_s
+
+
+async def _session_recently_active(session_id: str, *, window_s: int = _SCHEDULED_STALE_WINDOW_S) -> bool:
+    """Has ``session_id`` had a turn within ``window_s`` seconds? (#2990 r3)
+
+    Reads the A2A task store — the durable per-session turn log. Best-effort: returns
+    True on any uncertainty (no engine / read error / no rows), because the guard exists
+    to skip *known-stale* sessions, not to demand a positive liveness proof."""
+    engine = getattr(STATE, "a2a_task_engine", None)
+    if engine is None:
+        return True
+    try:
+        from a2a.server.tasks.database_task_store import TaskModel
+        from sqlalchemy import func, select
+
+        async with engine.connect() as conn:
+            latest = (
+                await conn.execute(
+                    select(func.max(TaskModel.last_updated)).where(TaskModel.context_id == session_id)
+                )
+            ).scalar()
+    except Exception:  # noqa: BLE001 — a read failure must not suppress a delivery
+        return True
+    return _is_recent(latest, datetime.now(UTC), window_s)
+
+
+async def _deliver_scheduled(payload: dict) -> bool:
+    """Publish a scheduled fire's result card unless the origin session is stale (#2990
+    r3). Returns whether it published. Best-effort — never raises."""
+    origin = payload["origin_session"]
+    try:
+        if not await _session_recently_active(origin):
+            log.info(
+                "[scheduler] session %s idle > 24h — skipping result card for job %s (result stays in Activity)",
+                origin,
+                payload["job_id"],
+            )
+            return False
+        _event_bus.publish("scheduler.completed", payload)
+        log.info("[scheduler] delivered result card for job %s → session %s", payload["job_id"], origin)
+        return True
+    except Exception:  # noqa: BLE001
+        log.exception("[scheduler] scheduled delivery failed for %s", payload["job_id"])
+        return False
+
+
+def _handle_scheduled_delivery(outcome) -> None:
+    """Deliver a scheduled fire's result back to the chat that created the schedule
+    (#2990). A cron runs in Activity (a `wait`/resume runs back in its chat), but if the
+    schedule was created from a chat we stamped it as the job's ``origin_session``; after
+    the fired turn completes, push a ``scheduler.completed`` event carrying a result
+    summary so the console renders a ScheduledReportCard — a full card on the first fire,
+    a compact dismissable chip on recurring re-fires — right where the operator set the
+    schedule up, instead of it hiding in Activity.
+
+    The stale-session check reads the async task store, so it runs off this sync hook.
+    Best-effort — never raises into the terminal hook."""
+    payload = _scheduled_delivery_payload(outcome)
+    if payload is None:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop (a direct unit-test call) — publish inline; the stale guard
+        # is a best-effort refinement layered on top of the always-safe bus publish
+        # (an unconsumed event creates no ghost session).
+        _event_bus.publish("scheduler.completed", payload)
+        return
+    t = loop.create_task(_deliver_scheduled(payload))
+    _BG_WAKE_TASKS.add(t)
+    t.add_done_callback(_BG_WAKE_TASKS.discard)
+
+
 def _a2a_terminal(outcome) -> None:
     """A2A terminal hook (ADR 0003 / 0006). Fired by ``ProtoAgentExecutor`` with
     a ``TurnOutcome`` when a turn reaches a terminal state. Records per-turn
@@ -956,6 +1101,10 @@ def _a2a_terminal(outcome) -> None:
     its real A2A context/task identity; ordinary operator chat still returns through
     its own stream and is never duplicated here. Best-effort — never raises."""
     _record_a2a_telemetry(outcome)
+    # Scheduled fires (#2990): deliver the result back to the chat that created the
+    # schedule as a ScheduledReportCard, whichever thread the fire actually ran in. A
+    # no-op for every non-scheduled turn (guarded inside _scheduled_delivery_payload).
+    _handle_scheduled_delivery(outcome)
     # Background subagent turns (ADR 0050) live in a dedicated ``background:<id>``
     # context, not the Activity thread — settle the job + notify the UI here, before
     # the Activity early-return below.

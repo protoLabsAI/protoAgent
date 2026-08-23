@@ -873,6 +873,21 @@ export type ChatMessage = {
    *  shows the server's preview; this lets the card open the FULL report in the document
    *  viewer (fetched by id) instead of forcing a trip to the Activity/Background panel. */
   report?: { jobId: string; title: string };
+  /** Scheduled-task result delivered back to the chat that CREATED the schedule (#2990):
+   *  a fire runs in Activity, but its outcome surfaces here as a ScheduledReportCard (first
+   *  fire) or a compact ScheduledChip (`collapse` — a recurring re-fire). Injected
+   *  display-only by ScheduledWatch from the `scheduler.completed` bus event; never streams. */
+  scheduled?: {
+    jobId: string;
+    firedAt: string;
+    summary: string;
+    status?: "completed" | "failed" | "canceled";
+    /** A recurring re-fire into this same session → render the compact one-line chip. */
+    collapse?: boolean;
+    /** The Activity thread the full turn lives in — the "View full result" target. */
+    activityContext?: string;
+    taskId?: string;
+  };
   /** This turn's token usage + cost (terminal cost-v1 extension metadata). Shown as a small footer
    *  under the answer; absent on user turns and history saved before this shipped. */
   usage?: TurnUsage;
