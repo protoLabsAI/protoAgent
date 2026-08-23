@@ -34,6 +34,7 @@ import os
 import re
 import shutil
 import signal
+import time
 from collections import deque
 from functools import lru_cache
 from pathlib import Path
@@ -1040,27 +1041,94 @@ class AcpClient:
         ``timeout``) instead of interleaving prompts into the one session — the per-turn
         state (``_answer``, the callbacks) lives on the instance, so an interleaved turn
         corrupts both answers.
+
+        Every completed, failed, or cancelled run writes one telemetry row here — see
+        ``_record_run_telemetry`` for why this method, of all of them, is the seam (#3015).
         """
-        if self._turn_lock.locked():
-            logger.info("[acp/%s] prompt queued behind an in-flight turn", self.name)
+        started = time.monotonic()
+        # "failed" until proven otherwise, and read from a `finally`, so a transport
+        # error, a queue timeout, and an outright cancel all record as failures without
+        # any of them needing their own except branch. That failure class is the whole
+        # reason the row exists: a coder run that burned ten minutes and delivered
+        # nothing is exactly what #3015 could not see.
+        state = "failed"
         try:
-            await asyncio.wait_for(self._turn_lock.acquire(), timeout=timeout)
-        except TimeoutError:
-            raise AcpError(
-                f"{self.name}: still queued behind an in-flight turn after {int(timeout)}s"
-                " — dispatch serially or raise the timeout"
-            ) from None
-        try:
-            return await self._prompt_locked(
-                text,
-                progress_callback=progress_callback,
-                tool_callback=tool_callback,
-                text_callback=text_callback,
-                thought_callback=thought_callback,
-                timeout=timeout,
-            )
+            if self._turn_lock.locked():
+                logger.info("[acp/%s] prompt queued behind an in-flight turn", self.name)
+            try:
+                await asyncio.wait_for(self._turn_lock.acquire(), timeout=timeout)
+            except TimeoutError:
+                raise AcpError(
+                    f"{self.name}: still queued behind an in-flight turn after {int(timeout)}s"
+                    " — dispatch serially or raise the timeout"
+                ) from None
+            try:
+                answer = await self._prompt_locked(
+                    text,
+                    progress_callback=progress_callback,
+                    tool_callback=tool_callback,
+                    text_callback=text_callback,
+                    thought_callback=thought_callback,
+                    timeout=timeout,
+                )
+            finally:
+                self._turn_lock.release()
+            # Returning is not the same as succeeding: `prompt()` is typed -> str, so a
+            # refusal and a deliberate cancel both come back as (usually empty) text.
+            # `dead_end()` is the existing reading of the wire stop reason for exactly
+            # that distinction, so the recorded outcome matches what the orchestrator
+            # already acts on rather than inventing a second classification (#2279).
+            state = "completed" if self.dead_end() is None else "failed"
+            return answer
         finally:
-            self._turn_lock.release()
+            self._record_run_telemetry(state, started)
+
+    def _record_run_telemetry(self, state: str, started: float) -> None:
+        """One durable telemetry row per coder run (#3015). Best-effort; never raises.
+
+        The project-board loop dispatches coders from a background loop rather than from
+        an agent turn, and per-turn telemetry is written from a turn's terminal hook — so
+        it structurally could not see them. The live PM recorded $2,809 across 331 turns,
+        all of it its own reasoning, while the coders that actually wrote the PRs
+        contributed zero rows. Both dispatch paths (``plugins.delegates.adapters``, and
+        the project board's tapped seam, which deliberately bypasses that adapter) funnel
+        through ``prompt()``, which is why the instrumentation lives here and not one
+        layer up where half the callers would miss it.
+
+        Tokens and cost are recorded as ZERO deliberately. The coding agent bills its own
+        subscription and protoAgent never observes those numbers; the ``acp:<name>`` model
+        label is the honest "this turn was not gateway-metered" marker, the same
+        convention ``server.chat._acp_drive_turn`` uses, and #3006 settled that a
+        half-wired or invented field here is worse than an absent one.
+
+        Synchronous on purpose. It is called from a ``finally`` that can run while the
+        task is already being cancelled, and an ``await`` there would be interrupted
+        before the row landed — losing precisely the cancelled runs worth seeing.
+        """
+        try:
+            # Lazily, inside the call: `plugins` is outside the import-layering contract,
+            # but importing the server package at plugin import time would still drag the
+            # whole app in for a module that only ever needs it mid-dispatch.
+            from server.turn_telemetry import local_task_id, record_turn
+
+            record_turn(
+                # `coder:<delegate>` origin prefix (#3000's convention) so a coder run is
+                # distinguishable from a console or /v1 turn by its key alone.
+                task_id=local_task_id(f"coder:{self.name}"),
+                # The ACP session is the run's stable thread id across turns; empty when
+                # the agent never opened one (the failure-before-handshake case).
+                session_id=self._session_id or "",
+                state=state,
+                models=[f"acp:{self.name}"],
+                duration_ms=int((time.monotonic() - started) * 1000),
+                # The console's fleet roster counts a member running with +1 on
+                # `turn.started` and -1 on the terminal `turn.usage`. A coder run emits no
+                # `turn.started`, so publishing only the -1 half would drive that count
+                # negative — see `record_turn`'s own docstring.
+                publish_usage_event=False,
+            )
+        except Exception as exc:  # noqa: BLE001 — telemetry must never break a coder run
+            logger.debug("[acp/%s] could not record run telemetry: %s", self.name, exc)
 
     async def _prompt_locked(
         self,
