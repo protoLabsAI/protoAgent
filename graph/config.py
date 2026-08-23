@@ -832,6 +832,20 @@ class LangGraphConfig:
     # Retention guardrail (ADR 0006) — turns older than this are pruned by the
     # periodic maintenance loop so the store can't grow unbounded. 0 = keep forever.
     telemetry_retention_days: int = 90
+    # Langfuse deep tracing (ADR 0006's OTHER half, #3017) — the per-turn trace tree
+    # the ``trace_id`` column, ``a2a.trace`` caller propagation and ``trace_session``
+    # all exist to feed. Until #3017 the credentials were env-only, which made tracing
+    # unreachable on the shape the fleet actually deploys (a desktop-app member spawned
+    # with no LANGFUSE_* in its environment). The environment still WINS — a container
+    # deploy that exports LANGFUSE_{PUBLIC,SECRET}_KEY keeps tracing with no config at
+    # all — and these fields are the fallback beneath it. The two keys are credentials:
+    # they are declared in ``config_io.SECRET_PATHS`` so they live in the untracked
+    # ``secrets.yaml``, never in the tracked YAML. Blank ``tracing_host`` resolves to
+    # the module's default (see ``observability.tracing.resolve_credentials``).
+    tracing_enabled: bool = False
+    tracing_host: str = ""
+    tracing_public_key: str = ""
+    tracing_secret_key: str = ""
     # Prompt snapshot capture (#2243) — record the EXACT system prompt each model
     # call received (stable prefix hash-deduped, volatile tail per call), viewable
     # per turn in the console ("View prompt" / /prompt). ON by default — the
@@ -1461,6 +1475,12 @@ class LangGraphConfig:
         secrets_manager = data.get("secrets_manager", {})
         secret_sm_client_id = secrets.get("secrets_manager", {}).get("client_id")
         secret_sm_client_secret = secrets.get("secrets_manager", {}).get("client_secret")
+        # Langfuse credentials (#3017) — same overlay shape as model.api_key: the
+        # secrets.yaml value wins, the (now secret-free) main YAML is the fallback,
+        # and a blank leaves ``tracing.init`` on its LANGFUSE_* environment path.
+        tracing = data.get("tracing", {})
+        secret_tracing_public_key = secrets.get("tracing", {}).get("public_key")
+        secret_tracing_secret_key = secrets.get("tracing", {}).get("secret_key")
         publish = data.get("publish", {}) or {}
 
         config = cls(
@@ -1557,6 +1577,10 @@ class LangGraphConfig:
             telemetry_enabled=data.get("telemetry", {}).get("enabled", cls.telemetry_enabled),
             telemetry_db_path=data.get("telemetry", {}).get("db_path", cls.telemetry_db_path),
             telemetry_retention_days=data.get("telemetry", {}).get("retention_days", cls.telemetry_retention_days),
+            tracing_enabled=tracing.get("enabled", cls.tracing_enabled),
+            tracing_host=tracing.get("host", cls.tracing_host),
+            tracing_public_key=secret_tracing_public_key or tracing.get("public_key", cls.tracing_public_key),
+            tracing_secret_key=secret_tracing_secret_key or tracing.get("secret_key", cls.tracing_secret_key),
             prompt_capture_enabled=data.get("prompts", {}).get("capture", cls.prompt_capture_enabled),
             prompt_capture_retention_days=data.get("prompts", {}).get(
                 "retention_days", cls.prompt_capture_retention_days

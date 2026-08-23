@@ -33,9 +33,13 @@ PATTERNS: dict[str, re.Pattern] = {
     "client_secret": re.compile(
         r"(?i)client[_\-]?secret(?:[\"'\s:=]+)([A-Za-z0-9_\-]{12,})",
     ),
+    # `PUBLIC_KEY` bare, not just `LANGFUSE_PUBLIC_KEY`: #3017 gave that key a config
+    # home, and `secrets.yaml` spells it `public_key`, so a tool that echoes the file
+    # would leak it while its `secret_key` sibling one line down was scrubbed. The
+    # leading `\b` keeps the bare alternative from matching inside a longer name.
     "env_var_assignment": re.compile(
         r"(?i)\b(OPENAI_API_KEY|LANGFUSE_SECRET_KEY|LANGFUSE_PUBLIC_KEY|"
-        r"A2A_AUTH_TOKEN|API_KEY|SECRET_KEY|AUTH_TOKEN|ACCESS_TOKEN|"
+        r"A2A_AUTH_TOKEN|API_KEY|SECRET_KEY|PUBLIC_KEY|AUTH_TOKEN|ACCESS_TOKEN|"
         r"PRIVATE_KEY|DISCORD_BOT_TOKEN|BOT_TOKEN|GATEWAY_API_KEY|GH_PAT|"
         r"CLIENT_SECRET|INFISICAL_CLIENT_SECRET)\s*[=:]\s*\S+",
     ),
@@ -50,6 +54,11 @@ _SENSITIVE_ENV_KEYS: frozenset[str] = frozenset(
         "A2A_AUTH_TOKEN",
         "API_KEY",
         "SECRET_KEY",
+        # Langfuse's "public" key is only public relative to their browser SDK; server-side
+        # it authenticates the ingest client, which is why #3017 declares BOTH halves in
+        # config_io.SECRET_PATHS. Redacted here (and as `public_key` below) so the audit
+        # layer doesn't undo that call.
+        "PUBLIC_KEY",
         "AUTH_TOKEN",
         "ACCESS_TOKEN",
         "PRIVATE_KEY",
@@ -58,6 +67,7 @@ _SENSITIVE_ENV_KEYS: frozenset[str] = frozenset(
         "api_key",
         "apikey",
         "secret_key",
+        "public_key",
         "auth_token",
         "access_token",
         "private_key",

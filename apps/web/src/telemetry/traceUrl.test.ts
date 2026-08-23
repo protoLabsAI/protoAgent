@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { langfuseTraceUrl } from "./traceUrl";
+import { langfuseTraceUrl, traceCellState } from "./traceUrl";
 
 const TPL = "https://langfuse.example.com/project/cmp123/traces/{trace_id}";
 
@@ -34,5 +34,42 @@ describe("langfuseTraceUrl", () => {
     expect(langfuseTraceUrl(TPL, "a b/c")).toBe(
       "https://langfuse.example.com/project/cmp123/traces/a%20b%2Fc",
     );
+  });
+});
+
+// #3017 — an always-empty Trace column reads as "these turns weren't traced", not
+// "tracing is disabled". The cell has to tell those apart.
+describe("traceCellState", () => {
+  it("deep-links a traced row when the server sent a template", () => {
+    expect(traceCellState(TPL, "abc123def456", true)).toEqual({
+      kind: "link",
+      href: "https://langfuse.example.com/project/cmp123/traces/abc123def456",
+      short: "abc123de",
+    });
+  });
+
+  it("falls back to a copyable id when the template is unavailable", () => {
+    expect(traceCellState(null, "abc123def456", true)).toEqual({
+      kind: "copy",
+      traceId: "abc123def456",
+      short: "abc123de",
+    });
+  });
+
+  it("says 'off' for an untraced row when tracing is disabled", () => {
+    expect(traceCellState(TPL, null, false)).toEqual({ kind: "off" });
+    expect(traceCellState(TPL, "  ", false)).toEqual({ kind: "off" });
+  });
+
+  it("says 'none' for an untraced row while tracing is ON — that turn simply has no trace", () => {
+    expect(traceCellState(TPL, null, true)).toEqual({ kind: "none" });
+  });
+
+  it("still shows a stored trace id after tracing is turned off — the trace still exists", () => {
+    expect(traceCellState(TPL, "abc123def456", false)).toEqual({
+      kind: "link",
+      href: "https://langfuse.example.com/project/cmp123/traces/abc123def456",
+      short: "abc123de",
+    });
   });
 });

@@ -128,6 +128,12 @@ SECRET_PATHS: tuple[tuple[str, str], ...] = (
     # that can't come from the manager itself, routed to secrets.yaml like the API key.
     ("secrets_manager", "client_id"),
     ("secrets_manager", "client_secret"),
+    # Langfuse credentials (#3017). Both halves of the pair are credentials — the
+    # "public" key is only public relative to Langfuse's own browser SDK; here it
+    # authenticates the ingest client alongside the secret key, so neither belongs
+    # in a file that gets exported, backed up or forked.
+    ("tracing", "public_key"),
+    ("tracing", "secret_key"),
     # Plugin secrets (e.g. discord's `discord.bot_token`) are declared by their
     # plugin manifests and added dynamically via secret_paths() (ADR 0019).
 )

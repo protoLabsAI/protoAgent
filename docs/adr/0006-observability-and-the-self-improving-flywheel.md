@@ -28,7 +28,7 @@ granularity. An audit of what protoAgent captures today:
 
 | Capability | Where | State |
 |---|---|---|
-| Langfuse tracing (session + tool spans, trace-id on audit lines) | `tracing.py` | Working; graceful no-op when unconfigured |
+| Langfuse tracing (session + tool spans, trace-id on audit lines) | `tracing.py` | Working; graceful no-op when unconfigured. **Env-only until #3017** — see the amendment below |
 | Prometheus `/metrics` (per-fork namespaced) | `metrics.py`, `server.py` | Endpoint up; **LLM metrics defined but unused** |
 | Per-tool latency + success → JSONL + Langfuse + Prometheus | `graph/middleware/audit.py` | Working |
 | Per-LLM-call token capture (`on_chat_model_end`, `stream_usage=True`) | `server.py` `_run_turn_stream`, `graph/llm.py` | Working (input/output only) |
@@ -371,3 +371,44 @@ Known limits, deliberately left rather than papered over:
 - Fleet: `protoWorkstacean/src/executor/extensions/cost.ts`,
   `protoWorkstacean/lib/types/cost-v1.ts`,
   `protoWorkstacean/docs/extensions/cost-v1.md`.
+
+## Amendment — Langfuse credentials are configurable (#3017)
+
+The state table above says tracing is "working; graceful no-op when unconfigured". Both
+halves were true and together they hid a hole: `tracing.init` read `LANGFUSE_PUBLIC_KEY` /
+`LANGFUSE_SECRET_KEY` from the environment and nowhere else, and nothing in the shape the
+fleet actually deploys — a member launched by the desktop app as
+`protoagent-server --port … --ui none` — puts those variables in its environment. So on
+every fleet member the deep-trace half of this ADR degraded gracefully to nothing, with no
+way to turn it on short of editing the app bundle's launch environment. The live PM measured
+**0 trace_ids across 336 turns and 5,000 model calls** over a month.
+
+The trace *tree* is not decoration on the SQL rollup: `trace_id`, the `a2a.trace` caller
+propagation (so a delegation nests under its caller) and `trace_session` all exist to feed
+it, and the console's `_resolve_trace_url_template` deep-link path can never resolve without
+it. With that half dark, the SQL rollup was the *only* observability an operator had — the
+condition under which the defects in #3000–#3006 went unnoticed as long as they did.
+
+`tracing.{enabled,host,public_key,secret_key}` now sit in `LangGraphConfig`, editable at
+**Settings ▸ Tracing**, with the two keys declared in
+`config_io.SECRET_PATHS` so they live in the untracked `secrets.yaml` (the Langfuse "public"
+key authenticates the ingest client server-side — it is a credential here, not a browser
+token). **The environment still wins**: a complete `LANGFUSE_{PUBLIC,SECRET}_KEY` pair is
+used as-is, including when `tracing.enabled` is false, because a container deploy has no
+config file to flip. `tracing.enabled` is the fallback toggle, not a kill switch.
+
+Settings ▸ **Tracing**, not Box ▸ Telemetry beside `telemetry.enabled`, and the difference is
+the whole acceptance rather than a taxonomy preference. `telemetry.*` is host-scoped box
+config, so the console files it under a `hostOnly` section that renders on the host console
+alone; the four tracing fields are agent-scoped credentials, and the deployment shape this
+amendment exists for — a member launched `--ui none`, seen only through the hub's slug-scoped
+window — is exactly where a `hostOnly` section is dropped. Filed there, the setting would have
+been as unreachable from the console as it already was from the environment. The Telemetry
+surface instead carries a `QuickSetting` onto the same four fields (ADR 0048's chip-is-a-
+shortcut, same fields, same save path), so the two halves of this ADR still meet in one place
+on the host console.
+
+And the surface now states its own state: `/api/telemetry/recent` reports `tracing_enabled`,
+and the console's Trace column reads `off` rather than `—` when tracing is disabled. A column
+of dashes reads as "these turns weren't traced" — the failure mode that let a month of dark
+tracing pass for normal.

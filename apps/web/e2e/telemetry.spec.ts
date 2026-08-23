@@ -42,4 +42,70 @@ test("Box ▸ Telemetry shows the summary cards and recent turns", async ({ page
   await expect(insights).toBeVisible();
   await expect(insights.getByText(/1 turn flagged/)).toBeVisible();
   await expect(insights.getByText(/Prompt cache: 60% hit/)).toBeVisible();
+
+  // Tracing is ON in the default mock, so the untraced turn is a plain "—" — the
+  // "tracing is disabled" cell below must not appear here (#3017).
+  await expect(surface.getByTestId("telemetry-trace-off")).toHaveCount(0);
+});
+
+// #3017 — with Langfuse off, every row's trace_id is blank. A column of dashes reads
+// as "these turns weren't traced", which is how a fleet ran a month of turns with
+// tracing dark and nothing in the product said so. The column has to say "off".
+test("Box ▸ Telemetry says tracing is off rather than showing an empty trace column", async ({ page }) => {
+  await page.route("**/api/telemetry/recent*", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        enabled: true,
+        // Both turns untraced, and the server reports tracing disabled — no template
+        // either, since _resolve_trace_url_template short-circuits when tracing is off.
+        turns: [
+          { task_id: "task-3", session_id: "s1", state: "completed", success: 1, model: "claude-opus-4-8",
+            input_tokens: 6000, output_tokens: 900, cost_usd: 0.12, duration_ms: 8100,
+            llm_calls: 3, tool_calls: 2, ended_at: "2026-06-01T05:00:08+00:00", trace_id: null },
+          { task_id: "task-2", session_id: "s1", state: "failed", success: 0, model: "claude-haiku-4-5",
+            input_tokens: 1800, output_tokens: 0, cost_usd: 0.0054, duration_ms: 700,
+            llm_calls: 1, tool_calls: 0, ended_at: "2026-06-01T04:59:01+00:00", trace_id: null },
+        ],
+        langfuse_trace_url_template: null,
+        tracing_enabled: false,
+      }),
+    });
+  });
+
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.getByTestId("settings-widget").click();
+  await expect(page.locator(".settings-overlay")).toBeVisible();
+  await page.locator(".settings-overlay .pl-sidenav").getByRole("tab", { name: "Telemetry", exact: true }).click();
+
+  const surface = page.getByTestId("telemetry-surface");
+  await expect(surface).toBeVisible();
+
+  const off = surface.getByTestId("telemetry-trace-off");
+  await expect(off).toHaveCount(2);           // one per untraced row, not a blank dash
+  await expect(off.first()).toHaveText("off");
+  // The title has to name a control that EXISTS. It used to say "Settings ▸ Telemetry",
+  // whose gear holds two unrelated fields — an operator following it found no tracing.
+  await expect(off.first()).toHaveAttribute("title", /Tracing is disabled/);
+  await expect(off.first()).toHaveAttribute("title", /Settings ▸ Tracing/);
+  // And no link/copy affordance is fabricated for a turn that has no trace.
+  await expect(surface.getByTestId("telemetry-trace-link")).toHaveCount(0);
+  await expect(surface.getByTestId("telemetry-trace-copy")).toHaveCount(0);
+
+  // The gear beside this table is the same four fields Settings ▸ Tracing owns, so the fix
+  // is one click from the column that reported the problem (ADR 0048 chip-is-a-shortcut).
+  await surface.getByRole("button", { name: "Langfuse tracing settings" }).click();
+  const dialog = page.getByRole("dialog", { name: "Langfuse tracing" });
+  await expect(dialog.locator('.setting-row[data-key="tracing.enabled"]')).toBeVisible();
+  // Same depends_on fold as the full section: the keys appear once the toggle is on.
+  await expect(dialog.locator('.setting-row[data-key="tracing.public_key"]')).toHaveCount(0);
+  await dialog.locator('.setting-row[data-key="tracing.enabled"] .pl-switch').click();
+  await expect(dialog.locator('.setting-row[data-key="tracing.host"]')).toBeVisible();
+  await expect(dialog.locator('.setting-row[data-key="tracing.public_key"]')).toBeVisible();
+  await expect(dialog.locator('.setting-row[data-key="tracing.secret_key"]')).toBeVisible();
+  // The client is built once at boot, so every row carries the restart badge — and none
+  // carries "box-shared": these are agent-scoped credentials, not a box default (ADR 0047 D5).
+  await expect(dialog.locator(".pl-badge", { hasText: "restart" }).first()).toBeVisible();
+  await expect(dialog.locator(".pl-badge", { hasText: "box-shared" })).toHaveCount(0);
 });

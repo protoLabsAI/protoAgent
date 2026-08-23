@@ -299,6 +299,30 @@ telemetry:
 | `enabled` | `true` | Write a per-turn row at terminal time. `false` → no store; endpoints return `{enabled:false}`. |
 | `db_path` | `/sandbox/telemetry.db` | SQLite path; `/sandbox`→`~/.protoagent` fallback, instance-scoped (ADR 0004). |
 
+## `tracing`
+
+Langfuse deep tracing — the other half of [ADR 0006](../adr/0006-observability-and-the-self-improving-flywheel.md). Where `telemetry` is the SQL rollup (one row per turn), this is the trace *tree*: the tool calls, model calls and subagent spans inside a turn, plus the `trace_id` each telemetry row carries so the console can deep-link a turn to its trace. It is also what makes `a2a.trace` propagation pay off — a delegation nests under its caller's trace instead of opening its own.
+
+Credentials resolve **environment first, config second** (#3017). A container deploy that exports `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_HOST` keeps working with no config at all, and those env vars win over anything here. The config block below is the fallback — and it is the only path that reaches a **desktop-launched fleet member** (`protoagent-server --port … --ui none`), which is spawned with no `LANGFUSE_*` in its environment. Editable in-app at **Settings ▸ Tracing** — in the Agent group rather than beside the `telemetry` rollup under Box, because these are per-agent credentials and the Box group renders only on the host console; a fleet member's window would never have shown them. The Telemetry surface carries a gear onto the same four fields.
+
+```yaml
+tracing:
+  enabled: true
+  host: https://cloud.langfuse.com
+  # public_key / secret_key are SECRETS — the Settings UI stores them in
+  # secrets.yaml, never here. Hand-editing them into this file works, but the
+  # next save relocates them to secrets.yaml (like model.api_key).
+```
+
+| Key | Default | What |
+|---|---|---|
+| `enabled` | `false` | Connect to Langfuse using the key pair below. Ignored when `LANGFUSE_{PUBLIC,SECRET}_KEY` are both in the environment — an env-configured deploy traces regardless, so this is a fallback toggle, not a kill switch. |
+| `host` | `http://host.docker.internal:3001` | Base URL of the Langfuse instance. The default only resolves inside the bundled Docker compose — a desktop-launched agent needs a real URL. `LANGFUSE_HOST` / `LANGFUSE_URL` override it. |
+| `public_key` | `""` | Langfuse public key. **Secret** → `secrets.yaml`. |
+| `secret_key` | `""` | Langfuse secret key. **Secret** → `secrets.yaml`. |
+
+Changing any of these needs a **restart** — the client is built once at boot. With tracing off, `/api/telemetry/recent` reports `tracing_enabled: false` and the console's Trace column says `off` rather than showing a blank that reads as "this turn wasn't traced". A toggle turned on without a full key pair is not silent either: the boot log says `tracing.enabled is on but the Langfuse key pair is incomplete`. Walkthrough: [Wire Langfuse + Prometheus](/guides/observability#langfuse-distributed-traces).
+
 ## `prompts`
 
 Per-call system-prompt snapshots (#2243) — the persistence behind the console's

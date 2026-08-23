@@ -28,7 +28,7 @@ import { api } from "../lib/api";
 import { localStamp, localStampTitle, ms, pct, tokens, usd } from "../lib/format";
 import { fleetTelemetryQuery, telemetryQuery } from "../lib/queries";
 import { FleetTelemetrySection } from "./FleetTelemetrySection";
-import { langfuseTraceUrl } from "./traceUrl";
+import { traceCellState } from "./traceUrl";
 
 import type { TelemetryTurn } from "../lib/types";
 
@@ -50,7 +50,7 @@ async function downloadTelemetryCsv() {
 function TelemetryBody() {
   const { data, isFetching, refetch } = useSuspenseQuery(telemetryQuery());
   const { data: fleet } = useSuspenseQuery(fleetTelemetryQuery());
-  const { enabled, summary, turns, insights, traceUrlTemplate } = data;
+  const { enabled, summary, turns, insights, traceUrlTemplate, tracingEnabled } = data;
   const toast = useToast();
 
   return (
@@ -63,6 +63,18 @@ function TelemetryBody() {
             {/* Quick-set the box-shared telemetry policy (ADR 0048) — both host-scoped,
                 so this saves to the host layer. */}
             <QuickSetting keys={["telemetry.enabled", "telemetry.retention_days"]} title="Telemetry" label="Telemetry settings" />
+            {/* Tracing's shortcut to the same four fields Settings ▸ Tracing owns (#3017), so
+                both halves of ADR 0006 are one click apart from the column that reports them.
+                A SEPARATE chip rather than four more keys on the one above: QuickSetting saves
+                to the host layer only when EVERY key it edits is host-scoped, and tracing.* is
+                agent-scoped — folding them together would have quietly demoted telemetry.enabled
+                to the agent leaf. */}
+            <QuickSetting
+              keys={["tracing.enabled", "tracing.host", "tracing.public_key", "tracing.secret_key"]}
+              title="Langfuse tracing"
+              label="Langfuse tracing settings"
+              icon={<Activity size={15} />}
+            />
             <Button icon variant="ghost" type="button" onClick={() => void downloadTelemetryCsv()}
                     disabled={!enabled || !summary?.turns} title="Export CSV" data-testid="telemetry-export">
               <Download size={16} />
@@ -212,7 +224,7 @@ function TelemetryBody() {
                       <Td>{ms(t.duration_ms)}</Td>
                       <Td>{t.llm_calls}/{t.tool_calls}</Td>
                       <Td><Badge status={t.state === "completed" ? "success" : t.state === "failed" ? "error" : "neutral"}>{t.state}</Badge></Td>
-                      <Td><TraceCell turn={t} template={traceUrlTemplate} onCopied={() =>
+                      <Td><TraceCell turn={t} template={traceUrlTemplate} tracingEnabled={tracingEnabled} onCopied={() =>
                         toast({ title: "Trace id copied", message: "Paste it into Langfuse's search." })} /></Td>
                     </Tr>
                   ))}
@@ -237,38 +249,57 @@ export function TelemetrySurface() {
 // Pivot from a telemetry row to its Langfuse trace. With a server-supplied URL
 // template that's a deep link; without one (Langfuse configured but its project
 // id unreachable, or no template at all) it degrades to a copyable trace id —
-// an honest id beats a fabricated link. Rows traced before the column existed,
-// or turns run with tracing off, show "—".
+// an honest id beats a fabricated link. Rows traced before the column existed show "—".
+//
+// With Langfuse OFF the cell says so (#3017). Every row is blank in that case, and a
+// column of dashes reads as "these particular turns weren't traced" — which is how a
+// fleet ran 336 turns with tracing dark and nothing in the product said so.
+// The four-way decision itself lives in traceCellState (traceUrl.ts) so it can be
+// unit-tested — the console has no component-rendering suite.
 function TraceCell({
   turn,
   template,
+  tracingEnabled,
   onCopied,
 }: {
   turn: TelemetryTurn;
   template: string | null;
+  tracingEnabled: boolean;
   onCopied: () => void;
 }) {
-  const traceId = (turn.trace_id || "").trim();
-  if (!traceId) return <span className="trace-none">—</span>;
+  const state = traceCellState(template, turn.trace_id, tracingEnabled);
 
-  const href = langfuseTraceUrl(template, traceId);
-  const short = traceId.slice(0, 8);
-
-  if (href) {
-    return (
-      <a className="trace-link" href={href} target="_blank" rel="noreferrer noopener"
-         title={`Open trace ${traceId} in Langfuse`} data-testid="telemetry-trace-link">
-        <ExternalLink size={13} aria-hidden /> {short}
-      </a>
-    );
+  switch (state.kind) {
+    case "link":
+      return (
+        <a className="trace-link" href={state.href} target="_blank" rel="noreferrer noopener"
+           title={`Open trace ${turn.trace_id} in Langfuse`} data-testid="telemetry-trace-link">
+          <ExternalLink size={13} aria-hidden /> {state.short}
+        </a>
+      );
+    case "copy":
+      return (
+        <Button type="button" variant="ghost" size="sm" className="trace-copy"
+                title={`Copy trace id ${state.traceId}`} data-testid="telemetry-trace-copy"
+                onClick={() => { void navigator.clipboard?.writeText(state.traceId); onCopied(); }}>
+          <Copy size={13} aria-hidden /> {state.short}
+        </Button>
+      );
+    case "off":
+      // The half-finished setup lands here too (toggle on, keys stored blank), so the
+      // title names what it takes rather than just "turn it on" — the same distinction
+      // observability/tracing.py draws in its boot log. It names Settings ▸ Tracing, the
+      // section that actually renders these fields in every console window; the gear beside
+      // this table is the same four fields (#3017).
+      return (
+        <span className="trace-none" data-testid="telemetry-trace-off"
+              title="Tracing is disabled on this agent — Settings ▸ Tracing ▸ Send traces to Langfuse needs the toggle AND both Langfuse keys">
+          off
+        </span>
+      );
+    default:
+      return <span className="trace-none">—</span>;
   }
-  return (
-    <Button type="button" variant="ghost" size="sm" className="trace-copy"
-            title={`Copy trace id ${traceId}`} data-testid="telemetry-trace-copy"
-            onClick={() => { void navigator.clipboard?.writeText(traceId); onCopied(); }}>
-      <Copy size={13} aria-hidden /> {short}
-    </Button>
-  );
 }
 
 function Metric({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {

@@ -482,13 +482,12 @@ def _main():
     headless_setup = ui == "none" or os.environ.get("PROTOAGENT_HEADLESS_SETUP", "").lower() in ("1", "true", "yes")
 
     # Initialize observability
-    from observability import tracing
     from observability import metrics
 
-    tracing.init()
     metrics.init()
-    # trace_export.init() runs later (after config loads) so it can honor the
-    # telemetry.fleet_trace_export toggle, not just the env var.
+    # tracing.init() and trace_export.init() both run later (after config loads) so
+    # they can honor their config toggles — tracing.{enabled,host,public_key,secret_key}
+    # and telemetry.fleet_trace_export — not just their env vars.
 
     _init_langgraph_agent(headless_setup=headless_setup)
 
@@ -824,6 +823,8 @@ def _main():
         # of dying in the SDK's batch buffer. Off the loop — flush() blocks on
         # the exporter. Best-effort, like everything else in this hook.
         try:
+            from observability import tracing
+
             await asyncio.to_thread(tracing.flush)
         except Exception:  # noqa: BLE001 — shutdown teardown is best-effort
             log.exception("[tracing] flush on shutdown failed")
@@ -963,6 +964,16 @@ def _main():
     )
 
     STATE.telemetry_store = _build_telemetry_store(STATE.graph_config)
+
+    # Langfuse deep tracing — ADR 0006's other half (#3017). Init here rather than in
+    # the early observability block for the same reason as the export below: only now
+    # is the config loaded, and the credentials are config-or-env. A desktop-launched
+    # fleet member has no LANGFUSE_* in its environment, so the config layer is the
+    # only one that can turn tracing on there. Still before any request is served
+    # (uvicorn.run is further down), so no turn can run untraced because of the move.
+    from observability import tracing
+
+    tracing.init(config=STATE.graph_config)
 
     # Fleet trace export → lab (the flywheel Observe, #1897). Init here (not in the
     # early observability block) so it can honor the telemetry.fleet_trace_export

@@ -4,7 +4,31 @@ The template has three independent observability layers: Langfuse traces, Promet
 
 ## Langfuse (distributed traces)
 
-Set these env vars on the running container:
+There are two ways in, and the environment always wins.
+
+**From config — the one that reaches a desktop-launched agent.** Turn it on in
+**Settings ▸ Tracing ▸ Send traces to Langfuse**, then paste the host and the key
+pair. The keys are secrets: the save writes them to the untracked `secrets.yaml`,
+never to `langgraph-config.yaml`. Equivalent YAML:
+
+```yaml
+tracing:
+  enabled: true
+  host: https://cloud.langfuse.com   # blank → http://host.docker.internal:3001 (compose only)
+  # public_key / secret_key live in secrets.yaml — the Settings save puts them there
+```
+
+This is the path that reaches a **fleet member started by the desktop app**
+(`protoagent-server --port … --ui none`): nothing in that launch path sets
+`LANGFUSE_*`, so before #3017 tracing could not be enabled there at all. That member
+serves no console of its own — you reach it through the hub at
+`/app/agent/<slug>/`, and **Settings ▸ Tracing** is in that window's Agent group.
+(It is deliberately *not* filed under Box ▸ Telemetry beside the cost rollup: the Box
+group is host-console-only, so a member's window never shows it — which would have
+left tracing exactly as unreachable as the environment variables. The Telemetry
+surface keeps a gear onto the same four fields for the host console.)
+
+**From the environment — containers.** Set these on the running container:
 
 ```bash
 LANGFUSE_PUBLIC_KEY=pk_lf_...
@@ -12,7 +36,21 @@ LANGFUSE_SECRET_KEY=sk_lf_...
 LANGFUSE_HOST=https://langfuse.your-domain.com   # or http://host.docker.internal:3001 for local
 ```
 
-That's it. `tracing.init()` runs at server boot, detects the keys, and connects. Traces show up tagged with `AGENT_NAME`.
+A **complete** `LANGFUSE_{PUBLIC,SECRET}_KEY` pair wins outright over the config
+block — including over `tracing.enabled: false`, because a container deploy has no
+config file to flip and silently dropping its tracing would be the regression.
+`tracing.enabled` is the fallback toggle, not a kill switch.
+
+`tracing.init()` runs once the config has loaded (still well before the server
+accepts a request), takes whichever layer answered, and connects. Traces show up
+tagged with `AGENT_NAME`, and the boot log names the layer it used:
+
+```
+[tracing] Langfuse initialized from config -> https://cloud.langfuse.com
+```
+
+Either way the client is built **once, at boot** — changing any of this needs a
+restart, not a reload.
 
 ### What gets traced
 
@@ -46,6 +84,8 @@ If the caller stamps its trace context into `params.metadata["a2a.trace"]`:
 ### If Langfuse isn't configured
 
 Every tracing helper becomes a no-op. No crashes, no latency. The rest of the agent doesn't care whether tracing is on.
+
+The console says so rather than leaving you to guess: `/api/telemetry/recent` reports `tracing_enabled: false`, and the Telemetry surface's **Trace** column reads `off` on every untraced row instead of a bare `—`. That distinction is the point — an always-blank column reads as "these particular turns weren't traced", which is how a fleet ran a month of turns with tracing dark and nothing in the product said so (#3017).
 
 ## Prometheus metrics
 

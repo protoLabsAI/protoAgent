@@ -59,6 +59,9 @@ test("the settings dialog lists the domain groups (host, no scope toggle)", asyn
     "Model",
     "Behavior",
     "Knowledge",
+    // Langfuse tracing (#3017) — the AGENT group, not Box, because its fields are agent-scoped
+    // credentials and the Box group is host-console-only (see the sister-agent test below).
+    "Tracing",
     "Secrets", // ADR 0080 — external secrets manager
     "Plugins",
     // Last in the Agent group: it EXPORTS what every section above configures (ADR 0091).
@@ -208,6 +211,42 @@ test("a sister agent's console keeps Box ▸ Fleet, without the agent-scoped Box
   await sidenav.getByRole("tab", { name: "Fleet", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
   await expect(page.locator(".fleet-row", { hasText: "roxy" })).toBeVisible();
+});
+
+// #3017 — the acceptance the issue is actually about. A fleet member started by the desktop
+// app runs `--ui none`, so it serves no /app of its own: the ONLY console that sees it is this
+// slug-scoped member window, and every `hostOnly` section (Box ▸ Telemetry included) is dropped
+// here. Tracing therefore lives in the Agent group, and this is the DOM proof that a member's
+// Langfuse credentials can be set from a console at all — the thing that was impossible before.
+test("a fleet member's console can turn tracing on (Settings ▸ Tracing, #3017)", async ({ page }) => {
+  await openSettings(page, "/app/agent/ava/");
+  const sidenav = page.locator(".settings-overlay .pl-sidenav");
+  await expect(sidenav.getByRole("tab", { name: "Telemetry", exact: true })).toHaveCount(0);
+
+  await sidenav.getByRole("tab", { name: "Tracing", exact: true }).click();
+  await expandAllGroups(page);
+
+  // The toggle renders; the host + key pair stay folded until it's on (depends_on, #963).
+  const toggle = page.locator('.setting-row[data-key="tracing.enabled"]');
+  await expect(toggle).toBeVisible();
+  await expect(page.locator('.setting-row[data-key="tracing.host"]')).toHaveCount(0);
+  await toggle.locator(".pl-switch").click();
+  await expect(page.locator('.setting-row[data-key="tracing.host"]')).toBeVisible();
+  await expect(page.locator('.setting-row[data-key="tracing.public_key"] input')).toBeVisible();
+  await expect(page.locator('.setting-row[data-key="tracing.secret_key"] input')).toBeVisible();
+  // Built once at boot — the restart banner has to say so before the operator walks away.
+  await expect(page.locator(".settings-banner")).toContainText("restart");
+
+  // And the save lands on the MEMBER, through the hub's per-agent proxy (ADR 0042 slug
+  // routing): agent-scoped fields write the agent leaf, which is this member's own config.
+  const req = page.waitForRequest(
+    (r) => r.method() === "POST" && new URL(r.url()).pathname.endsWith("/api/settings"),
+  );
+  await page.locator('.setting-row[data-key="tracing.host"] input').fill("https://cloud.langfuse.com");
+  await page.getByRole("button", { name: /Save & apply/ }).click();
+  const posted = await req;
+  expect(new URL(posted.url()).pathname).toContain("/agents/ava/");
+  expect(posted.postDataJSON()?.updates?.["tracing.host"]).toBe("https://cloud.langfuse.com");
 });
 
 test("Identity: a name change saves via /api/settings, not /api/config (no operator clobber)", async ({ page }) => {
