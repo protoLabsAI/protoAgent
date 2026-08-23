@@ -158,6 +158,11 @@ def test_data_routes(tmp_path) -> None:
 
     doc = c.get("/api/plugins/docs/doc", params={"path": "guides/skills.md"}).json()
     assert doc["path"] == "guides/skills.md" and "<h1>" in doc["html"]
+    # The reader only ever renders `html`, so the raw markdown is OPT-IN (`raw=1`) — the
+    # view asks for it just for its "Copy as markdown" context action (#3030).
+    assert "md" not in doc
+    raw = c.get("/api/plugins/docs/doc", params={"path": "guides/skills.md", "raw": 1}).json()
+    assert raw["md"].lstrip().startswith("#") and "<h1>" in raw["html"]
 
     # Out-of-corpus path → 404 (the read gate).
     assert c.get("/api/plugins/docs/doc", params={"path": "../../etc/passwd"}).status_code == 404

@@ -116,13 +116,18 @@ def _build_data_router():
         return {"results": [{"path": r.path, "title": r.title, "section": r.section, "preview": r.preview} for r in rows]}
 
     @router.get("/doc")
-    async def _doc(path: str = ""):
+    async def _doc(path: str = "", raw: int = 0):
         if not _index().has(path):
             return JSONResponse({"error": "not found"}, status_code=404)
         md = read_doc(path)
         if md is None:
             return JSONResponse({"error": "not found"}, status_code=404)
-        return {"path": path, "title": _title_from_md(md, path), "html": render_markdown(md)}
+        out = {"path": path, "title": _title_from_md(md, path), "html": render_markdown(md)}
+        if raw:
+            # The view's "Copy as markdown" context action (#3030). Opt-in, so the reader
+            # path — which only ever renders the HTML — doesn't carry every doc twice.
+            out["md"] = md
+        return out
 
     return router
 
@@ -194,6 +199,9 @@ document.write('<link rel="stylesheet" href="'+window.__base+'/_ds/plugin-kit.cs
   .res{padding:6px 8px;border-radius:6px;cursor:pointer} .res:hover{background:var(--pl-color-bg-inset)}
   .res .t{font-weight:600} .res .p{font-size:12px;opacity:.65}
   .empty{opacity:.6;padding:24px}
+  /* Context-action feedback (#3030) — a clipboard write is invisible otherwise. */
+  #toast{position:fixed;right:14px;bottom:14px;max-width:60vw;padding:8px 12px;border:1px solid var(--pl-color-border);border-radius:8px;background:var(--pl-color-bg-inset);box-shadow:0 6px 20px rgba(0,0,0,.28);font-size:13px;opacity:0;transform:translateY(6px);transition:opacity .14s,transform .14s;pointer-events:none}
+  #toast.on{opacity:1;transform:none}
   .md{max-width:760px} .md h1{font-size:1.6em} .md h2{font-size:1.3em;border-bottom:1px solid var(--pl-color-border);padding-bottom:.2em} .md h3{font-size:1.1em}
   .md code{background:var(--pl-color-bg-inset);padding:1px 5px;border-radius:4px;font-size:.9em}
   .md pre{background:var(--pl-color-bg-inset);padding:12px;border-radius:8px;overflow:auto} .md pre code{background:none;padding:0}
@@ -218,6 +226,7 @@ document.write('<link rel="stylesheet" href="'+window.__base+'/_ds/plugin-kit.cs
   <aside id="nav"><input id="q" class="q" placeholder="Search docs…" autofocus><div id="list"></div></aside>
   <main id="reader"><div class="empty">Select a doc from the list.</div></main>
 </div>
+<div id="toast" role="status" aria-live="polite"></div>
 <script type="module">
 const base = window.__base;
 let kit;
@@ -330,5 +339,80 @@ let started=false;
 const start=()=>{ if(started) return; started=true; showTree(); };
 kit.initPluginView(start);
 setTimeout(start, 1500);
+
+// ── Context menus (#3030) ─────────────────────────────────────────────────────────────
+// A right-click inside this iframe is invisible to the console — the event fires in OUR
+// document and never bubbles across the boundary — so we suppress the browser menu and
+// hand the console the position plus the items for whatever is under the cursor. It opens
+// its own menu there and posts back the id we chose.
+const post=o=>{ try{ if(parent&&parent!==window) parent.postMessage(o,"*"); }catch(e){} };
+const $nav=document.getElementById("nav"), $toast=document.getElementById("toast");
+let toastTimer;
+function toast(msg){ $toast.textContent=msg; $toast.classList.add("on"); clearTimeout(toastTimer); toastTimer=setTimeout(()=>$toast.classList.remove("on"), 2200); }
+// The doc the open menu describes — the row right-clicked, or the one in the reader.
+let menuFor=null;
+function openMenu(e, items, forPath){
+  e.preventDefault();
+  menuFor=forPath||null;
+  post({type:"protoagent:contextmenu:open", x:e.clientX, y:e.clientY, items});
+}
+const DOC_ITEMS=[
+  {id:"open", label:"Open", icon:"book-open"},
+  {id:"copy-path", label:"Copy path", icon:"clipboard"},
+  {id:"copy-md", label:"Copy as markdown", icon:"file-text"},
+  {divider:true},
+  {id:"open-live", label:"Open on the docs site", icon:"external-link"},
+];
+// The list background's menu never changes, so declare it ONCE and post a bare open.
+post({type:"protoagent:contextmenu:register", items:[
+  {id:"focus-search", label:"Search docs…", icon:"search"},
+  {id:"reload-tree", label:"Reload the doc list", icon:"refresh-cw"},
+]});
+// One handler for the whole sidebar: a row menus that doc, anything else falls through to
+// the registered set (two listeners would post twice and the second would win).
+$nav.addEventListener("contextmenu",(e)=>{
+  const row=e.target.closest("[data-path]");
+  if(row && $nav.contains(row)) openMenu(e, DOC_ITEMS, row.dataset.path);
+  else { menuFor=null; e.preventDefault(); post({type:"protoagent:contextmenu:open", x:e.clientX, y:e.clientY}); }
+});
+// The reader acts on the doc it is showing; with none open the items are DISABLED rather
+// than missing, so the menu doesn't change shape under the cursor.
+$reader.addEventListener("contextmenu",(e)=>{
+  const none=!currentPath;
+  openMenu(e, [
+    {id:"copy-path", label:"Copy path", icon:"clipboard", disabled:none},
+    {id:"copy-md", label:"Copy as markdown", icon:"file-text", disabled:none},
+    {divider:true},
+    {id:"open-live", label:"Open on the docs site", icon:"external-link", disabled:none},
+  ], currentPath);
+});
+async function copyText(text,msg){
+  // The menu is a HOST overlay, so our document lost focus while it was open — take it
+  // back before writing, and fall back to the legacy selection path if we're still refused.
+  try{ window.focus(); }catch(e){}
+  try{ await navigator.clipboard.writeText(text); toast(msg); return; }catch(e){}
+  try{
+    const ta=document.createElement("textarea");
+    ta.value=text; ta.style.position="fixed"; ta.style.opacity="0";
+    document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove();
+    toast(msg);
+  }catch(e){ toast("Could not copy — the clipboard was refused."); }
+}
+addEventListener("message", async (e)=>{
+  const m=e.data||{};
+  if(m.type!=="protoagent:contextmenu:action") return;
+  const id=m.itemId, path=menuFor;
+  if(id==="focus-search"){ $q.focus(); $q.select(); return; }
+  if(id==="reload-tree"){ tree=null; $q.value=""; showTree(); toast("Doc list reloaded."); return; }
+  if(!path) return;
+  if(id==="open"){ openDoc(path); return; }
+  if(id==="copy-path"){ copyText(path, "Copied "+path); return; }
+  if(id==="copy-md"){
+    try{ const d=await api("/doc?raw=1&path="+encodeURIComponent(path)); if(d&&d.md) copyText(d.md, "Copied "+path+" as markdown"); }
+    catch(err){ toast("Could not read "+path); }
+    return;
+  }
+  if(id==="open-live"){ window.open(liveDocsUrl("", "/"+path, ""), "_blank", "noopener,noreferrer"); return; }
+});
 </script></body></html>
 """
