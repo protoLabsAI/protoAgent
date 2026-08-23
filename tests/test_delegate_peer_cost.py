@@ -9,8 +9,10 @@ only its own thinking. These tests cover the whole path:
     real turn through the real a2a-sdk app, not a hand-written envelope);
   - the adapter emitting one tagged ``usage`` custom event per delegation, on both the
     inline and the polled terminal path;
-  - the durable outcome: the peer's tokens and cost land in the calling turn's
-    accumulator, its prompt size does NOT land in the lead thread's context fill;
+  - the durable outcomes — the peer's tokens and cost in the calling turn's accumulator,
+    in the STORED telemetry row, and in the cost-v1 this instance itself puts back on
+    the wire (so a hub→member→member chain rolls up) — while the peer's prompt size
+    stays out of the lead thread's context fill;
   - silent degradation for a peer that emits no cost-v1.
 """
 
@@ -327,3 +329,97 @@ async def test_a_peerless_turn_is_unchanged():
     o = await _run_turn_outcome(stream)
     assert o.usage["input_tokens"] == 30 and o.cost_usd == pytest.approx(0.002)
     assert o.models == ["claude-lead"] and o.context_tokens == 30
+
+
+async def test_peer_spend_rolls_up_into_the_cost_v1_we_emit_but_not_the_context_readout():
+    """The chain case (ADR 0055): what a hub bills, its OWN caller can read.
+
+    This instance emits cost-v1 on its terminal artifact from the same accumulator the
+    peer row lands in — so a member's spend rides one hop further up and a hub→member→
+    member fan-out is countable at the top. The context-v1 readout on the SAME artifact
+    must not move, though: that one describes THIS thread's window, and the peer's
+    700-token prompt is a different agent's entirely. Both read off the wire, not the
+    in-process outcome — the split only counts if it survives serialization.
+    """
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield ("usage", dict(_LEAD_USAGE))
+        yield ("usage", dict(_PEER_ROW))
+        yield ("done", "answer")
+
+    app = _build_app(stream)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:
+        task = (await _send_msg(c)).json()["result"]["task"]
+        final = await _poll_terminal(c, task["id"])
+
+    artifact = final["artifacts"][-1]
+    payload = pa.parse_cost(artifact["metadata"])
+    assert payload, "no cost-v1 on the terminal artifact"
+    assert payload["usage"]["input_tokens"] == 730
+    assert payload["usage"]["output_tokens"] == 67
+    assert payload["costUsd"] == pytest.approx(0.0143)
+
+    # …and the context readout is the LEAD's alone: peak prompt 30, and a next-turn
+    # projection of 30+12 anchored to the lead's last call — not 700 / 755.
+    _mime, ctx = pa.read_data(artifact["parts"][1])
+    assert ctx["contextTokens"] == 30
+    assert ctx["projectedTokens"] == 42
+
+
+async def test_peer_spend_lands_in_the_stored_telemetry_row(tmp_path, monkeypatch):
+    """The durable row — the thing anyone actually queries later (ADR 0006 Slice 2).
+
+    A frame on a stream proves nothing if the row it should reach is unchanged, so this
+    drives the real terminal chokepoint (``server.a2a._record_a2a_telemetry`` →
+    ``record_turn`` → the SQLite store) with a real turn's outcome and reads the row back.
+    """
+    from observability.telemetry_store import TelemetryStore
+    from runtime.state import STATE
+    from server.a2a import _record_a2a_telemetry
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield ("usage", dict(_LEAD_USAGE))
+        yield ("usage", dict(_PEER_ROW))
+        yield ("done", "answer")
+
+    monkeypatch.setattr(STATE, "telemetry_store", TelemetryStore(str(tmp_path / "turns.db")), raising=False)
+    _record_a2a_telemetry(await _run_turn_outcome(stream))
+
+    (row,) = STATE.telemetry_store.recent(limit=5)
+    # The peer's spend is IN the row: its cost summed, its tokens summed, and the
+    # `peer:` marker in `models` — the only durable trace a delegation leaves.
+    assert row["cost_usd"] == pytest.approx(0.0143)
+    assert row["models"] == "claude-lead,peer:orbis"
+    # …and the prompt split stays disjoint with a peer's tokens in it (#3003): the
+    # peer accumulated `input_tokens` cache-INCLUSIVE, the same convention this side
+    # subtracts back out, so uncached + cache_read + cache_creation is the true total.
+    assert row["cache_read_input_tokens"] == 15 and row["cache_creation_input_tokens"] == 2
+    assert row["input_tokens"] == 730 - 15 - 2
+    assert row["total_tokens"] == 730 + 67
+    # The `model` column must still name a MODEL. A marker names an agent, and a
+    # per-model breakdown listing "peer:orbis" would be wrong (#3016).
+    assert row["model"] == "claude-lead"
+
+
+async def test_a_marker_never_becomes_the_rows_primary_model(tmp_path, monkeypatch):
+    """The edge the column guard exists for: a lead whose provider reported no usage at
+    all yields no frame of its own, leaving the peer marker first in `models`. The row
+    falls back to the configured model rather than claiming a delegate name is one."""
+    from observability.telemetry_store import TelemetryStore
+    from runtime.state import STATE
+    from server.turn_telemetry import record_turn
+
+    monkeypatch.setattr(STATE, "telemetry_store", TelemetryStore(str(tmp_path / "turns.db")), raising=False)
+    record_turn(
+        task_id="t-marker",
+        session_id="c1",
+        state="completed",
+        models=["peer:orbis"],
+        usage={"input_tokens": 700, "output_tokens": 55},
+        cost_usd=0.0123,
+        publish_usage_event=False,
+    )
+
+    (row,) = STATE.telemetry_store.recent(limit=5)
+    assert row["models"] == "peer:orbis"  # still legible as peer spend
+    assert not row["model"].startswith("peer:")

@@ -262,10 +262,12 @@ separable. A peer row is `{…tokens…, cost_usd, model: "peer:<delegate>", pee
 
 The mechanics, and why each is what it is:
 
-- **Read at the terminal artifact.** `_peer_cost_payload` takes the cost-v1
-  payload off the terminal artifact's metadata map keyed by the extension URI
-  (protolabs-a2a 0.3.0 — the shape `a2a_impl/executor.py::_terminal_parts`
-  emits), falling back to the terminal status message's metadata.
+- **Read at the terminal artifact.** `tools/a2a_parse.py::_extract_cost` takes the
+  cost-v1 payload off the terminal artifact's metadata map keyed by the extension
+  URI (protolabs-a2a 0.3.0 — the shape `a2a_impl/executor.py::_terminal_parts`
+  emits), falling back to the terminal status message's metadata. It sits beside
+  `_extract_text` — the wire reader belongs with the other wire readers, in a layer
+  core surfaces can import without reaching into `plugins/`.
 - **Attributed through the existing `usage` custom-event lane** (#2872,
   `server/chat.py`'s `on_custom_event` branch → the executor's accumulator).
   `Adapter.dispatch`'s `-> str` return type is a stable interface across three
@@ -277,15 +279,35 @@ The mechanics, and why each is what it is:
   contributes tokens and no cost — a visible undercount beats an invented number.
 - **`model` carries a `peer:` marker, not a model name.** cost-v1 has no model
   field, and `models` exists to prove which model actually ran (Slice 4b). The
-  prefix keeps "what did this turn spend on peers" answerable from the stored row.
+  prefix keeps "what did this turn spend on peers" answerable from the stored row —
+  it is the only durable trace a delegation leaves, since the `peer` tag itself is a
+  stream-only routing hint. Because a marker is not a model, `record_turn` skips
+  markers when picking the row's primary `model` column and the `turn.usage` bus
+  event's `model`: normally the lead's own call is first anyway, but a provider that
+  reports no usage leaves the marker leading the list, and a per-model breakdown that
+  lists `peer:orbis` is simply wrong.
 - **Silent degradation is the contract.** A peer that emits no cost-v1 — any
   non-protoAgent A2A agent — behaves exactly as before: no row, no cost, same
   text.
 
-Known limits, deliberately left: a peer delegation counts as **one** `llm_calls`
-however many calls the peer really made (cost-v1 reports no call count), and a
-**background** delegation (ADR 0050) runs detached from the turn's callback
-context, so its peer row has no run context to dispatch into and is dropped.
+Known limits, deliberately left rather than papered over:
+
+- A peer delegation counts as **one** `llm_calls` however many calls the peer
+  really made — cost-v1 reports no call count.
+- A **background** delegation (ADR 0050) runs detached from the turn's callback
+  context, so its peer row has no run context to dispatch into and is dropped.
+- **Only spend that reached a terminal artifact is billable here.** A peer leg that
+  ends without one — a HITL park (#2943's `input_required` leg, which emits a status
+  message and no artifact) or a failed turn — put no cost-v1 on the wire, so the
+  caller cannot bill it. It is not lost: the peer records that leg in its own store
+  as a row of its own. The consequence is that a HITL delegation chain undercounts on
+  the calling side by the peer's pre-park spend. Closing it means emitting cost-v1 on
+  the park and failure paths too — an emitting-side change, and a separate one.
+- Nothing is deduplicated across dispatches. Correct today because each billed
+  return path corresponds to one leg the caller just caused (a resumed task's
+  terminal artifact is REPLACED in place under `{task_id}-answer`, so it carries the
+  resumed leg only), and the "already finished, nothing to resume" branch returns
+  without billing. A peer that accumulated across legs would double-count.
 
 ## 6. Consequences
 
