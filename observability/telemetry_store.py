@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import sqlite3
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -261,16 +262,27 @@ class TelemetryStore:
                     COALESCE(SUM(llm_calls), 0)       AS llm_calls,
                     COALESCE(SUM(tool_calls), 0)      AS tool_calls,
                     COALESCE(AVG(duration_ms), 0)     AS avg_duration_ms,
-                    COALESCE(SUM(success), 0)         AS successes
+                    COALESCE(SUM(success), 0)         AS successes,
+                    COUNT(success)                    AS resolved
                 FROM turns {where}
                 """,
                 params,
             ).fetchone()
             out = dict(agg)
-            turns = out.get("turns", 0) or 0
             out["cost_usd"] = round(out.get("cost_usd", 0.0) or 0.0, 6)
             out["avg_duration_ms"] = int(out.get("avg_duration_ms", 0) or 0)
-            out["success_rate"] = round((out.get("successes", 0) or 0) / turns, 4) if turns else 0.0
+            # Success rate is over turns that RESOLVED, not every recorded row (#3004).
+            # A parked leg writes `success = NULL` — it is neither a success nor a
+            # failure, it is a turn waiting on a human (#2943). NULL already kept it
+            # out of `SUM(success)`, but the denominator was `COUNT(*)`, which counts
+            # it — so every approval-gated turn read as a failure and any agent using
+            # HITL showed a permanently depressed success rate. `COUNT(success)` skips
+            # NULLs, so parked legs now drop out of BOTH halves.
+            resolved = out.get("resolved", 0) or 0
+            out["success_rate"] = round((out.get("successes", 0) or 0) / resolved, 4) if resolved else 0.0
+            # Kept alongside `turns` (every recorded row) so the gap is visible rather
+            # than merely excluded: turns - resolved = legs parked awaiting a human.
+            out["resolved"] = resolved
             # Cache-hit ratio: cached reads / total input tokens seen.
             inp = out.get("input_tokens", 0) or 0
             out["cache_hit_ratio"] = round((out.get("cache_read_input_tokens", 0) or 0) / inp, 4) if inp else 0.0
@@ -414,10 +426,18 @@ class TelemetryStore:
 
 
 def _percentile(values: list[int], pct: float) -> int:
-    """Nearest-rank percentile over a pre-sorted list (empty → 0)."""
+    """Nearest-rank percentile over a pre-sorted list (empty → 0).
+
+    Nearest rank is ``ceil(pct/100 * n)``, 1-indexed. The previous form —
+    ``round(pct/100 * n + 0.5) - 1`` — sat one rank high, but only sometimes:
+    Python's ``round`` is banker's rounding, so the error flipped with the parity
+    of the half-value. At n=100 that made p50 correct and p99 return the MAXIMUM,
+    which is not a percentile at all — and p99 is the column an operator reads to
+    decide whether a tool is slow (#3005).
+    """
     if not values:
         return 0
-    k = max(0, min(len(values) - 1, int(round((pct / 100.0) * len(values) + 0.5)) - 1))
+    k = max(0, min(len(values) - 1, math.ceil(pct / 100.0 * len(values)) - 1))
     return int(values[k])
 
 

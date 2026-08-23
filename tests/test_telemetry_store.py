@@ -455,11 +455,37 @@ def test_median_helper():
     assert _median([3, 1, 2]) == 2
 
 
+@pytest.mark.parametrize(
+    ("n", "pct", "expected"),
+    [
+        # Nearest rank over 1..n is ceil(pct/100 * n). The old form sat one rank
+        # high, but only for some (n, pct) pairs — banker's rounding flipped the
+        # error with the parity of the half-value, which is why a permissive
+        # `in (5, 6)` assertion here let it survive (#3005).
+        (10, 50, 5),  # was 6
+        (10, 95, 10),
+        (20, 95, 19),  # was 20
+        (100, 50, 50),  # was already correct — the parity trap
+        (100, 95, 95),  # was 96
+        (100, 99, 99),  # was 100 — p99 returned the MAXIMUM
+        (1, 50, 1),
+        (1, 99, 1),
+        (3, 50, 2),
+    ],
+)
+def test_percentile_is_nearest_rank(n, pct, expected):
+    assert _percentile(list(range(1, n + 1)), pct) == expected
+
+
+def test_percentile_never_exceeds_the_sample(store):
+    # p99 must be a percentile, not "the worst turn we saw".
+    values = list(range(1, 101))
+    assert _percentile(values, 99) < max(values)
+
+
 def test_percentile_helper():
     assert _percentile([], 50) == 0
     assert _percentile([10], 95) == 10
-    assert _percentile([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 50) in (5, 6)
-    assert _percentile([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 95) == 10
 
 
 @pytest.fixture
@@ -803,3 +829,35 @@ def test_park_and_resume_write_two_rows_through_the_real_writer(store, telemetry
     assert (s["input_tokens"], s["output_tokens"]) == (110, 35)
     assert s["cost_usd"] == 0.005
     assert s["tool_calls"] == 2
+
+
+def test_success_rate_excludes_turns_awaiting_a_human(store):
+    """#3004 — a parked leg is neither a success nor a failure.
+
+    #2943 wrote `success = NULL` for a parked leg so it would stay out of
+    `SUM(success)`, but the denominator was `COUNT(*)`, which counts it. Any agent
+    using approvals therefore showed a permanently depressed success rate — the
+    metric watched for "is this agent healthy" instead tracked how often it asked.
+    """
+    store.record(_row("t1", state="completed", success=1))
+    store.record(_row("t2", state="input_required", success=None))
+    s = store.summary()
+    assert s["turns"] == 2  # every recorded row
+    assert s["resolved"] == 1  # ...but only one of them resolved
+    assert s["success_rate"] == 1.0  # not 0.5 — nothing failed
+
+
+def test_success_rate_still_counts_real_failures(store):
+    store.record(_row("t1", state="completed", success=1))
+    store.record(_row("t2", state="failed", success=0))
+    store.record(_row("t3", state="input_required", success=None))
+    s = store.summary()
+    assert (s["turns"], s["resolved"]) == (3, 2)
+    assert s["success_rate"] == 0.5
+
+
+def test_success_rate_is_zero_when_nothing_has_resolved(store):
+    # All parked: no basis for a rate. Must not divide by zero.
+    store.record(_row("t1", state="input_required", success=None))
+    s = store.summary()
+    assert s["resolved"] == 0 and s["success_rate"] == 0.0

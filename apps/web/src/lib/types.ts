@@ -1035,7 +1035,13 @@ export type TelemetrySummary = {
   p50_duration_ms: number;
   p95_duration_ms: number;
   p99_duration_ms: number;
+  /** Share of RESOLVED turns that succeeded (#3004) — the denominator is
+   *  `resolved`, not `turns`, so a leg parked awaiting a human counts as neither
+   *  a success nor a failure. */
   success_rate: number;
+  /** Turns that reached a success/failure outcome. `turns - resolved` is the
+   *  number of legs parked awaiting a human. Absent on pre-#3004 backends. */
+  resolved?: number;
   cache_hit_ratio: number;
   /** Context-fill series (#2773, ADR 0101 D6) — peak/p95 of per-turn context-window
    *  fill, zero rows excluded. Absent on pre-#2789 backends. */
