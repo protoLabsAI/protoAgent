@@ -676,3 +676,28 @@ def test_create_refusal_is_a_400_with_the_prompt_named(client, monkeypatch):
     r = client.post("/api/fleet", json={"name": "pm", "start": False, "bundle": "https://github.com/x/stack"})
     assert r.status_code == 400
     assert "Coder delegate (board.coder)" in r.json()["detail"]
+
+
+def test_fleet_list_reports_a_malformed_remote_instead_of_500ing(client):
+    """#3018's sibling surface. The telemetry rollup was the reported symptom, but
+    /api/fleet reads the SAME registry through the same ``refresh_remote_probes()``
+    + ``status()`` pair, so one hand-edited remote record took the console's fleet
+    list down too. Fixing it in the route would have left this one broken."""
+    import json
+
+    from graph.fleet import supervisor
+    from graph.workspaces import manager
+
+    root = manager.workspaces_root()
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "remotes.json").write_text(json.dumps({"ava-1a2b": {"id": "ava-1a2b", "name": "ava"}}))
+    supervisor._probe_cache.clear()
+
+    res = client.get("/api/fleet")
+
+    assert res.status_code == 200
+    row = next(a for a in res.json()["agents"] if a.get("remote"))
+    # Reported for what it is: a member with no address, so never reachable —
+    # and no ``a2a`` endpoint invented out of a missing url.
+    assert row["id"] == "ava-1a2b" and row["name"] == "ava"
+    assert row["running"] is False and row["url"] == "" and row["a2a"] is None

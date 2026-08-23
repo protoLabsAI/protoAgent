@@ -454,12 +454,26 @@ def _load_remotes() -> dict:
     if not p.exists():
         return {}
     try:
-        return json.loads(p.read_text())
+        d = json.loads(p.read_text())
     except (OSError, json.JSONDecodeError) as e:
         # Loud: a corrupt registry silently dropping every remote member —
         # including their stored bearer tokens — is undebuggable otherwise.
         log.warning("[fleet] %s unreadable (%s) — treating as empty; remote members dropped", p, e)
         return {}
+    if not isinstance(d, dict):
+        # The registry is an ``{id: record}`` map. A hand-edited file holding a
+        # LIST parses fine and then breaks every reader on the first ``.get()``/
+        # ``.values()`` — an AttributeError out of ``list_remotes()`` that used
+        # to escape ``status()`` and 500 both /api/fleet and the telemetry
+        # rollup (#3018). Same tolerance ``_load_state`` already applies to its
+        # own file, and loud for the same reason as an unreadable one.
+        log.warning(
+            "[fleet] %s holds a %s, not an object — treating as empty; remote members dropped",
+            p,
+            type(d).__name__,
+        )
+        return {}
+    return d
 
 
 def _save_remotes(remotes: dict) -> None:
@@ -471,8 +485,26 @@ def _save_remotes(remotes: dict) -> None:
 
 
 def list_remotes() -> list[dict]:
-    """Registered remote members, tokens INCLUDED — internal/proxy use only."""
-    return list(_load_remotes().values())
+    """Registered remote members, tokens INCLUDED — internal/proxy use only.
+
+    Normalized for its readers the way ``manager.list_workspaces`` already
+    normalizes the local half of the roster, so ``status()`` and
+    ``refresh_remote_probes()`` can rely on an ``id`` being there: the registry
+    is keyed BY id, so a record that lost its own ``id`` field is recovered from
+    its key instead of raising KeyError at the first reader (#3018). A value
+    that isn't a record at all carries nothing to recover — it is dropped, and
+    said out loud, because a member vanishing in silence is undebuggable.
+
+    Read-side only: the read-modify-write paths use ``_load_remotes`` directly,
+    so nothing here can rewrite (or erase) what is actually on disk.
+    """
+    out: list[dict] = []
+    for rid, rec in _load_remotes().items():
+        if not isinstance(rec, dict):
+            log.warning("[fleet] remote %r is a %s, not an object — dropped from the roster", rid, type(rec).__name__)
+            continue
+        out.append(rec if rec.get("id") else {**rec, "id": rid})
+    return out
 
 
 def remote_for_slug(slug: str) -> dict | None:
@@ -592,8 +624,17 @@ def _probe_one(rec: dict, timeout: float) -> tuple[bool, str]:
     import httpx
 
     version = ""
+    rid = str(rec.get("id") or "")
+    url = str(rec.get("url") or "")
+    if not url:
+        # Nothing to dial. Raising here would be worse than useless: /api/fleet
+        # runs this over every remote on the 3s console poll BEFORE it reads the
+        # roster, so one url-less record would 500 the whole surface (#3018).
+        # Cache the miss so it degrades exactly like a member that never answers.
+        _probe_cache[rid] = (False, time.monotonic())
+        return False, ""
     try:
-        r = httpx.get(f"{rec['url']}/.well-known/agent-card.json", timeout=timeout)
+        r = httpx.get(f"{url}/.well-known/agent-card.json", timeout=timeout)
         alive = r.status_code == 200
         if alive:
             try:
@@ -605,16 +646,16 @@ def _probe_one(rec: dict, timeout: float) -> tuple[bool, str]:
                 version = ""
     except httpx.HTTPError:
         alive = False
-    _probe_cache[rec["id"]] = (alive, time.monotonic())
+    _probe_cache[rid] = (alive, time.monotonic())
     if version and version != rec.get("version"):
-        _record_remote_version(rec["id"], version)
+        _record_remote_version(rid, version)
     return alive, version
 
 
 def refresh_remote_probes(timeout: float = 1.0) -> None:
     now = time.monotonic()
     for rec in list_remotes():
-        hit = _probe_cache.get(rec["id"])
+        hit = _probe_cache.get(rec["id"])  # list_remotes() guarantees the key
         if hit and now - hit[1] < _PROBE_TTL:
             continue
         _probe_one(rec, timeout)
@@ -690,21 +731,30 @@ def status() -> list[dict]:
             }
         )
     for rec in list_remotes():
-        alive = _probe_cache.get(rec["id"], (False, 0.0))[0]
+        rid = rec["id"]  # list_remotes() recovers it from the registry key
+        # Every other field is read defensively. The roster is the FIRST thing
+        # every console surface reads, so one hand-edited record missing a field
+        # used to raise KeyError right here and 500 the WHOLE read — /api/fleet
+        # and the telemetry rollup alike (#3018), losing every healthy member
+        # over one bad row. A remote with no url is REPORTED and simply never
+        # reachable, which is exactly what it is; that is also what makes it a
+        # ``reachable: false`` entry in the telemetry rollup rather than a 500.
+        url = str(rec.get("url") or "")
+        alive = _probe_cache.get(rid, (False, 0.0))[0]
         out.append(
             {
-                "name": rec["name"],
-                "label": rec.get("label") or rec["name"],
-                "id": rec["id"],
+                "name": rec.get("name") or rid,
+                "label": rec.get("label") or rec.get("name") or rid,
+                "id": rid,
                 "port": None,
                 "pid": None,
                 "running": alive,
                 "bundle": "",
                 "remote": True,
-                "url": rec["url"],
+                "url": url,
                 # Last-probed remote version (from its A2A card) — NEVER the token.
                 "version": rec.get("version", ""),
-                "a2a": f"{rec['url']}/a2a",
+                "a2a": f"{url}/a2a" if url else None,
             }
         )
     return out
