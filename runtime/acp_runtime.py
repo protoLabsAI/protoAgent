@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -163,6 +164,141 @@ def persona_doc(config) -> str:
     )
 
 
+# ── empty-reply detection (#2991) ──────────────────────────────────────────────
+# ACP coding delegates (sonnet, claude-code, …) occasionally "reply" without doing any
+# work: zero tool calls, no file edits, just a boilerplate preamble echoing intent ("Let
+# me read the relevant files first"). The board plugin classifies these as their own
+# failure class (#198/#222); this is the host-side backstop in the runtime's own delegate
+# path — detect the empty reply and retry the same delegate once before returning it.
+
+# Detection is deliberately two-tier so it never drops a genuine short answer that merely
+# OPENS with a conversational lead-in (the #2991 false-positive: a bare-prefix match on
+# "Sure,"/"OK,"/"First," classified "Sure, the fix is: change line 42." as boilerplate and
+# silently retried it away). A reply is empty only when EVERY clause is either a stripped
+# lead-in or a bare announcement of work-to-do — the moment any clause carries real content
+# ("the fix is …", "the bug is …"), the reply is substantive and passes through untouched.
+
+# Tier 1 — conversational lead-ins. On their own they mean nothing; they can equally
+# precede a real answer, so they are STRIPPED and what remains decides. Never boilerplate
+# by themselves.
+_FILLER_LEADINS: tuple[str, ...] = (
+    "sure", "ok", "okay", "alright", "all right", "of course", "certainly", "absolutely",
+    "sure thing", "no problem", "gotcha", "understood", "got it", "sounds good", "will do",
+    "you got it", "yes", "yep", "yeah", "yup", "great", "perfect", "right", "first",
+    "now", "so", "well", "cool", "then", "also", "just", "please", "actually", "hey",
+    "hi", "hello", "go ahead and",
+)
+
+# Tier 2 — an actual announcement of work that produced no output: a lead ("let me", "i'll",
+# …) followed by an EXPLORATION verb ("read", "look", "check", …). Only verbs that deliver
+# nothing even when performed live here — action/answer verbs ("fix", "change", "explain")
+# are intentionally excluded, since a clause like "the fix is …" carries the answer itself.
+_INTENT_LEADS: tuple[str, ...] = (
+    "let me", "let's", "let us", "i'll", "i will", "i'm going to", "i am going to",
+    "i'm gonna", "i am gonna", "i'm about to", "i am about to", "going to", "gonna",
+)
+_WORK_VERBS: tuple[str, ...] = (
+    "read", "look", "take a look", "have a look", "check", "examine", "inspect", "review",
+    "start", "begin", "investigate", "dig", "explore", "open", "search", "gather",
+    "go through", "pull up", "analyze", "scan", "trace", "study", "get started",
+    "get back to", "dive", "work on", "familiarize", "spin up",
+)
+# Announce phrases with no lead+verb shape ("looking into it", "one moment", "on it").
+_STANDALONE_INTENT: tuple[str, ...] = (
+    "looking into", "taking a look", "having a look", "one moment", "one sec",
+    "one second", "give me a moment", "give me a sec", "give me a second", "on it",
+    "working on it", "getting started", "hang on", "hold on", "here goes", "here we go",
+)
+
+# With zero tool calls, a reply at or under this many characters is a candidate for
+# "boilerplate only"; more text than this is substantive by length alone. Sized to hold a
+# couple of sentences of preamble but well under a real one-paragraph answer.
+_EMPTY_REPLY_TEXT_CEILING = 400
+
+# Chars that end one clause and begin another. Splitting on these means a real thought
+# tacked onto a preamble ("let me look — the answer is 42") is seen as its own clause and
+# keeps the reply substantive.
+_CLAUSE_SPLIT = re.compile(r"[,.!?;:—–\n]+")
+# A phrase only matches at a word boundary, so "so" never eats into "something".
+_WORD_BOUNDARY = " ,.!?:;—–-…\t'"
+
+
+def _startswith_phrase(text: str, phrase: str) -> bool:
+    """True if *text* begins with *phrase* as a whole word/phrase (not mid-word)."""
+    if text == phrase:
+        return True
+    return text.startswith(phrase) and text[len(phrase)] in _WORD_BOUNDARY
+
+
+def _strip_leadins(text: str) -> str:
+    """Drop markdown bullets/quotes and any leading conversational fillers, iteratively —
+    "- Sure, first, let me …" → "let me …". Returns lowercased remainder ("" if the text
+    was nothing but fillers). A filler only counts at a word boundary, never mid-word."""
+    text = text.lstrip("#*->`•·–—+ \t").strip().lower()
+    changed = True
+    while changed and text:
+        changed = False
+        for f in _FILLER_LEADINS:
+            if text == f:
+                return ""
+            if text.startswith(f) and text[len(f)] in _WORD_BOUNDARY:
+                text = text[len(f):].lstrip(_WORD_BOUNDARY)
+                changed = True
+                break
+    return text
+
+
+def _is_intent_clause(clause: str) -> bool:
+    """True if *clause* (already lead-in-stripped) is a bare announcement of work with no
+    delivered content — a standalone announce phrase, or a lead + exploration verb."""
+    if not clause:
+        return True
+    if any(_startswith_phrase(clause, p) for p in _STANDALONE_INTENT):
+        return True
+    for lead in _INTENT_LEADS:
+        if _startswith_phrase(clause, lead):
+            rest = _strip_leadins(clause[len(lead):])
+            if any(_startswith_phrase(rest, v) for v in _WORK_VERBS):
+                return True
+    return False
+
+
+def is_empty_delegate_reply(text: str, tool_calls: int) -> bool:
+    """True when an ACP delegate returned nothing meaningful (#2991).
+
+    "Meaningful" = at least one tool call (a file edit is a tool call), OR substantive
+    text beyond a boilerplate preamble. A reply with zero tool calls and either no text or
+    only a short announcement of work never done ("Let me read the relevant files first")
+    is empty and worth a retry. A normal reply — any tool activity, or real prose — is
+    never flagged, so the common path is untouched.
+
+    Detection favours the safe direction: a genuine short answer that opens with a
+    conversational lead-in ("Sure, the fix is: change line 42.") is NOT empty, because the
+    lead-in is stripped and the surviving clause carries content. Missing a truly-empty
+    reply merely returns it as-is (the board plugin's own classification is the backstop);
+    dropping a real one would lose the answer, so the heuristic errs toward "substantive".
+    """
+    if tool_calls > 0:
+        return False
+    stripped = (text or "").strip()
+    if not stripped:
+        return True
+    if len(stripped) > _EMPTY_REPLY_TEXT_CEILING:
+        return False
+    lines = [ln for ln in stripped.splitlines() if ln.strip()]
+    return all(_is_boilerplate_line(ln) for ln in lines)
+
+
+def _is_boilerplate_line(line: str) -> bool:
+    remainder = _strip_leadins(line)
+    if not remainder:
+        return True  # the line was nothing but conversational filler ("Sure.", "OK!")
+    clauses = [c.strip() for c in _CLAUSE_SPLIT.split(remainder) if c.strip()]
+    if not clauses:
+        return True
+    return all(_is_intent_clause(_strip_leadins(c)) for c in clauses)
+
+
 class AcpRuntime:
     """Drives turns through an external coding agent over ACP.
 
@@ -248,18 +384,116 @@ class AcpRuntime:
         """Run one turn: per-turn context delta + message → ACP → write back. Persona is
         carried by the AGENTS.md file, not the prompt. ``tool_callback`` receives the agent's
         structured tool start/end events (UI cards); ``text_callback`` receives answer-text
-        deltas (token-ish streaming)."""
+        deltas (token-ish streaming).
+
+        Empty-reply guard (#2991): if the delegate returns with no tool calls and only a
+        boilerplate preamble, the same delegate is retried ONCE. The first attempt's frames
+        are buffered and dropped, so the caller sees only the retry — never the empty first
+        attempt. A second empty reply is returned as-is (no loop). A normal reply makes
+        exactly one attempt and streams unchanged.
+        """
         client = self._ensure_client()
         ctx = self._context.assemble(query=message)
         prompt = "\n\n".join(p for p in (ctx.volatile_delta, message) if p)
-        answer = await client.prompt(
+
+        answer, tool_calls = await self._prompt_attempt(
+            client,
             prompt,
             progress_callback=progress_callback,
             tool_callback=tool_callback,
             text_callback=text_callback,
         )
+        if is_empty_delegate_reply(answer, tool_calls):
+            log.warning(
+                "[acp-runtime] empty reply from delegate %s (output_len=%d, tool_calls=%d) — retrying once",
+                self.agent,
+                len(answer or ""),
+                tool_calls,
+            )
+            answer, tool_calls = await self._prompt_attempt(
+                client,
+                prompt,
+                progress_callback=progress_callback,
+                tool_callback=tool_callback,
+                text_callback=text_callback,
+            )
+            if is_empty_delegate_reply(answer, tool_calls):
+                # One retry only — a second empty reply is returned normally (no loop).
+                log.warning(
+                    "[acp-runtime] retry of delegate %s also returned empty "
+                    "(output_len=%d, tool_calls=%d) — returning it",
+                    self.agent,
+                    len(answer or ""),
+                    tool_calls,
+                )
         self._context.after_turn(user=message, response=answer)
         return answer
+
+    async def _prompt_attempt(
+        self, client, prompt: str, *, progress_callback, tool_callback, text_callback
+    ) -> tuple[str, int]:
+        """One ACP prompt attempt → ``(answer, tool_call_count)``.
+
+        The caller's tool/text callbacks are held behind a buffer until the attempt proves
+        substantive — the first tool call, or text past the boilerplate ceiling — then the
+        buffer is flushed and every later frame passes through live. So a real reply streams
+        essentially unchanged (only a short leading preamble is briefly buffered, released
+        the instant real work appears), while an attempt that stays empty is dropped whole:
+        its buffered boilerplate frames are never forwarded, letting a retry replace it with
+        the caller none the wiser (#2991). ``progress_callback`` is passed straight through —
+        progress narration is ephemeral and safe to leak from a discarded attempt.
+        """
+        tool_calls = 0
+        text_len = 0
+        flushed = False
+        buffer: list[tuple[str, object]] = []
+
+        async def _flush() -> None:
+            nonlocal flushed
+            if flushed:
+                return
+            flushed = True
+            for kind, payload in buffer:
+                if kind == "text":
+                    if text_callback is not None:
+                        await text_callback(payload)
+                elif tool_callback is not None:
+                    await tool_callback(payload)
+            buffer.clear()
+
+        async def _on_tool(ev) -> None:
+            nonlocal tool_calls
+            if isinstance(ev, dict) and ev.get("phase") == "start":
+                tool_calls += 1
+            if flushed:
+                if tool_callback is not None:
+                    await tool_callback(ev)
+                return
+            buffer.append(("tool", ev))
+            await _flush()  # any tool activity proves the attempt did real work
+
+        async def _on_text(delta) -> None:
+            nonlocal text_len
+            text_len += len(delta or "")
+            if flushed:
+                if text_callback is not None:
+                    await text_callback(delta)
+                return
+            buffer.append(("text", delta))
+            if text_len > _EMPTY_REPLY_TEXT_CEILING:
+                await _flush()  # too much text to be a boilerplate-only preamble
+
+        answer = await client.prompt(
+            prompt,
+            progress_callback=progress_callback,
+            tool_callback=_on_tool,
+            text_callback=_on_text,
+        )
+        # Attempt over. If it never flushed but IS a real (if short) reply, deliver its
+        # buffered frames now; if it's empty, leave them unsent so a retry can replace it.
+        if not flushed and not is_empty_delegate_reply(answer, tool_calls):
+            await _flush()
+        return answer, tool_calls
 
     def last_usage(self) -> dict | None:
         """Latest ACP-native context pressure ({used, size} tokens) the agent reported

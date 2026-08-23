@@ -294,10 +294,13 @@ async def _acp_drive_turn(rt, message: str):
             await frame_q.put(_ACP_DONE)
 
     driver = asyncio.create_task(_drive())
+    tool_calls = 0  # tool_start frames actually delivered to the caller (post-retry)
     while True:
         frame = await frame_q.get()
         if frame is _ACP_DONE:
             break
+        if frame[0] == "tool_start":
+            tool_calls += 1
         yield frame  # (kind, payload) — already normalized
     try:
         answer = await driver
@@ -305,6 +308,19 @@ async def _acp_drive_turn(rt, message: str):
         log.exception("[acp-runtime] turn failed")
         yield ("error", f"ACP runtime ({rt.agent}) failed: {exc}")
         return
+    # Boundary observability (#2991): the runtime already retries an empty reply once; if
+    # what actually reached the caller is STILL empty (no tool calls + only boilerplate),
+    # log it at the delivery point so the pattern is diagnosable end-to-end — the runtime's
+    # own retry log and this one bracket the retry. A normal reply logs nothing.
+    from runtime.acp_runtime import is_empty_delegate_reply
+
+    if is_empty_delegate_reply(answer or "", tool_calls):
+        log.warning(
+            "[acp-runtime] delegate %s delivered an empty reply after retry (output_len=%d, tool_calls=%d)",
+            rt.agent,
+            len(answer or ""),
+            tool_calls,
+        )
     # Attribute the turn to the ACP agent in telemetry — gateway tokens/cost are 0 (the
     # external agent's own subscription meters its usage). The acp:<agent> model label is
     # the honest signal that this turn wasn't gateway-metered.
