@@ -2,6 +2,7 @@
 call_index assignment, purge, and migration idempotence."""
 
 import sqlite3
+from datetime import UTC, datetime, timedelta
 
 from observability.prompt_snapshots import PromptSnapshotStore
 
@@ -27,6 +28,19 @@ def _indexes(store, table):
     finally:
         db.close()
     return {r[0] for r in rows}
+
+
+def _backdate_oldest(store, days):
+    """Age the store's oldest row `days` days into the past — what time does to
+    a store that outlives its own window (retention_stats never writes, so this
+    is the only way to reach that state inside a test)."""
+    stamp = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+    db = sqlite3.connect(store.path)
+    try:
+        db.execute("UPDATE calls SET ts = ? WHERE id = (SELECT id FROM calls ORDER BY ts LIMIT 1)", (stamp,))
+        db.commit()
+    finally:
+        db.close()
 
 
 def test_stable_blob_hash_dedupe(tmp_path):
@@ -166,13 +180,37 @@ def test_retention_stats_names_the_row_cap_when_it_evicts_inside_the_age_window(
     assert stats["oldest_ts"] and stats["newest_ts"]
 
 
-def test_retention_stats_names_the_age_cap_when_the_row_cap_is_not_binding(tmp_path):
-    # Row cap off (or nowhere near it) → the age cap is what ends the window.
+def test_retention_stats_names_the_age_cap_only_once_the_cutoff_is_reached(tmp_path):
+    # binding_cap is a diagnosis — the cap that is ending the window right now —
+    # so a store nowhere near either cap is "none", not "retention_days". A day
+    # of rows under a 30-day cap has had nothing evicted by age, and naming the
+    # age cap there would tell an operator a window had closed that has not.
     s = _store(tmp_path, retention_days=30, max_calls=0)
     s.record(task_id="t1", stable_text="P")
-    assert s.retention_stats()["binding_cap"] == "retention_days"
+    assert s.retention_stats()["binding_cap"] == "none"
     roomy = _store(tmp_path, retention_days=30, max_calls=1000)
-    assert roomy.retention_stats()["binding_cap"] == "retention_days"
+    assert roomy.retention_stats()["binding_cap"] == "none"
+
+    # Push the oldest row past the cutoff — the real state of a store that has
+    # been running longer than its window (the trim only runs on write, so a
+    # quiet instance's oldest row drifts past the cutoff between captures). NOW
+    # the age cap is what ends the window.
+    _backdate_oldest(s, 40)
+    aged = s.retention_stats()
+    assert aged["binding_cap"] == "retention_days"
+    assert aged["effective_days"] > 30  # and the span says how far back it reaches
+
+
+def test_retention_stats_leaves_the_row_cap_alone_when_the_full_window_survives(tmp_path):
+    # At the row cap AND holding the whole configured window: retention_days is
+    # NOT inert — the operator is getting their 30 days — so the max_calls alarm
+    # must stay quiet. This is the branch that keeps the alarm meaning something.
+    s = _store(tmp_path, retention_days=30, max_calls=1)
+    s.record(task_id="t1", stable_text="P")
+    _backdate_oldest(s, 40)
+    stats = s.retention_stats()
+    assert stats["calls"] == stats["max_calls"]  # sitting exactly at the row cap
+    assert stats["binding_cap"] == "retention_days"
 
 
 def test_retention_stats_reports_the_caps_it_is_given(tmp_path):
@@ -189,7 +227,10 @@ def test_retention_stats_reports_the_caps_it_is_given(tmp_path):
     asked = s.retention_stats(retention_days=90, max_calls=40000)
     assert (asked["retention_days"], asked["max_calls"]) == (90, 40000)
     assert asked["calls"] == 2  # the rows really held, whatever the caps say
-    assert asked["binding_cap"] == "retention_days"
+    # Under the raised caps nothing is evicting at all — neither the row cap
+    # (2 of 40,000) nor the 90-day one — so the alarm clears to "none" rather
+    # than moving to the other cap.
+    assert asked["binding_cap"] == "none"
 
 
 def test_retention_stats_degrades_toward_the_alarm_on_an_unreadable_stamp(tmp_path):

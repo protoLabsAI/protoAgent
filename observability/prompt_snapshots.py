@@ -367,13 +367,18 @@ class PromptSnapshotStore:
         already raised it. The route passes the live config; ``None`` means
         "whatever this store is set to" (the writer's own view).
 
-        ``binding_cap`` is ``"max_calls"`` only when the row cap is at its limit
-        and nothing rules the age cap in ahead of it — the state where the age
-        knob is inert. ``"retention_days"`` means the age cap is the one that
-        ends the window and the row cap still has headroom; ``"none"`` means
-        nothing is stored yet or neither cap can evict. ``effective_days`` is how
-        far back the store actually reaches, so "my 30 days is really 3" reads
-        off the payload.
+        ``binding_cap`` names the cap that is ending the window *right now*, so
+        it is only ever a cap actually at its limit. ``"max_calls"`` = the store
+        sits at the row cap and what survived is younger than ``retention_days``
+        — the state where the age knob is inert. ``"retention_days"`` = the
+        oldest row has reached the age cutoff, so age is what ends the window.
+        ``"none"`` = nothing has been evicted yet: an empty store, a store still
+        filling under caps neither of which it has reached, or both caps
+        disabled. A young store under generous caps is deliberately ``"none"``
+        and not ``"retention_days"``: naming a cap nothing has hit yet reads as a
+        diagnosis, and this field exists to be read as one. ``effective_days`` is
+        how far back the store actually reaches, so "my 30 days is really 3"
+        reads off the payload whatever the verdict.
         """
         days = self.retention_days if retention_days is None else int(retention_days)
         rows = self.max_calls if max_calls is None else int(max_calls)
@@ -406,22 +411,29 @@ class PromptSnapshotStore:
         stats["newest_ts"] = newest or ""
         if not stats["calls"]:
             return stats
-        effective_days = None
+        age_days = None
         try:
             age = datetime.now(UTC) - datetime.fromisoformat(stats["oldest_ts"])
-            effective_days = round(age.total_seconds() / 86400.0, 2)
+            age_days = age.total_seconds() / 86400.0
         except (TypeError, ValueError):
             pass  # an unparseable stamp costs the span, not the rest of the answer
-        stats["effective_days"] = effective_days
+        stats["effective_days"] = None if age_days is None else round(age_days, 2)
         at_row_cap = rows > 0 and stats["calls"] >= rows
+        # The age cap can only be ENDING a window it has actually reached: the
+        # trim drops rows older than the cutoff on every write, so while the
+        # oldest row is younger than retention_days the age cap has evicted
+        # nothing and naming it would invent a diagnosis. The comparison is on
+        # the unrounded age — `effective_days` is a display figure. (A quiet
+        # instance drifts past its own cutoff between writes, which is why this
+        # is `>=` on an age that can exceed the cap rather than equality.)
+        age_cap_reached = days > 0 and age_days is not None and age_days >= days
         # Sitting AT the row cap is observed eviction — every write past this
         # point drops a row. The span only refines whether the age cap would
         # have kept it, so a span we could not compute must not talk us out of
         # the alarm; it degrades toward reporting the cap we can see biting.
-        row_cap_bites_first = days <= 0 or effective_days is None or effective_days < days
-        if at_row_cap and row_cap_bites_first:
+        if at_row_cap and not age_cap_reached:
             stats["binding_cap"] = "max_calls"
-        elif days > 0:
+        elif age_cap_reached:
             stats["binding_cap"] = "retention_days"
         return stats
 

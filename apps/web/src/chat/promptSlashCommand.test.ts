@@ -135,6 +135,10 @@ describe("/prompt", () => {
     await vi.waitFor(() => expect(noted.length).toBe(1));
     expect(noted[0].md).toContain("prompts.max_calls` = 5000");
     expect(noted[0].md).toContain("~3.1d held");
+    // The cap story REPLACES the "yet" one rather than being appended under it —
+    // a note that asserts both at once tells the operator nothing.
+    expect(noted[0].md).not.toContain("yet");
+    expect(noted[0].md).not.toContain("send a message first");
   });
 
   it("surfaces fetch failures as a danger note", async () => {

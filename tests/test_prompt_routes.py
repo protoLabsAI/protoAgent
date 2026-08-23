@@ -122,9 +122,10 @@ def test_last_reports_the_configured_caps_not_the_stores_own(monkeypatch):
     retention = c.get("/api/prompts/last?session_id=s1").json()["retention"]
     assert (retention["retention_days"], retention["max_calls"]) == (90, 40000)
     assert retention["calls"] == 2  # the rows the old cap left behind, reported honestly
-    # 2 rows against a 40,000-row cap is headroom: the row cap is no longer what
-    # ends the window, and the alarm must clear rather than echo the old state.
-    assert retention["binding_cap"] == "retention_days"
+    # 2 rows against a 40,000-row cap is headroom and the rows are minutes old
+    # against a 90-day one: nothing is evicting, so the alarm clears to "none"
+    # rather than echoing the old state.
+    assert retention["binding_cap"] == "none"
 
 
 # ── #2388 P3: subagents + prev on the task route; the preview route ───────────
