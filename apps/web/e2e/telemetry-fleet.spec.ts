@@ -73,7 +73,9 @@ test("Telemetry ▸ Fleet flags carry evidence and render the member LABEL, not 
   await expect(hostFlag).toContainText("claude-opus-4-8");
   await expect(hostFlag).toContainText("$0.12"); // per-turn cost evidence
   await expect(hostFlag).toContainText("8.1s"); // per-turn latency evidence
-  await expect(hostFlag).toContainText("5× median"); // the flag reason
+  // The flag reason, including the baseline it names: the median is per MODEL, so a
+  // slow coding-agent run is not flagged for being slower than a chat turn (#3015).
+  await expect(hostFlag).toContainText("5× claude-opus-4-8 median");
 
   // A peer flag also resolves label from the members map: slug
   // "protoEngineer-ba4c" → label "protoEngineer".

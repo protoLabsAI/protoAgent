@@ -117,7 +117,13 @@ outbound telemetry with the fleet so the data is useful beyond protoAgent.
    `/v1/chat/completions`, `/api/chat`, and the plugin `HOST.invoke()` seam.
    Instrumenting only the first is how the second's spend stayed invisible for so
    long (#3000) — a new turn surface must route through that writer or it is not
-   measured. Instance-scoped (ADR 0004). Read via
+   measured. A third producer joins them: `AcpClient.prompt` writes one row per CLI
+   coding-agent run under a `coder:<delegate>` key and an `acp:<delegate>` model
+   label, since those dispatches happen outside any turn and so reach no terminal
+   hook (#3015). They carry zero tokens and zero cost — the coder bills its own
+   subscription — so whole-instance **cost** is unaffected while **turn counts,
+   success rate and latency percentiles now span both populations**; the per-model
+   split is where they stay separate. Instance-scoped (ADR 0004). Read via
    `/api/telemetry/summary` (totals, success rate, cache-hit ratio, p50/p95
    latency, per-model split) + `/api/telemetry/recent`. Survives restart; no TTL
    (history is the substrate), `prune()` available. *(fixes 5)*
@@ -128,7 +134,11 @@ outbound telemetry with the fleet so the data is useful beyond protoAgent.
    (theme-consistent, no charts yet — a follow-up). *(fixes 6)*
 4. ✅ **Flywheel / feedback — shipped (advise-only).** `/api/telemetry/insights`
    + a Telemetry **Insights** panel: flags turns whose cost/latency ≥ 5× the
-   rolling median, and *proves the levers we can measure from the per-turn
+   rolling median **for their own model** (#3015 — the store holds several
+   populations that aren't comparable: a CLI coding-agent run recorded under
+   `acp:<delegate>` is minutes where a gateway chat turn is seconds, and against
+   one shared median every coder run cleared 5× by construction and filled the
+   list), and *proves the levers we can measure from the per-turn
    store* — prompt-cache hit % + estimated USD saved (`pricing.cache_read_savings_usd`),
    plus model-mix (routing visibility). **Read-only**: it surfaces signal, the
    operator decides — no autonomous config changes. Levers needing extra

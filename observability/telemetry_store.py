@@ -54,6 +54,13 @@ _COLUMNS = (
     "context_tokens",  # peak single-call prompt size = context-window fill (#2773, ADR 0101 D6)
 )
 
+#: How many sampled turns a model needs before `outliers()` compares its rows against
+#: that model's own median instead of the median across everything. Three is not a
+#: distribution, but the rule it feeds is a coarse 5× — and three samples are already
+#: enough to know that a coding-agent run is minutes while a chat turn is seconds, which
+#: is the confusion that filled the flag list (#3015).
+_OUTLIER_MIN_COHORT = 3
+
 
 class TelemetryStore:
     def __init__(self, db_path: str) -> None:
@@ -383,26 +390,64 @@ class TelemetryStore:
             db.close()
 
     def outliers(
-        self, *, cost_multiple: float = 5.0, latency_multiple: float = 5.0, sample: int = 200, limit: int = 20
+        self,
+        *,
+        cost_multiple: float = 5.0,
+        latency_multiple: float = 5.0,
+        sample: int = 200,
+        limit: int = 20,
+        min_cohort: int = _OUTLIER_MIN_COHORT,
     ) -> list[dict]:
-        """Flag recent turns whose cost or duration exceeds ``N×`` the median
-        (over the last ``sample`` turns). Advise-only signal for the flywheel —
-        read-only, no action taken. Each flagged turn carries a ``reasons`` list
-        and the medians it beat. Newest first."""
+        """Flag recent turns whose cost or duration exceeds ``N×`` the median for
+        turns of THEIR OWN model (over the last ``sample`` turns). Advise-only
+        signal for the flywheel — read-only, no action taken. Each flagged turn
+        carries a ``reasons`` list naming the baseline it beat. Newest first.
+
+        The baseline is per model because the store holds several populations that
+        are not comparable. A gateway chat turn is seconds; a CLI coding-agent run
+        recorded under ``acp:<delegate>`` (#3015) is minutes, and against one shared
+        median EVERY coder run clears 5× by construction — which silently filled all
+        ``limit`` slots of an anomaly list whose whole job is to surface the few turns
+        worth looking at, pushing the real gateway anomalies out of it. Comparing a
+        turn against its own kind asks the question the panel claims to answer: not
+        "is this slower than a chat turn" but "is this slow for what it is".
+
+        A model with fewer than ``min_cohort`` rows in the sample has no baseline of
+        its own and falls back to the median across all sampled turns. Deliberate:
+        the first runs of a newly-configured model are exactly when a $40 turn should
+        surface, and suppressing them until a cohort builds would hide it. The reason
+        string names which baseline was used, so a flag is never ambiguous.
+        """
         recent = self.recent(limit=sample)
         if not recent:
             return []
-        med_cost = _median([float(r.get("cost_usd") or 0.0) for r in recent])
-        med_dur = _median([int(r.get("duration_ms") or 0) for r in recent])
+        overall_cost = _median([float(r.get("cost_usd") or 0.0) for r in recent])
+        overall_dur = _median([int(r.get("duration_ms") or 0) for r in recent])
+        cohorts: dict[str, list[dict]] = {}
+        for r in recent:
+            cohorts.setdefault(str(r.get("model") or ""), []).append(r)
+        # (median cost, median duration, label) per model, resolved once per cohort
+        # rather than per row.
+        baselines: dict[str, tuple[float, float, str]] = {}
+        for model, rows in cohorts.items():
+            if len(rows) < max(1, int(min_cohort)):
+                baselines[model] = (overall_cost, overall_dur, "all turns")
+                continue
+            baselines[model] = (
+                _median([float(r.get("cost_usd") or 0.0) for r in rows]),
+                _median([int(r.get("duration_ms") or 0) for r in rows]),
+                model or "unknown model",
+            )
         flagged = []
         for r in recent:
+            med_cost, med_dur, label = baselines[str(r.get("model") or "")]
             reasons = []
             cost = float(r.get("cost_usd") or 0.0)
             dur = int(r.get("duration_ms") or 0)
             if med_cost > 0 and cost >= med_cost * cost_multiple:
-                reasons.append(f"cost {cost:.4g} ≥ {cost_multiple:g}× median {med_cost:.4g}")
+                reasons.append(f"cost {cost:.4g} ≥ {cost_multiple:g}× {label} median {med_cost:.4g}")
             if med_dur > 0 and dur >= med_dur * latency_multiple:
-                reasons.append(f"latency {dur}ms ≥ {latency_multiple:g}× median {med_dur}ms")
+                reasons.append(f"latency {dur}ms ≥ {latency_multiple:g}× {label} median {med_dur}ms")
             if reasons:
                 flagged.append({**r, "reasons": reasons})
             if len(flagged) >= limit:

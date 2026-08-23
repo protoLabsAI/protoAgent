@@ -34,6 +34,7 @@ import os
 import re
 import shutil
 import signal
+import time
 from collections import deque
 from functools import lru_cache
 from pathlib import Path
@@ -50,6 +51,15 @@ ProgressCallback = Callable[[str], Awaitable[None]]
 #: the work is the right response, and `end_turn` is a normal completion whose
 #: productivity is the caller's call (commits), not the transport's.
 _DEAD_END_STOP_REASONS = frozenset({"refusal", "cancelled"})
+
+#: ACP ``stopReason`` values that mean the turn did NOT deliver a finished answer.
+#: A different question from ``_DEAD_END_STOP_REASONS`` above, which answers "is a retry
+#: worth making" — and the two disagree on exactly one value, which is why they cannot
+#: share a set: a ``max_tokens`` turn is cut off mid-generation (the delegates adapter's
+#: ``_INCOMPLETE_STOP_REASONS`` stamps "do not treat it as complete" on that reply and
+#: the orchestrator re-dispatches it) AND is worth retrying at a bigger tier. Reading the
+#: retry classifier as the outcome booked every truncated run as a success (#3015).
+_UNFINISHED_STOP_REASONS = frozenset({"refusal", "cancelled", "max_tokens"})
 ToolCallback = Callable[[dict], Awaitable[None]]  # structured tool start/end events
 
 
@@ -348,6 +358,7 @@ class AcpClient:
         permission: Callable[[dict], str | None] | None = None,
         mcp_servers: list[dict] | None = None,
         session_id_path: Path | None = None,
+        record_runs: bool = True,
     ) -> None:
         self.command = command
         self.args = list(args or [])
@@ -370,6 +381,32 @@ class AcpClient:
         # cancel/deny). Defaults to ``_auto_allow`` — the coding agent self-governs
         # within its workdir. The plugin injects a by-kind policy here (ADR 0024).
         self._permission = permission
+        # Whether a finished ``prompt()`` writes its own telemetry row (#3015).
+        #
+        # On by default, because the callers that need it are the ones that would
+        # otherwise be invisible: every coder dispatch — the delegates adapter and the
+        # project board's tapped seam alike — goes through ``_client_for``'s pool, runs
+        # outside any agent turn, and so reaches no terminal hook.
+        #
+        # ``runtime/acp_runtime.py`` is the exception and turns it OFF at both of its
+        # construction sites. Its clients are not coder dispatches: one drives the
+        # agent's OWN chat turn, the other is the aux model (compaction, goal
+        # verification, fact extraction). Neither is coder work, and both would be a lie
+        # under a ``coder:`` key.
+        #
+        # For the chat turn, note what the exclusion does and does not buy. On the
+        # streaming/A2A path that turn is ALREADY booked under the same ``acp:<agent>``
+        # label — ``server.chat._acp_drive_turn`` yields a usage frame the executor's
+        # terminal hook records — so a row from here would double it. On the
+        # NON-streaming driver (``/v1/chat/completions``, ``/api/chat``, the ADR 0018
+        # ``HOST.invoke()`` seam) that turn is booked NOWHERE: the ACP branch of
+        # ``server.chat._chat_langgraph_impl`` returns before the usage callback exists,
+        # so ``_record_local_turn``'s sink is empty and it bails. That blind spot
+        # predates #3015 and survives it — recording it from here would file a CHAT turn
+        # under a ``coder:`` key and count it as coder work, which is a worse answer than
+        # no row. Closing it belongs to #3000's non-streaming recorder, and ACP runtime
+        # mode is deprecated (#2548), which is why this is documented rather than wired.
+        self.record_runs = bool(record_runs)
 
         self._proc: asyncio.subprocess.Process | None = None
         self._session_id: str | None = None
@@ -402,6 +439,10 @@ class AcpClient:
 
         # Per-turn state (one turn at a time).
         self._answer = ""
+        # How many tool calls the coder made this turn — counted in ``_handle_update``
+        # off the wire, NOT off ``tool_callback``, because the delegates adapter wires
+        # no callback at all and its runs would otherwise all record zero (#3015).
+        self._turn_tool_calls = 0
         # Why the last turn ended, straight from ACP's `session/prompt` result (#2279).
         # `prompt()` is typed -> str and cannot carry it; an orchestrator reads it here
         # (or via `dead_end()`) to tell "declined" from "ran out of room" from "done".
@@ -682,6 +723,7 @@ class AcpClient:
             if text:
                 await self._emit_thought(text)
         elif kind == "tool_call":
+            self._turn_tool_calls += 1
             # A tool call STARTED — narrate its title + emit a structured start event so the
             # UI can render a card (parity with the native runtime's tool_start). The card
             # NAME is a short label; the verbose args (structured rawInput, else the title's
@@ -1040,27 +1082,118 @@ class AcpClient:
         ``timeout``) instead of interleaving prompts into the one session — the per-turn
         state (``_answer``, the callbacks) lives on the instance, so an interleaved turn
         corrupts both answers.
+
+        Every completed, failed, or cancelled run writes one telemetry row here, unless
+        the client was built with ``record_runs=False`` — see ``_record_run_telemetry``
+        for why this method, of all of them, is the seam (#3015).
         """
-        if self._turn_lock.locked():
-            logger.info("[acp/%s] prompt queued behind an in-flight turn", self.name)
+        started = time.monotonic()
+        # "failed" until proven otherwise, and read from a `finally`, so a transport
+        # error, a queue timeout, and an outright cancel all record as failures without
+        # any of them needing their own except branch. That failure class is the whole
+        # reason the row exists: a coder run that burned ten minutes and delivered
+        # nothing is exactly what #3015 could not see.
+        state = "failed"
+        # Stays 0 unless this call actually got the lock and ran — a queue timeout must
+        # not inherit the count of the in-flight turn it was waiting behind.
+        tool_calls = 0
         try:
-            await asyncio.wait_for(self._turn_lock.acquire(), timeout=timeout)
-        except TimeoutError:
-            raise AcpError(
-                f"{self.name}: still queued behind an in-flight turn after {int(timeout)}s"
-                " — dispatch serially or raise the timeout"
-            ) from None
-        try:
-            return await self._prompt_locked(
-                text,
-                progress_callback=progress_callback,
-                tool_callback=tool_callback,
-                text_callback=text_callback,
-                thought_callback=thought_callback,
-                timeout=timeout,
-            )
+            if self._turn_lock.locked():
+                logger.info("[acp/%s] prompt queued behind an in-flight turn", self.name)
+            try:
+                await asyncio.wait_for(self._turn_lock.acquire(), timeout=timeout)
+            except TimeoutError:
+                raise AcpError(
+                    f"{self.name}: still queued behind an in-flight turn after {int(timeout)}s"
+                    " — dispatch serially or raise the timeout"
+                ) from None
+            try:
+                answer = await self._prompt_locked(
+                    text,
+                    progress_callback=progress_callback,
+                    tool_callback=tool_callback,
+                    text_callback=text_callback,
+                    thought_callback=thought_callback,
+                    timeout=timeout,
+                )
+            finally:
+                # Read while the lock is still held: the counter is per-turn instance
+                # state, and the next queued turn resets it the moment it acquires.
+                tool_calls = self._turn_tool_calls
+                self._turn_lock.release()
+            # Returning is not the same as succeeding: `prompt()` is typed -> str, so a
+            # refusal, a deliberate cancel and a reply truncated at the output-token
+            # limit all come back as (usually empty or half-written) text. The outcome
+            # is read from the wire stop reason — `unfinished_reason()`, NOT `dead_end()`:
+            # that one answers "is a retry worth making", and a `max_tokens` run is both
+            # retryable and unsuccessful, so reusing it booked every truncated run as a
+            # success while the delegate surface was telling the orchestrator the same
+            # reply was cut off (#2279, #2352, #3015).
+            state = "completed" if self.unfinished_reason() is None else "failed"
+            return answer
         finally:
-            self._turn_lock.release()
+            self._record_run_telemetry(state, started, tool_calls)
+
+    def _record_run_telemetry(self, state: str, started: float, tool_calls: int) -> None:
+        """One durable telemetry row per coder run (#3015). Best-effort; never raises.
+
+        The project-board loop dispatches coders from a background loop rather than from
+        an agent turn, and per-turn telemetry is written from a turn's terminal hook — so
+        it structurally could not see them. The live PM recorded $2,809 across 331 turns,
+        all of it its own reasoning, while the coders that actually wrote the PRs
+        contributed zero rows. Both dispatch paths (``plugins.delegates.adapters``, and
+        the project board's tapped seam, which deliberately bypasses that adapter) funnel
+        through ``prompt()``, which is why the instrumentation lives here and not one
+        layer up where half the callers would miss it — and why ``record_runs`` exists to
+        exclude the callers here that are *not* coder dispatches.
+
+        Tokens and cost are recorded as ZERO deliberately. The coding agent bills its own
+        subscription and protoAgent never observes those numbers; the ``acp:<name>`` model
+        label is the honest "this turn was not gateway-metered" marker, the same
+        convention ``server.chat._acp_drive_turn`` uses, and #3006 settled that a
+        half-wired or invented field here is worse than an absent one. ``tool_calls`` is
+        the one non-zero effort figure we can honestly claim: it is counted off the wire,
+        not inferred.
+
+        Synchronous on purpose. It is called from a ``finally`` that can run while the
+        task is already being cancelled, and an ``await`` there would be interrupted
+        before the row landed — losing precisely the cancelled runs worth seeing.
+        """
+        if not self.record_runs:
+            return
+        try:
+            # Lazily, inside the call: `plugins` is outside the import-layering contract,
+            # but importing the server package at plugin import time would still drag the
+            # whole app in for a module that only ever needs it mid-dispatch.
+            from server.turn_telemetry import local_task_id, record_turn
+
+            record_turn(
+                # `coder:<delegate>` origin prefix (#3000's convention) so a coder run is
+                # distinguishable from a console or /v1 turn by its key alone.
+                task_id=local_task_id(f"coder:{self.name}"),
+                # The ACP session is the run's stable thread id across turns; empty when
+                # the agent never opened one (the failure-before-handshake case).
+                session_id=self._session_id or "",
+                state=state,
+                models=[f"acp:{self.name}"],
+                # Wall clock around the whole call. On the one path that fails before the
+                # turn starts — the lock-acquire timeout — that is queue-wait time, not
+                # coder time; the row is still worth having (a dispatch that never ran is
+                # a failed dispatch), but its duration means something different.
+                duration_ms=int((time.monotonic() - started) * 1000),
+                # How much the coder actually did. Zero tokens and zero cost are honest
+                # but say nothing about effort, and the issue's own evidence table is
+                # `turns | tool_calls | cost` — this is the column that stops a coder run
+                # reading as a no-op next to a PM turn that made four.
+                tool_calls=tool_calls,
+                # The console's fleet roster counts a member running with +1 on
+                # `turn.started` and -1 on the terminal `turn.usage`. A coder run emits no
+                # `turn.started`, so publishing only the -1 half would drive that count
+                # negative — see `record_turn`'s own docstring.
+                publish_usage_event=False,
+            )
+        except Exception as exc:  # noqa: BLE001 — telemetry must never break a coder run
+            logger.debug("[acp/%s] could not record run telemetry: %s", self.name, exc)
 
     async def _prompt_locked(
         self,
@@ -1074,6 +1207,7 @@ class AcpClient:
     ) -> str:
         await self._ensure_started()
         self._answer = ""
+        self._turn_tool_calls = 0
         self._progress = progress_callback
         self._on_tool = tool_callback
         self._on_text = text_callback
@@ -1130,3 +1264,20 @@ class AcpClient:
         """
         reason = (self.last_stop_reason or "").strip()
         return reason if reason in _DEAD_END_STOP_REASONS else None
+
+    def unfinished_reason(self) -> str | None:
+        """Why the last turn did not deliver a finished answer — ``None`` when it did.
+
+        The OUTCOME question, as against ``dead_end()``'s retry question. They differ on
+        ``max_tokens``: the coder hit its output-token limit mid-generation, so the reply
+        is truncated — ``plugins.delegates.adapters`` stamps that on it and the caller
+        re-dispatches — while a bigger tier or a narrower query is still worth trying.
+        A run that ends that way is a failed run and a retryable one at the same time,
+        so "did it succeed" cannot be answered by asking "should we retry" (#3015).
+
+        A turn that reports NO stop reason (an agent that sends none) counts as finished:
+        absence is not evidence of truncation, and treating it as one would book every
+        run from such an agent as a failure.
+        """
+        reason = (self.last_stop_reason or "").strip()
+        return reason if reason in _UNFINISHED_STOP_REASONS else None

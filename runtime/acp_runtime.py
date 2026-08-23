@@ -227,6 +227,15 @@ class AcpRuntime:
             cwd=self.cwd,
             name=self.agent,
             mcp_servers=[mcp] if mcp else [],
+            # This client drives the agent's OWN chat turn, not a coder dispatch. On the
+            # streaming/A2A path that turn is already booked under the same `acp:<agent>`
+            # label (`server.chat._acp_drive_turn` yields the usage frame the executor's
+            # terminal hook records), so a row from here would double it in the very
+            # rollup #3015 exists to make trustworthy. On the non-streaming driver the
+            # turn is booked nowhere — a gap #3015 neither opens nor closes, because a
+            # chat turn recorded HERE would file under a `coder:` key and count as coder
+            # work. See `AcpClient.record_runs` for why that is left to #3000.
+            record_runs=False,
         )
 
     def _ensure_client(self):
@@ -289,7 +298,11 @@ async def _aux_prompt(agent: str, config, text: str) -> str:
         spec = adapter_for(agent, config)
         from plugins.coding_agent.acp_client import AcpClient
 
-        client = AcpClient(spec["command"], spec.get("args"), cwd=os.getcwd(), name=f"{agent}-aux")
+        # Not a coder run: this is the auxiliary model (compaction, goal verification,
+        # fact extraction) for an ACP-only setup with no gateway. Recording it under a
+        # `coder:` key would put an internal housekeeping call in the coder-run count
+        # (#3015). It is unmetered either way — a separate row shape, if anyone wants it.
+        client = AcpClient(spec["command"], spec.get("args"), cwd=os.getcwd(), name=f"{agent}-aux", record_runs=False)
         _AUX_CLIENTS[agent] = client
     return await client.prompt(text)
 
