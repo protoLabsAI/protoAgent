@@ -121,12 +121,17 @@ async def _fetch_member_json(slug: str, path: str) -> dict | None:
     non-200, non-JSON — returns None: the caller REPORTS the member unreachable,
     it never retries into it or restarts it.
     """
-    # Every step is inside the boundary, resolution included (#3018).
-    # ``_target_for_slug`` reads supervisor state, and a corrupt or
-    # half-written state file makes it RAISE rather than return None; with the
-    # resolution and token-minting calls sitting outside the try, one member's
-    # bad state 500'd the whole rollup — the exact opposite of the contract
-    # this docstring states.
+    # Every step is inside the boundary, resolution and token minting included
+    # (#3018). Both used to sit ABOVE the try, so a raise there escaped as a 500
+    # for the WHOLE rollup — the exact opposite of the contract this docstring
+    # states. Not hypothetical: ``_target_for_slug`` subscripts fleet-registry
+    # records straight through (``rec["port"]``, ``remote["url"]``), and
+    # ``supervisor._load_remotes`` returns whatever the JSON held with no dict
+    # check — so one malformed record (an older-schema state entry, a
+    # hand-edited remotes file) raises KeyError/AttributeError instead of
+    # returning None. Both loaders are already tolerant of an unreadable FILE
+    # (they log and return {}), so it is a bad RECORD that gets here: hardening
+    # them would not make this boundary redundant.
     try:
         import httpx
 
@@ -201,6 +206,9 @@ def _unreachable_entry(rec: object, slug: str) -> dict:
     """The roster-only row for a member we could not read: identity from the
     roster record, ``reachable: false``, no telemetry.
 
+    Also the base ``_member_entry`` builds a reachable row on, so the identity
+    half of a member row has one definition rather than two that must agree.
+
     Total by construction for the same reason as ``_slug_of`` — this is what a
     member whose read RAISED degrades to (#3018), so it must not be able to
     raise itself.
@@ -229,25 +237,26 @@ def _member_entry(
     """One member's merged fleet read: roster identity + live telemetry. A
     member whose reads both failed is a ``reachable: False`` row — reported,
     never raised."""
+    # Start from the roster-only row so the identity half (name/label/host/
+    # remote/running) is defined ONCE and the "we could not read this member"
+    # shape can't drift from the normal one (#3018) — including on the raised-
+    # read path, which reaches for the same helper.
+    entry = _unreachable_entry(rec, slug)
     if summary_payload is None and insights_payload is None:
-        # Both reads failed. One shape for "we could not read this member",
-        # shared with the raised-read path so the two can never drift.
-        return _unreachable_entry(rec, slug)
+        return entry  # both reads failed: the roster row IS the whole answer
     # Past that early return at least one read came back, so the member IS
     # reachable; only the state of its telemetry store is still in question.
     enabled = bool((summary_payload or {}).get("enabled") or (insights_payload or {}).get("enabled"))
     flagged = ((insights_payload or {}).get("insights") or {}).get("flagged") or []
-    return {
-        "name": rec.get("name", slug),
-        "label": rec.get("label") or rec.get("name") or slug,
-        "host": bool(rec.get("host")),
-        "remote": bool(rec.get("remote")),
-        "running": bool(rec.get("running")),
-        "reachable": True,
-        "telemetry_enabled": enabled,
-        "rollup": _rollup_of((summary_payload or {}).get("summary")),
-        "flags": [_flag_entry(slug, row, template) for row in flagged],
-    }
+    # Updating in place keeps the key order (and so the response shape) identical
+    # to the unreachable row's.
+    entry.update(
+        reachable=True,
+        telemetry_enabled=enabled,
+        rollup=_rollup_of((summary_payload or {}).get("summary")),
+        flags=[_flag_entry(slug, row, template) for row in flagged],
+    )
+    return entry
 
 
 def register_telemetry_routes(app) -> None:
@@ -361,6 +370,10 @@ def register_telemetry_routes(app) -> None:
         """
         from graph.fleet import supervisor
 
+        # Deliberately NOT inside a containment boundary (#3018 covers the
+        # per-member reads): if the roster read itself fails there is no fleet
+        # to report, and quietly degrading to host-only here would hide a broken
+        # registry that every other /api/fleet surface is already failing on.
         roster = await asyncio.to_thread(supervisor.status)
         template = await _trace_url_template()
         summary_payload = _local_summary_payload()

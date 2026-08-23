@@ -1,6 +1,7 @@
 """Telemetry routes (ADR 0023 phase 3 extraction) — registrar wires the
 read-only /api/telemetry/* surface and degrades safely when the store is off."""
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -255,11 +256,18 @@ def test_fleet_rollup_reports_unreachable_member(monkeypatch):
 
 
 def test_fleet_rollup_survives_member_that_raises_during_resolution(monkeypatch):
-    # #3018: `_target_for_slug` reads supervisor state and RAISES on a corrupt
-    # or half-written state file rather than returning None. That call sat
-    # outside `_fetch_member_json`'s try, so one bad member 500'd the whole
-    # rollup and took every healthy member's data — and the host's own numbers
-    # — down with it. Exercises the REAL `_fetch_member_json`, not the fake.
+    # #3018: target resolution sat OUTSIDE `_fetch_member_json`'s try, so one
+    # member raising there returned HTTP 500 for the whole rollup — every
+    # healthy member's data and the host's own numbers lost with it.
+    #
+    # The raise is driven through the REAL `_target_for_slug` over a REAL
+    # malformed record rather than a stubbed side_effect, because the mechanism
+    # is easy to get wrong: `_load_state` is *tolerant* of an unreadable file
+    # (it logs and returns {}), so what actually reaches this route is a bad
+    # RECORD — here a state entry this hub believes is running that carries no
+    # `port`, which `_target_for_slug` subscripts straight through.
+    import os
+
     from graph.fleet import proxy, supervisor
 
     roster = [
@@ -267,28 +275,65 @@ def test_fleet_rollup_survives_member_that_raises_during_resolution(monkeypatch)
         {"name": "bad", "label": "Bad", "id": "bad", "running": True},
         {"name": "okay", "label": "Okay", "id": "okay", "running": True},
     ]
-
-    def _resolve(slug):
-        if slug == "bad":
-            raise RuntimeError("corrupt supervisor state for this member")
-        return None  # "okay" resolves cleanly to not-running: merely unreachable
-
     monkeypatch.setattr(supervisor, "status", lambda: roster)
-    monkeypatch.setattr(proxy, "_target_for_slug", _resolve)
-    c = _client(monkeypatch, _FleetHostStore())
+    monkeypatch.setattr(supervisor, "_load_state", lambda: {"bad": {"pid": os.getpid()}})
+    # No remote lookups: "okay" then resolves cleanly to None (merely
+    # unreachable), and the test never reads the developer's real remotes
+    # registry — so it can never dial a real member.
+    monkeypatch.setattr(supervisor, "remote_for_slug", lambda slug: None)
+    monkeypatch.setattr(proxy, "_slug_cache", {})  # 1s memo — never inherit a neighbour's
 
-    res = c.get("/api/telemetry/fleet")
+    # Guard the mechanism itself: if `_target_for_slug` ever stops raising here,
+    # the assertions below would pass without exercising the bug at all.
+    with pytest.raises(KeyError):
+        proxy._target_for_slug("bad")
+
+    res = _client(monkeypatch, _FleetHostStore()).get("/api/telemetry/fleet")
     assert res.status_code == 200
     body = res.json()
 
-    # The member that raised is REPORTED unreachable — not dropped, not fatal.
-    assert body["members"]["bad"]["reachable"] is False
-    assert body["members"]["bad"]["label"] == "Bad"
+    # The member that raised is REPORTED unreachable — not dropped, not fatal —
+    # in the same shape any other unreadable member gets.
+    assert body["members"]["bad"] == {
+        "name": "bad",
+        "label": "Bad",
+        "host": False,
+        "remote": False,
+        "running": True,
+        "reachable": False,
+        "telemetry_enabled": False,
+        "rollup": None,
+        "flags": [],
+    }
     assert body["members"]["okay"]["reachable"] is False
     # ...and the host's own telemetry still renders, which is what the 500 ate.
     assert body["enabled"] is True
     assert body["members"]["host"]["rollup"]["turns"] == 4
     assert body["members"]["host"]["flags"][0]["evidence"]["trace_id"] == "trace-host"
+
+
+def test_fleet_rollup_survives_service_token_failure(monkeypatch):
+    # The other call #3018 moved inside the boundary: a LOCAL member's read
+    # mints the fleet service token (ADR 0089 D3) before the GET, and
+    # `resolve_service_token` reads-or-creates a file — so it can raise on its
+    # own. That was one member's problem escaping as the rollup's.
+    from graph.fleet import proxy, service_token, supervisor
+
+    def _boom():
+        raise RuntimeError("service-token file unreadable")
+
+    roster = [_HOST_REC, {"name": "bad", "label": "Bad", "id": "bad", "running": True}]
+    monkeypatch.setattr(supervisor, "status", lambda: roster)
+    # A LOCAL target — no authorization in the extra headers — is exactly the
+    # case that mints. Port 9 (discard) is never dialed: the mint raises first.
+    monkeypatch.setattr(proxy, "_target_for_slug", lambda slug: ("http://127.0.0.1:9", {}))
+    monkeypatch.setattr(service_token, "resolve_service_token", _boom)
+
+    res = _client(monkeypatch, _FleetHostStore()).get("/api/telemetry/fleet")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["members"]["bad"]["reachable"] is False
+    assert body["members"]["host"]["rollup"]["turns"] == 4
 
 
 def test_fleet_rollup_survives_raise_after_the_fetch_boundary(monkeypatch):
