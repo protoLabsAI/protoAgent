@@ -878,20 +878,38 @@ def test_finish_setup_failure_leaves_no_contract_behind(monkeypatch):
     assert read_host_archetype() is None
 
 
-def test_finish_setup_clears_or_keeps_the_contract_by_payload_shape(monkeypatch):
-    """`[]` (the console picked a contract-free persona) clears a stale record; an
-    omitted field (an older console) leaves whatever is there alone."""
+def test_finish_setup_without_a_contract_clears_a_stale_record(monkeypatch):
+    """A contract-free persona (the console sends `[]`; an omitted field defaults to
+    the same) must not keep yesterday's contract from an earlier wizard run."""
     import operator_api.config_routes as cr
     from graph.config_io import read_host_archetype, write_host_archetype
 
     monkeypatch.setattr(cr, "_build_settings_callbacks", lambda: {"finish_setup": lambda c, s: (True, "ready")})
+
     write_host_archetype(["github_create_issue"])
-
-    _client().post("/api/config/setup", json={"config": {}, "soul": "S"})
-    assert read_host_archetype() == {"requires_tools": ["github_create_issue"]}
-
     _client().post("/api/config/setup", json={"config": {}, "soul": "S", "requires_tools": []})
     assert read_host_archetype() is None
+
+    write_host_archetype(["github_create_issue"])
+    _client().post("/api/config/setup", json={"config": {}, "soul": "S"})
+    assert read_host_archetype() is None
+
+
+def test_finish_setup_reports_an_unwritable_contract_instead_of_500ing(monkeypatch):
+    """Setup is already marked complete by the time the contract is written, so a
+    read-only config dir must surface in the message, not un-finish setup with a 500."""
+    import operator_api.config_routes as cr
+
+    def _boom(_tools):
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(cr, "_build_settings_callbacks", lambda: {"finish_setup": lambda c, s: (True, "ready")})
+    monkeypatch.setattr("graph.config_io.write_host_archetype", _boom)
+    resp = _client().post("/api/config/setup", json={"config": {}, "soul": "S", "requires_tools": ["x"]})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert "archetype contract not recorded: read-only file system" in body["message"]
 
 
 def test_config_explain_delegates(monkeypatch):

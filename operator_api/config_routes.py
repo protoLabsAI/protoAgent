@@ -39,9 +39,9 @@ class ConfigReloadRequest(BaseModel):
 class SetupFinishRequest(ConfigReloadRequest):
     # The picked archetype's capability contract (ADR 0100 `requires_tools`) — what
     # `POST /api/fleet` records on a member's workspace.yaml, recorded host-side here so
-    # a wizard-installed archetype gets the same contract banner. `[]` clears a stale
-    # record; omitted (an older console) leaves it untouched.
-    requires_tools: list[str] | None = None
+    # a wizard-installed archetype gets the same contract banner. Empty (the default, and
+    # what the console sends for a contract-free persona) clears any stale record.
+    requires_tools: list[str] = []
 
 
 class ModelsProbeRequest(BaseModel):
@@ -429,12 +429,20 @@ def register_config_routes(app) -> None:
         # The archetype's capability contract rides the finish (#2277 / ADR 0100): the
         # host-side twin of the member's workspace.yaml record, so a wizard-installed
         # Project Manager gets the contract banner too. Only once setup actually
-        # finished — a failed finish leaves no half-written contract behind — and
-        # `None` (an older console that doesn't send it) leaves any record untouched.
-        if ok and req.requires_tools is not None:
+        # finished — a failed finish leaves no half-written contract behind. Setup is
+        # already marked complete by now, so a write failure (read-only config dir) is
+        # reported in the message rather than turned into a 500 the wizard can't act on.
+        # Expected transient: a status poll between this write and the wizard's bundle
+        # install completing can show the contract banner (the tool isn't bound yet) —
+        # it self-clears on the install's hot-reload; not a bug to re-file.
+        if ok:
             from graph.config_io import write_host_archetype
 
-            await asyncio.to_thread(write_host_archetype, req.requires_tools)
+            try:
+                await asyncio.to_thread(write_host_archetype, req.requires_tools)
+            except Exception as e:  # noqa: BLE001 — setup is done; don't un-finish it
+                log.warning("[setup] archetype contract not recorded: %s", e)
+                msg = f"{msg} • archetype contract not recorded: {e}"
         return {"ok": ok, "message": msg}
 
     @app.post("/api/config/reset-setup")

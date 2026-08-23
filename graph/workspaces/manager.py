@@ -215,10 +215,12 @@ def capability_contract_warning(bound_tool_names) -> str | None:
 
     The HOST has the same doctrine problem with no ``workspace.yaml``: the setup wizard
     installs an archetype's bundle onto the host itself, so its ``requires_tools`` is
-    recorded in ``<config_dir>/archetype.yaml`` instead (``graph.config_io
+    recorded in ``<config_dir>/archetype-contract.yaml`` instead (``graph.config_io
     .write_host_archetype``, written by ``POST /api/config/setup``). A workspace record
     wins when present; the host record is the fallback, so a wizard-installed Project
-    Manager gets the same banner a member does.
+    Manager gets the same banner a member does. (Between that finish and the bundle
+    install completing, the contract can transiently read as unmet — the banner
+    self-clears on the install's hot-reload.)
 
     Returns ``None`` for an instance with no record of either kind, one with no declared
     contract, or a satisfied one. Deliberately a warning, not a refusal: the operator may

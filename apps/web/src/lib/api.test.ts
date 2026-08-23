@@ -122,7 +122,7 @@ describe("member-scoped 401 must NOT hijack the hub AuthGate (ADR 0042 §I)", ()
 
 describe("finishSetup carries the archetype's capability contract (ADR 0100)", () => {
   // The wizard's host path is the twin of POST /api/fleet's `requires_tools`: the
-  // server records it in the host's archetype.yaml so a wizard-installed archetype
+  // server records it in the host's archetype-contract.yaml so a wizard-installed archetype
   // gets the contract banner. An empty list is SENT (not omitted) — it clears a
   // stale record from an earlier wizard run.
   const capture = () => {

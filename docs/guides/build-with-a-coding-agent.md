@@ -207,7 +207,7 @@ a different archetype, over A2A ([portfolio](/guides/portfolio)).
 `github.write: false`, which the bundle seeds true. The banner fires on **both
 doors**: a fleet member records the contract on its `workspace.yaml` at create,
 and a PM the Setup Wizard installs onto the host itself records it in the host's
-`config/archetype.yaml` (next to the setup marker) — so either way, a quiet
+`config/archetype-contract.yaml` (next to the setup marker, gitignored like it) — so either way, a quiet
 status means the tool bound. To double-check, look for `github_create_issue`
 under Settings ▸ Capabilities ▸ Tools. The **Board** view shows a setup card
 naming the bound repo, not a beads error; if the repo has never had a board,

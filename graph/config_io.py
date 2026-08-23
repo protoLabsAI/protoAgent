@@ -78,11 +78,13 @@ def setup_marker_path() -> Path:
 
 
 def host_archetype_path() -> Path:
-    """The host's archetype record — ``<config_dir>/archetype.yaml``, sibling of the
-    setup marker. The host-side mirror of a fleet member's ``workspace.yaml``
+    """The host's archetype capability contract — ``<config_dir>/archetype-contract.yaml``,
+    sibling of the setup marker (and gitignored like it: runtime state, never config to
+    commit). The host-side mirror of a fleet member's ``workspace.yaml``
     (``requires_tools``, ADR 0100): written by the setup wizard's finish, read by
-    ``capability_contract_warning`` when there is no workspace record."""
-    return setup_marker_path().parent / "archetype.yaml"
+    ``capability_contract_warning`` when there is no workspace record. Named
+    ``-contract`` so it can't be mistaken for an ``archetype-catalog.json`` override."""
+    return setup_marker_path().parent / "archetype-contract.yaml"
 
 
 def theme_json_path() -> Path:
@@ -1723,9 +1725,9 @@ def write_host_archetype(requires_tools) -> None:
     ``POST /api/fleet`` copies an archetype's ``requires_tools`` onto the new member's
     ``workspace.yaml`` at create; the wizard's host path had nowhere to put it, so a
     wizard-installed Project Manager never got the contract banner. This is that
-    somewhere: the same ``requires_tools`` key, in ``archetype.yaml`` next to the setup
-    marker. An empty/absent list removes the record (a re-run of the wizard onto a
-    code-free persona must not keep yesterday's contract)."""
+    somewhere: the same ``requires_tools`` key, in ``archetype-contract.yaml`` next to
+    the setup marker. An empty/absent list removes the record (a re-run of the wizard
+    onto a code-free persona must not keep yesterday's contract)."""
     import yaml
 
     tools = [str(t).strip() for t in (requires_tools or []) if str(t).strip()]
@@ -1791,8 +1793,11 @@ def reset_setup() -> None:
     Exposed to the drawer as a "Re-run setup" action. Leaves the YAML
     + SOUL.md in place so the wizard pre-populates with the current
     values — reset is for revisiting choices, not for wiping config.
+    The archetype contract goes with the marker: it belongs to the
+    archetype the LAST wizard run picked, and the re-run records its own.
     """
     setup_marker_path().unlink(missing_ok=True)
+    host_archetype_path().unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------

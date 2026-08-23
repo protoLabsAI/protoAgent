@@ -19,6 +19,10 @@ config/langgraph-config.yaml
 # Setup-wizard completion marker — per-deployment runtime state, written once
 # the wizard has been run. Not config to commit.
 config/.setup-complete
+# The archetype capability contract the wizard installed onto this host (#2989) —
+# the host-side twin of a member's workspace.yaml `requires_tools`. Runtime state:
+# committed in a fork, every clone would show the contract banner.
+config/archetype-contract.yaml
 
 # Merge-on-boot baseline (#2071) — a verbatim copy of whatever PROTOAGENT_SEED_CONFIG
 # baked, as last applied. Per-deployment runtime state written 0600, and it may carry
@@ -104,6 +108,7 @@ sites/marketing/.astro/
 config/*/secrets.yaml
 config/*/langgraph-config.yaml
 config/*/.setup-complete
+config/*/archetype-contract.yaml
 
 # Playwright run artifacts
 test-results/

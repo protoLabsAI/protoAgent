@@ -69,10 +69,10 @@ def test_an_empty_bound_set_still_reports_rather_than_crashing(tmp_path, monkeyp
     assert manager.capability_contract_warning(None)
 
 
-# ── the host path: archetype.yaml next to the setup marker ────────────────────
+# ── the host path: archetype-contract.yaml next to the setup marker ───────────
 # The setup wizard installs an archetype onto the HOST, which has no workspace.yaml;
-# POST /api/config/setup records the contract in <config_dir>/archetype.yaml instead
-# (graph.config_io.write_host_archetype) and the warning falls back to it.
+# POST /api/config/setup records the contract in <config_dir>/archetype-contract.yaml
+# instead (graph.config_io.write_host_archetype) and the warning falls back to it.
 def _host(tmp_path, monkeypatch):
     """THIS process is the host: an instance root with no workspace.yaml."""
     return _member(tmp_path, monkeypatch, None)
@@ -123,11 +123,41 @@ def test_write_host_archetype_round_trips_and_an_empty_contract_removes_the_file
     assert read_host_archetype() == {"requires_tools": ["a", "b"]}
     # Sibling of the setup marker, under this instance's config dir — the same place the
     # wizard's other state lives.
-    assert host_archetype_path() == ws / "config" / "archetype.yaml"
+    assert host_archetype_path() == ws / "config" / "archetype-contract.yaml"
     assert host_archetype_path().parent == setup_marker_path().parent
     write_host_archetype([])
     assert not host_archetype_path().exists()
     assert read_host_archetype() is None
+
+
+def test_reset_setup_drops_the_contract_with_the_marker(tmp_path, monkeypatch):
+    """Re-running the wizard (POST /api/config/reset-setup) must not carry the LAST
+    run's contract into the next one — the re-run records its own."""
+    from graph.config_io import host_archetype_path, mark_setup_complete, reset_setup, setup_marker_path, write_host_archetype
+
+    _host(tmp_path, monkeypatch)
+    mark_setup_complete()
+    write_host_archetype(["github_create_issue"])
+    reset_setup()
+    assert not setup_marker_path().exists()
+    assert not host_archetype_path().exists()
+    reset_setup()  # idempotent, like the marker
+
+
+def test_the_host_contract_file_is_gitignored():
+    """Runtime state, never config to commit: in a fork (this is a template repo) a
+    committed contract would put the banner on every clone. Both the default instance
+    (config/) and a scoped one (config/<id>/) must be covered, like .setup-complete."""
+    import subprocess
+
+    repo = Path(__file__).resolve().parents[1]
+    if not (repo / ".git").exists():  # a sdist / wheel checkout has no gitignore to check
+        import pytest
+
+        pytest.skip("not a git checkout")
+    for rel in ("config/archetype-contract.yaml", "config/dev/archetype-contract.yaml"):
+        r = subprocess.run(["git", "check-ignore", "-q", rel], cwd=repo)
+        assert r.returncode == 0, f"{rel} is not gitignored"
 
 
 def test_read_host_archetype_tolerates_garbage(tmp_path, monkeypatch):
