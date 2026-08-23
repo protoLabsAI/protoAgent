@@ -240,6 +240,53 @@ Resolved as:
   Not backfilled: quietly rewriting recorded history is worse than a documented
   seam, and the error is conservative.
 
+### Amendment — a peer's `cost-v1` bills to the calling turn (#3016, 2026-08-23)
+
+We emitted `cost-v1` on every terminal artifact and then ignored it in our own
+client: `plugins/delegates/adapters.py::A2aAdapter.dispatch` read
+`_extract_text(result)` and returned a bare `str`, so a delegation to a
+protoAgent peer spent real money that appeared in no row on the *calling* side.
+A hub fanning work out to members reported only its own thinking, and ADR 0055
+multi-team orchestration was uncountable by construction. Of every delegation
+kind this is the one where the number is already computed, already correct, and
+already on the wire — an ACP coder's spend genuinely isn't observable from here
+(#3015), a peer's is.
+
+**Where a peer's spend lands: the calling turn, tagged — not a row of its own.**
+This follows #2872, which settled the same question for subagents: a delegated
+model call bills to the parent turn while carrying a tag, and the tag excludes it
+from the parent's context-window fill. One row per turn keeps "what did this turn
+cost" answerable without a join, and the tag keeps the delegated share
+separable. A peer row is `{…tokens…, cost_usd, model: "peer:<delegate>", peer:
+"<delegate>"}`.
+
+The mechanics, and why each is what it is:
+
+- **Read at the terminal artifact.** `_peer_cost_payload` takes the cost-v1
+  payload off the terminal artifact's metadata map keyed by the extension URI
+  (protolabs-a2a 0.3.0 — the shape `a2a_impl/executor.py::_terminal_parts`
+  emits), falling back to the terminal status message's metadata.
+- **Attributed through the existing `usage` custom-event lane** (#2872,
+  `server/chat.py`'s `on_custom_event` branch → the executor's accumulator).
+  `Adapter.dispatch`'s `-> str` return type is a stable interface across three
+  adapters and does not change; nothing is stashed on the adapter either, since
+  `ADAPTERS` holds one instance per type process-wide and last-call state on it
+  would race across a concurrent fan-out.
+- **The peer's `costUsd` is used verbatim, never re-derived.** The peer knows
+  which models it routed to; we don't. A peer reporting tokens but no `costUsd`
+  contributes tokens and no cost — a visible undercount beats an invented number.
+- **`model` carries a `peer:` marker, not a model name.** cost-v1 has no model
+  field, and `models` exists to prove which model actually ran (Slice 4b). The
+  prefix keeps "what did this turn spend on peers" answerable from the stored row.
+- **Silent degradation is the contract.** A peer that emits no cost-v1 — any
+  non-protoAgent A2A agent — behaves exactly as before: no row, no cost, same
+  text.
+
+Known limits, deliberately left: a peer delegation counts as **one** `llm_calls`
+however many calls the peer really made (cost-v1 reports no call count), and a
+**background** delegation (ADR 0050) runs detached from the turn's callback
+context, so its peer row has no run context to dispatch into and is dropped.
+
 ## 6. Consequences
 
 **Positive**

@@ -335,6 +335,130 @@ def _advertised_a2a_versions(card: dict) -> list[str]:
     return seen
 
 
+# ── the peer's own cost-v1 telemetry (#3016) ──────────────────────────────────
+#
+# A protoAgent peer measures the turn it just ran for us and ships the numbers back on
+# the wire: ``a2a_impl/executor.py::_terminal_parts`` merges a cost-v1 fragment into the
+# TERMINAL ARTIFACT's metadata map, keyed by the extension URI (protolabs-a2a 0.3.0
+# moved the payload off DataParts). This is the one delegation whose spend we never have
+# to estimate — the peer already computed it, with its own pricing, for the work we
+# caused — so the adapter reads it verbatim and bills it to the calling turn instead of
+# dropping it on the floor.
+
+
+def _wire_int(value) -> int:
+    """A wire number as an int. Proto-JSON round-trips numbers as floats and a foreign
+    peer may send them as strings, so every field is coerced rather than trusted."""
+    try:
+        return int(float(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _wire_float(value) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _peer_cost_payload(result) -> dict | None:
+    """The cost-v1 payload off an A2A ``SendMessage`` / ``GetTask`` result, or ``None``.
+
+    Mirrors ``_extract_text``'s tolerance of both envelopes (``{"task": …}`` and a bare
+    task) and reads the two places terminal telemetry may ride: the artifact's metadata
+    (where protoAgent's executor puts it) and the terminal status message's metadata
+    (the other location the extension permits). Artifacts are scanned LAST-wins — a
+    resumed task's legs replace one artifact id, but a peer that appends a fresh
+    artifact per leg must bill the leg we just caused, not its first one.
+    """
+    import protolabs_a2a as pa
+
+    if not isinstance(result, dict):
+        return None
+    task = result.get("task", result)
+    if not isinstance(task, dict):
+        return None
+    found: dict | None = None
+    for art in task.get("artifacts") or []:
+        payload = pa.parse_cost(art.get("metadata")) if isinstance(art, dict) else None
+        if payload:
+            found = payload
+    if found:
+        return found
+    status = task.get("status")
+    msg = (status.get("message") if isinstance(status, dict) else None) or {}
+    return pa.parse_cost(msg.get("metadata")) if isinstance(msg, dict) else None
+
+
+def _peer_usage_row(result, delegate: str) -> dict | None:
+    """A peer's cost-v1 payload as a turn-accumulator usage row (#3016), or ``None``.
+
+    The shape is the one the A2A executor's ``usage`` lane already sums —
+    ``{input_tokens, output_tokens, cache_read_input_tokens,
+    cache_creation_input_tokens, cost_usd, model}`` — plus a ``peer`` tag: the #2872
+    precedent applied to a peer, so delegated spend bills to the PARENT turn while
+    staying identifiable, and the tag keeps the peer's prompt size out of the lead
+    thread's context-window fill (a peer's context is not ours).
+
+    ``cost_usd`` is the peer's OWN ``costUsd``, never re-derived here: the peer knows
+    which models it actually routed to and we don't, so re-pricing would be a guess
+    dressed as a measurement. A peer that reports tokens but no ``costUsd`` therefore
+    contributes tokens and no cost — a visible undercount rather than an invented number.
+
+    ``None`` when the peer emitted no cost-v1 (any non-protoAgent A2A agent) or when the
+    payload carries neither tokens nor a cost: the caller then behaves exactly as before.
+    """
+    payload = _peer_cost_payload(result)
+    if not payload:
+        return None
+    usage = payload.get("usage")
+    usage = usage if isinstance(usage, dict) else {}
+    row = {
+        "input_tokens": _wire_int(usage.get("input_tokens")),
+        "output_tokens": _wire_int(usage.get("output_tokens")),
+        "cache_read_input_tokens": _wire_int(usage.get("cache_read_input_tokens")),
+        "cache_creation_input_tokens": _wire_int(usage.get("cache_creation_input_tokens")),
+        "cost_usd": _wire_float(payload.get("costUsd")),
+    }
+    if not any(row.values()):
+        return None
+    # A marker, not a model name: cost-v1 carries no model, and inventing one would break
+    # the promise that `models` proves which model actually ran (ADR 0006 Slice 4b). The
+    # prefix is what makes "what did this turn spend on peers" answerable from the stored
+    # row without a second telemetry row per delegation.
+    row["model"] = f"peer:{delegate}"
+    row["peer"] = delegate
+    return row
+
+
+async def _bill_peer_usage(result, delegate: str) -> dict | None:
+    """Surface a peer's reported spend onto the CALLING turn's stream (#3016).
+
+    Dispatched as a custom ``usage`` event from inside the ``delegate_to`` tool body's
+    call stack — the lane #2872 built for subagents: ``server/chat.py`` forwards each one
+    verbatim as a ``("usage", …)`` frame and the A2A executor's accumulator sums it into
+    the turn's tokens, cost, and models. Reusing that lane is what lets
+    ``Adapter.dispatch`` keep its ``-> str`` contract (stable across three adapters), and
+    is why nothing is stashed on the adapter: ``ADAPTERS`` holds one instance per type for
+    the whole process, so last-call state on it would race across a concurrent fan-out.
+
+    Best-effort in both halves: a peer with no cost-v1 emits nothing, and having no run
+    context (a background delegation detached from the turn, a unit test, the CLI runner)
+    is not an error. Returns the row it emitted, for callers and tests that want it.
+    """
+    row = _peer_usage_row(result, delegate)
+    if not row:
+        return None
+    try:
+        from langchain_core.callbacks import adispatch_custom_event
+
+        await adispatch_custom_event("usage", dict(row))
+    except Exception:  # noqa: BLE001 — telemetry must never break a delegation
+        logger.debug("[delegates] peer usage row not dispatched to the turn stream", exc_info=True)
+    return row
+
+
 class A2aAdapter(Adapter):
     type = "a2a"
     label = "A2A agent"
@@ -580,6 +704,9 @@ class A2aAdapter(Adapter):
             # resume protocol with it (caught live, 2026-08-20).
             text = _extract_text(result)
             if text and not _is_input_required(state):
+                # Bill the peer's own cost-v1 telemetry to this turn before returning
+                # the answer (#3016) — the synchronous path a protoAgent peer takes.
+                await _bill_peer_usage(result, d.name)
                 return text
             deadline = time.monotonic() + poll_timeout
             while task_id and not _is_terminal(state) and not _is_input_required(state) and time.monotonic() < deadline:
@@ -620,6 +747,12 @@ class A2aAdapter(Adapter):
                 )
             text = _extract_text(result)
             if text:
+                # Same billing as the inline path (#3016), for the peer that made us
+                # poll. Deliberately NOT done on the two branches above: a park emits no
+                # terminal artifact (so there is nothing to read), and the "already
+                # finished, nothing to resume" branch reports work an EARLIER dispatch
+                # caused — billing it here would double-count it into a second turn.
+                await _bill_peer_usage(result, d.name)
                 return text
             if task_id and not _is_terminal(state):
                 raise DelegateError(
