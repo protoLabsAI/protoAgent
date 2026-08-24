@@ -1104,17 +1104,53 @@ def _delegate_unavailable_msg(name: str) -> str:
     return f"Unknown or unreachable delegate: @{name}. Available: {avail or '(none)'}."
 
 
+def _parse_at_delegates(text: str) -> tuple[list[str], str] | None:
+    """The leading RUN of resolvable mentions and the message after it, else ``None``.
+
+    ``@proto @reviewer what do you think?`` addresses BOTH: the run extends token by
+    token while each next ``@token`` resolves to a delegate, and the first thing that
+    is not a resolvable mention begins the message. So ``@proto @nope hi`` addresses
+    proto with the message ``@nope hi`` — for tokens past the first, "doesn't resolve"
+    means "is prose", exactly as a mid-message ``@`` is prose.
+
+    The FIRST token keeps ``_parse_at_delegate``'s stricter contract: unknown ⇒ the
+    caller answers with the roster rather than running the text as a prompt. Duplicates
+    de-duplicate (addressing someone twice is one address).
+    """
+    first = _parse_at_delegate(text)
+    if first is None:
+        return None
+    targets, rest = [first[0]], first[1]
+    while True:
+        nxt = _leading_at_token(rest)
+        if nxt is None:
+            break
+        canonical = _mention_target(nxt[0])
+        if canonical is None:
+            break
+        if canonical not in targets:
+            targets.append(canonical)
+        rest = nxt[1]
+    return targets, rest
+
+
 async def _at_delegate_exchange(
     message: str, session_id: str = "", request_metadata: dict | None = None
-) -> tuple[str | None, dict | None]:
+) -> tuple[str | None, list[dict] | None]:
     """The complete @-delegate short-circuit (S1), shared by the streaming and
     non-streaming turn drivers so both dispatch identically.
 
-    Returns ``(reply, outcome)``. ``reply`` is the assistant text to emit — the delegate's
-    answer, a usage hint for a bare ``@name``, or an "unknown delegate" roster — or
-    ``None`` to fall through to a normal turn. ``outcome`` is the structured record of a
-    real exchange (author, catch-up size), for the authorship frame; ``None`` for the
-    fall-through and error replies, which no participant authored.
+    Returns ``(reply, outcomes)``. ``reply`` is the assistant text to emit — the
+    delegate's answer (attributed per participant when several were addressed), a usage
+    hint for a bare ``@name``, or an "unknown delegate" roster — or ``None`` to fall
+    through to a normal turn. ``outcomes`` is one structured record per exchange, for the
+    authorship frames; ``None`` for the fall-through and error replies, which no
+    participant authored.
+
+    **A leading run of mentions fans out** (`_parse_at_delegates`): ``@proto @reviewer
+    <msg>`` sends the message to each, SEQUENTIALLY and in the order written — so the
+    second addressee's catch-up already contains the first one's reply. The room makes
+    that true for free: each exchange is on the thread before the next one reads it.
 
     ``message`` is NOT mutated: the original ``@name rest`` is what the caller logs to
     session history, and only the stripped ``rest`` reaches the delegate.
@@ -1131,35 +1167,46 @@ async def _at_delegate_exchange(
     tok = _leading_at_token(message)
     if tok is None:
         return None, None
-    parsed = _parse_at_delegate(message)
+    parsed = _parse_at_delegates(message)
     # A leading `@token` that resolves to no delegate → answer with the roster instead of
     # running the raw text as a prompt (r2). The get() re-check keeps step 2 honest if the
     # roster mutated between names() and here.
-    if parsed is None or reg.get(parsed[0]) is None:
-        return _delegate_unavailable_msg(tok[0] if parsed is None else parsed[0]), None
-    name, rest = parsed
+    if parsed is None or any(reg.get(name) is None for name in parsed[0]):
+        bad = tok[0] if parsed is None else next(n for n in parsed[0] if reg.get(n) is None)
+        return _delegate_unavailable_msg(bad), None
+    targets, rest = parsed
     if not rest:
-        return f"Usage: `@{name} <message>` — add a message to send to the {name} delegate.", None
+        listing = " ".join(f"@{n}" for n in targets)
+        return f"Usage: `{listing} <message>` — add a message to send.", None
 
     from graph.mention_op import run_mention
 
-    outcome = await run_mention(
-        STATE.graph,
-        reg,
-        _resolve_thread_id(request_metadata, session_id),
-        name,
-        rest,
-        session_id=session_id,
-    )
-    if outcome.get("ok"):
-        return (str(outcome.get("reply") or "").strip() or f"@{name} replied with nothing."), outcome
-    # Keep S1's wording — a delegate failure is an answer to the operator, not a 500.
-    return f"Delegate @{name} failed: {outcome.get('error') or 'unknown error'}", outcome
+    tid = _resolve_thread_id(request_metadata, session_id)
+    outcomes: list[dict] = []
+    for name in targets:
+        outcomes.append(
+            await run_mention(STATE.graph, reg, tid, name, rest, session_id=session_id)
+        )
+
+    def _line(o: dict) -> str:
+        who = str(o.get("author") or "")
+        if o.get("ok"):
+            return str(o.get("reply") or "").strip() or f"@{who} replied with nothing."
+        # Keep S1's wording — a delegate failure is an answer to the operator, not a 500.
+        return f"Delegate @{who} failed: {o.get('error') or 'unknown error'}"
+
+    if len(outcomes) == 1:
+        return _line(outcomes[0]), outcomes
+    # Several participants answered one message: attribute each reply, because an
+    # unattributed join would read as one voice — the exact collapse the room exists
+    # to avoid. Consoles that render per-exchange frames show the parts; this text is
+    # the whole for everyone else.
+    return "\n\n".join(f"**@{o.get('author')}** — {_line(o)}" for o in outcomes), outcomes
 
 
 async def _at_delegate_reply(message: str) -> str | None:
     """``_at_delegate_exchange``'s reply text alone — the S1 entry point."""
-    reply, _outcome = await _at_delegate_exchange(message)
+    reply, _outcomes = await _at_delegate_exchange(message)
     return reply
 
 
@@ -1656,18 +1703,22 @@ async def _chat_langgraph_stream_impl(
                     message, session_id, request_metadata
                 )
             if _at_reply is not None:
-                if _at_outcome is not None:
-                    # An authorship stamp for the terminal frame that follows: the answer
-                    # is this participant's own words, not the lead agent's. Consumers
-                    # that don't know this kind ignore it (the executor's if/elif has no
-                    # else) and still get the answer on the `done` frame.
+                for _exchange in _at_outcome or []:
+                    # One authorship frame per exchange: the answer is that participant's
+                    # own words, not the lead agent's, and a multi-mention turn is several
+                    # participants answering. `text` rides along so a console that renders
+                    # per-exchange messages has the words with the byline; consumers that
+                    # don't know this kind ignore it (the executor's if/elif has no else)
+                    # and still get the whole answer on the `done` frame.
                     yield (
                         "room_reply",
                         {
-                            "author": _at_outcome.get("author") or "",
-                            "ok": bool(_at_outcome.get("ok")),
-                            "catchup": int(_at_outcome.get("catchup") or 0),
-                            "truncated": bool(_at_outcome.get("truncated")),
+                            "author": _exchange.get("author") or "",
+                            "from": "operator",
+                            "text": str(_exchange.get("reply") or ""),
+                            "ok": bool(_exchange.get("ok")),
+                            "catchup": int(_exchange.get("catchup") or 0),
+                            "truncated": bool(_exchange.get("truncated")),
                         },
                     )
                 yield ("done", _at_reply)
