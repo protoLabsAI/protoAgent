@@ -666,6 +666,23 @@ def _save_report(results: list[CaseResult], path: Path, *, model: str = "", base
     print(f"\nReport: {path}")
 
 
+def select_by_ids(cases: list[dict], tasks_arg: str) -> tuple[list[dict], list[str]]:
+    """Filter ``cases`` to the comma-separated ids in ``tasks_arg``.
+
+    Returns ``(selected, unknown_ids)``. Ids are stripped, so ``"a, b"`` works.
+
+    The unknown list is returned rather than ignored because the dangerous shape is a
+    PARTIALLY unknown request: the run proceeds on the ids that did match, exits 0, and
+    reports green while covering less than was asked for. A typo or a retired id looks
+    exactly like a pass. (The evals guide shipped that for months — a live id next to
+    ``daily_log_intent``, a case removed with the tool.) A fully-unknown request already
+    fails loudly via the "no cases match filters" exit below.
+    """
+    wanted = {t.strip() for t in tasks_arg.split(",") if t.strip()}
+    known = {c["id"] for c in cases}
+    return [c for c in cases if c["id"] in wanted], sorted(wanted - known)
+
+
 async def main():
     p = argparse.ArgumentParser()
     p.add_argument("--base-url", default=None)
@@ -689,8 +706,13 @@ async def main():
     cases = json.loads(tasks_path.read_text())
 
     if args.tasks:
-        wanted = set(args.tasks.split(","))
-        cases = [c for c in cases if c["id"] in wanted]
+        cases, unknown = select_by_ids(cases, args.tasks)
+        if unknown:
+            print(
+                f"warning: no such case id(s) in {tasks_path.name}: {', '.join(unknown)} "
+                f"— continuing with the {len(cases)} that matched",
+                file=sys.stderr,
+            )
     if args.category:
         cases = [c for c in cases if c.get("category") == args.category]
 

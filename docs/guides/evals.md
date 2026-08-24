@@ -25,9 +25,11 @@ python -m evals.runner --category tool
 python -m evals.runner --tasks current_time_intent,memory_ingest_intent
 ```
 
-`--tasks` takes case **ids** from `tasks.json`, not tool names, and an id that
-doesn't exist is silently dropped — a typo'd or retired id runs fewer cases and
-still reports green. Check the ids you meant appear in the board it prints.
+`--tasks` takes case **ids** from `tasks.json`, not tool names. An unknown id does
+not fail the run — the run continues on whatever matched — so the runner prints a
+`warning: no such case id(s): …` line to stderr naming them. Don't wave it through:
+a typo'd or retired id means you covered less than you asked for, and the board can
+still come back all-green.
 
 Reports land in `evals/results/run-<ts>.json` (gitignored — they're run
 artifacts, not source). The CLI prints a pass/fail board; the JSON report
