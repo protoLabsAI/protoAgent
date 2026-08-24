@@ -288,6 +288,10 @@ def test_config_wires_middleware():
     # (logs the real per-tab model) but outside PromptCache (its refs must hash
     # the STORED message bytes, not the view-only cache-marked copies).
     assert wrappers[:3] == ["ModelOverrideMiddleware", "TrajectoryMiddleware", "PromptCacheMiddleware"]
+    # RoomCast (#3049) mutates the prompt (system-suffix cast line): INSIDE
+    # PromptCache (a suffix never disturbs the prefix anchors), OUTSIDE
+    # PromptCapture (which must record the prompt cast line included).
+    assert wrappers.index("RoomCastMiddleware") > wrappers.index("PromptCacheMiddleware")
 
 
 @pytest.mark.asyncio
