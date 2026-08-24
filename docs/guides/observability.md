@@ -39,7 +39,12 @@ LANGFUSE_HOST=https://langfuse.your-domain.com   # or http://host.docker.interna
 A **complete** `LANGFUSE_{PUBLIC,SECRET}_KEY` pair wins outright over the config
 block — including over `tracing.enabled: false`, because a container deploy has no
 config file to flip and silently dropping its tracing would be the regression.
-`tracing.enabled` is the fallback toggle, not a kill switch.
+`tracing.enabled` is the fallback toggle, not a kill switch. **Env keys never follow a
+config host** (#3039): they go to `LANGFUSE_HOST` (or the compose default) and never to a
+`tracing.host` in the config file — the compose file passes `LANGFUSE_HOST=${LANGFUSE_HOST:-}`,
+so leaving it unset used to hand the choice of destination to config. That block is
+one-directional: config-supplied keys still fall back to `LANGFUSE_HOST` when `tracing.host`
+is blank, which is what makes host-in-env + keys-in-Settings work.
 
 `tracing.init()` runs once the config has loaded (still well before the server
 accepts a request), takes whichever layer answered, and connects. Traces show up

@@ -134,7 +134,7 @@ every credential needed — and nothing is written until you accept it. The CLI 
 without `--yes`; the console's button says what it is about to install.
 
 Capability settings (`filesystem.allow_run`, `operator.allowed_dirs`, `mcp.servers`,
-`delegates`) apply **verbatim** and are shown in the plan rather than stripped. They're part
+`delegates`, `tracing.host`) apply **verbatim** and are shown in the plan rather than stripped. They're part
 of the agent's definition — silently neutering them would hand you a duplicate that behaves
 differently for reasons the plan couldn't enumerate. protoAgent's model is trust and consent,
 not sandboxing ([ADR 0071](../adr/0071-plugin-permissions-trust-model.md)): the control is

@@ -37,6 +37,8 @@ container deploy is untouched, while a desktop-launched fleet member (which has
 no ``LANGFUSE_*`` in its environment and so could not enable tracing at all
 before #3017) can be configured from Settings ▸ Tracing. The two keys are
 declared secrets, stored in ``secrets.yaml`` and never in the tracked YAML.
+The host travels with the keys — whichever layer supplies the pair supplies the
+destination, so config can't redirect deployment-owned credentials (#3039).
 
 Graceful degrade
 ────────────────
@@ -117,9 +119,30 @@ def resolve_credentials(config: Any = None) -> tuple[str, str, str, str]:
     ``tracing.enabled`` AND a full key pair — an enabled toggle with no keys is
     the operator having started but not finished, not a reason to connect.
 
-    ``host`` falls back env → config → ``_DEFAULT_HOST`` independently of which
-    layer supplied the keys, so an env-only deploy that sets just the pair keeps
-    landing on the compose default it always did.
+    ENV-supplied keys never follow a config host (#3039). #3017 resolved the host as one
+    ``env_host or cfg_host or _DEFAULT_HOST`` chain regardless of which layer answered for
+    the keys, which let config data choose the destination for DEPLOYMENT-owned credentials:
+    ``docker-compose.yml`` passes ``LANGFUSE_HOST=${LANGFUSE_HOST:-}``, so an operator who
+    exports only the key pair has an empty env host, ``cfg_host`` won the chain, and the
+    deployment's keys left the process as a Basic auth header aimed wherever ``tracing.host``
+    said. ``tracing.host`` is not a secret field, and config reaches an instance through more
+    paths than deployment env does (snapshot import, a fork's committed config, any write to
+    ``langgraph-config.yaml``), so env keys resolve to ``LANGFUSE_HOST``/``LANGFUSE_URL`` or
+    ``_DEFAULT_HOST`` and stop there.
+
+    The block is DIRECTIONAL, not symmetric. Config keys still fall back to ``env_host``
+    (``cfg_host or env_host or _DEFAULT_HOST``): env is the more trusted layer — only whoever
+    starts the process sets it — so an env host aiming config-owned keys was never the hole,
+    and host-in-env + keys-in-Settings is a shape this repo tells operators to use. Compose
+    persists ``/sandbox/config`` and the example YAML says the two keys are secrets that
+    belong in Settings, and every fleet member inherits the hub's ``LANGFUSE_HOST`` through
+    ``{**os.environ, **env}`` while its keys come from its own per-agent Settings — the #3017
+    target shape. Refusing that fallback would send those members to ``_DEFAULT_HOST``, an
+    address that resolves only inside compose, and take tracing dark to fix nothing.
+
+    A host that loses is NAMED rather than dropped (#3039). Both discards happen on paths
+    that worked before, so the operator's only other signal is a Trace column that quietly
+    stops filling — the exact silence #3017 exists to remove.
 
     ``source`` is ``"env"``, ``"config"``, or ``""`` (nothing usable); it only
     feeds the boot log line so an operator can see which layer answered.
@@ -133,11 +156,22 @@ def resolve_credentials(config: Any = None) -> tuple[str, str, str, str]:
     cfg_public = str(getattr(config, "tracing_public_key", "") or "").strip()
     cfg_secret = str(getattr(config, "tracing_secret_key", "") or "").strip()
     cfg_host = str(getattr(config, "tracing_host", "") or "").strip()
-    host = env_host or cfg_host or _DEFAULT_HOST
 
     if env_public and env_secret:
+        host = env_host or _DEFAULT_HOST
+        if cfg_host and cfg_host != host:
+            print(
+                f"[tracing] ignoring tracing.host={cfg_host} : the Langfuse key pair came from the "
+                f"environment, so the host does too (#3039). Sending to {host} — set LANGFUSE_HOST to change it."
+            )
         return env_public, env_secret, host, "env"
     if getattr(config, "tracing_enabled", False) and cfg_public and cfg_secret:
+        host = cfg_host or env_host or _DEFAULT_HOST
+        if env_host and env_host != host:
+            print(
+                f"[tracing] ignoring LANGFUSE_HOST={env_host} : the Langfuse key pair came from "
+                f"config, so tracing.host wins (#3039). Sending to {host}."
+            )
         return cfg_public, cfg_secret, host, "config"
     return "", "", "", ""
 

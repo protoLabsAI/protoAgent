@@ -269,9 +269,14 @@ checkpoint:
 # fleet member, which is spawned with no LANGFUSE_* in its environment. The two keys
 # are SECRETS: set them in Settings ▸ Tracing and they land in secrets.yaml, never
 # here. Needs a restart (the client is built once at boot).
+# The host below applies to the keys below it: credentials that came from
+# LANGFUSE_{PUBLIC,SECRET}_KEY go to LANGFUSE_HOST and never here, so config can't
+# redirect a deployment's keys (#3039). The reverse is a FALLBACK, not a block — keys
+# here with the host blank still use LANGFUSE_HOST, which is how host-in-env +
+# keys-in-Settings works and how a fleet member inherits the hub's Langfuse.
 # tracing:
 #   enabled: true
-#   host: https://cloud.langfuse.com   # blank → http://host.docker.internal:3001 (compose only)
+#   host: https://cloud.langfuse.com   # blank → LANGFUSE_HOST, else http://host.docker.internal:3001 (compose only)
 
 # Background jobs (ADR 0050/0070) — delegations fired with run_in_background.
 # auto_resume: when a job finishes, immediately run a turn in the session that

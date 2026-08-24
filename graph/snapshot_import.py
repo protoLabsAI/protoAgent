@@ -67,6 +67,11 @@ CAPABILITY_KEYS: tuple[tuple[str, str], ...] = (
     ("mcp.servers", "external MCP server processes"),
     ("delegates", "outbound calls to other agents / coding agents"),
     ("plugins.sources.allow", "which plugin sources this agent may install from"),
+    # Not a capability the agent exercises — a destination the snapshot picks for prompts,
+    # tool IO and span bodies once the importer supplies the key pair (#3039). It only ever
+    # applies to config-supplied credentials now, but "the config you accepted names where
+    # your traces go" is exactly the sort of thing the plan exists to say out loud.
+    ("tracing.host", "an external Langfuse host that receives prompts and tool IO"),
 )
 
 
