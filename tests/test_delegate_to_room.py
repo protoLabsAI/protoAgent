@@ -147,3 +147,16 @@ async def test_a_later_mention_catches_the_participant_up_on_the_delegation(wire
     window, _ = mop.catchup_window(room, "reviewer")
     assert ("assistant", "why is auth failing?") in window
     assert ("proto", "the token expires early") in window
+
+
+def test_run_mention_accepts_a_speaker():
+    """A merge-order guard. #3067 removes `speaker` (its only caller was the reverted
+    chain); this PR's caller passes it. Whichever lands second must keep it — and because
+    `_dispatch_into_room` catches broadly so bookkeeping can never cost the reply, a
+    missing parameter degrades to a SILENT no-op: every delegation falls back and nothing
+    is ever recorded. This asserts the signature directly, so that can't hide."""
+    import inspect
+
+    from graph.mention_op import run_mention
+
+    assert "speaker" in inspect.signature(run_mention).parameters
