@@ -33,6 +33,7 @@ import { exportChatToFile } from "./exportChat";
 import { PublishDialog } from "./PublishDialog";
 import { openPublishDialog } from "./publishDialogStore";
 import { findSlashCommand, registeredSlashCommands, slashTokenAt } from "../ext/slashRegistry";
+import { mentionTokenAt } from "./mentionToken";
 import type { ComposerFormSpec } from "../ext/slashRegistry";
 import { useFlag, useFlagPredicate } from "../flags/flags";
 import { registeredComposerActions } from "../ext/composerRegistry";
@@ -701,12 +702,29 @@ function ChatSessionSlot({
   // The "/name" token the caret currently sits in ({query, start}), or null. Recomputed
   // from the LIVE textarea caret (not just the draft) so the popover triggers MID-INPUT —
   // typing "/" at any cursor position opens it, not only when "/" is char 0 (#1530).
-  const [slashCtx, setSlashCtx] = useState<{ query: string; start: number; end: number } | null>(null);
+  // One token context for BOTH sigils (#3042). A draft can't start with `/` and `@` at
+  // once, so `/` commands and `@` participants share one popover, one keyboard nav and
+  // one completion path — the sigil only decides which list fills it.
+  const [slashCtx, setSlashCtx] = useState<{ query: string; start: number; end: number; sigil: "/" | "@" } | null>(
+    null,
+  );
+  const [mentions, setMentions] = useState<SlashCommand[]>([]);
   // Keeps the keyboard-selected item scrolled into view during ↑/↓ nav (#1528).
   const activeSlashRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     api.chatCommands().then((r) => setCommands(r.commands)).catch(() => {});
+    // The addressable roster for `@` (#3042) — same resolver the dispatcher routes with,
+    // so the popover can never offer a name the turn won't reach. Delegates hot-reload,
+    // but so does the command list above; both are read once per surface mount.
+    api
+      .chatMentions()
+      .then((r) =>
+        setMentions(
+          r.mentions.map((m) => ({ name: m.name, kind: m.kind, description: m.description, usage: m.usage })),
+        ),
+      )
+      .catch(() => {});
   }, []);
 
   // Re-parse the slash token from the textarea's current value + caret. Called on input,
@@ -715,7 +733,11 @@ function ChatSessionSlot({
   const refreshSlash = useCallback(() => {
     const ta = textareaRef.current;
     if (!ta) return;
-    setSlashCtx(slashTokenAt(ta.value, ta.selectionStart ?? ta.value.length));
+    const caret = ta.selectionStart ?? ta.value.length;
+    const slash = slashTokenAt(ta.value, caret);
+    if (slash) return setSlashCtx({ ...slash, sigil: "/" });
+    const mention = mentionTokenAt(ta.value, caret);
+    setSlashCtx(mention ? { ...mention, sigil: "@" } : null);
   }, []);
 
   // Caret moves that don't fire onChange (arrow keys, clicks, selection, focus) still need
@@ -741,9 +763,16 @@ function ChatSessionSlot({
   // and dispatched only while its flag resolves ON — flag-off, it's as if unregistered.
   const flagOn = useFlagPredicate();
 
+  const slashSigil = slashDismissed ? null : slashCtx?.sigil ?? null;
+
   const slashMatches = useMemo(() => {
     if (slashQuery === null) return [];
     const q = slashQuery.toLowerCase();
+    if (slashSigil === "@") {
+      // Participants, not commands: no client registry, no flag gate, no dedup — the
+      // server resolver already returned exactly the addressable set.
+      return mentions.filter((m) => !q || m.name.toLowerCase().includes(q) || m.description.toLowerCase().includes(q));
+    }
     // Client-side commands (ADR 0061) surface first, then server skills. The client set
     // comes from the slash-command registry — core (/new, /clear, /effort) AND any fork-
     // registered commands — so neither is hardcoded here.
@@ -765,7 +794,7 @@ function ChatSessionSlot({
     return unique.filter(
       (c) => !q || c.name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q),
     );
-  }, [slashQuery, commands, flagOn]);
+  }, [slashQuery, slashSigil, commands, mentions, flagOn]);
 
   const slashActive = slashMatches.length > 0;
   const slashSel = slashActive ? Math.min(slashIndex, slashMatches.length - 1) : 0;
@@ -841,7 +870,8 @@ function ChatSessionSlot({
     };
     // A client command runs on pick — drop just its token from the draft (keeping any
     // surrounding text); a server skill inserts "/name " to edit + send.
-    if (runClientSlash(cmd.name)) {
+    const sigil = token?.sigil ?? "/";
+    if (sigil === "/" && runClientSlash(cmd.name)) {
       setDraft(draft.slice(0, start) + draft.slice(end));
       setSlashIndex(0);
       setSlashDismissed(true);
@@ -849,7 +879,7 @@ function ChatSessionSlot({
       settleCaret(start);
       return;
     }
-    const insert = `/${cmd.name} `;
+    const insert = `${sigil}${cmd.name} `;
     setDraft(draft.slice(0, start) + insert + draft.slice(end));
     setSlashIndex(0);
     setSlashDismissed(true); // a space follows, so it would close anyway
@@ -1722,6 +1752,18 @@ function ChatSessionSlot({
             latest.messages.map((message) => (message.id === assistantId ? applyComponent(message, spec) : message)),
           );
         },
+        onRoomAuthor: (author) => {
+          // An `@<name>`-addressed turn (#3042): the answer streaming into this message is
+          // the named participant's, not the lead agent's. The stamp arrives on a working
+          // frame BEFORE the text, so the byline is in place as the answer draws rather
+          // than appearing after the fact.
+          const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
+          if (!latest) return;
+          chatStore.updateMessages(
+            session.id,
+            latest.messages.map((message) => (message.id === assistantId ? { ...message, author } : message)),
+          );
+        },
         onCost: (usage) => {
           // This turn's token/cost readout (terminal cost-v1 extension metadata) — pin it to the assistant
           // message so the per-turn footer survives reload with the rest of the message.
@@ -2146,7 +2188,10 @@ function ChatSessionSlot({
                   onClick={() => completeCommand(cmd)}
                 >
                   <span className="slash-title">
-                    <span className="slash-name">/{cmd.name}</span>
+                    <span className="slash-name">
+                      {slashSigil ?? "/"}
+                      {cmd.name}
+                    </span>
                     {cmd.kind ? (
                       <span className="slash-kind">{cmd.kind === "plugin_command" ? "plugin" : cmd.kind}</span>
                     ) : null}
