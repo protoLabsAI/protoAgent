@@ -191,7 +191,7 @@ reads:
 
 ## Peer federation (A2A peer-consult tools)
 
-Register peer agents so this agent can consult them via the `peer_list` / `peer_consult` tools (added to the toolset only when at least one peer is set). See [`tools/peer_tools.py`](https://github.com/protoLabsAI/protoAgent/blob/main/tools/peer_tools.py).
+Register peer agents so this agent can consult them via the `peer_list` / `peer_consult` tools (added to the toolset only when at least one peer is set). See [`tools/lg_tools.py`](https://github.com/protoLabsAI/protoAgent/blob/main/tools/lg_tools.py).
 
 | Variable | What |
 |---|---|

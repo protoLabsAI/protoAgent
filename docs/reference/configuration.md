@@ -227,7 +227,7 @@ compaction:
 
 ## `execute_code`
 
-Opt-in **programmatic tool calling** (`tools/execute_code.py`). Adds an `execute_code` tool: the model writes one Python script that calls several tools, loops/filters/composes their results in code, and `print()`s only the final answer — collapsing a long tool-call chain into a single turn (the model reads just the stdout, not every intermediate payload).
+Opt-in **programmatic tool calling** (the bundled `execute_code` plugin, `plugins/execute_code/`). Adds an `execute_code` tool: the model writes one Python script that calls several tools, loops/filters/composes their results in code, and `print()`s only the final answer — collapsing a long tool-call chain into a single turn (the model reads just the stdout, not every intermediate payload).
 
 The script runs in a **child process** with a **scrubbed environment** (only `PATH` + the bridge fds — no gateway keys / auth tokens) and a **hard timeout**. Tools are invoked back in the **parent** over an fd-based RPC bridge, so they run with the parent's credentials, audit, and trace context; the child only orchestrates. Inside the script, tools are reached via an injected `tools` object (`tools.web_search(query=...)`). The `execute_code` tool never exposes itself, so scripts can't recurse.
 

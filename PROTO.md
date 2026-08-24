@@ -207,6 +207,19 @@ These are the failures that actually recur — read them before you edit.
   three places: the dataclass default, the `from_dict` parser, and the golden
   test.
 
+- **Plugin API docs are generated — regenerate them.** Touching a public
+  `PluginRegistry` method, a `graph.sdk` function, a `PluginManifest` field, the
+  testkit, or the plugin CLI — *including just editing one of their docstrings or
+  field comments* — makes the committed reference pages stale, and
+  `tests/test_plugin_api_reference.py` fails with the file names and the fix. Run
+  **`python scripts/gen_plugin_api.py`** and commit `docs/reference/plugin-*.md`.
+  Two things to know: the prose comes from your docstring/comment, so a new symbol
+  with none fails a *separate* assertion (write one — it's the docs); and CI builds
+  your branch merged with `main`, so an upstream docstring change can make your
+  pages stale even when you didn't touch those files (merge `main`, regenerate).
+  The same applies to `docs/reference/plugin-view-bridge.md` when the console
+  grows a `protoagent:*` bridge message (`tests/test_plugin_view_bridge_docs.py`).
+
 - **Import layering (enforced by `lint-imports`).** `graph/` and the infra
   packages (`a2a_impl/ observability/ security/ infra/ tools/ knowledge/
   events/ scheduler/ runtime/ ops/`) must **never** import `server/` or
