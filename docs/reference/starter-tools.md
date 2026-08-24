@@ -152,6 +152,7 @@ Defaults to **true**, same verifier requirement. See [Watches](/guides/watches) 
 | Tool | What it does | Bound when |
 |---|---|---|
 | [`edit_soul(section, content, mode="replace")`](#edit_soul) | Rewrite one section of the agent's own `SOUL.md`. Lead agent only. | `soul.self_edit_enabled: true` (default **off**) |
+| [`set_config(updates)`](#set_config) | Change the agent's own **operational** config — models, routing, plugin settings. Lead agent only. | `tools.self_config_enabled: true` (default **off**) |
 | [`search_tools(query="", limit=10)`](#search_tools) | Load deferred tools by capability. | `tools.deferred.enabled: true` (default **off**) |
 
 ## Why a tool isn't bound {#missing}
@@ -779,6 +780,50 @@ defaults to the repo name; `write` overrides the operator's default access mode.
 
 **Off unless `onboarding.enabled: true`** — and off means *absent*, not a tool that exists only
 to refuse. An operator who hasn't opted in gets no onboarding surface at all.
+
+## Self-configuration
+
+### `set_config`
+
+```python
+async def set_config(updates: dict) -> str
+```
+
+**Guarded, off by default.** Bound to the **lead agent only** when an operator sets
+`tools.self_config_enabled: true`; bounded subagents never receive it. `updates` is a flat dict
+of dotted keys → values (`{"project_board.coder": "proto"}`), applied through the same
+`ops.config.set_config` write path as `protoagent config set` and the console's
+`PATCH /api/config` ([ADR 0075](/adr/0075-external-interfaces-cli-mcp-api) D2 — one op, thin
+adapters). The change persists and reloads the agent, and the operator is notified on the bus.
+
+**Scope is operational settings only.** The tool refuses the whole write — never partially — when
+any key falls in the trust surface, because those settings decide what the agent is *allowed* to
+do rather than how it behaves:
+
+| Refused | Why |
+|---|---|
+| `filesystem` | `allow_run` (shell) and the [ADR 0007](/adr/0007-directory-aware-operator-agent) project fence |
+| `operator` | `allowed_dirs` / `project_dir` — the operator fence |
+| `egress` | the [ADR 0008](/adr/0008-sandboxing-and-openshell) network fence |
+| `plugins` | enabling a plugin runs its code in-process **as the agent** ([ADR 0071](/adr/0071-plugin-permissions-trust-model)) |
+| `delegates` · `runtime` · `acp` | each entry names an **executable** the host spawns (`command`/`args`, often `permissions: auto`) |
+| `auth` · `security` · `mcp` | operator credentials and out-of-process capability |
+| `soul` | persona has its own guarded path (`edit_soul`) |
+| `tools` | including `self_config_enabled` itself — no widening its own fence |
+
+A key whose leaf name is `command`, `args`, `argv`, `executable`, `binary`, `cmd`, `entrypoint`,
+or `interpreter` is refused in **any** section, including plugin ones — those can't be enumerated
+in advance, and any plugin may grow a key naming a binary. The line is that an agent may *choose*
+among the executables its operator provisioned (`project_board.coder: proto`) but never *define*
+one.
+
+Any **secret**-typed key is refused outright and never echoed back: the write path would
+faithfully route it into `secrets.yaml`, which is right for the CLI and the console and wrong
+here, since it would put a live credential in the turn transcript.
+
+So an agent can retune how it runs without being able to change what it may do. Batching a denied
+key with legitimate ones refuses everything, so nothing can be smuggled through alongside a
+valid write.
 
 ## Persona
 
