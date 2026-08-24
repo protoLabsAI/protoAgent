@@ -14,7 +14,7 @@ import { useIsMobile } from "../lib/useIsMobile";
 import { useKbIntents } from "../keybindings/intents";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
-import { goalsQuery, runtimeStatusQuery } from "../lib/queries";
+import { chatMentionsQuery, goalsQuery, runtimeStatusQuery } from "../lib/queries";
 import { useUI } from "../state/uiStore";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import type { ChatMessage, ChatPart, HitlPayload, SlashCommand, SystemNoteTone, ToolCall } from "../lib/types";
@@ -708,23 +708,25 @@ function ChatSessionSlot({
   const [slashCtx, setSlashCtx] = useState<{ query: string; start: number; end: number; sigil: "/" | "@" } | null>(
     null,
   );
-  const [mentions, setMentions] = useState<SlashCommand[]>([]);
+  // The `@`-addressable roster (#3042). A QUERY, not a one-shot fetch: its key is
+  // prefixed under `delegates`, so adding or editing a delegate in Settings invalidates
+  // it and the popover updates without a page reload.
+  const mentionsQ = useQuery(chatMentionsQuery());
+  const mentions: SlashCommand[] = useMemo(
+    () =>
+      (mentionsQ.data?.mentions ?? []).map((m) => ({
+        name: m.name,
+        kind: m.kind,
+        description: m.description,
+        usage: m.usage,
+      })),
+    [mentionsQ.data],
+  );
   // Keeps the keyboard-selected item scrolled into view during ↑/↓ nav (#1528).
   const activeSlashRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     api.chatCommands().then((r) => setCommands(r.commands)).catch(() => {});
-    // The addressable roster for `@` (#3042) — same resolver the dispatcher routes with,
-    // so the popover can never offer a name the turn won't reach. Delegates hot-reload,
-    // but so does the command list above; both are read once per surface mount.
-    api
-      .chatMentions()
-      .then((r) =>
-        setMentions(
-          r.mentions.map((m) => ({ name: m.name, kind: m.kind, description: m.description, usage: m.usage })),
-        ),
-      )
-      .catch(() => {});
   }, []);
 
   // Re-parse the slash token from the textarea's current value + caret. Called on input,
