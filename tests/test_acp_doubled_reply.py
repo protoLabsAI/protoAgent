@@ -61,3 +61,16 @@ def test_a_triple_is_not_a_double_and_survives():
     # X*3 has unequal halves — out of scope on purpose; collapsing it would be guessing.
     t = "REVIEWER" * 3
     assert _client()._collapse_doubled(t) == t
+
+
+def test_a_whitespace_terminated_doubled_block_collapses_through_the_real_call_order():
+    """QA panel finding: the call site stripped BEFORE collapsing, so a doubled block
+    ending in whitespace ("…\\n" twice) went asymmetric and the collapse no-op'd on
+    exactly the replies it exists for — while the direct-call tests above stayed green.
+    This mirrors the production order: collapse the RAW accumulated answer, then strip."""
+    block = "## Status\nqueue empty\nblockers: none\n"
+    raw = block + block  # what _answer holds after a doubled turn
+    c = _client()
+    assert c._collapse_doubled(raw).strip() == block.strip()
+    # And the old order is documented as broken, so this can't regress silently:
+    assert c._collapse_doubled(raw.strip()) == raw.strip()  # strip-first no-ops — the bug

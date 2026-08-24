@@ -1366,7 +1366,12 @@ class AcpClient:
             self._on_thought = None
         self.last_stop_reason = str((result or {}).get("stopReason") or "") or None
         logger.info("[acp/%s] turn complete (stopReason=%s)", self.name, self.last_stop_reason)
-        return self._collapse_doubled(self._answer.strip())
+        # Collapse BEFORE stripping: a doubled reply is text+text byte-for-byte, and the
+        # common shape ends in whitespace ("…blockers: none\n" twice) — stripping first
+        # removes only the SECOND copy's trailing newline, the halves go asymmetric, and
+        # the collapse silently no-ops on exactly the replies it exists for (QA panel
+        # finding on this PR).
+        return self._collapse_doubled(self._answer).strip()
 
     def _collapse_doubled(self, answer: str) -> str:
         """Collapse a reply that is its own text twice with no joiner — and say so.
