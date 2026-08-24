@@ -93,3 +93,22 @@ def test_no_symbol_ships_without_prose(gen) -> None:
         f"These pages contain undocumented symbols: {offenders}. "
         "Add a docstring (or a comment above the field) in the source module, then regenerate."
     )
+
+
+def test_docstring_rendering_is_interpreter_independent(gen) -> None:
+    """The generated pages must be byte-identical on every supported Python.
+
+    Python 3.13 strips docstring indentation at compile time; 3.12 does not. The generator
+    originally used `textwrap.dedent`, which is a no-op on a docstring whose first line
+    carries no indentation — so the same source produced differently-indented pages on
+    3.12 and 3.13, and the staleness gate could never pass in CI (3.12) once a page was
+    committed from a 3.13 machine. It cost a red build to find, so it gets a test.
+    """
+    as_312 = "First line.\n\n        Indented continuation, the way 3.12 hands it over.\n        Still indented.\n    "
+    as_313 = "First line.\n\nIndented continuation, the way 3.12 hands it over.\nStill indented.\n"
+
+    assert gen._clean_doc(as_312) == gen._clean_doc(as_313), (
+        "docstring rendering depends on the interpreter's docstring indentation handling — "
+        "use inspect.cleandoc, never textwrap.dedent, on a __doc__"
+    )
+    assert "\n        Indented" not in gen._clean_doc(as_312), "source indentation leaked into the page"

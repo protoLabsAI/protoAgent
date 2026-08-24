@@ -38,7 +38,6 @@ import ast
 import inspect
 import re
 import sys
-import textwrap
 from dataclasses import MISSING, fields as dataclass_fields
 from pathlib import Path
 from typing import Any
@@ -122,7 +121,12 @@ def _clean_doc(doc: str | None) -> str:
     and issue references become links."""
     if not doc:
         return "_No description yet — add a docstring in the source module._"
-    text = textwrap.dedent(doc).strip()
+    # cleandoc, NOT textwrap.dedent: a docstring's first line carries no indentation, so
+    # dedent finds a common prefix of "" and does nothing to the indented remainder. Python
+    # 3.13 strips docstring indentation at compile time and 3.12 does not, so dedent made
+    # the generated pages differ BY INTERPRETER — CI (3.12) could never agree with a 3.13
+    # dev machine. cleandoc handles the first-line-unindented shape identically on both.
+    text = inspect.cleandoc(doc)
     text = re.sub(r":(?:func|class|meth|mod|attr|data):`~?([^`]+)`", lambda m: f"`{m.group(1).split('.')[-1]}`", text)
     text = re.sub(r"``([^`]+)``", r"`\1`", text)
 
