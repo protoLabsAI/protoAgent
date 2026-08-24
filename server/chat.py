@@ -1106,15 +1106,16 @@ def _delegate_unavailable_msg(name: str) -> str:
 
 async def _at_delegate_exchange(
     message: str, session_id: str = "", request_metadata: dict | None = None
-) -> tuple[str | None, dict | None]:
+) -> tuple[str | None, list[dict] | None]:
     """The complete @-delegate short-circuit (S1), shared by the streaming and
     non-streaming turn drivers so both dispatch identically.
 
     Returns ``(reply, outcome)``. ``reply`` is the assistant text to emit — the delegate's
     answer, a usage hint for a bare ``@name``, or an "unknown delegate" roster — or
-    ``None`` to fall through to a normal turn. ``outcome`` is the structured record of a
-    real exchange (author, catch-up size), for the authorship frame; ``None`` for the
-    fall-through and error replies, which no participant authored.
+    ``None`` to fall through to a normal turn. The second element is the CHAIN of
+    exchanges (#3050) — normally one, the operator's own address; longer only when
+    agent-to-agent addressing is enabled and a reply opened with a mention. ``None``
+    for the fall-through and error replies, which no participant authored.
 
     ``message`` is NOT mutated: the original ``@name rest`` is what the caller logs to
     session history, and only the stripped ``rest`` reaches the delegate.
@@ -1141,20 +1142,31 @@ async def _at_delegate_exchange(
     if not rest:
         return f"Usage: `@{name} <message>` — add a message to send to the {name} delegate.", None
 
-    from graph.mention_op import run_mention
+    from graph.mention_op import run_mention_chain
+    from graph.mentions import mention_target
 
-    outcome = await run_mention(
+    cfg = STATE.graph_config
+    chain = await run_mention_chain(
         STATE.graph,
         reg,
         _resolve_thread_id(request_metadata, session_id),
         name,
         rest,
         session_id=session_id,
+        max_hops=int(getattr(cfg, "mention_max_agent_hops", 0) or 0),
+        max_per_target=int(getattr(cfg, "mention_max_per_target", 2) or 2),
+        resolve=mention_target,
     )
-    if outcome.get("ok"):
-        return (str(outcome.get("reply") or "").strip() or f"@{name} replied with nothing."), outcome
+    last = chain[-1]
+    who = str(last.get("author") or name)
+    if last.get("ok"):
+        # The terminal frame carries the LAST reply. Each exchange also gets its own
+        # `room_reply` frame, which is how a console renders a multi-participant chain as
+        # the several messages it was; a consumer reading only the terminal frame still
+        # gets an answer rather than a transcript.
+        return (str(last.get("reply") or "").strip() or f"@{who} replied with nothing."), chain
     # Keep S1's wording — a delegate failure is an answer to the operator, not a 500.
-    return f"Delegate @{name} failed: {outcome.get('error') or 'unknown error'}", outcome
+    return f"Delegate @{who} failed: {last.get('error') or 'unknown error'}", chain
 
 
 async def _at_delegate_reply(message: str) -> str | None:
@@ -1648,18 +1660,22 @@ async def _chat_langgraph_stream_impl(
             # loaded (no registry on STATE ⇒ `@` is ordinary text). See _at_delegate_reply.
             _at_reply, _at_outcome = await _at_delegate_exchange(message, session_id, request_metadata)
             if _at_reply is not None:
-                if _at_outcome is not None:
-                    # An authorship stamp for the terminal frame that follows: the answer
-                    # is this participant's own words, not the lead agent's. Consumers
-                    # that don't know this kind ignore it (the executor's if/elif has no
-                    # else) and still get the answer on the `done` frame.
+                for _exchange in _at_outcome or []:
+                    # One authorship stamp per exchange: the answer is this participant's
+                    # own words, not the lead agent's, and a chain (#3050) is several
+                    # participants speaking. Consumers that don't know this kind ignore it
+                    # (the executor's if/elif has no else) and still get the last answer on
+                    # the `done` frame.
                     yield (
                         "room_reply",
                         {
-                            "author": _at_outcome.get("author") or "",
-                            "ok": bool(_at_outcome.get("ok")),
-                            "catchup": int(_at_outcome.get("catchup") or 0),
-                            "truncated": bool(_at_outcome.get("truncated")),
+                            "author": _exchange.get("author") or "",
+                            "from": _exchange.get("from") or "operator",
+                            "text": str(_exchange.get("reply") or ""),
+                            "ok": bool(_exchange.get("ok")),
+                            "catchup": int(_exchange.get("catchup") or 0),
+                            "truncated": bool(_exchange.get("truncated")),
+                            **({"stopped": _exchange["chain_stopped"]} if _exchange.get("chain_stopped") else {}),
                         },
                     )
                 yield ("done", _at_reply)
