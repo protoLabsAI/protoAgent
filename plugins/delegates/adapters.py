@@ -594,6 +594,40 @@ async def _bill_peer_usage(result, delegate: str) -> None:
         logger.debug("[delegates] peer usage row not billed to the turn stream", exc_info=True)
 
 
+# ── truncated / partial-reply smell (#3085) ───────────────────────────────────
+#
+# The observed failure: a background delegation to protoEngineer returned a 416-char
+# reply that ended mid-sentence — narration of what the delegate was ABOUT to do, not
+# the answer, which never arrived. The primary cause (streamed text parts newline-joined
+# into mid-word breaks, and content beyond the first artifact dropped) is fixed in
+# ``a2a_parse._extract_text``; this is the belt-and-braces diagnostic on the dispatch
+# side. A reply this short after a dispatch that ran a non-trivial while reads as
+# work-about-to-happen rather than the work itself, so the adapter says so — once, at
+# WARNING, on the way past. It is a HEURISTIC (a genuinely terse answer trips it too), so
+# it only logs and never alters the returned text.
+_SHORT_REPLY_CHARS = 500
+#: Below this dispatch duration a short reply is unremarkable — a fast, terse answer is
+#: normal. The smell is a SHORT reply after a LONG wait, so gate on elapsed too.
+_SHORT_REPLY_MIN_ELAPSED_S = 2.0
+
+
+def _warn_if_suspiciously_short(delegate: str, text: str, elapsed_s: float) -> None:
+    """Log a warning when a delegate's reply is suspiciously short relative to how long
+    the dispatch ran (#3085) — a post-hoc aid for diagnosing truncated / partial replies,
+    never a behavior change. Fires only once the dispatch has run past
+    :data:`_SHORT_REPLY_MIN_ELAPSED_S`, so an instant terse answer stays quiet."""
+    if len(text) >= _SHORT_REPLY_CHARS or elapsed_s < _SHORT_REPLY_MIN_ELAPSED_S:
+        return
+    logger.warning(
+        "[delegates] delegate %r returned only %d chars after %.1fs — the reply may be truncated "
+        "or a partial narration rather than the answer (#3085). If the peer streamed its reply, "
+        "check that it consolidated its text parts before completing the task.",
+        delegate,
+        len(text),
+        elapsed_s,
+    )
+
+
 def _a2a_auth_hint(d: Delegate, status_code: int) -> str:
     """The actionable half of a 401/403 from an A2A peer, or ``""``.
 
@@ -843,6 +877,9 @@ class A2aAdapter(Adapter):
         # stays short so an unreachable peer still fails fast; the same client serves the GetTask
         # poll loop, which returns quickly regardless. An explicit ``timeout`` still overrides.
         read_budget = send_timeout if send_timeout is not None else poll_timeout
+        # Wall-clock start of the wire round-trips, used only to flag a suspiciously short
+        # reply relative to how long the dispatch took (#3085) — never alters the answer.
+        t0 = time.monotonic()
         async with httpx.AsyncClient(timeout=httpx.Timeout(read_budget, connect=10.0)) as client:
             if resume_task_id:
                 parked = await _rpc(client, "GetTask", {"id": resume_task_id})
@@ -875,6 +912,7 @@ class A2aAdapter(Adapter):
                 # Bill the peer's own cost-v1 telemetry to this turn before returning
                 # the answer (#3016) — the synchronous path a protoAgent peer takes.
                 await _bill_peer_usage(result, d.name)
+                _warn_if_suspiciously_short(d.name, text, time.monotonic() - t0)
                 return text
             deadline = time.monotonic() + poll_timeout
             while task_id and not _is_terminal(state) and not _is_input_required(state) and time.monotonic() < deadline:
@@ -924,6 +962,7 @@ class A2aAdapter(Adapter):
                 # dispatch caused — billing it here would double-count it into a second
                 # turn.
                 await _bill_peer_usage(result, d.name)
+                _warn_if_suspiciously_short(d.name, text, time.monotonic() - t0)
                 return text
             if task_id and not _is_terminal(state):
                 raise DelegateError(

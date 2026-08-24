@@ -59,15 +59,30 @@ def _task_of(result) -> dict:
 def _extract_text(result) -> str | None:
     """Pull text out of an A2A 1.0 result — a ``{"task": ...}`` envelope (the
     ``SendMessage`` / ``GetTask`` response) or a bare Message. Tolerant of parts
-    with or without an explicit ``kind`` tag (1.0 text parts carry just ``text``)."""
+    with or without an explicit ``kind`` tag (1.0 text parts carry just ``text``).
+
+    Text parts are concatenated with the EMPTY string, and across EVERY text-bearing
+    artifact rather than only the first (#3085). A peer that streams its reply one
+    part — or one artifact — per delta was otherwise read two ways wrong: the tail
+    beyond the first artifact was dropped, and a newline was spliced between the parts
+    that survived. A streamed delta already carries its own leading whitespace
+    (``"Let"`` + ``" me"`` reassembles to ``"Let me"``), so joining parts on a newline
+    broke every word that fell on a chunk boundary and truncated the answer to
+    whatever reached the first artifact. An empty-string join over all artifacts
+    rebuilds the reply exactly as it was streamed; a peer that means a paragraph break
+    still sends that newline inside a part's own text, so nothing real is lost."""
     task = _task_of(result)
-    for art in task.get("artifacts") or []:
-        chunks = [p.get("text", "") for p in art.get("parts", []) if p.get("text")]
-        if any(chunks):
-            return "\n".join(c for c in chunks if c)
+    chunks = [
+        p.get("text", "")
+        for art in task.get("artifacts") or []
+        for p in art.get("parts", [])
+        if p.get("text")
+    ]
+    if any(chunks):
+        return "".join(chunks)
     msg = (task.get("status") or {}).get("message") or {}
     parts = [p.get("text", "") for p in (msg.get("parts") or []) if p.get("text")]
-    text = "\n".join(p for p in parts if p)
+    text = "".join(parts)
     return text or None
 
 
@@ -81,10 +96,10 @@ def _extract_cost(result) -> dict | None:
     is the extension's other permitted home, so it is the fallback.
 
     Artifacts are scanned LAST-wins, deliberately diverging from ``_extract_text``
-    above, which answers with the FIRST text-bearing artifact. For a protoAgent peer
-    the two agree — its whole task carries one artifact (``{task_id}-answer``,
-    replaced in place on every leg). They only differ for a peer that appends a
-    fresh artifact per leg, and there the newest telemetry is the one we want:
+    above, which CONCATENATES every text-bearing artifact. For a protoAgent peer the
+    two agree — its whole task carries one artifact (``{task_id}-answer``, replaced in
+    place on every leg). They only differ for a peer that appends a fresh artifact per
+    leg: there we want every artifact's WORDS but only the NEWEST telemetry, since
     billing a stale first leg would charge this turn for spend an earlier dispatch
     already caused.
     """

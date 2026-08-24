@@ -10,11 +10,18 @@ from __future__ import annotations
 
 import asyncio
 import json as _json
+import logging
 
 import httpx
 import pytest
 
-from plugins.delegates.adapters import A2aAdapter, Delegate, DelegateError, _a2a_error_detail
+from plugins.delegates.adapters import (
+    A2aAdapter,
+    Delegate,
+    DelegateError,
+    _a2a_error_detail,
+    _warn_if_suspiciously_short,
+)
 
 A = A2aAdapter()
 
@@ -602,3 +609,62 @@ def test_inline_park_is_not_mistaken_for_an_answer(patched):
     assert "resume_task_id='t-9'" in out
     # the park was visible inline — no GetTask round-trips at all
     assert [b.get("method") for b in bodies] == ["SendMessage"]
+
+
+# ── #3085: suspiciously-short-reply diagnostic ─────────────────────────────────
+#
+# The live failure: a background delegation returned a 416-char reply that ended
+# mid-sentence — narration, not the answer. The dispatch path logs a WARNING when a
+# short reply comes back after a non-trivial wait, so the next occurrence leaves a
+# breadcrumb. It only logs; it never alters the returned text.
+
+_DELEGATE_LOGGER = "protoagent.plugins.delegates"
+
+
+def test_warn_helper_fires_for_a_short_reply_after_a_wait(caplog):
+    """A <500-char reply after the dispatch has run past the elapsed floor smells of a
+    truncated / partial-narration answer — the helper says so, once, at WARNING."""
+    with caplog.at_level(logging.WARNING, logger=_DELEGATE_LOGGER):
+        _warn_if_suspiciously_short("protoEngineer", "x" * 416, elapsed_s=30.0)
+    assert any("#3085" in m and "protoEngineer" in m and "416 chars" in m for m in caplog.messages)
+
+
+def test_warn_helper_is_quiet_for_a_full_length_reply(caplog):
+    """A full answer is exactly what we want — no warning even after a long dispatch."""
+    with caplog.at_level(logging.WARNING, logger=_DELEGATE_LOGGER):
+        _warn_if_suspiciously_short("protoEngineer", "x" * 600, elapsed_s=30.0)
+    assert caplog.messages == []
+
+
+def test_warn_helper_is_quiet_for_a_fast_terse_reply(caplog):
+    """A short reply that came back instantly is a normal terse answer, not a truncation
+    — the elapsed floor keeps it quiet."""
+    with caplog.at_level(logging.WARNING, logger=_DELEGATE_LOGGER):
+        _warn_if_suspiciously_short("protoEngineer", "ok", elapsed_s=0.2)
+    assert caplog.messages == []
+
+
+def test_dispatch_warns_on_a_short_reply_but_returns_it_unchanged(patched, caplog, monkeypatch):
+    """End to end: the dispatch path flags a suspiciously short reply (elapsed floor
+    neutralised so the fast fake client trips it) yet still returns the text verbatim —
+    the diagnostic is post-hoc, never a behavior change (#3085)."""
+    monkeypatch.setattr("plugins.delegates.adapters._SHORT_REPLY_MIN_ELAPSED_S", 0.0)
+    patched.setattr("tools.a2a_parse._extract_text", lambda result, *a, **k: "narration only" if result else "")
+    _install_client(patched, send_resp=_Resp({"jsonrpc": "2.0", "result": {"text": "narration only"}}))
+    with caplog.at_level(logging.WARNING, logger=_DELEGATE_LOGGER):
+        out = asyncio.run(A.dispatch(_parse(), "do the whole thing"))
+    assert out == "narration only"  # returned untouched
+    assert any("#3085" in m for m in caplog.messages)
+
+
+def test_dispatch_does_not_warn_on_a_full_length_reply(patched, caplog, monkeypatch):
+    """The same path stays silent when the peer returns a full answer, even with the
+    elapsed floor neutralised — the trigger is length, not merely slowness."""
+    monkeypatch.setattr("plugins.delegates.adapters._SHORT_REPLY_MIN_ELAPSED_S", 0.0)
+    long = "x" * 600
+    patched.setattr("tools.a2a_parse._extract_text", lambda result, *a, **k: long if result else "")
+    _install_client(patched, send_resp=_Resp({"jsonrpc": "2.0", "result": {"text": long}}))
+    with caplog.at_level(logging.WARNING, logger=_DELEGATE_LOGGER):
+        out = asyncio.run(A.dispatch(_parse(), "do the whole thing"))
+    assert out == long
+    assert not any("#3085" in m for m in caplog.messages)
