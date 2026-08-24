@@ -27,13 +27,30 @@ function fakeClock() {
 const IDLE = 45_000;
 
 describe("isTerminalTaskState", () => {
-  it("treats completed/failed/canceled and a missing state as terminal", () => {
-    for (const s of ["TASK_STATE_COMPLETED", "completed", "failed", "canceled", "cancelled", ""]) {
+  it("treats completed/failed/canceled/rejected and a missing state as terminal", () => {
+    for (const s of [
+      "TASK_STATE_COMPLETED",
+      "completed",
+      "failed",
+      "canceled",
+      "cancelled",
+      "rejected",
+      "TASK_STATE_REJECTED",
+      "",
+    ]) {
       expect(isTerminalTaskState(s)).toBe(true);
     }
   });
-  it("treats an in-flight state as non-terminal", () => {
-    for (const s of ["TASK_STATE_WORKING", "working", "submitted", "input-required"]) {
+  it("treats in-flight and PAUSED states as non-terminal (paused turns resume — the watchdog must keep waiting)", () => {
+    for (const s of [
+      "TASK_STATE_WORKING",
+      "working",
+      "submitted",
+      "input-required",
+      "TASK_STATE_INPUT_REQUIRED",
+      "auth-required",
+      "TASK_STATE_AUTH_REQUIRED",
+    ]) {
       expect(isTerminalTaskState(s)).toBe(false);
     }
   });
