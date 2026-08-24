@@ -591,6 +591,22 @@ def register_operator_routes(
             except Exception as exc:
                 raise _http_error(exc) from exc
 
+    # --- Mentions ------------------------------------------------------------
+    # The composer's `@` autocomplete — who the operator can address directly (#3042).
+    # Served from the SAME resolver the chat dispatcher routes with (``graph.mentions``,
+    # which `_parse_at_delegate` also reads), so the roster offered can't drift from the
+    # roster reached. Not gated on `chat_commands`: `@` addressing is independent of `/`
+    # commands, and the roster is live config (delegates hot-reload), so it's read per
+    # request.
+    @app.get("/api/chat/mentions")
+    async def _chat_mentions():
+        from graph.mentions import resolve_mentions
+
+        try:
+            return {"mentions": resolve_mentions()}
+        except Exception as exc:
+            raise _http_error(exc) from exc
+
     # A plugin composer-form's answers route back to the plugin's on_submit here
     # (#1701 Slice 2) — the form itself rode the input_required frame with a
     # `plugin_callback_id`; the console POSTs the field values to redeem it. Not gated
