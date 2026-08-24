@@ -201,11 +201,21 @@ def _build_middleware(
         )
     )
 
+    # Who is in this chat (#3049) — one system-SUFFIX line naming the delegates that
+    # have spoken on this thread, so the lead knows who is already caught up and
+    # prefers them for follow-ups. Awareness, never permission; no-op on a thread with
+    # no room participants (every ordinary chat). Placed INSIDE PromptCache — a suffix
+    # block never disturbs the prefix the cache anchors on — and OUTSIDE PromptCapture,
+    # which must see the final prompt, cast line included.
+    from graph.middleware.room_cast import RoomCastMiddleware
+
+    middleware.append(RoomCastMiddleware(lead_name=getattr(config, "identity_name", "") or ""))
+
     # Prompt snapshot capture (#2243) — records the EXACT system prompt each
-    # model call received. DIRECTLY after PromptCache (the ordering IS the
-    # correctness: it must see the final assembled system message, and nothing
-    # downstream mutates the prompt). Best-effort; a capture failure never
-    # touches the turn.
+    # model call received. After PromptCache and every prompt mutator above (the
+    # ordering IS the correctness: it must see the final assembled system message,
+    # and nothing downstream mutates the prompt). Best-effort; a capture failure
+    # never touches the turn.
     if config.prompt_capture_enabled:
         from graph.middleware.prompt_capture import PromptCaptureMiddleware
 

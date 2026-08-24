@@ -15,6 +15,7 @@ until then), so the gate is the delegate, not a plugin toggle.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Annotated, Any
 
 from langchain_core.tools import tool
@@ -300,6 +301,39 @@ def _build_propose_delegate():
     return propose_delegate
 
 
+
+def _warn_on_identity_shadow(reg: DelegateRegistry) -> None:
+    """Warn when a delegate's name shadows the agent's OWN name (#3049 live finding).
+
+    A delegate `proto` on an agent named `protoagent` made the lead answer a status
+    question AS the delegate, in first person. The room's cast line now fences identity
+    in-prompt, but the collision itself is worth a loud signal at the moment it is
+    configured — similar names will keep happening, and the operator picking them is the
+    one person who can pick better. Prefix-of-either-direction (case-folded), because the
+    live case was similarity, not equality. Warn-only: naming is the operator's call.
+    """
+    try:
+        from runtime.state import STATE
+
+        lead = (
+            str(getattr(getattr(STATE, "graph_config", None), "identity_name", "") or "").strip()
+            or os.environ.get("AGENT_NAME", "").strip()
+            or "protoagent"
+        ).casefold()
+    except Exception:  # noqa: BLE001 — a warning must never break registration
+        return
+    for name in reg.names():
+        folded = name.casefold()
+        if folded == lead or lead.startswith(folded) or folded.startswith(lead):
+            log.warning(
+                "[delegates] delegate %r shadows this agent's own name %r — the lead can "
+                "confuse itself with it (answering AS the delegate). Consider renaming "
+                "the delegate.",
+                name,
+                lead,
+            )
+
+
 def _load_delegates_config() -> list:
     """Read the top-level ``delegates: [...]`` list from the live config doc.
 
@@ -348,6 +382,7 @@ def register(registry) -> None:
         if isinstance(nested, list):
             delegates = nested
     reg = DelegateRegistry(delegates)
+    _warn_on_identity_shadow(reg)
 
     # Publish the live roster on the runtime state so the chat turn driver can route
     # `@<delegate> …` messages straight to a delegate (S1). Set only when the roster is

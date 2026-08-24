@@ -234,14 +234,22 @@ def test_the_subagent_stack_carries_the_row_cap_too(monkeypatch):
 # --- middleware-order contract -----------------------------------------------
 
 
-def test_capture_sits_directly_after_prompt_cache():
-    # The ordering IS the correctness: capture must see the final assembled
-    # system message, which only exists inside PromptCache's wrap.
+def test_capture_sees_the_final_prompt():
+    # The ordering IS the correctness: capture must see the final assembled system
+    # message, which only exists inside PromptCache's wrap — and inside every other
+    # prompt MUTATOR. Strict cache→capture adjacency was the old proxy for this;
+    # RoomCast (#3049) now sits between them, appending the cast suffix, and capture
+    # must record the prompt WITH it — a snapshot missing a block the model saw lies.
     from graph.agent import _build_middleware
     from graph.config import LangGraphConfig
 
     names = [type(m).__name__ for m in _build_middleware(LangGraphConfig(api_key="k"), None)]
-    assert names.index("PromptCaptureMiddleware") == names.index("PromptCacheMiddleware") + 1
+    capture = names.index("PromptCaptureMiddleware")
+    assert capture > names.index("PromptCacheMiddleware")
+    assert capture > names.index("RoomCastMiddleware")
+    # And nothing downstream of capture mutates the prompt — it stays the last
+    # prompt-touching wrapper.
+    assert "RoomCastMiddleware" not in names[capture + 1 :]
 
 
 def test_capture_absent_when_disabled():

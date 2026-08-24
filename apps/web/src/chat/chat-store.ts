@@ -27,6 +27,12 @@ export type ChatSession = {
   // that turn. The flag is per-MESSAGE server-side, so it must ride every send: a mixed
   // thread would leak earlier incognito content into a later non-incognito turn's summary.
   incognito?: boolean;
+  // Group chat (#3049): the delegates this room is with, by their `@`-addressable
+  // names. Undefined/empty = an ordinary chat with the lead agent alone. The list
+  // ORDERS the `@` popover rather than gating it — a room's membership is a
+  // convenience, and refusing to route `@somebody-else` would be a surprise, not a
+  // safety property.
+  participants?: string[];
 };
 
 // Reasoning is ON by default in the console (auto-enable) — a fresh tab thinks at
@@ -372,6 +378,21 @@ export function unusedSession(
       s.title === DEFAULT_SESSION_TITLE &&
       Boolean(s.incognito) === wantIncognito,
   );
+}
+
+/** Who is in this chat (#3049) — DERIVED from the transcript, never tracked from
+ *  keystrokes. A participant is a delegate that has spoken here (an authored assistant
+ *  message), in first-spoken order. Deriving is the whole design: a tracked list can
+ *  only drift from the transcript (chips that outlive a deleted draft were the bug that
+ *  killed the first cut), and nothing in this system "listens" — an agent acts only
+ *  when addressed — so the strip is a record of the conversation's cast, not presence. */
+export function sessionCast(session: Pick<ChatSession, "messages"> | null | undefined): string[] {
+  const seen: string[] = [];
+  for (const m of session?.messages ?? []) {
+    const name = m.role === "assistant" ? m.author?.name : undefined;
+    if (name && !seen.includes(name)) seen.push(name);
+  }
+  return seen;
 }
 
 export function ensureActiveSessions(state: ChatState, sessionId: string | null): string[] {
