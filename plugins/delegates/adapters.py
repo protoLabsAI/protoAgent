@@ -591,6 +591,37 @@ async def _bill_peer_usage(result, delegate: str) -> None:
         logger.debug("[delegates] peer usage row not billed to the turn stream", exc_info=True)
 
 
+def _a2a_auth_hint(d: Delegate, status_code: int) -> str:
+    """The actionable half of a 401/403 from an A2A peer, or ``""``.
+
+    A bare passthrough ("HTTP 401: Unauthorized: expected 'Authorization: Bearer '")
+    tells the operator that something is unauthorized, not what to do — and the most
+    likely cause is a deliberate design decision they have no way to know about: a
+    tokenless delegate presents the fleet service token on **loopback only** (ADR 0089),
+    because that token must never leave the box. Point an off-box delegate at a peer and
+    it sends no credential at all, exactly as intended, and 401s.
+
+    Names the least-privilege option too: a peer's ``auth.federation_token`` (ADR 0066)
+    reaches only ``/a2a`` + ``/v1``, where its operator token opens the whole API.
+    """
+    if status_code not in (401, 403) or d.auth_token:
+        return ""
+    if _is_loopback_url(d.url):
+        # Loopback AND no credential reached the peer — the service token lookup failed
+        # rather than being withheld. Different problem, different fix.
+        return (
+            " — this is a loopback delegate, so the fleet service token should have been"
+            " presented; it could not be resolved. Check that this instance is part of a fleet,"
+            " or set an explicit Auth token on the delegate."
+        )
+    return (
+        f" — {d.name!r} has no Auth token and {d.url} is not loopback, so no credential was sent:"
+        " the fleet service token is presented for loopback peers only and never leaves the box"
+        " (ADR 0089). Set the delegate's Auth token to the peer's `auth.federation_token` if it"
+        " has one (ADR 0066 — it reaches only /a2a and /v1), otherwise the peer's `auth.token`."
+    )
+
+
 class A2aAdapter(Adapter):
     type = "a2a"
     label = "A2A agent"
@@ -719,7 +750,9 @@ class A2aAdapter(Adapter):
             except httpx.HTTPError as exc:
                 raise DelegateError(f"delegate {d.name!r} transport error: {str(exc)[:160]}") from exc
             if r.status_code >= 400:
-                raise DelegateError(f"delegate {d.name!r} HTTP {r.status_code}: {r.text[:200]}")
+                raise DelegateError(
+                    f"delegate {d.name!r} HTTP {r.status_code}: {r.text[:200]}{_a2a_auth_hint(d, r.status_code)}"
+                )
             data = r.json()
             if data.get("error"):
                 raise DelegateError(_a2a_error_detail(d, data["error"]))
