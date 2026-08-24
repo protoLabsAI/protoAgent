@@ -89,6 +89,133 @@ def _drop_host_model_identity(host_layer: dict, agent_data: dict) -> list[str]:
     return dropped
 
 
+# ── Provider/model coherence across ALL slots (bd-66cw) ───────────────────────
+#
+# `model.provider` + `model.name` are one decision (see `_MODEL_IDENTITY_KEYS`), but the
+# aux / subagent / fallback slots each carry their OWN model override that inherits
+# `model.provider`. A native-OAuth provider (ADR 0097) needs a real Claude id in every
+# slot it builds — ``graph.providers.anthropic_oauth`` REJECTS a '/'-bearing gateway
+# alias (`protolabs/reasoning`). Before this, a stale alias in a NON-lead slot (aux, a
+# subagent tier, a fallback) built fine at boot and only raised at the FIRST subagent
+# dispatch — silently disabling all task/task_batch/workflow/board-dispatch work while
+# the lead agent kept running. We surface it at config load and reconcile the fixable
+# slots so they inherit the coherent lead pair instead.
+#
+# Gateway-aware, not a blanket ban on '/': when a gateway key IS configured a '/'-alias
+# slot legitimately routes THROUGH the gateway (the mixed native-main / gateway-aux path,
+# #2550 / graph.llm), so it is coherent. The genuine incoherence — the shape that raises
+# at dispatch — is a native provider + an alias slot + NO gateway key to route it.
+
+# Slot-name prefixes that name their OWN routing target (graph.llm.split_slot_target and
+# the `acp:` convention). The bare id after them is out of scope for the lead-provider
+# coherence check — the slot already said where it goes.
+_SLOT_ROUTE_PREFIXES = ("gateway:", "anthropic-oauth:", "openai-codex:", "acp:")
+
+# The non-lead SCALAR model slots that resolve through ``create_llm(config,
+# model_name=<slot>)`` and thus hit the native builder. (human label, config attribute.)
+_SCALAR_MODEL_SLOTS = (
+    ("routing.aux_model", "aux_model"),
+    ("compaction.model", "compaction_model"),
+    ("goal.eval_model", "goal_eval_model"),
+    ("soul.drift.judge.model", "soul_drift_judge_model"),
+)
+# Config-exposed subagent tiers (subagents.<name>.model). Only `researcher` is a typed
+# field today; extend alongside the dataclass fields as more subagents are promoted.
+_SUBAGENT_MODEL_SLOTS = ("researcher",)
+
+
+def _is_gateway_alias(model_value) -> bool:
+    """Is ``model_value`` a bare gateway alias — a '/'-namespaced id (`protolabs/reasoning`)
+    with no explicit slot-provider prefix? A native id (`claude-opus-4-6`) or an
+    explicitly-routed slot (`gateway:…`, `acp:…`) is NOT one."""
+    v = str(model_value or "").strip()
+    if not v or "/" not in v:
+        return False
+    return not v.lower().startswith(_SLOT_ROUTE_PREFIXES)
+
+
+def _native_provider_without_gateway(config) -> bool:
+    """A native-OAuth provider (ADR 0097) with NO gateway key to fall back on — the only
+    shape in which a '/'-alias slot is genuinely incoherent (it raises at first dispatch
+    rather than routing through the gateway). Mirrors ``graph.llm._gateway_configured``
+    (config key or ``OPENAI_API_KEY`` env)."""
+    from graph.providers import is_native_oauth_provider  # lazy — avoid an import cycle
+
+    if not is_native_oauth_provider(getattr(config, "model_provider", "")):
+        return False
+    has_gateway_key = bool(
+        (getattr(config, "api_key", "") or "").strip()
+        or os.environ.get("OPENAI_API_KEY", "").strip()
+    )
+    return not has_gateway_key
+
+
+def _detect_incoherent_slots(config) -> list[str]:
+    """Every model slot whose value is incoherent with the current provider (read-only).
+
+    Empty when coherent. Today's case: a native-OAuth provider with a bare gateway alias
+    in a slot and no gateway key to route it. Covers the LEAD pair plus aux, the subagent
+    tiers, and each ``routing.fallback_models`` entry — the full set ``graph.llm`` builds.
+    """
+    if not _native_provider_without_gateway(config):
+        return []
+    flagged: list[str] = []
+    if _is_gateway_alias(getattr(config, "model_name", "")):
+        flagged.append(f"model.name={config.model_name!r} (lead)")
+    for label, attr in _SCALAR_MODEL_SLOTS:
+        if _is_gateway_alias(getattr(config, attr, "")):
+            flagged.append(f"{label}={getattr(config, attr)!r}")
+    for name in _SUBAGENT_MODEL_SLOTS:
+        sub = getattr(config, name, None)
+        if isinstance(sub, SubagentDef) and _is_gateway_alias(sub.model):
+            flagged.append(f"subagents.{name}.model={sub.model!r}")
+    for m in getattr(config, "routing_fallback_models", None) or []:
+        if _is_gateway_alias(m):
+            flagged.append(f"routing.fallback_models[{m!r}]")
+    return flagged
+
+
+def _reconcile_slot_providers(config) -> list[str]:
+    """Reconcile NON-lead slots incoherent with a native-OAuth provider so they inherit
+    the coherent lead pair instead of raising at first dispatch — and WARN, naming each
+    offending slot, so the incoherence is visible at config load/reload rather than only
+    at the first `task`/subagent dispatch. Called from :meth:`from_dict`, so a provider
+    SWITCH (a reload with a new `model.provider`) reconciles exactly as a fresh load does.
+
+    A scalar aux/tier slot is CLEARED (→ it inherits `model.name`); an incoherent fallback
+    is DROPPED (each fallback is built eagerly at graph build, so a '/'-alias one would
+    crash the whole build there, not just at dispatch). The LEAD pair cannot be reconciled
+    — it has nothing to inherit — so it is only surfaced; the operator fixes
+    `model.name`/`model.provider` together (they are one decision, ADR 0097). Returns the
+    flagged slot descriptions."""
+    flagged = _detect_incoherent_slots(config)
+    if not flagged:
+        return []
+    for _label, attr in _SCALAR_MODEL_SLOTS:
+        if _is_gateway_alias(getattr(config, attr, "")):
+            setattr(config, attr, "")
+    for name in _SUBAGENT_MODEL_SLOTS:
+        sub = getattr(config, name, None)
+        if isinstance(sub, SubagentDef) and _is_gateway_alias(sub.model):
+            sub.model = ""
+    kept = [m for m in (config.routing_fallback_models or []) if not _is_gateway_alias(m)]
+    if len(kept) != len(config.routing_fallback_models or []):
+        config.routing_fallback_models = kept
+    log.warning(
+        "[config] model.provider=%r is a native OAuth provider (ADR 0097) and needs a real "
+        "Claude model id, but these slots hold a gateway alias with no gateway key to route "
+        "them: %s. Non-lead slots were reconciled to inherit the coherent lead "
+        "model.name=%r (any such fallback dropped); a lead-slot alias must be fixed in "
+        "config. Left unreconciled, this only surfaced at the FIRST subagent dispatch as "
+        "'is not a Claude model id', silently disabling all task/task_batch/workflow "
+        "delegation.",
+        getattr(config, "model_provider", ""),
+        ", ".join(flagged),
+        getattr(config, "model_name", ""),
+    )
+    return flagged
+
+
 def _read_config_docs(p: Path) -> tuple[dict, dict, bool]:
     """The file-reading half of ``from_yaml``: (host ⊕ agent) merged doc + secrets
     overlay. The third element is False when there is nothing to parse (no agent
@@ -1304,6 +1431,18 @@ class LangGraphConfig:
         if env_model:
             self.model_name = env_model
 
+    def coherence_warnings(self) -> list[str]:
+        """Provider/model coherence problems across EVERY model slot (read-only).
+
+        Non-empty when a slot is incoherent with `model.provider` — today's case is a
+        native-OAuth provider (ADR 0097) with a bare gateway alias slot (aux / subagent
+        tier / a fallback) that would raise at the first `task`/subagent dispatch.
+        :meth:`from_dict` already reconciles the fixable NON-lead slots on load, so on a
+        freshly-parsed config this returns only what could not be auto-fixed (an
+        incoherent LEAD pair). A caller that builds a config directly can validate with
+        it before graph build."""
+        return _detect_incoherent_slots(self)
+
     def fenced_projects(self) -> list[dict]:
         """The ADR 0095 ``projects:`` registry projected onto the fs-fence shape.
 
@@ -1806,5 +1945,12 @@ class LangGraphConfig:
                         model=sub.get("model", getattr(config, name).model),
                     ),
                 )
+
+        # Provider/model coherence across ALL slots (bd-66cw): a native-OAuth provider
+        # with a stale gateway alias in a non-lead slot used to build fine and raise only
+        # at the first subagent dispatch. Surface it now and reconcile the fixable slots so
+        # they inherit the coherent lead pair. Runs on every load path, so a provider
+        # SWITCH (a reload with a new model.provider) reconciles the same way a load does.
+        _reconcile_slot_providers(config)
 
         return config

@@ -181,6 +181,34 @@ except Exception as exc:  # noqa: BLE001 — surfaced with an actionable message
     _IMPORT_ERROR = exc
 
 
+def resolve_claude_model_name(config: "LangGraphConfig", model_name: str | None = None) -> str:
+    """The concrete Claude model id this native-OAuth call will build against.
+
+    ``model_name`` (a per-slot override, e.g. an aux/subagent tier) wins; an empty/None
+    override INHERITS the lead ``config.model_name`` — the coherent pair travels together
+    (ADR 0097) — never the ``protolabs/reasoning`` gateway-alias dataclass default via
+    some other layer. Raises a clear ``RuntimeError`` when the resolved id is empty or a
+    '/'-bearing gateway alias (meaningless to Anthropic).
+
+    Config load reconciles the aux/subagent/fallback slots ahead of this
+    (``graph.config._reconcile_slot_providers``), so a raise here now means the LEAD pair
+    itself is incoherent — surfaced at load, not discovered here on a live delegation.
+    """
+    name = (model_name or config.model_name or "").strip()
+    if not name or "/" in name:
+        # A gateway alias like "protolabs/reasoning" is meaningless to Anthropic —
+        # anthropic-oauth needs a real Claude model id.
+        raise RuntimeError(
+            f"model.provider is 'anthropic-oauth' but model.name={name!r} is not a Claude "
+            "model id (e.g. 'claude-sonnet-4-5', 'claude-opus-4-1').\n"
+            "A '/' in the name means a gateway alias, which usually means the two halves "
+            "came from different config layers: set model.provider and model.name TOGETHER "
+            "on this agent (they are one decision), or clear both so it inherits a "
+            "coherent pair from the host."
+        )
+    return name
+
+
 def build_anthropic_oauth_llm(
     config: "LangGraphConfig",
     *,
@@ -200,18 +228,7 @@ def build_anthropic_oauth_llm(
         )
 
     creds = resolve_anthropic_oauth()  # raises OAuthCredentialError if none
-    name = (model_name or config.model_name or "").strip()
-    if not name or "/" in name:
-        # A gateway alias like "protolabs/reasoning" is meaningless to Anthropic —
-        # anthropic-oauth needs a real Claude model id.
-        raise RuntimeError(
-            f"model.provider is 'anthropic-oauth' but model.name={name!r} is not a Claude "
-            "model id (e.g. 'claude-sonnet-4-5', 'claude-opus-4-1').\n"
-            "A '/' in the name means a gateway alias, which usually means the two halves "
-            "came from different config layers: set model.provider and model.name TOGETHER "
-            "on this agent (they are one decision), or clear both so it inherits a "
-            "coherent pair from the host."
-        )
+    name = resolve_claude_model_name(config, model_name)
 
     token = (creds.access_token or "").strip()
     if not token:
