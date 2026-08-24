@@ -116,26 +116,11 @@ def _drain_background_messages(session_id: str) -> list:
     return msgs
 
 
-def _resolve_thread_id(request_metadata: dict | None, session_id: str) -> str:
-    """Resolve the checkpointer ``thread_id`` for this turn (#571).
-
-    Template default keys A2A sessions by conversation id (``a2a:<session_id>``),
-    prefixed to isolate them from the non-streaming chat in the shared checkpointer. A fork
-    can register a resolver ``(request_metadata, session_id) -> str`` via a plugin
-    (``register_thread_id_resolver``) to scope memory off request metadata — e.g.
-    per-project working memory — with ZERO edits to this file. Falls back to the
-    default when no resolver is registered or a custom one errors / returns falsy.
-    """
-    resolver = getattr(STATE, "thread_id_resolver", None)
-    if resolver is not None:
-        try:
-            tid = resolver(request_metadata or {}, session_id)
-            if tid:
-                return str(tid)
-            log.warning("[thread_id] resolver returned falsy; using default")
-        except Exception:
-            log.exception("[thread_id] custom resolver failed; using default")
-    return f"a2a:{session_id}"
+# Thread-id resolution moved to `graph.thread_ids` so a tool body can reach it too
+# (the delegates plugin records delegations on the session's thread, and `plugins/`
+# must not import `server`). Re-exported under the old private name: every caller here
+# and in the test suite keeps working, and there is still exactly one implementation.
+from graph.thread_ids import resolve_thread_id as _resolve_thread_id  # noqa: E402
 
 
 def _goal_continuation_config(config: dict, goal_state) -> dict:

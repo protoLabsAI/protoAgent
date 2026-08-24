@@ -93,8 +93,8 @@ def _build_delegate_to(registry: DelegateRegistry):
                 registry, target, query, state, item_id=item_id, resume_task_id=resume_task_id
             )
         try:
-            return await registry.dispatch(
-                target, query, item_id=item_id or None, resume_task_id=resume_task_id or None
+            return await _dispatch_into_room(
+                registry, target, query, state, item_id=item_id or None, resume_task_id=resume_task_id or None
             )
         except DelegateError as exc:
             return f"Error: {exc}"
@@ -104,6 +104,74 @@ def _build_delegate_to(registry: DelegateRegistry):
 
     delegate_to.description = f"{delegate_to.description}\n\nAvailable delegates: {listing or '(none configured)'}."
     return delegate_to
+
+
+async def _dispatch_into_room(
+    registry: DelegateRegistry,
+    target: str,
+    query: str,
+    state: Any,
+    *,
+    item_id: str | None = None,
+    resume_task_id: str | None = None,
+) -> str:
+    """Dispatch a foreground delegation and RECORD it in the session's room (#3042).
+
+    A delegation is the orchestrator addressing a participant — the same operation the
+    operator performs by typing ``@proto``. Recording it means the transcript reflects who
+    actually said what, so a later ``@`` catches that participant up on it and the next
+    turn's orchestrator can see its own past delegations as conversation rather than as
+    tool output it has to remember paraphrasing.
+
+    **No ``room_reply`` frame is emitted.** The orchestrator's own answer is still the
+    single visible response for this turn; surfacing the delegate's words as a second
+    bubble *and* letting the orchestrator summarise them would show the operator the same
+    content twice. The record is for the thread, not the screen. Whether the orchestrator
+    should stop summarising is a behaviour change, and its own decision.
+
+    Falls back to a plain dispatch whenever the room is unavailable — no graph, no session
+    id, or a `run_mention` that refuses. Losing the record must never cost the caller the
+    reply, and this is the ONLY tool the orchestrator has for reaching a delegate.
+    """
+    async def plain() -> str:
+        """The direct route. A COROUTINE FACTORY, not a coroutine: building it eagerly
+        and only awaiting it on the fallback paths leaked one un-awaited coroutine per
+        successful delegation (and a RuntimeWarning with it)."""
+        return await registry.dispatch(target, query, item_id=item_id, resume_task_id=resume_task_id)
+
+    # `item_id` / `resume_task_id` are managed-git and parked-task concerns that
+    # `run_mention` has no parameter for; a call carrying either goes the direct route
+    # rather than being silently stripped of its work-item identity.
+    if item_id or resume_task_id:
+        return await plain()
+
+    try:
+        from runtime.state import STATE
+        from tools.lg_tools import _session_id_from
+
+        session = _session_id_from(state) or ""
+        graph = getattr(STATE, "graph", None)
+        if not session or graph is None:
+            return await plain()
+        from graph.mention_op import run_mention
+        from graph.thread_ids import resolve_thread_id
+
+        outcome = await run_mention(
+            graph,
+            registry,
+            resolve_thread_id(None, session),
+            target,
+            query,
+            session_id=session,
+            speaker="assistant",
+        )
+    except Exception:  # noqa: BLE001 — the room is bookkeeping; the reply is the job
+        log.exception("[delegates] recording the delegation in the room failed")
+        return await plain()
+
+    if outcome.get("ok"):
+        return str(outcome.get("reply") or "")
+    return f"Error: delegate {target!r} failed: {outcome.get('error') or 'unknown error'}"
 
 
 async def _spawn_background_delegation(
