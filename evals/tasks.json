@@ -110,7 +110,7 @@
     ]
   },
   {
-    "id": "memory_ingest_intent",
+    "id": "memory_note_intent",
     "category": "tool",
     "kind": "ask",
     "name": "Asks to log an event → memory_ingest writes the chunk",

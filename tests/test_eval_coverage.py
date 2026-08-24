@@ -264,6 +264,19 @@ def test_workflow_kind_is_dispatchable():
 # ── the new cases are well-formed ───────────────────────────────────────────────
 
 
+def test_case_ids_are_unique():
+    """Every report consumer keys by case id — ``evals/compare.py`` builds
+    ``{r["id"]: passed}``, ``evals/sweep.py`` aggregates into ``agg[r["id"]]``, and
+    half the tests in this file build a ``by_id`` dict. A duplicate id fails nothing
+    loudly: the second row silently overwrites the first, so a regression in one of
+    the two cases is invisible to compare/sweep. Shipped once already, when
+    ``daily_log_intent`` was rewritten onto ``memory_ingest`` without being renamed.
+    """
+    ids = [c["id"] for c in TASKS]
+    dupes = sorted({i for i in ids if ids.count(i) > 1})
+    assert not dupes, f"duplicate case ids in tasks.json: {dupes}"
+
+
 def test_new_cases_present_and_valid():
     by_id = {c["id"]: c for c in TASKS}
     for cid in ("research_delegation", "workflow_research_brief", "workflow_deep_research_adversarial"):
