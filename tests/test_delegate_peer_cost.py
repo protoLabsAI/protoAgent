@@ -24,6 +24,7 @@ only its own thinking. These tests cover the whole path:
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 
 import httpx
@@ -203,13 +204,19 @@ class _PeerClient:
 
 
 class _Resp:
+    """A peer's HTTP reply. A ``str`` payload is a RAW JSON body and is decoded by the
+    real ``json.loads``, because for #3038 the spelling is the whole point: a 400-digit
+    integer LITERAL decodes to a Python ``int`` that ``float()`` refuses outright, where
+    the string ``"1e400"`` merely overflows to ``inf`` — two different failures a
+    pre-decoded dict cannot tell apart. Dict payloads stay as they were."""
+
     def __init__(self, payload):
         self._p = payload
         self.status_code = 200
-        self.text = str(payload)
+        self.text = payload if isinstance(payload, str) else str(payload)
 
     def json(self):
-        return self._p
+        return json.loads(self._p) if isinstance(self._p, str) else self._p
 
 
 def _delegate_to(peer_url="https://peer/a2a", name="orbis"):
@@ -645,3 +652,336 @@ async def test_a_marker_never_becomes_the_exported_trace_rows_model(tmp_path, mo
 
     assert row["meta"]["models"] == ["peer:orbis"]
     assert not row["meta"]["model"].startswith("peer:")
+
+
+# ── a peer cannot erase the calling turn's telemetry row (#3038) ──────────────
+
+
+#: A peer's cost-v1 with numbers no real turn produces: ``1e308`` is a 309-digit Python
+#: int once ``int()``ed, which is what ``store.record`` rejects with ``OverflowError:
+#: Python int too large to convert to SQLite INTEGER``. Both wire spellings are here
+#: (proto-JSON float and string) plus a negative, since the executor's accumulator adds
+#: whichever survives straight into the turn's sums.
+_HOSTILE_COST = {
+    pa.COST_EXT_URI: {
+        "usage": {
+            "input_tokens": 1e308,
+            "output_tokens": "1e308",
+            "cache_read_input_tokens": -5,
+            "cache_creation_input_tokens": 2**70,
+        },
+        "costUsd": 1e300,
+    }
+}
+
+#: What the LEAD agent actually spent on the turn that made the delegation — the thing
+#: the bug destroys. Realistic, not token-sized: a turn with a delegation in it has a
+#: prompt worth of context behind it.
+_LEAD_SPEND = {
+    "input_tokens": 5000,
+    "output_tokens": 900,
+    "cache_read_input_tokens": 1200,
+    "cache_creation_input_tokens": 300,
+    "cost_usd": 0.0475,
+    "model": "claude-sonnet-4-6",
+}
+
+
+def _seed_a_month_of_history(store) -> int:
+    """A store that is NOT a clean room: a month of the turns a live instance actually
+    accumulates — operator turns, coder rows an order of magnitude bigger, both legs of
+    a HITL park sharing one ``task_id`` (#3001), earlier honest peer delegations, and
+    turns that overlapped.
+
+    The bug is a dropped INSERT, and an empty store cannot tell "the row was written"
+    from "the store was already empty" — nor can it show that the loss is confined to
+    the one turn rather than taking the history around it too.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    base = datetime(2026, 7, 24, 9, 0, tzinfo=timezone.utc)
+    fixtures = [
+        ("claude-sonnet-4-6", "claude-sonnet-4-6", 4200, 610, 0.031),
+        ("claude-code", "claude-code", 88000, 3100, 0.44),  # a coder row
+        ("claude-sonnet-4-6", "claude-sonnet-4-6,peer:orbis", 9100, 720, 0.079),  # an honest peer
+        ("gpt-5.2", "gpt-5.2", 2600, 340, 0.012),
+    ]
+    n = 0
+    for day in range(30):
+        model, models, inp, out, cost = fixtures[day % len(fixtures)]
+        ended = base + timedelta(days=day)
+        # Two legs of a HITL park share a task_id; the pair also overlaps in time, which
+        # is what concurrent turns on one instance look like in this table.
+        for leg in range(2 if day % 7 == 3 else 1):
+            n += 1
+            store.record(
+                {
+                    "task_id": f"hist-{day}",
+                    "session_id": f"c{day % 5}",
+                    "state": "completed",
+                    "success": 1,
+                    "model": model,
+                    "models": models,
+                    "input_tokens": inp + leg * 400,
+                    "output_tokens": out,
+                    "total_tokens": inp + out + leg * 400,
+                    "cache_read_input_tokens": inp // 3,
+                    "cache_creation_input_tokens": 120,
+                    "cost_usd": cost,
+                    "duration_ms": 14000 + day * 37,
+                    "llm_calls": 3,
+                    "tool_calls": 5,
+                    "created_at": (ended - timedelta(seconds=14)).isoformat(),
+                    "ended_at": (ended + timedelta(seconds=leg)).isoformat(),
+                    "soul_rev": "abc1234",
+                    "trace_id": f"tr-{day}",
+                    "tool_durations": None,
+                    "context_tokens": inp,
+                }
+            )
+    return n
+
+
+async def test_a_hostile_peers_unbounded_number_cannot_erase_the_calling_turns_row(tmp_path, monkeypatch):
+    """#3038 — the durable outcome: one hostile delegation must not cost the lead agent
+    its own turn.
+
+    A peer replying with ``{"usage": {"input_tokens": 1e308}}`` used to ride the wire
+    into the executor's accumulator as a 309-digit int, through ``record_turn``'s
+    ``total_tokens``, and into ``store.record``, where SQLite refuses it. ``record_turn``
+    swallows the ``OverflowError`` because telemetry is best-effort — correct in
+    isolation, and it turned a peer-controlled input into total loss of THAT turn's
+    accounting: the lead's own spend gone from cost totals, success rate and latency
+    percentiles at a remote party's choosing. ``record_turn`` did log the failure at
+    ERROR with a traceback, so the drop was reported; what nothing said was which remote
+    party caused it, and no log line brings the row back.
+
+    So this drives the real path end to end — a real ``delegate_to`` dispatch against a
+    peer that answers with the poisoned numbers, the resulting usage frame riding the
+    same turn as the lead's genuine spend, through the real
+    ``server.a2a._record_a2a_telemetry`` chokepoint into a real ``TelemetryStore`` that
+    already holds a month of history — and reads the row back out.
+    """
+    from observability.telemetry_store import TelemetryStore
+    from runtime.state import STATE
+    from server.a2a import _record_a2a_telemetry
+
+    # 1. The peer's numbers arrive the way they really do: off a live delegation.
+    poisoned = {"result": {"task": {"id": "t1", "artifacts": [_artifact(metadata=_HOSTILE_COST)]}}}
+    reply, usage = await _dispatch_capturing_usage(monkeypatch, poisoned)
+    assert str(reply) == "hi from peer", "the delegation itself must still succeed"
+    (peer_row,) = usage
+    # The peer double swaps ``httpx.AsyncClient`` globally; the turn below rides an
+    # ASGITransport client through the same class, so put the real one back first.
+    monkeypatch.undo()
+
+    store = TelemetryStore(str(tmp_path / "turns.db"))
+    seeded = _seed_a_month_of_history(store)
+    monkeypatch.setattr(STATE, "telemetry_store", store, raising=False)
+
+    # 2. That peer frame rides the SAME turn as the lead agent's real spend.
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield ("usage", dict(_LEAD_SPEND))
+        yield ("usage", dict(peer_row))
+        yield ("done", "answer")
+
+    outcome = await _run_turn_outcome(stream)
+    _record_a2a_telemetry(outcome)
+
+    # 3. The turn is in the store — the whole point.
+    rows = store.recent(limit=200)
+    assert len(rows) == seeded + 1, "the hostile peer erased the calling turn's row, the lead's own spend with it"
+    (row,) = [r for r in rows if r["task_id"] == outcome.task_id]
+
+    # The lead's genuine numbers are IN the surviving row, not merely a row of zeros.
+    assert row["cost_usd"] >= _LEAD_SPEND["cost_usd"]
+    assert row["output_tokens"] >= _LEAD_SPEND["output_tokens"]
+    assert row["cache_creation_input_tokens"] >= _LEAD_SPEND["cache_creation_input_tokens"]
+    assert row["model"] == "claude-sonnet-4-6"
+    assert "peer:orbis" in row["models"], "the peer's share stays legible — it is bounded, not erased"
+
+    # Every integer column is storable — SQLite INTEGER is signed 64-bit, and that wall
+    # is what the peer was driving the row through — and none went negative on a peer's
+    # say-so (a token credit is not a thing a peer gets to issue).
+    for col in (
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+        "context_tokens",
+    ):
+        assert 0 <= row[col] < 2**63, f"{col} = {row[col]} is not a storable, non-negative count"
+    assert 0.0 <= row["cost_usd"] < 1e12
+
+    # …and the month of history around it is untouched: the aggregate a human reads
+    # still sums this turn in with the rest.
+    assert store.summary()["turns"] == seeded + 1
+
+
+async def test_an_out_of_range_peer_value_is_clamped_floored_and_reported(monkeypatch, caplog):
+    """The bound itself, at the parse boundary: absurd magnitudes clamp to the ceiling,
+    negatives floor at zero, and the first clamp says so out loud.
+
+    The warning is budgeted per PEER (a peer that reports garbage reports it on every
+    reply), which means a test asserting it has to clear the budget — otherwise it
+    passes or fails on test ORDER, the exact clean-room failure this class of bug keeps
+    repeating.
+    """
+    import logging
+
+    from plugins.delegates import adapters
+    from plugins.delegates.adapters import _MAX_WIRE_COST_USD, _MAX_WIRE_TOKENS
+
+    monkeypatch.setattr(adapters, "_clamp_warned", set())
+    caplog.set_level(logging.WARNING, logger="protoagent.plugins.delegates")
+
+    poisoned = {"result": {"task": {"id": "t1", "artifacts": [_artifact(metadata=_HOSTILE_COST)]}}}
+    _reply, usage = await _dispatch_capturing_usage(monkeypatch, poisoned)
+    (row,) = usage
+
+    assert row["input_tokens"] == _MAX_WIRE_TOKENS and isinstance(row["input_tokens"], int)
+    assert row["output_tokens"] == _MAX_WIRE_TOKENS, "a string-spelled 1e308 is the same attack"
+    assert row["cache_creation_input_tokens"] == _MAX_WIRE_TOKENS
+    assert row["cache_read_input_tokens"] == 0, "a negative peer count floors at zero"
+    assert row["cost_usd"] == _MAX_WIRE_COST_USD
+
+    warned = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    # `record_turn` already logged the dropped row at ERROR; what it could not name is
+    # the peer, because by then the number is one addend inside `total_tokens`.
+    assert warned, "a peer sending absurd numbers must be ATTRIBUTABLE to that peer"
+    assert "orbis" in warned[0].getMessage(), "the warning must name the peer that sent them"
+
+
+#: The spelling the first cut of the bound missed (#3038). ``json.loads`` decodes a
+#: 401-digit integer LITERAL — the natural way a peer writes an absurd token count — to
+#: a Python ``int``, and ``float()`` REFUSES an int wider than a double instead of
+#: overflowing to ``inf`` the way the string ``"1e400"`` does. The honest fields sit
+#: beside it because the failure was total: the ``OverflowError`` came out of
+#: ``_peer_usage_row``, so ``output_tokens`` and ``costUsd`` went down with it.
+_WIDE_INT_COST = {
+    pa.COST_EXT_URI: {
+        "usage": {"input_tokens": int("1" + "0" * 400), "output_tokens": 120},
+        "costUsd": 0.51,
+    }
+}
+
+
+def _wire_body(cost_meta) -> str:
+    """The peer's reply as a RAW JSON body — what actually crosses the wire, decoded on
+    the way in by the real ``json.loads`` (see :class:`_Resp`)."""
+    return json.dumps({"result": {"task": {"id": "t1", "artifacts": [_artifact(metadata=cost_meta)]}}})
+
+
+async def test_a_wide_integer_literal_is_bounded_not_dropped(tmp_path, monkeypatch):
+    """#3038 — the bound has to hold for the spelling a peer would actually use.
+
+    ``1e308`` is a float literal; a peer writing an absurd count writes an INTEGER, and
+    that integer reaches ``_wire_number`` as a Python ``int`` too wide for a double.
+    ``float()`` raises ``OverflowError``, which is neither of the ``(TypeError,
+    ValueError)`` the coercion guard caught — so the exception left ``_peer_usage_row``
+    entirely, ``_bill_peer_usage``'s catch-all swallowed it at DEBUG, and the peer's
+    WHOLE cost-v1 was erased rather than bounded: the honest ``output_tokens`` and
+    ``costUsd`` beside it gone too, with nothing above DEBUG to say so.
+
+    Driven the whole way: a raw JSON body through the real decoder, a real
+    ``delegate_to`` dispatch, the usage frame riding the same turn as the lead agent's
+    genuine spend, through ``server.a2a._record_a2a_telemetry`` into a real
+    ``TelemetryStore`` that already holds a month of history — then the stored row read
+    back out.
+    """
+    from observability.telemetry_store import TelemetryStore
+    from plugins.delegates import adapters
+    from plugins.delegates.adapters import _MAX_WIRE_TOKENS
+    from runtime.state import STATE
+    from server.a2a import _record_a2a_telemetry
+
+    monkeypatch.setattr(adapters, "_clamp_warned", set())
+    reply, usage = await _dispatch_capturing_usage(monkeypatch, _wire_body(_WIDE_INT_COST))
+    assert str(reply) == "hi from peer", "the delegation itself must still succeed"
+    assert len(usage) == 1, "the peer's cost-v1 was erased instead of bounded"
+    (peer_row,) = usage
+
+    # Bounded — and the honest fields that used to die with the raise are still there.
+    assert peer_row["input_tokens"] == _MAX_WIRE_TOKENS
+    assert peer_row["output_tokens"] == 120, "an honest field must survive its neighbour being absurd"
+    assert peer_row["cost_usd"] == 0.51
+
+    monkeypatch.undo()  # the peer double swapped httpx.AsyncClient globally
+
+    store = TelemetryStore(str(tmp_path / "turns.db"))
+    seeded = _seed_a_month_of_history(store)
+    monkeypatch.setattr(STATE, "telemetry_store", store, raising=False)
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield ("usage", dict(_LEAD_SPEND))
+        yield ("usage", dict(peer_row))
+        yield ("done", "answer")
+
+    outcome = await _run_turn_outcome(stream)
+    _record_a2a_telemetry(outcome)
+
+    rows = store.recent(limit=200)
+    assert len(rows) == seeded + 1, "the calling turn's row is gone — the lead's own spend with it"
+    (row,) = [r for r in rows if r["task_id"] == outcome.task_id]
+    assert row["cost_usd"] >= _LEAD_SPEND["cost_usd"] + 0.51
+    assert row["output_tokens"] >= _LEAD_SPEND["output_tokens"] + 120
+    assert "peer:orbis" in row["models"], "the peer's share stays legible — bounded, not erased"
+    for col in ("input_tokens", "output_tokens", "total_tokens", "cache_read_input_tokens", "context_tokens"):
+        assert 0 <= row[col] < 2**63, f"{col} = {row[col]} is not a storable, non-negative count"
+
+
+async def test_a_non_finite_peer_neither_warns_nor_spends_a_hostile_peers_warning(monkeypatch, caplog):
+    """#3038 — the warning has to survive an instance that also has ORDINARY peers on it.
+
+    Two things are being pinned, and both only fail once the process has seen more than
+    the one hostile delegation a clean room contains:
+
+    1. A non-finite number is #3016's settled contract — the peer lost track, so it
+       bills nothing — and ``json`` really does carry it (``json.dumps(float("nan"))``
+       emits a bare ``NaN`` that ``json.loads`` accepts). Reporting it as
+       "out-of-range … clamped to sane bounds" is wrong on both counts and names an
+       innocent peer for it.
+    2. The budget that stops a garbage-reporting peer flooding the log must not be
+       spendable BY that ordinary condition, nor by a payload that contributes nothing
+       at all — otherwise the one warning an operator ever sees is gone before the
+       hostile peer arrives, and the clamp this fix exists for is DEBUG-only on an
+       instance where DEBUG is off.
+    """
+    import logging
+
+    from plugins.delegates import adapters
+
+    monkeypatch.setattr(adapters, "_clamp_warned", set())
+    caplog.set_level(logging.DEBUG, logger="protoagent.plugins.delegates")
+
+    def _warnings():
+        return [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+
+    # 1. An ordinary peer whose pricing went NaN. Billed as zero, and NOT called clamped.
+    nan_cost = {pa.COST_EXT_URI: {"usage": {"input_tokens": 700, "output_tokens": 55}, "costUsd": float("nan")}}
+    _reply, usage = await _dispatch_capturing_usage(monkeypatch, _wire_body(nan_cost), target="peerA")
+    (benign,) = usage
+    assert benign["cost_usd"] == 0.0 and benign["input_tokens"] == 700
+    assert _warnings() == [], "a non-finite value is #3016's contract, not a peer to warn about"
+
+    # 2. A payload that contributes nothing is dropped, as it always was — it must not
+    #    spend the warning either.
+    empty = {pa.COST_EXT_URI: {"usage": {"input_tokens": -3, "output_tokens": -1}, "costUsd": -2.0}}
+    _reply, usage = await _dispatch_capturing_usage(monkeypatch, _wire_body(empty), target="orbis")
+    assert usage == [], "an all-negative payload floors to nothing and is not billed"
+    assert _warnings() == [], "a row no consumer will ever see must not spend the budget"
+
+    # 3. NOW the hostile peer. This is the one an operator has to see.
+    _reply, usage = await _dispatch_capturing_usage(monkeypatch, _wire_body(_HOSTILE_COST), target="orbis")
+    assert usage, "the hostile payload is bounded, so it still bills"
+    warned = _warnings()
+    assert len(warned) == 1, "the hostile clamp must reach WARNING — DEBUG is off in production"
+    assert "orbis" in warned[0] and "input_tokens" in warned[0]
+    assert "peerA" not in warned[0]
+
+    # 4. …and only once for that peer: it reports garbage on every reply.
+    caplog.clear()
+    await _dispatch_capturing_usage(monkeypatch, _wire_body(_HOSTILE_COST), target="orbis")
+    assert _warnings() == [], "a peer must not set the volume of the log it appears in"
+    assert [r for r in caplog.records if r.levelno == logging.DEBUG and "clamped" in r.getMessage()]
