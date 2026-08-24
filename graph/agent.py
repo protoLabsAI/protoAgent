@@ -209,7 +209,7 @@ def _build_middleware(
     # which must see the final prompt, cast line included.
     from graph.middleware.room_cast import RoomCastMiddleware
 
-    middleware.append(RoomCastMiddleware())
+    middleware.append(RoomCastMiddleware(lead_name=getattr(config, "identity_name", "") or ""))
 
     # Prompt snapshot capture (#2243) — records the EXACT system prompt each
     # model call received. After PromptCache and every prompt mutator above (the

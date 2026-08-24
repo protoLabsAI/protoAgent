@@ -48,18 +48,32 @@ def participants(messages) -> list[str]:
     return seen
 
 
-def cast_line(names: list[str]) -> str:
-    """The one-line awareness note. Kept to a sentence — it rides every model call."""
+def cast_line(names: list[str], *, lead_name: str = "") -> str:
+    """The awareness note. Short — it rides every model call — but the identity fence
+    is load-bearing: delegate names are often SIMILAR to the lead's own name (a
+    delegate `proto` on an agent named `protoagent` made the lead answer a status
+    question AS the delegate, in first person). The line therefore says outright who
+    the reader is, that the cast are other agents regardless of name similarity, and
+    what to do when asked ABOUT one — report or ask them, never impersonate."""
     listed = ", ".join(names)
+    you = f"You are {lead_name}, " if lead_name else "You are "
     return (
-        f"{_CAST_MARK} In this chat and already caught up on it: {listed}. For follow-ups "
-        "on this conversation they have its context — a delegate not listed would come in "
-        "cold. Awareness, not permission: delegate to whoever fits the task."
+        f"{_CAST_MARK} {you}the lead agent of this chat. Also in this chat, having "
+        f"spoken here: {listed}. They are OTHER agents — distinct from you and from the "
+        "operator, even where names look similar; `<room-message from=\"X\">` marks what "
+        "X said. They are already caught up on this conversation, so prefer them for "
+        "follow-ups on it — awareness, not permission; delegate to whoever fits. When "
+        "the operator asks ABOUT one of them, answer about them or ask them via "
+        "delegate_to — never answer AS them."
     )
 
 
 class RoomCastMiddleware(AgentMiddleware):
     """Append the cast line as the final system block when the thread has a cast."""
+
+    def __init__(self, *, lead_name: str = ""):
+        super().__init__()
+        self._lead_name = str(lead_name or "").strip()
 
     def _transform(self, request):
         names = participants(getattr(request, "messages", None))
@@ -68,7 +82,7 @@ class RoomCastMiddleware(AgentMiddleware):
         sysmsg = getattr(request, "system_message", None)
         if sysmsg is None:
             return request  # create_agent always supplies one; nothing safe to attach to
-        block = {"type": "text", "text": cast_line(names)}
+        block = {"type": "text", "text": cast_line(names, lead_name=self._lead_name)}
         content = getattr(sysmsg, "content", None)
         if isinstance(content, str):
             blocks = ([{"type": "text", "text": content}] if content else []) + [block]

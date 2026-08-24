@@ -95,9 +95,127 @@ def test_awareness_never_permission():
     construction, so the line must SAY it doesn't gate."""
     line = cast_line(["proto"])
     assert "not permission" in line
-    assert "whoever fits the task" in line
+    assert "whoever fits" in line
+
+
+def test_the_identity_fence_is_explicit():
+    """Live failure (2026-08-24): a delegate `proto` on an agent named `protoagent`
+    made the lead answer a status question AS the delegate, in first person. Names
+    WILL be similar in the wild, so the fence lives in the line, not in naming
+    discipline: who the reader is, that the cast are other agents despite similar
+    names, and never answer AS one."""
+    line = cast_line(["proto"], lead_name="protoagent")
+    assert "You are protoagent" in line
+    assert "OTHER agents" in line
+    assert "names look similar" in line
+    assert "never answer AS them" in line
+
+
+def test_the_fence_holds_without_a_configured_name():
+    line = cast_line(["proto"])
+    assert line.startswith("[room] You are the lead agent")
+    assert "never answer AS them" in line
+
+
+def test_the_envelope_reading_rule_is_stated():
+    """The lead once read `<room-message from="operator" to="proto">` and concluded
+    proto WAS the operator — say how to read the tag."""
+    assert 'marks what X said' in cast_line(["proto"])
 
 
 def test_no_system_message_is_left_alone():
     req = _Req([_room("proto")], None)
     assert RoomCastMiddleware()._transform(req) is req
+
+
+# --- the registration-time shadow warning (delegates plugin) --------------------
+
+
+def test_a_shadowing_delegate_name_warns(monkeypatch, caplog):
+    import logging
+
+    import runtime.state as rs
+    from plugins.delegates import _warn_on_identity_shadow
+    from plugins.delegates.registry import DelegateRegistry
+
+    class _Cfg:
+        identity_name = "protoagent"
+
+    monkeypatch.setattr(rs.STATE, "graph_config", _Cfg(), raising=False)
+
+    class _Reg(DelegateRegistry):
+        def __init__(self, names):
+            self._names = names
+
+        def names(self):
+            return self._names
+
+    with caplog.at_level(logging.WARNING):
+        _warn_on_identity_shadow(_Reg(["proto", "reviewer"]))
+    warned = [r.message for r in caplog.records if "shadows" in r.message]
+    assert len(warned) == 1 and "'proto'" in warned[0]  # reviewer is fine
+
+
+def test_distinct_names_stay_quiet(monkeypatch, caplog):
+    import logging
+
+    import runtime.state as rs
+    from plugins.delegates import _warn_on_identity_shadow
+    from plugins.delegates.registry import DelegateRegistry
+
+    class _Cfg:
+        identity_name = "buzz"
+
+    monkeypatch.setattr(rs.STATE, "graph_config", _Cfg(), raising=False)
+
+    class _Reg(DelegateRegistry):
+        def __init__(self):
+            pass
+
+        def names(self):
+            return ["coder", "reviewer"]
+
+    with caplog.at_level(logging.WARNING):
+        _warn_on_identity_shadow(_Reg())
+    assert not [r for r in caplog.records if "shadows" in r.message]
+
+
+def test_a_shadowing_delegate_name_warns(monkeypatch, caplog):
+    import logging
+
+    import runtime.state as rs
+    from plugins.delegates import _warn_on_identity_shadow
+
+    class _Cfg:
+        identity_name = "protoagent"
+
+    monkeypatch.setattr(rs.STATE, "graph_config", _Cfg(), raising=False)
+
+    class _Reg:
+        def names(self):
+            return ["proto", "reviewer"]
+
+    with caplog.at_level(logging.WARNING):
+        _warn_on_identity_shadow(_Reg())
+    warned = [r.message for r in caplog.records if "shadows" in r.message]
+    assert len(warned) == 1 and "'proto'" in warned[0]  # reviewer is fine
+
+
+def test_distinct_names_stay_quiet(monkeypatch, caplog):
+    import logging
+
+    import runtime.state as rs
+    from plugins.delegates import _warn_on_identity_shadow
+
+    class _Cfg:
+        identity_name = "buzz"
+
+    monkeypatch.setattr(rs.STATE, "graph_config", _Cfg(), raising=False)
+
+    class _Reg:
+        def names(self):
+            return ["coder", "reviewer"]
+
+    with caplog.at_level(logging.WARNING):
+        _warn_on_identity_shadow(_Reg())
+    assert not [r for r in caplog.records if "shadows" in r.message]
