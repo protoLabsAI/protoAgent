@@ -20,6 +20,7 @@ import asyncio
 import logging
 import re
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from events import ACTIVITY_CONTEXT
@@ -923,6 +924,74 @@ def cancel_plugin_jobs(plugin_id: str) -> int:
         if jid.startswith(prefix) and scheduler.cancel_job(jid):
             cancelled += 1
     return cancelled
+
+
+# ── plugin state (own the file, never core's) ───────────────────────────────────────────
+# Plugins that need persistence were each hand-rolling path resolution, and they had
+# diverged badly: one hardcodes an absolute sandbox path with a module-global sqlite
+# connection, one still imports `infra.paths.scope_leaf` (removed in the ADR 0065 two-tier
+# cutover — its feature has been silently dead ever since), one hardcodes `~/.protoagent`
+# and re-implements instance scoping by hand, and one gets it right. Four attempts at four
+# lines of code, with no seam to copy. This is the seam.
+
+
+def plugin_store(subdir: str = "", *, plugin_id: str) -> Path:
+    """This plugin's own writable directory, scoped to the running instance.
+
+    Use it for state the plugin owns — a SQLite file, a cache, exports, generated assets.
+    The directory is created if absent, and it lives under the instance root (ADR 0004 /
+    ADR 0065), so the dev sandbox and every fleet member get their own copy without the
+    plugin doing anything: the isolation that used to be each plugin's job to remember.
+
+    **Do not open core's databases** (``checkpoints.db``, ``knowledge.db``, the telemetry
+    or tasks stores). They carry no compatibility promise for outside readers and core
+    migrates them freely; reach core data through this SDK instead
+    (:func:`knowledge_search`, :func:`metric_history`, …).
+
+    Prefer an existing seam where one fits — small numeric series belong in
+    :func:`record_metric`, retrievable facts in :func:`knowledge_add`, and an index you can
+    rebuild at load belongs in memory. Reach for a file when you have durable, structured,
+    plugin-shaped state.
+
+    Args:
+        subdir: optional path *under* the plugin's directory (``"exports"``,
+            ``"cache/thumbs"``). Must be relative and must not escape upward; a
+            traversing or absolute value is rejected.
+        plugin_id: the owning plugin's id (``registry.plugin_id``) — explicit, like
+            :func:`record_metric`, since the SDK has no ambient plugin identity.
+
+    Returns the created directory as a :class:`~pathlib.Path`.
+
+    Raises:
+        ValueError: on an empty/unsafe ``plugin_id`` or an escaping ``subdir`` — a bad
+            path is raised rather than silently redirected, because writing an operator's
+            data somewhere unexpected is worse than failing loudly.
+
+    ```python
+    from graph import sdk
+
+    db = sdk.plugin_store(plugin_id=registry.plugin_id) / "state.db"
+    ```
+    """
+    from infra.paths import instance_paths
+
+    pid = (plugin_id or "").strip()
+    if not pid or ":" in pid or "/" in pid or "\\" in pid or pid in (".", ".."):
+        raise ValueError(f"plugin_id must be a bare plugin id, got {plugin_id!r}")
+
+    base = instance_paths().store(pid)
+    target = base
+    if subdir:
+        candidate = Path(subdir)
+        if candidate.is_absolute():
+            raise ValueError(f"subdir must be relative, got {subdir!r}")
+        target = (base / candidate).resolve()
+        # `..` in a subdir would hand a plugin the whole instance root (or the disk).
+        if not target.is_relative_to(base.resolve()):
+            raise ValueError(f"subdir must stay inside the plugin's store, got {subdir!r}")
+
+    target.mkdir(parents=True, exist_ok=True)
+    return target
 
 
 # ── plugin metric timeseries (#1632) ────────────────────────────────────────────────
