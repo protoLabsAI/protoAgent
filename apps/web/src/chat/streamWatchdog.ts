@@ -18,7 +18,11 @@
 
 export type WatchdogTaskState = { state: string; text: string };
 
-const TERMINAL_RE = /completed|failed|canceled|cancelled/i;
+// Kept in sync with reattach.ts TERMINAL. Paused states (input-required /
+// auth-required) are deliberately NOT here: the turn resumes with the
+// operator's answer, so the watchdog keeps waiting rather than fabricating a
+// completion — a paused live turn settles via the stream closing (onDone).
+const TERMINAL_RE = /completed|failed|canceled|cancelled|rejected/i;
 
 /**
  * True when a task should be treated as settled. A missing/empty state means the

@@ -11,6 +11,11 @@
 //      { return; }` froze the bubble forever in exactly this case).
 //   3. A turn that already ENDED while detached: resubscribe is rejected for
 //      terminal tasks, so fall back to one GetTask snapshot replay + finalize.
+//   4. A turn PAUSED on the operator (input-required / auth-required): the
+//      snapshot replay re-renders the pending HITL form; the session goes idle
+//      WITHOUT finalize — the turn isn't over, and stamping the message "done"
+//      (or holding the session "streaming" while the poller spins) would leave
+//      the form's buttons dead (#3082).
 //
 // Kept store-only (no component state) so any surface can mount it; HITL and
 // transient-status hooks are injected by the caller.
@@ -20,7 +25,12 @@ import type { HitlPayload } from "../lib/types";
 import { chatStore } from "./chat-store";
 import { applyComponent, applyReasoning, applyText, applyToolEvent, applyUsage } from "./turnReducers";
 
-const TERMINAL = /completed|failed|canceled|cancelled/i;
+// Kept in sync with streamWatchdog.ts TERMINAL_RE.
+const TERMINAL = /completed|failed|canceled|cancelled|rejected/i;
+// PAUSED, not over: the server parked the turn waiting on the operator (a HITL
+// form/approval, or an auth grant). The task resumes with the operator's answer,
+// so the message keeps its status — only the session un-busies.
+const PAUSED = /input.required|auth.required/i;
 // Cold-agent / transient-transport signatures worth retrying (mirrors the
 // query client's retry policy for member boots).
 const COLD = /\b(409|502|503|504)\b|Failed to fetch|NetworkError|Load failed|network/i;
@@ -92,6 +102,14 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
         if (!COLD.test(String(err))) sawTask = false; // gone/rejected — un-stick below
       }
       if (cancelled) return;
+      if (PAUSED.test(state)) {
+        // Paused on operator input — stop polling NOW (this used to spin the
+        // full MAX_POLLS budget holding the session "streaming", which kept the
+        // re-rendered HITL form's buttons disabled) and free the composer. No
+        // finalize: the turn isn't over, the replay above re-rendered the form.
+        chatStore.setSessionStatus(sessionId, "idle");
+        return;
+      }
       if (!sawTask || !state || TERMINAL.test(state)) {
         const { state: s2, text } = await api.getTask(taskId).catch(() => ({ state: "", text: "" }));
         finalize(sessionId, assistantId, s2 || state, text);
@@ -110,6 +128,15 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
         // and finalize off the durable task.
         if (cancelled) return;
         const { state, text } = await api.getTask(taskId).catch(() => ({ state: "completed", text: "" }));
+        if (PAUSED.test(state)) {
+          // Waiting on the operator (HITL / auth): un-busy the session so the
+          // re-rendered form's buttons work, but DON'T finalize — stamping the
+          // message "done" would misrepresent a turn the server still owns.
+          // Mirrors the live path, where the stream closing on input-required
+          // lands on idle without touching the message.
+          chatStore.setSessionStatus(sessionId, "idle");
+          return;
+        }
         finalize(sessionId, assistantId, state || "completed", text);
         return;
       } catch (err) {

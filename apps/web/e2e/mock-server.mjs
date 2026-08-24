@@ -640,6 +640,31 @@ const server = createServer(async (req, res) => {
     // FLAT on `result`, member-style `{text}` parts. The legacy `tasks/get` is -32601 on
     // the live server — answering it here is how the self-heal rotted unnoticed.
     if (body?.method === "GetTask") {
+      // A task id carrying "paused" is PARKED on operator input (#3082): an
+      // input-required task whose status message carries the pending approval
+      // gate. Reattach must stop polling immediately, go idle (buttons live),
+      // and re-render the HITL card from this snapshot — never finalize.
+      // contextId matches the seeded session so the frame dispatcher's
+      // foreign-context guard passes the replay through.
+      if (String(body.params?.id || "").includes("paused")) {
+        return sendJson(res, {
+          jsonrpc: "2.0",
+          id: body.id,
+          result: {
+            id: body.params?.id, contextId: "s-stuck",
+            status: {
+              state: "TASK_STATE_INPUT_REQUIRED",
+              message: {
+                parts: [{
+                  metadata: { mimeType: "application/vnd.protolabs.hitl-v1+json" },
+                  data: { kind: "approval", title: "Approve the deploy?", detail: "kubectl apply -f prod.yaml" },
+                }],
+              },
+            },
+            artifacts: [],
+          },
+        });
+      }
       // A task id carrying "history" also returns a durable history with a
       // tool-call-v1 frame — the Swap & Resume replay path (reattach.ts) must
       // render the tool card the operator never saw live.
