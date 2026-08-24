@@ -1,19 +1,20 @@
 /** `@<name>` token parsing for the composer (#3042) — the client twin of the server's
- *  `graph.mentions.parse_mention`.
+ *  `graph.mentions.parse_mention` / `server.chat._parse_at_delegates`.
  *
- *  The two MUST agree on one rule: only a **leading** mention addresses a turn. The
- *  dispatcher routes `@proto fix it` and does not route `ask @proto about it`, so offering
- *  autocomplete on that second `@` would suggest a target the message will never reach —
- *  the operator picks a name, sends, and the lead agent answers instead. Anchoring the
- *  popover to position 0 is what keeps the affordance honest.
+ *  The two MUST agree on where a mention can route. The dispatcher routes a **leading
+ *  run** of mentions — `@proto @reviewer what do you think?` fans out to both — and a
+ *  mid-message `@` is prose the addressees will read, not a routing instruction. So the
+ *  popover opens for the token the caret is in only while every token BEFORE it is
+ *  itself an `@`-mention: offering a completion past the end of the run would suggest a
+ *  target the message never reaches — the operator picks a name, sends, and the lead
+ *  agent answers instead.
  */
 
 /** The `@name` token the caret sits in, or `null`.
  *
  *  Mirrors `slashTokenAt`'s shape (`query` filters the popover; `start`/`end` bound a
- *  caret-anchored replace that preserves any tail), with the leading-only rule above and
- *  the sigil-must-be-followed-immediately rule from the server parser — `@ me when it
- *  lands` is prose, not an address.
+ *  caret-anchored replace that preserves any tail). The sigil must be followed
+ *  immediately by the name — `@ me when it lands` is prose, not an address.
  */
 export function mentionTokenAt(
   text: string,
@@ -21,13 +22,27 @@ export function mentionTokenAt(
 ): { query: string; start: number; end: number } | null {
   if (text[0] !== "@") return null;
   const pos = Math.max(0, Math.min(caret, text.length));
-  // The token runs from 0 to the next whitespace. A caret past that whitespace is in the
-  // MESSAGE, not the address — the target is already chosen and the popover must close.
-  let end = 0;
-  while (end < text.length && !/\s/.test(text[end])) end += 1;
-  if (pos > end) return null;
-  const query = text.slice(1, pos);
-  // A bare sigil addresses nobody, and a token with non-name characters isn't a name.
-  if (query && !/^[A-Za-z][\w.-]*$/.test(query)) return null;
-  return { query, start: 0, end };
+  let i = 0;
+  while (i < text.length) {
+    // Every token up to (and including) the caret's must be an `@`-token — the first
+    // non-mention token ends the run, and everything after it is the message.
+    if (text[i] !== "@") return null;
+    let end = i;
+    while (end < text.length && !/\s/.test(text[end])) end += 1;
+    if (pos < i) return null; // caret sits in the whitespace before this token
+    if (pos <= end) {
+      const query = text.slice(i + 1, pos);
+      // A token with non-name characters isn't a name (and `@` alone at the caret is
+      // an empty query — the "show everyone" state).
+      if (query && !/^[A-Za-z][\w.-]*$/.test(query)) return null;
+      return { query, start: i, end };
+    }
+    // Walk over the whitespace to the next token; end-of-text means the caret was
+    // clamped into the final token above, so this only advances.
+    let j = end;
+    while (j < text.length && /\s/.test(text[j])) j += 1;
+    if (j === end) return null;
+    i = j;
+  }
+  return null;
 }

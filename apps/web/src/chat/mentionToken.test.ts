@@ -47,3 +47,37 @@ describe("mentionTokenAt", () => {
     expect(mentionTokenAt("@proto", 999)).toEqual({ query: "proto", start: 0, end: 6 });
   });
 });
+
+describe("a leading RUN of mentions (multi-@)", () => {
+  it("opens for a second mention while the first token is a mention", () => {
+    // "@proto @rev|" — the dispatcher fans a leading run out, so the popover follows.
+    expect(mentionTokenAt("@proto @rev", 11)).toEqual({ query: "rev", start: 7, end: 11 });
+  });
+
+  it("opens for a bare second sigil", () => {
+    expect(mentionTokenAt("@proto @", 8)).toEqual({ query: "", start: 7, end: 8 });
+  });
+
+  it("opens for a third mention too", () => {
+    expect(mentionTokenAt("@proto @reviewer @cl", 20)).toEqual({ query: "cl", start: 17, end: 20 });
+  });
+
+  it("stays closed once a non-mention token starts the message", () => {
+    // "fix" ends the run — an `@` after it is prose, and completing it would suggest
+    // a target the message never reaches.
+    expect(mentionTokenAt("@proto fix @rev", 15)).toBeNull();
+  });
+
+  it("bounds the second token so completing mid-name replaces all of it", () => {
+    // caret after "@rev" inside "@reviewer" — end runs to the whitespace
+    expect(mentionTokenAt("@proto @reviewer go", 11)).toEqual({ query: "rev", start: 7, end: 16 });
+  });
+
+  it("caret in the whitespace between mentions belongs to neither", () => {
+    expect(mentionTokenAt("@proto  @reviewer", 7)).toBeNull();
+  });
+
+  it("still closes once the caret is in the message body", () => {
+    expect(mentionTokenAt("@proto @reviewer fix it", 20)).toBeNull();
+  });
+});
