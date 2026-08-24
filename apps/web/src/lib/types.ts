@@ -879,6 +879,20 @@ export type MessageAuthor = {
   kind?: string;
 };
 
+/** One exchange in an `@`-addressed turn (#3051). A chain sends several — the operator
+ *  addressed proto, proto addressed claude-code — and each is a participant speaking,
+ *  so each becomes its own authored message rather than being collapsed into the last
+ *  one's answer. */
+export type RoomReply = {
+  author: MessageAuthor;
+  /** Who did the addressing: the operator, or the participant whose reply named this one. */
+  from: string;
+  text: string;
+  ok: boolean;
+  /** Set when a chain stopped here, and why (`self_mention` / `per_target_limit`). */
+  stopped?: string;
+};
+
 export type ChatMessage = {
   id?: string;
   role: "user" | "assistant" | "system";

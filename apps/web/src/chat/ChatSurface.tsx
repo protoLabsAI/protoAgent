@@ -728,6 +728,9 @@ function ChatSessionSlot({
   );
   // Keeps the keyboard-selected item scrolled into view during ↑/↓ nav (#1528).
   const activeSlashRef = useRef<HTMLButtonElement | null>(null);
+  // How many room exchanges this turn has delivered (#3051). Per-turn, reset at send:
+  // the first fills the in-flight bubble, the rest append.
+  const roomReplies = useRef(0);
 
   useEffect(() => {
     api.chatCommands().then((r) => setCommands(r.commands)).catch(() => {});
@@ -1532,6 +1535,7 @@ function ChatSessionSlot({
     // WorkBlock with no inter-bubble gap. Otherwise mint a new assistant message as usual.
     const resuming = opts.resumeMessageId != null;
     const assistantId = opts.resumeMessageId ?? messageId();
+    roomReplies.current = 0; // per-turn (#3051) — a fresh turn starts with an empty room
     const assistant: ChatMessage = {
       id: assistantId,
       role: "assistant",
@@ -1768,17 +1772,44 @@ function ChatSessionSlot({
             latest.messages.map((message) => (message.id === assistantId ? applyComponent(message, spec) : message)),
           );
         },
-        onRoomAuthor: (author) => {
-          // An `@<name>`-addressed turn (#3042): the answer streaming into this message is
-          // the named participant's, not the lead agent's. The stamp arrives on a working
-          // frame BEFORE the text, so the byline is in place as the answer draws rather
-          // than appearing after the fact.
+        onRoomReply: (reply) => {
+          // An `@`-addressed turn (#3042/#3051). A fan-out (`@proto @reviewer …`) sends
+          // one frame per exchange, each a different participant speaking — so each
+          // text-bearing frame becomes its OWN completed message, inserted BEFORE the
+          // in-flight bubble (which stays last, where the streaming indicator lives, and
+          // is dropped at `done` — see onDone). Filling the live bubble with frame text
+          // and moving it around was the previous design, and it double-rendered: the
+          // terminal `done` text then overwrote the bubble with the combined reply,
+          // showing the last participant's words twice under the wrong byline.
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
-          chatStore.updateMessages(
-            session.id,
-            latest.messages.map((message) => (message.id === assistantId ? { ...message, author } : message)),
-          );
+          if (!reply.text) {
+            // A pre-fan-out server frame carries no text — the single-address case,
+            // where the terminal `done` text IS the reply. Stamp the byline on the live
+            // bubble and let the answer fill it as before.
+            chatStore.updateMessages(
+              session.id,
+              latest.messages.map((message) =>
+                message.id === assistantId ? { ...message, author: reply.author } : message,
+              ),
+            );
+            return;
+          }
+          roomReplies.current += 1;
+          const at = latest.messages.findIndex((m) => m.id === assistantId);
+          const authored = {
+            id: messageId(),
+            role: "assistant" as const,
+            content: reply.text,
+            author: reply.author,
+            createdAt: Date.now(),
+            status: "done" as const,
+          };
+          const next =
+            at === -1
+              ? [...latest.messages, authored]
+              : [...latest.messages.slice(0, at), authored, ...latest.messages.slice(at)];
+          chatStore.updateMessages(session.id, next);
         },
         onCost: (usage) => {
           // This turn's token/cost readout (terminal cost-v1 extension metadata) — pin it to the assistant
@@ -1811,6 +1842,16 @@ function ChatSessionSlot({
           reveal.flush();
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
+          if (roomReplies.current > 0) {
+            // Every word of this turn was delivered as authored room messages
+            // (#3051) — the terminal `done` text is the combined fallback for consumers
+            // that can't render them, and keeping the live bubble would show it twice.
+            chatStore.updateMessages(
+              session.id,
+              latest.messages.filter((message) => message.id !== assistantId),
+            );
+            return;
+          }
           const now = Date.now();
           chatStore.updateMessages(
             session.id,
