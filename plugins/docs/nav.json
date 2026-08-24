@@ -155,6 +155,10 @@
       "label": "Tools, MCP & plugins",
       "items": [
         {
+          "path": "guides/extend.md",
+          "title": "Extend protoAgent (start here)"
+        },
+        {
           "path": "guides/mcp.md",
           "title": "Connect MCP servers"
         },
