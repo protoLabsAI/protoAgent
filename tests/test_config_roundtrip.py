@@ -241,6 +241,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "routing_fallback_models": [],
     "scheduler_enabled": True,
     "security_callback_allowlist": [],
+    "security_redact_tool_output": True,
     "skills_db_path": "/sandbox/skills.db",
     "skills_dir": "",
     "skills_enabled": True,
