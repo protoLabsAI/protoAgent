@@ -50,9 +50,15 @@ class PluginRegistry:
     def __init__(
         self, plugin_id: str, plugin_dir: Path, config: dict | None = None, config_section: str | None = None
     ):
+        # The plugin's manifest id — the slug every namespaced thing derives from. Pass it
+        # to the SDK calls that take an explicit owner (``sdk.schedule_recurring``,
+        # ``sdk.record_metric``): that attribution is how the host sweeps a plugin's jobs
+        # when it's disabled, and how one plugin is kept out of another's namespace.
         self.plugin_id = plugin_id
         # Display name for operator-facing banners; the loader sets it from the manifest.
         self.display_name: str = plugin_id
+        # The plugin's own directory on disk. The right base for reading files the plugin
+        # ships — templates, a view's HTML, seed data — since the process CWD is not it.
         self.plugin_dir = plugin_dir
         # The plugin's resolved config section (ADR 0019) — manifest defaults ⊕
         # YAML ⊕ secrets. Read it in register() and close over it for your
@@ -63,10 +69,10 @@ class PluginRegistry:
         # The top-level config key this plugin's section lives under (``config_section``
         # or the id) — the lookup key for ``live_config()``.
         self.config_section: str = config_section or plugin_id
-        # Host services (agent invoke + event bus) a surface/route can use — the
-        # server populates these before startup; guard for None (e.g. in tests).
         from graph.plugins.host import HOST
 
+        # Host services (agent invoke + event bus) a surface/route can use — the
+        # server populates these before startup; guard for None (e.g. in tests).
         self.host = HOST
         self.tools: list = []
         self.skill_dirs: list[Path] = []

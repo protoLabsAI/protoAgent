@@ -189,7 +189,8 @@ CSS `<link>` is base-prefixed by hand, because it loads before any script can he
 </script>
 ```
 
-The API:
+The API — for the raw `postMessage` contract underneath it (every message, direction, payload,
+and trust rule), see the [plugin view bridge reference](/reference/plugin-view-bridge):
 
 | Helper | What it does |
 |---|---|

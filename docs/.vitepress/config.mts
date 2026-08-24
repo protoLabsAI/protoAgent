@@ -56,6 +56,7 @@ export default defineConfig({
       { text: "Guides", link: "/guides/" },
       { text: "Reference", link: "/reference/" },
       { text: "Explanation", link: "/explanation/" },
+      { text: "Extend", link: "/guides/extend" },
     ],
 
     // Each Diátaxis section's sidebar is grouped by the SAME domain taxonomy
@@ -78,7 +79,10 @@ export default defineConfig({
         {
           text: "Tools, MCP & plugins",
           collapsed: false,
-          items: [{ text: "Write your first tool", link: "/tutorials/first-tool" }],
+          items: [
+            { text: "Write your first tool", link: "/tutorials/first-tool" },
+            { text: "Build your first plugin", link: "/tutorials/first-plugin" },
+          ],
         },
         {
           text: "A2A, fleet & delegates",
@@ -144,6 +148,7 @@ export default defineConfig({
           text: "Tools, MCP & plugins",
           collapsed: false,
           items: [
+            { text: "Extend protoAgent (start here)", link: "/guides/extend" },
             { text: "Connect MCP servers", link: "/guides/mcp" },
             { text: "Plugins", link: "/guides/plugins" },
             { text: "Building a plugin view", link: "/guides/building-react-plugin-views" },
@@ -221,7 +226,15 @@ export default defineConfig({
         {
           text: "Tools, MCP & plugins",
           collapsed: false,
-          items: [{ text: "Starter tools", link: "/reference/starter-tools" }],
+          items: [
+            { text: "Starter tools", link: "/reference/starter-tools" },
+            { text: "Plugin manifest", link: "/reference/plugin-manifest" },
+            { text: "Plugin registry API", link: "/reference/plugin-registry-api" },
+            { text: "Plugin SDK (graph.sdk)", link: "/reference/plugin-sdk-api" },
+            { text: "Plugin testkit", link: "/reference/plugin-testkit" },
+            { text: "Plugin CLI", link: "/reference/plugin-cli" },
+            { text: "Plugin view bridge (wire protocol)", link: "/reference/plugin-view-bridge" },
+          ],
         },
         {
           text: "Console & UI",
@@ -246,6 +259,11 @@ export default defineConfig({
           text: "Knowledge & memory",
           collapsed: false,
           items: [{ text: "Memory & knowledge store", link: "/explanation/memory-and-knowledge" }],
+        },
+        {
+          text: "Tools, MCP & plugins",
+          collapsed: false,
+          items: [{ text: "Plugin architecture", link: "/explanation/plugin-architecture" }],
         },
         {
           text: "A2A, fleet & delegates",

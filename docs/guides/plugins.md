@@ -22,7 +22,24 @@ default** and you opt in explicitly — only enable plugins you trust.
 
 ## Start here
 
-This page is the full reference. Pick the job you actually have:
+This page explains how to *build* one. When you already know the shape and just need a
+signature, a field, or a flag, go to the reference instead — it is generated from the code,
+so it is complete and current by construction:
+
+| Reference | Contents |
+| --- | --- |
+| [Plugin manifest](/reference/plugin-manifest) | Every `protoagent.plugin.yaml` field — type, default, meaning |
+| [Registry API](/reference/plugin-registry-api) | Every `register_*` seam with its exact signature, plus `registry.host` |
+| [Plugin SDK](/reference/plugin-sdk-api) | `graph.sdk` — subagents, knowledge, watches, background jobs, metrics |
+| [Testkit](/reference/plugin-testkit) | `load_plugin`, `FakeRegistry`, host stubs |
+| [Plugin CLI](/reference/plugin-cli) | `python -m server plugin …` |
+| [View bridge](/reference/plugin-view-bridge) | The sandboxed-iframe `postMessage` protocol |
+
+New to plugins? [Build your first plugin](/tutorials/first-plugin) is the twenty-minute version,
+and [Plugin architecture](/explanation/plugin-architecture) explains the model — what runs
+in-process, what's sandboxed, and when your code is called.
+
+Otherwise, pick the job you actually have:
 
 | I want to… | Go to |
 | --- | --- |
@@ -32,8 +49,8 @@ This page is the full reference. Pick the job you actually have:
 | **Add a console surface to one** | [Building a plugin view](/guides/building-react-plugin-views) |
 | **Turn my agent into a chat bot** | [Build a communication plugin](/guides/communication-plugins) |
 
-The rest of this page walks the plugin contract top to bottom — read it once when
-you write your first plugin, then use it as a lookup.
+The rest of this page walks the plugin contract top to bottom — read it once when you
+write your first plugin, then use the [reference pages](/reference/) for lookup.
 
 ## Anatomy
 

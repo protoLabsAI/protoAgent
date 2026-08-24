@@ -24,6 +24,10 @@
         {
           "path": "tutorials/first-tool.md",
           "title": "Write your first tool"
+        },
+        {
+          "path": "tutorials/first-plugin.md",
+          "title": "Build your first plugin"
         }
       ]
     },
@@ -150,6 +154,10 @@
     {
       "label": "Tools, MCP & plugins",
       "items": [
+        {
+          "path": "guides/extend.md",
+          "title": "Extend protoAgent (start here)"
+        },
         {
           "path": "guides/mcp.md",
           "title": "Connect MCP servers"
@@ -326,6 +334,30 @@
         {
           "path": "reference/starter-tools.md",
           "title": "Starter tools"
+        },
+        {
+          "path": "reference/plugin-manifest.md",
+          "title": "Plugin manifest"
+        },
+        {
+          "path": "reference/plugin-registry-api.md",
+          "title": "Plugin registry API"
+        },
+        {
+          "path": "reference/plugin-sdk-api.md",
+          "title": "Plugin SDK (graph.sdk)"
+        },
+        {
+          "path": "reference/plugin-testkit.md",
+          "title": "Plugin testkit"
+        },
+        {
+          "path": "reference/plugin-cli.md",
+          "title": "Plugin CLI"
+        },
+        {
+          "path": "reference/plugin-view-bridge.md",
+          "title": "Plugin view bridge (wire protocol)"
         }
       ]
     },
@@ -367,6 +399,15 @@
         {
           "path": "explanation/memory-and-knowledge.md",
           "title": "Memory & knowledge store"
+        }
+      ]
+    },
+    {
+      "label": "Tools, MCP & plugins",
+      "items": [
+        {
+          "path": "explanation/plugin-architecture.md",
+          "title": "Plugin architecture"
         }
       ]
     },

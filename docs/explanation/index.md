@@ -11,6 +11,12 @@ Understanding-oriented. Read these when you want to know *why* the template is s
 | [Mid-turn steering](/explanation/steering) | How can I redirect the agent mid-turn without stopping and losing its work? |
 | [LiteLLM gateway](/explanation/litellm-gateway) | Why route every call through a gateway instead of the provider SDK? |
 
+## Tools, MCP & plugins
+
+| Page | Question it answers |
+|---|---|
+| [Plugin architecture](/explanation/plugin-architecture) | What is a plugin, when does its code run, and what is it trusted to do? |
+
 ## Knowledge & memory
 
 | Page | Question it answers |

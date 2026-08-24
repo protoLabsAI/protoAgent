@@ -64,6 +64,7 @@ Add capability without forking — external tools, drop-in packages, channels.
 
 | Guide | When to read |
 |---|---|
+| [Extend protoAgent](/guides/extend) | The map for adding capability without forking — plugins, views, MCP |
 | [Connect MCP servers](/guides/mcp) | You want to plug external tools into the agent via the Model Context Protocol (stdio / HTTP) |
 | [Plugins](/guides/plugins) | You want drop-in packages that add tools, skills, routes, background surfaces, subagents and managed MCP servers without forking (Discord ships this way; Google/Slack install as external plugins) |
 | [Building a plugin view](/guides/building-react-plugin-views) | You want a plugin to add its own console surface — a left-rail view (dashboard/chart/editor) or a panel that replaces the built-in chat |

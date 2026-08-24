@@ -18,9 +18,21 @@ MANIFEST_FILENAME = "protoagent.plugin.yaml"
 class PluginManifest:
     """Declared metadata for a plugin. ``id`` + ``name`` are required."""
 
+    # Identity. ``id`` is the slug everything else is namespaced by — routes
+    # (``/plugins/<id>/``), the config section, event topics, scheduler job ids — so it
+    # must be unique on the instance, match ``[A-Za-z0-9][A-Za-z0-9_-]*``, and avoid the
+    # reserved management verbs (``install``, ``sync``, ``catalog``, …).
+    #   id:   the plugin's slug — required, unique, namespaces everything it owns
+    #   name: the human label the console shows — required
+    #   path: the plugin's directory on disk. Resolved by the loader, never authored.
     id: str
     name: str
     path: Path
+    # Presentation + release metadata. ``version`` is what the update/pin machinery
+    # compares (ADR 0049), so bump it on every release or an installed copy looks current
+    # forever.
+    #   version:     semantic version string; drives update + pin resolution
+    #   description: one-line summary shown in the console's plugin list
     version: str = "0.0.0"
     description: str = ""
     # ``enabled: true`` in the manifest is an author opt-in (for plugins you
@@ -33,10 +45,16 @@ class PluginManifest:
     # since it isn't an optional add-on the operator toggles. Its config lives in
     # the core Workspace settings, not the Plugins panel.
     builtin: bool = False
+    # Env vars that must be set for the plugin to load — a HARD gate: a missing one skips
+    # the plugin with a logged reason rather than half-loading it. Use it for what the
+    # plugin cannot function without; use ``settings[].required`` (ADR 0019) instead when
+    # the operator should be prompted in the console rather than blocked at boot.
     requires_env: list[str] = field(default_factory=list)
     # Declarative, for transparency in the console — not yet enforced.
     capabilities: dict = field(default_factory=dict)
-    entrypoint: str = ""  # optional module filename; defaults to __init__.py / plugin.py
+    # The module filename the loader imports to find ``register(registry)``. Empty means
+    # the default search: ``__init__.py``, then ``plugin.py``.
+    entrypoint: str = ""
     # Plugin config (ADR 0019) — declared as data so it's known at config-load /
     # secret-strip / settings-schema time, before register() ever imports.
     #   config_section: the top-level YAML section the plugin claims (default: id)
@@ -86,6 +104,8 @@ class PluginManifest:
     # "ships" its events as its public API so others subscribe by topic without
     # importing it. Not enforced — publish is auto-namespaced + guarded at runtime;
     # subscribing to any topic is allowed.
+    #   emits:      topics this plugin broadcasts — its public event API
+    #   subscribes: topics it listens for, declared so the wiring is visible to operators
     emits: list[str] = field(default_factory=list)
     subscribes: list[str] = field(default_factory=list)
     # Typed event contracts (#1636) — topic → {"summary": str, "schema": dict} for
