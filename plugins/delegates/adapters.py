@@ -120,7 +120,10 @@ class Delegate:
     # caller sanitize host identity/credentials (``PROTOAGENT_*``, ``A2A_AUTH_TOKEN``)
     # WITHOUT mutating ``os.environ``. Names are not secrets — no redaction needed.
     env_remove: list[str] = field(default_factory=list)
-    timeout_s: float = 600.0
+    # Default 1800s (30 min), not 600 (#3091): implementation-shaped ACP delegates
+    # (a full TDD cycle, venv setup, a CI gate run) routinely need more than 10 min.
+    # Still per-delegate configurable, and overridable per-call via delegate_to(timeout=…).
+    timeout_s: float = 1800.0
     permissions: str = "auto"
     allow_kinds: list[str] = field(default_factory=list)
     deny_kinds: list[str] = field(default_factory=list)
@@ -1175,7 +1178,16 @@ class AcpAdapter(Adapter):
                 advanced=True,
                 help="Ask the operator before each call.",
             ),
-            FieldSpec("timeout_s", "Timeout (s)", "number", default=600, advanced=True),
+            FieldSpec(
+                "timeout_s",
+                "Timeout (s)",
+                "number",
+                default=1800,
+                advanced=True,
+                help="Max seconds to await the coder's reply. Default 1800 (30 min) — "
+                "implementation tasks (TDD cycles, venv setup, CI gates) can run long. "
+                "delegate_to(timeout=…) overrides this per call.",
+            ),
             FieldSpec(
                 "manage_git",
                 "Managed git",
@@ -1223,9 +1235,9 @@ class AcpAdapter(Adapter):
             d.args = []
         _parse_env(raw, d)
         try:
-            d.timeout_s = float(raw.get("timeout_s") or 600)
+            d.timeout_s = float(raw.get("timeout_s") or 1800)
         except (TypeError, ValueError):
-            d.timeout_s = 600.0
+            d.timeout_s = 1800.0
         d.permissions = str(raw.get("permissions", "auto")).strip().lower() or "auto"
         d.allow_kinds = [str(k).lower() for k in (raw.get("allow_kinds") or [])]
         d.deny_kinds = [str(k).lower() for k in (raw.get("deny_kinds") or [])]

@@ -37,6 +37,7 @@ def _build_delegate_to(registry: DelegateRegistry):
         background: bool = False,
         item_id: str = "",
         resume_task_id: str = "",
+        timeout: int = 0,
         state: Annotated[Any, InjectedState] = None,
     ) -> str:
         """Hand a question or task to one of your configured delegates and return its reply.
@@ -81,6 +82,12 @@ def _build_delegate_to(registry: DelegateRegistry):
                 your question bubbles up the chain the same way), THEN resume.
                 Never re-delegate the original task instead of resuming — that
                 starts the work over.
+            timeout: max seconds to wait for the delegate's reply before failing,
+                overriding the delegate's configured timeout for THIS call only.
+                Leave 0 (the default) to use the configured timeout. Raise it for a
+                known-long job — a coding agent running a full TDD cycle, venv
+                setup, or a CI gate — that would otherwise exceed the delegate's
+                default (ACP coding delegates default to 1800s / 30 min).
         """
         if not str(query).strip():
             return "Error: `query` is empty — give the delegate something to do."
@@ -89,13 +96,19 @@ def _build_delegate_to(registry: DelegateRegistry):
         # the one-PR-per-item dedup).
         item_id = str(item_id or "").strip()
         resume_task_id = str(resume_task_id or "").strip()
+        # 0 (or anything ≤ 0) ⇒ use the delegate's configured timeout; a positive value
+        # is a per-call override (seconds) threaded down to the adapter's dispatch.
+        try:
+            timeout_s: float | None = float(timeout) if timeout and float(timeout) > 0 else None
+        except (TypeError, ValueError):
+            timeout_s = None
         if background:
             return await _spawn_background_delegation(
-                registry, target, query, state, item_id=item_id, resume_task_id=resume_task_id
+                registry, target, query, state, item_id=item_id, resume_task_id=resume_task_id, timeout=timeout_s
             )
         try:
             return await registry.dispatch(
-                target, query, item_id=item_id or None, resume_task_id=resume_task_id or None
+                target, query, item_id=item_id or None, resume_task_id=resume_task_id or None, timeout=timeout_s
             )
         except DelegateError as exc:
             return f"Error: {exc}"
@@ -115,6 +128,7 @@ async def _spawn_background_delegation(
     *,
     item_id: str = "",
     resume_task_id: str = "",
+    timeout: float | None = None,
 ) -> str:
     """Run a delegation as a detached background job (ADR 0050): return a handle now and
     drain the delegate's reply back into the spawning session on completion — the same
@@ -136,7 +150,9 @@ async def _spawn_background_delegation(
     except Exception:  # noqa: BLE001 — no runtime state (e.g. a unit test) → inline
         mgr = None
     if mgr is None:
-        return await registry.dispatch(target, query, item_id=item_id or None, resume_task_id=resume_task_id or None)
+        return await registry.dispatch(
+            target, query, item_id=item_id or None, resume_task_id=resume_task_id or None, timeout=timeout
+        )
 
     try:
         from tools.lg_tools import _session_id_from
@@ -157,8 +173,11 @@ async def _spawn_background_delegation(
         mark_delegation_detached()
         # item_id rides into the dispatch itself, so the managed-git claim/dedup
         # applies identically to background and foreground fan-out (one registry,
-        # one event loop).
-        return await registry.dispatch(target, query, item_id=item_id or None, resume_task_id=resume_task_id or None)
+        # one event loop). timeout rides down the same way so a per-call override
+        # holds for a detached long-running coding job too.
+        return await registry.dispatch(
+            target, query, item_id=item_id or None, resume_task_id=resume_task_id or None, timeout=timeout
+        )
 
     snippet = " ".join(query.split())[:80]
     job_id = await mgr.spawn_work(
