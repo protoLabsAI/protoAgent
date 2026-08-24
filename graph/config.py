@@ -1254,6 +1254,15 @@ class LangGraphConfig:
     # CIDR. Enforced via ``policy.set_callback_allowlist``.
     security_callback_allowlist: list[str] = field(default_factory=list)
 
+    # Redact credentials from tool output before it enters the transcript (#3070).
+    # When True (default), AuditMiddleware applies the redaction.py patterns to
+    # ToolMessage.content before returning the result to the graph — scrubbing
+    # OpenAI keys, GitHub tokens, Bearer tokens, env-var assignments, and any
+    # value the external secrets manager knows about. Audit redaction is always
+    # on regardless of this flag; this controls only the transcript/checkpoint path.
+    # Set False to disable (e.g. debug a credential issue where you need raw output).
+    security_redact_tool_output: bool = True
+
     # External secrets manager (ADR 0080) — pull env vars from Infisical (etc.) at
     # config load, on hot-reload, and on a refresh interval. client_id/client_secret
     # are the bootstrap machine identity: SECRET_PATHS entries, overlaid from
@@ -1778,6 +1787,9 @@ class LangGraphConfig:
             ),
             egress_allowed_hosts=list(data.get("egress", {}).get("allowed_hosts", []) or []),
             security_callback_allowlist=list((data.get("security") or {}).get("callback_allowlist", []) or []),
+            security_redact_tool_output=bool(
+                (data.get("security") or {}).get("redact_tool_output", cls.security_redact_tool_output)
+            ),
             plugin_config=_resolve_plugin_config(data, secrets, config_dir),
         )
 

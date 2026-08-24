@@ -1335,6 +1335,19 @@ FIELDS: list[Field] = [
         "A separate URL from the publish endpoint above — empty = revocation isn't "
         "configured, same honest 'not yet' default.",
     ),
+    # ── Security ─────────────────────────────────────────────────────────────
+    Field(
+        "security.redact_tool_output",
+        "security_redact_tool_output",
+        "Redact secrets from tool output",
+        "bool",
+        "Security",
+        "Scrub credential patterns (OpenAI keys, GitHub tokens, Bearer headers, "
+        "env-var assignments, and secrets-manager values) from tool output before "
+        "it reaches the model, session transcript, and checkpoints. Audit logging "
+        "is always redacted regardless of this flag. Disable only for debugging a "
+        "credential issue where you need the raw tool output.",
+    ),
     # ── Plugins ──────────────────────────────────────────────────────────────
     Field(
         "plugins.allow_unbundled_deps",
@@ -1602,6 +1615,10 @@ _SECTION_CATEGORY = {
     # standalone SettingsCategoryPanel). The console renders this as its own sidenav
     # section with a Published Links list+revoke card (mirroring Secrets' status card).
     "Publish": "Publish",
+    # Security — runtime security controls (tool-output redaction, egress, callbacks).
+    # Mapped to Behavior rather than a standalone category: it's a runtime knob, not
+    # an integration or infrastructure surface.
+    "Security": "Behavior",
     # Plugins — the one core FIELD under the Plugins surface (ADR 0093 opt-in). Mapped
     # explicitly (not via the default) so the core-section guard stays honest.
     "Plugins": "Plugins",

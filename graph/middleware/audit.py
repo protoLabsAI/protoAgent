@@ -39,6 +39,22 @@ class AuditMiddleware(AgentMiddleware):
             result = handler(request)
             duration_ms = int((time.monotonic() - t0) * 1000)
 
+            # Transcript redaction: scrub credentials from result.content before it
+            # reaches the model, checkpoints, and memory — the full string, not just
+            # the 200-char audit summary. Gated by security.redact_tool_output (default
+            # True). Only applied to string content; non-string (multipart list, etc.)
+            # is left as-is. Audit redaction below always runs regardless of this flag.
+            _tc = getattr(result, "content", None)
+            if isinstance(_tc, str):
+                try:
+                    from graph import sdk as _sdk
+
+                    _should_redact = bool(getattr(_sdk.config(), "security_redact_tool_output", True))
+                except Exception:  # noqa: BLE001 — never let config lookup break tool execution
+                    _should_redact = True
+                if _should_redact:
+                    result.content = redact(_tc)
+
             # Duck-type on `.content`: the handler returns a ToolMessage in
             # production, but isinstance is brittle across langchain versions
             # (and ToolMessage subclasses) — capture any message-like result.
@@ -107,6 +123,18 @@ class AuditMiddleware(AgentMiddleware):
         try:
             result = await handler(request)
             duration_ms = int((time.monotonic() - t0) * 1000)
+
+            # Transcript redaction — same logic as the sync path above.
+            _tc = getattr(result, "content", None)
+            if isinstance(_tc, str):
+                try:
+                    from graph import sdk as _sdk
+
+                    _should_redact = bool(getattr(_sdk.config(), "security_redact_tool_output", True))
+                except Exception:  # noqa: BLE001 — never let config lookup break tool execution
+                    _should_redact = True
+                if _should_redact:
+                    result.content = redact(_tc)
 
             # Duck-type on `.content`: the handler returns a ToolMessage in
             # production, but isinstance is brittle across langchain versions

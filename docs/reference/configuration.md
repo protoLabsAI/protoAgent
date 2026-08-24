@@ -465,6 +465,7 @@ security:
 | Key | Default | What |
 |---|---|---|
 | `callback_allowlist` | `[]` | CIDRs an outbound callback / peer destination may resolve into. **Empty = off.** When set it becomes the policy: a destination is allowed iff **every** resolved IP is inside a listed range (overrides the default callback denylist, so you can permit a specific internal/tailnet range; everything else is rejected). Hot-reloads. |
+| `redact_tool_output` | `true` | Scrub credential patterns from tool output **before** it reaches the model, session transcript, and checkpoints. Patterns include OpenAI keys (`sk-…`), GitHub tokens (`ghp_…`), Bearer tokens, env-var assignments (`OPENAI_API_KEY=…`), AWS access keys, Slack/Discord tokens, and any value the [external secrets manager](./configuration.md#secrets_manager) has fetched. Audit logging is always redacted regardless of this flag. Set `false` only when debugging a credential issue that requires seeing the raw output. |
 
 ## `routing`
 

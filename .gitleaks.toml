@@ -19,4 +19,8 @@ paths = [
   '''^tests/test_export_op\.py$''',
   # And its structured-bundle sibling (#2680/#2681) — same reasoning, same fixtures.
   '''^tests/test_chat_bundle\.py$''',
+  # Tool-output transcript redaction (#3070) — same reasoning again: the fixtures are
+  # deliberately shaped like real sk-/ghp_ credentials, because obviously-fake strings
+  # wouldn't prove the patterns catch the real thing.
+  '''^tests/test_tool_output_redaction\.py$''',
 ]
