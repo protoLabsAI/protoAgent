@@ -52,6 +52,9 @@ from graph.knobs import Knobs, make_knob_tools  # noqa: F401
 from graph.multimodal import MAX_IMAGE_BYTES, MAX_IMAGES_PER_RESULT, multimodal_tool_result  # noqa: F401
 
 
+# ── agent + model access (the plugin↔agent channel, ADR 0043) ──────────────────────────
+
+
 def config() -> Any:
     """The live runtime ``LangGraphConfig``."""
     return STATE.graph_config

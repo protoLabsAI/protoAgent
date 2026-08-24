@@ -326,6 +326,26 @@
         {
           "path": "reference/starter-tools.md",
           "title": "Starter tools"
+        },
+        {
+          "path": "reference/plugin-manifest.md",
+          "title": "Plugin manifest"
+        },
+        {
+          "path": "reference/plugin-registry-api.md",
+          "title": "Plugin registry API"
+        },
+        {
+          "path": "reference/plugin-sdk-api.md",
+          "title": "Plugin SDK (graph.sdk)"
+        },
+        {
+          "path": "reference/plugin-testkit.md",
+          "title": "Plugin testkit"
+        },
+        {
+          "path": "reference/plugin-cli.md",
+          "title": "Plugin CLI"
         }
       ]
     },

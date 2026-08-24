@@ -221,7 +221,14 @@ export default defineConfig({
         {
           text: "Tools, MCP & plugins",
           collapsed: false,
-          items: [{ text: "Starter tools", link: "/reference/starter-tools" }],
+          items: [
+            { text: "Starter tools", link: "/reference/starter-tools" },
+            { text: "Plugin manifest", link: "/reference/plugin-manifest" },
+            { text: "Plugin registry API", link: "/reference/plugin-registry-api" },
+            { text: "Plugin SDK (graph.sdk)", link: "/reference/plugin-sdk-api" },
+            { text: "Plugin testkit", link: "/reference/plugin-testkit" },
+            { text: "Plugin CLI", link: "/reference/plugin-cli" },
+          ],
         },
         {
           text: "Console & UI",

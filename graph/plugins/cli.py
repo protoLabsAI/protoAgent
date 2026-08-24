@@ -100,7 +100,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("list", help="list git-installed plugins (from plugins.lock)")
     pu = sub.add_parser("uninstall", help="remove a git-installed plugin (code + lock + enabled ref)")
-    pu.add_argument("id")
+    pu.add_argument("id", help="the plugin id to remove (as it appears in `plugin list`)")
     pu.add_argument("--purge", action="store_true", help="also remove the plugin's config section + secrets")
     pub = sub.add_parser(
         "update-bundle",
@@ -117,7 +117,7 @@ def _build_parser() -> argparse.ArgumentParser:
     pux.add_argument("--purge", action="store_true", help="also remove each member's config + secrets")
     sub.add_parser("sync", help="re-clone locked plugins at their pinned SHA (reproducible set)")
     pd = sub.add_parser("install-deps", help="pip-install a plugin's declared requires_pip (explicit code-exec)")
-    pd.add_argument("id")
+    pd.add_argument("id", help="the plugin id whose declared deps to install")
     return p
 
 

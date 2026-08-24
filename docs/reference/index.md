@@ -29,6 +29,11 @@ Information-oriented. Look up exact shapes and values here, grouped by **domain*
 | Page | Contents |
 |---|---|
 | [Starter tools](/reference/starter-tools) | Shipped LangChain tools and their signatures |
+| [Plugin manifest](/reference/plugin-manifest) | Every `protoagent.plugin.yaml` field — type, default, meaning |
+| [Plugin registry API](/reference/plugin-registry-api) | The `register(registry)` surface: every seam, its signature, and `registry.host` |
+| [Plugin SDK (`graph.sdk`)](/reference/plugin-sdk-api) | The stable capability surface — subagents, knowledge, watches, background jobs, metrics |
+| [Plugin testkit](/reference/plugin-testkit) | The host-free harness: `load_plugin`, `FakeRegistry`, host stubs |
+| [Plugin CLI](/reference/plugin-cli) | `python -m server plugin …` — scaffold, install, sync, uninstall |
 
 ## Console & UI
 
