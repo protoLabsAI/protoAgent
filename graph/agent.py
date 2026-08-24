@@ -1351,6 +1351,7 @@ def create_agent_graph(
         # both, so edit_soul never binds on a bounded subagent. reload_callback is the
         # server-owned graph reload (injected, not imported) that makes an edit live next turn.
         soul_edit_enabled=getattr(config, "soul_self_edit_enabled", False),
+        self_config_enabled=getattr(config, "tools_self_config_enabled", False),
         reload_callback=reload_callback,
     )
 

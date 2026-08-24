@@ -1961,6 +1961,145 @@ def _publish_persona_event(topic: str, data: dict) -> None:
         pass
 
 
+
+# ── guarded agent-owned config writes (tools.self_config_enabled) ─────────────────────
+# The trust surface an agent must never be able to widen from inside. These are the knobs
+# that decide what the agent is ALLOWED to do — shell execution, which directories the
+# filesystem tools can reach, egress, which plugins run in-process as the agent, and the
+# credentials gating the operator API. A tool that could edit them is not a config tool,
+# it is a privilege-escalation tool, so the fence is a denylist checked before anything
+# reaches the write path (ADR 0071 / ADR 0089 draw exactly these lines).
+_CONFIG_WRITE_DENIED = (
+    "acp",               # ACP runtime specs carry a `command` the host spawns
+    "auth",              # bearer/token config — the operator API's gate
+    "delegates",         # each entry is an EXECUTABLE (command/args/workdir, permissions: auto)
+    "egress",            # ADR 0008 network fence
+    "filesystem",        # allow_run + the ADR 0007 project fence
+    "mcp",               # out-of-process tool servers = new capability
+    "operator",          # allowed_dirs / project_dir — the operator fence
+    "plugins",           # enabling a plugin runs its code in-process AS the agent
+    "runtime",           # per-agent command overrides, same spawn path as delegates
+    "security",
+    "soul",              # persona has its own guarded path (edit_soul, ADR 0081)
+    "tools",             # incl. self_config_enabled itself: no self-widening
+)
+
+# Section denial can't be the whole story: plugin config sections are named after their
+# plugin, so the fence can't enumerate them, and any plugin is free to grow a key naming a
+# binary. Denying these leaf names everywhere catches that class without having to predict
+# which plugin does it — an agent may CHOOSE among the executables its operator provisioned
+# (`project_board.coder: proto`) but never DEFINE one.
+_CONFIG_WRITE_DENIED_LEAVES = frozenset(
+    {"args", "argv", "binary", "cmd", "command", "entrypoint", "executable", "interpreter"}
+)
+
+
+def _config_write_refusal(updates: dict) -> str | None:
+    """The reason this write is refused, or None when every key is inside the fence.
+
+    Checks the TOP-LEVEL section of each dotted key. Deliberately coarse: a denied section
+    is denied entirely, because "which sub-key of `filesystem` is safe" is exactly the
+    judgement call that shouldn't live in a tool the agent can call.
+    """
+    denied = sorted({k.split(".", 1)[0] for k in updates if k.split(".", 1)[0] in _CONFIG_WRITE_DENIED})
+    if denied:
+        return (
+            f"Refused: {', '.join(denied)} is outside what you may change. Those settings decide what "
+            f"you are allowed to do (shell access, reachable directories, egress, which plugins run as "
+            f"you, the executables that get spawned, operator credentials) — only your operator can "
+            f"change them, from Settings. Everything else (models, routing, plugin behavior) is yours."
+        )
+    executable = sorted({k for k in updates if k.rsplit(".", 1)[-1].lower() in _CONFIG_WRITE_DENIED_LEAVES})
+    if executable:
+        return (
+            f"Refused: {', '.join(executable)} names a program to run. You may choose among the "
+            f"executables your operator has already provisioned (e.g. a coder by name), but defining "
+            f"one is theirs to do."
+        )
+    return None
+
+
+def _build_config_editor_tool() -> list:
+    """Bind the guarded config editor (config ``tools.self_config_enabled``, default off).
+
+    A fourth adapter over ``ops.config.set_config`` — the same op behind ``protoagent config
+    set`` and the console's ``PATCH /api/config`` (ADR 0075 D2: one op, thin adapters). It
+    reaches the live write path through ``HOST.apply_settings`` because ``tools/`` must never
+    import ``server/`` (the import-layering contract), the same reason ``onboard_project``
+    does. Lead-agent only: no subagent build passes the flag.
+    """
+
+    @tool
+    async def set_config(updates: dict) -> str:
+        """Change your own operational configuration — models, routing, and plugin settings.
+
+        Use this when you need to retune how you run: point a plugin at a different coder,
+        change a model slot, adjust a plugin's behavior. The change is persisted and applied
+        immediately (a reload), and your operator is notified.
+
+        - ``updates``: a flat dict of dotted config keys → values, e.g.
+          ``{"project_board.coder": "proto", "routing.aux_model": "claude-opus-4-6"}``.
+
+        SCOPE — operational settings only. You cannot change what you are ALLOWED to do:
+        shell execution, reachable directories, egress, which plugins run, operator
+        credentials, or your own persona (that's `edit_soul`). Those are your operator's,
+        and attempting them returns a refusal rather than a partial write. Secrets are never
+        accepted here — ask your operator to set those in Settings.
+
+        Returns a confirmation naming what changed, or a readable error. Prefer one call
+        with all the related keys: each call reloads the agent."""
+        if not isinstance(updates, dict) or not updates:
+            return "Error: 'updates' must be a non-empty dict of dotted config keys, e.g. {'project_board.coder': 'proto'}."
+
+        flat = {str(k).strip(): v for k, v in updates.items() if str(k).strip()}
+        if not flat:
+            return "Error: no usable keys in 'updates'."
+
+        refusal = _config_write_refusal(flat)
+        if refusal:
+            log.warning("[set_config] refused out-of-fence write: %s", sorted(flat))
+            return refusal
+
+        # Secrets never travel through the agent. The op would faithfully route a
+        # secret-typed key into secrets.yaml; that is right for the CLI and the console and
+        # wrong here, because it would put a live credential in the turn transcript.
+        try:
+            from graph.settings_schema import _SECRET_KEYS
+
+            secrets = sorted(k for k in flat if k in _SECRET_KEYS)
+        except Exception:  # noqa: BLE001 — schema unavailable (standalone/tests): fall through
+            secrets = []
+        if secrets:
+            return (
+                f"Refused: {', '.join(secrets)} is a secret. Credentials are never set through me — "
+                f"ask your operator to enter it in Settings."
+            )
+
+        from graph.plugins.host import HOST
+
+        if HOST.apply_settings is None:
+            return "Error: config writes are unavailable — the host is not wired for config apply (no running server)."
+
+        from graph.settings_schema import nest_updates
+
+        try:
+            ok, messages = await asyncio.to_thread(HOST.apply_settings, nest_updates(flat))
+        except Exception as e:  # noqa: BLE001 — a bad value must not kill the turn
+            log.exception("[set_config] apply failed")
+            return f"Error: could not apply the change: {e}"
+
+        detail = "; ".join(messages or [])
+        if not ok:
+            return f"Error: the change was rejected: {detail or 'unknown error'}"
+
+        changed = ", ".join(f"{k}={v!r}" for k, v in sorted(flat.items()))
+        _publish_persona_event("config.self_edited", {"keys": sorted(flat), "by": "agent"})
+        log.info("[set_config] applied %s", changed)
+        return f"Applied: {changed}. The change is live{(' — ' + detail) if detail else ''}."
+
+    return [set_config]
+
+
 def _build_soul_editor_tool(reload_callback=None) -> list:
     """Bind the guarded self-persona editor (config ``soul.self_edit_enabled``, default off).
 
@@ -2089,6 +2228,7 @@ def get_all_tools(
     background_mgr=None,
     dropped=None,
     soul_edit_enabled=False,
+    self_config_enabled=False,
     reload_callback=None,
 ):
     """Return every LangChain tool the lead agent + subagents can use.
@@ -2107,6 +2247,8 @@ def get_all_tools(
     - ``background_mgr`` (ADR 0050) lets ``knowledge_ingest`` run a slow
       source (URL fetch / media transcription) as a detached background job
       instead of blocking the turn. Optional — without it it ingests inline.
+    - ``self_config_enabled`` binds the guarded ``set_config`` tool (operational keys
+      only; the trust surface is refused). Lead-agent only, like ``edit_soul``.
     - ``soul_edit_enabled`` (ADR 0079/0081) binds the guarded ``edit_soul`` tool
       — the lead agent's self-authored persona editor. Default off; lead-only
       (no subagent build passes it). ``reload_callback`` is the server-owned
@@ -2178,6 +2320,12 @@ def get_all_tools(
         # mode off lost the watch tools it never asked to lose. Tool availability ONLY:
         # stored watches and the background poller are independent of both flags.
         tools.extend(_build_watch_tools())
+    if self_config_enabled:
+        # Guarded agent-owned config writes (config tools.self_config_enabled, default
+        # off). Lead-agent only — no subagent build passes the flag, so a bounded subagent
+        # can never reach the write path. The fence lives in the tool, not here, so the
+        # refusal is legible to the model that tried it.
+        tools.extend(_build_config_editor_tool())
     if soul_edit_enabled:
         # ADR 0079/0081 — guarded self-authored persona (config soul.self_edit_enabled,
         # default off). Lead-agent only: no subagent build passes soul_edit_enabled, so

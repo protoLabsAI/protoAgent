@@ -376,6 +376,22 @@ FIELDS: list[Field] = [
     # opt-in: settable via YAML/API, but hidden from the generic Settings UI for now — the
     # dedicated Identity panel already owns SOUL, and this reload-live toggle can join it
     # later. ui_hidden keeps it in FIELDS so it round-trips.
+    # Guarded agent-owned config writes. Same disposition as soul.self_edit_enabled below:
+    # crossing into self-modification is the operator's explicit choice, so it ships off and
+    # is settable via YAML/API while staying out of the generic Settings UI for now.
+    # ui_hidden keeps it in FIELDS so it round-trips.
+    Field(
+        "tools.self_config_enabled",
+        "tools_self_config_enabled",
+        "Let the agent change its own operational config",
+        "bool",
+        "Tools",
+        "When on, the lead agent gets a `set_config` tool over the same write path the CLI and "
+        "console use. Fenced to OPERATIONAL keys (models, routing, plugin settings): it refuses "
+        "filesystem, egress, plugins, operator, auth, soul and tools outright, so the agent can "
+        "retune itself but never widen what it is allowed to do. Secrets are always refused.",
+        ui_hidden=True,
+    ),
     Field(
         "soul.self_edit_enabled",
         "soul_self_edit_enabled",

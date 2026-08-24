@@ -611,6 +611,16 @@ class LangGraphConfig:
     # driven — no core edit that conflicts on upstream re-sync.
     tools_disabled: list[str] = field(default_factory=list)
 
+    # Guarded agent-owned config writes (config ``tools.self_config_enabled``, default off).
+    # When on, the LEAD agent gets a ``set_config`` tool over the same ops-layer write path
+    # the CLI and the console REST route use (ADR 0075 D2 — one op, thin adapters). Off by
+    # default and fenced to OPERATIONAL keys: the tool refuses the trust surface outright
+    # (``filesystem.allow_run``, ``operator.allowed_dirs``, egress, ``plugins.enabled``,
+    # auth) and every secret-typed key, so an agent can retune itself without being able to
+    # widen what it is allowed to do. Same disposition as ``soul.self_edit_enabled``
+    # (ADR 0081): crossing into self-modification is the operator's explicit choice.
+    tools_self_config_enabled: bool = False
+
     # Tool HIDE list (config ``tools.hidden``, #2172) — a HARD superset of ``disabled``:
     # a hidden tool is denied like a disabled one (never bound to the graph), AND it is
     # dropped from the console's tool inventory entirely, so it never renders as a
@@ -1539,6 +1549,7 @@ class LangGraphConfig:
             .get("memoize_reads", {})
             .get("enabled", cls.tools_memoize_reads_enabled),
             tools_disabled=list(data.get("tools", {}).get("disabled", []) or []),
+            tools_self_config_enabled=bool(data.get("tools", {}).get("self_config_enabled", False)),
             tools_hidden=list(data.get("tools", {}).get("hidden", []) or []),
             settings_hidden=list(data.get("settings", {}).get("hidden", []) or []),
             routing_fallback_models=data.get("routing", {}).get("fallback_models", []),
