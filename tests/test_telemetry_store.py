@@ -427,14 +427,26 @@ def test_prune(store):
 
 
 def test_outliers_flags_expensive_and_slow_turns(store):
-    # A baseline of cheap/fast turns + one expensive + one slow.
+    # A baseline of cheap/fast turns + one expensive + one slow, in the company a real
+    # instance keeps (#3041): coder rows that are the majority of the sample, and a SECOND
+    # priced tier. Both matter — a fixture with exactly one gateway price is a clean room
+    # where `priced_median` is always the ordinary turn's own cost, so the absolute cost
+    # test can never fire on an ordinary row and a flood in it cannot be seen.
+    for i in range(30):
+        store.record(_row(f"mini{i}", model="gpt-5-mini", cost_usd=0.002, duration_ms=1500, ended_at=_stamp(i)))
     for i in range(8):
-        store.record(_row(f"base{i}", cost_usd=0.01, duration_ms=500))
-    store.record(_row("pricey", cost_usd=0.20, duration_ms=500))  # ≥5× median cost
-    store.record(_row("slow", cost_usd=0.01, duration_ms=9000))  # ≥5× median latency
+        store.record(_row(f"base{i}", cost_usd=0.01, duration_ms=500, ended_at=_stamp(40 + i)))
+    store.record(_row("pricey", cost_usd=0.20, duration_ms=500, ended_at=_stamp(48)))  # ≥5× median cost
+    store.record(_row("slow", cost_usd=0.01, duration_ms=9000, ended_at=_stamp(49)))  # ≥5× median latency
+    for i in range(40):
+        store.record(
+            _row(f"coder{i}", model="acp:claude-code", cost_usd=0.0, duration_ms=300_000, ended_at=_stamp(60 + i))
+        )
     flagged = {f["task_id"]: f for f in store.outliers(cost_multiple=5, latency_multiple=5)}
     assert "pricey" in flagged and "slow" in flagged
     assert "base0" not in flagged
+    assert [t for t in flagged if t.startswith("coder")] == []
+    assert [t for t in flagged if t.startswith("mini")] == []
     assert any("cost" in r for r in flagged["pricey"]["reasons"])
     assert any("latency" in r for r in flagged["slow"]["reasons"])
 
@@ -495,7 +507,125 @@ def test_outliers_falls_back_to_the_overall_median_for_a_barely_seen_model(store
 
     flagged = {f["task_id"]: f for f in store.outliers()}
     assert "first-run" in flagged
-    assert any("all turns median" in r for r in flagged["first-run"]["reasons"])
+    assert any("all priced turns median" in r for r in flagged["first-run"]["reasons"])
+
+
+def test_outliers_fallback_survives_a_sample_dominated_by_coder_rows(store):
+    """The production twin of the test above (#3041). On a coder-dispatching instance most
+    of the last 200 turns are `acp:` rows — cost 0 by construction, duration in the hundreds
+    of thousands of ms. The fallback used to take its medians over the WHOLE sample, so once
+    coder rows passed half of it the cost median went to 0, the `med_cost > 0` guard went
+    False, and this file's barely-seen-model flag silently disappeared — on exactly the
+    agent the per-model rewrite (#3015) was written for."""
+    for i in range(30):
+        store.record(_row(f"chat{i}", model="claude-opus-4-8", cost_usd=0.03, ended_at=_stamp(i)))
+    for i in range(120):
+        store.record(
+            _row(f"coder{i}", model="acp:claude-code", cost_usd=0.0, duration_ms=300_000, ended_at=_stamp(40 + i))
+        )
+    store.record(_row("first-run", model="brand-new-model", cost_usd=1.50, ended_at=_stamp(170)))
+
+    flagged = {f["task_id"]: f for f in store.outliers()}
+    assert "first-run" in flagged, "a $1.50 first run must still surface with 120 coder rows in the sample"
+    assert any("all priced turns median" in r for r in flagged["first-run"]["reasons"])
+    # ...and the coder rows stay ordinary, so the fix does not reopen #3015's flood.
+    assert [t for t in flagged if t.startswith("coder")] == []
+
+
+def test_outliers_still_names_a_model_that_is_uniformly_expensive(store):
+    """A cohort median answers "unusual FOR THIS MODEL" and by construction cannot answer
+    "this model is expensive": past `_OUTLIER_MIN_COHORT` priced rows a model is measured
+    against itself, so the third $40 run DELETED the flags the first two raised — more
+    evidence, fewer alerts (#3041). Cost keeps a second, absolute baseline for that reason,
+    capped at one row per model.
+
+    The cap is load-bearing, so the fixture carries the TWO priced tiers every real
+    instance has. With a single gateway price, `priced_median` is the ordinary turn's own
+    cost and the absolute test is unreachable from an ordinary row — the clean room in
+    which an uncapped version of this test looks safe while flagging every flagship turn."""
+    for i in range(60):
+        store.record(
+            _row(f"haiku{i}", model="claude-haiku-4-5", cost_usd=0.01, duration_ms=4_000, ended_at=_stamp(i))
+        )
+    for i in range(50):
+        store.record(
+            _row(f"gw{i}", model="claude-opus-4-8", cost_usd=0.20, duration_ms=20_000, ended_at=_stamp(60 + i))
+        )
+    for i in range(60):
+        store.record(
+            _row(f"coder{i}", model="acp:claude-code", cost_usd=0.0, duration_ms=300_000, ended_at=_stamp(120 + i))
+        )
+    for i in range(4):
+        store.record(
+            _row(f"spendy{i}", model="pricey-new-model", cost_usd=40.0, duration_ms=20_000, ended_at=_stamp(185 + i))
+        )
+
+    flagged = store.outliers()
+    by_task = {f["task_id"]: f for f in flagged}
+    assert "pricey-new-model" in {f["model"] for f in flagged}, "past the cohort threshold the model must not vanish"
+    assert any("all priced turns median" in r for r in by_task["spendy3"]["reasons"])
+    # ...and it says so ONCE. The absolute test names a model, not a turn: uncapped it
+    # flags every row of any tier priced 5× above the instance median, which is an ordinary
+    # price gap — here 16 of the 20 slots went to ordinary `gw` turns, leaving 4 for
+    # anything real. One row per model, and the coder rows stay out of it entirely.
+    assert len([t for t in by_task if t.startswith("gw")]) <= 1
+    assert len([t for t in by_task if t.startswith("haiku")]) == 0
+    assert [t for t in by_task if t.startswith("coder")] == []
+    assert _backstop_rows_per_model(flagged) <= 1
+
+
+def test_outliers_absolute_cost_test_cannot_evict_the_real_runaway(store):
+    """The regression the absolute cost test shipped with, on the two-tier gateway routing
+    a real instance runs (#3041). `priced_median` is a row-weighted median, so it sits in
+    whichever priced model holds the most rows — and every turn of a costlier tier then
+    clears 5× it. That is #3015's flood re-created on the cost axis: 20 ordinary flagship
+    turns fill the list, and because it is truncated newest-first they EVICT the genuine
+    runaway sitting behind them. Exactly 200 rows, so the whole fixture is the sample."""
+    stamp = 0
+    for i in range(70):  # coder runs: cost 0, minutes long, the biggest population
+        store.record(
+            _row(f"coder{i}", model="acp:claude-code", cost_usd=0.0, duration_ms=300_000, ended_at=_stamp(stamp))
+        )
+        stamp += 1
+    for i in range(80):  # the cheap lane holds the row-weighted median
+        store.record(_row(f"mini{i}", model="gpt-5-mini", cost_usd=0.004, duration_ms=3_000, ended_at=_stamp(stamp)))
+        stamp += 1
+    store.record(_row("runaway", model="claude-opus-4-8", cost_usd=4.00, duration_ms=20_000, ended_at=_stamp(stamp)))
+    stamp += 1
+    for i in range(45):  # ...and 45 ORDINARY flagship turns land after it
+        store.record(
+            _row(f"chat{i}", model="claude-opus-4-8", cost_usd=0.25, duration_ms=20_000, ended_at=_stamp(stamp))
+        )
+        stamp += 1
+    for i in range(4):
+        store.record(
+            _row(f"spendy{i}", model="pricey-new-model", cost_usd=40.0, duration_ms=20_000, ended_at=_stamp(stamp))
+        )
+        stamp += 1
+
+    flagged = store.outliers()
+    by_task = {f["task_id"]: f for f in flagged}
+    assert "runaway" in by_task, "a $4 turn on a $0.25 model is the anomaly the panel exists for"
+    assert any("claude-opus-4-8 median" in r for r in by_task["runaway"]["reasons"])
+    # The uniformly-expensive model still surfaces — that is what the absolute test is for.
+    assert "pricey-new-model" in {f["model"] for f in flagged}
+    # But the ordinary flagship turns are ordinary. Uncapped, all 45 of them clear
+    # 5 × $0.004 and the newest 20 take the whole list.
+    assert len([t for t in by_task if t.startswith("chat")]) <= 1
+    assert len(flagged) <= 5, f"the advise list is 20 slots, not a per-turn price report: {sorted(by_task)}"
+    assert _backstop_rows_per_model(flagged) <= 1
+
+
+def _backstop_rows_per_model(flagged: list[dict]) -> int:
+    """Most rows any single model contributed via the absolute (`all priced turns`) test.
+
+    That test states "this model is expensive", so one row per model is its whole budget —
+    the bound that keeps it from crowding out the anomalies (#3041)."""
+    per_model: dict[str, int] = {}
+    for f in flagged:
+        if any("all priced turns median" in r for r in f["reasons"]):
+            per_model[f["model"]] = per_model.get(f["model"], 0) + 1
+    return max(per_model.values(), default=0)
 
 
 def test_cache_read_savings_usd():
