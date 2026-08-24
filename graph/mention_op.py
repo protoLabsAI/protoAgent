@@ -31,8 +31,6 @@ import re
 
 from langgraph.constants import START
 
-from graph.mentions import parse_mention
-
 log = logging.getLogger(__name__)
 
 # The catch-up window handed to an addressed delegate. Whichever bound trips first wins,
@@ -182,15 +180,8 @@ async def run_mention(
     session_id: str = "",
     lead_name: str = "assistant",
     permissions: str | None = None,
-    speaker: str = "operator",
 ) -> dict:
     """Address ``target`` directly and record the exchange on ``thread_id``.
-
-    ``speaker`` is who is doing the addressing — the operator, or (on an agent-to-agent
-    hop, #3050) the participant whose reply named this target. It is what the room
-    records as the author of the addressing message, so a hop reads as the agent that
-    actually made it. Getting this wrong would put an agent's words in the operator's
-    mouth, and every later catch-up would repeat the lie.
 
     Returns ``{ok, author, reply, error, catchup, truncated}``. ``permissions`` is the
     per-call ceiling — left unset for an operator-typed mention (the operator is the
@@ -263,8 +254,8 @@ async def run_mention(
     #    same room. Ordered operator-then-reply, as they happened.
     written = [
         HumanMessage(
-            content=_envelope(speaker, message, to=target),
-            additional_kwargs={"lc_source": _SOURCE, "room": {"from": speaker, "to": target}},
+            content=_envelope("operator", message, to=target),
+            additional_kwargs={"lc_source": _SOURCE, "room": {"from": "operator", "to": target}},
         )
     ]
     if ok and reply:
@@ -312,88 +303,3 @@ async def run_mention(
         "catchup": len(window),
         "truncated": truncated,
     }
-
-
-async def run_mention_chain(
-    graph,
-    registry,
-    thread_id: str,
-    target: str,
-    message: str,
-    *,
-    session_id: str = "",
-    lead_name: str = "assistant",
-    max_hops: int = 0,
-    max_per_target: int = 2,
-    resolve=None,
-) -> list[dict]:
-    """Address ``target``, then follow the mention chain its reply opens with (#3050).
-
-    Returns the exchanges in order — always at least the operator's own address, so a
-    caller can render the chain as the sequence of messages it was.
-
-    **The operator's address carries the operator's authority; every hop after it does
-    not.** A mention the operator typed is the operator speaking. A mention that appears
-    inside an agent's reply is an agent speaking, and runs under ``permissions="readonly"``
-    — same syntax, different ceiling, decided here in one place rather than accidentally
-    in two.
-
-    Three bounds, all of which must hold for the chain to terminate:
-
-    * ``max_hops`` — how many agent-originated addresses may follow. **0 (the default)
-      means agents cannot address each other at all**, which is the shipped default.
-    * ``max_per_target`` — how many times one participant may be pulled into this chain.
-      This is the bound that actually stops an A→B→A ping-pong; hops alone would just let
-      two agents alternate until the counter ran out.
-    * a participant may never address **itself** — the degenerate one-agent loop, and the
-      cheapest of all to fall into.
-
-    ``resolve`` maps a mention token to a canonical delegate name (``graph.mentions``'s
-    ``mention_target``); without it, no reply is ever treated as a mention, so a caller
-    that forgets to pass it fails CLOSED.
-    """
-    exchanges: list[dict] = []
-    addressed: dict[str, int] = {}
-    speaker = "operator"
-    permissions: str | None = None
-    hops = 0
-
-    while True:
-        addressed[target] = addressed.get(target, 0) + 1
-        outcome = await run_mention(
-            graph,
-            registry,
-            thread_id,
-            target,
-            message,
-            session_id=session_id,
-            lead_name=lead_name,
-            permissions=permissions,
-            speaker=speaker,
-        )
-        outcome["from"] = speaker
-        exchanges.append(outcome)
-
-        if not outcome.get("ok") or hops >= max_hops or resolve is None:
-            return exchanges
-
-        # `parse_mention` is the SAME parser the operator's input goes through, applied
-        # to output — an agent addresses someone the way a person does, or not at all.
-        parsed = parse_mention(str(outcome.get("reply") or ""))
-        if parsed is None or not parsed[1].strip():
-            return exchanges
-        token, rest = parsed
-        nxt = resolve(token)
-        if nxt is None:
-            return exchanges
-        # The three refusals. Each is recorded on the exchange that TRIED, so a chain
-        # that stops is visible as a decision rather than as the conversation trailing off.
-        if nxt == target:
-            outcome["chain_stopped"] = "self_mention"
-            return exchanges
-        if addressed.get(nxt, 0) >= max_per_target:
-            outcome["chain_stopped"] = "per_target_limit"
-            return exchanges
-
-        hops += 1
-        speaker, target, message, permissions = target, nxt, rest, "readonly"

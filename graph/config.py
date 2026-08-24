@@ -444,17 +444,6 @@ class LangGraphConfig:
     # ≈25 tool calls/turn, so 2000 is deliberately generous headroom, not a copy of the
     # old number. The real backstop for a runaway turn is `turn_stall_timeout_seconds`.
     max_iterations: int = 2000
-    # Agent-to-agent addressing (#3050). When an `@<name>`-addressed delegate's reply
-    # OPENS with `@someone`, that mention can be followed — one participant pulling
-    # another into the room. **Off by default (0 hops)**: this is the one path in the
-    # feature that can spend money without a human in the loop, so it is a deliberate
-    # opt-in rather than something an operator discovers by surprise. 1 is the useful
-    # setting (proto may pull in claude-code; claude-code may not pull in a third).
-    # `mention_max_per_target` bounds how many times any ONE participant can be pulled
-    # into a single chain, which is what actually stops an A→B→A ping-pong — the hop
-    # count alone would let two agents alternate until it ran out.
-    mention_max_agent_hops: int = 0
-    mention_max_per_target: int = 2
     # Seconds of stream SILENCE after which a turn is declared wedged and failed
     # (#2344). Deliberately a stall window, not a wall-clock cap: a long turn that
     # keeps emitting frames is healthy and must never be cut off, while a turn stuck
