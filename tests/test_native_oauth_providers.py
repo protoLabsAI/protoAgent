@@ -235,6 +235,145 @@ def test_codex_missing_raises(monkeypatch, tmp_path):
     assert ei.value.provider == "openai-codex"
 
 
+# ── burned-refresh-token recovery ───────────────────────────────────────────────
+#
+# Every instance that bootstraps from the same ~/.codex/auth.json copies the SAME
+# single-use refresh token, so the first one to refresh burns it for the others. That
+# 401 used to be permanent: we only bootstrap when the store file is missing, so a
+# store holding a dead token never re-read the CLI file — and the error's own advice
+# ("run codex login") could not work. These pin the recovery and its four guards.
+
+
+class _CodexRefreshStub:
+    """Stands in for ``httpx.post``: mints for known tokens, 401s for the rest."""
+
+    def __init__(self, mint: dict[str, str]) -> None:
+        self.mint = mint  # refresh_token sent -> access token handed back
+        self.sent: list[str] = []
+
+    def __call__(self, url, **kw):
+        sent = kw.get("data", {}).get("refresh_token")
+        self.sent.append(sent)
+        access = self.mint.get(sent)
+        if access is None:
+            return types.SimpleNamespace(status_code=401, json=lambda: {})
+        return types.SimpleNamespace(
+            status_code=200,
+            json=lambda: {"access_token": access, "refresh_token": f"{sent}-rotated"},
+        )
+
+
+def _burned_store_and_cli(tmp_path, monkeypatch, *, cli_tokens):
+    """A store whose access token is stale and whose refresh token is already spent."""
+    store = tmp_path / "codex-oauth.json"
+    store.write_text(
+        json.dumps(
+            {
+                "tokens": {
+                    "access_token": _jwt({"exp": time.time() - 10}),
+                    "refresh_token": "r-burned",
+                    "account_id": "acct-ours",
+                }
+            }
+        )
+    )
+    cli = tmp_path / "codex_auth.json"
+    cli.write_text(json.dumps({"tokens": cli_tokens}))
+    monkeypatch.setattr(oauth_mod, "_codex_store_path", lambda paths: store)
+    monkeypatch.setattr(oauth_mod, "_CODEX_CLI_AUTH_FILE", cli)
+    return store
+
+
+def test_codex_rejected_refresh_reimports_newer_cli_credential(monkeypatch, tmp_path):
+    """A sibling instance burned our token; the CLI's fresh login rescues us."""
+    fresh = _jwt({"exp": time.time() + 3600})
+    store = _burned_store_and_cli(
+        tmp_path,
+        monkeypatch,
+        cli_tokens={"access_token": fresh, "refresh_token": "r-cli-new", "account_id": "acct-cli"},
+    )
+    stub = _CodexRefreshStub({})  # every refresh 401s
+    monkeypatch.setattr(oauth_mod.httpx, "post", stub)
+
+    creds = resolve_codex_oauth(paths=types.SimpleNamespace(config_dir=tmp_path))
+
+    assert creds.access_token == fresh
+    assert creds.account_id == "acct-cli"
+    assert stub.sent == ["r-burned"]  # CLI token was still valid — not spent needlessly
+    saved = json.loads(store.read_text())
+    assert saved["tokens"]["refresh_token"] == "r-cli-new"
+    # Re-imported, so it is borrowed again: disconnect must not revoke it remotely (#2461).
+    assert saved["provenance"] == oauth_mod.PROVENANCE_CLI_BOOTSTRAP
+
+
+def test_codex_reimport_refreshes_a_stale_cli_token(monkeypatch, tmp_path):
+    """The CLI's own access token can be stale too — refresh it with its live token."""
+    minted = _jwt({"exp": time.time() + 3600})
+    _burned_store_and_cli(
+        tmp_path,
+        monkeypatch,
+        cli_tokens={"access_token": _jwt({"exp": time.time() - 10}), "refresh_token": "r-cli-new"},
+    )
+    stub = _CodexRefreshStub({"r-cli-new": minted})
+    monkeypatch.setattr(oauth_mod.httpx, "post", stub)
+
+    creds = resolve_codex_oauth(paths=types.SimpleNamespace(config_dir=tmp_path))
+
+    assert creds.access_token == minted
+    assert stub.sent == ["r-burned", "r-cli-new"]
+
+
+def test_codex_no_reimport_when_cli_holds_the_same_dead_token(monkeypatch, tmp_path):
+    """The usual case: the CLI's copy IS the token we just burned. Don't re-spend it."""
+    _burned_store_and_cli(
+        tmp_path,
+        monkeypatch,
+        cli_tokens={"access_token": _jwt({"exp": time.time() - 10}), "refresh_token": "r-burned"},
+    )
+    stub = _CodexRefreshStub({})
+    monkeypatch.setattr(oauth_mod.httpx, "post", stub)
+
+    with pytest.raises(OAuthCredentialError) as ei:
+        resolve_codex_oauth(paths=types.SimpleNamespace(config_dir=tmp_path))
+
+    assert ei.value.relogin is True
+    assert stub.sent == ["r-burned"]  # exactly once — no retry loop, no double burn
+
+
+def test_codex_no_reimport_while_disconnected(monkeypatch, tmp_path):
+    """An explicit disconnect (#2440) outranks repair — never silently re-import."""
+    paths = types.SimpleNamespace(config_dir=tmp_path)
+    _burned_store_and_cli(
+        tmp_path,
+        monkeypatch,
+        cli_tokens={"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r-cli-new"},
+    )
+    oauth_mod._write_disconnected(paths, {"openai-codex"})
+    monkeypatch.setattr(oauth_mod.httpx, "post", _CodexRefreshStub({}))
+
+    with pytest.raises(OAuthCredentialError):
+        resolve_codex_oauth(paths=paths)
+
+
+def test_codex_no_reimport_on_network_error(monkeypatch, tmp_path):
+    """A blip is not a rejection: an unreachable OpenAI must not rotate us onto the CLI."""
+    _burned_store_and_cli(
+        tmp_path,
+        monkeypatch,
+        cli_tokens={"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r-cli-new"},
+    )
+
+    def _boom(url, **kw):
+        raise oauth_mod.httpx.ConnectError("down")
+
+    monkeypatch.setattr(oauth_mod.httpx, "post", _boom)
+
+    with pytest.raises(OAuthCredentialError) as ei:
+        resolve_codex_oauth(paths=types.SimpleNamespace(config_dir=tmp_path))
+
+    assert ei.value.relogin is False
+
+
 def test_create_llm_codex_responses_config(monkeypatch):
     import graph.providers.openai_codex as ocx
 
