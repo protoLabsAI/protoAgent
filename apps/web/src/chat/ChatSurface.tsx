@@ -4,7 +4,7 @@ import { Spinner } from "@protolabsai/ui/data";
 import { Switch } from "@protolabsai/ui/forms";
 import { Conversation, Message, PromptInput } from "@protolabsai/ui/ai";
 import { TabBar } from "@protolabsai/ui/navigation";
-import { Check, EyeOff, TerminalSquare } from "lucide-react";
+import { Check, EyeOff, TerminalSquare, Users, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -780,7 +780,19 @@ function ChatSessionSlot({
     if (slashSigil === "@") {
       // Participants, not commands: no client registry, no flag gate, no dedup — the
       // server resolver already returned exactly the addressable set.
-      return mentions.filter((m) => !q || m.name.toLowerCase().includes(q) || m.description.toLowerCase().includes(q));
+      const matched = mentions.filter(
+        (m) => !q || m.name.toLowerCase().includes(q) || m.description.toLowerCase().includes(q),
+      );
+      // Who's already in THIS room comes first (#3049), in the order the operator built
+      // it. Ordering, not filtering: `@somebody-else` still routes, because the roster is
+      // a convenience and refusing an address would be a surprise rather than a safeguard.
+      const roster = session?.participants ?? [];
+      if (!roster.length) return matched;
+      const rank = (name: string) => {
+        const at = roster.indexOf(name);
+        return at === -1 ? roster.length : at;
+      };
+      return [...matched].sort((a, b) => rank(a.name) - rank(b.name));
     }
     // Client-side commands (ADR 0061) surface first, then server skills. The client set
     // comes from the slash-command registry — core (/new, /clear, /effort) AND any fork-
@@ -803,7 +815,7 @@ function ChatSessionSlot({
     return unique.filter(
       (c) => !q || c.name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q),
     );
-  }, [slashQuery, slashSigil, commands, mentions, flagOn]);
+  }, [slashQuery, slashSigil, commands, mentions, flagOn, session?.participants]);
 
   const slashActive = slashMatches.length > 0;
   const slashSel = slashActive ? Math.min(slashIndex, slashMatches.length - 1) : 0;
@@ -888,6 +900,9 @@ function ChatSessionSlot({
       settleCaret(start);
       return;
     }
+    // Completing an `@` PULLS that participant into the room (#3049) — the operator
+    // said the name, so the roster reflects it without a second gesture.
+    if (sigil === "@" && session) chatStore.addSessionParticipant(session.id, cmd.name);
     const insert = `${sigil}${cmd.name} `;
     setDraft(draft.slice(0, start) + insert + draft.slice(end));
     setSlashIndex(0);
@@ -2076,6 +2091,32 @@ function ChatSessionSlot({
           }
         }}
       >
+        {/* Who is in this room (#3049). Rendered only once somebody has been pulled in,
+            so an ordinary chat looks exactly as it did. Each chip removes its participant
+            — leaving the room is one click, and emptying it turns the tab back into a
+            plain chat rather than an empty-roster special case. */}
+        {session?.participants?.length ? (
+          <div className="chat-roster" aria-label="In this room">
+            <Users size={13} aria-hidden />
+            {session.participants.map((name) => (
+              <button
+                key={name}
+                type="button"
+                className="chat-roster-chip"
+                title={`Remove @${name} from this room`}
+                onClick={() =>
+                  chatStore.setSessionParticipants(
+                    session.id,
+                    (session.participants ?? []).filter((p) => p !== name),
+                  )
+                }
+              >
+                <span className="chat-roster-name">@{name}</span>
+                <X size={11} aria-hidden />
+              </button>
+            ))}
+          </div>
+        ) : null}
         {/* HITL panel (#1973): floats ABOVE the composer (absolute, anchored to
             .composer-wrap like the slash menu) so it never reflows the conversation,
             moves the composer, or jumps the scroll when it appears/resolves. No

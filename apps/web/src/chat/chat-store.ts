@@ -27,6 +27,12 @@ export type ChatSession = {
   // that turn. The flag is per-MESSAGE server-side, so it must ride every send: a mixed
   // thread would leak earlier incognito content into a later non-incognito turn's summary.
   incognito?: boolean;
+  // Group chat (#3049): the delegates this room is with, by their `@`-addressable
+  // names. Undefined/empty = an ordinary chat with the lead agent alone. The list
+  // ORDERS the `@` popover rather than gating it — a room's membership is a
+  // convenience, and refusing to route `@somebody-else` would be a surprise, not a
+  // safety property.
+  participants?: string[];
 };
 
 // Reasoning is ON by default in the console (auto-enable) — a fresh tab thinks at
@@ -128,7 +134,7 @@ function titleFromMessages(messages: ChatMessage[]) {
   return text.length > 52 ? `${text.slice(0, 49)}...` : text;
 }
 
-function createSession(opts: { incognito?: boolean } = {}): ChatSession {
+function createSession(opts: { incognito?: boolean; participants?: string[] } = {}): ChatSession {
   const now = Date.now();
   return {
     id: id("chat"),
@@ -137,6 +143,7 @@ function createSession(opts: { incognito?: boolean } = {}): ChatSession {
     createdAt: now,
     updatedAt: now,
     ...(opts.incognito ? { incognito: true } : {}),
+    ...(opts.participants?.length ? { participants: [...opts.participants] } : {}),
   };
 }
 
@@ -360,17 +367,23 @@ try {
  * silently landing the operator there when they asked for a new chat would be a surprise.
  * Incognito must match too: an incognito request is a different kind of session, so a
  * plain blank can't satisfy it (ADR 0069 D3b — incognito threads leave no memory).
+ * Participants likewise (#3049): a room with people in it is not interchangeable with
+ * an empty chat, in either direction — handing back a blank when a group was asked for
+ * loses the roster, and handing back a group when a plain chat was asked for silently
+ * puts the operator in a room.
  */
 export function unusedSession(
   state: ChatState,
-  opts: { incognito?: boolean } = {},
+  opts: { incognito?: boolean; participants?: string[] } = {},
 ): ChatSession | undefined {
   const wantIncognito = Boolean(opts.incognito);
+  const wantParticipants = [...(opts.participants ?? [])].sort().join("\u0000");
   return state.sessions.find(
     (s) =>
       s.messages.length === 0 &&
       s.title === DEFAULT_SESSION_TITLE &&
-      Boolean(s.incognito) === wantIncognito,
+      Boolean(s.incognito) === wantIncognito &&
+      [...(s.participants ?? [])].sort().join("\u0000") === wantParticipants,
   );
 }
 
@@ -481,7 +494,7 @@ export const chatStore = {
     return state;
   },
 
-  createSession(opts: { incognito?: boolean } = {}) {
+  createSession(opts: { incognito?: boolean; participants?: string[] } = {}) {
     // Don't pile up blanks. A pristine session is byte-for-byte what this call would
     // produce, so hand it back instead — otherwise tapping "+" repeatedly (easy to do
     // now that it's a primary action in the mobile header) spawns identical empty tabs
@@ -682,6 +695,32 @@ export const chatStore = {
 
   // Per-tab incognito toggle (ADR 0069 D3b). Persisted with the session so the mode
   // survives reload — every send while ON carries metadata.incognito.
+  /** Replace a room's participant list (#3049). Empty ⇒ back to an ordinary chat. */
+  setSessionParticipants(sessionId: string, names: string[]) {
+    // De-duplicate while preserving order: the list is operator-curated, so the order
+    // they built it in is the order they expect to see.
+    const unique = names.filter((n, i) => n && names.indexOf(n) === i);
+    setState((current) => ({
+      ...current,
+      sessions: current.sessions.map((session) =>
+        session.id === sessionId ? { ...session, participants: unique.length ? unique : undefined } : session,
+      ),
+    }));
+  },
+
+  /** Add one participant to a room, idempotently — used when an `@` pulls somebody in. */
+  addSessionParticipant(sessionId: string, name: string) {
+    if (!name) return;
+    setState((current) => ({
+      ...current,
+      sessions: current.sessions.map((session) => {
+        if (session.id !== sessionId) return session;
+        const existing = session.participants ?? [];
+        return existing.includes(name) ? session : { ...session, participants: [...existing, name] };
+      }),
+    }));
+  },
+
   setSessionIncognito(sessionId: string, on: boolean) {
     setState((current) => ({
       ...current,
