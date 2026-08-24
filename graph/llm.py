@@ -453,10 +453,15 @@ def create_llm(
             if model_name and "/" in model_name:
                 # Falling through would build a client against an empty gateway. Let the
                 # native builder raise its own clear error instead, but say why here —
-                # "alias ignored" is otherwise invisible.
+                # "alias ignored" is otherwise invisible. Config load reconciles the
+                # aux/subagent/fallback slots to a coherent id ahead of this
+                # (graph.config._reconcile_slot_providers), so reaching here with a
+                # '/'-alias means either the LEAD pair itself is incoherent or this is a
+                # direct runtime slot that bypassed that pass.
                 log.warning(
                     "[llm] slot model %r looks like a gateway alias but no gateway key is "
-                    "configured; it cannot override the native %s provider",
+                    "configured; it cannot override the native %s provider (config-load "
+                    "coherence validation should have reconciled or flagged this slot)",
                     model_name,
                     config.model_provider,
                 )
