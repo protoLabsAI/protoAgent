@@ -360,7 +360,7 @@ tools:
   disabled: []
   hidden: []
   # - calculator
-  # - daily_log
+  # - web_search
   # deferred:
   #   enabled: false
   #   keep: []
