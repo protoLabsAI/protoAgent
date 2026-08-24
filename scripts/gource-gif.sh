@@ -16,8 +16,9 @@ if [[ ! -f "$INPUT" ]]; then
   exit 1
 fi
 
-PALETTE="$(mktemp -t gource-palette).png"
-trap 'rm -f "$PALETTE"' EXIT
+PALETTE_DIR="$(mktemp -d -t gource-gif)"
+PALETTE="$PALETTE_DIR/palette.png"
+trap 'rm -rf "$PALETTE_DIR"' EXIT
 
 FILTERS="fps=$FPS,scale=$WIDTH:-1:flags=lanczos"
 
@@ -28,7 +29,7 @@ echo ""
 
 ffmpeg -y -v warning -i "$INPUT" \
   -vf "$FILTERS,palettegen=stats_mode=diff" \
-  "$PALETTE"
+  -update 1 -frames:v 1 "$PALETTE"
 
 ffmpeg -y -v warning -i "$INPUT" -i "$PALETTE" \
   -lavfi "$FILTERS [x]; [x][1:v] paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle" \
