@@ -180,8 +180,14 @@ async def run_mention(
     session_id: str = "",
     lead_name: str = "assistant",
     permissions: str | None = None,
+    speaker: str = "operator",
 ) -> dict:
     """Address ``target`` directly and record the exchange on ``thread_id``.
+
+    ``speaker`` is who did the addressing, and the room has to tell the two callers apart:
+    the operator typing ``@proto``, or the ORCHESTRATOR calling ``delegate_to`` mid-turn.
+    Recording an orchestrator's delegation as the operator's would put words in their
+    mouth, and because the room IS the transcript, every later catch-up would repeat it.
 
     Returns ``{ok, author, reply, error, catchup, truncated}``. ``permissions`` is the
     per-call ceiling — left unset for an operator-typed mention (the operator is the
@@ -254,8 +260,8 @@ async def run_mention(
     #    same room. Ordered operator-then-reply, as they happened.
     written = [
         HumanMessage(
-            content=_envelope("operator", message, to=target),
-            additional_kwargs={"lc_source": _SOURCE, "room": {"from": "operator", "to": target}},
+            content=_envelope(speaker, message, to=target),
+            additional_kwargs={"lc_source": _SOURCE, "room": {"from": speaker, "to": target}},
         )
     ]
     if ok and reply:
