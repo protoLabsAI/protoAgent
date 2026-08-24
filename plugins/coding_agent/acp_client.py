@@ -800,6 +800,13 @@ class AcpClient:
         if kind == "agent_message_chunk":
             text = _content_text(update.get("content"))
             if text:
+                # Evidence hook for the doubled-reply investigation: when a reply comes
+                # back duplicated, this is what says whether the chunks ARRIVED twice
+                # (an agent-side emit) or accumulated twice (ours). Debug-level — turn
+                # it on when chasing, free otherwise.
+                logger.debug(
+                    "[acp/%s] chunk len=%d sess=%s head=%r", self.name, len(text), params.get("sessionId"), text[:32]
+                )
                 self._answer += text
                 await self._emit_text(text)  # stream the delta (token-ish) to the UI
         elif kind == "agent_thought_chunk":
@@ -1359,7 +1366,42 @@ class AcpClient:
             self._on_thought = None
         self.last_stop_reason = str((result or {}).get("stopReason") or "") or None
         logger.info("[acp/%s] turn complete (stopReason=%s)", self.name, self.last_stop_reason)
-        return self._answer.strip()
+        # Collapse BEFORE stripping: a doubled reply is text+text byte-for-byte, and the
+        # common shape ends in whitespace ("…blockers: none\n" twice) — stripping first
+        # removes only the SECOND copy's trailing newline, the halves go asymmetric, and
+        # the collapse silently no-ops on exactly the replies it exists for (QA panel
+        # finding on this PR).
+        return self._collapse_doubled(self._answer).strip()
+
+    def _collapse_doubled(self, answer: str) -> str:
+        """Collapse a reply that is its own text twice with no joiner — and say so.
+
+        Observed live (2026-08-24): claude-agent-acp turns intermittently deliver the
+        whole final message twice — ``REVIEWERREVIEWER``, a full status block glued to
+        itself. One ``session/prompt`` per doubled turn, so it is not a retry on our
+        side, and it does not reproduce on demand. Until the emit side is found, this
+        keeps the duplication out of transcripts, rooms, and PR bodies.
+
+        Deliberately the narrowest possible test: even length, first half == second
+        half EXACTLY (any separator between deliberate repeats breaks it), and a half
+        of at least 8 chars so a legitimate short chant ("hahahaha") is untouched. A
+        model that intends byte-identical X+X with no joiner at that length is
+        vanishingly rare; the duplication bug produced it constantly. Every collapse
+        WARNS with the session id, so occurrences stay countable even once invisible —
+        if this warning goes quiet for a few releases, delete the whole method.
+        """
+        half, rem = divmod(len(answer), 2)
+        if rem == 0 and half >= 8 and answer[:half] == answer[half:]:
+            logger.warning(
+                "[acp/%s] doubled reply collapsed (%d chars -> %d, session=%s) — the agent "
+                "delivered its final message twice on one prompt",
+                self.name,
+                len(answer),
+                half,
+                self._turn_session_id,
+            )
+            return answer[:half]
+        return answer
 
     def dead_end(self) -> str | None:
         """Why the last turn is NOT worth retrying — or ``None`` when a retry is sane.
