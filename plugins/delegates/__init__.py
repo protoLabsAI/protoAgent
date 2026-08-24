@@ -349,6 +349,13 @@ def register(registry) -> None:
             delegates = nested
     reg = DelegateRegistry(delegates)
 
+    # Publish the live roster on the runtime state so the chat turn driver can route
+    # `@<delegate> …` messages straight to a delegate (S1). Set only when the roster is
+    # non-empty (cleared below otherwise) so a bare `@` with nothing configured falls
+    # through to a normal turn instead of erroring. Re-runs every hot reload (ADR 0025),
+    # keeping STATE.delegate_registry in step with the current config.
+    from runtime.state import STATE as _STATE
+
     def _register_propose():
         # propose_delegate registers UNCONDITIONALLY — an empty roster is exactly
         # its moment (#2944): the agent's only move used to be prose when it
@@ -362,6 +369,7 @@ def register(registry) -> None:
     if not reg.names():
         # The default state for a fresh install (the plugin is always-on): no
         # delegates declared ⇒ no `delegate_to` tool. Not an anomaly — debug, not warn.
+        _STATE.delegate_registry = None  # nothing to @-mention → `@` stays ordinary text
         log.debug(
             "[delegates] no delegates declared — `delegate_to` not registered "
             "(propose_delegate is). Add entries under `delegates` "
@@ -382,6 +390,7 @@ def register(registry) -> None:
 
     if host is not None:
         host.invoke_delegate = _invoke_delegate
+    _STATE.delegate_registry = reg  # live roster for @-delegate chat dispatch (S1)
     registry.register_tool(_build_delegate_to(reg))
     registry.register_tool(_build_list_agents(reg))
     _register_propose()

@@ -1060,6 +1060,95 @@ def _unknown_slash_command_reply(message: str) -> str | None:
         return None
     return f"Unknown command /{name}. Type / to see available commands."
 
+
+# ── @-delegate dispatch (S1) ─────────────────────────────────────────────────
+# A message that OPENS with `@<delegate-name>` is routed straight to that delegate
+# over DelegateRegistry.dispatch() — the chat analogue of the `delegate_to` tool —
+# short-circuiting the LLM turn entirely. The `@` must be the first non-whitespace
+# character (no mid-message mentions in v1). The registry is published on STATE by
+# the delegates plugin at register() time; with the plugin absent there is no
+# registry and every `@` falls through to a normal turn.
+_AT_TOKEN_RE = re.compile(r"@(\S+)(?:\s+(.*))?\Z", re.DOTALL)
+
+
+def _leading_at_token(text: str) -> tuple[str, str] | None:
+    """``(token, rest)`` when ``text``'s first non-whitespace run is an ``@``-prefixed
+    token, else ``None`` — a SYNTACTIC check only (no registry lookup), so an unknown
+    ``@name`` is still recognized as an attempted mention (and answered with the roster,
+    not run as a prompt). ``rest`` is whitespace-stripped; a bare ``@name`` yields
+    ``("name", "")``. ``hello @proto`` returns ``None`` (the ``@`` isn't leading)."""
+    stripped = (text or "").lstrip()
+    if not stripped.startswith("@"):
+        return None
+    m = _AT_TOKEN_RE.match(stripped)
+    if m is None:
+        return None
+    return (m.group(1), (m.group(2) or "").strip())
+
+
+def _parse_at_delegate(text: str) -> tuple[str, str] | None:
+    """``(canonical_delegate_name, rest)`` when ``text`` opens with ``@<known-delegate>``,
+    else ``None``.
+
+    Matches the leading ``@`` token case-insensitively against the live
+    ``STATE.delegate_registry.names()`` and returns the delegate's REGISTERED name — so
+    ``@Proto`` resolves to ``proto`` (``dispatch``/``get`` are case-sensitive). Returns
+    ``None`` when the delegates plugin isn't loaded, the ``@`` isn't the leading token, or
+    the token names no configured delegate. A bare ``@name`` still returns ``("name", "")``
+    — the empty-query case is an error the dispatcher surfaces, not a parse failure."""
+    reg = getattr(STATE, "delegate_registry", None)
+    if not reg:
+        return None
+    tok = _leading_at_token(text)
+    if tok is None:
+        return None
+    token, rest = tok
+    canonical = {n.lower(): n for n in reg.names()}.get(token.lower())
+    if canonical is None:
+        return None
+    return (canonical, rest)
+
+
+def _delegate_unavailable_msg(name: str) -> str:
+    """The reply for an ``@name`` that names no reachable delegate — names the roster so
+    the operator can correct the mention without opening the Delegates panel (r2)."""
+    reg = getattr(STATE, "delegate_registry", None)
+    avail = ", ".join(reg.names()) if reg else ""
+    return f"Unknown or unreachable delegate: @{name}. Available: {avail or '(none)'}."
+
+
+async def _at_delegate_reply(message: str) -> str | None:
+    """The complete @-delegate short-circuit (S1), shared by the streaming and
+    non-streaming turn drivers so both dispatch identically.
+
+    Returns the assistant reply to emit — the delegate's answer, a usage hint for a bare
+    ``@name``, or an "unknown delegate" roster — or ``None`` to fall through to the normal
+    turn (no leading ``@``-mention, or the delegates plugin isn't loaded so there is no
+    registry to route to). ``message`` is NOT mutated: the original ``@name rest`` is what
+    the caller logs to session history, and only the stripped ``rest`` reaches the
+    delegate."""
+    reg = getattr(STATE, "delegate_registry", None)
+    if not reg:
+        return None
+    tok = _leading_at_token(message)
+    if tok is None:
+        return None
+    parsed = _parse_at_delegate(message)
+    # A leading `@token` that resolves to no delegate → answer with the roster instead of
+    # running the raw text as a prompt (r2). The get() re-check keeps step 2 honest if the
+    # roster mutated between names() and here.
+    if parsed is None or reg.get(parsed[0]) is None:
+        return _delegate_unavailable_msg(tok[0] if parsed is None else parsed[0])
+    name, rest = parsed
+    if not rest:
+        return f"Usage: `@{name} <message>` — add a message to send to the {name} delegate."
+    try:
+        return await reg.dispatch(name, rest)
+    except Exception as exc:  # noqa: BLE001 — a delegate failure is an answer to the operator, not a 500
+        log.warning("[at-delegate] dispatch to @%s failed", name, exc_info=True)
+        return f"Delegate @{name} failed: {exc}"
+
+
 # Per-thread_id locks (WeakValueDictionary so a lock is GC'd once no turn holds it,
 # bounding memory). See _thread_lock.
 _THREAD_LOCKS: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
@@ -1538,6 +1627,16 @@ async def _chat_langgraph_stream_impl(
         request_metadata_scope(request_metadata),
     ):
         try:
+            # STEP 0 — @-delegate dispatch (S1): a message opening with `@<delegate>`
+            # routes straight to that delegate, short-circuiting the LLM turn. Checked
+            # BEFORE goal control (and every slash-command below) so an @-mention is
+            # never swallowed by an active goal; a no-op when the delegates plugin isn't
+            # loaded (no registry on STATE ⇒ `@` is ordinary text). See _at_delegate_reply.
+            _at_reply = await _at_delegate_reply(message)
+            if _at_reply is not None:
+                yield ("done", _at_reply)
+                return
+
             # Goal control messages (/goal ...) short-circuit the turn: set /
             # status / clear a goal and return the reply without running the graph.
             if STATE.goal_controller is not None:
@@ -2612,6 +2711,13 @@ async def _chat_langgraph_impl(
         metadata={"message_preview": message[:100], "soul_rev": soul_revision()},
     ):
         try:
+            # STEP 0 — @-delegate dispatch (S1): same short-circuit as the streaming path,
+            # returned as the assistant message. Checked before goal control / every slash
+            # command; a no-op when the delegates plugin isn't loaded. See _at_delegate_reply.
+            _at_reply = await _at_delegate_reply(message)
+            if _at_reply is not None:
+                return [{"role": "assistant", "content": _at_reply}]
+
             # Goal control messages short-circuit (status / clear) — but a /goal SET kicks the
             # drive immediately (#1910) rather than returning just the ack: fall through into a
             # goal-driven turn (the condition is injected at the kickoff below). The ack is

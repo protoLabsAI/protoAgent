@@ -36,6 +36,11 @@ class AppState:
     skills_index: Any = None
     workflow_registry: Any = None  # set by the workflows plugin (None = plugin disabled)
     workflow_run: Any = None  # async (name, inputs, on_step) -> result; set by the workflows plugin
+    # Live DelegateRegistry, published by the delegates plugin at register() time when the
+    # roster is non-empty (None when the plugin is absent or no delegates are configured).
+    # The chat turn driver reads it to route `@<delegate> …` messages (S1); None ⇒ `@` is
+    # ordinary text. Rebuilt on every graph build / hot-reload (ADR 0025) so the roster stays live.
+    delegate_registry: Any = None
     telemetry_store: Any = None
     # Plugin metric timeseries (#1632) — behind sdk.record_metric / metric_history /
     # metric_last. Wired once at boot (path isn't reloadable config); survives reloads.
