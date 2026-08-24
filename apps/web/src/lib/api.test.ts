@@ -13,7 +13,7 @@ import {
   loadBackgroundReport,
   textFromParts,
   hitlFromParts,
-  roomAuthorFromParts,
+  roomReplyFromParts,
 } from "./api";
 import { authRequired, clearAuthRequired } from "./auth";
 
@@ -246,27 +246,52 @@ describe("artifactAppends — the A2A append flag's wire shape (#1709 companion)
 
 const ROOM_MIME = "application/vnd.protolabs.room-v1+json";
 
-describe("roomAuthorFromParts", () => {
-  it("attributes an @-addressed answer to the participant that gave it", () => {
+describe("roomReplyFromParts", () => {
+  it("carries the author, who addressed them, and their reply", () => {
     const parts = [
-      { metadata: { mimeType: ROOM_MIME }, content: { $case: "data", value: { author: "proto", ok: true } } },
+      {
+        metadata: { mimeType: ROOM_MIME },
+        content: { $case: "data", value: { author: "proto", from: "operator", text: "line 40", ok: true } },
+      },
     ];
-    expect(roomAuthorFromParts(parts)).toEqual({ name: "proto" });
-  });
-
-  it("reads the flattened proto-JSON form", () => {
-    expect(roomAuthorFromParts([{ metadata: { mimeType: ROOM_MIME }, data: { author: "claude-code" } }])).toEqual({
-      name: "claude-code",
+    expect(roomReplyFromParts(parts)).toEqual({
+      author: { name: "proto" },
+      from: "operator",
+      text: "line 40",
+      ok: true,
+      stopped: undefined,
     });
   });
 
+  it("reads the flattened proto-JSON form", () => {
+    const got = roomReplyFromParts([
+      { metadata: { mimeType: ROOM_MIME }, data: { author: "claude-code", from: "proto", text: "patched" } },
+    ]);
+    expect(got?.author).toEqual({ name: "claude-code" });
+    expect(got?.from).toBe("proto");
+  });
+
+  it("defaults `from` to the operator when a producer omits it", () => {
+    // Pre-#3050 producers send no `from`; the operator is the only addresser then.
+    expect(roomReplyFromParts([{ metadata: { mimeType: ROOM_MIME }, data: { author: "proto" } }])?.from).toBe(
+      "operator",
+    );
+  });
+
+  it("surfaces why a chain stopped", () => {
+    const got = roomReplyFromParts([
+      { metadata: { mimeType: ROOM_MIME }, data: { author: "proto", stopped: "self_mention" } },
+    ]);
+    expect(got?.stopped).toBe("self_mention");
+  });
+
   it("leaves an ordinary turn unattributed", () => {
-    expect(roomAuthorFromParts([{ metadata: { mimeType: "text/plain" }, data: {} }])).toBeNull();
+    expect(roomReplyFromParts([{ metadata: { mimeType: "text/plain" }, data: {} }])).toBeNull();
   });
 
   it("ignores a payload with no author rather than drawing an empty byline", () => {
-    expect(roomAuthorFromParts([{ metadata: { mimeType: ROOM_MIME }, data: { ok: false } }])).toBeNull();
-    expect(roomAuthorFromParts([{ metadata: { mimeType: ROOM_MIME }, data: { author: "" } }])).toBeNull();
+    expect(roomReplyFromParts([{ metadata: { mimeType: ROOM_MIME }, data: { ok: false } }])).toBeNull();
+    expect(roomReplyFromParts([{ metadata: { mimeType: ROOM_MIME }, data: { author: "" } }])).toBeNull();
   });
 });
 

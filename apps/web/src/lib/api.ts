@@ -29,6 +29,7 @@ import type {
   InboxItem,
   MentionTarget,
   MessageAuthor,
+  RoomReply,
   CatalogPlugin,
   McpCatalogEntry,
   InstalledPlugin,
@@ -576,10 +577,18 @@ export function componentFromParts(parts?: RawPart[]): ComponentSpec | null {
 
 /** The author of an `@<name>`-addressed answer, off a working frame's parts (#3042).
  *  `null` for every ordinary turn — the lead agent needs no attribution. */
-export function roomAuthorFromParts(parts?: RawPart[]): MessageAuthor | null {
-  const d = dataByMime(parts, ROOM_MIME) as { author?: string; ok?: boolean } | undefined;
+export function roomReplyFromParts(parts?: RawPart[]): RoomReply | null {
+  const d = dataByMime(parts, ROOM_MIME) as
+    | { author?: string; from?: string; text?: string; ok?: boolean; stopped?: string }
+    | undefined;
   if (!d || typeof d.author !== "string" || !d.author) return null;
-  return { name: d.author };
+  return {
+    author: { name: d.author },
+    from: typeof d.from === "string" ? d.from : "operator",
+    text: typeof d.text === "string" ? d.text : "",
+    ok: d.ok !== false,
+    stopped: typeof d.stopped === "string" ? d.stopped : undefined,
+  };
 }
 
 export function hitlFromParts(parts?: RawPart[]): HitlPayload | null {
@@ -710,8 +719,9 @@ export type TurnStreamHandlers = {
   onReasoning?: (delta: string) => void;
   onToolCall?: (evt: ToolEvent) => void;
   onComponent?: (spec: ComponentSpec) => void;
-  /** An `@<name>`-addressed turn: the answer that follows is this participant's. */
-  onRoomAuthor?: (author: MessageAuthor) => void;
+  /** One exchange of an `@<name>`-addressed turn. A chain (#3050) sends several — each
+   *  is a participant speaking, so each becomes its own authored message. */
+  onRoomReply?: (reply: RoomReply) => void;
   onCost?: (usage: TurnUsage) => void;
   onContext?: (ctx: ContextWindow) => void;
   onInputRequired?: (payload: HitlPayload) => void;
@@ -781,8 +791,8 @@ function makeA2ADispatcher(sessionId: string, handlers: TurnStreamHandlers): (fr
       if (toolEvent) handlers.onToolCall?.(toolEvent);
       const component = componentFromParts(parts);
       if (component) handlers.onComponent?.(component);
-      const roomAuthor = roomAuthorFromParts(parts);
-      if (roomAuthor) handlers.onRoomAuthor?.(roomAuthor);
+      const roomReply = roomReplyFromParts(parts);
+      if (roomReply) handlers.onRoomReply?.(roomReply);
       if (state === "input-required" || state === "TASK_STATE_INPUT_REQUIRED") {
         handlers.onInputRequired?.(hitlFromParts(parts) || { question: messageText });
       }

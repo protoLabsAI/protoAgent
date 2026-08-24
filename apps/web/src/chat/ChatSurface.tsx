@@ -728,6 +728,9 @@ function ChatSessionSlot({
   );
   // Keeps the keyboard-selected item scrolled into view during ↑/↓ nav (#1528).
   const activeSlashRef = useRef<HTMLButtonElement | null>(null);
+  // How many room exchanges this turn has delivered (#3051). Per-turn, reset at send:
+  // the first fills the in-flight bubble, the rest append.
+  const roomReplies = useRef(0);
 
   useEffect(() => {
     api.chatCommands().then((r) => setCommands(r.commands)).catch(() => {});
@@ -1532,6 +1535,7 @@ function ChatSessionSlot({
     // WorkBlock with no inter-bubble gap. Otherwise mint a new assistant message as usual.
     const resuming = opts.resumeMessageId != null;
     const assistantId = opts.resumeMessageId ?? messageId();
+    roomReplies.current = 0; // per-turn (#3051) — a fresh turn starts with an empty room
     const assistant: ChatMessage = {
       id: assistantId,
       role: "assistant",
@@ -1768,17 +1772,44 @@ function ChatSessionSlot({
             latest.messages.map((message) => (message.id === assistantId ? applyComponent(message, spec) : message)),
           );
         },
-        onRoomAuthor: (author) => {
-          // An `@<name>`-addressed turn (#3042): the answer streaming into this message is
-          // the named participant's, not the lead agent's. The stamp arrives on a working
-          // frame BEFORE the text, so the byline is in place as the answer draws rather
-          // than appearing after the fact.
+        onRoomReply: (reply) => {
+          // An `@<name>`-addressed turn (#3042/#3051). A CHAIN sends one frame per
+          // exchange, and each is a different participant speaking — so the first fills
+          // the in-flight assistant bubble (the byline lands as the answer draws) and each
+          // one after it becomes its OWN message. Collapsing them would show only whoever
+          // happened to speak last, which is how a three-way conversation reads as a
+          // monologue.
+          roomReplies.current += 1;
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
-          chatStore.updateMessages(
-            session.id,
-            latest.messages.map((message) => (message.id === assistantId ? { ...message, author } : message)),
-          );
+          if (roomReplies.current === 1) {
+            chatStore.updateMessages(
+              session.id,
+              latest.messages.map((message) =>
+                message.id === assistantId
+                  ? { ...message, author: reply.author, content: reply.text || message.content }
+                  : message,
+              ),
+            );
+            return;
+          }
+          // A later hop: append it, and pull the in-flight bubble to the END so the
+          // streaming indicator stays at the bottom of the thread rather than above the
+          // messages that arrived after it.
+          const placeholder = latest.messages.find((m) => m.id === assistantId);
+          const rest = latest.messages.filter((m) => m.id !== assistantId);
+          chatStore.updateMessages(session.id, [
+            ...rest,
+            {
+              id: messageId(),
+              role: "assistant",
+              content: reply.text,
+              author: reply.author,
+              createdAt: Date.now(),
+              status: "done",
+            },
+            ...(placeholder ? [placeholder] : []),
+          ]);
         },
         onCost: (usage) => {
           // This turn's token/cost readout (terminal cost-v1 extension metadata) — pin it to the assistant
