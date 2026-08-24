@@ -130,6 +130,15 @@ export function ChatMessageView({
             : undefined
       }
     >
+      {/* An `@<name>`-addressed answer (#3042) is this participant's own words, not the
+          lead agent's paraphrase of them — say whose. The role stays "assistant" so every
+          other renderer is untouched; the chip is the only thing that changes. */}
+      {message.role === "assistant" && message.author?.name ? (
+        <div className="chat-author">
+          <Bot size={13} aria-hidden />
+          <span className="chat-author-name">{message.author.name}</span>
+        </div>
+      ) : null}
       {message.reasoning && !(message.parts && message.parts.length) ? (
         // History-loaded turns have no ordered parts — fall back to the flat collapsed
         // reasoning card. Live turns render reasoning inline via parts.

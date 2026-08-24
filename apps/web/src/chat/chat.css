@@ -786,3 +786,23 @@
   color: var(--pl-color-text-muted, #8b8b93);
   pointer-events: none;
 }
+
+/* Authorship byline on an `@<name>`-addressed answer (#3042). The message keeps the
+   assistant role and the assistant bubble; this is the one thing that distinguishes a
+   participant's own words from the lead agent's. Deliberately a quiet byline rather than
+   a second bubble style — a room reads as one conversation, not as two kinds of message. */
+.chat-author {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  color: var(--pl-color-fg-muted);
+}
+.chat-author > svg {
+  flex: 0 0 auto;
+}
+.chat-author-name {
+  font-weight: 600;
+  font-size: 0.8rem;
+  letter-spacing: 0.01em;
+}
