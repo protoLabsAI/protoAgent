@@ -444,19 +444,25 @@ async def test_the_read_surface_answers_the_acceptance_question(wired, tmp_path)
 # the counter is not bound by `_turn_lock`, so a turn abandoned on timeout goes on
 # feeding the tally of whichever run holds the client next.
 #
-# Both are asserted against a store that already holds a month of this instance's
-# real traffic: PM chat turns, this same delegate's earlier runs, a peer delegation.
-# In an empty store an inherited count is conspicuous; next to thirty rows that all
-# carry a plausible `tool_calls` and a plausible session id, it is not — which is
-# how it survived #3015's own tests.
+# Every case here runs against a store that already holds a month of this instance's
+# real traffic — PM chat turns, this same delegate's earlier runs, a peer delegation —
+# plus a second delegate dispatched concurrently. Be precise about what that buys: the
+# per-row assertions below identify their rows by `row_id` diff, so the seeded rows do
+# not themselves make a red test red. What they do is put the assertions in the
+# population the number is actually read in — `recent()` full of same-prefix history
+# where position means nothing, and the instance-wide `tool_calls` aggregate the
+# operator surface reports, which
+# `test_a_dead_agents_orphaned_backend_neither_charges_nor_kills_the_next_run` asserts
+# with the seeded rows INSIDE the sum rather than filtered out of it.
 
 
 def _seed_a_month_of_traffic(store) -> None:
     """Thirty days of the traffic a live instance actually accumulates.
 
     Every seeded row carries a non-zero ``tool_calls`` and a real session id, including
-    rows for the *same* delegate the tests below dispatch — so a run that inherits its
-    predecessor's numbers looks exactly like ordinary history rather than standing out.
+    rows for the *same* delegate the tests below dispatch — the population an inherited
+    count would be invisible in, and the one every aggregate these tests read is
+    computed over.
     """
     from datetime import datetime, timedelta, timezone
 
@@ -679,3 +685,321 @@ async def test_a_timed_out_turn_cannot_spend_the_next_runs_tool_budget(wired, tm
     # The concurrent peer's own count is untouched by either.
     assert peer_rows[0]["tool_calls"] == 3
     assert peer_rows[0]["session_id"] == "sess-peer-live"
+
+
+# ── the stream of an agent that died between dispatches (#3040) ──────────────
+# Not every respawn is a fenced one. A pooled client whose agent died between
+# dispatches goes straight from `_ensure_started` to `_start` — no close(), nothing
+# cancelled — and the reader that served the dead process is still alive, because the
+# backend that process spawned holds the same stdout open and keeps writing into it.
+# (That orphan pile is the reason `close()` kills the whole process GROUP.) Until the
+# generation advances on every start, that reader is indistinguishable from the live
+# one: its `tool_call` updates are charged to the next run, and when its pipe finally
+# does close, its `finally` fails that run's in-flight `session/prompt` with the
+# previous process's obituary.
+
+_ORPHANED_AGENT = r'''
+import json, os, subprocess, sys, time
+
+SESSION = "__SESSION__"
+SENTINEL = sys.argv[1]
+
+# The backend this adapter spawned, and which outlives it — the whole point: it holds
+# the stdout the client is reading and keeps emitting `tool_call` updates into it long
+# after the process the client thinks it is talking to is gone. It stops when the test
+# creates the sentinel, so the EOF lands at a moment the test chooses rather than a
+# moment it races.
+_FLOOD = """
+import json, os, sys, time
+sess, sentinel = sys.argv[1], sys.argv[2]
+for n in range(600):
+    if os.path.exists(sentinel):
+        break
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "method": "session/update", "params": {
+        "sessionId": sess,
+        "update": {"sessionUpdate": "tool_call", "toolCallId": "orphan-%d" % n,
+                   "title": "Edit(orphan.py)", "kind": "edit"}}}) + "\\n")
+    sys.stdout.flush()
+    time.sleep(0.01)
+"""
+
+
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+def tool(tag):
+    send({"jsonrpc": "2.0", "method": "session/update", "params": {
+        "sessionId": SESSION,
+        "update": {"sessionUpdate": "tool_call", "toolCallId": "t-%s" % tag,
+                   "title": "Edit(%s.py)" % tag, "kind": "edit"}}})
+
+
+def chunk():
+    send({"jsonrpc": "2.0", "method": "session/update", "params": {
+        "sessionId": SESSION,
+        "update": {"sessionUpdate": "agent_message_chunk",
+                   "content": {"type": "text", "text": "wrote the patch"}}}})
+
+
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method, mid = msg.get("method"), msg.get("id")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": mid, "result": {"protocolVersion": 1}})
+    elif method == "session/new":
+        send({"jsonrpc": "2.0", "id": mid, "result": {"sessionId": SESSION}})
+    elif method == "session/prompt":
+        blocks = (msg.get("params") or {}).get("prompt") or []
+        text = "".join(b.get("text", "") for b in blocks)
+        if "first" in text:
+            tool("own")
+            chunk()
+            send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
+            # Answered cleanly — so nothing fences this stream. Only then hand the
+            # pipe to the backend and die.
+            time.sleep(0.3)
+            subprocess.Popen([sys.executable, "-c", _FLOOD, SESSION, SENTINEL],
+                             stdout=sys.stdout, stderr=subprocess.DEVNULL)
+            time.sleep(0.05)
+            os._exit(1)
+        else:
+            tool("own")
+            time.sleep(2.8)
+            chunk()
+            send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
+'''
+
+
+def _orphaning_agent(tmp_path, sentinel, session: str = "sess-orphaned") -> list[str]:
+    script = tmp_path / "acp_agent_orphaned.py"
+    script.write_text(_ORPHANED_AGENT.replace("__SESSION__", session), encoding="utf-8")
+    return [str(script), str(sentinel)]
+
+
+async def _wait_for_exit(client, timeout: float = 5.0) -> None:
+    """Block until the agent subprocess has actually been reaped — the precondition
+    the case needs, not something it asserts. Without it the next dispatch could find
+    a process still marked running and never take the respawn path at all."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        if client._proc is not None and client._proc.returncode is not None:
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError("the fake agent never exited")
+
+
+async def test_a_dead_agents_orphaned_backend_neither_charges_nor_kills_the_next_run(wired, tmp_path):
+    """Run A finishes cleanly — ``end_turn``, one tool call — and *then* the agent dies,
+    leaving a backend flooding the stdout it inherited. Nothing fenced that stream: the
+    turn ended the way turns are supposed to. Run B, on the same pooled client, must
+    still record one tool call and complete, even though the orphan is writing
+    ``tool_call`` updates throughout it and its pipe closes mid-turn.
+
+    Both symptoms are one root: the reader of a replaced process outliving it. Asserted
+    on the durable rows, with a peer coder dispatched concurrently and a month of this
+    instance's history already in the store — the population the number is read in.
+    """
+    _seed_a_month_of_traffic(wired)
+    before = {r["row_id"] for r in wired.recent(500)}
+    seeded_tool_calls = sum(r["tool_calls"] for r in wired.recent(500))
+
+    sentinel = tmp_path / "stop-flooding"
+    peer = _client(tmp_path, "codex", _PEER_TOOLS_BODY, session="sess-peer-live")
+    client = AcpClient(
+        sys.executable, _orphaning_agent(tmp_path, sentinel), cwd=str(tmp_path), name="claude-code"
+    )
+    try:
+        peer_task = asyncio.create_task(peer.prompt("peer feature", timeout=30.0))
+        assert await client.prompt("first feature", timeout=30.0) == "wrote the patch"
+        await _wait_for_exit(client)
+
+        # Same pooled client, next dispatch. `_ensure_started` respawns — but by the
+        # unfenced route, because run A ended cleanly.
+        second = asyncio.create_task(client.prompt("second feature", timeout=30.0))
+        await asyncio.sleep(0.4)  # the orphan's updates arrive while run B is generating
+        sentinel.write_text("stop", encoding="utf-8")  # …and now its pipe closes, mid-turn
+        assert await second == "wrote the patch"
+        assert await peer_task == "wrote the patch"
+    finally:
+        sentinel.write_text("stop", encoding="utf-8")
+        await client.close()
+        await peer.close()
+
+    fresh = _rows_written_by(wired, before)
+    mine = [r for r in fresh if r["model"] == "acp:claude-code"]
+    peer_rows = [r for r in fresh if r["model"] == "acp:codex"]
+    assert len(mine) == 2 and len(peer_rows) == 1
+
+    # Run B did one tool call and finished. A run charged for the orphan's work reads
+    # as a busy run; a run killed by the orphan's EOF reads as a failed one.
+    following = max(mine, key=lambda r: r["created_at"])
+    assert following["state"] == "completed"
+    assert following["tool_calls"] == 1
+    assert all(r["tool_calls"] == 1 for r in mine)
+    assert peer_rows[0]["tool_calls"] == 3
+
+    # And the same thing said the way an operator reads it: the instance-wide tool-call
+    # total is its month of history plus exactly the five calls these three runs made.
+    # The seeded rows are inside this number, not filtered out of it.
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from operator_api.telemetry_routes import register_telemetry_routes
+
+    app = FastAPI()
+    register_telemetry_routes(app)
+    summary = TestClient(app).get("/api/telemetry/summary").json()["summary"]
+    assert summary["tool_calls"] == seeded_tool_calls + 5
+
+
+# ── an error the agent answered with is not an abandoned turn (#3040) ────────
+
+_POOLED_ERROR_AGENT = r'''
+import json, os, sys, time
+
+# The session id names the PROCESS, so a respawn is visible in the recorded row: this
+# agent advertises no `loadSession`, so a client that reaps it opens a brand-new
+# session and the ACP thread is gone.
+SESSION = "sess-%d" % os.getpid()
+
+
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method, mid = msg.get("method"), msg.get("id")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": mid, "result": {"protocolVersion": 1}})
+    elif method == "session/new":
+        send({"jsonrpc": "2.0", "id": mid, "result": {"sessionId": SESSION}})
+    elif method == "session/prompt":
+        blocks = (msg.get("params") or {}).get("prompt") or []
+        text = "".join(b.get("text", "") for b in blocks)
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {
+            "sessionId": SESSION,
+            "update": {"sessionUpdate": "tool_call", "toolCallId": "t-own",
+                       "title": "Read(spec.md)", "kind": "read"}}})
+        if "boom" in text:
+            # A turn the agent ends by telling us it failed. It is idle afterwards.
+            send({"jsonrpc": "2.0", "id": mid,
+                  "error": {"code": -32000, "message": "the coder blew up"}})
+        else:
+            time.sleep(0.05)
+            send({"jsonrpc": "2.0", "method": "session/update", "params": {
+                "sessionId": SESSION,
+                "update": {"sessionUpdate": "agent_message_chunk",
+                           "content": {"type": "text", "text": "wrote the patch"}}}})
+            send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
+'''
+
+
+async def test_an_error_the_agent_reported_keeps_the_pooled_session(wired, tmp_path):
+    """A JSON-RPC error response is the agent saying it stopped. Nothing is left
+    generating, so there is nothing to fence — and fencing it anyway would SIGTERM a
+    healthy pooled agent on every ordinary agent-side error, then reopen a fresh
+    session, dropping the conversation thread that pooling by ``conversation_key``
+    exists to keep.
+
+    Read off the durable rows: the run after the error must record the SAME ACP session
+    as the run before it. This agent names its session after its pid, so a respawn
+    cannot hide.
+    """
+    _seed_a_month_of_traffic(wired)
+    before = {r["row_id"] for r in wired.recent(500)}
+
+    script = tmp_path / "acp_agent_pooled_error.py"
+    script.write_text(_POOLED_ERROR_AGENT, encoding="utf-8")
+    peer = _client(tmp_path, "codex", _PEER_TOOLS_BODY, session="sess-peer-live")
+    client = AcpClient(sys.executable, [str(script)], cwd=str(tmp_path), name="claude-code")
+    try:
+        peer_task = asyncio.create_task(peer.prompt("peer feature", timeout=30.0))
+        assert await client.prompt("first feature", timeout=30.0) == "wrote the patch"
+        with pytest.raises(AcpError, match="the coder blew up"):
+            await client.prompt("boom feature", timeout=30.0)
+        # The conversation carries on in the same session — an agent that errored on one
+        # turn is still the agent that has the context of the previous ten.
+        assert await client.prompt("third feature", timeout=30.0) == "wrote the patch"
+        assert await peer_task == "wrote the patch"
+    finally:
+        await client.close()
+        await peer.close()
+
+    fresh = sorted(
+        [r for r in _rows_written_by(wired, before) if r["model"] == "acp:claude-code"],
+        key=lambda r: r["created_at"],
+    )
+    assert len(fresh) == 3
+    first, errored, third = fresh
+
+    assert first["state"] == "completed"
+    assert errored["state"] == "failed"
+    assert third["state"] == "completed"
+
+    # The whole point: one session across all three, including the one that errored —
+    # which did run in it, and records it.
+    assert first["session_id"].startswith("sess-")
+    assert errored["session_id"] == first["session_id"]
+    assert third["session_id"] == first["session_id"], "the pooled agent was evicted by an error it reported"
+
+    # The error turn's own tool call is still its own, and the peer is untouched.
+    assert errored["tool_calls"] == 1
+    assert third["tool_calls"] == 1
+    peer_rows = [r for r in _rows_written_by(wired, before) if r["model"] == "acp:codex"]
+    assert peer_rows[0]["tool_calls"] == 3
+
+
+async def test_a_turn_queued_behind_an_abandoned_one_is_charged_only_for_itself(wired, tmp_path):
+    """The fan-out shape ``prompt()`` explicitly supports: a second dispatch arrives on
+    the same pooled client *while* the first is still in flight, and logs "prompt queued
+    behind an in-flight turn". It is the queued turn — not a later, leisurely one — that
+    inherits the client the instant the runaway is abandoned, with the flood still
+    arriving and the respawn not yet done.
+
+    The queued run must record its own single tool call.
+    """
+    _seed_a_month_of_traffic(wired)
+    before = {r["row_id"] for r in wired.recent(500)}
+
+    peer = _client(tmp_path, "codex", _PEER_TOOLS_BODY, session="sess-peer-live")
+    client = AcpClient(
+        sys.executable, _flooding_agent(tmp_path, session="sess-queued"), cwd=str(tmp_path), name="claude-code"
+    )
+    try:
+        peer_task = asyncio.create_task(peer.prompt("peer feature", timeout=30.0))
+        runaway = asyncio.create_task(client.prompt("runaway feature", timeout=0.8))
+        await asyncio.sleep(0.3)  # the second dispatch arrives mid-generation, not after
+        assert client._turn_lock.locked()
+        queued = asyncio.create_task(client.prompt("second feature", timeout=30.0))
+        with pytest.raises(AcpError, match="session/prompt timed out"):
+            await runaway
+        assert await queued == "wrote the patch"
+        assert await peer_task == "wrote the patch"
+    finally:
+        await client.close()
+        await peer.close()
+
+    fresh = _rows_written_by(wired, before)
+    mine = [r for r in fresh if r["model"] == "acp:claude-code"]
+    abandoned = [r for r in mine if r["state"] == "failed"][0]
+    following = [r for r in mine if r["state"] == "completed"][0]
+
+    assert abandoned["tool_calls"] >= 1  # it really was mid-work when we walked away
+    assert following["tool_calls"] == 1
+    assert [r for r in fresh if r["model"] == "acp:codex"][0]["tool_calls"] == 3

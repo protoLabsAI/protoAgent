@@ -326,12 +326,27 @@ class AcpError(Exception):
     error response (else ``None``), so callers can special-case e.g.
     ``AUTH_REQUIRED``, plus the raw ``data`` member for a caller that wants the
     structured cause rather than the rendered line.
+
+    ``reported_by_agent`` says the agent ANSWERED with this failure — the turn is over
+    on its side and nothing is still generating — as against a timeout, a cancel or a
+    dead transport, where nothing on the other end has agreed to stop. Only the second
+    class means the run was abandoned rather than finished (#3040). It is a separate
+    flag rather than ``code is not None`` because an agent may answer with an error
+    member carrying no code at all, and that is still an answer.
     """
 
-    def __init__(self, message: str, *, code: int | None = None, data: object = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: int | None = None,
+        data: object = None,
+        reported_by_agent: bool = False,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.data = data
+        self.reported_by_agent = reported_by_agent
 
 
 class AcpClient:
@@ -520,8 +535,13 @@ class AcpClient:
         # A pooled client that respawns must not report the PREVIOUS process's dying
         # words as this one's — that would be worse than saying nothing.
         self._stderr_tail.clear()
-        # This is a live stream again: whatever the previous one is still shouting into
-        # a dead pipe stays fenced off by its older generation id (#3040).
+        # A live stream again — and a NEW one, so the generation advances here too, not
+        # only in `_fence_stream`. Not every respawn is fenced: an agent that died
+        # between dispatches reaches `_start` straight from `_ensure_started`, with no
+        # close() and nothing to mute the reader still draining the dead process's
+        # stdout — which a backend it spawned can hold open long after it. Bumping here
+        # is what keeps whatever that stream is still shouting out of THIS run (#3040).
+        self._stream_gen += 1
         self._stream_fenced = False
         try:
             self._proc = await asyncio.create_subprocess_exec(
@@ -714,24 +734,31 @@ class AcpClient:
         except Exception:  # noqa: BLE001 — surface WHY the loop ended (was silent → undiagnosable)
             logger.exception("[acp/%s] read loop ended on error", self.name)
         finally:
-            # Reap the process before reading its exit code. On Windows the exit status
-            # isn't collected by the time stdout ends — whether via a clean EOF or a
-            # Proactor ConnectionResetError — so returncode would still be None and
-            # _exit_detail would report "still running" for a child that's already dead.
-            # Skipped when cancelled: close() is already tearing the process down, and
-            # waiting here would only add latency to shutdown.
-            if not cancelled and self._proc is not None and self._proc.returncode is None:
-                with contextlib.suppress(Exception):
-                    await asyncio.wait_for(self._proc.wait(), timeout=2.0)
-            # Fail any in-flight requests if the process dies mid-turn — WITH how it
-            # died and what it said on the way out. A bare "agent exited" is the least
-            # actionable message in this file: it is emitted for a crash, an OOM kill, a
-            # bad launch, and an upstream auth failure alike.
-            detail = self._exit_detail()
-            for fut in self._pending.values():
-                if not fut.done():
-                    fut.set_exception(AcpError(f"{self.name} agent exited{detail}"))
-            self._pending.clear()
+            # Only the reader that still owns the stream settles it. A stale one (its
+            # process was replaced — see `_start`) is reporting the death of a stream
+            # nobody is listening to any more, while `self._proc` and `self._pending`
+            # already belong to the next run: it would wait two seconds on the LIVE
+            # process, then fail that run's in-flight `session/prompt` with the previous
+            # process's obituary and clear the shared pending map (#3040).
+            if gen == self._stream_gen:
+                # Reap the process before reading its exit code. On Windows the exit
+                # status isn't collected by the time stdout ends — whether via a clean
+                # EOF or a Proactor ConnectionResetError — so returncode would still be
+                # None and _exit_detail would report "still running" for a child that's
+                # already dead. Skipped when cancelled: close() is already tearing the
+                # process down, and waiting here would only add latency to shutdown.
+                if not cancelled and self._proc is not None and self._proc.returncode is None:
+                    with contextlib.suppress(Exception):
+                        await asyncio.wait_for(self._proc.wait(), timeout=2.0)
+                # Fail any in-flight requests if the process dies mid-turn — WITH how it
+                # died and what it said on the way out. A bare "agent exited" is the least
+                # actionable message in this file: it is emitted for a crash, an OOM kill, a
+                # bad launch, and an upstream auth failure alike.
+                detail = self._exit_detail()
+                for fut in self._pending.values():
+                    if not fut.done():
+                        fut.set_exception(AcpError(f"{self.name} agent exited{detail}"))
+                self._pending.clear()
 
     async def _handle(self, msg: dict) -> None:
         # 1) Response to one of our outbound requests.
@@ -741,9 +768,16 @@ class AcpClient:
                 if "error" in msg:
                     err = msg.get("error") or {}
                     if isinstance(err, dict):
-                        fut.set_exception(AcpError(_format_rpc_error(err), code=err.get("code"), data=err.get("data")))
+                        fut.set_exception(
+                            AcpError(
+                                _format_rpc_error(err),
+                                code=err.get("code"),
+                                data=err.get("data"),
+                                reported_by_agent=True,
+                            )
+                        )
                     else:
-                        fut.set_exception(AcpError(str(err)))
+                        fut.set_exception(AcpError(str(err), reported_by_agent=True))
                 else:
                     fut.set_result(msg.get("result"))
             return
@@ -1300,14 +1334,22 @@ class AcpClient:
                     },
                     timeout=timeout,
                 )
-            except (AcpError, asyncio.CancelledError):
+            except (AcpError, asyncio.CancelledError) as exc:
                 # Turn abandoned — internal timeout, external cancel (e.g. an
                 # orchestrator's wait_for watchdog), or transport failure. Tell the
                 # agent to drain it so the reused session isn't left mid-generation,
                 # and fence the stream: the ask is advisory, the agent may well still be
                 # running tools, and its updates would otherwise be counted against
                 # whichever run holds this pooled client next (#3040).
-                self._fence_stream()
+                #
+                # An error the agent ANSWERED with is not an abandoned turn — it has told
+                # us the turn is over, so nothing is left generating to fence off. Fencing
+                # it would kill and respawn a healthy pooled agent on every ordinary
+                # agent-side error, and for a coder that does not advertise `loadSession`
+                # the respawn opens a fresh `session/new`, silently dropping the
+                # conversation thread the pooling exists to keep.
+                if not (isinstance(exc, AcpError) and exc.reported_by_agent):
+                    self._fence_stream()
                 await self._cancel_session()
                 raise
         finally:
