@@ -443,11 +443,63 @@ async def test_delegate_to_background_falls_back_inline_without_manager(monkeypa
     assert out == "dispatched:quick q"
 
 
-async def _fake_dispatch(self, name, query, *, item_id=None, resume_task_id=None):
+async def test_delegate_to_forwards_timeout_override(monkeypatch):
+    """#3091: delegate_to(timeout=…) threads a per-call override into registry.dispatch."""
+    r = _register([{"name": "coder", "type": "acp", "command": "proto", "workdir": "/tmp"}], monkeypatch)
+    tool = r.tools[0]
+    seen: dict = {}
+
+    async def _dispatch(self, name, query, *, item_id=None, resume_task_id=None, timeout=None):
+        seen["timeout"] = timeout
+        return "done"
+
+    monkeypatch.setattr(DelegateRegistry, "dispatch", _dispatch)
+    assert await tool.ainvoke({"target": "coder", "query": "build", "timeout": 900}) == "done"
+    assert seen["timeout"] == 900.0
+
+
+async def test_delegate_to_omitted_timeout_passes_none(monkeypatch):
+    """Default timeout=0 ⇒ None down the stack ⇒ the delegate's configured timeout is used."""
+    r = _register([{"name": "coder", "type": "acp", "command": "proto", "workdir": "/tmp"}], monkeypatch)
+    tool = r.tools[0]
+    seen: dict = {"timeout": "unset"}
+
+    async def _dispatch(self, name, query, *, item_id=None, resume_task_id=None, timeout=None):
+        seen["timeout"] = timeout
+        return "done"
+
+    monkeypatch.setattr(DelegateRegistry, "dispatch", _dispatch)
+    assert await tool.ainvoke({"target": "coder", "query": "build"}) == "done"
+    assert seen["timeout"] is None
+
+
+async def test_delegate_to_background_threads_timeout(monkeypatch):
+    """A per-call timeout rides into the DETACHED work too, so a long coding job keeps it."""
+    r = _register([{"name": "coder", "type": "acp", "command": "proto", "workdir": "/tmp"}], monkeypatch)
+    tool = r.tools[0]
+    import runtime.state as rs
+
+    fake = _FakeBgManager()
+    monkeypatch.setattr(rs.STATE, "background_mgr", fake, raising=False)
+    seen: dict = {}
+
+    async def _dispatch(self, name, query, *, item_id=None, resume_task_id=None, timeout=None):
+        seen["timeout"] = timeout
+        return f"dispatched:{query}"
+
+    monkeypatch.setattr(DelegateRegistry, "dispatch", _dispatch)
+    out = await tool.ainvoke({"target": "coder", "query": "big job", "background": True, "timeout": 1200})
+    assert "job-abc123" in out
+    # The queued work carries the override down to dispatch.
+    assert await fake.calls[0]["work"]() == "dispatched:big job"
+    assert seen["timeout"] == 1200.0
+
+
+async def _fake_dispatch(self, name, query, *, item_id=None, resume_task_id=None, timeout=None):
     return f"dispatched:{query}"
 
 
-async def _unexpected_dispatch(self, name, query, *, item_id=None, resume_task_id=None):
+async def _unexpected_dispatch(self, name, query, *, item_id=None, resume_task_id=None, timeout=None):
     raise AssertionError("dispatch must not run inline when a background job is spawned")
 
 
@@ -670,6 +722,81 @@ async def test_acp_dispatch_reuses_client(monkeypatch):
     monkeypatch.setattr(CA, "_client_for", lambda spec: _StubClient())
     d = ADAPTERS["acp"].parse({"name": "proto", "type": "acp", "command": "proto", "workdir": "/tmp"})
     assert await ADAPTERS["acp"].dispatch(d, "fix the bug") == "coding done"
+
+
+# ── #3091: ACP delegation timeout — raised default + per-call override ─────────
+
+
+def test_acp_default_timeout_is_1800():
+    """#3091: implementation-shaped ACP delegates (TDD cycles, venv setup, CI gates)
+    outrun the old 600s default. With no timeout_s configured, the parsed default is
+    1800s (30 min)."""
+    d = ADAPTERS["acp"].parse({"name": "coder", "type": "acp", "command": "proto", "workdir": "/tmp"})
+    assert d.timeout_s == 1800.0
+
+
+def test_acp_timeout_field_default_is_1800():
+    """The Settings form field mirrors the code default, so the console shows 1800, not 600."""
+    field = next(f for f in ADAPTERS["acp"].config_schema() if f.key == "timeout_s")
+    assert field.default == 1800
+
+
+def test_acp_configured_timeout_still_wins():
+    """The raised default is only a default — an explicit per-delegate timeout_s overrides it."""
+    d = ADAPTERS["acp"].parse(
+        {"name": "coder", "type": "acp", "command": "proto", "workdir": "/tmp", "timeout_s": 120}
+    )
+    assert d.timeout_s == 120.0
+
+
+def _stub_acp_prompt(monkeypatch, seen):
+    """Wire a fake ACP client whose ``prompt`` records the timeout it is enforced with."""
+    import plugins.coding_agent as CA
+
+    class _StubClient:
+        last_stop_reason = None
+        _permission = None
+
+        async def prompt(self, query, timeout=None):
+            seen["timeout"] = timeout
+            return "done"
+
+    monkeypatch.setattr(CA, "_client_for", lambda spec: _StubClient())
+
+
+async def test_acp_dispatch_uses_configured_timeout(monkeypatch):
+    """No per-call override ⇒ dispatch enforces the delegate's configured timeout_s (1800)."""
+    seen: dict = {}
+    _stub_acp_prompt(monkeypatch, seen)
+    d = ADAPTERS["acp"].parse({"name": "coder", "type": "acp", "command": "proto", "workdir": "/tmp"})
+    assert await ADAPTERS["acp"].dispatch(d, "go") == "done"
+    assert seen["timeout"] == 1800.0
+
+
+async def test_acp_dispatch_honors_per_call_timeout(monkeypatch):
+    """A per-call ``timeout`` overrides the delegate's configured timeout_s for that call
+    (enforced at ``client.prompt(query, timeout=timeout or d.timeout_s)``)."""
+    seen: dict = {}
+    _stub_acp_prompt(monkeypatch, seen)
+    d = ADAPTERS["acp"].parse(
+        {"name": "coder", "type": "acp", "command": "proto", "workdir": "/tmp", "timeout_s": 300}
+    )
+    assert await ADAPTERS["acp"].dispatch(d, "go", timeout=120) == "done"
+    assert seen["timeout"] == 120
+
+
+async def test_registry_dispatch_forwards_timeout_to_adapter(monkeypatch):
+    """registry.dispatch threads a per-call timeout straight down to the adapter."""
+    seen: dict = {}
+
+    async def _capture(d, query, *, timeout=None, item_id=None, resume_task_id=None):
+        seen["timeout"] = timeout
+        return "ok"
+
+    monkeypatch.setattr(ADAPTERS["acp"], "dispatch", _capture)
+    reg = DelegateRegistry([{"name": "coder", "type": "acp", "command": "proto", "workdir": "/tmp"}])
+    assert await reg.dispatch("coder", "go", timeout=900) == "ok"
+    assert seen["timeout"] == 900
 
 
 async def test_acp_teardown_evicts_every_conversation_for_the_workdir_scoped_client():

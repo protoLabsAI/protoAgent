@@ -74,12 +74,15 @@ class DelegateRegistry:
         resume_task_id: str | None = None,
         conversation_key: str | None = None,
         permissions: str | None = None,
+        timeout: float | None = None,
     ) -> str:
         """Dispatch ``query`` to the named delegate.
 
         ``item_id`` is the work-item identity for adapters that manage a git
         lifecycle (ADR 0076); ``resume_task_id`` answers a PARKED a2a task (the
-        HITL delegation chain). ``raw=True`` bypasses
+        HITL delegation chain). ``timeout`` overrides the delegate's configured
+        timeout for THIS call only (seconds) — ``None`` keeps the configured one.
+        ``raw=True`` bypasses
         the managed-git lifecycle for programmatic callers that consume the reply as
         DATA (e.g. the coder ladder's candidate generation, ADR 0064) — no branch, no
         commit, no PR, no claim; just the coder's text. ``conversation_key`` selects
@@ -125,7 +128,9 @@ class DelegateRegistry:
         # A cancellation is deliberately not a failure: an operator stopping a turn says
         # nothing about the delegate (see status.py).
         try:
-            reply = await ADAPTERS[d.type].dispatch(d, query, item_id=item_id, resume_task_id=resume_task_id)
+            reply = await ADAPTERS[d.type].dispatch(
+                d, query, timeout=timeout, item_id=item_id, resume_task_id=resume_task_id
+            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
