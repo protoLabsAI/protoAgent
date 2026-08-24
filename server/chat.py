@@ -1068,45 +1068,32 @@ def _unknown_slash_command_reply(message: str) -> str | None:
 # character (no mid-message mentions in v1). The registry is published on STATE by
 # the delegates plugin at register() time; with the plugin absent there is no
 # registry and every `@` falls through to a normal turn.
-_AT_TOKEN_RE = re.compile(r"@(\S+)(?:\s+(.*))?\Z", re.DOTALL)
-
-
-def _leading_at_token(text: str) -> tuple[str, str] | None:
-    """``(token, rest)`` when ``text``'s first non-whitespace run is an ``@``-prefixed
-    token, else ``None`` — a SYNTACTIC check only (no registry lookup), so an unknown
-    ``@name`` is still recognized as an attempted mention (and answered with the roster,
-    not run as a prompt). ``rest`` is whitespace-stripped; a bare ``@name`` yields
-    ``("name", "")``. ``hello @proto`` returns ``None`` (the ``@`` isn't leading)."""
-    stripped = (text or "").lstrip()
-    if not stripped.startswith("@"):
-        return None
-    m = _AT_TOKEN_RE.match(stripped)
-    if m is None:
-        return None
-    return (m.group(1), (m.group(2) or "").strip())
+# Parsing + resolution live in ``graph.mentions`` — ONE source shared with the console
+# composer's `@` popover, the way ``graph.slash_commands`` is shared for `/`. A composer
+# that autocompletes a name this dispatcher won't route sends the operator's message to
+# the wrong participant, so the two must read the same roster through the same code.
+from graph.mentions import (  # noqa: E402
+    mention_target as _mention_target,
+    parse_mention as _leading_at_token,
+)
 
 
 def _parse_at_delegate(text: str) -> tuple[str, str] | None:
     """``(canonical_delegate_name, rest)`` when ``text`` opens with ``@<known-delegate>``,
     else ``None``.
 
-    Matches the leading ``@`` token case-insensitively against the live
-    ``STATE.delegate_registry.names()`` and returns the delegate's REGISTERED name — so
-    ``@Proto`` resolves to ``proto`` (``dispatch``/``get`` are case-sensitive). Returns
-    ``None`` when the delegates plugin isn't loaded, the ``@`` isn't the leading token, or
-    the token names no configured delegate. A bare ``@name`` still returns ``("name", "")``
-    — the empty-query case is an error the dispatcher surfaces, not a parse failure."""
-    reg = getattr(STATE, "delegate_registry", None)
-    if not reg:
+    Case-insensitive against the live roster, returning the delegate's REGISTERED name —
+    ``@Proto`` resolves to ``proto`` (``dispatch``/``get`` are case-sensitive). ``None``
+    when the delegates plugin isn't loaded, the ``@`` isn't leading, or the token names no
+    configured delegate. A bare ``@name`` still returns ``("name", "")`` — the empty-query
+    case is an error the dispatcher surfaces, not a parse failure."""
+    if not getattr(STATE, "delegate_registry", None):
         return None
     tok = _leading_at_token(text)
     if tok is None:
         return None
-    token, rest = tok
-    canonical = {n.lower(): n for n in reg.names()}.get(token.lower())
-    if canonical is None:
-        return None
-    return (canonical, rest)
+    canonical = _mention_target(tok[0])
+    return None if canonical is None else (canonical, tok[1])
 
 
 def _delegate_unavailable_msg(name: str) -> str:
@@ -1117,36 +1104,63 @@ def _delegate_unavailable_msg(name: str) -> str:
     return f"Unknown or unreachable delegate: @{name}. Available: {avail or '(none)'}."
 
 
-async def _at_delegate_reply(message: str) -> str | None:
+async def _at_delegate_exchange(
+    message: str, session_id: str = "", request_metadata: dict | None = None
+) -> tuple[str | None, dict | None]:
     """The complete @-delegate short-circuit (S1), shared by the streaming and
     non-streaming turn drivers so both dispatch identically.
 
-    Returns the assistant reply to emit — the delegate's answer, a usage hint for a bare
-    ``@name``, or an "unknown delegate" roster — or ``None`` to fall through to the normal
-    turn (no leading ``@``-mention, or the delegates plugin isn't loaded so there is no
-    registry to route to). ``message`` is NOT mutated: the original ``@name rest`` is what
-    the caller logs to session history, and only the stripped ``rest`` reaches the
-    delegate."""
+    Returns ``(reply, outcome)``. ``reply`` is the assistant text to emit — the delegate's
+    answer, a usage hint for a bare ``@name``, or an "unknown delegate" roster — or
+    ``None`` to fall through to a normal turn. ``outcome`` is the structured record of a
+    real exchange (author, catch-up size), for the authorship frame; ``None`` for the
+    fall-through and error replies, which no participant authored.
+
+    ``message`` is NOT mutated: the original ``@name rest`` is what the caller logs to
+    session history, and only the stripped ``rest`` reaches the delegate.
+
+    **The exchange is recorded on the session's checkpointer thread** (``run_mention``).
+    That matters because a bare follow-up message goes to the LEAD agent, not to the
+    delegate — without the record the lead cannot answer "what did proto say?" one message
+    later, having never seen it. Recording it is also what lets the delegate be caught up
+    on the room next time it is addressed.
+    """
     reg = getattr(STATE, "delegate_registry", None)
     if not reg:
-        return None
+        return None, None
     tok = _leading_at_token(message)
     if tok is None:
-        return None
+        return None, None
     parsed = _parse_at_delegate(message)
     # A leading `@token` that resolves to no delegate → answer with the roster instead of
     # running the raw text as a prompt (r2). The get() re-check keeps step 2 honest if the
     # roster mutated between names() and here.
     if parsed is None or reg.get(parsed[0]) is None:
-        return _delegate_unavailable_msg(tok[0] if parsed is None else parsed[0])
+        return _delegate_unavailable_msg(tok[0] if parsed is None else parsed[0]), None
     name, rest = parsed
     if not rest:
-        return f"Usage: `@{name} <message>` — add a message to send to the {name} delegate."
-    try:
-        return await reg.dispatch(name, rest)
-    except Exception as exc:  # noqa: BLE001 — a delegate failure is an answer to the operator, not a 500
-        log.warning("[at-delegate] dispatch to @%s failed", name, exc_info=True)
-        return f"Delegate @{name} failed: {exc}"
+        return f"Usage: `@{name} <message>` — add a message to send to the {name} delegate.", None
+
+    from graph.mention_op import run_mention
+
+    outcome = await run_mention(
+        STATE.graph,
+        reg,
+        _resolve_thread_id(request_metadata, session_id),
+        name,
+        rest,
+        session_id=session_id,
+    )
+    if outcome.get("ok"):
+        return (str(outcome.get("reply") or "").strip() or f"@{name} replied with nothing."), outcome
+    # Keep S1's wording — a delegate failure is an answer to the operator, not a 500.
+    return f"Delegate @{name} failed: {outcome.get('error') or 'unknown error'}", outcome
+
+
+async def _at_delegate_reply(message: str) -> str | None:
+    """``_at_delegate_exchange``'s reply text alone — the S1 entry point."""
+    reply, _outcome = await _at_delegate_exchange(message)
+    return reply
 
 
 # Per-thread_id locks (WeakValueDictionary so a lock is GC'd once no turn holds it,
@@ -1632,8 +1646,22 @@ async def _chat_langgraph_stream_impl(
             # BEFORE goal control (and every slash-command below) so an @-mention is
             # never swallowed by an active goal; a no-op when the delegates plugin isn't
             # loaded (no registry on STATE ⇒ `@` is ordinary text). See _at_delegate_reply.
-            _at_reply = await _at_delegate_reply(message)
+            _at_reply, _at_outcome = await _at_delegate_exchange(message, session_id, request_metadata)
             if _at_reply is not None:
+                if _at_outcome is not None:
+                    # An authorship stamp for the terminal frame that follows: the answer
+                    # is this participant's own words, not the lead agent's. Consumers
+                    # that don't know this kind ignore it (the executor's if/elif has no
+                    # else) and still get the answer on the `done` frame.
+                    yield (
+                        "room_reply",
+                        {
+                            "author": _at_outcome.get("author") or "",
+                            "ok": bool(_at_outcome.get("ok")),
+                            "catchup": int(_at_outcome.get("catchup") or 0),
+                            "truncated": bool(_at_outcome.get("truncated")),
+                        },
+                    )
                 yield ("done", _at_reply)
                 return
 
@@ -2714,7 +2742,9 @@ async def _chat_langgraph_impl(
             # STEP 0 — @-delegate dispatch (S1): same short-circuit as the streaming path,
             # returned as the assistant message. Checked before goal control / every slash
             # command; a no-op when the delegates plugin isn't loaded. See _at_delegate_reply.
-            _at_reply = await _at_delegate_reply(message)
+            # No request_metadata on this driver — the thread resolves from the session
+            # id alone, as it does everywhere else in this function.
+            _at_reply, _ = await _at_delegate_exchange(message, session_id, None)
             if _at_reply is not None:
                 return [{"role": "assistant", "content": _at_reply}]
 
