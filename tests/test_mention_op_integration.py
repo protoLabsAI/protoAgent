@@ -10,7 +10,10 @@ and fail the moment an operator typed `@proto`.
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
+from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.constants import START
@@ -39,7 +42,12 @@ class _Registry:
 
 @pytest.fixture
 def real_graph():
-    return create_agent_graph(LangGraphConfig(), checkpointer=MemorySaver())
+    # `create_agent_graph` builds the LLM eagerly, so an unpatched fixture needs
+    # OPENAI_API_KEY in the environment even though no test here calls a model. Patch
+    # the seam: what these tests exercise is the checkpointer, not the model.
+    fake = GenericFakeChatModel(messages=iter([]))
+    with patch("graph.agent.create_llm", lambda *a, **k: fake):
+        return create_agent_graph(LangGraphConfig(), checkpointer=MemorySaver())
 
 
 async def _thread_messages(graph, thread_id):

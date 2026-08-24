@@ -20,7 +20,11 @@ class _Reg:
         self._entries = entries
 
     def names(self):
-        return [e["name"] for e in self._entries]
+        # Skip non-dict entries the way the real registry does. Without this the
+        # non-dict fixture below raises inside `names()`, `mention_target` swallows it,
+        # and EVERY token resolves to None — which would make `resolve_mentions` look
+        # correct while returning nothing for the wrong reason.
+        return [e["name"] for e in self._entries if isinstance(e, dict) and e.get("name")]
 
     def roster(self):
         return list(self._entries)
@@ -142,6 +146,34 @@ def test_every_offered_mention_resolves(monkeypatch):
 def test_nameless_roster_entries_are_dropped(monkeypatch):
     _install(monkeypatch, [PROTO, {"name": "", "type": "agent"}, "not-a-dict"])
     assert [e["name"] for e in mentions.resolve_mentions()] == ["proto"]
+
+
+def test_an_entry_the_dispatcher_could_not_route_is_never_offered(monkeypatch):
+    """The composer must never offer a token the dispatcher would refuse. The guard is
+    a round-trip through `mention_target` — here a roster that advertises a name the
+    registry cannot actually resolve."""
+
+    class _Mismatched(_Reg):
+        def names(self):
+            return ["proto"]  # `ghost` is advertised by roster() but resolves to nobody
+
+    monkeypatch.setattr(
+        rs.STATE,
+        "delegate_registry",
+        _Mismatched([PROTO, {"name": "ghost", "type": "agent", "description": "", "url": ""}]),
+        raising=False,
+    )
+    assert [e["name"] for e in mentions.resolve_mentions()] == ["proto"]
+
+
+def test_both_halves_of_a_case_pair_stay_addressable(monkeypatch):
+    """A case-differing PAIR is not ambiguity — each is exactly addressable, so both are
+    offered. Only a token matching NEITHER exactly (`@PROTO`) is refused."""
+    _install(monkeypatch, [PROTO, {"name": "Proto", "type": "agent", "description": "", "url": ""}])
+    assert [e["name"] for e in mentions.resolve_mentions()] == ["proto", "Proto"]
+    assert mentions.mention_target("proto") == "proto"
+    assert mentions.mention_target("Proto") == "Proto"
+    assert mentions.mention_target("PROTO") is None
 
 
 def test_trailing_punctuation_stays_on_the_token():

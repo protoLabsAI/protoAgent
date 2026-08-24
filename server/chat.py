@@ -1646,7 +1646,15 @@ async def _chat_langgraph_stream_impl(
             # BEFORE goal control (and every slash-command below) so an @-mention is
             # never swallowed by an active goal; a no-op when the delegates plugin isn't
             # loaded (no registry on STATE ⇒ `@` is ordinary text). See _at_delegate_reply.
-            _at_reply, _at_outcome = await _at_delegate_exchange(message, session_id, request_metadata)
+            # The exchange WRITES this session's checkpointer thread, so it takes the
+            # same per-thread lock every other writer takes (see the turn lock below,
+            # and compact/rewind). Without it a mention landing while a goal
+            # continuation or a scheduled fire writes the same thread lost-updates the
+            # transcript — the exact corruption that lock exists to prevent.
+            async with _thread_lock(_resolve_thread_id(request_metadata, session_id)):
+                _at_reply, _at_outcome = await _at_delegate_exchange(
+                    message, session_id, request_metadata
+                )
             if _at_reply is not None:
                 if _at_outcome is not None:
                     # An authorship stamp for the terminal frame that follows: the answer
@@ -2743,8 +2751,10 @@ async def _chat_langgraph_impl(
             # returned as the assistant message. Checked before goal control / every slash
             # command; a no-op when the delegates plugin isn't loaded. See _at_delegate_reply.
             # No request_metadata on this driver — the thread resolves from the session
-            # id alone, as it does everywhere else in this function.
-            _at_reply, _ = await _at_delegate_exchange(message, session_id, None)
+            # id alone, as it does everywhere else in this function. Same per-thread
+            # lock contract as the streaming driver: the exchange writes the thread.
+            async with _thread_lock(_resolve_thread_id(None, session_id)):
+                _at_reply, _ = await _at_delegate_exchange(message, session_id, None)
             if _at_reply is not None:
                 return [{"role": "assistant", "content": _at_reply}]
 

@@ -147,6 +147,17 @@ def _prompt(window: list[tuple[str, str]], truncated: bool, target: str, message
     return preface + message
 
 
+def _attr(value: str) -> str:
+    """An XML attribute value, escaped — a participant name is not trusted markup.
+
+    Today both names come from the configured delegate roster, but ``run_mention`` is a
+    public entry point and #3050 adds agent-originated addressing. A name carrying `"`
+    or `>` would otherwise break the envelope so `_ENVELOPE_RE` stops round-tripping it,
+    and — worse — let a forged ``from=`` attribution reach the lead agent.
+    """
+    return str(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
 def _envelope(author: str, text: str, *, to: str = "") -> str:
     """The model-facing carrier for a room message on the thread.
 
@@ -155,7 +166,7 @@ def _envelope(author: str, text: str, *, to: str = "") -> str:
     an ``AIMessage(name=…)``: the `name` field's handling varies by gateway, and the
     lead agent must never read another participant's words as its own prior output.
     """
-    attrs = f'from="{author}"' + (f' to="{to}"' if to else "")
+    attrs = f'from="{_attr(author)}"' + (f' to="{_attr(to)}"' if to else "")
     return f"<room-message {attrs}>\n{text}\n</room-message>"
 
 
@@ -179,6 +190,12 @@ async def run_mention(
     The thread write is best-effort and happens even on a dispatch error, so a failed
     address is visible to the lead agent as something that happened in the room rather
     than vanishing.
+
+    **Callers must hold the per-thread lock** for ``thread_id``. This writes the shared
+    checkpointer thread, and every other writer (a turn, a goal continuation, compact,
+    rewind) serializes on that lock — an unlocked write here lost-updates the
+    transcript. Kept as a caller contract rather than taken here so the module stays
+    host-free, the way ``_hold_if_hitl_pending`` documents the same requirement.
     """
     # A missing graph is NOT a refusal. The operator asked a delegate a question; the
     # thread record is bookkeeping on top of that, and losing the bookkeeping must never

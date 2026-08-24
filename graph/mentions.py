@@ -99,7 +99,11 @@ def resolve_mentions() -> list[dict]:
         if not isinstance(entry, dict):
             continue
         name = str(entry.get("name") or "").strip()
-        if not name:
+        # Apply the resolution the docstring promises rather than assuming it: an entry
+        # whose name does not round-trip through `mention_target` is one the dispatcher
+        # would refuse (an ambiguous case-fold, or a roster/name mismatch), and offering
+        # it in the composer is how the operator's message reaches the wrong participant.
+        if not name or mention_target(name) != name:
             continue
         out.append(
             {
