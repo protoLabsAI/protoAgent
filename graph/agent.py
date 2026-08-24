@@ -166,6 +166,14 @@ def _build_middleware(
         )
     )
 
+    # Who is in this chat (#3049) — one system-suffix line naming the delegates that
+    # have spoken on this thread, so the lead knows who is already caught up and
+    # prefers them for follow-ups. Awareness, never permission; no-op on a thread
+    # with no room participants (every ordinary chat).
+    from graph.middleware.room_cast import RoomCastMiddleware
+
+    middleware.append(RoomCastMiddleware())
+
     # Mid-turn user steering (spike) — fold queued user input into the running
     # turn at the next model call, so a user can redirect ongoing work without
     # stopping the stream. No-op when nothing was injected this turn.

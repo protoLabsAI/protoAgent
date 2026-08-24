@@ -134,7 +134,7 @@ function titleFromMessages(messages: ChatMessage[]) {
   return text.length > 52 ? `${text.slice(0, 49)}...` : text;
 }
 
-function createSession(opts: { incognito?: boolean; participants?: string[] } = {}): ChatSession {
+function createSession(opts: { incognito?: boolean } = {}): ChatSession {
   const now = Date.now();
   return {
     id: id("chat"),
@@ -143,7 +143,6 @@ function createSession(opts: { incognito?: boolean; participants?: string[] } = 
     createdAt: now,
     updatedAt: now,
     ...(opts.incognito ? { incognito: true } : {}),
-    ...(opts.participants?.length ? { participants: [...opts.participants] } : {}),
   };
 }
 
@@ -367,24 +366,33 @@ try {
  * silently landing the operator there when they asked for a new chat would be a surprise.
  * Incognito must match too: an incognito request is a different kind of session, so a
  * plain blank can't satisfy it (ADR 0069 D3b — incognito threads leave no memory).
- * Participants likewise (#3049): a room with people in it is not interchangeable with
- * an empty chat, in either direction — handing back a blank when a group was asked for
- * loses the roster, and handing back a group when a plain chat was asked for silently
- * puts the operator in a room.
  */
 export function unusedSession(
   state: ChatState,
-  opts: { incognito?: boolean; participants?: string[] } = {},
+  opts: { incognito?: boolean } = {},
 ): ChatSession | undefined {
   const wantIncognito = Boolean(opts.incognito);
-  const wantParticipants = [...(opts.participants ?? [])].sort().join("\u0000");
   return state.sessions.find(
     (s) =>
       s.messages.length === 0 &&
       s.title === DEFAULT_SESSION_TITLE &&
-      Boolean(s.incognito) === wantIncognito &&
-      [...(s.participants ?? [])].sort().join("\u0000") === wantParticipants,
+      Boolean(s.incognito) === wantIncognito,
   );
+}
+
+/** Who is in this chat (#3049) — DERIVED from the transcript, never tracked from
+ *  keystrokes. A participant is a delegate that has spoken here (an authored assistant
+ *  message), in first-spoken order. Deriving is the whole design: a tracked list can
+ *  only drift from the transcript (chips that outlive a deleted draft were the bug that
+ *  killed the first cut), and nothing in this system "listens" — an agent acts only
+ *  when addressed — so the strip is a record of the conversation's cast, not presence. */
+export function sessionCast(session: Pick<ChatSession, "messages"> | null | undefined): string[] {
+  const seen: string[] = [];
+  for (const m of session?.messages ?? []) {
+    const name = m.role === "assistant" ? m.author?.name : undefined;
+    if (name && !seen.includes(name)) seen.push(name);
+  }
+  return seen;
 }
 
 export function ensureActiveSessions(state: ChatState, sessionId: string | null): string[] {
@@ -494,7 +502,7 @@ export const chatStore = {
     return state;
   },
 
-  createSession(opts: { incognito?: boolean; participants?: string[] } = {}) {
+  createSession(opts: { incognito?: boolean } = {}) {
     // Don't pile up blanks. A pristine session is byte-for-byte what this call would
     // produce, so hand it back instead — otherwise tapping "+" repeatedly (easy to do
     // now that it's a primary action in the mobile header) spawns identical empty tabs
@@ -695,32 +703,6 @@ export const chatStore = {
 
   // Per-tab incognito toggle (ADR 0069 D3b). Persisted with the session so the mode
   // survives reload — every send while ON carries metadata.incognito.
-  /** Replace a room's participant list (#3049). Empty ⇒ back to an ordinary chat. */
-  setSessionParticipants(sessionId: string, names: string[]) {
-    // De-duplicate while preserving order: the list is operator-curated, so the order
-    // they built it in is the order they expect to see.
-    const unique = names.filter((n, i) => n && names.indexOf(n) === i);
-    setState((current) => ({
-      ...current,
-      sessions: current.sessions.map((session) =>
-        session.id === sessionId ? { ...session, participants: unique.length ? unique : undefined } : session,
-      ),
-    }));
-  },
-
-  /** Add one participant to a room, idempotently — used when an `@` pulls somebody in. */
-  addSessionParticipant(sessionId: string, name: string) {
-    if (!name) return;
-    setState((current) => ({
-      ...current,
-      sessions: current.sessions.map((session) => {
-        if (session.id !== sessionId) return session;
-        const existing = session.participants ?? [];
-        return existing.includes(name) ? session : { ...session, participants: [...existing, name] };
-      }),
-    }));
-  },
-
   setSessionIncognito(sessionId: string, on: boolean) {
     setState((current) => ({
       ...current,

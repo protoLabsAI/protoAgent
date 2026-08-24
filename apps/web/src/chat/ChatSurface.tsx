@@ -4,7 +4,7 @@ import { Spinner } from "@protolabsai/ui/data";
 import { Switch } from "@protolabsai/ui/forms";
 import { Conversation, Message, PromptInput } from "@protolabsai/ui/ai";
 import { TabBar } from "@protolabsai/ui/navigation";
-import { Check, EyeOff, TerminalSquare, Users, X } from "lucide-react";
+import { Check, EyeOff, TerminalSquare, Users } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -24,6 +24,7 @@ import {
   chatStore,
   useChatState,
   effectiveReasoningEffort,
+  sessionCast,
   subscribeGoalKickoff,
   takeGoalKickoff,
 } from "./chat-store";
@@ -783,10 +784,11 @@ function ChatSessionSlot({
       const matched = mentions.filter(
         (m) => !q || m.name.toLowerCase().includes(q) || m.description.toLowerCase().includes(q),
       );
-      // Who's already in THIS room comes first (#3049), in the order the operator built
-      // it. Ordering, not filtering: `@somebody-else` still routes, because the roster is
-      // a convenience and refusing an address would be a surprise rather than a safeguard.
-      const roster = session?.participants ?? [];
+      // Who has SPOKEN in this chat comes first (#3049) — derived from the transcript,
+      // so it can never disagree with what happened. Ordering, not filtering:
+      // `@somebody-else` still routes; refusing an address would be a surprise, not a
+      // safeguard.
+      const roster = sessionCast(session);
       if (!roster.length) return matched;
       const rank = (name: string) => {
         const at = roster.indexOf(name);
@@ -815,7 +817,7 @@ function ChatSessionSlot({
     return unique.filter(
       (c) => !q || c.name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q),
     );
-  }, [slashQuery, slashSigil, commands, mentions, flagOn, session?.participants]);
+  }, [slashQuery, slashSigil, commands, mentions, flagOn, session?.messages]);
 
   const slashActive = slashMatches.length > 0;
   const slashSel = slashActive ? Math.min(slashIndex, slashMatches.length - 1) : 0;
@@ -900,9 +902,6 @@ function ChatSessionSlot({
       settleCaret(start);
       return;
     }
-    // Completing an `@` PULLS that participant into the room (#3049) — the operator
-    // said the name, so the roster reflects it without a second gesture.
-    if (sigil === "@" && session) chatStore.addSessionParticipant(session.id, cmd.name);
     const insert = `${sigil}${cmd.name} `;
     setDraft(draft.slice(0, start) + insert + draft.slice(end));
     setSlashIndex(0);
@@ -2091,28 +2090,27 @@ function ChatSessionSlot({
           }
         }}
       >
-        {/* Who is in this room (#3049). Rendered only once somebody has been pulled in,
-            so an ordinary chat looks exactly as it did. Each chip removes its participant
-            — leaving the room is one click, and emptying it turns the tab back into a
-            plain chat rather than an empty-roster special case. */}
-        {session?.participants?.length ? (
-          <div className="chat-roster" aria-label="In this room">
+        {/* Who is in this chat (#3049) — derived from the transcript, so it can never
+            drift from what happened (the tracked-list version grew chips a deleted draft
+            left behind). A quiet legend, not presence: nothing here "listens" — an agent
+            acts only when addressed, and clicking a name is exactly that affordance
+            (inserts `@name `). No remove control: history is not removable, and an X
+            that gated nothing was confusion pretending to be a control. */}
+        {sessionCast(session).length ? (
+          <div className="chat-roster" aria-label="In this chat">
             <Users size={13} aria-hidden />
-            {session.participants.map((name) => (
+            {sessionCast(session).map((name) => (
               <button
                 key={name}
                 type="button"
                 className="chat-roster-chip"
-                title={`Remove @${name} from this room`}
-                onClick={() =>
-                  chatStore.setSessionParticipants(
-                    session.id,
-                    (session.participants ?? []).filter((p) => p !== name),
-                  )
-                }
+                title={`Address @${name}`}
+                onClick={() => {
+                  setDraft((d) => (d.trim() ? d : `@${name} `));
+                  textareaRef.current?.focus();
+                }}
               >
                 <span className="chat-roster-name">@{name}</span>
-                <X size={11} aria-hidden />
               </button>
             ))}
           </div>
