@@ -41,7 +41,7 @@ to add or override host modules your plugin needs. Returns the names newly insta
 ### `load_plugin`
 
 ```python
-load_plugin(root, plugin_id: str | None = None, *, entry: str = __init__.py)
+load_plugin(root, plugin_id: str | None = None, *, entry: str = '__init__.py')
 ```
 
 Import a plugin directory as a PACKAGE and return the package module.

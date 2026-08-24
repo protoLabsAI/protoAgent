@@ -73,6 +73,8 @@ _ADR_RE = re.compile(r"\bADR (\d{4})\b")
 _ISSUE_RE = re.compile(r"(?<![\w/#])#(\d{3,5})\b")
 # Text shaped like an HTML tag — `<id>`, `<config_section>` — which Vue would try to parse.
 _TAGLIKE_RE = re.compile(r"<(/?[A-Za-z_][^>\s]*)>")
+# A fenced code block inside a docstring — verbatim, never rewritten.
+_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 # Split on code spans so we never linkify inside `like_this`.
 _CODE_SPAN_RE = re.compile(r"(``[^`]+``|`[^`]+`)")
 
@@ -127,6 +129,16 @@ def _clean_doc(doc: str | None) -> str:
     # the generated pages differ BY INTERPRETER — CI (3.12) could never agree with a 3.13
     # dev machine. cleandoc handles the first-line-unindented shape identically on both.
     text = inspect.cleandoc(doc)
+    # Park fenced code blocks before any rewriting. A docstring example is verbatim text:
+    # the RST ``double backtick`` → `single` substitution below would eat two of a fence's
+    # three backticks, and linkification would rewrite identifiers inside the sample.
+    fences: list[str] = []
+
+    def _park(m: re.Match) -> str:
+        fences.append(m.group(0))
+        return f"\x00FENCE{len(fences) - 1}\x00"
+
+    text = _FENCE_RE.sub(_park, text)
     text = re.sub(r":(?:func|class|meth|mod|attr|data):`~?([^`]+)`", lambda m: f"`{m.group(1).split('.')[-1]}`", text)
     text = re.sub(r"``([^`]+)``", r"`\1`", text)
 
@@ -154,7 +166,10 @@ def _clean_doc(doc: str | None) -> str:
         in_section = False
         lines.append(line)
     _flush()
-    return _linkify("\n".join(lines))
+    out = _linkify("\n".join(lines))
+    for i, fence in enumerate(fences):
+        out = out.replace(f"\x00FENCE{i}\x00", fence)
+    return out
 
 
 def _prose(text: str) -> str:
@@ -298,16 +313,37 @@ def _init_attr_docs(cls: type) -> dict[str, str]:
     return out
 
 
+class _Literal:
+    """Renders as its text with no quotes — `inspect.Signature` formats annotations with
+    `repr()` (which would quote a plain string) but calls `str()` on anything else."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+    def __repr__(self) -> str:
+        return self.text
+
+
 def _sig(fn: Any, *, drop_self: bool = False) -> str:
     """A rendered signature, minus ``self``. Annotations are kept — they're the contract."""
     sig = inspect.signature(fn)
     params = list(sig.parameters.values())
     if drop_self and params and params[0].name == "self":
         params = params[1:]
-    rendered = str(sig.replace(parameters=params))
-    # `from __future__ import annotations` makes every annotation a string literal;
-    # rendering those quotes would put `-> 'Any'` in the docs. Strip them.
-    return re.sub(r"'([^']*)'", r"\1", rendered)
+
+    # `from __future__ import annotations` makes every annotation a string literal, and
+    # rendering those quotes would put `-> 'Any'` in the docs. Unquote the ANNOTATIONS
+    # specifically — a blanket regex over the rendered signature also strips the quotes off
+    # default VALUES, which silently turned `subdir: str = ''` into `subdir: str = `.
+    def _unquoted(p: inspect.Parameter) -> inspect.Parameter:
+        if isinstance(p.annotation, str):
+            return p.replace(annotation=_Literal(p.annotation))
+        return p
+
+    ret = sig.return_annotation
+    if isinstance(ret, str):
+        ret = _Literal(ret)
+    return str(sig.replace(parameters=[_unquoted(p) for p in params], return_annotation=ret))
 
 
 def _public_functions(module: Any) -> list[tuple[str, Any]]:
