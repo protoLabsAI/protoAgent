@@ -10,6 +10,7 @@ import {
   SlidersHorizontal,
   Square,
   Wrench,
+  X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
@@ -18,6 +19,7 @@ import { ToolCard, ToolCardList, ToolCardSummary, ToolSection } from "@protolabs
 
 import { tokens } from "../lib/format";
 import type { ToolCall } from "../lib/types";
+import { isCancelledDelegation } from "./dismissedToolCalls";
 import { useUI } from "../state/uiStore";
 import { SHOW_ELAPSED_AFTER_MS, formatElapsed, useElapsed } from "./elapsed";
 import { ToolValue } from "./tool-renderers";
@@ -107,6 +109,7 @@ export function ToolCalls({
   flat = false,
   spotlight = false,
   onCancelDelegation,
+  onDismissToolCall,
 }: {
   calls: ToolCall[];
   /** The turn is still live. Keeps the spotlight slot reserved for the whole turn so the
@@ -123,7 +126,15 @@ export function ToolCalls({
   /** Abort a running top-level `task` delegation by its tool-call id (Tier 2). When
    *  omitted, no Stop affordance renders (e.g. historical/finished messages). */
   onCancelDelegation?: (id: string) => void;
+  /** Dismiss a settled CANCELLED delegation card from this client's transcript (local-only —
+   *  backend history is never mutated; see dismissedToolCalls.ts). ToolGroup gates the × to
+   *  cancelled delegations only; when omitted, no dismiss affordance renders anywhere. */
+  onDismissToolCall?: (id: string) => void;
 }) {
+  // Every call in the list can be dismissed away at render time (a cancelled delegation
+  // ×'d out — hideDismissedToolCalls strips it and its children from the message), and an
+  // empty ToolCardList would still paint its chrome/margins. Nothing to show → nothing.
+  if (calls.length === 0) return null;
   // Group children (tools that ran inside a `task` subagent) under their parent.
   const childrenByParent = new Map<string, ToolCall[]>();
   const top: ToolCall[] = [];
@@ -147,13 +158,16 @@ export function ToolCalls({
   const failedCount = fg.filter((c) => c.status === "error").length;
 
   // Only TOP-LEVEL `task` groups get the cancel callback (the Stop affordance only shows
-  // for a running task); nested children and settled cards never need it.
+  // for a running task); nested children and settled cards never need it. The dismiss
+  // callback rides along unconditionally — ToolGroup itself gates it to cancelled
+  // delegations, so it renders nothing on running/completed/failed cards.
   const group = (call: ToolCall) => (
     <ToolGroup
       key={call.id}
       call={call}
       childrenByParent={childrenByParent}
       onCancelDelegation={call.status === "running" ? onCancelDelegation : undefined}
+      onDismissToolCall={onDismissToolCall}
     />
   );
 
@@ -210,6 +224,7 @@ export function ToolCalls({
               call={current}
               childrenByParent={childrenByParent}
               onCancelDelegation={current.status === "running" ? onCancelDelegation : undefined}
+              onDismissToolCall={onDismissToolCall}
             />
           </div>
         ) : null}
@@ -238,6 +253,7 @@ export function ToolCalls({
               call={current}
               childrenByParent={childrenByParent}
               onCancelDelegation={current.status === "running" ? onCancelDelegation : undefined}
+              onDismissToolCall={onDismissToolCall}
             />
           </div>
         ) : null}
@@ -274,10 +290,12 @@ function ToolGroup({
   call,
   childrenByParent,
   onCancelDelegation,
+  onDismissToolCall,
 }: {
   call: ToolCall;
   childrenByParent: Map<string, ToolCall[]>;
   onCancelDelegation?: (id: string) => void;
+  onDismissToolCall?: (id: string) => void;
 }) {
   const kids = childrenByParent.get(call.id);
   const nestedCards = kids?.length
@@ -352,9 +370,30 @@ function ToolGroup({
     </button>
   );
 
+  // A settled CANCELLED delegation is dead weight in the transcript — its sentinel result
+  // carries nothing the operator needs later — so it alone gets a local dismiss (×) in the
+  // same header actions slot. Gated by isCancelledDelegation: a normal completed call (real
+  // output) or a real failure never renders this control, so their chrome is unchanged.
+  const dismissBtn =
+    onDismissToolCall && isCancelledDelegation(call) ? (
+      <button
+        type="button"
+        className="pl-iconbtn tool-dismiss-btn"
+        title="Dismiss this cancelled delegation — hides the card in this view only; chat history is untouched"
+        aria-label="Dismiss cancelled delegation"
+        onClick={(e) => {
+          e.stopPropagation();
+          onDismissToolCall(call.id);
+        }}
+      >
+        <X size={11} />
+      </button>
+    ) : null;
+
   const actions = (
     <>
       {stopBtn}
+      {dismissBtn}
       {manageBtn}
     </>
   );

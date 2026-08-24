@@ -645,6 +645,11 @@ export type ToolCall = {
   id: string;
   name: string;
   input?: string;
+  /** Result preview. A `task` delegation the operator cancelled (Tier 2 Stop) settles
+   *  through the normal tool_end stream with `status: "error"` and an output that starts
+   *  with the `[delegation cancelled by the user` sentinel (graph/agent.py) — the only
+   *  client-visible signal telling "cancelled" apart from a real failure, and the one the
+   *  card's local dismiss keys off (chat/dismissedToolCalls.ts, #3095). */
   output?: string;
   /** True pre-truncation result size in chars (#2775) — `output` is the capped
    *  wire preview, so the context-cost chip must estimate from this instead. */

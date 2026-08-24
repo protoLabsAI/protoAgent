@@ -42,6 +42,7 @@ import { ComposerModelSelect } from "./ComposerModelSelect";
 import { useServerTurn, useServerTurnSessions } from "./server-turn-store";
 import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
 import { inputHistory, pushInputHistory } from "./inputHistory";
+import { dismissedToolCallSet, hideDismissedToolCalls, rememberDismissedToolCall } from "./dismissedToolCalls";
 import { registerChatEscapeHandler, resolveEscapeAction } from "./escapeStop";
 import { finalizeStoppedMessages, resolveStopTarget } from "./stopTurn";
 import { lastOperatorAssistantId, rewindableTailId, replaceText } from "./parts";
@@ -559,6 +560,9 @@ function ChatSessionSlot({
   const [composerForm, setComposerForm] = useState<ComposerFormSpec | null>(null);
   // Transient "copied ✓" feedback on a message's copy action.
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  // Tool-call ids of CANCELLED delegations the operator ×'d out of the transcript (#3095).
+  // Seeded from localStorage so a reload keeps them hidden; see dismissedToolCalls.ts.
+  const [dismissedToolCalls, setDismissedToolCalls] = useState<Set<string>>(dismissedToolCallSet);
   // The message a "Rewind to here" is pending confirmation on (null = dialog closed).
   // Rewind is destructive (discards everything below), so it goes through a confirm.
   const [pendingRewind, setPendingRewind] = useState<ChatMessage | null>(null);
@@ -1267,6 +1271,16 @@ function ChatSessionSlot({
   // then re-run the user message that prompted it via the `hidden` path — no
   // duplicate user bubble, just a fresh streaming assistant. Only offered on the
   // last assistant message when idle.
+  // Dismiss a settled CANCELLED delegation card (#3095): its × on the tool card adds the
+  // id to a localStorage-backed set and the render below filters the card out of THIS
+  // client's view. Local-only — no backend call, the chat history keeps the full turn
+  // (contrast dismissErroredMessage below, whose bubble never WAS history). Held as state
+  // so the dismissal re-renders the transcript immediately; persisted so a reload doesn't
+  // resurrect the card.
+  function dismissToolCall(id: string) {
+    setDismissedToolCalls(rememberDismissedToolCall(id));
+  }
+
   // Drop a local-only errored turn from the transcript (#1695). A hard turn error
   // parks the assistant bubble at status "error" with the error as content — it's
   // never backend history (a reload omits it), so removing it here is purely local
@@ -1949,8 +1963,11 @@ function ChatSessionSlot({
           messages.map((message) => (
             <ChatMessageView
               key={message.id || `${message.role}-${message.createdAt}`}
-              message={message}
+              // Dismissed cancelled-delegation cards are stripped at render time only —
+              // the store (and the backend history it mirrors) keeps the full turn.
+              message={hideDismissedToolCalls(message, dismissedToolCalls)}
               onCancelDelegation={cancelDelegation}
+              onDismissToolCall={dismissToolCall}
               actions={{
                 copiedId,
                 sessionId: session?.id,
