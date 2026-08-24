@@ -221,6 +221,12 @@ def test_view_error_messages_name_the_cause() -> None:
     assert '"Could not read "+path+" — "+causeOf(err)' in html
     # The message that blamed the doc for an unreachable agent is gone.
     assert 'toast("Could not read "+path)' not in html
+    # The reader names the doc it failed to open — but only for an HTTP failure. An
+    # unreachable agent is never reported as a named doc going bad, and the tree/search
+    # reads pass no path, because "docs" is genuinely what failed there.
+    assert 'showErr($reader,e,path)' in html
+    assert 'path&&isHttpErr(e)?esc(path):"docs"' in html
+    assert "showErr($list,e)" in html  # tree/search stay generic
 
 
 # ── operator-chosen docs root (`docs.root`) ───────────────────────────────────

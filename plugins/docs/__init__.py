@@ -260,7 +260,9 @@ async function api(p){
 // <doc>" sends you looking in the wrong place. Name the real cause.
 const isHttpErr=e=>/^HTTP /.test(String((e&&e.message)||e));   // ONE place decides which kind it is
 const causeOf=e=>isHttpErr(e) ? String((e&&e.message)||e) : "the agent is not reachable (is it still running?)";
-const showErr=(el,e)=>{ el.innerHTML='<div class="empty">Could not load docs — '+esc(causeOf(e))+'</div>'; };
+// `path` names the doc being opened; the tree/search reads pass none, because "docs" IS what
+// failed there. An unreachable agent is never named after a doc — the cause line says which.
+const showErr=(el,e,path)=>{ el.innerHTML='<div class="empty">Could not load '+(path&&isHttpErr(e)?esc(path):"docs")+' — '+esc(causeOf(e))+'</div>'; };
 const LIVE_DOCS="https://agent.protolabs.studio/docs/";  // Cloudflare build folds the docs in here (config.mts)
 const slugify=s=>String(s).normalize("NFKD").replace(/[\u0300-\u036f]/g,"").replace(/[^\w\- ]+/g,"").trim().replace(/\s+/g,"-").toLowerCase();
 let currentPath=null;
@@ -297,8 +299,8 @@ function renderDoc(path, d, anchor){
   scrollToAnchor(anchor);
 }
 async function openDoc(path){
-  try{ const d=await fetchDoc(path); if(d) renderDoc(path,d); else $reader.innerHTML='<div class="empty">Could not load.</div>'; }
-  catch(e){ showErr($reader,e); }
+  try{ const d=await fetchDoc(path); if(d) renderDoc(path,d); else $reader.innerHTML='<div class="empty">'+esc(path)+' is not in the docs index.</div>'; }
+  catch(e){ showErr($reader,e,path); }
 }
 // In-content cross-reference links: don't let the click reload the target INSIDE this iframe
 // (cramped, loses the docs chrome). Resolve to a corpus doc → open in-panel (preferred);
