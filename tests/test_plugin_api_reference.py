@@ -15,6 +15,7 @@ symbol reaches the docs, so growing the API surface without documenting it is a 
 
 from __future__ import annotations
 
+import difflib
 import importlib.util
 from pathlib import Path
 
@@ -37,17 +38,45 @@ def gen():
     return _generator()
 
 
+_DIFF_LINES = 40
+
+
+def _drift(committed: str, fresh: str, name: str) -> str:
+    """A unified diff of what the generator would now write, truncated.
+
+    "X is stale, run the generator" is a fine instruction and a useless diagnosis. It is
+    least useful exactly when it matters most: a page that is stale on ONE platform (a
+    separator the generator embedded, a file that checkout skipped, a test that wrote into
+    a scanned directory) can't be reproduced on the machine reading the failure, so the
+    only evidence is what CI prints. Print the difference.
+    """
+    lines = list(
+        difflib.unified_diff(
+            committed.splitlines(),
+            fresh.splitlines(),
+            fromfile=f"committed/{name}",
+            tofile=f"generated/{name}",
+            lineterm="",
+        )
+    )
+    shown = lines[:_DIFF_LINES]
+    if len(lines) > _DIFF_LINES:
+        shown.append(f"… and {len(lines) - _DIFF_LINES} more diff lines")
+    return "\n".join(shown)
+
+
 def test_generated_pages_are_current(gen) -> None:
     """Every committed page matches what the generator produces from today's source."""
     stale = []
     for filename, builder in gen.PAGES.items():
         target = REFERENCE / filename
         assert target.exists(), f"{filename} is missing — run `python scripts/gen_plugin_api.py`"
-        if target.read_text(encoding="utf-8") != builder():
-            stale.append(filename)
+        committed, fresh = target.read_text(encoding="utf-8"), builder()
+        if committed != fresh:
+            stale.append(_drift(committed, fresh, filename))
     assert not stale, (
-        f"Stale generated plugin reference: {', '.join(stale)}. "
-        "Run `python scripts/gen_plugin_api.py` and commit the result."
+        "Stale generated plugin reference. Run `python scripts/gen_plugin_api.py` and commit "
+        "the result. What differs:\n\n" + "\n\n".join(stale)
     )
 
 
