@@ -186,10 +186,6 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "knowledge_attach_inline_budget": 8000,
     "llm_max_retries": 2,
     "max_iterations": 2000,
-    # Agent-to-agent addressing is OFF by default (#3050) — the golden is the guard
-    # that a future edit cannot quietly turn it on.
-    "mention_max_agent_hops": 0,
-    "mention_max_per_target": 2,
     "turn_stall_timeout_seconds": 900.0,
     "round_nudge_after": 25,
     "round_hard_cap": 0,
