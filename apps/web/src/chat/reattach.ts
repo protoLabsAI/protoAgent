@@ -11,6 +11,10 @@
 //      { return; }` froze the bubble forever in exactly this case).
 //   3. A turn that already ENDED while detached: resubscribe is rejected for
 //      terminal tasks, so fall back to one GetTask snapshot replay + finalize.
+//      finalize reconciles the ORDERED parts (not just flat `content`) off the
+//      authoritative task, so a completed MULTI-PART turn whose trailing prose
+//      frame was stranded on the wire still renders its answer below the tool
+//      cards instead of stopping at the last card (#3082 sibling).
 //   4. A turn PAUSED on the operator (input-required / auth-required): the
 //      snapshot replay re-renders the pending HITL form; the session goes idle
 //      WITHOUT finalize — the turn isn't over, and stamping the message "done"
@@ -23,6 +27,7 @@
 import { api, type TurnStreamHandlers } from "../lib/api";
 import type { HitlPayload } from "../lib/types";
 import { chatStore } from "./chat-store";
+import { replaceText } from "./parts";
 import { applyComponent, applyReasoning, applyText, applyToolEvent, applyUsage } from "./turnReducers";
 
 // Kept in sync with streamWatchdog.ts TERMINAL_RE.
@@ -61,7 +66,24 @@ function finalize(sessionId: string, assistantId: string, state: string, text: s
     const toolCalls = m.toolCalls?.map((c: { status: string }) =>
       c.status === "running" ? { ...c, status: "done" as const } : c,
     );
-    return { ...m, content: text || m.content, status: failed ? "error" : "done", toolCalls };
+    return {
+      ...m,
+      content: text || m.content,
+      // Reconcile the ORDERED parts against the authoritative full-turn text, not
+      // just the flat `content`. ChatMessageView renders a parts-bearing bubble
+      // FROM its parts (foldPlan) and only falls back to `content` when there are
+      // none — so a completed MULTI-PART turn whose trailing prose frame was
+      // stranded on the wire (the resubscribe stream closed after the tool cards
+      // but before the answer artifact-update) would otherwise render only the
+      // last tool card: the GetTask text landed in `content`, which a parts-bearing
+      // message never shows (#3082 sibling). replaceText lands the canonical answer
+      // as the trailing text run (dropping any partial preamble run so it isn't
+      // doubled); with no parts yet (a bare / history-loaded bubble) the content
+      // fallback still renders it. Mirrors the live path's finalizeFromTask.
+      parts: text ? replaceText(m.parts, text, m.content) : m.parts,
+      status: failed ? "error" : "done",
+      toolCalls,
+    };
   });
   chatStore.setSessionStatus(sessionId, failed ? "error" : "idle");
 }
