@@ -114,6 +114,13 @@ Better than expected — several pieces of the above already exist:
 
 The native tool set today (~19, lead agent, all stores enabled):
 
+> **Snapshot, 2026-05-31.** The inventory below is left as written — it is the
+> evidence for the count argument that follows, so updating it would break the
+> reasoning as well as the record. Much of it has since moved: `daily_log` and the
+> `peer_*` tools were retired (`delegate_to` replaced the latter), and the GitHub,
+> notes, workflow and `execute_code` tools are plugin-provided now. For the set an
+> agent actually binds today, see [Starter tools](/reference/starter-tools).
+
 - **Keyless (5):** `current_time`, `calculator`, `web_search`, `fetch_url`,
   `ask_human` (lead-only HITL).
 - **GitHub (4):** `github_get_pr`, `github_get_issue`, `github_list_issues`,

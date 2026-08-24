@@ -165,4 +165,4 @@ single-subagent skill (`SKILL.md`).
 
 - [ADR 0002 — Reusable Subagent Workflows](/adr/0002-reusable-subagent-workflows)
 - [Configure subagents](/guides/subagents)
-- [Starter tools](/reference/starter-tools) — `run_workflow` lives alongside `task` / `task_batch`
+- [Starter tools](/reference/starter-tools) — the core tool set `run_workflow`, `task` and `task_batch` are bound alongside, and where each of them actually comes from

@@ -27,6 +27,8 @@ import type {
   GoalState,
   HitlPayload,
   InboxItem,
+  MentionTarget,
+  MessageAuthor,
   CatalogPlugin,
   McpCatalogEntry,
   InstalledPlugin,
@@ -480,6 +482,9 @@ const HITL_MIME = "application/vnd.protolabs.hitl-v1+json";
 const COMPONENT_MIME = "application/vnd.protolabs.component-v1+json";
 const REASONING_MIME = "application/vnd.protolabs.reasoning-v1+json";
 const CONTEXT_MIME = "application/vnd.protolabs.context-v1+json";
+// Authorship for an `@<name>`-addressed turn (#3042) — arrives on a WORKING frame
+// BEFORE the answer artifact, so the answer can be attributed as it is drawn.
+const ROOM_MIME = "application/vnd.protolabs.room-v1+json";
 
 // The two protolabs-a2a SDK extensions we consume ride the message/artifact METADATA
 // map keyed by their extension URI (protolabs-a2a 0.3.0) — they are no longer MIME-typed
@@ -567,6 +572,14 @@ export function componentFromParts(parts?: RawPart[]): ComponentSpec | null {
     | undefined;
   if (!d || typeof d.component !== "string") return null;
   return { component: d.component, props: (d.props as Record<string, unknown>) || {} };
+}
+
+/** The author of an `@<name>`-addressed answer, off a working frame's parts (#3042).
+ *  `null` for every ordinary turn — the lead agent needs no attribution. */
+export function roomAuthorFromParts(parts?: RawPart[]): MessageAuthor | null {
+  const d = dataByMime(parts, ROOM_MIME) as { author?: string; ok?: boolean } | undefined;
+  if (!d || typeof d.author !== "string" || !d.author) return null;
+  return { name: d.author };
 }
 
 export function hitlFromParts(parts?: RawPart[]): HitlPayload | null {
@@ -697,6 +710,8 @@ export type TurnStreamHandlers = {
   onReasoning?: (delta: string) => void;
   onToolCall?: (evt: ToolEvent) => void;
   onComponent?: (spec: ComponentSpec) => void;
+  /** An `@<name>`-addressed turn: the answer that follows is this participant's. */
+  onRoomAuthor?: (author: MessageAuthor) => void;
   onCost?: (usage: TurnUsage) => void;
   onContext?: (ctx: ContextWindow) => void;
   onInputRequired?: (payload: HitlPayload) => void;
@@ -766,6 +781,8 @@ function makeA2ADispatcher(sessionId: string, handlers: TurnStreamHandlers): (fr
       if (toolEvent) handlers.onToolCall?.(toolEvent);
       const component = componentFromParts(parts);
       if (component) handlers.onComponent?.(component);
+      const roomAuthor = roomAuthorFromParts(parts);
+      if (roomAuthor) handlers.onRoomAuthor?.(roomAuthor);
       if (state === "input-required" || state === "TASK_STATE_INPUT_REQUIRED") {
         handlers.onInputRequired?.(hitlFromParts(parts) || { question: messageText });
       }
@@ -1657,6 +1674,12 @@ export const api = {
 
   chatCommands() {
     return request<{ commands: SlashCommand[] }>("/api/chat/commands");
+  },
+
+  /** Who the operator can address with `@<name>` (#3042) — the same resolver the chat
+   *  dispatcher routes with, so the popover can't offer an unreachable target. */
+  chatMentions() {
+    return request<{ mentions: MentionTarget[] }>("/api/chat/mentions");
   },
 
   settingsSchema() {

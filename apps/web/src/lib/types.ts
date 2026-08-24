@@ -851,10 +851,36 @@ export type ContextWindow = {
  *  `.chat-note--<tone>` rule in chat.css; nothing else needs to change. */
 export type SystemNoteTone = "info" | "warning" | "danger" | "success";
 
+/** Who authored a message, when it wasn't the lead agent (#3042).
+ *
+ * Set on an `assistant`-role message answered by an `@<name>`-addressed delegate. The
+ * ROLE deliberately stays "assistant": every existing renderer, exporter and reconciler
+ * keeps working, and attribution is an additive overlay rather than a fourth role that
+ * each of them would have to learn. Absent → the lead agent spoke, as always. */
+/** An addressable participant offered by the composer's `@` popover (#3042). Shaped
+ *  like SlashCommand on purpose — one popover renders both. */
+export type MentionTarget = {
+  name: string;
+  /** The delegate type (`acp`, `a2a`, `model`, …). */
+  kind: string;
+  description: string;
+  usage: string;
+};
+
+export type MessageAuthor = {
+  /** The delegate's name, exactly as it resolves for `@<name>`. */
+  name: string;
+  /** Its delegate type (`acp`, `a2a`, `model`, …) — drives the roster icon. */
+  kind?: string;
+};
+
 export type ChatMessage = {
   id?: string;
   role: "user" | "assistant" | "system";
   content: string;
+  /** Set when this message came from an addressed participant rather than the lead
+   *  agent — see `MessageAuthor`. */
+  author?: MessageAuthor;
   toolCalls?: ToolCall[];
   components?: ComponentSpec[];
   /** Ordered render blocks (text runs + tool groups) built during streaming so the

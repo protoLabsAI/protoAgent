@@ -22,8 +22,14 @@ hallucinates a tool result still gets caught.
 
 python -m evals.runner
 python -m evals.runner --category tool
-python -m evals.runner --tasks current_time_intent,daily_log_intent
+python -m evals.runner --tasks current_time_intent,memory_ingest_intent
 ```
+
+`--tasks` takes case **ids** from `tasks.json`, not tool names. An unknown id does
+not fail the run — the run continues on whatever matched — so the runner prints a
+`warning: no such case id(s): …` line to stderr naming them. Don't wave it through:
+a typo'd or retired id means you covered less than you asked for, and the board can
+still come back all-green.
 
 Reports land in `evals/results/run-<ts>.json` (gitignored — they're run
 artifacts, not source). The CLI prints a pass/fail board; the JSON report
@@ -115,7 +121,7 @@ to model paraphrasing and miss hallucinated tool results entirely.
 ### Why side-effect verification beats text-only
 
 A model can produce "Logged: ..." in its reply without actually
-calling `daily_log`. Substring matching passes, the DB stays empty,
+calling `memory_ingest`. Substring matching passes, the DB stays empty,
 and the bug ships. Reading `audit.jsonl` and the `chunks` table
 afterward catches it.
 
@@ -318,7 +324,7 @@ resolve to the same per-instance knowledge DB — the same requirement the
 ## Prompt rule
 
 **The tool name never appears in the prompt.** Every prompt must be
-plausibly typed by a real user. "Use `daily_log` to record..." tests
+plausibly typed by a real user. "Use `memory_ingest` to record..." tests
 instruction-following, not tool selection. If the agent needs to
 infer the tool from intent, that *is* the test.
 
@@ -351,7 +357,7 @@ The starter `tasks.json` covers:
 - Each shipped tool fires from a plausible operator prompt
 - Memory ingest → recall round-trip
 - KB-driven middleware injection (no tool call needed)
-- A chained two-tool case (`daily_log` then `memory_recall`)
+- A chained two-tool case (`memory_ingest` then `memory_recall`)
 
 When you add a tool, add at least one case for it. When you add a
 skill to the agent card, extend the `card_discovery` case to assert

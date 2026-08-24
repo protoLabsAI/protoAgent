@@ -59,6 +59,12 @@ HITL_MIME = "application/vnd.protolabs.hitl-v1+json"
 # a DataPart, distinct from the answer artifact, so the console can show a
 # collapsible reasoning view. Plain consumers ignore it.
 REASONING_MIME = "application/vnd.protolabs.reasoning-v1+json"
+# Authorship for an `@<name>`-addressed turn (#3042) — who the answer on the terminal
+# frame is FROM, so the console renders it as that participant's message instead of the
+# lead agent's. A local extension like the two above: the answer itself still rides the
+# ordinary artifact, so a consumer that ignores this DataPart shows the same text, just
+# unattributed.
+ROOM_MIME = "application/vnd.protolabs.room-v1+json"
 
 # A renderable UI component (ADR 0051 Slice 2) — a typed, data-only widget the console
 # renders inline ({component, props}). Same DataPart contract as the HITL/tool-call parts.
@@ -706,6 +712,17 @@ class ProtoAgentExecutor(AgentExecutor):
                             # provenance and a tool result carrying an "origin" key of its
                             # own must not be able to masquerade as one.
                             {"phase": event_type, **payload, "origin": _origin},
+                        )
+
+                elif event_type == "room_reply":
+                    # An `@<name>` address answered (#3042). Emitted BEFORE the terminal
+                    # frame carrying the answer text, so the console has the author in
+                    # hand when the answer lands and can attribute it in one render
+                    # rather than re-labelling a message it already drew as the lead's.
+                    if isinstance(payload, dict):
+                        await updater.update_status(
+                            TaskState.TASK_STATE_WORKING,
+                            message=updater.new_agent_message([_data_part_proto(payload, ROOM_MIME)]),
                         )
 
                 elif event_type == "component":
