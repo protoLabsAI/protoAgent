@@ -35,6 +35,7 @@ import { PublishDialog } from "./PublishDialog";
 import { openPublishDialog } from "./publishDialogStore";
 import { findSlashCommand, registeredSlashCommands, slashTokenAt } from "../ext/slashRegistry";
 import { mentionTokenAt } from "./mentionToken";
+import { continueRun, leadingRun, runHas, toggleMention } from "./mentionRun";
 import type { ComposerFormSpec } from "../ext/slashRegistry";
 import { useFlag, useFlagPredicate } from "../flags/flags";
 import { registeredComposerActions } from "../ext/composerRegistry";
@@ -732,6 +733,12 @@ function ChatSessionSlot({
   // How many room exchanges this turn has delivered (#3051). Per-turn, reset at send:
   // the first fills the in-flight bubble, the rest append.
   const roomReplies = useRef(0);
+  // Continue-the-conversation prefill (#3049): the leading run the in-flight turn
+  // addressed, and whether an authored reply actually came back. Set at send, read at
+  // done. Routing stays PER-MESSAGE and visible — the prefill is typed text the
+  // operator can delete, not hidden sticky state.
+  const pendingRun = useRef<string[]>([]);
+  const runAnswered = useRef(false);
 
   useEffect(() => {
     api.chatCommands().then((r) => setCommands(r.commands)).catch(() => {});
@@ -1548,6 +1555,9 @@ function ChatSessionSlot({
     // minting a fresh bubble — so the pre- and post-approval tool cards extend ONE message / one
     // WorkBlock with no inter-bubble gap. Otherwise mint a new assistant message as usual.
     const resuming = opts.resumeMessageId != null;
+    // Who this message addresses (its leading run) — for the continue prefill at done.
+    pendingRun.current = leadingRun(content).names;
+    runAnswered.current = false;
     const assistantId = opts.resumeMessageId ?? messageId();
     roomReplies.current = 0; // per-turn (#3051) — a fresh turn starts with an empty room
     const assistant: ChatMessage = {
@@ -1787,6 +1797,7 @@ function ChatSessionSlot({
           );
         },
         onRoomReply: (reply) => {
+          runAnswered.current = true; // an authored reply arrived — the continue prefill may fire
           // An `@`-addressed turn (#3042/#3051). A fan-out (`@proto @reviewer …`) sends
           // one frame per exchange, each a different participant speaking — so each
           // text-bearing frame becomes its OWN completed message, inserted BEFORE the
@@ -1854,6 +1865,20 @@ function ChatSessionSlot({
           // Stream over — reveal everything still queued before the settle
           // below, so the done bubble never withholds tail text (#2993).
           reveal.flush();
+          // Mid-conversation with a participant, re-typing the address every message is
+          // friction — prefill the run that was just ANSWERED (#3049). Only when their
+          // reply actually came back (a failed address prefills nothing), only into an
+          // empty composer, and only while this tab is still the one in front. Deleting
+          // the prefix is the visible, one-gesture way to talk to the lead again — and a
+          // bare send clears pendingRun, so the lead conversation doesn't re-prefill.
+          if (
+            runAnswered.current &&
+            pendingRun.current.length &&
+            chatStore.getSnapshot().currentSessionId === session.id
+          ) {
+            const run = continueRun(pendingRun.current);
+            setDraft((d) => (d.trim() ? d : run));
+          }
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
           if (roomReplies.current > 0) {
@@ -2099,20 +2124,28 @@ function ChatSessionSlot({
         {sessionCast(session).length ? (
           <div className="chat-roster" aria-label="In this chat">
             <Users size={13} aria-hidden />
-            {sessionCast(session).map((name) => (
-              <button
-                key={name}
-                type="button"
-                className="chat-roster-chip"
-                title={`Address @${name}`}
-                onClick={() => {
-                  setDraft((d) => (d.trim() ? d : `@${name} `));
-                  textareaRef.current?.focus();
-                }}
-              >
-                <span className="chat-roster-name">@{name}</span>
-              </button>
-            ))}
+            {sessionCast(session).map((name) => {
+              const active = runHas(draft, name);
+              return (
+                <button
+                  key={name}
+                  type="button"
+                  className={`chat-roster-chip${active ? " chat-roster-chip--active" : ""}`}
+                  aria-pressed={active}
+                  title={active ? `Remove @${name} from this message` : `Address @${name}`}
+                  onClick={() => {
+                    // Chips COMPOSE the draft's leading run — the only position where a
+                    // mention routes. Click to add, click again to remove; the message
+                    // body is preserved either way. (The first cut refused a non-empty
+                    // draft, which made every chip after the first a silent no-op.)
+                    setDraft((d) => toggleMention(d, name));
+                    textareaRef.current?.focus();
+                  }}
+                >
+                  <span className="chat-roster-name">@{name}</span>
+                </button>
+              );
+            })}
           </div>
         ) : null}
         {/* HITL panel (#1973): floats ABOVE the composer (absolute, anchored to

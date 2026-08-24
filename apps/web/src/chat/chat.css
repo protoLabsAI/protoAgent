@@ -848,3 +848,12 @@
 .chat-roster-chip:hover > svg {
   opacity: 1;
 }
+
+/* An active cast chip — its participant is already addressed by the draft's leading
+   run. Pressed, not disabled: clicking again removes just that mention, so the chip is
+   a real toggle over visible text rather than a dead control. */
+.chat-roster-chip--active {
+  color: var(--pl-color-fg);
+  border-color: var(--pl-color-fg-subtle);
+  background: var(--pl-color-bg-sunken, var(--pl-color-bg));
+}
