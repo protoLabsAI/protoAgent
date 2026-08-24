@@ -724,10 +724,43 @@ def install(
                 if warnings:
                     summary["warnings"] = warnings
                 return summary
-            shutil.rmtree(target)
 
         shutil.rmtree(staging / ".git", ignore_errors=True)  # drop git metadata; lock holds provenance
-        shutil.move(str(staging), str(target))
+
+        # Land the staged tree with a swap, not rmtree-then-move (#3075): the old sequence
+        # deleted the installed copy first, so a move that died mid-copy (disk full,
+        # permissions) left NO old version and half a new one. Rename the existing install
+        # aside instead — same parent dir, so it's an atomic same-filesystem rename — move
+        # the staged tree in, and only then drop the backup; any failure renames the old
+        # version back. (`plugins.lock` already lands atomically via `_write_lock`.)
+        backup = target.parent / (target.name + ".bak")
+        shutil.rmtree(backup, ignore_errors=True)  # leftover from a previously interrupted swap
+        backed_up = False
+        if target.exists():
+            try:
+                os.rename(target, backup)
+                backed_up = True
+            except OSError as exc:
+                raise InstallError(
+                    f"could not set aside the installed copy of {pid!r} before update "
+                    f"(it was left untouched): {exc}"
+                ) from exc
+        try:
+            shutil.move(str(staging), str(target))
+        except Exception as exc:
+            # A cross-filesystem move copies then deletes — it can fail half-copied.
+            shutil.rmtree(target, ignore_errors=True)
+            restored = ""
+            if backed_up:
+                try:
+                    os.rename(backup, target)
+                    restored = " — the previous version was restored"
+                except OSError:
+                    restored = f" — the previous version was left at {backup}"
+            raise InstallError(f"could not move staged plugin {pid!r} into place{restored}: {exc}") from exc
+        if backed_up:
+            shutil.rmtree(backup, ignore_errors=True)
+
         manifest = load_manifest(target) or manifest  # re-read from final path
 
     summary = _summary(manifest, source=url, ref=ref or "", sha=sha)
@@ -1087,7 +1120,13 @@ def uninstall(plugin_id: str, *, purge: bool = False) -> dict:
 
     removed: list[str] = []
     if target.exists():
-        shutil.rmtree(target)
+        # Rename aside first (atomic, same parent dir), then delete (#3075): an
+        # interrupted removal leaves `<id>.bak` — never a half-deleted live plugin
+        # dir. A leftover backup is cleared by the next install of the same id.
+        backup = target.parent / (target.name + ".bak")
+        shutil.rmtree(backup, ignore_errors=True)
+        os.rename(target, backup)
+        shutil.rmtree(backup, ignore_errors=True)
         removed.append("code")
     lock = _read_lock()
     before = len(lock["plugins"])

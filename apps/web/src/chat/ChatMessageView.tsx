@@ -63,10 +63,15 @@ export type ChatMessageActions = {
 export function ChatMessageView({
   message,
   onCancelDelegation,
+  onDismissToolCall,
   actions,
 }: {
   message: ChatMessage;
   onCancelDelegation?: (id: string) => void;
+  /** Dismiss a settled CANCELLED delegation card from this client's transcript (local-only —
+   *  the backend history is never mutated). Threaded to ToolCalls, which gates the × to
+   *  cancelled delegations; when omitted, no dismiss affordance renders. */
+  onDismissToolCall?: (id: string) => void;
   actions?: ChatMessageActions;
 }) {
   const streaming = message.status === "streaming";
@@ -112,7 +117,7 @@ export function ChatMessageView({
   // so an in-flight turn still renders full-size). These are visually secondary to the operator's
   // own turns, so they collapse into a compact, expandable card instead of a full-size bubble.
   if (message.role === "assistant" && message.origin && message.status !== "streaming") {
-    return <ServerResultCard message={message} onCancelDelegation={onCancelDelegation} />;
+    return <ServerResultCard message={message} onCancelDelegation={onCancelDelegation} onDismissToolCall={onDismissToolCall} />;
   }
   return (
     <Message
@@ -166,7 +171,7 @@ export function ChatMessageView({
             );
           const renderInline = (part: ChatPart, i: number) =>
             part.kind === "tools" ? (
-              <ToolCalls key={i} calls={toolsForGroup(part.ids, message.toolCalls)} streaming={streaming} onCancelDelegation={onCancelDelegation} />
+              <ToolCalls key={i} calls={toolsForGroup(part.ids, message.toolCalls)} streaming={streaming} onCancelDelegation={onCancelDelegation} onDismissToolCall={onDismissToolCall} />
             ) : part.kind === "reasoning" ? (
               part.text.trim() ? (
                 <ReasoningCard key={i} text={part.text} streaming={streaming && i === workParts.length - 1} />
@@ -195,7 +200,7 @@ export function ChatMessageView({
         // (tool cards above the text; order isn't recoverable from storage).
         <>
           {message.toolCalls && message.toolCalls.length > 0 ? (
-            <ToolCalls calls={message.toolCalls} onCancelDelegation={onCancelDelegation} />
+            <ToolCalls calls={message.toolCalls} onCancelDelegation={onCancelDelegation} onDismissToolCall={onDismissToolCall} />
           ) : null}
           {message.content ? (
             message.role === "user" ? (
@@ -497,9 +502,11 @@ function ScheduledChip({
 function ServerResultCard({
   message,
   onCancelDelegation,
+  onDismissToolCall,
 }: {
   message: ChatMessage;
   onCancelDelegation?: (id: string) => void;
+  onDismissToolCall?: (id: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   // `origin` is always set on this path (the render branch guards it) — fall back defensively.
@@ -528,7 +535,7 @@ function ServerResultCard({
         {expanded ? (
           <div className="chat-server-result-body">
             {message.toolCalls && message.toolCalls.length > 0 ? (
-              <ToolCalls calls={message.toolCalls} onCancelDelegation={onCancelDelegation} />
+              <ToolCalls calls={message.toolCalls} onCancelDelegation={onCancelDelegation} onDismissToolCall={onDismissToolCall} />
             ) : null}
             {message.content ? <Markdown>{message.content}</Markdown> : null}
           </div>

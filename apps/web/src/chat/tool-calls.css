@@ -227,6 +227,30 @@
   flex: none;
 }
 
+/* Dismiss a settled CANCELLED delegation (#3095) — icon-only ×, in the same quiet header
+   actions slot. Only ever rendered on the cancellation-sentinel card (see
+   dismissedToolCalls.isCancelledDelegation): completed and failed calls keep their exact
+   prior chrome. Error-toned on hover — it removes the card from this view. */
+.tool-dismiss-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  width: auto;
+  border-radius: 6px;
+  color: var(--pl-color-fg-subtle);
+  border: 1px solid transparent;
+  opacity: 0.7;
+}
+.tool-dismiss-btn:hover {
+  color: var(--pl-color-status-error);
+  background: color-mix(in srgb, var(--pl-color-status-error) 12%, transparent);
+  border-color: color-mix(in srgb, var(--pl-color-status-error) 28%, transparent);
+  opacity: 1;
+}
+.tool-dismiss-btn svg {
+  flex: none;
+}
+
 /* Defensive: an ACP coding agent can report a long/unbroken tool NAME (e.g. a verbose
    MCP tool title). Let the header shrink + the name wrap so it can never force the card
    wider than the chat panel — the args/source live in the expandable body, not here. */
