@@ -453,6 +453,11 @@ class LangGraphConfig:
     # `mention_max_per_target` bounds how many times any ONE participant can be pulled
     # into a single chain, which is what actually stops an A→B→A ping-pong — the hop
     # count alone would let two agents alternate until it ran out.
+    #
+    # YAML shape (a field is only settable if `from_dict` reads it — see #3050):
+    #   mentions:
+    #     max_agent_hops: 1
+    #     max_per_target: 2
     mention_max_agent_hops: int = 0
     mention_max_per_target: int = 2
     # Seconds of stream SILENCE after which a turn is declared wedged and failed
@@ -1556,6 +1561,10 @@ class LangGraphConfig:
             aux_model=data.get("routing", {}).get("aux_model", cls.aux_model),
             goal_enabled=data.get("goal", {}).get("enabled", cls.goal_enabled),
             goal_max_iterations=data.get("goal", {}).get("max_iterations", cls.goal_max_iterations),
+            mention_max_agent_hops=data.get("mentions", {}).get(
+                "max_agent_hops", cls.mention_max_agent_hops
+            ),
+            mention_max_per_target=data.get("mentions", {}).get("max_per_target", cls.mention_max_per_target),
             goal_no_progress_limit=data.get("goal", {}).get("no_progress_limit", cls.goal_no_progress_limit),
             goal_eval_model=data.get("goal", {}).get("eval_model", cls.goal_eval_model),
             goal_verify_timeout=data.get("goal", {}).get("verify_timeout", cls.goal_verify_timeout),

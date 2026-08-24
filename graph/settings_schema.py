@@ -323,6 +323,37 @@ FIELDS: list[Field] = [
     # YAML value (if any) is still honored. Tuning knobs below remain user-editable.
     Field("goal.enabled", "goal_enabled", "Enable goal mode", "bool", "Goal mode", ui_hidden=True),
     Field("goal.max_iterations", "goal_max_iterations", "Max continuations", "number", "Goal mode", minimum=1),
+    # ── Group chat (#3050) ───────────────────────────────────────────────────
+    # Agent-to-agent addressing. 0 = off, and off is the shipped default: this is the
+    # one path in the room that spends money with no human in the loop, so turning it
+    # on is a deliberate act.
+    Field(
+        "mentions.max_agent_hops",
+        "mention_max_agent_hops",
+        "Agent-to-agent hops",
+        "number",
+        "Group chat",
+        description=(
+            "How far an `@mention` chain may travel when one agent addresses another. "
+            "0 (default) means agents cannot address each other at all."
+        ),
+        minimum=0,
+        maximum=5,
+    ),
+    Field(
+        "mentions.max_per_target",
+        "mention_max_per_target",
+        "Max mentions per participant",
+        "number",
+        "Group chat",
+        description=(
+            "How many times one participant can be pulled into a single chain. This is "
+            "what stops an A→B→A ping-pong; the hop count alone would let two agents alternate."
+        ),
+        minimum=1,
+        maximum=10,
+        depends_on={"key": "mentions.max_agent_hops"},
+    ),
     Field(
         "goal.eval_model",
         "goal_eval_model",
@@ -1552,6 +1583,9 @@ _SECTION_CATEGORY = {
     "Caching": "Model",
     # Behavior — how the agent thinks, loops, and decides.
     "Goal mode": "Behavior",
+    # Group chat (#3050) — how far an `@mention` chain may travel. A behaviour knob,
+    # not an integration: it changes what the agent does, not what it connects to.
+    "Group chat": "Behavior",
     # Watches (ADR 0067) sit beside Goal mode, not inside it: the two are independent
     # dispositions (drive vs. supervise) and each has its own enable flag.
     "Watches": "Behavior",
