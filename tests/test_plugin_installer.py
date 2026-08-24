@@ -1189,3 +1189,100 @@ def test_from_yaml_distinguishes_and_warns_on_explicit_empty(tmp_path, caplog):
 
     cfg.write_text("plugins: {}\n")
     assert LangGraphConfig.from_yaml(str(cfg)).plugins_sources_allow is None
+
+
+# ── atomic directory swap on install/update (#3075) ───────────────────────────
+
+
+def _commit_update(repo: Path) -> None:
+    (repo / "extra.py").write_text("x = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "update")
+
+
+def test_update_leaves_no_backup_behind(env):
+    """Success path unchanged: the new version lands, the lock updates, and the
+    transient `<id>.bak` swap dir is gone."""
+    repo = _make_plugin_repo(env)
+    installer.install(str(repo))
+    _commit_update(repo)
+    updated = installer.install(str(repo))
+    target = installer.live_plugins_dir() / "demo_ext"
+    assert (target / "extra.py").exists()
+    assert not (installer.live_plugins_dir() / "demo_ext.bak").exists()
+    lock = installer._read_lock()
+    assert [e["resolved_sha"] for e in lock["plugins"]] == [updated["resolved_sha"]]
+
+
+def test_failed_move_restores_the_previous_version(env, monkeypatch):
+    """The move into place dies mid-update → the old install is back, byte-for-byte.
+
+    The old rmtree-then-move sequence deleted the installed copy first, so this exact
+    failure left nothing at all. The lock keeps the old pin — code and lock agree.
+    """
+    import shutil
+
+    repo = _make_plugin_repo(env)
+    first = installer.install(str(repo))
+    _commit_update(repo)
+    target = installer.live_plugins_dir() / "demo_ext"
+    real_move = shutil.move
+
+    def boom(src, dst, *a, **k):
+        if Path(dst) == target:
+            raise OSError("simulated: disk full mid-move")
+        return real_move(src, dst, *a, **k)
+
+    monkeypatch.setattr(shutil, "move", boom)
+    with pytest.raises(installer.InstallError, match="previous version was restored"):
+        installer.install(str(repo))
+    assert (target / "protoagent.plugin.yaml").exists()  # previous version intact at its path
+    assert not (target / "extra.py").exists()  # the new version did NOT half-land
+    assert not (installer.live_plugins_dir() / "demo_ext.bak").exists()  # backup renamed back, not leaked
+    lock = installer._read_lock()
+    assert [e["resolved_sha"] for e in lock["plugins"]] == [first["resolved_sha"]]
+
+
+def test_backup_rename_failure_leaves_existing_install_untouched(env, monkeypatch):
+    """Setting the old version aside fails (e.g. permissions) → `InstallError`, and
+    the installed copy was never deleted."""
+    import os
+
+    repo = _make_plugin_repo(env)
+    first = installer.install(str(repo))
+    _commit_update(repo)
+    target = installer.live_plugins_dir() / "demo_ext"
+    real_rename = os.rename
+
+    def deny(src, dst, *a, **k):
+        if Path(src) == target:
+            raise PermissionError("simulated: EACCES")
+        return real_rename(src, dst, *a, **k)
+
+    monkeypatch.setattr(os, "rename", deny)
+    with pytest.raises(installer.InstallError, match="left untouched"):
+        installer.install(str(repo))
+    assert (target / "protoagent.plugin.yaml").exists()
+    assert not (target / "extra.py").exists()
+    lock = installer._read_lock()
+    assert [e["resolved_sha"] for e in lock["plugins"]] == [first["resolved_sha"]]
+
+
+def test_stale_backup_from_an_interrupted_swap_is_cleared(env):
+    repo = _make_plugin_repo(env)
+    installer.install(str(repo))
+    stale = installer.live_plugins_dir() / "demo_ext.bak"
+    stale.mkdir()
+    (stale / "junk.py").write_text("x = 1\n")
+    _commit_update(repo)
+    installer.install(str(repo))
+    assert not stale.exists()
+    assert (installer.live_plugins_dir() / "demo_ext" / "extra.py").exists()
+
+
+def test_uninstall_removes_via_rename_aside_and_leaves_no_backup(env):
+    repo = _make_plugin_repo(env)
+    installer.install(str(repo))
+    installer.uninstall("demo_ext")
+    assert not (installer.live_plugins_dir() / "demo_ext").exists()
+    assert not (installer.live_plugins_dir() / "demo_ext.bak").exists()

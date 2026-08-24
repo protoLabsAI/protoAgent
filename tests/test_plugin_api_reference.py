@@ -167,3 +167,12 @@ def test_event_catalog_documents_every_scanned_topic(gen) -> None:
     page = (REFERENCE / "plugin-events.md").read_text(encoding="utf-8")
     missing = [t for t in gen._scan_topics() if f"`{t}`" not in page]
     assert not missing, f"Topics missing from the catalog: {missing}. Run `python scripts/gen_plugin_api.py`."
+
+
+def test_event_scan_emits_posix_paths_on_every_platform(gen) -> None:
+    """Like the docstrings, the "Emitted from" paths must be byte-identical on every
+    OS — Windows CI regenerates the page and compares it to the committed bytes, and
+    a `str(Path)` backslash separator made `plugin-events.md` permanently stale there."""
+    for topic, rec in gen._scan_topics().items():
+        bad = [s for s in rec["sources"] if "\\" in s]
+        assert not bad, f"non-POSIX source paths for {topic!r}: {bad} — use as_posix() in _scan_topics"
