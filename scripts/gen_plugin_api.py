@@ -750,7 +750,10 @@ def _scan_topics() -> dict[str, dict]:
                     continue
                 rec = found.setdefault(topic, {"keys": set(), "sources": set()})
                 rec["keys"].update(_payload_keys(node))
-                rec["sources"].add(str(path.relative_to(REPO)))
+                # as_posix(), not str(): the committed page must be byte-identical on
+                # every OS — Windows CI regenerates it, and a `\` separator here made
+                # plugin-events.md permanently stale there.
+                rec["sources"].add(path.relative_to(REPO).as_posix())
     return {t: {"keys": sorted(v["keys"]), "sources": sorted(v["sources"])} for t, v in sorted(found.items())}
 
 
