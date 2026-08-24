@@ -358,6 +358,10 @@
         {
           "path": "reference/plugin-view-bridge.md",
           "title": "Plugin view bridge (wire protocol)"
+        },
+        {
+          "path": "reference/plugin-events.md",
+          "title": "Event bus topics"
         }
       ]
     },

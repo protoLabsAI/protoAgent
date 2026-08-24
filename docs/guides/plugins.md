@@ -34,6 +34,7 @@ so it is complete and current by construction:
 | [Testkit](/reference/plugin-testkit) | `load_plugin`, `FakeRegistry`, host stubs |
 | [Plugin CLI](/reference/plugin-cli) | `python -m server plugin …` |
 | [View bridge](/reference/plugin-view-bridge) | The sandboxed-iframe `postMessage` protocol |
+| [Event bus topics](/reference/plugin-events) | Every topic core publishes, with payload keys |
 
 New to plugins? [Build your first plugin](/tutorials/first-plugin) is the twenty-minute version,
 and [Plugin architecture](/explanation/plugin-architecture) explains the model — what runs
@@ -89,25 +90,7 @@ federation_paths: []      # prefixes under THIS plugin's own namespace that acce
                           # the /api operator ceiling is lowered. See below.
 ```
 
-**Every field, at a glance** — most have a dedicated section below or in a linked guide:
-
-| Field | Meaning |
-|---|---|
-| `id` · `name` | Required. `id` is the slug that namespaces routes + config; reserved verbs (`install`, `sync`, …) are refused. |
-| `version` · `description` | Metadata; `version` also drives update/pin resolution. |
-| `enabled` | Author opt-in (`true` loads without an operator listing it). |
-| `builtin` | Core runtime infra — **always loads**, ignores enable/disable, hidden from the Plugins panel (e.g. the delegate registry). |
-| `entrypoint` | Module filename to import; defaults to `__init__.py` then `plugin.py`. |
-| `requires_env` | Env vars that must be set or the plugin is skipped (a **hard** gate, vs `required` settings). |
-| `config_section` · `config` · `secrets` · `settings` | Config declaration ([below](#config-secrets-settings)); `settings[].required: true` is the soft gate. |
-| `test` | `true` → the console renders a **Test connection** button (POST `/api/config/test-<section>`), ADR 0029. |
-| `guide_url` | A **Setup guide** link the console shows next to the plugin's settings (ADR 0059). |
-| `views` | Console rail views ([Building a plugin view](/guides/building-react-plugin-views)); a view's `palette` may be a string or a dict with its own `path`. |
-| `public_paths` | Auth-exempt prefixes under the plugin's own namespace — the escape hatch for an inbound webhook or a public asset ([below](#public-paths)). |
-| `federation_paths` | Prefixes under the plugin's own namespace that a **federation** credential may call — a peer-reachable deterministic plugin RPC without issuing the operator bearer ([below](#federation-paths)). |
-| `emits` · `subscribes` · `emits_schemas` | Event-bus contract ([Typed event contracts](#typed-event-contracts)). |
-| `requires_pip` · `optional_pip` | Declared pip deps ([publish guide](/guides/plugin-registry)) — the `optional` tier degrades gracefully when absent. |
-| `repository` · `homepage` · `min_protoagent_version` | Provenance + the host-compat gate ([publish guide](/guides/plugin-registry)). |
+**Every field, with its type and default: [Plugin manifest reference](/reference/plugin-manifest).** Generated from the dataclass the loader reads, so it can't fall behind. The fields worth explaining rather than listing have their own sections below.
 
 ### Entry — `register(registry)`
 
@@ -387,26 +370,8 @@ and [Watches](/guides/watches).
 
 ## Host services — `registry.host`
 
-A surface or route often needs to **call the agent** or the **event bus** — host
-services it can't build. `registry.host` exposes them (the server populates them
-before any surface starts; guard for `None`):
-
-- `host.invoke(prompt, session_id, *, tool_fence=None)` — run a chat turn (one
-  conversation per `session_id`), returns the assistant text. `tool_fence` (host ≥ 0.146,
-  #2972) is a per-turn **tool allowlist** for a turn that originated with an untrusted
-  party — a surface relaying another operator's agent, an inbound webhook — so the host
-  blocks any tool call outside it (the model sees a `Blocked by policy` tool result and
-  adapts). A surface that *needs* the fence should feature-detect it
-  (`"tool_fence" in inspect.signature(host.invoke).parameters`) and refuse to run
-  unfenced on an older host rather than run with the agent's full toolset.
-- `host.publish(event, data)` / `host.subscribe()` — the server→client event bus.
-- `host.on(topic, handler)` — subscribe an in-process handler to bus topics (ADR 0039); prefer the
-  `registry.emit` / `registry.on` wrappers, which namespace + guard for you.
-- `host.config()` — the live `LangGraphConfig` (current resolved values, incl.
-  `plugin_config`), so a route reads fresh config instead of a load-time snapshot.
-- `host.apply_settings(patch)` — persist a nested config patch + reload once
-  (heavy — call via `asyncio.to_thread`). Lets a route apply config (e.g. an OAuth
-  Connect flow flips `enabled` and reloads).
+A surface or route often needs to **call the agent** or the **event bus** — host services it
+can't build itself. `registry.host` exposes them:
 
 ```python
 def register(registry):
@@ -416,145 +381,44 @@ def register(registry):
     registry.register_surface(lambda: _gateway(_on_message), name="my-gateway")
 ```
 
+**Guard for `None`.** The server populates these *before any surface starts*, which means
+they are unset at import time and in host-free tests — a route that assumes `host.invoke`
+exists will work in production and crash in your test suite.
+
+Every service, with its signature:
+[registry.host reference](/reference/plugin-registry-api#host-services-registry-host).
+
 ### Tapping core deeper — `graph.sdk` (ADR 0043) {#consumption-sdk}
 
 `registry.host` covers the common cases. For deeper capability, import the **consumption
-SDK** directly — `from graph.sdk import …`, the *stable* surface plugins call into core
-(so core can refactor underneath you; never reach into `graph.agent` internals). v1:
+SDK** — a stable surface onto the agent itself, so a plugin can run a subagent, search
+knowledge, arm a watch, spawn campaign-scale background work, schedule a recurring turn, or
+record a metric series without reaching into core internals (which are free to change
+underneath you — `graph.sdk` and `registry.host` are not).
 
-- `run_subagent(subagent_type, prompt, *, description, extra_tools=None, truncate=None)` — run
-  **one subagent** to completion (vs `host.invoke`, which runs a full lead-agent *chat turn*).
-  `extra_tools` defaults to the host's plugin + MCP tools, so a subagent whose allowlist names a
-  plugin tool still sees it — pass an explicit list (even `[]`) to override, but overriding with a
-  set that omits a needed tool is why an SDK step can silently degrade to "No tools available".
-- `complete(prompt, *, system=None, model_name=None)` — a single **bare LLM completion**: no
-  tools, no agent loop, no persona, no memory. The clean primitive for a one-shot
-  classify/summarize/answer (e.g. an interactive artifact calling back). Distinct from
-  `run_subagent` (a full tool-using worker); uses the live config's model through the gateway.
-- `subagent_types()` — the configured subagent ids.
-- `config()` — the live `LangGraphConfig`.
-- `gateway_client(timeout=…)` — an `httpx.AsyncClient` **pre-configured for the model
-  gateway** (#1931): `base_url` = the configured `api_base`, bearer auth, a sane timeout,
-  and the allowlisted `protoAgent/…` User-Agent (the gateway's Cloudflare WAF 403s the
-  default SDK UAs — hand-rolled httpx calls get blocked at the edge). For the
-  OpenAI-compatible endpoints the chat model doesn't cover — `/images/generations`,
-  `/images/edits`, `/audio/*` (core's own audio transcription rides the same client).
-  **Call gateway endpoints through this; never hit a provider backend directly** — the
-  configured `api_base` host is auto-trusted by the egress guard and the OpenShell
-  network policy (ADR 0008), while any other host is deny-by-default under an egress
-  allowlist and a private backend IP is denied outright. Request **relative paths** and
-  use it per call:
+```python
+from graph import sdk                      # import lazily if your tests run host-free
 
-  ```python
-  from graph import sdk
+answer = await sdk.complete("Summarize the changelog")
+db = sdk.plugin_store(plugin_id=registry.plugin_id) / "state.db"
+```
 
-  async with sdk.gateway_client(timeout=300) as client:
-      resp = await client.post("/images/generations", json={"model": m, "prompt": p})
-      resp.raise_for_status()
-  ```
-- `multimodal_tool_result(text, images)` — an **opt-in envelope** a tool returns so the
-  model can *see* an image it just produced (#1930): on a vision-capable model
-  (`model.vision: true`) the image rides the ToolMessage as content blocks; on a
-  text-only model it degrades to the caption (described via
-  `knowledge.image_describe_model` when configured). Each image is
-  `{"b64"|"path": …, "mime": …}`; limits `MAX_IMAGES_PER_RESULT` (3) /
-  `MAX_IMAGE_BYTES` (2 MiB decoded) are enforced eagerly — downscale in the tool.
-  Ordinary string-returning tools are untouched. Pairs with `registry.save_media`
-  (#1929): save for the *user* to see inline, envelope for the *model* to see —
-  a generate → look → refine loop uses both.
+**Every call, with its signature and failure mode: [Plugin SDK reference](/reference/plugin-sdk-api).**
+It is generated from the source, so it is complete and current — this guide deliberately
+doesn't restate it.
 
-  ```python
-  from graph.sdk import multimodal_tool_result
+Two things the reference can't tell you. First, **import it inside the function that uses
+it** if your plugin must also run host-free in its own test suite; a module-level
+`from graph import sdk` makes the whole plugin need a host to import. Second, the
+**workflows plugin** (`plugins/workflows`) is the reference consumer — its engine injects
+`run_subagent` as the per-step runner, which is the pattern to copy for a plugin that drives
+the agent rather than just extending it.
 
-  @tool
-  async def render_chart(spec: str) -> str:
-      png = _render(spec)                       # bytes
-      ref = registry.save_media(png, "image/png")   # user sees it inline
-      return multimodal_tool_result(                # model sees it too
-          f"Rendered chart: ![chart]({ref.url})", images=[{"b64": b64encode(png).decode()}]
-      )
-  ```
-- `knowledge_search(query, *, k=5, domain=None, epoch=None)` /
-  `knowledge_add(content, *, domain="general", heading=None, epoch=None)` — the
-  plugin↔knowledge channel: search the agent's knowledge graph (hybrid FTS5 +
-  embeddings) and write chunks back, scoped to a `domain` bucket. Both degrade to a
-  no-op (`[]` / `None`) without a store. `epoch` (#1634) tags a chunk with the **era**
-  it was learned in (an opaque string — typically a reset date); passing `epoch=` to
-  `knowledge_search` filters **both** rankings to exactly that era, so a plugin in a
-  resettable world (spacetraders' weekly wipes) retires old lessons by just searching
-  with the new tag — they stay stored for post-mortems but stop polluting retrieval.
-- `knowledge_purge(domain, *, before=None) -> int` — the knowledge **lifecycle**
-  primitive (#1634): hard-delete every chunk in a domain (optionally only those
-  created before an ISO-8601 timestamp) and return the count. Deletes consistently
-  from every index (rows, FTS, vectors); on a layered store only the **private** tier
-  is purged (the commons is curated, never bulk-deleted). Refuses (returns 0) on an
-  empty domain or an unparseable `before`. See
-  [Knowledge ▸ Plugin knowledge lifecycle](/guides/knowledge#plugin-knowledge-lifecycle).
-- `run_in_session(session_id, prompt, *, delay_seconds=0, job_id=None)` — enqueue a
-  **non-blocking one-shot agent turn** in a session (that session's memory + full tools).
-  The primitive behind "when a goal fires, prompt the agent" — call it from a
-  `register_goal_hook` reaction. See [Goal mode ▸ Reacting to a goal](/guides/goal-mode#reacting-to-a-goal).
-- `create_watch(*, condition, verifier, run_prompt=…, …)` — register a **watch** (ADR 0067):
-  poll `condition` on a cadence, and on met run `run_prompt` as a follow-up turn
-  (`run_in_session`) + fire `on_met` hooks. Plugin-verifier only; hold **many** at once (unlike
-  a monitor goal). Pair with `registry.register_watch_hook(on_met/on_expired/on_stalled=…)`.
-- `list_watches(prefix="")` / `clear_watch(watch_id)` — the watch **lifecycle** half (#1638):
-  enumerate the registered watches (each `{id, condition, status, verifier}`, optionally
-  id-prefix-filtered — e.g. `list_watches("st-")` for your own suite) and remove one by id
-  (`True` if it existed). Together they make a plugin's arm step a *reconcile* — clear the
-  suite ids no longer in your spec set, then create/replace the rest — so a renamed/dropped
-  watch spec can't leak a zombie watch. See [Watches](/guides/watches).
-- `spawn_background(prompt, *, subagent_type, origin_session, label=None)` — spawn a
-  **detached background subagent job** ([ADR 0050](/adr/0050-background-subagents-reactive-notifications))
-  that returns a `bg-…` id immediately and rides the full
-  [ADR 0070](/adr/0070-background-results-push-resume) results pipeline (push-resume nudge
-  into `origin_session`, KB-indexed report, console report card). The seam for long
-  campaign work — never reach into `STATE.background_mgr` directly.
-- `background_status(task_id)` — the status-query companion: `{status, description,
-  report?}` for a spawned job (`report` once terminal), so a plugin can render progress
-  on its own surface between launch and the completion nudge.
-- `react_on(topic, *, prompt, job_id, session=…, debounce_s=0)` — **reactive-rule sugar**:
-  when a bus event matching `topic` fires, build a prompt from the payload and enqueue a
-  follow-up turn (`run_in_session`). `prompt(event) -> str | None` (`None`/empty skips the
-  event), `job_id` makes re-fires replace rather than stack, `debounce_s` coalesces a burst
-  into ONE turn (trailing-edge; the last event's prompt wins), `session` defaults to the
-  Activity thread. Returns an unsubscribe fn. The one-call form of the canonical
-  `registry.on` → `run_in_session` composition — see [Events](#event-bus).
-- `schedule_recurring(prompt, cron, *, plugin_id, job_id, session="", timezone=None)` — a
-  plugin-owned **recurring** cadence (#1642): a cron job whose id is namespaced
-  `plugin:<plugin_id>:<job_id>` so the host cancels it on disable/uninstall (no orphan
-  cadence outlives its plugin). Idempotent by id (a re-call replaces), fires into Activity
-  by default; pass `plugin_id=registry.plugin_id`. One-shot turns stay on `run_in_session`.
-  With `cancel_scheduled(job_id, *, plugin_id)` and `cancel_plugin_jobs(plugin_id)` — see
-  [Scheduler ▸ Plugin-owned recurring jobs](/guides/scheduler#plugin-owned-recurring-jobs).
-- `record_metric(name, value, *, ts=None, plugin_id)` / `metric_history(name, *,
-  since=None, limit=500, plugin_id)` / `metric_last(name, *, plugin_id)` — a plugin
-  **metric timeseries** (#1632): small named numeric series (treasury, net worth, fleet
-  size), namespaced `<plugin_id>:<name>` into one per-instance SQLite store
-  (`metrics.db`), retention-capped per series (90 days / 10k points, trimmed on write —
-  record freely from an engine tick). This is the *history* a live-state watch verifier
-  (ADR 0067) can't get any other way — drawdown vs high-water mark, flatline detection —
-  and the substrate for dashboard sparklines. Timestamps are Unix epoch seconds
-  (`ts=None` → now); `metric_history` returns the newest `limit` points (optionally at/after
-  `since`) **oldest→newest** as `(ts, value)` tuples; `metric_last` returns the latest
-  `(ts, value)` or `None`. Pass `plugin_id=registry.plugin_id` (explicit, like
-  `schedule_recurring` — the SDK has no ambient plugin identity; `':'` is rejected so one
-  plugin can't reach another's namespace). Point-in-time snapshots stay on `telemetry()`;
-  per-turn cost rollups stay on the [operator telemetry store](/guides/observability#local-telemetry-store).
-
-**Re-exported host-free kits** — the SDK also re-exports a few building blocks so a plugin
-doesn't hand-roll them (`from graph.sdk import …`):
-
-- `supervise` / `Supervisor` / `RetryAfter` — a supervised, watchdog-backed background task
-  runner for a self-perpetuating engine loop (instead of hand-rolled task/restart machinery).
-- `Knobs` / `make_knob_tools` — a bounded, reversible set of tunable engine knobs + presets,
-  with auto-generated `show`/`tune`/`preset` agent tools.
-- `DecisionLog` / `telemetry` / `render_html` — the telemetry + decision-log kit for a standard
-  observability surface (audit trail + point-in-time envelope + a themed panel).
-
-The **workflows plugin** (`plugins/workflows`) is the reference consumer: its engine
-injects `run_subagent` as the per-step runner. This is the pattern for plugins that tap
-core, not just contribute to it.
+The SDK also re-exports a few host-free kits so a plugin doesn't hand-roll them:
+`supervise` / `Supervisor` / `RetryAfter` (a watchdog-backed runner for a self-perpetuating
+engine loop), `Knobs` / `make_knob_tools` (bounded, reversible tunables with generated
+`show`/`tune`/`preset` tools), and `DecisionLog` / `telemetry` / `render_html` (an audit
+trail plus a themed panel).
 
 ## Events — the plugin bus (ADR 0039) {#event-bus}
 

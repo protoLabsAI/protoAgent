@@ -144,3 +144,26 @@ def test_fenced_examples_in_docstrings_survive_intact(gen) -> None:
 
     assert "```python" in out, f"fence was mangled: {out!r}"
     assert 'x = f("ADR 0004")  # see #1234' in out, f"sample was rewritten: {out!r}"
+
+
+def test_event_scan_finds_the_topics_it_should(gen) -> None:
+    """Guard the guard: the topic catalog is built by scanning for a fixed set of publisher
+    call names, which is its blind spot. A new forwarding helper — `_publish` was one, and
+    it hid every `watch.*` topic on the first run — means silently missing events, and the
+    page would still look complete. These sentinels come from four different modules and
+    three different publisher spellings.
+    """
+    topics = gen._scan_topics()
+    for expected in ("turn.started", "watch.met", "ui.navigate", "inbox.item", "turn.usage"):
+        assert expected in topics, (
+            f"the bus-topic scan no longer finds {expected!r} — a publisher helper was probably "
+            f"renamed; check gen_plugin_api._PUBLISHERS"
+        )
+    assert len(topics) >= 25, f"only {len(topics)} topics found — the scan is probably broken"
+    assert topics["turn.usage"]["keys"], "payload keys stopped being extracted"
+
+
+def test_event_catalog_documents_every_scanned_topic(gen) -> None:
+    page = (REFERENCE / "plugin-events.md").read_text(encoding="utf-8")
+    missing = [t for t in gen._scan_topics() if f"`{t}`" not in page]
+    assert not missing, f"Topics missing from the catalog: {missing}. Run `python scripts/gen_plugin_api.py`."

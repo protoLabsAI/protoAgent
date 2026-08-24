@@ -55,6 +55,7 @@ Generated from the source on every build, and CI-gated — a new seam can't ship
 | [Registry API](/reference/plugin-registry-api) | Every `register_*` seam with its signature, plus `registry.host` |
 | [Plugin SDK](/reference/plugin-sdk-api) | `graph.sdk` — subagents, knowledge, watches, background jobs, scheduling, metrics |
 | [View bridge](/reference/plugin-view-bridge) | The sandboxed-iframe `postMessage` protocol |
+| [Event bus topics](/reference/plugin-events) | Every topic core publishes, with payload keys and matching rules |
 | [Testkit](/reference/plugin-testkit) | `load_plugin`, `FakeRegistry`, host stubs |
 | [Plugin CLI](/reference/plugin-cli) | `python -m server plugin …` |
 

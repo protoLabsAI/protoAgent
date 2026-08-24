@@ -234,6 +234,7 @@ export default defineConfig({
             { text: "Plugin testkit", link: "/reference/plugin-testkit" },
             { text: "Plugin CLI", link: "/reference/plugin-cli" },
             { text: "Plugin view bridge (wire protocol)", link: "/reference/plugin-view-bridge" },
+            { text: "Event bus topics", link: "/reference/plugin-events" },
           ],
         },
         {

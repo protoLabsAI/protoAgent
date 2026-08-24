@@ -97,7 +97,7 @@ Backed by:
 | `POST` | `/api/goals/{session_id}/resume` | Keep an active goal running headlessly (detach on tab close) |
 | `DELETE` | `/api/goals/{session_id}` | Clear (stop) one (`{cleared, tasks_closed}`); `?close_tasks=true` also closes its task backlog |
 
-> The `plugin`-verifier-only **safe set** (`sdk.set_goal_safe`, ADR 0028 D3) is a separate, programmatic path for agents/plugins — distinct from the operator `/api/goals` route above.
+> The `plugin`-verifier-only **safe set** (`GoalController.set_goal_safe`, ADR 0028 D3 — reached by the agent's `set_goal` tool, not importable as `sdk.set_goal_safe`) is a separate, programmatic path for agents/plugins — distinct from the operator `/api/goals` route above. A plugin drives goals through [`sdk.start_goal_loop`](/reference/plugin-sdk-api#sdk-start-goal-loop).
 
 ## Reacting to a goal
 

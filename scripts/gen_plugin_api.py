@@ -672,12 +672,164 @@ def page_cli() -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
+# Directories scanned for bus topics. Explicit (not a repo walk) so the page is
+# deterministic and so `plugins/` stays out: a bundled plugin's topics belong to that
+# plugin's own manifest, not to the core catalog a plugin author can rely on.
+EVENT_SOURCE_DIRS = (
+    "a2a_impl",
+    "activity",
+    "background",
+    "events",
+    "graph",
+    "inbox",
+    "infra",
+    "knowledge",
+    "observability",
+    "operator_api",
+    "runtime",
+    "scheduler",
+    "server",
+    "tools",
+)
+
+# Calls that put an event on the bus. The private ones are thin per-module helpers that
+# forward to publish() — their topic is still the interesting argument, so they count. This
+# list is the scan's blind spot: a new helper name means silently missing topics, which is
+# why `tests/test_plugin_api_reference.py` asserts a sentinel set of known topics is found.
+_PUBLISHERS = frozenset({"publish", "emit", "publish_event", "_publish", "_publish_turn"})
+
+
+def _topic_of(call: ast.Call) -> str | None:
+    """The topic literal a publish call names, or None when it isn't a literal.
+
+    A conditional topic (``"goal.achieved" if ok else "goal.failed"``) yields both, joined —
+    dropping one would silently leave a real event out of the catalog.
+    """
+    if not call.args:
+        return None
+    a0 = call.args[0]
+    if isinstance(a0, ast.Constant) and isinstance(a0.value, str):
+        return a0.value
+    if isinstance(a0, ast.IfExp):
+        pair = [x.value for x in (a0.body, a0.orelse) if isinstance(x, ast.Constant) and isinstance(x.value, str)]
+        if len(pair) == 2:
+            return " / ".join(sorted(pair))
+    return None
+
+
+def _payload_keys(call: ast.Call) -> list[str]:
+    """Keys of the payload dict (and any keyword arguments) a publish call passes."""
+    keys: list[str] = []
+    for arg in call.args[1:]:
+        if isinstance(arg, ast.Dict):
+            keys += [k.value for k in arg.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)]
+    keys += [kw.arg for kw in call.keywords if kw.arg and kw.arg not in ("retain",)]
+    return keys
+
+
+def _scan_topics() -> dict[str, dict]:
+    """``topic -> {"keys": sorted keys, "sources": sorted repo-relative files}``."""
+    found: dict[str, dict] = {}
+    for d in EVENT_SOURCE_DIRS:
+        base = REPO / d
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("*.py")):
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+            except (OSError, SyntaxError):
+                continue
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                name = getattr(node.func, "attr", getattr(node.func, "id", ""))
+                if name not in _PUBLISHERS:
+                    continue
+                topic = _topic_of(node)
+                if not topic or "." not in topic:
+                    continue
+                rec = found.setdefault(topic, {"keys": set(), "sources": set()})
+                rec["keys"].update(_payload_keys(node))
+                rec["sources"].add(str(path.relative_to(REPO)))
+    return {t: {"keys": sorted(v["keys"]), "sources": sorted(v["sources"])} for t, v in sorted(found.items())}
+
+
+def page_events() -> str:
+    from events.bus import topic_matches
+
+    topics = _scan_topics()
+    out = [
+        BANNER,
+        "# Event bus topics",
+        "",
+        "The topics protoAgent's core publishes, and the rules for subscribing to them. A plugin",
+        "reacts to these with `registry.on` or [`sdk.react_on`](/reference/plugin-sdk-api#sdk-react-on),",
+        "and a console view through the",
+        "[view bridge](/reference/plugin-view-bridge#events-subscribe-event-publish).",
+        "",
+        "The bus is the **only** inter-plugin channel — plugins publish topics as their public API and",
+        "never import one another ([ADR 0039](/adr/0039-plugin-event-bus)). It is also ephemeral: a",
+        "small ring buffer lets a reconnecting subscriber catch up via `since`, but there is no durable",
+        "log. Persist what you need to keep.",
+        "",
+        "## Matching",
+        "",
+        "Topics are dot-namespaced. A subscription pattern may use two wildcards:",
+        "",
+        "| Pattern | Matches | Doesn't match |",
+        "|---|---|---|",
+        "| `#` | everything | — |",
+        "| `watch.*` | `watch.met` | `watch.a.b` |",
+        "| `watch.#` | `watch`, `watch.met`, `watch.a.b` | `goal.changed` |",
+        "| `watch.met` | exactly that | anything else |",
+        "",
+        f"`*` matches one segment; `#` matches the tail. (Verified against `topic_matches`: "
+        f"`watch.*` vs `watch.a.b` → `{topic_matches('watch.*', 'watch.a.b')}`, "
+        f"`watch.#` vs `watch.a.b` → `{topic_matches('watch.#', 'watch.a.b')}`.)",
+        "",
+        "## Core topics",
+        "",
+        "Generated by scanning every `publish`/`emit` call in the core packages, so this is what the",
+        "runtime actually emits — not a list someone remembered to update. Payload keys are the union",
+        "of what the emitting call sites pass; a key may be absent on a given event.",
+        "",
+        "| Topic | Payload keys | Emitted from |",
+        "|---|---|---|",
+    ]
+    for topic, rec in topics.items():
+        keys = ", ".join(f"`{k}`" for k in rec["keys"]) or "_(varies)_"
+        src = ", ".join(f"`{s}`" for s in rec["sources"][:2])
+        if len(rec["sources"]) > 2:
+            src += f" +{len(rec['sources']) - 2}"
+        out.append(f"| `{topic}` | {_cell(keys)} | {_cell(src)} |")
+    out += [
+        "",
+        "## Publishing your own",
+        "",
+        '`registry.emit("created", {...})` publishes `<your-plugin-id>.created` — the namespace is',
+        "forced, so a plugin can only publish under its own id. Declare your topics in the manifest",
+        "([`emits`](/reference/plugin-manifest#field-emits)) so other plugins can discover the contract",
+        "instead of reverse-engineering it, optionally with a payload schema",
+        "([`emits_schemas`](/reference/plugin-manifest#field-emits-schemas)). Declarations are for",
+        "discovery only — payloads are never validated at publish time.",
+        "",
+        "Publishing is safe from any thread: an off-loop `publish` reroutes itself onto the bound event",
+        "loop, so emitting from a sync middleware hook works. One exception — an off-loop publish",
+        "before any loop is bound is dropped with a warning.",
+        "",
+        "Related: [Plugins ▸ Events](/guides/plugins#event-bus) ·",
+        "[Plugin SDK](/reference/plugin-sdk-api) · [Lifecycle events](/guides/lifecycle-events)",
+    ]
+    return "\n".join(out).rstrip() + "\n"
+
+
 PAGES = {
     "plugin-manifest.md": page_manifest,
     "plugin-registry-api.md": page_registry,
     "plugin-sdk-api.md": page_sdk,
     "plugin-testkit.md": page_testkit,
     "plugin-cli.md": page_cli,
+    "plugin-events.md": page_events,
 }
 
 

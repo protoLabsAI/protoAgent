@@ -35,6 +35,7 @@ Information-oriented. Look up exact shapes and values here, grouped by **domain*
 | [Plugin testkit](/reference/plugin-testkit) | The host-free harness: `load_plugin`, `FakeRegistry`, host stubs |
 | [Plugin CLI](/reference/plugin-cli) | `python -m server plugin …` — scaffold, install, sync, uninstall |
 | [Plugin view bridge](/reference/plugin-view-bridge) | The sandboxed-iframe postMessage protocol — every message, direction, payload, and trust rule |
+| [Event bus topics](/reference/plugin-events) | Every topic core publishes, its payload keys, and the wildcard matching rules |
 
 ## Console & UI
 
