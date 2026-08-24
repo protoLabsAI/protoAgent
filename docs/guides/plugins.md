@@ -639,6 +639,44 @@ go quiet when nobody's looking. This matters doubly for the desktop build.
   away — your in-iframe timers/listeners die with it for free. For host-side work (a `registry.on`
   handler, a background surface), return/register a teardown so nothing lingers.
 
+## Persisting state {#persist-state}
+
+Config is for what the *operator* sets. For state your plugin *owns* — a SQLite file, a
+cache, exports, generated assets — ask the SDK for a directory:
+
+```python
+from graph import sdk
+
+db_path = sdk.plugin_store(plugin_id=registry.plugin_id) / "state.db"
+```
+
+That directory is created for you and scoped to the running instance, so the dev sandbox
+and every fleet member get their own copy without your plugin doing anything. Pass a
+`subdir` (`sdk.plugin_store("exports", plugin_id=…)`) to nest; a path that would escape
+your own store is refused rather than silently redirected.
+
+**Don't open core's databases.** `checkpoints.db`, `knowledge.db`, the telemetry and tasks
+stores carry no compatibility promise for outside readers, and core migrates them freely.
+Reach core data through the [SDK](/reference/plugin-sdk-api) instead.
+
+**Check whether you need a file at all.** These already exist, and each replaces a store
+plugins used to hand-roll:
+
+| You want | Use |
+| --- | --- |
+| A small numeric series (treasury, fleet size, a sparkline, drawdown math) | `sdk.record_metric` / `metric_history` / `metric_last` |
+| Facts the agent should be able to retrieve | `sdk.knowledge_add` / `knowledge_search` |
+| A whole alternate knowledge engine (pgvector, Qdrant) | `register_knowledge_store` |
+| A durable "the operator wanted this running" flag | a small JSON file — see [surfaces that resume](#surface-resume) |
+| An index you can rebuild at load | keep it in memory (`sqlite3.connect(":memory:")`) |
+
+If you do open SQLite, the convention that has survived contact with Windows CI is:
+connection **per call** (never one shared across threads), `PRAGMA busy_timeout` **before**
+`journal_mode=WAL` (the WAL transition itself takes locks), an in-process lock around
+writes (`busy_timeout` is a retry loop, not a queue), and additive `ALTER TABLE` migrations
+at connect so an operator who has been using your plugin for weeks doesn't lose their rows
+to an upgrade. `observability/metrics_store.py` is the reference implementation.
+
 ## Config, secrets & settings (ADR 0019) {#config-secrets-settings}
 
 A configurable plugin **declares its config in the manifest** (data, so it's known

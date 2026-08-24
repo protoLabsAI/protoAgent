@@ -35,6 +35,8 @@ the module's own.
 
 **Plugin-owned recurring jobs (#1642)** — [`cancel_plugin_jobs()`](#sdk-cancel-plugin-jobs), [`cancel_scheduled()`](#sdk-cancel-scheduled), [`plugin_job_prefix()`](#sdk-plugin-job-prefix), [`schedule_recurring()`](#sdk-schedule-recurring)
 
+**Plugin state (own the file, never core's)** — [`plugin_store()`](#sdk-plugin-store)
+
 **Plugin metric timeseries (#1632)** — [`metric_history()`](#sdk-metric-history), [`metric_last()`](#sdk-metric-last), [`record_metric()`](#sdk-record-metric)
 
 ## Agent + model access (the plugin↔agent channel, ADR 0043)
@@ -129,7 +131,7 @@ don't match (both search modes filter). `None` = unfiltered.
 ### `sdk.knowledge_add` {#sdk-knowledge-add}
 
 ```python
-await sdk.knowledge_add(content: str, *, domain: str = general, heading: str | None = None, epoch: str | None = None) -> int | None
+await sdk.knowledge_add(content: str, *, domain: str = 'general', heading: str | None = None, epoch: str | None = None) -> int | None
 ```
 
 Add one chunk to the agent's knowledge graph; return its id, or `None` when no
@@ -201,7 +203,7 @@ message when the scheduler is unavailable or the inputs are bad.
 ### `sdk.create_watch` {#sdk-create-watch}
 
 ```python
-sdk.create_watch(*, condition: str, verifier: str, verifier_args: dict | None = None, watch_id: str | None = None, interval_s: float | None = None, deadline: float | None = None, stall_after: int | None = None, run_prompt: str = , run_session: str = , trigger: str = met, repeat: bool = False) -> dict
+sdk.create_watch(*, condition: str, verifier: str, verifier_args: dict | None = None, watch_id: str | None = None, interval_s: float | None = None, deadline: float | None = None, stall_after: int | None = None, run_prompt: str = '', run_session: str = '', trigger: str = 'met', repeat: bool = False) -> dict
 ```
 
 Register a WATCH from a plugin ([ADR 0067](/adr/0067-standalone-watch-primitive)): poll `condition` — ground-truthed by the
@@ -222,7 +224,7 @@ rejected.
 ### `sdk.list_watches` {#sdk-list-watches}
 
 ```python
-sdk.list_watches(prefix: str = ) -> list[dict]
+sdk.list_watches(prefix: str = '') -> list[dict]
 ```
 
 List the registered watches — each `{"id", "condition", "status", "verifier"}` —
@@ -270,7 +272,7 @@ which reset the watch's accumulated stall state every time it shipped a tweak.
 ### `sdk.start_goal_loop` {#sdk-start-goal-loop}
 
 ```python
-sdk.start_goal_loop(*, goal: str, verifier: str, every: str, prompt: str, plugin_id: str, loop_id: str, session_id: str = , verifier_args: dict | None = None, done_prompt: str = , timezone: str | None = None, interval_s: float | None = None, deadline: float | None = None, stall_after: int | None = None) -> dict
+sdk.start_goal_loop(*, goal: str, verifier: str, every: str, prompt: str, plugin_id: str, loop_id: str, session_id: str = '', verifier_args: dict | None = None, done_prompt: str = '', timezone: str | None = None, interval_s: float | None = None, deadline: float | None = None, stall_after: int | None = None) -> dict
 ```
 
 Wire a goal-driven recurring loop in ONE call (the OODA / self-improving pattern):
@@ -379,7 +381,7 @@ readable message. Reads the durable jobs store directly (cheap local SQLite).
 ### `sdk.react_on` {#sdk-react-on}
 
 ```python
-sdk.react_on(topic: str, *, prompt: Callable[[dict], str | None], job_id: str, session: str = system:activity, debounce_s: float = 0.0) -> Callable[[], None]
+sdk.react_on(topic: str, *, prompt: Callable[[dict], str | None], job_id: str, session: str = 'system:activity', debounce_s: float = 0.0) -> Callable[[], None]
 ```
 
 When a bus event matching `topic` fires, enqueue a follow-up agent turn.
@@ -422,7 +424,7 @@ The id prefix every scheduler job owned by `plugin_id` carries.
 ### `sdk.schedule_recurring` {#sdk-schedule-recurring}
 
 ```python
-sdk.schedule_recurring(prompt: str, cron: str, *, plugin_id: str, job_id: str, session: str = , timezone: str | None = None) -> dict
+sdk.schedule_recurring(prompt: str, cron: str, *, plugin_id: str, job_id: str, session: str = '', timezone: str | None = None) -> dict
 ```
 
 Schedule `prompt` as a RECURRING agent turn on a `cron` cadence, owned by
@@ -479,6 +481,48 @@ jobs on (re)load and the installer sweeps on uninstall, so an orphan cadence can
 keep firing prompts about a plugin that's gone. Only jobs under this instance's
 `agent_name` are visible (`list_jobs` filters), so the [ADR 0004](/adr/0004-multi-instance-data-scoping) scoping holds.
 Also useful to a plugin that wants to tear down its whole cadence at once.
+
+## Plugin state (own the file, never core's)
+
+### `sdk.plugin_store` {#sdk-plugin-store}
+
+```python
+sdk.plugin_store(subdir: str = '', *, plugin_id: str) -> Path
+```
+
+This plugin's own writable directory, scoped to the running instance.
+
+Use it for state the plugin owns — a SQLite file, a cache, exports, generated assets.
+The directory is created if absent, and it lives under the instance root ([ADR 0004](/adr/0004-multi-instance-data-scoping) /
+[ADR 0065](/adr/0065-two-tier-instance-paths)), so the dev sandbox and every fleet member get their own copy without the
+plugin doing anything: the isolation that used to be each plugin's job to remember.
+
+**Do not open core's databases** (`checkpoints.db`, `knowledge.db`, the telemetry
+or tasks stores). They carry no compatibility promise for outside readers and core
+migrates them freely; reach core data through this SDK instead
+(`knowledge_search`, `metric_history`, …).
+
+Prefer an existing seam where one fits — small numeric series belong in
+`record_metric`, retrievable facts in `knowledge_add`, and an index you can
+rebuild at load belongs in memory. Reach for a file when you have durable, structured,
+plugin-shaped state.
+
+**Args:**
+
+- `subdir` — optional path *under* the plugin's directory (`"exports"`, `"cache/thumbs"`). Must be relative and must not escape upward; a traversing or absolute value is rejected.
+- `plugin_id` — the owning plugin's id (`registry.plugin_id`) — explicit, like `record_metric`, since the SDK has no ambient plugin identity.
+
+Returns the created directory as a `Path`.
+
+**Raises:**
+
+- `ValueError` — on an empty/unsafe `plugin_id` or an escaping `subdir` — a bad path is raised rather than silently redirected, because writing an operator's data somewhere unexpected is worse than failing loudly.
+
+```python
+from graph import sdk
+
+db = sdk.plugin_store(plugin_id=registry.plugin_id) / "state.db"
+```
 
 ## Plugin metric timeseries (#1632)
 

@@ -112,3 +112,35 @@ def test_docstring_rendering_is_interpreter_independent(gen) -> None:
         "use inspect.cleandoc, never textwrap.dedent, on a __doc__"
     )
     assert "\n        Indented" not in gen._clean_doc(as_312), "source indentation leaked into the page"
+
+
+def test_signature_keeps_default_values_while_unquoting_annotations(gen) -> None:
+    """`from __future__ import annotations` quotes every annotation, so the generator
+    unquotes them — but a blanket regex over the rendered signature also strips the quotes
+    off default VALUES, which turned `subdir: str = ''` into `subdir: str = ` in the docs.
+    """
+
+    # Bare annotations, like the real source. (An explicitly *quoted* annotation is
+    # already a string in the source text, so `from __future__ import annotations` keeps
+    # its quotes verbatim — a different case, and not one this codebase writes.)
+    def sample(a: str = "", b: int = 3, *, c: dict | None = None) -> str:
+        return ""
+
+    rendered = gen._sig(sample)
+
+    assert "a: str = ''" in rendered, f"empty-string default was eaten: {rendered}"
+    assert "-> str" in rendered and "-> 'str'" not in rendered, f"annotation still quoted: {rendered}"
+    assert "c: dict | None = None" in rendered, rendered
+
+
+def test_fenced_examples_in_docstrings_survive_intact(gen) -> None:
+    """A docstring may carry a runnable example. The RST ``double backtick`` → `single`
+    rewrite ate two of a fence's three backticks, and linkification rewrote identifiers
+    inside the sample, so the example rendered as prose.
+    """
+    doc = 'Summary line.\n\n```python\nx = f("ADR 0004")  # see #1234\n```\n'
+
+    out = gen._clean_doc(doc)
+
+    assert "```python" in out, f"fence was mangled: {out!r}"
+    assert 'x = f("ADR 0004")  # see #1234' in out, f"sample was rewritten: {out!r}"

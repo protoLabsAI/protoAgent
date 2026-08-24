@@ -110,7 +110,7 @@ section that resolved empty).
 ### `registry.navigate` {#registry-navigate}
 
 ```python
-registry.navigate(view: str = ) -> None
+registry.navigate(view: str = '') -> None
 ```
 
 Ask the operator console to open one of THIS plugin's views — plugin-driven
@@ -207,7 +207,7 @@ on_met/on_expired/on_stalled, [ADR 0067](/adr/0067-standalone-watch-primitive).)
 ### `registry.register_goal_verifier` {#registry-register-goal-verifier}
 
 ```python
-registry.register_goal_verifier(name: str, fn, description: str = ) -> None
+registry.register_goal_verifier(name: str, fn, description: str = '') -> None
 ```
 
 Contribute an in-process goal/watch verifier ([ADR 0028](/adr/0028-plugin-goal-verifiers)) — an async
