@@ -44,7 +44,11 @@ from pathlib import Path
 from typing import Any
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO))  # import the host packages we introspect, however we were invoked
+if str(REPO) not in sys.path:
+    # Import the host packages we introspect, however we were invoked. Guarded: under
+    # pytest the repo root is already first on the path, and re-inserting it would
+    # reorder imports for every test that runs after this module is loaded.
+    sys.path.insert(0, str(REPO))
 
 DOCS = REPO / "docs" / "reference"
 GITHUB = "https://github.com/protoLabsAI/protoAgent"
