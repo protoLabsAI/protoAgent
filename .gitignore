@@ -116,3 +116,7 @@ test-results/
 # OpenShell local deployment artifacts (deploy/openshell/)
 deploy/openshell/jwt/
 deploy/openshell/openshell-policy.yaml
+
+# Gource visualization (render locally, don't commit)
+gource.mp4
+.gource/
