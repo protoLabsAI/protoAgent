@@ -119,4 +119,5 @@ deploy/openshell/openshell-policy.yaml
 
 # Gource visualization (render locally, don't commit)
 gource.mp4
+gource.gif
 .gource/
