@@ -33,6 +33,11 @@ so it is complete and current by construction:
 | [Plugin SDK](/reference/plugin-sdk-api) | `graph.sdk` — subagents, knowledge, watches, background jobs, metrics |
 | [Testkit](/reference/plugin-testkit) | `load_plugin`, `FakeRegistry`, host stubs |
 | [Plugin CLI](/reference/plugin-cli) | `python -m server plugin …` |
+| [View bridge](/reference/plugin-view-bridge) | The sandboxed-iframe `postMessage` protocol |
+
+New to plugins? [Build your first plugin](/tutorials/first-plugin) is the twenty-minute version,
+and [Plugin architecture](/explanation/plugin-architecture) explains the model — what runs
+in-process, what's sandboxed, and when your code is called.
 
 Otherwise, pick the job you actually have:
 

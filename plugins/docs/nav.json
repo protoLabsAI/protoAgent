@@ -24,6 +24,10 @@
         {
           "path": "tutorials/first-tool.md",
           "title": "Write your first tool"
+        },
+        {
+          "path": "tutorials/first-plugin.md",
+          "title": "Build your first plugin"
         }
       ]
     },
@@ -346,6 +350,10 @@
         {
           "path": "reference/plugin-cli.md",
           "title": "Plugin CLI"
+        },
+        {
+          "path": "reference/plugin-view-bridge.md",
+          "title": "Plugin view bridge (wire protocol)"
         }
       ]
     },
@@ -387,6 +395,15 @@
         {
           "path": "explanation/memory-and-knowledge.md",
           "title": "Memory & knowledge store"
+        }
+      ]
+    },
+    {
+      "label": "Tools, MCP & plugins",
+      "items": [
+        {
+          "path": "explanation/plugin-architecture.md",
+          "title": "Plugin architecture"
         }
       ]
     },

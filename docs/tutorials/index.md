@@ -19,6 +19,7 @@ Learning-oriented walkthroughs. Start here if you're new to protoAgent. Grouped 
 | Tutorial | What you'll end up with |
 |---|---|
 | [Write your first tool](/tutorials/first-tool) | A custom LangChain tool wired into the agent's loop |
+| [Build your first plugin](/tutorials/first-plugin) | A tool and a console view added to a running agent — no fork, no core edits |
 
 ## A2A, fleet & delegates
 
