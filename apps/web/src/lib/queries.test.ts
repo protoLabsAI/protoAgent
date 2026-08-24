@@ -75,6 +75,11 @@ describe("slug-namespaced query keys (#2887)", () => {
       expect(isPrefixOf(queryKeys.runtime, queryKeys.nodeRuntime)).toBe(true);
       expect(isPrefixOf(queryKeys.runtime, queryKeys.pythonRuntime)).toBe(true);
       expect(isPrefixOf(queryKeys.delegates, queryKeys.delegateTypes)).toBe(true);
+      // The `@` roster is delegate-derived, so DelegatesSection's existing
+      // invalidateQueries(queryKeys.delegates) after create/update/delete has to reach
+      // it. Without this nesting, adding a delegate leaves the composer's `@` menu
+      // stale until the operator reloads the page.
+      expect(isPrefixOf(queryKeys.delegates, queryKeys.chatMentions)).toBe(true);
       expect(isPrefixOf(queryKeys.memory, queryKeys.memoryInjections)).toBe(true);
       expect(isPrefixOf(queryKeys.memoryInjections, queryKeys.memoryInjectionDetail(7))).toBe(true);
     });

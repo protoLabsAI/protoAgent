@@ -84,6 +84,15 @@ export const queryKeys = {
   get delegateTypes() {
     return ns("delegates", "types");
   },
+  // The `@`-addressable roster for the chat composer. Prefixed under `delegates` on
+  // purpose: the roster IS delegate-derived, so `DelegatesSection`'s existing
+  // `invalidateQueries(queryKeys.delegates)` after create/update/delete reaches it by
+  // prefix match. Adding a delegate used to leave the `@` menu stale until a page
+  // reload, because the composer fetched this once per mount and nothing told it to
+  // look again.
+  get chatMentions() {
+    return ns("delegates", "mentions");
+  },
   get acpAgents() {
     return ns("acp", "agents");
   },
@@ -392,6 +401,17 @@ export const delegatesQuery = () =>
   queryOptions({
     queryKey: queryKeys.delegates,
     queryFn: () => api.delegates(),
+    retry: false,
+  });
+
+// `@`-addressable participants for the composer (#3042). Served by the same resolver
+// the chat dispatcher routes with, so the popover can't offer an unreachable name.
+// `retry: false` mirrors delegatesQuery — a 404 (delegates plugin disabled) is an
+// empty roster, not an error worth retrying.
+export const chatMentionsQuery = () =>
+  queryOptions({
+    queryKey: queryKeys.chatMentions,
+    queryFn: () => api.chatMentions(),
     retry: false,
   });
 
