@@ -529,6 +529,7 @@ def _main():
     from operator_api import console_handlers as _console
     from operator_api.chat_routes import register_chat_routes
     from operator_api.config_routes import register_config_routes
+    from operator_api.provider_routes import register_provider_routes
     from operator_api.knowledge_routes import register_knowledge_routes
     from operator_api.plugin_routes import register_plugin_routes
     from operator_api.mcp_routes import register_mcp_routes
@@ -935,6 +936,7 @@ def _main():
     # schema-driven settings. Extracted to operator_api/config_routes.py
     # (ADR 0023 phase 3).
     register_config_routes(fastapi_app)
+    register_provider_routes(fastapi_app)
 
     # GET /api/operations — the ops-layer catalog (ADR 0075 D2), derived from ops.registry().
     from operator_api.operations_routes import register_operations_routes
