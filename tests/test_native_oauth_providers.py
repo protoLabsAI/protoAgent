@@ -306,21 +306,59 @@ def test_codex_rejected_refresh_reimports_newer_cli_credential(monkeypatch, tmp_
     assert saved["provenance"] == oauth_mod.PROVENANCE_CLI_BOOTSTRAP
 
 
-def test_codex_reimport_refreshes_a_stale_cli_token(monkeypatch, tmp_path):
-    """The CLI's own access token can be stale too — refresh it with its live token."""
-    minted = _jwt({"exp": time.time() + 3600})
+def test_codex_no_reimport_of_a_stale_cli_login(monkeypatch, tmp_path):
+    """A CLI login whose own access token has expired is NOT adopted.
+
+    Its refresh token is single-use and by then almost certainly spent, so importing it
+    trades an honest "sign in" for a 401 about a refresh — the failure Hermes calls
+    getting "stuck with 'Login successful!' but no working credentials".
+    """
     _burned_store_and_cli(
         tmp_path,
         monkeypatch,
-        cli_tokens={"access_token": _jwt({"exp": time.time() - 10}), "refresh_token": "r-cli-new"},
+        cli_tokens={"access_token": _jwt({"exp": time.time() - 10}), "refresh_token": "r-cli-stale"},
     )
-    stub = _CodexRefreshStub({"r-cli-new": minted})
+    stub = _CodexRefreshStub({"r-cli-stale": _jwt({"exp": time.time() + 3600})})
     monkeypatch.setattr(oauth_mod.httpx, "post", stub)
 
-    creds = resolve_codex_oauth(paths=types.SimpleNamespace(config_dir=tmp_path))
+    with pytest.raises(OAuthCredentialError):
+        resolve_codex_oauth(paths=types.SimpleNamespace(config_dir=tmp_path))
 
-    assert creds.access_token == minted
-    assert stub.sent == ["r-burned", "r-cli-new"]
+    # The stale CLI token is never spent — only our own burned one was tried.
+    assert stub.sent == ["r-burned"]
+
+
+def test_codex_bootstrap_refuses_a_stale_cli_login(monkeypatch, tmp_path):
+    """With no store of our own, a stale CLI login is a sign-in problem, not a refresh one."""
+    cli = tmp_path / "codex_auth.json"
+    cli.write_text(json.dumps({"tokens": {"access_token": _jwt({"exp": time.time() - 10}), "refresh_token": "r-stale"}}))
+    monkeypatch.setattr(oauth_mod, "_CODEX_CLI_AUTH_FILE", cli)
+    monkeypatch.setattr(oauth_mod, "_codex_store_path", lambda paths: tmp_path / "store-nope.json")
+
+    def _never(*a, **kw):
+        raise AssertionError("a stale CLI credential must not be spent on a refresh")
+
+    monkeypatch.setattr(oauth_mod.httpx, "post", _never)
+
+    with pytest.raises(OAuthCredentialError) as ei:
+        resolve_codex_oauth(paths=types.SimpleNamespace(config_dir=tmp_path))
+    # The message must name the sign-in, not a refresh failure.
+    assert "codex login" in str(ei.value)
+    assert "refresh failed" not in str(ei.value).lower()
+
+
+def test_codex_bootstrap_accepts_a_live_cli_login(monkeypatch, tmp_path):
+    """The happy path is unchanged: a live CLI login still bootstraps our own copy."""
+    cli = tmp_path / "codex_auth.json"
+    fresh = _jwt({"exp": time.time() + 3600})
+    cli.write_text(json.dumps({"tokens": {"access_token": fresh, "refresh_token": "r-live", "account_id": "acct-live"}}))
+    monkeypatch.setattr(oauth_mod, "_CODEX_CLI_AUTH_FILE", cli)
+    store = tmp_path / "codex-oauth.json"
+    monkeypatch.setattr(oauth_mod, "_codex_store_path", lambda paths: store)
+
+    creds = resolve_codex_oauth(paths=types.SimpleNamespace(config_dir=tmp_path))
+    assert creds.access_token == fresh
+    assert store.exists()
 
 
 def test_codex_no_reimport_when_cli_holds_the_same_dead_token(monkeypatch, tmp_path):

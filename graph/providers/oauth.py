@@ -491,6 +491,39 @@ def _write_codex_store(path: Path, tokens: dict[str, Any], provenance: str | Non
     atomic_write(path, json.dumps(doc), mode=0o600)
 
 
+def _usable_cli_tokens() -> dict[str, Any] | None:
+    """The Codex CLI's tokens, but ONLY when they can actually still be used.
+
+    Importing is a one-way copy of a SINGLE-USE refresh token. If the CLI's own access
+    token has already expired, its refresh token is almost certainly the one that was
+    already spent — by us, by a sibling instance, or by the CLI itself — so importing the
+    pair buys a 401 on the very next call and an error that blames a refresh instead of
+    naming the missing login. Hermes rejects a stale pair for exactly this reason:
+    "importing stale tokens from ~/.codex/ that can't be refreshed leaves the user stuck
+    with 'Login successful!' but no working credentials."
+
+    Both halves are required: adopting an access token with no refresh token would only
+    move the failure to the next refresh cycle.
+    """
+    tokens = _read_codex_tokens(_CODEX_CLI_AUTH_FILE)
+    if not tokens:
+        return None
+    access = str(tokens.get("access_token", "") or "").strip()
+    refresh = str(tokens.get("refresh_token", "") or "").strip()
+    if not access or not refresh:
+        return None
+    # Skew 0 deliberately: this asks "is it dead yet", not "should we refresh soon" —
+    # a live-but-expiring CLI token is still worth adopting, we just refresh it after.
+    if _jwt_is_expiring(access, 0):
+        log.info(
+            "[codex] %s holds an expired login; not importing it — a stale refresh token "
+            "would 401 rather than sign in.",
+            _CODEX_CLI_AUTH_FILE,
+        )
+        return None
+    return tokens
+
+
 def _cli_recovery_tokens(
     exc: OAuthCredentialError,
     source: str,
@@ -514,7 +547,10 @@ def _cli_recovery_tokens(
         return None
     if is_disconnected("openai-codex", paths):
         return None
-    cli = _read_codex_tokens(_CODEX_CLI_AUTH_FILE)
+    # A *live* CLI login only. "Different from ours" is not enough: after any successful
+    # refresh our token is NEWER than the CLI's, so a bare difference check would happily
+    # adopt the older, already-spent pair and 401 again.
+    cli = _usable_cli_tokens()
     if cli is None:
         return None
     theirs = str(cli.get("refresh_token", "") or "").strip()
@@ -566,13 +602,17 @@ def resolve_codex_oauth(paths: InstancePaths | None = None) -> CodexOAuthCreds:
                     "Codex is disconnected in protoAgent. Sign in again to reconnect.",
                     provider="openai-codex",
                 )
-            tokens = _read_codex_tokens(_CODEX_CLI_AUTH_FILE)
+            tokens = _usable_cli_tokens()
             source = "codex_cli_bootstrap"
             if tokens is None:
                 raise OAuthCredentialError(
-                    "No Codex OAuth credential found. Sign in with the Codex CLI "
-                    "(`codex`), then retry — protoAgent imports it once and keeps its "
-                    "own refreshed copy.",
+                    "No usable Codex credential. Run `codex login`, then retry — "
+                    "protoAgent imports that login once and keeps its own refreshed copy. "
+                    "A Codex CLI login whose own token has already expired is deliberately "
+                    "NOT imported: its refresh token is single-use and has almost certainly "
+                    "been spent, so importing it would surface a 401 about a refresh instead "
+                    "of telling you to sign in. Note that `codex login status` reports a "
+                    "long-dead login as healthy — trust the file, not the command.",
                     provider="openai-codex",
                 )
 
