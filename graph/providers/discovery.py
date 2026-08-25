@@ -216,11 +216,13 @@ _ANTHROPIC_FALLBACK_MODELS = [
 _MODELS_TIMEOUT_S = 15.0
 
 
-def _list_codex_models(config: "LangGraphConfig") -> tuple[list[str], str]:
+def _codex_models_once(config: "LangGraphConfig", *, force_refresh: bool) -> tuple[list[str], str, int]:
+    """One probe. Returns ``(models, error, status)`` — status 401 means the token was
+    rejected, which the caller turns into a refresh-and-retry."""
     try:
-        creds = _oauth.resolve_codex_oauth()
+        creds = _oauth.resolve_codex_oauth(force_refresh=force_refresh)
     except _oauth.OAuthCredentialError as exc:
-        return [], str(exc)
+        return [], str(exc), 0
     headers = {
         "Authorization": f"Bearer {creds.access_token}",
         "User-Agent": "codex-cli",
@@ -234,11 +236,32 @@ def _list_codex_models(config: "LangGraphConfig") -> tuple[list[str], str]:
             headers=headers,
             timeout=_MODELS_TIMEOUT_S,
         )
+        if resp.status_code == 401:
+            return [], f"Could not list Codex models: {resp.text[:200]}", 401
         resp.raise_for_status()
         models = [str(m.get("slug")) for m in resp.json().get("models", []) if isinstance(m, dict) and m.get("slug")]
-        return models, ""
+        return models, "", resp.status_code
     except httpx.HTTPError as exc:
-        return [], f"Could not list Codex models: {exc}"
+        return [], f"Could not list Codex models: {exc}", 0
+
+
+def _list_codex_models(config: "LangGraphConfig") -> tuple[list[str], str]:
+    """Probe the account's models, refreshing once if the token is rejected.
+
+    An access token can be invalidated long before its ``exp`` — signing in again on the
+    same ChatGPT account ends the previous session — and the backend then answers 401
+    while the JWT still looks valid for days. Trusting ``exp`` alone meant that state was
+    terminal: nothing refreshed, every call failed the same way, and the refresh token
+    was live the whole time. So a 401 is treated as "this token is done" rather than as
+    the answer: mark it rejected, refresh, and try once more.
+    """
+    models, error, status = _codex_models_once(config, force_refresh=False)
+    if status != 401:
+        return models, error
+    if not _oauth.note_codex_auth_rejected():
+        return models, error
+    retry_models, retry_error, _ = _codex_models_once(config, force_refresh=True)
+    return retry_models, retry_error
 
 
 def _list_anthropic_models() -> tuple[list[str], str]:
@@ -274,6 +297,20 @@ def list_provider_models(provider: str, config: "LangGraphConfig") -> tuple[list
     raise ValueError(f"not a native OAuth provider: {provider!r}")
 
 
+def _is_auth_rejection(exc: Exception) -> bool:
+    """Does this provider error mean "your token is no longer good"?
+
+    Matched on the wire text rather than an exception type: the error arrives wrapped by
+    langchain/openai and the discriminating detail is the backend's own code. Kept narrow
+    — a 401 or an explicit invalidation, never a generic failure — because the response
+    is to spend a single-use refresh token, which must not happen on a timeout.
+    """
+    text = str(exc).lower()
+    if "token_invalidated" in text or "has been invalidated" in text:
+        return True
+    return "401" in text and ("unauthorized" in text or "authentication" in text or "invalid_request_error" in text)
+
+
 def validate_oauth_connection(provider: str, model: str, config: "LangGraphConfig") -> tuple[bool, str]:
     """The wizard/Settings "Test connection" for a native OAuth provider.
 
@@ -306,6 +343,16 @@ def validate_oauth_connection(provider: str, model: str, config: "LangGraphConfi
     except _oauth.OAuthCredentialError as exc:
         return False, str(exc)
     except Exception as exc:  # noqa: BLE001 — surface the provider's own error text
+        # Same self-heal as the models probe, and this is the surface an operator is
+        # most likely to be looking at when a session gets invalidated ("Test connection
+        # → 401 token_invalidated"). Marking it here means the NEXT attempt — a retry
+        # here, or an ordinary turn — refreshes instead of replaying a dead token.
+        if provider == "openai-codex" and _is_auth_rejection(exc):
+            if _oauth.note_codex_auth_rejected():
+                return False, (
+                    f"{exc}\n\nThe stored token was rejected and has been marked for refresh — "
+                    "try again and it will mint a fresh one."
+                )
         return False, str(exc)
 
 

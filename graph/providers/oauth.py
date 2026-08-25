@@ -687,7 +687,38 @@ def _cli_recovery_tokens(
     return cli if theirs and theirs != ours else None
 
 
-def resolve_codex_oauth(paths: InstancePaths | None = None) -> CodexOAuthCreds:
+def note_codex_auth_rejected(paths: InstancePaths | None = None) -> bool:
+    """Record that the stored ACCESS token was rejected, so the next resolve refreshes.
+
+    An access token can stop working long before its ``exp``: signing in again on the
+    same ChatGPT account invalidates the previous session, and the backend then answers
+    ``401 token_invalidated`` while the JWT still claims to be valid for days. Resolution
+    decides "is this good?" from ``exp`` alone, so nothing ever refreshed and every call
+    failed identically until a human intervened — even though the refresh token was live
+    the whole time and one refresh would have fixed it.
+
+    Blanking the access token (keeping the refresh token) is the smallest durable way to
+    say "don't trust this one again": the next resolve takes the refresh path by its
+    existing rules, no new state and no network call here. Returns whether anything
+    changed, so a caller can tell a real invalidation from a repeat.
+    """
+    paths = paths or instance_paths()
+    store = _codex_store_path(paths)
+    with _store_lock(store), _file_lock(store):
+        tokens = _read_codex_tokens(store)
+        if not tokens or not str(tokens.get("access_token", "") or "").strip():
+            return False
+        cleared = dict(tokens)
+        cleared["access_token"] = ""
+        # `earliest_refresh_at` is the provider's "don't refresh before this" hint; an
+        # invalidated token must not be pinned behind it, so it goes too.
+        cleared.pop("earliest_refresh_at", None)
+        _write_codex_store(store, cleared)
+    log.warning("[codex] the stored access token was rejected; the next call will refresh it.")
+    return True
+
+
+def resolve_codex_oauth(paths: InstancePaths | None = None, *, force_refresh: bool = False) -> CodexOAuthCreds:
     """Return a fresh Codex access token + account id, refreshing/bootstrapping as needed.
 
     1. Read our own instance-scoped store; if absent, bootstrap it once from the
@@ -714,7 +745,7 @@ def resolve_codex_oauth(paths: InstancePaths | None = None) -> CodexOAuthCreds:
 
     # Fast path: a warm, unexpired store read needs neither the lock nor a write.
     tokens = _read_codex_tokens(store)
-    if tokens and not _codex_needs_refresh(tokens, _CODEX_REFRESH_SKEW_S):
+    if tokens and not force_refresh and not _codex_needs_refresh(tokens, _CODEX_REFRESH_SKEW_S):
         return _creds(tokens, str(tokens["access_token"]).strip(), "instance_store")
 
     # Slow path: refresh or first bootstrap — serialized so single-use refresh is spent once.
@@ -745,7 +776,7 @@ def resolve_codex_oauth(paths: InstancePaths | None = None) -> CodexOAuthCreds:
 
         access = str(tokens.get("access_token", "") or "").strip()
         refreshed = False
-        if _codex_needs_refresh(tokens, _CODEX_REFRESH_SKEW_S):
+        if force_refresh or _codex_needs_refresh(tokens, _CODEX_REFRESH_SKEW_S):
             try:
                 tokens = _refresh_codex_tokens(tokens)
             except OAuthCredentialError as exc:
