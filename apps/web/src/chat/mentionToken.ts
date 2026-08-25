@@ -1,48 +1,39 @@
-/** `@<name>` token parsing for the composer (#3042) — the client twin of the server's
- *  `graph.mentions.parse_mention` / `server.chat._parse_at_delegates`.
+/** `@<name>` autocomplete-token parsing for the composer (#3042).
  *
- *  The two MUST agree on where a mention can route. The dispatcher routes a **leading
- *  run** of mentions — `@proto @reviewer what do you think?` fans out to both — and a
- *  mid-message `@` is prose the addressees will read, not a routing instruction. So the
- *  popover opens for the token the caret is in only while every token BEFORE it is
- *  itself an `@`-mention: offering a completion past the end of the run would suggest a
- *  target the message never reaches — the operator picks a name, sends, and the lead
- *  agent answers instead.
+ *  Purely the AUTOCOMPLETE trigger — where the popover opens as you type — not where a
+ *  mention routes. It opens for whatever `@`-token the caret is in, ANYWHERE in the
+ *  message, exactly like `slashTokenAt` does for `/`: "hello team, @bob and @bill should
+ *  pair on this" pops the picker at both `@bob` and `@bill`, so you get name completion
+ *  in ordinary prose to the lead — not only in a leading `@bob @bill` run.
+ *
+ *  Routing is a separate, deliberately different rule (server `_parse_at_delegates`): a
+ *  LEADING `@name` (run) addresses that participant directly; a mid-message `@name` is
+ *  prose the lead reads and coordinates. Completion here just inserts the name at the
+ *  caret — it never implies the mid-message mention will short-circuit to that delegate.
  */
 
-/** The `@name` token the caret sits in, or `null`.
- *
- *  Mirrors `slashTokenAt`'s shape (`query` filters the popover; `start`/`end` bound a
- *  caret-anchored replace that preserves any tail). The sigil must be followed
- *  immediately by the name — `@ me when it lands` is prose, not an address.
- */
+/** The `@name` token the caret sits in, or `null`. Mirrors `slashTokenAt`'s shape
+ *  (`query` filters the popover; `start`/`end` bound a caret-anchored replace that
+ *  preserves surrounding text). The `@` must begin the token — at the message start or
+ *  after whitespace — so an email address (`josh@protolabs.studio`) never triggers it. */
 export function mentionTokenAt(
   text: string,
   caret: number,
 ): { query: string; start: number; end: number } | null {
-  if (text[0] !== "@") return null;
   const pos = Math.max(0, Math.min(caret, text.length));
-  let i = 0;
-  while (i < text.length) {
-    // Every token up to (and including) the caret's must be an `@`-token — the first
-    // non-mention token ends the run, and everything after it is the message.
-    if (text[i] !== "@") return null;
-    let end = i;
-    while (end < text.length && !/\s/.test(text[end])) end += 1;
-    if (pos < i) return null; // caret sits in the whitespace before this token
-    if (pos <= end) {
-      const query = text.slice(i + 1, pos);
-      // A token with non-name characters isn't a name (and `@` alone at the caret is
-      // an empty query — the "show everyone" state).
-      if (query && !/^[A-Za-z][\w.-]*$/.test(query)) return null;
-      return { query, start: i, end };
-    }
-    // Walk over the whitespace to the next token; end-of-text means the caret was
-    // clamped into the final token above, so this only advances.
-    let j = end;
-    while (j < text.length && /\s/.test(text[j])) j += 1;
-    if (j === end) return null;
-    i = j;
-  }
-  return null;
+  // Walk back to the start of the token the caret is in.
+  let start = pos;
+  while (start > 0 && !/\s/.test(text[start - 1])) start -= 1;
+  // The token must BEGIN with the sigil — otherwise the caret is in an ordinary word, or
+  // in the domain half of an email where the `@` sits mid-token.
+  if (text[start] !== "@") return null;
+  // The token runs to the next whitespace at/after the caret, so completing mid-token
+  // replaces the whole thing (no dangling tail).
+  let end = pos;
+  while (end < text.length && !/\s/.test(text[end])) end += 1;
+  const query = text.slice(start + 1, pos);
+  // `@` alone at the caret is an empty query — the "show everyone" state. Any typed query
+  // must be name-shaped, or the caret is in something that isn't a mention.
+  if (query && !/^[A-Za-z][\w.-]*$/.test(query)) return null;
+  return { query, start, end };
 }
