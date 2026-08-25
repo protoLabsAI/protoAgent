@@ -11,11 +11,14 @@ what Hermes does (the reference implementation):
   user's Claude subscription, so this is sanctioned.
 
 - ``openai-codex`` — BOOTSTRAP from the Codex CLI's store (``~/.codex/auth.json``),
-  then keep and refresh our OWN copy under the instance root. OAuth refresh tokens
-  are single-use, so sharing one file with the Codex CLI means the two clients rotate
-  each other's tokens and race to 401 — owning our copy avoids that. Using ChatGPT/
-  Codex OAuth from a third-party app is a grayer ToS area than the Claude path; see
-  ADR 0097.
+  then keep and refresh our OWN copy under the instance root, so day-to-day refreshes
+  never write the CLI's file. Note what owning a copy does NOT buy: the bootstrap
+  *copies* the CLI's refresh token, and OpenAI's refresh tokens are single-use, so the
+  first refresh after an import still rotates that token out from under the CLI — and
+  out from under any sibling instance that imported the same one. That is recoverable
+  rather than terminal: a rejected refresh re-imports whatever credential the CLI holds
+  now (see :func:`resolve_codex_oauth`). Using ChatGPT/Codex OAuth from a third-party
+  app is a grayer ToS area than the Claude path; see ADR 0097.
 
 This module resolves *credentials only* — the ``BaseChatModel`` builders live in
 :mod:`graph.providers.anthropic_oauth` and :mod:`graph.providers.openai_codex`.
@@ -429,8 +432,9 @@ def _refresh_codex_tokens(tokens: dict[str, Any], *, timeout_s: float = 20.0) ->
     if resp.status_code != 200:
         relogin = resp.status_code in {400, 401, 403}
         raise OAuthCredentialError(
-            f"Codex token refresh failed (HTTP {resp.status_code}). "
-            "Re-run `codex` in your terminal to generate fresh tokens.",
+            f"Codex token refresh failed (HTTP {resp.status_code}) — OpenAI rejected the "
+            "refresh token, usually because it had already been spent. Run `codex login` "
+            "to mint a fresh credential; protoAgent re-imports it on the next attempt.",
             provider="openai-codex",
             relogin=relogin,
         )
@@ -487,13 +491,50 @@ def _write_codex_store(path: Path, tokens: dict[str, Any], provenance: str | Non
     atomic_write(path, json.dumps(doc), mode=0o600)
 
 
+def _cli_recovery_tokens(
+    exc: OAuthCredentialError,
+    source: str,
+    tokens: dict[str, Any],
+    paths: InstancePaths,
+) -> dict[str, Any] | None:
+    """The Codex CLI's tokens when they can rescue a *rejected* refresh, else ``None``.
+
+    Our stored refresh token is single-use and shared by construction: every instance
+    that bootstraps from the same ``~/.codex/auth.json`` copies the same one, so the
+    first to refresh burns it for the rest. Recovery is deliberately narrow — it applies
+    only when
+
+    * OpenAI *rejected* the token (``exc.relogin``); a network blip must not re-import,
+    * we were spending our OWN store (a fresh bootstrap that 401s is already terminal),
+    * the provider is not explicitly disconnected (#2440) — that intent outranks repair,
+    * and the CLI holds a genuinely DIFFERENT refresh token. Re-spending the identical
+      dead token would just 401 again, and could burn a token someone else still holds.
+    """
+    if not exc.relogin or source != "instance_store":
+        return None
+    if is_disconnected("openai-codex", paths):
+        return None
+    cli = _read_codex_tokens(_CODEX_CLI_AUTH_FILE)
+    if cli is None:
+        return None
+    theirs = str(cli.get("refresh_token", "") or "").strip()
+    ours = str(tokens.get("refresh_token", "") or "").strip()
+    return cli if theirs and theirs != ours else None
+
+
 def resolve_codex_oauth(paths: InstancePaths | None = None) -> CodexOAuthCreds:
     """Return a fresh Codex access token + account id, refreshing/bootstrapping as needed.
 
     1. Read our own instance-scoped store; if absent, bootstrap it once from the
        Codex CLI's ``~/.codex/auth.json``.
     2. If the access token is expiring, refresh against OpenAI and persist our copy
-       (never the Codex CLI's file — we don't rotate its single-use token).
+       (we never write the CLI's file, though the refresh does rotate the token it holds).
+    3. If that refresh is REJECTED, our stored token had already been spent — by a sibling
+       instance that bootstrapped from the same CLI login, or by the CLI itself. Re-import
+       the CLI's current credential when it differs from ours, so a fresh ``codex login``
+       is enough to recover. Without this the 401 is permanent: step 1 only bootstraps
+       when the store file is *missing*, so a store holding a dead token never re-reads
+       the CLI file and the error's own advice cannot work.
 
     Serialized per store (#2441): concurrent resolutions can't both spend the same
     single-use refresh token — a warm read is lock-free, but the refresh/bootstrap path
@@ -538,7 +579,21 @@ def resolve_codex_oauth(paths: InstancePaths | None = None) -> CodexOAuthCreds:
         access = str(tokens.get("access_token", "") or "").strip()
         refreshed = False
         if not access or _jwt_is_expiring(access, _CODEX_REFRESH_SKEW_S):
-            tokens = _refresh_codex_tokens(tokens)
+            try:
+                tokens = _refresh_codex_tokens(tokens)
+            except OAuthCredentialError as exc:
+                recovered = _cli_recovery_tokens(exc, source, tokens, paths)
+                if recovered is None:
+                    raise
+                log.warning(
+                    "Codex refresh token was rejected (already spent by the CLI or a "
+                    "sibling instance); re-importing the newer credential from %s.",
+                    _CODEX_CLI_AUTH_FILE,
+                )
+                tokens, source = recovered, "codex_cli_bootstrap"
+                cli_access = str(tokens.get("access_token", "") or "").strip()
+                if not cli_access or _jwt_is_expiring(cli_access, _CODEX_REFRESH_SKEW_S):
+                    tokens = _refresh_codex_tokens(tokens)
             access = str(tokens["access_token"]).strip()
             refreshed = True
 
