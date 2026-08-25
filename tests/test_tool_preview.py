@@ -100,3 +100,69 @@ def test_output_chars_zero_for_empty():
 
     assert _tool_output_chars("") == 0
     assert _tool_output_chars(None) == 0
+
+
+# ── Command(update=…) returns (#3102) ─────────────────────────────────────────
+#
+# A delegate tool writes the room envelopes into state and carries its own
+# terminating ToolMessage, so it returns a Command rather than a value. A Command has
+# no `.content`, so the old `getattr(value, "content", value)` fell straight through to
+# `str()` and rendered the entire `Command(update={...})` repr — envelopes, tool_call_ids
+# and all — into the chat as the delegate's reply.
+
+
+def _delegation_command(reply: str = "Reachable — Hermes Agent v0.20.5"):
+    from langchain_core.messages import HumanMessage
+    from langgraph.types import Command
+
+    return Command(
+        update={
+            "messages": [
+                HumanMessage(content="\n@hermes health check\n"),
+                HumanMessage(content=f"\n{reply}\n"),
+                ToolMessage(content=reply, tool_call_id="call_1"),
+            ]
+        }
+    )
+
+
+def test_a_command_return_renders_its_reply_not_its_repr():
+    from server.chat import _coerce_room_text, _coerce_tool_output
+
+    cmd = _delegation_command()
+    for rendered in (_coerce_tool_output(cmd), _coerce_room_text(cmd)):
+        assert rendered == "Reachable — Hermes Agent v0.20.5"
+        assert "Command(update=" not in rendered
+        assert "tool_call_id" not in rendered
+        assert "HumanMessage" not in rendered
+
+
+def test_the_terminating_toolmessage_wins_over_the_envelopes():
+    """The envelopes are conversation state; the terminator is what the tool returned."""
+    from server.chat import _coerce_tool_output
+
+    assert _coerce_tool_output(_delegation_command("the reply")) == "the reply"
+
+
+def test_a_command_with_no_terminator_renders_nothing_rather_than_a_repr():
+    from langgraph.types import Command
+
+    from server.chat import _coerce_room_text, _coerce_tool_output
+
+    cmd = Command(update={"messages": []})
+    assert _coerce_tool_output(cmd) == ""
+    assert _coerce_room_text(cmd) == ""
+
+
+def test_a_command_size_is_measured_on_the_payload():
+    """The cost chip estimates from the real payload, not the repr's length (#2775)."""
+    from server.chat import _tool_output_chars
+
+    assert _tool_output_chars(_delegation_command("12345")) == 5
+
+
+def test_plain_and_toolmessage_returns_are_unchanged():
+    from server.chat import _coerce_tool_output
+
+    assert _coerce_tool_output("plain") == "plain"
+    assert _coerce_tool_output(ToolMessage(content="tm", tool_call_id="c")) == "tm"
