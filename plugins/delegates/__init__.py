@@ -18,8 +18,10 @@ import logging
 import os
 from typing import Annotated, Any
 
-from langchain_core.tools import tool
+from langchain_core.messages import ToolMessage
+from langchain_core.tools import InjectedToolCallId, tool
 from langgraph.prebuilt import InjectedState
+from langgraph.types import Command
 
 from .adapters import DelegateError, mark_delegation_detached
 from .registry import DelegateRegistry
@@ -39,7 +41,8 @@ def _build_delegate_to(registry: DelegateRegistry):
         resume_task_id: str = "",
         timeout: int = 0,
         state: Annotated[Any, InjectedState] = None,
-    ) -> str:
+        tool_call_id: Annotated[str, InjectedToolCallId] = "",
+    ) -> str | Command:
         """Hand a question or task to one of your configured delegates and return its reply.
 
         Use this to reach beyond your own context: ask a fleet **agent**, consult
@@ -107,8 +110,15 @@ def _build_delegate_to(registry: DelegateRegistry):
                 registry, target, query, state, item_id=item_id, resume_task_id=resume_task_id, timeout=timeout_s
             )
         try:
-            return await registry.dispatch(
-                target, query, item_id=item_id or None, resume_task_id=resume_task_id or None, timeout=timeout_s
+            return await _dispatch_into_room(
+                registry,
+                target,
+                query,
+                state,
+                tool_call_id=tool_call_id,
+                item_id=item_id or None,
+                resume_task_id=resume_task_id or None,
+                timeout=timeout_s,
             )
         except DelegateError as exc:
             return f"Error: {exc}"
@@ -118,6 +128,72 @@ def _build_delegate_to(registry: DelegateRegistry):
 
     delegate_to.description = f"{delegate_to.description}\n\nAvailable delegates: {listing or '(none configured)'}."
     return delegate_to
+
+
+async def _dispatch_into_room(
+    registry: DelegateRegistry,
+    target: str,
+    query: str,
+    state: Any,
+    *,
+    tool_call_id: str,
+    item_id: str | None = None,
+    resume_task_id: str | None = None,
+    timeout: float | None = None,
+) -> str | Command:
+    """Dispatch a foreground delegation and atomically add it to the room (#3102).
+
+    A tool body runs while its graph turn owns the thread. Calling ``aupdate_state``
+    here would race that turn's next checkpoint and lose the room record. Returning a
+    ``Command`` lets the ToolNode reduce the address, reply, and required ToolMessage
+    as part of the turn that produced them.
+    """
+    async def plain() -> str:
+        return await registry.dispatch(
+            target, query, item_id=item_id, resume_task_id=resume_task_id, timeout=timeout
+        )
+
+    # These identities have dispatch semantics the room helper deliberately does not
+    # own. Preserve the managed-git claim and parked-task continuation exactly.
+    if item_id or resume_task_id:
+        return await plain()
+    try:
+        from graph.mention_op import dispatch_into_room
+        from graph.thread_ids import resolve_thread_id
+        from tools.lg_tools import _session_id_from
+
+        session_id = _session_id_from(state) or ""
+        if not session_id:
+            return await plain()
+        messages = list((state or {}).get("messages") or []) if isinstance(state, dict) else []
+        outcome = await dispatch_into_room(
+            registry,
+            target,
+            query,
+            messages,
+            thread_id=resolve_thread_id(None, session_id),
+            speaker="assistant",
+            timeout=timeout,
+        )
+    except Exception:  # noqa: BLE001 — conversation bookkeeping must never cost the reply
+        log.exception("[delegates] recording delegation in the room failed")
+        return await plain()
+
+    if outcome["ok"]:
+        result = outcome["reply"]
+    else:
+        result = f"Error: delegate {target!r} failed: {outcome['error'] or 'unknown error'}"
+    # A Command update needs the matching ToolMessage: ToolNode validates that every
+    # model tool call has exactly one terminator. It also leaves the usual result in the
+    # current loop, so the lead can synthesize immediately while the envelopes persist.
+    return Command(
+        update={
+            "messages": [
+                *outcome["messages"],
+                ToolMessage(content=result, tool_call_id=tool_call_id, status="success" if outcome["ok"] else "error"),
+            ]
+        }
+    )
 
 
 async def _spawn_background_delegation(
