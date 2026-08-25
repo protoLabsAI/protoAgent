@@ -15,6 +15,761 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.148.0] - 2026-08-25
+
+### Added
+- **CLI coding-agent runs are recorded in telemetry (#3015, ADR 0006).**
+  The work protoAgent hands to an ACP coder — the actual code-writing — left no trace at
+  all: not a row, not a duration, not an outcome. The project board dispatches coders
+  from a background loop rather than from an agent turn, and per-turn telemetry is
+  written from a *turn's* terminal hook, so `observability/` structurally could not see
+  them. On the live PM that meant $2,809 booked across 331 turns of the PM's own
+  reasoning while the coders that actually produced the PRs contributed zero rows — cost
+  and effort attribution exactly inverted.
+  `AcpClient.prompt` now writes one durable turn row per run: an origin-prefixed
+  `coder:<delegate>:<id>` key, the ACP session id, wall-clock duration, the number of
+  tool calls the coder made (counted off the wire), and `completed`/`failed` read from
+  the wire stop reason. A refusal, a cancel, a transport failure, a dispatch that timed
+  out queued behind another, and a reply the coder truncated at its output-token limit
+  all record as failed — that last one because the delegate surface already stamps such
+  a reply "do not treat it as complete" and re-dispatches it, so booking it as a success
+  would have undercounted exactly the failure mode this issue asks about. A cancelled
+  run still re-raises. Both dispatch paths funnel through that one method (the delegates
+  adapter, and the project board's tapped seam, which deliberately bypasses that
+  adapter), so no plugin-side change was needed. `/api/telemetry/summary?since=` and
+  `/api/telemetry/recent` now answer "how many coder runs in the last 24h, and how many
+  failed".
+  Tokens and cost are recorded as **zero**: the coder bills its own subscription and
+  protoAgent never observes those numbers, so the `acp:<delegate>` model label is the
+  honest "not gateway-metered" marker rather than an invented figure. No `turn.usage` bus
+  event is published, since the console's fleet roster pairs a `turn.started` +1 with a
+  `turn.usage` −1 and a coder run emits no `turn.started`. Runs driven by
+  `runtime/acp_runtime.py` are excluded: the aux model (compaction, goal verification) is
+  not a coder dispatch at all, and an ACP-runtime *chat* turn is already booked under the
+  same label by the A2A executor's terminal hook, so a second row would double it. On the
+  non-streaming driver (`/v1/chat/completions`, `/api/chat`, the plugin `HOST.invoke()`
+  seam) an ACP-runtime chat turn is booked nowhere, before this change and after it —
+  recording it here would have filed a chat turn as coder work, so that gap is left to
+  the non-streaming turn recorder (#3000) and noted rather than papered over.
+  **Coder runs are turns, so every whole-instance figure now covers them**: the Telemetry
+  surface's Success and Latency p50/p95/p99 tiles, the `/perf` chat note, the agent's own
+  `recent_activity`, the fleet rollup, and the shared Prometheus turn counter and latency
+  histogram (`metrics.record_a2a_turn`) all mix minutes-long coder runs in with
+  seconds-long gateway turns from this release on. The By-model table (and
+  `summary()["by_model"]`, which carries per-model p50/p95/p99) is where the two
+  populations stay separate.
+
+- **Langfuse tracing is configurable, not env-only (#3017).** ADR 0006's deep-trace half
+  read `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` from the environment and nowhere
+  else, so it was unreachable on the shape the fleet actually deploys — a desktop-app
+  member (`protoagent-server --port … --ui none`) is spawned with none of those vars set,
+  and a live PM recorded 0 trace_ids across 336 turns and 5,000 model calls. New
+  `tracing.{enabled,host,public_key,secret_key}`, editable at **Settings ▸ Tracing** — the
+  Agent group, not Box ▸ Telemetry, because these are per-agent credentials and the Box
+  group never renders in a fleet member's console window (which is the only console a
+  `--ui none` member has); the Telemetry surface carries a gear onto the same four fields,
+  so both halves of ADR 0006 are still one click apart on the host console. The client is
+  built at boot, so a change needs a restart. Both keys are declared secrets — stored in
+  the untracked `secrets.yaml`, redacted from every config read and from the audit log,
+  exactly like `model.api_key` (Langfuse's "public" key is only public relative to their
+  browser SDK; server-side it authenticates the ingest client). The environment still wins
+  — a container deploy that exports the pair is untouched, and `tracing.enabled` is a
+  fallback toggle, not a kill switch for it. With tracing off the console now says so:
+  `/api/telemetry/recent` reports `tracing_enabled: false` and the Trace column reads
+  `off` instead of a blank that reads as "this turn wasn't traced".
+
+- **Plugin views can put items in the console's context menu (#3030).** The context-menu
+  system (ADR 0036) stopped at the iframe edge: a right-click inside a plugin view got the
+  browser's own menu, because that event fires in the frame's document and never reaches the
+  host — and under the desktop app the frame is cross-origin, so the host can't listen on it
+  either. The page is the only party that sees the click, so it now hands it over. Three
+  messages on the ADR 0026 bridge: `protoagent:contextmenu:register` declares a default item
+  set (re-registering replaces it, `items: []` clears it), `protoagent:contextmenu:open`
+  reports a right-click with the cursor position and, optionally, the items for whatever is
+  under it, and `protoagent:contextmenu:action` fires back the chosen item's id. So a board
+  view can offer Copy ID / Open PR / Mark ready on a card, in the console's own styled menu.
+  Items are data only — a label, an optional lucide icon NAME resolved against the console's
+  icon set, `danger`/`disabled` — and their ids are forced into the plugin's
+  `plugin.<id>.` namespace, so a page can neither shadow a core menu item nor collide with
+  another plugin, exactly as the keybinding bridge (#1457) already does for chords. The
+  position is clamped into the view, and the console appends its own **Configure…** so a
+  page that suppressed the native menu never leaves the operator with an empty one.
+
+- **An `@delegate` exchange is recorded in the conversation, and the delegate sees the room (#3042).**
+  Builds on the `@<delegate>` dispatch from #3043. That slice routes the message and
+  returns the answer, but the exchange never reaches graph state — so the *lead* agent,
+  which is where the next bare message goes, has no idea the delegate was ever asked
+  anything. Ask `@proto` about a bug, then say "so what should we do?", and the lead
+  answers having never seen proto's reply.
+  Both halves of the exchange are now written onto the session's checkpointer thread, so
+  the thread *is* the room transcript and no second store is needed. Authorship rides
+  `additional_kwargs["room"]` structurally, and the model-facing carrier is an
+  XML-enveloped `HumanMessage` matching how a delegated result already enters a thread
+  (`<task-notification>`) rather than an `AIMessage(name=…)` whose handling varies by
+  gateway — the lead must never read another participant's words as its own prior output.
+  The write specifies `as_node` (`__start__`): the compiled graph refuses an ambiguous
+  update once a thread has pending state, and because the write is best-effort that
+  refusal would have been silent.
+  **An addressed delegate now sees the room since it last spoke**, attributed by author
+  and capped at 40 messages / 8000 chars, trimmed from the front. Previously it received
+  only the bare message. That bound keeps the cost of a room proportional to the
+  conversation rather than to its length, and it is the *only* continuity most delegates
+  get: `conversation_key` is ACP-only — `DelegateRegistry.dispatch` raises for every other
+  type — so it rides only where accepted, and an `a2a` fleet member or model endpoint gets
+  its whole picture of the room from the catch-up. Tool traffic is excluded: a lead's tool
+  calls are how it did its work, not something anyone said.
+  Parsing and resolution move to `graph/mentions.py`, the addressing twin of
+  `graph/slash_commands.py` and, like it, one source shared by the dispatcher and the
+  console — a composer that autocompletes a name the dispatcher won't route sends the
+  operator's message to the wrong participant. `GET /api/chat/mentions` serves that roster.
+  An ambiguous case-fold (two delegates differing only in case) now resolves to nobody and
+  answers with the roster, instead of silently reaching whichever one a dict happened to
+  keep. Dispatch also survives a missing graph: losing the bookkeeping must never cost the
+  operator their answer.
+  The exchange takes the session's **per-thread lock** before writing, the way every
+  other writer to that thread does (a turn, a goal continuation, compact, rewind). It runs
+  before the turn lock is acquired, so without this a mention landing while a scheduled
+  fire wrote the same thread would lost-update the transcript. Participant names are
+  XML-escaped into the envelope, so a name is data rather than markup and cannot forge a
+  `from=` attribution.
+
+- **The console shows who answered, and `@` completes from the roster (#3042).**
+  The console half of `@<name>` addressing. An answer from an addressed delegate now
+  carries a **byline** with that participant's name instead of reading as the lead agent's,
+  and typing `@` in the composer opens the same popover `/` uses, filled with the
+  addressable roster.
+  Authorship rides a new local A2A extension (`application/vnd.protolabs.room-v1+json`) on
+  a working frame *before* the answer artifact, so the byline is in place as the answer
+  draws rather than appearing after the fact. `ChatMessage` gains an optional `author`; the
+  role deliberately stays `assistant`, so every existing renderer, exporter and reconciler
+  is untouched and attribution is an additive overlay rather than a fourth role each of
+  them would have to learn. A consumer that ignores the extension shows the same answer
+  text, just unattributed.
+  The composer's `@` popover is the *same* popover, keyboard nav and completion path as
+  `/` — a draft can't start with both sigils, so the sigil only decides which list fills
+  it. Its entries come from `GET /api/chat/mentions`, the same resolver the dispatcher
+  routes with, so it can't offer a name the turn won't reach. It opens only on a **leading**
+  `@`, matching the server: `ask @proto about it` is one message to nobody in particular, so
+  completing that second `@` would suggest a target the message never reaches.
+
+- **`sdk.plugin_store()` — a plugin's own writable directory, scoped to the instance (#3057).**
+  Plugins needing persistence each hand-rolled path resolution, and the four in-tree attempts had
+  diverged into four different answers: one hardcodes an absolute `/sandbox` path with a
+  module-global SQLite connection, one hardcodes `~/.protoagent` and re-implements instance scoping
+  by hand, one gets it right — and one still imported `infra.paths.scope_leaf`, removed in the
+  ADR 0065 two-tier cutover, so **its feature had been silently dead ever since** (the caller caught
+  the ImportError by design and logged one line). One call now covers it:
+  `sdk.plugin_store(plugin_id=registry.plugin_id) / "state.db"` returns a created directory under
+  the instance root, so the dev sandbox and every fleet member are isolated without the plugin
+  remembering to do it. An escaping `subdir` or a malformed `plugin_id` raises rather than
+  redirecting — writing an operator's data somewhere unexpected is worse than failing. The docstring
+  and the [Persisting state](https://agent.protolabs.studio/docs/guides/plugins#persist-state) guide
+  also say plainly what wasn't written down anywhere: don't open core's databases, prefer
+  `record_metric`/`knowledge_add` where they fit, and the connection discipline (per-call
+  connections, `busy_timeout` before WAL, a write lock, additive migrations) that survived contact
+  with Windows CI.
+
+- **A chat shows its cast — derived, never tracked (#3049).**
+  A quiet strip above the composer names the delegates that have **spoken** in this chat,
+  computed from the transcript itself. That derivation is the design: a participant list
+  tracked from keystrokes could only drift from reality (a chip appeared on `@`-completion
+  and outlived the deleted draft), and nothing in this system "listens" — an agent acts
+  only when addressed — so the strip is a record of the conversation's cast, not a claim
+  of presence. Clicking a name inserts `@name ` (the one thing "being in a chat"
+  affords). There is **no remove control**: history is not removable, and an X that gated
+  nothing was confusion pretending to be a control. Cast members sort first in the `@`
+  popover, ordering only — every delegate stays addressable.
+  **The lead agent is told the cast**, as awareness, never permission: a one-line system
+  suffix ("in this chat and already caught up on it: proto, reviewer…") injected per
+  model call via `RoomCastMiddleware` — ephemeral, recomputed from the thread's `room`
+  stamps, never checkpointed, absent on every ordinary chat. The lead prefers cast
+  members for follow-ups for the true reason — they already have the conversation's
+  context — while `delegate_to` remains unrestricted. A membership list that *gated*
+  delegation was considered and rejected: either it fences tools the roster says exist,
+  or it doesn't and the list is a control without teeth.
+
+- **A chain renders as the several messages it was, not one (#3051).**
+  Agent-to-agent addressing (#3050) sends one `room_reply` frame per exchange — the
+  operator addressed proto, proto addressed claude-code — but the console stamped each
+  onto the *same* bubble, so a three-way conversation displayed as whoever happened to
+  speak last. Each exchange now becomes its own authored message: the first fills the
+  in-flight bubble (so the byline lands as the answer draws), and every hop after it
+  appends. The in-flight bubble is moved to the end as each one arrives, so the streaming
+  indicator stays at the bottom of the thread instead of stranded above messages that
+  landed after it.
+  The `room-v1` payload now carries the reply text and **who did the addressing**
+  (`from`), not just the author — so a hop reads as `proto → claude-code` rather than
+  looking like the operator asked. `from` defaults to the operator when a producer omits
+  it, which keeps a pre-#3050 frame rendering correctly. A chain that stopped at a guard
+  carries `stopped` with the reason.
+
+- **Gource visualization scripts — render the repo's history as a growing contribution tree (#3094).**
+  `scripts/render-gource.sh` produces a 1080p video (gource → ffmpeg, protoAgent
+  lavender highlight), `scripts/fetch-gource-avatars.sh` pulls contributor avatars, and
+  `scripts/gource-gif.sh` converts the render to a shareable GIF (two-pass palette);
+  output stays local (`gource.mp4` / `gource.gif` / `.gource/` gitignored). Ported
+  from protoMaker.
+
+- **`@` several participants in one message (#3042).**
+  `@proto @reviewer what do you think?` now addresses both. A **leading run** of
+  mentions fans out: the run extends while each next `@token` resolves to a delegate,
+  and the first thing that isn't a resolvable mention begins the message — so
+  `@proto @nope hi` addresses proto with the message `@nope hi`, and a mid-message `@`
+  stays prose exactly as before. An unknown *first* token keeps answering with the
+  roster. Duplicates de-duplicate.
+  Dispatch is **sequential, in written order**, which the room turns into a feature:
+  each exchange lands on the thread before the next participant reads it, so the second
+  addressee's catch-up already contains the first one's reply — they answer the
+  conversation, not just the question.
+  The combined answer attributes each participant (`**@proto** — …`); one participant's
+  failure costs nobody else's reply. Each exchange also gets its own `room_reply` frame,
+  now carrying the reply text, so a console can render the fan-out as the several
+  authored messages it was. A single mention is byte-for-byte unchanged.
+  The composer's popover follows the same rule: it opens for the token the caret is in
+  while every token before it is itself a mention — previously it anchored to position 0,
+  so after completing the first name the second `@` never offered anyone.
+
+- **Agents can change their own operational config, if you let them (`tools.self_config_enabled`).**
+  An agent that needed a settings change — repoint a board's coder, fix a model slot — could read the
+  config, work out the exact edit, and then had to stop and hand a human the diff. `set_config` closes
+  that loop: a flat dict of dotted keys applied through the same `ops.config.set_config` path the CLI
+  and the console already use (ADR 0075 D2 — one op, thin adapters; this is the third). It ships
+  **off**, binds to the lead agent only, and is fenced to *operational* keys. The trust surface —
+  `filesystem` (shell + the project fence), `operator`, `egress`, `plugins` (enabling one runs its
+  code in-process as the agent), `auth`, `mcp`, `soul`, and `tools` itself — is refused outright, as
+  is any secret-typed key, which the write path would otherwise have routed into `secrets.yaml` and
+  thereby into the turn transcript. A batch containing a denied key refuses **entirely** rather than
+  applying the rest, so a fence change can't ride along with legitimate edits. The net: an agent can
+  retune how it runs, and still cannot widen what it is allowed to do.
+
+- **Chat messages can address a delegate directly with `@name` (#3037, S1).** A chat
+  message that opens with `@<delegate>` is now routed straight to that delegate over
+  `DelegateRegistry.dispatch()` — the chat analogue of the `delegate_to` tool — and the
+  LLM turn is skipped entirely. The check runs as STEP 0 in both the streaming and
+  non-streaming turn drivers, before goal control and the slash-command cascade, so an
+  `@`-mention is never swallowed by an active goal. `@Proto build it` matches the
+  registered `proto` case-insensitively and sends only `build it`; a bare `@proto` returns
+  a usage hint; a leading `@name` that resolves to no delegate answers with the roster
+  (`Unknown or unreachable delegate: @name. Available: …`) rather than running the raw text
+  as a prompt. The `@` must be the first non-whitespace character (no mid-message mentions
+  in v1), so `hello @proto` stays a normal turn. The delegates plugin publishes the live
+  roster on `STATE.delegate_registry` at register() time (cleared when the roster is empty),
+  so with the plugin absent or no delegates configured every `@` falls through to ordinary
+  chat. Both the `@name rest` message and the delegate's reply ride the same terminal path
+  every slash-command short-circuit uses, so both land in session history.
+
+### Changed
+- **Flagged-outlier turns are now measured against their own model's median (#3015).**
+  `/api/telemetry/insights` flags a turn whose cost or duration is ≥ 5× the median of
+  recent turns, and the console renders the top of that list. The median was taken across
+  every sampled turn regardless of model, which was survivable while every row came from
+  the gateway — and stopped being survivable the moment coding-agent runs started
+  recording (same issue): a coder run is minutes against a chat turn of seconds, so every
+  one of them cleared 5× *by construction* and filled all 20 slots of an advise-only
+  anomaly list, pushing the real anomalies out of it. Each turn is now compared against
+  the median for its own model, and the flag text names the baseline it beat
+  (`latency 41000ms ≥ 5× acp:claude-code median 8000ms`). A model with fewer than three
+  rows in the sample still falls back to the overall median — the first runs of a
+  newly-configured model are exactly when a surprise bill should surface.
+
+- **Compact result cards for scheduled/autonomous turns (#3028).** A settled scheduled-task
+  fire, watch reaction, or autonomous wake no longer renders as a full-size assistant message
+  in chat — it collapses into a muted, expandable result card (trigger label · preview · time)
+  that opens to the full markdown answer and the turn's tool work on click. Operator-initiated
+  answers are unchanged. The trigger origin is persisted on the message, so the card treatment
+  survives a reload.
+
+- **The Inbox and Activity utility-bar pills are now one unified feed (#3029).** The two
+  near-identical bottom-left widgets merged into a single pill whose unread badge tracks
+  both the `inbox.item` (pending inbound stimuli, ADR 0003) and `activity.message`
+  (completed agent turns, ADR 0022) bus events. One dialog now shows pending inbox items
+  on top — with priority badges and dismiss (POST `/api/inbox/{id}/deliver`) — and the
+  read-only provenance timeline below, with origin/trigger badges, markdown, and
+  open-in-reader. The two feeds load and error-handle independently, so a transient
+  failure of one API no longer blanks the other.
+
+- **The Docs view is the first plugin to use context menus (#3030).** Right-click a doc in
+  the sidebar for **Open · Copy path · Copy as markdown · Open on the docs site**; right-click
+  the reader for the same actions on the doc it's showing (disabled, not hidden, when nothing
+  is open); right-click the empty list for **Search docs… · Reload the doc list**, the set the
+  page registers once. "Copy as markdown" is why `/api/plugins/docs/doc` grew an opt-in
+  `raw=1` — the reader only ever renders the HTML, so it doesn't carry every doc twice.
+
+- **Settings ▸ Model lists every connected provider instead of gating on the active one (#3097).**
+  The Connected-account panel used to compute a single provider from `model.provider` and
+  hide everything else, so a second subscription you'd connected stayed invisible until you
+  switched the default to it. It now renders one connect/disconnect/reconnect card per
+  signed-in native-OAuth provider (ADR 0097) — Claude and ChatGPT at once — listed alongside
+  the gateway/API-key connection, independent of which one is the active default. Managing one
+  connection no longer requires changing `model.provider`; the single-provider case looks as it
+  did before. Presentation only: what `model.provider`/`model.name` mean is unchanged.
+
+### Fixed
+- **Retry empty ACP delegate replies before counting a failure (#2991).** An ACP coding
+  delegate (sonnet, claude-code, …) that "replies" with no tool calls and only a boilerplate
+  preamble ("Let me read the relevant files first") is now detected in the host's ACP runtime
+  path and the same delegate is retried once, transparently — the caller sees the retry, not
+  the empty first attempt. A second empty reply is returned normally (no loop). The detection
+  is logged at warning level with the delegate name, output length, and tool-call count so the
+  pattern is diagnosable; normal replies pass through unchanged and are never retried.
+  Detection errs toward "substantive" — a genuine short answer that merely opens with a
+  conversational lead-in ("Sure, the fix is: change line 42.") is preserved, not retried away.
+  The board plugin's own empty-reply classification (#198/#222) continues to work as a backstop.
+
+- **A delegation to an A2A peer now bills the peer's reported cost and tokens to the
+  calling turn (#3016).** protoAgent's A2A server emits the `cost-v1` extension on every
+  terminal artifact, and its own client ignored it: `A2aAdapter.dispatch` read the reply
+  text and dropped the metadata, so a hub that fanned work out to members reported only
+  its own thinking and ADR 0055 multi-team orchestration was uncountable. The adapter now
+  reads the cost-v1 payload off the terminal artifact (falling back to the terminal status
+  message) and surfaces it on the calling turn's stream through the `usage` custom-event
+  lane #2872 built for subagents — so the peer's `costUsd` and tokens land in this
+  instance's telemetry row, carrying a `peer:<delegate>` marker in `models` and, like a
+  subagent's, excluded from the lead thread's context-window fill. Because the same
+  accumulator feeds the cost-v1 *this* instance emits, a member's spend also rides one hop
+  further up a hub→member chain. The peer's own `costUsd` is used verbatim, never
+  re-derived; a peer that emits no cost-v1 (any non-protoAgent A2A agent) is billed
+  nothing and behaves exactly as before. Not billed, and documented as such in ADR 0006: a
+  background delegation (ADR 0050), whose detached job is deliberately excluded so that a
+  peer's latency can't decide whether the spawning turn is charged, and a peer leg that
+  ends without a terminal artifact — a HITL park or a failure — which puts no cost-v1 on
+  the wire to read. Reading the payload is best-effort like dispatching it, so a peer that
+  reports a number we can't parse still gets its answer through with the delegation
+  recorded as the success it was.
+
+- **One bad member no longer 500s the whole fleet telemetry rollup (#3018).**
+  `GET /api/telemetry/fleet` promises in its own docstring that an unreachable
+  member is a `reachable: false` entry, "never a failure of the rollup" — but
+  one malformed record in the fleet registry HTTP 500'd the *entire* rollup:
+  every healthy member's numbers and the host's own telemetry lost with it.
+  Two halves, both fixed. `_fetch_member_json` did its slug-proxy target
+  resolution and service-token minting *outside* its `try`, and the peers
+  fan-out gathered without `return_exceptions` — so a `KeyError` out of
+  `_target_for_slug` (which subscripts registry records straight through)
+  escaped the route. Resolution and token minting now sit inside the
+  containment boundary and the fan-out gathers with `return_exceptions=True`,
+  so a raise anywhere in one member's read — the merge step included — becomes
+  that member's `reachable: false` row (reported, not dropped: a member
+  silently missing from `members` would be its own lie about the fleet).
+  The other half was the *roster* read, which the route makes before any member
+  is contacted: `supervisor.status()` subscripted `rec["name"]`/`rec["url"]` on
+  every remote record and `list_remotes()` called `.values()` on whatever
+  `remotes.json` held. A hand-edited remotes file missing a `url`, or holding a
+  JSON list, raised there — never reaching the boundary above. The registry
+  read is now total the way `manager.list_workspaces` already was for the local
+  half: a record that lost its `id` is recovered from its registry key, a
+  remote with no `url` is reported as the never-reachable member it is
+  (`a2a: null`, not an invented endpoint), a non-record value is dropped
+  loudly, and a wrong-shaped file degrades to empty like an unreadable one.
+  That fix lands in `graph/fleet` rather than the route because `/api/fleet`
+  reads the same registry through the same `refresh_remote_probes()` +
+  `status()` pair, and broke on the same input. The 10s/5s-connect per-read
+  bound and the concurrent fan-out are unchanged.
+
+- **`prompts.retention_days` no longer goes silently inert on a busy agent (#3019).**
+  The snapshot store trims on two caps per write — age and row count — but the row cap
+  was a hardcoded `MAX_CALLS = 5000` reachable from no config key and passed at neither
+  construction site. At real turn volume it evicted long before the age cap applied, so
+  raising the documented, console-exposed retention knob changed nothing: a live Project
+  Manager sat at 4,968 rows spanning ~3 days against a configured 30, meaning "View
+  prompt" had already lost everything older than about 72 hours on exactly the agent
+  whose prompts you most want to inspect. The row cap is now `prompts.max_calls`
+  (default `5000`, `0` = unlimited), threaded along the same path `retention_days`
+  travels and surfaced in Settings ▸ Telemetry beside it. `GET /api/prompts/last` gained
+  a `retention` block naming which cap — if either — is actually ending the window
+  (`binding_cap`) and how far back the store really reaches (`effective_days`). When it
+  reports the row cap, `/prompt`'s empty-session note drops the "nothing captured for
+  this session **yet** — send a message first" lead, which is the wrong story once
+  captures have existed and been evicted, for one that names the cap, the span really
+  held, and the knob to raise. Also adds the missing index on `calls(stable_hash)`, the
+  column the orphan-blob sweep looks up on every write once the store is at its cap; it
+  migrates onto an existing store on open. Measured, so as not to overstate it: an
+  at-cap write costs ~9.4 ms against ~3.5 ms below the cap and the index recovers
+  ~1.3 ms of that — the row-cap `DELETE` and its write amplification dominate the rest
+  and are unchanged.
+
+- **A plugin view's page had no namespace, which silently disabled its keyboard shortcuts
+  (#3030).** The console derived the owning plugin's id from the view's path with a pattern
+  that only matched `/api/plugins/<id>/…` — the plugin's *gated data* router. Real view pages
+  serve from the public namespace (`path: /plugins/<id>/view`, ADR 0026), so the id resolved
+  to `""` for every plugin that ships a view. Two things quietly rode on it. Chords declared
+  with `protoagent:keybindings` (#1457) were refused as a batch — the parser needs a
+  namespace to force ids into — so a plugin's shortcuts never registered and never appeared
+  in Settings ▸ Keyboard. And `protoagent:publish` fell back to the page's raw topic instead
+  of forcing `<plugin_id>.`, against both ADR 0039's no-cross-dependency clause and the
+  guide's "the host FORCES your plugin's namespace": a page publishing `created` published
+  `created`, which no `<plugin>.#` subscriber matched and no rail notification dot ever saw.
+  The id now comes from the surface key App already stamps on each view
+  (`plugin:<id>:<viewId>`), with a path fallback that accepts both namespaces.
+
+- **The Docs view says when the AGENT is unreachable, instead of blaming the doc (#3037).**
+  A fetch that never reached the server rejects with no status at all — a stopped agent, or a
+  console tab that outlived one — and both the reader's error line and the new context-menu
+  actions reported that as a failure to read the document you were pointing at, which sends you
+  looking in exactly the wrong place. Failures now name their real cause: a network-layer
+  rejection reads "the agent is not reachable (is it still running?)", while a genuine HTTP
+  error still names the doc and its status.
+
+- **A hostile A2A peer can no longer erase the calling turn's telemetry row (#3038).**
+  #3016 made protoAgent read a peer's `cost-v1` numbers off the wire into local telemetry,
+  and the parse boundary guarded non-finiteness but not magnitude: a peer replying to a
+  `delegate_to` with `{"usage": {"input_tokens": 1e308}}` produced a 309-digit Python int
+  that the executor accumulated, `record_turn` folded into `total_tokens`, and SQLite
+  refused with `OverflowError: Python int too large to convert to SQLite INTEGER`. Because
+  telemetry is deliberately best-effort, that exception was swallowed and the WHOLE turn
+  row was dropped — the lead agent's own genuine spend gone from cost totals, success rate
+  and latency percentiles, at a remote party's choosing. `record_turn` logged the failure
+  at ERROR with a traceback, so the loss was reported; what nothing said was which remote
+  party caused it, and no log line brings the row back.
+  `plugins/delegates/adapters.py` now bounds every peer-reported number where it is parsed
+  — including the spelling a peer would actually use, a plain JSON integer literal wider
+  than a double, which `float()` refuses outright rather than overflowing. Tokens clamp to
+  1e12 and cost to $1,000,000 (a per-turn figure above either is not a real turn, and both
+  sit far below SQLite's signed-64-bit ceiling), negatives floor at zero, and non-finite
+  values still bill nothing. A clamp is logged at warning level once per peer, naming the
+  peer and the fields, so the party responsible is identifiable without letting a
+  garbage-reporting peer set the volume of the log it appears in. A peer's honest numbers
+  are unchanged.
+
+- **Config can no longer choose the destination for deployment-owned Langfuse credentials** (#3039). `resolve_credentials` resolved the host as `env_host or cfg_host or default` regardless of which layer answered for the keys, and `docker-compose.yml` passes `LANGFUSE_HOST=${LANGFUSE_HOST:-}` — empty for an operator who exports only the key pair — so a `tracing.host` written into `langgraph-config.yaml` (snapshot import, a fork's committed config, any Settings save) sent the deployment's keys, as a Basic auth header, plus span bodies, to a host config named. A key pair from `LANGFUSE_{PUBLIC,SECRET}_KEY` now goes to `LANGFUSE_HOST`/`LANGFUSE_URL` or the compose default and never to `tracing.host`. **Upgrade action:** if you set the key pair in the environment AND named a `tracing.host` in config, those traces move to `LANGFUSE_HOST` (or `http://host.docker.internal:3001` if you never set it) — export `LANGFUSE_HOST` to keep the destination you had. The block is one-directional: keys set in Settings ▸ Tracing still fall back to `LANGFUSE_HOST` when `tracing.host` is blank, so host-in-env + keys-in-Settings and fleet members inheriting the hub's Langfuse are unaffected. Whichever host loses is now named on the boot line instead of being dropped silently, and snapshot import surfaces `tracing.host` in the plan's capability list alongside `filesystem.allow_run`.
+
+- **A coder run no longer books another run's effort (#3040).** The per-run `tool_calls`
+  and session id #3015 records live on a *pooled* `AcpClient`, and several paths let one
+  run's numbers land on the next. A dispatch that died inside `_ensure_started` — a
+  managed-git worktree already deleted, a binary an upgrade moved, a handshake timeout —
+  never reached the reset, so it was recorded with the previous run's tool count and the
+  previous run's ACP session id; the per-turn state is now cleared before the start attempt,
+  and the session id is recorded per run rather than read off the pooled client. A turn
+  abandoned on timeout left the coder still emitting `session/update` notifications into a
+  counter the turn lock does not guard, spending the next run's tally: an abandoned turn now
+  fences its stream (the reader that served it is stamped stale and ignored) and the next
+  dispatch respawns the agent instead of sharing output with a coder that is still working.
+  The same stamping now covers the *unfenced* respawn — an agent that died between
+  dispatches, whose backend can hold the stdout pipe open after it — so neither the tool
+  calls that orphan keeps emitting nor the "agent exited" it eventually raises reaches the
+  healthy run that replaced it. An error the agent itself answered with is left alone: the
+  turn is over on its side, so it no longer kills and respawns a working agent (which, for a
+  coder without `loadSession`, silently dropped the conversation thread).
+
+- **Telemetry outliers no longer go silent as evidence accumulates, or when coder rows fill
+  the sample (#3041).** The per-model cohort baseline #3015 introduced fixed a flood and
+  bought two silences. First, a model with three or more sampled rows was measured only
+  against itself, so a uniformly expensive model could never be flagged for cost and the
+  third $40 run deleted the flags the first two raised — more evidence, fewer alerts. Cost
+  now clears the bar against either the model's own median *or* the median across every
+  priced turn on the instance, so "this model is expensive" surfaces again. That second,
+  absolute test states something about a *model*, so it claims at most **one row per
+  model** — the priciest turn sampled on it. Uncapped it flags every turn of any tier
+  priced 5× above the instance-wide median, which is what an ordinary price gap between a
+  mini model and a flagship looks like: 60 flagship turns into a 20-slot list, evicting the
+  genuine runaway. Latency stays purely per-model. Second, the fallback used for a model
+  with too little history took its medians over the whole mixed sample: on a
+  coder-dispatching agent, CLI runs recorded under `acp:<delegate>` (cost 0, duration in the
+  hundreds of thousands of ms) are most of the last 200 turns, so the cost median went to 0
+  — killing the `> 0` guard and the entire cost signal with it — and the latency threshold
+  drifted out to roughly 25 minutes. Zero-cost rows are now excluded from every cost median,
+  and the latency fallback is taken over comparable rows only (coder runs against coder runs,
+  gateway turns against gateway turns). Reason strings name the new baselines
+  (`all priced turns`, `all gateway turns`) so a flag still says what it beat.
+
+- **Finished removing `daily_log`, and stopped a duplicate eval-case id from hiding
+  regressions.** The tool left core a while back, but six places still described it as
+  shipped: the evals guide (whose `--tasks current_time_intent,daily_log_intent` example
+  named a case that no longer exists — and `--tasks` drops unknown ids *silently*, so it
+  ran one case and reported green), the eval runner's own `--tasks` docstring example
+  (`current_time,memory_ingest` — neither is a real case id), the `tools.disabled` example
+  in `config/langgraph-config.example.yaml`, the `knowledge` package docstring, and ADR 0005's
+  tool census. Worse, the eval case itself had been rewritten onto `memory_ingest` **without
+  being renamed**, leaving two cases sharing the id `memory_ingest_intent` — and every report
+  consumer keys by id (`compare.py` builds `{id: passed}`, `sweep.py` aggregates into
+  `agg[id]`), so the second silently overwrote the first and a regression in either was
+  invisible to both. The case is now `memory_note_intent`, a test asserts case ids are
+  unique, the docs name real ids and warn that unknown ones are dropped without complaint,
+  and ADR 0005's census is marked as the dated snapshot it is (it's the evidence for that
+  ADR's count argument, so it's preserved rather than rewritten) with a pointer to the live
+  [Starter tools](/reference/starter-tools) reference.
+
+- **`python -m evals.runner --tasks` now says when an id doesn't exist.** It filtered
+  with `c["id"] in wanted` and said nothing about the ids that matched nothing, so the
+  dangerous shape was a *partially* unknown request: the run proceeded on whatever
+  matched, exited 0, and printed a green board while covering less than was asked for. A
+  typo and a retired case looked identical to a pass — which is how the evals guide came
+  to document `--tasks current_time_intent,daily_log_intent` for months after that case
+  was removed, running one case and reporting success. Unknown ids are now named on
+  stderr (`warning: no such case id(s): … — continuing with the N that matched`), the
+  selection moved into a testable `select_by_ids()` that also tolerates whitespace
+  (`--tasks "a, b"` works), and a test gates the guide's own `--tasks` examples against
+  `tasks.json` so a doc example can't rot into a lie again. A fully-unknown request
+  already exited 2 and still does.
+
+- **Adding a delegate now shows up in the `@` menu without reloading the page (#3042).**
+  The composer fetched its addressable roster once per mount, so a delegate created in
+  Settings → Delegates existed server-side and dispatched correctly, but the `@` popover
+  kept offering the old list until the operator reloaded.
+  It is a react-query now, keyed **under** `delegates` — so the invalidation
+  `DelegatesSection` already fires after every create / update / delete reaches it by
+  prefix match, with no new wiring and nothing for a future panel to remember to call. A
+  test pins that nesting, because the whole fix is the key's shape: flatten it and the
+  staleness returns silently.
+
+- **Plugin install and update now land with an atomic directory swap, so a failed move
+  never leaves a broken install (#3075).** The old sequence deleted the installed plugin
+  (`shutil.rmtree(target)`) before moving the staged clone into place: a move that died
+  mid-copy (disk full, a permission change) left no old version and half a new one. The
+  installer now renames the existing plugin to `<id>.bak` — an atomic same-directory
+  rename — moves the staged tree in, and only then removes the backup; on any failure the
+  backup is renamed back and the install raises `InstallError` with the previous version
+  intact and still pinned in `plugins.lock`. A `.bak` left by an interrupted swap is
+  cleared by the next install of that plugin. `uninstall()` likewise renames the directory
+  aside before deleting, so an interrupted removal never leaves a half-deleted plugin dir.
+  The `plugins.lock` write was already atomic (tempfile + `os.replace`) and is unchanged.
+  Also fixed en route: the generated event-bus topic catalog
+  (`docs/reference/plugin-events.md`) now renders "Emitted from" paths with POSIX
+  separators on every OS, so Windows CI no longer regenerates a permanently-stale page.
+
+- **A 401 from an A2A peer now says what to do about it.**
+  A delegate with no Auth token presents the fleet service token on **loopback only**
+  (ADR 0089) — that token must never leave the box — so an off-box peer receives no
+  credential at all, by design, and answers 401. The operator saw
+  `HTTP 401: Unauthorized: expected 'Authorization: Bearer '` and no way to connect that
+  to a deliberate decision they had no reason to know about.
+  A 401/403 from a tokenless off-box delegate now names the field to set and why nothing
+  was sent, and points at the **least-privilege** credential first: the peer's
+  `auth.federation_token` (ADR 0066) reaches only `/a2a` and `/v1`, where its operator
+  token opens the whole API. A *loopback* 401 gets a different message — there the token
+  should have been presented, so the lookup failed rather than being withheld, and telling
+  the operator about off-box policy would send them the wrong way. A delegate that already
+  has a token gets no hint at all: that credential was sent and rejected, which is a wrong
+  token, not a missing one.
+
+- **A reattached paused turn gets its HITL buttons back (#3082).** Returning to a
+  session after a fleet agent switch or reload while the turn was parked on
+  operator input (`input-required` / `auth-required`) left the reattach fallback
+  poller looping for its full 10-minute budget — the A2A paused states weren't in
+  its TERMINAL regex — holding the session "streaming", which fed the re-rendered
+  HITL form `busy={true}` and disabled Submit/Dismiss and Approve/Deny alike.
+  The reattach path and the stalled-stream watchdog now count `rejected` as
+  terminal, and a paused state stops the poller immediately and returns the
+  session to idle *without* `finalize()` — finalize stamps the message "done",
+  which misrepresents a turn the server still owns and the operator is about to
+  resume. Terminal turns (completed/failed/canceled) reconcile exactly as before.
+
+- **A2A delegate replies no longer corrupt or truncate on streaming chunk boundaries (#3085).**
+  `tools/a2a_parse._extract_text` joined a peer's text parts with a newline and returned only the
+  first artifact, so a delegate that streamed its reply one part — or one artifact — per delta had
+  a `\n` spliced into every word that fell on a chunk boundary (`"Let"` + `" me"` → `"Let\n me"`,
+  `"didn"` + `"'t"` → `"didn\n't"`) and lost everything past the first artifact, leaving a reply
+  that ended mid-sentence. Text parts are now concatenated verbatim (empty-string join) across
+  every text-bearing artifact, reassembling the peer's reply exactly as it was streamed; a peer
+  that means a paragraph break still sends that newline inside a part's own text, so nothing real
+  is lost. The fix lives on the consumer side because we don't control every peer's chunking. As a
+  belt-and-braces diagnostic, the a2a dispatch path now logs a WARNING when a delegate returns a
+  suspiciously short reply (<500 chars) after a non-trivial dispatch — the smell of a truncated or
+  partial-narration answer — naming the delegate, its length, and the elapsed time to aid future
+  debugging; it only logs and never alters the returned text.
+
+- **Raise the ACP delegation timeout default to 30 min, and make it overridable per call (#3091).**
+  Implementation-shaped ACP coding delegates (a full TDD red→green cycle, venv setup, a CI gate
+  run) routinely need more than the old 600s (10 min) timeout, which cut them off mid-task. The
+  ACP delegate default `timeout_s` is now 1800s (30 min) — in both the code default and the
+  Settings form field — and remains per-delegate configurable. On top of that, `delegate_to`
+  now accepts an optional `timeout` (seconds) that overrides the delegate's configured timeout
+  for a single call, threaded through `registry.dispatch()` down to the adapter (and into the
+  detached work of a `background=True` delegation). Leave it at 0 to use the configured timeout.
+  a2a and openai delegates keep their existing behavior.
+
+- **A stale generated reference page now says what drifted (#3099).** The freshness guard
+  reported the filename and the remedy — "run `python scripts/gen_plugin_api.py`" — and
+  nothing about the difference, which is exactly the wrong trade when a page is stale on
+  ONE platform: Windows CI has been red on `plugin-events.md` since the bus-topic catalog
+  landed, and the failure can't be reproduced on the machine reading it, so CI's output is
+  the only evidence there is. It now prints a truncated unified diff of what the generator
+  would write.
+
+- **A doubled ACP reply is collapsed, loudly.**
+  claude-agent-acp turns intermittently deliver the whole final message twice on one
+  `session/prompt` — `REVIEWERREVIEWER`, a full status block glued to itself with no
+  separator. The server log proves each doubled turn sent exactly one prompt, so it is
+  not a retry on our side, and it does not reproduce on demand (the same fan-out that
+  doubled at one moment came back clean minutes later).
+  The client now collapses a reply that is byte-for-byte its own text twice — even
+  length, exact halves, half ≥ 8 chars, so a deliberate `PING PING` (separator) or a
+  short `hahahaha` (under the floor) is untouched — and logs a WARNING with the session
+  id on every collapse, so occurrences stay countable after the symptom disappears. If
+  that warning goes quiet for a few releases, delete the collapse. A debug-level chunk
+  log rides along as the evidence hook: when the next doubled turn happens with it on,
+  it answers whether the chunks arrived twice (agent-side emit) or accumulated twice.
+
+- **Validate provider/model coherence across ALL model slots at config load, not at first
+  dispatch (#3104).** A switch to a native OAuth provider (`model.provider: anthropic-oauth`,
+  ADR 0097) could leave a stale gateway alias (`protolabs/reasoning`) in a NON-lead slot —
+  `routing.aux_model`, a subagent tier (`subagents.*.model`), or a `routing.fallback_models`
+  entry — inherited from another config layer. The lead pair stayed coherent so the agent
+  chatted fine, but the FIRST `task`/subagent dispatch raised "model.name='protolabs/reasoning'
+  is not a Claude model id" and silently disabled all `task`/`task_batch`/workflow/board-dispatch
+  delegation. Config load (and every reload, so a provider *switch* too) now checks every slot:
+  a native-OAuth provider with a '/'-bearing alias slot and no gateway key to route it is
+  reported with a WARNING naming the offending slot, the fixable non-lead scalar slots are
+  cleared so they inherit the coherent lead `model.name`, and an incoherent fallback (which
+  would otherwise crash the graph build) is dropped. The check is provider-aware: on a gateway
+  provider — or a native provider that *does* have a gateway key — aliases remain valid and
+  route through the gateway (#2550), so nothing is flagged or changed. An empty slot override
+  under a native provider now resolves to the lead's real Claude id, never the gateway-alias
+  dataclass default.
+
+- **Codex OAuth recovers from a burned refresh token instead of wedging (#3108, ADR 0097).**
+  Every instance that bootstraps from the Codex CLI's `~/.codex/auth.json` copies the *same*
+  refresh token, and OpenAI's refresh tokens are single-use — so the first instance to refresh
+  rotated it out from under the CLI and every sibling that had imported it. The resulting 401
+  was permanent, because credential resolution only re-read the CLI file when its own store was
+  *missing*: a store holding a dead token never recovered, and the error's own advice ("re-run
+  `codex`") could not work, since a fresh login rewrote a file protoAgent would never look at
+  again. Observed live as `Couldn't fetch models` on an instance whose CLI reported being
+  logged in, two weeks after a sibling instance spent the shared token.
+  A rejected refresh now re-imports the CLI's current credential when it differs from ours, so
+  a fresh `codex login` is enough to recover. Recovery is narrow: only on a rejection (a network
+  blip never re-imports), only when spending our own store, never while the provider is
+  explicitly disconnected — that intent still outranks repair — and never when the CLI holds the
+  identical dead token, which would just 401 again and risk burning a token someone else still
+  holds. A re-import is stamped `cli_bootstrap` provenance, so disconnect stays scoped to
+  protoAgent's copy rather than revoking a login the CLI still holds.
+  The refresh-failure message now names the real cause and points at `codex login` — advice this
+  change finally makes true — and the module docstring no longer claims that owning our own copy
+  means we never rotate the CLI's token. It avoids the ongoing race, not the initial burn.
+
+- **A reattached, already-completed turn keeps its trailing answer (#3110).** Toggling
+  fleet agents away and back while a multi-tool-call turn was settling could leave the
+  transcript stopped at the last tool card, the assistant's trailing prose gone — even
+  though the turn finished cleanly and the durable task held the full answer (the sibling
+  of #3082, but on a turn that ended rather than one parked at a HITL gate). The reattach
+  path's `finalize()` patched only the flat `content`, but `ChatMessageView` renders a
+  parts-bearing bubble *from* its ordered `parts` — so the authoritative GetTask text
+  landed somewhere the view never shows. `finalize()` now reconciles `parts` too, running
+  the same `replaceText` the live stalled-stream watchdog already used to land the
+  canonical answer as the trailing text run below the tool cards. Paused-state
+  (input-required / auth-required) reattaches still never reach `finalize()`, so the
+  #3082/#3088 HITL behavior is untouched.
+
+### Removed
+- **Removed reply-text agent-to-agent addressing (#3050, reverted).**
+  Shipped in v-unreleased and taken back out before release. It scanned an addressed
+  delegate's *reply* for a leading `@name` and dispatched onward — which handed an **ACP
+  subordinate** a capability it must not have. A2A delegates are peers: they have their own
+  agency, their own operator, and they route on their own side. ACP and OpenAI-compatible
+  delegates are subordinates the orchestrator runs, scoped by whoever set them up; they
+  answer their caller and nothing else. A live test made the leak concrete — a `claude-code`
+  worker pulled a second participant into the room and spent tokens doing it.
+  It was also the wrong mechanism regardless: inferring routing intent from prose, when a
+  declared intent (`delegate_to`) already exists. Nothing in a room routes except the
+  operator (`@`) and the orchestrator. The `mentions.max_agent_hops` /
+  `mentions.max_per_target` knobs go with it — they bounded a path that no longer exists.
+
+### Security
+- **Redact secrets from tool output before it reaches the transcript (#3070).** `AuditMiddleware` now applies the existing `redact()` patterns (OpenAI keys, GitHub tokens, Bearer headers, env-var assignments, AWS keys, Slack/Discord tokens, and secrets-manager exact-match values) to `ToolMessage.content` **before** returning the result to the graph — closing the gap where audit logs were scrubbed but the model, session checkpoints, memory chunks, and prior-session digests received the raw credential. A new config toggle `security.redact_tool_output` (default `true`) lets operators disable transcript redaction when debugging; audit-log redaction is always on regardless.
+
+### Docs
+- **Docs and module docstrings caught up with the telemetry batch (#3015–#3019).**
+  Five PRs landed in the same subsystem in one batch, and a completeness sweep afterwards
+  found nine places still describing the behaviour they replaced — the exact failure mode
+  the batch itself was fixing. `configuration.md` and the observability guide still said
+  the store holds "one row per terminal A2A turn" (it holds one per turn *leg*, from
+  either driver, plus one per CLI coder run); the guide still described the outlier
+  baseline as a single rolling median after `#3015` made it per-model;
+  `environment-variables.md` omitted the `tracing.host` config layer `#3017` added to the
+  `LANGFUSE_HOST` fallback chain; the README still listed Langfuse as env-var-only;
+  `cost-and-trace.md` still said the emitted `costUsd` covers only this instance's own
+  calls; and `telemetry_store.py` / `turn_telemetry.py` / `trace_export.py` still claimed
+  a single terminal chokepoint, exactly two turn drivers, and env-only tracing.
+  Also: a changelog fragment named a tool (`agent_report`) that does not exist — the
+  agent-facing rollup is `recent_activity` — which would have shipped verbatim into the
+  release notes; ADR 0006's three independent amendments now sit together under a dated
+  `§ 9. Amendments` instead of one dangling past `§ 8. Related`; and the new `tracing.*`
+  secrets are classified as core config rather than plugin credentials in snapshot export.
+
+- **The starter-tools reference is a usable index of the core tool set again.** The page
+  opened with a wall of counted bullets ("four keyless…", "five memory…") that named 14 of
+  the 39 tools `get_all_tools()` actually binds, gave detail sections for a different 14,
+  and still documented `daily_log` — removed from core long ago. Now: a table of **every**
+  core tool grouped by what turns it on, a "why a tool isn't bound" section covering the six
+  real causes (plugin not enabled · backend absent · **goal/watch flag on but no plugin
+  verifier registered** · `tools.disabled`/`tools.hidden` · subagent allowlist · deferred
+  disclosure), a map of the five places the agent's tools come from (core · plugins ·
+  `task`/`task_batch` · the filesystem fence · MCP), and a reference entry for all 39 —
+  including the previously undocumented `knowledge_ingest`, `forget_memory`, `load_skill`,
+  `show_component`, `onboard_project`, `list_verifiers`, the tasks, goal, watch and curation
+  groups, and `search_tools`. Corrected along the way: `memory_recall`'s `domain` argument,
+  `schedule_task`'s `timezone` argument, `fetch_url`'s SSRF/egress behavior, the GitHub tools
+  (a separately installed plugin, not in-tree), and "add your own" no longer walks you through
+  editing `get_all_tools()` and then tells you not to. The same stale summary in `README.md`
+  and the first-agent tutorial was fixed to match.
+
+- **The plugin API now has a reference tier, generated from the code (#3057).** `docs/reference/`
+  gains five pages — [plugin manifest](https://agent.protolabs.studio/docs/reference/plugin-manifest),
+  [registry API](https://agent.protolabs.studio/docs/reference/plugin-registry-api),
+  [SDK (`graph.sdk`)](https://agent.protolabs.studio/docs/reference/plugin-sdk-api),
+  [testkit](https://agent.protolabs.studio/docs/reference/plugin-testkit), and
+  [CLI](https://agent.protolabs.studio/docs/reference/plugin-cli) — covering every public
+  extension symbol with its exact signature. Previously the entire plugin system was documented
+  only as narrative guides: there was no page you could look a seam up in, so answering "what
+  arguments does `register_middleware` take" meant reading 763 lines of prose or the source.
+  The pages are produced by `scripts/gen_plugin_api.py` from docstrings and field comments, and
+  `tests/test_plugin_api_reference.py` fails CI when they drift or when any public registry seam,
+  SDK call, or manifest field reaches the code without documentation — so the reference cannot
+  silently go stale the way it had. Writing the generator surfaced eleven symbols with no prose at
+  all (`registry.plugin_id`, `registry.plugin_dir`, `registry.host`, the manifest's `id`/`name`/
+  `version`/`description`/`requires_env`/`entrypoint`/`subscribes`, and two CLI arguments); those
+  are now documented at the source.
+- **The plugin view bridge, a first-plugin tutorial, and a plugin architecture page (#3057).** A
+  console view is a sandboxed iframe, so `postMessage` is its only channel to the host — twelve
+  message types carrying the auth handshake, live theming, event relay, keybindings, and context
+  menus, previously documented only as scattered examples in a how-to. The
+  [view bridge reference](https://agent.protolabs.studio/docs/reference/plugin-view-bridge) is the
+  full contract, including the parts that bite: post `protoagent:ready` or the init handshake can
+  race ahead of your listener and leave the view unauthenticated on the wrong theme; `patterns` and
+  re-registered keybindings/menu items **replace** rather than append; `since`/`seq` give exact
+  replay with no duplicates across a remount; and the host force-namespaces every topic, keybinding
+  id, and menu item id into the plugin's own namespace. `tests/test_plugin_view_bridge_docs.py`
+  reddens when the console grows a bridge message the reference doesn't describe.
+  [Build your first plugin](https://agent.protolabs.studio/docs/tutorials/first-plugin) is the
+  missing on-ramp — scaffold, tool, tests, view, verified end to end against the real scaffold — and
+  [Plugin architecture](https://agent.protolabs.studio/docs/explanation/plugin-architecture) is the
+  model the 83 plugin-mentioning ADRs never stated in one place: why the manifest is parsed before
+  any import, why the Python plane is trusted and the console plane sandboxed, the eight-step load
+  lifecycle (and why `register()` is the wrong place to do work), the namespace table, and which
+  three surfaces are actually stable API.
+- **"Extend" is now a top-level docs destination (#3057).** Plugins were reachable only by finding
+  the "Tools, MCP & plugins" subsection inside four separate Diátaxis sidebars, which is a strange
+  way to present the one supported path for adding capability without forking.
+  [Extend protoAgent](https://agent.protolabs.studio/docs/guides/extend) is the hub: it opens by
+  answering the question people actually arrive with — fork, plugin, or MCP server — then maps every
+  contribution a plugin can make to the seam that provides it, and gathers the tutorial, the
+  architecture page, the six reference pages, and the publishing path in one place. It lives under
+  `/guides/` rather than its own directory on purpose: the docs corpus the agent reads indexes only
+  the four Diátaxis sections, so a top-level `docs/extend/` would have been invisible to both the
+  in-product docs reader and site search.
+
+- **The event bus has a topic catalog, and the plugins guide stopped duplicating the reference (#3057).**
+  A plugin reacts to core events with `registry.on` / `sdk.react_on`, but there was no list of what
+  core actually publishes — you found topics by grepping the server.
+  [Event bus topics](https://agent.protolabs.studio/docs/reference/plugin-events) is that list, built
+  by AST-scanning every `publish`/`emit` call in the core packages: 27 topics with their payload keys
+  and emitting modules, plus the wildcard matching rules (`*` is one segment, `#` is the tail) shown
+  against real examples. It regenerates with the code, and a sentinel test guards the scan itself —
+  the first run silently missed every `watch.*` topic because they publish through a `_publish`
+  helper the scan didn't know about, so a test now asserts known topics from four modules are still
+  found. `guides/plugins.md` drops 137 lines that the generated pages now own (the SDK function
+  enumeration, the manifest field table, the host-services table) and keeps what a guide is for —
+  the parts a reference can't say, like importing the SDK lazily so your tests stay host-free, and
+  that `registry.host` is `None` until surfaces start, which is why a route that assumes it works in
+  production and crashes in tests.
+- **Three stale doc citations fixed (#3057).** A sweep of every repo path and API symbol the live docs
+  cite found: `reference/configuration.md` pointing at `tools/execute_code.py` (it's been the
+  `plugins/execute_code/` plugin for a while), `reference/environment-variables.md` linking a
+  **404** source file (`tools/peer_tools.py` — peer tools live in `tools/lg_tools.py`), and
+  `guides/goal-mode.md` naming `sdk.set_goal_safe`, which has never been importable — it is a
+  `GoalController` method reached through the agent's `set_goal` tool, and a plugin drives goals with
+  `sdk.start_goal_loop`.
+
 ## [0.147.0] - 2026-08-23
 
 ### Added
