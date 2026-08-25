@@ -2118,6 +2118,52 @@ textarea {
   display: block;
 }
 
+/* Every DS Menu is capped to the space Radix measured for it, and scrolls past that.
+   The DS caps its own DropSelect (`.pl-menu.pl-dropselect__menu`) this way but never
+   the base `.pl-menu`, so a plain Menu with more rows than fit simply ran off the
+   viewport with no way to reach the rest — the composer's model picker, once a second
+   provider's models joined the list, was the surface that made it obvious. The Radix
+   var is the collision-aware available height; the vh fallback covers a Content that
+   somehow renders without it. (DS gap: this belongs on base `.pl-menu` in
+   @protolabsai/ui — contribute back and drop this, along with the section-label and
+   disabled-item-with-tooltip gaps above.) */
+.pl-menu {
+  max-height: var(--radix-dropdown-menu-content-available-height, 60vh);
+  overflow-y: auto;
+  /* A menu that has hit its cap must not hand its leftover scroll to the page
+     underneath — on touch especially, that reads as the chat jumping while you're
+     choosing a model. */
+  overscroll-behavior: contain;
+}
+
+/* On a phone the same menu becomes a full-screen sheet: 180px of dropdown floating over
+   a keyboard-shrunk viewport is unusable for a list you're meant to read. Scoped to the
+   composer's model picker via its marker child — `Menu` takes no className (the popover
+   is always `.pl-menu`), so the marker is the only per-instance hook, and a context menu
+   or an overflow menu must NOT become a sheet. */
+@media (max-width: 767px) {
+  .pl-menu:has(> .composer-model-menu) {
+    position: fixed;
+    inset: 0;
+    max-height: 100dvh;
+    width: 100vw;
+    max-width: 100vw;
+    border: 0;
+    border-radius: 0;
+    padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
+    /* Radix positions the portal wrapper with a transform; inset:0 only wins once the
+       element is taken out of that flow. */
+    transform: none !important;
+  }
+  /* The transformed popper wrapper would otherwise clip/offset the fixed sheet. */
+  [data-radix-popper-content-wrapper]:has(> .pl-menu > .composer-model-menu) {
+    position: fixed !important;
+    inset: 0 !important;
+    transform: none !important;
+    z-index: 1200;
+  }
+}
+
 /* .fleet-host-tag retired (#832) — the "this instance" / "remote" tags in the
    fleet manager + switcher are now DS <Badge status="neutral">. */
 
