@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from graph.config import LangGraphConfig, SubagentDef
+from graph.config import LangGraphConfig, Provider, SubagentDef
 from graph.config_io import (
     apply_updates_to_yaml,
     config_to_dict,
@@ -204,6 +204,10 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "model_favorites": [],
     "model_name": "protolabs/reasoning",
     "model_provider": "openai",
+    # ADR 0106: a config with no `providers:` block is migrated to the registry its
+    # legacy fields imply, reusing the slot grammar's existing lane id so every stored
+    # `gateway:<model>` value keeps resolving to the same connection.
+    "providers": [Provider(id="gateway", type="openai-compat", label="Gateway", base_url="http://gateway:4000/v1", api_key="")],
     "model_vision": False,
     "operator_allowed_dirs": [],
     "operator_project_dir": "",
