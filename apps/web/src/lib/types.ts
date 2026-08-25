@@ -884,7 +884,12 @@ export type MessageAuthor = {
  *  so each becomes its own authored message rather than being collapsed into the last
  *  one's answer. */
 export type RoomReply = {
-  author: MessageAuthor;
+  /** Set on the lead's OUTGOING ask (`lead → proto`): the participant being addressed,
+   *  with no `author` (the lead is speaking). The reply that follows is `author`-stamped
+   *  as the participant. One or the other, never both. */
+  addressedTo?: string;
+  /** The participant who authored a REPLY. Absent on an outgoing ask. */
+  author?: MessageAuthor;
   /** Who did the addressing: the operator, or the participant whose reply named this one. */
   from: string;
   text: string;
@@ -900,6 +905,10 @@ export type ChatMessage = {
   /** Set when this message came from an addressed participant rather than the lead
    *  agent — see `MessageAuthor`. */
   author?: MessageAuthor;
+  /** Set on the lead's OUTGOING delegation ask (#3042): the participant it addressed.
+   *  Renders a `→ @name` header on an otherwise-ordinary lead bubble, so the operator
+   *  sees what was delegated. Distinct from `author` (a participant's reply). */
+  addressedTo?: string;
   toolCalls?: ToolCall[];
   components?: ComponentSpec[];
   /** Ordered render blocks (text runs + tool groups) built during streaming so the

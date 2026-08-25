@@ -2,7 +2,7 @@ import { Button } from "@protolabsai/ui/primitives";
 import { Message, MessageAction, MessageActions } from "@protolabsai/ui/ai";
 import { Tooltip } from "@protolabsai/ui/overlays";
 import { Spinner } from "@protolabsai/ui/data";
-import { ArrowDownToLine, Bot, CalendarClock, Check, ChevronDown, Clock, Coins, Copy, FileText, GitBranch, Gauge, History, RotateCcw, X } from "lucide-react";
+import { ArrowDownToLine, ArrowRight, Bot, CalendarClock, Check, ChevronDown, Clock, Coins, Copy, FileText, GitBranch, Gauge, History, RotateCcw, X } from "lucide-react";
 import { useState } from "react";
 
 import { useQuery } from "@tanstack/react-query";
@@ -142,6 +142,15 @@ export function ChatMessageView({
         <div className="chat-author">
           <Bot size={13} aria-hidden />
           <span className="chat-author-name">{message.author.name}</span>
+        </div>
+      ) : null}
+      {/* The lead's OUTGOING delegation ask (#3042): a `→ @name` header on an otherwise
+          ordinary lead bubble, so the operator sees what was delegated — the `lead → proto`
+          half of the exchange, distinct from a participant's reply above. */}
+      {message.role === "assistant" && message.addressedTo && !message.author ? (
+        <div className="chat-author chat-author--to">
+          <ArrowRight size={13} aria-hidden />
+          <span className="chat-author-name">@{message.addressedTo}</span>
         </div>
       ) : null}
       {message.reasoning && !(message.parts && message.parts.length) ? (

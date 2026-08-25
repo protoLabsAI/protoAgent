@@ -36,6 +36,7 @@ import { openPublishDialog } from "./publishDialogStore";
 import { findSlashCommand, registeredSlashCommands, slashTokenAt } from "../ext/slashRegistry";
 import { mentionTokenAt } from "./mentionToken";
 import { continueRun, leadingRun, runHas, toggleMention } from "./mentionRun";
+import { insertRoomBubble } from "./roomBubble";
 import type { ComposerFormSpec } from "../ext/slashRegistry";
 import { useFlag, useFlagPredicate } from "../flags/flags";
 import { registeredComposerActions } from "../ext/composerRegistry";
@@ -1797,21 +1798,19 @@ function ChatSessionSlot({
           );
         },
         onRoomReply: (reply) => {
-          runAnswered.current = true; // an authored reply arrived — the continue prefill may fire
-          // An `@`-addressed turn (#3042/#3051). A fan-out (`@proto @reviewer …`) sends
-          // one frame per exchange, each a different participant speaking — so each
-          // text-bearing frame becomes its OWN completed message, inserted BEFORE the
-          // in-flight bubble (which stays last, where the streaming indicator lives, and
-          // is dropped at `done` — see onDone). Filling the live bubble with frame text
-          // and moving it around was the previous design, and it double-rendered: the
-          // terminal `done` text then overwrote the bubble with the combined reply,
-          // showing the last participant's words twice under the wrong byline.
+          // A delegation rendered inline as a mini-conversation (#3042): the lead's
+          // outgoing ASK (`addressedTo`, no author — the lead speaking to a participant),
+          // then the participant's REPLY (`author`). Each lands at the point in the stream
+          // where the delegate_to happened, via insertRoomBubble — which splits the lead's
+          // single streaming message so a bubble never floats above the work that preceded
+          // it. A `@x @y` fan-out is the same path with an empty placeholder (insert-before).
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
-          if (!reply.text) {
-            // A pre-fan-out server frame carries no text — the single-address case,
-            // where the terminal `done` text IS the reply. Stamp the byline on the live
-            // bubble and let the answer fill it as before.
+          if (reply.author) runAnswered.current = true; // a real reply — the continue prefill may fire
+
+          if (!reply.text && reply.author) {
+            // A pre-fan-out server frame carries no text — the single-address case, where
+            // the terminal `done` text IS the reply. Stamp the byline on the live bubble.
             chatStore.updateMessages(
               session.id,
               latest.messages.map((message) =>
@@ -1820,21 +1819,22 @@ function ChatSessionSlot({
             );
             return;
           }
+          if (!reply.text) return; // an ask with no query — nothing to show
+
           roomReplies.current += 1;
-          const at = latest.messages.findIndex((m) => m.id === assistantId);
-          const authored = {
+          const authored: ChatMessage = {
             id: messageId(),
-            role: "assistant" as const,
+            role: "assistant",
             content: reply.text,
-            author: reply.author,
             createdAt: Date.now(),
-            status: "done" as const,
+            status: "done",
+            ...(reply.author ? { author: reply.author } : {}),
+            ...(reply.addressedTo ? { addressedTo: reply.addressedTo } : {}),
           };
-          const next =
-            at === -1
-              ? [...latest.messages, authored]
-              : [...latest.messages.slice(0, at), authored, ...latest.messages.slice(at)];
-          chatStore.updateMessages(session.id, next);
+          chatStore.updateMessages(
+            session.id,
+            insertRoomBubble(latest.messages, assistantId, authored, messageId()),
+          );
         },
         onCost: (usage) => {
           // This turn's token/cost readout (terminal cost-v1 extension metadata) — pin it to the assistant
