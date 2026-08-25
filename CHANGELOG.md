@@ -229,7 +229,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while every token before it is itself a mention — previously it anchored to position 0,
   so after completing the first name the second `@` never offered anyone.
 
-- **Agents can change their own operational config, if you let them (`tools.self_config_enabled`).**
+- **Agents can change their own operational config, if you let them (`tools.self_config_enabled`) (#3098).**
   An agent that needed a settings change — repoint a board's coder, fix a model slot — could read the
   config, work out the exact edit, and then had to stop and hand a human the diff. `set_config` closes
   that loop: a flat dict of dotted keys applied through the same `ops.config.set_config` path the CLI
@@ -473,7 +473,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`all priced turns`, `all gateway turns`) so a flag still says what it beat.
 
 - **Finished removing `daily_log`, and stopped a duplicate eval-case id from hiding
-  regressions.** The tool left core a while back, but six places still described it as
+  regressions (#3056).** The tool left core a while back, but six places still described it as
   shipped: the evals guide (whose `--tasks current_time_intent,daily_log_intent` example
   named a case that no longer exists — and `--tasks` drops unknown ids *silently*, so it
   ran one case and reported green), the eval runner's own `--tasks` docstring example
@@ -489,7 +489,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ADR's count argument, so it's preserved rather than rewritten) with a pointer to the live
   [Starter tools](/reference/starter-tools) reference.
 
-- **`python -m evals.runner --tasks` now says when an id doesn't exist.** It filtered
+- **`python -m evals.runner --tasks` now says when an id doesn't exist (#3059).** It filtered
   with `c["id"] in wanted` and said nothing about the ids that matched nothing, so the
   dangerous shape was a *partially* unknown request: the run proceeded on whatever
   matched, exited 0, and printed a green board while covering less than was asked for. A
@@ -527,7 +527,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`docs/reference/plugin-events.md`) now renders "Emitted from" paths with POSIX
   separators on every OS, so Windows CI no longer regenerates a permanently-stale page.
 
-- **A 401 from an A2A peer now says what to do about it.**
+- **A 401 from an A2A peer now says what to do about it (#3080).**
   A delegate with no Auth token presents the fleet service token on **loopback only**
   (ADR 0089) — that token must never leave the box — so an off-box peer receives no
   credential at all, by design, and answers 401. The operator saw
@@ -586,7 +586,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the only evidence there is. It now prints a truncated unified diff of what the generator
   would write.
 
-- **A doubled ACP reply is collapsed, loudly.**
+- **A doubled ACP reply is collapsed, loudly (#3100).**
   claude-agent-acp turns intermittently deliver the whole final message twice on one
   `session/prompt` — `REVIEWERREVIEWER`, a full status block glued to itself with no
   separator. The server log proves each doubled turn sent exactly one prompt, so it is
@@ -686,7 +686,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `§ 9. Amendments` instead of one dangling past `§ 8. Related`; and the new `tracing.*`
   secrets are classified as core config rather than plugin credentials in snapshot export.
 
-- **The starter-tools reference is a usable index of the core tool set again.** The page
+- **The starter-tools reference is a usable index of the core tool set again (#3055).** The page
   opened with a wall of counted bullets ("four keyless…", "five memory…") that named 14 of
   the 39 tools `get_all_tools()` actually binds, gave detail sections for a different 14,
   and still documented `daily_log` — removed from core long ago. Now: a table of **every**
