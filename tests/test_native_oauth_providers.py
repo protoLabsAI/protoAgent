@@ -1386,3 +1386,88 @@ def test_a_broken_store_read_keeps_the_working_token(monkeypatch):
     llm._refresh_oauth_token()  # must not raise
 
     assert llm._client.auth_token == "cc-GOOD"
+
+
+# ── credential scope: box store shared by every instance, instance overrides ────
+#
+# A ChatGPT/Claude login belongs to the person at the machine, not to one instance.
+# Per-instance copies meant a console sign-in on `default` left the desktop app's other
+# servers importing (and burning) the vendor CLI's single-use token.
+
+
+def test_codex_store_defaults_to_the_box_when_the_instance_has_none(monkeypatch, tmp_path):
+    box, inst = tmp_path / "box", tmp_path / "inst"
+    inst.mkdir()
+    monkeypatch.setattr(oauth_mod, "box_root", lambda: box)
+    got = oauth_mod._codex_store_path(types.SimpleNamespace(config_dir=inst))
+    assert got == box / "codex-oauth.json"
+
+
+def test_codex_instance_store_overrides_the_box_when_present(monkeypatch, tmp_path):
+    box, inst = tmp_path / "box", tmp_path / "inst"
+    box.mkdir()
+    inst.mkdir()
+    (box / "codex-oauth.json").write_text("{}")
+    (inst / "codex-oauth.json").write_text("{}")
+    monkeypatch.setattr(oauth_mod, "box_root", lambda: box)
+    got = oauth_mod._codex_store_path(types.SimpleNamespace(config_dir=inst))
+    assert got == inst / "codex-oauth.json"
+
+
+def test_anthropic_store_follows_the_same_scope_rule(monkeypatch, tmp_path):
+    box, inst = tmp_path / "box", tmp_path / "inst"
+    inst.mkdir()
+    monkeypatch.setattr(oauth_mod, "box_root", lambda: box)
+    paths = types.SimpleNamespace(config_dir=inst)
+    assert oauth_mod._anthropic_store_path(paths) == box / "anthropic-oauth.json"
+    (inst / "anthropic-oauth.json").write_text("{}")
+    assert oauth_mod._anthropic_store_path(paths) == inst / "anthropic-oauth.json"
+
+
+def test_one_box_signin_serves_every_instance(monkeypatch, tmp_path):
+    """The whole point: sign in once, and an instance that never signed in resolves."""
+    box = tmp_path / "box"
+    box.mkdir()
+    fresh = _jwt({"exp": time.time() + 3600})
+    (box / "codex-oauth.json").write_text(
+        json.dumps({"tokens": {"access_token": fresh, "refresh_token": "r-box", "account_id": "acct-box"}})
+    )
+    monkeypatch.setattr(oauth_mod, "box_root", lambda: box)
+    monkeypatch.setattr(oauth_mod, "_CODEX_CLI_AUTH_FILE", tmp_path / "no-cli.json")
+
+    for name in ("default", "dev", "desktop-1"):
+        cfg = tmp_path / name
+        cfg.mkdir()
+        creds = resolve_codex_oauth(paths=types.SimpleNamespace(config_dir=cfg))
+        assert creds.access_token == fresh
+        assert creds.account_id == "acct-box"
+        # Nothing was written into the instance — it reads the shared store in place.
+        assert not (cfg / "codex-oauth.json").exists()
+
+
+def test_codex_adopts_a_token_a_peer_process_just_rotated(monkeypatch, tmp_path):
+    """Two processes share the box store; the loser's 401 is not a dead login."""
+    store = tmp_path / "codex-oauth.json"
+    stale = _jwt({"exp": time.time() - 10})
+    store.write_text(json.dumps({"tokens": {"access_token": stale, "refresh_token": "r-mine", "account_id": "a"}}))
+    monkeypatch.setattr(oauth_mod, "_codex_store_path", lambda paths: store)
+    monkeypatch.setattr(oauth_mod, "_CODEX_CLI_AUTH_FILE", tmp_path / "no-cli.json")
+
+    winner = _jwt({"exp": time.time() + 3600})
+
+    def _post(url, **kw):
+        # Our spend is refused — a peer got there first and left its result on disk.
+        store.write_text(
+            json.dumps({"tokens": {"access_token": winner, "refresh_token": "r-peer", "account_id": "a"}})
+        )
+        return types.SimpleNamespace(status_code=401, json=lambda: {})
+
+    monkeypatch.setattr(oauth_mod.httpx, "post", _post)
+    creds = resolve_codex_oauth(paths=types.SimpleNamespace(config_dir=tmp_path))
+    assert creds.access_token == winner
+
+
+def test_file_lock_is_best_effort_and_never_raises(tmp_path):
+    """An unlockable filesystem degrades to the old behaviour, it does not fail a turn."""
+    with oauth_mod._file_lock(tmp_path / "nope" / "deep" / "store.json"):
+        pass  # must not raise even though the directory chain is created on demand
