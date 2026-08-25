@@ -401,6 +401,31 @@ def available_model_lanes(config: "LangGraphConfig") -> list[dict]:
                 except Exception as exc:  # noqa: BLE001
                     lane["error"] = str(exc)
         lanes.append(lane)
+    # A MIGRATED registry only contains the lanes the legacy fields implied — the common
+    # `model.provider: openai` + gateway shape yields `[gateway]` alone — so a signed-in
+    # Claude or ChatGPT subscription would silently stop being offered, even though the
+    # runtime still routes `anthropic-oauth:…` fine (the slot grammar keeps its own floor
+    # for exactly that). Append any native lane the registry does not already name, which
+    # also honours the rule that an unusable lane is REPORTED with a reason rather than
+    # omitted. Retires with the legacy fields (no earlier than v0.152.0).
+    named = {lane["provider"] for lane in lanes} | {e.type for e in entries}
+    for native in sorted(NATIVE_OAUTH_PROVIDERS):
+        if native in named:
+            continue
+        status = oauth_status(native)
+        lane = {
+            "provider": native,
+            "label": _PROVIDER_LABELS.get(native, native),
+            "configured": bool(status.signed_in),
+            "models": [],
+            "error": "" if status.signed_in else (status.hint or "Not signed in."),
+        }
+        if status.signed_in:
+            try:
+                lane["models"], lane["error"] = list_provider_models(native, config)
+            except Exception as exc:  # noqa: BLE001 — one lane's outage is not the picker's
+                lane["error"] = str(exc)
+        lanes.append(lane)
     return lanes
 
 def qualified_model_options(config: "LangGraphConfig") -> list[str]:

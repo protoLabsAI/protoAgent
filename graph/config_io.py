@@ -929,6 +929,22 @@ def split_secret_updates(config: dict[str, Any]) -> tuple[dict[str, Any], dict[s
         # don't write an empty `auth: {}` block to the main YAML.
         if not sect:
             main.pop(section, None)
+    # The provider registry is a LIST of objects (ADR 0106), which `secret_paths()`'s
+    # (section, key) pairs cannot describe — so each connection's key is pulled out here
+    # and filed under `providers.<id>`, exactly where the loader's overlay looks for it.
+    # Without this a key written through the wizard or a config PUT would land in the
+    # tracked YAML, which gets exported, backed up and forked.
+    entries = main.get("providers")
+    if isinstance(entries, list):
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            value = entry.pop("api_key", None)
+            pid = str(entry.get("id", "") or "").strip().lower()
+            # A blank means "leave the stored key alone", the same rule every other
+            # secret follows — the UI sends blank when the operator didn't re-enter one.
+            if pid and isinstance(value, str) and value.strip():
+                secrets.setdefault("providers", {})[pid] = value.strip()
     return main, secrets
 
 

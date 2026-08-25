@@ -508,19 +508,27 @@ export function SetupWizard({
       // its provider (gateway "openai", or a native OAuth provider — ADR 0097).
       const provider = state.runtimeKind === "acp" ? state.provider || "openai" : state.provider;
       const oauth = isOAuthProvider(provider);
+      // Setup writes ONE CONNECTION (ADR 0106), not the provider/base/key triple. The id
+      // is the lane name the qualified grammar already used — `gateway` for an
+      // OpenAI-compatible endpoint, the provider's own name for a subscription — so a
+      // config written here is indistinguishable from a migrated one, and first run never
+      // has to ask someone to invent an identifier.
+      const connectionId = oauth ? provider : "gateway";
+      const connection: NonNullable<AgentConfig["providers"]>[number] = {
+        id: connectionId,
+        type: oauth ? provider : "openai-compat",
+      };
+      // A subscription authenticates from a credential store, so it carries no endpoint.
+      if (!oauth) connection.base_url = state.apiBase.trim();
+      if (!oauth && state.apiKey.trim()) connection.api_key = state.apiKey.trim();
       const model: AgentConfig["model"] = {
-        provider,
-        name: state.modelName.trim(),
-        // OAuth providers authenticate from a credential store, not a gateway endpoint —
-        // don't pin an irrelevant api_base for them.
-        api_base: oauth ? "" : state.apiBase.trim(),
+        // Qualified from the start: the primary model names its connection like every
+        // other slot, so there is no lead provider to fall out of step with.
+        name: `${connectionId}:${state.modelName.trim()}`,
         temperature: Number(state.temperature),
         max_tokens: Number(state.maxTokens),
         max_iterations: Number(state.maxIterations),
       };
-      if (!oauth && state.apiKey.trim()) {
-        model.api_key = state.apiKey.trim();
-      }
       // The project you're setting up should be operable, so fold its path
       // into the allowlist automatically — otherwise picking a project path
       // outside the (empty) allowlist silently makes tasks/notes unusable
@@ -536,6 +544,7 @@ export function SetupWizard({
       const response = await api.finishSetup(
         {
           agent_runtime: state.runtimeKind === "acp" ? `acp:${state.acpAgent}` : "native",
+          providers: [connection],
           model,
           identity: {
             name: state.agentName.trim() || "protoagent",

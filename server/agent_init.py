@@ -2935,13 +2935,36 @@ def _build_settings_callbacks() -> dict[str, Any]:
 
         _runtime = str((config or {}).get("agent_runtime", "native") or "native")
         _model_cfg = (config or {}).get("model")
-        _provider = str((_model_cfg or {}).get("provider", "") or "") if isinstance(_model_cfg, dict) else ""
+        # Setup writes ONE connection now (ADR 0106) and a qualified `model.name`, so the
+        # probe reads the connection rather than the retired provider/base/key triple.
+        # Older clients still send the triple; both shapes are accepted here because this
+        # runs before anything is persisted, and a first run that cannot be probed is a
+        # first run that cannot complete.
+        _conns = (config or {}).get("providers")
+        _conn = next((c for c in _conns if isinstance(c, dict)), None) if isinstance(_conns, list) else None
+        _provider = str((_conn or {}).get("type", "") or "") or (
+            str((_model_cfg or {}).get("provider", "") or "") if isinstance(_model_cfg, dict) else ""
+        )
         _skip_probe = _runtime.startswith("acp:") or is_native_oauth_provider(_provider)
         if not _skip_probe and config is not None and isinstance(_model_cfg, dict):
             m = _model_cfg
-            test_base = m.get("api_base") or (STATE.graph_config.api_base if STATE.graph_config else "")
-            test_key = m.get("api_key") or (STATE.graph_config.api_key if STATE.graph_config else "")
+            test_base = (
+                (_conn or {}).get("base_url")
+                or m.get("api_base")
+                or (STATE.graph_config.api_base if STATE.graph_config else "")
+            )
+            test_key = (
+                (_conn or {}).get("api_key")
+                or m.get("api_key")
+                or (STATE.graph_config.api_key if STATE.graph_config else "")
+            )
             test_model = m.get("name") or (STATE.graph_config.model_name if STATE.graph_config else "")
+            # The gateway is asked for a MODEL, not for a route: sending it
+            # `gateway:protolabs/reasoning` verbatim probes a model id that does not exist.
+            if _conn and isinstance(test_model, str):
+                prefix = f"{_conn.get('id', '')}:"
+                if prefix != ":" and test_model.startswith(prefix):
+                    test_model = test_model[len(prefix) :]
             ok, verr = validate_model_connection(test_base, test_key, test_model)
             if not ok:
                 return False, f"model connection failed — {verr}"

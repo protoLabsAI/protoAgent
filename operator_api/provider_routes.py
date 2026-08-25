@@ -206,8 +206,19 @@ def register_provider_routes(app) -> None:
         if entry.type == "openai-compat":
             from graph.config_io import list_gateway_models
 
-            key = (entry.api_key or "").strip() or (cfg.api_key or "")
-            models, error = await asyncio.to_thread(list_gateway_models, entry.base_url or cfg.api_base, key)
+            # ONLY this connection's endpoint and key. Falling back to `model.api_key` /
+            # `model.api_base` would send one connection's credential to another's
+            # endpoint — a local vLLM probed with the production gateway's key — which is
+            # the coupling the registry exists to remove. `available_model_lanes` already
+            # refuses that; this route was the same probe with the old fallback still in
+            # it, so the isolation held in the picker and leaked here.
+            base = (entry.base_url or "").strip()
+            if not base:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{entry.id!r} has no base URL configured — set one before probing it.",
+                )
+            models, error = await asyncio.to_thread(list_gateway_models, base, (entry.api_key or "").strip())
             return {"models": models, "error": error}
         from graph.providers.discovery import list_provider_models
 

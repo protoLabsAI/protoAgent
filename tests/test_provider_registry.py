@@ -250,3 +250,40 @@ def test_a_registered_connection_never_borrows_another_credential(monkeypatch):
     assert probed["http://localhost:8000/v1"] == ""  # NOT pk, not the legacy key, not env
     assert "legacy-key-must-not-leak" not in probed.values()
     assert "env-key-must-not-leak" not in probed.values()
+
+
+def test_a_migrated_config_still_offers_a_signed_in_subscription(monkeypatch):
+    """The commonest legacy shape migrates to [gateway] alone.
+
+    The runtime still routes `anthropic-oauth:…` (the slot grammar keeps a floor for it),
+    so a picker that dropped the lane would offer strictly less than the runtime accepts —
+    a signed-in Claude subscription silently disappearing from every model list.
+    """
+    from graph.providers import discovery
+
+    cfg = _cfg(model={"provider": "openai", "api_base": "https://gw/v1", "api_key": "k"})
+    assert cfg.provider_ids() == ["gateway"]  # the shape that caused it
+
+    monkeypatch.setattr("graph.config_io.list_gateway_models", lambda b, k: (["m"], ""), raising=False)
+    monkeypatch.setattr(
+        discovery, "oauth_status", lambda p: discovery.OAuthStatus(p, p == "anthropic-oauth", "s", "d", "Sign in")
+    )
+    monkeypatch.setattr(discovery, "list_provider_models", lambda p, c: (["claude-x"], ""))
+
+    lanes = {lane["provider"]: lane for lane in discovery.available_model_lanes(cfg)}
+    assert set(lanes) == {"gateway", "anthropic-oauth", "openai-codex"}
+    assert lanes["anthropic-oauth"]["configured"] and lanes["anthropic-oauth"]["models"] == ["claude-x"]
+    # ...and the one you can't use is reported with a reason, never omitted.
+    assert lanes["openai-codex"]["configured"] is False
+    assert "Sign in" in lanes["openai-codex"]["error"]
+
+
+def test_an_explicit_subscription_entry_is_not_duplicated(monkeypatch):
+    from graph.providers import discovery
+
+    cfg = _cfg(providers=[{"id": "claude", "type": "anthropic-oauth"}])
+    monkeypatch.setattr(discovery, "oauth_status", lambda p: discovery.OAuthStatus(p, False, "", "", "Sign in"))
+    lanes = [lane["provider"] for lane in discovery.available_model_lanes(cfg)]
+    # `claude` covers the anthropic-oauth TYPE, so no second entry for it.
+    assert lanes.count("anthropic-oauth") == 0
+    assert "claude" in lanes and "openai-codex" in lanes

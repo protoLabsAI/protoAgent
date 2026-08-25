@@ -99,7 +99,14 @@ export function modelPickerData(groups: SettingsGroup[]): ModelPickerData {
     // a second request — the schema already carries the answer.
     crossProvider: [...new Set(strings(favs?.options))],
     globalModel,
-    provider: typeof prov?.value === "string" ? prov.value.trim().toLowerCase() : "",
+    // `model.provider` is no longer RENDERED (ADR 0106 — Connections owns it), so reading
+    // it from the schema now yields "" and the subscription labels below would silently
+    // degrade to "gateway model". The primary model names its connection, so its lane is
+    // the better answer; the retired field stays as a fallback for an older backend that
+    // still renders it. Both disappear with the field itself.
+    provider:
+      (typeof prov?.value === "string" ? prov.value.trim().toLowerCase() : "") ||
+      laneOf(globalModel, lanesFromOptions([globalModel, ...models])),
   };
 }
 

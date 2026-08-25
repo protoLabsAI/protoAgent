@@ -150,3 +150,34 @@ def test_models_probe_uses_the_connection_own_endpoint(client, monkeypatch):
     r = client.post("/api/config/providers/local-vllm/models")
     assert r.json()["models"] == ["m1", "m2"]
     assert seen["base"] == "http://localhost:8000/v1"
+
+
+# ── first run writes a connection, not the retired triple (ADR 0106 S6) ────────
+
+
+def test_setup_splits_a_connection_key_into_the_secrets_overlay():
+    """A key the wizard collects must never reach the tracked YAML — that file gets
+    exported, backed up and forked. Same rule model.api_key always had, but the registry
+    is a LIST, which `secret_paths()`'s (section, key) pairs cannot describe."""
+    from graph.config_io import split_secret_updates
+
+    main, secrets = split_secret_updates(
+        {
+            "providers": [
+                {"id": "gateway", "type": "openai-compat", "base_url": "https://gw/v1", "api_key": "sk-1"},
+                {"id": "local", "type": "openai-compat", "base_url": "http://l/v1"},
+            ],
+            "model": {"name": "gateway:protolabs/reasoning"},
+        }
+    )
+    assert secrets == {"providers": {"gateway": "sk-1"}}
+    assert all("api_key" not in entry for entry in main["providers"])
+    assert main["providers"][0]["base_url"] == "https://gw/v1"  # everything else survives
+
+
+def test_a_blank_connection_key_leaves_the_stored_one_alone():
+    """Blank means "didn't re-enter it", the rule every other secret follows."""
+    from graph.config_io import split_secret_updates
+
+    _, secrets = split_secret_updates({"providers": [{"id": "gateway", "api_key": "   "}]})
+    assert secrets == {}
