@@ -1555,3 +1555,94 @@ def test_the_hint_is_persisted_by_a_refresh(monkeypatch, tmp_path):
 
     monkeypatch.setattr(oauth_mod.httpx, "post", _never)
     resolve_codex_oauth(paths=types.SimpleNamespace(config_dir=tmp_path))
+
+
+# ── an access token can die before its exp ─────────────────────────────────────
+#
+# Signing in again on the same ChatGPT account ends the previous session, and the
+# backend then answers 401 token_invalidated while the JWT still claims days of
+# validity. Deciding "is this good?" from exp alone made that state terminal: nothing
+# refreshed, every call failed identically, and the refresh token was live throughout.
+
+
+def test_marking_a_rejection_clears_the_access_token_but_keeps_the_refresh(monkeypatch, tmp_path):
+    store = tmp_path / "codex-oauth.json"
+    store.write_text(
+        json.dumps(
+            {
+                "tokens": {
+                    "access_token": _jwt({"exp": time.time() + 864000}),  # days of validity left
+                    "refresh_token": "r-live",
+                    "account_id": "a",
+                    "earliest_refresh_at": time.time() + 777_777,
+                }
+            }
+        )
+    )
+    monkeypatch.setattr(oauth_mod, "_codex_store_path", lambda paths: store)
+
+    assert oauth_mod.note_codex_auth_rejected(types.SimpleNamespace(config_dir=tmp_path)) is True
+    saved = json.loads(store.read_text())["tokens"]
+    assert saved["access_token"] == ""
+    assert saved["refresh_token"] == "r-live"  # the live half survives
+    # The provider's "don't refresh yet" hint must not pin an invalidated token.
+    assert "earliest_refresh_at" not in saved
+
+
+def test_marking_twice_reports_no_second_change(monkeypatch, tmp_path):
+    """So a caller can tell a real invalidation from a repeat and not loop."""
+    store = tmp_path / "codex-oauth.json"
+    store.write_text(json.dumps({"tokens": {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r"}}))
+    monkeypatch.setattr(oauth_mod, "_codex_store_path", lambda paths: store)
+    paths = types.SimpleNamespace(config_dir=tmp_path)
+    assert oauth_mod.note_codex_auth_rejected(paths) is True
+    assert oauth_mod.note_codex_auth_rejected(paths) is False
+
+
+def test_a_marked_store_refreshes_on_the_next_resolve(monkeypatch, tmp_path):
+    """The point of the whole thing: the next call mints a token instead of replaying."""
+    store = tmp_path / "codex-oauth.json"
+    store.write_text(json.dumps({"tokens": {"access_token": "", "refresh_token": "r-live", "account_id": "a"}}))
+    monkeypatch.setattr(oauth_mod, "_codex_store_path", lambda paths: store)
+    monkeypatch.setattr(oauth_mod, "_CODEX_CLI_AUTH_FILE", tmp_path / "no-cli.json")
+    minted = _jwt({"exp": time.time() + 864000})
+    monkeypatch.setattr(oauth_mod.httpx, "post", _CodexRefreshStub({"r-live": minted}))
+
+    creds = resolve_codex_oauth(paths=types.SimpleNamespace(config_dir=tmp_path))
+    assert creds.access_token == minted
+
+
+def test_force_refresh_overrides_a_token_that_still_looks_valid(monkeypatch, tmp_path):
+    store = tmp_path / "codex-oauth.json"
+    fine = _jwt({"exp": time.time() + 864000})
+    store.write_text(json.dumps({"tokens": {"access_token": fine, "refresh_token": "r-live", "account_id": "a"}}))
+    monkeypatch.setattr(oauth_mod, "_codex_store_path", lambda paths: store)
+    monkeypatch.setattr(oauth_mod, "_CODEX_CLI_AUTH_FILE", tmp_path / "no-cli.json")
+    minted = _jwt({"exp": time.time() + 864000})
+    monkeypatch.setattr(oauth_mod.httpx, "post", _CodexRefreshStub({"r-live": minted}))
+
+    paths = types.SimpleNamespace(config_dir=tmp_path)
+    assert resolve_codex_oauth(paths=paths).access_token == fine  # unforced: reuses it
+    assert resolve_codex_oauth(paths=paths, force_refresh=True).access_token == minted
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Error code: 401 - {'error': {'message': 'Your authentication token has been invalidated.', 'code': 'token_invalidated'}}",
+        "Error code: 401 - unauthorized",
+        "Error code: 401 - {'type': 'invalid_request_error'}",
+    ],
+)
+def test_auth_rejections_are_recognised(text):
+    from graph.providers.discovery import _is_auth_rejection
+
+    assert _is_auth_rejection(Exception(text)) is True
+
+
+@pytest.mark.parametrize("text", ["Connection timed out", "Error code: 500 - server error", "429 rate limited"])
+def test_other_failures_never_spend_a_refresh_token(text):
+    """Narrow on purpose — the response is to spend a SINGLE-USE token."""
+    from graph.providers.discovery import _is_auth_rejection
+
+    assert _is_auth_rejection(Exception(text)) is False
