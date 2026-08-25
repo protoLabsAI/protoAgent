@@ -1489,3 +1489,69 @@ def test_file_lock_is_best_effort_and_never_raises(tmp_path):
     """An unlockable filesystem degrades to the old behaviour, it does not fail a turn."""
     with oauth_mod._file_lock(tmp_path / "nope" / "deep" / "store.json"):
         pass  # must not raise even though the directory chain is created on demand
+
+
+# ── earliest_refresh_at: refresh when the PROVIDER says, not on our own skew ────
+#
+# Access tokens last ~10 days and OpenAI returns `earliest_refresh_at` about a day
+# before expiry. Honouring it turns refresh from a per-boot expiry check into a
+# roughly once-per-nine-days event, which is what makes a race over a single-use
+# token rare rather than routine.
+
+
+def test_a_live_token_before_the_earliest_mark_is_not_refreshed():
+    tokens = {"access_token": _jwt({"exp": time.time() + 86400}), "earliest_refresh_at": time.time() + 3600}
+    assert oauth_mod._codex_needs_refresh(tokens, 120) is False
+
+
+def test_a_live_token_past_the_earliest_mark_is_refreshed():
+    tokens = {"access_token": _jwt({"exp": time.time() + 86400}), "earliest_refresh_at": time.time() - 1}
+    assert oauth_mod._codex_needs_refresh(tokens, 120) is True
+
+
+def test_expiry_overrides_a_stale_earliest_mark():
+    """A hint that outlives its token must never strand a caller."""
+    tokens = {"access_token": _jwt({"exp": time.time() + 10}), "earliest_refresh_at": time.time() + 999_999}
+    assert oauth_mod._codex_needs_refresh(tokens, 120) is True
+
+
+def test_without_the_hint_the_decision_is_expiry_only():
+    assert oauth_mod._codex_needs_refresh({"access_token": _jwt({"exp": time.time() + 86400})}, 120) is False
+    assert oauth_mod._codex_needs_refresh({"access_token": _jwt({"exp": time.time() - 1})}, 120) is True
+    assert oauth_mod._codex_needs_refresh({"access_token": ""}, 120) is True
+
+
+def test_a_non_numeric_hint_is_ignored_rather_than_trusted():
+    tokens = {"access_token": _jwt({"exp": time.time() + 86400}), "earliest_refresh_at": "soon"}
+    assert oauth_mod._codex_needs_refresh(tokens, 120) is False
+
+
+def test_the_hint_is_persisted_by_a_refresh(monkeypatch, tmp_path):
+    """Every process on the box must see the same answer, so it rides the store."""
+    store = tmp_path / "codex-oauth.json"
+    store.write_text(
+        json.dumps({"tokens": {"access_token": _jwt({"exp": time.time() - 10}), "refresh_token": "r", "account_id": "a"}})
+    )
+    monkeypatch.setattr(oauth_mod, "_codex_store_path", lambda paths: store)
+    mark = time.time() + 777_777
+
+    def _post(url, **kw):
+        return types.SimpleNamespace(
+            status_code=200,
+            json=lambda: {
+                "access_token": _jwt({"exp": time.time() + 86400}),
+                "refresh_token": "r2",
+                "earliest_refresh_at": mark,
+            },
+        )
+
+    monkeypatch.setattr(oauth_mod.httpx, "post", _post)
+    resolve_codex_oauth(paths=types.SimpleNamespace(config_dir=tmp_path))
+    assert json.loads(store.read_text())["tokens"]["earliest_refresh_at"] == mark
+
+    # And the next resolution honours it instead of refreshing again.
+    def _never(*a, **kw):
+        raise AssertionError("a token before its earliest_refresh_at must not be refreshed")
+
+    monkeypatch.setattr(oauth_mod.httpx, "post", _never)
+    resolve_codex_oauth(paths=types.SimpleNamespace(config_dir=tmp_path))
