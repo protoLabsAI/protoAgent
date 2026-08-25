@@ -250,12 +250,17 @@ def _read_config_docs(p: Path) -> tuple[dict, dict, bool]:
         _warn_shadowed_host_keys(host_layer, agent_data)
         host_base = copy.deepcopy(host_layer)
         _drop_host_model_identity(host_base, agent_data)
+        # Captured BEFORE the merge: `_deep_merge_dicts` mutates `host_base` in place and
+        # lists REPLACE, so after it runs `host_base["providers"]` IS the agent's list.
+        # Reading it afterwards made the merge `(agent, agent)` and silently discarded
+        # every box-level connection — the exact inheritance this merge exists to keep.
+        host_providers = host_base.get("providers")
         merged = _deep_merge_dicts(host_base, agent_data)
         # A list does not deep-merge: the agent leaf's `providers:` would REPLACE the
         # box's outright, so an instance that adds one local connection would lose every
         # shared one. Merge by id instead — the box supplies the connection, the instance
         # may override any field of it or add its own.
-        merged["providers"] = _merge_provider_lists(host_base.get("providers"), agent_data.get("providers"))
+        merged["providers"] = _merge_provider_lists(host_providers, agent_data.get("providers"))
         if not merged["providers"]:
             merged.pop("providers")
     else:

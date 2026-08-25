@@ -27,7 +27,18 @@ const TYPE_LABEL: Record<string, string> = {
   "openai-codex": "ChatGPT subscription",
 };
 
-const ID_RE = /^[a-z0-9][a-z0-9_-]*$/;
+// Mirrors `valid_provider_id` in graph/config.py — the console refuses locally what the
+// route would refuse anyway, so a typo is caught before a round trip. Exported so the
+// rule is testable on its own; the two must not drift, since an id the backend rejects
+// would otherwise only surface as a 400.
+export const ID_RE = /^[a-z0-9][a-z0-9_-]*$/;
+
+export function providerIdError(id: string): string {
+  if (!id) return "";
+  return ID_RE.test(id)
+    ? ""
+    : "Lowercase letters, digits, - and _ only — ':' and '/' are reserved by the provider:model grammar.";
+}
 
 export function ProvidersPanel() {
   const toast = useToast();
@@ -77,10 +88,7 @@ export function ProvidersPanel() {
     onError: (e) => toast({ tone: "error", title: "Couldn't reach it", message: errMsg(e) }),
   });
 
-  const idError =
-    draft.id && !ID_RE.test(draft.id)
-      ? "Lowercase letters, digits, - and _ only — ':' and '/' are reserved by the provider:model grammar."
-      : "";
+  const idError = providerIdError(draft.id);
 
   const rows = data?.providers ?? [];
 
