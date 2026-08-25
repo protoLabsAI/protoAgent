@@ -232,12 +232,17 @@ async def _dispatch_capturing_usage(monkeypatch, *responses, target="orbis", **t
     tool = _delegate_to(name=target)
     usage: list[dict] = []
     reply = ""
-    args = {"target": target, "query": "do the thing", **tool_args}
+    args = {
+        "name": "delegate_to",
+        "args": {"target": target, "query": "do the thing", **tool_args},
+        "id": "peer-cost",
+        "type": "tool_call",
+    }
     async for ev in tool.astream_events(args, version="v2"):
         if ev["event"] == "on_custom_event" and ev["name"] == "usage":
             usage.append(ev["data"])
         elif ev["event"] == "on_tool_end":
-            reply = ev["data"]["output"]
+            reply = getattr(ev["data"]["output"], "content", ev["data"]["output"])
     return reply, usage
 
 
@@ -342,7 +347,18 @@ async def test_a_detached_background_delegation_does_not_bill_the_spawning_turn(
 
     async def turn(_):
         nonlocal handle
-        handle = await tool.ainvoke({"target": "orbis", "query": "do the thing", "background": True})
+        handle = getattr(
+            await tool.ainvoke(
+                {
+                    "name": "delegate_to",
+                    "args": {"target": "orbis", "query": "do the thing", "background": True},
+                    "id": "peer-cost",
+                    "type": "tool_call",
+                }
+            ),
+            "content",
+            "",
+        )
         await mgr.task  # the lead thread works on while the peer answers
         # Proof the billing window was open the whole time: this event, dispatched
         # AFTER the peer answered, still reaches the stream below — so an unsuppressed

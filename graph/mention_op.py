@@ -180,6 +180,7 @@ async def run_mention(
     session_id: str = "",
     lead_name: str = "assistant",
     permissions: str | None = None,
+    speaker: str = "operator",
 ) -> dict:
     """Address ``target`` directly and record the exchange on ``thread_id``.
 
@@ -205,8 +206,6 @@ async def run_mention(
     if not (message or "").strip():
         return {"ok": False, "author": target, "reply": "", "error": "empty_message", "catchup": 0, "truncated": False}
 
-    from langchain_core.messages import HumanMessage
-
     lg_config = {"configurable": {"thread_id": thread_id}}
 
     # 1. READ the room.
@@ -219,8 +218,58 @@ async def run_mention(
 
     window, truncated = catchup_window(history, target, lead_name=lead_name)
 
-    # 2. DISPATCH. `conversation_key` is ACP-only — dispatch() raises for every other
-    #    type, so it rides only where it is accepted. Everyone else gets the catch-up.
+    outcome = await dispatch_into_room(
+        registry,
+        target,
+        message,
+        history,
+        thread_id=thread_id,
+        lead_name=lead_name,
+        permissions=permissions,
+        speaker=speaker,
+    )
+    written = outcome.pop("messages")
+    if graph is None or not written:
+        return outcome
+    try:
+        # `as_node` is REQUIRED, not optional garnish: on a thread that already has
+        # history the compiled graph has several nodes that could have produced this
+        # update and LangGraph refuses it as ambiguous.
+        await graph.aupdate_state(lg_config, {"messages": written}, as_node=START)
+    except Exception:  # noqa: BLE001 — the operator already has the reply; the room record is best-effort
+        log.exception("[room] recording the exchange on thread %s failed", thread_id)
+    return outcome
+
+
+async def dispatch_into_room(
+    registry,
+    target: str,
+    message: str,
+    history: list,
+    *,
+    thread_id: str,
+    lead_name: str = "assistant",
+    permissions: str | None = None,
+    speaker: str = "operator",
+    timeout: float | None = None,
+) -> dict:
+    """Dispatch an address and return its room envelopes without writing state.
+
+    ``run_mention`` writes these after an out-of-turn operator ``@``. A foreground
+    ``delegate_to`` instead returns them in a ``Command`` so they are reduced into the
+    active turn rather than lost to that turn's next checkpoint.
+    """
+    if registry is None:
+        return {"ok": False, "author": target, "reply": "", "error": "no_registry", "catchup": 0, "truncated": False, "messages": []}
+    if not (message or "").strip():
+        return {"ok": False, "author": target, "reply": "", "error": "empty_message", "catchup": 0, "truncated": False, "messages": []}
+
+    from langchain_core.messages import HumanMessage
+
+    window, truncated = catchup_window(history, target, lead_name=lead_name)
+
+    # `conversation_key` is ACP-only — dispatch() raises for every other type, so it
+    # rides only where it is accepted. Everyone else gets the attributed catch-up.
     delegate = registry.get(target)
     if delegate is None:
         return {
@@ -230,17 +279,23 @@ async def run_mention(
             "error": f"unknown delegate {target!r}",
             "catchup": 0,
             "truncated": False,
+            "messages": [],
         }
     conversation_key = thread_id if getattr(delegate, "type", "") == "acp" else None
 
     ok, reply, error = True, "", ""
     try:
+        dispatch_kwargs = {
+            "conversation_key": conversation_key,
+            "permissions": permissions,
+        }
+        if timeout is not None:
+            dispatch_kwargs["timeout"] = timeout
         reply = str(
             await registry.dispatch(
                 target,
                 _prompt(window, truncated, target, message),
-                conversation_key=conversation_key,
-                permissions=permissions,
+                **dispatch_kwargs,
             )
             or ""
         ).strip()
@@ -250,12 +305,12 @@ async def run_mention(
         ok, error = False, str(exc) or type(exc).__name__
         log.warning("[room] dispatch to %r failed: %s: %s", target, type(exc).__name__, error)
 
-    # 3. WRITE both halves back onto the thread, so the lead agent's next turn reads the
-    #    same room. Ordered operator-then-reply, as they happened.
+    # Both halves are ordered as they happened. The caller decides whether they join
+    # the current turn via Command or are written after an operator-only address.
     written = [
         HumanMessage(
-            content=_envelope("operator", message, to=target),
-            additional_kwargs={"lc_source": _SOURCE, "room": {"from": "operator", "to": target}},
+            content=_envelope(speaker, message, to=target),
+            additional_kwargs={"lc_source": _SOURCE, "room": {"from": speaker, "to": target}},
         )
     ]
     if ok and reply:
@@ -272,29 +327,6 @@ async def run_mention(
                 additional_kwargs={"lc_source": _SOURCE, "room": {"from": target, "failed": True}},
             )
         )
-    if graph is None:
-        return {
-            "ok": ok,
-            "author": target,
-            "reply": reply,
-            "error": error,
-            "catchup": len(window),
-            "truncated": truncated,
-        }
-    try:
-        # `as_node` is REQUIRED, not optional garnish: on a thread that already has
-        # history the compiled graph has several nodes that could have produced this
-        # update and LangGraph refuses it as ambiguous. Since the write below is
-        # best-effort, that refusal was silent — the room record simply never landed for
-        # any chat past its first turn, which is every real chat.
-        #
-        # `__start__` is the honest node: a room message ARRIVES on the thread, it is not
-        # some node's output. It's also the only stable choice — the rest of the node list
-        # is middleware-dependent and changes as middleware is added or removed.
-        await graph.aupdate_state(lg_config, {"messages": written}, as_node=START)
-    except Exception:  # noqa: BLE001 — the operator already has the reply; the room record is best-effort
-        log.exception("[room] recording the exchange on thread %s failed", thread_id)
-
     return {
         "ok": ok,
         "author": target,
@@ -302,4 +334,5 @@ async def run_mention(
         "error": error,
         "catchup": len(window),
         "truncated": truncated,
+        "messages": written,
     }

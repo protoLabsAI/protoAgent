@@ -312,6 +312,12 @@ def _register(delegates, monkeypatch):
     return r
 
 
+async def _invoke_delegate(tool, args):
+    """Invoke through the real ToolNode-shaped call so injected ids are available."""
+    result = await tool.ainvoke({"name": "delegate_to", "args": args, "id": "test-call", "type": "tool_call"})
+    return getattr(result, "content", result)
+
+
 def test_register_no_delegates_registers_only_propose(monkeypatch):
     """An empty roster still gets propose_delegate (#2944) — the consent-gated way
     OUT of the empty-roster dead end — and nothing else."""
@@ -380,8 +386,8 @@ def test_list_agents_unknown_health_is_neutral(monkeypatch):
 async def test_delegate_to_unknown_and_empty(monkeypatch):
     r = _register([{"name": "opus", "type": "openai", "url": "https://g/v1", "model": "m"}], monkeypatch)
     tool = r.tools[0]
-    assert "unknown delegate" in await tool.ainvoke({"target": "nope", "query": "hi"})
-    assert "empty" in (await tool.ainvoke({"target": "opus", "query": "  "})).lower()
+    assert "unknown delegate" in await _invoke_delegate(tool, {"target": "nope", "query": "hi"})
+    assert "empty" in (await _invoke_delegate(tool, {"target": "opus", "query": "  "})).lower()
 
 
 # ── delegate_to background=True (ADR 0050) ─────────────────────────────────────
@@ -410,7 +416,7 @@ async def test_delegate_to_background_spawns_detached_job(monkeypatch):
     # dispatch must NOT run inline — the fake spawn_work never calls work.
     monkeypatch.setattr(DelegateRegistry, "dispatch", _unexpected_dispatch)
 
-    out = await tool.ainvoke({"target": "opus", "query": "build the thing", "background": True})
+    out = await _invoke_delegate(tool, {"target": "opus", "query": "build the thing", "background": True})
     assert "job-abc123" in out and "background" in out.lower()
     assert len(fake.calls) == 1
     call = fake.calls[0]
@@ -427,7 +433,7 @@ async def test_delegate_to_background_unknown_fails_fast(monkeypatch):
     import runtime.state as rs
 
     monkeypatch.setattr(rs.STATE, "background_mgr", _FakeBgManager(), raising=False)
-    out = await tool.ainvoke({"target": "nope", "query": "hi", "background": True})
+    out = await _invoke_delegate(tool, {"target": "nope", "query": "hi", "background": True})
     assert "unknown delegate" in out  # no orphan job for a bad target
 
 
@@ -439,7 +445,7 @@ async def test_delegate_to_background_falls_back_inline_without_manager(monkeypa
     monkeypatch.setattr(rs.STATE, "background_mgr", None, raising=False)
     monkeypatch.setattr(DelegateRegistry, "dispatch", _fake_dispatch)
     # No manager → background degrades to a normal inline dispatch, never worse than sync.
-    out = await tool.ainvoke({"target": "opus", "query": "quick q", "background": True})
+    out = await _invoke_delegate(tool, {"target": "opus", "query": "quick q", "background": True})
     assert out == "dispatched:quick q"
 
 
@@ -454,7 +460,7 @@ async def test_delegate_to_forwards_timeout_override(monkeypatch):
         return "done"
 
     monkeypatch.setattr(DelegateRegistry, "dispatch", _dispatch)
-    assert await tool.ainvoke({"target": "coder", "query": "build", "timeout": 900}) == "done"
+    assert await _invoke_delegate(tool, {"target": "coder", "query": "build", "timeout": 900}) == "done"
     assert seen["timeout"] == 900.0
 
 
@@ -469,7 +475,7 @@ async def test_delegate_to_omitted_timeout_passes_none(monkeypatch):
         return "done"
 
     monkeypatch.setattr(DelegateRegistry, "dispatch", _dispatch)
-    assert await tool.ainvoke({"target": "coder", "query": "build"}) == "done"
+    assert await _invoke_delegate(tool, {"target": "coder", "query": "build"}) == "done"
     assert seen["timeout"] is None
 
 
@@ -488,7 +494,7 @@ async def test_delegate_to_background_threads_timeout(monkeypatch):
         return f"dispatched:{query}"
 
     monkeypatch.setattr(DelegateRegistry, "dispatch", _dispatch)
-    out = await tool.ainvoke({"target": "coder", "query": "big job", "background": True, "timeout": 1200})
+    out = await _invoke_delegate(tool, {"target": "coder", "query": "big job", "background": True, "timeout": 1200})
     assert "job-abc123" in out
     # The queued work carries the override down to dispatch.
     assert await fake.calls[0]["work"]() == "dispatched:big job"
