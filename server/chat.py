@@ -506,6 +506,28 @@ def _coerce_tool_output(value) -> str:
     return _coerce_tool_value(getattr(value, "content", value))
 
 
+def _coerce_room_text(value) -> str:
+    """A delegate's reply/query as a chat MESSAGE — full text, never preview-capped.
+
+    ``_coerce_tool_output`` truncates at ``_TOOL_PREVIEW_CHARS`` (800) because a tool CARD
+    is a preview. A room bubble is the participant's actual message, so it must carry the
+    whole thing — the same as the operator-`@` path, which returns the delegate's reply
+    uncapped. Unwraps the ToolMessage and renders structured content as JSON, minus the
+    cap. (#3042 truncation: a long review came through cut at ~800 chars.)
+    """
+    v = getattr(value, "content", value)
+    if v is None or v == "":
+        return ""
+    if isinstance(v, (dict, list)):
+        import json as _json
+
+        try:
+            return _json.dumps(v, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            pass
+    return str(v)
+
+
 def _tool_output_chars(value) -> int:
     """True size of a tool result BEFORE the preview truncation (#2775).
 
@@ -829,7 +851,7 @@ async def _run_turn_stream(
                     if _q:
                         yield (
                             "room_reply",
-                            {"addressed_to": _target, "text": _q[:_TOOL_PREVIEW_CHARS], "ok": True},
+                            {"addressed_to": _target, "text": _q, "ok": True},
                         )
         elif kind == "on_tool_end":
             output = event.get("data", {}).get("output", "")
@@ -842,7 +864,7 @@ async def _run_turn_stream(
             # never through on_tool_end, so it is untouched here.
             _dtgt = _delegate_targets.pop(rid, None) if rid else None
             if _dtgt:
-                _dtext = _coerce_tool_output(output)
+                _dtext = _coerce_room_text(output)
                 _derror = getattr(output, "status", None) == "error"
                 yield (
                     "room_reply",
