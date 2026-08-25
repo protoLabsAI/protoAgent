@@ -124,7 +124,7 @@ def test_a_gateway_slot_without_a_key_says_so(monkeypatch):
 
     # The message names the CONNECTION now (ADR 0106) — with several gateways
     # registrable, "the gateway" no longer identifies which one failed.
-    with pytest.raises(RuntimeError, match="'gateway' connection, but it has no API key"):
+    with pytest.raises(RuntimeError, match="'gateway' connection, but that connection has no base URL or API key"):
         create_llm(cfg, model_name="gateway:protolabs/coder")
 
 

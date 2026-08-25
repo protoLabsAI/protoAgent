@@ -141,10 +141,18 @@ capability regression rather than a simplification. The registry therefore mirro
 ### The replaced fields are retired over one release, not cut
 
 `model.provider`, `model.api_base` and `model.api_key` stay in the settings schema for
-one release, rendered **read-only with a pointer to Connections**. Deleting them
-outright would break anything reading them over `/api/settings` — forks, snapshot
-import, the fleet host layer — with no warning. They are removed no earlier than
-**v0.152.0**, alongside the config attributes they mirror.
+one release but stop being **rendered** — they carry `ui_hidden`, the flag this codebase
+already uses for "a key a dedicated panel now owns". Deleting them outright would break
+anything reading them over `/api/settings` — forks, snapshot import, the fleet host layer
+— with no warning, and `ui_hidden` keeps every one of those paths intact while removing
+the second editor. They are removed no earlier than **v0.152.0**, alongside the config
+attributes they mirror.
+
+Hiding them from `build_schema` would also have removed them from the **cascade
+diagnostic**, which walks the same builder: "where did this value come from?" must still
+answer for a key that still drives behaviour and is still inherited through the Host
+layer. `build_schema(include_hidden=True)` keeps the explainer whole; rendering paths
+keep the default.
 
 ### First run adds a connection
 

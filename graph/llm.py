@@ -463,8 +463,11 @@ def create_llm(
         if ptype == PROVIDER_TYPE_OPENAI_COMPAT or slot_provider == GATEWAY_SLOT:
             if not _gateway_configured(config, entry):
                 raise RuntimeError(
-                    f"slot model {model_name!r} names the {slot_provider!r} connection, but it "
-                    "has no API key configured (its `api_key`, model.api_key, or OPENAI_API_KEY)."
+                    f"slot model {model_name!r} names the {slot_provider!r} connection, but that "
+                    "connection has no base URL or API key of its own. A connection is resolved "
+                    "strictly from its own fields — `model.api_key` and OPENAI_API_KEY are NOT "
+                    "consulted for it, so that one connection's credential can never be sent to "
+                    "another's endpoint. Set them in Settings ▸ Model ▸ Connections."
                 )
             return _build_gateway_llm(config, slot_model or None, reasoning_effort, provider=entry)
         from graph.providers import build_native_oauth_llm
