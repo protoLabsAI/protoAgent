@@ -172,7 +172,6 @@ async def _dispatch_into_room(
             query,
             messages,
             thread_id=resolve_thread_id(None, session_id),
-            permissions="readonly",
             speaker="assistant",
             timeout=timeout,
         )

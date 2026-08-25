@@ -35,6 +35,9 @@ class _ToolFake(GenericFakeChatModel):
 
 
 class _Registry:
+    def __init__(self):
+        self.calls = []
+
     def get(self, name):
         return _Delegate() if name == "proto" else None
 
@@ -42,13 +45,15 @@ class _Registry:
         return "proto"
 
     async def dispatch(self, name, query, *, conversation_key=None, permissions=None, timeout=None, **_kwargs):
+        self.calls.append({"conversation_key": conversation_key, "permissions": permissions, "timeout": timeout})
         return "the token expires before refresh"
 
 
 @pytest.mark.asyncio
 async def test_command_carries_authored_room_messages_and_the_tool_terminator():
+    registry = _Registry()
     out = await _dispatch_into_room(
-        _Registry(),
+        registry,
         "proto",
         "inspect auth",
         {"session_id": "room-command", "messages": [HumanMessage(content="please investigate auth")]},
@@ -64,6 +69,7 @@ async def test_command_carries_authored_room_messages_and_the_tool_terminator():
     assert isinstance(messages[2], ToolMessage)
     assert messages[2].tool_call_id == "call-1"
     assert messages[2].content == "the token expires before refresh"
+    assert registry.calls[0]["permissions"] is None  # preserve foreground delegate_to access
 
 
 @pytest.mark.asyncio
