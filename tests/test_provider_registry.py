@@ -215,3 +215,38 @@ def test_a_keyless_connection_raises_naming_itself(monkeypatch):
     cfg.api_key = ""
     with pytest.raises(RuntimeError, match="'local-vllm' connection"):
         create_llm(cfg, model_name="local-vllm:qwen3-32b")
+
+
+def test_a_registered_connection_never_borrows_another_credential(monkeypatch):
+    """The coupling the registry exists to remove.
+
+    Falling back to `model.api_key` / `OPENAI_API_KEY` for a connection that carries no
+    key of its own would send one connection's credential to another's endpoint — a
+    local vLLM probed with the production gateway's key. A keyless endpoint is normal
+    (vLLM, Ollama), so having somewhere to talk to is what "configured" means.
+    """
+    from graph.providers.discovery import available_model_lanes
+
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key-must-not-leak")
+    cfg = _cfg(
+        providers=[
+            {"id": "prod-gateway", "type": "openai-compat", "base_url": "https://prod/v1", "api_key": "pk"},
+            {"id": "local-vllm", "type": "openai-compat", "base_url": "http://localhost:8000/v1"},
+        ],
+        model={"api_key": "legacy-key-must-not-leak"},
+    )
+    seen: list[tuple[str, str]] = []
+
+    def _probe(base, key):
+        seen.append((base, key))
+        return ["m"], ""
+
+    monkeypatch.setattr("graph.config_io.list_gateway_models", _probe, raising=False)
+    lanes = {lane["provider"]: lane for lane in available_model_lanes(cfg)}
+
+    assert lanes["local-vllm"]["configured"] is True  # keyless is usable
+    probed = dict(seen)
+    assert probed["https://prod/v1"] == "pk"
+    assert probed["http://localhost:8000/v1"] == ""  # NOT pk, not the legacy key, not env
+    assert "legacy-key-must-not-leak" not in probed.values()
+    assert "env-key-must-not-leak" not in probed.values()

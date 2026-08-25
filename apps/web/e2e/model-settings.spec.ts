@@ -1,9 +1,8 @@
 import { expect, test } from "@playwright/test";
 
-// #1386 — switching the main model provider was a dead-end: the Primary model dropdown only
-// offered the SAVED gateway's models, so after changing the base URL/key you couldn't pick a
-// model the new key actually allows, and Test connection failed against the stale model. The
-// "Get models" action probes the form's gateway and refreshes the dropdown with its models.
+// Settings ▸ Model. Since ADR 0106 the page leads with Connections — the registry of
+// model sources — and no longer carries the Provider / API base URL / API key fields or
+// the single-gateway "Get models" probe, all of which assumed exactly one gateway.
 
 async function openModelSettings(page) {
   await page.goto("/app/", { waitUntil: "load" });
@@ -19,66 +18,47 @@ async function openModelSettings(page) {
   }
 }
 
-test("Get models refreshes the Primary model dropdown with the gateway's models (#1386)", async ({ page }) => {
-  await openModelSettings(page);
-  const model = page.locator("#set-model\\.name");
-  // The saved dropdown offers only protolabs/reasoning + protolabs/fast (the fixture).
-  await expect(model).toContainText("protolabs/reasoning");
-
-  // Pull the gateway's models (POST /api/config/models → the mock's GATEWAY_MODELS).
-  await page.getByRole("button", { name: "Get models" }).click();
-  await expect(page.locator(".pl-toast", { hasText: /found 3 models/i })).toBeVisible();
-
-  // The freshly-probed models are now selectable — picking protolabs/smart (which was NOT in the
-  // saved options) proves the dropdown refreshed, so switching gateway is no longer a dead-end.
-  await model.click();
-  await page.getByRole("menuitemradio", { name: "protolabs/smart" }).click();
-  await expect(model).toContainText("protolabs/smart");
-});
-
-// #2518 — the probe must follow the provider named on the FORM. Switching to a native OAuth
-// provider (ADR 0097) and clicking "Get models" listed the GATEWAY's models: the provider was
-// never sent, so the dropdown only ever offered gateway ids the save validator then rejected
-// ("model.name='protolabs/smart' is not a Claude model id") — a dead-end with a rollback.
-test("Get models follows the form's provider — anthropic-oauth lists the subscription's models", async ({ page }) => {
+// The two "Get models" specs that lived here are gone with the button (ADR 0106).
+// It probed "the form's gateway" — a question with no answer once several connections
+// can be registered — so the probe moved onto the connection row, covered below.
+test("Connections lists every registered connection, and the retired fields are gone", async ({ page }) => {
   await openModelSettings(page);
 
-  // Flip the provider ON THE FORM (unsaved) to anthropic-oauth.
-  const provider = page.locator("#set-model\\.provider");
-  await provider.click();
-  await page.getByRole("menuitemradio", { name: "anthropic-oauth" }).click();
+  const panel = page.getByTestId("providers-panel");
+  await expect(panel).toBeVisible();
+  await expect(page.getByTestId("provider-row")).toHaveCount(2);
+  await expect(panel).toContainText("Production gateway");
+  await expect(panel).toContainText("local-vllm");
+  // Two OpenAI-compatible endpoints at once — the shape a single api_base/api_key pair
+  // could not express, and the reason the registry exists.
+  await expect(panel).toContainText("https://gateway.example/v1");
+  await expect(panel).toContainText("http://localhost:8000/v1");
 
-  // The probe carries the form's provider — the wire-level fact that was missing.
-  const probe = page.waitForRequest((r) => r.url().includes("/api/config/models") && r.method() === "POST");
-  await page.getByRole("button", { name: "Get models" }).click();
-  expect(JSON.parse((await probe).postData() || "{}").provider).toBe("anthropic-oauth");
-  await expect(page.locator(".pl-toast", { hasText: /found 2 models/i })).toBeVisible();
+  // Why a delete may be refused, shown before it is attempted.
+  await expect(panel).toContainText("In use by 1 slot");
+  // A connection with no key says so rather than looking ready.
+  await expect(panel).toContainText("no API key");
 
-  // The stale gateway model was auto-swapped for one the provider actually serves (wizard
-  // parity), so Save can't submit a model the rebuild validator would reject.
-  const model = page.locator("#set-model\\.name");
-  await expect(model).toContainText("claude-opus-4-5");
-  await model.click();
-  await expect(page.getByRole("menuitemradio", { name: "claude-sonnet-4-5" })).toBeVisible();
+  // The fields Connections replaced must not also be on the page — two editors for one
+  // value is the contradiction this panel resolved.
+  const dialog = page.locator(".settings-overlay");
+  await expect(dialog).not.toContainText("API base URL");
+  await expect(dialog).not.toContainText("Get models");
 });
 
-// #2466 — one Escape closed BOTH the open dropdown and the whole Settings dialog, losing the
-// operator's section and any unsaved edits. The unit test pins the arbitration predicate
-// (settingsEscape.test.ts); this pins the behaviour the issue actually reported, end to end.
 test("Escape closes the dropdown first, Settings second — never both at once (#2466)", async ({ page }) => {
   await openModelSettings(page);
   const overlay = page.locator(".settings-overlay");
   const model = page.locator("#set-model\\.name");
 
-  // Reproduce the report exactly: "Get models" turns Primary model into a live dropdown.
-  await page.getByRole("button", { name: "Get models" }).click();
-  await expect(page.locator(".pl-toast", { hasText: /found 3 models/i })).toBeVisible();
+  // Primary model is a live dropdown on load now — it offers every connection's models
+  // (ADR 0106), where before it needed "Get models" to populate the one gateway's list.
   await model.click();
-  await expect(page.getByRole("menuitemradio", { name: "protolabs/smart" })).toBeVisible();
+  await expect(page.getByRole("menuitemradio", { name: "local-vllm:qwen3-32b" })).toBeVisible();
 
   // FIRST Escape: only the topmost layer goes.
   await page.keyboard.press("Escape");
-  await expect(page.getByRole("menuitemradio", { name: "protolabs/smart" })).toBeHidden();
+  await expect(page.getByRole("menuitemradio", { name: "local-vllm:qwen3-32b" })).toBeHidden();
   await expect(overlay).toBeVisible();
   // ...still on Model, with the section's controls intact — the context the bug destroyed.
   await expect(page.locator(".settings-overlay .pl-sidenav").getByRole("tab", { name: "Model", exact: true }))

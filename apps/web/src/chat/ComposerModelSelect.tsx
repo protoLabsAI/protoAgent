@@ -6,7 +6,7 @@ import { Menu, MenuItem, MenuSeparator } from "@protolabsai/ui/menu";
 
 import { runtimeStatusQuery, settingsSchemaQuery } from "../lib/queries";
 import { chatStore, useChatState } from "./chat-store";
-import { bareModel, groupByLane, laneOf, modelChoices, modelPickerData } from "./modelForm";
+import { bareModel, groupByLane, lanesFromOptions, modelChoices, modelPickerData, sameModel } from "./modelForm";
 
 // The composer's inline model picker — rendered in the DS PromptInput `actions` slot.
 // This is a PER-TAB override: it does NOT change the saved global model (that lives in
@@ -51,6 +51,11 @@ export function ComposerModelSelect() {
 
   const effectiveModel = selected || globalModel;
   const groups = groupByLane(options);
+  // Same derivation the grouping used, so the badge and the headings agree.
+  // Include the configured model: with favorites pinned as bare ids, the options alone
+  // never mention the connection the primary model names, and the trigger would print the
+  // raw `prod-gateway:…` grammar as its label.
+  const knownLanes = lanesFromOptions([...options, globalModel, selected]);
   // Headings earn their place only when there's a choice of account to make.
   const showLanes = groups.length > 1;
 
@@ -67,7 +72,7 @@ export function ComposerModelSelect() {
     <Menu
       trigger={
         <button type="button" className="composer-model-select" aria-label="Model for this chat">
-          {bareModel(effectiveModel)}
+          {bareModel(effectiveModel, knownLanes)}
         </button>
       }
       align="start"
@@ -92,9 +97,10 @@ export function ComposerModelSelect() {
             </div>
           ) : null}
           {group.items.map((m) => {
-            // A qualified favorite of the configured model is still the default — compare
-            // on the bare id too, or the badge vanishes the moment favorites are pinned.
-            const isDefault = m === globalModel || (!!laneOf(m) && bareModel(m) === globalModel);
+            // Either side may be qualified or bare (ADR 0106 made the primary model name
+            // its connection), so the comparison has to be spelling-agnostic in BOTH
+            // directions — see sameModel.
+            const isDefault = sameModel(m, globalModel, knownLanes);
             return (
               <MenuItem
                 key={m}
@@ -102,7 +108,7 @@ export function ComposerModelSelect() {
                   chatStore.setSessionModel(currentSessionId, isDefault ? "" : m);
                 }}
               >
-                {bareModel(m)}
+                {bareModel(m, knownLanes)}
                 {isDefault ? <Badge>default</Badge> : null}
               </MenuItem>
             );

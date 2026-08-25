@@ -340,7 +340,8 @@ def available_model_lanes(config: "LangGraphConfig") -> list[dict]:
     lanes: list[dict] = []
     env_key = os.environ.get("OPENAI_API_KEY", "").strip()
     entries = list(getattr(config, "providers", []) or [])
-    if not entries:
+    legacy = not entries
+    if legacy:
         # Compatibility floor, the same one `split_slot_target` keeps: a config that
         # never went through `from_dict` (a bare LangGraphConfig, a caller that built one
         # directly) has no registry, and returning ZERO lanes would blank every picker
@@ -362,16 +363,34 @@ def available_model_lanes(config: "LangGraphConfig") -> list[dict]:
             "error": "",
         }
         if entry.type == "openai-compat":
-            base = (entry.base_url or getattr(config, "api_base", "") or "").strip()
-            key = (entry.api_key or "").strip() or (getattr(config, "api_key", "") or "").strip() or env_key
-            lane["configured"] = bool(base and key)
+            if legacy:
+                # The synthesized legacy lane IS the old single gateway, so the
+                # config-level endpoint and key are its own.
+                base = (entry.base_url or getattr(config, "api_base", "") or "").strip()
+                key = (entry.api_key or "").strip() or (getattr(config, "api_key", "") or "").strip() or env_key
+                lane["configured"] = bool(base and key)
+            else:
+                # A REGISTERED connection uses only its own endpoint and key. Falling back
+                # to `model.api_key`/`OPENAI_API_KEY` would let one connection's credential
+                # be sent to another's endpoint — a local vLLM probed with the production
+                # gateway's key — which is precisely the coupling the registry removes.
+                base = (entry.base_url or "").strip()
+                key = (entry.api_key or "").strip()
+                # A keyless endpoint is normal (a local vLLM or Ollama wants no auth), so
+                # having somewhere to talk to is what "configured" means; the key is passed
+                # through when there is one and omitted when there isn't.
+                lane["configured"] = bool(base)
             if lane["configured"]:
                 try:
                     lane["models"], lane["error"] = list_gateway_models(base, key)
                 except Exception as exc:  # noqa: BLE001 — one lane's outage is not the picker's
                     lane["error"] = str(exc)
             else:
-                lane["error"] = "No API key configured for this connection."
+                lane["error"] = (
+                    "No API key configured for this connection."
+                    if legacy
+                    else "No base URL configured for this connection."
+                )
         else:
             status = oauth_status(entry.type)
             lane["configured"] = bool(status.signed_in)
