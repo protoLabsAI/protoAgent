@@ -15,6 +15,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.149.1] - 2026-08-25
+
+### Fixed
+- **A delegate's reply renders as its reply again, not as a `Command(update=…)` dump (#3124).**
+  Foreground delegations shipped in v0.149.0 showing the whole internal return value in the
+  chat — envelopes, message objects and `tool_call_id`s — where the delegate's answer should
+  be. #3102 changed `delegate_to` to return a `Command` so the room envelopes persist with the
+  turn, and the console's tool-result unwrapping still looked only for a `.content` attribute;
+  a `Command` has none, so it fell through to a plain string conversion of the whole object.
+  The unwrapping now understands a `Command` and takes the terminating tool message inside it —
+  the value the tool actually returned to the model — for the tool card, the room bubble, and
+  the size the cost chip estimates from. That last one had the same defect, so a delegation's
+  cost was being estimated from the length of the dump rather than the reply. A `Command` that
+  carries no terminating message renders as nothing rather than as its internal representation.
+
 ## [0.149.0] - 2026-08-25
 
 ### Added

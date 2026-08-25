@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.149.1",
+    "date": "2026-08-25",
+    "changes": [
+      "A delegate's reply renders as its reply again, not as a Command(update=…) dump (#3124)."
+    ]
+  },
+  {
     "version": "v0.149.0",
     "date": "2026-08-25",
     "changes": [
