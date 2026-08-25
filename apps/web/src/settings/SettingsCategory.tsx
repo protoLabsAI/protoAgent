@@ -87,7 +87,6 @@ export function SettingsCategory({
   }, [groups, dirty]);
   const isVisible = (field: SettingsField): boolean => fieldVisible(field, (k) => currentValues.get(k));
 
-  const hasModel = groups.some((g) => g.fields.some((f) => f.key === "model.name"));
 
   // Active agent runtime (ADR 0033) — for the banner + header badge when this category
   // carries the selector. Keyed on the field, not the category: agent_runtime now lives in
@@ -152,8 +151,6 @@ export function SettingsCategory({
     },
     onError: (e) => toast({ tone: "error", title: "Reset failed", message: errMsg(e) }),
   });
-
-  const asStr = (v: unknown) => (typeof v === "string" ? v : "");
 
   // The single-gateway probe that lived here — "Get models" against the form's
   // api_base/key, and its Test connection (#1386, #2518) — is gone with the fields it
