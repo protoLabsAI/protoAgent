@@ -479,6 +479,32 @@ def _coerce_tool_value(value) -> str:
     return str(value)[:_TOOL_PREVIEW_CHARS]
 
 
+def _tool_payload(value):
+    """The payload of a tool result, whatever shape the tool returned.
+
+    A tool may return a plain value, a ``ToolMessage``, or — since #3102 — a
+    ``Command(update={"messages": [...]})`` that writes conversation state and carries
+    its own terminating ``ToolMessage``. A ``Command`` has no ``.content``, so the old
+    ``getattr(value, "content", value)`` fell straight through to ``str()`` and rendered
+    the whole `Command(update={...})` repr — envelopes, tool_call_ids and all — into the
+    chat as the delegate's reply.
+
+    The terminator is what the tool actually returned to the model, so that is the
+    payload: take the LAST ToolMessage in the update, which is where ToolNode requires it.
+    """
+    update = getattr(value, "update", None)
+    if isinstance(update, dict):
+        messages = update.get("messages")
+        if isinstance(messages, list):
+            for msg in reversed(messages):
+                if getattr(msg, "type", "") == "tool" or type(msg).__name__ == "ToolMessage":
+                    return getattr(msg, "content", msg)
+            # A Command that updates state without a terminator has no payload to show;
+            # its repr is never the right answer.
+            return ""
+    return getattr(value, "content", value)
+
+
 def _coerce_tool_output(value) -> str:
     """Unwrap a tool result to its payload.
 
@@ -486,7 +512,7 @@ def _coerce_tool_output(value) -> str:
     leaks ``name=``/``tool_call_id=`` noise — the card wants the actual
     ``.content``. Falls back to the raw value for plain returns.
     """
-    return _coerce_tool_value(getattr(value, "content", value))
+    return _coerce_tool_value(_tool_payload(value))
 
 
 def _coerce_room_text(value) -> str:
@@ -498,7 +524,7 @@ def _coerce_room_text(value) -> str:
     uncapped. Unwraps the ToolMessage and renders structured content as JSON, minus the
     cap. (#3042 truncation: a long review came through cut at ~800 chars.)
     """
-    v = getattr(value, "content", value)
+    v = _tool_payload(value)
     if v is None or v == "":
         return ""
     if isinstance(v, (dict, list)):
@@ -519,7 +545,7 @@ def _tool_output_chars(value) -> int:
     — estimating from the preview made the #2282 chip mathematically dead. Same
     coercion as the preview (ToolMessage unwrap, dict/list → JSON), minus the cap.
     """
-    v = getattr(value, "content", value)
+    v = _tool_payload(value)
     if v is None or v == "":
         return 0
     if isinstance(v, (dict, list)):
