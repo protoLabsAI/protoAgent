@@ -180,23 +180,28 @@ def test_codex_jwt_expiry():
     assert oauth_mod._jwt_is_expiring("garbage", 120)
 
 
-def test_codex_bootstrap_from_cli_and_own_copy(monkeypatch, tmp_path):
-    """First resolve imports ~/.codex/auth.json, then keeps its own instance copy."""
-    cli = tmp_path / "codex_auth.json"
-    fresh = _jwt({"exp": time.time() + 3600})
-    cli.write_text(json.dumps({"tokens": {"access_token": fresh, "refresh_token": "r", "account_id": "acct-1"}}))
-    monkeypatch.setattr(oauth_mod, "_CODEX_CLI_AUTH_FILE", cli)
+def test_codex_never_silently_imports_the_cli_login(monkeypatch, tmp_path):
+    """Resolution does NOT read the Codex CLI's credential.
 
+    A refresh token is single-use, so a silent import puts two applications on one
+    secret with no way to coordinate — we cannot lock the Codex CLI, and whichever
+    refreshes first kills the other. Ownership is explicit instead.
+    """
+    cli = tmp_path / "codex_auth.json"
+    cli.write_text(
+        json.dumps({"tokens": {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"}})
+    )
+    monkeypatch.setattr(oauth_mod, "_CODEX_CLI_AUTH_FILE", cli)
     store = tmp_path / "codex-oauth.json"
     monkeypatch.setattr(oauth_mod, "_codex_store_path", lambda paths: store)
 
-    creds = resolve_codex_oauth(paths=types.SimpleNamespace(config_dir=tmp_path))
-    assert creds.account_id == "acct-1"
-    assert creds.source == "codex_cli_bootstrap"
-    assert store.exists()  # our own copy was written
-    # Second call reads our store, not the CLI file.
-    creds2 = resolve_codex_oauth(paths=types.SimpleNamespace(config_dir=tmp_path))
-    assert creds2.source == "instance_store"
+    def _never(*a, **kw):
+        raise AssertionError("resolution must not spend the CLI's token")
+
+    monkeypatch.setattr(oauth_mod.httpx, "post", _never)
+    with pytest.raises(OAuthCredentialError, match="Not signed in"):
+        resolve_codex_oauth(paths=types.SimpleNamespace(config_dir=tmp_path))
+    assert not store.exists()
 
 
 def test_codex_refresh_on_expiry(monkeypatch, tmp_path):
@@ -347,18 +352,38 @@ def test_codex_bootstrap_refuses_a_stale_cli_login(monkeypatch, tmp_path):
     assert "refresh failed" not in str(ei.value).lower()
 
 
-def test_codex_bootstrap_accepts_a_live_cli_login(monkeypatch, tmp_path):
-    """The happy path is unchanged: a live CLI login still bootstraps our own copy."""
+def test_import_takes_ownership_by_rotating_on_the_way_in(monkeypatch, tmp_path):
+    """The explicit handover: import refreshes immediately, so only we hold a live token."""
     cli = tmp_path / "codex_auth.json"
-    fresh = _jwt({"exp": time.time() + 3600})
-    cli.write_text(json.dumps({"tokens": {"access_token": fresh, "refresh_token": "r-live", "account_id": "acct-live"}}))
+    cli.write_text(
+        json.dumps({"tokens": {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r-cli", "account_id": "acct-1"}})
+    )
     monkeypatch.setattr(oauth_mod, "_CODEX_CLI_AUTH_FILE", cli)
     store = tmp_path / "codex-oauth.json"
     monkeypatch.setattr(oauth_mod, "_codex_store_path", lambda paths: store)
+    minted = _jwt({"exp": time.time() + 3600})
+    stub = _CodexRefreshStub({"r-cli": minted})
+    monkeypatch.setattr(oauth_mod.httpx, "post", stub)
 
-    creds = resolve_codex_oauth(paths=types.SimpleNamespace(config_dir=tmp_path))
-    assert creds.access_token == fresh
-    assert store.exists()
+    result = oauth_mod.import_codex_cli_credential(paths=types.SimpleNamespace(config_dir=tmp_path))
+
+    assert result["cli_needs_relogin"] is True
+    assert stub.sent == ["r-cli"]  # rotated on the way in — the CLI's copy is now dead
+    saved = json.loads(store.read_text())
+    assert saved["tokens"]["access_token"] == minted
+    assert saved["tokens"]["refresh_token"] == "r-cli-rotated"
+    assert saved["provenance"] == oauth_mod.PROVENANCE_CLI_BOOTSTRAP
+    # And the CLI's own file is never written.
+    assert json.loads(cli.read_text())["tokens"]["refresh_token"] == "r-cli"
+
+
+def test_import_refuses_a_stale_cli_login(monkeypatch, tmp_path):
+    cli = tmp_path / "codex_auth.json"
+    cli.write_text(json.dumps({"tokens": {"access_token": _jwt({"exp": time.time() - 10}), "refresh_token": "r"}}))
+    monkeypatch.setattr(oauth_mod, "_CODEX_CLI_AUTH_FILE", cli)
+    monkeypatch.setattr(oauth_mod, "_codex_store_path", lambda paths: tmp_path / "s.json")
+    with pytest.raises(OAuthCredentialError, match="no usable login"):
+        oauth_mod.import_codex_cli_credential(paths=types.SimpleNamespace(config_dir=tmp_path))
 
 
 def test_codex_no_reimport_when_cli_holds_the_same_dead_token(monkeypatch, tmp_path):
@@ -1086,27 +1111,28 @@ def test_disconnect_is_idempotent(monkeypatch, tmp_path):
     assert second.removed is False  # nothing left to remove; still succeeds
 
 
-def test_disconnect_suppresses_cli_reimport_until_reconnect(monkeypatch, tmp_path):
-    """#2440 core: after an explicit disconnect, resolve must NOT silently re-bootstrap
-    from the Codex CLI until an in-console sign-in reconnects."""
+def test_disconnect_suppresses_reimport_until_reconnect(monkeypatch, tmp_path):
+    """#2440 core, now on the explicit path: a disconnected provider refuses import."""
     paths = types.SimpleNamespace(config_dir=tmp_path)
     cli = tmp_path / "codex_cli.json"
     cli.write_text(
-        json.dumps(
-            {"tokens": {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"}}
-        )
+        json.dumps({"tokens": {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"}})
     )
     _patch_codex(monkeypatch, paths, cli)
+    monkeypatch.setattr(oauth_mod.httpx, "post", _CodexRefreshStub({"r": _jwt({"exp": time.time() + 3600})}))
 
-    assert resolve_codex_oauth(paths).source == "codex_cli_bootstrap"  # imports once
+    oauth_mod.import_codex_cli_credential(paths)
+    assert resolve_codex_oauth(paths).source == "instance_store"
+
     monkeypatch.setattr(oauth_mod.httpx, "post", lambda url, **kw: types.SimpleNamespace(status_code=200))
     oauth_mod.disconnect("openai-codex", paths)
-
     with pytest.raises(OAuthCredentialError, match="disconnected"):
-        resolve_codex_oauth(paths)  # would previously re-import from the CLI — now suppressed
+        resolve_codex_oauth(paths)
 
-    oauth_mod.clear_disconnected("openai-codex", paths)  # an explicit sign-in clears the intent
-    assert resolve_codex_oauth(paths).source == "codex_cli_bootstrap"  # reconnect works
+    # An explicit import clears the intent, exactly as an in-console sign-in does.
+    monkeypatch.setattr(oauth_mod.httpx, "post", _CodexRefreshStub({"r": _jwt({"exp": time.time() + 3600})}))
+    oauth_mod.import_codex_cli_credential(paths)
+    assert resolve_codex_oauth(paths).source == "instance_store"
 
 
 def test_disconnect_marker_is_owner_only_on_posix(monkeypatch, tmp_path):
@@ -1175,32 +1201,24 @@ def test_disconnect_treats_legacy_no_provenance_store_as_borrowed(monkeypatch, t
     assert result.removed is True and result.revoked is False
 
 
-def test_bootstrap_stamps_cli_provenance_and_refresh_preserves_it(monkeypatch, tmp_path):
-    """Resolution's bootstrap write records cli_bootstrap; a later refresh
-    rewrite keeps it (a refresh rotates tokens, not ownership)."""
+def test_import_stamps_cli_provenance_and_refresh_preserves_it(monkeypatch, tmp_path):
+    """Import records cli_bootstrap; a later refresh keeps it (rotation isn't ownership)."""
     cli = tmp_path / "codex_auth.json"
-    fresh = _jwt({"exp": time.time() + 3600})
-    cli.write_text(json.dumps({"tokens": {"access_token": fresh, "refresh_token": "r", "account_id": "acct-1"}}))
+    cli.write_text(
+        json.dumps({"tokens": {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "acct-1"}})
+    )
     store = tmp_path / "codex-oauth.json"
     monkeypatch.setattr(oauth_mod, "_CODEX_CLI_AUTH_FILE", cli)
     monkeypatch.setattr(oauth_mod, "_codex_store_path", lambda paths: store)
+    monkeypatch.setattr(oauth_mod.httpx, "post", _CodexRefreshStub({"r": _jwt({"exp": time.time() + 3600})}))
 
-    resolve_codex_oauth(paths=types.SimpleNamespace(config_dir=tmp_path))
+    oauth_mod.import_codex_cli_credential(paths=types.SimpleNamespace(config_dir=tmp_path))
     assert json.loads(store.read_text())["provenance"] == "cli_bootstrap"
 
-    # Force a refresh rewrite; provenance must survive.
-    stale = _jwt({"exp": time.time() - 10})
     doc = json.loads(store.read_text())
-    doc["tokens"]["access_token"] = stale
+    doc["tokens"]["access_token"] = _jwt({"exp": time.time() - 10})
     store.write_text(json.dumps(doc))
-
-    class _Resp:
-        status_code = 200
-
-        def json(self):
-            return {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r2"}
-
-    monkeypatch.setattr(oauth_mod.httpx, "post", lambda url, **kw: _Resp())
+    monkeypatch.setattr(oauth_mod.httpx, "post", _CodexRefreshStub({"r-rotated": _jwt({"exp": time.time() + 3600})}))
     resolve_codex_oauth(paths=types.SimpleNamespace(config_dir=tmp_path))
     assert json.loads(store.read_text())["provenance"] == "cli_bootstrap"
 
@@ -1386,3 +1404,154 @@ def test_a_broken_store_read_keeps_the_working_token(monkeypatch):
     llm._refresh_oauth_token()  # must not raise
 
     assert llm._client.auth_token == "cc-GOOD"
+
+
+# ── credential scope: box store shared by every instance, instance overrides ────
+#
+# A ChatGPT/Claude login belongs to the person at the machine, not to one instance.
+# Per-instance copies meant a console sign-in on `default` left the desktop app's other
+# servers importing (and burning) the vendor CLI's single-use token.
+
+
+def test_codex_store_defaults_to_the_box_when_the_instance_has_none(monkeypatch, tmp_path):
+    box, inst = tmp_path / "box", tmp_path / "inst"
+    inst.mkdir()
+    monkeypatch.setattr(oauth_mod, "box_root", lambda: box)
+    got = oauth_mod._codex_store_path(types.SimpleNamespace(config_dir=inst))
+    assert got == box / "codex-oauth.json"
+
+
+def test_codex_instance_store_overrides_the_box_when_present(monkeypatch, tmp_path):
+    box, inst = tmp_path / "box", tmp_path / "inst"
+    box.mkdir()
+    inst.mkdir()
+    (box / "codex-oauth.json").write_text("{}")
+    (inst / "codex-oauth.json").write_text("{}")
+    monkeypatch.setattr(oauth_mod, "box_root", lambda: box)
+    got = oauth_mod._codex_store_path(types.SimpleNamespace(config_dir=inst))
+    assert got == inst / "codex-oauth.json"
+
+
+def test_anthropic_store_follows_the_same_scope_rule(monkeypatch, tmp_path):
+    box, inst = tmp_path / "box", tmp_path / "inst"
+    inst.mkdir()
+    monkeypatch.setattr(oauth_mod, "box_root", lambda: box)
+    paths = types.SimpleNamespace(config_dir=inst)
+    assert oauth_mod._anthropic_store_path(paths) == box / "anthropic-oauth.json"
+    (inst / "anthropic-oauth.json").write_text("{}")
+    assert oauth_mod._anthropic_store_path(paths) == inst / "anthropic-oauth.json"
+
+
+def test_one_box_signin_serves_every_instance(monkeypatch, tmp_path):
+    """The whole point: sign in once, and an instance that never signed in resolves."""
+    box = tmp_path / "box"
+    box.mkdir()
+    fresh = _jwt({"exp": time.time() + 3600})
+    (box / "codex-oauth.json").write_text(
+        json.dumps({"tokens": {"access_token": fresh, "refresh_token": "r-box", "account_id": "acct-box"}})
+    )
+    monkeypatch.setattr(oauth_mod, "box_root", lambda: box)
+    monkeypatch.setattr(oauth_mod, "_CODEX_CLI_AUTH_FILE", tmp_path / "no-cli.json")
+
+    for name in ("default", "dev", "desktop-1"):
+        cfg = tmp_path / name
+        cfg.mkdir()
+        creds = resolve_codex_oauth(paths=types.SimpleNamespace(config_dir=cfg))
+        assert creds.access_token == fresh
+        assert creds.account_id == "acct-box"
+        # Nothing was written into the instance — it reads the shared store in place.
+        assert not (cfg / "codex-oauth.json").exists()
+
+
+def test_codex_adopts_a_token_a_peer_process_just_rotated(monkeypatch, tmp_path):
+    """Two processes share the box store; the loser's 401 is not a dead login."""
+    store = tmp_path / "codex-oauth.json"
+    stale = _jwt({"exp": time.time() - 10})
+    store.write_text(json.dumps({"tokens": {"access_token": stale, "refresh_token": "r-mine", "account_id": "a"}}))
+    monkeypatch.setattr(oauth_mod, "_codex_store_path", lambda paths: store)
+    monkeypatch.setattr(oauth_mod, "_CODEX_CLI_AUTH_FILE", tmp_path / "no-cli.json")
+
+    winner = _jwt({"exp": time.time() + 3600})
+
+    def _post(url, **kw):
+        # Our spend is refused — a peer got there first and left its result on disk.
+        store.write_text(
+            json.dumps({"tokens": {"access_token": winner, "refresh_token": "r-peer", "account_id": "a"}})
+        )
+        return types.SimpleNamespace(status_code=401, json=lambda: {})
+
+    monkeypatch.setattr(oauth_mod.httpx, "post", _post)
+    creds = resolve_codex_oauth(paths=types.SimpleNamespace(config_dir=tmp_path))
+    assert creds.access_token == winner
+
+
+def test_file_lock_is_best_effort_and_never_raises(tmp_path):
+    """An unlockable filesystem degrades to the old behaviour, it does not fail a turn."""
+    with oauth_mod._file_lock(tmp_path / "nope" / "deep" / "store.json"):
+        pass  # must not raise even though the directory chain is created on demand
+
+
+# ── earliest_refresh_at: refresh when the PROVIDER says, not on our own skew ────
+#
+# Access tokens last ~10 days and OpenAI returns `earliest_refresh_at` about a day
+# before expiry. Honouring it turns refresh from a per-boot expiry check into a
+# roughly once-per-nine-days event, which is what makes a race over a single-use
+# token rare rather than routine.
+
+
+def test_a_live_token_before_the_earliest_mark_is_not_refreshed():
+    tokens = {"access_token": _jwt({"exp": time.time() + 86400}), "earliest_refresh_at": time.time() + 3600}
+    assert oauth_mod._codex_needs_refresh(tokens, 120) is False
+
+
+def test_a_live_token_past_the_earliest_mark_is_refreshed():
+    tokens = {"access_token": _jwt({"exp": time.time() + 86400}), "earliest_refresh_at": time.time() - 1}
+    assert oauth_mod._codex_needs_refresh(tokens, 120) is True
+
+
+def test_expiry_overrides_a_stale_earliest_mark():
+    """A hint that outlives its token must never strand a caller."""
+    tokens = {"access_token": _jwt({"exp": time.time() + 10}), "earliest_refresh_at": time.time() + 999_999}
+    assert oauth_mod._codex_needs_refresh(tokens, 120) is True
+
+
+def test_without_the_hint_the_decision_is_expiry_only():
+    assert oauth_mod._codex_needs_refresh({"access_token": _jwt({"exp": time.time() + 86400})}, 120) is False
+    assert oauth_mod._codex_needs_refresh({"access_token": _jwt({"exp": time.time() - 1})}, 120) is True
+    assert oauth_mod._codex_needs_refresh({"access_token": ""}, 120) is True
+
+
+def test_a_non_numeric_hint_is_ignored_rather_than_trusted():
+    tokens = {"access_token": _jwt({"exp": time.time() + 86400}), "earliest_refresh_at": "soon"}
+    assert oauth_mod._codex_needs_refresh(tokens, 120) is False
+
+
+def test_the_hint_is_persisted_by_a_refresh(monkeypatch, tmp_path):
+    """Every process on the box must see the same answer, so it rides the store."""
+    store = tmp_path / "codex-oauth.json"
+    store.write_text(
+        json.dumps({"tokens": {"access_token": _jwt({"exp": time.time() - 10}), "refresh_token": "r", "account_id": "a"}})
+    )
+    monkeypatch.setattr(oauth_mod, "_codex_store_path", lambda paths: store)
+    mark = time.time() + 777_777
+
+    def _post(url, **kw):
+        return types.SimpleNamespace(
+            status_code=200,
+            json=lambda: {
+                "access_token": _jwt({"exp": time.time() + 86400}),
+                "refresh_token": "r2",
+                "earliest_refresh_at": mark,
+            },
+        )
+
+    monkeypatch.setattr(oauth_mod.httpx, "post", _post)
+    resolve_codex_oauth(paths=types.SimpleNamespace(config_dir=tmp_path))
+    assert json.loads(store.read_text())["tokens"]["earliest_refresh_at"] == mark
+
+    # And the next resolution honours it instead of refreshing again.
+    def _never(*a, **kw):
+        raise AssertionError("a token before its earliest_refresh_at must not be refreshed")
+
+    monkeypatch.setattr(oauth_mod.httpx, "post", _never)
+    resolve_codex_oauth(paths=types.SimpleNamespace(config_dir=tmp_path))

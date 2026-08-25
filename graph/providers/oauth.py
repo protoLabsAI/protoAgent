@@ -35,13 +35,17 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from infra.paths import InstancePaths, atomic_write, instance_paths
+from infra.paths import InstancePaths, atomic_write, box_root, harden_private_file, instance_paths
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 log = logging.getLogger("protoagent.providers.oauth")
 
@@ -69,6 +73,57 @@ def _store_lock(path: Path) -> threading.Lock:
         if lock is None:
             lock = _STORE_LOCKS[key] = threading.Lock()
         return lock
+
+
+@contextmanager
+def _file_lock(path: Path) -> "Iterator[None]":
+    """Best-effort EXCLUSIVE cross-process lock on ``path``'s sidecar, or a no-op.
+
+    ``_store_lock`` is a ``threading.Lock`` — it serializes consumers inside ONE
+    process. Once a credential store is shared by every instance on the machine, the
+    racers are separate SERVER PROCESSES (the desktop app alone runs several), and a
+    single-use refresh token spent twice is a 401 for whoever loses. This closes that
+    window.
+
+    Deliberately best-effort: correctness does not depend on it. A refusal that slips
+    through is still recovered by re-reading the store and adopting whatever the winner
+    wrote (see ``resolve_codex_oauth``), so an unlockable filesystem — a network mount,
+    an exotic platform — degrades to the pre-existing behaviour rather than failing the
+    turn."""
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    fh = None
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fh = open(lock_path, "a+", encoding="utf-8")  # noqa: SIM115 — released in the finally below
+        harden_private_file(lock_path)
+        if sys.platform == "win32":
+            import msvcrt
+
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+    except Exception:  # noqa: BLE001 — a lock we cannot take must not break auth
+        log.debug("[oauth] cross-process lock unavailable for %s", lock_path, exc_info=True)
+    try:
+        yield
+    finally:
+        if fh is not None:
+            try:
+                if sys.platform == "win32":
+                    import msvcrt
+
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            except Exception:  # noqa: BLE001
+                pass
+            fh.close()
 
 
 def _disconnect_marker_path(paths: InstancePaths) -> Path:
@@ -203,9 +258,17 @@ def _creds_from_claude_doc(doc: dict[str, Any], source: str) -> AnthropicOAuthCr
     return AnthropicOAuthCreds(access_token=token, source=source, expires_at=expires_at)
 
 
+def _anthropic_box_store() -> Path:
+    return box_root() / "anthropic-oauth.json"
+
+
 def _anthropic_store_path(paths: InstancePaths | None = None) -> Path:
-    """protoAgent's own Claude token copy (from in-console sign-in), instance-scoped."""
-    return (paths or instance_paths()).config_dir / "anthropic-oauth.json"
+    """protoAgent's own Claude token copy: an instance override if one exists, else box.
+
+    Same scope rule as the Codex store above, for the same reason — one console sign-in
+    should serve every instance on the machine, not just the one you happened to open."""
+    instance = (paths or instance_paths()).config_dir / "anthropic-oauth.json"
+    return instance if instance.exists() else _anthropic_box_store()
 
 
 def _read_anthropic_store() -> dict[str, Any] | None:
@@ -336,9 +399,34 @@ class CodexOAuthCreds:
     source: str  # "instance_store" | "codex_cli_bootstrap"
 
 
+# A ChatGPT or Claude login belongs to the PERSON at this machine, not to one agent
+# instance. Keeping the copy per-instance meant a console sign-in on `default` did
+# nothing for the desktop app's other servers, the dev sandbox, or any other instance:
+# each one fell back to importing the vendor CLI's single-use token and burning it for
+# the rest (#3112). So the store lives at the BOX tier — beside `host-config.yaml` and
+# the other things every instance on this machine already shares — and an instance-local
+# file, when one exists, overrides it.
+#
+# Mirrors Hermes's credential pool (profile entries win, the global root is the fallback
+# "so workers spawned in a profile can see providers that were only authenticated at
+# global scope"), with the default flipped to box: Hermes profiles are deliberate
+# isolation, whereas protoAgent instances are mostly incidental.
+
+
+def _codex_box_store() -> Path:
+    return box_root() / "codex-oauth.json"
+
+
 def _codex_store_path(paths: InstancePaths) -> Path:
-    """Our own Codex token copy, instance-scoped (dev and prod never share)."""
-    return paths.config_dir / "codex-oauth.json"
+    """The Codex store to read AND write: an instance override if one exists, else box.
+
+    Existence is the whole switch, which is what keeps this a no-op upgrade — every
+    instance that already has its own file keeps using it, and only instances that never
+    had one start sharing. Writing back to whichever we read means a per-instance account
+    stays per-instance rather than silently migrating to the shared one on first refresh.
+    """
+    instance = paths.config_dir / "codex-oauth.json"
+    return instance if instance.exists() else _codex_box_store()
 
 
 def _b64url_json(segment: str) -> dict[str, Any]:
@@ -381,6 +469,24 @@ def _jwt_is_expiring(access_token: str, skew_s: int) -> bool:
     if not isinstance(exp, (int, float)):
         return True
     return float(exp) <= time.time() + skew_s
+
+
+def _codex_needs_refresh(tokens: dict[str, Any], skew_s: int) -> bool:
+    """Should we spend the refresh token now?
+
+    Two signals, and the provider's wins while the access token is still usable:
+    OpenAI's ``earliest_refresh_at`` says the soonest it wants to hear from us, so a
+    token that is live and before that mark is simply used. Once the access token is
+    genuinely within ``skew_s`` of expiry we refresh regardless — a stale
+    ``earliest_refresh_at`` must never strand a caller.
+    """
+    access = str(tokens.get("access_token", "") or "").strip()
+    if not access or _jwt_is_expiring(access, skew_s):
+        return True
+    earliest = tokens.get("earliest_refresh_at")
+    if isinstance(earliest, (int, float)):
+        return time.time() >= float(earliest)
+    return False
 
 
 def _read_codex_tokens(path: Path) -> dict[str, Any] | None:
@@ -453,6 +559,13 @@ def _refresh_codex_tokens(tokens: dict[str, Any], *, timeout_s: float = 20.0) ->
         )
     updated = dict(tokens)
     updated["access_token"] = new_access
+    # OpenAI returns `earliest_refresh_at` — an explicit "do not refresh before this",
+    # about a day ahead of a 10-day access token. Honouring it turns refresh from a
+    # per-boot expiry check into a roughly once-per-nine-days event, which is the real
+    # reason concurrent refreshes were ever common enough to notice. Kept alongside the
+    # tokens so every process on the box sees the same answer.
+    if isinstance(payload.get("earliest_refresh_at"), (int, float)):
+        updated["earliest_refresh_at"] = float(payload["earliest_refresh_at"])
     if isinstance(payload.get("refresh_token"), str) and payload["refresh_token"].strip():
         updated["refresh_token"] = payload["refresh_token"].strip()
     if isinstance(payload.get("id_token"), str) and payload["id_token"].strip():
@@ -524,6 +637,22 @@ def _usable_cli_tokens() -> dict[str, Any] | None:
     return tokens
 
 
+def _peer_rotated_tokens(store: Path, spent: dict[str, Any]) -> dict[str, Any] | None:
+    """The store's CURRENT tokens when a peer process rotated them under us, else None.
+
+    With a box-level store the racers are separate processes, so the losing one's 401 is
+    routinely not "the login is dead" but "someone else just refreshed". Re-reading costs
+    a file read and turns that into a success."""
+    current = _read_codex_tokens(store)
+    if not current:
+        return None
+    if not str(current.get("access_token", "") or "").strip():
+        return None
+    ours = str(spent.get("refresh_token", "") or "").strip()
+    theirs = str(current.get("refresh_token", "") or "").strip()
+    return current if theirs and theirs != ours else None
+
+
 def _cli_recovery_tokens(
     exc: OAuthCredentialError,
     source: str,
@@ -585,43 +714,55 @@ def resolve_codex_oauth(paths: InstancePaths | None = None) -> CodexOAuthCreds:
 
     # Fast path: a warm, unexpired store read needs neither the lock nor a write.
     tokens = _read_codex_tokens(store)
-    if tokens:
-        access = str(tokens.get("access_token", "") or "").strip()
-        if access and not _jwt_is_expiring(access, _CODEX_REFRESH_SKEW_S):
-            return _creds(tokens, access, "instance_store")
+    if tokens and not _codex_needs_refresh(tokens, _CODEX_REFRESH_SKEW_S):
+        return _creds(tokens, str(tokens["access_token"]).strip(), "instance_store")
 
     # Slow path: refresh or first bootstrap — serialized so single-use refresh is spent once.
-    with _store_lock(store):
+    with _store_lock(store), _file_lock(store):
         tokens = _read_codex_tokens(store)  # re-read: a peer may have refreshed while we waited
         source = "instance_store"
         if tokens is None:
-            # Respect an explicit disconnect: do NOT silently re-import the Codex CLI's
-            # credential until an in-console sign-in reconnects (#2440).
             if is_disconnected("openai-codex", paths):
                 raise OAuthCredentialError(
                     "Codex is disconnected in protoAgent. Sign in again to reconnect.",
                     provider="openai-codex",
                 )
-            tokens = _usable_cli_tokens()
-            source = "codex_cli_bootstrap"
-            if tokens is None:
-                raise OAuthCredentialError(
-                    "No usable Codex credential. Run `codex login`, then retry — "
-                    "protoAgent imports that login once and keeps its own refreshed copy. "
-                    "A Codex CLI login whose own token has already expired is deliberately "
-                    "NOT imported: its refresh token is single-use and has almost certainly "
-                    "been spent, so importing it would surface a 401 about a refresh instead "
-                    "of telling you to sign in. Note that `codex login status` reports a "
-                    "long-dead login as healthy — trust the file, not the command.",
-                    provider="openai-codex",
-                )
+            # NO silent import. A refresh token is single-use, so reading the Codex
+            # CLI's file makes two applications hold one secret with no way to
+            # coordinate — we cannot lock the CLI, and whichever refreshes first
+            # silently kills the other. Every 401 this module has had to survive came
+            # from that, so ownership is now explicit: protoAgent uses a credential it
+            # minted (console device sign-in) or one the operator deliberately handed
+            # over (`import_codex_cli_credential`, which takes ownership immediately).
+            raise OAuthCredentialError(
+                "Not signed in to ChatGPT. Sign in from the console — Settings ▸ Model ▸ "
+                "Connected account — which mints protoAgent's own credential and never "
+                "touches the Codex CLI's. If you would rather hand over the login the "
+                "Codex CLI already holds, import it explicitly; that transfers ownership, "
+                "so the CLI itself will need `codex login` afterwards.",
+                provider="openai-codex",
+            )
 
         access = str(tokens.get("access_token", "") or "").strip()
         refreshed = False
-        if not access or _jwt_is_expiring(access, _CODEX_REFRESH_SKEW_S):
+        if _codex_needs_refresh(tokens, _CODEX_REFRESH_SKEW_S):
             try:
                 tokens = _refresh_codex_tokens(tokens)
             except OAuthCredentialError as exc:
+                # A peer PROCESS sharing the box store may have rotated the token
+                # between our read and our spend — the file on disk is then already the
+                # answer. Cheaper and more likely than the CLI path below, so try it
+                # first; unlike the CLI it needs no freshness test, because whatever a
+                # peer just wrote is by construction newer than what we spent.
+                peer = _peer_rotated_tokens(store, tokens) if exc.relogin else None
+                if peer is not None:
+                    log.info("[codex] refresh token was rotated by a peer process; adopting its result.")
+                    tokens = peer
+                    access = str(tokens["access_token"]).strip()
+                    if not access or _jwt_is_expiring(access, _CODEX_REFRESH_SKEW_S):
+                        tokens = _refresh_codex_tokens(tokens)
+                        access = str(tokens["access_token"]).strip()
+                    return _creds(tokens, access, "instance_store")
                 recovered = _cli_recovery_tokens(exc, source, tokens, paths)
                 if recovered is None:
                     raise
@@ -644,6 +785,40 @@ def resolve_codex_oauth(paths: InstancePaths | None = None) -> CodexOAuthCreds:
         elif refreshed:
             _write_codex_store(store, tokens)
         return _creds(tokens, access, "instance_store" if refreshed else source)
+
+
+def import_codex_cli_credential(paths: InstancePaths | None = None) -> dict[str, Any]:
+    """Take over the login the Codex CLI holds. Explicit, operator-initiated only.
+
+    An OAuth refresh token is single-use, so two applications cannot both hold one
+    live. Importing therefore *transfers* the login rather than copying it: we refresh
+    immediately, which rotates the token to one only protoAgent knows, and the Codex
+    CLI's own copy is dead from that moment. That consequence is real and is why this
+    is never automatic — silently breaking another application the operator relies on
+    is not ours to do. The caller is expected to have said so in the UI.
+
+    Returns ``{"account_id": …, "cli_needs_relogin": True}``.
+    """
+    paths = paths or instance_paths()
+    store = _codex_store_path(paths)
+    tokens = _usable_cli_tokens()
+    if tokens is None:
+        raise OAuthCredentialError(
+            "The Codex CLI has no usable login to import — its stored token is missing or "
+            "already expired. Sign in from the console instead (that mints protoAgent's own "
+            "credential), or run `codex login` first if you specifically want to hand that "
+            "login over. Note `codex login status` reports a long-dead login as healthy.",
+            provider="openai-codex",
+        )
+    with _store_lock(store), _file_lock(store):
+        # Refresh AS PART OF the import, not later: until we have rotated, both
+        # applications believe they hold a live token and the first to refresh kills the
+        # other. Rotating here makes the handover atomic from the operator's point of view.
+        tokens = _refresh_codex_tokens(tokens)
+        _write_codex_store(store, tokens, provenance=PROVENANCE_CLI_BOOTSTRAP)
+    clear_disconnected("openai-codex", paths)
+    log.info("[codex] imported the Codex CLI login and rotated it; the CLI now needs `codex login`.")
+    return {"account_id": _codex_account_id(tokens) or "", "cli_needs_relogin": True}
 
 
 # ── Disconnect / revoke lifecycle (#2440) ─────────────────────────────────────
@@ -687,11 +862,19 @@ def disconnect(provider: str, paths: InstancePaths | None = None) -> DisconnectR
     """Idempotent disconnect for a native OAuth provider (#2440).
 
     Attempts best-effort remote revocation for protoAgent-owned tokens, ALWAYS deletes
-    protoAgent's own instance-scoped credential store (even when revocation fails), and
+    protoAgent's own credential store (even when revocation fails), and
     marks the provider disconnected so it won't auto-resolve until an in-console sign-in
     reconnects it. The vendor CLI's own auth file (``~/.codex/auth.json`` /
     ``~/.claude/.credentials.json``) is never modified. Takes the same per-store lock as
     resolution, so it can't race a refresh that would rewrite the store after deletion.
+
+    **Scope note:** the store deleted is whichever one resolution reads — an instance
+    override when that instance has its own file, otherwise the BOX store shared by every
+    instance on this machine. Disconnecting a shared login therefore disconnects it
+    everywhere, which is the honest reading of "disconnect my ChatGPT account" but is not
+    what a per-instance mental model expects; ``DisconnectResult.note`` says which
+    happened so the console can too. The *marker* that suppresses re-import stays
+    per-instance either way.
     """
     provider = (provider or "").strip().lower()
     paths = paths or instance_paths()
@@ -720,6 +903,8 @@ def disconnect(provider: str, paths: InstancePaths | None = None) -> DisconnectR
             )
         else:
             note = "removed protoAgent's local copy (remote revoke did not confirm)"
+        if existed and store == _codex_box_store():
+            note += " (the shared login for every instance on this machine)"
         return DisconnectResult(provider, removed=existed, revoked=revoked, note=note)
     if provider == "anthropic-oauth":
         store = _anthropic_store_path(paths)

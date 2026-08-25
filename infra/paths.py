@@ -587,6 +587,15 @@ def _app_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def box_root() -> Path:
+    """Public alias for :func:`_box_root` — the machine-shared base.
+
+    Anything owned by the PERSON at this machine rather than by one agent (the Host
+    cascade layer, the commons, OAuth credentials) resolves through here.
+    """
+    return _box_root()
+
+
 def _box_root() -> Path:
     """Machine-shared base: ``PROTOAGENT_BOX_ROOT`` override else ``data_home()``.
     Never scoped — the Host cascade layer + commons live here, inherited by every
