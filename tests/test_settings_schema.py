@@ -59,12 +59,12 @@ def test_schema_groups_and_values():
     # #1386 — every CORE entry carries options_source so the console knows which dropdowns to
     # refresh from a freshly-probed gateway ("Get models"). Model-backed → "models"/"models+acp".
     assert all("options_source" in f for f in fields if f["key"] in core_keys)
-    assert model["options_source"] == "models"
+    # ADR 0106: the lead model names its connection like any other slot.
+    assert model["options_source"] == "slot_models"
     # ACP aliases are no longer OFFERED in the aux/compaction/eval dropdowns
     # (deprecated with the runtime) — typed legacy values still validate (string).
-    # Slot fields moved to "slot_models": they offer CROSS-PROVIDER `<provider>:<model>`
-    # options, while model.name keeps the single-provider bare list (the main model
-    # belongs to model.provider, so a qualified value there is a misconfiguration).
+    # Every model slot speaks CROSS-PROVIDER `<provider>:<model>` options now — including
+    # model.name, since ADR 0106 removed the single lead provider it used to belong to.
     assert next(f for f in fields if f["key"] == "routing.aux_model")["options_source"] == "slot_models"
     # The runtime select is deprecated: never rendered, but still a known key so a
     # legacy `agent_runtime: acp:*` round-trips and the wizard's explicit
@@ -154,7 +154,10 @@ def test_secrets_are_redacted_with_is_set():
     fields = {f["key"]: f for g in build_schema(cfg) for f in g["fields"]}
     tok = fields["auth.token"]
     assert tok["type"] == "secret" and tok["value"] == "" and tok["is_set"] is True
-    assert fields["model.api_key"]["is_set"] is False  # default blank
+    # model.api_key is no longer RENDERED (Connections owns keys, ADR 0106) — the
+    # redaction contract above is asserted on auth.token, which still is. That the
+    # retired key still round-trips redacted is covered by the config_to_dict golden.
+    assert "model.api_key" not in fields
 
 
 def test_current_values_reflect_config():

@@ -13,6 +13,7 @@ YAML (or swap the gateway alias) per agent without code changes.
 import copy
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -124,14 +125,27 @@ _SCALAR_MODEL_SLOTS = (
 _SUBAGENT_MODEL_SLOTS = ("researcher",)
 
 
-def _is_gateway_alias(model_value) -> bool:
+def _is_gateway_alias(model_value, config=None) -> bool:
     """Is ``model_value`` a bare gateway alias — a '/'-namespaced id (`protolabs/reasoning`)
     with no explicit slot-provider prefix? A native id (`claude-opus-4-6`) or an
-    explicitly-routed slot (`gateway:…`, `acp:…`) is NOT one."""
+    explicitly-routed slot (`gateway:…`, `acp:…`) is NOT one.
+
+    A value naming a REGISTERED connection (ADR 0106) is never one either, however many
+    slashes follow: `prod-gateway:protolabs/reasoning` says where it runs, so it cannot
+    be incoherent with a lead provider — that is the whole point of qualifying it. The
+    hardcoded prefix tuple only knows the three legacy lanes, so without the registry
+    check a custom connection id read as a bare alias and the coherence warning fired on
+    a perfectly routable value."""
     v = str(model_value or "").strip()
     if not v or "/" not in v:
         return False
-    return not v.lower().startswith(_SLOT_ROUTE_PREFIXES)
+    if v.lower().startswith(_SLOT_ROUTE_PREFIXES):
+        return False
+    if config is not None:
+        prefix = v.partition(":")[0].strip().lower()
+        if prefix and prefix in {p.id for p in getattr(config, "providers", []) or []}:
+            return False
+    return True
 
 
 def _native_provider_without_gateway(config) -> bool:
@@ -160,17 +174,17 @@ def _detect_incoherent_slots(config) -> list[str]:
     if not _native_provider_without_gateway(config):
         return []
     flagged: list[str] = []
-    if _is_gateway_alias(getattr(config, "model_name", "")):
+    if _is_gateway_alias(getattr(config, "model_name", ""), config):
         flagged.append(f"model.name={config.model_name!r} (lead)")
     for label, attr in _SCALAR_MODEL_SLOTS:
-        if _is_gateway_alias(getattr(config, attr, "")):
+        if _is_gateway_alias(getattr(config, attr, ""), config):
             flagged.append(f"{label}={getattr(config, attr)!r}")
     for name in _SUBAGENT_MODEL_SLOTS:
         sub = getattr(config, name, None)
-        if isinstance(sub, SubagentDef) and _is_gateway_alias(sub.model):
+        if isinstance(sub, SubagentDef) and _is_gateway_alias(sub.model, config):
             flagged.append(f"subagents.{name}.model={sub.model!r}")
     for m in getattr(config, "routing_fallback_models", None) or []:
-        if _is_gateway_alias(m):
+        if _is_gateway_alias(m, config):
             flagged.append(f"routing.fallback_models[{m!r}]")
     return flagged
 
@@ -192,13 +206,13 @@ def _reconcile_slot_providers(config) -> list[str]:
     if not flagged:
         return []
     for _label, attr in _SCALAR_MODEL_SLOTS:
-        if _is_gateway_alias(getattr(config, attr, "")):
+        if _is_gateway_alias(getattr(config, attr, ""), config):
             setattr(config, attr, "")
     for name in _SUBAGENT_MODEL_SLOTS:
         sub = getattr(config, name, None)
-        if isinstance(sub, SubagentDef) and _is_gateway_alias(sub.model):
+        if isinstance(sub, SubagentDef) and _is_gateway_alias(sub.model, config):
             sub.model = ""
-    kept = [m for m in (config.routing_fallback_models or []) if not _is_gateway_alias(m)]
+    kept = [m for m in (config.routing_fallback_models or []) if not _is_gateway_alias(m, config)]
     if len(kept) != len(config.routing_fallback_models or []):
         config.routing_fallback_models = kept
     log.warning(
@@ -236,7 +250,19 @@ def _read_config_docs(p: Path) -> tuple[dict, dict, bool]:
         _warn_shadowed_host_keys(host_layer, agent_data)
         host_base = copy.deepcopy(host_layer)
         _drop_host_model_identity(host_base, agent_data)
+        # Captured BEFORE the merge: `_deep_merge_dicts` mutates `host_base` in place and
+        # lists REPLACE, so after it runs `host_base["providers"]` IS the agent's list.
+        # Reading it afterwards made the merge `(agent, agent)` and silently discarded
+        # every box-level connection — the exact inheritance this merge exists to keep.
+        host_providers = host_base.get("providers")
         merged = _deep_merge_dicts(host_base, agent_data)
+        # A list does not deep-merge: the agent leaf's `providers:` would REPLACE the
+        # box's outright, so an instance that adds one local connection would lose every
+        # shared one. Merge by id instead — the box supplies the connection, the instance
+        # may override any field of it or add its own.
+        merged["providers"] = _merge_provider_lists(host_providers, agent_data.get("providers"))
+        if not merged["providers"]:
+            merged.pop("providers")
     else:
         merged = agent_data
 
@@ -481,6 +507,27 @@ def _host_scoped_fields():
     return [f for f in FIELDS if getattr(f, "scope", "agent") == "host"]
 
 
+def _merge_provider_lists(host_entries, agent_entries) -> list:
+    """Host connections overlaid by the agent's, matched on ``id`` (ADR 0106).
+
+    Order follows the host list first, then anything the instance adds — stable, so a
+    picker built from it does not reshuffle when the box gains a connection."""
+    out: list = []
+    index: dict[str, int] = {}
+    for entry in list(host_entries or []) + list(agent_entries or []):
+        if not isinstance(entry, dict):
+            continue
+        pid = str(entry.get("id", "") or "").strip().lower()
+        if not pid:
+            continue
+        if pid in index:
+            out[index[pid]] = {**out[index[pid]], **entry}  # per-field override
+        else:
+            index[pid] = len(out)
+            out.append(dict(entry))
+    return out
+
+
 def _filter_to_host_keys(raw: dict) -> dict:
     """Keep only the host-scoped FIELDS keys present in a raw host-config doc.
 
@@ -492,6 +539,20 @@ def _filter_to_host_keys(raw: dict) -> dict:
         found, val = _get_dotted(raw, f.key)
         if found:
             _set_dotted(out, f.key, val)
+    # `providers:` is not a FIELDS key (it is a list of objects, ADR 0106) but IS
+    # box-shared, mirroring the host-scoped `model.api_base` it replaces: one endpoint
+    # per box, inherited by every instance on it. Keys are deliberately NOT carried —
+    # `model.api_key` is agent-scoped, so a connection's key comes from the instance's
+    # own secrets.yaml and the Host file must not be able to hand one out.
+    host_providers = raw.get("providers")
+    if isinstance(host_providers, list):
+        kept = []
+        for entry in host_providers:
+            if not isinstance(entry, dict):
+                continue
+            kept.append({k: v for k, v in entry.items() if k != "api_key"})
+        if kept:
+            out["providers"] = kept
     return out
 
 
@@ -555,6 +616,118 @@ class SubagentDef:
     model: str = ""
 
 
+# ── Provider registry (ADR 0106) ──────────────────────────────────────────────
+#
+# A provider is a CONNECTION, not a mode. `type` is the kind of connection
+# (`openai-compat`, `anthropic-oauth`, `openai-codex`); `id` is which one. Several
+# entries may share a type — that is the point, and what makes two gateways possible.
+#
+# Ids appear inside stored model values (`prod-gateway:protolabs/reasoning`), and via
+# the fleet host layer those values can live in ANOTHER instance's config, which a
+# rename cannot reach. So an id is chosen once and frozen; `label` carries the
+# ergonomics and is freely editable.
+
+PROVIDER_TYPE_OPENAI_COMPAT = "openai-compat"
+PROVIDER_TYPES = (PROVIDER_TYPE_OPENAI_COMPAT, "anthropic-oauth", "openai-codex")
+
+# No colon (it separates id from model in the slot grammar) and no slash (gateway
+# aliases contain them), so `split_slot_target` stays unambiguous by construction.
+_PROVIDER_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+
+def valid_provider_id(pid: str) -> bool:
+    return bool(_PROVIDER_ID_RE.match((pid or "").strip()))
+
+
+@dataclass
+class Provider:
+    """One configured connection to a model source."""
+
+    id: str
+    type: str = PROVIDER_TYPE_OPENAI_COMPAT
+    label: str = ""
+    base_url: str = ""
+    api_key: str = ""  # overlaid from secrets.yaml, like model.api_key was
+
+    def display(self) -> str:
+        return self.label.strip() or self.id
+
+    def as_dict(self, *, redact: bool = True) -> dict:
+        out = {"id": self.id, "type": self.type}
+        if self.label:
+            out["label"] = self.label
+        if self.base_url:
+            out["base_url"] = self.base_url
+        if self.api_key and not redact:
+            out["api_key"] = self.api_key
+        return out
+
+
+def _parse_providers(entries, secrets: dict) -> list[Provider]:
+    """YAML `providers:` → validated entries. Malformed ones are dropped WITH an
+    attributed warning rather than raising: a typo in one connection must not take the
+    agent down, and a silent drop would strand every slot that names it."""
+    out: list[Provider] = []
+    seen: set[str] = set()
+    secret_keys = secrets.get("providers") if isinstance(secrets.get("providers"), dict) else {}
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            log.warning("providers: skipping a non-mapping entry: %r", entry)
+            continue
+        pid = str(entry.get("id", "") or "").strip().lower()
+        if not valid_provider_id(pid):
+            log.warning("providers: skipping entry with invalid id %r (need [a-z0-9][a-z0-9_-]*)", entry.get("id"))
+            continue
+        if pid in seen:
+            log.warning("providers: duplicate id %r — keeping the first", pid)
+            continue
+        ptype = str(entry.get("type", "") or PROVIDER_TYPE_OPENAI_COMPAT).strip().lower()
+        if ptype not in PROVIDER_TYPES:
+            log.warning("providers: %r has unknown type %r — skipping", pid, ptype)
+            continue
+        seen.add(pid)
+        out.append(
+            Provider(
+                id=pid,
+                type=ptype,
+                label=str(entry.get("label", "") or ""),
+                base_url=str(entry.get("base_url", "") or "").strip(),
+                # Secret overlay mirrors model.api_key: secrets.yaml wins over inline.
+                api_key=str((secret_keys or {}).get(pid) or entry.get("api_key", "") or ""),
+            )
+        )
+    return out
+
+
+def _migrated_providers(config) -> list[Provider]:
+    """The registry a pre-ADR-0106 config implies.
+
+    Deliberately reuses the three lane names the qualified slot grammar already used
+    (#2574) as the ids — `gateway`, `anthropic-oauth`, `openai-codex` — so EVERY slot
+    value already stored keeps resolving to the same place and no fleet member's config
+    needs rewriting. The migration is as close to an identity function as it can be.
+    """
+    out: list[Provider] = []
+    base = (getattr(config, "api_base", "") or "").strip()
+    # Includes the env key: the migrated entry has to carry everything the legacy gateway
+    # ran on, because a REGISTERED connection is resolved strictly from its own fields —
+    # nothing downstream may borrow a global key on its behalf (that is how one
+    # connection's credential reaches another's endpoint).
+    key = (getattr(config, "api_key", "") or "").strip() or os.environ.get("OPENAI_API_KEY", "").strip()
+    if base or key:
+        out.append(Provider(id="gateway", type=PROVIDER_TYPE_OPENAI_COMPAT, label="Gateway", base_url=base, api_key=key))
+    lead = (getattr(config, "model_provider", "") or "").strip().lower()
+    if lead in ("anthropic-oauth", "openai-codex"):
+        out.append(Provider(id=lead, type=lead, label=_LEGACY_PROVIDER_LABELS[lead]))
+    return out
+
+
+_LEGACY_PROVIDER_LABELS = {
+    "anthropic-oauth": "Claude subscription",
+    "openai-codex": "ChatGPT subscription",
+}
+
+
 @dataclass
 class LangGraphConfig:
     # Model settings — route through the LiteLLM gateway by default
@@ -594,6 +767,10 @@ class LangGraphConfig:
     # order) instead of the gateway's full list. Console-consumed via the settings
     # schema; empty = no favorites, /model falls back to the full model list.
     model_favorites: list[str] = field(default_factory=list)
+    # The provider registry (ADR 0106). Empty in a pre-0106 config until `from_dict`
+    # migrates one in from the legacy `model.provider`/`api_base`/`api_key` fields, so
+    # code may assume it is populated after a load.
+    providers: list["Provider"] = field(default_factory=list)
 
     # Per-call timeout (seconds) on the model client + transient-retry cap. Bounds
     # a hung/slow gateway so a turn surfaces a clean error instead of blocking the
@@ -1571,6 +1748,15 @@ class LangGraphConfig:
         _hydrate_external_secrets(merged, secrets)
         return cls.from_dict(merged, secrets=secrets, config_dir=p.parent)
 
+    def provider_by_id(self, pid: str) -> "Provider | None":
+        """The registered connection named `pid`, or None. Case-insensitive."""
+        want = (pid or "").strip().lower()
+        return next((p for p in self.providers if p.id == want), None)
+
+    def provider_ids(self) -> list[str]:
+        """Registered ids, in config order — the whitelist the slot grammar parses against."""
+        return [p.id for p in self.providers]
+
     @classmethod
     def from_dict(
         cls,
@@ -1650,6 +1836,7 @@ class LangGraphConfig:
             max_tokens=model.get("max_tokens", cls.max_tokens),
             model_vision=model.get("vision", cls.model_vision),
             model_favorites=list(model.get("favorites", []) or []),
+            providers=_parse_providers(data.get("providers"), secrets),
             max_iterations=model.get("max_iterations", cls.max_iterations),
             turn_stall_timeout_seconds=model.get(
                 "turn_stall_timeout_seconds", cls.turn_stall_timeout_seconds
@@ -1951,6 +2138,12 @@ class LangGraphConfig:
         # at the first subagent dispatch. Surface it now and reconcile the fixable slots so
         # they inherit the coherent lead pair. Runs on every load path, so a provider
         # SWITCH (a reload with a new model.provider) reconciles the same way a load does.
+        # ADR 0106: a config with no `providers:` gets the registry its legacy fields
+        # imply, using the same three ids the slot grammar already used — so every
+        # stored `gateway:`/`anthropic-oauth:`/`openai-codex:` value keeps working and
+        # nothing downstream has to special-case "pre-registry config".
+        if not config.providers:
+            config.providers = _migrated_providers(config)
         _reconcile_slot_providers(config)
 
         return config

@@ -1007,10 +1007,23 @@ export type AgentConfig = {
   // Where turns run: "native" (the built-in LangGraph loop on the model gateway) or
   // "acp:<agent>" (hand each turn to a CLI coding agent over ACP — ADR 0033).
   agent_runtime?: string;
+  // The registry of model connections (ADR 0106). Setup writes exactly one; everything
+  // afterwards is managed in Settings ▸ Model ▸ Connections.
+  providers?: {
+    id: string;
+    type: string;
+    label?: string;
+    base_url?: string;
+    // Split out to secrets.yaml on write — it never lands in the tracked YAML.
+    api_key?: string;
+  }[];
   model: {
-    provider: string;
+    // Qualified: `<connection-id>:<model>`. `provider` / `api_base` / `api_key` are the
+    // pre-registry shape, still accepted so an older client keeps working, but setup no
+    // longer writes them.
     name: string;
-    api_base: string;
+    provider?: string;
+    api_base?: string;
     api_key?: string;
     temperature: number;
     max_tokens: number;

@@ -446,16 +446,15 @@ export const SETTINGS_SCHEMA = [
     category: "Model",
     fields: [
       // model.name is host-scoped + inherited from the host layer (inheritance badge). Its
-      // options are gateway-probed (options_source "models") — the "Get models" action (#1386)
-      // refreshes them from the form's api_base/key.
-      // model.provider drives WHERE "Get models" probes (#2518): "openai" = the gateway,
-      // a native OAuth provider (ADR 0097) = the subscription account (mock: CLAUDE_MODELS).
-      { key: "model.provider", label: "Provider", type: "select", section: "Model", restart: false, description: "", options: ["openai", "anthropic-oauth", "openai-codex"], value: "openai", default: "openai", scope: "host", source: "host" },
-      { key: "model.name", label: "Primary model", type: "select", section: "Model", restart: false, description: "", options: ["protolabs/reasoning", "protolabs/fast"], options_source: "models", value: "protolabs/reasoning", default: "protolabs/reasoning", scope: "host", source: "host" },
-      { key: "model.api_base", label: "Gateway base URL", type: "string", section: "Model", restart: false, description: "", options: [], value: "https://gw.example/v1", default: "", scope: "host", source: "host" },
+      // Primary model options are QUALIFIED and span every connection (options_source
+      // "slot_models", ADR 0106). `model.provider` / `model.api_base` / `model.api_key`
+      // are deliberately absent: they are `ui_hidden` in the real schema now — Settings ▸
+      // Model ▸ Connections owns endpoints and keys — so a fixture that still served them
+      // would be testing a page the backend cannot produce. The "Get models" action they
+      // fed is gone with them.
+      { key: "model.name", label: "Primary model", type: "select", section: "Model", restart: false, description: "", options: ["prod-gateway:protolabs/reasoning", "prod-gateway:protolabs/fast", "local-vllm:qwen3-32b"], options_source: "slot_models", value: "prod-gateway:protolabs/reasoning", default: "prod-gateway:protolabs/reasoning", scope: "host", source: "host" },
       // host-scoped but overridden in this agent (overridden-here badge + reset link).
       { key: "model.temperature", label: "Temperature", type: "number", section: "Model", restart: false, description: "", options: [], value: 0.2, default: 0.2, minimum: 0, maximum: 2, scope: "host", source: "agent" },
-      { key: "model.api_key", label: "API key", type: "secret", section: "Model", restart: false, description: "Stored in secrets.yaml.", options: [], value: "", is_set: true, scope: "agent", source: "agent" },
     ],
   },
   {

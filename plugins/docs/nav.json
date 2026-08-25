@@ -867,6 +867,10 @@
           "title": "0105 — Fleet-shared delegates: one roster on the box, every member's bench"
         },
         {
+          "path": "adr/0106-provider-registry.md",
+          "title": "0106 — Providers are a registry; every model reference names its provider"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }

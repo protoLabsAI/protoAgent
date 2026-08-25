@@ -43,21 +43,47 @@ const LANE_LABELS: Record<string, string> = {
 /** The lane a qualified value names ("anthropic-oauth:claude-sonnet-5" → that provider);
  *  "" for an unqualified name. Mirrors `split_slot_target` on the backend: only a KNOWN
  *  lane counts, so "openai/gpt-5" stays a gateway alias and never reads as a lane. */
-export function laneOf(value: string): string {
-  const i = value.indexOf(":");
-  if (i <= 0) return "";
-  const head = value.slice(0, i).trim().toLowerCase();
-  return head in LANE_LABELS ? head : "";
+// The lanes a value may name. The three in LANE_LABELS were the whole vocabulary when
+// there were exactly three; an operator can now register `prod-gateway` or `local-vllm`.
+// The set is DERIVED from the qualified options the server sent (their prefixes are
+// registered ids by construction) rather than guessed from the string's shape — the
+// backend only claims a prefix that names a registered connection, and a looser rule here
+// would disagree with it, reading `bedrock:anthropic.claude` as a lane when the runtime
+// treats it as a model name.
+export function lanesFromOptions(options: string[]): Set<string> {
+  const out = new Set(Object.keys(LANE_LABELS));
+  for (const opt of options) {
+    const i = (opt || "").indexOf(":");
+    if (i <= 0 || i >= opt.length - 1) continue;
+    const head = opt.slice(0, i).trim().toLowerCase();
+    // Pass SERVER-BUILT option lists only. Their prefixes are registered connection ids
+    // by construction, which is what keeps this agreeing with the backend — it claims a
+    // prefix only when it names a registered connection. Feeding arbitrary stored values
+    // in would register `bedrock` from a stored `bedrock:anthropic.claude` and display it
+    // as `anthropic.claude`, which the runtime would never do. The id-shape check is a
+    // second line: a gateway alias contains a slash and can never qualify.
+    if (/^[a-z0-9][a-z0-9_-]*$/.test(head)) out.add(head);
+  }
+  return out;
 }
 
-/** The human label for a lane id — "" for an unknown one, so a caller can just test it. */
+export function laneOf(value: string, known?: Set<string>): string {
+  const i = value.indexOf(":");
+  if (i <= 0 || i === value.length - 1) return "";
+  const head = value.slice(0, i).trim().toLowerCase();
+  const lanes = known ?? new Set(Object.keys(LANE_LABELS));
+  return lanes.has(head) ? head : "";
+}
+
 export function laneLabel(lane: string): string {
-  return LANE_LABELS[lane] ?? "";
+  // A registered connection the console has no canned name for is shown by its id — the
+  // operator chose it, so it is already the most meaningful label available here.
+  return LANE_LABELS[lane] ?? lane;
 }
 
 /** The model id without its lane prefix — what a card should actually be titled. */
-export function bareModel(value: string): string {
-  const lane = laneOf(value);
+export function bareModel(value: string, known?: Set<string>): string {
+  const lane = laneOf(value, known);
   return lane ? value.slice(lane.length + 1).trim() : value;
 }
 
@@ -66,7 +92,7 @@ const strings = (v: unknown): string[] =>
 
 /** Extract the picker's inputs from the settings schema (`GET /api/settings/schema`) —
  *  the SAME source the composer's model menu reads, so /model can never disagree with it. */
-export function modelPickerData(groups: SettingsGroup[]): ModelPickerData {
+export function modelPickerData(groups: SettingsGroup[], liveProvider = ""): ModelPickerData {
   const fields = groups.flatMap((g) => g.fields);
   const name = fields.find((f) => f.key === "model.name");
   const favs = fields.find((f) => f.key === "model.favorites");
@@ -81,7 +107,20 @@ export function modelPickerData(groups: SettingsGroup[]): ModelPickerData {
     // a second request — the schema already carries the answer.
     crossProvider: [...new Set(strings(favs?.options))],
     globalModel,
-    provider: typeof prov?.value === "string" ? prov.value.trim().toLowerCase() : "",
+    // `model.provider` is no longer RENDERED (ADR 0106 — Connections owns it), so reading
+    // it from the schema now yields "" and the subscription labels below would silently
+    // degrade to "gateway model". The primary model names its connection, so its lane is
+    // the better answer; the retired field stays as a fallback for an older backend that
+    // still renders it. Both disappear with the field itself.
+    // `model.provider` is `ui_hidden` (ADR 0106), so the schema no longer carries it and
+    // reading it alone made every subscription card on a legacy config read "gateway
+    // model". Order: the schema if an older backend still renders it, then the lane the
+    // primary model names, then the RUNTIME's live provider — which is the only source
+    // left once the field is gone, and the one the console already has.
+    provider:
+      (typeof prov?.value === "string" ? prov.value.trim().toLowerCase() : "") ||
+      laneOf(globalModel, lanesFromOptions(models)) ||
+      (liveProvider || "").trim().toLowerCase(),
   };
 }
 
@@ -101,8 +140,10 @@ export type ModelLaneGroup = { lane: string; label: string; items: string[] };
  * every row is chrome, not information. */
 export function groupByLane(choices: string[]): ModelLaneGroup[] {
   const groups: ModelLaneGroup[] = [];
+  // The choices themselves say which lanes exist — no second source to fall out of sync.
+  const known = lanesFromOptions(choices);
   for (const choice of choices) {
-    const lane = laneOf(choice);
+    const lane = laneOf(choice, known);
     const last = groups.find((g) => g.lane === lane);
     if (last) last.items.push(choice);
     else groups.push({ lane, label: laneLabel(lane), items: [choice] });
@@ -120,17 +161,37 @@ export function modelChoices(data: ModelPickerData): { choices: string[]; fromFa
 
 /** One-line card hint: the model's source (alias prefix, subscription label, or
  *  "gateway model") plus a "configured default" marker. */
-export function modelCardHint(alias: string, globalModel: string, provider = ""): string {
+/** Do these two model values select the same model, whichever way each is written?
+ *
+ *  "Is this the configured default?" is asked wherever a model is listed, and both sides
+ *  can now be qualified or bare: the primary model names its connection since ADR 0106,
+ *  while a favorite or a stored slot may still be bare — or the reverse. Comparing the
+ *  raw strings made the marker vanish whenever the two spellings disagreed, which is the
+ *  same defect twice: once when favorites were pinned qualified against a bare
+ *  `model.name`, and again when `model.name` itself became qualified.
+ *
+ *  Qualified-vs-qualified compares whole (a model on two connections is two choices);
+ *  otherwise the bare ids decide. */
+export function sameModel(a: string, b: string, known?: Set<string>): boolean {
+  const x = (a || "").trim();
+  const y = (b || "").trim();
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const lx = laneOf(x, known);
+  const ly = laneOf(y, known);
+  if (lx && ly) return false; // both name a connection and they differ
+  return bareModel(x, known) === bareModel(y, known);
+}
+
+export function modelCardHint(alias: string, globalModel: string, provider = "", known?: Set<string>): string {
   // A qualified value names its own lane, so that wins over everything: the whole point
   // is that this card may run on a DIFFERENT provider than the agent is configured for.
-  const lane = laneOf(alias);
+  const lane = laneOf(alias, known);
   const source = lane
-    ? LANE_LABELS[lane]
+    ? laneLabel(lane)
     : providerOf(alias) || SUBSCRIPTION_LABELS[provider] || "gateway model";
   const parts = [source];
-  // Compare on the bare id too: a favorite pinned as `gateway:protolabs/fast` IS the
-  // configured default when model.name is `protolabs/fast`.
-  if (alias === globalModel || (lane && bareModel(alias) === globalModel)) parts.push("configured default");
+  if (sameModel(alias, globalModel, known)) parts.push("configured default");
   return parts.join(" · ");
 }
 
@@ -138,6 +199,12 @@ export function modelCardHint(alias: string, globalModel: string, provider = "")
  *  effective model — preselects its card when it's among the choices. */
 export function modelFormPayload(data: ModelPickerData, current: string): HitlPayload {
   const { choices, fromFavorites } = modelChoices(data);
+  // Derived from the very choices these cards list, so the title, the hint and the
+  // "configured default" marker can never disagree about what counts as a lane.
+  // `choices` may be the operator's favorites, which can be stored bare; `data.models`
+  // and `data.crossProvider` are the schema's qualified option lists, so they carry the
+  // lane names authoritatively.
+  const knownLanes = lanesFromOptions([...data.models, ...data.crossProvider, ...choices]);
   const sourceLabel = data.crossProvider.length
     ? "every model you're signed in to"
     : SUBSCRIPTION_LABELS[data.provider]
@@ -158,14 +225,21 @@ export function modelFormPayload(data: ModelPickerData, current: string): HitlPa
             model: {
               type: "string",
               title: "Model",
-              ...(choices.includes(current) ? { default: current } : {}),
+              // Pre-select on MEANING, not spelling: the configured model may be written
+              // `prod-gateway:protolabs/reasoning` while the favorite listing it is bare
+              // (or the reverse). An exact `includes` left the picker with nothing
+              // selected the moment the two spellings diverged.
+              ...(() => {
+                const match = choices.find((c) => sameModel(c, current, knownLanes));
+                return match ? { default: match } : {};
+              })(),
               // `const` keeps the QUALIFIED value (that's what gets applied and saved);
               // the title shows the bare id, with the lane carried in the hint — a card
               // reading "anthropic-oauth:claude-sonnet-5" is noise, not information.
               oneOf: choices.map((m) => ({
                 const: m,
-                title: bareModel(m),
-                description: modelCardHint(m, data.globalModel, data.provider),
+                title: bareModel(m, knownLanes),
+                description: modelCardHint(m, data.globalModel, data.provider, knownLanes),
               })),
             },
           },
@@ -183,10 +257,17 @@ export function resolveModelArg(data: ModelPickerData, arg: string): string | nu
   if (!t) return null;
   const known = [...data.favorites, ...data.models, ...data.crossProvider];
   if (!known.length) return arg.trim();
+  // The lane set has to reach the bare-name comparison too. Without it `bareModel` only
+  // knew the three legacy lanes, so `/model qwen3-32b` could not find
+  // `local-vllm:qwen3-32b` — the fallback silently stopped working for exactly the custom
+  // connections this PR makes possible. Derived from the server-built lists, as everywhere.
+  const lanes = lanesFromOptions([...data.models, ...data.crossProvider]);
   // Exact match first (someone may type the qualified form), then the bare id — typing
   // `/model claude-sonnet-5` should find `anthropic-oauth:claude-sonnet-5` rather than
   // reporting it unknown.
   return (
-    known.find((m) => m.toLowerCase() === t) ?? known.find((m) => bareModel(m).toLowerCase() === t) ?? null
+    known.find((m) => m.toLowerCase() === t) ??
+    known.find((m) => bareModel(m, lanes).toLowerCase() === t) ??
+    null
   );
 }

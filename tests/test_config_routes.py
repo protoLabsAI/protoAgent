@@ -770,7 +770,7 @@ def test_available_models_route_reports_every_lane(monkeypatch):
     monkeypatch.setattr(
         rs.STATE, "graph_config", _t.SimpleNamespace(api_base="https://gw/v1", api_key="k"), raising=False
     )
-    monkeypatch.setattr("graph.config_io.list_gateway_models", lambda base, key: (["protolabs/coder"], ""))
+    monkeypatch.setattr("graph.config_io.list_gateway_models", lambda base, key, **kw: (["protolabs/coder"], ""))
     monkeypatch.setattr(
         discovery, "oauth_status", lambda p: discovery.OAuthStatus(p, p == "anthropic-oauth", "s", "", "hint")
     )

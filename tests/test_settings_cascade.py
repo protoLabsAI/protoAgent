@@ -775,3 +775,45 @@ def test_api_base_still_inherits_when_the_agent_names_a_model(tmp_path, monkeypa
     path = _agent_yaml(tmp_path, "model:\n  name: protolabs/smart\n")
 
     assert LangGraphConfig.from_yaml(path).api_base == "https://gw.example/v1"
+
+
+# ── provider registry across the cascade (ADR 0106) ───────────────────────────
+#
+# A connection's identity and endpoint are box-shared (mirroring the host-scoped
+# `model.api_base` they replace); its key stays agent-scoped. These go through the REAL
+# cascade rather than the merge helper alone — the helper was correct while the call site
+# read a list `_deep_merge_dicts` had already replaced in place, so every box connection
+# was silently dropped and a helper-level test still passed.
+
+
+def test_a_box_connection_is_inherited_when_the_agent_declares_none(tmp_path, monkeypatch):
+    _host_yaml(tmp_path, "providers:\n  - id: box-gw\n    base_url: https://box/v1\n", monkeypatch)
+    cfg = LangGraphConfig.from_yaml(_agent_yaml(tmp_path, "model:\n  name: gateway:m\n"))
+    assert cfg.provider_ids() == ["box-gw"]
+    assert cfg.provider_by_id("box-gw").base_url == "https://box/v1"
+
+
+def test_an_agent_connection_does_not_replace_the_box_ones(tmp_path, monkeypatch):
+    """The regression: a list REPLACES on deep-merge, so this must be merged by id."""
+    _host_yaml(tmp_path, "providers:\n  - id: box-gw\n    base_url: https://box/v1\n", monkeypatch)
+    cfg = LangGraphConfig.from_yaml(
+        _agent_yaml(tmp_path, "providers:\n  - id: mine\n    base_url: http://local/v1\nmodel:\n  name: mine:m\n")
+    )
+    assert cfg.provider_ids() == ["box-gw", "mine"]  # box first, then what the agent added
+
+
+def test_an_agent_may_override_one_field_of_a_box_connection(tmp_path, monkeypatch):
+    _host_yaml(tmp_path, "providers:\n  - id: box-gw\n    label: Box\n    base_url: https://box/v1\n", monkeypatch)
+    cfg = LangGraphConfig.from_yaml(
+        _agent_yaml(tmp_path, "providers:\n  - id: box-gw\n    base_url: https://mine/v1\n")
+    )
+    entry = cfg.provider_by_id("box-gw")
+    assert entry.base_url == "https://mine/v1"  # overridden
+    assert entry.label == "Box"  # inherited — per-field, not whole-entry
+
+
+def test_the_host_layer_can_never_hand_out_a_key(tmp_path, monkeypatch):
+    """`model.api_key` is agent-scoped; a connection's key must be too (ADR 0106)."""
+    _host_yaml(tmp_path, "providers:\n  - id: box-gw\n    base_url: https://box/v1\n    api_key: leaked\n", monkeypatch)
+    cfg = LangGraphConfig.from_yaml(_agent_yaml(tmp_path, "model:\n  name: box-gw:m\n"))
+    assert cfg.provider_by_id("box-gw").api_key == ""

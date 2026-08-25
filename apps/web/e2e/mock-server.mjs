@@ -361,6 +361,31 @@ function handleApiGet(pathname, fleet = FLEET, params = new URLSearchParams(), m
       };
     case "/api/settings/schema":
       return { groups: SETTINGS_SCHEMA };
+    // The provider registry (ADR 0106). Two openai-compat connections so the console's
+    // Connections panel has the shape the single-gateway config could not express, plus
+    // `in_use_by` on one so the delete guard is exercised.
+    case "/api/config/providers":
+      return {
+        providers: [
+          {
+            id: "prod-gateway",
+            type: "openai-compat",
+            label: "Production gateway",
+            base_url: "https://gateway.example/v1",
+            display: "Production gateway",
+            has_key: true,
+            in_use_by: ["model.name=prod-gateway:protolabs/reasoning"],
+          },
+          {
+            id: "local-vllm",
+            type: "openai-compat",
+            base_url: "http://localhost:8000/v1",
+            display: "local-vllm",
+            has_key: false,
+            in_use_by: [],
+          },
+        ],
+      };
     case "/api/secrets/status":
       return secretsStatusNow();
     case "/api/delegate-types":

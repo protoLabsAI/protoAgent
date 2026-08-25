@@ -4,7 +4,7 @@ import { Alert } from "@protolabsai/ui/data";
 import { Combobox, DropdownSelect, Input, SecretInput, Switch, Textarea } from "@protolabsai/ui/forms";
 import { Badge, Button } from "@protolabsai/ui/primitives";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
-import { Boxes, ChevronDown, ChevronUp, RotateCcw, Save } from "lucide-react";
+import { ChevronDown, ChevronUp, RotateCcw, Save } from "lucide-react";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
@@ -87,7 +87,6 @@ export function SettingsCategory({
   }, [groups, dirty]);
   const isVisible = (field: SettingsField): boolean => fieldVisible(field, (k) => currentValues.get(k));
 
-  const hasModel = groups.some((g) => g.fields.some((f) => f.key === "model.name"));
 
   // Active agent runtime (ADR 0033) — for the banner + header badge when this category
   // carries the selector. Keyed on the field, not the category: agent_runtime now lives in
@@ -153,83 +152,12 @@ export function SettingsCategory({
     onError: (e) => toast({ tone: "error", title: "Reset failed", message: errMsg(e) }),
   });
 
-  const asStr = (v: unknown) => (typeof v === "string" ? v : "");
-  const testConn = useMutation({
-    mutationFn: () => api.testModel(asStr(dirty["model.api_base"]), asStr(dirty["model.api_key"]), asStr(dirty["model.name"])),
-    onSuccess: (r) =>
-      r.ok
-        ? toast({ tone: "success", title: "Connection OK", message: "The model responded." })
-        : toast({ tone: "error", title: "Connection failed", message: r.error || "no response" }),
-    onError: (e) => toast({ tone: "error", title: "Connection test failed", message: errMsg(e) }),
-  });
-
-  // "Get models" (#1386): probe the gateway named on the FORM — its api_base/key, which may be
-  // a NEW provider you haven't saved yet — for its model list, so you can pick a valid model
-  // BEFORE saving and testing (the saved dropdown would otherwise be stuck on the old gateway's
-  // models → a dead-end). The result is merged into every model-backed dropdown below.
-  const [gatewayModels, setGatewayModels] = useState<string[] | null>(null);
-  const apiBaseField = useMemo(
-    () => groups.flatMap((g) => g.fields).find((f) => f.key === "model.api_base"),
-    [groups],
-  );
-  const providerField = useMemo(
-    () => groups.flatMap((g) => g.fields).find((f) => f.key === "model.provider"),
-    [groups],
-  );
-  const modelNameField = useMemo(
-    () => groups.flatMap((g) => g.fields).find((f) => f.key === "model.name"),
-    [groups],
-  );
-  // The provider the FORM currently names — the probe must follow it (a native OAuth
-  // selection lists the subscription's models, ADR 0097; "openai"/blank = the gateway
-  // path), or switching to anthropic-oauth/openai-codex keeps offering gateway models
-  // the save validator then rejects (#2518). Same rule as the wizard's probeModels.
-  const formProvider = (asStr(dirty["model.provider"]) || asStr(providerField?.value)).trim().toLowerCase();
-  // A provider flip invalidates any previously probed list — the OTHER provider's
-  // models must not linger in the dropdown merge below.
-  useEffect(() => {
-    setGatewayModels(null);
-  }, [formProvider]);
-  const getModels = useMutation({
-    // api_base: the form edit, else the saved value. api_key: the form edit, else blank — the
-    // server falls back to the saved (secret) key, which never leaves localStorage as plaintext.
-    mutationFn: () =>
-      api.models(asStr(dirty["model.api_base"]) || asStr(apiBaseField?.value), asStr(dirty["model.api_key"]), formProvider),
-    onSuccess: (r) => {
-      if (r.error) { toast({ tone: "error", title: "Couldn't fetch models", message: r.error }); return; }
-      setGatewayModels(r.models);
-      // Wizard parity: a Primary model the probed provider doesn't offer guarantees a
-      // failed save (the rebuild validator rejects it and rolls back) — swap it for the
-      // first offered model, as an ordinary dirty edit the operator can change or discard.
-      const current = asStr(dirty["model.name"]) || asStr(modelNameField?.value);
-      if (r.models.length && !r.models.includes(current)) {
-        setDirty((d) => ({ ...d, "model.name": r.models[0] }));
-      }
-      toast(
-        r.models.length
-          ? { tone: "success", title: `Found ${r.models.length} model${r.models.length === 1 ? "" : "s"}`, message: "Pick one in Primary model, then Test connection." }
-          : { tone: "info", title: "No models", message: "The provider returned no models." },
-      );
-    },
-    onError: (e) => toast({ tone: "error", title: "Couldn't fetch models", message: errMsg(e) }),
-  });
-  // Merge the freshly-probed models into a model-backed field's options (new gateway's models
-  // first, then whatever was saved), so the dropdown isn't stuck on the old provider's list.
-  const withGatewayModels = (field: SettingsField): SettingsField => {
-    if (!gatewayModels) return field;
-    if (field.options_source === "models" || field.options_source === "models+acp")
-      return { ...field, options: [...new Set([...gatewayModels, ...field.options])] };
-    // A per-slot dropdown speaks QUALIFIED names (`<provider>:<model>`) so a saved slot
-    // keeps meaning the same lane after a provider switch. This probe hits the form's
-    // gateway, so its results are gateway models — qualify them rather than mixing the
-    // two grammars in one list.
-    if (field.options_source === "slot_models")
-      return {
-        ...field,
-        options: [...new Set([...gatewayModels.map((m) => `gateway:${m}`), ...field.options])],
-      };
-    return field;
-  };
+  // The single-gateway probe that lived here — "Get models" against the form's
+  // api_base/key, and its Test connection (#1386, #2518) — is gone with the fields it
+  // read. Those fields are no longer rendered (ADR 0106: Connections owns endpoints and
+  // keys), so there is no form gateway to probe, and with several connections neither
+  // button had an unambiguous subject. Both now live on the connection row, where the
+  // probe targets one connection and the result belongs to it.
 
   // Generic per-group "Test connection" (ADR 0029).
   const [testingSection, setTestingSection] = useState<string | null>(null);
@@ -261,7 +189,7 @@ export function SettingsCategory({
       {group.fields.filter(isVisible).map((field) => (
         <SettingRow
           key={field.key}
-          field={withGatewayModels(field)}
+          field={field}
           dirty={field.key in dirty}
           value={field.key in dirty ? dirty[field.key] : field.value}
           showInheritance
@@ -302,16 +230,11 @@ export function SettingsCategory({
         }
         actions={
           <>
-            {hasModel ? (
-              <>
-                {/* #1386 — pull the form gateway's model list into the Primary model dropdown, so
-                    switching provider/key isn't a dead-end (the saved list is stale). */}
-                <Button type="button" onClick={() => getModels.mutate()} loading={getModels.isPending} disabled={save.isPending}>
-                  {getModels.isPending ? null : <Boxes size={15} />} Get models
-                </Button>
-                <TestConnectionButton onClick={() => testConn.mutate()} pending={testConn.isPending} disabled={save.isPending} />
-              </>
-            ) : null}
+            {/* "Get models" and "Test connection" lived here when there was exactly ONE
+                gateway to probe — the form's api_base/key (#1386). With a registry of
+                connections (ADR 0106) neither has an answer: "test WHICH connection?"
+                Both moved onto the connection rows in Settings ▸ Model ▸ Connections,
+                where the question is unambiguous and the result belongs to a row. */}
             {/* Pilot of the protoLabs design system (ADR 0037 D7) — the real @protolabsai/ui Button. */}
             <Button type="button" onClick={discard} disabled={save.isPending || !dirtyKeys.length}>
               <RotateCcw size={15} /> Discard

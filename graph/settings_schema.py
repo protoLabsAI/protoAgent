@@ -113,25 +113,51 @@ FIELDS: list[Field] = [
         "Primary model",
         "select",
         "Model & runtime",
-        "The main reasoning model (gateway alias).",
-        options_source="models",
+        "The main reasoning model. Names its connection, like every other slot (ADR 0106).",
+        # Qualified, cross-connection options — the lead model is no longer special
+        # (ADR 0106). It used to draw from `models`, the bare list of ONE provider's ids,
+        # because the main model belonged to `model.provider` by definition; now it can
+        # name any registered connection, so it reads the same source the other slots do.
+        options_source="slot_models",
         scope="host",
     ),
+    # ── replaced by Settings ▸ Model ▸ Connections (ADR 0106) ──────────────────
+    # Kept in FIELDS so they still round-trip through config_to_dict, the YAML writer
+    # and /api/settings — forks, snapshot import and the fleet Host layer read them —
+    # but no longer RENDERED: the Connections panel owns endpoints and keys now, and
+    # showing both made the page contradict itself (it says there is no default to
+    # switch between, then offered a Provider dropdown). Removed no earlier than
+    # v0.152.0, with the config attributes they mirror.
     Field(
         "model.provider",
         "model_provider",
         "Provider",
         "select",
         "Model & runtime",
-        "Gateway (openai) uses the API base + key below; anthropic-oauth / openai-codex "
-        "run Claude / ChatGPT on your own subscription (ADR 0097) and ignore them.",
+        "Superseded by Connections (ADR 0106) — a model slot names its own connection.",
         scope="host",
         # Dynamic (not a strict enum) so a custom gateway provider label still validates.
         options_source="providers",
+        ui_hidden=True,
     ),
-    Field("model.api_base", "api_base", "API base URL", "string", "Model & runtime", scope="host"),
     Field(
-        "model.api_key", "api_key", "API key", "secret", "Model & runtime", "Stored in secrets.yaml, never echoed back."
+        "model.api_base",
+        "api_base",
+        "API base URL",
+        "string",
+        "Model & runtime",
+        "Superseded by Connections (ADR 0106) — set a connection's base URL there.",
+        scope="host",
+        ui_hidden=True,
+    ),
+    Field(
+        "model.api_key",
+        "api_key",
+        "API key",
+        "secret",
+        "Model & runtime",
+        "Superseded by Connections (ADR 0106) — set a connection's key there.",
+        ui_hidden=True,
     ),
     Field("model.temperature", "temperature", "Temperature", "number", "Model & runtime", minimum=0, maximum=2),
     Field("model.max_tokens", "max_tokens", "Max output tokens", "number", "Model & runtime", minimum=1),
@@ -1680,12 +1706,18 @@ def build_schema(
     config,
     *,
     model_options: list[str] | None = None,
-    # Cross-provider, `<provider>:<model>`-qualified options for the SLOT fields.
-    # `model.name` keeps the bare list: the main model belongs to `model.provider`,
-    # and a qualified value there is a misconfiguration, not a choice.
+    # Cross-provider, `<provider>:<model>`-qualified options for every model slot —
+    # `model.name` included since ADR 0106, because the lead model names its connection
+    # like any other slot rather than belonging to a single `model.provider`.
     slot_model_options: list[str] | None = None,
     agent_doc: dict | None = None,
     host_doc: dict | None = None,
+    # Diagnostics want the fields a FORM does not (ADR 0106 retires model.api_base /
+    # api_key / provider from rendering, and agent_runtime was already hidden) — those
+    # keys still exist, still round-trip, and are still inherited through the Host layer,
+    # so "where does this value come from?" must still be able to answer for them.
+    # Rendering paths keep the default and never see them.
+    include_hidden: bool = False,
 ) -> list[dict[str, Any]]:
     """Return the settings schema grouped by section, with current values.
 
@@ -1705,7 +1737,7 @@ def build_schema(
     hidden = list(getattr(config, "settings_hidden", None) or [])
     groups: dict[str, dict[str, Any]] = {}
     for f in FIELDS:
-        if f.ui_hidden:
+        if f.ui_hidden and not include_hidden:
             continue  # in FIELDS for config round-trip, but a dedicated panel owns the UI (#1076)
         if is_hidden_setting(f.key, hidden):
             continue  # settings.hidden (#2172) — never rendered, never toggleable back on

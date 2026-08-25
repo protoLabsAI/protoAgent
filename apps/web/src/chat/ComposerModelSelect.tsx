@@ -6,7 +6,7 @@ import { Menu, MenuItem, MenuSeparator } from "@protolabsai/ui/menu";
 
 import { runtimeStatusQuery, settingsSchemaQuery } from "../lib/queries";
 import { chatStore, useChatState } from "./chat-store";
-import { bareModel, groupByLane, laneOf, modelChoices, modelPickerData } from "./modelForm";
+import { bareModel, groupByLane, lanesFromOptions, modelChoices, modelPickerData, sameModel } from "./modelForm";
 
 // The composer's inline model picker — rendered in the DS PromptInput `actions` slot.
 // This is a PER-TAB override: it does NOT change the saved global model (that lives in
@@ -25,7 +25,7 @@ export function ComposerModelSelect() {
   const field = schema.data?.groups.flatMap((g) => g.fields).find((f) => f.key === "model.name");
 
   const globalModel = String(field?.value ?? "");
-  const picker = schema.data ? modelPickerData(schema.data.groups) : null;
+  const picker = schema.data ? modelPickerData(schema.data.groups, runtime.data?.model?.provider ?? "") : null;
   const fallback = field?.options?.length ? field.options : globalModel ? [globalModel] : [];
   const crossLane = picker ? modelChoices(picker).choices : [];
   const options = crossLane.length ? crossLane : fallback;
@@ -51,6 +51,13 @@ export function ComposerModelSelect() {
 
   const effectiveModel = selected || globalModel;
   const groups = groupByLane(options);
+  // Same derivation the grouping used, so the badge and the headings agree.
+  // From the SERVER-BUILT lists only: `options` may be the operator's favorites, which
+  // can be stored bare, while the schema's `models`/`crossProvider` carry the qualified
+  // names whose prefixes are registered ids by construction. The configured value itself
+  // is deliberately NOT a source — it is whatever is stored, and inferring a connection
+  // from it would disagree with the runtime.
+  const knownLanes = lanesFromOptions([...(picker?.models ?? []), ...(picker?.crossProvider ?? []), ...options]);
   // Headings earn their place only when there's a choice of account to make.
   const showLanes = groups.length > 1;
 
@@ -67,7 +74,7 @@ export function ComposerModelSelect() {
     <Menu
       trigger={
         <button type="button" className="composer-model-select" aria-label="Model for this chat">
-          {bareModel(effectiveModel)}
+          {bareModel(effectiveModel, knownLanes)}
         </button>
       }
       align="start"
@@ -92,9 +99,10 @@ export function ComposerModelSelect() {
             </div>
           ) : null}
           {group.items.map((m) => {
-            // A qualified favorite of the configured model is still the default — compare
-            // on the bare id too, or the badge vanishes the moment favorites are pinned.
-            const isDefault = m === globalModel || (!!laneOf(m) && bareModel(m) === globalModel);
+            // Either side may be qualified or bare (ADR 0106 made the primary model name
+            // its connection), so the comparison has to be spelling-agnostic in BOTH
+            // directions — see sameModel.
+            const isDefault = sameModel(m, globalModel, knownLanes);
             return (
               <MenuItem
                 key={m}
@@ -102,7 +110,7 @@ export function ComposerModelSelect() {
                   chatStore.setSessionModel(currentSessionId, isDefault ? "" : m);
                 }}
               >
-                {bareModel(m)}
+                {bareModel(m, knownLanes)}
                 {isDefault ? <Badge>default</Badge> : null}
               </MenuItem>
             );

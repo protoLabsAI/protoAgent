@@ -122,7 +122,13 @@ test("Model shows the agent's Model + Routing fields", async ({ page }) => {
   expect(await page.locator(".pl-accordion__title").allTextContents()).toEqual(["Model", "Favorite models", "Routing"]);
   await expandAllGroups(page);
   await expect(page.locator('.setting-row[data-key="routing.aux_model"] input')).toHaveValue("protolabs/fast");
-  await expect(page.locator('.setting-row[data-key="model.api_key"] input')).toHaveAttribute("placeholder", /set/);
+  // The endpoint/key/provider triple is no longer part of this form (ADR 0106) —
+  // Settings ▸ Model ▸ Connections owns it, and two editors for one value is the
+  // contradiction that panel resolved. Secret-field rendering is covered by
+  // secrets-settings.spec.ts, which exercises a secret this form still owns.
+  for (const retired of ["model.api_key", "model.api_base", "model.provider"]) {
+    await expect(page.locator(`.setting-row[data-key="${retired}"]`)).toHaveCount(0);
+  }
 });
 
 test("editing an Agent setting enables save and round-trips", async ({ page }) => {

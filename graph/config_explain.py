@@ -64,7 +64,7 @@ def _build_cascade(config: Any = None) -> list[dict]:
     host_doc = _load_host_layer()
 
     cascade: list[dict] = []
-    for group in build_schema(config, agent_doc=agent_doc, host_doc=host_doc):
+    for group in build_schema(config, agent_doc=agent_doc, host_doc=host_doc, include_hidden=True):
         for f in group["fields"]:
             if f.get("type") == "secret":
                 value: Any = "<set>" if f.get("is_set") else "<unset>"

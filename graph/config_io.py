@@ -929,6 +929,31 @@ def split_secret_updates(config: dict[str, Any]) -> tuple[dict[str, Any], dict[s
         # don't write an empty `auth: {}` block to the main YAML.
         if not sect:
             main.pop(section, None)
+    # The provider registry is a LIST of objects (ADR 0106), which `secret_paths()`'s
+    # (section, key) pairs cannot describe — so each connection's key is pulled out here
+    # and filed under `providers.<id>`, exactly where the loader's overlay looks for it.
+    # Without this a key written through the wizard or a config PUT would land in the
+    # tracked YAML, which gets exported, backed up and forked.
+    entries = main.get("providers")
+    if isinstance(entries, list):
+        seen_ids: set[str] = set()
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            value = entry.pop("api_key", None)
+            pid = str(entry.get("id", "") or "").strip().lower()
+            if not pid:
+                continue
+            # `_parse_providers` keeps the FIRST entry for a duplicated id, so the key must
+            # follow the same rule: taking the last one would apply a later duplicate's
+            # credential to the first one's endpoint.
+            if pid in seen_ids:
+                continue
+            seen_ids.add(pid)
+            # A blank means "leave the stored key alone", the same rule every other
+            # secret follows — the UI sends blank when the operator didn't re-enter one.
+            if isinstance(value, str) and value.strip():
+                secrets.setdefault("providers", {})[pid] = value.strip()
     return main, secrets
 
 
@@ -1531,6 +1556,8 @@ def list_gateway_models(
     api_base: str,
     api_key: str = "",
     timeout: float = 10.0,
+    *,
+    allow_env_key: bool = True,
 ) -> tuple[list[str], str]:
     """Fetch the model list from ``{api_base}/models``.
 
@@ -1545,7 +1572,11 @@ def list_gateway_models(
     if not api_base:
         return [], "api_base is empty"
 
-    key = api_key or os.environ.get("OPENAI_API_KEY", "")
+    # `allow_env_key=False` is for a REGISTERED connection (ADR 0106): a blank key there
+    # means "this endpoint needs none", not "go find a global one". Without the opt-out
+    # the fallback here quietly undid the isolation the callers had just enforced and put
+    # OPENAI_API_KEY on the wire to a local endpoint.
+    key = api_key or (os.environ.get("OPENAI_API_KEY", "") if allow_env_key else "")
     url = api_base.rstrip("/") + "/models"
     # SSRF guard (#871): an operator-supplied api_base must not steer this probe at
     # cloud-metadata (169.254.169.254) or another link-local/reserved address. But a

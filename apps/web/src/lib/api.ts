@@ -1369,6 +1369,51 @@ export const api = {
     });
   },
 
+  /** The provider registry (ADR 0106) — every configured CONNECTION, keys redacted.
+   *  `in_use_by` names the slots routing through each one, so the delete guard is
+   *  legible before the operator tries it. */
+  providers() {
+    return request<{
+      providers: {
+        id: string;
+        type: string;
+        label?: string;
+        base_url?: string;
+        display: string;
+        has_key: boolean;
+        in_use_by: string[];
+      }[];
+    }>("/api/config/providers");
+  },
+
+  addProvider(body: { id: string; type: string; label?: string; base_url?: string; api_key?: string }) {
+    return request<{ ok: boolean; id: string }>("/api/config/providers", { method: "POST", body });
+  },
+
+  /** Label / endpoint / key only. There is no id or type here on purpose: both are
+   *  identity, and an id lives inside stored model values that a rename cannot reach. */
+  updateProvider(id: string, body: { label?: string; base_url?: string; api_key?: string }) {
+    return request<{ ok: boolean; id: string }>(`/api/config/providers/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body,
+    });
+  },
+
+  /** 409 with the referencing slots named when the connection is still in use. */
+  removeProvider(id: string) {
+    return request<{ ok: boolean; removed: string }>(`/api/config/providers/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+  },
+
+  /** That connection's own model list — its endpoint, or its subscription account. */
+  providerModels(id: string) {
+    return request<{ models: string[]; error: string }>(
+      `/api/config/providers/${encodeURIComponent(id)}/models`,
+      { method: "POST" },
+    );
+  },
+
   /** Sign-in status for the native OAuth providers (ADR 0097) — "✓ signed in" or a
    *  sign-in hint per provider, so the setup UX never asks for a key it doesn't need. */
   oauthStatus() {
