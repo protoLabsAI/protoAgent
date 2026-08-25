@@ -310,7 +310,18 @@ def split_slot_target(model_name: str | None, config: LangGraphConfig | None = N
     prefix, sep, rest = raw.partition(":")
     if not sep:
         return "", raw
-    known = tuple(config.provider_ids()) if config is not None and config.providers else _LEGACY_SLOT_PROVIDERS
+    # Registered ids UNION the legacy three — the second half is a compatibility floor,
+    # not redundancy. Every qualified value stored before ADR 0106 names one of those
+    # three, the old hardcoded tuple accepted them unconditionally, and a migrated
+    # config only contains the lanes its legacy fields happened to imply: the common
+    # `model.provider: openai` + gateway shape migrates to `[gateway]` alone. Without
+    # the floor a stored `anthropic-oauth:claude-opus-4-6` aux slot would stop being
+    # claimed and get sent to the GATEWAY as a bare model id — silently breaking exactly
+    # the gateway-lead-plus-native-slots mixing #2574 was built for. Dispatch resolves an
+    # unregistered-but-legacy prefix by its own name, so it routes as it always did.
+    # This floor retires with the legacy fields themselves (no earlier than v0.152.0).
+    known = set(config.provider_ids()) if config is not None else set()
+    known.update(_LEGACY_SLOT_PROVIDERS)
     if prefix.strip().lower() not in known:
         return "", raw
     return prefix.strip().lower(), rest.strip()

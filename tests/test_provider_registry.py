@@ -16,6 +16,7 @@ from graph.config import (
     Provider,
     valid_provider_id,
 )
+from graph.llm import _gateway_configured, create_llm, split_slot_target
 
 
 def _cfg(**doc) -> LangGraphConfig:
@@ -80,6 +81,31 @@ def test_a_legacy_gateway_config_migrates_to_the_gateway_id():
     assert (p.type, p.base_url, p.api_key) == (PROVIDER_TYPE_OPENAI_COMPAT, "https://gw/v1", "k")
 
 
+@pytest.mark.parametrize(
+    "slot",
+    ["anthropic-oauth:claude-opus-4-6", "openai-codex:gpt-5.5", "gateway:protolabs/coder"],
+)
+def test_native_slots_survive_a_gateway_only_migration(slot):
+    """The regression this nearly shipped.
+
+    The commonest legacy shape — `model.provider: openai` with a gateway — migrates to a
+    registry of `[gateway]` alone. If the grammar's whitelist were the registry ALONE, a
+    stored `anthropic-oauth:…` aux slot would stop being claimed and get sent to the
+    gateway as a bare model id, silently breaking exactly the gateway-lead-plus-native-slots
+    mixing the qualified grammar was built for (#2574).
+    """
+    cfg = _cfg(model={"provider": "openai", "api_base": "https://gw/v1", "api_key": "k"})
+    assert cfg.provider_ids() == ["gateway"]
+    lane, model = split_slot_target(slot, cfg)
+    assert lane == slot.split(":", 1)[0]
+    assert model == slot.split(":", 1)[1]
+
+
+def test_the_legacy_floor_does_not_swallow_an_unknown_prefix():
+    cfg = _cfg(model={"provider": "openai", "api_base": "https://gw/v1", "api_key": "k"})
+    assert split_slot_target("bedrock:anthropic.claude", cfg) == ("", "bedrock:anthropic.claude")
+
+
 @pytest.mark.parametrize("lead", ["anthropic-oauth", "openai-codex"])
 def test_a_legacy_native_oauth_config_migrates_under_its_own_lane_id(lead):
     cfg = _cfg(model={"provider": lead, "name": "some-model", "api_base": "", "api_key": ""})
@@ -123,8 +149,6 @@ def test_as_dict_redacts_the_key_by_default():
 
 
 # ── S2: dispatch routes by registered connection, not by a hardcoded lane ──────
-
-from graph.llm import _gateway_configured, create_llm, split_slot_target  # noqa: E402
 
 
 def _registry_cfg() -> LangGraphConfig:
