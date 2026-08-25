@@ -817,8 +817,20 @@ async def _run_turn_stream(
             # the latency timing above uses.
             if name == "delegate_to" and rid:
                 _tgt = (event.get("data") or {}).get("input") or {}
-                if isinstance(_tgt, dict) and str(_tgt.get("target") or "").strip():
-                    _delegate_targets[rid] = str(_tgt["target"]).strip()
+                _target = str((_tgt or {}).get("target") or "").strip() if isinstance(_tgt, dict) else ""
+                if _target:
+                    _delegate_targets[rid] = _target
+                    # Surface the lead's OUTGOING ask as a directed bubble, so the operator
+                    # sees what was delegated, not just the reply (#3042) — the console
+                    # analogue of the `operator → proto` half of an `@` exchange, here
+                    # `lead → proto`. `addressed_to` + no `author` = the lead speaking to a
+                    # participant; the reply below is `author`-stamped as the participant.
+                    _q = str((_tgt or {}).get("query") or "").strip()
+                    if _q:
+                        yield (
+                            "room_reply",
+                            {"addressed_to": _target, "text": _q[:_TOOL_PREVIEW_CHARS], "ok": True},
+                        )
         elif kind == "on_tool_end":
             output = event.get("data", {}).get("output", "")
             rid = event.get("run_id")

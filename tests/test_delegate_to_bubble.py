@@ -81,14 +81,23 @@ async def _frames(session, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_delegate_to_emits_a_room_reply_authored_by_the_target(monkeypatch):
+async def test_delegate_to_emits_ask_then_reply(monkeypatch):
+    """The delegation renders as a mini-conversation (#3042): the lead's outgoing ASK
+    (addressed_to, no author) then the participant's REPLY (author), in that order."""
     frames = await _frames("dtb1", monkeypatch)
     rooms = [p for k, p in frames if k == "room_reply"]
-    assert len(rooms) == 1, f"expected one room_reply; saw {[k for k, _ in frames]}"
-    assert rooms[0]["author"] == "proto"
-    assert rooms[0]["from"] == "assistant"  # the LEAD addressed the participant
-    assert "says: done" in rooms[0]["text"]
-    assert rooms[0]["ok"] is True
+    assert len(rooms) == 2, f"expected ask + reply; saw {[k for k, _ in frames]}"
+
+    ask, reply = rooms
+    # 1. the lead's outgoing ask — directed, no author (the lead is speaking)
+    assert ask["addressed_to"] == "proto"
+    assert "author" not in ask
+    assert "look at auth" in ask["text"]
+    # 2. the participant's reply — author-stamped, from the lead
+    assert reply["author"] == "proto"
+    assert reply["from"] == "assistant"
+    assert "says: done" in reply["text"]
+    assert reply["ok"] is True
 
 
 @pytest.mark.asyncio

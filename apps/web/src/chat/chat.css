@@ -857,3 +857,9 @@
   border-color: var(--pl-color-fg-subtle);
   background: var(--pl-color-bg-sunken, var(--pl-color-bg));
 }
+
+/* The lead's outgoing delegation ask (#3042) — a directed "→ @name" header, quieter than
+   a participant byline: it's the lead speaking to someone, not a new voice. */
+.chat-author--to {
+  opacity: 0.75;
+}

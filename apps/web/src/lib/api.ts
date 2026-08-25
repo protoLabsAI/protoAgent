@@ -579,11 +579,17 @@ export function componentFromParts(parts?: RawPart[]): ComponentSpec | null {
  *  `null` for every ordinary turn — the lead agent needs no attribution. */
 export function roomReplyFromParts(parts?: RawPart[]): RoomReply | null {
   const d = dataByMime(parts, ROOM_MIME) as
-    | { author?: string; from?: string; text?: string; ok?: boolean; stopped?: string }
+    | { author?: string; addressed_to?: string; from?: string; text?: string; ok?: boolean; stopped?: string }
     | undefined;
-  if (!d || typeof d.author !== "string" || !d.author) return null;
+  if (!d) return null;
+  const addressedTo = typeof d.addressed_to === "string" && d.addressed_to ? d.addressed_to : undefined;
+  const author = typeof d.author === "string" && d.author ? { name: d.author } : undefined;
+  // A frame is either an outgoing ask (addressed_to, no author) or a reply (author). One
+  // of the two must be present, or there is nothing to render.
+  if (!addressedTo && !author) return null;
   return {
-    author: { name: d.author },
+    addressedTo,
+    author,
     from: typeof d.from === "string" ? d.from : "operator",
     text: typeof d.text === "string" ? d.text : "",
     ok: d.ok !== false,
