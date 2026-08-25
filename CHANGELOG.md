@@ -15,6 +15,173 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.149.0] - 2026-08-25
+
+### Added
+- **protoAgent owns its ChatGPT login, and one console sign-in serves every instance (#3113).**
+  Two problems with one cause (ADR 0097). A refresh token is single-use, but protoAgent read the Codex CLI's
+  `~/.codex/auth.json` on its own — putting two applications on one secret with no way to coordinate,
+  since the CLI cannot be locked and whichever refreshes first silently kills the other. And the copy
+  it kept lived under the *instance* config dir, so signing in from one console did nothing for the
+  desktop app's other servers or any other instance; each fell back to importing that same CLI token
+  and burning it for the rest. Together they are the cause behind the repeated
+  `Codex token refresh failed (HTTP 401)` reports.
+  Resolution no longer reads the CLI file at all: with no credential it says "not signed in" and
+  points at the console sign-in, which mints protoAgent's own token. Handing over the login the CLI
+  already holds is now a deliberate action (Settings, or `POST /api/config/oauth/import`) that
+  refreshes on the way in — so the handover is atomic and only one application holds a live token
+  afterwards. The Codex CLI needs `codex login` after an import, which is precisely why it is never
+  automatic. The status probe stops reporting a CLI credential as a signed-in session; it had shown a
+  green "connected" account off a file protoAgent did not own, sometimes a long-dead one, while every
+  turn 401'd.
+  The credential store moves to the box tier, beside `host-config.yaml` and the other state every
+  instance already shares, with an instance-local file overriding it when one exists — so one sign-in
+  covers the whole machine, and an instance that already had its own credential keeps it. Claude
+  follows the same rule. Sharing one file across processes needs more than the in-process lock that
+  was there, so a best-effort cross-process file lock now wraps the refresh window; because
+  correctness must not depend on a lock, a refusal that slips through re-reads the store and adopts
+  whatever the winner wrote. protoAgent also now honours OpenAI's `earliest_refresh_at`, which it had
+  ignored: access tokens last ten days and the hint lands a day before expiry, so refreshing becomes a
+  roughly once-per-nine-days event instead of something every process re-evaluates on an expiry skew.
+  **Behaviour change:** disconnecting a shared login disconnects it for every instance on the machine,
+  and the disconnect result now says which scope it acted on.
+
+- **The lead moderates multi-agent collaboration (#3042).** When the operator asks two or
+  more participants to work together — "have proto and reviewer sort out X" — the lead
+  agent now knows that *running the discussion is its job*. A system-prompt section (present
+  only when delegates are configured) teaches it to `delegate_to` one, relay that reply to
+  the next, carry objections back, and continue round by round until they converge or
+  clearly won't — assigning roles when the work is code (one drafts, one reviews) rather
+  than letting two agents edit one workspace in parallel. This follows from the
+  peers/subordinates model: `acp` and `model` delegates are subordinates that answer their
+  caller and cannot address each other, so coordination among them has to be run by the
+  orchestrator, not handed to the delegates (the same reason reply-text agent-to-agent
+  chaining was removed). A bare `@x @y <task>` from the operator stays what it is — one
+  message to each, in turn — and the section says so, so "work together" reaches the one
+  entity that can actually run it instead of collapsing into a single round each.
+
+- **A `delegate_to` renders as the participant's own chat bubble, not a tool card (#3042).**
+  When the lead moderates a collaboration (#3114) — `delegate_to` proto, relay to reviewer,
+  back to proto — those rounds now read as proto and reviewer *speaking*, authored bubbles
+  identical to an operator `@`, instead of tool-call cards buried under the lead's single
+  reply. A foreground `delegate_to` emits a `room_reply` frame carrying the delegate's
+  answer (author = the target, addressed by the lead), and its tool card is suppressed at
+  both card-emit sites — it is conversation, not machinery. Every other tool keeps its
+  card. The lead's own synthesis stays its own bubble: the empty-placeholder guard tells a
+  pure `@x @y` fan-out (drop the never-used bubble) apart from a moderated turn (the lead
+  ran and its answer must remain). Foreground only — a `background=True` delegation returns
+  through the background manager, not the turn's tool-end, and is unchanged.
+
+- **Several model connections at once, including more than one OpenAI-compatible gateway (#3119).**
+  Model configuration had exactly one provider identity — `model.provider` plus a single
+  `api_base`/`api_key` pair — so a production gateway and a local vLLM, or two gateways with
+  different key scopes, could not both exist, and every connected subscription that was not the
+  configured one showed in the console as "connected but isn't the current default". Providers are
+  now a registry of connections under a `providers:` key: `type` says what kind a connection is
+  (`openai-compat`, `anthropic-oauth`, `openai-codex`) and `id` says which one, so several entries
+  may share a type. Any model slot can name any of them with the `<provider-id>:<model>` grammar
+  that already existed — `prod-gateway:protolabs/coder`, `local-vllm:qwen3-32b` — and each builds
+  against its own endpoint and key rather than inheriting one config-level pair.
+  Existing configs need no changes: a config with no `providers:` block is migrated to the registry
+  its current fields imply, reusing the three names the slot grammar has used since #2574 as the
+  ids, so every stored `gateway:` / `anthropic-oauth:` / `openai-codex:` value keeps resolving to
+  the same connection and no fleet member's config is rewritten. Provider ids are fixed once chosen
+  (they appear inside stored model values, which the fleet host layer can place in another
+  instance's config that a rename cannot reach); the display label is freely editable. A malformed
+  entry is skipped with a logged reason rather than failing the load, and an unregistered prefix is
+  still just part of a model name, so `bedrock:anthropic.claude` continues to mean what it says.
+
+### Fixed
+- **Foreground delegate conversations persist with their turn (#3102).** A `delegate_to`
+  call now returns its authored room address and reply through LangGraph's `Command`
+  update, so the active turn checkpoints them instead of overwriting an out-of-turn
+  thread write. The lead still receives the normal tool result and synthesizes it;
+  background, managed-Git, and parked-task delegations retain their existing paths.
+
+- **The chat model picker is capped to the viewport and scrolls (#3111).** It had no height
+  cap at all, so once a second provider's models joined the list the menu grew past the screen
+  with no way to reach the rest — measured at `y = -481px`, i.e. 481 pixels of models rendered
+  above the top of the viewport, unreachable by any means. The cause was in the design system
+  rather than the console: `.pl-menu.pl-dropselect__menu` caps itself with the Radix
+  available-height variable, but base `.pl-menu` never got the same treatment, so every plain DS
+  Menu inherited it. Fixed at the base class — a menu that already fits is unaffected — with
+  `overscroll-behavior: contain` so a capped menu doesn't hand its leftover scroll to the chat
+  behind it. Below 768px the same menu becomes a full-screen sheet, since 180px of dropdown over
+  a keyboard-shrunk viewport is unusable for a list you're meant to read; the sheet is scoped to
+  the model picker alone, so a context menu or an overflow menu still opens as a menu.
+
+- **An expired Codex CLI login is no longer imported, so the error names the sign-in (#3112, ADR 0097).**
+  Instances with no Codex store of their own — the desktop app runs several servers, each its own
+  instance — bootstrap from `~/.codex/auth.json`. When that file held a login whose access token had
+  already expired, each of them imported the dead pair and then reported `Codex token refresh failed
+  (HTTP 401)`, blaming a refresh for what was really a missing login. A refresh token is single-use,
+  so a CLI login whose own access token has lapsed has almost certainly had its refresh token spent
+  already — by protoAgent, by a sibling instance, or by the CLI itself. Such a credential is now
+  refused at import (the rule Hermes already applies, to avoid leaving an operator "stuck with
+  'Login successful!' but no working credentials"), and the error says to run `codex login` instead
+  of spending a network call on a token that cannot work. It also names the trap that hides this:
+  `codex login status` reports a long-dead login as healthy, because it reads the stored auth mode
+  and validates neither the token's signature nor its expiry. The recovery path added in #3108 is
+  tightened the same way — it required only that the CLI's token *differ* from ours, and after any
+  successful refresh ours is the newer one, so it could adopt the older spent pair and fail again.
+
+- **A delegation renders inline as a two-sided exchange, in the right place (#3042).**
+  Two fixes to how a moderated `delegate_to` shows in chat. First, the lead's **outgoing
+  ask** now renders as a directed `→ @proto` bubble carrying the query, so the operator
+  sees *what* was delegated, not only the reply — the console analogue of the `operator →
+  proto` half of an `@` exchange. Second, both the ask and the reply now land at the
+  **point in the stream where the delegation happened**, instead of floating above the
+  lead's work: a `delegate_to` fires mid-turn, and the lead's whole turn is one streaming
+  message, so the bubble was rendering above "I'll coordinate…" and the preceding tool
+  cards. The message is now split at the delegation point — the lead's work so far is
+  frozen as a completed bubble, the exchange drops in after it, and the lead keeps
+  streaming below. A `@x @y` fan-out (empty placeholder, lead never ran) is unchanged.
+
+- **Delegation bubbles now interleave with the lead's narration (#3042).** A follow-up to
+  the inline-render work: the lead's "I'll coordinate…" and its closing summary were
+  landing at the *bottom* of the thread with the participant bubbles stacked above,
+  instead of in stream order. The lead's streamed text is buffered in the reveal queue for
+  smooth rendering, and the room-bubble handler read the transcript before flushing it — so
+  the in-flight message looked empty, every bubble inserted ahead of it, and the lead's
+  prose flushed in last. The handler now flushes first, the same as the tool-card and
+  component handlers do for the identical ordering reason, so a moderated collaboration
+  reads top to bottom as it happened: lead, → @proto, proto, → @reviewer, reviewer, lead.
+
+- **The `@` autocomplete now opens anywhere in a message, not only at the start (#3042).**
+  Typing a participant's name in ordinary prose — "hello team, @bob and @bill should pair
+  on this" — now pops the name picker at each `@`, the same as every chat app, instead of
+  only for a leading `@bob @bill` run. It mirrors how `/` autocomplete already works: the
+  popover opens for whatever `@`-token the caret is in, wherever it is; an email address
+  (`josh@protolabs.studio`) still never triggers it, because there the `@` sits mid-token.
+  This is autocomplete only. Where a mention *routes* is unchanged and deliberately
+  distinct: a **leading** `@name` addresses that participant directly, while a mid-message
+  `@name` is prose the lead reads and coordinates — completion inserts the name at the
+  caret and never implies the mid-message mention will short-circuit to that delegate.
+
+- **A delegation's ask and reply no longer truncate in chat (#3042).** When the lead
+  moderated a collaboration, the query it sent a participant — and the participant's
+  reply — were being run through the *tool-card preview* coercion, which caps at 800
+  characters. So a real review or proposal came through cut off mid-sentence ("…Do you
+  agree with the test s"). A room bubble is a chat message, not a card preview: both the
+  outgoing ask and the reply now carry their full text, matching the operator-`@` path,
+  which was never capped. (The 800-char cap still applies to ordinary tool cards, where a
+  preview is the point.)
+
+- **A Codex token that is rejected before it expires now refreshes instead of failing forever (#3122, ADR 0097).**
+  An access token can stop working long before the expiry baked into it: signing in again on
+  the same ChatGPT account ends the previous session, and the backend then answers
+  `401 token_invalidated` while the token still claims days of validity. protoAgent decided
+  whether its credential was good from that expiry claim alone, so nothing ever refreshed — every
+  call failed identically until someone repaired the store by hand, even though the refresh token
+  was live the whole time and one refresh would have fixed it. Reported as "Connection failed —
+  Error code: 401 … token_invalidated" on an instance that had been working for days.
+  A rejection is now treated as "this token is done" rather than as the answer. The models probe
+  and Test connection mark the stored access token rejected, refresh, and retry once; because the
+  mark is recorded in the store, an ordinary turn recovers on its next call too. The refresh token
+  is kept, and the provider's `earliest_refresh_at` hint is dropped so it cannot pin an
+  invalidated token. Recognition is deliberately narrow — a 401 or an explicit invalidation,
+  never a timeout, a 500 or a 429 — because the response is to spend a single-use refresh token.
+
 ## [0.148.0] - 2026-08-25
 
 ### Added
