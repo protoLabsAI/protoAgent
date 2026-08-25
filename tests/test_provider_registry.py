@@ -127,7 +127,10 @@ def test_an_explicit_registry_is_not_overwritten_by_migration():
     assert cfg.provider_ids() == ["only-mine"]
 
 
-def test_a_config_with_no_model_source_at_all_migrates_to_nothing():
+def test_a_config_with_no_model_source_at_all_migrates_to_nothing(monkeypatch):
+    # An env key IS a model source — migration folds it in — so "nothing configured"
+    # means nothing in config AND nothing in the environment.
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     assert _cfg(model={"provider": "openai", "api_base": "", "api_key": ""}).providers == []
 
 
@@ -198,23 +201,41 @@ def test_two_gateways_build_against_their_own_endpoints():
     assert local.openai_api_key.get_secret_value() == "lk"
 
 
-def test_a_connection_supplies_its_own_key_for_the_configured_check(monkeypatch):
+def test_a_connection_is_usable_when_it_has_somewhere_to_talk_to(monkeypatch):
+    """A key is optional — a local vLLM or Ollama wants none — and is never borrowed.
+
+    "Configured" for a registered connection therefore means it has an endpoint, not that
+    some global key exists somewhere else.
+    """
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     cfg = _registry_cfg()
     assert _gateway_configured(cfg, cfg.provider_by_id("prod-gateway")) is True
-    # The config-level key and OPENAI_API_KEY are still the fallback for a connection
-    # that carries none, so both have to be absent for "unconfigured" to mean anything.
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
     keyless = _cfg(providers=[{"id": "no-key", "base_url": "https://x/v1"}])
     keyless.api_key = ""
-    assert _gateway_configured(keyless, keyless.provider_by_id("no-key")) is False
+    assert _gateway_configured(keyless, keyless.provider_by_id("no-key")) is True
+
+    nowhere = _cfg(providers=[{"id": "nowhere", "type": "openai-compat"}])
+    nowhere.api_key = ""
+    assert _gateway_configured(nowhere, nowhere.provider_by_id("nowhere")) is False
 
 
-def test_a_keyless_connection_raises_naming_itself(monkeypatch):
+def test_a_connection_with_nowhere_to_talk_to_raises_naming_itself(monkeypatch):
+    """A keyless endpoint builds (that is normal); one with NO endpoint cannot.
+
+    The error names the connection, because with several registrable "the gateway" no
+    longer identifies which one failed.
+    """
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    cfg = _cfg(providers=[{"id": "local-vllm", "base_url": "http://localhost:8000/v1"}])
-    cfg.api_key = ""
-    with pytest.raises(RuntimeError, match="'local-vllm' connection"):
-        create_llm(cfg, model_name="local-vllm:qwen3-32b")
+    keyless = _cfg(providers=[{"id": "local-vllm", "base_url": "http://localhost:8000/v1"}])
+    keyless.api_key = ""
+    assert create_llm(keyless, model_name="local-vllm:qwen3-32b") is not None
+
+    nowhere = _cfg(providers=[{"id": "nowhere", "type": "openai-compat"}])
+    nowhere.api_key = ""
+    nowhere.api_base = ""
+    with pytest.raises(RuntimeError, match="'nowhere' connection"):
+        create_llm(nowhere, model_name="nowhere:some-model")
 
 
 def test_a_registered_connection_never_borrows_another_credential(monkeypatch):
@@ -237,7 +258,7 @@ def test_a_registered_connection_never_borrows_another_credential(monkeypatch):
     )
     seen: list[tuple[str, str]] = []
 
-    def _probe(base, key):
+    def _probe(base, key, **kw):
         seen.append((base, key))
         return ["m"], ""
 
@@ -264,7 +285,7 @@ def test_a_migrated_config_still_offers_a_signed_in_subscription(monkeypatch):
     cfg = _cfg(model={"provider": "openai", "api_base": "https://gw/v1", "api_key": "k"})
     assert cfg.provider_ids() == ["gateway"]  # the shape that caused it
 
-    monkeypatch.setattr("graph.config_io.list_gateway_models", lambda b, k: (["m"], ""), raising=False)
+    monkeypatch.setattr("graph.config_io.list_gateway_models", lambda b, k, **kw: (["m"], ""), raising=False)
     monkeypatch.setattr(
         discovery, "oauth_status", lambda p: discovery.OAuthStatus(p, p == "anthropic-oauth", "s", "d", "Sign in")
     )
@@ -287,3 +308,66 @@ def test_an_explicit_subscription_entry_is_not_duplicated(monkeypatch):
     # `claude` covers the anthropic-oauth TYPE, so no second entry for it.
     assert lanes.count("anthropic-oauth") == 0
     assert "claude" in lanes and "openai-codex" in lanes
+
+
+def test_the_build_path_never_sends_one_connection_key_to_another(monkeypatch):
+    """The third and worst instance of this coupling — the actual client builder.
+
+    `_build_llm_kwargs` seeds kwargs from the legacy `model.api_base`/`api_key`, so
+    merely SKIPPING a blank connection key left the previous credential in place and sent
+    it to this endpoint. Discovery and the CRUD route were fixed first; this is the one
+    that put a production key on the wire to a local endpoint on every turn.
+    """
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key-LEAK")
+    cfg = _cfg(
+        providers=[{"id": "local-vllm", "type": "openai-compat", "base_url": "http://localhost:8000/v1"}],
+        model={"name": "local-vllm:qwen3-32b", "api_key": "PROD-GATEWAY-KEY", "api_base": "https://prod/v1"},
+    )
+    llm = create_llm(cfg, model_name="local-vllm:qwen3-32b")
+    assert str(llm.openai_api_base) == "http://localhost:8000/v1"
+    sent = llm.openai_api_key.get_secret_value()
+    assert sent not in ("PROD-GATEWAY-KEY", "env-key-LEAK")
+
+
+def test_a_migrated_gateway_still_runs_on_an_env_only_key(monkeypatch):
+    """The other half: strictness must not strand an operator who supplies the gateway
+    key through OPENAI_API_KEY, so migration folds it into the entry itself."""
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
+    cfg = _cfg(model={"name": "protolabs/reasoning", "api_base": "https://prod/v1"})
+    assert cfg.provider_by_id("gateway").api_key == "env-key"
+    llm = create_llm(cfg, model_name="gateway:protolabs/reasoning")
+    assert llm.openai_api_key.get_secret_value() == "env-key"
+    assert str(llm.openai_api_base) == "https://prod/v1"
+
+
+def test_a_keyless_connection_does_not_pick_up_the_env_key_via_the_probe(monkeypatch):
+    """`list_gateway_models` has its own OPENAI_API_KEY fallback, which quietly undid the
+    isolation its callers had just enforced. A registered connection opts out."""
+    from graph.config_io import list_gateway_models
+
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key-LEAK")
+    seen: dict = {}
+
+    def _capture(url, headers=None, **kw):
+        seen["auth"] = (headers or {}).get("Authorization", "")
+        raise RuntimeError("stop here — the header is what matters")
+
+    monkeypatch.setattr("httpx.get", _capture, raising=False)
+    list_gateway_models("http://localhost:8000/v1", "", allow_env_key=False)
+    assert "env-key-LEAK" not in seen.get("auth", "")
+
+
+def test_a_duplicate_connection_id_keeps_the_FIRST_key():
+    """`_parse_providers` keeps the first entry for a duplicated id, so the key must too —
+    otherwise a later duplicate's credential is applied to the first one's endpoint."""
+    from graph.config_io import split_secret_updates
+
+    _, secrets = split_secret_updates(
+        {
+            "providers": [
+                {"id": "gw", "base_url": "https://first/v1", "api_key": "first-key"},
+                {"id": "gw", "base_url": "https://second/v1", "api_key": "second-key"},
+            ]
+        }
+    )
+    assert secrets == {"providers": {"gw": "first-key"}}

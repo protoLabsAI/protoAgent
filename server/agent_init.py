@@ -2941,7 +2941,16 @@ def _build_settings_callbacks() -> dict[str, Any]:
         # runs before anything is persisted, and a first run that cannot be probed is a
         # first run that cannot complete.
         _conns = (config or {}).get("providers")
-        _conn = next((c for c in _conns if isinstance(c, dict)), None) if isinstance(_conns, list) else None
+        _conns = [c for c in _conns if isinstance(c, dict)] if isinstance(_conns, list) else []
+        # Resolve the connection `model.name` actually NAMES, not simply the first one:
+        # probing connection #1 while the model runs on #2 tests the wrong endpoint and
+        # leaves the prefix unstripped. The wizard writes exactly one today, so this is
+        # about any other caller of finish_setup — and about not encoding "there is only
+        # one" a second time, which is the assumption this whole change removes.
+        _named = str(((config or {}).get("model") or {}).get("name", "") or "").partition(":")[0].strip().lower()
+        _conn = next((c for c in _conns if str(c.get("id", "") or "").strip().lower() == _named), None)
+        if _conn is None:
+            _conn = _conns[0] if _conns else None
         _provider = str((_conn or {}).get("type", "") or "") or (
             str((_model_cfg or {}).get("provider", "") or "") if isinstance(_model_cfg, dict) else ""
         )

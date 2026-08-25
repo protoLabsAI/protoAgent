@@ -54,7 +54,15 @@ export function lanesFromOptions(options: string[]): Set<string> {
   const out = new Set(Object.keys(LANE_LABELS));
   for (const opt of options) {
     const i = (opt || "").indexOf(":");
-    if (i > 0 && i < opt.length - 1) out.add(opt.slice(0, i).trim().toLowerCase());
+    if (i <= 0 || i >= opt.length - 1) continue;
+    const head = opt.slice(0, i).trim().toLowerCase();
+    // Pass SERVER-BUILT option lists only. Their prefixes are registered connection ids
+    // by construction, which is what keeps this agreeing with the backend — it claims a
+    // prefix only when it names a registered connection. Feeding arbitrary stored values
+    // in would register `bedrock` from a stored `bedrock:anthropic.claude` and display it
+    // as `anthropic.claude`, which the runtime would never do. The id-shape check is a
+    // second line: a gateway alias contains a slash and can never qualify.
+    if (/^[a-z0-9][a-z0-9_-]*$/.test(head)) out.add(head);
   }
   return out;
 }
@@ -187,7 +195,10 @@ export function modelFormPayload(data: ModelPickerData, current: string): HitlPa
   const { choices, fromFavorites } = modelChoices(data);
   // Derived from the very choices these cards list, so the title, the hint and the
   // "configured default" marker can never disagree about what counts as a lane.
-  const knownLanes = lanesFromOptions([...choices, data.globalModel]);
+  // `choices` may be the operator's favorites, which can be stored bare; `data.models`
+  // and `data.crossProvider` are the schema's qualified option lists, so they carry the
+  // lane names authoritatively.
+  const knownLanes = lanesFromOptions([...data.models, ...data.crossProvider, ...choices]);
   const sourceLabel = data.crossProvider.length
     ? "every model you're signed in to"
     : SUBSCRIPTION_LABELS[data.provider]

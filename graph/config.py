@@ -709,7 +709,11 @@ def _migrated_providers(config) -> list[Provider]:
     """
     out: list[Provider] = []
     base = (getattr(config, "api_base", "") or "").strip()
-    key = (getattr(config, "api_key", "") or "").strip()
+    # Includes the env key: the migrated entry has to carry everything the legacy gateway
+    # ran on, because a REGISTERED connection is resolved strictly from its own fields —
+    # nothing downstream may borrow a global key on its behalf (that is how one
+    # connection's credential reaches another's endpoint).
+    key = (getattr(config, "api_key", "") or "").strip() or os.environ.get("OPENAI_API_KEY", "").strip()
     if base or key:
         out.append(Provider(id="gateway", type=PROVIDER_TYPE_OPENAI_COMPAT, label="Gateway", base_url=base, api_key=key))
     lead = (getattr(config, "model_provider", "") or "").strip().lower()

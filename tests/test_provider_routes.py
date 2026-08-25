@@ -140,7 +140,7 @@ def test_models_probe_uses_the_connection_own_endpoint(client, monkeypatch):
     _install(monkeypatch, **BASE)
     seen: dict = {}
 
-    def _fake_list(base, key):
+    def _fake_list(base, key, **kw):
         seen["base"], seen["key"] = base, key
         return ["m1", "m2"], ""
 

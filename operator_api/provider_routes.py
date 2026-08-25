@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from functools import partial
 
 from fastapi import HTTPException
 from pydantic import BaseModel
@@ -218,7 +219,9 @@ def register_provider_routes(app) -> None:
                     status_code=400,
                     detail=f"{entry.id!r} has no base URL configured — set one before probing it.",
                 )
-            models, error = await asyncio.to_thread(list_gateway_models, base, (entry.api_key or "").strip())
+            models, error = await asyncio.to_thread(
+                partial(list_gateway_models, base, (entry.api_key or "").strip(), allow_env_key=False)
+            )
             return {"models": models, "error": error}
         from graph.providers.discovery import list_provider_models
 

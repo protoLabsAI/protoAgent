@@ -21,8 +21,8 @@ def _cfg(**over) -> LangGraphConfig:
 @pytest.fixture
 def lanes(monkeypatch):
     """Gateway configured, Claude signed in, Codex signed out — the mixed real case."""
-    monkeypatch.setattr(discovery, "list_gateway_models", lambda base, key: (["protolabs/coder"], ""), raising=False)
-    monkeypatch.setattr("graph.config_io.list_gateway_models", lambda base, key: (["protolabs/coder"], ""))
+    monkeypatch.setattr(discovery, "list_gateway_models", lambda base, key, **kw: (["protolabs/coder"], ""), raising=False)
+    monkeypatch.setattr("graph.config_io.list_gateway_models", lambda base, key, **kw: (["protolabs/coder"], ""))
     monkeypatch.setattr(
         discovery,
         "oauth_status",
@@ -53,7 +53,7 @@ def test_options_are_qualified_even_with_a_single_lane(monkeypatch):
     """An unqualified name silently means "whatever model.provider is", so a saved slot
     would change lanes the day the operator switches providers. Naming the lane makes
     the choice durable."""
-    monkeypatch.setattr("graph.config_io.list_gateway_models", lambda base, key: (["protolabs/coder"], ""))
+    monkeypatch.setattr("graph.config_io.list_gateway_models", lambda base, key, **kw: (["protolabs/coder"], ""))
     monkeypatch.setattr(discovery, "oauth_status", lambda p: discovery.OAuthStatus(p, False, "", "", "no"))
 
     assert discovery.qualified_model_options(_cfg()) == ["gateway:protolabs/coder"]
@@ -74,7 +74,7 @@ def test_one_lanes_outage_never_blanks_the_others(monkeypatch):
     """A picker that goes empty because one credential expired is worse than a picker
     that says which lane is down."""
 
-    def _boom(base, key):
+    def _boom(base, key, **kw):
         raise RuntimeError("gateway unreachable")
 
     monkeypatch.setattr("graph.config_io.list_gateway_models", _boom)

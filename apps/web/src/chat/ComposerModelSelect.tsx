@@ -52,10 +52,12 @@ export function ComposerModelSelect() {
   const effectiveModel = selected || globalModel;
   const groups = groupByLane(options);
   // Same derivation the grouping used, so the badge and the headings agree.
-  // Include the configured model: with favorites pinned as bare ids, the options alone
-  // never mention the connection the primary model names, and the trigger would print the
-  // raw `prod-gateway:…` grammar as its label.
-  const knownLanes = lanesFromOptions([...options, globalModel, selected]);
+  // From the SERVER-BUILT lists only: `options` may be the operator's favorites, which
+  // can be stored bare, while the schema's `models`/`crossProvider` carry the qualified
+  // names whose prefixes are registered ids by construction. The configured value itself
+  // is deliberately NOT a source — it is whatever is stored, and inferring a connection
+  // from it would disagree with the runtime.
+  const knownLanes = lanesFromOptions([...(picker?.models ?? []), ...(picker?.crossProvider ?? []), ...options]);
   // Headings earn their place only when there's a choice of account to make.
   const showLanes = groups.length > 1;
 

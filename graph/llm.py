@@ -233,8 +233,10 @@ def _gateway_configured(config: LangGraphConfig, provider: "Provider | None" = N
     Defined here rather than borrowed from ``runtime.acp_runtime`` — the question is
     "can the gateway path build?", which belongs to this module, and the ACP runtime is
     deprecated (#2548)."""
-    if provider is not None and (provider.api_key or "").strip():
-        return True
+    if provider is not None:
+        # Same strictness: a registered connection is usable when it has somewhere to
+        # talk to. A key is optional (local endpoints want none) and is never borrowed.
+        return bool((provider.base_url or "").strip() or (provider.api_key or "").strip())
     key = (getattr(config, "api_key", "") or "").strip() or os.environ.get("OPENAI_API_KEY", "").strip()
     return bool(key)
 
@@ -256,11 +258,16 @@ def _build_gateway_llm(
     # same client class against different connections, rather than every gateway call
     # inheriting the single `model.api_base`/`api_key` pair.
     if provider is not None:
-        if provider.base_url:
-            kwargs["base_url"] = provider.base_url
-        key = (provider.api_key or "").strip()
-        if key:
-            kwargs["api_key"] = key
+        # A registered connection is resolved STRICTLY from its own fields. The kwargs
+        # above start from the legacy `model.api_base`/`api_key`, so merely skipping a
+        # blank key left the previous connection's credential in place and sent it to
+        # THIS endpoint — a local vLLM receiving the production gateway's key. The
+        # migrated `gateway` entry carries the legacy base/key (env included), so nothing
+        # that worked before loses its credential here.
+        kwargs["base_url"] = provider.base_url or kwargs.get("base_url")
+        # langchain requires SOMETHING; a keyless endpoint (a local vLLM, Ollama) is
+        # normal, so a placeholder goes on the wire rather than another connection's key.
+        kwargs["api_key"] = (provider.api_key or "").strip() or "not-needed"
     if model_name:
         kwargs["model"] = model_name
     # Per-turn reasoning-effort override (the /effort chat command). When the turn carries

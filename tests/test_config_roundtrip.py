@@ -12,6 +12,7 @@ literals so a future refactor that drops or mis-parses a field fails loudly.
 """
 
 import dataclasses
+import os
 import textwrap
 from pathlib import Path
 
@@ -74,6 +75,16 @@ def _freeze_ui_tier_default(monkeypatch):
 # from_yaml(example) field map. api_key/auth_token are asserted == "" and
 # plugin_config is only asserted to be a dict (see test below), so they are
 # OMITTED from this map.
+_GOLDEN_PROVIDERS = [
+    Provider(
+        id="gateway",
+        type="openai-compat",
+        label="Gateway",
+        base_url="http://gateway:4000/v1",
+        api_key=os.environ.get("OPENAI_API_KEY", "").strip(),
+    )
+]
+
 FROM_YAML_EXAMPLE_FIELDS = {
     "a2a_description": "",
     "a2a_require_routable_url": False,
@@ -207,7 +218,10 @@ FROM_YAML_EXAMPLE_FIELDS = {
     # ADR 0106: a config with no `providers:` block is migrated to the registry its
     # legacy fields imply, reusing the slot grammar's existing lane id so every stored
     # `gateway:<model>` value keeps resolving to the same connection.
-    "providers": [Provider(id="gateway", type="openai-compat", label="Gateway", base_url="http://gateway:4000/v1", api_key="")],
+    # api_key is env-sensitive: migration folds OPENAI_API_KEY into the entry so a
+    # registered connection is self-contained (nothing downstream may borrow a global key
+    # on its behalf), so the golden pins the shape and the roundtrip test checks the key.
+    "providers": _GOLDEN_PROVIDERS,
     "model_vision": False,
     "operator_allowed_dirs": [],
     "operator_project_dir": "",

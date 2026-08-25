@@ -382,7 +382,11 @@ def available_model_lanes(config: "LangGraphConfig") -> list[dict]:
                 lane["configured"] = bool(base)
             if lane["configured"]:
                 try:
-                    lane["models"], lane["error"] = list_gateway_models(base, key)
+                    # No env fallback for a registered connection — a blank key means
+                    # this endpoint needs none, not "borrow the global one".
+                    lane["models"], lane["error"] = list_gateway_models(
+                        base, key, allow_env_key=legacy
+                    )
                 except Exception as exc:  # noqa: BLE001 — one lane's outage is not the picker's
                     lane["error"] = str(exc)
             else:
