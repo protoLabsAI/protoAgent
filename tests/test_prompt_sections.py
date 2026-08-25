@@ -216,3 +216,59 @@ def test_compose_context_record_false_skips_injection_log(tmp_path, monkeypatch)
 
     km.before_agent(state, runtime=None)
     assert recorded == [True]  # the real path still records
+
+
+# --- collaboration section (#3042) --------------------------------------------
+
+
+def test_collaboration_section_is_empty_without_delegates(monkeypatch):
+    import runtime.state as rs
+    from graph.prompts import _build_collaboration_section
+
+    monkeypatch.setattr(rs.STATE, "delegate_registry", None, raising=False)
+    assert _build_collaboration_section() == ""
+
+    class _Empty:
+        def names(self):
+            return []
+
+    monkeypatch.setattr(rs.STATE, "delegate_registry", _Empty(), raising=False)
+    assert _build_collaboration_section() == ""
+
+
+def test_collaboration_section_teaches_the_lead_to_moderate(monkeypatch):
+    """The live gap this closes: `@x @y work together` ran ONE round each and never
+    reached the lead. The doctrine must say moderation is the lead's job, that
+    subordinates can't route to each other, and that a bare `@x @y` is one round."""
+    import runtime.state as rs
+    from graph.prompts import _build_collaboration_section
+
+    class _Reg:
+        def names(self):
+            return ["proto", "reviewer"]
+
+    monkeypatch.setattr(rs.STATE, "delegate_registry", _Reg(), raising=False)
+    text = _build_collaboration_section()
+    assert "work together" in text.lower()
+    assert "delegate_to" in text
+    assert "subordinate" in text.lower()
+    assert "one message to each" in text  # the @x @y clarification
+    assert "role" in text.lower()  # coders get roles, not parallel edits
+
+
+def test_collaboration_section_appears_in_the_assembled_prompt(monkeypatch):
+    """It must actually reach the prompt, and only when delegates exist."""
+    import runtime.state as rs
+    from graph.prompts import build_system_prompt_parts
+
+    class _Reg:
+        def names(self):
+            return ["proto"]
+
+    monkeypatch.setattr(rs.STATE, "delegate_registry", _Reg(), raising=False)
+    labels = [label for label, _ in build_system_prompt_parts()]
+    assert "Collaboration" in labels
+
+    monkeypatch.setattr(rs.STATE, "delegate_registry", None, raising=False)
+    labels = [label for label, _ in build_system_prompt_parts()]
+    assert "Collaboration" not in labels

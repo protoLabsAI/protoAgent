@@ -170,6 +170,16 @@ def build_system_prompt_parts(
         if section:
             parts.append(("Managed projects", section))
 
+    # 2c. Delegate collaboration (#3042) — only when delegates are configured. Teaches
+    # the lead that when the operator asks two+ participants to WORK TOGETHER, moderating
+    # the rounds is ITS job: subordinate delegates (acp / model) answer their caller and
+    # cannot address each other, so someone has to run the back-and-forth, and that
+    # someone is the orchestrator. A single `@x @y` from the operator is one round each,
+    # not a discussion.
+    collab = _build_collaboration_section()
+    if collab:
+        parts.append(("Collaboration", collab))
+
     # 3. Dynamic context (typically from KnowledgeMiddleware)
     if context:
         parts.append(("Context", f"\n# Context\n\n{context}"))
@@ -226,6 +236,48 @@ def _build_projects_section(projects) -> str:
         rendered += 1
     return "\n".join(lines) if rendered else ""
 
+
+
+def _build_collaboration_section() -> str:
+    """Moderation doctrine for multi-agent collaboration (#3042) — empty unless delegates
+    are configured, so an instance with none carries none of it.
+
+    The load-bearing idea: ACP and model delegates are SUBORDINATES — they answer their
+    caller and cannot route to each other. So "have X and Y work together" cannot happen
+    among them on its own; the lead must run the rounds. This is the same reason
+    reply-text agent-to-agent chaining was removed (a subordinate must not route onward):
+    coordination is the orchestrator's job, done with `delegate_to`, not a capability
+    handed to the delegates.
+    """
+    try:
+        from runtime.state import STATE
+
+        reg = getattr(STATE, "delegate_registry", None)
+        if reg is None or not reg.names():
+            return ""
+    except Exception:  # noqa: BLE001 — prompt building must never break on registry state
+        return ""
+    return (
+        "# Working with delegates\n\n"
+        "When the operator asks two or more participants to **work together** / collaborate "
+        "/ reach agreement on something (e.g. \"have proto and reviewer sort out X\"), YOU "
+        "moderate it — that is orchestration, and it is your job:\n"
+        "- Delegates of type `acp` and `model` are subordinates: they answer you and cannot "
+        "address each other. So run the discussion yourself — `delegate_to` one, relay its "
+        "points to the next (`delegate_to` again with that context), carry objections back, "
+        "and continue round by round until they converge or clearly won't.\n"
+        "- Give each participant a ROLE when the task is code or artifacts (one drafts, one "
+        "reviews) rather than having both edit in parallel — two coders in one workspace "
+        "collide.\n"
+        "- Decide when it's settled and say so, with the outcome and who held which "
+        "position. Don't loop indefinitely — a handful of rounds, then report even a "
+        "disagreement.\n"
+        "- Prefer `background=True` for anything that will take more than a couple of quick "
+        "exchanges, and synthesize when the replies land.\n"
+        "A bare `@x @y <task>` typed by the OPERATOR is one message to each, in turn — a "
+        "quick parallel consult, not a discussion. If they need to iterate, that's the "
+        "moderation loop above, and the operator hands it to you as an ordinary request."
+    )
 
 def _build_subagent_section() -> str:
     """Build the subagent delegation instructions.
