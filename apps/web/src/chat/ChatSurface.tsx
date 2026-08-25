@@ -1804,6 +1804,10 @@ function ChatSessionSlot({
           // where the delegate_to happened, via insertRoomBubble — which splits the lead's
           // single streaming message so a bubble never floats above the work that preceded
           // it. A `@x @y` fan-out is the same path with an empty placeholder (insert-before).
+          reveal.flush(); // part ordering (like onToolCall/onComponent): commit the lead's
+          // streamed-so-far text into the placeholder BEFORE the split reads it — otherwise
+          // the text is still buffered, the placeholder looks empty, every bubble takes the
+          // insert-before path, and all the lead's prose flushes in at the END (the bug).
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
           if (reply.author) runAnswered.current = true; // a real reply — the continue prefill may fire
