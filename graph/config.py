@@ -251,6 +251,13 @@ def _read_config_docs(p: Path) -> tuple[dict, dict, bool]:
         host_base = copy.deepcopy(host_layer)
         _drop_host_model_identity(host_base, agent_data)
         merged = _deep_merge_dicts(host_base, agent_data)
+        # A list does not deep-merge: the agent leaf's `providers:` would REPLACE the
+        # box's outright, so an instance that adds one local connection would lose every
+        # shared one. Merge by id instead — the box supplies the connection, the instance
+        # may override any field of it or add its own.
+        merged["providers"] = _merge_provider_lists(host_base.get("providers"), agent_data.get("providers"))
+        if not merged["providers"]:
+            merged.pop("providers")
     else:
         merged = agent_data
 
@@ -495,6 +502,27 @@ def _host_scoped_fields():
     return [f for f in FIELDS if getattr(f, "scope", "agent") == "host"]
 
 
+def _merge_provider_lists(host_entries, agent_entries) -> list:
+    """Host connections overlaid by the agent's, matched on ``id`` (ADR 0106).
+
+    Order follows the host list first, then anything the instance adds — stable, so a
+    picker built from it does not reshuffle when the box gains a connection."""
+    out: list = []
+    index: dict[str, int] = {}
+    for entry in list(host_entries or []) + list(agent_entries or []):
+        if not isinstance(entry, dict):
+            continue
+        pid = str(entry.get("id", "") or "").strip().lower()
+        if not pid:
+            continue
+        if pid in index:
+            out[index[pid]] = {**out[index[pid]], **entry}  # per-field override
+        else:
+            index[pid] = len(out)
+            out.append(dict(entry))
+    return out
+
+
 def _filter_to_host_keys(raw: dict) -> dict:
     """Keep only the host-scoped FIELDS keys present in a raw host-config doc.
 
@@ -506,6 +534,20 @@ def _filter_to_host_keys(raw: dict) -> dict:
         found, val = _get_dotted(raw, f.key)
         if found:
             _set_dotted(out, f.key, val)
+    # `providers:` is not a FIELDS key (it is a list of objects, ADR 0106) but IS
+    # box-shared, mirroring the host-scoped `model.api_base` it replaces: one endpoint
+    # per box, inherited by every instance on it. Keys are deliberately NOT carried —
+    # `model.api_key` is agent-scoped, so a connection's key comes from the instance's
+    # own secrets.yaml and the Host file must not be able to hand one out.
+    host_providers = raw.get("providers")
+    if isinstance(host_providers, list):
+        kept = []
+        for entry in host_providers:
+            if not isinstance(entry, dict):
+                continue
+            kept.append({k: v for k, v in entry.items() if k != "api_key"})
+        if kept:
+            out["providers"] = kept
     return out
 
 

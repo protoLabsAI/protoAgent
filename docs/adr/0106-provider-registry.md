@@ -103,6 +103,56 @@ incoherent with the lead provider when there is no lead provider: a qualified na
 either names a registered provider or is a plain model id. The fleet crash-loop these
 defended against becomes unreachable rather than defended.
 
+## The console surface
+
+Adding a Connections panel beside the pre-registry fields made Settings ▸ Model
+contradict itself: it says "there is no default to switch between" and then, lower on
+the same page, offers a **Provider** dropdown and **API base URL / API key** — the same
+data as the `gateway` connection, with a different write path. So the panel is not an
+addition, it is a **replacement**, and the fields it replaces have to go.
+
+**Settings ▸ Model becomes three blocks:**
+
+1. **Connections** — the only place an endpoint or key is entered. Add / Test / Remove
+   per row. Absorbs `model.api_base`, `model.api_key`, `model.provider`, and the header
+   "Get models" / "Test connection" buttons (both were single-gateway questions: with
+   several connections, "which one?" has no answer).
+2. **Model selection** — which connection and model each slot uses. The primary model
+   becomes a grouped picker (provider heading, bare model names — the convention chosen
+   in #2581) storing the qualified value. The other slots already speak `slot_models`;
+   they simply widen to every connection.
+3. **Behavior** — temperature, max tokens, thinking, reasoning effort, vision,
+   iterations, timeouts. Untouched: none of it is provider-scoped.
+
+### Connections keep today's scope split
+
+`model.api_base` is **host**-scoped and `model.api_key` is **agent**-scoped (ADR 0047),
+so a box shares one endpoint while each agent holds its own key. A single instance-level
+`providers:` list would have silently dropped that, which on a fleet member is a
+capability regression rather than a simplification. The registry therefore mirrors it:
+
+* A connection's **identity and endpoint** (`id`, `type`, `label`, `base_url`) may be
+  declared in the Host layer (`host-config.yaml`) and is inherited by every instance on
+  the box. An instance-level entry with the same id overrides it, per-field.
+* A connection's **key** is always read from the instance's own `secrets.yaml` under
+  `providers.<id>`, never from the Host layer — the same reason `model.api_key` is
+  agent-scoped today.
+
+### The replaced fields are retired over one release, not cut
+
+`model.provider`, `model.api_base` and `model.api_key` stay in the settings schema for
+one release, rendered **read-only with a pointer to Connections**. Deleting them
+outright would break anything reading them over `/api/settings` — forks, snapshot
+import, the fleet host layer — with no warning. They are removed no earlier than
+**v0.152.0**, alongside the config attributes they mirror.
+
+### First run adds a connection
+
+The setup wizard asks for provider + base URL + key today, writing the three legacy
+fields. It writes **one connection** instead, and nothing else — first run is where the
+registry's shape is easiest to teach, and a wizard that still wrote the legacy fields
+would recreate the divergence this section exists to remove.
+
 ## Consequences
 
 - Settings ▸ Model's account section becomes **Settings ▸ Providers** — a list you

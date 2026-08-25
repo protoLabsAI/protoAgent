@@ -105,4 +105,6 @@ def test_an_unconfigured_gateway_is_not_probed(monkeypatch):
     got = {lane["provider"]: lane for lane in discovery.available_model_lanes(cfg)}
 
     assert not got["gateway"]["configured"]
-    assert "No gateway key" in got["gateway"]["error"]
+    # Names the CONNECTION now (ADR 0106) — with several registrable, "the gateway"
+    # no longer identifies which one.
+    assert "No API key configured" in got["gateway"]["error"]

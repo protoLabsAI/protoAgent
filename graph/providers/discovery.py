@@ -324,56 +324,65 @@ _PROVIDER_LABELS = {
 
 
 def available_model_lanes(config: "LangGraphConfig") -> list[dict]:
-    """Per-lane model lists: ``[{provider, label, configured, models, error}]``.
+    """Per-connection model lists: ``[{provider, label, configured, models, error}]``.
 
-    Order is gateway first, then subscriptions alphabetically — stable, so the picker
-    doesn't reshuffle between polls. A lane the operator can't use is still returned,
-    with ``configured: False``, so the UI can say "sign in to use Claude" rather than
-    silently omitting it (the difference between "not available" and "not offered").
+    One entry per REGISTERED connection (ADR 0106), in config order — so two gateways
+    appear as two lanes and the picker can offer both, which the previous fixed triple
+    (gateway + the two subscriptions) could not express. ``provider`` carries the
+    connection id, which is exactly the prefix that selects it.
 
-    Every probe is network I/O and every one is contained: a lane that fails reports its
-    own ``error`` and the others still list. One expired credential must not blank the
-    whole picker.
+    A lane the operator can't use is still returned with ``configured: False`` and a
+    reason: "sign in to use Claude" beats silently omitting it. Every probe is network
+    I/O and every one is contained — one expired credential must not blank the picker.
     """
     from graph.config_io import list_gateway_models
 
     lanes: list[dict] = []
+    env_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    entries = list(getattr(config, "providers", []) or [])
+    if not entries:
+        # Compatibility floor, the same one `split_slot_target` keeps: a config that
+        # never went through `from_dict` (a bare LangGraphConfig, a caller that built one
+        # directly) has no registry, and returning ZERO lanes would blank every picker
+        # rather than degrade. Fall back to the three lanes this function always
+        # reported — gateway plus both subscriptions — so such a caller sees exactly what
+        # it saw before. Retires with the legacy fields (no earlier than v0.152.0).
+        from graph.config import Provider
 
-    api_base = (getattr(config, "api_base", "") or "").strip()
-    api_key = (getattr(config, "api_key", "") or "").strip() or os.environ.get("OPENAI_API_KEY", "").strip()
-    gw: dict = {
-        "provider": "gateway",
-        "label": _PROVIDER_LABELS["gateway"],
-        "configured": bool(api_base and api_key),
-        "models": [],
-        "error": "",
-    }
-    if gw["configured"]:
-        try:
-            gw["models"], gw["error"] = list_gateway_models(api_base, api_key)
-        except Exception as exc:  # noqa: BLE001 — one lane's outage is not the picker's
-            gw["error"] = str(exc)
-    else:
-        gw["error"] = "No gateway key configured."
-    lanes.append(gw)
-
-    for provider in sorted(NATIVE_OAUTH_PROVIDERS):
-        status = oauth_status(provider)
+        entries = [Provider(id="gateway", type="openai-compat", label=_PROVIDER_LABELS["gateway"])]
+        entries += [
+            Provider(id=t, type=t, label=_PROVIDER_LABELS.get(t, t)) for t in sorted(NATIVE_OAUTH_PROVIDERS)
+        ]
+    for entry in entries:
         lane: dict = {
-            "provider": provider,
-            "label": _PROVIDER_LABELS.get(provider, provider),
-            "configured": bool(status.signed_in),
+            "provider": entry.id,
+            "label": entry.display(),
+            "configured": False,
             "models": [],
-            "error": "" if status.signed_in else (status.hint or "Not signed in."),
+            "error": "",
         }
-        if status.signed_in:
-            try:
-                lane["models"], lane["error"] = list_provider_models(provider, config)
-            except Exception as exc:  # noqa: BLE001
-                lane["error"] = str(exc)
+        if entry.type == "openai-compat":
+            base = (entry.base_url or getattr(config, "api_base", "") or "").strip()
+            key = (entry.api_key or "").strip() or (getattr(config, "api_key", "") or "").strip() or env_key
+            lane["configured"] = bool(base and key)
+            if lane["configured"]:
+                try:
+                    lane["models"], lane["error"] = list_gateway_models(base, key)
+                except Exception as exc:  # noqa: BLE001 — one lane's outage is not the picker's
+                    lane["error"] = str(exc)
+            else:
+                lane["error"] = "No API key configured for this connection."
+        else:
+            status = oauth_status(entry.type)
+            lane["configured"] = bool(status.signed_in)
+            lane["error"] = "" if status.signed_in else (status.hint or "Not signed in.")
+            if status.signed_in:
+                try:
+                    lane["models"], lane["error"] = list_provider_models(entry.type, config)
+                except Exception as exc:  # noqa: BLE001
+                    lane["error"] = str(exc)
         lanes.append(lane)
     return lanes
-
 
 def qualified_model_options(config: "LangGraphConfig") -> list[str]:
     """Flat, deduped ``<provider>:<model>`` options for every usable lane — what a

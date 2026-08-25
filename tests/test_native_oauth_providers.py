@@ -851,17 +851,28 @@ def test_validate_oauth_no_system_message_for_codex(monkeypatch):
 # ── settings schema: provider is a suggest-dropdown, not a strict enum ───────────
 
 
-def test_provider_field_is_a_dropdown():
+def test_provider_field_is_retired_from_the_form_but_still_a_known_key():
+    """ADR 0106: Connections owns the endpoint/key/provider triple.
+
+    The field stays in FIELDS so it round-trips through config_to_dict, the YAML writer
+    and /api/settings — forks, snapshot import and the fleet Host layer read it — but a
+    form that still offered it would contradict the panel above it. Removed no earlier
+    than v0.152.0.
+    """
     from graph.settings_schema import FIELDS, build_schema
 
     field = next(f for f in FIELDS if f.key == "model.provider")
-    assert field.type == "select"
-    assert field.options_source == "providers"
-    # build_schema fills the provider options for the console.
-    schema = build_schema(LangGraphConfig())
-    entry = next(f for group in schema for f in group["fields"] if f["key"] == "model.provider")
-    assert "anthropic-oauth" in entry["options"]
-    assert "openai-codex" in entry["options"]
+    assert field.ui_hidden is True
+    assert field.options_source == "providers"  # still validates a legacy written value
+
+    rendered = {f["key"] for group in build_schema(LangGraphConfig()) for f in group["fields"]}
+    assert "model.provider" not in rendered
+    assert "model.api_base" not in rendered
+    assert "model.api_key" not in rendered
+
+    # ...but the cascade diagnostic can still explain where each one came from.
+    explained = {f["key"] for g in build_schema(LangGraphConfig(), include_hidden=True) for f in g["fields"]}
+    assert {"model.provider", "model.api_base", "model.api_key"} <= explained
 
 
 def test_provider_select_still_accepts_custom_value():
