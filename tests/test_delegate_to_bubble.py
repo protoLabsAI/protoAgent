@@ -46,10 +46,15 @@ class _ToolFake(GenericFakeChatModel):
         yield self._chunk()
 
 
+# Longer than _TOOL_PREVIEW_CHARS (800) so a preview-cap regression would show up as a
+# truncated bubble — a delegate's review or proposal easily runs past 800 chars.
+_LONG_REPLY = "REVIEW: " + ("this is a detailed point. " * 60) + "Do you agree with the tests?"
+
+
 @tool
 async def delegate_to(target: str, query: str) -> str:
-    """Fake delegate_to for the test — echoes an authored-looking reply."""
-    return f"{target.upper()} says: done"
+    """Fake delegate_to for the test — a long authored-looking reply."""
+    return f"{target.upper()} · {_LONG_REPLY}"
 
 
 def _call(**args):
@@ -96,7 +101,8 @@ async def test_delegate_to_emits_ask_then_reply(monkeypatch):
     # 2. the participant's reply — author-stamped, from the lead
     assert reply["author"] == "proto"
     assert reply["from"] == "assistant"
-    assert "says: done" in reply["text"]
+    assert reply["text"].endswith("Do you agree with the tests?")  # FULL reply, not preview-capped
+    assert len(reply["text"]) > 800  # #3042: a room bubble is a message, not an 800-char card
     assert reply["ok"] is True
 
 
