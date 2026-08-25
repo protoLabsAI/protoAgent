@@ -120,3 +120,74 @@ def test_as_dict_redacts_the_key_by_default():
     p = Provider(id="gw", base_url="https://x/v1", api_key="shh")
     assert "api_key" not in p.as_dict()
     assert p.as_dict(redact=False)["api_key"] == "shh"
+
+
+# ── S2: dispatch routes by registered connection, not by a hardcoded lane ──────
+
+from graph.llm import _gateway_configured, create_llm, split_slot_target  # noqa: E402
+
+
+def _registry_cfg() -> LangGraphConfig:
+    return _cfg(
+        providers=[
+            {"id": "prod-gateway", "type": "openai-compat", "base_url": "https://prod/v1", "api_key": "pk"},
+            {"id": "local-vllm", "type": "openai-compat", "base_url": "http://localhost:8000/v1", "api_key": "lk"},
+            {"id": "claude", "type": "anthropic-oauth"},
+        ],
+        model={"name": "prod-gateway:protolabs/reasoning"},
+    )
+
+
+def test_the_grammar_claims_any_registered_id():
+    cfg = _registry_cfg()
+    assert split_slot_target("local-vllm:qwen3-32b", cfg) == ("local-vllm", "qwen3-32b")
+    assert split_slot_target("prod-gateway:protolabs/coder", cfg) == ("prod-gateway", "protolabs/coder")
+
+
+def test_an_unregistered_prefix_stays_part_of_the_model_name():
+    """The rule that keeps `bedrock:anthropic.claude` a model id rather than a route."""
+    cfg = _registry_cfg()
+    assert split_slot_target("bedrock:anthropic.claude", cfg) == ("", "bedrock:anthropic.claude")
+    assert split_slot_target("protolabs/reasoning", cfg) == ("", "protolabs/reasoning")
+
+
+def test_a_config_with_no_registry_still_speaks_the_legacy_lanes():
+    """A bare config (a test, a caller that never loaded YAML) means what it always did."""
+    bare = LangGraphConfig()
+    assert bare.providers == []
+    assert split_slot_target("gateway:protolabs/coder", bare) == ("gateway", "protolabs/coder")
+    assert split_slot_target("openai-codex:gpt-5.5", bare) == ("openai-codex", "gpt-5.5")
+    assert split_slot_target("prod-gateway:x", bare) == ("", "prod-gateway:x")
+
+
+def test_two_gateways_build_against_their_own_endpoints():
+    """The thing the single api_base/api_key pair made impossible."""
+    cfg = _registry_cfg()
+    prod = create_llm(cfg, model_name="prod-gateway:protolabs/coder")
+    local = create_llm(cfg, model_name="local-vllm:qwen3-32b")
+    assert str(prod.openai_api_base) == "https://prod/v1"
+    assert str(local.openai_api_base) == "http://localhost:8000/v1"
+    assert prod.model_name == "protolabs/coder"
+    assert local.model_name == "qwen3-32b"
+    # Each carries its OWN key, not the one config-level field.
+    assert prod.openai_api_key.get_secret_value() == "pk"
+    assert local.openai_api_key.get_secret_value() == "lk"
+
+
+def test_a_connection_supplies_its_own_key_for_the_configured_check(monkeypatch):
+    cfg = _registry_cfg()
+    assert _gateway_configured(cfg, cfg.provider_by_id("prod-gateway")) is True
+    # The config-level key and OPENAI_API_KEY are still the fallback for a connection
+    # that carries none, so both have to be absent for "unconfigured" to mean anything.
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    keyless = _cfg(providers=[{"id": "no-key", "base_url": "https://x/v1"}])
+    keyless.api_key = ""
+    assert _gateway_configured(keyless, keyless.provider_by_id("no-key")) is False
+
+
+def test_a_keyless_connection_raises_naming_itself(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    cfg = _cfg(providers=[{"id": "local-vllm", "base_url": "http://localhost:8000/v1"}])
+    cfg.api_key = ""
+    with pytest.raises(RuntimeError, match="'local-vllm' connection"):
+        create_llm(cfg, model_name="local-vllm:qwen3-32b")

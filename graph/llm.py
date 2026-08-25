@@ -14,7 +14,7 @@ import httpx
 from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
-from graph.config import LangGraphConfig
+from graph.config import PROVIDER_TYPE_OPENAI_COMPAT, LangGraphConfig, Provider
 
 log = logging.getLogger(__name__)
 
@@ -227,23 +227,40 @@ class _ReasoningChatOpenAI(ChatOpenAI):
             yield chunk
 
 
-def _gateway_configured(config: LangGraphConfig) -> bool:
+def _gateway_configured(config: LangGraphConfig, provider: "Provider | None" = None) -> bool:
     """Is there a usable OpenAI-compatible gateway key (config or env)?
 
     Defined here rather than borrowed from ``runtime.acp_runtime`` — the question is
     "can the gateway path build?", which belongs to this module, and the ACP runtime is
     deprecated (#2548)."""
+    if provider is not None and (provider.api_key or "").strip():
+        return True
     key = (getattr(config, "api_key", "") or "").strip() or os.environ.get("OPENAI_API_KEY", "").strip()
     return bool(key)
 
 
-def _build_gateway_llm(config: LangGraphConfig, model_name: str | None, reasoning_effort: str | None) -> BaseChatModel:
+def _build_gateway_llm(
+    config: LangGraphConfig,
+    model_name: str | None,
+    reasoning_effort: str | None,
+    provider: "Provider | None" = None,
+) -> BaseChatModel:
     """The gateway client for ``model_name`` (or the config's model when blank).
 
     Extracted so every path that means "route this through the gateway" shares one
     builder: the default, a `/`-shorthand slot under a native provider, and an explicit
     ``gateway:<alias>`` slot."""
     kwargs = _build_llm_kwargs(config)
+    # A registered openai-compat connection supplies its OWN endpoint and key. This is
+    # what makes several gateways possible: `prod-gateway:` and `local-vllm:` build the
+    # same client class against different connections, rather than every gateway call
+    # inheriting the single `model.api_base`/`api_key` pair.
+    if provider is not None:
+        if provider.base_url:
+            kwargs["base_url"] = provider.base_url
+        key = (provider.api_key or "").strip()
+        if key:
+            kwargs["api_key"] = key
     if model_name:
         kwargs["model"] = model_name
     # Per-turn reasoning-effort override (the /effort chat command). When the turn carries
@@ -271,18 +288,30 @@ def _build_gateway_llm(config: LangGraphConfig, model_name: str | None, reasonin
 # already existed to the other three lanes, so an operator with a gateway key, a Claude
 # subscription and a ChatGPT subscription can mix all of them across slots.
 GATEWAY_SLOT = "gateway"
-_SLOT_PROVIDERS = (GATEWAY_SLOT, "anthropic-oauth", "openai-codex")
+# The ids a pre-ADR-0106 config implies, and therefore the ones every already-stored
+# slot value uses. Kept as the fallback whitelist for a config that has no registry
+# (a bare LangGraphConfig in a test, a caller that never loaded YAML), so the grammar
+# means the same thing there as it always did.
+_LEGACY_SLOT_PROVIDERS = (GATEWAY_SLOT, "anthropic-oauth", "openai-codex")
 
 
-def split_slot_target(model_name: str | None) -> tuple[str, str]:
+def split_slot_target(model_name: str | None, config: LangGraphConfig | None = None) -> tuple[str, str]:
     """``"openai-codex:gpt-5.6-sol"`` → ``("openai-codex", "gpt-5.6-sol")``.
 
     ``("", name)`` when unqualified, which keeps every existing slot value meaning
-    exactly what it meant before. Unambiguous by construction: no gateway alias or
-    native model id contains a colon (`acp:` is handled separately, upstream)."""
+    exactly what it meant before. A prefix is only claimed when it names a REGISTERED
+    provider (ADR 0106) — previously a hardcoded triple — which is what lets an
+    operator add `prod-gateway:` or `local-vllm:` without touching this module, while
+    `bedrock:anthropic.claude` stays a model name because no such provider is
+    registered. Provider ids cannot contain a colon or slash, so the split stays
+    unambiguous however many are registered (`acp:` is handled separately, upstream).
+    """
     raw = (model_name or "").strip()
     prefix, sep, rest = raw.partition(":")
-    if not sep or prefix.strip().lower() not in _SLOT_PROVIDERS:
+    if not sep:
+        return "", raw
+    known = tuple(config.provider_ids()) if config is not None and config.providers else _LEGACY_SLOT_PROVIDERS
+    if prefix.strip().lower() not in known:
         return "", raw
     return prefix.strip().lower(), rest.strip()
 
@@ -391,19 +420,25 @@ def create_llm(
     # Claude subscription and a ChatGPT subscription can mix all of them across slots
     # instead of every slot inheriting `model.provider`. The qualified form wins over
     # every heuristic below, and says out loud which account pays for the call.
-    slot_provider, slot_model = split_slot_target(model_name)
+    slot_provider, slot_model = split_slot_target(model_name, config)
     if slot_provider:
-        if slot_provider == GATEWAY_SLOT:
-            if not _gateway_configured(config):
+        # Dispatch on the registered connection's TYPE (ADR 0106). An id no longer
+        # implies a kind — `prod-gateway` and `local-vllm` are both openai-compat — so
+        # the registry is what says how to build, and an unregistered prefix never
+        # reaches here because `split_slot_target` declined to claim it.
+        entry = config.provider_by_id(slot_provider)
+        ptype = entry.type if entry is not None else slot_provider
+        if ptype == PROVIDER_TYPE_OPENAI_COMPAT or slot_provider == GATEWAY_SLOT:
+            if not _gateway_configured(config, entry):
                 raise RuntimeError(
-                    f"slot model {model_name!r} asks for the gateway, but no gateway key is "
-                    "configured (model.api_key / OPENAI_API_KEY)."
+                    f"slot model {model_name!r} names the {slot_provider!r} connection, but it "
+                    "has no API key configured (its `api_key`, model.api_key, or OPENAI_API_KEY)."
                 )
-            return _build_gateway_llm(config, slot_model or None, reasoning_effort)
+            return _build_gateway_llm(config, slot_model or None, reasoning_effort, provider=entry)
         from graph.providers import build_native_oauth_llm
 
         return build_native_oauth_llm(
-            slot_provider, config, model_name=slot_model or None, reasoning_effort=reasoning_effort
+            ptype, config, model_name=slot_model or None, reasoning_effort=reasoning_effort
         )
 
     # ACP-only fallback (ADR 0033): when the runtime is an ACP coding agent AND no gateway
