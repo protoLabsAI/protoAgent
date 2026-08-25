@@ -141,3 +141,44 @@ async def test_an_ordinary_tool_still_gets_its_card(monkeypatch):
     cards = [p for k, p in frames if k == "tool_end" and p.get("name") == "current_time"]
     assert cards, "an ordinary tool must still render a card"
     assert not [p for k, p in frames if k == "room_reply"], "a plain tool is not a room bubble"
+
+
+@pytest.mark.asyncio
+async def test_wire_order_is_leadtext_then_ask_then_reply(monkeypatch):
+    """The interleave the console relies on (#3042): within one model response the lead's
+    TEXT streams before the tool executes, so the frames arrive text → ask → reply. The
+    console's reveal.flush() then commits that text before splitting on the bubble — but
+    only if the wire delivers it first, which this pins."""
+    import runtime.state as rs
+    from graph.agent import create_agent_graph
+    from graph.config import LangGraphConfig
+    from langgraph.checkpoint.memory import MemorySaver
+    from server.chat import _run_turn_stream
+
+    # One model response: lead SAYS something, THEN calls delegate_to.
+    lead_then_delegate = AIMessage(
+        content="I'll coordinate this.",
+        tool_calls=[{"name": "delegate_to", "args": {"target": "proto", "query": "look at auth"}, "id": "d1", "type": "tool_call"}],
+    )
+    stream = itertools.chain(
+        [lead_then_delegate, AIMessage(content="proto handled it")],
+        itertools.repeat(AIMessage(content="<output>done</output>")),
+    )
+    monkeypatch.setattr("graph.agent.create_llm", lambda *a, **k: _ToolFake(messages=stream))
+    g = create_agent_graph(LangGraphConfig(), include_subagents=False, extra_tools=[delegate_to], checkpointer=MemorySaver())
+    monkeypatch.setattr(rs.STATE, "graph", g, raising=False)
+    monkeypatch.setattr(rs.STATE, "goal_controller", None, raising=False)
+    monkeypatch.setattr(rs.STATE, "graph_config", LangGraphConfig(), raising=False)
+
+    order = []
+    async for kind, payload in _run_turn_stream("go", "wire1", {"configurable": {"thread_id": "wire1"}}):
+        if kind == "text" and "coordinate" in str(payload):
+            order.append("lead-text")
+        elif kind == "room_reply" and payload.get("addressed_to"):
+            order.append("ask")
+        elif kind == "room_reply" and payload.get("author"):
+            order.append("reply")
+
+    # The lead's text must reach the client BEFORE the delegation bubbles, so the console
+    # can commit it into the placeholder and split after it — not below.
+    assert order == ["lead-text", "ask", "reply"], f"wire order was {order}"
