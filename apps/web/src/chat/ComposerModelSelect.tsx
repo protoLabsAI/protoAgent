@@ -75,6 +75,10 @@ export function ComposerModelSelect() {
         if (open && (degraded || schema.isStale)) void schema.refetch();
       }}
     >
+      {/* Marker child: `Menu` takes no className (its popover is always `.pl-menu`), so
+          this is what lets the stylesheet turn THIS menu — and not a context or overflow
+          menu — into a full-screen sheet on a phone. Not rendered to a11y or to sight. */}
+      <span className="composer-model-menu" hidden aria-hidden="true" />
       {/* Grouped by account, with the provider as a section heading rather than a badge
           on every row: the rows are then just model names, which is what you're actually
           choosing between. A single-lane operator sees one unlabelled group — a lone
