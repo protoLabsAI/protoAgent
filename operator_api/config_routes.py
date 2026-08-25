@@ -269,6 +269,25 @@ def register_config_routes(app) -> None:
 
         return {"providers": await asyncio.to_thread(all_oauth_status)}
 
+    @app.post("/api/config/oauth/import")
+    async def _api_oauth_import(req: OAuthLoginRequest):
+        """Take over the login the Codex CLI holds (ADR 0097).
+
+        Deliberately a separate, explicit route rather than something resolution does on
+        its own: a refresh token is single-use, so importing TRANSFERS the login — it is
+        rotated on the way in and the Codex CLI needs `codex login` afterwards. The
+        caller must have told the operator that before calling this.
+        """
+        from graph.providers.oauth import OAuthCredentialError, import_codex_cli_credential
+
+        if (req.provider or "").strip().lower() != "openai-codex":
+            raise HTTPException(status_code=400, detail="import is only available for openai-codex")
+        try:
+            result = await asyncio.to_thread(import_codex_cli_credential)
+        except OAuthCredentialError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return await _rebuild_graph_after_reconnect({"status": "complete", **result}, "openai-codex")
+
     @app.post("/api/config/oauth/start")
     async def _api_oauth_start(req: OAuthLoginRequest):
         """Begin an in-console OAuth sign-in (ADR 0097). Codex returns a device code +

@@ -471,6 +471,24 @@ def _jwt_is_expiring(access_token: str, skew_s: int) -> bool:
     return float(exp) <= time.time() + skew_s
 
 
+def _codex_needs_refresh(tokens: dict[str, Any], skew_s: int) -> bool:
+    """Should we spend the refresh token now?
+
+    Two signals, and the provider's wins while the access token is still usable:
+    OpenAI's ``earliest_refresh_at`` says the soonest it wants to hear from us, so a
+    token that is live and before that mark is simply used. Once the access token is
+    genuinely within ``skew_s`` of expiry we refresh regardless — a stale
+    ``earliest_refresh_at`` must never strand a caller.
+    """
+    access = str(tokens.get("access_token", "") or "").strip()
+    if not access or _jwt_is_expiring(access, skew_s):
+        return True
+    earliest = tokens.get("earliest_refresh_at")
+    if isinstance(earliest, (int, float)):
+        return time.time() >= float(earliest)
+    return False
+
+
 def _read_codex_tokens(path: Path) -> dict[str, Any] | None:
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
@@ -541,6 +559,13 @@ def _refresh_codex_tokens(tokens: dict[str, Any], *, timeout_s: float = 20.0) ->
         )
     updated = dict(tokens)
     updated["access_token"] = new_access
+    # OpenAI returns `earliest_refresh_at` — an explicit "do not refresh before this",
+    # about a day ahead of a 10-day access token. Honouring it turns refresh from a
+    # per-boot expiry check into a roughly once-per-nine-days event, which is the real
+    # reason concurrent refreshes were ever common enough to notice. Kept alongside the
+    # tokens so every process on the box sees the same answer.
+    if isinstance(payload.get("earliest_refresh_at"), (int, float)):
+        updated["earliest_refresh_at"] = float(payload["earliest_refresh_at"])
     if isinstance(payload.get("refresh_token"), str) and payload["refresh_token"].strip():
         updated["refresh_token"] = payload["refresh_token"].strip()
     if isinstance(payload.get("id_token"), str) and payload["id_token"].strip():
@@ -689,40 +714,38 @@ def resolve_codex_oauth(paths: InstancePaths | None = None) -> CodexOAuthCreds:
 
     # Fast path: a warm, unexpired store read needs neither the lock nor a write.
     tokens = _read_codex_tokens(store)
-    if tokens:
-        access = str(tokens.get("access_token", "") or "").strip()
-        if access and not _jwt_is_expiring(access, _CODEX_REFRESH_SKEW_S):
-            return _creds(tokens, access, "instance_store")
+    if tokens and not _codex_needs_refresh(tokens, _CODEX_REFRESH_SKEW_S):
+        return _creds(tokens, str(tokens["access_token"]).strip(), "instance_store")
 
     # Slow path: refresh or first bootstrap — serialized so single-use refresh is spent once.
     with _store_lock(store), _file_lock(store):
         tokens = _read_codex_tokens(store)  # re-read: a peer may have refreshed while we waited
         source = "instance_store"
         if tokens is None:
-            # Respect an explicit disconnect: do NOT silently re-import the Codex CLI's
-            # credential until an in-console sign-in reconnects (#2440).
             if is_disconnected("openai-codex", paths):
                 raise OAuthCredentialError(
                     "Codex is disconnected in protoAgent. Sign in again to reconnect.",
                     provider="openai-codex",
                 )
-            tokens = _usable_cli_tokens()
-            source = "codex_cli_bootstrap"
-            if tokens is None:
-                raise OAuthCredentialError(
-                    "No usable Codex credential. Run `codex login`, then retry — "
-                    "protoAgent imports that login once and keeps its own refreshed copy. "
-                    "A Codex CLI login whose own token has already expired is deliberately "
-                    "NOT imported: its refresh token is single-use and has almost certainly "
-                    "been spent, so importing it would surface a 401 about a refresh instead "
-                    "of telling you to sign in. Note that `codex login status` reports a "
-                    "long-dead login as healthy — trust the file, not the command.",
-                    provider="openai-codex",
-                )
+            # NO silent import. A refresh token is single-use, so reading the Codex
+            # CLI's file makes two applications hold one secret with no way to
+            # coordinate — we cannot lock the CLI, and whichever refreshes first
+            # silently kills the other. Every 401 this module has had to survive came
+            # from that, so ownership is now explicit: protoAgent uses a credential it
+            # minted (console device sign-in) or one the operator deliberately handed
+            # over (`import_codex_cli_credential`, which takes ownership immediately).
+            raise OAuthCredentialError(
+                "Not signed in to ChatGPT. Sign in from the console — Settings ▸ Model ▸ "
+                "Connected account — which mints protoAgent's own credential and never "
+                "touches the Codex CLI's. If you would rather hand over the login the "
+                "Codex CLI already holds, import it explicitly; that transfers ownership, "
+                "so the CLI itself will need `codex login` afterwards.",
+                provider="openai-codex",
+            )
 
         access = str(tokens.get("access_token", "") or "").strip()
         refreshed = False
-        if not access or _jwt_is_expiring(access, _CODEX_REFRESH_SKEW_S):
+        if _codex_needs_refresh(tokens, _CODEX_REFRESH_SKEW_S):
             try:
                 tokens = _refresh_codex_tokens(tokens)
             except OAuthCredentialError as exc:
@@ -762,6 +785,40 @@ def resolve_codex_oauth(paths: InstancePaths | None = None) -> CodexOAuthCreds:
         elif refreshed:
             _write_codex_store(store, tokens)
         return _creds(tokens, access, "instance_store" if refreshed else source)
+
+
+def import_codex_cli_credential(paths: InstancePaths | None = None) -> dict[str, Any]:
+    """Take over the login the Codex CLI holds. Explicit, operator-initiated only.
+
+    An OAuth refresh token is single-use, so two applications cannot both hold one
+    live. Importing therefore *transfers* the login rather than copying it: we refresh
+    immediately, which rotates the token to one only protoAgent knows, and the Codex
+    CLI's own copy is dead from that moment. That consequence is real and is why this
+    is never automatic — silently breaking another application the operator relies on
+    is not ours to do. The caller is expected to have said so in the UI.
+
+    Returns ``{"account_id": …, "cli_needs_relogin": True}``.
+    """
+    paths = paths or instance_paths()
+    store = _codex_store_path(paths)
+    tokens = _usable_cli_tokens()
+    if tokens is None:
+        raise OAuthCredentialError(
+            "The Codex CLI has no usable login to import — its stored token is missing or "
+            "already expired. Sign in from the console instead (that mints protoAgent's own "
+            "credential), or run `codex login` first if you specifically want to hand that "
+            "login over. Note `codex login status` reports a long-dead login as healthy.",
+            provider="openai-codex",
+        )
+    with _store_lock(store), _file_lock(store):
+        # Refresh AS PART OF the import, not later: until we have rotated, both
+        # applications believe they hold a live token and the first to refresh kills the
+        # other. Rotating here makes the handover atomic from the operator's point of view.
+        tokens = _refresh_codex_tokens(tokens)
+        _write_codex_store(store, tokens, provenance=PROVENANCE_CLI_BOOTSTRAP)
+    clear_disconnected("openai-codex", paths)
+    log.info("[codex] imported the Codex CLI login and rotated it; the CLI now needs `codex login`.")
+    return {"account_id": _codex_account_id(tokens) or "", "cli_needs_relogin": True}
 
 
 # ── Disconnect / revoke lifecycle (#2440) ─────────────────────────────────────

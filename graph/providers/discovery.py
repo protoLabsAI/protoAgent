@@ -151,14 +151,22 @@ def _codex_status() -> OAuthStatus:
     Never refreshes or writes — a status poll must be side-effect-free."""
     from infra.paths import instance_paths
 
+    # ONLY protoAgent's own store counts as signed in. Reading the Codex CLI's file
+    # here reported `signed_in: True` off a credential we do not own and may not be
+    # able to use — including a long-dead one, which still rendered as a green
+    # "connected" account in the console while every turn 401'd. A CLI login is an
+    # offer to import, not a session; `import_available` says so without claiming it.
     store = _oauth._codex_store_path(instance_paths())
     tokens = _oauth._read_codex_tokens(store)
     source = "instance_store"
-    if tokens is None:
-        tokens = _oauth._read_codex_tokens(_oauth._CODEX_CLI_AUTH_FILE)
-        source = "codex_cli"
     if not tokens or not str(tokens.get("access_token", "") or "").strip():
-        return OAuthStatus("openai-codex", False, "", "", _SIGN_IN_HINTS["openai-codex"])
+        hint = _SIGN_IN_HINTS["openai-codex"]
+        if _oauth._usable_cli_tokens() is not None:
+            hint = (
+                "The Codex CLI holds a usable login you can import — that transfers it, so "
+                "the CLI will need `codex login` afterwards. " + hint
+            )
+        return OAuthStatus("openai-codex", False, "", "", hint)
     acct = _oauth._codex_account_id(tokens)
     expiring = _oauth._jwt_is_expiring(str(tokens["access_token"]), 0)
     detail = "ChatGPT account" + (f" …{acct[-6:]}" if acct else "")
