@@ -234,9 +234,11 @@ def _gateway_configured(config: LangGraphConfig, provider: "Provider | None" = N
     "can the gateway path build?", which belongs to this module, and the ACP runtime is
     deprecated (#2548)."""
     if provider is not None:
-        # Same strictness: a registered connection is usable when it has somewhere to
-        # talk to. A key is optional (local endpoints want none) and is never borrowed.
-        return bool((provider.base_url or "").strip() or (provider.api_key or "").strip())
+        # A registered connection is usable when it has somewhere to talk to. An ENDPOINT
+        # is the requirement — a key is optional (local endpoints want none) — and neither
+        # is ever borrowed from another connection or from the legacy fields. Accepting a
+        # key alone would let the build fall through to the legacy endpoint.
+        return bool((provider.base_url or "").strip())
     key = (getattr(config, "api_key", "") or "").strip() or os.environ.get("OPENAI_API_KEY", "").strip()
     return bool(key)
 
@@ -264,7 +266,12 @@ def _build_gateway_llm(
         # THIS endpoint — a local vLLM receiving the production gateway's key. The
         # migrated `gateway` entry carries the legacy base/key (env included), so nothing
         # that worked before loses its credential here.
-        kwargs["base_url"] = provider.base_url or kwargs.get("base_url")
+        # BOTH directions, not just the key. Falling back to the legacy `model.api_base`
+        # here sent THIS connection's key to the legacy gateway's endpoint — the same
+        # coupling as the key fallback, mirrored, and just as capable of putting one
+        # party's credential in front of another. A connection with no endpoint has
+        # nowhere to talk to and is rejected by `_gateway_configured` above.
+        kwargs["base_url"] = provider.base_url
         # langchain requires SOMETHING; a keyless endpoint (a local vLLM, Ollama) is
         # normal, so a placeholder goes on the wire rather than another connection's key.
         kwargs["api_key"] = (provider.api_key or "").strip() or "not-needed"

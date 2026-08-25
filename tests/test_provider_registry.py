@@ -371,3 +371,33 @@ def test_a_duplicate_connection_id_keeps_the_FIRST_key():
         }
     )
     assert secrets == {"providers": {"gw": "first-key"}}
+
+
+def test_a_connection_key_never_reaches_the_legacy_endpoint(monkeypatch):
+    """The mirror of the key leak, and the one that survived to round 11.
+
+    Removing the KEY fallback left the BASE_URL fallback: a connection with a key but no
+    endpoint of its own built against the legacy `model.api_base`, putting that
+    connection's credential in front of the legacy gateway. Both directions of the
+    coupling had to go, so an endpoint is what makes a connection usable and neither
+    field is ever borrowed.
+    """
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    cfg = _cfg(
+        providers=[{"id": "keyed-no-base", "type": "openai-compat", "api_key": "CONNECTION-KEY"}],
+        model={"name": "keyed-no-base:m", "api_base": "https://legacy-gateway/v1", "api_key": "legacy"},
+    )
+    with pytest.raises(RuntimeError, match="'keyed-no-base' connection"):
+        create_llm(cfg, model_name="keyed-no-base:m")
+    assert _gateway_configured(cfg, cfg.provider_by_id("keyed-no-base")) is False
+
+
+def test_a_connection_with_an_endpoint_builds_against_its_own(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    cfg = _cfg(
+        providers=[{"id": "mine", "type": "openai-compat", "base_url": "https://mine/v1", "api_key": "mk"}],
+        model={"name": "mine:m", "api_base": "https://legacy-gateway/v1", "api_key": "legacy"},
+    )
+    llm = create_llm(cfg, model_name="mine:m")
+    assert str(llm.openai_api_base) == "https://mine/v1"
+    assert llm.openai_api_key.get_secret_value() == "mk"
