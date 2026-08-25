@@ -776,6 +776,7 @@ async def _run_turn_stream(
     accumulated_raw = ""  # the answer text so far (the model's content; no protocol tags)
     _llm_started: dict[str, float] = {}  # run_id → monotonic start (per-call latency)
     _tool_started: dict[str, float] = {}  # run_id → monotonic start (per-call latency, #2697)
+    _delegate_targets: dict[str, str] = {}  # run_id → delegate name, for delegate_to → room bubble (#3042)
     announced_tools: set[str] = set()  # tool_call ids already surfaced as a start frame
     async for event in STATE.graph.astream_events(
         graph_input,
@@ -809,9 +810,40 @@ async def _run_turn_stream(
             rid = event.get("run_id")
             if rid:
                 _tool_started[rid] = time.monotonic()
+            # A foreground `delegate_to` is the lead addressing a participant — the same
+            # act as an operator `@`. Stash its target now (the args are on the start
+            # event, not the end) so on_tool_end can render the reply as an AUTHORED room
+            # bubble instead of a tool card (#3042). Correlated by run_id, the same key
+            # the latency timing above uses.
+            if name == "delegate_to" and rid:
+                _tgt = (event.get("data") or {}).get("input") or {}
+                if isinstance(_tgt, dict) and str(_tgt.get("target") or "").strip():
+                    _delegate_targets[rid] = str(_tgt["target"]).strip()
         elif kind == "on_tool_end":
             output = event.get("data", {}).get("output", "")
             rid = event.get("run_id")
+            # `delegate_to` renders as the participant's own chat bubble, not a tool card:
+            # the collaboration the lead moderates then reads as a conversation (proto,
+            # reviewer) rather than machinery under one reply (#3042). REPLACES the card —
+            # this branch emits a room_reply and continues, so no tool_end frame follows.
+            # Foreground only: a background delegate_to answers via the background manager,
+            # never through on_tool_end, so it is untouched here.
+            _dtgt = _delegate_targets.pop(rid, None) if rid else None
+            if _dtgt:
+                _dtext = _coerce_tool_output(output)
+                _derror = getattr(output, "status", None) == "error"
+                yield (
+                    "room_reply",
+                    {
+                        "author": _dtgt,
+                        "from": "assistant",  # the LEAD addressed this participant
+                        "text": _dtext,
+                        "ok": not _derror,
+                        "catchup": 0,
+                        "truncated": False,
+                    },
+                )
+                continue
             tool_duration_ms = (
                 int(max(0.0, time.monotonic() - _tool_started.pop(rid, time.monotonic())) * 1000) if rid else 0
             )
@@ -859,6 +891,12 @@ async def _run_turn_stream(
             # tool_call id; on_chat_model_end fills the args, on_tool_end closes it.
             for tcc in getattr(chunk, "tool_call_chunks", None) or []:
                 tcid, tcname = tcc.get("id"), tcc.get("name")
+                # A `delegate_to` gets NO tool card — it renders as an authored room
+                # bubble at on_tool_end instead (#3042). Marked announced so neither this
+                # pass nor the on_chat_model_end finalize re-cards it.
+                if tcid and tcname == "delegate_to":
+                    announced_tools.add(tcid)
+                    continue
                 if tcid and tcname and tcid not in announced_tools:
                     announced_tools.add(tcid)
                     yield (
@@ -926,6 +964,9 @@ async def _run_turn_stream(
             # without re-emitting an early start already sent earlier this turn.
             for tc in getattr(output, "tool_calls", None) or []:
                 tcid = tc.get("id")
+                if tcid and tc.get("name") == "delegate_to":
+                    announced_tools.add(tcid)  # room bubble, not a card (#3042)
+                    continue
                 if tcid:
                     announced_tools.add(tcid)
                     yield (

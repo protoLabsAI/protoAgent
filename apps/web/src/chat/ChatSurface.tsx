@@ -1881,10 +1881,17 @@ function ChatSessionSlot({
           }
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
-          if (roomReplies.current > 0) {
-            // Every word of this turn was delivered as authored room messages
-            // (#3051) — the terminal `done` text is the combined fallback for consumers
-            // that can't render them, and keeping the live bubble would show it twice.
+          const placeholder = latest.messages.find((m) => m.id === assistantId);
+          const placeholderEmpty =
+            !placeholder?.content && !placeholder?.parts?.length && !placeholder?.toolCalls?.length;
+          if (roomReplies.current > 0 && placeholderEmpty) {
+            // Pure fan-out (`@x @y`, #3051): the lead never ran, every word of the turn
+            // was authored room messages, and the terminal `done` text is just the
+            // combined fallback — so drop the empty live bubble rather than show it twice.
+            // But when the lead DID run (it moderated a collaboration via delegate_to,
+            // #3042/#3114), its synthesis is IN this bubble and must stay: the room
+            // bubbles are the participants, this is the lead's own answer. The
+            // placeholder-empty guard is exactly that distinction.
             chatStore.updateMessages(
               session.id,
               latest.messages.filter((message) => message.id !== assistantId),
