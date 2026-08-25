@@ -17,7 +17,7 @@ from runtime.state import STATE
 
 
 @pytest.fixture
-def client(monkeypatch, tmp_path):
+def client(monkeypatch):
     app = FastAPI()
     register_provider_routes(app)
 
