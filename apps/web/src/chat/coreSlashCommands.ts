@@ -445,7 +445,9 @@ registerSlashCommand({
     // model — a pick would be inert (mirrors ComposerModelSelect, which hides its menu).
     // Cache-only read: the app shell fetches runtime status at boot, so this is warm;
     // when genuinely unknown we proceed rather than block the command.
-    const runtime = queryClient.getQueryData<{ agent_runtime?: string }>(queryKeys.runtime);
+    const runtime = queryClient.getQueryData<{ agent_runtime?: string; model?: { provider?: string } }>(
+      queryKeys.runtime,
+    );
     const agentRuntime = runtime?.agent_runtime ?? "";
     if (agentRuntime.startsWith("acp:")) {
       ctx.noteToThread(
@@ -462,7 +464,8 @@ registerSlashCommand({
     void queryClient
       .ensureQueryData(settingsSchemaQuery())
       .then((schema) => {
-        const data = modelPickerData(schema.groups);
+        // The runtime carries the live provider; the schema no longer does (ADR 0106).
+        const data = modelPickerData(schema.groups, runtime?.model?.provider ?? "");
         const applyCtx = { sessionId: sid, noteToThread: ctx.noteToThread, focusComposer: ctx.focusComposer };
         if (arg) {
           // Typed form: `/model <alias>` applies directly (like `/effort high`);

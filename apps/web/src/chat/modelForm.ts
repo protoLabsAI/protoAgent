@@ -92,7 +92,7 @@ const strings = (v: unknown): string[] =>
 
 /** Extract the picker's inputs from the settings schema (`GET /api/settings/schema`) —
  *  the SAME source the composer's model menu reads, so /model can never disagree with it. */
-export function modelPickerData(groups: SettingsGroup[]): ModelPickerData {
+export function modelPickerData(groups: SettingsGroup[], liveProvider = ""): ModelPickerData {
   const fields = groups.flatMap((g) => g.fields);
   const name = fields.find((f) => f.key === "model.name");
   const favs = fields.find((f) => f.key === "model.favorites");
@@ -112,9 +112,15 @@ export function modelPickerData(groups: SettingsGroup[]): ModelPickerData {
     // degrade to "gateway model". The primary model names its connection, so its lane is
     // the better answer; the retired field stays as a fallback for an older backend that
     // still renders it. Both disappear with the field itself.
+    // `model.provider` is `ui_hidden` (ADR 0106), so the schema no longer carries it and
+    // reading it alone made every subscription card on a legacy config read "gateway
+    // model". Order: the schema if an older backend still renders it, then the lane the
+    // primary model names, then the RUNTIME's live provider — which is the only source
+    // left once the field is gone, and the one the console already has.
     provider:
       (typeof prov?.value === "string" ? prov.value.trim().toLowerCase() : "") ||
-      laneOf(globalModel, lanesFromOptions([globalModel, ...models])),
+      laneOf(globalModel, lanesFromOptions(models)) ||
+      (liveProvider || "").trim().toLowerCase(),
   };
 }
 
@@ -251,10 +257,17 @@ export function resolveModelArg(data: ModelPickerData, arg: string): string | nu
   if (!t) return null;
   const known = [...data.favorites, ...data.models, ...data.crossProvider];
   if (!known.length) return arg.trim();
+  // The lane set has to reach the bare-name comparison too. Without it `bareModel` only
+  // knew the three legacy lanes, so `/model qwen3-32b` could not find
+  // `local-vllm:qwen3-32b` — the fallback silently stopped working for exactly the custom
+  // connections this PR makes possible. Derived from the server-built lists, as everywhere.
+  const lanes = lanesFromOptions([...data.models, ...data.crossProvider]);
   // Exact match first (someone may type the qualified form), then the bare id — typing
   // `/model claude-sonnet-5` should find `anthropic-oauth:claude-sonnet-5` rather than
   // reporting it unknown.
   return (
-    known.find((m) => m.toLowerCase() === t) ?? known.find((m) => bareModel(m).toLowerCase() === t) ?? null
+    known.find((m) => m.toLowerCase() === t) ??
+    known.find((m) => bareModel(m, lanes).toLowerCase() === t) ??
+    null
   );
 }

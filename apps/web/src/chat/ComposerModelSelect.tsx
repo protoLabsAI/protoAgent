@@ -25,7 +25,7 @@ export function ComposerModelSelect() {
   const field = schema.data?.groups.flatMap((g) => g.fields).find((f) => f.key === "model.name");
 
   const globalModel = String(field?.value ?? "");
-  const picker = schema.data ? modelPickerData(schema.data.groups) : null;
+  const picker = schema.data ? modelPickerData(schema.data.groups, runtime.data?.model?.provider ?? "") : null;
   const fallback = field?.options?.length ? field.options : globalModel ? [globalModel] : [];
   const crossLane = picker ? modelChoices(picker).choices : [];
   const options = crossLane.length ? crossLane : fallback;
