@@ -31,7 +31,7 @@ import { OverviewPanel } from "./OverviewPanel";
 import { DevicesPanel } from "./DevicesPanel";
 import { SecretsPanel } from "./SecretsPanel";
 import { PublishedLinksSection } from "./PublishedLinksSection";
-import { OAuthAccountSection } from "./OAuthAccountSection";
+import { ProvidersPanel } from "./ProvidersPanel";
 import { SettingsCategoryPanel } from "./SettingsCategory";
 import { ThemeSurface } from "./ThemeSurface";
 
@@ -103,7 +103,7 @@ const AGENT_SECTIONS: Section[] = [
   // The OAuth account lifecycle (#2460) renders under the schema-driven Model form —
   // status/Disconnect/Reconnect were wizard-only before, a recovery dead end post-setup.
   { id: "model", label: "Model", icon: Cpu, render: () => (
-    <SettingsCategoryPanel category="Model" title="Model & routing" lead={<OAuthAccountSection />} />
+    <SettingsCategoryPanel category="Model" title="Model & routing" lead={<ProvidersPanel />} />
   ) },
   { id: "behavior", label: "Behavior", icon: Brain, render: () => <SettingsCategoryPanel category="Behavior" title="Behavior" /> },
   { id: "knowledge", label: "Knowledge", icon: Database, render: () => <SettingsCategoryPanel category="Knowledge" title="Knowledge" /> },

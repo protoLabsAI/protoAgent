@@ -432,6 +432,20 @@ def create_llm(
     # instead of every slot inheriting `model.provider`. The qualified form wins over
     # every heuristic below, and says out loud which account pays for the call.
     slot_provider, slot_model = split_slot_target(model_name, config)
+    if not slot_provider and not model_name:
+        # The PRIMARY model names its own connection too (ADR 0106):
+        # `model.name: prod-gateway:protolabs/reasoning`. Before the registry the lead
+        # model belonged to `model.provider` by definition, so a qualified value there
+        # was a misconfiguration and this path never looked. Now it is the normal way to
+        # say which connection runs the main brain, and it has to win over the
+        # lead-provider dispatch below — otherwise the qualified string is handed to the
+        # legacy provider whole and rejected as "not an OpenAI model id".
+        slot_provider, slot_model = split_slot_target(getattr(config, "model_name", ""), config)
+        if slot_provider:
+            # Report the value we actually resolved, not the (absent) argument — an
+            # error reading "slot model None names the 'prod-gateway' connection" tells
+            # the operator nothing about which setting to go and fix.
+            model_name = getattr(config, "model_name", "")
     if slot_provider:
         # Dispatch on the registered connection's TYPE (ADR 0106). An id no longer
         # implies a kind — `prod-gateway` and `local-vllm` are both openai-compat — so

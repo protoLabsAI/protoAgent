@@ -1,0 +1,49 @@
+/* Settings ▸ Model ▸ Connections (ADR 0106). One row per configured model source.
+   Deliberately flat — there is no "active" connection to highlight, which is the whole
+   point of the registry replacing a single lead provider. */
+.provider-row {
+  padding: 10px 0;
+  border-top: 1px solid var(--pl-color-border);
+}
+.provider-row__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.provider-row__name {
+  font-weight: 600;
+  margin-right: 8px;
+}
+.provider-row__id {
+  font-size: 12px;
+  color: var(--pl-color-fg-muted);
+  margin-right: 8px;
+}
+.provider-row__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.provider-row__meta {
+  font-size: 12px;
+  color: var(--pl-color-fg-muted);
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+.provider-row__ok {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.provider-row__warn {
+  color: var(--pl-color-status-warning);
+}
+.provider-row__inuse {
+  font-style: italic;
+}
+.provider-row--draft {
+  display: grid;
+  gap: 8px;
+}

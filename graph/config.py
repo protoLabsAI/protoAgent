@@ -125,14 +125,27 @@ _SCALAR_MODEL_SLOTS = (
 _SUBAGENT_MODEL_SLOTS = ("researcher",)
 
 
-def _is_gateway_alias(model_value) -> bool:
+def _is_gateway_alias(model_value, config=None) -> bool:
     """Is ``model_value`` a bare gateway alias — a '/'-namespaced id (`protolabs/reasoning`)
     with no explicit slot-provider prefix? A native id (`claude-opus-4-6`) or an
-    explicitly-routed slot (`gateway:…`, `acp:…`) is NOT one."""
+    explicitly-routed slot (`gateway:…`, `acp:…`) is NOT one.
+
+    A value naming a REGISTERED connection (ADR 0106) is never one either, however many
+    slashes follow: `prod-gateway:protolabs/reasoning` says where it runs, so it cannot
+    be incoherent with a lead provider — that is the whole point of qualifying it. The
+    hardcoded prefix tuple only knows the three legacy lanes, so without the registry
+    check a custom connection id read as a bare alias and the coherence warning fired on
+    a perfectly routable value."""
     v = str(model_value or "").strip()
     if not v or "/" not in v:
         return False
-    return not v.lower().startswith(_SLOT_ROUTE_PREFIXES)
+    if v.lower().startswith(_SLOT_ROUTE_PREFIXES):
+        return False
+    if config is not None:
+        prefix = v.partition(":")[0].strip().lower()
+        if prefix and prefix in {p.id for p in getattr(config, "providers", []) or []}:
+            return False
+    return True
 
 
 def _native_provider_without_gateway(config) -> bool:
@@ -161,17 +174,17 @@ def _detect_incoherent_slots(config) -> list[str]:
     if not _native_provider_without_gateway(config):
         return []
     flagged: list[str] = []
-    if _is_gateway_alias(getattr(config, "model_name", "")):
+    if _is_gateway_alias(getattr(config, "model_name", ""), config):
         flagged.append(f"model.name={config.model_name!r} (lead)")
     for label, attr in _SCALAR_MODEL_SLOTS:
-        if _is_gateway_alias(getattr(config, attr, "")):
+        if _is_gateway_alias(getattr(config, attr, ""), config):
             flagged.append(f"{label}={getattr(config, attr)!r}")
     for name in _SUBAGENT_MODEL_SLOTS:
         sub = getattr(config, name, None)
-        if isinstance(sub, SubagentDef) and _is_gateway_alias(sub.model):
+        if isinstance(sub, SubagentDef) and _is_gateway_alias(sub.model, config):
             flagged.append(f"subagents.{name}.model={sub.model!r}")
     for m in getattr(config, "routing_fallback_models", None) or []:
-        if _is_gateway_alias(m):
+        if _is_gateway_alias(m, config):
             flagged.append(f"routing.fallback_models[{m!r}]")
     return flagged
 
@@ -193,13 +206,13 @@ def _reconcile_slot_providers(config) -> list[str]:
     if not flagged:
         return []
     for _label, attr in _SCALAR_MODEL_SLOTS:
-        if _is_gateway_alias(getattr(config, attr, "")):
+        if _is_gateway_alias(getattr(config, attr, ""), config):
             setattr(config, attr, "")
     for name in _SUBAGENT_MODEL_SLOTS:
         sub = getattr(config, name, None)
-        if isinstance(sub, SubagentDef) and _is_gateway_alias(sub.model):
+        if isinstance(sub, SubagentDef) and _is_gateway_alias(sub.model, config):
             sub.model = ""
-    kept = [m for m in (config.routing_fallback_models or []) if not _is_gateway_alias(m)]
+    kept = [m for m in (config.routing_fallback_models or []) if not _is_gateway_alias(m, config)]
     if len(kept) != len(config.routing_fallback_models or []):
         config.routing_fallback_models = kept
     log.warning(
