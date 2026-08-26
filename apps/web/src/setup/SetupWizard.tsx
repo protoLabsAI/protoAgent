@@ -926,7 +926,7 @@ export function SetupWizard({
                         <>
                           <KeyRound size={15} /> In the tab that opened, enter code{" "}
                           <code>{login.userCode}</code> at{" "}
-                          <a href={login.verifyUri} target="_blank" rel="noreferrer">
+                          <a href={login.verifyUri} target="_blank" rel="noopener noreferrer">
                             {login.verifyUri}
                           </a>
                           . <Spinner size={13} /> Waiting for approval…{" "}

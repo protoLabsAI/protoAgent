@@ -230,7 +230,7 @@ export function OAuthAccountCard({ provider }: { provider: string }) {
           {lc.login.mode === "device" ? (
             <>
               <KeyRound size={15} /> In the tab that opened, enter code <code>{lc.login.userCode}</code> at{" "}
-              <a href={lc.login.verifyUri} target="_blank" rel="noreferrer">
+              <a href={lc.login.verifyUri} target="_blank" rel="noopener noreferrer">
                 {lc.login.verifyUri}
               </a>
               . <Spinner size={13} /> Waiting for approval…{" "}
