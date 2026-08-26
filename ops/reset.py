@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import socket
 import tarfile
@@ -286,7 +287,15 @@ def run_reset_cli(argv: list[str]) -> int:
         help="wipe every instance and machine-wide item, including protoAgent OAuth stores (machine handoff)",
     )
     parser.add_argument("--force", action="store_true", help="stop this instance's tracked server before reset")
-    parser.add_argument("--port", type=int, default=7870, help="server port used by the running-process guard")
+    # Keep the compatibility wrapper's long-standing PORT contract. argparse applies
+    # `type=int` to a string default too, so an invalid env value gets the same clear
+    # usage error as an invalid --port rather than silently checking the wrong listener.
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=os.environ.get("PORT", "7870"),
+        help="server port used by the running-process guard (default: PORT or 7870)",
+    )
     args = parser.parse_args(argv)
     if args.purge_box and args.keep_secrets:
         parser.error("--purge-box cannot be combined with --keep-secrets")

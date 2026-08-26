@@ -49,6 +49,22 @@ def test_heartbeat_finds_a_running_desktop_process_without_a_pidfile(monkeypatch
     assert reset._tracked_pid(paths) == os.getpid()
 
 
+def test_reset_uses_port_environment_for_the_process_guard(monkeypatch, tmp_path):
+    paths = _paths(tmp_path)
+    seen = {}
+    monkeypatch.setenv("PORT", "8123")
+    monkeypatch.setattr(reset, "instance_paths", lambda: paths)
+    monkeypatch.setattr(reset, "render_plan", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        reset,
+        "_guard_running_server",
+        lambda _paths, *, port, force: seen.update(port=port, force=force) or False,
+    )
+
+    assert reset.run_reset_cli(["--yes"]) == 1
+    assert seen == {"port": 8123, "force": False}
+
+
 def test_delete_guard_rejects_root_and_home(monkeypatch, tmp_path):
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     with pytest.raises(ValueError, match="unsafe reset target"):

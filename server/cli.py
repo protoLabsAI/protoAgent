@@ -247,8 +247,15 @@ def _cmd_up(rest: list[str]) -> int:
             return 0
         time.sleep(0.3)
 
+    # The detached child may still be doing slow first-boot work. Keep it manageable
+    # instead of returning with an orphan that `status` and `down` cannot identify.
+    _pid_path().write_text(
+        json.dumps({"pid": proc.pid, "port": args.port, "version": package_version()}),
+        encoding="utf-8",
+    )
     print(
-        f"protoagent: started (pid {proc.pid}) but port {args.port} didn't bind in {args.wait:g}s — see {log_path}",
+        f"protoagent: started (pid {proc.pid}) but port {args.port} didn't bind in {args.wait:g}s; "
+        f"the process remains tracked for `status` / `down` — see {log_path}",
         file=sys.stderr,
     )
     return 1

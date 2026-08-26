@@ -163,6 +163,21 @@ def test_up_refuses_to_orphan_a_server_running_on_another_port(monkeypatch, tmp_
     assert "one server" in capsys.readouterr().err
 
 
+def test_up_timeout_keeps_the_detached_process_tracked(monkeypatch, tmp_path, capsys):
+    pidf = tmp_path / "server.pid"
+    logf = tmp_path / "server.log"
+    proc = types.SimpleNamespace(pid=4242, returncode=None, poll=lambda: None)
+    monkeypatch.setattr(cli, "_pid_path", lambda: pidf)
+    monkeypatch.setattr(cli, "_our_server", lambda: None)
+    monkeypatch.setattr(cli, "_port_open", lambda _port, *a, **k: False)
+    monkeypatch.setattr(cli.subprocess, "Popen", lambda *a, **k: proc)
+
+    assert cli._cmd_up(["--port", "7999", "--wait", "0"]) == 1
+    assert json.loads(pidf.read_text(encoding="utf-8"))["pid"] == 4242
+    assert "remains tracked" in capsys.readouterr().err
+    assert logf.exists()
+
+
 def test_down_reports_when_nothing_to_stop(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(cli, "_pid_path", lambda: tmp_path / "none.pid")
     monkeypatch.setattr(cli, "_port_open", lambda port, *a, **k: False)
