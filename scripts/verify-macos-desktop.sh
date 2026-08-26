@@ -48,7 +48,10 @@ echo "ok: sidecar bundled (arm64, $((SIZE / 1024 / 1024)) MB)"
 
 # ── Signing mode ─────────────────────────────────────────────────────────────
 # (-dvv, not -dv: the Authority= certificate chain only prints at verbosity 2+.)
-if ! codesign -dvv "$APP" 2>&1 | grep -q "Authority=Developer ID Application:"; then
+# Capture first: grep -q can close its input early, which makes codesign receive
+# SIGPIPE and turns a successful match into a failed pipeline under pipefail.
+SIGNATURE_INFO="$(codesign -dvv "$APP" 2>&1 || true)"
+if [[ "$SIGNATURE_INFO" != *"Authority=Developer ID Application:"* ]]; then
   if [ "$REQUIRE_SIGNED" = "1" ]; then
     echo "FAIL: app is not Developer ID-signed and --require-signed was set"
     exit 1
@@ -60,7 +63,7 @@ fi
 # ── Signing + notarization battery (release builds) ─────────────────────────
 codesign --verify --deep --strict --verbose=2 "$APP"
 echo "ok: codesign verify (deep, strict)"
-codesign -dvv "$APP" 2>&1 | grep -q "TeamIdentifier=" || { echo "FAIL: no TeamIdentifier"; exit 1; }
+[[ "$SIGNATURE_INFO" == *"TeamIdentifier="* ]] || { echo "FAIL: no TeamIdentifier"; exit 1; }
 echo "ok: Developer ID authority + team identifier"
 
 ENTITLEMENTS="$(codesign -d --entitlements :- "$APP" 2>/dev/null)"
