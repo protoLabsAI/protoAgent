@@ -15,6 +15,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.151.0] - 2026-08-26
+
+### Changed
+- A direct `@member` message now falls through to the lead agent when every addressed
+  local fleet member is stopped and unreachable. The lead uses the existing
+  consent-based `delegate_to` startup path to offer a start and retry; mixed
+  multi-mentions keep their existing replies and error lines without redispatching
+  participants who already answered.
+
+- Fleet members now have individual **Start on boot** switches in the Fleet list.
+  The switches write stable member IDs to the hub's `fleet.autostart` roster, and the
+  raw roster editor has been removed from the Box runtime dialog.
+
+### Fixed
+- **Model connections can no longer be removed out from under the agent without a clear warning (#3127).**
+  The registry protects a migrated gateway implicitly used by a bare lead model, and removing the final unused
+  connection requires explicit confirmation instead of silently leaving the agent without a model source.
+
+- **Factory reset now reaches desktop and packaged installs and reports shared OAuth honestly (#3133).**
+  `protoagent reset` resolves the current instance through the runtime path model, refuses false-success no-ops,
+  and offers an explicit full-box purge for machine handoff (#3134, #3135).
+
+- **Claude and Codex can be added from Settings ▸ Model ▸ Connections again (#3138).**
+  The new connection form silently hardcoded every entry as an OpenAI-compatible endpoint,
+  and provider writes did not refresh the live registry. It now offers both subscription
+  types, opens their native sign-in lifecycle, and applies registry changes transactionally.
+
+### Security
+- **Patched the production `nanoid` dependency against a denial-of-service advisory (#3140).**
+  The lockfile now resolves the fixed 3.3.18 release.
+
+- **Agent snapshots now preserve real plugin pins without crossing their export/import trust boundaries (#3142).**
+  Export normalizes the live lock schema, scrubs plugin metadata, and refuses symlinked skill assets; import strictly binds the reviewed manifest to staged content, rejects deceptive source matches and malformed archives, persists MCP credentials accurately, and cleans up failed scaffolds. The console also refuses a download when the definition changed after review.
+
+### Docs
+- **Agent tooling now discovers the repository's canonical instructions (#3139).**
+  A root `AGENTS.md` points contributors to `PROTO.md`, keeping guidance in one source of truth.
+
 ## [0.150.0] - 2026-08-26
 
 ### Added
