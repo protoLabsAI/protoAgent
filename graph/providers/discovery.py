@@ -111,6 +111,17 @@ def _anthropic_status() -> OAuthStatus:
         refreshable = bool(str(store.get("refresh_token", "") or "").strip())
         detail = "Claude subscription (signed in here)"
         if exp is not None and exp <= _oauth._now():
+            if not refreshable:
+                return OAuthStatus(
+                    "anthropic-oauth",
+                    False,
+                    "instance_store",
+                    f"{detail} (expired)",
+                    "The stored login cannot refresh. Sign in again.",
+                    expires_at=exp,
+                    refreshable=False,
+                    durability=DURABILITY_STATIC,
+                )
             detail += " (token will refresh on use)"
         return OAuthStatus(
             "anthropic-oauth",
@@ -123,6 +134,7 @@ def _anthropic_status() -> OAuthStatus:
             durability=DURABILITY_MANAGED if refreshable else DURABILITY_STATIC,
         )
     # File on Linux/WSL; the Keychain item on macOS — same document shape.
+    expired_borrowed: OAuthStatus | None = None
     for source, doc in (
         ("credentials_file", _oauth._read_claude_credentials_file()),
         ("keychain", _oauth._read_claude_keychain()),
@@ -131,18 +143,35 @@ def _anthropic_status() -> OAuthStatus:
         if isinstance(oauth, dict) and str(oauth.get("accessToken", "") or "").strip():
             plan = str(oauth.get("subscriptionType", "") or "").strip()
             detail = f"{plan} plan" if plan else "Claude Code credentials"
+            expires_at = _epoch(oauth.get("expiresAt"), scale=1000.0)
             # The CLI's own document, in milliseconds. We read it; we don't refresh it —
             # that stays the CLI's job, which is exactly what makes it `borrowed`.
+            if expires_at is not None and expires_at <= _oauth._now():
+                expired_borrowed = OAuthStatus(
+                    "anthropic-oauth",
+                    False,
+                    source,
+                    f"{detail} (expired)",
+                    "Claude Code's borrowed login expired. Sign in here for an independently "
+                    "refreshable login, or re-authenticate Claude Code.",
+                    expires_at=expires_at,
+                    refreshable=False,
+                    durability=DURABILITY_BORROWED,
+                )
+                # A stale credentials file must not mask a newer Keychain login.
+                continue
             return OAuthStatus(
                 "anthropic-oauth",
                 True,
                 source,
                 detail,
                 "",
-                expires_at=_epoch(oauth.get("expiresAt"), scale=1000.0),
+                expires_at=expires_at,
                 refreshable=False,
                 durability=DURABILITY_BORROWED,
             )
+    if expired_borrowed is not None:
+        return expired_borrowed
     return OAuthStatus("anthropic-oauth", False, "", "", _SIGN_IN_HINTS["anthropic-oauth"])
 
 
@@ -206,13 +235,6 @@ def all_oauth_status() -> list[dict]:
 
 # ── model listing ────────────────────────────────────────────────────────────
 
-# Fallback Claude ids if the live /models probe fails (offline, or the OAuth token
-# can't list). Kept short and current; the live probe is preferred.
-_ANTHROPIC_FALLBACK_MODELS = [
-    "claude-opus-4-1",
-    "claude-sonnet-4-5",
-    "claude-haiku-4-5",
-]
 _MODELS_TIMEOUT_S = 15.0
 
 
@@ -268,7 +290,7 @@ def _list_anthropic_models() -> tuple[list[str], str]:
     try:
         creds = _oauth.resolve_anthropic_oauth()
     except _oauth.OAuthCredentialError as exc:
-        return _ANTHROPIC_FALLBACK_MODELS, str(exc)
+        return [], str(exc)
     from graph.providers.anthropic_oauth import oauth_default_headers
 
     headers = {"Authorization": f"Bearer {creds.access_token}", "anthropic-version": "2023-06-01"}
@@ -276,18 +298,24 @@ def _list_anthropic_models() -> tuple[list[str], str]:
     try:
         resp = httpx.get("https://api.anthropic.com/v1/models", headers=headers, timeout=_MODELS_TIMEOUT_S)
         resp.raise_for_status()
-        models = [str(m.get("id")) for m in resp.json().get("data", []) if isinstance(m, dict) and m.get("id")]
-        return (models or _ANTHROPIC_FALLBACK_MODELS), ""
-    except httpx.HTTPError:
-        # The OAuth token may not carry models:list scope — fall back to the curated set.
-        return _ANTHROPIC_FALLBACK_MODELS, ""
+        payload = resp.json()
+        data = payload.get("data", []) if isinstance(payload, dict) else []
+        models = [str(m.get("id")) for m in data if isinstance(m, dict) and m.get("id")]
+        if not models:
+            return [], "Anthropic returned an empty model list. Enter an exact model ID and test it."
+        return models, ""
+    except (httpx.HTTPError, ValueError) as exc:
+        # Never turn a failed live probe into a fabricated catalog. The setup and
+        # settings fields accept an exact model id, and Test connection verifies it.
+        return [], f"Could not list Claude subscription models: {exc}. Enter an exact model ID and test it."
 
 
 def list_provider_models(provider: str, config: "LangGraphConfig") -> tuple[list[str], str]:
     """Return ``(models, error)`` for a native OAuth provider's account.
 
     Codex is probed live from the account's ``/models`` endpoint; Claude tries the
-    Anthropic ``/v1/models`` API and falls back to a curated list.
+    Anthropic ``/v1/models`` API. A failed probe returns an honest error; model ids are
+    never guessed or served from a hand-maintained catalog.
     """
     provider = (provider or "").strip().lower()
     if provider == "openai-codex":

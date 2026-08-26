@@ -71,6 +71,53 @@ describe("OAuthAccountCard", () => {
     expect([...container.querySelectorAll("button")].some((b) => b.textContent?.includes("Sign in with ChatGPT"))).toBe(true);
   });
 
+  it("Re-check exposes progress and applies the refreshed status", async () => {
+    let release!: (value: Awaited<ReturnType<typeof api.oauthStatus>>) => void;
+    const pending = new Promise<Awaited<ReturnType<typeof api.oauthStatus>>>((resolve) => {
+      release = resolve;
+    });
+    const status = vi
+      .spyOn(api, "oauthStatus")
+      .mockResolvedValueOnce({
+        providers: [
+          { provider: "openai-codex", signed_in: true, source: "instance_store", detail: "ChatGPT account", hint: "" },
+        ],
+      })
+      .mockReturnValueOnce(pending);
+    mount(h(OAuthAccountCard, { provider: "openai-codex" }));
+    await flush();
+
+    const btn = [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Re-check"))!;
+    act(() => btn.click());
+    expect(status).toHaveBeenCalledTimes(2);
+    expect(btn.textContent).toContain("Checking…");
+    expect(btn.disabled).toBe(true);
+
+    await act(async () => {
+      release({
+        providers: [
+          { provider: "openai-codex", signed_in: false, source: "", detail: "", hint: "Session expired. Sign in again." },
+        ],
+      });
+      await pending;
+    });
+    expect(container.textContent).toContain("Session expired. Sign in again.");
+  });
+
+  it("Re-check shows a probe failure instead of silently doing nothing", async () => {
+    stubStatus(true);
+    mount(h(OAuthAccountCard, { provider: "openai-codex" }));
+    await flush();
+    vi.mocked(api.oauthStatus).mockRejectedValueOnce(new Error("server unavailable"));
+
+    const btn = [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Re-check"))!;
+    await act(async () => {
+      btn.click();
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain("Could not check sign-in status: server unavailable");
+  });
+
   it("disconnect calls the API and invalidates the query cache (graph was unloaded)", async () => {
     stubStatus(true);
     const disc = vi.spyOn(api, "oauthDisconnect").mockResolvedValue({

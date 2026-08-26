@@ -240,8 +240,9 @@ def _read_claude_keychain() -> dict[str, Any] | None:
 
 def _creds_from_claude_doc(doc: dict[str, Any], source: str) -> AnthropicOAuthCreds | None:
     """The ``claudeAiOauth`` document (credentials file / Keychain item) → creds.
-    None when the shape/token is missing. Expiry is advisory only — Claude Code owns
-    refresh for its own login; a dead token surfaces as a clean 401 → relogin hint."""
+    None when the shape/token is missing or the borrowed token is expired. Claude Code
+    owns refresh for its login; handing its known-dead token to every caller only turns
+    a local, actionable state into a remote 401."""
     oauth = doc.get("claudeAiOauth")
     if not isinstance(oauth, dict):
         return None
@@ -250,11 +251,12 @@ def _creds_from_claude_doc(doc: dict[str, Any], source: str) -> AnthropicOAuthCr
         return None
     exp_ms = oauth.get("expiresAt")
     expires_at = float(exp_ms) / 1000.0 if isinstance(exp_ms, (int, float)) else None
-    if expires_at is not None and expires_at <= time.time() - _ANTHROPIC_REFRESH_SKEW_S:
+    if expires_at is not None and expires_at <= time.time() + _ANTHROPIC_REFRESH_SKEW_S:
         log.info(
-            "[anthropic-oauth] Claude Code token looks expired (run any `claude` "
-            "command to refresh); trying it anyway",
+            "[anthropic-oauth] ignoring expired borrowed Claude Code token from %s",
+            source,
         )
+        return None
     return AnthropicOAuthCreds(access_token=token, source=source, expires_at=expires_at)
 
 
@@ -349,10 +351,17 @@ def resolve_anthropic_oauth() -> AnthropicOAuthCreds:
         access = str(store["access_token"]).strip()
         expires_at = store.get("expires_at")
         expiring = isinstance(expires_at, (int, float)) and expires_at <= _now() + _ANTHROPIC_REFRESH_SKEW_S
-        if expiring and str(store.get("refresh_token", "") or ""):
-            refreshed = _refresh_anthropic_tokens(str(store["refresh_token"]))
+        if expiring:
+            refresh_token = str(store.get("refresh_token", "") or "").strip()
+            if not refresh_token:
+                raise OAuthCredentialError(
+                    "protoAgent's stored Claude OAuth token has expired and cannot be "
+                    "refreshed. Sign in again.",
+                    provider="anthropic-oauth",
+                )
+            refreshed = _refresh_anthropic_tokens(refresh_token)
             # A refresh may not return a new refresh_token — keep the old one.
-            refreshed.setdefault("refresh_token", store["refresh_token"])
+            refreshed.setdefault("refresh_token", refresh_token)
             _write_anthropic_store(refreshed)
             return AnthropicOAuthCreds(access_token=str(refreshed["access_token"]).strip(), source="instance_store")
         return AnthropicOAuthCreds(
@@ -361,18 +370,32 @@ def resolve_anthropic_oauth() -> AnthropicOAuthCreds:
             expires_at=expires_at if isinstance(expires_at, (int, float)) else None,
         )
 
-    doc = _read_claude_credentials_file()
-    if doc:
-        creds = _creds_from_claude_doc(doc, "credentials_file")
+    borrowed_expired = False
+    for source, doc in (
+        ("credentials_file", _read_claude_credentials_file()),
+        # macOS: Claude Code's login lives in the Keychain, not the credentials file.
+        ("keychain", _read_claude_keychain()),
+    ):
+        if doc:
+            oauth = doc.get("claudeAiOauth")
+            exp_ms = oauth.get("expiresAt") if isinstance(oauth, dict) else None
+            token = str(oauth.get("accessToken", "") or "").strip() if isinstance(oauth, dict) else ""
+            borrowed_expired = borrowed_expired or (
+                bool(token) and isinstance(exp_ms, (int, float))
+                and float(exp_ms) / 1000.0 <= time.time() + _ANTHROPIC_REFRESH_SKEW_S
+            )
+            creds = _creds_from_claude_doc(doc, source)
+        else:
+            creds = None
         if creds:
             return creds
 
-    # macOS: Claude Code's login lives in the Keychain, not the credentials file.
-    doc = _read_claude_keychain()
-    if doc:
-        creds = _creds_from_claude_doc(doc, "keychain")
-        if creds:
-            return creds
+    if borrowed_expired:
+        raise OAuthCredentialError(
+            "Claude Code's borrowed OAuth token has expired. Sign in from protoAgent to "
+            "create an independently refreshable login, or re-authenticate Claude Code.",
+            provider="anthropic-oauth",
+        )
 
     raise OAuthCredentialError(
         "No Claude OAuth credential found. Sign in from the console, the Claude Code CLI "
