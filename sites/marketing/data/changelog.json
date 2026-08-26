@@ -1,5 +1,19 @@
 [
   {
+    "version": "v0.151.0",
+    "date": "2026-08-26",
+    "changes": [
+      "A direct @member message now falls through to the lead agent when every addressed local fleet member is stopped and unreachable",
+      "Fleet members now have individual Start on boot switches in the Fleet list",
+      "Model connections can no longer be removed out from under the agent without a clear warning (#3127).",
+      "Factory reset now reaches desktop and packaged installs and reports shared OAuth honestly (#3133).",
+      "Claude and Codex can be added from Settings ▸ Model ▸ Connections again (#3138).",
+      "Patched the production nanoid dependency against a denial-of-service advisory (#3140).",
+      "Agent snapshots now preserve real plugin pins without crossing their export/import trust boundaries (#3142).",
+      "Agent tooling now discovers the repository's canonical instructions (#3139)."
+    ]
+  },
+  {
     "version": "v0.150.0",
     "date": "2026-08-26",
     "changes": [
