@@ -42,10 +42,18 @@ def test_dispatch_forward_none_result_is_zero(monkeypatch):
     assert cli.dispatch(["config", "explain"]) == 0  # None → 0
 
 
+def test_dispatch_exposes_packaged_reset(monkeypatch):
+    seen = {}
+    fake = types.SimpleNamespace(run_reset_cli=lambda argv: seen.setdefault("argv", argv) and 0)
+    monkeypatch.setattr(cli.importlib, "import_module", lambda name: fake)
+    assert cli.dispatch(["reset", "--dry-run"]) == 0
+    assert seen["argv"] == ["--dry-run"]
+
+
 def test_main_bare_prints_help(capsys):
     assert cli.main([]) == 0
     out = capsys.readouterr().out
-    assert "protoagent" in out and "plugin" in out and "up" in out  # the command tree
+    assert "protoagent" in out and "plugin" in out and "up" in out and "reset" in out  # the command tree
 
 
 def test_main_unknown_command(capsys):
@@ -153,6 +161,21 @@ def test_up_refuses_to_orphan_a_server_running_on_another_port(monkeypatch, tmp_
     assert cli._cmd_up(["--port", "7999"]) == 1
     assert not started  # starting would clobber the pidfile and orphan :7870
     assert "one server" in capsys.readouterr().err
+
+
+def test_up_timeout_keeps_the_detached_process_tracked(monkeypatch, tmp_path, capsys):
+    pidf = tmp_path / "server.pid"
+    logf = tmp_path / "server.log"
+    proc = types.SimpleNamespace(pid=4242, returncode=None, poll=lambda: None)
+    monkeypatch.setattr(cli, "_pid_path", lambda: pidf)
+    monkeypatch.setattr(cli, "_our_server", lambda: None)
+    monkeypatch.setattr(cli, "_port_open", lambda _port, *a, **k: False)
+    monkeypatch.setattr(cli.subprocess, "Popen", lambda *a, **k: proc)
+
+    assert cli._cmd_up(["--port", "7999", "--wait", "0"]) == 1
+    assert json.loads(pidf.read_text(encoding="utf-8"))["pid"] == 4242
+    assert "remains tracked" in capsys.readouterr().err
+    assert logf.exists()
 
 
 def test_down_reports_when_nothing_to_stop(monkeypatch, tmp_path, capsys):

@@ -40,15 +40,17 @@ TypeScript is the console.
   features; pure-console/UI review works as-is. (Serving a worktree's own
   `apps/web/dist`: `cd <worktree> && … python -m server` — `_bundle_root()` anchors
   to the loaded `server/` package, so it serves that checkout's build.)
-- **Factory-reset the default instance:** `scripts/reset.sh` wipes the **prod**
-  instance back to a clean slate (next boot runs the setup wizard) — for testing the
-  fresh-user flow via CLI (there is no in-app reset). **Always `--dry-run` first** to
-  read the plan. It's safe on a multi-instance machine: every *other* instance
-  (`~/.protoagent/<name>`, the dev sandbox, fleet members) and the machine-wide **box**
-  layer (`host-config.yaml`, `commons/`) are preserved. Flags: `--yes`, `--backup`,
-  `--keep-secrets` (keep gateway creds), `--include-dev`, `--force` (stop a bound
-  server first). *(Reset-script rewrite for the ADR-0065 single-subtree layout is a
-  follow-up; see [the env-vars gotcha](#house-rules--gotchas-that-bite).)*
+- **Factory-reset the current instance:** `protoagent reset` uses the same resolved
+  `infra.paths` roots as the runtime, so it works for desktop, wheel, Docker and
+  named instances. The next boot runs the setup wizard. **Always `--dry-run` first**
+  and read the plan. A normal reset preserves sibling instances and machine-wide box
+  state; if ChatGPT or Claude OAuth is present, the plan says explicitly that the
+  machine remains signed in. `--purge-box` / `--all` is the handoff-machine operation:
+  it removes every instance and protoAgent box-shared credential (vendor CLI login
+  files remain owned by those CLIs). Other flags: `--yes`,
+  `--backup`, `--keep-secrets`, `--include-dev`, and `--force` (stop a verified
+  running process for this instance). `scripts/reset.sh`
+  remains a thin compatibility wrapper for source checkouts.
 - **See where state lives:** `protoagent config explain` (or `python -m server
   config explain`, or `GET /api/config/explain`) prints this instance's id, both roots (box + instance),
   every resolved path, and the per-field settings cascade with provenance (secrets
