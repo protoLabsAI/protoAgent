@@ -239,6 +239,18 @@ async def test_a_failed_dispatch_is_recorded_in_the_room_not_swallowed():
 
 
 @pytest.mark.asyncio
+async def test_a_failed_dispatch_preserves_machine_readable_error_kind():
+    class _ClassifiedError(RuntimeError):
+        kind = "unreachable"
+
+    graph, reg = _Graph(), _Registry(raises=_ClassifiedError("delegate is down"))
+    out = await mop.run_mention(graph, reg, "t1", "proto", "you there?")
+
+    assert out["error"] == "delegate is down"
+    assert out["error_kind"] == "unreachable"
+
+
+@pytest.mark.asyncio
 async def test_an_unknown_delegate_writes_nothing_to_the_room():
     class _Empty(_Registry):
         def get(self, name):

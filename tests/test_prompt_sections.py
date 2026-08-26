@@ -254,6 +254,9 @@ def test_collaboration_section_teaches_the_lead_to_moderate(monkeypatch):
     assert "subordinate" in text.lower()
     assert "one message to each" in text  # the @x @y clarification
     assert "role" in text.lower()  # coders get roles, not parallel edits
+    assert "every direct address" in text
+    assert "call `delegate_to` for each named target now" in text
+    assert "Do not answer in the named participant's place" in text
 
 
 def test_collaboration_section_appears_in_the_assembled_prompt(monkeypatch):
