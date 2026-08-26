@@ -1,5 +1,7 @@
 """Tests for LLM kwargs assembly — sampling params + extra_body wiring."""
 
+from types import SimpleNamespace
+
 import httpcore
 import httpx
 import pytest
@@ -226,7 +228,7 @@ def test_create_llm_routes_acp_model_name_to_acp_aux(monkeypatch):
     from graph.llm import create_llm
 
     captured = {}
-    sentinel = object()
+    sentinel = SimpleNamespace()
 
     def _fake(config, agent=None):
         captured["agent"] = agent

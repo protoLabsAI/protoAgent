@@ -42,10 +42,11 @@ def test_build_middleware_appends_extra_before_message_capture():
     names = [type(m).__name__ for m in mw]
     assert names[-1] == "MessageCaptureMiddleware", names
     # The wire observer (#2527) is deliberately INNERMOST of everything that can
-    # touch the system prompt — provider transforms AND plugin middleware alike —
-    # so plugin middleware sits just before IT now, not directly before capture.
+    # touch the system prompt — provider shaping AND plugin middleware alike —
+    # and the per-call provider dispatcher sits between plugins and that observer.
     assert names[-2] == "WirePromptCaptureMiddleware", names
-    assert names[-3] == "FakeMW", names
+    assert names[-3] == "ProviderShapeMiddleware", names
+    assert names[-4] == "FakeMW", names
 
 
 def test_resolve_plugin_middleware_is_best_effort():

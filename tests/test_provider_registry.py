@@ -8,6 +8,8 @@ descended from.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from graph.config import (
@@ -222,7 +224,7 @@ def test_registered_subscription_ids_dispatch_to_their_provider_type(
         model={"name": f"{connection_id}:{model}"},
     )
     seen: dict = {}
-    sentinel = object()
+    sentinel = SimpleNamespace()
 
     def _build(ptype, _config, *, model_name=None, reasoning_effort=None):
         seen.update(ptype=ptype, model=model_name, effort=reasoning_effort)

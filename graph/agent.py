@@ -397,7 +397,7 @@ def _build_middleware(
 
 
 def provider_shape_middleware(config) -> list:
-    """The native-OAuth wire-shape transforms, innermost-last (ADR 0097).
+    """Per-call native-OAuth wire shaping, innermost-last (ADR 0097).
 
     EVERY stack that sends a system prompt on a native-OAuth provider needs
     these, not just the lead agent: Anthropic's OAuth infra refuses traffic
@@ -412,16 +412,12 @@ def provider_shape_middleware(config) -> list:
     final system message, and trailed by the wire observer (#2527) so what the
     call actually carries is recorded rather than assumed.
     """
-    out: list = []
-    provider = (getattr(config, "model_provider", "") or "").strip().lower()
-    if provider == "anthropic-oauth":
-        from graph.middleware.claude_code_identity import ClaudeCodeIdentityMiddleware
+    # Always mounted: model overrides and fallback retries can change providers
+    # after graph compilation. The dispatcher reads request.model's explicit
+    # identity for EACH attempt and applies exactly one (or zero) transforms.
+    from graph.middleware.provider_shape import ProviderShapeMiddleware
 
-        out.append(ClaudeCodeIdentityMiddleware())
-    elif provider == "openai-codex":
-        from graph.middleware.codex_responses_input import CodexResponsesInputMiddleware
-
-        out.append(CodexResponsesInputMiddleware())
+    out: list = [ProviderShapeMiddleware()]
     # Innermost observer (#2527): stash what each call ACTUALLY carries — after
     # the transforms above — so PromptCapture records wire-vs-composed divergence
     # instead of showing a prompt the wire never carried (#2519's invisibility).
@@ -710,8 +706,8 @@ async def _run_subagent(
     # subagent's primary-model error fails the whole delegation, while the lead
     # would have transparently retried on the configured fallbacks — the failover
     # chain covered only `_build_middleware()`, never `task()`/`task_batch()`.
-    # Same gateway, same observable wrapper, built from the same
-    # routing.fallback_models. Appended before the provider-shape transforms so a
+    # Same observable wrapper, built from the same routing.fallback_models.
+    # Appended before the provider-shape dispatcher so a cross-provider
     # fallback retry still runs through the native-OAuth wire shaping. No-op when
     # routing.fallback_models is empty — the subagent stack is then unchanged.
     if config.routing_fallback_models:
