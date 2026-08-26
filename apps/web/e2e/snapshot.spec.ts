@@ -58,6 +58,26 @@ test("downloads the zip under the server's filename", async ({ page }) => {
   await expect(page.locator(".pl-toast", { hasText: "Snapshot downloaded" })).toBeVisible();
 });
 
+test("refuses a download whose definition changed after review", async ({ page }) => {
+  await page.route("**/api/agent/export", async (route) => {
+    if (route.request().postDataJSON()?.dry_run) return route.fallback();
+    await route.fulfill({
+      status: 200,
+      body: "changed snapshot bytes",
+      headers: {
+        "content-type": "application/zip",
+        "content-disposition": 'attachment; filename="changed.zip"',
+        "x-snapshot-definition-sha256": "different-definition",
+      },
+    });
+  });
+
+  await openSnapshot(page);
+  await page.getByRole("button", { name: /Download snapshot/ }).click();
+
+  await expect(page.locator(".pl-toast", { hasText: "Snapshot changed — review refreshed" })).toBeVisible();
+});
+
 test("states plainly that scrubbing is not a guarantee", async ({ page }) => {
   // Over-claiming is the real danger: an operator who believes the filter is exhaustive
   // stops reading the artifact before publishing it.

@@ -102,6 +102,7 @@ def register_snapshot_routes(app) -> None:
             headers={
                 "Content-Disposition": f'attachment; filename="{result.filename}"',
                 "X-Snapshot-Review": header,
+                "X-Snapshot-Definition-SHA256": result.definition_sha256,
             },
         )
 

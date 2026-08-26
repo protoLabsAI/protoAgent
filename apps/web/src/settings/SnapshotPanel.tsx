@@ -7,7 +7,7 @@ import { useCallback, useEffect, useState } from "react";
 import { StatusPill } from "../app/StatusPill";
 import { api } from "../lib/api";
 import { SettingsSubPanel } from "./SettingsSubPanel";
-import { splitFindings } from "./snapshotReview";
+import { reviewedDefinitionMatches, splitFindings } from "./snapshotReview";
 import "./snapshot.css";
 
 import type { SnapshotReview } from "../lib/types";
@@ -55,7 +55,16 @@ export function SnapshotPanel() {
   const download = async () => {
     setDownloading(true);
     try {
-      const { blob, filename } = await api.exportSnapshot();
+      const { blob, filename, definitionSha256 } = await api.exportSnapshot();
+      if (!reviewedDefinitionMatches(review?.definition_sha256, definitionSha256)) {
+        await load();
+        toast({
+          tone: "info",
+          title: "Snapshot changed — review refreshed",
+          message: "The agent definition changed since the review. Check it once more before downloading.",
+        });
+        return;
+      }
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;

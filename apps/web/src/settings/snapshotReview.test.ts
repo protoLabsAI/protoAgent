@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { NON_CREDENTIAL_KINDS, splitFindings } from "./snapshotReview";
+import { NON_CREDENTIAL_KINDS, reviewedDefinitionMatches, splitFindings } from "./snapshotReview";
+
+describe("reviewedDefinitionMatches", () => {
+  it("accepts only the exact non-empty digest reviewed", () => {
+    expect(reviewedDefinitionMatches("abc", "abc")).toBe(true);
+    expect(reviewedDefinitionMatches("abc", "def")).toBe(false);
+    expect(reviewedDefinitionMatches(undefined, "abc")).toBe(false);
+    expect(reviewedDefinitionMatches("abc", "")).toBe(false);
+  });
+});
 
 describe("splitFindings", () => {
   it("routes a credential finding to the rotate-it bucket", () => {

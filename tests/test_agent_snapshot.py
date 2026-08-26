@@ -90,7 +90,16 @@ def agent_tree(tmp_path):
     (tmp_path / ".fleet-token").write_text("fleet-service-token-value", encoding="utf-8")
     (tmp_path / "plugins.lock").write_text(
         json.dumps(
-            {"plugins": [{"id": "github", "url": "https://github.com/protoLabsAI/github-plugin", "sha": "abc123"}]}
+            {
+                "plugins": [
+                    {
+                        "id": "github",
+                        "source_url": "https://github.com/protoLabsAI/github-plugin",
+                        "resolved_sha": "abc123",
+                        "requested_ref": "main",
+                    }
+                ]
+            }
         ),
         encoding="utf-8",
     )
@@ -132,6 +141,41 @@ class TestPublicGistLitmus:
                 body = zf.read(name).decode("utf-8", errors="replace")
                 for canary in ALL_CANARIES:
                     assert canary not in body, f"{canary[:16]}… survived in {name}"
+
+    def test_a_credential_bearing_plugin_url_is_omitted(self, agent_tree):
+        token = "ghp_" + "A" * 36
+        (agent_tree / "plugins.lock").write_text(
+            json.dumps(
+                {
+                    "plugins": [
+                        {
+                            "id": "private",
+                            "source_url": f"https://user:{token}@github.com/acme/private",
+                            "resolved_sha": "abc123",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        result = _build(agent_tree)
+        with zipfile.ZipFile(BytesIO(result.data)) as zf:
+            assert token not in zf.read(SNAPSHOT_MANIFEST).decode()
+        assert result.manifest["plugins"] == []
+        assert any("source URL contained sensitive text" in n for n in result.notes)
+
+    def test_a_symlinked_skill_asset_is_not_dereferenced(self, agent_tree, tmp_path):
+        outside = tmp_path / "outside.txt"
+        outside.write_text("ordinary private material", encoding="utf-8")
+        link = agent_tree / "skills" / "reviewing" / "linked.txt"
+        try:
+            link.symlink_to(outside)
+        except OSError:
+            pytest.skip("symlinks unavailable on this platform")
+        result = _build(agent_tree)
+        with zipfile.ZipFile(BytesIO(result.data)) as zf:
+            assert "skills/instance/reviewing/linked.txt" not in zf.namelist()
+        assert any("skipped symlinked skill asset" in n for n in result.notes)
 
     def test_credential_bearing_files_are_never_members(self, agent_tree):
         """secrets.yaml / .fleet-token exist only to hold credentials — no redaction makes
@@ -361,6 +405,22 @@ class TestManifest:
 
     def test_summary_is_json_safe_for_the_route(self, agent_tree):
         json.dumps(_build(agent_tree).summary())
+
+    def test_definition_hash_ignores_export_timestamp_but_tracks_content(self, agent_tree):
+        first = _build(agent_tree)
+        second = build_snapshot(
+            config_yaml=agent_tree / "config" / "langgraph-config.yaml",
+            soul_path=agent_tree / "config" / "SOUL.md",
+            plugins_lock=agent_tree / "plugins.lock",
+            skills_dirs={"instance": agent_tree / "skills"},
+            agent_name="vera",
+            secret_key_paths=SECRET_KEYS,
+            plugin_requirements=[],
+            now=datetime(2026, 8, 4, 12, 0, tzinfo=UTC),
+        )
+        assert first.definition_sha256 == second.definition_sha256
+        (agent_tree / "config" / "SOUL.md").write_text("# Changed\n", encoding="utf-8")
+        assert _build(agent_tree).definition_sha256 != first.definition_sha256
 
 
 # ── REVIEW.md — the disclosure that travels WITH the artifact ────────────────────────

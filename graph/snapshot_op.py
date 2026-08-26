@@ -37,6 +37,7 @@ reads ``STATE`` — the ``export_op`` / ``rewind_op`` shape.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import logging
@@ -133,6 +134,9 @@ class SnapshotResult:
     data: bytes
     filename: str
     manifest: dict
+    #: Stable across rebuild timestamps; binds a console review to the exact definition
+    #: later downloaded.
+    definition_sha256: str
     required_secrets: list[SecretRequirement] = field(default_factory=list)
     #: Redaction kinds the PATTERN sweep matched, keyed by WHERE — a dotted config path
     #: (``operator.project_dir``, ``notes.scratch[0]``) or a filename (``SOUL.md``). Non-empty
@@ -156,6 +160,7 @@ class SnapshotResult:
         return {
             "filename": self.filename,
             "bytes": len(self.data),
+            "definition_sha256": self.definition_sha256,
             "required_secrets": [s.as_dict() for s in self.required_secrets],
             "pattern_redactions": self.pattern_redactions,
             "notes": self.notes,
@@ -370,17 +375,62 @@ def _read_json(path: Path) -> dict:
     return doc if isinstance(doc, dict) else {}
 
 
-def _skill_files(root: Path) -> list[tuple[str, Path]]:
+def _skill_files(root: Path) -> tuple[list[tuple[str, Path]], list[str]]:
     """``SKILL.md`` dirs travel whole: skills re-seed from disk each boot (ADR 0060), so
     the files ARE the definition. Returns (arcname-relative, path) pairs."""
     if not root.is_dir():
-        return []
+        return [], []
     out: list[tuple[str, Path]] = []
+    skipped: list[str] = []
     for path in sorted(root.rglob("*")):
+        rel = str(path.relative_to(root))
+        # A skill tree is an export boundary, not permission to dereference pointers to
+        # arbitrary files elsewhere on the machine.  ``Path.is_file()`` follows symlinks,
+        # so checking it first silently packaged the target under an innocent member name.
+        if path.is_symlink():
+            skipped.append(rel)
+            continue
         if not path.is_file() or path.name in EXCLUDED_FILENAMES:
             continue
-        out.append((str(path.relative_to(root)), path))
-    return out
+        out.append((rel, path))
+    return out, skipped
+
+
+def _snapshot_plugin_pins(
+    lock: dict,
+    *,
+    pattern_hits: dict[str, list[str]],
+    notes: list[str],
+) -> list[dict[str, str]]:
+    """Translate the live ``plugins.lock`` schema into the stable snapshot schema.
+
+    The installer records ``source_url`` / ``resolved_sha``; v1 snapshots carry the
+    deliberately smaller ``url`` / ``sha`` shape.  Older tests and hand-authored locks used
+    the latter already, so accept both on the source side.  Every emitted string goes through
+    the same free-text sweep as config/SOUL/skills.  A redacted URL is not installable, so
+    omit that pin and say why instead of leaking it or shipping a misleading broken URL.
+    """
+    rows = lock.get("plugins") if isinstance(lock.get("plugins"), list) else []
+    pins: list[dict[str, str]] = []
+    for i, raw in enumerate(rows):
+        if not isinstance(raw, dict):
+            notes.append(f"skipped malformed plugin lock row {i}")
+            continue
+        plugin_id = str(raw.get("id") or "").strip()
+        url = str(raw.get("source_url") or raw.get("url") or "").strip()
+        sha = str(raw.get("resolved_sha") or raw.get("sha") or raw.get("ref") or "").strip()
+        if not url:
+            # Builtins have no repository to install and therefore need no snapshot pin.
+            continue
+        where = f"plugins[{i}].url"
+        clean_url = _redact_text(url, where, pattern_hits)
+        if clean_url != url:
+            notes.append(f"skipped plugin {plugin_id or i}: its source URL contained sensitive text")
+            continue
+        clean_id = _redact_text(plugin_id or url.rstrip("/").split("/")[-1], f"plugins[{i}].id", pattern_hits)
+        clean_sha = _redact_text(sha, f"plugins[{i}].sha", pattern_hits)
+        pins.append({"id": clean_id, "url": clean_url, "sha": clean_sha})
+    return pins
 
 
 def render_review(
@@ -504,6 +554,27 @@ def render_review(
     return "\n".join(lines)
 
 
+def _definition_sha256(data: bytes) -> str:
+    """Hash definition members while ignoring export/review timestamps and zip metadata."""
+    import yaml
+
+    digest = hashlib.sha256()
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        for name in sorted(n for n in zf.namelist() if n != "REVIEW.md"):
+            body = zf.read(name)
+            if name == SNAPSHOT_MANIFEST:
+                doc = yaml.safe_load(body.decode("utf-8")) or {}
+                if isinstance(doc, dict):
+                    doc.pop("exported_at", None)
+                body = json.dumps(doc, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+            encoded_name = name.encode("utf-8")
+            digest.update(len(encoded_name).to_bytes(4, "big"))
+            digest.update(encoded_name)
+            digest.update(len(body).to_bytes(8, "big"))
+            digest.update(body)
+    return digest.hexdigest()
+
+
 def build_snapshot(
     *,
     config_yaml: Path,
@@ -573,7 +644,7 @@ def build_snapshot(
     soul_text = _redact_text(soul_text, "SOUL.md", pattern_hits)
 
     lock = _read_json(plugins_lock)
-    plugins = lock.get("plugins") if isinstance(lock.get("plugins"), list) else []
+    plugins = _snapshot_plugin_pins(lock, pattern_hits=pattern_hits, notes=notes)
 
     required = _dedupe(config_reqs + list(plugin_requirements or []))
 
@@ -609,7 +680,8 @@ def build_snapshot(
         if soul_text:
             zf.writestr("SOUL.md", soul_text)
         for label, root in (skills_dirs or {}).items():
-            files = _skill_files(root)
+            files, skipped_links = _skill_files(root)
+            notes.extend(f"skipped symlinked skill asset: {label}/{rel}" for rel in skipped_links)
             if not files:
                 continue
             for rel, path in files:
@@ -646,11 +718,13 @@ def build_snapshot(
 
     safe_name = "".join(c for c in agent_name if c.isalnum() or c in "-_") or "agent"
     filename = f"{safe_name}-snapshot-{(now or datetime.now(UTC)).strftime('%Y%m%d-%H%M%S')}.zip"
+    data = buf.getvalue()
     return SnapshotResult(
         knowledge=dict(knowledge.counts) if knowledge and knowledge.docs else {},
-        data=buf.getvalue(),
+        data=data,
         filename=filename,
         manifest=manifest,
+        definition_sha256=_definition_sha256(data),
         required_secrets=required,
         pattern_redactions=pattern_hits,
         notes=notes,

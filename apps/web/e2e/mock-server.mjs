@@ -896,9 +896,11 @@ const server = createServer(async (req, res) => {
     // so the panel's credential-vs-machine-path split is exercised end to end.
     if (pathname === "/api/agent/export" && req.method === "POST") {
       const body = await readBody(req);
+      const definitionSha256 = "e2e-reviewed-definition-sha256";
       const review = {
         filename: "vera-snapshot-20260804-120000.zip",
         bytes: 4321,
+        definition_sha256: definitionSha256,
         required_secrets: [
           { name: "model.api_key", kind: "config", description: "Gateway key.", was_set: true },
           { name: "discord.bot_token", kind: "plugin", description: "Declared by discord.", was_set: false },
@@ -914,6 +916,7 @@ const server = createServer(async (req, res) => {
         "content-type": "application/zip",
         "content-disposition": `attachment; filename="${review.filename}"`,
         "x-snapshot-review": JSON.stringify({ required_secrets: review.required_secrets.map((s) => s.name) }),
+        "x-snapshot-definition-sha256": definitionSha256,
       });
       return res.end(zip);
     }
