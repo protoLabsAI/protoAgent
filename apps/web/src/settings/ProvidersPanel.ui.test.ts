@@ -31,7 +31,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("OAuth connection editing", () => {
+describe("Provider connection dialogs", () => {
   it("opens, focuses, and saves the exact connection from the account-card Edit action", async () => {
     vi.spyOn(api, "providers").mockResolvedValue({
       providers: [
@@ -62,12 +62,16 @@ describe("OAuth connection editing", () => {
     const edit = [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Edit")!;
     act(() => edit.click());
 
-    const editor = container.querySelector('[data-testid="provider-edit-openai-codex"]')!;
+    const editor = document.querySelector('[data-testid="provider-edit-openai-codex"]')!;
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(document.body.textContent).toContain("Edit Codex team");
     const name = editor.querySelector("input") as HTMLInputElement;
     expect(name.value).toBe("Codex team");
-    expect(document.activeElement).toBe(name);
+    expect(document.querySelector('[role="dialog"]')?.contains(document.activeElement)).toBe(true);
 
-    const save = [...editor.querySelectorAll("button")].find((button) => button.textContent?.includes("Save connection"))!;
+    const save = [...document.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Save connection"),
+    )!;
     await act(async () => {
       save.click();
       await Promise.resolve();
@@ -77,5 +81,33 @@ describe("OAuth connection editing", () => {
       base_url: "",
       api_key: "",
     });
+  });
+
+  it("opens add in a focused dialog and cancels without creating a connection", async () => {
+    vi.spyOn(api, "providers").mockResolvedValue({ providers: [] });
+    const add = vi.spyOn(api, "addProvider").mockResolvedValue({ ok: true, id: "new-provider" });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    act(() => {
+      root.render(h(QueryClientProvider, { client }, h(ToastProvider, null, h(ProvidersPanel))));
+    });
+    await flush();
+
+    const addButton = container.querySelector('[data-testid="add-provider"]') as HTMLButtonElement;
+    act(() => addButton.click());
+
+    const editor = document.querySelector('[data-testid="provider-add-form"]')!;
+    expect(editor.querySelector("input")).not.toBeNull();
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(document.body.textContent).toContain("Add a connection");
+    expect(document.querySelector('[role="dialog"]')?.contains(document.activeElement)).toBe(true);
+
+    const cancel = [...document.querySelectorAll("button")].find(
+      (button) => button.textContent?.trim() === "Cancel",
+    )!;
+    act(() => cancel.click());
+
+    expect(document.querySelector('[data-testid="provider-add-form"]')).toBeNull();
+    expect(add).not.toHaveBeenCalled();
   });
 });
