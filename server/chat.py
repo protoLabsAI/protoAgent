@@ -1844,10 +1844,26 @@ async def _chat_langgraph_stream_impl(
                 }
                 yield ("tool_start", _mention_tool)
 
-            async with _thread_lock(_resolve_thread_id(request_metadata, session_id)):
-                _at_reply, _at_outcome = await _at_delegate_exchange(
-                    message, session_id, request_metadata
-                )
+            try:
+                async with _thread_lock(_resolve_thread_id(request_metadata, session_id)):
+                    _at_reply, _at_outcome = await _at_delegate_exchange(
+                        message, session_id, request_metadata
+                    )
+            except Exception as exc:
+                # Most adapter failures are ordinary room outcomes, but an unexpected
+                # exchange failure still flows to the turn-level error handler below.
+                # Settle the card first so the console cannot strand it as running.
+                if _mention_tool is not None:
+                    yield (
+                        "tool_end",
+                        {
+                            "id": _mention_tool["id"],
+                            "name": _mention_tool["name"],
+                            "output": str(exc) or type(exc).__name__,
+                            "error": True,
+                        },
+                    )
+                raise
             if _mention_tool is not None:
                 _failed = sum(not bool(item.get("ok")) for item in (_at_outcome or []))
                 _answered = sum(bool(item.get("ok")) for item in (_at_outcome or []))

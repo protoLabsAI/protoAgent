@@ -259,3 +259,29 @@ async def test_bare_address_does_not_flash_a_work_card(wired, monkeypatch):
     frames = [frame async for frame in sc._chat_langgraph_stream_impl("@proto", "s-bare")]
     assert not [frame for frame in frames if frame[0] in ("tool_start", "tool_end")]
     assert frames[-1][0] == "done"
+
+
+@pytest.mark.asyncio
+async def test_unexpected_address_failure_settles_work_card(wired, monkeypatch):
+    """An exception outside normal adapter error conversion must not strand the card."""
+    monkeypatch.setattr(rs.STATE, "graph", object(), raising=False)
+
+    async def _boom(message, session_id="", request_metadata=None):
+        raise RuntimeError("dispatch machinery broke")
+
+    monkeypatch.setattr(sc, "_at_delegate_exchange", _boom)
+    frames = [frame async for frame in sc._chat_langgraph_stream_impl("@proto status?", "s-failed")]
+
+    assert frames[:2] == [
+        ("tool_start", {"id": "mention:proto", "name": "@proto", "input": "status?"}),
+        (
+            "tool_end",
+            {
+                "id": "mention:proto",
+                "name": "@proto",
+                "output": "dispatch machinery broke",
+                "error": True,
+            },
+        ),
+    ]
+    assert frames[-1] == ("error", "dispatch machinery broke")
