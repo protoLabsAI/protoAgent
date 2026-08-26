@@ -1648,9 +1648,10 @@ _SECTION_CATEGORY = {
     # Plugins — the one core FIELD under the Plugins surface (ADR 0093 opt-in). Mapped
     # explicitly (not via the default) so the core-section guard stays honest.
     "Plugins": "Plugins",
-    # Box — box-wide operational config (host console only): the telemetry store + the
-    # host box-runtime knobs (network / discovery / keep-warm, ADR 0047 D8). Host-scoped;
-    # a workspace-leaf override of these is a silent no-op (consumed by the host process).
+    # Box — operational config rendered on the host console: the telemetry store + prompt
+    # capture policy and the host box-runtime knobs (network / discovery / keep-warm,
+    # ADR 0047 D8) are host-scoped. Telemetry's fleet-trace export is the one agent-scoped
+    # field here; Box ▸ Telemetry exposes it through its own agent-layer shortcut (#3032).
     "Telemetry": "Box",
     "Network": "Box",
     "Discovery": "Box",

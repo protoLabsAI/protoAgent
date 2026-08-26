@@ -898,6 +898,35 @@ def test_telemetry_surface_chips_the_tracing_keys():
     )
 
 
+def test_telemetry_surface_chips_every_telemetry_section_field():
+    """#3032: a Telemetry schema field must not exist in the API but in no console DOM.
+
+    Pin the schema inventory to the contextual surface rather than repeating a static key
+    list: adding another field to this section now fails until its operator control ships.
+    """
+    from graph.config import LangGraphConfig
+    from graph.settings_schema import build_schema
+
+    src = _console_source("telemetry", "TelemetrySurface.tsx")
+    telemetry_fields = [
+        field
+        for group in build_schema(LangGraphConfig())
+        for field in group["fields"]
+        if field["section"] == "Telemetry"
+    ]
+
+    assert {field["key"] for field in telemetry_fields} == {
+        "telemetry.fleet_trace_export",
+        "telemetry.enabled",
+        "telemetry.retention_days",
+        "prompts.capture",
+        "prompts.retention_days",
+        "prompts.max_calls",
+    }
+    for field in telemetry_fields:
+        assert f'"{field["key"]}"' in src, f'{field["key"]} renders in no Telemetry control'
+
+
 # ── shutdown flush wiring ─────────────────────────────────────────────────────
 
 

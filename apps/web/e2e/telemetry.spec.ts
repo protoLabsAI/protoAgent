@@ -48,6 +48,49 @@ test("Box ▸ Telemetry shows the summary cards and recent turns", async ({ page
   await expect(surface.getByTestId("telemetry-trace-off")).toHaveCount(0);
 });
 
+test("Box ▸ Telemetry exposes every setting without mixing save layers", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.getByTestId("settings-widget").click();
+  await page.locator(".settings-overlay .pl-sidenav").getByRole("tab", { name: "Telemetry", exact: true }).click();
+
+  const surface = page.getByTestId("telemetry-surface");
+  await surface.getByRole("button", { name: "Telemetry and prompt capture settings" }).click();
+  const hostDialog = page.getByRole("dialog", { name: "Telemetry & prompt capture" });
+  for (const key of [
+    "telemetry.enabled",
+    "telemetry.retention_days",
+    "prompts.capture",
+    "prompts.retention_days",
+    "prompts.max_calls",
+  ]) {
+    await expect(hostDialog.locator(`.setting-row[data-key="${key}"]`)).toBeVisible();
+  }
+  await expect(hostDialog.locator('.setting-row[data-key="telemetry.fleet_trace_export"]')).toHaveCount(0);
+
+  const hostWrite = page.waitForRequest(
+    (request) => request.method() === "POST" && new URL(request.url()).pathname.endsWith("/api/settings"),
+  );
+  await hostDialog.locator('.setting-row[data-key="telemetry.enabled"] .pl-switch').click();
+  await hostDialog.getByRole("button", { name: "Save", exact: true }).click();
+  const hostBody = (await hostWrite).postDataJSON();
+  expect(hostBody.layer).toBe("host");
+  expect(hostBody.updates).toEqual({ "telemetry.enabled": false });
+
+  await surface.getByRole("button", { name: "Fleet trace export setting" }).click();
+  const agentDialog = page.getByRole("dialog", { name: "Fleet trace export" });
+  await expect(agentDialog.locator('.setting-row[data-key="telemetry.fleet_trace_export"]')).toBeVisible();
+  await expect(agentDialog.locator(".pl-badge", { hasText: "box-shared" })).toHaveCount(0);
+
+  const agentWrite = page.waitForRequest(
+    (request) => request.method() === "POST" && new URL(request.url()).pathname.endsWith("/api/settings"),
+  );
+  await agentDialog.locator('.setting-row[data-key="telemetry.fleet_trace_export"] .pl-switch').click();
+  await agentDialog.getByRole("button", { name: "Save", exact: true }).click();
+  const agentBody = (await agentWrite).postDataJSON();
+  expect(agentBody.layer).toBe("agent");
+  expect(agentBody.updates).toEqual({ "telemetry.fleet_trace_export": true });
+});
+
 // #3017 — with Langfuse off, every row's trace_id is blank. A column of dashes reads
 // as "these turns weren't traced", which is how a fleet ran a month of turns with
 // tracing dark and nothing in the product said so. The column has to say "off".

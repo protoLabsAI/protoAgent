@@ -60,9 +60,26 @@ function TelemetryBody() {
         kicker={`per-turn cost & latency · ${summary?.turns ?? 0} turns recorded`}
         actions={
           <>
-            {/* Quick-set the box-shared telemetry policy (ADR 0048) — both host-scoped,
-                so this saves to the host layer. */}
-            <QuickSetting keys={["telemetry.enabled", "telemetry.retention_days"]} title="Telemetry" label="Telemetry settings" />
+            {/* Keep each shortcut single-scope (#3032): QuickSetting deliberately makes one
+                settings write. These five are box-shared, while fleet trace export below is
+                the focused agent's own toggle. */}
+            <QuickSetting
+              keys={[
+                "telemetry.enabled",
+                "telemetry.retention_days",
+                "prompts.capture",
+                "prompts.retention_days",
+                "prompts.max_calls",
+              ]}
+              title="Telemetry & prompt capture"
+              label="Telemetry and prompt capture settings"
+            />
+            <QuickSetting
+              keys={["telemetry.fleet_trace_export"]}
+              title="Fleet trace export"
+              label="Fleet trace export setting"
+              icon={<Layers size={15} />}
+            />
             {/* Tracing's shortcut to the same four fields Settings ▸ Tracing owns (#3017), so
                 both halves of ADR 0006 are one click apart from the column that reports them.
                 A SEPARATE chip rather than four more keys on the one above: QuickSetting saves
