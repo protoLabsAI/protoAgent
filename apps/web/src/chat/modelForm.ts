@@ -26,7 +26,7 @@ export type ModelPickerData = {
  *  carry. A subscription model is NOT a "gateway model" — that wording made the picker
  *  look wrong the moment discovery worked (#2473). */
 const SUBSCRIPTION_LABELS: Record<string, string> = {
-  "openai-codex": "ChatGPT subscription",
+  "openai-codex": "ChatGPT / Codex subscription",
   "anthropic-oauth": "Claude subscription",
 };
 
@@ -36,7 +36,7 @@ const SUBSCRIPTION_LABELS: Record<string, string> = {
  *  happens to be running on. */
 const LANE_LABELS: Record<string, string> = {
   gateway: "Gateway",
-  "openai-codex": "ChatGPT subscription",
+  "openai-codex": "ChatGPT / Codex subscription",
   "anthropic-oauth": "Claude subscription",
 };
 

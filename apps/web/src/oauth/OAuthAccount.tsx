@@ -20,7 +20,7 @@ import { errMsg } from "../lib/format";
 
 export const OAUTH_PROVIDER_LABEL: Record<string, string> = {
   "anthropic-oauth": "Claude subscription",
-  "openai-codex": "ChatGPT subscription",
+  "openai-codex": "ChatGPT / Codex subscription",
 };
 
 export type OauthProviderStatus = { signed_in: boolean; detail: string; hint: string };

@@ -94,7 +94,7 @@ describe("OAuthAccountSection", () => {
     stub("openai-codex", "openai-codex");
     mount();
     await flush();
-    expect(container.textContent).toContain("runs on your ChatGPT subscription");
+    expect(container.textContent).toContain("runs on your ChatGPT / Codex subscription");
     expect(cards()).toHaveLength(1);
   });
 
@@ -107,7 +107,9 @@ describe("OAuthAccountSection", () => {
     expect(cards()).toHaveLength(2);
     expect(container.textContent).toContain("This agent runs on your Claude subscription.");
     // The non-active provider renders with its own "connected, not the default" line.
-    expect(container.textContent).toContain("Your ChatGPT subscription is connected but isn't the current default.");
+    expect(container.textContent).toContain(
+      "Your ChatGPT / Codex subscription is connected but isn't the current default.",
+    );
     expect(container.querySelector("[data-testid=gateway-connection]")).toBeNull();
   });
 
