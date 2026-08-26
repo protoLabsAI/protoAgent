@@ -97,6 +97,30 @@ def _write_providers(entries: list[dict], secret_updates: dict[str, str]) -> Non
         save_secrets({"providers": secret_updates})
 
 
+async def _apply_providers(entries: list[dict], secret_updates: dict[str, str]) -> None:
+    """Persist the registry and make it the live registry before returning.
+
+    The server wires ``HOST.apply_settings`` to the transactional config writer: it
+    validates, persists, rebuilds, and rolls back on a failed rebuild. Route-only unit
+    tests have no host, so they keep using the narrow disk-writer seam they already
+    exercise.
+    """
+    from graph.plugins.host import HOST
+
+    if HOST.apply_settings is None:
+        await asyncio.to_thread(_write_providers, entries, secret_updates)
+        return
+
+    updates = [dict(entry) for entry in entries]
+    for entry in updates:
+        secret = secret_updates.get(str(entry.get("id", "")))
+        if secret:
+            entry["api_key"] = secret
+    ok, messages = await asyncio.to_thread(HOST.apply_settings, {"providers": updates})
+    if not ok:
+        raise HTTPException(status_code=400, detail=" · ".join(messages or ["connection update failed"]))
+
+
 def _entries_from_config(cfg) -> list[dict]:
     return [p.as_dict() for p in cfg.providers]
 
@@ -146,7 +170,7 @@ def register_provider_routes(app) -> None:
         if req.base_url.strip():
             entry["base_url"] = req.base_url.strip()
         entries.append(entry)
-        await asyncio.to_thread(_write_providers, entries, {pid: req.api_key} if req.api_key.strip() else {})
+        await _apply_providers(entries, {pid: req.api_key} if req.api_key.strip() else {})
         return {"ok": True, "id": pid, "restart_required": False}
 
     @app.patch("/api/config/providers/{pid}")
@@ -170,7 +194,7 @@ def register_provider_routes(app) -> None:
         # A blank/absent api_key leaves the stored one in place — the console is never
         # shown a key, so it cannot echo one back.
         secret = {pid: req.api_key} if (req.api_key or "").strip() else {}
-        await asyncio.to_thread(_write_providers, entries, secret)
+        await _apply_providers(entries, secret)
         return {"ok": True, "id": pid}
 
     @app.delete("/api/config/providers/{pid}")
@@ -193,7 +217,7 @@ def register_provider_routes(app) -> None:
                 ),
             )
         entries = [e for e in _entries_from_config(cfg) if e["id"] != pid]
-        await asyncio.to_thread(_write_providers, entries, {})
+        await _apply_providers(entries, {})
         return {"ok": True, "removed": pid}
 
     @app.post("/api/config/providers/{pid}/models")

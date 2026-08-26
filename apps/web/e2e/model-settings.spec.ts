@@ -46,6 +46,35 @@ test("Connections lists every registered connection, and the retired fields are 
   await expect(dialog).not.toContainText("Get models");
 });
 
+test("Add a connection submits Claude and Codex as native subscription types", async ({ page }) => {
+  await openModelSettings(page);
+  const panel = page.getByTestId("providers-panel");
+
+  for (const expected of [
+    { option: "Claude subscription", id: "anthropic-oauth", type: "anthropic-oauth", label: "Claude" },
+    { option: "ChatGPT / Codex subscription", id: "openai-codex", type: "openai-codex", label: "ChatGPT / Codex" },
+  ]) {
+    await panel.getByRole("button", { name: "Add a connection", exact: true }).click();
+    await panel.locator("#provider-connection-type").click();
+    await page.getByRole("menuitemradio", { name: expected.option, exact: true }).click();
+
+    // OAuth providers get useful stable ids and never ask for gateway credentials.
+    // The field help is part of each native label's accessible name, hence the anchored
+    // role match rather than an exact bare-label match.
+    await expect(panel.getByRole("textbox", { name: /^Id\b/ })).toHaveValue(expected.id);
+    await expect(panel.getByRole("textbox", { name: /^Name\b/ })).toHaveValue(expected.label);
+    await expect(panel.getByRole("textbox", { name: /^Base URL\b/ })).toHaveCount(0);
+    await expect(panel.getByRole("textbox", { name: /^API key\b/ })).toHaveCount(0);
+
+    const posted = page.waitForRequest((request) =>
+      request.method() === "POST" && new URL(request.url()).pathname === "/api/config/providers"
+    );
+    await panel.getByRole("button", { name: "Add connection", exact: true }).click();
+    const body = (await posted).postDataJSON();
+    expect(body).toEqual({ id: expected.id, type: expected.type, label: expected.label, base_url: "", api_key: "" });
+  }
+});
+
 test("Escape closes the dropdown first, Settings second — never both at once (#2466)", async ({ page }) => {
   await openModelSettings(page);
   const overlay = page.locator(".settings-overlay");

@@ -201,6 +201,38 @@ def test_two_gateways_build_against_their_own_endpoints():
     assert local.openai_api_key.get_secret_value() == "lk"
 
 
+@pytest.mark.parametrize(
+    ("connection_id", "provider_type", "model"),
+    [
+        ("claude", "anthropic-oauth", "claude-sonnet-5"),
+        ("codex", "openai-codex", "gpt-5.6-sol"),
+    ],
+)
+def test_registered_subscription_ids_dispatch_to_their_provider_type(
+    monkeypatch, connection_id, provider_type, model
+):
+    """The operator chooses an id, but the client builder must route on its TYPE.
+
+    This covers the exact add-connection shape: friendly ids such as ``claude`` and
+    ``codex`` are not hardcoded lanes, yet must still enter the Anthropic and Codex
+    native OAuth pipelines with the unqualified model id.
+    """
+    cfg = _cfg(
+        providers=[{"id": connection_id, "type": provider_type}],
+        model={"name": f"{connection_id}:{model}"},
+    )
+    seen: dict = {}
+    sentinel = object()
+
+    def _build(ptype, _config, *, model_name=None, reasoning_effort=None):
+        seen.update(ptype=ptype, model=model_name, effort=reasoning_effort)
+        return sentinel
+
+    monkeypatch.setattr("graph.providers.build_native_oauth_llm", _build)
+    assert create_llm(cfg) is sentinel
+    assert seen == {"ptype": provider_type, "model": model, "effort": None}
+
+
 def test_a_connection_is_usable_when_it_has_somewhere_to_talk_to(monkeypatch):
     """A key is optional — a local vLLM or Ollama wants none — and is never borrowed.
 

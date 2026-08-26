@@ -1,7 +1,7 @@
 import "./settings.css";
 import "./providers.css";
 
-import { Input, SecretInput } from "@protolabsai/ui/forms";
+import { DropdownSelect, Input, SecretInput } from "@protolabsai/ui/forms";
 import { Badge, Button } from "@protolabsai/ui/primitives";
 import { useToast } from "@protolabsai/ui/overlays";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -24,8 +24,31 @@ import { OAUTH_PROVIDER_LABEL, OAuthAccountCard } from "../oauth/OAuthAccount";
 const TYPE_LABEL: Record<string, string> = {
   "openai-compat": "OpenAI-compatible endpoint",
   "anthropic-oauth": "Claude subscription",
-  "openai-codex": "ChatGPT subscription",
+  "openai-codex": "ChatGPT / Codex subscription",
 };
+
+export const CONNECTION_TYPE_OPTIONS = Object.entries(TYPE_LABEL).map(([value, label]) => ({ value, label }));
+
+type ProviderDraft = {
+  id: string;
+  type: string;
+  label: string;
+  base_url: string;
+  api_key: string;
+};
+
+// OAuth connections use the established lane ids by default. They remain editable in
+// the form, but the useful default preserves the qualified names operators already know
+// (`anthropic-oauth:…` / `openai-codex:…`) and gets them to sign-in in one click.
+export function providerDraftForType(type = "openai-compat"): ProviderDraft {
+  if (type === "anthropic-oauth") {
+    return { id: "anthropic-oauth", type, label: "Claude", base_url: "", api_key: "" };
+  }
+  if (type === "openai-codex") {
+    return { id: "openai-codex", type, label: "ChatGPT / Codex", base_url: "", api_key: "" };
+  }
+  return { id: "", type: "openai-compat", label: "", base_url: "", api_key: "" };
+}
 
 // Mirrors `valid_provider_id` in graph/config.py — the console refuses locally what the
 // route would refuse anyway, so a typo is caught before a round trip. Exported so the
@@ -45,7 +68,7 @@ export function ProvidersPanel() {
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({ queryKey: ["providers"], queryFn: () => api.providers() });
   const [adding, setAdding] = useState(false);
-  const [draft, setDraft] = useState({ id: "", type: "openai-compat", label: "", base_url: "", api_key: "" });
+  const [draft, setDraft] = useState<ProviderDraft>(() => providerDraftForType());
   const [models, setModels] = useState<Record<string, string[]>>({});
 
   const refresh = () => void qc.invalidateQueries({ queryKey: ["providers"] });
@@ -53,9 +76,16 @@ export function ProvidersPanel() {
   const add = useMutation({
     mutationFn: () => api.addProvider(draft),
     onSuccess: () => {
-      toast({ tone: "success", title: "Connection added", message: `${draft.id} is ready to use in model slots.` });
+      const oauth = Boolean(OAUTH_PROVIDER_LABEL[draft.type]);
+      toast({
+        tone: "success",
+        title: "Connection added",
+        message: oauth
+          ? `${draft.id} was added. Sign in below to finish connecting it.`
+          : `${draft.id} is ready to use in model slots.`,
+      });
       setAdding(false);
-      setDraft({ id: "", type: "openai-compat", label: "", base_url: "", api_key: "" });
+      setDraft(providerDraftForType());
       refresh();
     },
     onError: (e) => toast({ tone: "error", title: "Couldn't add the connection", message: errMsg(e) }),
@@ -160,6 +190,18 @@ export function ProvidersPanel() {
       {adding ? (
         <div className="provider-row provider-row--draft">
           <label className="field">
+            <span>Connection type</span>
+            <DropdownSelect
+              id="provider-connection-type"
+              value={draft.type}
+              onValueChange={(type) => setDraft(providerDraftForType(type))}
+              options={CONNECTION_TYPE_OPTIONS}
+            />
+            <small className="muted">
+              Subscriptions open their sign-in flow after the connection is added.
+            </small>
+          </label>
+          <label className="field">
             <span>Id</span>
             <Input
               value={draft.id}
@@ -181,21 +223,25 @@ export function ProvidersPanel() {
             />
             <small className="muted">Display only. Change it whenever you like.</small>
           </label>
-          <label className="field">
-            <span>Base URL</span>
-            <Input
-              value={draft.base_url}
-              onChange={(e) => setDraft({ ...draft, base_url: e.target.value })}
-              placeholder="https://api.example.com/v1"
-            />
-          </label>
-          <label className="field">
-            <span>API key</span>
-            <SecretInput
-              value={draft.api_key}
-              onChange={(e) => setDraft({ ...draft, api_key: e.target.value })}
-            />
-          </label>
+          {draft.type === "openai-compat" ? (
+            <>
+              <label className="field">
+                <span>Base URL</span>
+                <Input
+                  value={draft.base_url}
+                  onChange={(e) => setDraft({ ...draft, base_url: e.target.value })}
+                  placeholder="https://api.example.com/v1"
+                />
+              </label>
+              <label className="field">
+                <span>API key</span>
+                <SecretInput
+                  value={draft.api_key}
+                  onChange={(e) => setDraft({ ...draft, api_key: e.target.value })}
+                />
+              </label>
+            </>
+          ) : null}
           <div className="provider-row__actions">
             <Button size="sm" onClick={() => add.mutate()} disabled={!draft.id || !!idError || add.isPending}>
               Add connection

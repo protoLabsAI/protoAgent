@@ -28,6 +28,9 @@ def client(monkeypatch):
         written["secrets"] = secrets
 
     monkeypatch.setattr("operator_api.provider_routes._write_providers", _fake_write)
+    # This focused route fixture has no running server. Keep it on the disk-writer
+    # fallback even when another test in the process has populated the host singleton.
+    monkeypatch.setattr("graph.plugins.host.HOST.apply_settings", None)
     c = TestClient(app)
     c.written = written  # type: ignore[attr-defined]
     return c
@@ -85,6 +88,32 @@ def test_add_routes_the_key_to_the_secrets_overlay(client, monkeypatch):
     # The key goes to secrets.yaml, never into the config document.
     assert all("api_key" not in e for e in entries)
     assert client.written["secrets"] == {"new-gw": "sk-1"}
+
+
+def test_add_uses_the_live_transactional_applier_when_the_server_wires_it(client, monkeypatch):
+    _install(monkeypatch, **BASE)
+    seen: dict = {}
+
+    def _apply(updates):
+        seen.update(updates)
+        return True, ["reloaded"]
+
+    monkeypatch.setattr("graph.plugins.host.HOST.apply_settings", _apply)
+    r = client.post(
+        "/api/config/providers",
+        json={"id": "claude", "type": "anthropic-oauth", "label": "Claude"},
+    )
+    assert r.status_code == 200
+    assert seen["providers"][-1] == {"id": "claude", "type": "anthropic-oauth", "label": "Claude"}
+    assert client.written["entries"] is None  # the fallback writer was not used
+
+
+def test_add_reports_a_live_reload_failure(client, monkeypatch):
+    _install(monkeypatch, **BASE)
+    monkeypatch.setattr("graph.plugins.host.HOST.apply_settings", lambda _updates: (False, ["graph rebuild failed"]))
+    r = client.post("/api/config/providers", json={"id": "codex", "type": "openai-codex"})
+    assert r.status_code == 400
+    assert r.json()["detail"] == "graph rebuild failed"
 
 
 def test_patch_edits_the_label_but_there_is_no_way_to_change_an_id(client, monkeypatch):
@@ -150,6 +179,34 @@ def test_models_probe_uses_the_connection_own_endpoint(client, monkeypatch):
     r = client.post("/api/config/providers/local-vllm/models")
     assert r.json()["models"] == ["m1", "m2"]
     assert seen["base"] == "http://localhost:8000/v1"
+
+
+@pytest.mark.parametrize(
+    ("connection_id", "provider_type", "models"),
+    [
+        ("claude", "anthropic-oauth", ["claude-sonnet-5"]),
+        ("codex", "openai-codex", ["gpt-5.6-sol"]),
+    ],
+)
+def test_models_probe_routes_subscription_connections_by_type(
+    client, monkeypatch, connection_id, provider_type, models
+):
+    _install(
+        monkeypatch,
+        providers=[{"id": connection_id, "type": provider_type}],
+        model={"name": f"{connection_id}:{models[0]}"},
+    )
+    seen: dict = {}
+
+    def _fake_list(ptype, cfg):
+        seen.update(ptype=ptype, ids=cfg.provider_ids())
+        return models, ""
+
+    monkeypatch.setattr("graph.providers.discovery.list_provider_models", _fake_list)
+    r = client.post(f"/api/config/providers/{connection_id}/models")
+    assert r.status_code == 200
+    assert r.json() == {"models": models, "error": ""}
+    assert seen == {"ptype": provider_type, "ids": [connection_id]}
 
 
 # ── first run writes a connection, not the retired triple (ADR 0106 S6) ────────
