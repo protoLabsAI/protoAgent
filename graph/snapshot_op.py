@@ -383,12 +383,27 @@ def _skill_files(root: Path) -> tuple[list[tuple[str, Path]], list[str]]:
         return [], []
     out: list[tuple[str, Path]] = []
     skipped: list[str] = []
+
+    def is_link_like(path: Path) -> bool:
+        """Recognize links and Windows reparse points without following them."""
+        if path.is_symlink():
+            return True
+        is_junction = getattr(path, "is_junction", None)
+        if is_junction is not None and is_junction():
+            return True
+        try:
+            # On Windows, directory links can surface to ``os.walk`` as reparse
+            # points without ``Path.is_symlink()`` identifying them consistently.
+            return bool(getattr(path.lstat(), "st_file_attributes", 0) & 0x400)
+        except OSError:
+            return False
+
     for current, dirnames, filenames in os.walk(root, followlinks=False):
         directory = Path(current)
         kept_dirs: list[str] = []
         for name in sorted(dirnames):
             path = directory / name
-            if path.is_symlink():
+            if is_link_like(path):
                 skipped.append(str(path.relative_to(root)))
             else:
                 kept_dirs.append(name)
@@ -400,7 +415,7 @@ def _skill_files(root: Path) -> tuple[list[tuple[str, Path]], list[str]]:
             rel = str(path.relative_to(root))
             # A skill tree is an export boundary, not permission to dereference pointers to
             # arbitrary files elsewhere on the machine. ``Path.is_file()`` follows links.
-            if path.is_symlink():
+            if is_link_like(path):
                 skipped.append(rel)
                 continue
             if not path.is_file() or path.name in EXCLUDED_FILENAMES:
