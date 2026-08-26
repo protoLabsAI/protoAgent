@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { SettingsGroup } from "../lib/types";
 import {
   bareModel,
+  composerModelSections,
   groupByLane,
   laneOf,
   modelCardHint,
@@ -300,5 +301,57 @@ describe("groupByLane — the menu's sections", () => {
     expect(groups).toEqual([
       { lane: "", label: "", items: ["protolabs/reasoning", "protolabs/fast"] },
     ]);
+  });
+});
+
+describe("composerModelSections — favorites pin without filtering", () => {
+  it("pins favorites first and keeps every non-favorite model in lane groups", () => {
+    const data = modelPickerData(
+      crossGroups(
+        ["openai-codex:gpt-5.6-sol", "gateway:protolabs/coder"],
+        [
+          "gateway:protolabs/coder",
+          "gateway:protolabs/fast",
+          "anthropic-oauth:claude-sonnet-5",
+          "openai-codex:gpt-5.6-sol",
+        ],
+      ),
+    );
+
+    const sections = composerModelSections(data);
+
+    expect(sections.favorites).toEqual([
+      "openai-codex:gpt-5.6-sol",
+      "gateway:protolabs/coder",
+    ]);
+    expect(sections.groups).toEqual([
+      { lane: "gateway", label: "Gateway", items: ["gateway:protolabs/fast"] },
+      {
+        lane: "anthropic-oauth",
+        label: "Claude subscription",
+        items: ["anthropic-oauth:claude-sonnet-5"],
+      },
+    ]);
+  });
+
+  it("deduplicates bare and qualified spellings by model meaning", () => {
+    const data = modelPickerData(
+      crossGroups(
+        ["gpt-5.6-sol", "openai-codex:gpt-5.6-sol"],
+        ["openai-codex:gpt-5.6-sol", "openai-codex:gpt-5-codex"],
+      ),
+    );
+
+    const sections = composerModelSections(data);
+
+    expect(sections.favorites).toEqual(["gpt-5.6-sol"]);
+    expect(sections.groups.flatMap((group) => group.items)).toEqual(["openai-codex:gpt-5-codex"]);
+  });
+
+  it("has no empty Favorites section when none are pinned", () => {
+    const sections = composerModelSections(modelPickerData(crossGroups([], LANES)));
+
+    expect(sections.favorites).toEqual([]);
+    expect(sections.groups.flatMap((group) => group.items)).toEqual(LANES);
   });
 });
