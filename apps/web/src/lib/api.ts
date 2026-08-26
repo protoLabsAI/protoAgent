@@ -1743,8 +1743,8 @@ export const api = {
     return request<{ mentions: MentionTarget[] }>("/api/chat/mentions");
   },
 
-  settingsSchema() {
-    return request<{ groups: SettingsGroup[] }>("/api/settings/schema");
+  settingsSchema(host = false) {
+    return request<{ groups: SettingsGroup[] }>("/api/settings/schema", { host });
   },
 
   activity() {
@@ -1857,10 +1857,15 @@ export const api = {
   // Save a flat {key: value} payload to a cascade layer (ADR 0047): "agent" (the
   // per-agent leaf, default) or "host" (the box-shared host-config.yaml). Secrets
   // are refused on the host layer server-side.
-  saveSettings(updates: Record<string, unknown>, layer: "agent" | "host" = "agent") {
+  saveSettings(
+    updates: Record<string, unknown>,
+    layer: "agent" | "host" = "agent",
+    host = false,
+  ) {
     return request<{ ok: boolean; messages: string[]; restart_required: string[] }>("/api/settings", {
       method: "POST",
       body: { updates, layer },
+      host,
     });
   },
 

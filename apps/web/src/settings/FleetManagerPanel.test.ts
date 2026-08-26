@@ -1,6 +1,13 @@
 import { describe, it, expect } from "vitest";
 
-import { BOX_RUNTIME_KEYS, canAddRemote, slugOf } from "./FleetManagerPanel";
+import {
+  BOX_RUNTIME_KEYS,
+  canAddRemote,
+  fleetAutostartRoster,
+  memberAutostarts,
+  slugOf,
+  updateAutostartRoster,
+} from "./FleetManagerPanel";
 
 describe("canAddRemote — manual add-remote submit gate (ADR 0042 §I)", () => {
   it("requires a non-empty name", () => {
@@ -39,8 +46,8 @@ describe("slugOf — the row link's destination (#2240)", () => {
 });
 
 describe("BOX_RUNTIME_KEYS — the Box runtime chip's field set (#2880)", () => {
-  it("includes fleet.autostart alongside the keep-warm fields", () => {
-    expect(BOX_RUNTIME_KEYS).toContain("fleet.autostart");
+  it("keeps the keep-warm fields but leaves per-member autostart on each row", () => {
+    expect(BOX_RUNTIME_KEYS).not.toContain("fleet.autostart");
     expect(BOX_RUNTIME_KEYS).toContain("fleet.warm.max");
     expect(BOX_RUNTIME_KEYS).toContain("fleet.warm.grace_seconds");
   });
@@ -56,7 +63,28 @@ describe("BOX_RUNTIME_KEYS — the Box runtime chip's field set (#2880)", () => 
       "fleet.discovery.mdns",
       "fleet.warm.max",
       "fleet.warm.grace_seconds",
-      "fleet.autostart",
     ]);
+  });
+});
+
+describe("fleet member autostart rows", () => {
+  const member = { id: "agent-17", name: "protoEngineer" };
+
+  it("reads fleet.autostart from the real settings-schema shape", () => {
+    const groups = [{ id: "fleet", label: "Fleet", fields: [
+      { key: "fleet.autostart", value: ["agent-17", "reviewer"] },
+    ] }];
+    expect(fleetAutostartRoster(groups as never)).toEqual(["agent-17", "reviewer"]);
+  });
+
+  it("recognizes both stable ids and legacy name entries", () => {
+    expect(memberAutostarts(["agent-17"], member)).toBe(true);
+    expect(memberAutostarts(["protoEngineer"], member)).toBe(true);
+    expect(memberAutostarts(["reviewer"], member)).toBe(false);
+  });
+
+  it("writes stable ids and preserves unrelated or currently missing members", () => {
+    expect(updateAutostartRoster(["reviewer"], member, true)).toEqual(["reviewer", "agent-17"]);
+    expect(updateAutostartRoster(["reviewer", "protoEngineer"], member, false)).toEqual(["reviewer"]);
   });
 });

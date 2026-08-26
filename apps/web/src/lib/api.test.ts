@@ -121,6 +121,42 @@ describe("member-scoped 401 must NOT hijack the hub AuthGate (ADR 0042 §I)", ()
   });
 });
 
+describe("hub-forced fleet settings", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    window.history.replaceState({}, "", "/app/");
+  });
+
+  it("reads and writes the hub even when a member window is focused", async () => {
+    window.history.replaceState({}, "", "/app/agent/ava/");
+    const calls: { url: string; body?: unknown }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push({
+          url,
+          body: init?.body ? JSON.parse(String(init.body)) : undefined,
+        });
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ ok: true, groups: [], messages: [], restart_required: [] }),
+          text: async () => "",
+        };
+      }),
+    );
+
+    await api.settingsSchema(true);
+    await api.saveSettings({ "fleet.autostart": ["agent-17"] }, "host", true);
+
+    expect(calls.map((c) => c.url)).toEqual(["/api/settings/schema", "/api/settings"]);
+    expect(calls[1].body).toEqual({
+      updates: { "fleet.autostart": ["agent-17"] },
+      layer: "host",
+    });
+  });
+});
+
 describe("finishSetup carries the archetype's capability contract (ADR 0100)", () => {
   // The wizard's host path is the twin of POST /api/fleet's `requires_tools`: the
   // server records it in the host's archetype-contract.yaml so a wizard-installed archetype

@@ -58,7 +58,13 @@
 .fleet-row-actions {
   flex: 0 0 auto;
   display: flex;
+  align-items: center;
   gap: 4px;
+}
+.fleet-autostart-toggle {
+  margin-right: 6px;
+  font-size: 12px;
+  color: var(--pl-color-fg-subtle);
 }
 /* .fleet-empty retired (#832) — the manager + discover empty states now render
    the DS <Empty> (.pl-empty). .fleet-section-label keeps its muted color. */

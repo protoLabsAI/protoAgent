@@ -13,8 +13,8 @@ import { PanelHeader } from "@protolabsai/ui/navigation";
 import { QuickSetting } from "./QuickSetting";
 import { agentHref, api, currentSlug } from "../lib/api";
 import { errMsg } from "../lib/format";
-import { fleetQuery, queryKeys } from "../lib/queries";
-import type { DiscoveredAgent, FleetAgent } from "../lib/types";
+import { fleetQuery, queryKeys, settingsSchemaQuery } from "../lib/queries";
+import type { DiscoveredAgent, FleetAgent, SettingsGroup } from "../lib/types";
 
 /** The manual add-remote form is submittable only with a name and an http(s) URL. Exported
  * (pure) so the enable rule is unit-tested without rendering the panel. The server does the
@@ -29,8 +29,8 @@ export function canAddRemote(name: string, url: string): boolean {
  * so the row link's destination is unit-tested without rendering the panel. */
 export const slugOf = (a: { id: string; host?: boolean }) => (a.host ? "host" : a.id);
 
-/** The Box-runtime chip's field set (bind interface · ports · discovery · keep-warm ·
- * autostart) — every key host-scoped, so the QuickSetting saves to the host layer
+/** The Box-runtime chip's field set (bind interface · ports · discovery · keep-warm) —
+ * every key host-scoped, so the QuickSetting saves to the host layer
  * (ADR 0047 D8 / 0048). Exported so the chip's contents are unit-tested without
  * rendering the panel. */
 export const BOX_RUNTIME_KEYS: string[] = [
@@ -41,8 +41,28 @@ export const BOX_RUNTIME_KEYS: string[] = [
   "fleet.discovery.mdns",
   "fleet.warm.max",
   "fleet.warm.grace_seconds",
-  "fleet.autostart",
 ];
+
+/** Resolve the host's durable autostart roster from the settings schema response. */
+export function fleetAutostartRoster(groups: SettingsGroup[] | undefined): string[] {
+  const value = groups?.flatMap((g) => g.fields).find((f) => f.key === "fleet.autostart")?.value;
+  return Array.isArray(value) ? value.map(String).filter(Boolean) : [];
+}
+
+/** A legacy name entry and the preferred stable-id entry both mean this row is enabled. */
+export function memberAutostarts(roster: string[], agent: Pick<FleetAgent, "id" | "name">): boolean {
+  return roster.includes(agent.id) || roster.includes(agent.name);
+}
+
+/** Toggle one row without disturbing entries for members no longer present in the roster. */
+export function updateAutostartRoster(
+  roster: string[],
+  agent: Pick<FleetAgent, "id" | "name">,
+  enabled: boolean,
+): string[] {
+  const others = roster.filter((entry) => entry !== agent.id && entry !== agent.name);
+  return enabled ? [...others, agent.id] : others;
+}
 
 // Fleet manager (ADR 0042) — Settings → Agents. Lists the workspace agents with live
 // status (the query polls every 3s, so a crashed agent flips to stopped on its own) and
@@ -50,6 +70,9 @@ export const BOX_RUNTIME_KEYS: string[] = [
 export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
   const qc = useQueryClient();
   const fleet = useQuery(fleetQuery());
+  // fleet.autostart belongs to the HUB's host layer. Force both this read and the
+  // mutation below to the hub even when the panel is open in a member window.
+  const hostSettings = useQuery(settingsSchemaQuery(true));
   // The id (never the display name) of the row currently being acted on. Every fleet call
   // below addresses agents by id for the same reason: display names are editable and — since
   // a member can rename ITSELF from its own Identity panel, where sibling names aren't
@@ -76,6 +99,10 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
   });
 
   const agents = fleet.data?.agents ?? [];
+  const autostartRoster = fleetAutostartRoster(hostSettings.data?.groups);
+  const autostartAvailable = Boolean(
+    hostSettings.data?.groups.flatMap((group) => group.fields).some((field) => field.key === "fleet.autostart"),
+  );
   const slug = currentSlug(); // the agent this window is focused on (the URL slug)
   // Hub↔remote version handshake (ADR 0042 §I): the proxied /api/* surface has no
   // other versioning, so a remote member on a different release gets a warning badge.
@@ -88,6 +115,31 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
       setBusy(null);
       qc.invalidateQueries({ queryKey: queryKeys.fleet });
     },
+  });
+
+  const autostart = useMutation({
+    mutationFn: async ({ agent, enabled }: { agent: FleetAgent; enabled: boolean }) => {
+      const next = updateAutostartRoster(autostartRoster, agent, enabled);
+      const result = await api.saveSettings({ "fleet.autostart": next }, "host", true);
+      if (!result.ok) throw new Error(result.messages.join(" · ") || "The setting was not applied.");
+      return next;
+    },
+    onSuccess: (next) => {
+      qc.setQueryData<{ groups: SettingsGroup[] }>(settingsSchemaQuery(true).queryKey, (current) =>
+        current
+          ? {
+              groups: current.groups.map((group) => ({
+                ...group,
+                fields: group.fields.map((field) =>
+                  field.key === "fleet.autostart" ? { ...field, value: next } : field,
+                ),
+              })),
+            }
+          : current,
+      );
+    },
+    onError: (e) => toast({ tone: "error", title: "Couldn't update autostart", message: errMsg(e) }),
+    onSettled: () => qc.invalidateQueries({ queryKey: settingsSchemaQuery(true).queryKey }),
   });
   const act = (id: string, fn: () => Promise<unknown>) => {
     setBusy(id);
@@ -384,6 +436,17 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                     </span>
                   </div>
                   <div className="fleet-row-actions">
+                    {/* Boot autostart is a hub-owned process policy, so it applies only to
+                        local workspace members — never the hub itself or a remote peer. */}
+                    {!a.host && !a.remote ? (
+                      <Switch
+                        className="fleet-autostart-toggle"
+                        checked={memberAutostarts(autostartRoster, a)}
+                        disabled={!autostartAvailable || autostart.isPending}
+                        onCheckedChange={(enabled) => autostart.mutate({ agent: a, enabled })}
+                        label="Start on boot"
+                      />
+                    ) : null}
                     {/* Add as a delegate of the focused agent → enables delegate_to flows. Any
                         agent but the one you're on (it can't delegate to itself). */}
                     {!isActive ? (
