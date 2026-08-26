@@ -1272,6 +1272,15 @@ async def _at_delegate_exchange(
             await run_mention(STATE.graph, reg, tid, name, rest, session_id=session_id)
         )
 
+    # A stopped member can already be started, with consent, by the lead agent's
+    # delegate_to tool (#3126). Direct @ dispatch runs outside the graph and therefore
+    # cannot interrupt for that consent. Bounce the original, untouched message into a
+    # normal lead turn only when EVERY address failed for exactly that recoverable
+    # reason. A mixed result stays here: replaying the whole message through the lead
+    # would dispatch again to participants who already answered.
+    if _all_mentions_are_startable_unreachable(reg, targets, outcomes):
+        return None, None
+
     def _line(o: dict) -> str:
         who = str(o.get("author") or "")
         if o.get("ok"):
@@ -1286,6 +1295,27 @@ async def _at_delegate_exchange(
     # to avoid. Consoles that render per-exchange frames show the parts; this text is
     # the whole for everyone else.
     return "\n\n".join(f"**@{o.get('author')}** — {_line(o)}" for o in outcomes), outcomes
+
+
+def _all_mentions_are_startable_unreachable(reg, targets: list[str], outcomes: list[dict]) -> bool:
+    """Whether every failed address can be recovered by ``delegate_to`` startup.
+
+    Classification comes from the adapter exception, while member identity comes from
+    the fleet roster. Both are required: an HTTP/timeout failure must not restart a live
+    process, and an unreachable remote peer is not ours to spawn.
+    """
+    if not outcomes or len(outcomes) != len(targets):
+        return False
+    from plugins.delegates.adapters import KIND_UNREACHABLE
+    from plugins.delegates.autostart import startable_member
+
+    for name, outcome in zip(targets, outcomes, strict=True):
+        if outcome.get("ok") or outcome.get("error_kind") != KIND_UNREACHABLE:
+            return False
+        delegate = reg.get(name)
+        if delegate is None or startable_member(getattr(delegate, "url", "") or "") is None:
+            return False
+    return True
 
 
 async def _at_delegate_reply(message: str) -> str | None:

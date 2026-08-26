@@ -283,7 +283,7 @@ async def dispatch_into_room(
         }
     conversation_key = thread_id if getattr(delegate, "type", "") == "acp" else None
 
-    ok, reply, error = True, "", ""
+    ok, reply, error, error_kind = True, "", "", ""
     try:
         dispatch_kwargs = {
             "conversation_key": conversation_key,
@@ -303,6 +303,10 @@ async def dispatch_into_room(
         # Bare `str(exc)` — this string is read by an operator, and the exception TYPE
         # is noise to them. The type goes to the log, which is who wants it.
         ok, error = False, str(exc) or type(exc).__name__
+        # Preserve the adapter's machine-readable failure class for callers that can
+        # recover from one narrow case. The operator-facing error remains the plain
+        # string above; this field is routing metadata, not new UI copy.
+        error_kind = str(getattr(exc, "kind", "") or "")
         log.warning("[room] dispatch to %r failed: %s: %s", target, type(exc).__name__, error)
 
     # Both halves are ordered as they happened. The caller decides whether they join
@@ -332,6 +336,7 @@ async def dispatch_into_room(
         "author": target,
         "reply": reply,
         "error": error,
+        "error_kind": error_kind,
         "catchup": len(window),
         "truncated": truncated,
         "messages": written,

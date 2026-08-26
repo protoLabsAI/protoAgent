@@ -21,6 +21,9 @@ sc = importlib.import_module("server.chat")
 class _Delegate:
     type = "acp"
 
+    def __init__(self, name=""):
+        self.url = f"http://127.0.0.1:78{len(name):02d}/a2a"
+
 
 class _Reg:
     def __init__(self, names=("proto", "reviewer"), replies=None):
@@ -35,7 +38,7 @@ class _Reg:
         return [{"name": n, "type": "acp", "description": "", "url": ""} for n in self._names]
 
     def get(self, name):
-        return _Delegate() if name in self._names else None
+        return _Delegate(name) if name in self._names else None
 
     async def dispatch(self, name, query, *, conversation_key=None, permissions=None):
         self.calls.append({"name": name, "query": query})
@@ -125,6 +128,69 @@ async def test_one_failure_does_not_cost_the_other_replies(wired):
     assert "Delegate @proto failed" in reply and "offline" in reply
     assert "**@reviewer** — agreed" in reply
     assert [o["ok"] for o in outcomes] == [False, True]
+
+
+@pytest.mark.asyncio
+async def test_mixed_success_and_startable_failure_does_not_redispatch_the_success(wired, monkeypatch):
+    """The explicit #3129 edge: @a @b with a up and b stopped stays on the direct
+    path, otherwise falling through would ask the lead to dispatch to a twice."""
+    from plugins.delegates.adapters import DelegateError, KIND_UNREACHABLE
+    from plugins.delegates import autostart
+
+    async def _dispatch(name, query, *, conversation_key=None, permissions=None):
+        wired.calls.append({"name": name, "query": query})
+        if name == "reviewer":
+            raise DelegateError("offline", kind=KIND_UNREACHABLE)
+        return "proto answered"
+
+    wired.dispatch = _dispatch
+    monkeypatch.setattr(
+        autostart,
+        "startable_member",
+        lambda url: {"id": url, "name": url, "port": 1},
+    )
+
+    reply, outcomes = await sc._at_delegate_exchange("@proto @reviewer status?")
+    assert "proto answered" in reply
+    assert "Delegate @reviewer failed: offline" in reply
+    assert [call["name"] for call in wired.calls] == ["proto", "reviewer"]
+    assert outcomes is not None
+
+
+@pytest.mark.asyncio
+async def test_every_startable_unreachable_target_falls_through_to_the_lead(wired, monkeypatch):
+    from plugins.delegates.adapters import DelegateError, KIND_UNREACHABLE
+    from plugins.delegates import autostart
+
+    async def _dispatch(name, query, *, conversation_key=None, permissions=None):
+        raise DelegateError(f"{name} is down", kind=KIND_UNREACHABLE)
+
+    wired.dispatch = _dispatch
+    monkeypatch.setattr(
+        autostart,
+        "startable_member",
+        lambda url: {"id": url, "name": url, "port": 1},
+    )
+
+    reply, outcomes = await sc._at_delegate_exchange("@proto @reviewer status?")
+    assert reply is None
+    assert outcomes is None
+
+
+@pytest.mark.asyncio
+async def test_unreachable_remote_target_keeps_the_direct_error(wired, monkeypatch):
+    from plugins.delegates.adapters import DelegateError, KIND_UNREACHABLE
+    from plugins.delegates import autostart
+
+    async def _dispatch(name, query, *, conversation_key=None, permissions=None):
+        raise DelegateError("offline", kind=KIND_UNREACHABLE)
+
+    wired.dispatch = _dispatch
+    monkeypatch.setattr(autostart, "startable_member", lambda url: None)
+
+    reply, outcomes = await sc._at_delegate_exchange("@proto status?")
+    assert reply == "Delegate @proto failed: offline"
+    assert outcomes and outcomes[0]["error_kind"] == KIND_UNREACHABLE
 
 
 @pytest.mark.asyncio
