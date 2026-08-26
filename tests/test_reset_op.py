@@ -74,6 +74,19 @@ def test_reset_uses_port_environment_for_the_process_guard(monkeypatch, tmp_path
     assert seen == {"port": expected, "force": False}
 
 
+def test_dry_run_warns_when_the_real_reset_would_be_blocked(monkeypatch, tmp_path, capsys):
+    paths = _paths(tmp_path)
+    (paths.instance_root / "checkpoints.db").write_text("state", encoding="utf-8")
+    monkeypatch.setattr(reset, "instance_paths", lambda: paths)
+    monkeypatch.setattr(reset, "_tracked_pid", lambda _paths: None)
+    monkeypatch.setattr(reset, "_port_open", lambda port: port == 8123)
+
+    assert reset.run_reset_cli(["--dry-run", "--port", "8123"]) == 0
+    output = capsys.readouterr().out
+    assert "NOTE: something is listening on :8123" in output
+    assert "stop it before a real run" in output
+
+
 def test_delete_guard_rejects_root_and_home(monkeypatch, tmp_path):
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     with pytest.raises(ValueError, match="unsafe reset target"):

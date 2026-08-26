@@ -297,10 +297,11 @@ def run_reset_cli(argv: list[str]) -> int:
     # Keep the compatibility wrapper's long-standing PORT contract. argparse applies
     # `type=int` to a string default too, so an invalid env value gets the same clear
     # usage error as an invalid --port rather than silently checking the wrong listener.
+    port_default = os.environ.get("PORT") or "7870"
     parser.add_argument(
         "--port",
         type=int,
-        default=os.environ.get("PORT") or "7870",
+        default=port_default,
         help="server port used by the running-process guard (default: PORT or 7870)",
     )
     args = parser.parse_args(argv)
@@ -319,6 +320,11 @@ def run_reset_cli(argv: list[str]) -> int:
         print("\nNothing to reset; no instance state was found.")
         return 1
     if args.dry_run:
+        pid = _tracked_pid(paths)
+        if pid is not None:
+            print(f"  NOTE: this instance is running (pid {pid}) — stop it (or --force) before a real run.")
+        elif _port_open(args.port):
+            print(f"  NOTE: something is listening on :{args.port} — stop it before a real run.")
         print("\nDry run complete — nothing was changed.")
         return 0
     if not _guard_running_server(paths, port=args.port, force=args.force):
