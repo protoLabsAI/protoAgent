@@ -522,6 +522,52 @@ async def test_tool_events_surface_as_tool_call_metadata():
 
 
 @pytest.mark.asyncio
+async def test_consumed_steer_flushes_prior_text_then_surfaces_a_typed_boundary():
+    """#2959: the marker must follow already-streamed work and precede later work."""
+    import json
+
+    from a2a_impl.executor import STEER_CONSUMED_MIME
+
+    before = "Work emitted before the user redirected. " * 8
+    after = "Work emitted after the redirect. " * 8
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield ("text", before)
+        yield ("steer_consumed", {"items": [{"id": "s1", "text": "change course"}]})
+        yield ("text", after)
+        yield ("done", before + after)
+
+    app = _build_app(stream)
+    order = []
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:
+        async with c.stream(
+            "POST",
+            "/a2a",
+            headers=A2A_HEADERS,
+            json={
+                "jsonrpc": "2.0",
+                "id": "steer",
+                "method": "SendStreamingMessage",
+                "params": {"message": {"messageId": "m", "role": "ROLE_USER", "parts": [{"text": "hi"}]}},
+            },
+        ) as resp:
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                result = json.loads(line[5:].strip()).get("result", {})
+                artifact = result.get("artifactUpdate", {}).get("artifact", {})
+                if any(part.get("text") and "Work emitted" in part["text"] for part in artifact.get("parts", [])):
+                    order.append("text")
+                status_parts = result.get("statusUpdate", {}).get("status", {}).get("message", {}).get("parts", [])
+                for part in status_parts:
+                    if (part.get("metadata") or {}).get("mimeType") == STEER_CONSUMED_MIME:
+                        order.append("steer")
+                        assert part.get("data", {}).get("items") == [{"id": "s1", "text": "change course"}]
+
+    assert order[:3] == ["text", "steer", "text"]
+
+
+@pytest.mark.asyncio
 async def test_tool_end_fragment_carries_true_output_size():
     """#2775: the fragment's `result` is the CAPPED card preview; `outputChars` rides
     the same extra-key lane as parentToolCallId with the true pre-truncation size, so

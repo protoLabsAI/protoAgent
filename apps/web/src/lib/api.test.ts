@@ -14,6 +14,7 @@ import {
   textFromParts,
   hitlFromParts,
   roomReplyFromParts,
+  consumedSteersFromParts,
 } from "./api";
 import { authRequired, clearAuthRequired } from "./auth";
 
@@ -281,6 +282,7 @@ describe("artifactAppends — the A2A append flag's wire shape (#1709 companion)
 });
 
 const ROOM_MIME = "application/vnd.protolabs.room-v1+json";
+const STEER_CONSUMED_MIME = "application/vnd.protolabs.steer-consumed-v1+json";
 
 describe("roomReplyFromParts", () => {
   it("carries the author, who addressed them, and their reply", () => {
@@ -328,6 +330,31 @@ describe("roomReplyFromParts", () => {
   it("ignores a payload with no author rather than drawing an empty byline", () => {
     expect(roomReplyFromParts([{ metadata: { mimeType: ROOM_MIME }, data: { ok: false } }])).toBeNull();
     expect(roomReplyFromParts([{ metadata: { mimeType: ROOM_MIME }, data: { author: "" } }])).toBeNull();
+  });
+});
+
+describe("consumedSteersFromParts", () => {
+  it("decodes a FIFO batch and drops malformed rows", () => {
+    const parts = [
+      {
+        metadata: { mimeType: STEER_CONSUMED_MIME },
+        content: {
+          $case: "data",
+          value: { items: [{ id: "s1", text: "first" }, { nope: true }, { id: "s2", text: "second" }] },
+        },
+      },
+    ];
+    expect(consumedSteersFromParts(parts)).toEqual([
+      { id: "s1", text: "first" },
+      { id: "s2", text: "second" },
+    ]);
+  });
+
+  it("ignores unrelated and empty payloads", () => {
+    expect(consumedSteersFromParts([{ metadata: { mimeType: "text/plain" }, data: {} }])).toBeNull();
+    expect(
+      consumedSteersFromParts([{ metadata: { mimeType: STEER_CONSUMED_MIME }, data: { items: [] } }]),
+    ).toBeNull();
   });
 });
 

@@ -1087,6 +1087,21 @@ async def _run_turn_stream(
             data = event.get("data")
             if isinstance(data, dict):
                 yield ("usage", dict(data))
+        elif kind == "on_custom_event" and name == "steer_consumed":
+            # SteeringMiddleware emits this immediately after draining queued
+            # operator input and before the next model call. Preserve that exact
+            # boundary on the wire so the console can split the live assistant
+            # message instead of floating the steer above the whole turn (#2959).
+            data = event.get("data")
+            items = data.get("items") if isinstance(data, dict) else None
+            if isinstance(items, list):
+                clean = [
+                    {"id": str(item.get("id") or ""), "text": str(item.get("text") or "")}
+                    for item in items
+                    if isinstance(item, dict) and item.get("id") and item.get("text")
+                ]
+                if clean:
+                    yield ("steer_consumed", {"items": clean})
 
     # HITL pause (ADR 0003): the agent called ask_human → LangGraph interrupt().
     # The graph is checkpointed at the interrupt; surface the question so the A2A

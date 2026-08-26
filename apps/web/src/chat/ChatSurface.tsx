@@ -17,7 +17,7 @@ import { errMsg } from "../lib/format";
 import { chatMentionsQuery, goalsQuery, runtimeStatusQuery } from "../lib/queries";
 import { useUI } from "../state/uiStore";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
-import type { ChatMessage, ChatPart, HitlPayload, SlashCommand, SystemNoteTone, ToolCall } from "../lib/types";
+import type { ChatMessage, ChatPart, ConsumedSteer, HitlPayload, SlashCommand, SystemNoteTone, ToolCall } from "../lib/types";
 import { HitlForm } from "./HitlForm";
 import { notifyIfHidden } from "../lib/notify";
 import {
@@ -57,6 +57,7 @@ import { createStreamWatchdog } from "./streamWatchdog";
 import { ADD_SELECTOR, isIncognitoAddClick, trackShiftHeld } from "./shiftCue";
 import { composerPlaceholder } from "./composerPlaceholder";
 import { sessionsToClose } from "./bulkClose";
+import { placeConsumedSteers } from "./steerPlacement";
 
 function messageId() {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1179,7 +1180,17 @@ function ChatSessionSlot({
     setSteerQueue(steerQueueRef.current.filter((q) => q.id !== id));
     try {
       const { removed } = await api.cancelSteer(session.id, id);
-      if (!removed) settleConsumed([item]);
+      if (!removed) {
+        // Already consumed, but the authoritative stream marker may still be in
+        // flight. Restore the queued bubble and let that marker place it exactly;
+        // turn-end reconcile is the missed-marker fallback. Settling here raced the
+        // marker and permanently pinned the steer to the legacy top-of-turn slot.
+        const snap = chatStore.getSnapshot().sessions.find((row) => row.id === session.id);
+        const alreadySettled = snap?.messages.some((message) => message.id === id);
+        if (!alreadySettled && !steerQueueRef.current.some((queued) => queued.id === id)) {
+          setSteerQueue([...steerQueueRef.current, item]);
+        }
+      }
     } catch (e) {
       // Couldn't reach the backend — restore the bubble rather than drop a steer
       // that may still be queued (avoid concurrent-add clobber by re-checking).
@@ -1203,32 +1214,23 @@ function ChatSessionSlot({
     }
   }
 
-  // Settle steered messages the agent has folded in: drop them from the queue and
-  // place them into the thread just before the turn's current assistant message —
-  // they shaped it. Shared by the mid-turn poll and the turn-end reconcile.
-  function settleConsumed(consumed: { id: string; text: string }[]) {
+  // Settle steered messages the agent has folded in: an explicit stream marker
+  // inserts them at the exact live boundary; polling/turn-end callers omit the id
+  // and retain the conservative before-assistant fallback. All paths dedupe by id.
+  function settleConsumed(consumed: ConsumedSteer[], inlineAssistantId?: string) {
     if (!session || !consumed.length) return;
     const consumedIds = new Set(consumed.map((c) => c.id));
     setSteerQueue(steerQueueRef.current.filter((q) => !consumedIds.has(q.id)));
     const snap = chatStore.getSnapshot().sessions.find((s) => s.id === session.id);
     if (!snap) return;
-    const settled: ChatMessage[] = consumed.map((c) => ({
-      id: c.id,
-      role: "user",
-      content: c.text,
-      createdAt: Date.now(),
-      status: "done",
-    }));
-    const msgs = [...snap.messages];
-    let at = msgs.length;
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      if (msgs[i].role === "assistant") {
-        at = i;
-        break;
-      }
-    }
-    msgs.splice(at, 0, ...settled);
-    chatStore.updateMessages(session.id, msgs);
+    chatStore.updateMessages(
+      session.id,
+      placeConsumedSteers(snap.messages, consumed, {
+        inlineAssistantId,
+        frozenId: messageId(),
+        createdAt: Date.now(),
+      }),
+    );
   }
 
   // After a turn ends, reconcile any still-queued steers: those the agent folded
@@ -1260,31 +1262,6 @@ function ChatSessionSlot({
       void runTurn(unconsumed.map((u) => u.text).join("\n\n"));
     }
   }
-
-  // Mid-turn ack: while a turn streams with queued steers, poll the backend so a
-  // steer the agent has already folded in settles into the thread immediately —
-  // otherwise a long turn shows "queued" long after the agent received it.
-  useEffect(() => {
-    if (status !== "streaming" || steerQueue.length === 0 || !session) return;
-    let alive = true;
-    const tick = async () => {
-      try {
-        const remaining = (await api.pendingSteer(session.id)).pending;
-        if (!alive) return;
-        const remainingIds = new Set(remaining.map((r) => r.id));
-        const consumed = steerQueueRef.current.filter((q) => !remainingIds.has(q.id));
-        if (consumed.length) settleConsumed(consumed);
-      } catch {
-        /* transient — retry next tick */
-      }
-    };
-    const handle = window.setInterval(tick, 1500);
-    return () => {
-      alive = false;
-      window.clearInterval(handle);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, steerQueue.length, session?.id]);
 
   function copyMessage(message: ChatMessage) {
     void navigator.clipboard?.writeText(message.content || "");
@@ -1840,6 +1817,13 @@ function ChatSessionSlot({
             insertRoomBubble(latest.messages, assistantId, authored, messageId()),
           );
         },
+        onSteerConsumed: (consumed) => {
+          // Like a room reply, this is a chronology frame inside one long assistant
+          // message. Commit reveal-paced text first, then split at the exact boundary;
+          // continued reasoning/tools/text keep streaming into the reset placeholder.
+          reveal.flush();
+          settleConsumed(consumed, assistantId);
+        },
         onCost: (usage) => {
           // This turn's token/cost readout (terminal cost-v1 extension metadata) — pin it to the assistant
           // message so the per-turn footer survives reload with the rest of the message.
@@ -2384,4 +2368,3 @@ function ChatSessionSlot({
     </div>
   );
 }
-

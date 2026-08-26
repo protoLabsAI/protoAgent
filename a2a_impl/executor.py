@@ -20,6 +20,7 @@ The producer-event contract (unchanged from the hand-rolled handler) is::
                     summed into the turn's spend but excluded from context-fill
                     tracking
     input_required  HITL pause {question}
+    steer_consumed  queued operator input folded before the next model call
     done            terminal; payload is the final text
     error           terminal; payload is the error string
 
@@ -65,6 +66,9 @@ REASONING_MIME = "application/vnd.protolabs.reasoning-v1+json"
 # ordinary artifact, so a consumer that ignores this DataPart shows the same text, just
 # unattributed.
 ROOM_MIME = "application/vnd.protolabs.room-v1+json"
+# Mid-turn operator input consumed at a model-call boundary (#2959). The payload is
+# {items:[{id,text}]}; its position among working frames is the chronology contract.
+STEER_CONSUMED_MIME = "application/vnd.protolabs.steer-consumed-v1+json"
 
 # A renderable UI component (ADR 0051 Slice 2) — a typed, data-only widget the console
 # renders inline ({component, props}). Same DataPart contract as the HITL/tool-call parts.
@@ -723,6 +727,18 @@ class ProtoAgentExecutor(AgentExecutor):
                         await updater.update_status(
                             TaskState.TASK_STATE_WORKING,
                             message=updater.new_agent_message([_data_part_proto(payload, ROOM_MIME)]),
+                        )
+
+                elif event_type == "steer_consumed":
+                    # Commit any answer text emitted before the model-call boundary,
+                    # then publish the marker. The client splits its live assistant
+                    # placeholder here and continued frames land below the user bubble.
+                    await _flush_text()
+                    await _flush_reasoning()
+                    if isinstance(payload, dict):
+                        await updater.update_status(
+                            TaskState.TASK_STATE_WORKING,
+                            message=updater.new_agent_message([_data_part_proto(payload, STEER_CONSUMED_MIME)]),
                         )
 
                 elif event_type == "component":

@@ -110,6 +110,44 @@ def test_middleware_noop_without_session_or_queue():
     assert SteeringMiddleware._inject({"session_id": "sess", "messages": []}) is None  # empty queue
 
 
+@pytest.mark.asyncio
+async def test_async_middleware_emits_the_consumption_boundary(monkeypatch):
+    seen = []
+
+    async def _capture(name, data):
+        seen.append((name, data))
+
+    monkeypatch.setattr("langchain_core.callbacks.adispatch_custom_event", _capture)
+    steering.enqueue("sess", "first", msg_id="s1")
+    steering.enqueue("sess", "second", msg_id="s2")
+
+    update = await SteeringMiddleware().abefore_model({"session_id": "sess", "messages": []}, None)
+
+    assert update is not None
+    assert seen == [
+        (
+            "steer_consumed",
+            {"items": [{"id": "s1", "text": "first"}, {"id": "s2", "text": "second"}]},
+        )
+    ]
+    assert steering.pending("sess") == 0
+
+
+@pytest.mark.asyncio
+async def test_async_middleware_keeps_the_steer_when_boundary_dispatch_fails(monkeypatch):
+    async def _fail(_name, _data):
+        raise RuntimeError("no callback context")
+
+    monkeypatch.setattr("langchain_core.callbacks.adispatch_custom_event", _fail)
+    steering.enqueue("sess", "change course", msg_id="s1")
+
+    update = await SteeringMiddleware().abefore_model({"session_id": "sess", "messages": []}, None)
+
+    assert update is not None
+    assert update["messages"][0].content.endswith("change course")
+    assert steering.pending("sess") == 0
+
+
 # ── end-to-end in a REAL graph ─────────────────────────────────────────────────
 # Drive a real create_agent graph: model call 1 invokes a tool; while the tool
 # "runs" the user steers (enqueue); SteeringMiddleware.before_model must fold that
