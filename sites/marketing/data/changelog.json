@@ -1,5 +1,13 @@
 [
   {
+    "version": "v0.150.0",
+    "date": "2026-08-26",
+    "changes": [
+      "A delegate that is down can be started from the chat, with your say-so (#3126).",
+      "Removing the last model connection now stays removed (#3126, ADR 0106)."
+    ]
+  },
+  {
     "version": "v0.149.1",
     "date": "2026-08-25",
     "changes": [

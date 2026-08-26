@@ -15,6 +15,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.150.0] - 2026-08-26
+
+### Added
+- **A delegate that is down can be started from the chat, with your say-so (#3126).** Asking an
+  agent to reach a stopped teammate reported "unreachable" and stopped there, even when the
+  teammate was a member of this machine's own fleet — sitting in the roster with a port and a
+  workspace, one start away. The recourse was to notice the error, find the fleet surface, start
+  the agent, and ask again. A delegation to a stopped local member now offers to start it, as an
+  approval card in the chat: start it once, start agents as needed for the rest of this chat, or
+  don't. Approving starts the member, waits for it to answer, and retries the delegation.
+  The middle option exists for coordination: when the lead is asked to run a discussion between
+  several participants it reaches them one at a time, so a per-call prompt would mean three cards
+  for one request. Granting it covers the rest of that chat rather than just the round, and lapses
+  after an hour — permission to start processes, given for a task an hour ago, should not still
+  apply to whatever the chat has moved on to.
+  Deliberately narrow. Only a refused connection qualifies — a timeout or an error response means
+  something did answer, and restarting an agent underneath a live turn is a footgun. Only a
+  loopback address matching a stopped member in this machine's roster; a remote peer is never
+  ours to start. One attempt per member per minute, so a member that dies at boot degrades to the
+  plain error instead of asking again on every call. Nothing is offered on a headless instance,
+  where no one can answer and a pending prompt would park the turn. When a start fails, the
+  member's own log tail is what you read.
+
+### Fixed
+- **Removing the last model connection now stays removed (#3126, ADR 0106).** Deleting a
+  connection in Settings ▸ Model reported success and the connection was back after a refresh.
+  Both messages were true about different moments: the delete really did write the change, and
+  the next load really did undo it. Migration — which gives a pre-registry config the connections
+  its older fields imply — keyed on the registry being *empty*, and an empty registry is exactly
+  what removing the last connection writes, so a deliberate "no connections" was read as "not
+  migrated yet". A registry is a *list*, so the test is now whether the `providers` key holds
+  one: absent, null and malformed all still migrate — those are the shapes a pre-registry config
+  actually has — and only an explicit empty list means "no connections, on purpose". The same
+  confusion had a second route through the fleet cascade, which dropped the key whenever the
+  merged result came out empty and handed the loader an absent key; a registry declared at
+  either layer now survives, empty or not.
+
 ## [0.149.1] - 2026-08-25
 
 ### Fixed
