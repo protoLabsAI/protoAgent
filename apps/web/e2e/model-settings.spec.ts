@@ -75,6 +75,77 @@ test("Add a connection submits Claude and Codex as native subscription types", a
   }
 });
 
+test("A gateway stays listed after add, settings reopen, and a fresh GET", async ({ page }) => {
+  const providers = [
+    {
+      id: "existing",
+      type: "openai-compat",
+      label: "Existing",
+      base_url: "https://existing.example/v1",
+      display: "Existing",
+      has_key: true,
+      in_use_by: [],
+    },
+  ];
+  await page.route("**/api/config/providers", async (route) => {
+    if (route.request().method() === "POST") {
+      const body = route.request().postDataJSON();
+      providers.push({
+        ...body,
+        display: body.label || body.id,
+        has_key: Boolean(body.api_key),
+        in_use_by: [],
+      });
+      return route.fulfill({ json: { ok: true, id: body.id } });
+    }
+    return route.fulfill({ json: { providers } });
+  });
+
+  await openModelSettings(page);
+  const panel = page.getByTestId("providers-panel");
+  await panel.getByRole("button", { name: "Add a connection", exact: true }).click();
+  await panel.getByRole("textbox", { name: /^Id\b/ }).fill("launch-gateway");
+  await panel.getByRole("textbox", { name: /^Name\b/ }).fill("Launch gateway");
+  await panel.getByRole("textbox", { name: /^Base URL\b/ }).fill("https://launch.example/v1");
+  await panel.locator('input[type="password"]').fill("sk-launch");
+  await panel.getByRole("button", { name: "Add connection", exact: true }).click();
+
+  await expect(panel.getByTestId("provider-row")).toHaveCount(2);
+  await expect(panel).toContainText("Launch gateway");
+
+  // Reopening remounts the panel and forces the assertion through a new registry GET,
+  // not React's existing row. This is the user-visible v0.150 regression contract.
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".settings-overlay")).toBeHidden();
+  await openModelSettings(page);
+  await expect(page.getByTestId("providers-panel")).toContainText("Launch gateway");
+});
+
+test("Removing the last unused connection requires an explicit confirmation", async ({ page }) => {
+  let present = true;
+  await page.route("**/api/config/providers**", async (route) => {
+    if (route.request().method() === "DELETE") {
+      expect(new URL(route.request().url()).searchParams.get("confirm_last")).toBe("true");
+      present = false;
+      return route.fulfill({ json: { ok: true, removed: "only" } });
+    }
+    return route.fulfill({
+      json: {
+        providers: present
+          ? [{ id: "only", type: "openai-compat", display: "Only", has_key: true, in_use_by: [] }]
+          : [],
+      },
+    });
+  });
+
+  await openModelSettings(page);
+  await page.getByRole("button", { name: "Remove Only" }).click();
+  const dialog = page.getByRole("dialog", { name: "Remove the last connection?" });
+  await expect(dialog).toContainText("no configured model source");
+  await dialog.getByRole("button", { name: "Remove connection", exact: true }).click();
+  await expect(page.getByTestId("provider-row")).toHaveCount(0);
+});
+
 test("Escape closes the dropdown first, Settings second — never both at once (#2466)", async ({ page }) => {
   await openModelSettings(page);
   const overlay = page.locator(".settings-overlay");

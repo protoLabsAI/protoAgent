@@ -1400,8 +1400,9 @@ export const api = {
   },
 
   /** 409 with the referencing slots named when the connection is still in use. */
-  removeProvider(id: string) {
-    return request<{ ok: boolean; removed: string }>(`/api/config/providers/${encodeURIComponent(id)}`, {
+  removeProvider(id: string, confirmLast = false) {
+    const query = confirmLast ? "?confirm_last=true" : "";
+    return request<{ ok: boolean; removed: string }>(`/api/config/providers/${encodeURIComponent(id)}${query}`, {
       method: "DELETE",
     });
   },

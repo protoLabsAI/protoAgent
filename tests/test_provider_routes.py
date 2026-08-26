@@ -108,6 +108,48 @@ def test_add_uses_the_live_transactional_applier_when_the_server_wires_it(client
     assert client.written["entries"] is None  # the fallback writer was not used
 
 
+def test_add_is_visible_to_an_immediate_get_after_the_live_apply(client, monkeypatch):
+    _install(monkeypatch, **BASE)
+
+    def _apply(updates):
+        # Model the server's successful reload contract: STATE is swapped before the
+        # route returns. This is the regression v0.150 missed — POST said success while
+        # the following GET still read the old registry and the new row vanished.
+        monkeypatch.setattr(STATE, "graph_config", LangGraphConfig.from_dict({**BASE, **updates}), raising=False)
+        return True, ["reloaded"]
+
+    monkeypatch.setattr("graph.plugins.host.HOST.apply_settings", _apply)
+    r = client.post(
+        "/api/config/providers",
+        json={"id": "new-gw", "type": "openai-compat", "base_url": "https://new/v1", "api_key": "sk-1"},
+    )
+    assert r.status_code == 200
+    providers = client.get("/api/config/providers").json()["providers"]
+    assert [p["id"] for p in providers] == ["prod-gateway", "local-vllm", "new-gw"]
+    assert next(p for p in providers if p["id"] == "new-gw")["has_key"] is True
+
+
+def test_provider_write_survives_a_fresh_config_load(tmp_path, monkeypatch):
+    from graph import config_io
+    from operator_api.provider_routes import _write_providers
+
+    config_path = tmp_path / "langgraph-config.yaml"
+    secrets_path = tmp_path / "secrets.yaml"
+    monkeypatch.setattr(config_io, "config_yaml_path", lambda: config_path)
+    monkeypatch.setattr(config_io, "secrets_yaml_path", lambda: secrets_path)
+    monkeypatch.setattr("graph.config._load_host_layer", lambda: {})
+
+    _write_providers(
+        [{"id": "new-gw", "type": "openai-compat", "base_url": "https://new/v1"}],
+        {"new-gw": "sk-1"},
+    )
+    fresh = LangGraphConfig.from_yaml(config_path)
+    provider = fresh.provider_by_id("new-gw")
+    assert provider is not None
+    assert provider.base_url == "https://new/v1"
+    assert provider.api_key == "sk-1"
+
+
 def test_add_reports_a_live_reload_failure(client, monkeypatch):
     _install(monkeypatch, **BASE)
     monkeypatch.setattr("graph.plugins.host.HOST.apply_settings", lambda _updates: (False, ["graph rebuild failed"]))
@@ -137,6 +179,50 @@ def test_delete_refuses_a_connection_a_slot_still_names(client, monkeypatch):
     assert r.status_code == 409
     assert "model.name=prod-gateway:protolabs/reasoning" in r.json()["detail"]
     assert client.written["entries"] is None  # nothing written
+
+
+def test_delete_refuses_the_migrated_gateway_implicitly_named_by_a_bare_model(client, monkeypatch):
+    _install(
+        monkeypatch,
+        providers=[{"id": "gateway", "type": "openai-compat", "base_url": "https://gateway/v1"}],
+        model={"name": "protolabs/reasoning"},
+    )
+    listed = client.get("/api/config/providers").json()["providers"][0]
+    assert listed["in_use_by"] == ["model.name=protolabs/reasoning (implicit gateway)"]
+    r = client.delete("/api/config/providers/gateway")
+    assert r.status_code == 409
+    assert "implicit gateway" in r.json()["detail"]
+    assert client.written["entries"] is None
+
+
+def test_native_subscription_lead_does_not_mark_a_bare_model_as_using_the_gateway(client, monkeypatch):
+    _install(
+        monkeypatch,
+        providers=[
+            {"id": "gateway", "type": "openai-compat", "base_url": "https://gateway/v1"},
+            {"id": "anthropic-oauth", "type": "anthropic-oauth"},
+        ],
+        model={"name": "claude-opus-4-6", "provider": "anthropic-oauth"},
+    )
+    providers = client.get("/api/config/providers").json()["providers"]
+    gateway = next(p for p in providers if p["id"] == "gateway")
+    assert gateway["in_use_by"] == []
+
+
+def test_delete_requires_explicit_confirmation_for_the_last_unused_connection(client, monkeypatch):
+    _install(
+        monkeypatch,
+        providers=[{"id": "local-vllm", "type": "openai-compat", "base_url": "http://localhost:8000/v1"}],
+        model={"name": "acp:codex"},
+    )
+    r = client.delete("/api/config/providers/local-vllm")
+    assert r.status_code == 409
+    assert "last model connection" in r.json()["detail"]
+    assert client.written["entries"] is None
+
+    r = client.delete("/api/config/providers/local-vllm?confirm_last=true")
+    assert r.status_code == 200
+    assert client.written["entries"] == []
 
 
 def test_delete_removes_an_unused_connection(client, monkeypatch):
