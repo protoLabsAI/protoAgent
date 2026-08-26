@@ -297,7 +297,11 @@ def run_reset_cli(argv: list[str]) -> int:
     # Keep the compatibility wrapper's long-standing PORT contract. argparse applies
     # `type=int` to a string default too, so an invalid env value gets the same clear
     # usage error as an invalid --port rather than silently checking the wrong listener.
-    port_default = os.environ.get("PORT") or "7870"
+    # Preserve the shell wrapper's exact ``PORT=${PORT:-7870}`` contract: both an
+    # unset and an explicitly empty PORT select 7870.
+    port_default = os.environ.get("PORT")
+    if not port_default:
+        port_default = "7870"
     parser.add_argument(
         "--port",
         type=int,
