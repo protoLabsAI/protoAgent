@@ -421,6 +421,7 @@ async def test_delegate_to_background_spawns_detached_job(monkeypatch):
     assert len(fake.calls) == 1
     call = fake.calls[0]
     assert call["kind"] == "delegate"
+    assert call["result_author"] == "opus"
     assert "opus" in call["description"] and call["detail"] == "build the thing"
     # The queued work, when awaited, dispatches to the delegate.
     monkeypatch.setattr(DelegateRegistry, "dispatch", _fake_dispatch)

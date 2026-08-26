@@ -384,6 +384,7 @@ async def _spawn_background_delegation(
         description=f"delegate → {target}: {snippet}",
         detail=query,
         work=_work,
+        result_author=target,
     )
     return (
         f"Started a background delegation to {target!r} (job `{job_id}`). It runs detached — "

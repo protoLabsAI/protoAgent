@@ -165,6 +165,7 @@ class BackgroundManager:
         detail: str = "",
         origin_incognito: bool = False,
         batch_id: str | None = None,
+        result_author: str = "",
     ) -> str:
         """Register and run a deterministic background job — a plain coroutine, NOT an
         LLM subagent turn — through the same durable store + concurrency cap + event
@@ -175,7 +176,8 @@ class BackgroundManager:
         (stored as ``subagent_type``, e.g. ``"ingest"``); ``detail`` is recorded as the
         job's ``prompt`` (e.g. the source). Returns the opaque job id immediately. Use
         this for long deterministic operations (media transcription/ingest) that must
-        not block the foreground turn.
+        not block the foreground turn. ``result_author`` identifies the result as a room
+        participant's own reply; background delegates set it, other work leaves it blank.
 
         The row is stamped ``deterministic`` (#2363): what comes back is the DELIVERABLE
         the caller dispatched and is waiting on, not a report an autonomous worker wrote,
@@ -190,6 +192,7 @@ class BackgroundManager:
             origin_incognito=origin_incognito,
             batch_id=batch_id,
             deterministic=True,
+            result_author=result_author,
         )
         t = asyncio.create_task(
             self._run_work(job_id, kind, description, origin_session or "", work),
@@ -424,8 +427,10 @@ class BackgroundManager:
     async def resume_origin(self, job) -> bool:
         """Push-resume (ADR 0070 D1): submit a terse self-A2A nudge INTO the job's
         origin session, so the origin agent runs a turn NOW — the notified-gated
-        drain (``server/chat.py``) attaches the actual ``<task-notification>`` to
-        that turn, and the agent briefs the operator against the new data.
+        drain (``server/chat.py``) attaches the completion message to that turn,
+        and the agent briefs the operator against the new data. A background
+        delegate arrives as its own authored room message (#3051); other jobs retain
+        the ``<task-notification>`` envelope.
 
         Deliberately NOT gated on the concurrency semaphore: this is an
         origin-session turn, not a background job — queuing the briefing behind
@@ -437,7 +442,7 @@ class BackgroundManager:
         still drains on the session's next manual turn."""
         verb = "failed" if job.status == "failed" else "finished"
         text = (
-            f"[background job {job.id} ({job.description}) {verb} — its report notification "
+            f"[background job {job.id} ({job.description}) {verb} — its completion message "
             "is attached to this turn; review it and brief the operator]"
         )
         # Turn-lifecycle events (#1767): the nudge holds the connection open for the whole
@@ -577,13 +582,13 @@ class BackgroundManager:
         if running > 0:
             text = (
                 f"[{settled} of {total} background jobs from your fan-out have finished ({summary}); "
-                "their report notifications are attached to this turn — synthesize ONE briefing against "
+                "their completion messages are attached to this turn — synthesize ONE briefing against "
                 f"them. The remaining {running} are still running and will notify separately.]"
             )
         else:
             text = (
-                f"[all {total} background jobs from your fan-out have finished ({summary}) — their report "
-                "notifications are attached to this turn; synthesize ONE briefing against all of them]"
+                f"[all {total} background jobs from your fan-out have finished ({summary}) — their completion "
+                "messages are attached to this turn; synthesize ONE briefing against all of them]"
             )
         # Turn-lifecycle events (#1767), keyed on the batch id: the nudge holds the
         # connection open for the whole origin-session briefing turn.
