@@ -25,27 +25,27 @@ def _names(mws) -> list[str]:
 # ── the shared helper ─────────────────────────────────────────────────────────
 
 
-def test_helper_shapes_per_provider():
+def test_helper_mounts_per_call_shape_dispatcher_for_every_default_provider():
     def names(provider, capture=False):
         # capture defaults ON in real config; pin it explicitly so this test is
         # about the PROVIDER shape, not the observer's gate.
         cfg = LangGraphConfig(model_provider=provider, prompt_capture_enabled=capture)
         return _names(provider_shape_middleware(cfg))
 
-    assert names("anthropic-oauth") == ["ClaudeCodeIdentityMiddleware"]
-    assert names("openai-codex") == ["CodexResponsesInputMiddleware"]
-    assert names("openai") == []  # gateway: nothing to reshape
+    assert names("anthropic-oauth") == ["ProviderShapeMiddleware"]
+    assert names("openai-codex") == ["ProviderShapeMiddleware"]
+    assert names("openai") == ["ProviderShapeMiddleware"]
     # The wire observer trails the transform (#2527) — never precedes it, or it
     # would record the composed prompt as if it were what the wire carried.
     assert names("openai-codex", capture=True) == [
-        "CodexResponsesInputMiddleware",
+        "ProviderShapeMiddleware",
         "WirePromptCaptureMiddleware",
     ]
 
 
 def test_helper_is_case_and_whitespace_tolerant():
     cfg = LangGraphConfig(model_provider="  OpenAI-Codex  ", prompt_capture_enabled=False)
-    assert _names(provider_shape_middleware(cfg)) == ["CodexResponsesInputMiddleware"]
+    assert _names(provider_shape_middleware(cfg)) == ["ProviderShapeMiddleware"]
 
 
 # ── the subagent stack actually mounts them ───────────────────────────────────
@@ -86,29 +86,28 @@ def _capture_subagent_middleware(monkeypatch, provider: str) -> list[str]:
     return _names(seen.get("middleware", []))
 
 
-def test_codex_subagent_carries_the_responses_transform(monkeypatch):
+def test_codex_subagent_carries_the_per_call_shape_dispatcher(monkeypatch):
     """WITHOUT this the Codex backend rejects the delegation's system-role item
     ('System messages are not allowed') — chat worked, every task() failed."""
     names = _capture_subagent_middleware(monkeypatch, "openai-codex")
-    assert "CodexResponsesInputMiddleware" in names, names
+    assert "ProviderShapeMiddleware" in names, names
     # Innermost: nothing that touches the system message may run after it, and it
     # must sit INSIDE PromptCapture (which records the composed prompt).
     if "PromptCaptureMiddleware" in names:
-        assert names.index("PromptCaptureMiddleware") < names.index("CodexResponsesInputMiddleware")
+        assert names.index("PromptCaptureMiddleware") < names.index("ProviderShapeMiddleware")
 
 
-def test_claude_subagent_carries_the_identity_prepend(monkeypatch):
+def test_claude_subagent_carries_the_per_call_shape_dispatcher(monkeypatch):
     """Anthropic's OAuth infra refuses traffic whose system prompt doesn't lead
     with the Claude Code identity line."""
     names = _capture_subagent_middleware(monkeypatch, "anthropic-oauth")
-    assert "ClaudeCodeIdentityMiddleware" in names, names
+    assert "ProviderShapeMiddleware" in names, names
 
 
-def test_gateway_subagent_is_unchanged(monkeypatch):
-    """No native provider ⇒ no reshaping (and no behavior change for gateways)."""
+def test_gateway_subagent_carries_the_noop_capable_dispatcher(monkeypatch):
+    """Gateway primaries still need the dispatcher for native fallback attempts."""
     names = _capture_subagent_middleware(monkeypatch, "openai")
-    assert "CodexResponsesInputMiddleware" not in names
-    assert "ClaudeCodeIdentityMiddleware" not in names
+    assert "ProviderShapeMiddleware" in names
 
 
 def test_subagent_stack_carries_prompt_cache(monkeypatch):
@@ -126,4 +125,4 @@ def test_subagent_prompt_cache_precedes_the_identity_shape(monkeypatch):
     lead path composes with caching)."""
     names = _capture_subagent_middleware(monkeypatch, "anthropic-oauth")
     assert "PromptCacheMiddleware" in names, names
-    assert names.index("PromptCacheMiddleware") < names.index("ClaudeCodeIdentityMiddleware")
+    assert names.index("PromptCacheMiddleware") < names.index("ProviderShapeMiddleware")

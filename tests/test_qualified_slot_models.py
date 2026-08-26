@@ -18,6 +18,7 @@ import pytest
 
 from graph.config import LangGraphConfig
 from graph.llm import create_llm, split_slot_target
+from graph.providers.identity import model_provider_type
 
 _GATEWAY = "https://gw.example.com/v1"
 
@@ -85,6 +86,7 @@ def test_a_gateway_slot_routes_to_the_gateway_from_a_native_main():
 
     assert llm.model_name == "protolabs/coder"
     assert str(llm.openai_api_base).rstrip("/") == _GATEWAY.rstrip("/")
+    assert model_provider_type(llm) == "openai-compat"
 
 
 def test_a_claude_slot_routes_to_claude_from_a_gateway_main():
@@ -94,6 +96,7 @@ def test_a_claude_slot_routes_to_claude_from_a_gateway_main():
 
     assert "claude-sonnet-5" in str(getattr(llm, "model", getattr(llm, "model_name", "")))
     assert not str(getattr(llm, "openai_api_base", "")).startswith(_GATEWAY)
+    assert model_provider_type(llm) == "anthropic-oauth"
 
 
 def test_a_codex_slot_routes_to_codex_from_a_claude_main():
@@ -104,6 +107,7 @@ def test_a_codex_slot_routes_to_codex_from_a_claude_main():
 
     assert "gpt-5.6-sol" in str(getattr(llm, "model", getattr(llm, "model_name", "")))
     assert "chatgpt.example" in str(getattr(llm, "openai_api_base", ""))
+    assert model_provider_type(llm) == "openai-codex"
 
 
 def test_the_qualified_form_beats_the_slash_shorthand():

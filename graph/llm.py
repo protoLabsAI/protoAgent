@@ -15,6 +15,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 from graph.config import PROVIDER_TYPE_OPENAI_COMPAT, LangGraphConfig, Provider
+from graph.providers.identity import tag_model_provider
 
 log = logging.getLogger(__name__)
 
@@ -434,7 +435,11 @@ def create_llm(
         try:
             from runtime.acp_runtime import make_acp_aux_model
 
-            return make_acp_aux_model(config, agent=model_name.split(":", 1)[1].strip() or None)
+            return tag_model_provider(
+                make_acp_aux_model(config, agent=model_name.split(":", 1)[1].strip() or None),
+                "acp",
+                "acp",
+            )
         except Exception:  # noqa: BLE001 — degrade to the gateway model rather than break the call
             log.warning("[llm] ACP override %r unavailable; using the main model", model_name, exc_info=True)
             model_name = None
@@ -476,11 +481,19 @@ def create_llm(
                     "consulted for it, so that one connection's credential can never be sent to "
                     "another's endpoint. Set them in Settings ▸ Model ▸ Connections."
                 )
-            return _build_gateway_llm(config, slot_model or None, reasoning_effort, provider=entry)
+            return tag_model_provider(
+                _build_gateway_llm(config, slot_model or None, reasoning_effort, provider=entry),
+                PROVIDER_TYPE_OPENAI_COMPAT,
+                slot_provider,
+            )
         from graph.providers import build_native_oauth_llm
 
-        return build_native_oauth_llm(
-            ptype, config, model_name=slot_model or None, reasoning_effort=reasoning_effort
+        return tag_model_provider(
+            build_native_oauth_llm(
+                ptype, config, model_name=slot_model or None, reasoning_effort=reasoning_effort
+            ),
+            ptype,
+            slot_provider,
         )
 
     # ACP-only fallback (ADR 0033): when the runtime is an ACP coding agent AND no gateway
@@ -494,7 +507,7 @@ def create_llm(
         from runtime.acp_runtime import is_acp_runtime, make_acp_aux_model
 
         if is_acp_runtime(config) and not _gateway_configured(config):
-            return make_acp_aux_model(config)
+            return tag_model_provider(make_acp_aux_model(config), "acp", "acp")
     except Exception:  # noqa: BLE001 — never let the ACP path break native model creation
         log.debug("[llm] ACP aux-model resolution skipped", exc_info=True)
 
@@ -542,11 +555,19 @@ def create_llm(
                     model_name,
                     config.model_provider,
                 )
-            return build_native_oauth_llm(
-                config.model_provider, config, model_name=model_name, reasoning_effort=reasoning_effort
+            return tag_model_provider(
+                build_native_oauth_llm(
+                    config.model_provider, config, model_name=model_name, reasoning_effort=reasoning_effort
+                ),
+                config.model_provider,
+                config.model_provider,
             )
 
-    return _build_gateway_llm(config, model_name, reasoning_effort)
+    return tag_model_provider(
+        _build_gateway_llm(config, model_name, reasoning_effort),
+        PROVIDER_TYPE_OPENAI_COMPAT,
+        GATEWAY_SLOT,
+    )
 
 
 # Embedding calls run INSIDE the turn (recall precedes every model call), so they get
