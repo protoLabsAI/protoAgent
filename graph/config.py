@@ -261,7 +261,14 @@ def _read_config_docs(p: Path) -> tuple[dict, dict, bool]:
         # shared one. Merge by id instead — the box supplies the connection, the instance
         # may override any field of it or add its own.
         merged["providers"] = _merge_provider_lists(host_providers, agent_data.get("providers"))
-        if not merged["providers"]:
+        if (
+            not merged["providers"]
+            and not isinstance(agent_data.get("providers"), list)
+            and not isinstance(host_layer.get("providers"), list)
+        ):
+            # Nothing declared one at either layer, so leave the key absent and let
+            # migration run. If EITHER layer declared it — even as an empty list —
+            # the key stays, because "no connections" is an answer.
             merged.pop("providers")
     else:
         merged = agent_data
@@ -2138,11 +2145,24 @@ class LangGraphConfig:
         # at the first subagent dispatch. Surface it now and reconcile the fixable slots so
         # they inherit the coherent lead pair. Runs on every load path, so a provider
         # SWITCH (a reload with a new model.provider) reconciles the same way a load does.
-        # ADR 0106: a config with no `providers:` gets the registry its legacy fields
+        # ADR 0106: a config with no `providers:` KEY gets the registry its legacy fields
         # imply, using the same three ids the slot grammar already used — so every
         # stored `gateway:`/`anthropic-oauth:`/`openai-codex:` value keeps working and
         # nothing downstream has to special-case "pre-registry config".
-        if not config.providers:
+        #
+        # Keyed on the value being ABSENT-OR-NULL, not on the list being empty.
+        # `providers: []` is a deliberate statement — it is what removing the last
+        # connection writes — and treating it as "not migrated yet" re-created the entry
+        # the operator had just deleted, on the very next load. The console reported
+        # success and the connection was back after a refresh, because both sides were
+        # telling the truth about different moments.
+        #
+        # A registry is a LIST, so "not a list" is the test rather than `is None`: a bare
+        # `providers:` parses as null and `from_dict` normalizes every null value to `{}`
+        # above, so an identity check against None could never see it. Absent, null and
+        # malformed all migrate — reading an ambiguous line as "this agent has no model
+        # source" is the more expensive wrong answer of the two.
+        if not isinstance(data.get("providers"), list):
             config.providers = _migrated_providers(config)
         _reconcile_slot_providers(config)
 

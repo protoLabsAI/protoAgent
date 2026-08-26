@@ -401,3 +401,81 @@ def test_a_connection_with_an_endpoint_builds_against_its_own(monkeypatch):
     llm = create_llm(cfg, model_name="mine:m")
     assert str(llm.openai_api_base) == "https://mine/v1"
     assert llm.openai_api_key.get_secret_value() == "mk"
+
+
+# ── removing the last connection must stay removed ────────────────────────────
+#
+# Reported live: deleting the gateway reported success, and it was back after a
+# refresh. Migration keyed on the registry being EMPTY, and `providers: []` is exactly
+# what removing the last connection writes — so the next load treated the operator's
+# deliberate "none" as "not migrated yet" and re-created the entry. Both sides were
+# telling the truth about different moments.
+
+
+def test_an_explicitly_empty_registry_is_not_re_migrated():
+    cfg = _cfg(providers=[], model={"provider": "openai", "api_base": "https://gw/v1", "api_key": "k"})
+    assert cfg.provider_ids() == []
+
+
+def test_an_absent_key_still_migrates():
+    """The other half — a pre-ADR-0106 config must still get its registry."""
+    cfg = _cfg(model={"provider": "openai", "api_base": "https://gw/v1", "api_key": "k"})
+    assert cfg.provider_ids() == ["gateway"]
+
+
+def test_deleting_the_last_connection_survives_a_reload():
+    """End to end, the way the console does it: read, drop, write, reload."""
+    cfg = _cfg(
+        providers=[{"id": "gateway", "type": "openai-compat", "base_url": "https://gw/v1"}],
+        model={"provider": "openai", "api_base": "https://gw/v1", "api_key": "k"},
+    )
+    assert cfg.provider_ids() == ["gateway"]
+    remaining = [p.as_dict() for p in cfg.providers if p.id != "gateway"]
+    reloaded = _cfg(providers=remaining, model={"provider": "openai", "api_base": "https://gw/v1", "api_key": "k"})
+    assert reloaded.provider_ids() == []
+
+
+@pytest.mark.parametrize(
+    ("label", "value", "expected"),
+    [
+        # A registry is a LIST. Absent, null and malformed all mean "nothing was
+        # declared" and migrate; only an actual empty list is the operator saying "none".
+        # `from_dict` normalizes null values to {} before this runs, so an `is None`
+        # check could never see a bare `providers:` line.
+        ("absent", "__absent__", ["gateway"]),
+        ("null", None, ["gateway"]),
+        ("malformed mapping", {}, ["gateway"]),
+        ("explicit empty", [], []),
+    ],
+)
+def test_only_an_explicit_empty_list_means_no_connections(label, value, expected):
+    doc = {"model": {"provider": "openai", "api_base": "https://gw/v1", "api_key": "k"}}
+    if value != "__absent__":
+        doc["providers"] = value
+    assert _cfg(**doc).provider_ids() == expected
+
+
+def test_an_id_less_roster_entry_does_not_mask_a_real_member(monkeypatch):
+    """The host entry has no workspace; a member sharing its port still does.
+
+    Bailing on the first id-less port match hid the member behind it.
+    """
+    import types
+
+    from plugins.delegates import autostart as A
+
+    monkeypatch.setattr(
+        "graph.fleet.supervisor",
+        types.SimpleNamespace(
+            status=lambda: [
+                {"name": "host", "id": "", "port": 7875, "running": False},
+                {"name": "protoEngineer", "id": "pe-ba4c", "port": 7875, "running": False},
+            ]
+        ),
+        raising=False,
+    )
+    assert A.startable_member("http://127.0.0.1:7875/a2a") == {
+        "name": "protoEngineer",
+        "id": "pe-ba4c",
+        "port": 7875,
+    }

@@ -14,6 +14,7 @@ until then), so the gate is the delegate, not a plugin toggle.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Annotated, Any
@@ -121,6 +122,22 @@ def _build_delegate_to(registry: DelegateRegistry):
                 timeout=timeout_s,
             )
         except DelegateError as exc:
+            # A stopped member of THIS box's fleet is recoverable: ask, start, retry.
+            # Anything else — a remote peer, a timeout, an HTTP error, an operatorless
+            # instance — falls through to the error, unchanged.
+            retried = await _offer_start_and_retry(
+                registry,
+                target,
+                query,
+                state,
+                exc,
+                tool_call_id=tool_call_id,
+                item_id=item_id or None,
+                resume_task_id=resume_task_id or None,
+                timeout=timeout_s,
+            )
+            if retried is not None:
+                return retried
             return f"Error: {exc}"
         except Exception as exc:  # noqa: BLE001 — surface as a tool error string
             log.warning("[delegates] dispatch to %r failed: %s", target, exc)
@@ -128,6 +145,111 @@ def _build_delegate_to(registry: DelegateRegistry):
 
     delegate_to.description = f"{delegate_to.description}\n\nAvailable delegates: {listing or '(none configured)'}."
     return delegate_to
+
+
+async def _offer_start_and_retry(
+    registry: DelegateRegistry,
+    target: str,
+    query: str,
+    state: Any,
+    exc: DelegateError,
+    *,
+    tool_call_id: str,
+    item_id: str | None,
+    resume_task_id: str | None,
+    timeout: float | None,
+):
+    """Ask to start a stopped local delegate, then retry once. ``None`` = not our case.
+
+    Returning ``None`` rather than raising keeps every non-recoverable failure on
+    exactly the path it had before: the caller reports the original error.
+    """
+    from .adapters import KIND_UNREACHABLE
+    from .autostart import (
+        attempt_allowed,
+        consent_form,
+        grant,
+        granted,
+        read_choice,
+        start_and_wait,
+        startable_member,
+    )
+
+    if getattr(exc, "kind", "") != KIND_UNREACHABLE:
+        return None
+    delegate = registry.get(target) if hasattr(registry, "get") else None
+    url = getattr(delegate, "url", "") or ""
+    member = startable_member(url)
+    if member is None:
+        return None
+    if not attempt_allowed(member["id"]):
+        # Already started once in this window and still unreachable — a member that
+        # cannot come up must degrade to the plain error, not re-prompt every call.
+        return None
+
+    from tools.lg_tools import _session_id_from
+
+    session_id = _session_id_from(state) or ""
+    if not granted(session_id):
+        if not _can_ask_operator():
+            # On a headless instance nobody can answer, and a pending interrupt()
+            # checkpoints the turn forever with every later message queued behind it
+            # (the same reason run_command's approval defaults off there).
+            return None
+        from langgraph.types import interrupt
+
+        choice = read_choice(interrupt(consent_form(member, coordinating=_is_coordinating(state))))
+        if choice == "no":
+            return (
+                f"Error: {exc}\n\n{member['name']} was not started — the operator declined. "
+                "Do not retry; ask how to proceed."
+            )
+        if choice == "session":
+            grant(session_id)
+
+    ready, detail = await asyncio.to_thread(start_and_wait, member)
+    if not ready:
+        return f"Error: could not start {member['name']}: {detail}"
+    log.info("[delegates] started %s on demand; retrying the delegation", member["name"])
+    # This runs INSIDE the caller's `except DelegateError`, so a failure here escapes
+    # that handler entirely and reaches the model as an unhandled exception instead of
+    # a tool-error string. A member that came up but still cannot serve the delegation
+    # is an ordinary failure and has to read like one.
+    try:
+        return await _dispatch_into_room(
+            registry,
+            target,
+            query,
+            state,
+            tool_call_id=tool_call_id,
+            item_id=item_id,
+            resume_task_id=resume_task_id,
+            timeout=timeout,
+        )
+    except DelegateError as retry_exc:
+        return f"Error: {retry_exc} (after starting {member['name']})"
+    except Exception as retry_exc:  # noqa: BLE001 — same contract as the caller's guard
+        log.warning("[delegates] retry after starting %s failed: %s", member["name"], retry_exc)
+        return f"Error: delegate {target!r} failed after starting it: {type(retry_exc).__name__}: {retry_exc}"
+
+
+def _can_ask_operator() -> bool:
+    """Is there a human on this instance to answer an interrupt?"""
+    return os.environ.get("PROTOAGENT_UI", "").strip().lower() != "none"
+
+
+def _is_coordinating(state: Any) -> bool:
+    """Whether this turn already involved another participant — wording only.
+
+    Read off the room envelopes the delegation path writes (#3042/#3102): if the
+    transcript already carries one, the lead is relaying between participants rather
+    than making a single call.
+    """
+    try:
+        messages = list((state or {}).get("messages") or []) if isinstance(state, dict) else []
+    except Exception:  # noqa: BLE001 — wording must never break a dispatch
+        return False
+    return any((getattr(m, "additional_kwargs", {}) or {}).get("room") for m in messages)
 
 
 async def _dispatch_into_room(

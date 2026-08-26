@@ -817,3 +817,20 @@ def test_the_host_layer_can_never_hand_out_a_key(tmp_path, monkeypatch):
     _host_yaml(tmp_path, "providers:\n  - id: box-gw\n    base_url: https://box/v1\n    api_key: leaked\n", monkeypatch)
     cfg = LangGraphConfig.from_yaml(_agent_yaml(tmp_path, "model:\n  name: box-gw:m\n"))
     assert cfg.provider_by_id("box-gw").api_key == ""
+
+
+def test_an_agent_that_declares_no_connections_is_not_re_migrated(tmp_path, monkeypatch):
+    """`providers: []` in the agent leaf is an answer, not a gap — even under a host layer.
+
+    The cascade popped the key when the merge came out empty, which handed the loader an
+    ABSENT key and re-ran migration: the connection the operator deleted came back.
+    """
+    _host_yaml(tmp_path, "model:\n  api_base: http://host-gw/v1\n", monkeypatch)
+    cfg = LangGraphConfig.from_yaml(_agent_yaml(tmp_path, "providers: []\nmodel:\n  name: m\n"))
+    assert cfg.provider_ids() == []
+
+
+def test_with_nothing_declared_anywhere_migration_still_runs(tmp_path, monkeypatch):
+    _host_yaml(tmp_path, "model:\n  api_base: http://host-gw/v1\n", monkeypatch)
+    cfg = LangGraphConfig.from_yaml(_agent_yaml(tmp_path, "model:\n  name: m\n"))
+    assert cfg.provider_ids() == ["gateway"]
