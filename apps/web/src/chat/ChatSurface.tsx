@@ -1,10 +1,9 @@
 import "./chat.css";
-import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
-import { Spinner } from "@protolabsai/ui/data";
+import { Badge, Button } from "@protolabsai/ui/primitives";
 import { Switch } from "@protolabsai/ui/forms";
-import { Conversation, Message, PromptInput } from "@protolabsai/ui/ai";
+import { PromptInput } from "@protolabsai/ui/ai";
 import { TabBar } from "@protolabsai/ui/navigation";
-import { Check, EyeOff, TerminalSquare, Users } from "lucide-react";
+import { Check, EyeOff, Users } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -40,12 +39,12 @@ import { insertRoomBubble } from "./roomBubble";
 import type { ComposerFormSpec } from "../ext/slashRegistry";
 import { useFlag, useFlagPredicate } from "../flags/flags";
 import { registeredComposerActions } from "../ext/composerRegistry";
-import { ChatMessageView } from "./ChatMessageView";
+import { ChatTranscript } from "./ChatTranscript";
 import { ComposerModelSelect } from "./ComposerModelSelect";
 import { useServerTurn, useServerTurnSessions } from "./server-turn-store";
 import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
 import { inputHistory, pushInputHistory } from "./inputHistory";
-import { dismissedToolCallSet, hideDismissedToolCalls, rememberDismissedToolCall } from "./dismissedToolCalls";
+import { dismissedToolCallSet, rememberDismissedToolCall } from "./dismissedToolCalls";
 import { registerChatEscapeHandler, resolveEscapeAction } from "./escapeStop";
 import { finalizeStoppedMessages, resolveStopTarget } from "./stopTurn";
 import { lastOperatorAssistantId, rewindableTailId, replaceText } from "./parts";
@@ -61,6 +60,15 @@ import { placeConsumedSteers } from "./steerPlacement";
 
 function messageId() {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// A stable event function whose body always sees the latest render. Transcript props need
+// stable identities so composer-only state changes can stop at the memo boundary, while
+// message actions must still observe current session/status state when they are clicked.
+function useLatestCallback<Args extends unknown[], Result>(callback: (...args: Args) => Result) {
+  const callbackRef = useRef(callback);
+  callbackRef.current = callback;
+  return useCallback((...args: Args) => callbackRef.current(...args), []);
 }
 
 // Read a File to bare base64 (no `data:…;base64,` prefix) — the proto Part `raw`
@@ -1093,6 +1101,7 @@ function ChatSessionSlot({
   const lastAssistantId = useMemo(() => lastOperatorAssistantId(messages), [messages]);
   // The conversational tail — "Rewind to here" hides on it (nothing below to discard).
   const rewindTailId = useMemo(() => rewindableTailId(messages), [messages]);
+  const cast = useMemo(() => (session ? sessionCast(session) : []), [session]);
 
   // Sendable with text OR at least one ready attachment (file-only send, e.g.
   // "describe this image" with no caption). Matches the DS PromptInput gate,
@@ -2027,67 +2036,59 @@ function ChatSessionSlot({
     }
   }
 
+  const transcriptCancelDelegation = useLatestCallback(cancelDelegation);
+  const transcriptDismissToolCall = useLatestCallback(dismissToolCall);
+  const transcriptCopyMessage = useLatestCallback(copyMessage);
+  const transcriptForkAtMessage = useLatestCallback(forkAtMessage);
+  const transcriptRewindAtMessage = useLatestCallback(rewindAtMessage);
+  const transcriptRegenerate = useLatestCallback(regenerate);
+  const transcriptDismissErroredMessage = useLatestCallback(dismissErroredMessage);
+  const transcriptCancelSteer = useLatestCallback(cancelSteer);
+  const transcriptActions = useMemo(
+    () => ({
+      copiedId,
+      sessionId: session?.id,
+      onCopy: transcriptCopyMessage,
+      onFork: transcriptForkAtMessage,
+      onRewind: transcriptRewindAtMessage,
+      onRegenerate: transcriptRegenerate,
+      onDismiss: transcriptDismissErroredMessage,
+      lastAssistantId,
+      regenDisabled: status === "streaming",
+      incognito: session?.incognito,
+      rewindTailId,
+    }),
+    [
+      copiedId,
+      lastAssistantId,
+      rewindTailId,
+      session?.id,
+      session?.incognito,
+      status,
+      transcriptCopyMessage,
+      transcriptDismissErroredMessage,
+      transcriptForkAtMessage,
+      transcriptRegenerate,
+      transcriptRewindAtMessage,
+    ],
+  );
+
   if (!session) return null;
 
   return (
     <div className="chat-session-slot" hidden={!visible}>
-      <Conversation id={`pl-conv-${sessionId}`}>
-        {messages.length === 0 ? (
-          <Empty icon={<TerminalSquare />} description="No messages in this session." />
-        ) : (
-          messages.map((message) => (
-            <ChatMessageView
-              key={message.id || `${message.role}-${message.createdAt}`}
-              // Dismissed cancelled-delegation cards are stripped at render time only —
-              // the store (and the backend history it mirrors) keeps the full turn.
-              message={hideDismissedToolCalls(message, dismissedToolCalls)}
-              onCancelDelegation={cancelDelegation}
-              onDismissToolCall={dismissToolCall}
-              actions={{
-                copiedId,
-                sessionId: session?.id,
-                onCopy: copyMessage,
-                onFork: forkAtMessage,
-                onRewind: rewindAtMessage,
-                onRegenerate: regenerate,
-                onDismiss: dismissErroredMessage,
-                lastAssistantId,
-                regenDisabled: status === "streaming",
-                // No prompt snapshots exist for incognito turns (by design) —
-                // hide View prompt instead of offering a 404 (#2484).
-                incognito: session?.incognito,
-                rewindTailId,
-              }}
-            />
-          ))
-        )}
-        {steerQueue.map((q) => (
-          // DS queued state (0.42.0): dimmed pending bubble + spinner + ✕. The ✕
-          // hits DELETE /steer/{id}: if still queued it's dropped before the agent
-          // sees it; if already folded in, cancelSteer settles it into the thread
-          // (no lie that it never ran).
-          <Message
-            key={q.id}
-            role="user"
-            queued
-            queuedLabel="queued — folds into the agent's work at its next step"
-            onCancel={() => void cancelSteer(q.id)}
-          >
-            <span className="chat-user-text">{q.text}</span>
-          </Message>
-        ))}
-        {serverTurnLabel && status !== "streaming" ? (
-          // Server-initiated turn in flight (#1767): the same spinner a streaming
-          // assistant shows, plus a label naming the trigger, so a background/scheduled/
-          // watch turn no longer looks like a hung app. Display-only — the real answer
-          // arrives via chat.resumed (ChatResumeWatch).
-          <Message role="assistant">
-            <span className="chat-server-turn">
-              <Spinner size={15} /> {serverTurnLabel}
-            </span>
-          </Message>
-        ) : null}
-      </Conversation>
+      <ChatTranscript
+        sessionId={sessionId}
+        messages={messages}
+        dismissedToolCalls={dismissedToolCalls}
+        actions={transcriptActions}
+        steerQueue={steerQueue}
+        serverTurnLabel={serverTurnLabel}
+        status={status}
+        onCancelDelegation={transcriptCancelDelegation}
+        onDismissToolCall={transcriptDismissToolCall}
+        onCancelSteer={transcriptCancelSteer}
+      />
 
       <div
         className="composer-wrap"
@@ -2116,10 +2117,10 @@ function ChatSessionSlot({
             acts only when addressed, and clicking a name is exactly that affordance
             (inserts `@name `). No remove control: history is not removable, and an X
             that gated nothing was confusion pretending to be a control. */}
-        {sessionCast(session).length ? (
+        {cast.length ? (
           <div className="chat-roster" aria-label="In this chat">
             <Users size={13} aria-hidden />
-            {sessionCast(session).map((name) => {
+            {cast.map((name) => {
               const active = runHas(draft, name);
               return (
                 <button
