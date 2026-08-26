@@ -127,6 +127,35 @@ class TestHostileArchives:
         with pytest.raises(SnapshotError, match="unreadable"):
             inspect_snapshot(_zip({"agent.snapshot.yaml": "{{{ not yaml"}))
 
+    @pytest.mark.parametrize(
+        ("over", "message"),
+        [
+            ({"agent": "not-a-map"}, "agent"),
+            ({"agent": {"name": ["not", "text"]}}, "name"),
+            ({"config": {"identity": "not-a-map"}}, "identity"),
+            ({"knowledge": {"domains": {"x": "many"}}}, "knowledge domains"),
+        ],
+    )
+    def test_malformed_manifest_shapes_are_refused(self, over, message):
+        with pytest.raises(SnapshotError, match=message):
+            inspect_snapshot(_snapshot(**over))
+
+    def test_duplicate_normalized_paths_are_refused(self):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("agent.snapshot.yaml", _manifest())
+            zf.writestr("./agent.snapshot.yaml", _manifest())
+            zf.writestr("SOUL.md", "# soul")
+        with pytest.raises(SnapshotError, match="duplicate path"):
+            inspect_snapshot(buf.getvalue())
+
+    def test_a_credential_bearing_plugin_url_is_refused_before_it_is_displayed(self):
+        token = "ghp_" + "A" * 36
+        with pytest.raises(SnapshotError, match="credential-shaped"):
+            inspect_snapshot(
+                _snapshot(plugins=[{"id": "private", "url": f"https://user:{token}@github.com/acme/private"}])
+            )
+
 
 # ── the plan: what would happen, before anything happens ─────────────────────────────
 
@@ -137,6 +166,22 @@ class TestInspect:
         assert [p.url for p in plan.plugins] == ["https://github.com/protoLabsAI/github-plugin"]
         assert plan.plugins[0].ref == "abc123"
         assert plan.as_dict()["runs_code"] is True
+
+    def test_imports_the_real_lock_shape_emitted_by_older_exports(self):
+        plan = inspect_snapshot(
+            _snapshot(
+                plugins=[
+                    {
+                        "id": "github",
+                        "source_url": "https://github.com/protoLabsAI/github-plugin",
+                        "resolved_sha": "abc123",
+                    }
+                ]
+            )
+        )
+        assert [(p.url, p.ref) for p in plan.plugins] == [
+            ("https://github.com/protoLabsAI/github-plugin", "abc123")
+        ]
 
     def test_flags_an_unfamiliar_source(self):
         """The ack should be able to say "2 of these are from somewhere you haven't
@@ -153,6 +198,12 @@ class TestInspect:
             known_sources=["gitlab.example/acme/*"],
         )
         assert plan.plugins[0].recognized is True
+
+    def test_a_deceptive_url_cannot_spoof_a_familiar_source(self):
+        plan = inspect_snapshot(
+            _snapshot(plugins=[{"id": "x", "url": "https://evil.example/github.com/protoLabsAI/x", "sha": "d"}])
+        )
+        assert plan.plugins[0].recognized is False
 
     def test_surfaces_capability_granting_config(self):
         """The config is applied verbatim (ADR 0071 D1 — trust, not sandbox), so the whole
@@ -250,6 +301,12 @@ class TestAcknowledgement:
         assert "inspect_snapshot" in str(exc.value)
         assert "runs the plugin code" in str(exc.value)
 
+    def test_a_plan_is_bound_to_the_bytes_it_inspected(self, ws_root):
+        plan = inspect_snapshot(_snapshot_no_plugins(config={"model": {"name": "one"}}))
+        changed = _snapshot_no_plugins(config={"model": {"name": "two"}})
+        with pytest.raises(SnapshotError, match="changed after inspection"):
+            apply_snapshot(changed, name="x", acknowledged=True, plan=plan, install=False)
+
 
 # ── staging ──────────────────────────────────────────────────────────────────────────
 
@@ -278,6 +335,23 @@ class TestStaging:
         data = _zip({"agent.snapshot.yaml": _manifest(), "../escape.txt": "x"})
         with pytest.raises(SnapshotError):
             stage_snapshot(data, tmp_path / "dest")
+
+    def test_an_undeclared_soul_is_refused(self):
+        data = _zip({"agent.snapshot.yaml": _manifest(soul=None), "SOUL.md": "hidden persona"})
+        with pytest.raises(SnapshotError, match="soul declaration"):
+            inspect_snapshot(data)
+
+    def test_undeclared_knowledge_files_are_refused(self):
+        data = _zip(
+            {
+                "agent.snapshot.yaml": _manifest(knowledge={"domains": {"shown": 1}}),
+                "SOUL.md": "# soul",
+                "knowledge/shown.md": "shown",
+                "knowledge/hidden.md": "hidden",
+            }
+        )
+        with pytest.raises(SnapshotError, match="knowledge declaration"):
+            inspect_snapshot(data)
 
 
 # ── round trip: a REAL export rehydrates ─────────────────────────────────────────────
@@ -388,6 +462,34 @@ class TestMissingSecrets:
         _write_secrets(tmp_path, self._plan(), {"model.api_key": "   "})
         assert not (tmp_path / "config" / "secrets.yaml").exists()
 
+    def test_a_blank_value_is_still_reported_missing(self, tmp_path):
+        from graph.snapshot_import import _write_secrets
+
+        (tmp_path / "config").mkdir()
+        plan = self._plan({"name": "model.api_key", "was_set": True})
+        assert _write_secrets(tmp_path, plan, {"model.api_key": "   "}) == ["model.api_key"]
+
+    def test_an_mcp_secret_is_written_to_the_named_server(self, tmp_path):
+        from graph.snapshot_import import _write_secrets
+
+        (tmp_path / "config").mkdir()
+        (tmp_path / "config" / "langgraph-config.yaml").write_text(
+            yaml.safe_dump({"mcp": {"servers": [{"name": "git", "env": {"TOKEN": ""}}]}}), encoding="utf-8"
+        )
+        plan = self._plan({"name": "mcp.git.env.TOKEN", "was_set": True})
+        assert _write_secrets(tmp_path, plan, {"mcp.git.env.TOKEN": "live"}) == []
+        doc = yaml.safe_load((tmp_path / "config" / "langgraph-config.yaml").read_text())
+        assert doc["mcp"]["servers"][0]["env"]["TOKEN"] == "live"
+        assert_owner_only(tmp_path / "config" / "langgraph-config.yaml")
+
+    def test_an_unreadable_mcp_config_leaves_the_secret_missing(self, tmp_path):
+        from graph.snapshot_import import _write_secrets
+
+        (tmp_path / "config").mkdir()
+        (tmp_path / "config" / "langgraph-config.yaml").write_text("mcp: [", encoding="utf-8")
+        plan = self._plan({"name": "mcp.git.env.TOKEN", "was_set": True})
+        assert _write_secrets(tmp_path, plan, {"mcp.git.env.TOKEN": "live"}) == ["mcp.git.env.TOKEN"]
+
 
 # ── end to end: the slice's acceptance criterion ─────────────────────────────────────
 
@@ -480,6 +582,15 @@ class TestApplyEndToEnd:
         ws = Path(res.path)
         for store in ("checkpoints", "telemetry", "activity", "inbox", "a2a", "background", "knowledge"):
             assert not (ws / store).exists(), f"{store} should not be seeded"
+
+    def test_an_unexpected_post_create_failure_removes_the_workspace(self, ws_root, monkeypatch):
+        def fail_copy(*_args):
+            raise OSError("disk")
+
+        monkeypatch.setattr("graph.snapshot_import._copy_skills", fail_copy)
+        with pytest.raises(OSError, match="disk"):
+            apply_snapshot(_snapshot_no_plugins(), name="cleanup", acknowledged=True, install=False)
+        assert not list(ws_root.iterdir())
 
 
 # ── the REST surface ─────────────────────────────────────────────────────────────────

@@ -12,6 +12,11 @@ export const NON_CREDENTIAL_KINDS = new Set(["home-path"]);
 
 export type Finding = { where: string; kinds: string[] };
 
+/** A download is releasable only when the server says it is the definition reviewed here. */
+export function reviewedDefinitionMatches(reviewDigest: string | undefined, downloadDigest: string): boolean {
+  return !!reviewDigest && !!downloadDigest && reviewDigest === downloadDigest;
+}
+
 /**
  * Split pattern-sweep hits by **what the operator should do about them**, not by detector.
  *

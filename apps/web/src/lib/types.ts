@@ -762,6 +762,7 @@ export type SnapshotSecret = {
 export type SnapshotReview = {
   filename: string;
   bytes: number;
+  definition_sha256: string;
   required_secrets: SnapshotSecret[];
   /** Pattern-sweep hits keyed by where they were found (`operator.project_dir`, `SOUL.md`). */
   pattern_redactions: Record<string, string[]>;

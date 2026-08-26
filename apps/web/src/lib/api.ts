@@ -1477,7 +1477,7 @@ export const api = {
   },
   /** The snapshot itself. Returns the Blob plus the server's filename — the name carries the
    *  agent + timestamp, and re-deriving it client-side would drift from the artifact. */
-  async exportSnapshot(): Promise<{ blob: Blob; filename: string }> {
+  async exportSnapshot(): Promise<{ blob: Blob; filename: string; definitionSha256: string }> {
     const res = await fetch(apiUrl("/api/agent/export"), {
       method: "POST",
       headers: applyAuth(new Headers({ "content-type": "application/json" })),
@@ -1486,7 +1486,11 @@ export const api = {
     if (!res.ok) throw new Error(`export failed: ${res.status}`);
     const disposition = res.headers.get("content-disposition") || "";
     const match = /filename="([^"]+)"/.exec(disposition);
-    return { blob: await res.blob(), filename: match?.[1] || "agent-snapshot.zip" };
+    return {
+      blob: await res.blob(),
+      filename: match?.[1] || "agent-snapshot.zip",
+      definitionSha256: res.headers.get("x-snapshot-definition-sha256") || "",
+    };
   },
 
   /** Inspect a snapshot WITHOUT applying it (ADR 0091 D3). Returns the plan: which plugins
