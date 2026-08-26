@@ -3,7 +3,7 @@ import { Message, MessageAction, MessageActions } from "@protolabsai/ui/ai";
 import { Tooltip } from "@protolabsai/ui/overlays";
 import { Spinner } from "@protolabsai/ui/data";
 import { ArrowDownToLine, ArrowRight, Bot, CalendarClock, Check, ChevronDown, Clock, Coins, Copy, FileText, GitBranch, Gauge, History, RotateCcw, X } from "lucide-react";
-import { useState } from "react";
+import { memo, useState } from "react";
 
 import { useQuery } from "@tanstack/react-query";
 
@@ -60,7 +60,7 @@ export type ChatMessageActions = {
 // live ordered `parts` (text↔tool interleave, WorkBlock fold) or the history-loaded grouped
 // fallback, plus the streaming loader, inline components, the background-report chip, and the
 // optional action row. Streaming state is read from `message.status`.
-export function ChatMessageView({
+export const ChatMessageView = memo(function ChatMessageView({
   message,
   onCancelDelegation,
   onDismissToolCall,
@@ -285,7 +285,7 @@ export function ChatMessageView({
       ) : null}
     </Message>
   );
-}
+});
 
 // Dismissed report chips (#2923): jobIds the operator ✕'d out of the transcript.
 // localStorage (not sessionStorage) so a reload doesn't resurrect them — the report itself
