@@ -161,7 +161,12 @@ def _backup(plan: ResetPlan) -> Path | None:
     if not candidates:
         return None
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    destination = Path.home() / f"protoagent-backup-{plan.paths.instance_id}-{stamp}.tar.gz"
+    # The compatibility wrapper's contract is to place backups under ``$HOME``.
+    # ``Path.home()`` ignores HOME on Windows and resolves USERPROFILE instead,
+    # which made a successful reset report a backup somewhere the caller did not
+    # request (and broke the same command across platforms).
+    backup_home = Path(os.environ.get("HOME") or Path.home())
+    destination = backup_home / f"protoagent-backup-{plan.paths.instance_id}-{stamp}.tar.gz"
     with tarfile.open(destination, "w:gz") as archive:
         for path in candidates:
             archive.add(path, arcname=path.name)
