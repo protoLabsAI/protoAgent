@@ -1827,9 +1827,46 @@ async def _chat_langgraph_stream_impl(
             # and compact/rewind). Without it a mention landing while a goal
             # continuation or a scheduled fire writes the same thread lost-updates the
             # transcript — the exact corruption that lock exists to prevent.
+            # A direct address deliberately skips the graph, so there are no model or
+            # tool events to reassure the operator while a slow delegate works (#3052).
+            # Open one ordinary work card before entering the (potentially queued)
+            # exchange. The console's existing elapsed timer then keeps ticking even
+            # when the adapter has no native progress stream. Unknown / bare mentions
+            # answer synchronously and do not need a card.
+            _addressed = _parse_at_delegates(message)
+            _mention_tool: dict | None = None
+            if _addressed is not None and _addressed[1]:
+                _mention_names = " ".join(f"@{name}" for name in _addressed[0])
+                _mention_tool = {
+                    "id": f"mention:{','.join(_addressed[0])}",
+                    "name": _mention_names,
+                    "input": _addressed[1],
+                }
+                yield ("tool_start", _mention_tool)
+
             async with _thread_lock(_resolve_thread_id(request_metadata, session_id)):
                 _at_reply, _at_outcome = await _at_delegate_exchange(
                     message, session_id, request_metadata
+                )
+            if _mention_tool is not None:
+                _failed = sum(not bool(item.get("ok")) for item in (_at_outcome or []))
+                _answered = sum(bool(item.get("ok")) for item in (_at_outcome or []))
+                if _at_outcome:
+                    _status = f"{_answered} replied"
+                    if _failed:
+                        _status += f", {_failed} failed"
+                else:
+                    # Every stopped local target can fall through to the lead's normal
+                    # consent/start path (#3126); the addressed wait itself still ended.
+                    _status = "Handed to lead" if _at_reply is None else "Finished"
+                yield (
+                    "tool_end",
+                    {
+                        "id": _mention_tool["id"],
+                        "name": _mention_tool["name"],
+                        "output": _status,
+                        "error": bool(_failed and not _answered),
+                    },
                 )
             if _at_reply is not None:
                 for _exchange in _at_outcome or []:

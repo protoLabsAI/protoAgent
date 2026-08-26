@@ -9,6 +9,7 @@ contains the first one's reply.
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 
 import pytest
@@ -215,3 +216,46 @@ async def test_the_streaming_driver_emits_one_frame_per_exchange(wired, monkeypa
     stamps = [dict(p) for k, p in frames if k == "room_reply"]
     assert [(x["author"], x["text"]) for x in stamps] == [("proto", "line 40"), ("reviewer", "agreed")]
     assert frames[-1] == ("done", "combined")
+
+
+@pytest.mark.asyncio
+async def test_addressed_turn_opens_live_work_before_delegate_finishes(wired, monkeypatch):
+    """#3052: a slow direct address must not leave the console on a bare spinner.
+
+    Prove temporal order, not merely frame membership: the first frame is observable
+    while the delegate exchange is still blocked. Its running card supplies the live
+    elapsed timer for adapters that cannot expose finer-grained progress.
+    """
+    monkeypatch.setattr(rs.STATE, "graph", object(), raising=False)
+    release = asyncio.Event()
+
+    async def _slow(message, session_id="", request_metadata=None):
+        await release.wait()
+        return "line 40", [
+            {"author": "proto", "ok": True, "reply": "line 40", "catchup": 0, "truncated": False}
+        ]
+
+    monkeypatch.setattr(sc, "_at_delegate_exchange", _slow)
+    stream = sc._chat_langgraph_stream_impl("@proto status?", "s-progress")
+
+    assert await anext(stream) == (
+        "tool_start",
+        {"id": "mention:proto", "name": "@proto", "input": "status?"},
+    )
+    release.set()
+    remaining = [frame async for frame in stream]
+
+    assert remaining[0] == (
+        "tool_end",
+        {"id": "mention:proto", "name": "@proto", "output": "1 replied", "error": False},
+    )
+    assert remaining[1][0] == "room_reply"
+    assert remaining[-1] == ("done", "line 40")
+
+
+@pytest.mark.asyncio
+async def test_bare_address_does_not_flash_a_work_card(wired, monkeypatch):
+    monkeypatch.setattr(rs.STATE, "graph", object(), raising=False)
+    frames = [frame async for frame in sc._chat_langgraph_stream_impl("@proto", "s-bare")]
+    assert not [frame for frame in frames if frame[0] in ("tool_start", "tool_end")]
+    assert frames[-1][0] == "done"
