@@ -7,6 +7,7 @@ SCRIPT = Path(__file__).parents[1] / "scripts" / "verify-macos-desktop.sh"
 
 
 def test_signature_probe_does_not_pipe_codesign_into_grep_q() -> None:
+    """Keep signature detection free of pipefail/SIGPIPE false negatives."""
     source = SCRIPT.read_text(encoding="utf-8")
 
     assert 'SIGNATURE_INFO="$(codesign -dvv "$APP" 2>&1 || true)"' in source
