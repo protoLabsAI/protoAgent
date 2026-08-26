@@ -76,6 +76,19 @@ def test_schema_groups_and_values():
     assert next(f for f in FIELDS if f.key == "agent_runtime").ui_hidden is True
 
 
+def test_fleet_autostart_row_toggle_schema_contract():
+    """The Fleet rows resolve this exact host-scoped list from /api/settings/schema."""
+    fields = {
+        field["key"]: field
+        for group in build_schema(LangGraphConfig(), model_options=[])
+        for field in group["fields"]
+    }
+    autostart = fields["fleet.autostart"]
+    assert autostart["type"] == "string_list"
+    assert autostart["scope"] == "host"
+    assert autostart["value"] == []
+
+
 def test_acp_runtime_deprecated_hidden_from_selects_but_still_validates():
     """ACP-as-runtime is DEPRECATED (2026-08-11; delegates keep ACP): custom ACP
     agents no longer surface in ANY selection UI — no runtime select is rendered,

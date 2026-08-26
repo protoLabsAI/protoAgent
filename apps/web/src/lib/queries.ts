@@ -327,10 +327,12 @@ export const fleetTelemetryQuery = () =>
 
 // The generic settings schema (GET /api/settings/schema). Invalidated after a
 // save so the surface reloads the server's hot-reloaded values.
-export const settingsSchemaQuery = () =>
+export const settingsSchemaQuery = (host = false) =>
   queryOptions({
-    queryKey: queryKeys.settings,
-    queryFn: () => api.settingsSchema(),
+    // Host-forced reads are the hub's box settings even in a member window, so they
+    // intentionally live outside that window's focused-agent namespace.
+    queryKey: host ? (["host", "settings", "schema"] as const) : queryKeys.settings,
+    queryFn: () => api.settingsSchema(host),
     // The schema GET does a gateway round-trip server-side (it embeds the live
     // model list for the model pickers) and is read by the Settings surface AND
     // every chat tab's composer picker — so without a staleTime React Query would
