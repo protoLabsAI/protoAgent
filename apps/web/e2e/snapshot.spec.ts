@@ -59,6 +59,10 @@ test("downloads the zip under the server's filename", async ({ page }) => {
 });
 
 test("refuses a download whose definition changed after review", async ({ page }) => {
+  let downloads = 0;
+  page.on("download", () => {
+    downloads += 1;
+  });
   await page.route("**/api/agent/export", async (route) => {
     if (route.request().postDataJSON()?.dry_run) return route.fallback();
     await route.fulfill({
@@ -76,6 +80,7 @@ test("refuses a download whose definition changed after review", async ({ page }
   await page.getByRole("button", { name: /Download snapshot/ }).click();
 
   await expect(page.locator(".pl-toast", { hasText: "Snapshot changed — review refreshed" })).toBeVisible();
+  expect(downloads).toBe(0);
 });
 
 test("states plainly that scrubbing is not a guarantee", async ({ page }) => {

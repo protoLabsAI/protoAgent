@@ -634,7 +634,11 @@ def _write_secrets(ws: Path, plan: ImportPlan, supplied: dict[str, str]) -> list
 
     if mcp_values:
         cfg_path = ws / "config" / "langgraph-config.yaml"
-        config = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+        try:
+            config = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError):
+            log.warning("[snapshot] could not read %s — MCP credentials were not applied", cfg_path)
+            config = {}
         servers = ((config.get("mcp") or {}).get("servers")) if isinstance(config, dict) else None
         if isinstance(servers, list):
             by_name = {str(s.get("name") or ""): s for s in servers if isinstance(s, dict)}
@@ -658,7 +662,9 @@ def _write_secrets(ws: Path, plan: ImportPlan, supplied: dict[str, str]) -> list
         if persisted.intersection(mcp_values):
             from infra.paths import atomic_write
 
-            atomic_write(cfg_path, yaml.safe_dump(config, sort_keys=False, allow_unicode=True))
+            # This config now contains live MCP credentials, so give it the same
+            # owner-only contract as secrets.yaml on POSIX and Windows.
+            atomic_write(cfg_path, yaml.safe_dump(config, sort_keys=False, allow_unicode=True), mode=0o600)
 
     return sorted(
         str(r.get("name"))

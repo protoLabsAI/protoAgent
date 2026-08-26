@@ -41,8 +41,10 @@ export function SnapshotPanel() {
     setError("");
     try {
       setReview(await api.snapshotReview());
+      return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      return false;
     } finally {
       setLoading(false);
     }
@@ -57,12 +59,13 @@ export function SnapshotPanel() {
     try {
       const { blob, filename, definitionSha256 } = await api.exportSnapshot();
       if (!reviewedDefinitionMatches(review?.definition_sha256, definitionSha256)) {
-        await load();
-        toast({
-          tone: "info",
-          title: "Snapshot changed — review refreshed",
-          message: "The agent definition changed since the review. Check it once more before downloading.",
-        });
+        if (await load()) {
+          toast({
+            tone: "info",
+            title: "Snapshot changed — review refreshed",
+            message: "The agent definition changed since the review. Check it once more before downloading.",
+          });
+        }
         return;
       }
       const url = URL.createObjectURL(blob);

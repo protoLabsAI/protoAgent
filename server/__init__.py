@@ -509,6 +509,9 @@ def _main():
         ),
         allow_methods=["*"],
         allow_headers=["*"],
+        # The desktop webview is cross-origin. Without explicit exposure, fetch() can see
+        # neither the reviewed digest nor the server-selected attachment name.
+        expose_headers=["Content-Disposition", "X-Snapshot-Definition-SHA256", "X-Snapshot-Review"],
         allow_credentials=True,
     )
     # gzip every text/JSON response — the console's own JS bundle is ~1 MB and was

@@ -164,6 +164,17 @@ class TestPublicGistLitmus:
         assert result.manifest["plugins"] == []
         assert any("source URL contained sensitive text" in n for n in result.notes)
 
+    def test_credential_shaped_plugin_pin_metadata_omits_the_pin(self, agent_tree):
+        lock = agent_tree / "plugins.lock"
+        doc = json.loads(lock.read_text(encoding="utf-8"))
+        doc["plugins"][0]["resolved_sha"] = PASTED_IN_SOUL
+        lock.write_text(json.dumps(doc), encoding="utf-8")
+
+        result = _build(agent_tree)
+
+        assert result.manifest["plugins"] == []
+        assert any("pin metadata contained sensitive text" in n for n in result.notes)
+
     def test_a_symlinked_skill_asset_is_not_dereferenced(self, agent_tree, tmp_path):
         outside = tmp_path / "outside.txt"
         outside.write_text("ordinary private material", encoding="utf-8")
@@ -176,6 +187,20 @@ class TestPublicGistLitmus:
         with zipfile.ZipFile(BytesIO(result.data)) as zf:
             assert "skills/instance/reviewing/linked.txt" not in zf.namelist()
         assert any("skipped symlinked skill asset" in n for n in result.notes)
+
+    def test_a_symlinked_skill_directory_is_not_walked(self, agent_tree, tmp_path):
+        outside = tmp_path / "outside-skill"
+        outside.mkdir()
+        (outside / "private.txt").write_text("ordinary private material", encoding="utf-8")
+        link = agent_tree / "skills" / "reviewing" / "linked"
+        try:
+            link.symlink_to(outside, target_is_directory=True)
+        except OSError:
+            pytest.skip("directory symlinks unavailable on this platform")
+        result = _build(agent_tree)
+        with zipfile.ZipFile(BytesIO(result.data)) as zf:
+            assert "skills/instance/reviewing/linked/private.txt" not in zf.namelist()
+        assert any("skipped symlinked skill asset: instance/reviewing/linked" in n for n in result.notes)
 
     def test_credential_bearing_files_are_never_members(self, agent_tree):
         """secrets.yaml / .fleet-token exist only to hold credentials — no redaction makes

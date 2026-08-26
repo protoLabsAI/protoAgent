@@ -41,6 +41,7 @@ import hashlib
 import io
 import json
 import logging
+import os
 import zipfile
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -382,17 +383,29 @@ def _skill_files(root: Path) -> tuple[list[tuple[str, Path]], list[str]]:
         return [], []
     out: list[tuple[str, Path]] = []
     skipped: list[str] = []
-    for path in sorted(root.rglob("*")):
-        rel = str(path.relative_to(root))
-        # A skill tree is an export boundary, not permission to dereference pointers to
-        # arbitrary files elsewhere on the machine.  ``Path.is_file()`` follows symlinks,
-        # so checking it first silently packaged the target under an innocent member name.
-        if path.is_symlink():
-            skipped.append(rel)
-            continue
-        if not path.is_file() or path.name in EXCLUDED_FILENAMES:
-            continue
-        out.append((rel, path))
+    for current, dirnames, filenames in os.walk(root, followlinks=False):
+        directory = Path(current)
+        kept_dirs: list[str] = []
+        for name in sorted(dirnames):
+            path = directory / name
+            if path.is_symlink():
+                skipped.append(str(path.relative_to(root)))
+            else:
+                kept_dirs.append(name)
+        # Explicitly prune directory links. This is stable even on Python versions where
+        # pathlib glob traversal differed in whether it walked symlinked directories.
+        dirnames[:] = kept_dirs
+        for name in sorted(filenames):
+            path = directory / name
+            rel = str(path.relative_to(root))
+            # A skill tree is an export boundary, not permission to dereference pointers to
+            # arbitrary files elsewhere on the machine. ``Path.is_file()`` follows links.
+            if path.is_symlink():
+                skipped.append(rel)
+                continue
+            if not path.is_file() or path.name in EXCLUDED_FILENAMES:
+                continue
+            out.append((rel, path))
     return out, skipped
 
 
@@ -429,6 +442,9 @@ def _snapshot_plugin_pins(
             continue
         clean_id = _redact_text(plugin_id or url.rstrip("/").split("/")[-1], f"plugins[{i}].id", pattern_hits)
         clean_sha = _redact_text(sha, f"plugins[{i}].sha", pattern_hits)
+        if clean_id != (plugin_id or url.rstrip("/").split("/")[-1]) or clean_sha != sha:
+            notes.append(f"skipped plugin {plugin_id or i}: its pin metadata contained sensitive text")
+            continue
         pins.append({"id": clean_id, "url": clean_url, "sha": clean_sha})
     return pins
 

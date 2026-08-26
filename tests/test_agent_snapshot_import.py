@@ -480,6 +480,15 @@ class TestMissingSecrets:
         assert _write_secrets(tmp_path, plan, {"mcp.git.env.TOKEN": "live"}) == []
         doc = yaml.safe_load((tmp_path / "config" / "langgraph-config.yaml").read_text())
         assert doc["mcp"]["servers"][0]["env"]["TOKEN"] == "live"
+        assert_owner_only(tmp_path / "config" / "langgraph-config.yaml")
+
+    def test_an_unreadable_mcp_config_leaves_the_secret_missing(self, tmp_path):
+        from graph.snapshot_import import _write_secrets
+
+        (tmp_path / "config").mkdir()
+        (tmp_path / "config" / "langgraph-config.yaml").write_text("mcp: [", encoding="utf-8")
+        plan = self._plan({"name": "mcp.git.env.TOKEN", "was_set": True})
+        assert _write_secrets(tmp_path, plan, {"mcp.git.env.TOKEN": "live"}) == ["mcp.git.env.TOKEN"]
 
 
 # ── end to end: the slice's acceptance criterion ─────────────────────────────────────
