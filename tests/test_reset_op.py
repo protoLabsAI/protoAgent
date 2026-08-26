@@ -87,6 +87,14 @@ def test_dry_run_warns_when_the_real_reset_would_be_blocked(monkeypatch, tmp_pat
     assert "stop it before a real run" in output
 
 
+def test_purge_box_rejects_keep_secrets(capsys):
+    with pytest.raises(SystemExit) as exc:
+        reset.run_reset_cli(["--purge-box", "--keep-secrets"])
+
+    assert exc.value.code == 2
+    assert "--purge-box cannot be combined with --keep-secrets" in capsys.readouterr().err
+
+
 def test_delete_guard_rejects_root_and_home(monkeypatch, tmp_path):
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     with pytest.raises(ValueError, match="unsafe reset target"):
