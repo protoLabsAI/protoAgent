@@ -194,9 +194,9 @@ class TestStore:
         assert counts == {"completed": 1, "failed": 1, "running": 1}
         assert s.batch_status_counts("nope") == {}
 
-    def test_batch_id_migrates_in_place(self, tmp_path):
-        """A pre-#1766 DB (no batch_id column) upgrades in place on open — existing rows
-        read batch_id None and new rows can carry one."""
+    def test_new_store_columns_migrate_in_place(self, tmp_path):
+        """A legacy DB upgrades in place: old rows get safe defaults and new rows can
+        persist the current batch and authored-result fields."""
         import sqlite3
 
         db_path = tmp_path / "background" / "jobs.db"
@@ -223,11 +223,14 @@ class TestStore:
         s = BackgroundStore(str(db_path))  # opening runs the guarded migration
         old = s.get("bg-old")
         assert old is not None and old.batch_id is None  # legacy row migrated, unbatched
+        assert old.result_author == ""  # legacy results remain ordinary task notifications
         new = s.create(
             agent_name="a", origin_session="s1", subagent_type="researcher", description="d", prompt="p",
             batch_id="batch-A",
+            result_author="proto",
         )
         assert s.get(new).batch_id == "batch-A"
+        assert s.get(new).result_author == "proto"
         assert s.batch_size("batch-A") == 1
 
 
