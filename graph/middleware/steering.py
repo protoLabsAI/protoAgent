@@ -59,8 +59,7 @@ class SteeringMiddleware(AgentMiddleware):
 
     @staticmethod
     def _inject(state) -> dict | None:
-        update, _queued = SteeringMiddleware._drain(state)
-        return update
+        return SteeringMiddleware._drain(state)[0]
 
     @staticmethod
     def _drain(state) -> tuple[dict | None, list[dict]]:

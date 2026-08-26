@@ -84,6 +84,17 @@ describe("insertConversationBubbles", () => {
     expect(out.map((message) => message.id)).toEqual(["s1", "A"]);
   });
 
+  it("preserves the live task id on the reset placeholder for reload recovery", () => {
+    const steer: ChatMessage = { id: "s1", role: "user", content: "redirect", status: "done" };
+    const out = insertConversationBubbles(
+      [ph({ content: "work before", taskId: "task-123" })],
+      "A",
+      [steer],
+      "F",
+    );
+    expect(out[out.length - 1]).toMatchObject({ id: "A", status: "streaming", taskId: "task-123" });
+  });
+
   it("is a no-op for an empty batch", () => {
     const input = [ph({ content: "work" })];
     expect(insertConversationBubbles(input, "A", [], "F")).toBe(input);

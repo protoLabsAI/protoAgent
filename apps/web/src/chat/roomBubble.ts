@@ -49,6 +49,7 @@ export function insertConversationBubbles(
     parts: [],
     createdAt: Date.now(),
     status: "streaming",
+    taskId: placeholder.taskId,
   };
   return [...messages.slice(0, at), frozen, ...bubbles, reset, ...messages.slice(at + 1)];
 }
