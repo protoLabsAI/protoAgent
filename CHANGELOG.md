@@ -15,6 +15,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.152.0] - 2026-08-26
+
+### Fixed
+- **Mid-turn steering messages now stay where they changed the work (#2959).** When the agent consumes queued operator input, the console inserts that user bubble at the exact model-call boundary—after the reasoning, text, and tool activity that preceded it and before the work it influenced—instead of floating it to the top of the turn.
+
+- **Expose every telemetry and prompt-retention setting in the console** without mixing box- and agent-scoped writes. (#3032)
+
+- **Render background delegate fan-in as authored room replies** in completion order before the lead's synthesis. (#3051)
+
+- **Show live elapsed progress while an addressed delegate works** so slow `@name` turns no longer look hung before the authored reply arrives. (#3052)
+
+- **Claude subscription model discovery no longer disguises an expired login as a stale model catalog (#3148).** A valid Claude OAuth login still returns the account's live Anthropic `/v1/models` response. When a borrowed Claude Code token has expired—or the live probe otherwise fails—the console now reports the real recovery action instead of silently offering three hand-maintained model IDs. Expired, unrefreshable credentials also stop appearing as signed in; sign in through protoAgent for an independently refreshable login, or re-authenticate Claude Code.
+
 ## [0.151.0] - 2026-08-26
 
 ### Changed

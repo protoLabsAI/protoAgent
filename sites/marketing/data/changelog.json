@@ -1,5 +1,16 @@
 [
   {
+    "version": "v0.152.0",
+    "date": "2026-08-26",
+    "changes": [
+      "Mid-turn steering messages now stay where they changed the work (#2959).",
+      "Expose every telemetry and prompt-retention setting in the console",
+      "Render background delegate fan-in as authored room replies",
+      "Show live elapsed progress while an addressed delegate works",
+      "Claude subscription model discovery no longer disguises an expired login as a stale model catalog (#3148)."
+    ]
+  },
+  {
     "version": "v0.151.0",
     "date": "2026-08-26",
     "changes": [
