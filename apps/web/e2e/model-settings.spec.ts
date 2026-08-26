@@ -55,21 +55,22 @@ test("Add a connection submits Claude and Codex as native subscription types", a
     { option: "ChatGPT / Codex subscription", id: "openai-codex", type: "openai-codex", label: "ChatGPT / Codex" },
   ]) {
     await panel.getByRole("button", { name: "Add a connection", exact: true }).click();
-    await panel.locator("#provider-connection-type").click();
+    const connectionDialog = page.getByRole("dialog", { name: "Add a connection" });
+    await connectionDialog.locator("#provider-connection-type").click();
     await page.getByRole("menuitemradio", { name: expected.option, exact: true }).click();
 
     // OAuth providers get useful stable ids and never ask for gateway credentials.
     // The field help is part of each native label's accessible name, hence the anchored
     // role match rather than an exact bare-label match.
-    await expect(panel.getByRole("textbox", { name: /^Id\b/ })).toHaveValue(expected.id);
-    await expect(panel.getByRole("textbox", { name: /^Name\b/ })).toHaveValue(expected.label);
-    await expect(panel.getByRole("textbox", { name: /^Base URL\b/ })).toHaveCount(0);
-    await expect(panel.getByRole("textbox", { name: /^API key\b/ })).toHaveCount(0);
+    await expect(connectionDialog.getByRole("textbox", { name: /^Id\b/ })).toHaveValue(expected.id);
+    await expect(connectionDialog.getByRole("textbox", { name: /^Name\b/ })).toHaveValue(expected.label);
+    await expect(connectionDialog.getByRole("textbox", { name: /^Base URL\b/ })).toHaveCount(0);
+    await expect(connectionDialog.getByRole("textbox", { name: /^API key\b/ })).toHaveCount(0);
 
     const posted = page.waitForRequest((request) =>
       request.method() === "POST" && new URL(request.url()).pathname === "/api/config/providers"
     );
-    await panel.getByRole("button", { name: "Add connection", exact: true }).click();
+    await connectionDialog.getByRole("button", { name: "Add connection", exact: true }).click();
     const body = (await posted).postDataJSON();
     expect(body).toEqual({ id: expected.id, type: expected.type, label: expected.label, base_url: "", api_key: "" });
   }
@@ -104,11 +105,12 @@ test("A gateway stays listed after add, settings reopen, and a fresh GET", async
   await openModelSettings(page);
   const panel = page.getByTestId("providers-panel");
   await panel.getByRole("button", { name: "Add a connection", exact: true }).click();
-  await panel.getByRole("textbox", { name: /^Id\b/ }).fill("launch-gateway");
-  await panel.getByRole("textbox", { name: /^Name\b/ }).fill("Launch gateway");
-  await panel.getByRole("textbox", { name: /^Base URL\b/ }).fill("https://launch.example/v1");
-  await panel.locator('input[type="password"]').fill("sk-launch");
-  await panel.getByRole("button", { name: "Add connection", exact: true }).click();
+  const connectionDialog = page.getByRole("dialog", { name: "Add a connection" });
+  await connectionDialog.getByRole("textbox", { name: /^Id\b/ }).fill("launch-gateway");
+  await connectionDialog.getByRole("textbox", { name: /^Name\b/ }).fill("Launch gateway");
+  await connectionDialog.getByRole("textbox", { name: /^Base URL\b/ }).fill("https://launch.example/v1");
+  await connectionDialog.locator('input[type="password"]').fill("sk-launch");
+  await connectionDialog.getByRole("button", { name: "Add connection", exact: true }).click();
 
   await expect(panel.getByTestId("provider-row")).toHaveCount(2);
   await expect(panel).toContainText("Launch gateway");
