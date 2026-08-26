@@ -3,7 +3,7 @@ import "./providers.css";
 
 import { DropdownSelect, Input, SecretInput } from "@protolabsai/ui/forms";
 import { Badge, Button } from "@protolabsai/ui/primitives";
-import { useToast } from "@protolabsai/ui/overlays";
+import { ConfirmDialog, useToast } from "@protolabsai/ui/overlays";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
@@ -70,6 +70,7 @@ export function ProvidersPanel() {
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState<ProviderDraft>(() => providerDraftForType());
   const [models, setModels] = useState<Record<string, string[]>>({});
+  const [confirmLast, setConfirmLast] = useState<string | null>(null);
 
   const refresh = () => void qc.invalidateQueries({ queryKey: ["providers"] });
 
@@ -92,7 +93,7 @@ export function ProvidersPanel() {
   });
 
   const remove = useMutation({
-    mutationFn: (id: string) => api.removeProvider(id),
+    mutationFn: ({ id, confirm }: { id: string; confirm: boolean }) => api.removeProvider(id, confirm),
     onSuccess: (r) => {
       toast({ tone: "success", title: "Connection removed", message: r.removed });
       refresh();
@@ -148,7 +149,10 @@ export function ProvidersPanel() {
                 size="sm"
                 variant="ghost"
                 aria-label={`Remove ${p.display}`}
-                onClick={() => remove.mutate(p.id)}
+                onClick={() => {
+                  if (rows.length === 1 && p.in_use_by.length === 0) setConfirmLast(p.id);
+                  else remove.mutate({ id: p.id, confirm: false });
+                }}
                 disabled={remove.isPending}
               >
                 <Trash2 size={14} />
@@ -256,6 +260,22 @@ export function ProvidersPanel() {
           <Plus size={14} /> Add a connection
         </Button>
       )}
+
+      <ConfirmDialog
+        open={confirmLast !== null}
+        title="Remove the last connection?"
+        confirmLabel="Remove connection"
+        destructive
+        onConfirm={() => {
+          const id = confirmLast;
+          setConfirmLast(null);
+          if (id) remove.mutate({ id, confirm: true });
+        }}
+        onClose={() => setConfirmLast(null)}
+      >
+        This agent will have no configured model source. Add another connection first unless you intend to leave it
+        unable to run model-backed work.
+      </ConfirmDialog>
     </div>
   );
 }

@@ -72,6 +72,18 @@ def _referencing_slots(cfg, pid: str) -> list[str]:
         value = str(getattr(cfg, attr, "") or "")
         if value.lower().startswith(f"{pid}:"):
             out.append(f"{label}={value}")
+        elif (
+            label == "model.name"
+            and pid == "gateway"
+            and value
+            and ":" not in value
+            and str(getattr(cfg, "model_provider", "") or "").lower() not in {"anthropic-oauth", "openai-codex"}
+        ):
+            # A pre-registry config's bare lead model implicitly runs through the
+            # migrated `gateway` connection. Treat that dependency exactly like the
+            # qualified `gateway:<model>` form; otherwise Settings can claim there are
+            # no connections while the legacy gateway is still serving the agent.
+            out.append(f"{label}={value} (implicit gateway)")
     for fav in getattr(cfg, "model_favorites", []) or []:
         if str(fav).lower().startswith(f"{pid}:"):
             out.append(f"model.favorites={fav}")
@@ -198,7 +210,7 @@ def register_provider_routes(app) -> None:
         return {"ok": True, "id": pid}
 
     @app.delete("/api/config/providers/{pid}")
-    async def _delete_provider(pid: str):
+    async def _delete_provider(pid: str, confirm_last: bool = False):
         cfg = _config()
         pid = (pid or "").strip().lower()
         if cfg.provider_by_id(pid) is None:
@@ -214,6 +226,14 @@ def register_provider_routes(app) -> None:
                 detail=(
                     f"{pid!r} is still named by: {', '.join(in_use)}. "
                     "Repoint those to another connection first."
+                ),
+            )
+        if len(cfg.providers) == 1 and not confirm_last:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{pid!r} is the last model connection. Removing it leaves this agent "
+                    "without a configured model source. Confirm that explicitly to continue."
                 ),
             )
         entries = [e for e in _entries_from_config(cfg) if e["id"] != pid]
