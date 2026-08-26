@@ -49,10 +49,11 @@ def test_heartbeat_finds_a_running_desktop_process_without_a_pidfile(monkeypatch
     assert reset._tracked_pid(paths) == os.getpid()
 
 
-def test_reset_uses_port_environment_for_the_process_guard(monkeypatch, tmp_path):
+@pytest.mark.parametrize(("env_port", "expected"), [("8123", 8123), ("", 7870)])
+def test_reset_uses_port_environment_for_the_process_guard(monkeypatch, tmp_path, env_port, expected):
     paths = _paths(tmp_path)
     seen = {}
-    monkeypatch.setenv("PORT", "8123")
+    monkeypatch.setenv("PORT", env_port)
     monkeypatch.setattr(reset, "instance_paths", lambda: paths)
     monkeypatch.setattr(reset, "render_plan", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
@@ -62,7 +63,7 @@ def test_reset_uses_port_environment_for_the_process_guard(monkeypatch, tmp_path
     )
 
     assert reset.run_reset_cli(["--yes"]) == 1
-    assert seen == {"port": 8123, "force": False}
+    assert seen == {"port": expected, "force": False}
 
 
 def test_delete_guard_rejects_root_and_home(monkeypatch, tmp_path):

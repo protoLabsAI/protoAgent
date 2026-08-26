@@ -293,7 +293,7 @@ def run_reset_cli(argv: list[str]) -> int:
     parser.add_argument(
         "--port",
         type=int,
-        default=os.environ.get("PORT", "7870"),
+        default=os.environ.get("PORT") or "7870",
         help="server port used by the running-process guard (default: PORT or 7870)",
     )
     args = parser.parse_args(argv)
