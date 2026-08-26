@@ -401,3 +401,35 @@ def test_a_connection_with_an_endpoint_builds_against_its_own(monkeypatch):
     llm = create_llm(cfg, model_name="mine:m")
     assert str(llm.openai_api_base) == "https://mine/v1"
     assert llm.openai_api_key.get_secret_value() == "mk"
+
+
+# ── removing the last connection must stay removed ────────────────────────────
+#
+# Reported live: deleting the gateway reported success, and it was back after a
+# refresh. Migration keyed on the registry being EMPTY, and `providers: []` is exactly
+# what removing the last connection writes — so the next load treated the operator's
+# deliberate "none" as "not migrated yet" and re-created the entry. Both sides were
+# telling the truth about different moments.
+
+
+def test_an_explicitly_empty_registry_is_not_re_migrated():
+    cfg = _cfg(providers=[], model={"provider": "openai", "api_base": "https://gw/v1", "api_key": "k"})
+    assert cfg.provider_ids() == []
+
+
+def test_an_absent_key_still_migrates():
+    """The other half — a pre-ADR-0106 config must still get its registry."""
+    cfg = _cfg(model={"provider": "openai", "api_base": "https://gw/v1", "api_key": "k"})
+    assert cfg.provider_ids() == ["gateway"]
+
+
+def test_deleting_the_last_connection_survives_a_reload():
+    """End to end, the way the console does it: read, drop, write, reload."""
+    cfg = _cfg(
+        providers=[{"id": "gateway", "type": "openai-compat", "base_url": "https://gw/v1"}],
+        model={"provider": "openai", "api_base": "https://gw/v1", "api_key": "k"},
+    )
+    assert cfg.provider_ids() == ["gateway"]
+    remaining = [p.as_dict() for p in cfg.providers if p.id != "gateway"]
+    reloaded = _cfg(providers=remaining, model={"provider": "openai", "api_base": "https://gw/v1", "api_key": "k"})
+    assert reloaded.provider_ids() == []

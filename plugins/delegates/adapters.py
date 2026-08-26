@@ -26,7 +26,21 @@ logger = logging.getLogger("protoagent.plugins.delegates")
 
 
 class DelegateError(Exception):
-    """A dispatch/parse failure. The caller turns it into a tool error string."""
+    """A dispatch/parse failure. The caller turns it into a tool error string.
+
+    ``kind`` says WHAT failed, because callers act on the difference. Only
+    ``unreachable`` — nothing accepted a connection — means the target may simply be a
+    stopped local member worth starting. A timeout or an HTTP error means something DID
+    answer, and restarting an agent underneath a slow-but-live turn is a footgun, not a
+    fix. Left empty for the failures nobody dispatches on.
+    """
+
+    def __init__(self, message: str, *, kind: str = "") -> None:
+        super().__init__(message)
+        self.kind = kind
+
+
+KIND_UNREACHABLE = "unreachable"
 
 
 # How much of a JSON-RPC error's free-form ``data`` member survives into the message the
@@ -781,7 +795,10 @@ class A2aAdapter(Adapter):
             try:
                 r = await client.post(d.url, json=body, headers=headers)
             except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-                raise DelegateError(f"delegate {d.name!r} unreachable at {d.url} ({type(exc).__name__})") from exc
+                raise DelegateError(
+                    f"delegate {d.name!r} unreachable at {d.url} ({type(exc).__name__})",
+                    kind=KIND_UNREACHABLE,
+                ) from exc
             except httpx.TimeoutException as exc:
                 raise DelegateError(f"delegate {d.name!r} timed out contacting {d.url}") from exc
             except httpx.HTTPError as exc:
@@ -1084,7 +1101,10 @@ class OpenAiAdapter(Adapter):
             try:
                 r = await client.post(url, json=payload, headers=headers)
             except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-                raise DelegateError(f"delegate {d.name!r} unreachable at {url} ({type(exc).__name__})") from exc
+                raise DelegateError(
+                    f"delegate {d.name!r} unreachable at {url} ({type(exc).__name__})",
+                    kind=KIND_UNREACHABLE,
+                ) from exc
             except httpx.TimeoutException as exc:
                 raise DelegateError(f"delegate {d.name!r} timed out contacting {url}") from exc
             except httpx.HTTPError as exc:
