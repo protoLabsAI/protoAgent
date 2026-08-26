@@ -133,6 +133,13 @@ export function providerOf(alias: string): string {
 
 export type ModelLaneGroup = { lane: string; label: string; items: string[] };
 
+export type ComposerModelSections = {
+  /** Pinned models, in configured order. */
+  favorites: string[];
+  /** The complete remaining catalog, grouped by connection. */
+  groups: ModelLaneGroup[];
+};
+
 /** Group picker choices by lane, preserving the order they arrived in.
  *
  * Unqualified names lead in one unlabelled group — a single-lane operator (or an older
@@ -149,6 +156,24 @@ export function groupByLane(choices: string[]): ModelLaneGroup[] {
     else groups.push({ lane, label: laneLabel(lane), items: [choice] });
   }
   return groups;
+}
+
+/** Sections for the composer's always-available model menu.
+ *
+ * Favorites are shortcuts, not a filter: pin them first, then retain the complete
+ * discovered catalog below. Semantic dedupe matters because a stored favorite may be
+ * bare while the server's cross-provider option is lane-qualified (or vice versa). */
+export function composerModelSections(data: ModelPickerData): ComposerModelSections {
+  const catalog = data.crossProvider.length ? data.crossProvider : data.models;
+  const knownLanes = lanesFromOptions([...data.models, ...data.crossProvider]);
+  const favorites = data.favorites.filter(
+    (favorite, index, all) =>
+      all.findIndex((other) => sameModel(other, favorite, knownLanes)) === index,
+  );
+  const remaining = catalog.filter(
+    (model) => !favorites.some((favorite) => sameModel(favorite, model, knownLanes)),
+  );
+  return { favorites, groups: groupByLane(remaining) };
 }
 
 /** The cards /model offers: the favorites when any are pinned, else every lane's models

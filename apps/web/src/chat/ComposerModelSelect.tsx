@@ -6,7 +6,7 @@ import { Menu, MenuItem, MenuSeparator } from "@protolabsai/ui/menu";
 
 import { runtimeStatusQuery, settingsSchemaQuery } from "../lib/queries";
 import { chatStore, useChatState } from "./chat-store";
-import { bareModel, groupByLane, lanesFromOptions, modelChoices, modelPickerData, sameModel } from "./modelForm";
+import { bareModel, composerModelSections, groupByLane, lanesFromOptions, modelPickerData, sameModel } from "./modelForm";
 
 // The composer's inline model picker — rendered in the DS PromptInput `actions` slot.
 // This is a PER-TAB override: it does NOT change the saved global model (that lives in
@@ -27,8 +27,10 @@ export function ComposerModelSelect() {
   const globalModel = String(field?.value ?? "");
   const picker = schema.data ? modelPickerData(schema.data.groups, runtime.data?.model?.provider ?? "") : null;
   const fallback = field?.options?.length ? field.options : globalModel ? [globalModel] : [];
-  const crossLane = picker ? modelChoices(picker).choices : [];
-  const options = crossLane.length ? crossLane : fallback;
+  const sections = picker
+    ? composerModelSections(picker)
+    : { favorites: [], groups: groupByLane(fallback) };
+  const options = [...sections.favorites, ...sections.groups.flatMap((group) => group.items)];
   const session = sessions.find((s) => s.id === currentSessionId);
   const selected = session?.model ?? "";
 
@@ -50,7 +52,7 @@ export function ComposerModelSelect() {
   if (!options.length || !currentSessionId) return null;
 
   const effectiveModel = selected || globalModel;
-  const groups = groupByLane(options);
+  const groups = sections.groups;
   // Same derivation the grouping used, so the badge and the headings agree.
   // From the SERVER-BUILT lists only: `options` may be the operator's favorites, which
   // can be stored bare, while the schema's `models`/`crossProvider` carry the qualified
@@ -60,6 +62,24 @@ export function ComposerModelSelect() {
   const knownLanes = lanesFromOptions([...(picker?.models ?? []), ...(picker?.crossProvider ?? []), ...options]);
   // Headings earn their place only when there's a choice of account to make.
   const showLanes = groups.length > 1;
+
+  const item = (model: string) => {
+    // Either side may be qualified or bare (ADR 0106 made the primary model name
+    // its connection), so the comparison has to be spelling-agnostic in BOTH
+    // directions — see sameModel.
+    const isDefault = sameModel(model, globalModel, knownLanes);
+    return (
+      <MenuItem
+        key={model}
+        onSelect={() => {
+          chatStore.setSessionModel(currentSessionId, isDefault ? "" : model);
+        }}
+      >
+        {bareModel(model, knownLanes)}
+        {isDefault ? <Badge>default</Badge> : null}
+      </MenuItem>
+    );
+  };
 
   // The composer mounts once for the app's lifetime (visibility-toggled, never
   // remounted), so its boot-time schema fetch can race the server — graph still
@@ -90,6 +110,15 @@ export function ComposerModelSelect() {
           on every row: the rows are then just model names, which is what you're actually
           choosing between. A single-lane operator sees one unlabelled group — a lone
           "Gateway" heading over every row is chrome, not information. */}
+      {sections.favorites.length ? (
+        <>
+          <div className="composer-model-lane" role="presentation">
+            Favorites
+          </div>
+          {sections.favorites.map(item)}
+          {groups.length ? <MenuSeparator /> : null}
+        </>
+      ) : null}
       {groups.map((group, gi) => (
         <Fragment key={group.lane || "_"}>
           {gi > 0 ? <MenuSeparator /> : null}
@@ -98,23 +127,7 @@ export function ComposerModelSelect() {
               {group.label}
             </div>
           ) : null}
-          {group.items.map((m) => {
-            // Either side may be qualified or bare (ADR 0106 made the primary model name
-            // its connection), so the comparison has to be spelling-agnostic in BOTH
-            // directions — see sameModel.
-            const isDefault = sameModel(m, globalModel, knownLanes);
-            return (
-              <MenuItem
-                key={m}
-                onSelect={() => {
-                  chatStore.setSessionModel(currentSessionId, isDefault ? "" : m);
-                }}
-              >
-                {bareModel(m, knownLanes)}
-                {isDefault ? <Badge>default</Badge> : null}
-              </MenuItem>
-            );
-          })}
+          {group.items.map(item)}
         </Fragment>
       ))}
     </Menu>
