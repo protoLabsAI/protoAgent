@@ -23,6 +23,15 @@ const tool = (
   error = false,
   taskId = "task-1",
 ): ProgressFrame => ({ session: "s1", taskId, kind: "tool", done, id, name, output, error });
+const room = (id: string, author: string, text: string): ProgressFrame => ({
+  session: "s1",
+  taskId: "task-1",
+  kind: "room",
+  id,
+  author,
+  text,
+  ok: true,
+});
 
 describe("parseProgress", () => {
   it("reads a text frame", () => {
@@ -62,6 +71,32 @@ describe("parseProgress", () => {
   it("ignores phases it doesn't render", () => {
     expect(parseProgress({ session_id: "s1", phase: "turn_started" })).toBeNull();
     expect(parseProgress({ session_id: "s1", phase: "reasoning", text: "hmm" })).toBeNull();
+  });
+
+  it("reads an authored background reply", () => {
+    expect(
+      parseProgress({
+        session_id: "s1",
+        task_id: "t",
+        phase: "room_reply",
+        message_id: "bg-1",
+        author: "proto",
+        text: "found it",
+        ok: true,
+      }),
+    ).toEqual({
+      session: "s1",
+      taskId: "t",
+      kind: "room",
+      id: "bg-1",
+      author: "proto",
+      text: "found it",
+      ok: true,
+    });
+  });
+
+  it("drops an authored reply without durable identity", () => {
+    expect(parseProgress({ session_id: "s1", phase: "room_reply", author: "proto" })).toBeNull();
   });
 });
 
@@ -135,6 +170,24 @@ describe("applyProgressFrame", () => {
     msgs = applyProgressFrame(msgs, text("from B", "task-B"));
     expect(msgs).toHaveLength(2);
     expect(msgs.map((m) => m.content)).toEqual(["from A", "from B"]);
+  });
+
+  it("appends background replies as distinct authored messages before synthesis", () => {
+    let msgs: ChatMessage[] = [];
+    msgs = applyProgressFrame(msgs, room("bg-1", "proto", "first result"));
+    msgs = applyProgressFrame(msgs, room("bg-2", "reviewer", "second result"));
+    msgs = applyProgressFrame(msgs, text("Lead synthesis"));
+
+    expect(msgs.map((message) => [message.author?.name, message.content])).toEqual([
+      ["proto", "first result"],
+      ["reviewer", "second result"],
+      [undefined, "Lead synthesis"],
+    ]);
+  });
+
+  it("deduplicates a repeated background room frame by job id", () => {
+    const once = applyProgressFrame([], room("bg-1", "proto", "result"));
+    expect(applyProgressFrame(once, room("bg-1", "proto", "result"))).toBe(once);
   });
 });
 

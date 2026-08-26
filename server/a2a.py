@@ -711,6 +711,22 @@ def _publish_chat_progress(context_id: str, task_id: str, frame: dict) -> None:
             "output": out,
             "error": bool(frame.get("error")),
         }
+    elif phase == "room_reply":
+        author = str(frame.get("author") or "")
+        text = str(frame.get("text") or "")
+        if not author:
+            return
+        data = {
+            "phase": "room_reply",
+            "message_id": str(frame.get("id") or ""),
+            "author": author,
+            "from": str(frame.get("from") or "assistant"),
+            # A delegate deliverable is intentionally whole (#2363), just like the
+            # foreground room-reply frame. Background transport must not silently
+            # turn an authored answer back into a preview.
+            "text": text,
+            "ok": bool(frame.get("ok")),
+        }
     else:
         return
     _event_bus.publish(

@@ -60,6 +60,10 @@ class BackgroundJob:
     # Recorded as a FACT about the job, not a per-caller policy knob: core owns the policy
     # so a plugin spawning work can't get its own context budget wrong.
     deterministic: bool = False
+    # A deterministic job whose result is another room participant's own words.
+    # Background ``delegate_to`` stamps the target here; ingest and other work leave it
+    # blank. The drain uses this explicit identity instead of parsing ``description``.
+    result_author: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -78,6 +82,7 @@ class BackgroundJob:
             "batch_id": self.batch_id,
             "dismissed": self.dismissed,
             "deterministic": self.deterministic,
+            "result_author": self.result_author,
         }
 
 
@@ -100,6 +105,7 @@ def _row_to_job(row: sqlite3.Row) -> BackgroundJob:
         batch_id=(row["batch_id"] if "batch_id" in keys else None) or None,
         dismissed=bool(row["dismissed"] if "dismissed" in keys else 0),
         deterministic=bool(row["deterministic"] if "deterministic" in keys else 0),
+        result_author=(row["result_author"] if "result_author" in keys else "") or "",
     )
 
 
@@ -140,7 +146,8 @@ class BackgroundStore:
                     origin_incognito INTEGER NOT NULL DEFAULT 0,
                     batch_id       TEXT,
                     dismissed      INTEGER NOT NULL DEFAULT 0,
-                    deterministic  INTEGER NOT NULL DEFAULT 0
+                    deterministic  INTEGER NOT NULL DEFAULT 0,
+                    result_author  TEXT NOT NULL DEFAULT ''
                 )
                 """
             )
@@ -162,6 +169,10 @@ class BackgroundStore:
             # they were written, so a drain of an old row can't change shape under us.
             if "deterministic" not in cols:
                 db.execute("ALTER TABLE background_jobs ADD COLUMN deterministic INTEGER NOT NULL DEFAULT 0")
+            # Migrate a pre-#3051 DB: explicit authored-result identity. Existing jobs
+            # stay ordinary task notifications; only newly spawned delegate work sets it.
+            if "result_author" not in cols:
+                db.execute("ALTER TABLE background_jobs ADD COLUMN result_author TEXT NOT NULL DEFAULT ''")
             db.execute(
                 "CREATE INDEX IF NOT EXISTS ix_bg_session_pending ON background_jobs(origin_session, status, notified)"
             )
@@ -184,6 +195,7 @@ class BackgroundStore:
         origin_incognito: bool = False,
         batch_id: str | None = None,
         deterministic: bool = False,
+        result_author: str = "",
         now: datetime | None = None,
     ) -> str:
         """Insert a ``running`` job and return its opaque id (``bg-<uuid12>``).
@@ -191,7 +203,8 @@ class BackgroundStore:
         ``batch_id`` (#1766) tags a job as a member of a fan-out spawned by one turn, so
         the completions coalesce into ONE push-resume; ``None`` (the default) is a
         singleton spawn. ``deterministic`` (#2363) marks a ``spawn_work`` job — its result
-        is a deliverable, not a report, and the drain delivers it whole."""
+        is a deliverable, not a report, and the drain delivers it whole. ``result_author``
+        stamps deliverables that are another room participant's own words (#3051)."""
         job_id = f"bg-{uuid.uuid4().hex[:12]}"
         created = (now or datetime.now(UTC)).isoformat()
         db = self._connect()
@@ -200,8 +213,8 @@ class BackgroundStore:
                 "INSERT INTO background_jobs "
                 "(id, agent_name, origin_session, subagent_type, description, prompt, "
                 " status, result, notified, created_at, completed_at, a2a_task_id, origin_incognito, "
-                " batch_id, deterministic) "
-                "VALUES (?, ?, ?, ?, ?, ?, 'running', '', 0, ?, NULL, '', ?, ?, ?)",
+                " batch_id, deterministic, result_author) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'running', '', 0, ?, NULL, '', ?, ?, ?, ?)",
                 (
                     job_id,
                     agent_name,
@@ -213,6 +226,7 @@ class BackgroundStore:
                     1 if origin_incognito else 0,
                     batch_id or None,
                     1 if deterministic else 0,
+                    result_author or "",
                 ),
             )
             db.commit()

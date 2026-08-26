@@ -10,6 +10,7 @@ doesn't need a running A2A endpoint — same approach as the scheduler tests.
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -859,6 +860,36 @@ class TestChatProgress:
         assert topic == "chat.progress"
         assert data["tool"] == "roll_block" and data["tool_call_id"] == "tc1"
 
+    def test_server_fired_room_reply_is_republished_whole(self, monkeypatch):
+        a2a, published = self._capture(monkeypatch)
+        answer = "delegate words " * 300
+        a2a._a2a_progress(
+            "chat-7",
+            "task-9",
+            {
+                "phase": "room_reply",
+                "id": "bg-1",
+                "author": "proto",
+                "from": "assistant",
+                "text": answer,
+                "ok": True,
+                "origin": "background-resume",
+            },
+        )
+        topic, data, kw = published[0]
+        assert topic == "chat.progress"
+        assert data == {
+            "session_id": "chat-7",
+            "task_id": "task-9",
+            "phase": "room_reply",
+            "message_id": "bg-1",
+            "author": "proto",
+            "from": "assistant",
+            "text": answer,
+            "ok": True,
+        }
+        assert kw == {"retain": False}
+
     def test_published_unretained(self, monkeypatch):
         """Live-only: the 128-event replay ring must not fill with one turn's progress,
         and a reconnecting tab must not render frames from a turn that already ended."""
@@ -1044,6 +1075,90 @@ class TestDrainIntoChat:
         body = _drain_background_messages("sess-Y")[0].content
         assert "truncated to" in body
         assert len(body) < _BG_RESULT_CAP + 2000
+
+    def test_delegate_results_drain_as_authored_room_messages_in_completion_order(
+        self, tmp_path, monkeypatch
+    ):
+        from runtime.state import STATE
+        from server.chat import _drain_background
+
+        mgr = _manager(tmp_path)
+        proto = mgr.store.create(
+            agent_name="a",
+            origin_session="room-1",
+            subagent_type="delegate",
+            description="delegate → proto",
+            prompt="p",
+            deterministic=True,
+            result_author="proto",
+        )
+        reviewer = mgr.store.create(
+            agent_name="a",
+            origin_session="room-1",
+            subagent_type="delegate",
+            description="delegate → reviewer",
+            prompt="p",
+            deterministic=True,
+            result_author="reviewer",
+        )
+        # Completion order, deliberately opposite dispatch/create order.
+        mgr.store.mark_complete(reviewer, "completed", "reviewed", now=datetime(2026, 1, 1, tzinfo=UTC))
+        mgr.store.mark_complete(proto, "completed", "patched", now=datetime(2026, 1, 2, tzinfo=UTC))
+        monkeypatch.setattr(STATE, "background_mgr", mgr, raising=False)
+
+        messages, replies = _drain_background("room-1")
+
+        assert [(reply["id"], reply["author"], reply["text"]) for reply in replies] == [
+            (reviewer, "reviewer", "reviewed"),
+            (proto, "proto", "patched"),
+        ]
+        assert [message.additional_kwargs["room"]["from"] for message in messages] == [
+            "reviewer",
+            "proto",
+        ]
+        assert all("<room-message" in message.content for message in messages)
+        assert all("<task-notification>" not in message.content for message in messages)
+        assert mgr.store.get(proto).result_author == "proto"
+
+    @pytest.mark.asyncio
+    async def test_turn_emits_authored_replies_before_lead_graph_runs(self, tmp_path, monkeypatch):
+        import runtime.state as rs
+        from server.chat import _run_turn_stream
+
+        mgr = _manager(tmp_path)
+        jid = mgr.store.create(
+            agent_name="a",
+            origin_session="room-2",
+            subagent_type="delegate",
+            description="delegate → proto",
+            prompt="p",
+            deterministic=True,
+            result_author="proto",
+        )
+        mgr.store.mark_complete(jid, "completed", "delegate answer")
+
+        class _EmptyGraph:
+            async def astream_events(self, graph_input, **kwargs):
+                # The authored envelope is already in the graph input when execution
+                # begins, so the lead can synthesize against the exact same message.
+                room = graph_input["messages"][0]
+                assert room.additional_kwargs["room"] == {"from": "proto"}
+                assert "delegate answer" in room.content
+                if False:
+                    yield None
+
+        monkeypatch.setattr(rs.STATE, "background_mgr", mgr, raising=False)
+        monkeypatch.setattr(rs.STATE, "graph", _EmptyGraph(), raising=False)
+        frames = [
+            frame
+            async for frame in _run_turn_stream("resume", "room-2", {"configurable": {"thread_id": "t"}})
+        ]
+
+        assert frames[0] == (
+            "room_reply",
+            {"id": jid, "author": "proto", "from": "assistant", "text": "delegate answer", "ok": True},
+        )
+        assert frames[-1] == ("__raw__", "")
 
 
 # ── the `task` tool captures the spawning session (bd-3v0) ────────────────────

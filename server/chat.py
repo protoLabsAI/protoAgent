@@ -45,13 +45,14 @@ log = logging.getLogger("protoagent.server")
 _BG_RESULT_CAP = 3000
 
 
-def _drain_background_messages(session_id: str) -> list:
-    """Pull completed background jobs for this session (ADR 0050) and render them as
-    ``<task-notification>`` messages to prepend to the turn's input.
+def _drain_background(session_id: str) -> tuple[list, list[dict]]:
+    """Pull completed background jobs for this session (ADR 0050) and render model
+    messages to prepend to the turn's input.
 
     Drains exactly-once (the store flips ``notified`` atomically), so a completion is
     announced to the model on the spawning session's next turn and never again. Returns
-    ``[]`` when the manager is absent or nothing is pending — a no-op on a normal turn.
+    ``(messages, room_replies)``; both are empty on a normal turn. A background
+    delegate contributes one authored room frame in honest completion order (#3051).
 
     Two delivery shapes, keyed on what the result IS (#2363):
 
@@ -59,6 +60,8 @@ def _drain_background_messages(session_id: str) -> list:
       ``_BG_RESULT_CAP`` and point at the knowledge-store copy (ADR 0070 D2);
     * a ``spawn_work`` job's result (``deterministic``) is the **deliverable** the caller
       dispatched — deliver it whole.
+    * a background delegate with ``result_author`` is that participant's own reply —
+      persist a ``<room-message>`` and emit its matching live authorship frame (#3051).
 
     The excerpt path's ``memory_recall`` pointer is only ever emitted for jobs that were
     actually indexed: ``_spawn_report_index`` runs from the A2A terminal hook, i.e. for
@@ -68,19 +71,43 @@ def _drain_background_messages(session_id: str) -> list:
     """
     mgr = getattr(STATE, "background_mgr", None)
     if mgr is None or not session_id:
-        return []
+        return [], []
     try:
         jobs = mgr.store.drain_pending(session_id)
     except Exception:  # noqa: BLE001 — never break a turn over the drain
         log.exception("[background] drain failed for session %s", session_id)
-        return []
+        return [], []
     if not jobs:
-        return []
+        return [], []
     from langchain_core.messages import HumanMessage
 
     msgs = []
+    room_replies: list[dict] = []
     for j in jobs:
         result = j.result or ""
+        author = str(getattr(j, "result_author", "") or "")
+        if author:
+            # Persist the same envelope as foreground/direct addressing so the lead,
+            # history reload, later participant catch-up, and live console all agree
+            # that these are the delegate's own words. The lead turn continues after
+            # these frames and still provides its synthesis.
+            from graph.mention_op import _envelope
+
+            ok = j.status == "completed"
+            text = result.strip() or ("(replied with nothing)" if ok else f"({j.status})")
+            msgs.append(
+                HumanMessage(
+                    content=_envelope(author, text),
+                    additional_kwargs={
+                        "lc_source": "room",
+                        "room": {"from": author, **({} if ok else {"failed": True})},
+                    },
+                )
+            )
+            room_replies.append(
+                {"id": j.id, "author": author, "from": "assistant", "text": text, "ok": ok}
+            )
+            continue
         # A deterministic work job's result is the deliverable — deliver it whole (#2363).
         if not getattr(j, "deterministic", False) and len(result) > _BG_RESULT_CAP:
             # Completed, non-incognito reports this size were indexed at completion
@@ -113,7 +140,12 @@ def _drain_background_messages(session_id: str) -> list:
         )
         msgs.append(HumanMessage(content=body))
     log.info("[background] drained %d completion(s) into session %s", len(msgs), session_id)
-    return msgs
+    return msgs, room_replies
+
+
+def _drain_background_messages(session_id: str) -> list:
+    """Compatibility view of :func:`_drain_background` for model-facing callers/tests."""
+    return _drain_background(session_id)[0]
 
 
 # Tool bodies need the same thread-id rule without importing ``server`` (which would
@@ -778,6 +810,13 @@ async def _run_turn_stream(
     from langgraph.types import Command
 
     human = _vision_human_message(message, images, session_id=session_id, incognito=incognito)
+    background_messages, background_replies = (
+        ([], []) if resume_value is not None else _drain_background(session_id)
+    )
+    for reply in background_replies:
+        # Replies arrive as themselves before the lead reads the same authored
+        # messages and streams its synthesis. Store ordering is completion ordering.
+        yield ("room_reply", reply)
 
     graph_input = (
         Command(resume=await _resume_payload(config, resume_value))
@@ -785,7 +824,7 @@ async def _run_turn_stream(
         # Prepend any completed background-job notifications (ADR 0050) so the model
         # learns of detached work that finished since this session last ran a turn.
         else {
-            "messages": _drain_background_messages(session_id) + [human],
+            "messages": background_messages + [human],
             "session_id": session_id,
             # Incognito (ADR 0069 D3b): always stamped explicitly — the channel
             # persists in the checkpointer, so an omitted key would silently

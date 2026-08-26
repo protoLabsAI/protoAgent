@@ -728,6 +728,15 @@ class ProtoAgentExecutor(AgentExecutor):
                             TaskState.TASK_STATE_WORKING,
                             message=updater.new_agent_message([_data_part_proto(payload, ROOM_MIME)]),
                         )
+                        # A server-fired background-resume turn is consumed by the
+                        # server itself, not the browser. Mirror authored replies onto
+                        # the progress hook so the open room sees each participant
+                        # before the lead's eventual synthesis (#3051).
+                        _notify_progress(
+                            context.context_id,
+                            context.task_id,
+                            {"phase": "room_reply", **payload, "origin": _origin},
+                        )
 
                 elif event_type == "steer_consumed":
                     # Commit any answer text emitted before the model-call boundary,

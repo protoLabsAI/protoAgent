@@ -28,6 +28,10 @@ export type ChatProgressEvent = {
   tool_call_id?: unknown;
   output?: unknown;
   error?: unknown;
+  message_id?: unknown;
+  author?: unknown;
+  from?: unknown;
+  ok?: unknown;
 };
 
 /** A parsed frame, or null when the event is malformed / not for a session we track. */
@@ -42,6 +46,15 @@ export type ProgressFrame =
       name: string;
       output: string;
       error: boolean;
+    }
+  | {
+      session: string;
+      taskId: string;
+      kind: "room";
+      id: string;
+      author: string;
+      text: string;
+      ok: boolean;
     };
 
 export function parseProgress(data: ChatProgressEvent): ProgressFrame | null {
@@ -69,6 +82,20 @@ export function parseProgress(data: ChatProgressEvent): ProgressFrame | null {
       error: Boolean(data.error),
     };
   }
+  if (phase === "room_reply") {
+    const id = String(data.message_id ?? "");
+    const author = String(data.author ?? "");
+    if (!id || !author) return null;
+    return {
+      session,
+      taskId,
+      kind: "room",
+      id,
+      author,
+      text: String(data.text ?? ""),
+      ok: data.ok !== false,
+    };
+  }
   return null;
 }
 
@@ -94,6 +121,21 @@ export function isLiveServerTurn(msg: ChatMessage, taskId: string, session: stri
  * above the tool it preceded — the same ordering contract the live stream path keeps.
  */
 export function applyProgressFrame(messages: ChatMessage[], frame: ProgressFrame): ChatMessage[] {
+  if (frame.kind === "room") {
+    const id = `background-room-${frame.id}`;
+    if (messages.some((message) => message.id === id)) return messages;
+    return [
+      ...messages,
+      {
+        id,
+        role: "assistant",
+        content: frame.text,
+        author: { name: frame.author },
+        createdAt: Date.now(),
+        status: frame.ok ? "done" : "error",
+      },
+    ];
+  }
   const id = liveMessageId(frame.taskId, frame.session);
   const idx = messages.findIndex((m) => m.id === id);
   const base: ChatMessage =

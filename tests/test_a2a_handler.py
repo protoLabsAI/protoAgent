@@ -430,6 +430,39 @@ async def test_input_required_fires_progress_frame_with_prompt():
 
 
 @pytest.mark.asyncio
+async def test_room_reply_fires_progress_frame_for_server_turn_bridge():
+    """#3051: the host must receive authored frames from a server-held stream."""
+    frames: list = []
+    set_progress_hook(lambda ctx, task, frame: frames.append(frame))
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield (
+            "room_reply",
+            {"id": "bg-1", "author": "proto", "from": "assistant", "text": "patched", "ok": True},
+        )
+        yield ("done", "Lead synthesis")
+
+    app = _build_app(stream)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:
+        task = (await _send_msg(c)).json()["result"]["task"]
+        final = await _poll_terminal(c, task["id"])
+
+    assert final["status"]["state"] == "TASK_STATE_COMPLETED"
+    room = [frame for frame in frames if frame.get("phase") == "room_reply"]
+    assert room == [
+        {
+            "phase": "room_reply",
+            "id": "bg-1",
+            "author": "proto",
+            "from": "assistant",
+            "text": "patched",
+            "ok": True,
+            "origin": "",
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_resumed_turn_started_frame_carries_resumed_flag():
     """Answering a parked task re-enters execute() with resume=True — the second
     turn_started frame must say so, so a host can flip "needs approval" back to
