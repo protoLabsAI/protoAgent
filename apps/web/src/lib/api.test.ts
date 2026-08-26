@@ -353,7 +353,12 @@ describe("consumedSteersFromParts", () => {
   it("ignores unrelated and empty payloads", () => {
     expect(consumedSteersFromParts([{ metadata: { mimeType: "text/plain" }, data: {} }])).toBeNull();
     expect(
-      consumedSteersFromParts([{ metadata: { mimeType: STEER_CONSUMED_MIME }, data: { items: [] } }]),
+      consumedSteersFromParts([
+        {
+          metadata: { mimeType: STEER_CONSUMED_MIME },
+          content: { $case: "data", value: { items: [] } },
+        },
+      ]),
     ).toBeNull();
   });
 });

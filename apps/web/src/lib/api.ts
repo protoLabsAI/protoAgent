@@ -772,8 +772,8 @@ function replayTaskSnapshot(task: NonNullable<A2AFrame["result"]>, handlers: Tur
     if (component) handlers.onComponent?.(component);
     // Do not replay steer-consumed markers from task history: snapshot artifacts
     // flatten all answer text into one accumulation, so the marker's position
-    // relative to that text cannot be reconstructed honestly. The queue poll / turn-
-    // end reconcile is the compatibility fallback for a client that missed it live.
+    // relative to that text cannot be reconstructed honestly. Turn-end queue
+    // reconciliation is the compatibility fallback for a client that missed it live.
   }
   if (accumulated) handlers.onText?.(accumulated, false);
   const state = (task.status?.state || "").toString();
