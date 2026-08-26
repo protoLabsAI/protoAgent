@@ -195,7 +195,7 @@ function brainKindPatch(kind: BrainKind): Partial<WizardState> {
 }
 const OAUTH_LABEL: Record<string, string> = {
   "anthropic-oauth": "Claude subscription",
-  "openai-codex": "ChatGPT subscription",
+  "openai-codex": "ChatGPT / Codex subscription",
 };
 
 // A probe/test against a possibly-wrong or slow gateway must never hang the wizard —
@@ -888,7 +888,7 @@ export function SetupWizard({
                   />
                   <RadioCard
                     value="codex"
-                    title="ChatGPT subscription"
+                    title="ChatGPT / Codex subscription"
                     blurb="Run ChatGPT/Codex on your plan — no API key, uses your Codex CLI login."
                   />
                   {/* The ACP brain card is deliberately GONE (deprecated 2026-08-11):

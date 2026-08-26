@@ -149,7 +149,7 @@ describe("native OAuth provider labeling (#2473)", () => {
 
   it("labels subscription cards as the subscription, never 'gateway model'", () => {
     expect(modelCardHint("gpt-5.6-sol", "gpt-5.6-sol", "openai-codex")).toBe(
-      "ChatGPT subscription · configured default",
+      "ChatGPT / Codex subscription · configured default",
     );
     expect(modelCardHint("claude-sonnet-4-5", "", "anthropic-oauth")).toBe("Claude subscription");
     // Gateway aliases keep their prefix; unknown providers keep the old wording.
@@ -160,7 +160,7 @@ describe("native OAuth provider labeling (#2473)", () => {
   it("the no-favorites description names the subscription, not the gateway", () => {
     const data = modelPickerData(codexGroups(["gpt-5.6-sol", "gpt-5-codex"]));
     const payload = modelFormPayload(data, "gpt-5.6-sol");
-    expect(payload.description).toContain("ChatGPT subscription");
+    expect(payload.description).toContain("ChatGPT / Codex subscription");
     expect(payload.description).not.toContain("gateway");
   });
 });
@@ -221,12 +221,14 @@ describe("the picker shows models, not slot syntax", () => {
     expect(cards.map((c) => c.title)).toEqual(["protolabs/coder", "claude-sonnet-5", "gpt-5.6-sol"]);
     expect(cards.map((c) => c.const)).toEqual(LANES); // what actually gets applied
     expect(cards[1].description).toContain("Claude subscription");
-    expect(cards[2].description).toContain("ChatGPT subscription");
+    expect(cards[2].description).toContain("ChatGPT / Codex subscription");
   });
 
   it("labels by the value's OWN lane, not the configured provider", () => {
     // The agent runs on Claude; a Codex favorite must not read "Claude subscription".
-    expect(modelCardHint("openai-codex:gpt-5.6-sol", "", "anthropic-oauth")).toContain("ChatGPT subscription");
+    expect(modelCardHint("openai-codex:gpt-5.6-sol", "", "anthropic-oauth")).toContain(
+      "ChatGPT / Codex subscription",
+    );
     expect(modelCardHint("gateway:protolabs/coder", "", "anthropic-oauth")).toContain("Gateway");
   });
 
@@ -275,7 +277,7 @@ describe("groupByLane — the menu's sections", () => {
     expect(groups.map((g) => [g.label, g.items.length])).toEqual([
       ["Gateway", 2],
       ["Claude subscription", 1],
-      ["ChatGPT subscription", 1],
+      ["ChatGPT / Codex subscription", 1],
     ]);
   });
 
