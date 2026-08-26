@@ -196,7 +196,7 @@ export function useOauthLifecycle(opts?: { onSignedIn?: () => void; onDisconnect
 /** The standard account card (Settings ▸ Model): status line + sign-in /
  *  disconnect actions + the in-flight device/redirect flow. The wizard renders
  *  its own JSX over the same hook (it interleaves model probing). */
-export function OAuthAccountCard({ provider }: { provider: string }) {
+export function OAuthAccountCard({ provider, onEdit }: { provider: string; onEdit?: () => void }) {
   const lc = useOauthLifecycle();
   const { status, refreshStatus } = lc;
   useEffect(() => {
@@ -212,6 +212,13 @@ export function OAuthAccountCard({ provider }: { provider: string }) {
       {st?.signed_in ? (
         <Callout tone="success">
           <ShieldCheck size={15} /> Signed in — {st.detail || "credentials found"}.{" "}
+          {onEdit ? (
+            <>
+              <Button type="button" onClick={onEdit}>
+                Edit
+              </Button>{" "}
+            </>
+          ) : null}
           <Button type="button" onClick={() => void refreshStatus()} disabled={lc.statusBusy}>
             {lc.statusBusy ? <Spinner size={15} /> : null}
             {lc.statusBusy ? "Checking…" : "Re-check"}

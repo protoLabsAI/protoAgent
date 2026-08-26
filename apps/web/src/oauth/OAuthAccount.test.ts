@@ -53,11 +53,16 @@ function stubStatus(signedIn: boolean) {
 }
 
 describe("OAuthAccountCard", () => {
-  it("signed in → status detail + a Disconnect action that never claims to touch the CLI login", async () => {
+  it("signed in → Edit callback + Disconnect action that never claims to touch the CLI login", async () => {
     stubStatus(true);
-    mount(h(OAuthAccountCard, { provider: "openai-codex" }));
+    const onEdit = vi.fn();
+    mount(h(OAuthAccountCard, { provider: "openai-codex", onEdit }));
     await flush();
     expect(container.textContent).toContain("Signed in — ChatGPT account");
+    const edit = [...container.querySelectorAll("button")].find((b) => b.textContent?.includes("Edit"));
+    expect(edit).toBeTruthy();
+    act(() => edit!.click());
+    expect(onEdit).toHaveBeenCalledOnce();
     const disconnect = [...container.querySelectorAll("button")].find((b) => b.textContent?.includes("Disconnect"));
     expect(disconnect).toBeTruthy();
     expect(disconnect!.title).toContain("never revoked remotely");

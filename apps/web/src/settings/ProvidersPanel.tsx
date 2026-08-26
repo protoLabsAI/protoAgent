@@ -37,6 +37,9 @@ type ProviderDraft = {
   api_key: string;
 };
 
+type ProviderView = Awaited<ReturnType<typeof api.providers>>["providers"][number];
+type ProviderEditDraft = Pick<ProviderDraft, "label" | "base_url" | "api_key">;
+
 // OAuth connections use the established lane ids by default. They remain editable in
 // the form, but the useful default preserves the qualified names operators already know
 // (`anthropic-oauth:…` / `openai-codex:…`) and gets them to sign-in in one click.
@@ -71,6 +74,8 @@ export function ProvidersPanel() {
   const [draft, setDraft] = useState<ProviderDraft>(() => providerDraftForType());
   const [models, setModels] = useState<Record<string, string[]>>({});
   const [confirmLast, setConfirmLast] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<ProviderEditDraft>({ label: "", base_url: "", api_key: "" });
 
   const refresh = () => void qc.invalidateQueries({ queryKey: ["providers"] });
 
@@ -102,6 +107,16 @@ export function ProvidersPanel() {
     onError: (e) => toast({ tone: "error", title: "Still in use", message: errMsg(e) }),
   });
 
+  const update = useMutation({
+    mutationFn: ({ id, values }: { id: string; values: ProviderEditDraft }) => api.updateProvider(id, values),
+    onSuccess: (_result, { id }) => {
+      toast({ tone: "success", title: "Connection updated", message: `${id} is ready.` });
+      setEditingId(null);
+      refresh();
+    },
+    onError: (e) => toast({ tone: "error", title: "Couldn't update the connection", message: errMsg(e) }),
+  });
+
   const probe = useMutation({
     mutationFn: (id: string) => api.providerModels(id).then((r) => ({ id, ...r })),
     onSuccess: (r) => {
@@ -123,6 +138,11 @@ export function ProvidersPanel() {
 
   const rows = data?.providers ?? [];
 
+  const startEditing = (provider: ProviderView) => {
+    setEditingId(provider.id);
+    setEditDraft({ label: provider.label ?? "", base_url: provider.base_url ?? "", api_key: "" });
+  };
+
   return (
     <div className="settings-subsection settings-subsection--lead" data-testid="providers-panel">
       <h2 className="panel-kicker">Connections</h2>
@@ -142,6 +162,11 @@ export function ProvidersPanel() {
               <Badge>{TYPE_LABEL[p.type] ?? p.type}</Badge>
             </div>
             <div className="provider-row__actions">
+              {!OAUTH_PROVIDER_LABEL[p.type] ? (
+                <Button size="sm" variant="ghost" onClick={() => startEditing(p)}>
+                  Edit
+                </Button>
+              ) : null}
               <Button size="sm" variant="ghost" onClick={() => probe.mutate(p.id)} disabled={probe.isPending}>
                 Test
               </Button>
@@ -164,7 +189,7 @@ export function ProvidersPanel() {
 
           {/* An OAuth connection carries its own sign-in lifecycle; an endpoint carries a key. */}
           {OAUTH_PROVIDER_LABEL[p.type] ? (
-            <OAuthAccountCard provider={p.type} />
+            <OAuthAccountCard provider={p.type} onEdit={() => startEditing(p)} />
           ) : (
             <div className="provider-row__meta">
               {p.has_key ? (
@@ -176,6 +201,57 @@ export function ProvidersPanel() {
               )}
             </div>
           )}
+
+          {editingId === p.id ? (
+            <div className="provider-row__edit" data-testid={`provider-edit-${p.id}`}>
+              <label className="field">
+                <span>Name</span>
+                <Input
+                  autoFocus
+                  value={editDraft.label}
+                  onChange={(e) => setEditDraft({ ...editDraft, label: e.target.value })}
+                  placeholder={p.id}
+                />
+                <small className="muted">Display only. The permanent connection id remains {p.id}.</small>
+              </label>
+              {p.type === "openai-compat" ? (
+                <>
+                  <label className="field">
+                    <span>Base URL</span>
+                    <Input
+                      value={editDraft.base_url}
+                      onChange={(e) => setEditDraft({ ...editDraft, base_url: e.target.value })}
+                    />
+                  </label>
+                  <label className="field">
+                    <span>API key</span>
+                    <SecretInput
+                      value={editDraft.api_key}
+                      placeholder={p.has_key ? "•••••••• — leave blank to keep" : "unset"}
+                      onChange={(e) => setEditDraft({ ...editDraft, api_key: e.target.value })}
+                    />
+                  </label>
+                </>
+              ) : (
+                <small className="muted">
+                  Subscription endpoints and credentials are managed by sign-in. Choose which model uses this
+                  connection in the model slots below.
+                </small>
+              )}
+              <div className="provider-row__actions">
+                <Button
+                  size="sm"
+                  onClick={() => update.mutate({ id: p.id, values: editDraft })}
+                  disabled={update.isPending}
+                >
+                  Save connection
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setEditingId(null)} disabled={update.isPending}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : null}
 
           {/* Why a delete may be refused, before it is attempted. */}
           {p.in_use_by.length ? (
