@@ -1,5 +1,16 @@
 [
   {
+    "version": "v0.153.0",
+    "date": "2026-08-26",
+    "changes": [
+      "Signed-in OAuth connection cards now include an Edit action that opens that connection's settings in place.",
+      "Provider connection forms now open in a focused dialog instead of expanding the Settings list inline (#3162).",
+      "Long chat transcripts no longer re-render on every composer keystroke (#3087).",
+      "Favorite models no longer hide the rest of the chat model picker (#3155).",
+      "Provider-specific request shaping now follows the model used for each lead, subagent, and fallback call, fixing Gateway-to-Codex chat switches that sent forbidden system messages while keeping provider credentials and wire formats isolated."
+    ]
+  },
+  {
     "version": "v0.152.0",
     "date": "2026-08-26",
     "changes": [
