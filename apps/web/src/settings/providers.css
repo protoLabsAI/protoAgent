@@ -43,15 +43,7 @@
 .provider-row__inuse {
   font-style: italic;
 }
-.provider-row--draft {
+.provider-dialog__form {
   display: grid;
   gap: 8px;
-}
-.provider-row__edit {
-  display: grid;
-  gap: 8px;
-  margin-top: 10px;
-  padding: 10px;
-  border: 1px solid var(--pl-color-border);
-  border-radius: 6px;
 }

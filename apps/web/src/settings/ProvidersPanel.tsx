@@ -3,7 +3,7 @@ import "./providers.css";
 
 import { DropdownSelect, Input, SecretInput } from "@protolabsai/ui/forms";
 import { Badge, Button } from "@protolabsai/ui/primitives";
-import { ConfirmDialog, useToast } from "@protolabsai/ui/overlays";
+import { ConfirmDialog, Dialog, useToast } from "@protolabsai/ui/overlays";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
@@ -38,7 +38,6 @@ type ProviderDraft = {
 };
 
 type ProviderView = Awaited<ReturnType<typeof api.providers>>["providers"][number];
-type ProviderEditDraft = Pick<ProviderDraft, "label" | "base_url" | "api_key">;
 
 // OAuth connections use the established lane ids by default. They remain editable in
 // the form, but the useful default preserves the qualified names operators already know
@@ -70,32 +69,11 @@ export function ProvidersPanel() {
   const toast = useToast();
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({ queryKey: ["providers"], queryFn: () => api.providers() });
-  const [adding, setAdding] = useState(false);
-  const [draft, setDraft] = useState<ProviderDraft>(() => providerDraftForType());
   const [models, setModels] = useState<Record<string, string[]>>({});
   const [confirmLast, setConfirmLast] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState<ProviderEditDraft>({ label: "", base_url: "", api_key: "" });
+  const [formTarget, setFormTarget] = useState<ProviderView | "add" | null>(null);
 
   const refresh = () => void qc.invalidateQueries({ queryKey: ["providers"] });
-
-  const add = useMutation({
-    mutationFn: () => api.addProvider(draft),
-    onSuccess: () => {
-      const oauth = Boolean(OAUTH_PROVIDER_LABEL[draft.type]);
-      toast({
-        tone: "success",
-        title: "Connection added",
-        message: oauth
-          ? `${draft.id} was added. Sign in below to finish connecting it.`
-          : `${draft.id} is ready to use in model slots.`,
-      });
-      setAdding(false);
-      setDraft(providerDraftForType());
-      refresh();
-    },
-    onError: (e) => toast({ tone: "error", title: "Couldn't add the connection", message: errMsg(e) }),
-  });
 
   const remove = useMutation({
     mutationFn: ({ id, confirm }: { id: string; confirm: boolean }) => api.removeProvider(id, confirm),
@@ -105,16 +83,6 @@ export function ProvidersPanel() {
     },
     // The 409 body names the slots still routing through it — that IS the message.
     onError: (e) => toast({ tone: "error", title: "Still in use", message: errMsg(e) }),
-  });
-
-  const update = useMutation({
-    mutationFn: ({ id, values }: { id: string; values: ProviderEditDraft }) => api.updateProvider(id, values),
-    onSuccess: (_result, { id }) => {
-      toast({ tone: "success", title: "Connection updated", message: `${id} is ready.` });
-      setEditingId(null);
-      refresh();
-    },
-    onError: (e) => toast({ tone: "error", title: "Couldn't update the connection", message: errMsg(e) }),
   });
 
   const probe = useMutation({
@@ -134,14 +102,7 @@ export function ProvidersPanel() {
     onError: (e) => toast({ tone: "error", title: "Couldn't reach it", message: errMsg(e) }),
   });
 
-  const idError = providerIdError(draft.id);
-
   const rows = data?.providers ?? [];
-
-  const startEditing = (provider: ProviderView) => {
-    setEditingId(provider.id);
-    setEditDraft({ label: provider.label ?? "", base_url: provider.base_url ?? "", api_key: "" });
-  };
 
   return (
     <div className="settings-subsection settings-subsection--lead" data-testid="providers-panel">
@@ -163,7 +124,7 @@ export function ProvidersPanel() {
             </div>
             <div className="provider-row__actions">
               {!OAUTH_PROVIDER_LABEL[p.type] ? (
-                <Button size="sm" variant="ghost" onClick={() => startEditing(p)}>
+                <Button size="sm" variant="ghost" onClick={() => setFormTarget(p)}>
                   Edit
                 </Button>
               ) : null}
@@ -189,7 +150,7 @@ export function ProvidersPanel() {
 
           {/* An OAuth connection carries its own sign-in lifecycle; an endpoint carries a key. */}
           {OAUTH_PROVIDER_LABEL[p.type] ? (
-            <OAuthAccountCard provider={p.type} onEdit={() => startEditing(p)} />
+            <OAuthAccountCard provider={p.type} onEdit={() => setFormTarget(p)} />
           ) : (
             <div className="provider-row__meta">
               {p.has_key ? (
@@ -201,57 +162,6 @@ export function ProvidersPanel() {
               )}
             </div>
           )}
-
-          {editingId === p.id ? (
-            <div className="provider-row__edit" data-testid={`provider-edit-${p.id}`}>
-              <label className="field">
-                <span>Name</span>
-                <Input
-                  autoFocus
-                  value={editDraft.label}
-                  onChange={(e) => setEditDraft({ ...editDraft, label: e.target.value })}
-                  placeholder={p.id}
-                />
-                <small className="muted">Display only. The permanent connection id remains {p.id}.</small>
-              </label>
-              {p.type === "openai-compat" ? (
-                <>
-                  <label className="field">
-                    <span>Base URL</span>
-                    <Input
-                      value={editDraft.base_url}
-                      onChange={(e) => setEditDraft({ ...editDraft, base_url: e.target.value })}
-                    />
-                  </label>
-                  <label className="field">
-                    <span>API key</span>
-                    <SecretInput
-                      value={editDraft.api_key}
-                      placeholder={p.has_key ? "•••••••• — leave blank to keep" : "unset"}
-                      onChange={(e) => setEditDraft({ ...editDraft, api_key: e.target.value })}
-                    />
-                  </label>
-                </>
-              ) : (
-                <small className="muted">
-                  Subscription endpoints and credentials are managed by sign-in. Choose which model uses this
-                  connection in the model slots below.
-                </small>
-              )}
-              <div className="provider-row__actions">
-                <Button
-                  size="sm"
-                  onClick={() => update.mutate({ id: p.id, values: editDraft })}
-                  disabled={update.isPending}
-                >
-                  Save connection
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => setEditingId(null)} disabled={update.isPending}>
-                  Cancel
-                </Button>
-              </div>
-            </div>
-          ) : null}
 
           {/* Why a delete may be refused, before it is attempted. */}
           {p.in_use_by.length ? (
@@ -267,75 +177,21 @@ export function ProvidersPanel() {
         </div>
       ))}
 
-      {adding ? (
-        <div className="provider-row provider-row--draft">
-          <label className="field">
-            <span>Connection type</span>
-            <DropdownSelect
-              id="provider-connection-type"
-              value={draft.type}
-              onValueChange={(type) => setDraft(providerDraftForType(type))}
-              options={CONNECTION_TYPE_OPTIONS}
-            />
-            <small className="muted">
-              Subscriptions open their sign-in flow after the connection is added.
-            </small>
-          </label>
-          <label className="field">
-            <span>Id</span>
-            <Input
-              value={draft.id}
-              onChange={(e) => setDraft({ ...draft, id: e.target.value.trim().toLowerCase() })}
-              placeholder="prod-gateway"
-            />
-            {/* Frozen after creation: an id lives inside stored model values, and via the
-                fleet host layer those can sit in another instance's config a rename can't reach. */}
-            <small className={idError ? "provider-row__warn" : "muted"}>
-              {idError || "Permanent — it appears inside model values like prod-gateway:protolabs/coder."}
-            </small>
-          </label>
-          <label className="field">
-            <span>Name</span>
-            <Input
-              value={draft.label}
-              onChange={(e) => setDraft({ ...draft, label: e.target.value })}
-              placeholder="Production gateway"
-            />
-            <small className="muted">Display only. Change it whenever you like.</small>
-          </label>
-          {draft.type === "openai-compat" ? (
-            <>
-              <label className="field">
-                <span>Base URL</span>
-                <Input
-                  value={draft.base_url}
-                  onChange={(e) => setDraft({ ...draft, base_url: e.target.value })}
-                  placeholder="https://api.example.com/v1"
-                />
-              </label>
-              <label className="field">
-                <span>API key</span>
-                <SecretInput
-                  value={draft.api_key}
-                  onChange={(e) => setDraft({ ...draft, api_key: e.target.value })}
-                />
-              </label>
-            </>
-          ) : null}
-          <div className="provider-row__actions">
-            <Button size="sm" onClick={() => add.mutate()} disabled={!draft.id || !!idError || add.isPending}>
-              Add connection
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => setAdding(false)}>
-              Cancel
-            </Button>
-          </div>
-        </div>
-      ) : (
-        <Button size="sm" variant="ghost" onClick={() => setAdding(true)} data-testid="add-provider">
-          <Plus size={14} /> Add a connection
-        </Button>
-      )}
+      <Button size="sm" variant="ghost" onClick={() => setFormTarget("add")} data-testid="add-provider">
+        <Plus size={14} /> Add a connection
+      </Button>
+
+      {formTarget ? (
+        <ProviderConnectionDialog
+          key={formTarget === "add" ? "add" : formTarget.id}
+          initial={formTarget === "add" ? null : formTarget}
+          onClose={() => setFormTarget(null)}
+          onSaved={() => {
+            setFormTarget(null);
+            refresh();
+          }}
+        />
+      ) : null}
 
       <ConfirmDialog
         open={confirmLast !== null}
@@ -353,5 +209,165 @@ export function ProvidersPanel() {
         unable to run model-backed work.
       </ConfirmDialog>
     </div>
+  );
+}
+
+function ProviderConnectionDialog({
+  initial,
+  onClose,
+  onSaved,
+}: {
+  initial: ProviderView | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const toast = useToast();
+  const editing = initial !== null;
+  const [draft, setDraft] = useState<ProviderDraft>(() =>
+    initial
+      ? {
+          id: initial.id,
+          type: initial.type,
+          label: initial.label ?? "",
+          base_url: initial.base_url ?? "",
+          api_key: "",
+        }
+      : providerDraftForType(),
+  );
+  const idError = providerIdError(draft.id);
+
+  const save = useMutation({
+    mutationFn: () =>
+      initial
+        ? api.updateProvider(initial.id, {
+            label: draft.label,
+            base_url: draft.base_url,
+            api_key: draft.api_key,
+          })
+        : api.addProvider(draft),
+    onSuccess: () => {
+      const oauth = Boolean(OAUTH_PROVIDER_LABEL[draft.type]);
+      toast({
+        tone: "success",
+        title: editing ? "Connection updated" : "Connection added",
+        message: editing
+          ? `${draft.id} is ready.`
+          : oauth
+            ? `${draft.id} was added. Sign in below to finish connecting it.`
+            : `${draft.id} is ready to use in model slots.`,
+      });
+      onSaved();
+    },
+    onError: (e) =>
+      toast({
+        tone: "error",
+        title: editing ? "Couldn't update the connection" : "Couldn't add the connection",
+        message: errMsg(e),
+      }),
+  });
+
+  const close = () => {
+    if (!save.isPending) onClose();
+  };
+  const valid = editing || (!!draft.id && !idError);
+
+  return (
+    <Dialog
+      open
+      onClose={close}
+      title={editing ? `Edit ${initial.display}` : "Add a connection"}
+      width="min(520px, 94vw)"
+      className="provider-dialog"
+      footer={
+        <>
+          <Button type="button" variant="ghost" onClick={close} disabled={save.isPending}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            type="submit"
+            form="provider-connection-form"
+            loading={save.isPending}
+            disabled={!valid || save.isPending}
+          >
+            {editing ? "Save connection" : "Add connection"}
+          </Button>
+        </>
+      }
+    >
+      <form
+        id="provider-connection-form"
+        className="provider-dialog__form"
+        data-testid={initial ? `provider-edit-${initial.id}` : "provider-add-form"}
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (valid && !save.isPending) save.mutate();
+        }}
+      >
+        {!editing ? (
+          <label className="field">
+            <span>Connection type</span>
+            <DropdownSelect
+              id="provider-connection-type"
+              value={draft.type}
+              onValueChange={(type) => setDraft(providerDraftForType(type))}
+              options={CONNECTION_TYPE_OPTIONS}
+            />
+            <small className="muted">Subscriptions open their sign-in flow after the connection is added.</small>
+          </label>
+        ) : null}
+        {!editing ? (
+          <label className="field">
+            <span>Id</span>
+            <Input
+              value={draft.id}
+              onChange={(event) => setDraft({ ...draft, id: event.target.value.trim().toLowerCase() })}
+              placeholder="prod-gateway"
+            />
+            <small className={idError ? "provider-row__warn" : "muted"}>
+              {idError || "Permanent — it appears inside model values like prod-gateway:protolabs/coder."}
+            </small>
+          </label>
+        ) : null}
+        <label className="field">
+          <span>Name</span>
+          <Input
+            value={draft.label}
+            onChange={(event) => setDraft({ ...draft, label: event.target.value })}
+            placeholder={initial?.id ?? "Production gateway"}
+          />
+          <small className="muted">
+            {initial
+              ? `Display only. The permanent connection id remains ${initial.id}.`
+              : "Display only. Change it whenever you like."}
+          </small>
+        </label>
+        {draft.type === "openai-compat" ? (
+          <>
+            <label className="field">
+              <span>Base URL</span>
+              <Input
+                value={draft.base_url}
+                onChange={(event) => setDraft({ ...draft, base_url: event.target.value })}
+                placeholder="https://api.example.com/v1"
+              />
+            </label>
+            <label className="field">
+              <span>API key</span>
+              <SecretInput
+                value={draft.api_key}
+                placeholder={initial?.has_key ? "•••••••• — leave blank to keep" : "unset"}
+                onChange={(event) => setDraft({ ...draft, api_key: event.target.value })}
+              />
+            </label>
+          </>
+        ) : (
+          <small className="muted">
+            Subscription endpoints and credentials are managed by sign-in. Choose which model uses this connection
+            in the model slots after closing this dialog.
+          </small>
+        )}
+      </form>
+    </Dialog>
   );
 }
