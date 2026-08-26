@@ -15,6 +15,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.153.0] - 2026-08-26
+
+### Added
+- Signed-in OAuth connection cards now include an Edit action that opens that connection's settings in place.
+
+### Changed
+- **Provider connection forms now open in a focused dialog instead of expanding the Settings list inline (#3162).**
+
+### Fixed
+- **Long chat transcripts no longer re-render on every composer keystroke (#3087).**
+  The console now isolates the controlled prompt from settled message rows, keeping typing responsive in large, tool-heavy sessions.
+
+- **Favorite models no longer hide the rest of the chat model picker (#3155).** Favorites are pinned in their own section at the top of the composer menu, while every other available model remains accessible below in its provider group.
+
+- Provider-specific request shaping now follows the model used for each lead, subagent, and fallback call, fixing Gateway-to-Codex chat switches that sent forbidden system messages while keeping provider credentials and wire formats isolated.
+
 ## [0.152.0] - 2026-08-26
 
 ### Fixed
