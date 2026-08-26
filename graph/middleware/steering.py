@@ -13,10 +13,14 @@ is keyed by the turn's ``session_id`` state channel (state_schema=ProtoAgentStat
 
 from __future__ import annotations
 
+import logging
+
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import HumanMessage
 
 from graph import steering
+
+logger = logging.getLogger(__name__)
 
 # Frame the injected text so the model reads it as a mid-task interjection (it may
 # redirect, or continue if it doesn't change the task) rather than a fresh request.
@@ -36,19 +40,38 @@ class SteeringMiddleware(AgentMiddleware):
         return self._inject(state)
 
     async def abefore_model(self, state, runtime):  # type: ignore[override]
-        return self._inject(state)
+        update, queued = self._drain(state)
+        if queued:
+            # This event is the exact UI chronology boundary: everything already
+            # streamed happened before the steer, and the next model call is the
+            # first work that can reflect it. The A2A bridge forwards it as a typed
+            # working frame; plain consumers safely ignore it.
+            try:
+                from langchain_core.callbacks import adispatch_custom_event
+
+                await adispatch_custom_event("steer_consumed", {"items": queued})
+            except Exception:  # noqa: BLE001 — a UI marker must never fail the turn
+                # A graph invoked outside an event-stream callback context cannot
+                # dispatch. The steer is still in `update` and the console's turn-end
+                # queue reconciliation remains the conservative placement fallback.
+                logger.debug("steer-consumed boundary was not dispatched", exc_info=True)
+        return update
 
     @staticmethod
     def _inject(state) -> dict | None:
+        return SteeringMiddleware._drain(state)[0]
+
+    @staticmethod
+    def _drain(state) -> tuple[dict | None, list[dict]]:
         session_id = state.get("session_id") if isinstance(state, dict) else getattr(state, "session_id", None)
         if not session_id:
-            return None
+            return None, []
         queued = steering.drain(session_id)
         if not queued:
-            return None
+            return None, []
         # One framed HumanMessage carrying all queued text. The add_messages reducer
         # appends it to the thread before the model node runs, so the very next model
         # call sees it. The console settles the user's ORIGINAL text into the thread
         # (per-id); only the model sees the framed interjection.
         combined = "\n\n".join(item["text"] for item in queued)
-        return {"messages": [HumanMessage(content=_INTERJECTION + combined)]}
+        return {"messages": [HumanMessage(content=_INTERJECTION + combined)]}, queued

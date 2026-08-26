@@ -110,6 +110,88 @@ def test_middleware_noop_without_session_or_queue():
     assert SteeringMiddleware._inject({"session_id": "sess", "messages": []}) is None  # empty queue
 
 
+@pytest.mark.asyncio
+async def test_async_middleware_emits_the_consumption_boundary(monkeypatch):
+    seen = []
+
+    async def _capture(name, data):
+        seen.append((name, data))
+
+    monkeypatch.setattr("langchain_core.callbacks.adispatch_custom_event", _capture)
+    steering.enqueue("sess", "first", msg_id="s1")
+    steering.enqueue("sess", "second", msg_id="s2")
+
+    update = await SteeringMiddleware().abefore_model({"session_id": "sess", "messages": []}, None)
+
+    assert update is not None
+    assert seen == [
+        (
+            "steer_consumed",
+            {"items": [{"id": "s1", "text": "first"}, {"id": "s2", "text": "second"}]},
+        )
+    ]
+    assert steering.pending("sess") == 0
+
+
+@pytest.mark.asyncio
+async def test_async_middleware_keeps_the_steer_when_boundary_dispatch_fails(monkeypatch):
+    async def _fail(_name, _data):
+        raise RuntimeError("no callback context")
+
+    monkeypatch.setattr("langchain_core.callbacks.adispatch_custom_event", _fail)
+    steering.enqueue("sess", "change course", msg_id="s1")
+
+    update = await SteeringMiddleware().abefore_model({"session_id": "sess", "messages": []}, None)
+
+    assert update is not None
+    assert update["messages"][0].content.endswith("change course")
+    assert steering.pending("sess") == 0
+
+
+@pytest.mark.asyncio
+async def test_turn_stream_sanitizes_and_forwards_consumed_steers(monkeypatch):
+    """The server bridge keeps valid FIFO rows and drops malformed event data."""
+    import importlib
+    from types import SimpleNamespace
+
+    import runtime.state as rs
+
+    chat_mod = importlib.import_module("server.chat")
+
+    class _Graph:
+        async def astream_events(self, *_args, **_kwargs):
+            yield {"event": "on_custom_event", "name": "steer_consumed", "data": "bad"}
+            yield {
+                "event": "on_custom_event",
+                "name": "steer_consumed",
+                "data": {
+                    "items": [
+                        {"id": "s1", "text": "first"},
+                        {"id": "", "text": "missing id"},
+                        {"id": "s2", "text": ""},
+                        "bad row",
+                        {"id": 7, "text": 9},
+                    ]
+                },
+            }
+
+    async def _no_interrupt(_config):
+        return None
+
+    monkeypatch.setattr(rs.STATE, "graph", _Graph(), raising=False)
+    monkeypatch.setattr(rs.STATE, "graph_config", SimpleNamespace(model_vision=False), raising=False)
+    monkeypatch.setattr(chat_mod, "_pending_interrupt_value", _no_interrupt)
+
+    frames = [
+        frame
+        async for frame in chat_mod._run_turn_stream(
+            "start", "sess", {"configurable": {"thread_id": "sess"}}
+        )
+    ]
+
+    assert ("steer_consumed", {"items": [{"id": "s1", "text": "first"}, {"id": "7", "text": "9"}]}) in frames
+
+
 # ── end-to-end in a REAL graph ─────────────────────────────────────────────────
 # Drive a real create_agent graph: model call 1 invokes a tool; while the tool
 # "runs" the user steers (enqueue); SteeringMiddleware.before_model must fold that

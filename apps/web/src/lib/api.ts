@@ -17,6 +17,7 @@ import type {
   ComponentSpec,
   ConfigPayload,
   ContextWindow,
+  ConsumedSteer,
   DelegateProbe,
   DelegateTypeSpec,
   DelegateView,
@@ -486,6 +487,7 @@ const CONTEXT_MIME = "application/vnd.protolabs.context-v1+json";
 // Authorship for an `@<name>`-addressed turn (#3042) — arrives on a WORKING frame
 // BEFORE the answer artifact, so the answer can be attributed as it is drawn.
 const ROOM_MIME = "application/vnd.protolabs.room-v1+json";
+const STEER_CONSUMED_MIME = "application/vnd.protolabs.steer-consumed-v1+json";
 
 // The two protolabs-a2a SDK extensions we consume ride the message/artifact METADATA
 // map keyed by their extension URI (protolabs-a2a 0.3.0) — they are no longer MIME-typed
@@ -595,6 +597,20 @@ export function roomReplyFromParts(parts?: RawPart[]): RoomReply | null {
     ok: d.ok !== false,
     stopped: typeof d.stopped === "string" ? d.stopped : undefined,
   };
+}
+
+/** Decode the exact model-call boundary where queued operator input was consumed. */
+export function consumedSteersFromParts(parts?: RawPart[]): ConsumedSteer[] | null {
+  const d = dataByMime(parts, STEER_CONSUMED_MIME) as { items?: unknown } | null;
+  if (!d || !Array.isArray(d.items)) return null;
+  const items = d.items.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const row = item as { id?: unknown; text?: unknown };
+    return typeof row.id === "string" && row.id && typeof row.text === "string" && row.text
+      ? [{ id: row.id, text: row.text }]
+      : [];
+  });
+  return items.length ? items : null;
 }
 
 export function hitlFromParts(parts?: RawPart[]): HitlPayload | null {
@@ -728,6 +744,7 @@ export type TurnStreamHandlers = {
   /** One exchange of an `@<name>`-addressed turn. A chain (#3050) sends several — each
    *  is a participant speaking, so each becomes its own authored message. */
   onRoomReply?: (reply: RoomReply) => void;
+  onSteerConsumed?: (items: ConsumedSteer[]) => void;
   onCost?: (usage: TurnUsage) => void;
   onContext?: (ctx: ContextWindow) => void;
   onInputRequired?: (payload: HitlPayload) => void;
@@ -753,6 +770,10 @@ function replayTaskSnapshot(task: NonNullable<A2AFrame["result"]>, handlers: Tur
     if (reasoning) handlers.onReasoning?.(reasoning);
     const component = componentFromParts(msg.parts);
     if (component) handlers.onComponent?.(component);
+    // Do not replay steer-consumed markers from task history: snapshot artifacts
+    // flatten all answer text into one accumulation, so the marker's position
+    // relative to that text cannot be reconstructed honestly. Turn-end queue
+    // reconciliation is the compatibility fallback for a client that missed it live.
   }
   if (accumulated) handlers.onText?.(accumulated, false);
   const state = (task.status?.state || "").toString();
@@ -799,6 +820,8 @@ function makeA2ADispatcher(sessionId: string, handlers: TurnStreamHandlers): (fr
       if (component) handlers.onComponent?.(component);
       const roomReply = roomReplyFromParts(parts);
       if (roomReply) handlers.onRoomReply?.(roomReply);
+      const consumedSteers = consumedSteersFromParts(parts);
+      if (consumedSteers) handlers.onSteerConsumed?.(consumedSteers);
       if (state === "input-required" || state === "TASK_STATE_INPUT_REQUIRED") {
         handlers.onInputRequired?.(hitlFromParts(parts) || { question: messageText });
       }

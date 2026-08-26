@@ -899,6 +899,9 @@ export type RoomReply = {
   stopped?: string;
 };
 
+/** Operator messages folded into a running turn at one model-call boundary (#2959). */
+export type ConsumedSteer = { id: string; text: string };
+
 export type ChatMessage = {
   id?: string;
   role: "user" | "assistant" | "system";

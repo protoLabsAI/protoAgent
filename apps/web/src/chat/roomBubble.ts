@@ -28,17 +28,18 @@ export function isEmptyPlaceholder(m: ChatMessage | undefined): boolean {
  *  `newId` is the id minted for the frozen lead bubble; kept a parameter so the caller
  *  owns id generation (and tests are deterministic).
  */
-export function insertRoomBubble(
+export function insertConversationBubbles(
   messages: ChatMessage[],
   assistantId: string,
-  bubble: ChatMessage,
+  bubbles: ChatMessage[],
   newId: string,
 ): ChatMessage[] {
+  if (!bubbles.length) return messages;
   const at = messages.findIndex((m) => m.id === assistantId);
-  if (at === -1) return [...messages, bubble];
+  if (at === -1) return [...messages, ...bubbles];
   const placeholder = messages[at];
   if (isEmptyPlaceholder(placeholder)) {
-    return [...messages.slice(0, at), bubble, ...messages.slice(at)];
+    return [...messages.slice(0, at), ...bubbles, ...messages.slice(at)];
   }
   const frozen: ChatMessage = { ...placeholder, id: newId, status: "done" };
   const reset: ChatMessage = {
@@ -48,6 +49,17 @@ export function insertRoomBubble(
     parts: [],
     createdAt: Date.now(),
     status: "streaming",
+    taskId: placeholder.taskId,
   };
-  return [...messages.slice(0, at), frozen, bubble, reset, ...messages.slice(at + 1)];
+  return [...messages.slice(0, at), frozen, ...bubbles, reset, ...messages.slice(at + 1)];
+}
+
+/** Backward-compatible single-bubble form used by addressed room replies. */
+export function insertRoomBubble(
+  messages: ChatMessage[],
+  assistantId: string,
+  bubble: ChatMessage,
+  newId: string,
+): ChatMessage[] {
+  return insertConversationBubbles(messages, assistantId, [bubble], newId);
 }

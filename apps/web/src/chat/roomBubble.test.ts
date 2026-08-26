@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { insertRoomBubble, isEmptyPlaceholder } from "./roomBubble";
+import { insertConversationBubbles, insertRoomBubble, isEmptyPlaceholder } from "./roomBubble";
 import type { ChatMessage } from "../lib/types";
 
 const ph = (over: Partial<ChatMessage> = {}): ChatMessage => ({
@@ -61,5 +61,42 @@ describe("isEmptyPlaceholder", () => {
     expect(isEmptyPlaceholder(ph({ toolCalls: [{ id: "t" } as never] }))).toBe(false);
     expect(isEmptyPlaceholder(ph({ parts: [{ kind: "text" } as never] }))).toBe(false);
     expect(isEmptyPlaceholder(undefined)).toBe(true);
+  });
+});
+
+describe("insertConversationBubbles", () => {
+  it("inserts a FIFO batch of consumed user steers at one live boundary", () => {
+    const steers: ChatMessage[] = [
+      { id: "s1", role: "user", content: "first redirect", createdAt: 2, status: "done" },
+      { id: "s2", role: "user", content: "then this", createdAt: 3, status: "done" },
+    ];
+    const out = insertConversationBubbles([ph({ content: "work before" })], "A", steers, "F");
+
+    expect(out.map((message) => message.id)).toEqual(["F", "s1", "s2", "A"]);
+    expect(out.map((message) => message.role)).toEqual(["assistant", "user", "user", "assistant"]);
+    expect(out[0]).toMatchObject({ content: "work before", status: "done" });
+    expect(out[3]).toMatchObject({ content: "", status: "streaming" });
+  });
+
+  it("puts a pre-work steer before an empty placeholder without minting a frozen bubble", () => {
+    const steer: ChatMessage = { id: "s1", role: "user", content: "redirect", status: "done" };
+    const out = insertConversationBubbles([ph()], "A", [steer], "unused");
+    expect(out.map((message) => message.id)).toEqual(["s1", "A"]);
+  });
+
+  it("preserves the live task id on the reset placeholder for reload recovery", () => {
+    const steer: ChatMessage = { id: "s1", role: "user", content: "redirect", status: "done" };
+    const out = insertConversationBubbles(
+      [ph({ content: "work before", taskId: "task-123" })],
+      "A",
+      [steer],
+      "F",
+    );
+    expect(out[out.length - 1]).toMatchObject({ id: "A", status: "streaming", taskId: "task-123" });
+  });
+
+  it("is a no-op for an empty batch", () => {
+    const input = [ph({ content: "work" })];
+    expect(insertConversationBubbles(input, "A", [], "F")).toBe(input);
   });
 });
