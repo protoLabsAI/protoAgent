@@ -4,7 +4,7 @@ ADR 0075 D1. This is the installable front door (``console_scripts`` →
 ``protoagent``) that replaces the boring ``python -m server <sub>`` invocation:
 one discoverable command tree with ``--help``, covering install/manage
 (``plugin`` / ``workspace`` / ``fleet`` / ``skills`` / ``config``) and lifecycle
-(``up`` / ``down`` / ``status`` / ``serve`` / ``setup``).
+(``up`` / ``down`` / ``status`` / ``serve`` / ``setup`` / ``reset``).
 
 Design: ``dispatch()`` is the *single* subcommand router, shared by BOTH
 entrypoints — the ``protoagent`` script (:func:`main`) and ``python -m server``
@@ -39,6 +39,7 @@ _FORWARD: dict[str, tuple[str, str]] = {
     "fleet": ("graph.fleet.cli", "run_fleet_cli"),
     "config": ("graph.config_explain", "run_config_cli"),
     "model": ("graph.model_cli", "run_model_cli"),
+    "reset": ("ops.reset", "run_reset_cli"),
     "runtime": ("runtime.cli", "run_runtime_cli"),
     # `hermes` = sugar for `runtime use hermes` — the one-command preset for Hermes users.
     "hermes": ("runtime.cli", "run_hermes_cli"),
@@ -61,6 +62,7 @@ _FORWARD_HELP = {
     "fleet": "Start / stop / list fleet MEMBER agents as background processes (ADR 0042)",
     "config": "Explain / get / set this instance's config (ADR 0047)",
     "model": "Point at a local / OpenAI-compatible LLM — Ollama, LM Studio, llama.cpp, vLLM (ADR 0075)",
+    "reset": "Factory-reset this instance, or the whole machine box for handoff",
     "runtime": "Select the agent runtime — native (LangGraph) or an ACP agent (ADR 0033)",
     "hermes": "(DEPRECATED, #2633) One-command Hermes preset — use ACP delegates instead",
     "operations": "List the operations on the ops layer — name, read/write, summary (ADR 0075)",
