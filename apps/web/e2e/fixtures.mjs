@@ -521,6 +521,21 @@ export const SETTINGS_SCHEMA = [
     ],
   },
   {
+    // Box ▸ Telemetry's contextual controls (#3032). Keep the scopes honest: the
+    // box-shared telemetry/prompt policy and per-agent fleet export must never share
+    // one QuickSetting write.
+    section: "Telemetry",
+    category: "Box",
+    fields: [
+      { key: "telemetry.fleet_trace_export", label: "Fleet trace export", type: "bool", section: "Telemetry", restart: true, description: "", options: [], value: false, default: false, scope: "agent", source: "agent" },
+      { key: "telemetry.enabled", label: "Store telemetry locally", type: "bool", section: "Telemetry", restart: true, description: "", options: [], value: true, default: true, scope: "host", source: "host" },
+      { key: "telemetry.retention_days", label: "Telemetry retention (days)", type: "number", section: "Telemetry", restart: true, description: "", options: [], value: 90, default: 90, minimum: 0, scope: "host", source: "host" },
+      { key: "prompts.capture", label: "Capture system prompts", type: "bool", section: "Telemetry", restart: true, description: "", options: [], value: true, default: true, scope: "host", source: "host" },
+      { key: "prompts.retention_days", label: "Prompt retention (days)", type: "number", section: "Telemetry", restart: true, description: "", options: [], value: 30, default: 30, minimum: 0, scope: "host", source: "host" },
+      { key: "prompts.max_calls", label: "Prompt retention (calls)", type: "number", section: "Telemetry", restart: true, description: "", options: [], value: 5000, default: 5000, minimum: 0, scope: "host", source: "host" },
+    ],
+  },
+  {
     // Langfuse tracing (#3017) — its own "Observability" category / sidenav section, in the
     // AGENT group. Agent-scoped on purpose: these are per-agent credentials, and the Box group
     // (where the telemetry rollup lives) is host-console-only, so a fleet member could never

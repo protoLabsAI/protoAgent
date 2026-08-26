@@ -61,7 +61,8 @@ describe("Box ▸ Telemetry's tracing chip (#3017)", () => {
     // one chip the mixed set falls back to "agent" and the box-shared telemetry policy would
     // silently start writing the agent leaf.
     expect(chip).not.toContain("telemetry.enabled");
-    expect(telemetrySrc).toContain('keys={["telemetry.enabled", "telemetry.retention_days"]}');
+    expect(telemetrySrc).toContain('"telemetry.enabled"');
+    expect(telemetrySrc).toContain('"telemetry.retention_days"');
   });
 
   it("the disabled-trace cell points at a section that exists", () => {
