@@ -211,16 +211,26 @@ async def _offer_start_and_retry(
     if not ready:
         return f"Error: could not start {member['name']}: {detail}"
     log.info("[delegates] started %s on demand; retrying the delegation", member["name"])
-    return await _dispatch_into_room(
-        registry,
-        target,
-        query,
-        state,
-        tool_call_id=tool_call_id,
-        item_id=item_id,
-        resume_task_id=resume_task_id,
-        timeout=timeout,
-    )
+    # This runs INSIDE the caller's `except DelegateError`, so a failure here escapes
+    # that handler entirely and reaches the model as an unhandled exception instead of
+    # a tool-error string. A member that came up but still cannot serve the delegation
+    # is an ordinary failure and has to read like one.
+    try:
+        return await _dispatch_into_room(
+            registry,
+            target,
+            query,
+            state,
+            tool_call_id=tool_call_id,
+            item_id=item_id,
+            resume_task_id=resume_task_id,
+            timeout=timeout,
+        )
+    except DelegateError as retry_exc:
+        return f"Error: {retry_exc} (after starting {member['name']})"
+    except Exception as retry_exc:  # noqa: BLE001 — same contract as the caller's guard
+        log.warning("[delegates] retry after starting %s failed: %s", member["name"], retry_exc)
+        return f"Error: delegate {target!r} failed after starting it: {type(retry_exc).__name__}: {retry_exc}"
 
 
 def _can_ask_operator() -> bool:

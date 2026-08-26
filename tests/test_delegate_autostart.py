@@ -163,3 +163,49 @@ def test_a_boot_failure_surfaces_the_agent_log(monkeypatch):
     ready, detail = A.start_and_wait({"name": "pe", "id": "pe", "port": 7875})
     assert ready is False
     assert "agent.log" in detail
+
+
+# ── the retry runs inside an except block, so it must not raise ───────────────
+
+
+@pytest.mark.asyncio
+async def test_a_failed_retry_returns_a_tool_error_not_an_exception(monkeypatch):
+    """`_offer_start_and_retry` is called FROM `except DelegateError`.
+
+    A raise there escapes that handler entirely and reaches the model as an unhandled
+    exception instead of a tool-error string. A member that came up but still cannot
+    serve the delegation is an ordinary failure and has to read like one.
+    """
+    import types
+
+    from plugins.delegates import _offer_start_and_retry
+    from plugins.delegates.adapters import KIND_UNREACHABLE, DelegateError
+
+    monkeypatch.setattr(
+        "graph.fleet.supervisor",
+        types.SimpleNamespace(start=lambda _i: {"ok": True}, _port_listening=lambda p: True),
+        raising=False,
+    )
+    monkeypatch.setattr(A, "startable_member", lambda url: {"name": "pe", "id": "pe", "port": 7875})
+    monkeypatch.setattr(A, "granted", lambda s: True)  # already approved this chat
+
+    async def _boom(*a, **kw):
+        raise DelegateError("still unreachable", kind=KIND_UNREACHABLE)
+
+    monkeypatch.setattr("plugins.delegates._dispatch_into_room", _boom)
+
+    registry = types.SimpleNamespace(get=lambda n: types.SimpleNamespace(url="http://127.0.0.1:7875/a2a"))
+    out = await _offer_start_and_retry(
+        registry,
+        "pe",
+        "q",
+        {"messages": []},
+        DelegateError("unreachable", kind=KIND_UNREACHABLE),
+        tool_call_id="c1",
+        item_id=None,
+        resume_task_id=None,
+        timeout=None,
+    )
+    assert isinstance(out, str)
+    assert out.startswith("Error:")
+    assert "after starting pe" in out

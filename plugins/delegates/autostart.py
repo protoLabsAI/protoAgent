@@ -72,11 +72,13 @@ def startable_member(url: str) -> dict | None:
         log.debug("[delegates] fleet status unavailable; not offering a start", exc_info=True)
         return None
     for entry in entries:
-        if entry.get("port") == parsed.port and not entry.get("running"):
-            # The host entry has no workspace to spawn; only members do.
-            if not entry.get("id"):
-                return None
-            return {"name": entry.get("name") or entry["id"], "id": entry["id"], "port": parsed.port}
+        if entry.get("port") != parsed.port or entry.get("running"):
+            continue
+        # The host entry has no workspace to spawn; only members do. Keep looking —
+        # bailing here let an id-less entry mask a real member sharing the port.
+        if not entry.get("id"):
+            continue
+        return {"name": entry.get("name") or entry["id"], "id": entry["id"], "port": parsed.port}
     return None
 
 

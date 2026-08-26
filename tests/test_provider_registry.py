@@ -433,3 +433,49 @@ def test_deleting_the_last_connection_survives_a_reload():
     remaining = [p.as_dict() for p in cfg.providers if p.id != "gateway"]
     reloaded = _cfg(providers=remaining, model={"provider": "openai", "api_base": "https://gw/v1", "api_key": "k"})
     assert reloaded.provider_ids() == []
+
+
+@pytest.mark.parametrize(
+    ("label", "value", "expected"),
+    [
+        # A registry is a LIST. Absent, null and malformed all mean "nothing was
+        # declared" and migrate; only an actual empty list is the operator saying "none".
+        # `from_dict` normalizes null values to {} before this runs, so an `is None`
+        # check could never see a bare `providers:` line.
+        ("absent", "__absent__", ["gateway"]),
+        ("null", None, ["gateway"]),
+        ("malformed mapping", {}, ["gateway"]),
+        ("explicit empty", [], []),
+    ],
+)
+def test_only_an_explicit_empty_list_means_no_connections(label, value, expected):
+    doc = {"model": {"provider": "openai", "api_base": "https://gw/v1", "api_key": "k"}}
+    if value != "__absent__":
+        doc["providers"] = value
+    assert _cfg(**doc).provider_ids() == expected
+
+
+def test_an_id_less_roster_entry_does_not_mask_a_real_member(monkeypatch):
+    """The host entry has no workspace; a member sharing its port still does.
+
+    Bailing on the first id-less port match hid the member behind it.
+    """
+    import types
+
+    from plugins.delegates import autostart as A
+
+    monkeypatch.setattr(
+        "graph.fleet.supervisor",
+        types.SimpleNamespace(
+            status=lambda: [
+                {"name": "host", "id": "", "port": 7875, "running": False},
+                {"name": "protoEngineer", "id": "pe-ba4c", "port": 7875, "running": False},
+            ]
+        ),
+        raising=False,
+    )
+    assert A.startable_member("http://127.0.0.1:7875/a2a") == {
+        "name": "protoEngineer",
+        "id": "pe-ba4c",
+        "port": 7875,
+    }
