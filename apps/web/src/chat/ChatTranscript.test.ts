@@ -3,6 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ChatMessage } from "../lib/types";
+import { CANCELLED_DELEGATION_PREFIX } from "./dismissedToolCalls";
 
 const messageRender = vi.hoisted(() => vi.fn());
 
@@ -57,6 +58,50 @@ function Harness() {
   );
 }
 
+const dismissedMessage: ChatMessage = {
+  id: "settled-with-dismissal",
+  role: "assistant",
+  content: "Settled answer",
+  status: "done",
+  toolCalls: [
+    {
+      id: "cancelled-task",
+      name: "task",
+      input: "{}",
+      output: `${CANCELLED_DELEGATION_PREFIX}]`,
+      status: "error",
+    },
+  ],
+};
+const dismissedTask = new Set(["cancelled-task"]);
+
+function StreamingHarness() {
+  const [content, setContent] = useState("first frame");
+  const streamingMessage: ChatMessage = {
+    id: "live-row",
+    role: "assistant",
+    content,
+    status: "streaming",
+  };
+  return createElement(
+    Fragment,
+    null,
+    createElement("button", { type: "button", onClick: () => setContent("next frame") }, "stream"),
+    createElement(ChatTranscript, {
+      sessionId: "streaming-session",
+      messages: [dismissedMessage, streamingMessage],
+      dismissedToolCalls: dismissedTask,
+      actions,
+      steerQueue,
+      serverTurnLabel: null,
+      status: "streaming",
+      onCancelDelegation: noop,
+      onDismissToolCall: noop,
+      onCancelSteer: noop,
+    }),
+  );
+}
+
 describe("ChatTranscript render isolation", () => {
   let host: HTMLDivElement;
   let root: Root;
@@ -84,5 +129,18 @@ describe("ChatTranscript render isolation", () => {
 
     expect(host.querySelector('[data-testid="draft"]')?.textContent).toBe("a");
     expect(messageRender).toHaveBeenCalledTimes(150);
+  });
+
+  it("keeps a filtered settled row stable when another row streams", async () => {
+    await act(async () => root.render(createElement(StreamingHarness)));
+    expect(messageRender.mock.calls.map(([id]) => id)).toEqual(["settled-with-dismissal", "live-row"]);
+
+    await act(async () => host.querySelector<HTMLButtonElement>("button")!.click());
+
+    expect(messageRender.mock.calls.map(([id]) => id)).toEqual([
+      "settled-with-dismissal",
+      "live-row",
+      "live-row",
+    ]);
   });
 });

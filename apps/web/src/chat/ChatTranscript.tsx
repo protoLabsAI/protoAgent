@@ -2,7 +2,7 @@ import { Empty } from "@protolabsai/ui/primitives";
 import { Spinner } from "@protolabsai/ui/data";
 import { Conversation, Message } from "@protolabsai/ui/ai";
 import { TerminalSquare } from "lucide-react";
-import { memo } from "react";
+import { memo, useMemo } from "react";
 
 import type { ChatMessage } from "../lib/types";
 import type { SessionStatus } from "./chat-store";
@@ -21,6 +21,38 @@ type ChatTranscriptProps = {
   onDismissToolCall: (id: string) => void;
   onCancelSteer: (id: string) => void;
 };
+
+type TranscriptMessageRowProps = {
+  message: ChatMessage;
+  dismissedToolCalls: Set<string>;
+  actions: ChatMessageActions;
+  onCancelDelegation: (id: string) => void;
+  onDismissToolCall: (id: string) => void;
+};
+
+const TranscriptMessageRow = memo(function TranscriptMessageRow({
+  message,
+  dismissedToolCalls,
+  actions,
+  onCancelDelegation,
+  onDismissToolCall,
+}: TranscriptMessageRowProps) {
+  // Filtering a dismissed card creates a derived message object. Retain that identity until
+  // either its source row or the dismissal set changes, so another row's stream cannot make
+  // this settled row expensive again.
+  const visibleMessage = useMemo(
+    () => hideDismissedToolCalls(message, dismissedToolCalls),
+    [dismissedToolCalls, message],
+  );
+  return (
+    <ChatMessageView
+      message={visibleMessage}
+      onCancelDelegation={onCancelDelegation}
+      onDismissToolCall={onDismissToolCall}
+      actions={actions}
+    />
+  );
+});
 
 // Keep the transcript outside the controlled composer's render path. In long chats the
 // message tree contains expensive markdown, reasoning, and tool cards; a draft keystroke
@@ -43,11 +75,12 @@ export const ChatTranscript = memo(function ChatTranscript({
         <Empty icon={<TerminalSquare />} description="No messages in this session." />
       ) : (
         messages.map((message) => (
-          <ChatMessageView
+          <TranscriptMessageRow
             key={message.id || `${message.role}-${message.createdAt}`}
             // Dismissed cards are stripped only for this client's view; the store and
             // backend history retain the complete turn.
-            message={hideDismissedToolCalls(message, dismissedToolCalls)}
+            message={message}
+            dismissedToolCalls={dismissedToolCalls}
             onCancelDelegation={onCancelDelegation}
             onDismissToolCall={onDismissToolCall}
             actions={actions}
