@@ -218,7 +218,9 @@ def _tracked_pid(paths: InstancePaths) -> int | None:
         try:
             other_root = record.get("instance_root")
             if other_root and str(Path(other_root).resolve()) == mine:
-                return int(record["pid"])
+                candidate = int(record["pid"])
+                if pid_alive(candidate):
+                    return candidate
         except (KeyError, OSError, TypeError, ValueError):
             continue
     return None
