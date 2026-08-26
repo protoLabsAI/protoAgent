@@ -41,19 +41,25 @@ export function useOauthLifecycle(opts?: { onSignedIn?: () => void; onDisconnect
   const [loginCode, setLoginCode] = useState("");
   const [loginBusy, setLoginBusy] = useState(false);
   const [loginError, setLoginError] = useState("");
+  const [statusBusy, setStatusBusy] = useState(false);
+  const [statusError, setStatusError] = useState("");
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The callbacks live in a ref so the poll timer never closes over a stale render.
   const cbRef = useRef(opts);
   cbRef.current = opts;
 
   const refreshStatus = useCallback(async () => {
+    setStatusBusy(true);
+    setStatusError("");
     try {
       const r = await api.oauthStatus();
       const map: Record<string, OauthProviderStatus> = {};
       for (const p of r.providers) map[p.provider] = { signed_in: p.signed_in, detail: p.detail, hint: p.hint };
       setStatus(map);
-    } catch {
-      /* status is advisory — a failed probe just leaves the line blank */
+    } catch (exc) {
+      setStatusError(`Could not check sign-in status: ${errMsg(exc)}`);
+    } finally {
+      setStatusBusy(false);
     }
   }, []);
 
@@ -178,6 +184,8 @@ export function useOauthLifecycle(opts?: { onSignedIn?: () => void; onDisconnect
     setLoginCode,
     loginBusy,
     loginError,
+    statusBusy,
+    statusError,
     startSignIn,
     completeSignIn,
     cancelSignIn,
@@ -204,8 +212,9 @@ export function OAuthAccountCard({ provider }: { provider: string }) {
       {st?.signed_in ? (
         <Callout tone="success">
           <ShieldCheck size={15} /> Signed in — {st.detail || "credentials found"}.{" "}
-          <Button type="button" onClick={() => void refreshStatus()}>
-            Re-check
+          <Button type="button" onClick={() => void refreshStatus()} disabled={lc.statusBusy}>
+            {lc.statusBusy ? <Spinner size={15} /> : null}
+            {lc.statusBusy ? "Checking…" : "Re-check"}
           </Button>{" "}
           <Button
             type="button"
@@ -221,7 +230,7 @@ export function OAuthAccountCard({ provider }: { provider: string }) {
           {lc.login.mode === "device" ? (
             <>
               <KeyRound size={15} /> In the tab that opened, enter code <code>{lc.login.userCode}</code> at{" "}
-              <a href={lc.login.verifyUri} target="_blank" rel="noreferrer">
+              <a href={lc.login.verifyUri} target="_blank" rel="noopener noreferrer">
                 {lc.login.verifyUri}
               </a>
               . <Spinner size={13} /> Waiting for approval…{" "}
@@ -255,11 +264,13 @@ export function OAuthAccountCard({ provider }: { provider: string }) {
             {lc.loginBusy ? <Spinner size={15} /> : <ShieldCheck size={15} />}
             Sign in with {shortLabel}
           </Button>{" "}
-          <Button type="button" onClick={() => void refreshStatus()}>
-            Re-check
+          <Button type="button" onClick={() => void refreshStatus()} disabled={lc.statusBusy}>
+            {lc.statusBusy ? <Spinner size={15} /> : null}
+            {lc.statusBusy ? "Checking…" : "Re-check"}
           </Button>
         </Callout>
       )}
+      {lc.statusError ? <Alert status="error">{lc.statusError}</Alert> : null}
       {lc.loginError ? <Alert status="error">{lc.loginError}</Alert> : null}
     </div>
   );

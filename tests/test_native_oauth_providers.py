@@ -702,6 +702,21 @@ def test_status_publishes_expiry_and_durability_for_our_own_store(monkeypatch, t
     assert s.durability == discovery.DURABILITY_MANAGED
 
 
+def test_status_marks_an_expired_unrefreshable_owned_claude_login_signed_out(monkeypatch, tmp_path):
+    from graph.providers import discovery
+
+    store = tmp_path / "anthropic-oauth.json"
+    store.write_text(json.dumps({"access_token": "expired", "refresh_token": "", "expires_at": 1.0}))
+    monkeypatch.setattr(oauth_mod, "_anthropic_store_path", lambda paths=None: store)
+
+    status = discovery.oauth_status("anthropic-oauth")
+
+    assert status.signed_in is False
+    assert status.source == "instance_store"
+    assert "expired" in status.detail.lower()
+    assert "Sign in again" in status.hint
+
+
 def test_status_marks_a_borrowed_cli_login_and_converts_its_millis(monkeypatch, tmp_path):
     """The CLI's document is OURS to read, not to refresh — that is what makes it
     borrowed, and it stores expiry in milliseconds."""
@@ -722,6 +737,62 @@ def test_status_marks_a_borrowed_cli_login_and_converts_its_millis(monkeypatch, 
     assert s.durability == discovery.DURABILITY_BORROWED
     assert s.refreshable is False
     assert s.expires_at == pytest.approx(exp_ms / 1000.0)
+
+
+def test_status_refuses_to_call_an_expired_borrowed_claude_login_signed_in(monkeypatch, tmp_path):
+    """A Keychain item can outlive its access token. Green "signed in" made model
+    discovery silently fall back and every real turn 401 until the operator guessed why."""
+    from graph.providers import discovery
+
+    monkeypatch.setattr(oauth_mod, "_anthropic_store_path", lambda paths=None: tmp_path / "absent.json")
+    monkeypatch.setattr(oauth_mod, "_read_claude_credentials_file", lambda: None)
+    monkeypatch.setattr(
+        oauth_mod,
+        "_read_claude_keychain",
+        lambda: {
+            "claudeAiOauth": {
+                "accessToken": "expired",
+                "subscriptionType": "max",
+                "expiresAt": (time.time() - 60) * 1000,
+            }
+        },
+    )
+
+    status = discovery.oauth_status("anthropic-oauth")
+
+    assert status.signed_in is False
+    assert status.source == "keychain"
+    assert status.durability == discovery.DURABILITY_BORROWED
+    assert "expired" in status.detail.lower()
+    assert "Sign in" in status.hint
+
+
+def test_status_does_not_let_an_expired_credentials_file_mask_a_valid_keychain_login(monkeypatch, tmp_path):
+    from graph.providers import discovery
+
+    monkeypatch.setattr(oauth_mod, "_anthropic_store_path", lambda paths=None: tmp_path / "absent.json")
+    monkeypatch.setattr(
+        oauth_mod,
+        "_read_claude_credentials_file",
+        lambda: {"claudeAiOauth": {"accessToken": "expired", "expiresAt": 1}},
+    )
+    monkeypatch.setattr(
+        oauth_mod,
+        "_read_claude_keychain",
+        lambda: {
+            "claudeAiOauth": {
+                "accessToken": "current",
+                "subscriptionType": "max",
+                "expiresAt": (time.time() + 3600) * 1000,
+            }
+        },
+    )
+
+    status = discovery.oauth_status("anthropic-oauth")
+
+    assert status.signed_in is True
+    assert status.source == "keychain"
+    assert status.detail == "max plan"
 
 
 def test_status_calls_an_env_token_static_with_no_expiry(monkeypatch):
@@ -792,14 +863,59 @@ def test_list_provider_models_rejects_unknown():
         discovery.list_provider_models("openai", LangGraphConfig())
 
 
-def test_anthropic_models_fall_back_without_creds(monkeypatch, tmp_path):
+def test_anthropic_models_do_not_invent_a_catalog_without_creds(monkeypatch, tmp_path):
     from graph.providers import discovery
 
     monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
     monkeypatch.setattr(oauth_mod, "_CLAUDE_CREDS_FILE", tmp_path / "none.json")
     models, error = discovery.list_provider_models("anthropic-oauth", LangGraphConfig())
-    assert models  # curated fallback, never empty
+    assert models == []
     assert error  # explains why the live probe was skipped
+
+
+def test_anthropic_models_are_the_live_api_response(monkeypatch):
+    from graph.providers import discovery
+
+    monkeypatch.setattr(
+        oauth_mod,
+        "resolve_anthropic_oauth",
+        lambda: oauth_mod.AnthropicOAuthCreds("live-token", "instance_store"),
+    )
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": [{"id": "claude-live-a"}, {"id": "claude-live-b"}]}
+
+    monkeypatch.setattr(discovery.httpx, "get", lambda *args, **kwargs: _Resp())
+
+    models, error = discovery.list_provider_models("anthropic-oauth", LangGraphConfig())
+
+    assert models == ["claude-live-a", "claude-live-b"]
+    assert error == ""
+
+
+def test_anthropic_model_probe_failure_is_not_replaced_with_static_ids(monkeypatch):
+    from graph.providers import discovery
+
+    monkeypatch.setattr(
+        oauth_mod,
+        "resolve_anthropic_oauth",
+        lambda: oauth_mod.AnthropicOAuthCreds("expired-token", "keychain"),
+    )
+
+    def _failed_probe(*args, **kwargs):
+        raise discovery.httpx.HTTPError("401 token expired")
+
+    monkeypatch.setattr(discovery.httpx, "get", _failed_probe)
+
+    models, error = discovery.list_provider_models("anthropic-oauth", LangGraphConfig())
+
+    assert models == []
+    assert "401 token expired" in error
+    assert "exact model ID" in error
 
 
 class _CaptureStreamLLM:
@@ -986,6 +1102,17 @@ def test_anthropic_store_refreshes_when_expiring(monkeypatch, tmp_path):
     assert creds.access_token == "cc-FRESH"
     # refresh_token preserved (response omitted it)
     assert json.loads(store.read_text())["refresh_token"] == "cc-R"
+
+
+def test_anthropic_store_refuses_an_expired_token_without_refresh_token(monkeypatch, tmp_path):
+    from graph.providers import oauth as oauth_mod2
+
+    store = tmp_path / "anthropic-oauth.json"
+    store.write_text(json.dumps({"access_token": "cc-OLD", "refresh_token": "", "expires_at": 1.0}))
+    monkeypatch.setattr(oauth_mod2, "_anthropic_store_path", lambda paths=None: store)
+
+    with pytest.raises(OAuthCredentialError, match="has expired and cannot be refreshed"):
+        oauth_mod2.resolve_anthropic_oauth()
 
 
 # ── Credential lifecycle: serialized refresh (#2441) + disconnect (#2440) ────────
@@ -1277,6 +1404,26 @@ def test_anthropic_oauth_reads_macos_keychain(monkeypatch, tmp_path):
     creds = oauth_mod.resolve_anthropic_oauth()
     assert creds.access_token == "sk-ant-oat-kc"
     assert creds.source == "keychain"
+
+
+def test_anthropic_oauth_rejects_an_expired_borrowed_keychain_token(monkeypatch, tmp_path):
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.setattr(oauth_mod, "_CLAUDE_CREDS_FILE", tmp_path / "absent.json")
+    monkeypatch.setattr(oauth_mod, "_anthropic_store_path", lambda paths=None: tmp_path / "no-store.json")
+    monkeypatch.setattr(oauth_mod, "instance_paths", lambda: types.SimpleNamespace(config_dir=tmp_path))
+    monkeypatch.setattr(
+        oauth_mod,
+        "_read_claude_keychain",
+        lambda: {
+            "claudeAiOauth": {
+                "accessToken": "sk-ant-oat-expired",
+                "expiresAt": (time.time() - 60) * 1000,
+            }
+        },
+    )
+
+    with pytest.raises(OAuthCredentialError, match="borrowed OAuth token has expired"):
+        oauth_mod.resolve_anthropic_oauth()
 
 
 def test_keychain_reader_parses_security_output(monkeypatch):

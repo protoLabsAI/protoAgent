@@ -264,6 +264,8 @@ export function SetupWizard({
     setLoginCode,
     loginBusy,
     loginError,
+    statusBusy: oauthStatusBusy,
+    statusError: oauthStatusError,
     startSignIn,
     completeSignIn,
     cancelSignIn,
@@ -905,8 +907,9 @@ export function SetupWizard({
                   {oauthState?.signed_in ? (
                     <Callout tone="success">
                       <ShieldCheck size={15} /> Signed in — {oauthState.detail || "credentials found"}.{" "}
-                      <Button type="button" onClick={() => void refreshOauthStatus()}>
-                        Re-check
+                      <Button type="button" onClick={() => void refreshOauthStatus()} disabled={oauthStatusBusy}>
+                        {oauthStatusBusy ? <Spinner size={15} /> : null}
+                        {oauthStatusBusy ? "Checking…" : "Re-check"}
                       </Button>{" "}
                       <Button
                         type="button"
@@ -923,7 +926,7 @@ export function SetupWizard({
                         <>
                           <KeyRound size={15} /> In the tab that opened, enter code{" "}
                           <code>{login.userCode}</code> at{" "}
-                          <a href={login.verifyUri} target="_blank" rel="noreferrer">
+                          <a href={login.verifyUri} target="_blank" rel="noopener noreferrer">
                             {login.verifyUri}
                           </a>
                           . <Spinner size={13} /> Waiting for approval…{" "}
@@ -965,11 +968,13 @@ export function SetupWizard({
                         {loginBusy ? <Spinner size={15} /> : <ShieldCheck size={15} />}
                         Sign in with {OAUTH_LABEL[state.provider]?.replace(" subscription", "")}
                       </Button>{" "}
-                      <Button type="button" onClick={() => void refreshOauthStatus()}>
-                        Re-check
+                      <Button type="button" onClick={() => void refreshOauthStatus()} disabled={oauthStatusBusy}>
+                        {oauthStatusBusy ? <Spinner size={15} /> : null}
+                        {oauthStatusBusy ? "Checking…" : "Re-check"}
                       </Button>
                     </Callout>
                   )}
+                  {oauthStatusError ? <Alert status="error">{oauthStatusError}</Alert> : null}
                   {loginError ? <Alert status="error">{loginError}</Alert> : null}
                   <div className="setup-grid model-row">
                     <FormField label="Model">
