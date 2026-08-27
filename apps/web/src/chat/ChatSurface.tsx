@@ -55,7 +55,7 @@ import { loadDraft, loadScroll, loadSteers, saveDraft, saveScroll, saveSteers } 
 import { createStreamWatchdog } from "./streamWatchdog";
 import { ADD_SELECTOR, isIncognitoAddClick, trackShiftHeld } from "./shiftCue";
 import { composerPlaceholder } from "./composerPlaceholder";
-import { sessionsToClose } from "./bulkClose";
+import { requiresGoalCloseConfirmation, sessionsToClose } from "./bulkClose";
 import { placeConsumedSteers } from "./steerPlacement";
 import { canClearSession, retireChatSession } from "./sessionRetirement";
 
@@ -298,6 +298,10 @@ export function ChatSurface({
     if (!session) return;
     e.preventDefault();
     e.stopPropagation(); // beat the DS close button's onClick → no confirm dialog
+    if (requiresGoalCloseConfirmation(goalSessions, session.id)) {
+      setPendingClose(session.id);
+      return;
+    }
     void closeSession(session.id, false); // false = no knowledge harvest
   }
 

@@ -5,6 +5,16 @@
 
 export type BulkCloseMode = "others" | "left" | "right";
 
+/** Goal-backed tabs must use the Stop-vs-Detach confirmation path. In
+ * particular, Shift-delete may skip the ordinary delete confirmation but must
+ * never skip this ownership decision and tombstone a still-running goal. */
+export function requiresGoalCloseConfirmation<T extends { session_id: string; status: string }>(
+  goals: readonly T[],
+  sessionId: string,
+): boolean {
+  return goals.some((goal) => goal.session_id === sessionId && goal.status === "active");
+}
+
 /**
  * The session ids a bulk-close action targets, given the ordered session list and the anchor
  * (right-clicked) tab. Index-based against `sessions` order:

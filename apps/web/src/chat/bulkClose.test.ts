@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { sessionsToClose } from "./bulkClose";
+import { requiresGoalCloseConfirmation, sessionsToClose } from "./bulkClose";
 
 const sessions = [{ id: "a" }, { id: "b" }, { id: "c" }, { id: "d" }, { id: "e" }];
 
@@ -42,5 +42,21 @@ describe("sessionsToClose", () => {
     expect(sessionsToClose(one, "only", "others")).toEqual([]);
     expect(sessionsToClose(one, "only", "left")).toEqual([]);
     expect(sessionsToClose(one, "only", "right")).toEqual([]);
+  });
+});
+
+describe("requiresGoalCloseConfirmation", () => {
+  const goals = [
+    { session_id: "goal-live", status: "active" },
+    { session_id: "goal-done", status: "completed" },
+  ];
+
+  it("routes an active goal through Stop-vs-Detach even for a direct close gesture", () => {
+    expect(requiresGoalCloseConfirmation(goals, "goal-live")).toBe(true);
+  });
+
+  it("keeps direct retirement for non-goal and inactive-goal chats", () => {
+    expect(requiresGoalCloseConfirmation(goals, "ordinary-chat")).toBe(false);
+    expect(requiresGoalCloseConfirmation(goals, "goal-done")).toBe(false);
   });
 });
