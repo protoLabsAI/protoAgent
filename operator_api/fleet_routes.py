@@ -162,9 +162,11 @@ def register_fleet_routes(app) -> None:
         ``soul`` is the archetype's base SOUL.md (persona), written
         into the workspace so a bundle agent gets its persona too. A blank ``bundle`` is the
         built-in **Basic** archetype. By default a new agent is a **blank agent with the host's
-        model config + secrets popped over** (the gateway only — NOT the host's plugins/skills),
-        so it boots ready-to-chat. Set ``inherit_config: false`` for a fully blank agent you'll
-        set up.
+        model connections + credentials popped over** (provider registry, gateway secrets,
+        and the box-shared OAuth login — NOT the host's plugins/skills), so it boots
+        ready-to-chat. A legacy instance-local OAuth login is transferred into the one
+        machine-shared box store, never copied. Set ``inherit_config: false`` for a fully
+        blank agent you'll set up.
 
         ``inputs`` are operator-supplied values for the bundle's MCP ``${input}`` placeholders
         (#2041) — an entry seeds ENABLED when its required inputs are filled here rather than
@@ -203,8 +205,8 @@ def register_fleet_routes(app) -> None:
         port = body.get("port")
         start = bool(body.get("start", True))
         shared = bool(body.get("shared_skills", False))
-        # Carry the host's MODEL only (gateway) so a new agent works immediately without inheriting
-        # its plugins — only if the host is actually configured (fresh host → plain blank template).
+        # Carry the host's model CONNECTIONS so a new agent works immediately without
+        # inheriting its plugins — only when the host is configured.
         inherit_model = None
         if bool(body.get("inherit_config", True)):
             from graph.config_io import config_yaml_path
