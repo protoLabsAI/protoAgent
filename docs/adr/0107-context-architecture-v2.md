@@ -30,7 +30,9 @@ Consequences:
 ### Fault 2: memory kind conflated with storage domain
 
 The knowledge store's `domain` column (`"hot"`, `"general"`, `"finding"`,
-`"preferences"`, `"context"`) conflates three orthogonal concerns:
+`"conversation"`, `"fact"`, plus freeform values like `"loop-lessons"` from
+SDK callers and `doc.stem` from snapshot imports) conflates three orthogonal
+concerns:
 
 - **Kind** — what the memory IS (a fact, a preference, a finding, a session
   digest, an operator instruction).
@@ -145,10 +147,25 @@ Every memory row carries these independently-valued attributes:
 
 **Migration.** A new `memory_kind` column and `delivery_policy` column are
 added to the `chunks` table (nullable, `ALTER TABLE ADD COLUMN`). Existing
-rows are backfilled: `domain="hot"` maps to `delivery_policy="always"`;
-`domain="finding"` maps to `kind="finding"`; `domain="general"` maps to
-`kind="fact"`. The `domain` column is retained for backward compatibility
-(reads from it continue to work) but new writes populate the new columns.
+rows are backfilled from the `domain` column:
+
+| `domain` | `memory_kind` | `delivery_policy` |
+|----------|---------------|-------------------|
+| `"hot"` | `NULL` (varies) | `"always"` |
+| `"general"` | `"fact"` | `NULL` (→ `"retrieved"`) |
+| `"finding"` | `"finding"` | `NULL` (→ `"retrieved"`) |
+| `"conversation"` | `"digest"` | `NULL` (→ `"retrieved"`) |
+| `"fact"` | `"fact"` | `NULL` (→ `"retrieved"`) |
+| `"attachment"` | `"archive"` | `NULL` (→ `"retrieved"`) |
+| Any other value | `NULL` | `NULL` (→ `"retrieved"`) |
+
+The `domain` column is a freeform `TEXT` — callers (the SDK, snapshot
+imports via `doc.stem`, operator API) may write arbitrary values. Unmapped
+domains get `memory_kind=NULL`, `delivery_policy=NULL`, which the delivery
+layer treats as `"retrieved"` (included only on RAG match). The backfill
+handles this via a `CASE/ELSE NULL` clause rather than failing on unknown
+values. The `domain` column is retained for backward compatibility (reads
+from it continue to work) but new writes populate the new columns.
 
 **Review state.** A `review_state` column (`confirmed`/`pending`/`rejected`,
 default `NULL` = `pending`) enables operator confirmation of agent-derived
