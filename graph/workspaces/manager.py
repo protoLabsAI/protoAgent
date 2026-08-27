@@ -1130,12 +1130,35 @@ def _overlay_model(cfg: Path, ws: Path, src: str) -> None:
     # can't be grafted into another document. The destination stays ruamel (comment-preserving).
     host = yaml.safe_load(read_text_utf8(src_cfg)) or {}
     new = load_yaml_doc(cfg)
+    inherited_secrets: dict[str, dict] = {}
     if isinstance(host, dict) and isinstance(new, dict):
         changed = False
-        for section in ("model", "providers"):
-            if host.get(section):
-                new[section] = host[section]
-                changed = True
+        model = host.get("model")
+        if isinstance(model, dict) and model:
+            model = dict(model)
+            inline_model_key = model.pop("api_key", "")
+            if inline_model_key:
+                inherited_secrets["model"] = {"api_key": inline_model_key}
+            new["model"] = model
+            changed = True
+        providers = host.get("providers")
+        if isinstance(providers, list) and providers:
+            sanitized: list = []
+            inline_provider_keys: dict[str, object] = {}
+            for entry in providers:
+                if not isinstance(entry, dict):
+                    sanitized.append(entry)
+                    continue
+                clean = dict(entry)
+                inline_key = clean.pop("api_key", "")
+                pid = str(clean.get("id", "") or "").strip().lower()
+                if pid and inline_key:
+                    inline_provider_keys[pid] = inline_key
+                sanitized.append(clean)
+            new["providers"] = sanitized
+            if inline_provider_keys:
+                inherited_secrets["providers"] = inline_provider_keys
+            changed = True
         if changed:
             save_yaml_doc(new, cfg)  # save_yaml_doc(doc, path) — doc first
     src_sec = (src_path if src_path.is_dir() else src_path.parent) / "secrets.yaml"
@@ -1144,9 +1167,13 @@ def _overlay_model(cfg: Path, ws: Path, src: str) -> None:
         # overlay also leaked plugin/delegate secrets despite the API's isolation promise.
         source_secrets = yaml.safe_load(read_text_utf8(src_sec)) or {}
         if isinstance(source_secrets, dict):
-            model_secrets = {k: source_secrets[k] for k in ("model", "providers") if source_secrets.get(k)}
-            if model_secrets:
-                save_secrets(model_secrets, cfg.parent / "secrets.yaml")
+            # The explicit secrets overlay wins over stale inline legacy keys.
+            for section in ("model", "providers"):
+                values = source_secrets.get(section)
+                if isinstance(values, dict) and values:
+                    inherited_secrets.setdefault(section, {}).update(values)
+    if inherited_secrets:
+        save_secrets(inherited_secrets, cfg.parent / "secrets.yaml")
 
 def _stamp_identity(cfg: Path, name: str, shared_skills: bool, *, instance_id: str | None = None) -> None:
     """Force identity.name (display) + instance.id (the opaque data-scope key) on a

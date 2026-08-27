@@ -126,6 +126,21 @@ def _file_lock(path: Path) -> "Iterator[None]":
             fh.close()
 
 
+@contextmanager
+def _oauth_scope_lock(provider: str) -> "Iterator[None]":
+    """Stable box-level mutation lock acquired before credential path resolution.
+
+    A store may move from an instance override to the box during fleet creation, so a
+    lock keyed by the resolved store path is not sufficient: disconnect could resolve
+    the old path, wait, and then delete the wrong owner.  Every refresh/sign-in,
+    disconnect, and scope transfer takes this provider lock first; per-store locks remain
+    the inner serialization for the actual document.
+    """
+    scope = box_root() / f".{provider}-oauth-scope"
+    with _store_lock(scope), _file_lock(scope):
+        yield
+
+
 def _disconnect_marker_path(paths: InstancePaths) -> Path:
     return paths.config_dir / _DISCONNECT_MARKER
 
@@ -325,6 +340,12 @@ def _refresh_anthropic_tokens(refresh_token: str, *, timeout_s: float = 20.0) ->
 
 
 def resolve_anthropic_oauth() -> AnthropicOAuthCreds:
+    """Resolve Claude OAuth while holding the stable credential-scope lock."""
+    with _oauth_scope_lock("anthropic-oauth"):
+        return _resolve_anthropic_oauth_locked()
+
+
+def _resolve_anthropic_oauth_locked() -> AnthropicOAuthCreds:
     """Return a live Claude OAuth access token, or raise OAuthCredentialError.
 
     Order (explicit intent first): ``$CLAUDE_CODE_OAUTH_TOKEN`` env → protoAgent's own
@@ -457,6 +478,14 @@ class OAuthStoreTransferError(RuntimeError):
 
 
 def promote_instance_oauth_to_box(config_dir: Path) -> list[str]:
+    """Transfer legacy instance stores while holding both stable scope locks."""
+    with ExitStack() as scopes:
+        for provider in ("anthropic-oauth", "openai-codex"):
+            scopes.enter_context(_oauth_scope_lock(provider))
+        return _promote_instance_oauth_to_box_locked(config_dir)
+
+
+def _promote_instance_oauth_to_box_locked(config_dir: Path) -> list[str]:
     """Move legacy instance-local OAuth stores into the shared box tier.
 
     Fleet sisters must resolve one credential store, not receive independent copies:
@@ -822,6 +851,12 @@ def _cli_recovery_tokens(
 
 
 def note_codex_auth_rejected(paths: InstancePaths | None = None) -> bool:
+    """Invalidate Codex access under the stable credential-scope lock."""
+    with _oauth_scope_lock("openai-codex"):
+        return _note_codex_auth_rejected_locked(paths)
+
+
+def _note_codex_auth_rejected_locked(paths: InstancePaths | None = None) -> bool:
     """Record that the stored ACCESS token was rejected, so the next resolve refreshes.
 
     An access token can stop working long before its ``exp``: signing in again on the
@@ -853,6 +888,12 @@ def note_codex_auth_rejected(paths: InstancePaths | None = None) -> bool:
 
 
 def resolve_codex_oauth(paths: InstancePaths | None = None, *, force_refresh: bool = False) -> CodexOAuthCreds:
+    """Resolve Codex OAuth while holding the stable credential-scope lock."""
+    with _oauth_scope_lock("openai-codex"):
+        return _resolve_codex_oauth_locked(paths, force_refresh=force_refresh)
+
+
+def _resolve_codex_oauth_locked(paths: InstancePaths | None = None, *, force_refresh: bool = False) -> CodexOAuthCreds:
     """Return a fresh Codex access token + account id, refreshing/bootstrapping as needed.
 
     1. Read our own instance-scoped store; if absent, bootstrap it once from the
@@ -953,6 +994,12 @@ def resolve_codex_oauth(paths: InstancePaths | None = None, *, force_refresh: bo
 
 
 def import_codex_cli_credential(paths: InstancePaths | None = None) -> dict[str, Any]:
+    """Transfer the CLI login while holding the stable credential-scope lock."""
+    with _oauth_scope_lock("openai-codex"):
+        return _import_codex_cli_credential_locked(paths)
+
+
+def _import_codex_cli_credential_locked(paths: InstancePaths | None = None) -> dict[str, Any]:
     """Take over the login the Codex CLI holds. Explicit, operator-initiated only.
 
     An OAuth refresh token is single-use, so two applications cannot both hold one
@@ -1024,6 +1071,15 @@ def _revoke_codex_token(tokens: dict[str, Any], *, timeout_s: float = 8.0) -> bo
 
 
 def disconnect(provider: str, paths: InstancePaths | None = None) -> DisconnectResult:
+    """Disconnect under the stable provider-scope lock, before resolving its store."""
+    provider = (provider or "").strip().lower()
+    if provider not in ("anthropic-oauth", "openai-codex"):
+        raise OAuthCredentialError(f"not a native OAuth provider: {provider!r}", provider=provider)
+    with _oauth_scope_lock(provider):
+        return _disconnect_locked(provider, paths)
+
+
+def _disconnect_locked(provider: str, paths: InstancePaths | None = None) -> DisconnectResult:
     """Idempotent disconnect for a native OAuth provider (#2440).
 
     Attempts best-effort remote revocation for protoAgent-owned tokens, ALWAYS deletes
@@ -1041,7 +1097,6 @@ def disconnect(provider: str, paths: InstancePaths | None = None) -> DisconnectR
     happened so the console can too. The *marker* that suppresses re-import stays
     per-instance either way.
     """
-    provider = (provider or "").strip().lower()
     paths = paths or instance_paths()
     if provider == "openai-codex":
         store = _codex_store_path(paths)

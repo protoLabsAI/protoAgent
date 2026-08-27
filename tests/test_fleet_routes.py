@@ -303,6 +303,23 @@ def test_create_without_inputs_or_secrets_forwards_none(client, monkeypatch):
     assert captured["inputs"] is None and captured["secrets"] is None
 
 
+def test_create_with_inheritance_disabled_never_supplies_an_oauth_transfer_source(client, monkeypatch):
+    """`inherit_config: false` is the explicit blank-agent escape hatch: it must not
+    copy model config or transfer a legacy OAuth store into box ownership."""
+    from graph.workspaces import manager
+
+    captured: dict = {}
+
+    def fake_create(name, **kwargs):
+        captured.update(kwargs)
+        return {"id": f"{name}-0", "name": name, "port": 7999, "path": "/tmp", "installed": []}
+
+    monkeypatch.setattr(manager, "create", fake_create)
+    response = client.post("/api/fleet", json={"name": "blank", "start": False, "inherit_config": False})
+    assert response.status_code == 200
+    assert captured["inherit_model"] is None
+
+
 def test_create_bad_name_is_400(client):
     assert client.post("/api/fleet", json={"name": "bad name"}).status_code == 400
 

@@ -151,6 +151,13 @@ login or an explicit disconnect marker, and rolls back multi-provider write fail
 The new member then inherits the same store in place. Vendor CLI credentials remain
 untouched, and `inherit_config: false` performs no transfer.
 
+Because the resolved store path itself can change during that transfer, path-keyed locks
+alone are insufficient. Each provider also has a stable box-root scope lock acquired
+*before* path resolution by transfer, disconnect, refresh/invalidation, and sign-in/import
+writes. The store-path lock nests inside it. This makes a waiting disconnect re-resolve
+the post-transfer box owner instead of deleting the stale instance path, and brings
+Anthropic refresh under the same cross-process serialization as Codex.
+
 ## Open items
 
 - **Claude end-to-end still unproven on a real subscription** — the sign-in URL + PKCE +

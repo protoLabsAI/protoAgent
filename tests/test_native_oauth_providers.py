@@ -1626,6 +1626,71 @@ def test_legacy_oauth_promotion_rolls_back_if_second_box_write_fails(monkeypatch
     assert not (box / "anthropic-oauth.json").exists()
 
 
+def test_legacy_oauth_promotion_serializes_disconnect_before_path_resolution(monkeypatch, tmp_path):
+    """Disconnect waits for a transfer, then re-resolves the box owner and removes it;
+    the old race could delete the source while promotion left the box live to sisters."""
+    box, inst = tmp_path / "box", tmp_path / "inst"
+    inst.mkdir()
+    source = inst / "codex-oauth.json"
+    source.write_text('{"tokens":{"refresh_token":"legacy"}}')
+    monkeypatch.setattr(oauth_mod, "box_root", lambda: box)
+    real_atomic_write = oauth_mod.atomic_write
+    real_codex_store_path = oauth_mod._codex_store_path
+    box_written = threading.Event()
+    finish_transfer = threading.Event()
+    disconnect_started = threading.Event()
+    disconnect_resolved = threading.Event()
+
+    def pause_after_box_write(path, text, **kwargs):
+        result = real_atomic_write(path, text, **kwargs)
+        if path == box / "codex-oauth.json":
+            box_written.set()
+            assert finish_transfer.wait(timeout=5)
+        return result
+
+    monkeypatch.setattr(oauth_mod, "atomic_write", pause_after_box_write)
+
+    def track_disconnect_resolution(paths):
+        disconnect_resolved.set()
+        return real_codex_store_path(paths)
+
+    monkeypatch.setattr(oauth_mod, "_codex_store_path", track_disconnect_resolution)
+    errors: list[BaseException] = []
+
+    def promote():
+        try:
+            oauth_mod.promote_instance_oauth_to_box(inst)
+        except BaseException as exc:  # noqa: BLE001 — thread must report into the test
+            errors.append(exc)
+
+    result: list = []
+
+    def disconnect():
+        try:
+            disconnect_started.set()
+            result.append(oauth_mod.disconnect("openai-codex", types.SimpleNamespace(config_dir=inst)))
+        except BaseException as exc:  # noqa: BLE001 — thread must report into the test
+            errors.append(exc)
+
+    transfer_thread = threading.Thread(target=promote)
+    disconnect_thread = threading.Thread(target=disconnect)
+    transfer_thread.start()
+    assert box_written.wait(timeout=5)
+    disconnect_thread.start()
+    assert disconnect_started.wait(timeout=5)
+    assert not disconnect_resolved.wait(timeout=0.1)  # blocked before stale-path resolution
+    finish_transfer.set()
+    transfer_thread.join(timeout=5)
+    disconnect_thread.join(timeout=5)
+
+    assert not errors
+    assert disconnect_resolved.is_set()
+    assert result and result[0].removed
+    assert not source.exists()
+    assert not (box / "codex-oauth.json").exists()
+    assert json.loads((inst / "oauth-disconnected.json").read_text()) == ["openai-codex"]
+
+
 def test_one_box_signin_serves_every_instance(monkeypatch, tmp_path):
     """The whole point: sign in once, and an instance that never signed in resolves."""
     box = tmp_path / "box"

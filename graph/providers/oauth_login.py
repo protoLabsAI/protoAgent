@@ -149,16 +149,17 @@ def codex_login_poll(flow_id: str) -> dict[str, str]:
     except OAuthLoginError as exc:
         return {"status": "error", "error": str(exc)}
     paths = _oauth.instance_paths()
-    store = _oauth._codex_store_path(paths)
     # Same lock disconnect() holds for its delete-store→write-marker pair (QA
     # review on #2459): an unserialized sign-in write could land INSIDE that
     # pair, after which both "who finished last" signals (store, marker) exist
     # at once. Serialized, either order leaves storage self-consistent, so the
     # disconnect route's marker re-check decides correctly.
-    with _oauth._store_lock(store):
-        # protoAgent minted this login itself (#2461) — disconnect may revoke it.
-        _oauth._write_codex_store(store, tokens, provenance=_oauth.PROVENANCE_DEVICE_LOGIN)
-        _oauth.clear_disconnected("openai-codex", paths)  # explicit reconnect clears a prior disconnect (#2440)
+    with _oauth._oauth_scope_lock("openai-codex"):
+        store = _oauth._codex_store_path(paths)
+        with _oauth._store_lock(store):
+            # protoAgent minted this login itself (#2461) — disconnect may revoke it.
+            _oauth._write_codex_store(store, tokens, provenance=_oauth.PROVENANCE_DEVICE_LOGIN)
+            _oauth.clear_disconnected("openai-codex", paths)  # explicit reconnect clears a prior disconnect (#2440)
     _FLOWS.pop(flow_id, None)
     return {"status": "complete"}
 
@@ -259,9 +260,11 @@ def anthropic_login_complete(flow_id: str, code: str) -> dict[str, str]:
         return {"status": "error", "error": "Token exchange returned no access_token."}
     # Serialized against disconnect()'s delete-store→write-marker pair — same
     # rationale as the codex path above (QA review on #2459).
-    with _oauth._store_lock(_oauth._anthropic_store_path()):
-        _oauth._write_anthropic_store(tokens)
-        _oauth.clear_disconnected("anthropic-oauth")  # explicit reconnect clears a prior disconnect (#2440)
+    with _oauth._oauth_scope_lock("anthropic-oauth"):
+        store = _oauth._anthropic_store_path()
+        with _oauth._store_lock(store):
+            _oauth._write_anthropic_store(tokens)
+            _oauth.clear_disconnected("anthropic-oauth")  # explicit reconnect clears a prior disconnect (#2440)
     _FLOWS.pop(flow_id, None)
     return {"status": "complete"}
 

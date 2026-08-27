@@ -1010,9 +1010,12 @@ def test_overlay_model_carries_complete_connections_without_blank_agent_state(ro
     host.mkdir()
     (host / "langgraph-config.yaml").write_text(
         "identity:\n  name: Host\n"
-        "model:\n  name: chatgpt:gpt-5-codex\n"
+        "model:\n  name: chatgpt:gpt-5-codex\n  api_key: stale-inline-model\n"
         "providers:\n"
         "  - id: gateway\n    type: openai-compat\n    base_url: https://gateway.example/v1\n"
+        "    api_key: stale-inline-gateway\n"
+        "  - id: local\n    type: openai-compat\n    base_url: http://localhost:8000/v1\n"
+        "    api_key: sk-local-inline\n"
         "  - id: chatgpt\n    type: openai-codex\n"
         "plugins:\n  enabled: [github]\n"
         "skills:\n  shared: true\n"
@@ -1038,11 +1041,12 @@ def test_overlay_model_carries_complete_connections_without_blank_agent_state(ro
     assert cfg["model"] == {"name": "chatgpt:gpt-5-codex"}
     assert cfg["providers"] == [
         {"id": "gateway", "type": "openai-compat", "base_url": "https://gateway.example/v1"},
+        {"id": "local", "type": "openai-compat", "base_url": "http://localhost:8000/v1"},
         {"id": "chatgpt", "type": "openai-codex"},
     ]
     assert yaml.safe_load((cfg_dir / "secrets.yaml").read_text()) == {
         "model": {"api_key": "sk-legacy"},
-        "providers": {"gateway": "sk-gateway"},
+        "providers": {"gateway": "sk-gateway", "local": "sk-local-inline"},
     }
     assert_owner_only(cfg_dir / "secrets.yaml")
 
