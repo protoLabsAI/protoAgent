@@ -1145,6 +1145,7 @@ def _overlay_model(cfg: Path, ws: Path, src: str) -> None:
         if isinstance(providers, list) and providers:
             sanitized: list = []
             inline_provider_keys: dict[str, object] = {}
+            seen_provider_ids: set[str] = set()
             for entry in providers:
                 if not isinstance(entry, dict):
                     sanitized.append(entry)
@@ -1152,8 +1153,14 @@ def _overlay_model(cfg: Path, ws: Path, src: str) -> None:
                 clean = dict(entry)
                 inline_key = clean.pop("api_key", "")
                 pid = str(clean.get("id", "") or "").strip().lower()
-                if pid and inline_key:
-                    inline_provider_keys[pid] = inline_key
+                # Runtime parsing and the canonical secret splitter both keep the
+                # FIRST duplicate id.  Track it even when its key is blank, or a later
+                # duplicate could authenticate the first entry's endpoint with the
+                # wrong credential.
+                if pid and pid not in seen_provider_ids:
+                    seen_provider_ids.add(pid)
+                    if inline_key:
+                        inline_provider_keys[pid] = inline_key
                 sanitized.append(clean)
             new["providers"] = sanitized
             if inline_provider_keys:

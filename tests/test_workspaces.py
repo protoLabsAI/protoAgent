@@ -1016,6 +1016,13 @@ def test_overlay_model_carries_complete_connections_without_blank_agent_state(ro
         "    api_key: stale-inline-gateway\n"
         "  - id: local\n    type: openai-compat\n    base_url: http://localhost:8000/v1\n"
         "    api_key: sk-local-inline\n"
+        "  - id: dupe\n    type: openai-compat\n    base_url: https://first.example/v1\n"
+        "    api_key: sk-first-inline\n"
+        "  - id: dupe\n    type: openai-compat\n    base_url: https://second.example/v1\n"
+        "    api_key: sk-wrong-last\n"
+        "  - id: blankdupe\n    type: openai-compat\n    base_url: https://blank-first.example/v1\n"
+        "  - id: blankdupe\n    type: openai-compat\n    base_url: https://keyed-second.example/v1\n"
+        "    api_key: sk-must-not-cross\n"
         "  - id: chatgpt\n    type: openai-codex\n"
         "plugins:\n  enabled: [github]\n"
         "skills:\n  shared: true\n"
@@ -1042,11 +1049,15 @@ def test_overlay_model_carries_complete_connections_without_blank_agent_state(ro
     assert cfg["providers"] == [
         {"id": "gateway", "type": "openai-compat", "base_url": "https://gateway.example/v1"},
         {"id": "local", "type": "openai-compat", "base_url": "http://localhost:8000/v1"},
+        {"id": "dupe", "type": "openai-compat", "base_url": "https://first.example/v1"},
+        {"id": "dupe", "type": "openai-compat", "base_url": "https://second.example/v1"},
+        {"id": "blankdupe", "type": "openai-compat", "base_url": "https://blank-first.example/v1"},
+        {"id": "blankdupe", "type": "openai-compat", "base_url": "https://keyed-second.example/v1"},
         {"id": "chatgpt", "type": "openai-codex"},
     ]
     assert yaml.safe_load((cfg_dir / "secrets.yaml").read_text()) == {
         "model": {"api_key": "sk-legacy"},
-        "providers": {"gateway": "sk-gateway", "local": "sk-local-inline"},
+        "providers": {"gateway": "sk-gateway", "local": "sk-local-inline", "dupe": "sk-first-inline"},
     }
     assert_owner_only(cfg_dir / "secrets.yaml")
 
