@@ -1,7 +1,7 @@
 import "../fleet/fleet.css";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link2, Pencil, Play, Plus, Radar, Server, Square, Trash2, Unlink2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Link2, Pencil, Play, Plus, Radar, Server, Square, Trash2, Unlink2 } from "lucide-react";
 import { useState } from "react";
 
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
@@ -14,7 +14,7 @@ import { QuickSetting } from "./QuickSetting";
 import { agentHref, api, currentSlug } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { fleetQuery, queryKeys, settingsSchemaQuery } from "../lib/queries";
-import type { DiscoveredAgent, FleetAgent, SettingsGroup } from "../lib/types";
+import type { DiscoveredAgent, FleetAgent, FleetStatus, SettingsGroup } from "../lib/types";
 
 /** The manual add-remote form is submittable only with a name and an http(s) URL. Exported
  * (pure) so the enable rule is unit-tested without rendering the panel. The server does the
@@ -62,6 +62,51 @@ export function updateAutostartRoster(
 ): string[] {
   const others = roster.filter((entry) => entry !== agent.id && entry !== agent.name);
   return enabled ? [...others, agent.id] : others;
+}
+
+/** The reorder payload for a move-up/move-down: swap the member at `index` with its neighbor
+ * (`delta` = -1 up, +1 down) and return the COMPLETE immutable-id order to submit. The reorder
+ * API (#3197) requires a full permutation of the current member ids — host + local + remote —
+ * so this always returns EVERY id, never a partial slice; an out-of-range (boundary) move
+ * returns the current order unchanged, since the controls are disabled there anyway. Uses ids,
+ * never names/labels, because a member can rename itself and only the id is stable + unique. */
+export function reorderFleetIds(agents: Pick<FleetAgent, "id">[], index: number, delta: number): string[] {
+  const ids = agents.map((a) => a.id);
+  const target = index + delta;
+  if (index < 0 || index >= ids.length || target < 0 || target >= ids.length) return ids;
+  const next = ids.slice();
+  const [moved] = next.splice(index, 1);
+  next.splice(target, 0, moved);
+  return next;
+}
+
+/** Reconcile a fleet snapshot's rows to match `order` (the ids submitted to the reorder API)
+ * WITHOUT dropping or mutating any row — every agent object is carried over by reference, so
+ * names, urls, tokens, process state, ids, and the per-row actions all survive the reorder. A
+ * row whose id isn't named in `order` (a member added between submit and the server reconcile)
+ * keeps its place at the tail, so an optimistic reorder never makes a row vanish. Pure: the
+ * input array + agents are left untouched, so it doubles as the rollback-safe snapshot transform. */
+export function applyFleetOrder(agents: FleetAgent[], order: string[]): FleetAgent[] {
+  const byId = new Map(agents.map((a) => [a.id, a]));
+  const seen = new Set<string>();
+  const next: FleetAgent[] = [];
+  for (const id of order) {
+    const agent = byId.get(id);
+    if (agent && !seen.has(id)) {
+      next.push(agent);
+      seen.add(id);
+    }
+  }
+  for (const agent of agents) {
+    if (!seen.has(agent.id)) next.push(agent);
+  }
+  return next;
+}
+
+/** The accessible name for an icon-only reorder control — a screen reader / keyboard user
+ * needs a text name the bare chevron can't give. `delta < 0` is up, otherwise down. */
+export function moveLabel(name: string, delta: number): string {
+  return `Move ${name} ${delta < 0 ? "up" : "down"} in the fleet order`;
 }
 
 // Fleet manager (ADR 0042) — Settings → Agents. Lists the workspace agents with live
@@ -311,6 +356,31 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
     onSettled: () => qc.invalidateQueries({ queryKey: queryKeys.fleet }),
   });
 
+  // Roster display order (ADR 0042 hub control-plane, #3197). The move-up/move-down controls
+  // (the accessible, non-pointer baseline) reorder the roster and submit the COMPLETE immutable-id
+  // permutation to the hub. Optimistic: reflect the new order at once and CANCEL the in-flight 3s
+  // poll so it can't stomp it; on error roll back to the pre-move snapshot, and ALWAYS re-sync with
+  // the server on settle so a rejected reorder can't leave a stale optimistic order behind. Order is
+  // presentation-only — it never touches names, urls, tokens, process state, ids, or the self/host
+  // action safeguards; the id-keyed payload means a rename can't misaddress the reorder.
+  const reorder = useMutation({
+    mutationFn: (order: string[]) => api.reorderFleet(order),
+    onMutate: async (order) => {
+      await qc.cancelQueries({ queryKey: queryKeys.fleet });
+      const prev = qc.getQueryData<FleetStatus>(queryKeys.fleet);
+      if (prev) {
+        qc.setQueryData<FleetStatus>(queryKeys.fleet, { ...prev, agents: applyFleetOrder(prev.agents, order) });
+      }
+      return { prev };
+    },
+    onError: (e, _order, ctx) => {
+      if (ctx?.prev) qc.setQueryData(queryKeys.fleet, ctx.prev);
+      toast({ tone: "error", title: "Couldn't reorder the fleet", message: errMsg(e) });
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: queryKeys.fleet }),
+  });
+  const move = (index: number, delta: number) => reorder.mutate(reorderFleetIds(agents, index, delta));
+
   return (
     <section className="panel stage-panel">
       <PanelHeader
@@ -366,7 +436,7 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
           />
         ) : (
           <ul className="fleet-list">
-            {agents.map((a) => {
+            {agents.map((a, i) => {
               const isActive = slugOf(a) === slug; // slug = stable id, not name
               return (
                 <li key={a.id} className={`fleet-row${isActive ? " active" : ""}`}>
@@ -436,6 +506,38 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                     </span>
                   </div>
                   <div className="fleet-row-actions">
+                    {/* Reorder the roster (#3197) — explicit move-up/move-down is the guaranteed
+                        keyboard/AT-accessible path (native DnD, if ever added, is additive, not the
+                        sole gesture). Reorder is presentation-only, so it rides every member row —
+                        host, local and remote — leaving the self/host action safeguards below intact.
+                        Boundary + in-flight states disable so the buttons can't submit a no-op or a
+                        second overlapping order. Hidden with nothing to reorder (a lone member). */}
+                    {agents.length > 1 ? (
+                      <div className="fleet-row-reorder" role="group" aria-label={`Reorder ${a.label ?? a.name}`}>
+                        <Button
+                          icon
+                          variant="ghost"
+                          type="button"
+                          aria-label={moveLabel(a.label ?? a.name, -1)}
+                          title="Move up in the fleet order"
+                          disabled={i === 0 || reorder.isPending}
+                          onClick={() => move(i, -1)}
+                        >
+                          <ChevronUp size={14} />
+                        </Button>
+                        <Button
+                          icon
+                          variant="ghost"
+                          type="button"
+                          aria-label={moveLabel(a.label ?? a.name, 1)}
+                          title="Move down in the fleet order"
+                          disabled={i === agents.length - 1 || reorder.isPending}
+                          onClick={() => move(i, 1)}
+                        >
+                          <ChevronDown size={14} />
+                        </Button>
+                      </div>
+                    ) : null}
                     {/* Boot autostart is a hub-owned process policy, so it applies only to
                         local workspace members — never the hub itself or a remote peer. */}
                     {!a.host && !a.remote ? (

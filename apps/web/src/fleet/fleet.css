@@ -61,6 +61,19 @@
   align-items: center;
   gap: 4px;
 }
+/* Accessible roster reorder controls (#3197) — the move-up/move-down pair is the guaranteed
+   non-pointer path. Grouped tight and fenced off from the action cluster so the "reorder" pair
+   reads as one control, distinct from the per-row start/stop/remove buttons beside it. The
+   disabled boundary state (first row can't move up, last can't move down) rides the DS Button's
+   own disabled styling. */
+.fleet-row-reorder {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: 4px;
+  padding-right: 4px;
+  border-right: 1px solid var(--pl-color-border);
+}
 .fleet-autostart-toggle {
   margin-right: 6px;
   font-size: 12px;
