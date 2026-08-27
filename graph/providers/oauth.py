@@ -35,7 +35,7 @@ import subprocess
 import sys
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -124,6 +124,21 @@ def _file_lock(path: Path) -> "Iterator[None]":
             except Exception:  # noqa: BLE001
                 pass
             fh.close()
+
+
+@contextmanager
+def _oauth_scope_lock(provider: str) -> "Iterator[None]":
+    """Stable box-level mutation lock acquired before credential path resolution.
+
+    A store may move from an instance override to the box during fleet creation, so a
+    lock keyed by the resolved store path is not sufficient: disconnect could resolve
+    the old path, wait, and then delete the wrong owner.  Every refresh/sign-in,
+    disconnect, and scope transfer takes this provider lock first; per-store locks remain
+    the inner serialization for the actual document.
+    """
+    scope = box_root() / f".{provider}-oauth-scope"
+    with _store_lock(scope), _file_lock(scope):
+        yield
 
 
 def _disconnect_marker_path(paths: InstancePaths) -> Path:
@@ -325,6 +340,12 @@ def _refresh_anthropic_tokens(refresh_token: str, *, timeout_s: float = 20.0) ->
 
 
 def resolve_anthropic_oauth() -> AnthropicOAuthCreds:
+    """Resolve Claude OAuth while holding the stable credential-scope lock."""
+    with _oauth_scope_lock("anthropic-oauth"):
+        return _resolve_anthropic_oauth_locked()
+
+
+def _resolve_anthropic_oauth_locked() -> AnthropicOAuthCreds:
     """Return a live Claude OAuth access token, or raise OAuthCredentialError.
 
     Order (explicit intent first): ``$CLAUDE_CODE_OAUTH_TOKEN`` env → protoAgent's own
@@ -450,6 +471,125 @@ def _codex_store_path(paths: InstancePaths) -> Path:
     """
     instance = paths.config_dir / "codex-oauth.json"
     return instance if instance.exists() else _codex_box_store()
+
+
+class OAuthStoreTransferError(RuntimeError):
+    """A legacy instance OAuth store could not safely join the shared box tier."""
+
+
+def promote_instance_oauth_to_box(config_dir: Path) -> list[str]:
+    """Transfer legacy instance stores while holding both stable scope locks."""
+    with ExitStack() as scopes:
+        for provider in ("anthropic-oauth", "openai-codex"):
+            scopes.enter_context(_oauth_scope_lock(provider))
+        return _promote_instance_oauth_to_box_locked(config_dir)
+
+
+def _promote_instance_oauth_to_box_locked(config_dir: Path) -> list[str]:
+    """Move legacy instance-local OAuth stores into the shared box tier.
+
+    Fleet sisters must resolve one credential store, not receive independent copies:
+    both OAuth refresh tokens are mutable and Codex refresh tokens are single-use.  A
+    copy would let two member processes rotate the same token independently and strand
+    whichever loses the race.  New sign-ins already write to the box tier (#3112); this
+    helper is only the upgrade bridge for an older instance override encountered while
+    creating a sister.
+
+    A distinct existing box credential is a refusal: silently replacing a machine-wide
+    login or giving the new sister a different account would both violate the operator's
+    intent.  Byte-identical overrides are deduplicated so the source instance rejoins the
+    shared store.  Returns the filenames promoted or deduplicated.
+    """
+    candidates = [
+        (Path(config_dir) / filename, destination, filename, provider)
+        for filename, destination, provider in (
+            ("codex-oauth.json", _codex_box_store(), "openai-codex"),
+            ("anthropic-oauth.json", _anthropic_box_store(), "anthropic-oauth"),
+        )
+        if (Path(config_dir) / filename).exists() and (Path(config_dir) / filename) != destination
+    ]
+    if not candidates:
+        return []
+
+    promoted: list[str] = []
+    try:
+        # Lock every candidate before the conflict preflight, then mutate.  No other
+        # runtime path takes two stores, so this stable order cannot deadlock with a
+        # provider refresh/disconnect and prevents a TOCTOU overwrite of either side.
+        with ExitStack() as locks:
+            for source, destination, _filename, _provider in candidates:
+                locks.enter_context(_store_lock(source))
+                locks.enter_context(_file_lock(source))
+                locks.enter_context(_store_lock(destination))
+                locks.enter_context(_file_lock(destination))
+
+            payloads: list[tuple[Path, Path, str, str, bool]] = []
+            conflicts: list[str] = []
+            try:
+                marker_doc = json.loads((Path(config_dir) / _DISCONNECT_MARKER).read_text(encoding="utf-8"))
+            except (OSError, ValueError, json.JSONDecodeError):
+                marker_doc = []
+            disconnected = set(marker_doc) if isinstance(marker_doc, list) else set()
+            blocked = [provider for _source, _destination, _filename, provider in candidates if provider in disconnected]
+            if blocked:
+                raise OAuthStoreTransferError(
+                    "cannot share legacy instance OAuth for "
+                    + ", ".join(blocked)
+                    + ": this instance explicitly disconnected it. Reconnect first, then create the sister again."
+                )
+
+            for source, destination, filename, _provider in candidates:
+                if not source.exists():
+                    continue
+                payload = source.read_text(encoding="utf-8")
+                if destination.exists() and destination.read_text(encoding="utf-8") != payload:
+                    conflicts.append(filename)
+                payloads.append((source, destination, filename, payload, destination.exists()))
+            if conflicts:
+                names = ", ".join(conflicts)
+                raise OAuthStoreTransferError(
+                    f"cannot share legacy instance OAuth ({names}): the box already has a different login. "
+                    "Reconnect this instance after removing its local OAuth override, then create the sister again."
+                )
+
+            # Phase 1 copies every absent destination while every source remains the
+            # authoritative store.  If any write fails, remove only destinations this
+            # transaction created; no source ownership has changed.
+            created: list[Path] = []
+            try:
+                for _source, destination, _filename, payload, existed in payloads:
+                    if not existed:
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        atomic_write(destination, payload, mode=0o600)
+                        created.append(destination)
+            except OSError:
+                for destination in created:
+                    destination.unlink(missing_ok=True)
+                raise
+
+            # Phase 2 commits ownership by removing the overrides only after every box
+            # store is durable.  Roll back removed sources + newly-created destinations
+            # if a later removal fails, so a two-provider transfer cannot half-complete.
+            removed: list[tuple[Path, str]] = []
+            try:
+                for source, _destination, filename, payload, _existed in payloads:
+                    source.unlink()
+                    removed.append((source, payload))
+                    promoted.append(filename)
+            except OSError:
+                for source, payload in removed:
+                    source.parent.mkdir(parents=True, exist_ok=True)
+                    atomic_write(source, payload, mode=0o600)
+                for destination in created:
+                    destination.unlink(missing_ok=True)
+                raise
+    except OAuthStoreTransferError:
+        raise
+    except OSError as exc:
+        raise OAuthStoreTransferError(
+            "could not transfer the legacy instance OAuth login into the shared box store"
+        ) from exc
+    return promoted
 
 
 def _b64url_json(segment: str) -> dict[str, Any]:
@@ -711,6 +851,12 @@ def _cli_recovery_tokens(
 
 
 def note_codex_auth_rejected(paths: InstancePaths | None = None) -> bool:
+    """Invalidate Codex access under the stable credential-scope lock."""
+    with _oauth_scope_lock("openai-codex"):
+        return _note_codex_auth_rejected_locked(paths)
+
+
+def _note_codex_auth_rejected_locked(paths: InstancePaths | None = None) -> bool:
     """Record that the stored ACCESS token was rejected, so the next resolve refreshes.
 
     An access token can stop working long before its ``exp``: signing in again on the
@@ -742,6 +888,12 @@ def note_codex_auth_rejected(paths: InstancePaths | None = None) -> bool:
 
 
 def resolve_codex_oauth(paths: InstancePaths | None = None, *, force_refresh: bool = False) -> CodexOAuthCreds:
+    """Resolve Codex OAuth while holding the stable credential-scope lock."""
+    with _oauth_scope_lock("openai-codex"):
+        return _resolve_codex_oauth_locked(paths, force_refresh=force_refresh)
+
+
+def _resolve_codex_oauth_locked(paths: InstancePaths | None = None, *, force_refresh: bool = False) -> CodexOAuthCreds:
     """Return a fresh Codex access token + account id, refreshing/bootstrapping as needed.
 
     1. Read our own instance-scoped store; if absent, bootstrap it once from the
@@ -842,6 +994,12 @@ def resolve_codex_oauth(paths: InstancePaths | None = None, *, force_refresh: bo
 
 
 def import_codex_cli_credential(paths: InstancePaths | None = None) -> dict[str, Any]:
+    """Transfer the CLI login while holding the stable credential-scope lock."""
+    with _oauth_scope_lock("openai-codex"):
+        return _import_codex_cli_credential_locked(paths)
+
+
+def _import_codex_cli_credential_locked(paths: InstancePaths | None = None) -> dict[str, Any]:
     """Take over the login the Codex CLI holds. Explicit, operator-initiated only.
 
     An OAuth refresh token is single-use, so two applications cannot both hold one
@@ -913,6 +1071,15 @@ def _revoke_codex_token(tokens: dict[str, Any], *, timeout_s: float = 8.0) -> bo
 
 
 def disconnect(provider: str, paths: InstancePaths | None = None) -> DisconnectResult:
+    """Disconnect under the stable provider-scope lock, before resolving its store."""
+    provider = (provider or "").strip().lower()
+    if provider not in ("anthropic-oauth", "openai-codex"):
+        raise OAuthCredentialError(f"not a native OAuth provider: {provider!r}", provider=provider)
+    with _oauth_scope_lock(provider):
+        return _disconnect_locked(provider, paths)
+
+
+def _disconnect_locked(provider: str, paths: InstancePaths | None = None) -> DisconnectResult:
     """Idempotent disconnect for a native OAuth provider (#2440).
 
     Attempts best-effort remote revocation for protoAgent-owned tokens, ALWAYS deletes
@@ -930,7 +1097,6 @@ def disconnect(provider: str, paths: InstancePaths | None = None) -> DisconnectR
     happened so the console can too. The *marker* that suppresses re-import stays
     per-instance either way.
     """
-    provider = (provider or "").strip().lower()
     paths = paths or instance_paths()
     if provider == "openai-codex":
         store = _codex_store_path(paths)
