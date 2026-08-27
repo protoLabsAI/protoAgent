@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from graph.plugins.host import timed_lifecycle_phase
-from graph.plugins.manifest import PluginManifest, load_manifest
+from graph.plugins.manifest import PluginManifest, _iframe_page_route, load_manifest
 from graph.plugins.registry import PluginRegistry
 
 log = logging.getLogger("protoagent.plugins")
@@ -371,7 +371,7 @@ def _warn_unserved_views(manifest: PluginManifest, routers: list[dict]) -> None:
         return
     served = _served_paths(routers)
     for kind, page_id, declared in pages:
-        path = str(declared or "").split("?", 1)[0].split("#", 1)[0].rstrip("/") or "/"
+        path = _iframe_page_route(declared).rstrip("/") or "/"
         if path not in served:
             log.warning(
                 "[plugins] %s: %s %r declares path %r but no registered router serves it "

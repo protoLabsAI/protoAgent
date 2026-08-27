@@ -278,6 +278,38 @@ describe("PluginView — embedded Configure mode", () => {
     expect(container.querySelector("iframe")).toBeNull();
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("isn’t mounted yet");
   });
+
+  it("retries a failed page probe in place", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 404 })
+      .mockResolvedValueOnce({ ok: false, status: 404 })
+      .mockResolvedValueOnce({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", fetchMock);
+    const view: PluginViewType = {
+      id: "projects",
+      label: "Projects",
+      path: "/plugins/boardy/config/projects",
+      key: "plugin:boardy:settings:projects",
+    };
+    await act(async () => {
+      root.render(h(PluginView, { view, embedded: true }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600);
+    });
+    expect(container.querySelector('[role="alert"]')).toBeTruthy();
+
+    const retry = [...container.querySelectorAll("button")].find((button) => button.textContent === "Retry")!;
+    await act(async () => {
+      retry.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(container.querySelector("iframe")).toBeTruthy();
+  });
 });
 
 describe("PluginView — the plugin context-menu bridge (#3030)", () => {

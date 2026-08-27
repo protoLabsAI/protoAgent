@@ -1,5 +1,6 @@
 import designTokens from "@protolabsai/design/tokens.json";
 import { Spinner } from "@protolabsai/ui/data";
+import { Button } from "@protolabsai/ui/primitives";
 import { AlertTriangle, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -132,6 +133,7 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
   // resolves we show the loading state; this keeps a 404 from ever rendering the server's
   // bare {"detail":"Not Found"} body as the "view".
   const [reachable, setReachable] = useState(false);
+  const [probeAttempt, setProbeAttempt] = useState(0);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   // Pending init re-post timers (see handleLoad) — cleared on unmount / src change.
   const initTimers = useRef<number[]>([]);
@@ -290,6 +292,7 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
   //   • otherwise → the HTTP status. One retry covers a sub-second race with a hot-mount reload.
   useEffect(() => {
     let cancelled = false;
+    let retryTimer: number | undefined;
     navigatedRef.current = false; // re-pointed frame: back to about:blank until it navigates
     setLoaded(false);
     setError(null);
@@ -316,7 +319,7 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
         // Retry once on a server-side miss — covers the brief window where the rail
         // renders the view before the hot-mount include_router commits (#822 reload race).
         if (attempt === 0 && (res.status === 404 || res.status >= 500)) {
-          setTimeout(() => void probe(1), 600);
+          retryTimer = window.setTimeout(() => void probe(1), 600);
           return;
         }
         setError(describeFailure(res.status));
@@ -324,7 +327,7 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
         if (cancelled) return;
         // True network/CORS failure (connection refused, blocked) — no status to read.
         if (attempt === 0) {
-          setTimeout(() => void probe(1), 600);
+          retryTimer = window.setTimeout(() => void probe(1), 600);
           return;
         }
         setError(describeFailure(null));
@@ -334,8 +337,9 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
     void probe(0);
     return () => {
       cancelled = true;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     };
-  }, [src, view.pluginLoaded, view.pluginError]);
+  }, [src, view.pluginLoaded, view.pluginError, probeAttempt]);
 
   // Event-bus relay across the sandbox (ADR 0039, extended #1640). The page subscribes via
   // `protoagent:subscribe {patterns, since?, background?}`; the host forwards matching bus
@@ -534,11 +538,14 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
           <div className="plugin-view-state" role="alert">
             <AlertTriangle size={18} />
             <span>Couldn’t load “{view.label}”. {error}</span>
+            <Button type="button" size="sm" variant="ghost" onClick={() => setProbeAttempt((attempt) => attempt + 1)}>
+              Retry
+            </Button>
           </div>
         ) : (
           <>
             {!loaded ? (
-              <div className="plugin-view-state">
+              <div className="plugin-view-state" role="status">
                 <Spinner size={18} />
                 <span>Loading {view.label}…</span>
               </div>

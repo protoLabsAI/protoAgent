@@ -161,6 +161,24 @@ _NON_SAME_ORIGIN_PATH = re.compile(r"https?://|^//|localhost|:\d", re.IGNORECASE
 _VALID_SETTINGS_TAB_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 
+def _iframe_page_route(path: object) -> str:
+    """Canonical route portion of a manifest iframe URL.
+
+    Browser navigation and the ASGI request path percent-decode the route before
+    auth/router matching. Normalize the manifest spelling the same way (including
+    nested encodings) so validation, public-chrome exemptions, and served-route
+    diagnostics cannot disagree. Query/fragment remain on the iframe URL but never
+    participate in either boundary.
+    """
+    route = str(path or "").strip().split("?", 1)[0].split("#", 1)[0]
+    while True:
+        decoded = unquote(route)
+        if decoded == route:
+            break
+        route = decoded
+    return route
+
+
 def _parse_settings_tabs(tabs, plugin_id: str) -> list[dict]:
     """Normalize ordered ``settings_tabs`` descriptors to unique ``{id, label, …}`` mappings.
 
@@ -192,7 +210,7 @@ def _parse_settings_tabs(tabs, plugin_id: str) -> list[dict]:
         normalized = {**raw, "id": tab_id, "label": label}
         if "path" in raw:
             path = str(raw.get("path") or "").strip()
-            route = unquote(path.split("?", 1)[0].split("#", 1)[0])
+            route = _iframe_page_route(path)
             parts = route.split("/")
             root = f"/plugins/{plugin_id}/"
             if (
@@ -339,7 +357,7 @@ def _view_public_paths(views: list[dict]) -> list[str]:
         if isinstance(palette, dict):
             candidates.append(palette.get("path"))
         for c in candidates:
-            p = str(c or "").split("?", 1)[0].split("#", 1)[0].strip()
+            p = _iframe_page_route(c)
             if p:
                 out.append(p)
     return out
@@ -352,11 +370,7 @@ def _settings_tab_public_paths(tabs: list[dict]) -> list[str]:
     declaring plugin's /plugins/<id>/ subtree. Query/fragment select page state;
     the middleware exemption is the underlying route only.
     """
-    return [
-        str(tab["path"]).split("?", 1)[0].split("#", 1)[0]
-        for tab in tabs
-        if tab.get("path")
-    ]
+    return [_iframe_page_route(tab["path"]) for tab in tabs if tab.get("path")]
 
 
 def _load_schema_ref(ref: str, plugin_dir: Path, plugin_id: str, topic: str) -> dict | None:
