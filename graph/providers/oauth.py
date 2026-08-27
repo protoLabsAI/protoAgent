@@ -1108,7 +1108,10 @@ def _disconnect_locked(provider: str, paths: InstancePaths | None = None) -> Dis
         elif revoked:
             note = "revoked at OpenAI and removed protoAgent's local copy"
         elif not owned:
-            note = "removed protoAgent's borrowed, vendor-origin credential without remotely revoking it"
+            note = (
+                "removed protoAgent's credential without remote revocation "
+                "(it was not minted by protoAgent's device login)"
+            )
         else:
             note = "removed protoAgent's local copy (remote revoke did not confirm)"
         if existed and store == _codex_box_store():

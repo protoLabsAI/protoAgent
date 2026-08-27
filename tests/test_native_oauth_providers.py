@@ -1308,8 +1308,7 @@ def test_disconnect_anthropic_removes_store_and_suppresses(monkeypatch, tmp_path
 
 
 def test_disconnect_never_revokes_a_bootstrap_borrowed_credential(monkeypatch, tmp_path):
-    """#2461: a CLI-bootstrap token set is the Codex CLI's login, borrowed —
-    disconnect deletes protoAgent's copy and must NOT hit the revoke endpoint."""
+    """#2461: a CLI-origin token is not ours to revoke remotely."""
     paths = _codex_store(
         tmp_path,
         {"access_token": _jwt({"exp": time.time() + 3600}), "refresh_token": "r", "account_id": "a"},
@@ -1323,7 +1322,7 @@ def test_disconnect_never_revokes_a_bootstrap_borrowed_credential(monkeypatch, t
     monkeypatch.setattr(oauth_mod.httpx, "post", _no_network)
     result = oauth_mod.disconnect("openai-codex", paths)
     assert result.removed is True and result.revoked is False
-    assert "borrowed" in result.note
+    assert "not minted by protoAgent's device login" in result.note
     assert not (paths.config_dir / "codex-oauth.json").exists()
 
 
