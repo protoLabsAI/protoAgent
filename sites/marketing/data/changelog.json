@@ -1,5 +1,17 @@
 [
   {
+    "version": "v0.153.2",
+    "date": "2026-08-27",
+    "changes": [
+      "The console can recover recent chat sessions from the server after local browser history is missing (#2888).",
+      "Prior sessions are searchable by transcript content with session_search (#3073).",
+      "Plugin Configure dialogs can organize schema-backed settings into declarative tabs (#3179).",
+      "Plugins can contribute sandboxed workflow tabs to their Configure dialog (#3180).",
+      "Desktop tray update checks now use the full in-app release dialog (#3175).",
+      "Model connections now share one clear settings hierarchy (#3177)."
+    ]
+  },
+  {
     "version": "v0.153.1",
     "date": "2026-08-27",
     "changes": [
