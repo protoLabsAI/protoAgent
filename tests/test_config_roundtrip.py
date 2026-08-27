@@ -871,6 +871,14 @@ def test_self_improvement_policy_parses_as_one_config_surface(tmp_path):
     assert cfg.self_improvement_distillation == "auto"
 
 
+def test_self_improvement_null_section_falls_back_to_defaults(tmp_path):
+    cfg = LangGraphConfig.from_yaml(_write_yaml(tmp_path, "self_improvement:\n"))
+    assert cfg.self_improvement_enabled is False
+    assert cfg.self_improvement_soul_md == "auto"
+    assert cfg.self_improvement_skills == "propose"
+    assert cfg.self_improvement_distillation == "propose"
+
+
 def test_soul_drift_defaults_when_section_absent_or_null(tmp_path):
     """No soul block -> defaults; a present-but-null `soul.drift:` also falls back to
     defaults (nested null isn't caught by the top-level normalizer, hence the `or {}`)."""

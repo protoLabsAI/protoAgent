@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 from fastapi import Body, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+
+log = logging.getLogger(__name__)
 
 
 class SubagentRunRequest(BaseModel):
@@ -387,9 +390,12 @@ def register_operator_routes(
     async def _tasks_close(issue_id: str, req: TaskCloseRequest):
         try:
             issue = await asyncio.to_thread(task_svc.close, req.project_path, issue_id, req.reason)
-            from graph.self_improvement import dispatch_task_review
+            try:
+                from graph.self_improvement import dispatch_task_review
 
-            dispatch_task_review(issue, reason=req.reason or "")
+                dispatch_task_review(issue, reason=req.reason or "")
+            except Exception:  # noqa: BLE001 — curation must never turn a successful close into a 500
+                log.exception("[self-improvement] task-close review scheduling failed")
             return {"issue": issue}
         except Exception as exc:
             raise _http_error(exc) from exc

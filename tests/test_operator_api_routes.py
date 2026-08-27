@@ -135,6 +135,17 @@ def test_task_close_dispatches_self_improvement_review(monkeypatch) -> None:
     ]
 
 
+def test_task_close_succeeds_when_review_dispatch_fails(monkeypatch) -> None:
+    def _fail(*_args, **_kwargs):
+        raise RuntimeError("scheduler unavailable")
+
+    monkeypatch.setattr("graph.self_improvement.dispatch_task_review", _fail)
+    response = _client().post("/api/tasks/issues/task-1/close", json={"reason": "done"})
+
+    assert response.status_code == 200
+    assert response.json()["issue"]["status"] == "closed"
+
+
 def test_operator_routes_map_value_errors_to_400() -> None:
     async def run(_req):
         raise ValueError("bad prompt")

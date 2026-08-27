@@ -1819,6 +1819,7 @@ class LangGraphConfig:
         # parses to None (top-level null is normalized above, a nested null is not).
         soul = data.get("soul", {}) or {}
         soul_drift = soul.get("drift", {}) or {}
+        self_improvement = data.get("self_improvement", {}) or {}
         # Box runtime (Host layer, ADR 0047 D8) — `or {}` because a present-but-empty
         # section parses to None.
         network = data.get("network", {}) or {}
@@ -1917,16 +1918,16 @@ class LangGraphConfig:
             ),
             soul_self_edit_enabled=soul.get("self_edit_enabled", cls.soul_self_edit_enabled),
             self_improvement_enabled=bool(
-                data.get("self_improvement", {}).get("enabled", cls.self_improvement_enabled)
+                self_improvement.get("enabled", cls.self_improvement_enabled)
             ),
             self_improvement_soul_md=str(
-                data.get("self_improvement", {}).get("soul_md", cls.self_improvement_soul_md) or "off"
+                self_improvement.get("soul_md", cls.self_improvement_soul_md) or "off"
             ),
             self_improvement_skills=str(
-                data.get("self_improvement", {}).get("skills", cls.self_improvement_skills) or "off"
+                self_improvement.get("skills", cls.self_improvement_skills) or "off"
             ),
             self_improvement_distillation=str(
-                data.get("self_improvement", {}).get("distillation", cls.self_improvement_distillation) or "off"
+                self_improvement.get("distillation", cls.self_improvement_distillation) or "off"
             ),
             soul_drift_enabled=bool(soul_drift.get("enabled", cls.soul_drift_enabled)),
             soul_drift_interval_hours=int(
