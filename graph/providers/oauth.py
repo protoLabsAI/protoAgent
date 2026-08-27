@@ -35,7 +35,7 @@ import subprocess
 import sys
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -450,6 +450,117 @@ def _codex_store_path(paths: InstancePaths) -> Path:
     """
     instance = paths.config_dir / "codex-oauth.json"
     return instance if instance.exists() else _codex_box_store()
+
+
+class OAuthStoreTransferError(RuntimeError):
+    """A legacy instance OAuth store could not safely join the shared box tier."""
+
+
+def promote_instance_oauth_to_box(config_dir: Path) -> list[str]:
+    """Move legacy instance-local OAuth stores into the shared box tier.
+
+    Fleet sisters must resolve one credential store, not receive independent copies:
+    both OAuth refresh tokens are mutable and Codex refresh tokens are single-use.  A
+    copy would let two member processes rotate the same token independently and strand
+    whichever loses the race.  New sign-ins already write to the box tier (#3112); this
+    helper is only the upgrade bridge for an older instance override encountered while
+    creating a sister.
+
+    A distinct existing box credential is a refusal: silently replacing a machine-wide
+    login or giving the new sister a different account would both violate the operator's
+    intent.  Byte-identical overrides are deduplicated so the source instance rejoins the
+    shared store.  Returns the filenames promoted or deduplicated.
+    """
+    candidates = [
+        (Path(config_dir) / filename, destination, filename, provider)
+        for filename, destination, provider in (
+            ("codex-oauth.json", _codex_box_store(), "openai-codex"),
+            ("anthropic-oauth.json", _anthropic_box_store(), "anthropic-oauth"),
+        )
+        if (Path(config_dir) / filename).exists() and (Path(config_dir) / filename) != destination
+    ]
+    if not candidates:
+        return []
+
+    promoted: list[str] = []
+    try:
+        # Lock every candidate before the conflict preflight, then mutate.  No other
+        # runtime path takes two stores, so this stable order cannot deadlock with a
+        # provider refresh/disconnect and prevents a TOCTOU overwrite of either side.
+        with ExitStack() as locks:
+            for source, destination, _filename, _provider in candidates:
+                locks.enter_context(_store_lock(source))
+                locks.enter_context(_file_lock(source))
+                locks.enter_context(_store_lock(destination))
+                locks.enter_context(_file_lock(destination))
+
+            payloads: list[tuple[Path, Path, str, str, bool]] = []
+            conflicts: list[str] = []
+            try:
+                marker_doc = json.loads((Path(config_dir) / _DISCONNECT_MARKER).read_text(encoding="utf-8"))
+            except (OSError, ValueError, json.JSONDecodeError):
+                marker_doc = []
+            disconnected = set(marker_doc) if isinstance(marker_doc, list) else set()
+            blocked = [provider for _source, _destination, _filename, provider in candidates if provider in disconnected]
+            if blocked:
+                raise OAuthStoreTransferError(
+                    "cannot share legacy instance OAuth for "
+                    + ", ".join(blocked)
+                    + ": this instance explicitly disconnected it. Reconnect first, then create the sister again."
+                )
+
+            for source, destination, filename, _provider in candidates:
+                if not source.exists():
+                    continue
+                payload = source.read_text(encoding="utf-8")
+                if destination.exists() and destination.read_text(encoding="utf-8") != payload:
+                    conflicts.append(filename)
+                payloads.append((source, destination, filename, payload, destination.exists()))
+            if conflicts:
+                names = ", ".join(conflicts)
+                raise OAuthStoreTransferError(
+                    f"cannot share legacy instance OAuth ({names}): the box already has a different login. "
+                    "Reconnect this instance after removing its local OAuth override, then create the sister again."
+                )
+
+            # Phase 1 copies every absent destination while every source remains the
+            # authoritative store.  If any write fails, remove only destinations this
+            # transaction created; no source ownership has changed.
+            created: list[Path] = []
+            try:
+                for _source, destination, _filename, payload, existed in payloads:
+                    if not existed:
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        atomic_write(destination, payload, mode=0o600)
+                        created.append(destination)
+            except OSError:
+                for destination in created:
+                    destination.unlink(missing_ok=True)
+                raise
+
+            # Phase 2 commits ownership by removing the overrides only after every box
+            # store is durable.  Roll back removed sources + newly-created destinations
+            # if a later removal fails, so a two-provider transfer cannot half-complete.
+            removed: list[tuple[Path, str]] = []
+            try:
+                for source, _destination, filename, payload, _existed in payloads:
+                    source.unlink()
+                    removed.append((source, payload))
+                    promoted.append(filename)
+            except OSError:
+                for source, payload in removed:
+                    source.parent.mkdir(parents=True, exist_ok=True)
+                    atomic_write(source, payload, mode=0o600)
+                for destination in created:
+                    destination.unlink(missing_ok=True)
+                raise
+    except OAuthStoreTransferError:
+        raise
+    except OSError as exc:
+        raise OAuthStoreTransferError(
+            "could not transfer the legacy instance OAuth login into the shared box store"
+        ) from exc
+    return promoted
 
 
 def _b64url_json(segment: str) -> dict[str, Any]:

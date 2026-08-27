@@ -999,6 +999,128 @@ def test_overlay_model_copies_secrets_owner_only(root, tmp_path):
     assert_owner_only(root / rec["id"] / "config" / "secrets.yaml")
 
 
+def test_overlay_model_carries_complete_connections_without_blank_agent_state(root, tmp_path, monkeypatch):
+    """A sister gets the provider registry, gateway keys, and protoAgent OAuth login,
+    but not the source agent's capabilities, identity, or unrelated credentials."""
+    from graph.providers import oauth
+
+    box = tmp_path / "box"
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(box))
+    host = tmp_path / "host"
+    host.mkdir()
+    (host / "langgraph-config.yaml").write_text(
+        "identity:\n  name: Host\n"
+        "model:\n  name: chatgpt:gpt-5-codex\n"
+        "providers:\n"
+        "  - id: gateway\n    type: openai-compat\n    base_url: https://gateway.example/v1\n"
+        "  - id: chatgpt\n    type: openai-codex\n"
+        "plugins:\n  enabled: [github]\n"
+        "skills:\n  shared: true\n"
+    )
+    (host / "secrets.yaml").write_text(
+        "model:\n  api_key: sk-legacy\n"
+        "providers:\n  gateway: sk-gateway\n"
+        "delegate_secrets:\n  coder.auth.token: do-not-copy\n"
+        "github:\n  token: do-not-copy\n"
+    )
+    codex = '{"tokens":{"access_token":"oauth-host","refresh_token":"refresh-host"}}'
+    claude = '{"access_token":"claude-host","refresh_token":"claude-refresh"}'
+    (host / "codex-oauth.json").write_text(codex)
+    (host / "anthropic-oauth.json").write_text(claude)
+
+    rec = manager.create("sister", inherit_model=str(host))
+    cfg_dir = root / rec["id"] / "config"
+    cfg = yaml.safe_load((cfg_dir / "langgraph-config.yaml").read_text())
+
+    assert cfg["identity"]["name"] == "sister"
+    assert cfg["plugins"]["enabled"] == ["delegates"]
+    assert "skills" not in cfg
+    assert cfg["model"] == {"name": "chatgpt:gpt-5-codex"}
+    assert cfg["providers"] == [
+        {"id": "gateway", "type": "openai-compat", "base_url": "https://gateway.example/v1"},
+        {"id": "chatgpt", "type": "openai-codex"},
+    ]
+    assert yaml.safe_load((cfg_dir / "secrets.yaml").read_text()) == {
+        "model": {"api_key": "sk-legacy"},
+        "providers": {"gateway": "sk-gateway"},
+    }
+    assert_owner_only(cfg_dir / "secrets.yaml")
+
+    # OAuth is shared through one box-level store, never copied into the member:
+    # mutable/single-use refresh tokens cannot safely have two owners.
+    assert not (cfg_dir / "codex-oauth.json").exists()
+    assert not (cfg_dir / "anthropic-oauth.json").exists()
+    assert not (host / "codex-oauth.json").exists()
+    assert not (host / "anthropic-oauth.json").exists()
+    assert (box / "codex-oauth.json").read_text() == codex
+    assert (box / "anthropic-oauth.json").read_text() == claude
+    assert oauth._codex_store_path(type("Paths", (), {"config_dir": cfg_dir})()) == box / "codex-oauth.json"
+    assert oauth._anthropic_store_path(type("Paths", (), {"config_dir": cfg_dir})()) == box / "anthropic-oauth.json"
+    assert_owner_only(box / "codex-oauth.json")
+    assert_owner_only(box / "anthropic-oauth.json")
+
+
+def test_overlay_model_refuses_conflicting_box_oauth_without_partial_workspace(root, tmp_path, monkeypatch):
+    """A legacy instance login cannot overwrite a different box login just to create
+    a sister; both credentials and the fleet stay unchanged on the refusal."""
+    box = tmp_path / "box"
+    box.mkdir()
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(box))
+    (box / "codex-oauth.json").write_text('{"tokens":{"refresh_token":"box"}}')
+    host = tmp_path / "host"
+    host.mkdir()
+    (host / "langgraph-config.yaml").write_text("model:\n  name: chatgpt:gpt-5-codex\n")
+    (host / "codex-oauth.json").write_text('{"tokens":{"refresh_token":"instance"}}')
+
+    with pytest.raises(manager.WorkspaceError, match="box already has a different login"):
+        manager.create("sister", inherit_model=str(host))
+
+    assert manager.list_workspaces() == []
+    assert not root.exists() or list(root.iterdir()) == []
+    assert (box / "codex-oauth.json").read_text() == '{"tokens":{"refresh_token":"box"}}'
+    assert (host / "codex-oauth.json").read_text() == '{"tokens":{"refresh_token":"instance"}}'
+
+
+def test_overlay_model_preserves_explicit_oauth_disconnect(root, tmp_path, monkeypatch):
+    """A residual local store beside a disconnect marker is not promoted or lent to
+    a sister, which would silently reverse the operator's explicit intent."""
+    box = tmp_path / "box"
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(box))
+    host = tmp_path / "host"
+    host.mkdir()
+    (host / "langgraph-config.yaml").write_text("model:\n  name: chatgpt:gpt-5-codex\n")
+    local_store = host / "codex-oauth.json"
+    local_store.write_text('{"tokens":{"refresh_token":"instance"}}')
+    (host / "oauth-disconnected.json").write_text('["openai-codex"]')
+
+    with pytest.raises(manager.WorkspaceError, match="explicitly disconnected"):
+        manager.create("sister", inherit_model=str(host))
+
+    assert local_store.exists()
+    assert not (box / "codex-oauth.json").exists()
+    assert manager.list_workspaces() == []
+
+
+def test_bundle_failure_does_not_transfer_oauth_ownership(root, tmp_path, monkeypatch):
+    """OAuth transfer is the final create step: a bundle failure rolls back the new
+    workspace without changing the source instance's credential scope."""
+    box = tmp_path / "box"
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(box))
+    host = tmp_path / "host"
+    host.mkdir()
+    (host / "langgraph-config.yaml").write_text("model:\n  name: chatgpt:gpt-5-codex\n")
+    local_store = host / "codex-oauth.json"
+    local_store.write_text('{"tokens":{"refresh_token":"instance"}}')
+    monkeypatch.setattr(manager, "_install_bundle_into", lambda ws, bundle: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    with pytest.raises(RuntimeError, match="boom"):
+        manager.create("sister", inherit_model=str(host), bundle="https://example.invalid/bundle")
+
+    assert local_store.exists()
+    assert not (box / "codex-oauth.json").exists()
+    assert manager.list_workspaces() == []
+
+
 def test_create_from_bundle_refuses_missing_required_input_and_cleans_up(root, tmp_path, monkeypatch):
     """The create path: a required Configure answer missing → WorkspaceError (→ 400)
     and the half-made workspace is removed, so a retry with the answer succeeds — and

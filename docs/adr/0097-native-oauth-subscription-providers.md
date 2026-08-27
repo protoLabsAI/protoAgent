@@ -136,6 +136,21 @@ The first cut had sign-in but no exit and no concurrency safety. Both are now cl
   spend the single-use refresh token; warm reads stay lock-free. Disconnect takes the same
   lock so it can't race a refresh that would rewrite the store after deletion.
 
+## Fleet inheritance amendment (2026-08-27, #3196)
+
+protoAgent-owned OAuth stores now default to the box tier, so every instance and fleet
+sister resolves one shared credential owner. Fleet creation
+never copies an OAuth JSON file: duplicating Codex's single-use refresh token would create
+two owners and eventually invalidate one of them.
+
+For upgrades that still have a legacy instance-local protoAgent store, the default
+`inherit_config` fleet-create path transfers that store into the one box location only
+after all other workspace setup succeeds. The transfer holds both store locks, preserves
+the exact credential document (including provenance), refuses a different existing box
+login or an explicit disconnect marker, and rolls back multi-provider write failures.
+The new member then inherits the same store in place. Vendor CLI credentials remain
+untouched, and `inherit_config: false` performs no transfer.
+
 ## Open items
 
 - **Claude end-to-end still unproven on a real subscription** — the sign-in URL + PKCE +

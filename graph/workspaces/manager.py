@@ -390,9 +390,9 @@ def create(
         which is the exact property a snapshot exists to avoid. The overlay is created EMPTY
         and credentials arrive only as operator-supplied values.
       * ``from_config`` — a FULL clone of another agent's config + secrets (identity re-stamped).
-      * ``inherit_model`` — a BLANK template, but with only that agent's ``model:`` section +
-        secrets popped over (the gateway), so it boots ready-to-chat WITHOUT inheriting its
-        plugins/skills. This is the fleet's default "new agent" (a blank agent, model carried).
+      * ``inherit_model`` — a BLANK template with that agent's ``model:`` section,
+        provider registry, gateway secrets, and shared protoAgent OAuth login, so it boots
+        ready-to-chat WITHOUT inheriting plugins/skills/identity. This is the fleet's default.
       * neither — the plain blank template.
 
     ``soul`` (the picked archetype's base SOUL.md, ADR 0042) is written into the workspace's
@@ -454,7 +454,7 @@ def create(
         cfg.write_text(_CONFIG_TEMPLATE.format(name=name, id=wid), encoding="utf-8")
         (cfg_dir / "secrets.yaml").write_text("# Per-workspace secrets overlay.\n", encoding="utf-8")
         if inherit_model:
-            _overlay_model(cfg, ws, inherit_model)  # gateway only — not plugins/skills
+            _overlay_model(cfg, ws, inherit_model)  # model connections only — not plugins/skills
         if shared_skills:
             _stamp_identity(cfg, name, True, instance_id=wid)
 
@@ -538,6 +538,18 @@ def create(
             # member's secrets.yaml — separate from mcp because these are standalone secrets, not
             # `${input}` fills, and land in the untracked 0600 overlay rather than the config.
             _apply_bundle_secrets(cfg, ws / "plugins.lock", secrets or [])
+        if inherit_model:
+            # Final failure-capable step: modern OAuth stores are already box-shared;
+            # an older source-instance override is explicitly TRANSFERRED (never copied)
+            # into that one fleet store.  Doing this after bundle/config seeding means a
+            # later create rollback cannot silently change credential ownership.
+            from graph.providers.oauth import OAuthStoreTransferError, promote_instance_oauth_to_box
+
+            try:
+                oauth_source = Path(inherit_model).expanduser()
+                promote_instance_oauth_to_box(oauth_source if oauth_source.is_dir() else oauth_source.parent)
+            except OAuthStoreTransferError as exc:
+                raise WorkspaceError(str(exc)) from exc
     except Exception:
         shutil.rmtree(ws, ignore_errors=True)
         raise
@@ -1099,33 +1111,42 @@ _register_project_inputs = register_project_inputs
 
 
 def _overlay_model(cfg: Path, ws: Path, src: str) -> None:
-    """Pop only the ``model:`` section + secrets from another agent's config into this blank one
-    — the gateway (provider/api_base/key) carries over so the agent boots ready-to-chat, but its
-    plugins/skills/identity stay the blank-template defaults. Best-effort + comment-preserving."""
+    """Pop model connections + credentials from another agent into this blank one.
+
+    A provider-qualified model is incomplete without its ``providers:`` registry and
+    gateway keys.  OAuth transfer is finalized by :func:`create` only after bundle
+    seeding succeeds.  Plugins, skills, identity, and unrelated secrets remain isolated.
+    Best-effort + comment-preserving.
+    """
     src_path = Path(src).expanduser()
     src_cfg = src_path / "langgraph-config.yaml" if src_path.is_dir() else src_path
     if not src_cfg.exists():
         return
     import yaml
 
-    from graph.config_io import load_yaml_doc, save_yaml_doc
+    from graph.config_io import load_yaml_doc, save_secrets, save_yaml_doc
 
     # Read the host's model as PLAIN data (not ruamel) — a ruamel node carries a parent ref and
     # can't be grafted into another document. The destination stays ruamel (comment-preserving).
     host = yaml.safe_load(read_text_utf8(src_cfg)) or {}
     new = load_yaml_doc(cfg)
-    if isinstance(host, dict) and isinstance(new, dict) and host.get("model"):
-        new["model"] = host["model"]
-        save_yaml_doc(new, cfg)  # save_yaml_doc(doc, path) — doc first
+    if isinstance(host, dict) and isinstance(new, dict):
+        changed = False
+        for section in ("model", "providers"):
+            if host.get(section):
+                new[section] = host[section]
+                changed = True
+        if changed:
+            save_yaml_doc(new, cfg)  # save_yaml_doc(doc, path) — doc first
     src_sec = (src_path if src_path.is_dir() else src_path.parent) / "secrets.yaml"
-    if src_sec.exists():  # carries the api_key so the gateway actually works — sits next to cfg
-        shutil.copyfile(src_sec, cfg.parent / "secrets.yaml")
-        # copyfile does not carry mode — the member's overlay must be owner-only like
-        # every other secrets file (it holds the host's gateway key + delegate secrets).
-        from infra.paths import harden_private_file
-
-        harden_private_file(cfg.parent / "secrets.yaml")
-
+    if src_sec.exists():
+        # Only model credentials cross this blank-agent boundary.  Copying the whole
+        # overlay also leaked plugin/delegate secrets despite the API's isolation promise.
+        source_secrets = yaml.safe_load(read_text_utf8(src_sec)) or {}
+        if isinstance(source_secrets, dict):
+            model_secrets = {k: source_secrets[k] for k in ("model", "providers") if source_secrets.get(k)}
+            if model_secrets:
+                save_secrets(model_secrets, cfg.parent / "secrets.yaml")
 
 def _stamp_identity(cfg: Path, name: str, shared_skills: bool, *, instance_id: str | None = None) -> None:
     """Force identity.name (display) + instance.id (the opaque data-scope key) on a

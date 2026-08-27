@@ -1600,6 +1600,32 @@ def test_anthropic_store_follows_the_same_scope_rule(monkeypatch, tmp_path):
     assert oauth_mod._anthropic_store_path(paths) == inst / "anthropic-oauth.json"
 
 
+def test_legacy_oauth_promotion_rolls_back_if_second_box_write_fails(monkeypatch, tmp_path):
+    """The two-provider compatibility transfer cannot strand only one credential at
+    box scope when the second durable write fails."""
+    box, inst = tmp_path / "box", tmp_path / "inst"
+    inst.mkdir()
+    codex = inst / "codex-oauth.json"
+    anthropic = inst / "anthropic-oauth.json"
+    codex.write_text('{"tokens":{"refresh_token":"codex"}}')
+    anthropic.write_text('{"refresh_token":"claude"}')
+    monkeypatch.setattr(oauth_mod, "box_root", lambda: box)
+    real_atomic_write = oauth_mod.atomic_write
+
+    def fail_anthropic(path, text, **kwargs):
+        if path == box / "anthropic-oauth.json":
+            raise OSError("disk full")
+        return real_atomic_write(path, text, **kwargs)
+
+    monkeypatch.setattr(oauth_mod, "atomic_write", fail_anthropic)
+    with pytest.raises(oauth_mod.OAuthStoreTransferError, match="could not transfer"):
+        oauth_mod.promote_instance_oauth_to_box(inst)
+
+    assert codex.exists() and anthropic.exists()
+    assert not (box / "codex-oauth.json").exists()
+    assert not (box / "anthropic-oauth.json").exists()
+
+
 def test_one_box_signin_serves_every_instance(monkeypatch, tmp_path):
     """The whole point: sign in once, and an instance that never signed in resolves."""
     box = tmp_path / "box"
