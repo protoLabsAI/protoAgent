@@ -112,6 +112,9 @@ test("⌘B / ⌘⌥B toggle the left rail / right panel (global)", async ({ page
 
 test("Settings ▸ Keyboard lists the bindings (opened via mod+,)", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
+  // The document load event precedes the async runtime readiness probe. The workspace
+  // (and therefore its global keybindings) intentionally mounts only after that probe.
+  await expect(page.locator(".app-shell-main")).toBeVisible();
   await page.keyboard.press("ControlOrMeta+Comma"); // settings.open
   await page.getByText("Keyboard", { exact: true }).click();
   await expect(page.getByText("Command palette", { exact: true })).toBeVisible();
