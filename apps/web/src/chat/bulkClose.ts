@@ -5,6 +5,8 @@
 
 export type BulkCloseMode = "others" | "left" | "right";
 
+export type GoalCloseDisposition = "confirm-goal" | "direct" | "blocked";
+
 /** Goal-backed tabs must use the Stop-vs-Detach confirmation path. In
  * particular, Shift-delete may skip the ordinary delete confirmation but must
  * never skip this ownership decision and tombstone a still-running goal. */
@@ -13,6 +15,26 @@ export function requiresGoalCloseConfirmation<T extends { session_id: string; st
   sessionId: string,
 ): boolean {
   return goals.some((goal) => goal.session_id === sessionId && goal.status === "active");
+}
+
+/** Resolve ownership from a just-completed authoritative goals read. Cached
+ * absence is not evidence that a tab is not goal-backed: on a cold mount or
+ * stale cache, deleting on that assumption can tombstone a running goal's
+ * session. A failed read therefore blocks the shortcut instead of failing
+ * open. */
+export async function resolveGoalCloseDisposition<
+  T extends { session_id: string; status: string },
+>(
+  sessionId: string,
+  refreshGoals: () => Promise<readonly T[] | undefined>,
+): Promise<GoalCloseDisposition> {
+  try {
+    const goals = await refreshGoals();
+    if (!goals) return "blocked";
+    return requiresGoalCloseConfirmation(goals, sessionId) ? "confirm-goal" : "direct";
+  } catch {
+    return "blocked";
+  }
 }
 
 /**

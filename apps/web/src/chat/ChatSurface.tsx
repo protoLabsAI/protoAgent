@@ -55,7 +55,7 @@ import { loadDraft, loadScroll, loadSteers, saveDraft, saveScroll, saveSteers } 
 import { createStreamWatchdog } from "./streamWatchdog";
 import { ADD_SELECTOR, isIncognitoAddClick, trackShiftHeld } from "./shiftCue";
 import { composerPlaceholder } from "./composerPlaceholder";
-import { requiresGoalCloseConfirmation, sessionsToClose } from "./bulkClose";
+import { resolveGoalCloseDisposition, sessionsToClose } from "./bulkClose";
 import { placeConsumedSteers } from "./steerPlacement";
 import { canClearSession, retireChatSession } from "./sessionRetirement";
 
@@ -167,7 +167,8 @@ export function ChatSurface({
   // Active goals keyed by session — a tab whose session is driving a goal gets a different
   // close flow (detach + keep running) instead of the plain delete. Cached; refetches on
   // focus. `status: "active"` is the only in-flight state.
-  const goalSessions = useQuery(goalsQuery()).data?.goals ?? [];
+  const goalsState = useQuery(goalsQuery());
+  const goalSessions = goalsState.data?.goals ?? [];
   const closingGoal = pendingClose
     ? goalSessions.find((g) => g.session_id === pendingClose && g.status === "active")
     : undefined;
@@ -298,11 +299,26 @@ export function ChatSurface({
     if (!session) return;
     e.preventDefault();
     e.stopPropagation(); // beat the DS close button's onClick → no confirm dialog
-    if (requiresGoalCloseConfirmation(goalSessions, session.id)) {
-      setPendingClose(session.id);
-      return;
-    }
-    void closeSession(session.id, false); // false = no knowledge harvest
+    // Cached absence is not authoritative: the query may still be mounting or
+    // refetching after a goal changed. Always refresh before the no-confirm
+    // shortcut, and fail closed if ownership cannot be verified.
+    void (async () => {
+      const disposition = await resolveGoalCloseDisposition(session.id, async () => {
+        const result = await goalsState.refetch();
+        // A failed background refetch may retain previously successful data;
+        // that cache is still stale and must not authorize deletion.
+        return result.error === null && result.data ? result.data.goals : undefined;
+      });
+      // The tab may have disappeared while the authoritative read was in flight.
+      if (!chatStore.getSnapshot().sessions.some((candidate) => candidate.id === session.id)) return;
+      if (disposition === "confirm-goal") {
+        setPendingClose(session.id);
+      } else if (disposition === "direct") {
+        await closeSession(session.id, false); // false = no knowledge harvest
+      } else {
+        onError("Couldn't verify whether this chat owns an active goal. The tab was kept; try again.");
+      }
+    })();
   }
 
   // Keyboard twin of the Shift+click incognito gesture (#1697): Shift+Enter/Space on the
