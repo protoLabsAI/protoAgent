@@ -387,6 +387,9 @@ def register_operator_routes(
     async def _tasks_close(issue_id: str, req: TaskCloseRequest):
         try:
             issue = await asyncio.to_thread(task_svc.close, req.project_path, issue_id, req.reason)
+            from graph.self_improvement import dispatch_task_review
+
+            dispatch_task_review(issue, reason=req.reason or "")
             return {"issue": issue}
         except Exception as exc:
             raise _http_error(exc) from exc

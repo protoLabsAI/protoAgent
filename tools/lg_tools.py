@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import hashlib
 import logging
 import operator as _op
 from datetime import UTC, datetime, timedelta
@@ -1390,12 +1391,23 @@ def _build_task_tools(tasks_store) -> list:
         return f"Updated {i['id']}: [{i['status']}] {i['title']}"
 
     @tool
-    def task_close(issue_id: str, reason: str = "") -> str:
+    def task_close(
+        issue_id: str,
+        reason: str = "",
+        state: Annotated[Any, InjectedState] = None,
+    ) -> str:
         """Close an issue (done, or won't-do). Optional ``reason``."""
         try:
             i = tasks_store.close(issue_id, reason=reason or None)
         except (KeyError, ValueError) as exc:
             return f"Error: {exc}"
+        session_id = _session_id_from(state)
+        try:
+            from graph.self_improvement import dispatch_task_review
+
+            dispatch_task_review(i, session_id=session_id, reason=reason)
+        except Exception:  # noqa: BLE001 — curation must never break task closure
+            log.exception("[self-improvement] task-close review scheduling failed")
         return f"Closed {i['id']}: {i['title']}"
 
     return [task_create, task_list, task_update, task_close]
@@ -1793,7 +1805,7 @@ def load_skill(name: str) -> str:
     return "\n".join(lines)
 
 
-def _build_curation_tools():
+def _build_curation_tools(*, provenance_required: bool = False):
     """Read-mostly tools for the memory/skill curation subagents (`dream` /
     `distill`, ADR 0054). They read from STATE at call time (the ``set_goal``
     pattern) so ``get_all_tools`` needs no new wiring, and they are deliberately
@@ -1891,6 +1903,8 @@ def _build_curation_tools():
         description: str,
         body: str,
         tools: list[str] | None = None,
+        provenance_reason: str = "",
+        source_session_id: str = "",
         state: Annotated[Any, InjectedState] = None,
     ) -> str:
         """Create a NEW reusable skill (a procedure/playbook the agent will be
@@ -1914,26 +1928,47 @@ def _build_curation_tools():
             return "Error: skill name is required."
         if not (description or "").strip():
             return "Error: a one-line description is required (it's how the skill is matched)."
-        existing = {(s.get("name") or "").strip().lower() for s in idx.all_skills()}
+        from graph.skills.authoring import slugify
+
+        all_skills = idx.all_skills()
+        existing = {(s.get("name") or "").strip().lower() for s in all_skills}
         if name.lower() in existing:
             return (
                 f"A skill named {name!r} already exists — refusing to overwrite "
                 "(additive-only). Pick a distinct name, or propose extending the "
                 "existing one for review instead of auto-creating."
             )
+        target_slug = slugify(name)
+        if not target_slug:
+            return "Error: skill name must contain at least one ASCII letter or digit."
+        if any(slugify(s.get("name", "")) == target_slug for s in all_skills):
+            return f"Error: skill name {name!r} collides with an existing skill's storage path."
         from graph.extensions.skills import SkillV1Artifact
 
+        trusted_session_id = _session_id_from(state)
+        session_id = trusted_session_id if provenance_required else ((source_session_id or "").strip() or trusted_session_id)
+        if provenance_required and (not session_id or not (provenance_reason or "").strip()):
+            return "Error: self-improvement writes require a trusted source session and evidence-based provenance reason."
+        prompt = body or ""
+        clean_reason = " ".join(provenance_reason.split()).replace("--", "—")
+        if clean_reason:
+            prompt = (
+                f"{prompt.rstrip()}\n\n<!-- self-improvement provenance: "
+                f"session={session_id or 'unknown'}; reason={clean_reason} -->"
+            )
         try:
             art = SkillV1Artifact(
                 name=name,
                 description=description.strip(),
-                prompt_template=body or "",
+                prompt_template=prompt,
                 tools_used=list(tools or []),
-                source_session_id=_session_id_from(state),
+                source_session_id=session_id,
             )
         except (ValueError, TypeError) as exc:
             return f"Error building skill: {exc}"
-        idx.add_skill(art, source="distilled")
+        inserted_id = idx.add_skill(art, source="distilled")
+        if provenance_required and inserted_id is None:
+            return "Error: the skills index did not confirm creation; no skill was reported as created."
         return (
             f"Created skill {name!r} (source=distilled, confidence 1.0). It'll be "
             "listed in the agent's <available_skills> index and loadable on demand "
@@ -1941,6 +1976,136 @@ def _build_curation_tools():
         )
 
     return [recent_activity, list_skills, save_skill]
+
+
+def _build_skill_editor_tools(*, provenance_required: bool = False):
+    """Guarded update/delete tools for ``self_improvement.skills: auto``.
+
+    Every destructive mutation snapshots the outgoing skill under the instance's
+    ``skills/.history`` tree before changing the live index/file.
+    """
+
+    @tool
+    def update_skill(
+        name: str,
+        description: str,
+        body: str,
+        reason: str,
+        tools: list[str] | None = None,
+        source_session_id: str = "",
+        state: Annotated[Any, InjectedState] = None,
+    ) -> str:
+        """Update an editable reusable skill after learning a concrete improvement.
+
+        Requires the complete replacement description/body plus an evidence-based
+        reason. The outgoing version is archived for rollback and the replacement is
+        stamped with the producing session. Bundled and commons skills are read-only.
+        """
+        from graph.skills.authoring import archive_skill, classify, restore_skill_snapshot, slugify, write_skill
+        from infra.paths import user_skills_dir
+        from runtime.state import STATE
+
+        idx = STATE.skills_index
+        if idx is None:
+            return "Skills index is not available — cannot update."
+        if not all((name or "").strip() for name in (name, description, body, reason)):
+            return "Error: name, description, body, and evidence-based reason are required."
+        current = next((s for s in idx.all_skills() if str(s.get("name", "")).casefold() == name.strip().casefold()), None)
+        if current is None:
+            return f"No skill named {name!r} exists."
+        root = user_skills_dir(create=True)
+        target_slug = slugify(str(current.get("name", "")))
+        if not target_slug:
+            return "Error: refusing to update a skill with an empty storage slug."
+        if any(
+            s.get("id") != current.get("id") and slugify(str(s.get("name", ""))) == target_slug
+            for s in idx.all_skills()
+        ):
+            return f"Error: refusing to update {name!r}; its storage path collides with another skill."
+        origin, editable = classify(current, root)
+        if not editable:
+            return f"Refusing to update {origin} skill {name!r}; only user/learned skills are editable."
+        trusted_session_id = _session_id_from(state)
+        session_id = trusted_session_id if provenance_required else ((source_session_id or "").strip() or trusted_session_id)
+        if provenance_required and not session_id:
+            return "Error: self-improvement writes require a trusted source session."
+        backup = archive_skill(root, current, session_id=session_id, reason=reason.strip())
+        try:
+            artifact = write_skill(
+                root,
+                current.get("name", name),
+                description.strip(),
+                body.strip(),
+                tools=list(current.get("tools_used") or []) if tools is None else list(tools),
+                user_facing=bool(current.get("user_facing", False)),
+                slash=str(current.get("slash", "") or ""),
+                user_only=bool(current.get("user_only", False)),
+                provenance={"session_id": session_id, "reason": reason.strip()},
+            )
+            if not idx.delete_skill(int(current["id"])):
+                restore_skill_snapshot(root, current.get("name", name), backup)
+                return f"Error updating skill: the index did not confirm removal of the old row; restored {backup}."
+            inserted_id = idx.add_skill(artifact, source="disk")
+            if inserted_id is None:
+                restored = restore_skill_snapshot(root, current.get("name", name), backup)
+                idx.add_skill(restored, source="disk")
+                return f"Error updating skill: the index did not confirm the replacement; restored {backup}."
+        except Exception as exc:  # noqa: BLE001
+            return f"Error updating skill (backup retained at {backup}): {exc}"
+        return f"Updated skill {name!r}; previous version archived at {backup}."
+
+    @tool
+    def delete_skill(
+        name: str,
+        reason: str,
+        source_session_id: str = "",
+        state: Annotated[Any, InjectedState] = None,
+    ) -> str:
+        """Delete an obsolete editable skill with an evidence-based reason.
+
+        The complete outgoing skill is archived for rollback first. Bundled and
+        commons skills are always read-only.
+        """
+        from graph.skills.authoring import archive_skill, classify, remove_skill, slugify
+        from graph.skills.loader import parse_skill_md
+        from infra.paths import user_skills_dir
+        from runtime.state import STATE
+
+        idx = STATE.skills_index
+        if idx is None:
+            return "Skills index is not available — cannot delete."
+        if not (name or "").strip() or not (reason or "").strip():
+            return "Error: name and evidence-based reason are required."
+        current = next((s for s in idx.all_skills() if str(s.get("name", "")).casefold() == name.strip().casefold()), None)
+        if current is None:
+            return f"No skill named {name!r} exists."
+        root = user_skills_dir(create=True)
+        target_slug = slugify(str(current.get("name", "")))
+        if not target_slug:
+            return "Error: refusing to delete a skill with an empty storage slug."
+        if any(
+            s.get("id") != current.get("id") and slugify(str(s.get("name", ""))) == target_slug
+            for s in idx.all_skills()
+        ):
+            return f"Error: refusing to delete {name!r}; its storage path collides with another skill."
+        origin, editable = classify(current, root)
+        if not editable:
+            return f"Refusing to delete {origin} skill {name!r}; only user/learned skills are editable."
+        trusted_session_id = _session_id_from(state)
+        session_id = trusted_session_id if provenance_required else ((source_session_id or "").strip() or trusted_session_id)
+        if provenance_required and not session_id:
+            return "Error: self-improvement writes require a trusted source session."
+        backup = archive_skill(root, current, session_id=session_id, reason=reason.strip())
+        if not idx.delete_skill(int(current["id"])):
+            return f"Error: the index did not confirm deletion of {name!r}; backup retained at {backup}."
+        if origin == "user" and not remove_skill(root, current.get("name", name)):
+            restored = parse_skill_md(backup)
+            if restored is not None:
+                idx.add_skill(restored, source="disk")
+            return f"Error: could not remove live skill {name!r}; index restored and backup retained at {backup}."
+        return f"Deleted skill {name!r}; previous version archived at {backup}."
+
+    return [update_skill, delete_skill]
 
 
 # ── self-authored persona: edit_soul (guarded, ADR 0079/0066/0081) ────────────
@@ -2037,6 +2202,7 @@ _CONFIG_WRITE_DENIED = (
     "plugins",           # enabling a plugin runs its code in-process AS the agent
     "runtime",           # per-agent command overrides, same spawn path as delegates
     "security",
+    "self_improvement", # automatic durable mutation policy is operator-owned
     "soul",              # persona has its own guarded path (edit_soul, ADR 0081)
     "tools",             # incl. self_config_enabled itself: no self-widening
 )
@@ -2157,7 +2323,7 @@ def _build_config_editor_tool() -> list:
     return [set_config]
 
 
-def _build_soul_editor_tool(reload_callback=None) -> list:
+def _build_soul_editor_tool(reload_callback=None, *, provenance_required: bool = False) -> list:
     """Bind the guarded self-persona editor (config ``soul.self_edit_enabled``, default off).
 
     ``edit_soul`` lets the LEAD agent rewrite a section of its own ``SOUL.md`` — its identity
@@ -2168,7 +2334,14 @@ def _build_soul_editor_tool(reload_callback=None) -> list:
     next natural reload/restart."""
 
     @tool
-    async def edit_soul(section: str, content: str, mode: str = "replace") -> str:
+    async def edit_soul(
+        section: str,
+        content: str,
+        mode: str = "replace",
+        reason: str = "",
+        source_session_id: str = "",
+        state: Annotated[Any, InjectedState] = None,
+    ) -> str:
         """Rewrite a section of your own persona file (SOUL.md) — how you think, speak, and carry
         yourself. Use this to durably refine your identity when you learn something about how you
         should show up.
@@ -2177,13 +2350,14 @@ def _build_soul_editor_tool(reload_callback=None) -> list:
           case-insensitively). If it doesn't exist yet, a new ``## <section>`` block is created.
         - ``content``: the new markdown for that section's body.
         - ``mode``: "replace" (swap the section body) or "append" (add to it).
+        - ``reason``: optional evidence for why this durable persona change was warranted.
 
         SCOPE — persona ONLY: identity, values, voice, temperament. Do NOT put operating
         instructions, task doctrine, or tool rules here — SOUL.md stays pure persona (ADR 0079).
         Every edit is snapshotted and reversible from Settings ▸ Identity, your operator is
         notified of the change, and it takes effect on your next turn (not the current one).
         Returns a confirmation with the live persona revision."""
-        from graph.config_io import read_soul, soul_revision, write_soul
+        from graph.config_io import read_soul, record_soul_edit_provenance, soul_revision, write_soul
 
         section = (section or "").strip()
         if not section:
@@ -2197,6 +2371,11 @@ def _build_soul_editor_tool(reload_callback=None) -> list:
                 f"Error: refusing to write an empty section {section!r} — pass non-empty content. "
                 "(To retire a persona trait, replace the section with its revised text instead.)"
             )
+        trusted_session_id = _session_id_from(state)
+        session_id = trusted_session_id if provenance_required else ((source_session_id or "").strip() or trusted_session_id)
+        clean_reason = (reason or "").strip()
+        if provenance_required and (not session_id or not clean_reason):
+            return "Error: self-improvement persona writes require a trusted source session and evidence-based reason."
 
         try:
             current = read_soul()
@@ -2216,11 +2395,27 @@ def _build_soul_editor_tool(reload_callback=None) -> list:
                 "Keep the persona tight — trim the section or fold it into an existing one."
             )
 
+        new_rev = hashlib.sha1(updated.encode("utf-8")).hexdigest()[:8]
+        provenance_path = None
+        if provenance_required:
+            try:
+                provenance_path = record_soul_edit_provenance(
+                    revision=new_rev,
+                    session_id=session_id,
+                    reason=clean_reason,
+                    section=section,
+                    mode=mode,
+                )
+            except Exception as exc:  # noqa: BLE001 — provenance is mandatory for this write path
+                return f"Error: durable persona provenance could not be recorded; SOUL.md was not changed: {exc}"
+
         try:
             # Archives the OUTGOING persona to soul-history (#1691) before overwriting, so this
             # is reversible from Settings ▸ Identity.
             write_soul(updated)
         except Exception as exc:  # noqa: BLE001
+            if provenance_path is not None:
+                provenance_path.unlink(missing_ok=True)
             return f"Error: persona write failed: {exc}"
 
         new_rev = soul_revision()
@@ -2235,6 +2430,8 @@ def _build_soul_editor_tool(reload_callback=None) -> list:
                 "section": section,
                 "mode": mode,
                 "revision": new_rev,
+                "session_id": session_id,
+                "reason": clean_reason,
                 "summary": f"Agent edited its own persona — {verb.lower()} section '{section}' (SOUL.md → {new_rev}).",
             },
         )
@@ -2286,6 +2483,8 @@ def get_all_tools(
     dropped=None,
     soul_edit_enabled=False,
     self_config_enabled=False,
+    skill_edit_enabled=False,
+    self_improvement_provenance_required=False,
     reload_callback=None,
 ):
     """Return every LangChain tool the lead agent + subagents can use.
@@ -2312,6 +2511,8 @@ def get_all_tools(
       graph reload, INJECTED (not imported) and handed to ``edit_soul`` so a
       persona self-edit goes live on the next turn without ``tools/`` reaching
       into ``server/``. ``None`` degrades to next-natural-reload semantics.
+    - ``skill_edit_enabled`` binds guarded skill update/delete tools. Each mutation
+      archives the outgoing skill for rollback before changing the live artifact.
 
     Pass ``None`` to disable either subsystem — the lead agent runs
     fine with just the four keyless general tools.
@@ -2388,11 +2589,18 @@ def get_all_tools(
         # default off). Lead-agent only: no subagent build passes soul_edit_enabled, so
         # edit_soul never reaches a bounded subagent. reload_callback (server-injected)
         # makes the edit live on the next turn without tools/ importing server/.
-        tools.extend(_build_soul_editor_tool(reload_callback))
+        tools.extend(
+            _build_soul_editor_tool(
+                reload_callback,
+                provenance_required=self_improvement_provenance_required,
+            )
+        )
+    if skill_edit_enabled:
+        tools.extend(_build_skill_editor_tools(provenance_required=self_improvement_provenance_required))
     # ADR 0054 — curation tools for the dream/distill subagents (read-only activity
     # + skill inventory + additive-only skill creation). Self-gate on STATE at call
     # time; present in the full set so the subagent allowlists can pick them up.
-    tools.extend(_build_curation_tools())
+    tools.extend(_build_curation_tools(provenance_required=self_improvement_provenance_required))
     # Operator denylist (config ``tools.disabled``): drop named core tools without
     # editing this function. Applied last so it covers every branch above. (graph.agent
     # re-applies it over the FULL assembled set — extra/fs/late tools — post-assembly.

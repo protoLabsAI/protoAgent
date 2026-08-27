@@ -138,7 +138,9 @@ async def test_edit_soul_writes_snapshots_and_reports_live(monkeypatch, tmp_path
         return True, "reloaded"
 
     edit_soul = _build_soul_editor_tool(fake_reload)[0]
-    msg = await edit_soul.ainvoke({"section": "Voice", "content": "Warm and plain.", "mode": "replace"})
+    msg = await edit_soul.ainvoke(
+        {"section": "Voice", "content": "Warm and plain.", "mode": "replace", "reason": "operator prefers warmth"}
+    )
 
     # persisted
     live = (home / "config" / "SOUL.md").read_text()
@@ -164,14 +166,58 @@ async def test_edit_soul_emits_operator_notice(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(host.HOST, "publish", lambda topic, data: events.append((topic, data)))
 
     edit_soul = _build_soul_editor_tool(None)[0]
-    msg = await edit_soul.ainvoke({"section": "Voice", "content": "Warm and plain.", "mode": "replace"})
+    msg = await edit_soul.ainvoke(
+        {"section": "Voice", "content": "Warm and plain.", "mode": "replace", "reason": "operator prefers warmth"}
+    )
 
     persona_events = [(t, d) for t, d in events if t == "persona.self_edited"]
     assert len(persona_events) == 1
     _, data = persona_events[0]
     assert data["section"] == "Voice" and data["mode"] == "replace" and data["revision"]
+    assert data["reason"] == "operator prefers warmth" and "session_id" in data
     assert "persona" in data["summary"].lower()
     assert "operator has been notified" in msg
+
+
+async def test_reviewer_soul_edit_requires_and_persists_trusted_provenance(monkeypatch, tmp_path: Path):
+    home = _home(monkeypatch, tmp_path)
+    config_io.write_soul(SAMPLE)
+    edit_soul = _build_soul_editor_tool(None, provenance_required=True)[0]
+
+    refused = await edit_soul.coroutine(
+        "Voice", "Warm.", reason="", source_session_id="forged", state={"session_id": "trusted"}
+    )
+    assert "evidence-based reason" in refused
+    assert config_io.read_soul() == SAMPLE
+
+    changed = await edit_soul.coroutine(
+        "Voice",
+        "Warm.",
+        reason="verified operator feedback",
+        source_session_id="forged",
+        state={"session_id": "trusted"},
+    )
+    assert "persona now at revision" in changed
+    records = list((home / "config" / "soul-history").glob("*.self-edit.json"))
+    assert len(records) == 1
+    payload = records[0].read_text()
+    assert '"session_id": "trusted"' in payload
+    assert "forged" not in payload
+
+
+def test_soul_edit_provenance_is_capped_with_history(monkeypatch, tmp_path: Path):
+    home = _home(monkeypatch, tmp_path)
+    monkeypatch.setattr(config_io, "_SOUL_HISTORY_CAP", 2)
+    for revision in ("rev-a", "rev-b", "rev-c"):
+        config_io.record_soul_edit_provenance(
+            revision=revision,
+            session_id="session-42",
+            reason="verified",
+            section="Voice",
+            mode="replace",
+        )
+    records = list((home / "config" / "soul-history").glob("*.self-edit.json"))
+    assert len(records) == 2
 
 
 async def test_edit_soul_rejected_edit_emits_no_notice(monkeypatch, tmp_path: Path):

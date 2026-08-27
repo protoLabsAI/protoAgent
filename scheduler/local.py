@@ -864,7 +864,10 @@ class LocalScheduler:
             wake_header = "[Autonomous wake — a wait you scheduled has elapsed. Continue:]"
         else:
             wake_header = "[Autonomous wake — scheduled run. Orient from <working_state>, then:]"
-        wake_prompt = f"{wake_header}\n\n{job.prompt}"
+        # Control-command jobs must remain slash-first: prepending the autonomous
+        # header turns `/self-improve` into ordinary lead-agent text and bypasses
+        # the bounded reviewer/tool policy entirely.
+        wake_prompt = job.prompt if job.id.startswith("self-improvement-") else f"{wake_header}\n\n{job.prompt}"
 
         message_id = str(uuid.uuid4())
         body = {

@@ -824,6 +824,7 @@ CONFIG_INPUT_RESERVED_SECTIONS = frozenset(
     {
         "model", "auth", "network", "security", "egress", "plugins", "filesystem",
         "projects", "onboarding", "delegates", "identity", "instance", "secrets", "mcp",
+        "self_improvement",
     }
 )
 

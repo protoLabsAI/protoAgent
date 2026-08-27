@@ -1006,6 +1006,15 @@ class LangGraphConfig:
     # opts in via ``soul.self_edit_enabled: true``.
     soul_self_edit_enabled: bool = False
 
+    # Unified, opt-in self-improvement policy (#3069). The master switch gates the
+    # opportunistic post-goal/task review loop; each facet then chooses whether the review
+    # is disabled, files an operator task, or writes directly. Manual /distill and the
+    # legacy soul.self_edit_enabled tool remain independent for backward compatibility.
+    self_improvement_enabled: bool = False
+    self_improvement_soul_md: str = "auto"  # off | propose | auto
+    self_improvement_skills: str = "propose"  # off | propose | auto
+    self_improvement_distillation: str = "propose"  # off | propose | auto
+
     # Deterministic persona drift detection (#1986). A read-only curation pass
     # (lineage of the dream/distill maintenance passes) periodically diffs the live
     # ``SOUL.md`` against its EARLIEST recorded soul-history snapshot — net size
@@ -1907,6 +1916,18 @@ class LangGraphConfig:
                 data.get("watches", {}).get("keep_terminal_h", cls.watch_keep_terminal_h) or 0
             ),
             soul_self_edit_enabled=soul.get("self_edit_enabled", cls.soul_self_edit_enabled),
+            self_improvement_enabled=bool(
+                data.get("self_improvement", {}).get("enabled", cls.self_improvement_enabled)
+            ),
+            self_improvement_soul_md=str(
+                data.get("self_improvement", {}).get("soul_md", cls.self_improvement_soul_md) or "off"
+            ),
+            self_improvement_skills=str(
+                data.get("self_improvement", {}).get("skills", cls.self_improvement_skills) or "off"
+            ),
+            self_improvement_distillation=str(
+                data.get("self_improvement", {}).get("distillation", cls.self_improvement_distillation) or "off"
+            ),
             soul_drift_enabled=bool(soul_drift.get("enabled", cls.soul_drift_enabled)),
             soul_drift_interval_hours=int(
                 soul_drift.get("interval_hours", cls.soul_drift_interval_hours) or 0

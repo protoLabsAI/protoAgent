@@ -78,9 +78,15 @@ class Decision:
 
 
 class GoalController:
-    def __init__(self, config, store: GoalStore | None = None):
+    def __init__(self, config, store: GoalStore | None = None, *, scheduler=None):
         self._config = config
         self._store = store or GoalStore()
+        self._scheduler = scheduler
+
+    def reconfigure(self, config, *, scheduler=None) -> None:
+        """Refresh live policy dependencies after a settings reload."""
+        self._config = config
+        self._scheduler = scheduler
 
     @property
     def store(self) -> GoalStore:
@@ -530,6 +536,10 @@ class GoalController:
         self._store.set(state)
         # Plugin lifecycle reactions (ADR 0028 D4) — notify / record / set next goal.
         await fire_goal_hooks(status, state)
+        if status == "achieved":
+            from graph.self_improvement import schedule_review
+
+            schedule_review(self._config, self._scheduler, state)
         # Broadcast on the event bus (ADR 0039) so ANY plugin or the console can react to a terminal
         # goal — no goal_hook plugin required, no cross-dependency. `goal.achieved` on success;
         # `goal.failed` on exhausted/unachievable. Best-effort: a bus hiccup must never break finish.
