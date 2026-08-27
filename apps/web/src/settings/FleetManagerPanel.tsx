@@ -1,7 +1,19 @@
 import "../fleet/fleet.css";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link2, Pencil, Play, Plus, Radar, Server, Square, Trash2, Unlink2 } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  Link2,
+  Pencil,
+  Play,
+  Plus,
+  Radar,
+  Server,
+  Square,
+  Trash2,
+  Unlink2,
+} from "lucide-react";
 import { useState } from "react";
 
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
@@ -14,7 +26,7 @@ import { QuickSetting } from "./QuickSetting";
 import { agentHref, api, currentSlug } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { fleetQuery, queryKeys, settingsSchemaQuery } from "../lib/queries";
-import type { DiscoveredAgent, FleetAgent, SettingsGroup } from "../lib/types";
+import type { DiscoveredAgent, FleetAgent, FleetStatus, SettingsGroup } from "../lib/types";
 
 /** The manual add-remote form is submittable only with a name and an http(s) URL. Exported
  * (pure) so the enable rule is unit-tested without rendering the panel. The server does the
@@ -62,6 +74,65 @@ export function updateAutostartRoster(
 ): string[] {
   const others = roster.filter((entry) => entry !== agent.id && entry !== agent.name);
   return enabled ? [...others, agent.id] : others;
+}
+
+// ── Roster reorder controls (#3197, on the merged PR #3200 hub API) ──────────────────────
+// Explicit, accessible move-up / move-down is the NON-POINTER baseline for ordering the
+// fleet list; a drag-and-drop layer, if ever added, would be additive over these and reuse
+// the exact same PUT /api/fleet/order contract. Every helper keys on the member's IMMUTABLE
+// id (never the editable name/label), so reordering never changes a member's identity — only
+// its display rank. All are exported (pure) so payload order, boundary/busy disabled state,
+// error reconciliation, and accessible labels are unit-tested WITHOUT rendering the panel.
+
+/** The complete immutable-id order of the current roster — exactly the permutation the hub's
+ * `PUT /api/fleet/order` requires (host + local + remote, in display order), by each member's
+ * STABLE id. */
+export function rosterOrder(agents: Pick<FleetAgent, "id">[]): string[] {
+  return agents.map((a) => a.id);
+}
+
+/** Swap the member at `index` with its neighbour toward the head (`dir` -1) or tail (`dir` +1),
+ * returning the COMPLETE reordered id list to submit. A move that would fall off either
+ * boundary is a no-op returning the input unchanged — the guard matching the disabled
+ * boundary control, so a rogue call can never drop or duplicate an id. */
+export function reorderRoster(ids: string[], index: number, dir: -1 | 1): string[] {
+  const target = index + dir;
+  if (index < 0 || index >= ids.length || target < 0 || target >= ids.length) return ids;
+  const next = ids.slice();
+  [next[index], next[target]] = [next[target], next[index]];
+  return next;
+}
+
+/** A row can move up unless it's already first. */
+export const canMoveUp = (index: number): boolean => index > 0;
+
+/** A row can move down unless it's already last. */
+export const canMoveDown = (index: number, count: number): boolean => index < count - 1;
+
+/** Whether a move control is disabled: at the list boundary (dir-dependent) OR while a reorder
+ * is in flight (`busy`). The single guard the panel applies to every up/down button. */
+export function moveDisabled(dir: -1 | 1, index: number, count: number, busy: boolean): boolean {
+  if (busy) return true;
+  return dir < 0 ? !canMoveUp(index) : !canMoveDown(index, count);
+}
+
+/** Reorder live fleet `agents` by an id `order`, mirroring the server's own reconciliation so
+ * the optimistic cache write matches what GET /api/fleet will return: an agent named in `order`
+ * sorts to that rank; one NOT named keeps discovery order after every ranked agent. Never drops
+ * or duplicates a row — every input agent appears exactly once — so an in-flight add/remove (or
+ * a stale order missing an id) can't lose a member. An empty order is identity. */
+export function applyRosterOrder(agents: FleetAgent[], order: string[]): FleetAgent[] {
+  if (!order.length) return agents;
+  const rank = new Map(order.map((id, i) => [id, i] as const));
+  return [...agents].sort(
+    (a, b) => (rank.get(a.id) ?? order.length) - (rank.get(b.id) ?? order.length),
+  );
+}
+
+/** Accessible name for a row's move control — the member's DISPLAY name (`label ?? name`, the
+ * same text the row shows), so the button reads "Move <agent> up" / "Move <agent> down". */
+export function moveLabel(dir: -1 | 1, agent: Pick<FleetAgent, "name" | "label">): string {
+  return `Move ${agent.label ?? agent.name} ${dir < 0 ? "up" : "down"}`;
 }
 
 // Fleet manager (ADR 0042) — Settings → Agents. Lists the workspace agents with live
@@ -311,6 +382,25 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
     onSettled: () => qc.invalidateQueries({ queryKey: queryKeys.fleet }),
   });
 
+  // Roster reorder (#3197) — the move controls submit the COMPLETE immutable-id order to the
+  // merged hub API (PUT /api/fleet/order). The fleet cache is updated OPTIMISTICALLY so the
+  // reordered roster shows at once, then reconciled through queryKeys.fleet on settle — whether
+  // the mutation succeeds OR errors — so an authoritative GET brings back the true order without
+  // losing a row or a row action. Display order is presentation-only: no name/url/token/process/
+  // id ever changes (the payload is ids alone, and the optimistic write only re-sorts rows).
+  const reorder = useMutation({
+    mutationFn: (order: string[]) => api.setFleetOrder(order),
+    onMutate: (order) => {
+      qc.setQueryData<FleetStatus>(queryKeys.fleet, (current) =>
+        current ? { ...current, agents: applyRosterOrder(current.agents, order) } : current,
+      );
+    },
+    onError: (e) => toast({ tone: "error", title: "Couldn't reorder the fleet", message: errMsg(e) }),
+    onSettled: () => qc.invalidateQueries({ queryKey: queryKeys.fleet }),
+  });
+  const move = (index: number, dir: -1 | 1) =>
+    reorder.mutate(reorderRoster(rosterOrder(agents), index, dir));
+
   return (
     <section className="panel stage-panel">
       <PanelHeader
@@ -366,7 +456,7 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
           />
         ) : (
           <ul className="fleet-list">
-            {agents.map((a) => {
+            {agents.map((a, index) => {
               const isActive = slugOf(a) === slug; // slug = stable id, not name
               return (
                 <li key={a.id} className={`fleet-row${isActive ? " active" : ""}`}>
@@ -436,6 +526,24 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                     </span>
                   </div>
                   <div className="fleet-row-actions">
+                    {/* Explicit, accessible roster reorder (#3197) — the non-pointer baseline
+                        for ordering the fleet list. Rendered on EVERY row (the hub API takes a
+                        COMPLETE id permutation), disabled at the list boundaries and while a
+                        reorder is in flight; the id/name/URL/token/process state never change. */}
+                    <div className="fleet-reorder" role="group" aria-label={`Reorder ${a.label ?? a.name}`}>
+                      <Button icon variant="ghost"
+                        title={moveLabel(-1, a)} aria-label={moveLabel(-1, a)}
+                        disabled={moveDisabled(-1, index, agents.length, reorder.isPending)}
+                        onClick={() => move(index, -1)}>
+                        <ArrowUp size={14} />
+                      </Button>
+                      <Button icon variant="ghost"
+                        title={moveLabel(1, a)} aria-label={moveLabel(1, a)}
+                        disabled={moveDisabled(1, index, agents.length, reorder.isPending)}
+                        onClick={() => move(index, 1)}>
+                        <ArrowDown size={14} />
+                      </Button>
+                    </div>
                     {/* Boot autostart is a hub-owned process policy, so it applies only to
                         local workspace members — never the hub itself or a remote peer. */}
                     {!a.host && !a.remote ? (

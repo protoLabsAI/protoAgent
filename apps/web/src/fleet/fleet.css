@@ -61,6 +61,15 @@
   align-items: center;
   gap: 4px;
 }
+/* Explicit, accessible roster reorder controls (#3197) — the non-pointer baseline for
+   ordering the fleet list. A tight up/down pair leading the row actions; the DS <Button>
+   owns the disabled styling at the list boundaries and while a reorder is in flight. */
+.fleet-reorder {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: 4px;
+}
 .fleet-autostart-toggle {
   margin-right: 6px;
   font-size: 12px;
