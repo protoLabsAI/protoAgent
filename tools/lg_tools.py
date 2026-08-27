@@ -716,6 +716,9 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         content: str,
         domain: str = "general",
         heading: str | None = None,
+        memory_kind: str | None = None,
+        subject: str | None = None,
+        state: Annotated[Any, InjectedState] = None,
     ) -> str:
         """Store a fact, preference, or note in long-term memory.
 
@@ -730,6 +733,10 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
                 ``"general"``. Defaults to ``"general"``.
             heading: Optional short label (e.g. ``"coffee"``) used as a
                 stable de-dupe key by the eval suite and curator.
+            memory_kind: Optional typed classification — ``"profile"``,
+                ``"standing"``, ``"fact"``, ``"decision"``, ``"note"``,
+                ``"episode"``, ``"reference"``. Defaults to untyped.
+            subject: Optional freeform entity tag (e.g. ``"auth-migration"``).
 
         Returns ``"Stored chunk N in 'domain'."`` on success.
         """
@@ -750,10 +757,19 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         # tier (ADR 0069 D8) — this write path is model-driven, not operator-.
         import asyncio
 
+        # Stamp the session namespace when available (#3072).
+        ns = _session_id_from(state) if state else None
+
         def _write():
             try:
-                return knowledge_store.add_chunk(content, domain=domain, heading=heading, source_type="conversation")
-            except TypeError:  # plugin backend predating the source_type kwarg
+                return knowledge_store.add_chunk(
+                    content, domain=domain, heading=heading,
+                    source_type="conversation",
+                    namespace=ns,
+                    memory_kind=memory_kind,
+                    subject=subject,
+                )
+            except TypeError:  # plugin backend predating the new kwargs
                 return knowledge_store.add_chunk(content, domain=domain, heading=heading)
 
         chunk_id = await asyncio.to_thread(_write)
@@ -850,7 +866,12 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         )
 
     @tool
-    async def memory_recall(query: str, k: int = 5, domain: str | None = None) -> str:
+    async def memory_recall(
+        query: str,
+        k: int = 5,
+        domain: str | None = None,
+        memory_kind: str | None = None,
+    ) -> str:
         """Search long-term memory for chunks relevant to ``query``.
 
         Returns the top-k matches, one per line, each citing its provenance
@@ -865,6 +886,9 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         agent's history), not your own actions; pass the domain you actually
         want (e.g. your own, or ``claude-import`` to inspect the inherited set).
 
+        ``memory_kind`` scopes to a typed classification (e.g. ``"decision"``,
+        ``"fact"``, ``"profile"``).
+
         Returns ``"No matches."`` when the store is empty or nothing
         scores above the keyword threshold.
         """
@@ -872,19 +896,28 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         # search embeds the query over HTTP on hybrid stores — keep it off the loop.
         import asyncio
 
-        results = await asyncio.to_thread(knowledge_store.search, query, k=clamped_k, domain=(domain or None))
+        results = await asyncio.to_thread(
+            knowledge_store.search, query, k=clamped_k,
+            domain=(domain or None), memory_kind=(memory_kind or None),
+        )
         if not results:
             return "No matches."
-        lines = [
-            f"[{r.get('domain', '?')}] {r['preview']}"
-            + _memory_citation(
+        lines = []
+        for r in results:
+            prefix = f"[{r.get('domain', '?')}]"
+            kind = r.get("memory_kind")
+            subj = r.get("subject")
+            if kind:
+                prefix += f" ({kind})"
+            if subj:
+                prefix += f" subj={subj}"
+            cite = _memory_citation(
                 source=r.get("source"),
                 created_at=r.get("created_at"),
                 namespace=r.get("namespace"),
                 source_type=r.get("source_type"),
             )
-            for r in results
-        ]
+            lines.append(f"{prefix} {r['preview']}{cite}")
         return "\n".join(lines)
 
     @tool
@@ -974,19 +1007,35 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         return rendered
 
     @tool
-    async def memory_list(domain: str | None = None, limit: int = 10) -> str:
-        """List the most recent chunks. Filter by domain when given.
+    async def memory_list(
+        domain: str | None = None,
+        limit: int = 10,
+        memory_kind: str | None = None,
+    ) -> str:
+        """List the most recent chunks. Filter by domain and/or memory_kind when given.
 
         Useful when the operator asks for recent activity ("what did I
         log today?") or wants to inspect what the agent has stored.
+
+        ``memory_kind`` scopes to a typed classification (e.g. ``"decision"``,
+        ``"fact"``, ``"profile"``).
         """
         clamped_limit = max(1, min(int(limit), _MEMORY_LIST_MAX_LIMIT))
-        chunks = knowledge_store.list_chunks(domain=domain, limit=clamped_limit)
+        chunks = knowledge_store.list_chunks(
+            domain=domain, limit=clamped_limit,
+            memory_kind=(memory_kind or None),
+        )
         if not chunks:
             return f"No chunks in {domain or 'any domain'}."
         lines = []
         for c in chunks:
             head = f"[{c.domain}]"
+            kind = getattr(c, "memory_kind", None)
+            subj = getattr(c, "subject", None)
+            if kind:
+                head += f" ({kind})"
+            if subj:
+                head += f" subj={subj}"
             if c.heading:
                 head += f" {c.heading}:"
             preview = (c.content or "")[:200]
