@@ -136,7 +136,7 @@ Every memory row carries these independently-valued attributes:
 
 | Attribute | What it answers | Current column | Values |
 |-----------|----------------|----------------|--------|
-| **Kind** | What is this memory? | `domain` (overloaded) | `fact`, `preference`, `finding`, `digest`, `instruction`, `archive` |
+| **Kind** | What is this memory? | `domain` (overloaded) | `profile`, `standing`, `fact`, `decision`, `note`, `episode`, `reference`, `legacy` |
 | **Provenance** | Who wrote it and how? | `source_type` | `operator`, `extracted`, `harvest`, `conversation`, `ingest`, `background_report` |
 | **Trust tier** | How much should the model trust it? | Derived from `source_type` | 3 (operator), 2 (agent), 1 (external) — `knowledge/trust.py` |
 | **Scope** | Where does it apply? | `namespace` | Global (empty), per-project (`project:<id>`), per-session (`session:<id>`) |
@@ -149,23 +149,24 @@ Every memory row carries these independently-valued attributes:
 added to the `chunks` table (nullable, `ALTER TABLE ADD COLUMN`). Existing
 rows are backfilled from the `domain` column:
 
-| `domain` | `memory_kind` | `delivery_policy` |
-|----------|---------------|-------------------|
-| `"hot"` | `NULL` (varies) | `"always"` |
-| `"general"` | `"fact"` | `NULL` (→ `"retrieved"`) |
-| `"finding"` | `"finding"` | `NULL` (→ `"retrieved"`) |
-| `"conversation"` | `"digest"` | `NULL` (→ `"retrieved"`) |
-| `"fact"` | `"fact"` | `NULL` (→ `"retrieved"`) |
-| `"attachment"` | `"archive"` | `NULL` (→ `"retrieved"`) |
-| Any other value | `NULL` | `NULL` (→ `"retrieved"`) |
+| `domain` | Condition | `memory_kind` | `delivery_policy` |
+|----------|-----------|---------------|-------------------|
+| `"hot"` | — | `"standing"` | `"always"` |
+| `"preferences"` | — | `"profile"` | `NULL` (→ `"retrieved"`) |
+| `"general"` | `source_type="conversation"` | `"note"` | `NULL` (→ `"retrieved"`) |
+| `"general"` | other `source_type` | `"reference"` | `NULL` (→ `"retrieved"`) |
+| `"finding"` | — | `"fact"` | `NULL` (→ `"retrieved"`) |
+| Any other value | — | `"legacy"` | `NULL` (→ `"retrieved"`) |
 
 The `domain` column is a freeform `TEXT` — callers (the SDK, snapshot
 imports via `doc.stem`, operator API) may write arbitrary values. Unmapped
-domains get `memory_kind=NULL`, `delivery_policy=NULL`, which the delivery
-layer treats as `"retrieved"` (included only on RAG match). The backfill
-handles this via a `CASE/ELSE NULL` clause rather than failing on unknown
-values. The `domain` column is retained for backward compatibility (reads
-from it continue to work) but new writes populate the new columns.
+domains get `memory_kind="legacy"`, `delivery_policy=NULL`, which the
+delivery layer treats as `"retrieved"` (included only on RAG match). The
+backfill uses `source_type` as a discriminator within `domain="general"`
+(agent-authored conversation notes vs imported/ingested reference) and
+falls back to `"legacy"` for any unrecognized domain — no data is lost or
+misclassified. The `domain` column is retained for backward compatibility
+(reads from it continue to work) but new writes populate the new columns.
 
 **Review state.** A `review_state` column (`confirmed`/`pending`/`rejected`,
 default `NULL` = `pending`) enables operator confirmation of agent-derived
@@ -191,6 +192,16 @@ Capture happens at `wrap_model_call` (the existing `PromptCacheMiddleware`
 boundary), persisted to the existing `TelemetryStore` as a
 `prompt_snapshot` record keyed by `(session_id, turn_index, call_index)`.
 The console prompt inspector renders these snapshots.
+
+**Trajectory integration (ADR 0102).** Prompt snapshots store references
+(section labels, content hashes, chunk IDs, char sizes) rather than
+duplicating large text. The authoritative content lives in the ADR 0102
+append-only trajectory JSONL; the snapshot links to trajectory entries by
+session-scoped reference ID. Full-text capture remains available as an
+explicit operator diagnostic mode (`context.capture_full_text`), bounded
+and redacted, for cases where the trajectory is insufficient (e.g.,
+provider-transformed prompts whose wire shape diverges from the composed
+input).
 
 Implements: #3191.
 
