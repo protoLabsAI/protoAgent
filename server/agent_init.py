@@ -403,7 +403,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
     if STATE.graph_config.goal_enabled:
         from graph.goals import GoalController, GoalStore
 
-        STATE.goal_controller = GoalController(STATE.graph_config, GoalStore())
+        STATE.goal_controller = GoalController(STATE.graph_config, GoalStore(), scheduler=STATE.scheduler)
     else:
         STATE.goal_controller = None
     # Watch primitive (ADR 0067) — many concurrent, out-of-band watches. Machinery only; no
@@ -2289,6 +2289,8 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     # the graph rebuild succeeded; if start/stop fails we log but
     # don't roll back (the agent is already serving the new graph).
     STATE.scheduler = next_scheduler
+    if STATE.goal_controller is not None:
+        STATE.goal_controller.reconfigure(new_config, scheduler=next_scheduler)
     if pending_stop is not None:
         _stop_scheduler_async(pending_stop)
     if pending_start is not None:

@@ -338,6 +338,17 @@ watches:
 soul:
   self_edit_enabled: false
 
+# Opportunistic self-improvement after a completed goal or tracked task (#3069). The master
+# switch is OFF by default. `propose` creates review tasks; `auto` may write the
+# corresponding artifact directly (with provenance and rollback history). Automatic
+# skill writes are refused for a flat shared store; use scoped/layered or propose. Reviews
+# require middleware.scheduler; runtime status warns if that prerequisite is unavailable.
+self_improvement:
+  enabled: false
+  soul_md: auto             # off | propose | auto
+  skills: propose           # off | propose | auto
+  distillation: propose     # off | propose | auto
+
 # Programmatic tool calling — let the model write ONE Python script that
 # composes several tools in a single turn (collapses long tool-call chains).
 # SECURITY: runs model-authored code in a subprocess (scrubbed env + hard

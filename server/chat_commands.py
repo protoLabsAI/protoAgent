@@ -124,9 +124,18 @@ def _parse_subagent_command(message: str):
     return name, rest.strip()
 
 
-async def _run_parsed_subagent(subagent_type: str, prompt: str) -> str:
+async def _run_parsed_subagent(subagent_type: str, prompt: str, *, session_id: str = "") -> str:
     """Run one subagent from a chat slash command, formatted as the reply."""
     from graph.agent import run_manual_subagent
+
+    reload_callback = None
+    if subagent_type == "self-improve":
+        # This one privileged built-in subagent may receive edit_soul when the
+        # two-axis policy allows it. Inject the server reload just like the lead
+        # graph so an accepted persona change is live on the next turn.
+        from server.agent_init import _reload_langgraph_agent
+
+        reload_callback = _reload_langgraph_agent
 
     try:
         raw = await run_manual_subagent(
@@ -136,6 +145,8 @@ async def _run_parsed_subagent(subagent_type: str, prompt: str) -> str:
             description=f"/{subagent_type} chat command",
             prompt=prompt,
             subagent_type=subagent_type,
+            reload_callback=reload_callback,
+            session_id=session_id,
         )
     except ValueError as exc:
         return f"⚠️ {exc}"
@@ -183,4 +194,3 @@ def _skill_directive(skill: dict, args: str) -> str:
     if args:
         directive += f"\nInput: {args}\n"
     return directive
-

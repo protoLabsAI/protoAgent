@@ -29,6 +29,7 @@ from __future__ import annotations
 import copy
 import difflib
 import hashlib
+import json
 import logging
 import os
 import re
@@ -1145,6 +1146,36 @@ def soul_revision() -> str:
     soul-history version ids, so a tagged run can be lined up with an archived version."""
     text = read_soul()
     return hashlib.sha1(text.encode("utf-8")).hexdigest()[:8] if text else ""
+
+
+def record_soul_edit_provenance(*, revision: str, session_id: str, reason: str, section: str, mode: str) -> Path:
+    """Persist the trusted audit record for an automatic persona mutation."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    path = instance_paths().soul_history_dir / f"{stamp}-{revision}.self-edit.json"
+    atomic_write(
+        path,
+        json.dumps(
+            {
+                "edited_at": stamp,
+                "revision": revision,
+                "session_id": session_id,
+                "reason": reason,
+                "section": section,
+                "mode": mode,
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+    )
+    records = sorted(path.parent.glob("*.self-edit.json"))
+    for stale in records[:-_SOUL_HISTORY_CAP] if len(records) > _SOUL_HISTORY_CAP else []:
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+    return path
 
 
 def read_host_delegates() -> list[dict]:
