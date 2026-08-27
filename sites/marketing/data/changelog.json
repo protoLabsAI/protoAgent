@@ -1,5 +1,23 @@
 [
   {
+    "version": "v0.154.0",
+    "date": "2026-08-27",
+    "changes": [
+      "Opt-in self-improvement reviews unify persona, skills, and distillation policy (#3069).",
+      "Typed memory schema (#3072).",
+      "Context Architecture v2 ADR (#3192).",
+      "Persist and serve fleet roster order (#3197).",
+      "Codex/ChatGPT-subscription chats keep their reasoning across turns again (#3207).",
+      "Dependency drift is now tracked instead of discovered (#3209).",
+      "The pinned AI stack is current again (#3208).",
+      "New fleet sisters inherit every configured model connection and credential (#3196).",
+      "A Codex/ChatGPT-subscription chat no longer bricks itself on a reasoning item the backend can't verify (#3199).",
+      "↑ now pulls a queued message out of the turn instead of copying it (#3212).",
+      "Fix text cramming in durable artifacts",
+      "Fleet model-connection documentation now matches box-shared OAuth ownership (#3198)."
+    ]
+  },
+  {
     "version": "v0.153.2",
     "date": "2026-08-27",
     "changes": [
