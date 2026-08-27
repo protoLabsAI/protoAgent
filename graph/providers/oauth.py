@@ -4,14 +4,16 @@ Two providers authenticate protoAgent's native pipeline with a coding-agent OAut
 subscription instead of a gateway API key. Their credential stories differ, mirroring
 what Hermes does (the reference implementation):
 
-- ``anthropic-oauth`` — use an environment override first, then protoAgent's box-scoped
-  console login (which protoAgent refreshes), then borrow Claude Code's live credentials
-  from ``~/.claude/.credentials.json`` / keychain. Anthropic's Agent SDK (2026-06)
+- ``anthropic-oauth`` — use an environment override first, then protoAgent's console
+  login (box-scoped by default; a legacy instance override remains until promotion),
+  then borrow Claude Code's live credentials from ``~/.claude/.credentials.json`` /
+  keychain. Anthropic's Agent SDK (2026-06)
   explicitly licenses a third-party app authenticating with a user's Claude subscription,
   so this is sanctioned.
 
 - ``openai-codex`` — OWN one protoAgent credential in the box-scoped store shared by
-  every sister. The console device flow mints it independently. An operator may instead
+  every sister by default; an existing legacy instance override remains the resolved
+  owner until fleet promotion. The console device flow mints it independently. An operator may instead
   import the Codex CLI's store explicitly; that immediately rotates the single-use
   refresh token and hands the live credential to protoAgent, so the CLI must sign in
   again. The imported store keeps vendor-origin provenance so disconnect will not remotely

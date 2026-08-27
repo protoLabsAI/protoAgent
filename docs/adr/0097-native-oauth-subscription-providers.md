@@ -44,8 +44,8 @@ unchanged.
 
 | Provider | Client | Auth | Credentials |
 | --- | --- | --- | --- |
-| `anthropic-oauth` | `ChatAnthropic` (Bearer subclass) | `auth_token` + OAuth betas + claude-code UA | env override → protoAgent's refreshable box store → live Claude Code file/keychain fallback |
-| `openai-codex` | `ChatOpenAI` (Responses API) | Bearer + `ChatGPT-Account-Id` + `store=false` + `include=[reasoning.encrypted_content]` | console sign-in mints a box-shared credential; explicit CLI import rotates and hands the live credential to protoAgent |
+| `anthropic-oauth` | `ChatAnthropic` (Bearer subclass) | `auth_token` + OAuth betas + claude-code UA | env override → protoAgent's refreshable store (box by default) → live Claude Code file/keychain fallback |
+| `openai-codex` | `ChatOpenAI` (Responses API) | Bearer + `ChatGPT-Account-Id` + `store=false` + `include=[reasoning.encrypted_content]` | console sign-in mints a box-shared credential by default; explicit CLI import rotates and hands the live credential to protoAgent |
 
 The asymmetry mirrors Hermes and is deliberate: Anthropic's OAuth client is painful to mint
 independently, so we can borrow Claude Code's live token; OpenAI's device-code flow is
@@ -54,6 +54,8 @@ never silently bootstrapped from the CLI. Explicit import rotates the token imme
 handing the live credential to protoAgent and requiring a subsequent `codex login` for
 the CLI. The store retains vendor-origin provenance, so disconnect deletes protoAgent's
 copy without remotely revoking a credential that originated in another application.
+On upgraded instances, an existing legacy instance-local store remains the resolver and
+sign-in target until fleet creation promotes it to the box tier.
 
 ### Seam
 

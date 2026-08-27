@@ -15,7 +15,8 @@ CLI's existing credentials; it's opt-in and the operator's call (ADR 0097).
 
 Flow state (the device id / PKCE verifier) is held in a short-lived in-process store keyed
 by an opaque ``flow_id``; nothing is persisted until tokens are minted, then they go to the
-box-scoped protoAgent stores every fleet sister resolves under a stable provider lock.
+resolved protoAgent store under a stable provider lock. That store is box-scoped by default;
+an existing legacy instance override remains the write target until fleet promotion.
 """
 
 from __future__ import annotations
@@ -123,7 +124,7 @@ def codex_login_poll(flow_id: str) -> dict[str, str]:
     """One poll tick. Returns ``{status: pending|complete|error, error?}``.
 
     On the first success this exchanges the authorization code for tokens and writes
-    protoAgent's box-scoped Codex store, so every sister sees the sign-in."""
+    protoAgent's resolved Codex store (box-scoped unless a legacy instance override exists)."""
     flow = _get_flow(flow_id, "openai-codex")
     try:
         resp = httpx.post(
