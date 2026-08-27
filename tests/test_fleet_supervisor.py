@@ -257,6 +257,46 @@ def test_roster_order_unset_keeps_default_order(tmp_path, monkeypatch):
     assert rows[0]["host"] is True  # host still first by default
 
 
+def test_status_survives_non_utf8_roster_json(tmp_path, monkeypatch):
+    """Regression: invalid UTF-8 in roster.json raised ``UnicodeDecodeError`` out of
+    ``read_text()`` — which ``_load_roster_order`` did NOT catch (only OSError /
+    JSONDecodeError), so ``status()`` and GET /api/fleet 500'd on a byte-corrupt file
+    instead of falling back to unsaved order. It must now degrade to discovery order."""
+    _roster_env(tmp_path, monkeypatch)
+    manager.create("alpha")
+    root = manager.workspaces_root()
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "roster.json").write_bytes(b"\xff\xfe not valid utf-8 \x80\x81")
+
+    assert supervisor.get_roster_order() == []  # loader tolerates the bad bytes
+    rows = supervisor.status()  # must NOT raise
+    assert rows[0]["host"] is True  # falls back to host-first discovery order
+    assert "alpha" in {r["name"] for r in rows}
+
+
+def test_load_roster_order_tolerates_corrupt_and_wrong_shape(tmp_path, monkeypatch):
+    """Corrupt JSON, a wrong-shaped ``order``, and non-string / blank entries all degrade
+    safely; both the ``{"order": [...]}`` and bare-list forms are accepted."""
+    import json
+
+    _roster_env(tmp_path, monkeypatch)
+    root = manager.workspaces_root()
+    root.mkdir(parents=True, exist_ok=True)
+    rp = root / "roster.json"
+
+    rp.write_text("{ not json")  # corrupt JSON
+    assert supervisor.get_roster_order() == []
+
+    rp.write_text(json.dumps({"order": "nope"}))  # order is not a list
+    assert supervisor.get_roster_order() == []
+
+    rp.write_text(json.dumps({"order": ["x", 1, "", "y"]}))  # non-str / blank filtered out
+    assert supervisor.get_roster_order() == ["x", "y"]
+
+    rp.write_text(json.dumps(["a", "b"]))  # bare-list form is accepted too
+    assert supervisor.get_roster_order() == ["a", "b"]
+
+
 # ── remote fleet members (ADR 0042 §I) ────────────────────────────────────────
 def test_remote_member_lifecycle(tmp_path, monkeypatch):
     monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))

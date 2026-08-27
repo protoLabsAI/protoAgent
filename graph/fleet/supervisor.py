@@ -707,15 +707,18 @@ def _roster_path() -> Path:
 
 def _load_roster_order() -> list[str]:
     """The saved roster order as a list of member ids (``[]`` when unsaved). Tolerant:
-    a missing / corrupt / wrong-shaped file reads as unsaved rather than raising on the
-    ``status()`` read path that every console fleet surface goes through — matching the
-    posture ``_load_state`` / ``_load_remotes`` already take for their own files."""
+    a missing / corrupt / non-UTF-8 / wrong-shaped file reads as unsaved rather than
+    raising on the ``status()`` read path that every console fleet surface goes through —
+    matching the posture ``_load_state`` / ``_load_remotes`` / ``_load_archetype_catalog``
+    already take for their own files. ``read_text()`` on invalid UTF-8 raises
+    ``UnicodeDecodeError`` (not ``JSONDecodeError``), so it is caught explicitly here —
+    otherwise a byte-corrupt roster.json would 500 both ``status()`` and GET /api/fleet."""
     p = _roster_path()
     if not p.exists():
         return []
     try:
         d = json.loads(p.read_text())
-    except (OSError, json.JSONDecodeError) as e:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
         log.warning("[fleet] %s unreadable (%s) — roster order treated as unsaved", p, e)
         return []
     order = d.get("order") if isinstance(d, dict) else d
