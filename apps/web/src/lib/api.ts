@@ -2101,7 +2101,8 @@ export const api = {
 
   // Retire a chat session server-side: purge its checkpoints, optionally
   // harvesting the conversation into knowledge first (the delete dialog's
-  // opt-in checkbox). Fire-and-forget on tab delete.
+  // opt-in checkbox). Callers await this durable commit before dropping the
+  // local tab so a failed tombstone write remains visible and retryable.
   deleteChatSession(sessionId: string, harvest = false) {
     return request<{ deleted: boolean; harvested: boolean }>(
       `/api/chat/sessions/${encodeURIComponent(sessionId)}?harvest=${harvest}`,

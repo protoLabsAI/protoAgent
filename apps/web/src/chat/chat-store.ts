@@ -88,6 +88,15 @@ const STORAGE_KEY = (() => {
 // never resurrects a chat we just removed from another tab's stale on-disk copy.
 const locallyDeletedIds = new Set<string>();
 
+/** Identity token captured immediately before a durable turn read. Any local
+ * edit replaces the session object, so the exact reference is a cheap per-tab
+ * generation: delete, clear, send, rename, or settings changes while the read
+ * is in flight veto the stale recovery result. */
+export type HydrationEligibility = {
+  sessionId: string;
+  localSession: ChatSession | null;
+};
+
 // ── goal kickoff seam ──────────────────────────────────────────────────────────
 // When a goal is created from the Work panel we open a dedicated tab and drive the goal
 // FROM it (so the loop streams live) rather than as a headless background turn. The
@@ -262,7 +271,9 @@ export function mergeHydratedSessions(current: ChatState, incoming: ChatSession[
         model: existing.model,
         reasoningEffort: existing.reasoningEffort,
         bypassPermissions: existing.bypassPermissions,
-        incognito: existing.incognito,
+        // Local intent wins when explicitly present; an empty placeholder with
+        // no local choice inherits the newest durable operator metadata.
+        incognito: existing.incognito ?? recovered.incognito,
         participants: existing.participants,
         createdAt: Math.min(existing.createdAt, recovered.createdAt),
       };
@@ -615,8 +626,24 @@ export const chatStore = {
     return session;
   },
 
-  hydrateSessions(sessions: ChatSession[]) {
-    setState((current) => mergeHydratedSessions(current, sessions));
+  captureHydrationEligibility(sessionId: string): HydrationEligibility | null {
+    if (locallyDeletedIds.has(sessionId)) return null;
+    const localSession = state.sessions.find((session) => session.id === sessionId) ?? null;
+    if (localSession?.messages.length) return null;
+    return { sessionId, localSession };
+  },
+
+  hydrateSessions(sessions: ChatSession[], eligibility: HydrationEligibility[] = []) {
+    const tokens = new Map(eligibility.map((token) => [token.sessionId, token.localSession]));
+    setState((current) => {
+      const eligible = sessions.filter((session) => {
+        if (locallyDeletedIds.has(session.id)) return false;
+        if (!tokens.has(session.id)) return eligibility.length === 0;
+        const now = current.sessions.find((candidate) => candidate.id === session.id) ?? null;
+        return now === tokens.get(session.id) && !now?.messages.length;
+      });
+      return mergeHydratedSessions(current, eligible);
+    });
   },
 
   deleteSession(sessionId: string) {

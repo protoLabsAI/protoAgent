@@ -10,7 +10,12 @@ import {
   type DurableChatTurn,
 } from "../lib/api";
 import type { ChatMessage } from "../lib/types";
-import { chatStore, DEFAULT_SESSION_TITLE, type ChatSession } from "./chat-store";
+import {
+  chatStore,
+  DEFAULT_SESSION_TITLE,
+  type ChatSession,
+  type HydrationEligibility,
+} from "./chat-store";
 import { applyComponent, applyReasoning, applyText, applyToolEvent, applyUsage } from "./turnReducers";
 
 const TERMINAL = /completed|failed|canceled|cancelled|rejected/i;
@@ -63,27 +68,32 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
     status: "streaming",
     taskId: turn.task_id,
   };
-  replayDurableChatTurn(turn, "", {
-    onText: (text, append) => {
-      assistant = applyText(assistant, text, append);
-    },
-    onReasoning: (delta) => {
-      assistant = applyReasoning(assistant, delta);
-    },
-    onToolCall: (event) => {
-      if (event.name !== "show_component") assistant = applyToolEvent(assistant, event);
-    },
-    onComponent: (spec) => {
-      assistant = applyComponent(assistant, spec);
-    },
-    onCost: (usage) => {
-      assistant = applyUsage(assistant, usage);
-    },
-    onContext: (contextWindow) => {
-      assistant = { ...assistant, contextWindow };
-    },
-  });
-  if (TERMINAL.test(turn.state)) {
+  const terminal = TERMINAL.test(turn.state);
+  // A resubscription begins with the task's full accumulated snapshot. Replaying
+  // that same snapshot here for a live/paused task would append reasoning,
+  // components, and tool events twice. Hydrate a reattachable shell instead;
+  // reattach owns the first authoritative snapshot exactly once.
+  if (terminal) {
+    replayDurableChatTurn(turn, "", {
+      onText: (text, append) => {
+        assistant = applyText(assistant, text, append);
+      },
+      onReasoning: (delta) => {
+        assistant = applyReasoning(assistant, delta);
+      },
+      onToolCall: (event) => {
+        if (event.name !== "show_component") assistant = applyToolEvent(assistant, event);
+      },
+      onComponent: (spec) => {
+        assistant = applyComponent(assistant, spec);
+      },
+      onCost: (usage) => {
+        assistant = applyUsage(assistant, usage);
+      },
+      onContext: (contextWindow) => {
+        assistant = { ...assistant, contextWindow };
+      },
+    });
     assistant = {
       ...assistant,
       status: FAILED.test(turn.state) ? "error" : "done",
@@ -130,9 +140,14 @@ export async function hydrateDurableChatSessions(): Promise<void> {
     return;
   }
   const local = new Map(chatStore.getSnapshot().sessions.map((session) => [session.id, session]));
+  const eligibility = new Map<string, HydrationEligibility>();
   const wanted = summaries.filter((summary) => {
     const session = local.get(summary.session_id);
-    return !session || session.messages.length === 0;
+    if (session?.messages.length) return false;
+    const token = chatStore.captureHydrationEligibility(summary.session_id);
+    if (!token) return false;
+    eligibility.set(summary.session_id, token);
+    return true;
   });
   const hydrated: ChatSession[] = [];
   let cursor = 0;
@@ -151,5 +166,13 @@ export async function hydrateDurableChatSessions(): Promise<void> {
   await Promise.all(
     Array.from({ length: Math.min(HYDRATION_CONCURRENCY, wanted.length) }, () => worker()),
   );
-  if (hydrated.length) chatStore.hydrateSessions(hydrated);
+  if (hydrated.length) {
+    chatStore.hydrateSessions(
+      hydrated,
+      hydrated.flatMap((session) => {
+        const token = eligibility.get(session.id);
+        return token ? [token] : [];
+      }),
+    );
+  }
 }

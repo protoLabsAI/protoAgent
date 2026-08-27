@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { api, type DurableChatSession, type DurableChatTurn } from "../lib/api";
-import { chatStore, DEFAULT_SESSION_TITLE, type ChatSession } from "./chat-store";
+import { chatStore, DEFAULT_SESSION_TITLE, mergeHydratedSessions, type ChatSession } from "./chat-store";
 import {
   HYDRATION_CONCURRENCY,
   hydrateDurableChatSessions,
@@ -30,6 +30,12 @@ function turn(overrides: Partial<DurableChatTurn> = {}): DurableChatTurn {
 
 function summary(id = "chat-server"): DurableChatSession {
   return { session_id: id, last_updated: "2026-08-20T12:00:00Z", turn_count: 1 };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
 }
 
 afterEach(() => vi.restoreAllMocks());
@@ -100,9 +106,11 @@ describe("durable turn conversion", () => {
     );
     expect(messages[messages.length - 1]).toMatchObject({
       role: "assistant",
+      content: "",
       status: "streaming",
       taskId: "task-1",
     });
+    expect(messages[messages.length - 1]).not.toHaveProperty("reasoning");
   });
 
   it("derives a fixed-id session and title from the first durable prompt", () => {
@@ -133,6 +141,27 @@ describe("durable turn conversion", () => {
 });
 
 describe("boot hydration", () => {
+  it("inherits recovered incognito for an existing empty tab without a local choice", () => {
+    const existing = {
+      id: "chat-private",
+      title: DEFAULT_SESSION_TITLE,
+      messages: [],
+      createdAt: 1,
+      updatedAt: 1,
+    } as ChatSession;
+    const recovered = { ...existing, messages: [{ role: "user", content: "secret" }], incognito: true } as ChatSession;
+    const current = {
+      version: 1,
+      sessions: [existing],
+      currentSessionId: existing.id,
+      activeSessions: [existing.id],
+      sessionStatusMap: {},
+      pendingDeleteRequest: null,
+      pendingClearRequest: null,
+    };
+    expect(mergeHydratedSessions(current, [recovered]).sessions[0].incognito).toBe(true);
+  });
+
   it("fetches only missing/empty sessions, tolerates one failure, and commits successful siblings", async () => {
     const nonEmpty = {
       id: "chat-local",
@@ -177,5 +206,35 @@ describe("boot hydration", () => {
 
     await hydrateDurableChatSessions();
     expect(peak).toBe(HYDRATION_CONCURRENCY);
+  });
+
+  it("does not resurrect a session deleted while its durable turns are in flight", async () => {
+    const session = chatStore.createSession();
+    const pending = deferred<{ turns: DurableChatTurn[] }>();
+    vi.spyOn(api, "chatSessions").mockResolvedValue({ sessions: [summary(session.id)] });
+    vi.spyOn(api, "chatSessionTurns").mockReturnValue(pending.promise);
+
+    const hydration = hydrateDurableChatSessions();
+    await vi.waitFor(() => expect(api.chatSessionTurns).toHaveBeenCalled());
+    chatStore.deleteSession(session.id);
+    pending.resolve({ turns: [turn()] });
+    await hydration;
+
+    expect(chatStore.getSnapshot().sessions.some((candidate) => candidate.id === session.id)).toBe(false);
+  });
+
+  it("does not overwrite a clear performed while durable turns are in flight", async () => {
+    const session = chatStore.createSession();
+    const pending = deferred<{ turns: DurableChatTurn[] }>();
+    vi.spyOn(api, "chatSessions").mockResolvedValue({ sessions: [summary(session.id)] });
+    vi.spyOn(api, "chatSessionTurns").mockReturnValue(pending.promise);
+
+    const hydration = hydrateDurableChatSessions();
+    await vi.waitFor(() => expect(api.chatSessionTurns).toHaveBeenCalled());
+    chatStore.updateMessages(session.id, []);
+    pending.resolve({ turns: [turn()] });
+    await hydration;
+
+    expect(chatStore.getSnapshot().sessions.find((candidate) => candidate.id === session.id)?.messages).toEqual([]);
   });
 });

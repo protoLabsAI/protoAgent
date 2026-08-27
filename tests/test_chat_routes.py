@@ -1020,29 +1020,57 @@ def test_delete_session_tombstone_hides_a_late_task_save(monkeypatch, tmp_path):
     assert asyncio.run(_remaining()) == [("t-late",)]
 
 
-def test_chat_tombstones_are_bounded(monkeypatch, tmp_path):
-    """Durable delete intent cannot become an unbounded side-store."""
+def test_chat_tombstones_are_not_count_evicted(monkeypatch, tmp_path):
+    """Crossing the former cap cannot reveal an old producer's late save."""
     import asyncio
+    from datetime import datetime, timezone
 
     import operator_api.chat_routes as cr
-    from sqlalchemy import func, select
+    import runtime.state as rs
+    from a2a.server.tasks.database_task_store import Base, TaskModel
+    from sqlalchemy import func, insert, select
     from sqlalchemy.ext.asyncio import create_async_engine
 
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/bounded-tombstones.db")
-    monkeypatch.setattr(cr, "_CHAT_TOMBSTONE_CAP", 2)
-
     async def _record_and_count():
         async with engine.begin() as conn:
-            for session_id in ("chat-a", "chat-b", "chat-c"):
-                await cr._record_chat_tombstone(conn, session_id)
-            table = cr._chat_tombstone_table()
+            await conn.run_sync(Base.metadata.create_all)
+            table = await cr._ensure_chat_tombstones(conn)
+            deleted_at = datetime(2026, 8, 19, 12, 0, tzinfo=timezone.utc)
+            await conn.execute(
+                insert(table),
+                [
+                    {"context_id": f"chat-{index:05d}", "deleted_at": deleted_at}
+                    for index in range(10_001)
+                ],
+            )
+            # This insert would have triggered the old 10k count eviction.
+            await cr._record_chat_tombstone(conn, "chat-new")
+            # A producer paused since the oldest retirement saves after the table
+            # crossed that boundary. The reader must still honor its tombstone.
+            await conn.execute(
+                TaskModel.__table__.insert(),
+                {
+                    "id": "t-very-late",
+                    "context_id": "chat-00000",
+                    "kind": "task",
+                    "status": {"state": "TASK_STATE_COMPLETED"},
+                    "artifacts": [{"parts": [{"text": "must stay hidden"}]}],
+                    "history": [],
+                    "last_updated": deleted_at,
+                },
+            )
             count = await conn.scalar(select(func.count()).select_from(table))
-            ids = (await conn.execute(select(table.c.context_id).order_by(table.c.context_id))).scalars().all()
-            return count, ids
+            oldest = await conn.scalar(
+                select(table.c.context_id).where(table.c.context_id == "chat-00000")
+            )
+            return count, oldest
 
-    count, ids = asyncio.run(_record_and_count())
-    assert count == 2
-    assert ids == ["chat-b", "chat-c"]
+    count, oldest = asyncio.run(_record_and_count())
+    assert count == 10_002
+    assert oldest == "chat-00000"
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
+    assert _client(monkeypatch).get("/api/chat/sessions/chat-00000/turns").json()["turns"] == []
 
 
 def test_api_chat_tags_its_turns_with_an_origin(monkeypatch):

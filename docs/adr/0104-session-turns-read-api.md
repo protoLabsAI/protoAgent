@@ -55,14 +55,27 @@ the primary store (it holds client-side niceties the task store doesn't —
 ordered parts, per-message usage pins): a non-empty local session always wins,
 while a missing or empty one is rebuilt from durable turns through the same
 A2A reducers used by live and reattached turns. Fetches are bounded and a
-failed member/read leaves the local console usable.
+failed member/read leaves the local console usable. Each read captures the
+eligible local session object; delete, clear, send, rename, or another local
+edit before commit changes/removes that object and vetoes the stale result.
+For a nonterminal turn hydration creates only the prompt plus a reattachable
+assistant shell: the subscription's initial full snapshot owns accumulated
+reasoning/components/tools exactly once.
 
 Explicit session retirement also removes that session's A2A task rows. Without
 this invariant, the discovery route would resurrect a deliberately deleted tab
 until the task store's normal TTL elapsed. Retirement also writes a durable,
-bounded tombstone in the task database: an in-flight producer may save its row
+non-evicting tombstone in the task database: an in-flight producer may save its row
 again after deletion, and the index/turn reader must continue excluding that
-late save. Clear-history uses `retire=false` because it keeps the tab/id alive.
+late save. Count/age eviction is unsafe without a proven producer-liveness
+bound. Clear-history uses `retire=false` because it keeps the tab/id alive; the
+console disallows it while the session is streaming because a reusable id has
+no tombstone protection against a post-clear save.
+
+The auxiliary tombstone table is created lazily through `CREATE TABLE IF NOT
+EXISTS` on the first index/turn read or retirement. Those nominal GET paths can
+therefore perform a one-time schema write on an older database; subsequent
+reads are ordinary queries.
 
 ## Consequences
 
@@ -72,6 +85,8 @@ late save. Clear-history uses `retire=false` because it keeps the tab/id alive.
 - Multi-device catch-up becomes buildable without protocol work.
 - A fresh console discovers recent server-known sessions without downloading
   every transcript up front, and explicit deletion cannot resurrect them.
+- Durable deletion intent grows with the number of retired session ids. Safe
+  compaction requires a future proof that no producer can save those ids again.
 - Recovery reaches only as far back as the A2A task store's current 24-hour
   terminal-task retention. The task store already persists every turn; changing
   that TTL is therefore also a user-visible history-depth decision.

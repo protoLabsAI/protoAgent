@@ -51,9 +51,10 @@ from server.chat import (
 # A task producer owns its durable row and may save it again after the operator
 # deletes the chat (for example, a detached turn finishing a few seconds later).
 # Keep deletion intent beside the task store so discovery remains monotonic even
-# across that race and across process restarts. The cap prevents an installation
-# that creates/deletes chats forever from growing this small index without bound.
-_CHAT_TOMBSTONE_CAP = 10_000
+# across that race and across process restarts. Tombstones are intentionally not
+# count-evicted: a paused producer can save arbitrarily late, so count-based eviction
+# silently resurrects an explicitly deleted chat. A future collector needs a proven
+# liveness/retention bound before it may remove deletion intent.
 _chat_tombstone_table_holder: list[Any | None] = [None]
 
 
@@ -80,8 +81,8 @@ async def _ensure_chat_tombstones(conn) -> Any:
 
 
 async def _record_chat_tombstone(conn, session_id: str) -> None:
-    """Record durable retirement and bound the auxiliary table to newest intent."""
-    from sqlalchemy import delete, insert, select
+    """Record durable retirement without unsafe age/count eviction."""
+    from sqlalchemy import delete, insert
 
     table = await _ensure_chat_tombstones(conn)
     # Portable upsert: the surrounding engine transaction serializes these two
@@ -90,15 +91,6 @@ async def _record_chat_tombstone(conn, session_id: str) -> None:
     await conn.execute(
         insert(table).values(context_id=session_id, deleted_at=datetime.now(timezone.utc))
     )
-    stale = (
-        await conn.execute(
-            select(table.c.context_id)
-            .order_by(table.c.deleted_at.desc(), table.c.context_id.desc())
-            .offset(_CHAT_TOMBSTONE_CAP)
-        )
-    ).scalars().all()
-    if stale:
-        await conn.execute(delete(table).where(table.c.context_id.in_(stale)))
 
 
 class ChatRequest(BaseModel):
