@@ -1,6 +1,6 @@
 """Context architecture characterization tests — pin current behavior before v2.
 
-These tests document the EXISTING context lifecycle (ADR 0107 Phase 0):
+These tests document the EXISTING context lifecycle (ADR 0108 Phase 0):
 how KnowledgeMiddleware composes the per-turn context frame, how context
 frames are tagged, what sections they contain, and how the stable prefix
 is composed. They are regression baselines — v2 changes will update them

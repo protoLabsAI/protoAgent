@@ -1,4 +1,4 @@
-# 0107 — Context Architecture v2: lifecycle, authority, and projection
+# 0108 — Context Architecture v2: lifecycle, authority, and projection
 
 Status: **Proposed** (umbrella #3184)
 
