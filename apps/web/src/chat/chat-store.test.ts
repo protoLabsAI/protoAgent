@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   dedupeMessages,
   ensureActiveSessions,
+  mergeHydratedSessions,
   mergeSessions,
   sanitizePersisted,
   MAX_ACTIVE_SESSIONS,
@@ -77,6 +78,84 @@ describe("ensureActiveSessions", () => {
     const next = ensureActiveSessions(mkState(full, full), "new");
     expect(next[0]).toBe("s1"); // s0 dropped despite streaming — no non-streaming option
     expect(next).not.toContain("s0");
+  });
+});
+
+describe("mergeHydratedSessions", () => {
+  const session = (id: string, messages: ChatMessage[], updatedAt = 10): ChatSession => ({
+    id,
+    title: messages.find((message) => message.role === "user")?.content || "New chat",
+    messages,
+    createdAt: 1,
+    updatedAt,
+  });
+  const user = (content: string): ChatMessage => ({ role: "user", content, status: "done" });
+
+  it("never overwrites richer non-empty local history", () => {
+    const local = session("chat-a", [user("local")]);
+    const current = {
+      ...mkState(["chat-a"]),
+      version: 1,
+      sessions: [local],
+      currentSessionId: "chat-a",
+      pendingDeleteRequest: null,
+      pendingClearRequest: null,
+    };
+    const next = mergeHydratedSessions(current, [session("chat-a", [user("server")], 20)]);
+    expect(next).toBe(current);
+    expect(next.sessions[0].messages[0].content).toBe("local");
+  });
+
+  it("fills an empty fixed-id copy while preserving its manual title", () => {
+    const local = { ...session("chat-a", []), title: "Release plan" };
+    const current = {
+      ...mkState(["chat-a"]),
+      version: 1,
+      sessions: [local],
+      currentSessionId: "chat-a",
+      pendingDeleteRequest: null,
+      pendingClearRequest: null,
+    };
+    const next = mergeHydratedSessions(current, [session("chat-a", [user("server")], 20)]);
+    expect(next.sessions[0]).toMatchObject({ id: "chat-a", title: "Release plan", updatedAt: 20 });
+    expect(next.sessions[0].messages[0].content).toBe("server");
+  });
+
+  it("replaces the sole boot placeholder and focuses the newest recovered session", () => {
+    const blank = session("chat-blank", []);
+    const current = {
+      ...mkState([blank.id]),
+      version: 1,
+      sessions: [blank],
+      currentSessionId: blank.id,
+      pendingDeleteRequest: null,
+      pendingClearRequest: null,
+    };
+    const next = mergeHydratedSessions(current, [
+      session("chat-old", [user("old")], 10),
+      session("chat-new", [user("new")], 20),
+    ]);
+    expect(next.sessions.map((item) => item.id)).toEqual(["chat-old", "chat-new"]);
+    expect(next.currentSessionId).toBe("chat-new");
+    expect(next.activeSessions).toContain("chat-new");
+  });
+
+  it("marks a recovered in-flight turn streaming for reattach", () => {
+    const blank = session("chat-blank", []);
+    const live = session("chat-live", [
+      user("go"),
+      { role: "assistant", content: "partial", status: "streaming", taskId: "task-live" },
+    ]);
+    const current = {
+      ...mkState([blank.id]),
+      version: 1,
+      sessions: [blank],
+      currentSessionId: blank.id,
+      pendingDeleteRequest: null,
+      pendingClearRequest: null,
+    };
+    const next = mergeHydratedSessions(current, [live]);
+    expect(next.sessionStatusMap["chat-live"]).toBe("streaming");
   });
 });
 

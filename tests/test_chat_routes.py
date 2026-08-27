@@ -776,6 +776,85 @@ def test_fork_session_route(monkeypatch):
 # ── ADR 0104: the session turns read API (Swap & Resume S5) ────────────────────
 
 
+def test_session_index_is_bounded_recent_and_grouped(monkeypatch, tmp_path):
+    """A fresh browser can discover session ids without downloading turns."""
+    import asyncio
+    from datetime import datetime, timezone
+
+    from a2a.server.tasks.database_task_store import Base, TaskModel
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/session-index.db")
+
+    async def _seed():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            await conn.execute(
+                TaskModel.__table__.insert(),
+                [
+                    {
+                        "id": "a-1",
+                        "context_id": "chat-a",
+                        "kind": "task",
+                        "status": {"state": "TASK_STATE_COMPLETED"},
+                        "artifacts": [],
+                        "history": [],
+                        "last_updated": datetime(2026, 8, 19, 12, 1, tzinfo=timezone.utc),
+                    },
+                    {
+                        "id": "a-2",
+                        "context_id": "chat-a",
+                        "kind": "task",
+                        "status": {"state": "TASK_STATE_COMPLETED"},
+                        "artifacts": [],
+                        "history": [],
+                        "last_updated": datetime(2026, 8, 19, 12, 3, tzinfo=timezone.utc),
+                    },
+                    {
+                        "id": "b-1",
+                        "context_id": "chat-b",
+                        "kind": "task",
+                        "status": {"state": "TASK_STATE_COMPLETED"},
+                        "artifacts": [],
+                        "history": [],
+                        "last_updated": datetime(2026, 8, 19, 12, 2, tzinfo=timezone.utc),
+                    },
+                    {  # non-console A2A contexts must not become chat tabs
+                        "id": "activity-1",
+                        "context_id": "activity:scheduler",
+                        "kind": "task",
+                        "status": {"state": "TASK_STATE_COMPLETED"},
+                        "artifacts": [],
+                        "history": [],
+                        "last_updated": datetime(2026, 8, 19, 12, 4, tzinfo=timezone.utc),
+                    },
+                ],
+            )
+
+    asyncio.run(_seed())
+    import runtime.state as rs
+
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
+    body = _client(monkeypatch).get("/api/chat/sessions?limit=1").json()
+    assert body == {
+        "sessions": [
+            {
+                "session_id": "chat-a",
+                "last_updated": "2026-08-19T12:03:00",
+                "turn_count": 2,
+            }
+        ]
+    }
+
+
+def test_session_index_degrades_without_a_store(monkeypatch):
+    import runtime.state as rs
+
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", None, raising=False)
+    body = _client(monkeypatch).get("/api/chat/sessions").json()
+    assert body["sessions"] == [] and "not initialized" in body["reason"]
+
+
 def test_session_turns_reads_the_task_store(monkeypatch, tmp_path):
     """Turns come back by context_id, ordered, with the raw wire pieces the
     console dispatcher replays (status/artifacts/history) + joined text."""
@@ -840,6 +919,53 @@ def test_session_turns_degrades_without_a_store(monkeypatch):
     c = _client(monkeypatch)
     body = c.get("/api/chat/sessions/whatever/turns").json()
     assert body["turns"] == [] and "not initialized" in body["reason"]
+
+
+def test_delete_session_removes_durable_turns_from_the_index(monkeypatch, tmp_path):
+    """Explicit retirement cannot be undone by the recovery index (#2888)."""
+    import asyncio
+    from datetime import datetime, timezone
+
+    import operator_api.chat_routes as cr
+    import runtime.state as rs
+    from a2a.server.tasks.database_task_store import Base, TaskModel
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/delete-turns.db")
+
+    async def _seed():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            await conn.execute(
+                TaskModel.__table__.insert(),
+                {
+                    "id": "t-delete",
+                    "context_id": "chat-delete",
+                    "kind": "task",
+                    "status": {"state": "TASK_STATE_COMPLETED"},
+                    "artifacts": [],
+                    "history": [],
+                    "last_updated": datetime(2026, 8, 19, 12, 1, tzinfo=timezone.utc),
+                },
+            )
+
+    async def _fake_retire(_thread_id, *, harvest=False, cascade=True):
+        return None
+
+    asyncio.run(_seed())
+    monkeypatch.setattr(cr, "_retire_thread", _fake_retire)
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
+    client = _client(monkeypatch)
+    assert client.get("/api/chat/sessions").json()["sessions"][0]["session_id"] == "chat-delete"
+    assert client.delete("/api/chat/sessions/chat-delete").json()["deleted"] is True
+    assert client.get("/api/chat/sessions").json()["sessions"] == []
+
+    async def _remaining():
+        async with engine.connect() as conn:
+            return (await conn.execute(select(TaskModel.id))).fetchall()
+
+    assert asyncio.run(_remaining()) == []
 
 
 def test_api_chat_tags_its_turns_with_an_origin(monkeypatch):

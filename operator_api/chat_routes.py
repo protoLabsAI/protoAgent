@@ -337,6 +337,22 @@ def register_chat_routes(app, ui: str) -> None:
             await asyncio.to_thread(delete_session_summary, session_id)
         except Exception as exc:  # noqa: BLE001 — cleanup is best-effort
             log.warning("[chat] session-summary cleanup failed for %s: %s", session_id, exc)
+        # The durable-turn reader indexes the A2A task store by context_id. A
+        # retired session must disappear from that index too, otherwise another
+        # browser (or this one after localStorage is cleared) resurrects the tab
+        # until the normal task TTL expires. This is best-effort like the other
+        # retirement stores: checkpoint deletion remains the primary operation.
+        engine = getattr(STATE, "a2a_task_engine", None)
+        if engine is not None:
+            try:
+                from sqlalchemy import delete
+
+                from a2a.server.tasks.database_task_store import TaskModel
+
+                async with engine.begin() as conn:
+                    await conn.execute(delete(TaskModel).where(TaskModel.context_id == session_id))
+            except Exception as exc:  # noqa: BLE001 — retirement must degrade, not strand the tab
+                log.warning("[chat] durable-turn cleanup failed for %s: %s", session_id, exc)
         return {"deleted": True, "harvested": chunk_id is not None}
 
     @app.post("/api/chat/sessions/{session_id}/compact")
@@ -371,6 +387,55 @@ def register_chat_routes(app, ui: str) -> None:
         machine, so the operator reviews rather than trusting a silent filter.
         Redaction is a safety net, not a guarantee."""
         return await export_session(session_id, title=title)
+
+    @app.get("/api/chat/sessions")
+    async def _api_chat_sessions(limit: int = 50):
+        """Recent server-known chat sessions from the A2A task store (#2888).
+
+        This is the bounded discovery half of ADR 0104: a fresh browser has no
+        local session ids with which to call the per-session ``/turns`` reader.
+        Newest activity comes first; the console decides which missing/empty
+        local sessions need the heavier turn payloads.
+        """
+        engine = getattr(STATE, "a2a_task_engine", None)
+        if engine is None:
+            return {"sessions": [], "reason": "task store not initialized"}
+        limit = max(1, min(int(limit), 200))
+        try:
+            from sqlalchemy import func, select
+
+            from a2a.server.tasks.database_task_store import TaskModel
+
+            async with engine.connect() as conn:
+                rows = (
+                    await conn.execute(
+                        select(
+                            TaskModel.context_id,
+                            func.max(TaskModel.last_updated).label("last_updated"),
+                            func.count(TaskModel.id).label("turn_count"),
+                        )
+                        # The task store also contains delegation, Activity,
+                        # fleet-room, and API contexts. Only console-created
+                        # chat tabs use the stable ``chat-`` id prefix.
+                        .where(TaskModel.context_id.like("chat-%"))
+                        .group_by(TaskModel.context_id)
+                        .order_by(func.max(TaskModel.last_updated).desc())
+                        .limit(limit)
+                    )
+                ).fetchall()
+        except Exception as exc:  # noqa: BLE001 — discovery is opportunistic
+            log.warning("[chat] session index read failed: %s", exc)
+            return {"sessions": [], "reason": f"read failed: {type(exc).__name__}"}
+        return {
+            "sessions": [
+                {
+                    "session_id": r.context_id,
+                    "last_updated": r.last_updated.isoformat() if r.last_updated else None,
+                    "turn_count": r.turn_count,
+                }
+                for r in rows
+            ]
+        }
 
     @app.get("/api/chat/sessions/{session_id}/turns")
     async def _api_session_turns(session_id: str, limit: int = 50):

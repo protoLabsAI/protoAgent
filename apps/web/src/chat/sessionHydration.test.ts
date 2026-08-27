@@ -1,0 +1,131 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { api, type DurableChatSession, type DurableChatTurn } from "../lib/api";
+import { chatStore, DEFAULT_SESSION_TITLE, type ChatSession } from "./chat-store";
+import {
+  HYDRATION_CONCURRENCY,
+  hydrateDurableChatSessions,
+  messagesFromDurableTurn,
+  sessionFromDurableTurns,
+} from "./sessionHydration";
+
+const TOOL = "https://proto-labs.ai/a2a/ext/tool-call-v1";
+
+function turn(overrides: Partial<DurableChatTurn> = {}): DurableChatTurn {
+  return {
+    task_id: "task-1",
+    state: "TASK_STATE_COMPLETED",
+    last_updated: "2026-08-20T12:00:00Z",
+    text: "answer",
+    status: { state: "TASK_STATE_COMPLETED" },
+    artifacts: [{ parts: [{ text: "answer" }] }],
+    history: [{ role: "ROLE_USER", parts: [{ text: "How do I ship this?" }] }],
+    ...overrides,
+  };
+}
+
+function summary(id = "chat-server"): DurableChatSession {
+  return { session_id: id, last_updated: "2026-08-20T12:00:00Z", turn_count: 1 };
+}
+
+afterEach(() => vi.restoreAllMocks());
+
+describe("durable turn conversion", () => {
+  it("rebuilds the user bubble and drives assistant text/tools through shared reducers", () => {
+    const messages = messagesFromDurableTurn(
+      turn({
+        history: [
+          { role: "ROLE_USER", parts: [{ text: "How do I ship this?" }] },
+          {
+            role: "ROLE_AGENT",
+            parts: [],
+            metadata: { [TOOL]: { toolCallId: "call-1", name: "run_command", phase: "started", args: "npm test" } },
+          },
+          {
+            role: "ROLE_AGENT",
+            parts: [],
+            metadata: { [TOOL]: { toolCallId: "call-1", name: "run_command", phase: "completed", result: "ok" } },
+          },
+        ],
+      }),
+    );
+    expect(messages[0]).toMatchObject({ role: "user", content: "How do I ship this?", status: "done" });
+    expect(messages[1]).toMatchObject({
+      role: "assistant",
+      content: "answer",
+      status: "done",
+      taskId: "task-1",
+      toolCalls: [{ id: "call-1", name: "run_command", input: "npm test", output: "ok", status: "done" }],
+    });
+  });
+
+  it("keeps a nonterminal assistant reattachable", () => {
+    const messages = messagesFromDurableTurn(
+      turn({ state: "TASK_STATE_WORKING", status: { state: "TASK_STATE_WORKING" } }),
+    );
+    expect(messages[messages.length - 1]).toMatchObject({
+      role: "assistant",
+      status: "streaming",
+      taskId: "task-1",
+    });
+  });
+
+  it("derives a fixed-id session and title from the first durable prompt", () => {
+    const session = sessionFromDurableTurns(summary(), [turn()]);
+    expect(session).toMatchObject({ id: "chat-server", title: "How do I ship this?" });
+    expect(session?.messages).toHaveLength(2);
+  });
+
+  it("falls back to the default title when a server turn has no visible user text", () => {
+    const session = sessionFromDurableTurns(summary(), [turn({ history: [] })]);
+    expect(session?.title).toBe(DEFAULT_SESSION_TITLE);
+  });
+});
+
+describe("boot hydration", () => {
+  it("fetches only missing/empty sessions, tolerates one failure, and commits successful siblings", async () => {
+    const nonEmpty = {
+      id: "chat-local",
+      title: "Local",
+      messages: [{ role: "user", content: "local" }],
+      createdAt: 1,
+      updatedAt: 1,
+    } as ChatSession;
+    const empty = { id: "chat-empty", title: "Empty", messages: [], createdAt: 1, updatedAt: 1 } as ChatSession;
+    vi.spyOn(chatStore, "getSnapshot").mockReturnValue({ sessions: [nonEmpty, empty] } as never);
+    const commit = vi.spyOn(chatStore, "hydrateSessions").mockImplementation(() => {});
+    vi.spyOn(api, "chatSessions").mockResolvedValue({
+      sessions: [summary("chat-local"), summary("chat-empty"), summary("chat-new"), summary("chat-fails")],
+    });
+    const reads = vi.spyOn(api, "chatSessionTurns").mockImplementation(async (id) => {
+      if (id === "chat-fails") throw new Error("member cold");
+      return { turns: [turn({ task_id: `task-${id}` })] };
+    });
+
+    await hydrateDurableChatSessions();
+
+    expect(reads.mock.calls.map(([id]) => id).sort()).toEqual(["chat-empty", "chat-fails", "chat-new"]);
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(commit.mock.calls[0][0].map((session) => session.id).sort()).toEqual(["chat-empty", "chat-new"]);
+  });
+
+  it("never exceeds the bounded fetch fan-out", async () => {
+    vi.spyOn(chatStore, "getSnapshot").mockReturnValue({ sessions: [] } as never);
+    vi.spyOn(chatStore, "hydrateSessions").mockImplementation(() => {});
+    vi.spyOn(api, "chatSessions").mockResolvedValue({
+      sessions: Array.from({ length: 12 }, (_, i) => summary(`chat-${i}`)),
+    });
+    let active = 0;
+    let peak = 0;
+    vi.spyOn(api, "chatSessionTurns").mockImplementation(async (id) => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      active -= 1;
+      return { turns: [turn({ task_id: `task-${id}` })] };
+    });
+
+    await hydrateDurableChatSessions();
+    expect(peak).toBe(HYDRATION_CONCURRENCY);
+  });
+});

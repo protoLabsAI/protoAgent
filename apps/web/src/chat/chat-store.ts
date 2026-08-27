@@ -234,6 +234,81 @@ export function mergeSessions(
   return out.slice(0, MAX_SESSIONS);
 }
 
+/** Fold server-recovered sessions into the local-first store (#2888).
+ * Non-empty local transcripts always win because they carry richer ordered
+ * parts and client-only annotations. A locally empty copy may be recovered,
+ * and server-only sessions fill only the remaining cap. The sole auto-created
+ * blank tab is a boot placeholder, so a successful recovery replaces it. */
+export function mergeHydratedSessions(current: ChatState, incoming: ChatSession[]): ChatState {
+  if (!incoming.length) return current;
+  const solePlaceholder = current.sessions.length === 1 ? unusedSession(current) : undefined;
+  const removePlaceholder = Boolean(solePlaceholder && incoming.some((session) => session.messages.length > 0));
+  const local = removePlaceholder
+    ? current.sessions.filter((session) => session.id !== solePlaceholder?.id)
+    : [...current.sessions];
+  const byId = new Map(local.map((session) => [session.id, session]));
+  const hydratedIds = new Set<string>();
+
+  for (const recovered of incoming) {
+    if (!recovered.messages.length) continue;
+    const existing = byId.get(recovered.id);
+    if (existing?.messages.length) continue;
+    if (existing) {
+      const next = {
+        ...recovered,
+        // A manually named empty tab expresses local intent; retain its title
+        // while filling only the missing transcript.
+        title: existing.title === DEFAULT_SESSION_TITLE ? recovered.title : existing.title,
+        model: existing.model,
+        reasoningEffort: existing.reasoningEffort,
+        bypassPermissions: existing.bypassPermissions,
+        incognito: existing.incognito,
+        participants: existing.participants,
+        createdAt: Math.min(existing.createdAt, recovered.createdAt),
+      };
+      byId.set(recovered.id, next);
+      hydratedIds.add(recovered.id);
+    }
+  }
+
+  const existingIds = new Set(local.map((session) => session.id));
+  const slots = Math.max(0, MAX_SESSIONS - local.length);
+  const missing = incoming
+    .filter((session) => session.messages.length > 0 && !existingIds.has(session.id))
+    .sort((a, b) => a.updatedAt - b.updatedAt);
+  const additions = slots ? missing.slice(-slots) : [];
+  for (const session of additions) {
+    byId.set(session.id, session);
+    hydratedIds.add(session.id);
+  }
+
+  const sessions = [
+    ...local.map((session) => byId.get(session.id) ?? session),
+    ...additions,
+  ];
+  if (!hydratedIds.size) return current;
+  const currentSessionId = removePlaceholder
+    ? (additions[additions.length - 1]?.id ?? sessions[sessions.length - 1]?.id ?? null)
+    : current.currentSessionId;
+  const activeSessions = ensureActiveSessions(
+    {
+      ...current,
+      sessions,
+      activeSessions: current.activeSessions.filter((id) => sessions.some((session) => session.id === id)),
+    },
+    currentSessionId,
+  );
+  const sessionStatusMap = { ...current.sessionStatusMap };
+  if (solePlaceholder) delete sessionStatusMap[solePlaceholder.id];
+  for (const session of sessions) {
+    if (!hydratedIds.has(session.id)) continue;
+    const last = [...session.messages].reverse().find((message) => message.role === "assistant");
+    if (last?.status === "streaming" && last.taskId) sessionStatusMap[session.id] = "streaming";
+    else if (last?.status === "error") sessionStatusMap[session.id] = "error";
+  }
+  return { ...current, sessions, currentSessionId, activeSessions, sessionStatusMap };
+}
+
 /** Collapse duplicate message entries by id, keeping the LAST occurrence (the
  *  freshest write wins — a finalize/reconcile rewrite supersedes the copy it was
  *  derived from). Id-less legacy entries pass through untouched. This is the
@@ -538,6 +613,10 @@ export const chatStore = {
       };
     });
     return session;
+  },
+
+  hydrateSessions(sessions: ChatSession[]) {
+    setState((current) => mergeHydratedSessions(current, sessions));
   },
 
   deleteSession(sessionId: string) {
