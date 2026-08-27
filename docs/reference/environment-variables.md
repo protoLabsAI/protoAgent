@@ -32,6 +32,13 @@ Every env var the template reads at runtime.
 | `PROTOAGENT_MODEL` | (unset) | Overrides `model.name` on every config load — used by `evals/sweep.py` to run one agent against many models without editing YAML. |
 | `PROTOAGENT_INSTANCE` | (unset) | Opt-in data-scoping key (ADR 0004): namespaces the knowledge/notes/tasks/checkpoint stores so several agents share a backend without colliding. Seeded from `instance.id` in config. |
 
+## Native OAuth subscription providers (ADR 0097)
+
+| Variable | Default | What |
+|---|---|---|
+| `PROTOAGENT_CODEX_BASE_URL` | `https://chatgpt.com/backend-api/codex` | Endpoint for `model.provider: openai-codex`. Changing it changes the **issuer** a captured reasoning blob is sealed to, so items minted against the old endpoint stop being replayed (by design — the new one can't decrypt them). |
+| `PROTOAGENT_CODEX_OUTPUT_VERSION` | `responses/v1` | Escape hatch for the `openai-codex` content shape. `responses/v1` keeps each reasoning item as its own content block, which is what makes cross-turn encrypted-reasoning replay possible. Set to `v0` to fall back to the legacy string-content shape — the turn still works, but reasoning continuity across turns is off. |
+
 ## Deployment / UI tier (ADR 0010)
 
 | Variable | Default | What |
