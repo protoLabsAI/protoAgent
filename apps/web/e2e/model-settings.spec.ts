@@ -4,17 +4,20 @@ import { expect, test } from "@playwright/test";
 // model sources — and no longer carries the Provider / API base URL / API key fields or
 // the single-gateway "Get models" probe, all of which assumed exactly one gateway.
 
-async function openModelSettings(page) {
+async function openModelSettings(page, expandAll = true) {
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByTestId("settings-widget").click();
   await expect(page.locator(".settings-overlay")).toBeVisible();
   await page.locator(".settings-overlay .pl-sidenav").getByRole("tab", { name: "Model", exact: true }).click();
-  // Field groups start collapsed — open them so the model field + actions are visible.
+  // Connections opens by default; most specs also expand the remaining field groups so
+  // the model field + actions are visible.
   const triggers = page.locator(".pl-accordion__trigger");
   await expect(triggers.first()).toBeVisible();
-  for (let i = 0; i < (await triggers.count()); i++) {
-    const t = triggers.nth(i);
-    if ((await t.getAttribute("aria-expanded")) !== "true") await t.click();
+  if (expandAll) {
+    for (let i = 0; i < (await triggers.count()); i++) {
+      const t = triggers.nth(i);
+      if ((await t.getAttribute("aria-expanded")) !== "true") await t.click();
+    }
   }
 }
 
@@ -37,13 +40,71 @@ test("Connections lists every registered connection, and the retired fields are 
   // Why a delete may be refused, shown before it is attempted.
   await expect(panel).toContainText("In use by 1 slot");
   // A connection with no key says so rather than looking ready.
-  await expect(panel).toContainText("no API key");
+  await expect(panel).toContainText(/no API key/i);
 
   // The fields Connections replaced must not also be on the page — two editors for one
   // value is the contradiction this panel resolved.
   const dialog = page.locator(".settings-overlay");
   await expect(dialog).not.toContainText("API base URL");
   await expect(dialog).not.toContainText("Get models");
+});
+
+test("Connections is the first accordion panel and gateway/OAuth rows share one card hierarchy", async ({ page }) => {
+  await page.route("**/api/config/providers", (route) =>
+    route.fulfill({
+      json: {
+        providers: [
+          {
+            id: "gateway",
+            type: "openai-compat",
+            label: "protoLabs studio",
+            base_url: "https://api.proto-labs.ai/v1",
+            display: "protoLabs studio",
+            has_key: true,
+            in_use_by: [],
+          },
+          {
+            id: "openai-codex",
+            type: "openai-codex",
+            label: "ChatGPT / Codex",
+            display: "ChatGPT / Codex",
+            has_key: false,
+            in_use_by: ["model.name=openai-codex:gpt-5.6-terra"],
+          },
+        ],
+      },
+    }),
+  );
+  await page.route("**/api/config/oauth-status", (route) =>
+    route.fulfill({
+      json: {
+        providers: [
+          {
+            provider: "openai-codex",
+            signed_in: true,
+            source: "instance_store",
+            detail: "ChatGPT account",
+            hint: "",
+          },
+        ],
+      },
+    }),
+  );
+
+  await openModelSettings(page, false);
+
+  const triggers = page.locator(".settings-overlay .pl-accordion__trigger");
+  await expect(triggers.first()).toContainText("Connections");
+  await expect(triggers.first()).toHaveAttribute("aria-expanded", "true");
+  await expect(triggers.nth(1)).toHaveAttribute("aria-expanded", "false");
+
+  const rows = page.getByTestId("provider-row");
+  await expect(rows).toHaveCount(2);
+  for (let i = 0; i < 2; i++) {
+    await expect(rows.nth(i).locator(".pl-callout")).toHaveCount(1);
+    await expect(rows.nth(i).locator(".provider-row__actions")).toContainText("Edit");
+    await expect(rows.nth(i).locator(".provider-row__actions")).toContainText("Test");
+  }
 });
 
 test("Add a connection submits Claude and Codex as native subscription types", async ({ page }) => {

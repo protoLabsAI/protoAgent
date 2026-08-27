@@ -22,7 +22,14 @@ import { fieldVisible } from "./visibility";
 
 // Drop-in full-panel wrapper (section + Suspense + ErrorBoundary) so any surface can
 // embed a category's settings as a standalone panel — Agent, Knowledge, central Settings.
-export function SettingsCategoryPanel(props: { category: string; title?: string; emptyHint?: string; footer?: ReactNode; lead?: ReactNode }) {
+export function SettingsCategoryPanel(props: {
+  category: string;
+  title?: string;
+  emptyHint?: string;
+  footer?: ReactNode;
+  lead?: ReactNode;
+  leadTitle?: string;
+}) {
   return (
     <StagePanel label="settings" className="settings-panel">
       <SettingsCategory {...props} />
@@ -46,9 +53,11 @@ export function SettingsCategory({
   emptyHint,
   footer,
   // Rendered ABOVE the field groups — for the section that must be seen before
-  // the knobs (the OAuth account card: it's what the signed-out banner deep-links
-  // to, and it lived at the bottom where nobody found it).
+  // the knobs, as the first accordion item (Connections: it is what the signed-out
+  // banner deep-links to, and it lived outside the accordion where it read as a
+  // separate panel).
   lead,
+  leadTitle = "Overview",
   // ADR 0059 — when set, render ONLY this plugin's group (its config folded into the
   // plugin's row in the Plugins surface). Pairs with category="Plugins".
   pluginId,
@@ -59,6 +68,7 @@ export function SettingsCategory({
   emptyHint?: string;
   footer?: ReactNode;
   lead?: ReactNode;
+  leadTitle?: string;
   pluginId?: string;
 }) {
   const queryClient = useQueryClient();
@@ -262,7 +272,6 @@ export function SettingsCategory({
         {/* While a background refetch is in flight (the #1643 fresh-install hydration
             re-pulls the schema), an empty group set is "still loading", not "nothing
             here" — don't flash the misleading empty hint. */}
-        {lead}
         {!groups.length && !footer && !lead ? (
           <p className="muted">{isFetching ? "Loading settings…" : emptyHint || "Nothing to configure here."}</p>
         ) : null}
@@ -283,6 +292,11 @@ export function SettingsCategory({
           </div>
         ) : (
           <Accordion className="settings-groups">
+            {lead ? (
+              <AccordionItem defaultOpen title={<span className="settings-group-head">{leadTitle}</span>}>
+                {lead}
+              </AccordionItem>
+            ) : null}
             {groups.map((group, i) => {
               const groupDirty = group.fields.filter(isVisible).reduce((n, f) => n + (f.key in dirty ? 1 : 0), 0);
               return (
@@ -290,7 +304,7 @@ export function SettingsCategory({
                   key={group.section}
                   // Open the first group by default so a panel never lands fully collapsed
                   // (the operator sees content immediately; the rest expand on demand).
-                  defaultOpen={i === 0}
+                  defaultOpen={!lead && i === 0}
                   title={
                     <span className="settings-group-head">
                       {group.section}

@@ -100,10 +100,15 @@ const AGENT_SECTIONS: Section[] = [
   { id: "devices", label: "Devices", icon: Smartphone, flag: "settings.devices", render: () => <DevicesPanel /> },
   // id stays "model" (the former "settings"/"Model & Routing"). It now renders ONLY the Model
   // domain (model · routing · caching) instead of the whole Agent category (ADR 0048 C4).
-  // The OAuth account lifecycle (#2460) renders under the schema-driven Model form —
-  // status/Disconnect/Reconnect were wizard-only before, a recovery dead end post-setup.
+  // Connections is the first, default-open accordion group. The OAuth account lifecycle
+  // (#2460) lives there beside gateway connections instead of outside the accordion.
   { id: "model", label: "Model", icon: Cpu, render: () => (
-    <SettingsCategoryPanel category="Model" title="Model & routing" lead={<ProvidersPanel />} />
+    <SettingsCategoryPanel
+      category="Model"
+      title="Model & routing"
+      leadTitle="Connections"
+      lead={<ProvidersPanel />}
+    />
   ) },
   { id: "behavior", label: "Behavior", icon: Brain, render: () => <SettingsCategoryPanel category="Behavior" title="Behavior" /> },
   { id: "knowledge", label: "Knowledge", icon: Database, render: () => <SettingsCategoryPanel category="Knowledge" title="Knowledge" /> },
