@@ -228,6 +228,9 @@ function PluginRow({
             pluginId={p.id}
             pluginName={p.name}
             needsConfig={p.incomplete ? p.needs_config : undefined}
+            settingsTabs={p.settings_tabs}
+            pluginLoaded={p.loaded}
+            pluginError={p.error}
             open={configOpen}
             onClose={() => setConfigOpen(false)}
           />
@@ -485,7 +488,7 @@ function LocalTab() {
       onToggle={onToggle}
       onUpdate={onUpdate}
       updating={updatingId === row.p.id}
-      configurable={configurableIds.has(row.p.id)}
+      configurable={configurableIds.has(row.p.id) || Boolean(row.p.settings_tabs?.some((tab) => tab.path))}
       removable={removableIds.has(row.p.id)}
       onRemove={onRemove}
       removing={removingId === row.p.id}

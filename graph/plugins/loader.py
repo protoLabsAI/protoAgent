@@ -351,25 +351,36 @@ def _served_paths(routers: list[dict]) -> set[str]:
 
 
 def _warn_unserved_views(manifest: PluginManifest, routers: list[dict]) -> None:
-    """Warn for each enabled view whose ``path`` no router serves (ADR 0026/0018).
+    """Warn for each enabled iframe page whose ``path`` no router serves.
 
-    A declared view is an iframe of a page the plugin must serve at ``path``. If no
-    registered router serves that path the iframe renders blank/404 — usually a
-    missing ``register_router`` or a path typo, which fails silently today.
+    Rail views (ADR 0026) and path-backed Configure tabs (#3180) share the same
+    sandbox host. If no registered router serves a declared page, the iframe renders
+    blank/404 — usually a missing ``register_router`` or a path typo. Query strings
+    and fragments select state inside a served page and are not part of its route.
     """
-    if not manifest.views:
+    pages = [
+        ("view", view.get("id"), view.get("path"))
+        for view in manifest.views
+    ]
+    pages.extend(
+        ("Configure tab", tab.get("id"), tab.get("path"))
+        for tab in getattr(manifest, "settings_tabs", [])
+        if tab.get("path")
+    )
+    if not pages:
         return
     served = _served_paths(routers)
-    for view in manifest.views:
-        path = str(view.get("path", "")).rstrip("/") or "/"
+    for kind, page_id, declared in pages:
+        path = str(declared or "").split("?", 1)[0].split("#", 1)[0].rstrip("/") or "/"
         if path not in served:
             log.warning(
-                "[plugins] %s: view %r declares path %r but no registered router serves it "
+                "[plugins] %s: %s %r declares path %r but no registered router serves it "
                 "— it will render a blank/404 iframe (did you forget register_router, "
                 "or is the path a typo?)",
                 manifest.id,
-                view.get("id"),
-                view.get("path"),
+                kind,
+                page_id,
+                declared,
             )
 
 
@@ -490,6 +501,10 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
             # Console surfaces (ADR 0026) — the rail reads these from /api/runtime/status. Views
             # are sandboxed iframes (ADR 0038); the plugin serves its own page at `path`.
             "views": list(manifest.views) if enabled else [],
+            # Ordered per-plugin Configure tabs (#3179/#3180). Schema-backed tabs
+            # carry id/label; path-backed tabs add a sandboxed plugin-owned page.
+            # Disabled plugins expose no runnable page contribution.
+            "settings_tabs": list(manifest.settings_tabs) if enabled else [],
             # Event contract (ADR 0039) — declared topics this plugin emits / subscribes to,
             # surfaced for discoverability (the console can show a plugin's event catalog).
             "emits": list(manifest.emits) if enabled else [],

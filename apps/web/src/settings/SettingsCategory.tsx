@@ -16,16 +16,19 @@ import { HelpLink, TestConnectionButton } from "../app/ui-kit";
 import { api, isHostConsole } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { queryKeys, settingsSchemaQuery } from "../lib/queries";
-import type { SettingsField, SettingsGroup } from "../lib/types";
+import type { PluginSettingsTabDescriptor, SettingsField, SettingsGroup } from "../lib/types";
 import { PathPicker } from "./PathPicker";
 import { fieldVisible } from "./visibility";
 
-export type PluginSettingsTab = { id: string; label: string; groups: SettingsGroup[] };
+export type PluginSettingsTab = PluginSettingsTabDescriptor & { groups: SettingsGroup[] };
 
 /** Build the ordered Configure tabs while retaining unassigned fields in the
  * backward-compatible Configuration fallback. Exported to pin the wire-to-UI
  * contract without coupling tests to Dialog focus management. */
-export function pluginSettingsTabs(groups: SettingsGroup[]): PluginSettingsTab[] {
+export function pluginSettingsTabs(
+  groups: SettingsGroup[],
+  descriptors: PluginSettingsTabDescriptor[] = [],
+): PluginSettingsTab[] {
   const fallback = groups.filter((group) => !group.settings_tab);
   const declared = new Map<string, PluginSettingsTab & { order: number }>();
   for (const group of groups) {
@@ -35,9 +38,15 @@ export function pluginSettingsTabs(groups: SettingsGroup[]): PluginSettingsTab[]
     if (tab) tab.groups.push(group);
     else declared.set(meta.id, { id: meta.id, label: meta.label, order: meta.order, groups: [group] });
   }
+  // Path-backed descriptors have no settings group, but share the SAME ordered
+  // registry so schema and plugin-owned tabs compose deterministically (#3180).
+  for (const [order, descriptor] of descriptors.entries()) {
+    if (!descriptor.path) continue;
+    declared.set(descriptor.id, { ...descriptor, order, groups: [] });
+  }
   const tabs: PluginSettingsTab[] = [...declared.values()]
     .sort((a, b) => a.order - b.order)
-    .map(({ id, label, groups: tabGroups }) => ({ id, label, groups: tabGroups }));
+    .map(({ id, label, path, groups: tabGroups }) => ({ id, label, ...(path ? { path } : {}), groups: tabGroups }));
   return fallback.length ? [{ id: "__configuration", label: "Configuration", groups: fallback }, ...tabs] : tabs;
 }
 
@@ -82,6 +91,11 @@ export function SettingsCategory({
   // ADR 0059 — when set, render ONLY this plugin's group (its config folded into the
   // plugin's row in the Plugins surface). Pairs with category="Plugins".
   pluginId,
+  // Ordered manifest registry plus a lazy renderer for path-backed plugin-owned
+  // tabs (#3180). The settings layer owns shared tab/dirty state; the caller owns
+  // the sandbox host so arbitrary plugin React never crosses into this component.
+  pluginTabs,
+  renderPluginTab,
 }: {
   category: string;
   categories?: string[];
@@ -91,6 +105,8 @@ export function SettingsCategory({
   lead?: ReactNode;
   leadTitle?: string;
   pluginId?: string;
+  pluginTabs?: PluginSettingsTabDescriptor[];
+  renderPluginTab?: (tab: PluginSettingsTab) => ReactNode;
 }) {
   const queryClient = useQueryClient();
   const { data, isFetching } = useSuspenseQuery(settingsSchemaQuery());
@@ -104,7 +120,7 @@ export function SettingsCategory({
   }, [data.groups, category, categories, pluginId]);
   const [dirty, setDirty] = useState<Record<string, unknown>>({});
   const dirtyKeys = Object.keys(dirty);
-  const configureTabs = useMemo(() => pluginSettingsTabs(groups), [groups]);
+  const configureTabs = useMemo(() => pluginSettingsTabs(groups, pluginTabs), [groups, pluginTabs]);
   const [activeSettingsTab, setActiveSettingsTab] = useState("");
   useEffect(() => {
     if (!pluginId || !configureTabs.length) return;
@@ -146,10 +162,11 @@ export function SettingsCategory({
     if (tab) setActiveSettingsTab(tab.id);
     button.focus();
   };
-  const visiblePluginGroups =
-    pluginId && configureTabs.length > 1
-      ? activeConfigureTab.groups
-      : groups;
+  const visiblePluginGroups = pluginId
+    ? activeConfigureTab?.path
+      ? []
+      : activeConfigureTab?.groups ?? groups
+    : groups;
   // Action feedback is a TOAST, not an inline line — transient success/error belongs in the
   // global toaster (the in-progress state is already on each button's pending spinner).
   const toast = useToast();
@@ -300,7 +317,7 @@ export function SettingsCategory({
 
   return (
     <>
-      <PanelHeader
+      {(!pluginId || groups.length > 0) ? <PanelHeader
         title={title}
         kicker={
           dirtyKeys.length
@@ -325,7 +342,7 @@ export function SettingsCategory({
             </Button>
           </>
         }
-      />
+      /> : null}
       <div className="stage-body">
         {acpAgent ? (
           <Alert status="info" className="settings-banner">
@@ -354,7 +371,7 @@ export function SettingsCategory({
             />
           </div>
         ) : null}
-        {!groups.length && !footer && !lead ? (
+        {!groups.length && !configureTabs.length && !footer && !lead ? (
           <p className="muted">{isFetching ? "Loading settings…" : emptyHint || "Nothing to configure here."}</p>
         ) : null}
 
@@ -366,7 +383,16 @@ export function SettingsCategory({
         {/* Folded into a plugin's row (ADR 0059): render the single group's fields
             FLAT — the row's Configure toggle is the disclosure, so a nested accordion
             would be a second click. The full Settings view keeps the collapsible groups. */}
-        {pluginId ? (
+        {pluginId && activeConfigureTab?.path ? (
+          <div
+            className="settings-groups plugin-configure-view"
+            role={configureTabs.length > 1 ? "tabpanel" : undefined}
+            id={configureTabs.length > 1 ? configureTabPanelId : undefined}
+            aria-labelledby={configureTabs.length > 1 ? `${configureTabPanelId}-tab-${effectiveSettingsTab}` : undefined}
+          >
+            {renderPluginTab?.(activeConfigureTab)}
+          </div>
+        ) : pluginId ? (
           <div
             className="settings-groups"
             role={configureTabs.length > 1 ? "tabpanel" : undefined}

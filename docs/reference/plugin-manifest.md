@@ -32,7 +32,7 @@ See [Plugins](/guides/plugins) for how to use these fields, and
 | [`config`](#field-config) | `dict` | `{}` | defaults for that section (key → default value) |
 | [`secrets`](#field-secrets) | `list[str]` | `[]` | keys in the section routed to the secrets.yaml overlay |
 | [`settings`](#field-settings) | `list[dict]` | `[]` | Settings-schema field specs ({key, label, type, ...}) |
-| [`settings_tabs`](#field-settings-tabs) | `list[dict]` | `[]` | Ordered Configure-dialog tabs for schema-backed settings ([#3179](https://github.com/protoLabsAI/protoAgent/issues/3179)) |
+| [`settings_tabs`](#field-settings-tabs) | `list[dict]` | `[]` | Ordered Configure-dialog tabs ([#3179](https://github.com/protoLabsAI/protoAgent/issues/3179)/#3180) |
 | [`test`](#field-test) | `bool` | `False` | Test action ([ADR 0029](/adr/0029-communication-plugins-standard)) — when true, the plugin serves a credential check at `POST /api/config/test-<config_section>` (e.g. the chat_surface wirer mounts… |
 | [`guide_url`](#field-guide-url) | `str` | `''` | Optional setup-guide URL ([ADR 0059](/adr/0059-unified-plugin-manager)) — the console renders a generic "Setup guide" link next to the plugin's settings, so no per-plugin frontend is needed |
 | [`views`](#field-views) | `list[dict]` | `[]` | Console surfaces ([ADR 0026](/adr/0026-plugin-contributed-console-surfaces)) — each entry adds a left-rail icon opening a full view (an iframe of a page the plugin serves at `path`) |
@@ -132,7 +132,7 @@ Settings-schema field specs ({key, label, type, ...})
 
 - **Type** `list[dict]` · **Default** `[]`
 
-Ordered Configure-dialog tabs for schema-backed settings ([#3179](https://github.com/protoLabsAI/protoAgent/issues/3179)). Each entry is `{id, label}`; a setting opts in with `tab: <id>`. IDs are stable identity while labels may change. Plugins that omit this keep the original single flat Configuration form. Future descriptor keys may add other host-rendered tab kinds without changing this ordered registry.
+Ordered Configure-dialog tabs ([#3179](https://github.com/protoLabsAI/protoAgent/issues/3179)/#3180). A schema-backed `{id, label}` descriptor is targeted by `settings[].tab`; a path-backed `{id, label, path}` descriptor embeds plugin-owned UI from /plugins/&lt;id&gt;/... through the sandboxed view bridge. One descriptor has one kind — settings cannot target a path-backed tab. Plugins that omit this keep the flat Configuration form.
 
 ### `test` {#field-test}
 

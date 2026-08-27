@@ -78,6 +78,61 @@ appears, the iframe loads your page. **No host rebuild.**
 reads `views` from `/api/runtime/status` and renders a rail icon per view (keyed
 `plugin:<id>:<viewId>`); `tabs` render as a sub-nav that swaps the iframe page.
 
+## Add a custom Configure tab
+
+Use a path-backed `settings_tabs` entry when configuration is a real workflow rather than a
+scalar setting: editing a dynamic registry, inspecting per-item state, or running plugin-owned
+actions. The console keeps ownership of the Configure dialog and tab strip, while the plugin page
+stays inside the same sandbox and bridge as a rail view.
+
+```yaml
+settings_tabs:
+  - id: projects
+    label: Projects
+    path: /plugins/mychart/config/projects
+```
+
+Serve that exact page from the plugin's public `/plugins/<id>/...` router. The manifest parser
+rejects a Configure path outside the declaring plugin's namespace and automatically exempts only
+the declared page from bearer auth. Keep every data read and mutation under
+`/api/plugins/<id>/...`; call it with the plugin kit's `apiFetch()` so the operator bearer and a
+fleet member's `/agents/<slug>` prefix are applied correctly.
+
+```python
+from fastapi import APIRouter
+from fastapi.responses import HTMLResponse
+
+page = APIRouter()
+data = APIRouter()
+
+@page.get("/config/projects")
+async def projects_page():
+    return HTMLResponse(PROJECTS_HTML)
+
+@data.get("/projects")
+async def projects_data():
+    return {"projects": load_projects()}
+
+def register(registry):
+    registry.register_router(page, prefix="/plugins/mychart")       # public page chrome
+    registry.register_router(data, prefix="/api/plugins/mychart")  # bearer-gated data
+```
+
+Path-backed tabs share one ordered `settings_tabs` registry with ordinary schema-backed tabs. A
+schema tab omits `path`, and its `settings` entries reference the tab's stable id:
+
+```yaml
+settings_tabs:
+  - { id: projects, label: Projects, path: /plugins/mychart/config/projects }
+  - { id: automation, label: Automation }
+settings:
+  - { key: auto_refresh, label: Auto refresh, type: bool, tab: automation }
+```
+
+A descriptor is either path-backed or schema-backed; settings cannot target a path-backed tab.
+Fields without `tab` remain in the backward-compatible **Configuration** form. Configure pages
+cannot inject React into the host: runtime plugin UI always uses the iframe boundary from ADR 0038.
+
 ### Why the page is public but its data is gated
 
 A browser **iframe page-load can't carry an `Authorization` header** — so the HTML page itself must

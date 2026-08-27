@@ -4,7 +4,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Suspense, useEffect } from "react";
 
 import { queryKeys } from "../lib/queries";
-import type { SettingsGroup } from "../lib/types";
+import type { PluginSettingsTabDescriptor, SettingsGroup } from "../lib/types";
+import { PluginView } from "../app/PluginView";
 import { SettingsCategory } from "../settings/SettingsCategory";
 import { pluginSchemaNeedsRefetch } from "./settingsHydration";
 
@@ -17,6 +18,9 @@ export function PluginSettingsDialog({
   pluginId,
   pluginName,
   needsConfig,
+  settingsTabs,
+  pluginLoaded,
+  pluginError,
   open,
   onClose,
 }: {
@@ -26,6 +30,9 @@ export function PluginSettingsDialog({
   // missing; renders a setup hint above the form so the dialog reads as a wizard.
   // Saving those fields reloads the plugin, which clears `incomplete` and the badge.
   needsConfig?: { key: string; label: string }[];
+  settingsTabs?: PluginSettingsTabDescriptor[];
+  pluginLoaded?: boolean;
+  pluginError?: string;
   open: boolean;
   onClose: () => void;
 }) {
@@ -45,7 +52,7 @@ export function PluginSettingsDialog({
 
   if (!open) return null;
   return (
-    <Dialog open onClose={onClose} title={pluginName} width="min(640px, 95vw)" className="plugin-settings-dialog">
+    <Dialog open onClose={onClose} title={pluginName} width="min(760px, 95vw)" className="plugin-settings-dialog">
       {needsConfig && needsConfig.length ? (
         <Alert status="warning" className="settings-banner">
           <strong>Finish setup to activate this plugin.</strong>{" "}
@@ -54,7 +61,26 @@ export function PluginSettingsDialog({
         </Alert>
       ) : null}
       <Suspense fallback={<p className="muted">Loading settings…</p>}>
-        <SettingsCategory category="Plugins" pluginId={pluginId} title="Configuration" />
+        <SettingsCategory
+          category="Plugins"
+          pluginId={pluginId}
+          pluginTabs={settingsTabs}
+          title="Configuration"
+          renderPluginTab={(tab) => tab.path ? (
+            <PluginView
+              key={`plugin:${pluginId}:settings:${tab.id}`}
+              embedded
+              view={{
+                id: tab.id,
+                label: tab.label,
+                path: tab.path,
+                key: `plugin:${pluginId}:settings:${tab.id}`,
+                pluginLoaded,
+                pluginError,
+              }}
+            />
+          ) : null}
+        />
       </Suspense>
     </Dialog>
   );
