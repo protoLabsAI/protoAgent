@@ -25,7 +25,7 @@
 // transient-status hooks are injected by the caller.
 
 import { api, type TurnStreamHandlers } from "../lib/api";
-import type { HitlPayload } from "../lib/types";
+import type { ChatMessage, HitlPayload } from "../lib/types";
 import { chatStore } from "./chat-store";
 import { replaceText } from "./parts";
 import { applyComponent, applyReasoning, applyText, applyToolEvent, applyUsage } from "./turnReducers";
@@ -50,6 +50,16 @@ export type ReattachHooks = {
   onHitl?: (payload: HitlPayload) => void;
   onStatus?: (status: string) => void;
 };
+
+/** Stable dependency key for the session slot's reattach effect. Hydration can
+ * fill an already-mounted empty fixed-id tab, so sessionId alone is not enough
+ * to trigger the effect when its durable streaming assistant appears later. */
+export function reattachKeyForMessages(messages: ChatMessage[] | undefined): string {
+  const last = [...(messages ?? [])].reverse().find((message) => message.role === "assistant");
+  return last?.status === "streaming" && last.taskId && last.id
+    ? `${last.id}:${last.taskId}`
+    : "";
+}
 
 function updateMessage(sessionId: string, assistantId: string, fn: (m: any) => any) {
   const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
@@ -83,6 +93,7 @@ function finalize(sessionId: string, assistantId: string, state: string, text: s
       parts: text ? replaceText(m.parts, text, m.content) : m.parts,
       status: failed ? "error" : "done",
       toolCalls,
+      durableSnapshotFallback: undefined,
     };
   });
   chatStore.setSessionStatus(sessionId, failed ? "error" : "idle");
@@ -96,6 +107,22 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
 
   const handlers: TurnStreamHandlers = {
     signal: controller.signal,
+    // Every Task frame is a full authoritative snapshot, not a delta. Reset
+    // replay-derived fields before EACH one: a subscription may deliver its
+    // snapshot and then fail, after which retry/GetTask replays the same history.
+    // If no Task frame arrives this hook never runs, preserving the hydrated
+    // durable partial as the cold/failure fallback.
+    onTaskSnapshot: () => updateMessage(sessionId, assistantId, (m) => ({
+      ...m,
+      content: "",
+      reasoning: undefined,
+      components: undefined,
+      toolCalls: undefined,
+      parts: undefined,
+      usage: undefined,
+      contextWindow: undefined,
+      durableSnapshotFallback: undefined,
+    })),
     onStatus: (status) => hooks.onStatus?.(status),
     onText: (text, append) => updateMessage(sessionId, assistantId, (m) => applyText(m, text, append)),
     onReasoning: (delta) => updateMessage(sessionId, assistantId, (m) => applyReasoning(m, delta)),

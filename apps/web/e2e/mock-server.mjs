@@ -814,6 +814,29 @@ const server = createServer(async (req, res) => {
   }
   if (pathname.startsWith("/api/")) {
     if (req.method === "GET") {
+      // ADR 0104/#2888 fresh-profile recovery. Header-gated so the durable
+      // session fixture does not add a chat tab to every unrelated E2E spec.
+      if (req.headers["x-e2e-session-history"] === "1" && pathname === "/api/chat/sessions") {
+        return sendJson(res, {
+          sessions: [{ session_id: "chat-recovered", last_updated: "2026-08-20T12:00:00Z", turn_count: 1 }],
+        });
+      }
+      if (
+        req.headers["x-e2e-session-history"] === "1" &&
+        pathname === "/api/chat/sessions/chat-recovered/turns"
+      ) {
+        return sendJson(res, {
+          turns: [{
+            task_id: "task-recovered",
+            state: "TASK_STATE_COMPLETED",
+            last_updated: "2026-08-20T12:00:00Z",
+            text: "The durable answer is back.",
+            status: { state: "TASK_STATE_COMPLETED" },
+            artifacts: [{ parts: [{ text: "The durable answer is back." }] }],
+            history: [{ role: "ROLE_USER", parts: [{ text: "Recover this conversation" }] }],
+          }],
+        });
+      }
       // Mid-turn steering: turn-end reconcile reads the still-queued items.
       if (/^\/api\/chat\/sessions\/[^/]+\/steer$/.test(pathname)) return sendJson(res, { pending: [] });
       // Memory inspector (ADR 0069 D7) — needs the query string (injections filter),

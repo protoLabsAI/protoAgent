@@ -21,11 +21,20 @@ like "this session's turns."** Consequences, found by the swap-resume audit:
 
 ## Decision
 
-One bearer-gated route on the operator API:
+Two bearer-gated routes on the operator API:
 
 ```
+GET /api/chat/sessions?limit=50
 GET /api/chat/sessions/{session_id}/turns?limit=50
 ```
+
+The bounded session index returns newest activity first as
+`{"sessions": [{"session_id", "last_updated", "turn_count"}]}`. Discovery is
+necessary because a fresh browser has no local session ids with which to call
+the turns reader. It deliberately carries no transcript content; the console
+only fetches turns for server-only or locally empty sessions.
+Only `chat-` contexts are indexed: the same task store also contains Activity,
+delegation, Fleet Room, and API contexts, none of which are console chat tabs.
 
 It reads the **A2A task store** (the SDK's `tasks` table — turns are keyed by
 `context_id`, which IS the console session id) via the engine the server
@@ -41,10 +50,44 @@ same shapes the console's A2A frame dispatcher already decodes, so a client
 replays a turn through the exact code path the live stream uses (no second
 mapping to drift). `text` is the joined artifact text for cheap consumers.
 
-Deliberately NOT in this slice: console adoption as the source of truth.
-localStorage stays the primary store (it holds client-side niceties the task
-store doesn't — ordered parts, per-message usage pins); this API is the
-recovery/second-device substrate, consumed opportunistically.
+The console consumes the index opportunistically at boot. `localStorage` stays
+the primary store (it holds client-side niceties the task store doesn't —
+ordered parts, per-message usage pins): a non-empty local session always wins,
+while a missing or empty one is rebuilt from durable turns through the same
+A2A reducers used by live and reattached turns. Fetches are bounded and a
+failed member/read leaves the local console usable. Each read captures the
+eligible local session object; delete, clear, send, rename, or another local
+edit before commit changes/removes that object and vetoes the stale result.
+For a nonterminal turn hydration keeps the latest durable partial visible as a
+fallback. It marks those replay-derived fields; every authoritative full Task
+snapshot resets them immediately before replay. This matters when a subscription
+emits its snapshot and then fails before a retry/GetTask emits the same snapshot:
+reasoning/components/tools still apply exactly once, while a failed/cold
+reattach that never receives a Task frame does not leave a blank bubble.
+
+Explicit session retirement also removes that session's A2A task rows. Without
+this invariant, the discovery route would resurrect a deliberately deleted tab
+until the task store's normal TTL elapsed. Retirement also writes a durable,
+non-evicting tombstone in the task database: an in-flight producer may save its row
+again after deletion, and the index/turn reader must continue excluding that
+late save. Count/age eviction is unsafe without a proven producer-liveness
+bound. Clear-history uses `retire=false` because it keeps the tab/id alive; the
+console disallows it while either a local or server-initiated turn is known to
+be active because a reusable id has no tombstone protection against a
+post-clear save. This is still a client-side liveness check: without a server
+generation/compare-and-delete primitive, a producer can theoretically start in
+the interval between that check and the delete request.
+
+Closing an active goal with **Keep running** is neither clear nor retirement.
+The console persists that session id in a separate local-dismissal set and
+excludes it from boot hydration, so reload does not reopen a deliberately
+detached goal tab. A future explicit **Open chat** action must first clear that
+dismissal (`restoreDismissedSession`) and then hydrate the same durable id.
+
+The auxiliary tombstone table is created lazily through `CREATE TABLE IF NOT
+EXISTS` on the first index/turn read or retirement. Those nominal GET paths can
+therefore perform a one-time schema write on an older database; subsequent
+reads are ordinary queries.
 
 ## Consequences
 
@@ -52,8 +95,13 @@ recovery/second-device substrate, consumed opportunistically.
   answer — the in-flight task appears with its accumulated artifacts/history
   and a non-terminal state.
 - Multi-device catch-up becomes buildable without protocol work.
-- The task store's retention now matters to history depth (it already persists
-  every turn; a future retention policy must consider this reader).
+- A fresh console discovers recent server-known sessions without downloading
+  every transcript up front, and explicit deletion cannot resurrect them.
+- Durable deletion intent grows with the number of retired session ids. Safe
+  compaction requires a future proof that no producer can save those ids again.
+- Recovery reaches only as far back as the A2A task store's current 24-hour
+  terminal-task retention. The task store already persists every turn; changing
+  that TTL is therefore also a user-visible history-depth decision.
 
 ## Rejected alternatives
 

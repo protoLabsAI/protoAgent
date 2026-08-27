@@ -21,6 +21,8 @@ import re
 import secrets
 import time
 import uuid
+from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -44,6 +46,51 @@ from server.chat import (
     revoke_published_link,
     rewind_session,
 )
+
+
+# A task producer owns its durable row and may save it again after the operator
+# deletes the chat (for example, a detached turn finishing a few seconds later).
+# Keep deletion intent beside the task store so discovery remains monotonic even
+# across that race and across process restarts. Tombstones are intentionally not
+# count-evicted: a paused producer can save arbitrarily late, so count-based eviction
+# silently resurrects an explicitly deleted chat. A future collector needs a proven
+# liveness/retention bound before it may remove deletion intent.
+_chat_tombstone_table_holder: list[Any | None] = [None]
+
+
+def _chat_tombstone_table():
+    table = _chat_tombstone_table_holder[0]
+    if table is None:
+        from sqlalchemy import Column, DateTime, MetaData, String, Table
+
+        metadata = MetaData()
+        table = Table(
+            "chat_session_tombstones",
+            metadata,
+            Column("context_id", String(255), primary_key=True),
+            Column("deleted_at", DateTime(timezone=True), nullable=False),
+        )
+        _chat_tombstone_table_holder[0] = table
+    return table
+
+
+async def _ensure_chat_tombstones(conn) -> Any:
+    table = _chat_tombstone_table()
+    await conn.run_sync(table.metadata.create_all, tables=[table])
+    return table
+
+
+async def _record_chat_tombstone(conn, session_id: str) -> None:
+    """Record durable retirement without unsafe age/count eviction."""
+    from sqlalchemy import delete, insert
+
+    table = await _ensure_chat_tombstones(conn)
+    # Portable upsert: the surrounding engine transaction serializes these two
+    # statements on SQLite and keeps the implementation dialect-neutral.
+    await conn.execute(delete(table).where(table.c.context_id == session_id))
+    await conn.execute(
+        insert(table).values(context_id=session_id, deleted_at=datetime.now(timezone.utc))
+    )
 
 
 class ChatRequest(BaseModel):
@@ -296,10 +343,11 @@ def register_chat_routes(app, ui: str) -> None:
         return {"response": "\n\n".join(parts), "messages": result, "session_id": session_id}
 
     @app.delete("/api/chat/sessions/{session_id}")
-    async def _api_delete_session(session_id: str, harvest: bool = False):
-        """Retire a chat session: purge its checkpoints for both the A2A and
-        chat prefix, optionally harvesting the conversation into the knowledge
-        base first. Called when the operator deletes a chat tab.
+    async def _api_delete_session(session_id: str, harvest: bool = False, retire: bool = True):
+        """Purge a chat session's checkpoints for both the A2A and chat prefix,
+        optionally harvesting the conversation into the knowledge base first.
+        The default ``retire=true`` permanently hides the id from durable
+        recovery; ``retire=false`` is clear-history for a tab that remains live.
 
         Harvest is OPT-IN (``?harvest=true`` — the delete dialog's checkbox):
         deleting a chat must not silently copy it into searchable memory; the
@@ -337,6 +385,30 @@ def register_chat_routes(app, ui: str) -> None:
             await asyncio.to_thread(delete_session_summary, session_id)
         except Exception as exc:  # noqa: BLE001 — cleanup is best-effort
             log.warning("[chat] session-summary cleanup failed for %s: %s", session_id, exc)
+        # The durable-turn reader indexes the A2A task store by context_id. Record
+        # retirement in the SAME database transaction that removes today's rows:
+        # an already-running producer owns its row and can save it again after
+        # this request. The tombstone keeps that late save out of discovery.
+        # `retire=false` is the console's clear-but-keep-tab operation: it wipes
+        # today's history without permanently hiding future turns under the same id.
+        engine = getattr(STATE, "a2a_task_engine", None)
+        if engine is not None:
+            try:
+                from sqlalchemy import delete
+
+                from a2a.server.tasks.database_task_store import TaskModel
+
+                async with engine.begin() as conn:
+                    if retire:
+                        await _record_chat_tombstone(conn, session_id)
+                    await conn.execute(delete(TaskModel).where(TaskModel.context_id == session_id))
+            except Exception as exc:  # noqa: BLE001 — clear degrades; retirement must be honest
+                log.warning("[chat] durable-turn cleanup failed for %s: %s", session_id, exc)
+                if retire:
+                    # Do not claim durable retirement when its race-safety marker
+                    # could not be written. The other cleanup is idempotent, so a
+                    # caller may retry this partially completed deletion safely.
+                    raise
         return {"deleted": True, "harvested": chunk_id is not None}
 
     @app.post("/api/chat/sessions/{session_id}/compact")
@@ -372,6 +444,64 @@ def register_chat_routes(app, ui: str) -> None:
         Redaction is a safety net, not a guarantee."""
         return await export_session(session_id, title=title)
 
+    @app.get("/api/chat/sessions")
+    async def _api_chat_sessions(limit: int = 50):
+        """Recent server-known chat sessions from the A2A task store (#2888).
+
+        This is the bounded discovery half of ADR 0104: a fresh browser has no
+        local session ids with which to call the per-session ``/turns`` reader.
+        Newest activity comes first; the console decides which missing/empty
+        local sessions need the heavier turn payloads.
+        """
+        engine = getattr(STATE, "a2a_task_engine", None)
+        if engine is None:
+            return {"sessions": [], "reason": "task store not initialized"}
+        limit = max(1, min(int(limit), 200))
+        try:
+            from sqlalchemy import exists, func, select
+
+            from a2a.server.tasks.database_task_store import TaskModel
+
+            async with engine.begin() as conn:
+                tombstones = await _ensure_chat_tombstones(conn)
+                rows = (
+                    await conn.execute(
+                        select(
+                            TaskModel.context_id,
+                            func.max(TaskModel.last_updated).label("last_updated"),
+                            func.count(TaskModel.id).label("turn_count"),
+                        )
+                        # The task store also contains delegation, Activity,
+                        # fleet-room, and API contexts. Only console-created
+                        # chat tabs use the stable ``chat-`` id prefix.
+                        .where(TaskModel.context_id.like("chat-%"))
+                        .where(
+                            ~exists(
+                                select(1).where(tombstones.c.context_id == TaskModel.context_id)
+                            )
+                        )
+                        .group_by(TaskModel.context_id)
+                        .order_by(
+                            func.max(TaskModel.last_updated).desc().nulls_last(),
+                            TaskModel.context_id.desc(),
+                        )
+                        .limit(limit)
+                    )
+                ).fetchall()
+        except Exception as exc:  # noqa: BLE001 — discovery is opportunistic
+            log.warning("[chat] session index read failed: %s", exc)
+            return {"sessions": [], "reason": f"read failed: {type(exc).__name__}"}
+        return {
+            "sessions": [
+                {
+                    "session_id": r.context_id,
+                    "last_updated": r.last_updated.isoformat() if r.last_updated else None,
+                    "turn_count": r.turn_count,
+                }
+                for r in rows
+            ]
+        }
+
     @app.get("/api/chat/sessions/{session_id}/turns")
     async def _api_session_turns(session_id: str, limit: int = 50):
         """The session's durable turns from the A2A task store (ADR 0104, Swap &
@@ -389,11 +519,12 @@ def register_chat_routes(app, ui: str) -> None:
             return {"turns": [], "reason": "task store not initialized"}
         limit = max(1, min(int(limit), 200))
         try:
-            from sqlalchemy import select
+            from sqlalchemy import exists, select
 
             from a2a.server.tasks.database_task_store import TaskModel
 
-            async with engine.connect() as conn:
+            async with engine.begin() as conn:
+                tombstones = await _ensure_chat_tombstones(conn)
                 rows = (
                     await conn.execute(
                         select(
@@ -404,10 +535,21 @@ def register_chat_routes(app, ui: str) -> None:
                             TaskModel.last_updated,
                         )
                         .where(TaskModel.context_id == session_id)
-                        .order_by(TaskModel.last_updated.asc())
+                        .where(
+                            ~exists(
+                                select(1).where(tombstones.c.context_id == TaskModel.context_id)
+                            )
+                        )
+                        # Read the NEWEST bounded tail so catch-up always includes
+                        # a current HITL/in-flight turn, then restore chronology below.
+                        .order_by(
+                            TaskModel.last_updated.desc().nulls_last(),
+                            TaskModel.id.desc(),
+                        )
                         .limit(limit)
                     )
                 ).fetchall()
+                rows.reverse()
         except Exception as exc:  # noqa: BLE001 — a read API must degrade, not 500 the console
             log.warning("[chat] session turns read failed for %s: %s", session_id, exc)
             return {"turns": [], "reason": f"read failed: {type(exc).__name__}"}

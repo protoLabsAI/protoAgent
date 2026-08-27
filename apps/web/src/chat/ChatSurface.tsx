@@ -50,13 +50,14 @@ import { finalizeStoppedMessages, resolveStopTarget } from "./stopTurn";
 import { lastOperatorAssistantId, rewindableTailId, replaceText } from "./parts";
 import { createRevealQueue } from "./revealQueue";
 import { applyComponent, applyReasoning, applyText, applyToolEvent } from "./turnReducers";
-import { reattachTurn } from "./reattach";
+import { reattachKeyForMessages, reattachTurn } from "./reattach";
 import { loadDraft, loadScroll, loadSteers, saveDraft, saveScroll, saveSteers } from "./scratchState";
 import { createStreamWatchdog } from "./streamWatchdog";
 import { ADD_SELECTOR, isIncognitoAddClick, trackShiftHeld } from "./shiftCue";
 import { composerPlaceholder } from "./composerPlaceholder";
-import { sessionsToClose } from "./bulkClose";
+import { resolveGoalCloseDisposition, sessionsToClose } from "./bulkClose";
 import { placeConsumedSteers } from "./steerPlacement";
+import { canClearSession, retireChatSession } from "./sessionRetirement";
 
 function messageId() {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -154,6 +155,7 @@ export function ChatSurface({
   // dialog-storm the spec warns against), and exactly one dialog is ever open.
   const [closeQueue, setCloseQueue] = useState<string[]>([]);
   const [harvestOnDelete, setHarvestOnDelete] = useState(false);
+  const [retiringSessionId, setRetiringSessionId] = useState<string | null>(null);
   // Goal tab close: default keeps the goal running (detach); toggle on to STOP it (clear the
   // goal + close its task backlog) instead.
   const [stopGoalOnClose, setStopGoalOnClose] = useState(false);
@@ -161,10 +163,12 @@ export function ChatSurface({
   // Clear conversation (⌘K / /clear, #2996): wipe THIS tab's history but keep the tab open —
   // gated behind the same confirm+harvest dialog as delete, since it's just as destructive.
   const [pendingClear, setPendingClear] = useState<string | null>(null);
+  const [clearingSessionId, setClearingSessionId] = useState<string | null>(null);
   // Active goals keyed by session — a tab whose session is driving a goal gets a different
   // close flow (detach + keep running) instead of the plain delete. Cached; refetches on
   // focus. `status: "active"` is the only in-flight state.
-  const goalSessions = useQuery(goalsQuery()).data?.goals ?? [];
+  const goalsState = useQuery(goalsQuery());
+  const goalSessions = goalsState.data?.goals ?? [];
   const closingGoal = pendingClose
     ? goalSessions.find((g) => g.session_id === pendingClose && g.status === "active")
     : undefined;
@@ -190,11 +194,14 @@ export function ChatSurface({
     if (chat.sessions.some((s) => s.id === requested)) setPendingClose(requested);
   }, [chat.pendingDeleteRequest, pendingClose, chat.sessions]);
 
-  function closeSession(id: string, harvest: boolean) {
-    // Retire server-side (purge checkpoints; harvest into knowledge ONLY when
-    // the dialog's checkbox opted in), best-effort, then drop the tab locally.
-    void api.deleteChatSession(id, harvest).catch(() => {});
-    chatStore.deleteSession(id);
+  async function closeSession(id: string, harvest: boolean): Promise<boolean> {
+    try {
+      await retireChatSession(id, harvest);
+      return true;
+    } catch (error) {
+      onError(`Couldn't delete chat: ${errMsg(error)}. The tab was kept so you can retry.`);
+      return false;
+    }
   }
 
   // Clear requests from ⌘K / /clear (both run outside React, so they park the id in the store
@@ -207,11 +214,19 @@ export function ChatSurface({
     if (chat.sessions.some((s) => s.id === requested)) setPendingClear(requested);
   }, [chat.pendingClearRequest, pendingClear, chat.sessions]);
 
-  function clearSession(id: string, harvest: boolean) {
-    // Purge the server checkpoint (harvest into knowledge ONLY when the dialog's checkbox opted
-    // in), best-effort, then wipe this tab's history locally — but KEEP the tab (unlike delete).
-    void api.deleteChatSession(id, harvest).catch(() => {});
-    chatStore.updateMessages(id, []);
+  async function clearSession(id: string, harvest: boolean): Promise<boolean> {
+    if (!canClearSession(chatStore.getSnapshot().sessionStatusMap[id], serverTurnSessions.has(id))) {
+      onError("Stop the active response before clearing this conversation.");
+      return false;
+    }
+    try {
+      await api.clearChatSession(id, harvest);
+      chatStore.updateMessages(id, []);
+      return true;
+    } catch (error) {
+      onError(`Couldn't clear chat: ${errMsg(error)}. Its history was kept so you can retry.`);
+      return false;
+    }
   }
 
   // Kick off a bulk close (Close others/left/right). `ids` is the already-resolved target list
@@ -225,7 +240,7 @@ export function ChatSurface({
     );
     const goals = ids.filter((id) => activeGoalIds.has(id));
     for (const id of ids) {
-      if (!activeGoalIds.has(id)) closeSession(id, false);
+      if (!activeGoalIds.has(id)) void closeSession(id, false);
     }
     setHarvestOnDelete(false);
     setStopGoalOnClose(false);
@@ -247,6 +262,7 @@ export function ChatSurface({
   // Cancel: abort the WHOLE bulk operation, not just the current tab — hitting cancel means
   // "stop closing", so the remaining queued tabs are spared.
   function cancelClose() {
+    if (retiringSessionId) return;
     setPendingClose(null);
     setCloseQueue([]);
     setHarvestOnDelete(false);
@@ -283,7 +299,26 @@ export function ChatSurface({
     if (!session) return;
     e.preventDefault();
     e.stopPropagation(); // beat the DS close button's onClick → no confirm dialog
-    closeSession(session.id, false); // false = no knowledge harvest
+    // Cached absence is not authoritative: the query may still be mounting or
+    // refetching after a goal changed. Always refresh before the no-confirm
+    // shortcut, and fail closed if ownership cannot be verified.
+    void (async () => {
+      const disposition = await resolveGoalCloseDisposition(session.id, async () => {
+        const result = await goalsState.refetch();
+        // A failed background refetch may retain previously successful data;
+        // that cache is still stale and must not authorize deletion.
+        return result.error === null && result.data ? result.data.goals : undefined;
+      });
+      // The tab may have disappeared while the authoritative read was in flight.
+      if (!chatStore.getSnapshot().sessions.some((candidate) => candidate.id === session.id)) return;
+      if (disposition === "confirm-goal") {
+        setPendingClose(session.id);
+      } else if (disposition === "direct") {
+        await closeSession(session.id, false); // false = no knowledge harvest
+      } else {
+        onError("Couldn't verify whether this chat owns an active goal. The tab was kept; try again.");
+      }
+    })();
   }
 
   // Keyboard twin of the Shift+click incognito gesture (#1697): Shift+Enter/Space on the
@@ -428,30 +463,34 @@ export function ChatSurface({
       <ConfirmDialog
         open={pendingClose !== null}
         title={closingGoal ? "Close this goal tab?" : "Delete this chat?"}
-        confirmLabel={closingGoal ? (stopGoalOnClose ? "Stop goal & close" : "Keep running, close tab") : "Delete chat"}
+        confirmLabel={retiringSessionId
+          ? "Deleting…"
+          : closingGoal
+            ? (stopGoalOnClose ? "Stop goal & close" : "Keep running, close tab")
+            : "Delete chat"}
         destructive={!closingGoal || stopGoalOnClose}
         onConfirm={() => {
-          if (pendingClose) {
-            if (closingGoal) {
-              if (stopGoalOnClose) {
-                // STOP: clear the goal + close its task backlog, and purge the (now finished)
-                // session. The tab unmount aborts the in-flight drive stream.
-                void api.clearGoal(pendingClose, true).catch(() => {});
-                void api.deleteChatSession(pendingClose, false).catch(() => {});
-                chatStore.deleteSession(pendingClose);
-              } else {
-                // DETACH: keep the goal driving in the background (a headless continuation) and
-                // KEEP the server session — its checkpoint is the goal's accumulated context, so
-                // we must NOT purge it. Just drop the tab locally; track it in the Goals panel.
-                void api.resumeGoal(pendingClose).catch(() => {});
-                chatStore.deleteSession(pendingClose);
-              }
-            } else {
-              closeSession(pendingClose, harvestOnDelete);
+          if (!pendingClose || retiringSessionId) return;
+          const id = pendingClose;
+          void (async () => {
+            if (closingGoal && !stopGoalOnClose) {
+              // DETACH deliberately keeps the server session/goal. This is a local
+              // tab dismissal, not durable retirement.
+              void api.resumeGoal(id).catch(() => {});
+              chatStore.dismissSession(id);
+              advanceClose();
+              return;
             }
-          }
-          // Advance the bulk-close queue (or just clear the dialog when it's a single close).
-          advanceClose();
+            setRetiringSessionId(id);
+            try {
+              if (closingGoal && stopGoalOnClose) await api.clearGoal(id, true);
+              if (await closeSession(id, closingGoal ? false : harvestOnDelete)) advanceClose();
+            } catch (error) {
+              onError(`Couldn't stop and delete this goal chat: ${errMsg(error)}. The tab was kept so you can retry.`);
+            } finally {
+              setRetiringSessionId(null);
+            }
+          })();
         }}
         onClose={cancelClose}
       >
@@ -495,10 +534,18 @@ export function ChatSurface({
       <ClearConversationDialog
         open={pendingClear !== null}
         onConfirm={(harvest) => {
-          if (pendingClear) clearSession(pendingClear, harvest);
-          setPendingClear(null);
+          if (!pendingClear || clearingSessionId) return;
+          const id = pendingClear;
+          setClearingSessionId(id);
+          void clearSession(id, harvest)
+            .then((cleared) => {
+              if (cleared) setPendingClear(null);
+            })
+            .finally(() => setClearingSessionId(null));
         }}
-        onCancel={() => setPendingClear(null)}
+        onCancel={() => {
+          if (!clearingSessionId) setPendingClear(null);
+        }}
       />
     </section>
   );
@@ -1078,6 +1125,7 @@ function ChatSessionSlot({
   // cards, reasoning, text) and the live tail streams in like a normal turn.
   // Cold agents (409/502 behind the fleet proxy) are retried with backoff; a
   // turn that already ended falls back to one snapshot replay + finalize.
+  const reattachKey = reattachKeyForMessages(session?.messages);
   useEffect(() => {
     if (abortRef.current) return; // a live turn in this slot owns the stream
     const snap = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
@@ -1090,8 +1138,10 @@ function ChatSessionSlot({
         notifyIfHidden(payload.title || "protoAgent needs your input", payload.question || payload.description);
       },
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- reattach is keyed to the session slot
-  }, [sessionId]);
+    // `reattachKey` changes when boot hydration fills an ALREADY-MOUNTED empty
+    // fixed-id tab; sessionId alone would strand that recovered HITL/live turn.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- callbacks intentionally bind this slot
+  }, [sessionId, reattachKey]);
 
   const messages = session?.messages || [];
   // Regenerate is offered only on the most recent OPERATOR-initiated assistant reply — a

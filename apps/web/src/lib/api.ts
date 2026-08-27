@@ -94,7 +94,7 @@ type A2APart = {
 };
 // A Message / Artifact carries an optional `metadata` map — since protolabs-a2a 0.3.0
 // that's where the SDK extensions (cost-v1, tool-call-v1) ride, keyed by extension URI.
-type A2AMessage = { parts?: A2APart[]; metadata?: Record<string, unknown> };
+type A2AMessage = { role?: string; parts?: A2APart[]; metadata?: Record<string, unknown> };
 type A2AArtifact = { parts?: A2APart[]; metadata?: Record<string, unknown> };
 type A2AStatus = {
   state?: string;
@@ -139,6 +139,22 @@ type A2AFrame = {
   error?: {
     message?: string;
   };
+};
+
+export type DurableChatSession = {
+  session_id: string;
+  last_updated: string | null;
+  turn_count: number;
+};
+
+export type DurableChatTurn = {
+  task_id: string;
+  state: string;
+  last_updated: string | null;
+  text: string;
+  status?: A2AStatus;
+  artifacts?: A2AArtifact[];
+  history?: A2AMessage[];
 };
 
 /**
@@ -735,6 +751,8 @@ async function consumeBuffered(
 // agent switch / reload, Swap & Resume S1).
 export type TurnStreamHandlers = {
   signal?: AbortSignal;
+  /** Fires immediately before a full Task snapshot is replayed. */
+  onTaskSnapshot?: () => void;
   onTaskId?: (taskId: string) => void;
   onStatus?: (status: string) => void;
   onText?: (text: string, append: boolean) => void;
@@ -758,7 +776,7 @@ export type TurnStreamHandlers = {
 // nobody was subscribed. A live SendStreamingMessage's initial Task frame is
 // bare (submitted; no artifacts, no history), so this is a no-op there.
 function replayTaskSnapshot(task: NonNullable<A2AFrame["result"]>, handlers: TurnStreamHandlers): void {
-  const arts = (task as { artifacts?: Array<{ parts?: RawPart[] }> }).artifacts || [];
+  const arts = (task as { artifacts?: Array<{ parts?: RawPart[]; metadata?: ExtMetadata }> }).artifacts || [];
   const accumulated = arts.map((a) => textFromParts(a.parts)).join("");
   const history = ((task as { history?: Array<{ role?: string; parts?: RawPart[]; metadata?: ExtMetadata }> }).history ||
     []) as Array<{ role?: string; parts?: RawPart[]; metadata?: ExtMetadata }>;
@@ -774,6 +792,12 @@ function replayTaskSnapshot(task: NonNullable<A2AFrame["result"]>, handlers: Tur
     // flatten all answer text into one accumulation, so the marker's position
     // relative to that text cannot be reconstructed honestly. Turn-end queue
     // reconciliation is the compatibility fallback for a client that missed it live.
+  }
+  for (const artifact of arts) {
+    const usage = costFromMeta(artifact.metadata);
+    if (usage) handlers.onCost?.(usage);
+    const context = contextFromParts(artifact.parts);
+    if (context) handlers.onContext?.(context);
   }
   if (accumulated) handlers.onText?.(accumulated, false);
   const state = (task.status?.state || "").toString();
@@ -802,6 +826,7 @@ function makeA2ADispatcher(sessionId: string, handlers: TurnStreamHandlers): (fr
       // frames a detached client missed), then the accumulated artifact text —
       // which for a terminal task IS the final answer. A live stream's initial
       // Task frame is bare (submitted, no artifacts/history), so it's a no-op.
+      handlers.onTaskSnapshot?.();
       replayTaskSnapshot(task, handlers);
     }
     if (statusUpdate) {
@@ -842,6 +867,25 @@ function makeA2ADispatcher(sessionId: string, handlers: TurnStreamHandlers): (fr
       if (ctx) handlers.onContext?.(ctx);
     }
   };
+}
+
+/** Replay one row from ADR 0104's durable-turn reader through the exact same
+ * dispatcher as live and reattached A2A tasks. The history hydrator creates
+ * the user bubble separately because snapshot replay intentionally ignores
+ * ROLE_USER frames while rebuilding the assistant response. */
+export function replayDurableChatTurn(
+  turn: DurableChatTurn,
+  sessionId: string,
+  handlers: TurnStreamHandlers = {},
+): void {
+  const task = {
+    id: turn.task_id,
+    contextId: sessionId,
+    status: turn.status ?? { state: turn.state },
+    artifacts: turn.artifacts ?? [],
+    history: turn.history ?? [],
+  };
+  makeA2ADispatcher(sessionId, handlers)({ result: { task } } as A2AFrame);
 }
 
 async function consumeSse(
@@ -2060,11 +2104,35 @@ export const api = {
 
   // Retire a chat session server-side: purge its checkpoints, optionally
   // harvesting the conversation into knowledge first (the delete dialog's
-  // opt-in checkbox). Fire-and-forget on tab delete.
+  // opt-in checkbox). Callers await this durable commit before dropping the
+  // local tab so a failed tombstone write remains visible and retryable.
   deleteChatSession(sessionId: string, harvest = false) {
     return request<{ deleted: boolean; harvested: boolean }>(
       `/api/chat/sessions/${encodeURIComponent(sessionId)}?harvest=${harvest}`,
       { method: "DELETE" },
+    );
+  },
+
+  /** Wipe durable history but keep the tab/id reusable. Unlike retirement this
+   * deliberately does not tombstone the id, so its next turn can be discovered. */
+  clearChatSession(sessionId: string, harvest = false) {
+    return request<{ deleted: boolean; harvested: boolean }>(
+      `/api/chat/sessions/${encodeURIComponent(sessionId)}?harvest=${harvest}&retire=false`,
+      { method: "DELETE" },
+    );
+  },
+
+  // Bounded discovery + turn reads for ADR 0104 recovery. The index carries no
+  // transcript content; callers fetch turns only for sessions missing locally.
+  chatSessions(limit = 50) {
+    return request<{ sessions: DurableChatSession[]; reason?: string }>(
+      `/api/chat/sessions?limit=${Math.max(1, Math.min(limit, 200))}`,
+    );
+  },
+
+  chatSessionTurns(sessionId: string, limit = 50) {
+    return request<{ turns: DurableChatTurn[]; reason?: string }>(
+      `/api/chat/sessions/${encodeURIComponent(sessionId)}/turns?limit=${Math.max(1, Math.min(limit, 200))}`,
     );
   },
 

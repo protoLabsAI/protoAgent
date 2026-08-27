@@ -1,6 +1,6 @@
 // #2996 — the "Clear this conversation?" confirm behind ⌘K (chat.clear) and /clear. Both
 // entry points park a clear request in the store; ChatSurface folds it into this dialog, so
-// the destructive deleteChatSession + updateMessages happens ONLY on confirm. These pin the
+// the server clear + local updateMessages sequence starts ONLY on confirm. These pin the
 // dialog's own contract: the exact copy, the opt-in "Harvest to knowledge" checkbox, that
 // cancel/backdrop dismiss without confirming, and that confirm reports the harvest choice.
 //

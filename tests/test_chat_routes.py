@@ -776,6 +776,115 @@ def test_fork_session_route(monkeypatch):
 # ── ADR 0104: the session turns read API (Swap & Resume S5) ────────────────────
 
 
+def test_session_index_is_bounded_recent_and_grouped(monkeypatch, tmp_path):
+    """A fresh browser can discover session ids without downloading turns."""
+    import asyncio
+    from datetime import datetime, timezone
+
+    from a2a.server.tasks.database_task_store import Base, TaskModel
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/session-index.db")
+
+    async def _seed():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            await conn.execute(
+                TaskModel.__table__.insert(),
+                [
+                    {
+                        "id": "a-1",
+                        "context_id": "chat-a",
+                        "kind": "task",
+                        "status": {"state": "TASK_STATE_COMPLETED"},
+                        "artifacts": [],
+                        "history": [],
+                        "last_updated": datetime(2026, 8, 19, 12, 1, tzinfo=timezone.utc),
+                    },
+                    {
+                        "id": "a-2",
+                        "context_id": "chat-a",
+                        "kind": "task",
+                        "status": {"state": "TASK_STATE_COMPLETED"},
+                        "artifacts": [],
+                        "history": [],
+                        "last_updated": datetime(2026, 8, 19, 12, 3, tzinfo=timezone.utc),
+                    },
+                    {
+                        "id": "b-1",
+                        "context_id": "chat-b",
+                        "kind": "task",
+                        "status": {"state": "TASK_STATE_COMPLETED"},
+                        "artifacts": [],
+                        "history": [],
+                        "last_updated": datetime(2026, 8, 19, 12, 2, tzinfo=timezone.utc),
+                    },
+                    {  # non-console A2A contexts must not become chat tabs
+                        "id": "activity-1",
+                        "context_id": "activity:scheduler",
+                        "kind": "task",
+                        "status": {"state": "TASK_STATE_COMPLETED"},
+                        "artifacts": [],
+                        "history": [],
+                        "last_updated": datetime(2026, 8, 19, 12, 4, tzinfo=timezone.utc),
+                    },
+                ],
+            )
+
+    asyncio.run(_seed())
+    import runtime.state as rs
+
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
+    body = _client(monkeypatch).get("/api/chat/sessions?limit=1").json()
+    assert body == {
+        "sessions": [
+            {
+                "session_id": "chat-a",
+                "last_updated": "2026-08-19T12:03:00",
+                "turn_count": 2,
+            }
+        ]
+    }
+
+
+def test_session_index_breaks_equal_timestamps_by_context_id(monkeypatch, tmp_path):
+    """Newest-first discovery is deterministic when database timestamps tie."""
+    import asyncio
+    from datetime import datetime, timezone
+
+    from a2a.server.tasks.database_task_store import Base, TaskModel
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/session-index-ties.db")
+
+    async def _seed():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            at = datetime(2026, 8, 19, 12, 3, tzinfo=timezone.utc)
+            await conn.execute(
+                TaskModel.__table__.insert(),
+                [
+                    {"id": "t-a", "context_id": "chat-a", "kind": "task", "status": {}, "last_updated": at},
+                    {"id": "t-b", "context_id": "chat-b", "kind": "task", "status": {}, "last_updated": at},
+                ],
+            )
+
+    asyncio.run(_seed())
+    import runtime.state as rs
+
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
+    rows = _client(monkeypatch).get("/api/chat/sessions?limit=2").json()["sessions"]
+    assert [row["session_id"] for row in rows] == ["chat-b", "chat-a"]
+
+
+def test_session_index_degrades_without_a_store(monkeypatch):
+    import runtime.state as rs
+
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", None, raising=False)
+    body = _client(monkeypatch).get("/api/chat/sessions").json()
+    assert body["sessions"] == [] and "not initialized" in body["reason"]
+
+
 def test_session_turns_reads_the_task_store(monkeypatch, tmp_path):
     """Turns come back by context_id, ordered, with the raw wire pieces the
     console dispatcher replays (status/artifacts/history) + joined text."""
@@ -806,6 +915,7 @@ def test_session_turns_reads_the_task_store(monkeypatch, tmp_path):
                 TaskModel.__table__.insert(),
                 [
                     row("t-2", 5, "TASK_STATE_COMPLETED", "second answer"),
+                    row("t-3", 5, "TASK_STATE_WORKING", "latest partial"),
                     row("t-1", 1, "TASK_STATE_COMPLETED", "first answer", history=[{"role": "ROLE_AGENT", "parts": []}]),
                     {  # a different session must not leak in
                         "id": "t-x",
@@ -825,11 +935,12 @@ def test_session_turns_reads_the_task_store(monkeypatch, tmp_path):
 
     monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
     c = _client(monkeypatch)
-    body = c.get("/api/chat/sessions/sess-1/turns").json()
-    assert [t["task_id"] for t in body["turns"]] == ["t-1", "t-2"]  # ordered, scoped
-    assert body["turns"][0]["text"] == "first answer"
-    assert body["turns"][0]["history"] == [{"role": "ROLE_AGENT", "parts": []}]
-    assert body["turns"][1]["state"] == "TASK_STATE_COMPLETED"
+    body = c.get("/api/chat/sessions/sess-1/turns?limit=2").json()
+    # The bounded tail includes the newest/nonterminal task, then returns it in
+    # chronology. Equal timestamps break by task id deterministically.
+    assert [t["task_id"] for t in body["turns"]] == ["t-2", "t-3"]
+    assert body["turns"][0]["text"] == "second answer"
+    assert body["turns"][1]["state"] == "TASK_STATE_WORKING"
     assert all(t["task_id"] != "t-x" for t in body["turns"])
 
 
@@ -840,6 +951,126 @@ def test_session_turns_degrades_without_a_store(monkeypatch):
     c = _client(monkeypatch)
     body = c.get("/api/chat/sessions/whatever/turns").json()
     assert body["turns"] == [] and "not initialized" in body["reason"]
+
+
+def test_delete_session_tombstone_hides_a_late_task_save(monkeypatch, tmp_path):
+    """A producer saving after DELETE cannot resurrect the retired chat (#2888)."""
+    import asyncio
+    from datetime import datetime, timezone
+
+    import operator_api.chat_routes as cr
+    import runtime.state as rs
+    from a2a.server.tasks.database_task_store import Base, TaskModel
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/delete-turns.db")
+
+    async def _seed():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            await conn.execute(
+                TaskModel.__table__.insert(),
+                {
+                    "id": "t-delete",
+                    "context_id": "chat-delete",
+                    "kind": "task",
+                    "status": {"state": "TASK_STATE_COMPLETED"},
+                    "artifacts": [],
+                    "history": [],
+                    "last_updated": datetime(2026, 8, 19, 12, 1, tzinfo=timezone.utc),
+                },
+            )
+
+    async def _fake_retire(_thread_id, *, harvest=False, cascade=True):
+        return None
+
+    asyncio.run(_seed())
+    monkeypatch.setattr(cr, "_retire_thread", _fake_retire)
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
+    client = _client(monkeypatch)
+    assert client.get("/api/chat/sessions").json()["sessions"][0]["session_id"] == "chat-delete"
+    assert client.delete("/api/chat/sessions/chat-delete").json()["deleted"] is True
+
+    async def _late_save():
+        async with engine.begin() as conn:
+            await conn.execute(
+                TaskModel.__table__.insert(),
+                {
+                    "id": "t-late",
+                    "context_id": "chat-delete",
+                    "kind": "task",
+                    "status": {"state": "TASK_STATE_COMPLETED"},
+                    "artifacts": [{"parts": [{"text": "late answer"}]}],
+                    "history": [],
+                    "last_updated": datetime(2026, 8, 19, 12, 2, tzinfo=timezone.utc),
+                },
+            )
+
+    asyncio.run(_late_save())
+    assert client.get("/api/chat/sessions").json()["sessions"] == []
+    assert client.get("/api/chat/sessions/chat-delete/turns").json()["turns"] == []
+
+    async def _remaining():
+        async with engine.connect() as conn:
+            return (await conn.execute(select(TaskModel.id))).fetchall()
+
+    # The late producer really did persist; the durable tombstone, not timing,
+    # is what keeps it out of both recovery APIs.
+    assert asyncio.run(_remaining()) == [("t-late",)]
+
+
+def test_chat_tombstones_are_not_count_evicted(monkeypatch, tmp_path):
+    """Crossing the former cap cannot reveal an old producer's late save."""
+    import asyncio
+    from datetime import datetime, timezone
+
+    import operator_api.chat_routes as cr
+    import runtime.state as rs
+    from a2a.server.tasks.database_task_store import Base, TaskModel
+    from sqlalchemy import func, insert, select
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/bounded-tombstones.db")
+    async def _record_and_count():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            table = await cr._ensure_chat_tombstones(conn)
+            deleted_at = datetime(2026, 8, 19, 12, 0, tzinfo=timezone.utc)
+            await conn.execute(
+                insert(table),
+                [
+                    {"context_id": f"chat-{index:05d}", "deleted_at": deleted_at}
+                    for index in range(10_001)
+                ],
+            )
+            # This insert would have triggered the old 10k count eviction.
+            await cr._record_chat_tombstone(conn, "chat-new")
+            # A producer paused since the oldest retirement saves after the table
+            # crossed that boundary. The reader must still honor its tombstone.
+            await conn.execute(
+                TaskModel.__table__.insert(),
+                {
+                    "id": "t-very-late",
+                    "context_id": "chat-00000",
+                    "kind": "task",
+                    "status": {"state": "TASK_STATE_COMPLETED"},
+                    "artifacts": [{"parts": [{"text": "must stay hidden"}]}],
+                    "history": [],
+                    "last_updated": deleted_at,
+                },
+            )
+            count = await conn.scalar(select(func.count()).select_from(table))
+            oldest = await conn.scalar(
+                select(table.c.context_id).where(table.c.context_id == "chat-00000")
+            )
+            return count, oldest
+
+    count, oldest = asyncio.run(_record_and_count())
+    assert count == 10_002
+    assert oldest == "chat-00000"
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
+    assert _client(monkeypatch).get("/api/chat/sessions/chat-00000/turns").json()["turns"] == []
 
 
 def test_api_chat_tags_its_turns_with_an_origin(monkeypatch):

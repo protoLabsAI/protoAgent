@@ -5,8 +5,8 @@ import { ConfirmDialog } from "@protolabsai/ui/overlays";
 // The "Clear this conversation?" confirm for the ⌘K chat.clear keybinding and the /clear
 // slash command (#2996). Clearing wipes the WHOLE conversation, so — like tab-close — it's
 // gated behind a confirm with an opt-in "Harvest to knowledge" checkbox. On confirm it reports
-// the harvest choice; the caller (ChatSurface) does the destructive deleteChatSession +
-// updateMessages, keeping the tab open. Its own small component (rather than inline in the
+// the harvest choice; the caller (ChatSurface) awaits the non-retiring server clear before
+// wiping local messages, keeping the tab open. Its own small component (rather than inline in the
 // giant ChatSurface) so the confirm / cancel / harvest wiring is unit-testable in the console's
 // `.test.ts`-only harness.
 export function ClearConversationDialog({

@@ -29,6 +29,7 @@ import { AuthGate } from "./AuthGate";
 import { authRequired, subscribeAuth } from "../lib/auth";
 import { pluginViewIcon } from "../lib/pluginIcon";
 import { TenantGuard } from "./TenantGuard";
+import { SessionHistoryHydrator } from "./SessionHistoryHydrator";
 import { Splash, BootGate } from "@protolabsai/ui/splash";
 import { Button } from "@protolabsai/ui/primitives";
 
@@ -830,6 +831,10 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
           Keyed on the HUB's uid, NOT the focused agent's — switching fleet agents keeps
           the same hub, so it must not clear chat on a normal swap. */}
       <TenantGuard uid={hostUidQ.data?.instance_uid} />
+      {/* ADR 0104/#2888: after tenant identity is verified, recover recent
+          server-known chats missing from this browser. Non-empty local copies
+          remain authoritative; failures are intentionally invisible. */}
+      <SessionHistoryHydrator tenantUid={hostUidQ.data?.instance_uid} />
       {/* macOS desktop: the topbar IS the window's drag region (its brand insets
           right of the native traffic lights — see `.is-tauri-mac .topbar`).
           Interactive children (the status dot) stay clickable; harmless on web. */}

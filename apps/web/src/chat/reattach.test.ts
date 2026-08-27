@@ -15,7 +15,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../lib/api";
 import { chatStore } from "./chat-store";
-import { reattachTurn } from "./reattach";
+import { reattachKeyForMessages, reattachTurn } from "./reattach";
+import { messagesFromDurableTurn } from "./sessionHydration";
 
 vi.mock("../lib/api", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../lib/api")>();
@@ -35,6 +36,13 @@ async function settle() {
 
 const ASSISTANT_ID = "a1";
 const TASK_ID = "t1";
+
+it("changes the reattach dependency when hydration fills an already-mounted empty tab", () => {
+  expect(reattachKeyForMessages([])).toBe("");
+  expect(reattachKeyForMessages([
+    { id: ASSISTANT_ID, role: "assistant", content: "partial", status: "streaming", taskId: TASK_ID },
+  ])).toBe(`${ASSISTANT_ID}:${TASK_ID}`);
+});
 
 /** A session whose last assistant message is stuck `streaming` — the exact
  *  shape the ChatSurface reattach effect hands to reattachTurn. */
@@ -116,6 +124,116 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("reattach run(): paused states", () => {
+  it("applies the first full subscription snapshot exactly once after hydration", async () => {
+    const session = chatStore.createSession();
+    const messages = messagesFromDurableTurn({
+      task_id: TASK_ID,
+      state: "TASK_STATE_WORKING",
+      last_updated: "2026-08-20T12:00:00Z",
+      text: "partial",
+      status: { state: "TASK_STATE_WORKING" },
+      artifacts: [{ parts: [{ text: "partial" }] }],
+      history: [{ role: "ROLE_USER", parts: [{ text: "ship it" }] }],
+    });
+    const assistant = messages.find((message) => message.role === "assistant")!;
+    assistant.reasoning = "checking";
+    assistant.components = [{ component: "key-value", props: { version: "1.2.3" } }];
+    assistant.toolCalls = [{ id: "call-1", name: "run_command", status: "running" }];
+    expect(assistant).toMatchObject({ content: "partial", status: "streaming", durableSnapshotFallback: true });
+    chatStore.updateMessages(session.id, messages);
+    chatStore.setSessionStatus(session.id, "streaming");
+    resumeTask.mockImplementation(async (_taskId, _sessionId, handlers) => {
+      handlers?.onTaskSnapshot?.();
+      handlers?.onReasoning?.("checking");
+      handlers?.onComponent?.({ component: "key-value", props: { version: "1.2.3" } });
+      handlers?.onToolCall?.({ id: "call-1", name: "run_command", phase: "start", input: "npm test" });
+    });
+    getTask.mockResolvedValue({ state: "TASK_STATE_INPUT_REQUIRED", text: "" });
+
+    const cancel = reattachTurn(session.id, assistant.id!, TASK_ID);
+    cancels.push(cancel);
+    await settle();
+
+    const recovered = chatStore.getSnapshot().sessions
+      .find((candidate) => candidate.id === session.id)?.messages
+      .find((message) => message.id === assistant.id);
+    expect(recovered?.reasoning).toBe("checking");
+    expect(recovered?.components).toHaveLength(1);
+    expect(recovered?.toolCalls).toHaveLength(1);
+    expect(recovered?.durableSnapshotFallback).toBeUndefined();
+  });
+
+  it("keeps the durable partial visible when reattach and fallback reads fail", async () => {
+    const session = chatStore.createSession();
+    const messages = messagesFromDurableTurn({
+      task_id: TASK_ID,
+      state: "TASK_STATE_WORKING",
+      last_updated: "2026-08-20T12:00:00Z",
+      text: "durable partial",
+      status: { state: "TASK_STATE_WORKING" },
+      artifacts: [{ parts: [{ text: "durable partial" }] }],
+      history: [{ role: "ROLE_USER", parts: [{ text: "ship it" }] }],
+    });
+    const assistant = messages.find((message) => message.role === "assistant")!;
+    chatStore.updateMessages(session.id, messages);
+    resumeTask.mockRejectedValue(new Error("task unavailable"));
+    replayTask.mockRejectedValue(new Error("task unavailable"));
+    getTask.mockRejectedValue(new Error("task unavailable"));
+
+    const cancel = reattachTurn(session.id, assistant.id!, TASK_ID);
+    cancels.push(cancel);
+    await settle();
+
+    expect(chatStore.getSnapshot().sessions
+      .find((candidate) => candidate.id === session.id)?.messages
+      .find((message) => message.id === assistant.id)?.content).toBe("durable partial");
+  });
+
+  it("reconciles the same full snapshot exactly once when resume emits then throws", async () => {
+    const session = chatStore.createSession();
+    const messages = messagesFromDurableTurn({
+      task_id: TASK_ID,
+      state: "TASK_STATE_WORKING",
+      last_updated: "2026-08-20T12:00:00Z",
+      text: "partial",
+      status: { state: "TASK_STATE_WORKING" },
+      artifacts: [{ parts: [{ text: "partial" }] }],
+      history: [{ role: "ROLE_USER", parts: [{ text: "ship it" }] }],
+    });
+    const assistant = messages.find((message) => message.role === "assistant")!;
+    chatStore.updateMessages(session.id, messages);
+    chatStore.setSessionStatus(session.id, "streaming");
+    const emitFullSnapshot = (handlers: Parameters<typeof api.resumeTask>[2]) => {
+      handlers?.onTaskSnapshot?.();
+      handlers?.onReasoning?.("checking");
+      handlers?.onComponent?.({ component: "key-value", props: { version: "1.2.3" } });
+      handlers?.onToolCall?.({ id: "call-1", name: "run_command", phase: "start", input: "npm test" });
+      handlers?.onText?.("partial", false);
+    };
+    resumeTask.mockImplementation(async (_taskId, _sessionId, handlers) => {
+      emitFullSnapshot(handlers);
+      throw new Error("subscription disconnected");
+    });
+    replayTask.mockImplementation(async (_taskId, _sessionId, handlers) => {
+      emitFullSnapshot(handlers);
+      return "TASK_STATE_INPUT_REQUIRED";
+    });
+
+    const cancel = reattachTurn(session.id, assistant.id!, TASK_ID);
+    cancels.push(cancel);
+    await settle();
+
+    const recovered = chatStore.getSnapshot().sessions
+      .find((candidate) => candidate.id === session.id)?.messages
+      .find((message) => message.id === assistant.id);
+    expect(recovered?.content).toBe("partial");
+    expect(recovered?.reasoning).toBe("checking");
+    expect(recovered?.components).toHaveLength(1);
+    expect(recovered?.toolCalls).toHaveLength(1);
+    expect(recovered?.durableSnapshotFallback).toBeUndefined();
+    expect(replayTask).toHaveBeenCalledTimes(1);
+  });
+
   it.each(["TASK_STATE_INPUT_REQUIRED", "input-required", "TASK_STATE_AUTH_REQUIRED", "auth-required"])(
     "goes idle WITHOUT finalizing the message on %s",
     async (state) => {
