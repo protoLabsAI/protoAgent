@@ -420,6 +420,7 @@ test("discover → add to fleet → switch into the remote member (ADR 0042 §I)
 
 test("⌘K root: member names surface the Fleet Room; the old per-member commands are gone", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
+  await expect(page.locator(".app-shell-main")).toBeVisible();
   await page.keyboard.press("ControlOrMeta+Shift+k");
   await expect(page.locator(".pl-cmdk__panel")).toBeVisible();
   const input = page.locator(".pl-cmdk__panel .pl-cmdk-commands__input");
@@ -477,6 +478,8 @@ test("Fleet Room: a parked member turn shows 'needs approval', then hands back (
 });
 
 async function openFleetRoom(page) {
+  // Boot readiness is asynchronous; wait until the workspace has mounted its keybindings.
+  await expect(page.locator(".app-shell-main")).toBeVisible();
   await page.keyboard.press("ControlOrMeta+Shift+k");
   await expect(page.locator(".pl-cmdk__panel")).toBeVisible();
   await page.locator(".pl-cmdk__panel .pl-cmdk-commands__input").fill("Fleet Room");
