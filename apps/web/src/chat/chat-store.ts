@@ -84,9 +84,33 @@ const STORAGE_KEY = (() => {
   }
 })();
 
+// Non-destructive tab dismissal is distinct from server retirement. Goal detach
+// intentionally leaves its durable session running, so remember that local UI
+// choice across reloads instead of letting boot hydration reopen the tab.
+const DISMISSED_STORAGE_KEY = `${STORAGE_KEY}.dismissed`;
+
+function loadDismissedIds(): Set<string> {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(DISMISSED_STORAGE_KEY) || "[]");
+    return new Set(Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function persistDismissedIds(ids: Set<string>) {
+  try {
+    window.localStorage.setItem(DISMISSED_STORAGE_KEY, JSON.stringify([...ids].sort()));
+  } catch {
+    // Hardened storage contexts keep the in-memory dismissal for this page.
+  }
+}
+
+const locallyDismissedIds = loadDismissedIds();
+
 // Sessions this tab deleted — a lightweight per-tab tombstone so the cross-tab merge
 // never resurrects a chat we just removed from another tab's stale on-disk copy.
-const locallyDeletedIds = new Set<string>();
+const locallyDeletedIds = new Set<string>(locallyDismissedIds);
 
 /** Identity token captured immediately before a durable turn read. Any local
  * edit replaces the session object, so the exact reference is a cheap per-tab
@@ -342,7 +366,18 @@ function loadPersisted(): PersistedChatState {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     const state = raw ? sanitizePersisted(JSON.parse(raw)) : null;
-    if (state) return state;
+    if (state) {
+      const sessions = state.sessions.filter((session) => !locallyDismissedIds.has(session.id));
+      if (sessions.length) {
+        return {
+          ...state,
+          sessions,
+          currentSessionId: sessions.some((session) => session.id === state.currentSessionId)
+            ? state.currentSessionId
+            : sessions[0].id,
+        };
+      }
+    }
   } catch {
     // Corrupt JSON or storage unavailable — fall through to a fresh session.
   }
@@ -545,6 +580,32 @@ function setState(
   listeners.forEach((listener) => listener());
 }
 
+function removeLocalSession(sessionId: string) {
+  setState((current) => {
+    const sessions = current.sessions.filter((session) => session.id !== sessionId);
+    const currentSessionId =
+      current.currentSessionId === sessionId ? sessions[0]?.id || null : current.currentSessionId;
+    const sessionStatusMap = { ...current.sessionStatusMap };
+    delete sessionStatusMap[sessionId];
+    return {
+      ...current,
+      sessions,
+      currentSessionId,
+      activeSessions: ensureActiveSessions(
+        {
+          ...current,
+          sessions,
+          currentSessionId,
+          activeSessions: current.activeSessions.filter((id) => id !== sessionId),
+          sessionStatusMap,
+        },
+        currentSessionId,
+      ),
+      sessionStatusMap,
+    };
+  });
+}
+
 /** A sibling tab sharing our localStorage key wrote new chat state. Merge its sessions
  *  into ours (so its new/updated chats show up here live) WITHOUT disturbing this tab's
  *  own view — our currentSessionId, active tabs, and live stream statuses stay put. We
@@ -627,7 +688,7 @@ export const chatStore = {
   },
 
   captureHydrationEligibility(sessionId: string): HydrationEligibility | null {
-    if (locallyDeletedIds.has(sessionId)) return null;
+    if (locallyDeletedIds.has(sessionId) || locallyDismissedIds.has(sessionId)) return null;
     const localSession = state.sessions.find((session) => session.id === sessionId) ?? null;
     if (localSession?.messages.length) return null;
     return { sessionId, localSession };
@@ -637,7 +698,7 @@ export const chatStore = {
     const tokens = new Map(eligibility.map((token) => [token.sessionId, token.localSession]));
     setState((current) => {
       const eligible = sessions.filter((session) => {
-        if (locallyDeletedIds.has(session.id)) return false;
+        if (locallyDeletedIds.has(session.id) || locallyDismissedIds.has(session.id)) return false;
         if (!tokens.has(session.id)) return eligibility.length === 0;
         const now = current.sessions.find((candidate) => candidate.id === session.id) ?? null;
         return now === tokens.get(session.id) && !now?.messages.length;
@@ -647,30 +708,27 @@ export const chatStore = {
   },
 
   deleteSession(sessionId: string) {
+    // Durable retirement makes a local-only dismissal redundant.
+    if (locallyDismissedIds.delete(sessionId)) persistDismissedIds(locallyDismissedIds);
     locallyDeletedIds.add(sessionId); // tombstone: the cross-tab merge won't resurrect it
-    setState((current) => {
-      const sessions = current.sessions.filter((session) => session.id !== sessionId);
-      const currentSessionId =
-        current.currentSessionId === sessionId ? sessions[0]?.id || null : current.currentSessionId;
-      const sessionStatusMap = { ...current.sessionStatusMap };
-      delete sessionStatusMap[sessionId];
-      return {
-        ...current,
-        sessions,
-        currentSessionId,
-        activeSessions: ensureActiveSessions(
-          {
-            ...current,
-            sessions,
-            currentSessionId,
-            activeSessions: current.activeSessions.filter((id) => id !== sessionId),
-            sessionStatusMap,
-          },
-          currentSessionId,
-        ),
-        sessionStatusMap,
-      };
-    });
+    removeLocalSession(sessionId);
+  },
+
+  /** Hide a tab locally while its server session intentionally keeps running
+   * (active-goal detach). This persisted dismissal is honored by boot hydration. */
+  dismissSession(sessionId: string) {
+    locallyDismissedIds.add(sessionId);
+    locallyDeletedIds.add(sessionId);
+    persistDismissedIds(locallyDismissedIds);
+    removeLocalSession(sessionId);
+  },
+
+  /** Explicit reopen lifecycle for future goal/history entry points: clear the
+   * local dismissal first, then fetch/hydrate the same durable session id. */
+  restoreDismissedSession(sessionId: string) {
+    locallyDismissedIds.delete(sessionId);
+    locallyDeletedIds.delete(sessionId);
+    persistDismissedIds(locallyDismissedIds);
   },
 
   /** Ask for a session to be deleted THROUGH the confirm lifecycle rather than

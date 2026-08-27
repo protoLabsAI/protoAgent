@@ -26,6 +26,9 @@ export async function retireChatSession(
 /** Clear keeps the session id reusable, so it has no tombstone protection
  * against a producer saving the old turn after the wipe. The console therefore
  * permits clear only once that producer is no longer active. */
-export function canClearSession(status: SessionStatus | undefined): boolean {
-  return status !== "streaming";
+export function canClearSession(
+  status: SessionStatus | undefined,
+  hasServerTurn = false,
+): boolean {
+  return status !== "streaming" && !hasServerTurn;
 }

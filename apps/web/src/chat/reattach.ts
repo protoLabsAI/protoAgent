@@ -106,6 +106,20 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
 
   const handlers: TurnStreamHandlers = {
     signal: controller.signal,
+    onTaskSnapshot: () => updateMessage(sessionId, assistantId, (m) => {
+      if (!m.durableSnapshotFallback) return m;
+      return {
+        ...m,
+        content: "",
+        reasoning: undefined,
+        components: undefined,
+        toolCalls: undefined,
+        parts: undefined,
+        usage: undefined,
+        contextWindow: undefined,
+        durableSnapshotFallback: undefined,
+      };
+    }),
     onStatus: (status) => hooks.onStatus?.(status),
     onText: (text, append) => updateMessage(sessionId, assistantId, (m) => applyText(m, text, append)),
     onReasoning: (delta) => updateMessage(sessionId, assistantId, (m) => applyReasoning(m, delta)),

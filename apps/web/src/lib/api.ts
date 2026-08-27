@@ -751,6 +751,8 @@ async function consumeBuffered(
 // agent switch / reload, Swap & Resume S1).
 export type TurnStreamHandlers = {
   signal?: AbortSignal;
+  /** Fires immediately before a full Task snapshot is replayed. */
+  onTaskSnapshot?: () => void;
   onTaskId?: (taskId: string) => void;
   onStatus?: (status: string) => void;
   onText?: (text: string, append: boolean) => void;
@@ -824,6 +826,7 @@ function makeA2ADispatcher(sessionId: string, handlers: TurnStreamHandlers): (fr
       // frames a detached client missed), then the accumulated artifact text —
       // which for a terminal task IS the final answer. A live stream's initial
       // Task frame is bare (submitted, no artifacts/history), so it's a no-op.
+      handlers.onTaskSnapshot?.();
       replayTaskSnapshot(task, handlers);
     }
     if (statusUpdate) {

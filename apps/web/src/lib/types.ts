@@ -959,6 +959,11 @@ export type ChatMessage = {
   /** This turn's context-window fill + compaction threshold (terminal context-v1 DataPart).
    *  Drives the meter in the same footer; absent on user turns / pre-ship history. */
   contextWindow?: ContextWindow;
+  /** A nonterminal task snapshot restored by boot hydration. It is useful as a
+   * visible fallback while a cold/failed reattach retries, but the first
+   * authoritative Task snapshot must reset its replay-derived fields before
+   * applying them so reasoning/tools/components are not duplicated. */
+  durableSnapshotFallback?: boolean;
   /** Set on a local SYSTEM NOTE (role "system", no `report`) to tone its rendering — a
    *  reusable, non-agent in-thread notice (slash-command confirmation, status, warning).
    *  Posted via `noteToThread(text, { tone })`; system notes never carry the answer

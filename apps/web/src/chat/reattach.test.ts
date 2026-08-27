@@ -136,10 +136,14 @@ describe("reattach run(): paused states", () => {
       history: [{ role: "ROLE_USER", parts: [{ text: "ship it" }] }],
     });
     const assistant = messages.find((message) => message.role === "assistant")!;
-    expect(assistant).toMatchObject({ content: "", status: "streaming" });
+    assistant.reasoning = "checking";
+    assistant.components = [{ component: "key-value", props: { version: "1.2.3" } }];
+    assistant.toolCalls = [{ id: "call-1", name: "run_command", status: "running" }];
+    expect(assistant).toMatchObject({ content: "partial", status: "streaming", durableSnapshotFallback: true });
     chatStore.updateMessages(session.id, messages);
     chatStore.setSessionStatus(session.id, "streaming");
     resumeTask.mockImplementation(async (_taskId, _sessionId, handlers) => {
+      handlers?.onTaskSnapshot?.();
       handlers?.onReasoning?.("checking");
       handlers?.onComponent?.({ component: "key-value", props: { version: "1.2.3" } });
       handlers?.onToolCall?.({ id: "call-1", name: "run_command", phase: "start", input: "npm test" });
@@ -156,6 +160,33 @@ describe("reattach run(): paused states", () => {
     expect(recovered?.reasoning).toBe("checking");
     expect(recovered?.components).toHaveLength(1);
     expect(recovered?.toolCalls).toHaveLength(1);
+    expect(recovered?.durableSnapshotFallback).toBeUndefined();
+  });
+
+  it("keeps the durable partial visible when reattach and fallback reads fail", async () => {
+    const session = chatStore.createSession();
+    const messages = messagesFromDurableTurn({
+      task_id: TASK_ID,
+      state: "TASK_STATE_WORKING",
+      last_updated: "2026-08-20T12:00:00Z",
+      text: "durable partial",
+      status: { state: "TASK_STATE_WORKING" },
+      artifacts: [{ parts: [{ text: "durable partial" }] }],
+      history: [{ role: "ROLE_USER", parts: [{ text: "ship it" }] }],
+    });
+    const assistant = messages.find((message) => message.role === "assistant")!;
+    chatStore.updateMessages(session.id, messages);
+    resumeTask.mockRejectedValue(new Error("task unavailable"));
+    replayTask.mockRejectedValue(new Error("task unavailable"));
+    getTask.mockRejectedValue(new Error("task unavailable"));
+
+    const cancel = reattachTurn(session.id, assistant.id!, TASK_ID);
+    cancels.push(cancel);
+    await settle();
+
+    expect(chatStore.getSnapshot().sessions
+      .find((candidate) => candidate.id === session.id)?.messages
+      .find((message) => message.id === assistant.id)?.content).toBe("durable partial");
   });
 
   it.each(["TASK_STATE_INPUT_REQUIRED", "input-required", "TASK_STATE_AUTH_REQUIRED", "auth-required"])(

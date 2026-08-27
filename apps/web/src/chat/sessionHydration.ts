@@ -69,31 +69,27 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
     taskId: turn.task_id,
   };
   const terminal = TERMINAL.test(turn.state);
-  // A resubscription begins with the task's full accumulated snapshot. Replaying
-  // that same snapshot here for a live/paused task would append reasoning,
-  // components, and tool events twice. Hydrate a reattachable shell instead;
-  // reattach owns the first authoritative snapshot exactly once.
+  replayDurableChatTurn(turn, "", {
+    onText: (text, append) => {
+      assistant = applyText(assistant, text, append);
+    },
+    onReasoning: (delta) => {
+      assistant = applyReasoning(assistant, delta);
+    },
+    onToolCall: (event) => {
+      if (event.name !== "show_component") assistant = applyToolEvent(assistant, event);
+    },
+    onComponent: (spec) => {
+      assistant = applyComponent(assistant, spec);
+    },
+    onCost: (usage) => {
+      assistant = applyUsage(assistant, usage);
+    },
+    onContext: (contextWindow) => {
+      assistant = { ...assistant, contextWindow };
+    },
+  });
   if (terminal) {
-    replayDurableChatTurn(turn, "", {
-      onText: (text, append) => {
-        assistant = applyText(assistant, text, append);
-      },
-      onReasoning: (delta) => {
-        assistant = applyReasoning(assistant, delta);
-      },
-      onToolCall: (event) => {
-        if (event.name !== "show_component") assistant = applyToolEvent(assistant, event);
-      },
-      onComponent: (spec) => {
-        assistant = applyComponent(assistant, spec);
-      },
-      onCost: (usage) => {
-        assistant = applyUsage(assistant, usage);
-      },
-      onContext: (contextWindow) => {
-        assistant = { ...assistant, contextWindow };
-      },
-    });
     assistant = {
       ...assistant,
       status: FAILED.test(turn.state) ? "error" : "done",
@@ -101,6 +97,11 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
         call.status === "running" ? { ...call, status: "done" as const } : call,
       ),
     };
+  } else {
+    // Keep the durable partial visible if a cold/failed reattach cannot produce
+    // a newer Task snapshot. The reattach handler recognizes this marker and
+    // clears snapshot-derived fields immediately before authoritative replay.
+    assistant = { ...assistant, durableSnapshotFallback: true };
   }
   return [...messages, assistant];
 }

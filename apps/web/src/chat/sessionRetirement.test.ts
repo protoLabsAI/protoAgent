@@ -31,6 +31,7 @@ describe("retireChatSession", () => {
 describe("canClearSession", () => {
   it("disallows clear while a producer can still save the pre-clear turn", () => {
     expect(canClearSession("streaming")).toBe(false);
+    expect(canClearSession("idle", true)).toBe(false);
     expect(canClearSession("idle")).toBe(true);
     expect(canClearSession("error")).toBe(true);
   });

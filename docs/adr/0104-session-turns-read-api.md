@@ -58,9 +58,11 @@ A2A reducers used by live and reattached turns. Fetches are bounded and a
 failed member/read leaves the local console usable. Each read captures the
 eligible local session object; delete, clear, send, rename, or another local
 edit before commit changes/removes that object and vetoes the stale result.
-For a nonterminal turn hydration creates only the prompt plus a reattachable
-assistant shell: the subscription's initial full snapshot owns accumulated
-reasoning/components/tools exactly once.
+For a nonterminal turn hydration keeps the latest durable partial visible as a
+fallback. It marks those replay-derived fields; the first authoritative Task
+snapshot resets them immediately before replay, so a successful subscription
+applies reasoning/components/tools exactly once while a failed/cold reattach
+does not leave a blank bubble.
 
 Explicit session retirement also removes that session's A2A task rows. Without
 this invariant, the discovery route would resurrect a deliberately deleted tab
@@ -69,8 +71,17 @@ non-evicting tombstone in the task database: an in-flight producer may save its 
 again after deletion, and the index/turn reader must continue excluding that
 late save. Count/age eviction is unsafe without a proven producer-liveness
 bound. Clear-history uses `retire=false` because it keeps the tab/id alive; the
-console disallows it while the session is streaming because a reusable id has
-no tombstone protection against a post-clear save.
+console disallows it while either a local or server-initiated turn is known to
+be active because a reusable id has no tombstone protection against a
+post-clear save. This is still a client-side liveness check: without a server
+generation/compare-and-delete primitive, a producer can theoretically start in
+the interval between that check and the delete request.
+
+Closing an active goal with **Keep running** is neither clear nor retirement.
+The console persists that session id in a separate local-dismissal set and
+excludes it from boot hydration, so reload does not reopen a deliberately
+detached goal tab. A future explicit **Open chat** action must first clear that
+dismissal (`restoreDismissedSession`) and then hydrate the same durable id.
 
 The auxiliary tombstone table is created lazily through `CREATE TABLE IF NOT
 EXISTS` on the first index/turn read or retirement. Those nominal GET paths can

@@ -106,11 +106,11 @@ describe("durable turn conversion", () => {
     );
     expect(messages[messages.length - 1]).toMatchObject({
       role: "assistant",
-      content: "",
+      content: "answer",
       status: "streaming",
       taskId: "task-1",
+      durableSnapshotFallback: true,
     });
-    expect(messages[messages.length - 1]).not.toHaveProperty("reasoning");
   });
 
   it("derives a fixed-id session and title from the first durable prompt", () => {

@@ -214,7 +214,7 @@ export function ChatSurface({
   }, [chat.pendingClearRequest, pendingClear, chat.sessions]);
 
   async function clearSession(id: string, harvest: boolean): Promise<boolean> {
-    if (!canClearSession(chatStore.getSnapshot().sessionStatusMap[id])) {
+    if (!canClearSession(chatStore.getSnapshot().sessionStatusMap[id], serverTurnSessions.has(id))) {
       onError("Stop the active response before clearing this conversation.");
       return false;
     }
@@ -457,7 +457,7 @@ export function ChatSurface({
               // DETACH deliberately keeps the server session/goal. This is a local
               // tab dismissal, not durable retirement.
               void api.resumeGoal(id).catch(() => {});
-              chatStore.deleteSession(id);
+              chatStore.dismissSession(id);
               advanceClose();
               return;
             }

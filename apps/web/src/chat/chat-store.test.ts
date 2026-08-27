@@ -239,6 +239,29 @@ describe("persist debouncing", () => {
     expect(setItem).toHaveBeenCalledTimes(4);
   });
 
+  it("persists a goal-detach dismissal across reload and clears it only on explicit restore", async () => {
+    const { chatStore } = await freshStore();
+    const detached = chatStore.getSnapshot().sessions[0];
+    chatStore.dismissSession(detached.id);
+    expect(JSON.parse(window.localStorage.getItem("protoagent.chat.sessions.dismissed") || "[]"))
+      .toContain(detached.id);
+
+    vi.resetModules();
+    const reloaded = await import("./chat-store");
+    expect(reloaded.chatStore.getSnapshot().sessions.some((session) => session.id === detached.id)).toBe(false);
+    expect(reloaded.chatStore.captureHydrationEligibility(detached.id)).toBeNull();
+
+    reloaded.chatStore.restoreDismissedSession(detached.id);
+    const token = reloaded.chatStore.captureHydrationEligibility(detached.id);
+    expect(token).not.toBeNull();
+    reloaded.chatStore.hydrateSessions([
+      { ...detached, messages: [{ role: "user", content: "goal history" }] },
+    ], [token!]);
+    expect(reloaded.chatStore.getSnapshot().sessions.some((session) => session.id === detached.id)).toBe(true);
+    expect(JSON.parse(window.localStorage.getItem("protoagent.chat.sessions.dismissed") || "[]"))
+      .not.toContain(detached.id);
+  });
+
   it("reorderSessions reorders the tabs, preserves the active session, and flushes immediately", async () => {
     const { chatStore } = await freshStore();
     const first = chatStore.getSnapshot().currentSessionId!;
