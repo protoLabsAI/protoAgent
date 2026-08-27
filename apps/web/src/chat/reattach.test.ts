@@ -189,6 +189,51 @@ describe("reattach run(): paused states", () => {
       .find((message) => message.id === assistant.id)?.content).toBe("durable partial");
   });
 
+  it("reconciles the same full snapshot exactly once when resume emits then throws", async () => {
+    const session = chatStore.createSession();
+    const messages = messagesFromDurableTurn({
+      task_id: TASK_ID,
+      state: "TASK_STATE_WORKING",
+      last_updated: "2026-08-20T12:00:00Z",
+      text: "partial",
+      status: { state: "TASK_STATE_WORKING" },
+      artifacts: [{ parts: [{ text: "partial" }] }],
+      history: [{ role: "ROLE_USER", parts: [{ text: "ship it" }] }],
+    });
+    const assistant = messages.find((message) => message.role === "assistant")!;
+    chatStore.updateMessages(session.id, messages);
+    chatStore.setSessionStatus(session.id, "streaming");
+    const emitFullSnapshot = (handlers: Parameters<typeof api.resumeTask>[2]) => {
+      handlers?.onTaskSnapshot?.();
+      handlers?.onReasoning?.("checking");
+      handlers?.onComponent?.({ component: "key-value", props: { version: "1.2.3" } });
+      handlers?.onToolCall?.({ id: "call-1", name: "run_command", phase: "start", input: "npm test" });
+      handlers?.onText?.("partial", false);
+    };
+    resumeTask.mockImplementation(async (_taskId, _sessionId, handlers) => {
+      emitFullSnapshot(handlers);
+      throw new Error("subscription disconnected");
+    });
+    replayTask.mockImplementation(async (_taskId, _sessionId, handlers) => {
+      emitFullSnapshot(handlers);
+      return "TASK_STATE_INPUT_REQUIRED";
+    });
+
+    const cancel = reattachTurn(session.id, assistant.id!, TASK_ID);
+    cancels.push(cancel);
+    await settle();
+
+    const recovered = chatStore.getSnapshot().sessions
+      .find((candidate) => candidate.id === session.id)?.messages
+      .find((message) => message.id === assistant.id);
+    expect(recovered?.content).toBe("partial");
+    expect(recovered?.reasoning).toBe("checking");
+    expect(recovered?.components).toHaveLength(1);
+    expect(recovered?.toolCalls).toHaveLength(1);
+    expect(recovered?.durableSnapshotFallback).toBeUndefined();
+    expect(replayTask).toHaveBeenCalledTimes(1);
+  });
+
   it.each(["TASK_STATE_INPUT_REQUIRED", "input-required", "TASK_STATE_AUTH_REQUIRED", "auth-required"])(
     "goes idle WITHOUT finalizing the message on %s",
     async (state) => {

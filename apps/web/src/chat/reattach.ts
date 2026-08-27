@@ -93,6 +93,7 @@ function finalize(sessionId: string, assistantId: string, state: string, text: s
       parts: text ? replaceText(m.parts, text, m.content) : m.parts,
       status: failed ? "error" : "done",
       toolCalls,
+      durableSnapshotFallback: undefined,
     };
   });
   chatStore.setSessionStatus(sessionId, failed ? "error" : "idle");
@@ -106,20 +107,22 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
 
   const handlers: TurnStreamHandlers = {
     signal: controller.signal,
-    onTaskSnapshot: () => updateMessage(sessionId, assistantId, (m) => {
-      if (!m.durableSnapshotFallback) return m;
-      return {
-        ...m,
-        content: "",
-        reasoning: undefined,
-        components: undefined,
-        toolCalls: undefined,
-        parts: undefined,
-        usage: undefined,
-        contextWindow: undefined,
-        durableSnapshotFallback: undefined,
-      };
-    }),
+    // Every Task frame is a full authoritative snapshot, not a delta. Reset
+    // replay-derived fields before EACH one: a subscription may deliver its
+    // snapshot and then fail, after which retry/GetTask replays the same history.
+    // If no Task frame arrives this hook never runs, preserving the hydrated
+    // durable partial as the cold/failure fallback.
+    onTaskSnapshot: () => updateMessage(sessionId, assistantId, (m) => ({
+      ...m,
+      content: "",
+      reasoning: undefined,
+      components: undefined,
+      toolCalls: undefined,
+      parts: undefined,
+      usage: undefined,
+      contextWindow: undefined,
+      durableSnapshotFallback: undefined,
+    })),
     onStatus: (status) => hooks.onStatus?.(status),
     onText: (text, append) => updateMessage(sessionId, assistantId, (m) => applyText(m, text, append)),
     onReasoning: (delta) => updateMessage(sessionId, assistantId, (m) => applyReasoning(m, delta)),

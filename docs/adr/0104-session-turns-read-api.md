@@ -59,10 +59,11 @@ failed member/read leaves the local console usable. Each read captures the
 eligible local session object; delete, clear, send, rename, or another local
 edit before commit changes/removes that object and vetoes the stale result.
 For a nonterminal turn hydration keeps the latest durable partial visible as a
-fallback. It marks those replay-derived fields; the first authoritative Task
-snapshot resets them immediately before replay, so a successful subscription
-applies reasoning/components/tools exactly once while a failed/cold reattach
-does not leave a blank bubble.
+fallback. It marks those replay-derived fields; every authoritative full Task
+snapshot resets them immediately before replay. This matters when a subscription
+emits its snapshot and then fails before a retry/GetTask emits the same snapshot:
+reasoning/components/tools still apply exactly once, while a failed/cold
+reattach that never receives a Task frame does not leave a blank bubble.
 
 Explicit session retirement also removes that session's A2A task rows. Without
 this invariant, the discovery route would resurrect a deliberately deleted tab
