@@ -499,6 +499,15 @@ Any slot that takes a model name — `routing.fallback_models`, `routing.aux_mod
 
 Hold a gateway key and both subscriptions and you can mix all of them at once — Claude for review, Codex for code, the gateway for cheap bulk work — whatever the main brain runs on. The qualified form is the one to reach for when two providers could plausibly serve the same model id.
 
+::: tip Mixing providers mid-conversation costs reasoning continuity, not correctness
+On `openai-codex`, the model's reasoning is threaded across turns as an encrypted blob that
+is **sealed to the endpoint and account that minted it** — a blob replayed anywhere else is a
+hard `400`. protoAgent stamps each captured item with its issuer and silently drops the ones
+the current endpoint can't decrypt, so switching a chat's model mid-thread (or re-signing-in
+under a different ChatGPT account) just restarts reasoning continuity from that point. The
+conversation itself is unaffected.
+:::
+
 ```yaml
 model:
   provider: anthropic-oauth      # main brain on your Claude subscription
