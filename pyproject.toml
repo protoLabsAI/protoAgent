@@ -63,7 +63,7 @@ dependencies = [
   # gateway path (default) never imports this — the branch in graph/llm.py is lazy.
   "langchain-anthropic>=1.0",
   "langgraph-checkpoint-sqlite>=2.0",
-  "langchain-mcp-adapters>=0.2,<0.3",
+  "langchain-mcp-adapters>=0.2,<0.4",
   # Capped at <2 because langchain-mcp-adapters does not work on mcp 2.x — it imports
   # `RequestContext` from `mcp.shared.context`, which mcp 2.0.0 removed. The cap has to
   # live HERE, on the transitive dep, because the adapter's own metadata says `mcp>=1.24.0`

@@ -8,8 +8,8 @@ resolution-markers = [
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.13' and sys_platform == 'win32'",
     "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
+    "python_full_version < '3.13' and sys_platform == 'win32'",
     "python_full_version < '3.12' and sys_platform == 'emscripten'",
     "python_full_version < '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
@@ -1023,16 +1023,16 @@ wheels = [
 
 [[package]]
 name = "langchain-mcp-adapters"
-version = "0.2.2"
+version = "0.3.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "langchain-core" },
     { name = "mcp" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0e/66/1cc7039e2daaddcdea9d8887851fe6eb67401925999b2aa394aa855c7132/langchain_mcp_adapters-0.2.2.tar.gz", hash = "sha256:12d39e91ae4389c54b61b221094e53850b6e152934d8bc10c80665d600e76530", size = 37942, upload-time = "2026-03-16T17:13:30.35Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/05/49/f3b8497b64024ab50d10011f27e94d149668fef754da74c1c2ce6ebe4a30/langchain_mcp_adapters-0.3.2.tar.gz", hash = "sha256:61cd1a09597adb619a9bafb0642938ffc2a9463d699a753f7af0420ea46c381a", size = 47129, upload-time = "2026-08-06T06:15:04.094Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7d/2f/15d5e6c1765d8404a9cce38d8c81d7b33fb3392f9db5b992c000dddbd2a3/langchain_mcp_adapters-0.2.2-py3-none-any.whl", hash = "sha256:d08e64954e86281002653071b7430e0377c9a577cb4ac3143abfeb3e24ef8797", size = 23288, upload-time = "2026-03-16T17:13:29.073Z" },
+    { url = "https://files.pythonhosted.org/packages/a3/5e/4f117d2500a661079a1895a6eb18954a906e458b1e45fa04a301fcdabd61/langchain_mcp_adapters-0.3.2-py3-none-any.whl", hash = "sha256:094e6b3096dbcc408417d5722f6915f164772e50c502ae3d8989405bf12c3c84", size = 28879, upload-time = "2026-08-06T06:15:02.832Z" },
 ]
 
 [[package]]
@@ -1064,7 +1064,7 @@ wheels = [
 
 [[package]]
 name = "langfuse"
-version = "4.7.1"
+version = "4.14.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "backoff" },
@@ -1076,9 +1076,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "wrapt" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/2c/74/a6f1a99893ee6d1a69439ae7eb92f8fe8806103492dc26531d5942dbd3bf/langfuse-4.7.1.tar.gz", hash = "sha256:f9e262eceedb353b191c1da1f8452d1e8ebf52297ca20e160cda0206608e3a40", size = 320620, upload-time = "2026-05-29T18:06:22.435Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d3/5c/f316b31abda2aab6ebadf69de99ea39df8d22ca743ac429284c0c1e12921/langfuse-4.14.5.tar.gz", hash = "sha256:75ccf86523ee87945bf9a853d4de65195376f9be5bda7178dd3d138b66fc670f", size = 391893, upload-time = "2026-08-24T13:01:08.496Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9f/9a/bd3368f46b6c72ee2068b80536826b02ae86df53eff1c79941344503098f/langfuse-4.7.1-py3-none-any.whl", hash = "sha256:a4e59c81ad5e5b16a65d3849f4923ebc3ad6e67ec803ada83d50c0cb66149490", size = 562571, upload-time = "2026-05-29T18:06:20.517Z" },
+    { url = "https://files.pythonhosted.org/packages/94/d4/914a654c3af7792f02394d93e0cbb052927b3e1e727416c62740cc49490d/langfuse-4.14.5-py3-none-any.whl", hash = "sha256:29e710b9b06adb30094e69af0034d10a47193bfb9c233296fe96b235cf1a377c", size = 695395, upload-time = "2026-08-24T13:01:09.62Z" },
 ]
 
 [[package]]
@@ -1684,7 +1684,7 @@ requires-dist = [
     { name = "langchain", specifier = ">=1.2.3" },
     { name = "langchain-anthropic", specifier = ">=1.0" },
     { name = "langchain-core", specifier = ">=1.0" },
-    { name = "langchain-mcp-adapters", specifier = ">=0.2,<0.3" },
+    { name = "langchain-mcp-adapters", specifier = ">=0.2,<0.4" },
     { name = "langchain-openai", specifier = ">=1.0" },
     { name = "langfuse", specifier = ">=3.0" },
     { name = "langgraph", specifier = ">=1.1.0" },
