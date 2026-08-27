@@ -9,6 +9,7 @@ vi.mock("@protolabsai/ui/splash", () => ({
 }));
 
 vi.mock("./AuthGate", () => ({ AuthGate: () => null }));
+vi.mock("./UpdateNotice", () => ({ UpdateNotice: () => h("div", { "data-testid": "update-notice" }) }));
 
 import { App } from "./App";
 
@@ -36,6 +37,7 @@ describe("App boot request boundary", () => {
     root.render(h(QueryClientProvider, { client: queryClient }, h(App)));
 
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(document.querySelector('[data-testid="update-notice"]')).not.toBeNull();
     const paths = fetchMock.mock.calls.map(([input]) => String(input));
     expect(paths).toHaveLength(1);
     expect(paths[0]).toContain("/api/runtime/status");

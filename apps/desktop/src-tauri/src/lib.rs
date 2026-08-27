@@ -668,14 +668,6 @@ async fn pick_path<R: Runtime>(app: AppHandle<R>, start: Option<String>, files: 
     picked.into_path().ok().map(|p| p.to_string_lossy().into_owned())
 }
 
-/// Check the GitHub Release updater manifest (latest.json) for a newer build;
-/// prompt, download + install, then relaunch. Signatures are verified against
-/// the org minisign pubkey baked into tauri.conf.json.
-///
-/// `interactive` = invoked from the tray item: "up to date" and errors surface
-/// as dialogs. The silent launch check only logs. On Linux the updater manages
-/// AppImage installs only (a .deb belongs to apt) — that limitation comes back
-/// as an error from the plugin and is handled like any other.
 /// What the pre-install freshness recheck (#2832) decided. Pure so the
 /// dialog-open-while-releases-advance contract is unit-testable: an offer for A
 /// must never install A once B is Latest without renewed confirmation.
@@ -698,142 +690,57 @@ fn classify_recheck(offered: &str, fresh: Option<&str>) -> Freshness {
     }
 }
 
-/// Offer `update` via the Install/Later dialog. On confirm, RE-CHECK the
-/// endpoint before downloading (#2832): the dialog can sit open across several
-/// releases, and the captured update object would otherwise install a stale,
-/// superseded build. A superseded offer re-enters this function with the fresh
-/// update so the operator confirms against the version that will actually
-/// install. Box::pin because the re-offer recursion makes the future cyclic.
-fn offer_update<R: Runtime>(
-    app: AppHandle<R>,
-    update: tauri_plugin_updater::Update,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
-    Box::pin(async move {
-        let current = app.package_info().version.to_string();
-        let version = update.version.clone();
-        // Callback dialog → awaitable: the file-picker above uses the same
-        // capacity-1 tauri::async_runtime channel idiom.
-        let (tx, mut rx) = tauri::async_runtime::channel::<bool>(1);
-        app.dialog()
-            .message(format!(
-                "protoAgent {version} is available (you have {current}).\n\n\
-                 Download and install now? The app relaunches when it finishes \
-                 and your agent data is untouched."
-            ))
-            .title("Update available")
-            .buttons(MessageDialogButtons::OkCancelCustom(
-                "Install and Relaunch".to_string(),
-                "Later".to_string(),
-            ))
-            .show(move |confirmed| {
-                let _ = tx.try_send(confirmed);
-            });
-        if !rx.recv().await.unwrap_or(false) {
-            return;
-        }
+const PRIMARY_WINDOW_LABEL: &str = "main";
+const UPDATE_REQUEST_EVENT: &str = "updater:check-requested";
 
-        // Freshness gate (#2832): revalidate against Latest before any download.
-        let recheck = match app.updater() {
-            Ok(u) => u.check().await,
-            Err(e) => Err(e),
-        };
-        let fresh = match recheck {
-            Ok(f) => f,
-            Err(e) => {
-                // Can't revalidate ⇒ don't gamble on a possibly-stale object; the
-                // download needs the same network the recheck just failed on.
-                log::warn!("updater: pre-install recheck failed: {e}");
-                app.dialog()
-                    .message(format!(
-                        "Couldn't re-confirm the latest version before installing.\n\n{e}\n\n\
-                         Nothing was installed — try Check for Updates again."
-                    ))
-                    .title("protoAgent updates")
-                    .show(|_| {});
-                return;
-            }
-        };
-        match classify_recheck(&version, fresh.as_ref().map(|u| u.version.as_str())) {
-            Freshness::Install => {
-                // Install the FRESH object — same version, but current URLs/signature.
-                let update = fresh.expect("Install implies a fresh update");
-                match update.download_and_install(|_, _| {}, || {}).await {
-                    Ok(()) => {
-                        log::info!("updater: installed {}, relaunching", update.version);
-                        app.restart();
-                    }
-                    Err(e) => {
-                        log::error!("updater: install failed: {e}");
-                        app.dialog()
-                            .message(format!("The update failed to install.\n\n{e}"))
-                            .title("protoAgent updates")
-                            .show(|_| {});
-                    }
-                }
-            }
-            Freshness::Superseded => {
-                let update = fresh.expect("Superseded implies a fresh update");
-                log::info!(
-                    "updater: offer {version} superseded by {} while the dialog was open — re-offering",
-                    update.version
-                );
-                offer_update(app, update).await;
-            }
-            Freshness::UpToDate => {
-                log::info!("updater: offer {version} withdrawn — endpoint reports up to date");
-                app.dialog()
-                    .message("You're already on the latest version — the offered update was withdrawn.")
-                    .title("protoAgent updates")
-                    .show(|_| {});
-            }
-        }
-    })
+#[derive(Default)]
+struct UpdateRequestSequence {
+    next_id: u64,
+    pending: Option<u64>,
 }
 
-fn check_for_updates<R: Runtime>(app: AppHandle<R>, interactive: bool) {
-    tauri::async_runtime::spawn(async move {
-        let updater = match app.updater() {
-            Ok(u) => u,
-            Err(e) => {
-                log::info!("updater: unavailable for this install: {e}");
-                if interactive {
-                    app.dialog()
-                        .message(format!(
-                            "Updates aren't managed in-app for this install.\n\n{e}"
-                        ))
-                        .title("protoAgent updates")
-                        .show(|_| {});
-                }
-                return;
-            }
-        };
-        match updater.check().await {
-            Ok(Some(update)) => {
-                let current = app.package_info().version.to_string();
-                let version = update.version.clone();
-                log::info!("updater: {version} available (running {current})");
-                offer_update(app.clone(), update).await;
-            }
-            Ok(None) => {
-                log::info!("updater: up to date");
-                if interactive {
-                    app.dialog()
-                        .message("You're on the latest version.")
-                        .title("protoAgent updates")
-                        .show(|_| {});
-                }
-            }
-            Err(e) => {
-                log::warn!("updater: check failed: {e}");
-                if interactive {
-                    app.dialog()
-                        .message(format!("Couldn't check for updates.\n\n{e}"))
-                        .title("protoAgent updates")
-                        .show(|_| {});
-                }
-            }
+/// Monotonic request id plus a one-slot durable inbox. A tray click can arrive before
+/// React has registered its event listener during desktop boot; retaining the latest id
+/// lets the primary window pull it after subscribing. Repeated clicks intentionally
+/// coalesce — one fresh check is enough.
+#[derive(Default)]
+struct UpdateRequestState(Mutex<UpdateRequestSequence>);
+
+impl UpdateRequestState {
+    fn record(&self) -> u64 {
+        let mut state = self.0.lock().unwrap();
+        state.next_id = state.next_id.saturating_add(1);
+        state.pending = Some(state.next_id);
+        state.next_id
+    }
+
+    fn take(&self) -> Option<u64> {
+        self.0.lock().unwrap().pending.take()
+    }
+
+    fn acknowledge(&self, request_id: u64) {
+        let mut state = self.0.lock().unwrap();
+        if state.pending == Some(request_id) {
+            state.pending = None;
         }
-    });
+    }
+}
+
+fn request_update_from_tray<R: Runtime>(app: &AppHandle<R>) {
+    show_main_window(app);
+    let Some(state) = app.try_state::<UpdateRequestState>() else {
+        log::warn!("updater: tray request state unavailable");
+        return;
+    };
+    let request_id = state.record();
+    if let Err(e) = app.emit_to(
+        tauri::EventTarget::webview_window(PRIMARY_WINDOW_LABEL),
+        UPDATE_REQUEST_EVENT,
+        request_id,
+    ) {
+        // The durable pending id remains available for the webview to pull after boot.
+        log::warn!("updater: couldn't notify the primary window: {e}");
+    }
 }
 
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
@@ -866,7 +773,7 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
                 }
             }
             "hide" => hide_main_window(app),
-            "updates" => check_for_updates(app.clone(), true),
+            "updates" => request_update_from_tray(app),
             "quit" => app.exit(0),
             _ => {}
         })
@@ -941,6 +848,75 @@ struct UpdateInfo {
     notes: String,
 }
 
+#[derive(Clone)]
+enum UpdateCheckOutcome {
+    Available(UpdateInfo),
+    Current,
+    Error(String),
+}
+
+#[derive(Default)]
+struct UpdateCheckSnapshot {
+    generation: u64,
+    outcome: Option<UpdateCheckOutcome>,
+}
+
+/// Serialize updater manifest reads and share the result among callers that overlap.
+/// Launch, periodic, and tray checks can otherwise race through the updater plugin and
+/// produce duplicate prompts. A caller that starts after the prior check completed still
+/// performs a fresh read, preserving the six-hour and explicit-interaction semantics.
+#[derive(Default)]
+struct UpdateCheckCoordinator {
+    gate: tauri::async_runtime::Mutex<()>,
+    snapshot: Mutex<UpdateCheckSnapshot>,
+}
+
+fn update_info<R: Runtime>(app: &AppHandle<R>, update: &tauri_plugin_updater::Update) -> UpdateInfo {
+    UpdateInfo {
+        version: update.version.clone(),
+        current: app.package_info().version.to_string(),
+        notes: update.body.clone().unwrap_or_default(),
+    }
+}
+
+async fn perform_update_check<R: Runtime>(app: &AppHandle<R>) -> UpdateCheckOutcome {
+    let updater = match app.updater() {
+        Ok(updater) => updater,
+        Err(e) => return UpdateCheckOutcome::Error(e.to_string()),
+    };
+    match updater.check().await {
+        Ok(Some(update)) => UpdateCheckOutcome::Available(update_info(app, &update)),
+        Ok(None) => UpdateCheckOutcome::Current,
+        Err(e) => UpdateCheckOutcome::Error(e.to_string()),
+    }
+}
+
+async fn coordinated_update_check<R: Runtime>(app: &AppHandle<R>) -> UpdateCheckOutcome {
+    let Some(coordinator) = app.try_state::<UpdateCheckCoordinator>() else {
+        return perform_update_check(app).await;
+    };
+    let observed_generation = coordinator.snapshot.lock().unwrap().generation;
+    let _guard = coordinator.gate.lock().await;
+
+    // Another caller completed while this one waited: reuse exactly that result instead
+    // of issuing an overlapping request. The next non-overlapping caller observes the new
+    // generation before taking the gate and therefore performs its own fresh check.
+    {
+        let snapshot = coordinator.snapshot.lock().unwrap();
+        if snapshot.generation > observed_generation {
+            if let Some(outcome) = snapshot.outcome.clone() {
+                return outcome;
+            }
+        }
+    }
+
+    let outcome = perform_update_check(app).await;
+    let mut snapshot = coordinator.snapshot.lock().unwrap();
+    snapshot.generation = snapshot.generation.saturating_add(1);
+    snapshot.outcome = Some(outcome.clone());
+    outcome
+}
+
 /// The launch-time update check's outcome (#2203), held for the webview to pull.
 /// `done: false` = still in flight; `done + update: None` = up to date / check failed
 /// (both mean "nothing to prompt"); `done + update: Some` = prompt immediately.
@@ -964,28 +940,21 @@ struct LaunchUpdateState(Mutex<LaunchUpdateResult>);
 /// it as soon as it mounts and owns the entire prompt UX (one prompt path, unchanged).
 fn spawn_launch_update_check<R: Runtime>(app: AppHandle<R>) {
     tauri::async_runtime::spawn(async move {
-        let outcome = match app.updater() {
-            Ok(updater) => match updater.check().await {
-                Ok(Some(update)) => {
-                    let current = app.package_info().version.to_string();
-                    log::info!("updater: {} available at launch (running {current})", update.version);
-                    Some(UpdateInfo {
-                        version: update.version.clone(),
-                        current,
-                        notes: update.body.clone().unwrap_or_default(),
-                    })
-                }
-                Ok(None) => {
-                    log::info!("updater: up to date (launch check)");
-                    None
-                }
-                Err(e) => {
-                    log::warn!("updater: launch check failed: {e}");
-                    None
-                }
-            },
-            Err(e) => {
-                log::info!("updater: unavailable for this install: {e}");
+        let outcome = match coordinated_update_check(&app).await {
+            UpdateCheckOutcome::Available(update) => {
+                log::info!(
+                    "updater: {} available at launch (running {})",
+                    update.version,
+                    update.current
+                );
+                Some(update)
+            }
+            UpdateCheckOutcome::Current => {
+                log::info!("updater: up to date (launch check)");
+                None
+            }
+            UpdateCheckOutcome::Error(e) => {
+                log::warn!("updater: launch check failed or unavailable: {e}");
                 None
             }
         };
@@ -1117,20 +1086,53 @@ fn own_origin_path(target: &str) -> Option<String> {
 }
 
 /// Check the updater manifest for a newer build, returning its version + notes for the
-/// in-app UpdateNotice (the web pill renders the changelog) — the typed counterpart to
-/// the tray's native-dialog `check_for_updates`. None when up to date; Err on failure.
+/// in-app UpdateNotice (the web pill renders the changelog). None when up to date;
+/// Err on failure so an interactive tray request can surface useful feedback.
 #[tauri::command]
 async fn updater_check<R: Runtime>(app: AppHandle<R>) -> Result<Option<UpdateInfo>, String> {
-    let updater = app.updater().map_err(|e| e.to_string())?;
-    let current = app.package_info().version.to_string();
-    match updater.check().await.map_err(|e| e.to_string())? {
-        Some(u) => Ok(Some(UpdateInfo {
-            version: u.version.clone(),
-            current,
-            notes: u.body.clone().unwrap_or_default(),
-        })),
-        None => Ok(None),
+    match coordinated_update_check(&app).await {
+        UpdateCheckOutcome::Available(update) => Ok(Some(update)),
+        UpdateCheckOutcome::Current => Ok(None),
+        UpdateCheckOutcome::Error(e) => Err(e),
     }
+}
+
+/// Pull the latest tray request after the frontend listener is registered. Only the
+/// primary window may consume it, so an already-open secondary chat window cannot steal
+/// a boot-time request or open a duplicate dialog.
+#[tauri::command]
+fn updater_take_request<R: Runtime>(
+    app: AppHandle<R>,
+    window: tauri::WebviewWindow<R>,
+) -> Option<u64> {
+    if window.label() != PRIMARY_WINDOW_LABEL {
+        return None;
+    }
+    app.try_state::<UpdateRequestState>().and_then(|state| state.take())
+}
+
+/// Clear a request delivered over the live event path. The id comparison is critical:
+/// an acknowledgement delayed behind a newer tray click must not erase that newer
+/// request from the durable boot inbox.
+#[tauri::command]
+fn updater_ack_request<R: Runtime>(
+    app: AppHandle<R>,
+    window: tauri::WebviewWindow<R>,
+    request_id: u64,
+) {
+    if window.label() != PRIMARY_WINDOW_LABEL {
+        return;
+    }
+    if let Some(state) = app.try_state::<UpdateRequestState>() {
+        state.acknowledge(request_id);
+    }
+}
+
+#[derive(serde::Serialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+enum InstallUpdateResult {
+    Superseded { update: UpdateInfo },
+    UpToDate,
 }
 
 /// Download + install the available update (signature-verified by the plugin against the
@@ -1138,14 +1140,36 @@ async fn updater_check<R: Runtime>(app: AppHandle<R>) -> Result<Option<UpdateInf
 #[tauri::command]
 async fn updater_install<R: Runtime>(
     app: AppHandle<R>,
+    expected_version: String,
     on_progress: tauri::ipc::Channel<DownloadProgress>,
-) -> Result<(), String> {
+) -> Result<InstallUpdateResult, String> {
+    // Share the same gate as manifest checks: no launch/periodic/tray read can race the
+    // operator's final freshness check and download. We still perform a NEW check here;
+    // the dialog may have remained open across multiple releases (#2832).
+    let coordinator = app.state::<UpdateCheckCoordinator>();
+    let _guard = coordinator.gate.lock().await;
     let updater = app.updater().map_err(|e| e.to_string())?;
-    let update = updater
-        .check()
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "no update available".to_string())?;
+    let fresh = updater.check().await.map_err(|e| e.to_string())?;
+    match classify_recheck(&expected_version, fresh.as_ref().map(|u| u.version.as_str())) {
+        Freshness::Superseded => {
+            let update = fresh.expect("Superseded implies a fresh update");
+            log::info!(
+                "updater: offer {expected_version} superseded by {} — returning it for renewed confirmation",
+                update.version
+            );
+            return Ok(InstallUpdateResult::Superseded {
+                update: update_info(&app, &update),
+            });
+        }
+        Freshness::UpToDate => {
+            log::info!("updater: offer {expected_version} withdrawn — endpoint reports up to date");
+            return Ok(InstallUpdateResult::UpToDate);
+        }
+        Freshness::Install => {}
+    }
+    // Install the FRESH object — same version the operator confirmed, but with the
+    // endpoint's current URLs and signature.
+    let update = fresh.expect("Install implies a fresh update");
     update
         .download_and_install(
             move |chunk, total| {
@@ -1169,6 +1193,8 @@ pub fn run() {
             updater_check,
             updater_install,
             updater_launch_result,
+            updater_take_request,
+            updater_ack_request,
             hide_launcher,
             focus_main,
             hotkeys_status,
@@ -1220,6 +1246,8 @@ pub fn run() {
                     .build(),
             )?;
             app.manage(SidecarProcess::default());
+            app.manage(UpdateCheckCoordinator::default());
+            app.manage(UpdateRequestState::default());
 
             // Two global, system-wide hotkeys (fire even when the app is unfocused or
             // hidden in the menu bar): the console toggle and the quick launcher —
@@ -1274,7 +1302,8 @@ pub fn run() {
             });
             let app_url = || WebviewUrl::App(format!("index.html?__apiPort={port}").into());
             let init = format!(
-                "window.__PROTOAGENT_API_BASE__ = \"http://127.0.0.1:{port}\";"
+                "window.__PROTOAGENT_API_BASE__ = \"http://127.0.0.1:{port}\"; \
+                 window.__PROTOAGENT_PRIMARY__ = true;"
             );
             // A `target="_blank"` / `window.open` from a (sandboxed) plugin iframe asks
             // the host to spawn a child window. We don't host child windows, so without
@@ -1369,9 +1398,9 @@ pub fn run() {
             // (the pill + changelog modal). It seeds from the launch check above
             // (`updater_launch_result`, #2203 — prompt lands before engine startup
             // finishes) and keeps its own 10s-settle + 6h `updater_check` cycle. The
-            // shell never dialogs an available update on its own — that double-prompt
-            // is why the old silent launch check was removed. The tray "Check for
-            // Updates…" stays as the interactive native fallback.
+            // tray targets a durable request at the primary webview, so manual checks
+            // use that same release-notes/progress UX even during sidecar boot. The
+            // shell never dialogs an available update on its own.
             Ok(())
         })
         .on_window_event(|window, event| match event {
@@ -1436,6 +1465,45 @@ mod updater_freshness_tests {
         // The endpoint is authoritative in both directions: never install an
         // object the endpoint no longer serves.
         assert_eq!(classify_recheck("0.141.0", Some("0.140.1")), Freshness::Superseded);
+    }
+}
+
+#[cfg(test)]
+mod update_request_tests {
+    use super::UpdateRequestState;
+
+    #[test]
+    fn repeated_tray_clicks_coalesce_to_the_latest_pending_request() {
+        let state = UpdateRequestState::default();
+
+        assert_eq!(state.record(), 1);
+        assert_eq!(state.record(), 2);
+        assert_eq!(state.take(), Some(2));
+        assert_eq!(state.take(), None);
+    }
+
+    #[test]
+    fn request_ids_remain_monotonic_after_a_request_is_taken() {
+        let state = UpdateRequestState::default();
+
+        assert_eq!(state.record(), 1);
+        assert_eq!(state.take(), Some(1));
+        assert_eq!(state.record(), 2);
+        assert_eq!(state.take(), Some(2));
+    }
+
+    #[test]
+    fn a_late_acknowledgement_cannot_erase_a_newer_request() {
+        let state = UpdateRequestState::default();
+
+        let first = state.record();
+        let second = state.record();
+        state.acknowledge(first);
+        assert_eq!(state.take(), Some(second));
+
+        let third = state.record();
+        state.acknowledge(third);
+        assert_eq!(state.take(), None);
     }
 }
 

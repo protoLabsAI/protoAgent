@@ -9,7 +9,11 @@ type TauriCore = {
 type UnlistenFn = () => void;
 type TauriEvent = {
   emit: (event: string, payload?: unknown) => Promise<void>;
-  listen: <T = unknown>(event: string, handler: (e: { payload: T }) => void) => Promise<UnlistenFn>;
+  listen: <T = unknown>(
+    event: string,
+    handler: (e: { payload: T }) => void,
+    options?: { target?: { kind: "WebviewWindow"; label: string } },
+  ) => Promise<UnlistenFn>;
 };
 type TauriGlobal = { core?: TauriCore; event?: TauriEvent };
 
@@ -26,6 +30,17 @@ function tauri(): TauriGlobal | null {
 export function isLauncherWindow(): boolean {
   try {
     return Boolean((window as unknown as { __PROTOAGENT_LAUNCHER__?: boolean }).__PROTOAGENT_LAUNCHER__);
+  } catch {
+    return false;
+  }
+}
+
+/** True only in the desktop shell's primary `main` window. The Rust shell injects
+ * this marker before page scripts run; secondary chat windows deliberately omit it
+ * so singleton shell UX (launch/tray update prompts) cannot render twice. */
+export function isPrimaryDesktopWindow(): boolean {
+  try {
+    return Boolean((window as unknown as { __PROTOAGENT_PRIMARY__?: boolean }).__PROTOAGENT_PRIMARY__);
   } catch {
     return false;
   }
@@ -59,11 +74,12 @@ export async function emit(event: string, payload?: unknown): Promise<void> {
 export async function listen<T = unknown>(
   event: string,
   handler: (payload: T) => void,
+  options?: { target?: { kind: "WebviewWindow"; label: string } },
 ): Promise<UnlistenFn> {
   const ev = tauri()?.event;
   if (!ev) return () => {};
   try {
-    return await ev.listen<T>(event, (e) => handler(e.payload));
+    return await ev.listen<T>(event, (e) => handler(e.payload), options);
   } catch {
     return () => {};
   }

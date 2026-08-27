@@ -2371,17 +2371,12 @@ export const api = {
 
   /** Desktop in-app updater (Tauri). `checkUpdate` returns the available build's
    * version + notes (the changelog from latest.json) or null (up to date / not
-   * desktop / offline). `installUpdate` downloads + installs + relaunches, streaming
-   * download progress. Both go through the Rust `updater_*` commands via the Tauri
-   * global (withGlobalTauri); they no-op outside the desktop shell. */
+   * desktop). Updater failures reject so an explicit tray request can surface them;
+   * ambient callers decide whether to stay quiet. */
   async checkUpdate(): Promise<{ version: string; current: string; notes: string } | null> {
     const core = tauriCore();
     if (!core) return null;
-    try {
-      return (await core.invoke<{ version: string; current: string; notes: string } | null>("updater_check")) ?? null;
-    } catch {
-      return null; // not in Tauri / no manifest / offline — stay quiet
-    }
+    return (await core.invoke<{ version: string; current: string; notes: string } | null>("updater_check")) ?? null;
   },
   /** The LAUNCH check's stored outcome (#2203) — the shell runs one update check in
    * parallel with engine startup; this pulls its result (a state read, no network).
@@ -2403,15 +2398,43 @@ export const api = {
       return null; // older shell without the command — UpdateNotice falls back to its timers
     }
   },
+  /** Latest tray request retained by Rust across the webview's boot/listener race.
+   * The command returns a request only to the primary `main` window. */
+  async takeUpdateRequest(): Promise<number | null> {
+    const core = tauriCore();
+    if (!core) return null;
+    try {
+      return (await core.invoke<number | null>("updater_take_request")) ?? null;
+    } catch {
+      return null; // older shell without the durable request command
+    }
+  },
+  async ackUpdateRequest(requestId: number): Promise<void> {
+    const core = tauriCore();
+    if (!core) return;
+    try {
+      await core.invoke("updater_ack_request", { requestId });
+    } catch {
+      // Older shell: the request may replay after a webview reload, but id de-duping
+      // still prevents duplicates within this mount.
+    }
+  },
   async installUpdate(
+    expectedVersion: string,
     onProgress: (e: { chunkLength: number; contentLength: number | null }) => void,
-  ): Promise<void> {
+  ): Promise<
+    | { status: "superseded"; update: { version: string; current: string; notes: string } }
+    | { status: "upToDate" }
+  > {
     const core = tauriCore();
     if (!core) throw new Error("Tauri core API unavailable");
     const channel = new core.Channel<{ chunkLength: number; contentLength: number | null }>();
     channel.onmessage = onProgress;
     // Resolves only if install fails — on success the Rust command relaunches the app.
-    await core.invoke("updater_install", { onProgress: channel });
+    return await core.invoke<
+      | { status: "superseded"; update: { version: string; current: string; notes: string } }
+      | { status: "upToDate" }
+    >("updater_install", { expectedVersion, onProgress: channel });
   },
 
   // Mid-turn steering: queue a user message into a RUNNING turn (folded in at the

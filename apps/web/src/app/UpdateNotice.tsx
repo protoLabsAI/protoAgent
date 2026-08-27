@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@protolabsai/ui/primitives";
-import { Dialog } from "@protolabsai/ui/overlays";
+import { Dialog, useToast } from "@protolabsai/ui/overlays";
 import { api, isDesktopWebview } from "../lib/api";
+import { isPrimaryDesktopWindow, listen } from "../lib/desktop";
 import { Markdown } from "../chat/LazyMarkdown";
 
 /**
@@ -18,16 +19,67 @@ import { Markdown } from "../chat/LazyMarkdown";
 
 const FIRST_CHECK_MS = 10_000; // let the boot settle
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000; // re-check every 6h
+const UPDATE_REQUEST_EVENT = "updater:check-requested";
 
 type UpdateInfo = { version: string; current: string; notes: string };
 type Phase = "available" | "downloading" | "error";
 
 export function UpdateNotice() {
+  const enabled = isDesktopWebview() && isPrimaryDesktopWindow();
+  const toast = useToast();
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [open, setOpen] = useState(false);
   const [phase, setPhase] = useState<Phase>("available");
   const [pct, setPct] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const checkInFlight = useRef<Promise<void> | null>(null);
+  const interactiveRequested = useRef(false);
+  const directCheckStarted = useRef(false);
+  const lastRequestId = useRef(0);
+
+  const present = useCallback((next: UpdateInfo, show: boolean) => {
+    setUpdate(next);
+    setPhase("available");
+    setPct(0);
+    setError(null);
+    if (show) setOpen(true);
+  }, []);
+
+  // One frontend check at a time. Rust applies the same single-flight contract across
+  // launch + command calls, while this layer also coalesces repeated tray events and the
+  // periodic timer into one piece of UI feedback.
+  const runCheck = useCallback(
+    (interactive: boolean) => {
+      if (interactive) interactiveRequested.current = true;
+      if (checkInFlight.current) return checkInFlight.current;
+      directCheckStarted.current = true;
+      const task = (async () => {
+        try {
+          const next = await api.checkUpdate();
+          const shouldReport = interactiveRequested.current;
+          if (next) {
+            present(next, shouldReport);
+          } else if (shouldReport) {
+            toast({ tone: "success", title: "You're up to date", message: "This is the latest version of protoAgent." });
+          }
+        } catch (e) {
+          if (interactiveRequested.current) {
+            toast({
+              tone: "error",
+              title: "Couldn't check for updates",
+              message: e instanceof Error ? e.message : String(e),
+            });
+          }
+        } finally {
+          interactiveRequested.current = false;
+          checkInFlight.current = null;
+        }
+      })();
+      checkInFlight.current = task;
+      return task;
+    },
+    [present, toast],
+  );
 
   // Launch check (#2203): the Rust shell runs ONE update check in parallel with engine
   // startup and stores the outcome; we poll that stored result (a state read, no
@@ -36,7 +88,7 @@ export function UpdateNotice() {
   // that's the "you're about to sit through startup; update instead?" moment. Timer-
   // found updates keep today's pill-only, don't-interrupt behavior.
   useEffect(() => {
-    if (!isDesktopWebview()) return;
+    if (!enabled) return;
     let cancelled = false;
     let retry: number | undefined;
     const poll = async (tries: number) => {
@@ -49,10 +101,8 @@ export function UpdateNotice() {
         if (tries < 20) retry = window.setTimeout(() => poll(tries + 1), 1_000);
         return;
       }
-      if (r.update) {
-        setUpdate(r.update);
-        setOpen(true);
-      }
+      // A direct tray/periodic check is newer than this immutable launch snapshot.
+      if (r.update && !directCheckStarted.current) present(r.update, true);
     };
     poll(0);
     return () => {
@@ -61,15 +111,45 @@ export function UpdateNotice() {
     };
     // Mount-only on purpose: the launch result is immutable once done.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [enabled, present]);
+
+  // Subscribe BEFORE pulling the durable request. If a click lands between those
+  // operations it arrives both ways; the monotonic id makes that harmless. Rust targets
+  // the event and pull command to `main`, and the primary marker keeps secondary windows
+  // from running any ambient update UX at all.
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    let unlisten = () => {};
+    const handle = (requestId: number) => {
+      if (!Number.isSafeInteger(requestId) || requestId <= lastRequestId.current) return;
+      lastRequestId.current = requestId;
+      void api.ackUpdateRequest(requestId);
+      void runCheck(true);
+    };
+    void listen<number>(UPDATE_REQUEST_EVENT, handle, {
+      target: { kind: "WebviewWindow", label: "main" },
+    }).then(async (off) => {
+      if (cancelled) {
+        off();
+        return;
+      }
+      unlisten = off;
+      const pending = await api.takeUpdateRequest();
+      if (!cancelled && pending !== null) handle(pending);
+    });
+    return () => {
+      cancelled = true;
+      unlisten();
+    };
+  }, [enabled, runCheck]);
 
   useEffect(() => {
-    if (!isDesktopWebview()) return;
+    if (!enabled) return;
     let cancelled = false;
     const run = async () => {
       if (cancelled || update) return;
-      const u = await api.checkUpdate();
-      if (!cancelled && u) setUpdate(u);
+      await runCheck(false);
     };
     const first = window.setTimeout(run, FIRST_CHECK_MS);
     const timer = window.setInterval(run, CHECK_INTERVAL_MS);
@@ -78,9 +158,9 @@ export function UpdateNotice() {
       window.clearTimeout(first);
       window.clearInterval(timer);
     };
-  }, [update]);
+  }, [enabled, runCheck, update]);
 
-  if (!update) return null;
+  if (!enabled || !update) return null;
 
   const install = async () => {
     setPhase("downloading");
@@ -89,12 +169,30 @@ export function UpdateNotice() {
     try {
       let got = 0;
       let total = 0;
-      await api.installUpdate((e) => {
+      const result = await api.installUpdate(update.version, (e) => {
         if (e.contentLength) total = e.contentLength;
         got += e.chunkLength;
         if (total > 0) setPct(Math.min(100, Math.round((got / total) * 100)));
       });
-      // On success the Rust command relaunches the app — we won't reach here.
+      // On success the Rust command relaunches the app — only a freshness outcome
+      // returns. Never install a release other than the one the operator confirmed.
+      if (result.status === "superseded") {
+        present(result.update, true);
+        toast({
+          tone: "info",
+          title: "A newer update is now available",
+          message: `Review ${result.update.version} before updating.`,
+        });
+      } else {
+        setUpdate(null);
+        setOpen(false);
+        setPhase("available");
+        toast({
+          tone: "success",
+          title: "You're up to date",
+          message: "The previously offered update is no longer available.",
+        });
+      }
     } catch (e) {
       setPhase("error");
       setError(e instanceof Error ? e.message : String(e));
