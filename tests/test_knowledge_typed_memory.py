@@ -328,3 +328,28 @@ def test_add_document_passes_typed_fields(tmp_path):
     assert c.expires_at == "2027-06-01T00:00:00+00:00"
 
 
+def test_promote_preserves_typed_fields(tmp_path):
+    """promote copies typed-memory fields from private to commons."""
+    from knowledge.layered import LayeredKnowledgeStore
+
+    priv = KnowledgeStore(tmp_path / "priv.db")
+    commons = KnowledgeStore(tmp_path / "commons.db")
+    store = LayeredKnowledgeStore(priv, commons)
+    priv.add_chunk(
+        "profile fact",
+        domain="hot",
+        memory_kind="profile",
+        subject="operator",
+        review_state="confirmed",
+        expires_at="2027-01-01T00:00:00+00:00",
+    )
+    chunks = priv.list_chunks()
+    assert len(chunks) == 1
+    store.promote(chunks[0].id)
+    commons_chunks = commons.list_chunks()
+    assert len(commons_chunks) == 1
+    c = commons_chunks[0]
+    assert c.memory_kind == "profile"
+    assert c.subject == "operator"
+    assert c.review_state == "confirmed"
+    assert c.expires_at == "2027-01-01T00:00:00+00:00"

@@ -126,6 +126,11 @@ class LayeredKnowledgeStore:
             source_type=chunk.get("source_type"),
             finding_type=chunk.get("finding_type"),
             namespace=chunk.get("namespace"),
+            epoch=chunk.get("epoch"),
+            memory_kind=chunk.get("memory_kind"),
+            subject=chunk.get("subject"),
+            review_state=chunk.get("review_state"),
+            expires_at=chunk.get("expires_at"),
         )
         if self._commons.id_for_exact_content(content) is None:
             log.error("[knowledge] promote(%s): commons write did not land — is the commons writable?", chunk_id)
