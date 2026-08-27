@@ -21,12 +21,25 @@ function timestamp(value: string | null): number {
   return Number.isFinite(parsed) ? parsed : Date.now();
 }
 
+function isUserRole(role: string | undefined): boolean {
+  const normalized = (role ?? "").toLowerCase();
+  return normalized === "user" || normalized.includes("role_user");
+}
+
 function firstUserText(turn: DurableChatTurn): string {
-  const user = (turn.history ?? []).find((message) => {
-    const role = (message.role ?? "").toLowerCase();
-    return role === "user" || role.includes("role_user");
-  });
+  const user = (turn.history ?? []).find((message) => isUserRole(message.role));
   return textFromParts(user?.parts);
+}
+
+/** Incognito is per operator message and therefore must be recovered from the
+ * newest durable user frame. Defaulting a recovered private tab to ordinary
+ * would let its next send participate in memory without the operator opting in. */
+function durableIncognito(turns: DurableChatTurn[]): boolean {
+  for (const turn of [...turns].reverse()) {
+    const user = [...(turn.history ?? [])].reverse().find((message) => isUserRole(message.role));
+    if (user) return user.metadata?.incognito === true;
+  }
+  return false;
 }
 
 function titleFromPrompt(prompt: string): string {
@@ -98,6 +111,7 @@ export function sessionFromDurableTurns(
     messages,
     createdAt,
     updatedAt,
+    ...(durableIncognito(turns) ? { incognito: true } : {}),
   };
 }
 

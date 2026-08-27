@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../lib/api";
 import { chatStore } from "./chat-store";
-import { reattachTurn } from "./reattach";
+import { reattachKeyForMessages, reattachTurn } from "./reattach";
 
 vi.mock("../lib/api", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../lib/api")>();
@@ -35,6 +35,13 @@ async function settle() {
 
 const ASSISTANT_ID = "a1";
 const TASK_ID = "t1";
+
+it("changes the reattach dependency when hydration fills an already-mounted empty tab", () => {
+  expect(reattachKeyForMessages([])).toBe("");
+  expect(reattachKeyForMessages([
+    { id: ASSISTANT_ID, role: "assistant", content: "partial", status: "streaming", taskId: TASK_ID },
+  ])).toBe(`${ASSISTANT_ID}:${TASK_ID}`);
+});
 
 /** A session whose last assistant message is stuck `streaming` — the exact
  *  shape the ChatSurface reattach effect hands to reattachTurn. */

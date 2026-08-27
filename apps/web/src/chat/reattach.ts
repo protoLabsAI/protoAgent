@@ -25,7 +25,7 @@
 // transient-status hooks are injected by the caller.
 
 import { api, type TurnStreamHandlers } from "../lib/api";
-import type { HitlPayload } from "../lib/types";
+import type { ChatMessage, HitlPayload } from "../lib/types";
 import { chatStore } from "./chat-store";
 import { replaceText } from "./parts";
 import { applyComponent, applyReasoning, applyText, applyToolEvent, applyUsage } from "./turnReducers";
@@ -50,6 +50,16 @@ export type ReattachHooks = {
   onHitl?: (payload: HitlPayload) => void;
   onStatus?: (status: string) => void;
 };
+
+/** Stable dependency key for the session slot's reattach effect. Hydration can
+ * fill an already-mounted empty fixed-id tab, so sessionId alone is not enough
+ * to trigger the effect when its durable streaming assistant appears later. */
+export function reattachKeyForMessages(messages: ChatMessage[] | undefined): string {
+  const last = [...(messages ?? [])].reverse().find((message) => message.role === "assistant");
+  return last?.status === "streaming" && last.taskId && last.id
+    ? `${last.id}:${last.taskId}`
+    : "";
+}
 
 function updateMessage(sessionId: string, assistantId: string, fn: (m: any) => any) {
   const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);

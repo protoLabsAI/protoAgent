@@ -2109,6 +2109,15 @@ export const api = {
     );
   },
 
+  /** Wipe durable history but keep the tab/id reusable. Unlike retirement this
+   * deliberately does not tombstone the id, so its next turn can be discovered. */
+  clearChatSession(sessionId: string, harvest = false) {
+    return request<{ deleted: boolean; harvested: boolean }>(
+      `/api/chat/sessions/${encodeURIComponent(sessionId)}?harvest=${harvest}&retire=false`,
+      { method: "DELETE" },
+    );
+  },
+
   // Bounded discovery + turn reads for ADR 0104 recovery. The index carries no
   // transcript content; callers fetch turns only for sessions missing locally.
   chatSessions(limit = 50) {

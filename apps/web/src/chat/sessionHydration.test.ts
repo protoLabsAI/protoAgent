@@ -10,6 +10,10 @@ import {
 } from "./sessionHydration";
 
 const TOOL = "https://proto-labs.ai/a2a/ext/tool-call-v1";
+const COST = "https://proto-labs.ai/a2a/ext/cost-v1";
+const REASONING = "application/vnd.protolabs.reasoning-v1+json";
+const COMPONENT = "application/vnd.protolabs.component-v1+json";
+const CONTEXT = "application/vnd.protolabs.context-v1+json";
 
 function turn(overrides: Partial<DurableChatTurn> = {}): DurableChatTurn {
   return {
@@ -59,6 +63,37 @@ describe("durable turn conversion", () => {
     });
   });
 
+  it("replays reasoning, components, cost, and context through the shared snapshot path", () => {
+    const messages = messagesFromDurableTurn(
+      turn({
+        history: [
+          { role: "ROLE_USER", parts: [{ text: "Show the release" }] },
+          { role: "ROLE_AGENT", parts: [{ data: { text: "checking" }, metadata: { mimeType: REASONING } }] },
+          {
+            role: "ROLE_AGENT",
+            parts: [{ data: { component: "key-value", props: { version: "1.2.3" } }, metadata: { mimeType: COMPONENT } }],
+          },
+        ],
+        artifacts: [{
+          parts: [
+            { text: "ready" },
+            { data: { contextTokens: 1200, maxTokens: 8000 }, metadata: { mimeType: CONTEXT } },
+          ],
+          metadata: {
+            [COST]: { usage: { input_tokens: 100, output_tokens: 20 }, costUsd: 0.012, durationMs: 450 },
+          },
+        }],
+      }),
+    );
+    expect(messages[1]).toMatchObject({
+      content: "ready",
+      reasoning: "checking",
+      components: [{ component: "key-value", props: { version: "1.2.3" } }],
+      usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120, costUsd: 0.012, durationMs: 450 },
+      contextWindow: { contextTokens: 1200, maxTokens: 8000 },
+    });
+  });
+
   it("keeps a nonterminal assistant reattachable", () => {
     const messages = messagesFromDurableTurn(
       turn({ state: "TASK_STATE_WORKING", status: { state: "TASK_STATE_WORKING" } }),
@@ -79,6 +114,21 @@ describe("durable turn conversion", () => {
   it("falls back to the default title when a server turn has no visible user text", () => {
     const session = sessionFromDurableTurns(summary(), [turn({ history: [] })]);
     expect(session?.title).toBe(DEFAULT_SESSION_TITLE);
+  });
+
+  it("restores incognito from the newest durable operator message", () => {
+    const privateTurn = turn({
+      task_id: "task-private",
+      history: [{ role: "ROLE_USER", parts: [{ text: "private" }], metadata: { incognito: true } }],
+    });
+    expect(sessionFromDurableTurns(summary(), [privateTurn])?.incognito).toBe(true);
+
+    const laterOrdinaryTurn = turn({
+      task_id: "task-ordinary",
+      last_updated: "2026-08-20T12:01:00Z",
+      history: [{ role: "ROLE_USER", parts: [{ text: "ordinary now" }] }],
+    });
+    expect(sessionFromDurableTurns(summary(), [privateTurn, laterOrdinaryTurn])?.incognito).toBeUndefined();
   });
 });
 

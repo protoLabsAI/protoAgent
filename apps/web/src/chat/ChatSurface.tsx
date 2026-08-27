@@ -50,7 +50,7 @@ import { finalizeStoppedMessages, resolveStopTarget } from "./stopTurn";
 import { lastOperatorAssistantId, rewindableTailId, replaceText } from "./parts";
 import { createRevealQueue } from "./revealQueue";
 import { applyComponent, applyReasoning, applyText, applyToolEvent } from "./turnReducers";
-import { reattachTurn } from "./reattach";
+import { reattachKeyForMessages, reattachTurn } from "./reattach";
 import { loadDraft, loadScroll, loadSteers, saveDraft, saveScroll, saveSteers } from "./scratchState";
 import { createStreamWatchdog } from "./streamWatchdog";
 import { ADD_SELECTOR, isIncognitoAddClick, trackShiftHeld } from "./shiftCue";
@@ -210,7 +210,7 @@ export function ChatSurface({
   function clearSession(id: string, harvest: boolean) {
     // Purge the server checkpoint (harvest into knowledge ONLY when the dialog's checkbox opted
     // in), best-effort, then wipe this tab's history locally — but KEEP the tab (unlike delete).
-    void api.deleteChatSession(id, harvest).catch(() => {});
+    void api.clearChatSession(id, harvest).catch(() => {});
     chatStore.updateMessages(id, []);
   }
 
@@ -1078,6 +1078,7 @@ function ChatSessionSlot({
   // cards, reasoning, text) and the live tail streams in like a normal turn.
   // Cold agents (409/502 behind the fleet proxy) are retried with backoff; a
   // turn that already ended falls back to one snapshot replay + finalize.
+  const reattachKey = reattachKeyForMessages(session?.messages);
   useEffect(() => {
     if (abortRef.current) return; // a live turn in this slot owns the stream
     const snap = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
@@ -1090,8 +1091,10 @@ function ChatSessionSlot({
         notifyIfHidden(payload.title || "protoAgent needs your input", payload.question || payload.description);
       },
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- reattach is keyed to the session slot
-  }, [sessionId]);
+    // `reattachKey` changes when boot hydration fills an ALREADY-MOUNTED empty
+    // fixed-id tab; sessionId alone would strand that recovered HITL/live turn.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- callbacks intentionally bind this slot
+  }, [sessionId, reattachKey]);
 
   const messages = session?.messages || [];
   // Regenerate is offered only on the most recent OPERATOR-initiated assistant reply — a

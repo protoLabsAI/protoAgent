@@ -59,7 +59,10 @@ failed member/read leaves the local console usable.
 
 Explicit session retirement also removes that session's A2A task rows. Without
 this invariant, the discovery route would resurrect a deliberately deleted tab
-until the task store's normal TTL elapsed.
+until the task store's normal TTL elapsed. Retirement also writes a durable,
+bounded tombstone in the task database: an in-flight producer may save its row
+again after deletion, and the index/turn reader must continue excluding that
+late save. Clear-history uses `retire=false` because it keeps the tab/id alive.
 
 ## Consequences
 
@@ -69,8 +72,9 @@ until the task store's normal TTL elapsed.
 - Multi-device catch-up becomes buildable without protocol work.
 - A fresh console discovers recent server-known sessions without downloading
   every transcript up front, and explicit deletion cannot resurrect them.
-- The task store's retention now matters to history depth (it already persists
-  every turn; a future retention policy must consider this reader).
+- Recovery reaches only as far back as the A2A task store's current 24-hour
+  terminal-task retention. The task store already persists every turn; changing
+  that TTL is therefore also a user-visible history-depth decision.
 
 ## Rejected alternatives
 
