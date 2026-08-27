@@ -32,7 +32,7 @@ Two things then happen to the **whole** assembled set, not just the core part:
 
 ## At a glance {#at-a-glance}
 
-39 tools in twelve groups. Each group's heading says what makes it appear.
+41 tools in twelve groups. Each group's heading says what makes it appear.
 
 ### General — always bound
 
@@ -78,6 +78,7 @@ Built by default; drop the whole group with `middleware.knowledge: false`. See
 | [`memory_ingest(content, domain="general", heading=None)`](#memory_ingest) | Store text you already have. |
 | [`knowledge_ingest(source, domain="general", title=None)`](#knowledge_ingest) | Fetch + extract + chunk a URL or file — the only path to a YouTube transcript or a PDF. |
 | [`memory_recall(query, k=5, domain=None)`](#memory_recall) | Search memory; returns cited matches. |
+| [`session_search(query, limit=5, surface="")`](#session_search) | Search prior session transcripts by content and return expandable session ids. |
 | [`recall_session(session_id)`](#recall_session) | Expand one `<prior_sessions>` line into that session's full summary. |
 | [`memory_list(domain=None, limit=10)`](#memory_list) | Most-recent-first listing, with each chunk's `#id`. |
 | [`memory_stats()`](#memory_stats) | Per-domain chunk counts. |
@@ -439,6 +440,21 @@ provenance — domain, stored date, namespace:
 `domain` scopes the search to one bucket — use it to separate the agent's own record from
 inherited or imported knowledge (a domain like `claude-import` is another codebase's history,
 not this agent's actions). Returns `"No matches."` when nothing clears the threshold.
+
+### `session_search`
+
+```python
+async def session_search(query: str, limit: int = 5, surface: str = "") -> str
+```
+
+Full-text search over persisted prior-session summaries when the relevant session id is
+unknown. The disposable FTS5 index is synchronized lazily, so existing histories become
+searchable without migration and session persistence never depends on index health. Results
+are relevance-ranked, credential-redacted, capped at 20, exclude the active session, and
+carry an excerpt plus id for expansion with `recall_session`.
+
+`surface` optionally limits results to `chat`, `a2a/other`, `activity`, `palette`, or
+`background`. Query text is converted to literal terms; raw FTS operators are never executed.
 
 ### `recall_session`
 
