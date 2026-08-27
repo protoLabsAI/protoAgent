@@ -352,7 +352,7 @@ class KnowledgeMiddleware(AgentMiddleware):
         return {"messages": [context_frame_message(ctx)], **clear}
 
     def compose_context(self, state, runtime=None, *, record: bool = True) -> dict | None:
-        """The dynamic-context composer behind ``before_model``.
+        """The dynamic-context composer behind ``before_agent``.
 
         ``record=False`` is the SPECULATIVE path (#2388 P3 next-call preview): it
         runs the full dynamic layer — digest, hot memory, RAG retrieval, skill

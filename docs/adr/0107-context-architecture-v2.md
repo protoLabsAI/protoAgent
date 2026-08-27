@@ -240,7 +240,7 @@ digest bounded.
 ### How `KnowledgeMiddleware` changes
 
 Today `compose_context` returns `{"context": str, "context_sections": list}`,
-which `before_model` wraps in a `context_frame_message` and returns as a state
+which `before_agent` wraps in a `context_frame_message` and returns as a state
 update. The frame is checkpointed.
 
 Under D1, the projection pipeline changes:
@@ -252,7 +252,7 @@ Under D1, the projection pipeline changes:
    occupy. The projector inserts the composed content into the request's
    message list as a transient frame that the model sees but the checkpoint
    does not.
-3. `before_model` clears the `context` and `context_sections` state channels
+3. `before_agent` clears the `context` and `context_sections` state channels
    (as it already does when composition is empty) rather than populating them
    with the frame.
 4. `PromptCaptureMiddleware` records the projection in its snapshot (addressing
@@ -387,7 +387,7 @@ These three are independent and can ship in any order.
 ### Rollback seams
 
 - Phase 1 changes are behind the existing `KnowledgeMiddleware` toggle
-  (`middleware.knowledge: true/false`). The old `before_model` path is
+  (`middleware.knowledge: true/false`). The old `before_agent` path is
   retained as a fallback for one release.
 - Phase 2 is additive schema — rollback is "ignore the new columns."
 - Phase 3 is a policy change atop Phase 2 — rollback is "use the old

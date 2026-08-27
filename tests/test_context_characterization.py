@@ -76,6 +76,8 @@ def test_chunk_is_a_dataclass():
 def test_compose_context_returns_context_keys():
     """compose_context always returns both 'context' and 'context_sections'."""
     mw = KnowledgeMiddleware(knowledge_store=None)
+    mw._prior_sessions_cache = ""
+    mw._prior_sessions_loaded_at = float("inf")
     result = mw.compose_context({}, record=False)
     assert result is not None, "compose_context should never return None (ADR 0101)"
     assert "context" in result, "Missing 'context' key"
