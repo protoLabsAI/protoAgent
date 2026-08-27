@@ -115,10 +115,10 @@ def test_promote_forwards_typed_memory_fields(tmp_path):
     commons_chunks = commons.list_chunks()
     assert len(commons_chunks) == 1
     c = commons_chunks[0]
-    assert c["memory_kind"] == "standing"
-    assert c["subject"] == "operator"
-    assert c["review_state"] == "approved"
-    assert c["expires_at"] == "2027-01-01"
+    assert c.memory_kind == "standing"
+    assert c.subject == "operator"
+    assert c.review_state == "approved"
+    assert c.expires_at == "2027-01-01"
 
 
 def test_stats_split_by_tier(tmp_path):
