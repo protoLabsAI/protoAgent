@@ -183,11 +183,19 @@ class TestBeforeAgent:
         monkeypatch.setattr(mw, "load_memory", lambda *a, **kw: "prior session data")
         state = {**_state_with_human("query"), "incognito": True}
         result = mw.before_agent(state, runtime=None)
-        if result and "messages" in result:
+        if result is None:
+            # No context injected at all — incognito suppression holds.
+            return
+        if "messages" in result:
             content = result["messages"][0].content
             assert "secret fact" not in content
             assert "rag hit" not in content
             assert "prior session" not in content
+        else:
+            ctx = result.get("context", "")
+            assert "secret fact" not in ctx
+            assert "rag hit" not in ctx
+            assert "prior session" not in ctx
 
 
 # ---------------------------------------------------------------------------

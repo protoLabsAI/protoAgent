@@ -156,6 +156,8 @@ rows are backfilled from the `domain` column:
 | `"general"` | `source_type="conversation"` | `"note"` | `NULL` (→ `"retrieved"`) |
 | `"general"` | other `source_type` | `"reference"` | `NULL` (→ `"retrieved"`) |
 | `"finding"` | — | `"fact"` | `NULL` (→ `"retrieved"`) |
+| `"fact"` | — | `"fact"` | `NULL` (→ `"retrieved"`) |
+| `"conversation"` | — | `"note"` | `NULL` (→ `"retrieved"`) |
 | Any other value | — | `"legacy"` | `NULL` (→ `"retrieved"`) |
 
 The `domain` column is a freeform `TEXT` — callers (the SDK, snapshot
