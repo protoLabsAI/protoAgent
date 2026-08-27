@@ -44,14 +44,16 @@ unchanged.
 
 | Provider | Client | Auth | Credentials |
 | --- | --- | --- | --- |
-| `anthropic-oauth` | `ChatAnthropic` (Bearer subclass) | `auth_token` + OAuth betas + claude-code UA | **read live** from `~/.claude/.credentials.json` / `CLAUDE_CODE_OAUTH_TOKEN` (Claude Code owns login + refresh) |
-| `openai-codex` | `ChatOpenAI` (Responses API) | Bearer + `ChatGPT-Account-Id` + `store=false` + `include=[reasoning.encrypted_content]` | **protoAgent-owned**: console sign-in mints a box-shared credential; importing `~/.codex/auth.json` is an explicit ownership transfer |
+| `anthropic-oauth` | `ChatAnthropic` (Bearer subclass) | `auth_token` + OAuth betas + claude-code UA | env override → protoAgent's refreshable box store → live Claude Code file/keychain fallback |
+| `openai-codex` | `ChatOpenAI` (Responses API) | Bearer + `ChatGPT-Account-Id` + `store=false` + `include=[reasoning.encrypted_content]` | console sign-in mints a box-shared credential; explicit CLI import rotates and hands the live credential to protoAgent |
 
 The asymmetry mirrors Hermes and is deliberate: Anthropic's OAuth client is painful to mint
 independently, so we can borrow Claude Code's live token; OpenAI's device-code flow is
 runnable standalone. OAuth refresh tokens are **single-use**, so a missing Codex store is
 never silently bootstrapped from the CLI. Explicit import rotates the token immediately,
-transferring ownership to protoAgent and requiring a subsequent `codex login` for the CLI.
+handing the live credential to protoAgent and requiring a subsequent `codex login` for
+the CLI. The store retains vendor-origin provenance, so disconnect deletes protoAgent's
+copy without remotely revoking a credential that originated in another application.
 
 ### Seam
 
@@ -134,8 +136,8 @@ The first cut had sign-in but no exit and no concurrency safety. Both are now cl
   `atomic_write` funnel.
 - **Serialized refresh (#2441).** Codex read→refresh→write is serialized by a per-store
   `threading.Lock` with a double-checked re-read, so two in-process consumers can't both
-  spend the single-use refresh token; warm reads stay lock-free. Disconnect takes the same
-  lock so it can't race a refresh that would rewrite the store after deletion.
+  spend the single-use refresh token. The later fleet amendment adds a stable provider
+  scope lock around warm resolution, refresh, transfer, sign-in/import, and disconnect.
 
 ## Fleet inheritance amendment (2026-08-27, #3196)
 

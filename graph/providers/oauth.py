@@ -4,18 +4,19 @@ Two providers authenticate protoAgent's native pipeline with a coding-agent OAut
 subscription instead of a gateway API key. Their credential stories differ, mirroring
 what Hermes does (the reference implementation):
 
-- ``anthropic-oauth`` — READ Claude Code's own credentials live
-  (``$CLAUDE_CODE_OAUTH_TOKEN`` env, or ``~/.claude/.credentials.json`` / keychain).
-  Claude Code owns login *and* refresh; we borrow the live access token. Anthropic's
-  Agent SDK (2026-06) explicitly licenses a third-party app authenticating with a
-  user's Claude subscription, so this is sanctioned.
+- ``anthropic-oauth`` — use an environment override first, then protoAgent's box-scoped
+  console login (which protoAgent refreshes), then borrow Claude Code's live credentials
+  from ``~/.claude/.credentials.json`` / keychain. Anthropic's Agent SDK (2026-06)
+  explicitly licenses a third-party app authenticating with a user's Claude subscription,
+  so this is sanctioned.
 
 - ``openai-codex`` — OWN one protoAgent credential in the box-scoped store shared by
   every sister. The console device flow mints it independently. An operator may instead
   import the Codex CLI's store explicitly; that immediately rotates the single-use
-  refresh token and transfers ownership, so the CLI must sign in again. Resolution never
-  silently bootstraps a missing store. A rejected store can narrowly recover from a
-  demonstrably newer live CLI login left by an explicit handover/re-login. Using
+  refresh token and hands the live credential to protoAgent, so the CLI must sign in
+  again. The imported store keeps vendor-origin provenance so disconnect will not remotely
+  revoke it. Resolution never silently bootstraps a missing store. A rejected store can
+  narrowly recover from a different, still-live CLI login. Using
   ChatGPT/Codex OAuth from a third-party app is a grayer ToS area than the Claude path;
   see ADR 0097.
 
@@ -53,9 +54,9 @@ log = logging.getLogger("protoagent.providers.oauth")
 #
 # ``create_llm`` resolves credentials per turn AND for aux/subagent slots, so two
 # consumers in the SAME process can race the read→refresh→write on a single-use refresh
-# token (#2441). A per-store ``threading.Lock`` serializes the slow (refresh/bootstrap)
-# path; warm reads stay lock-free. Disconnect (#2440) takes the same lock so it can't race
-# a refresh. Locks are keyed by the resolved store path so dev/prod instances are independent.
+# token (#2441). A per-store ``threading.Lock`` serializes refresh/import writes;
+# the stable provider-scope lock also covers warm resolution and disconnect so the resolved
+# path cannot change mid-operation. Store locks are keyed by path so overrides remain distinct.
 _STORE_LOCKS: dict[str, threading.Lock] = {}
 _STORE_LOCKS_GUARD = threading.Lock()
 
@@ -424,7 +425,7 @@ def _resolve_anthropic_oauth_locked() -> AnthropicOAuthCreds:
     )
 
 
-# ── OpenAI Codex — bootstrap-then-own, with refresh ───────────────────────────
+# ── OpenAI Codex — explicit protoAgent store, with refresh ────────────────────
 
 _CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 _CODEX_TOKEN_URL = "https://auth.openai.com/oauth/token"  # noqa: S105 — public OAuth endpoint
@@ -736,8 +737,9 @@ def _refresh_codex_tokens(tokens: dict[str, Any], *, timeout_s: float = 20.0) ->
 
 
 # Credential provenance (#2461): who minted the token set this store holds.
-# "cli_bootstrap" — copied from the Codex CLI's auth.json; the login is SHARED
-# with another application, so protoAgent must never remotely revoke it.
+# "cli_bootstrap" — legacy field name for a store imported from the Codex CLI.
+# Import rotates the live credential away from the CLI, but we conservatively retain
+# vendor-origin provenance so protoAgent never remotely revokes it.
 # "device_login" — minted by protoAgent's own in-console device sign-in; ours to
 # revoke. Stores written before this field exist ("" on read) and are treated as
 # borrowed: with ownership unproven, deleting our copy is the only safe scope.
@@ -823,13 +825,11 @@ def _cli_recovery_tokens(
 ) -> dict[str, Any] | None:
     """The Codex CLI's tokens when they can rescue a *rejected* refresh, else ``None``.
 
-    Our stored refresh token is single-use and shared by construction: every instance
-    that bootstraps from the same ``~/.codex/auth.json`` copies the same one, so the
-    first to refresh burns it for the rest. Recovery is deliberately narrow — it applies
-    only when
+    A legacy/imported store can still hold a refresh token the Codex CLI later replaced.
+    Recovery is deliberately narrow — it applies only when
 
     * OpenAI *rejected* the token (``exc.relogin``); a network blip must not re-import,
-    * we were spending our OWN store (a fresh bootstrap that 401s is already terminal),
+    * we were spending protoAgent's existing store,
     * the provider is not explicitly disconnected (#2440) — that intent outranks repair,
     * and the CLI holds a genuinely DIFFERENT refresh token. Re-spending the identical
       dead token would just 401 again, and could burn a token someone else still holds.
@@ -838,9 +838,8 @@ def _cli_recovery_tokens(
         return None
     if is_disconnected("openai-codex", paths):
         return None
-    # A *live* CLI login only. "Different from ours" is not enough: after any successful
-    # refresh our token is NEWER than the CLI's, so a bare difference check would happily
-    # adopt the older, already-spent pair and 401 again.
+    # Require a live CLI token pair as well as a different refresh token. Difference
+    # alone proves no ordering, but it prevents re-spending the identical rejected token.
     cli = _usable_cli_tokens()
     if cli is None:
         return None
@@ -967,7 +966,7 @@ def _resolve_codex_oauth_locked(paths: InstancePaths | None = None, *, force_ref
                     raise
                 log.warning(
                     "Codex refresh token was rejected (already spent by the CLI or a "
-                    "sibling instance); re-importing the newer credential from %s.",
+                    "sibling instance); adopting a different live credential from %s.",
                     _CODEX_CLI_AUTH_FILE,
                 )
                 tokens, source = recovered, "codex_cli_bootstrap"
@@ -978,8 +977,8 @@ def _resolve_codex_oauth_locked(paths: InstancePaths | None = None, *, force_ref
             refreshed = True
 
         if source == "codex_cli_bootstrap":
-            # Stamp the borrowed origin (#2461) — disconnect uses it to scope
-            # itself to our copy instead of revoking a login the CLI still holds.
+            # Stamp the vendor origin (#2461) — disconnect then deletes our store
+            # without remotely revoking a credential minted through another app.
             _write_codex_store(store, tokens, provenance=PROVENANCE_CLI_BOOTSTRAP)
         elif refreshed:
             _write_codex_store(store, tokens)
@@ -1095,11 +1094,10 @@ def _disconnect_locked(provider: str, paths: InstancePaths | None = None) -> Dis
         store = _codex_store_path(paths)
         with _store_lock(store):
             tokens = _read_codex_tokens(store)  # our copy only — never ~/.codex/auth.json
-            # Ownership gate (#2461): a bootstrap-derived token set is the Codex
-            # CLI's login, borrowed — remote revocation would sign the CLI out
-            # too, well outside protoAgent's mandate. Only a credential our own
-            # device sign-in minted is ours to revoke; a legacy store with no
-            # provenance is treated as borrowed (ownership unproven).
+            # Ownership gate (#2461): remotely revoke only a credential our device
+            # sign-in minted. An explicit CLI import rotates the live token away from
+            # the CLI, but retains vendor-origin provenance; legacy stores with no
+            # provenance are also treated conservatively (ownership unproven).
             owned = _read_codex_provenance(store) == PROVENANCE_DEVICE_LOGIN
             revoked = _revoke_codex_token(tokens) if (tokens and owned) else False
             existed = store.exists()
@@ -1110,10 +1108,7 @@ def _disconnect_locked(provider: str, paths: InstancePaths | None = None) -> Dis
         elif revoked:
             note = "revoked at OpenAI and removed protoAgent's local copy"
         elif not owned:
-            note = (
-                "removed protoAgent's borrowed copy — the login is shared with the "
-                "Codex CLI, so it was not revoked remotely"
-            )
+            note = "removed protoAgent's borrowed, vendor-origin credential without remotely revoking it"
         else:
             note = "removed protoAgent's local copy (remote revoke did not confirm)"
         if existed and store == _codex_box_store():

@@ -62,10 +62,11 @@ the CLI never records an archetype's capability contract. The picker and
 
 Unlike the CLI path, the new-agent picker and `POST /api/fleet` default to
 `inherit_config: true`: they carry the host's effective model and provider registry plus
-only the matching gateway secrets. protoAgent-owned OAuth is shared from the box store;
-an older instance-local store is transferred there, never copied. Creation refuses an
-OAuth conflict or explicit disconnect instead of choosing a credential silently. Set
-`inherit_config: false` for a fully blank agent with no model or credential inheritance.
+nonblank secrets from the model/provider namespaces. protoAgent-owned OAuth is shared from
+the box store; an older instance-local store is transferred there, never copied. Promotion
+refuses a conflicting box login or a residual local override marked disconnected instead
+of choosing a credential silently. Set `inherit_config: false` for no model/provider-secret
+inheritance and no legacy OAuth transfer; an existing box OAuth store remains host-shared.
 
 ## Bundles & archetypes — start from a type
 
