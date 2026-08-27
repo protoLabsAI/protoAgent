@@ -15,6 +15,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.154.0] - 2026-08-27
+
+### Added
+- **Opt-in self-improvement reviews unify persona, skills, and distillation policy (#3069).**
+  Completed goals and tracked tasks can now enqueue a bounded same-session review in `off`, `propose`, or `auto` mode; proposal runs cannot reach artifact writers, while direct private-skill updates and deletes carry provenance and archive the outgoing version for rollback.
+
+- **Typed memory schema (#3072).** Additive columns (memory_kind, subject, review_state, expires_at) for operator-profile vs agent-note classification without changing delivery behavior.
+
+- **Context Architecture v2 ADR (#3192).** Lifecycle, authority, and projection contract for typed memory and request-only context projection.
+
+- **Persist and serve fleet roster order (#3197).** The fleet control plane now keeps a hub-scoped, id-based roster display order. `PUT /api/fleet/order` validates a complete permutation of the current member ids (host + local + remote) under the supervisor state lock and rejects duplicate, unknown, missing, or malformed lists without mutating saved order. `/api/fleet` reads return members in the saved order, reconciled so adding or removing a local or remote agent never loses a member or creates a duplicate, and the order survives a hub restart. A missing, corrupt, or non-UTF-8 `roster.json` degrades to unsaved (discovery) order rather than failing the read. Ordering is presentation metadata only — immutable ids, member config, remote credentials, and the hub-only routing contract are unchanged.
+
+- **Codex/ChatGPT-subscription chats keep their reasoning across turns again (#3207).** With
+  `store=false` the model's reasoning only survives a turn if its encrypted blob is threaded
+  back, and protoAgent never captured that blob — the streaming path drops the one event that
+  carries it — so every turn on `model.provider: openai-codex` started its reasoning from
+  scratch. It is now captured and replayed, and each item is stamped with the endpoint and
+  account that minted it: a blob is only ever sent back to the issuer that can decrypt it, so
+  switching a chat's model mid-thread (or signing in under a different ChatGPT account) costs
+  reasoning continuity from that point rather than failing the turn.
+
+- **Dependency drift is now tracked instead of discovered (#3209).** CI installed unpinned
+  dependencies while `uv.lock` held much older versions, so local development and CI tested
+  different code — an upstream release would land as a red build on whichever PR happened to
+  be open, and a bug that only reproduced on the newer version could pass locally. The PR
+  gates now install from `uv.lock` (a red PR means that PR), a nightly `upstream-canary`
+  workflow runs the suite against what a fresh install actually resolves and files one
+  tracking issue with the version delta when that breaks, grouped Dependabot PRs keep the
+  lock moving, and `tests/test_upstream_seams.py` pins the private langchain APIs protoAgent
+  subclasses so an upstream refactor fails with the moved API named rather than as a mystery
+  three layers down. `python scripts/dep_drift.py` answers "is this me or upstream?" locally.
+
+### Changed
+- **The pinned AI stack is current again (#3208).** `uv.lock` had drifted well behind what a
+  fresh install actually resolves — langchain-openai 1.3.0 vs 1.6.0, and a full major version
+  on both SDKs (`openai` 2.x→3.x, `anthropic` 0.x→1.x). Since CI installed unpinned while
+  local development ran the lock, the two were testing different code, and a bug could pass
+  locally and only surface as a red CI run on someone else's PR. Lock and CI now resolve the
+  same versions; the full suite, import contracts and the A2A live smoke pass on them.
+
+### Fixed
+- **New fleet sisters inherit every configured model connection and credential (#3196).**
+  Agent creation now carries the provider registry and gateway keys while sharing protoAgent-owned OAuth safely through the box credential store, so ChatGPT/Codex and Claude work without reconnecting and plugins, skills, identity, and unrelated secrets remain isolated.
+
+- **A Codex/ChatGPT-subscription chat no longer bricks itself on a reasoning item the backend
+  can't verify (#3199).** On `model.provider: openai-codex`, an assistant turn's reasoning item
+  was replayed by its `rs_…` id with no `encrypted_content` — the streaming Responses path never
+  captures the blob — which the backend rejects with `400 invalid_encrypted_content`. Because the
+  item is checkpointed, every later turn in that thread failed the same way, so the chat stayed
+  broken until it was deleted. protoAgent now drops un-verifiable reasoning items before they go
+  on the wire, and self-heals a thread whose replay the provider rejects for reasons the sender
+  can't see ahead of time (a mid-conversation model swap onto an endpoint that didn't mint the
+  blob, a rotated credential): it strips the replay state, retries once, and takes the bad item
+  out of the checkpoint.
+
+- **↑ now pulls a queued message out of the turn instead of copying it (#3212).** With a
+  message queued mid-turn the composer offers "Press ↑ to edit queued message", but ↑ only
+  recalled a copy of the text from the input-history ring — the queued message stayed queued,
+  so sending the edit delivered both it and the original to the agent. ↑ on an empty composer
+  now dequeues the newest queued message (the same call the ✕ on its bubble makes), drops its
+  pending bubble, and lands the text in the composer to edit; sending queues the edited
+  message afresh. A draft in progress still keeps ↑ on ordinary input-history nav, and if the
+  agent had already read the message, its bubble comes back and the composer says so rather
+  than queueing a silent duplicate.
+
+- **Fix text cramming in durable artifacts (#3210).** Agent text produced before and after tool calls was concatenated without separators in the stored artifact, making turns unreadable in the chat history and turns API.
+
+### Docs
+- **Fleet model-connection documentation now matches box-shared OAuth ownership (#3198).**
+  The fleet guide, native OAuth ADR, provider docstrings, and ADR index now explain explicit Codex credential transfer and the picker/API inheritance default without the obsolete instance-copy language.
+
 ## [0.153.2] - 2026-08-27
 
 ### Added
