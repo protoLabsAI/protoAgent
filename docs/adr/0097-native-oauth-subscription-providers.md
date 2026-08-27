@@ -136,8 +136,56 @@ The first cut had sign-in but no exit and no concurrency safety. Both are now cl
   spend the single-use refresh token; warm reads stay lock-free. Disconnect takes the same
   lock so it can't race a refresh that would rewrite the store after deletion.
 
+## Encrypted-reasoning replay was HALF wired (2026-08-27)
+
+The live-validation note above records that encrypted-reasoning replay "did not block the
+tool loop in practice". That was true of the tool loop and wrong about the wire: replay was
+not absent, it was **half present**, and the missing half is a 400 that bricks a thread.
+
+    400 invalid_encrypted_content — The encrypted content for item rs_… could not be
+    verified. Reason: Encrypted content could not be decrypted or parsed.
+
+With `store=false` the backend keeps no reasoning state, so a replayed reasoning item must
+carry its own `encrypted_content`. langchain-openai's **streaming** Responses path never
+captures that blob — it reads the item at `response.output_item.added` (where the field is
+still null), and the terminal `response.completed` event rebuilds the full message but keeps
+only `parsed`/usage/`response_metadata` from it. The item's `rs_…` **id** does survive into
+`additional_kwargs["reasoning"]`, and langchain replays it. protoAgent always streams (the
+backend mandates it), so this is the only shape it ever produced: an item referenced by an id
+the backend never stored, with nothing to verify. `include=["reasoning.encrypted_content"]`
+was asking for a blob nothing read.
+
+Worse than a failed turn: the item is checkpointed, so every later turn in the thread re-sent
+it and failed identically — the thread was bricked, the same failure class
+`ToolCallRepairMiddleware` exists to heal for a dangling `tool_call`.
+
+Two fixes, both containment (capturing the blob is still open, below):
+
+- **`graph/providers/codex_client.py`** — `CodexChatOpenAI` sanitizes the outbound Responses
+  `input`: a reasoning item with no blob is **dropped** (restoring the stateless continuity
+  this ADR believed it already had), and an item that *does* carry one keeps it but loses its
+  `id` (`store=false` cannot resolve an item id — the blob is self-contained).
+- **`graph/middleware/codex_reasoning_replay.py`** — the same 400 can still arrive from
+  causes the sender cannot see: `encrypted_content` is sealed to the endpoint that minted it,
+  and this repo lets each slot name its own connection, each chat tab override the model per
+  turn, and a failed turn retry against the fallback chain — every one of which replays one
+  thread's history to an endpoint that did not mint it (a rotated credential does the same).
+  `CodexReasoningReplayRecoveryMiddleware` strips the replay state, retries once, and then
+  rewrites the offending assistant messages in place by id so the bad item leaves the
+  checkpoint. Registered on the lead **and** subagent stacks; a no-op unless that specific
+  error fires.
+
+Hermes's Codex adapter (`agent/codex_responses_adapter.py`) reached the same rules
+independently — including the id strip and a session-wide replay kill switch — and its
+`_issuer_kind` stamp is the model for the cross-issuer filter listed below.
+
 ## Open items
 
+- **Encrypted-reasoning replay is contained, not delivered.** Cross-turn reasoning
+  continuity on `openai-codex` is OFF: capturing the blob needs an `output_item.done`
+  handler for reasoning items that langchain-openai does not have (worth an upstream
+  issue). Once captured, replayed items should carry an issuer stamp (endpoint + account)
+  and be filtered when the current endpoint differs — Hermes's `_classify_responses_issuer`.
 - **Claude end-to-end still unproven on a real subscription** — the sign-in URL + PKCE +
   refresh are unit-tested and the flow runs, but no Pro/Max approval has been driven here yet
   (tool loop, streaming, `cache_control`).

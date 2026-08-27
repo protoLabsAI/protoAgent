@@ -46,7 +46,8 @@ def build_codex_llm(
     backend, and sets the subscription-required headers and ``store``/``include``
     flags. ``model_name`` overrides ``config.model_name`` for aux/subagent slots.
     """
-    from graph.llm import _ReasoningChatOpenAI  # local import — avoids a cycle at module load
+    # Local import — avoids a cycle at module load (the client subclasses graph.llm's).
+    from graph.providers.codex_client import CodexChatOpenAI
 
     creds = resolve_codex_oauth()  # raises OAuthCredentialError if none
 
@@ -82,8 +83,12 @@ def build_codex_llm(
         # cross-turn encrypted-reasoning replay — that's the ADR 0097 multi-turn
         # follow-up, wired once the pipeline understands the blocks.
         "output_version": "v0",
-        # The ChatGPT backend mandates store=false; include still requests encrypted
-        # reasoning so a follow-up can thread it once the block path is wired.
+        # The ChatGPT backend mandates store=false, so a replayed reasoning item must
+        # carry its own blob — hence `include`. langchain-openai's STREAMING path
+        # never captures it (only the `rs_…` id survives), so today this asks for a
+        # blob nothing reads; `CodexChatOpenAI` drops the id-only leftovers rather
+        # than replaying an item the backend cannot verify. Kept set so wiring the
+        # capture is the only step left.
         "store": False,
         "include": ["reasoning.encrypted_content"],
         # The Codex backend manages its own output truncation and rejects
@@ -100,4 +105,4 @@ def build_codex_llm(
     if config.top_p is not None:
         kwargs["top_p"] = config.top_p
 
-    return _ReasoningChatOpenAI(**kwargs)
+    return CodexChatOpenAI(**kwargs)
