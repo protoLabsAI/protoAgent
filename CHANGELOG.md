@@ -15,6 +15,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.153.2] - 2026-08-27
+
+### Added
+- **The console can recover recent chat sessions from the server after local browser history is missing (#2888).**
+  A bounded durable-session index now hydrates missing or empty tabs through the existing A2A replay path while preserving richer non-empty local history, and explicit deletion removes the durable turns so retired chats do not reappear.
+
+- **Prior sessions are searchable by transcript content with `session_search` (#3073).**
+  A lazy, disposable FTS5 index covers existing and future session summaries, returns bounded attributed excerpts, supports surface filters, excludes the active conversation, and hands matching ids to `recall_session` for full expansion.
+
+- **Plugin Configure dialogs can organize schema-backed settings into declarative tabs (#3179).**
+  Manifests declare one ordered `settings_tabs` registry and assign fields by stable id; unassigned and legacy fields retain the flat Configuration fallback, while edits and restart notices remain shared across every tab.
+
+- **Plugins can contribute sandboxed workflow tabs to their Configure dialog (#3180).**
+  Path-backed `settings_tabs` reuse the plugin-view bearer, theme, fleet-routing, loading, and error boundaries while keeping plugin code out of the host React runtime.
+
+### Changed
+- **Desktop tray update checks now use the full in-app release dialog (#3175).**
+  The tray reveals the primary window and shares the launch/background updater's release notes, progress, current/error feedback, concurrency guard, and pre-install version confirmation without prompting in secondary windows.
+
+- **Model connections now share one clear settings hierarchy (#3177).** Connections is the first, default-open Model accordion panel, and gateway and subscription entries use the same card, action, and connection-status structure.
+
 ## [0.153.1] - 2026-08-27
 
 ### Fixed
