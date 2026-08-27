@@ -1,8 +1,11 @@
 """Regression coverage for the fail-safe Windows CI change classifier."""
 
+import io
+import json
+import sys
 from pathlib import Path
 
-from scripts.windows_ci_scope import WindowsScope, classify_paths
+from scripts.windows_ci_scope import WindowsScope, classify_paths, main
 
 
 ROOT = Path(__file__).parent.parent
@@ -61,6 +64,29 @@ def test_mixed_change_set_takes_union_of_required_gates() -> None:
         python_tests=True,
         rust_tests=True,
     )
+
+
+def test_cli_unions_positional_and_stdin_paths(monkeypatch, capsys) -> None:
+    """Mixed input modes must not discard a gate-requiring positional path."""
+
+    stdin = io.TextIOWrapper(io.BytesIO(b"docs/guide.md\0"), encoding="utf-8")
+    monkeypatch.setattr(sys, "stdin", stdin)
+
+    assert main(["server/cli.py", "--stdin0"]) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "python_tests": True,
+        "rust_tests": False,
+    }
+
+
+def test_cli_json_uses_booleans(capsys) -> None:
+    """Diagnostic JSON should remain type-safe for non-Actions consumers."""
+
+    assert main(["docs/guide.md"]) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "python_tests": False,
+        "rust_tests": False,
+    }
 
 
 def test_checks_workflow_preserves_stable_gate_and_full_suite_shards() -> None:

@@ -111,18 +111,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.all:
         scope = WindowsScope(python_tests=True, rust_tests=True)
     else:
-        paths = args.paths
+        paths = list(args.paths)
         if args.stdin0:
-            paths = [part.decode("utf-8") for part in sys.stdin.buffer.read().split(b"\0") if part]
+            paths.extend(part.decode("utf-8") for part in sys.stdin.buffer.read().split(b"\0") if part)
         scope = classify_paths(paths)
 
     values = {
-        "python_tests": str(scope.python_tests).lower(),
-        "rust_tests": str(scope.rust_tests).lower(),
+        "python_tests": scope.python_tests,
+        "rust_tests": scope.rust_tests,
     }
     if args.github_output:
         for key, value in values.items():
-            print(f"{key}={value}")
+            print(f"{key}={str(value).lower()}")
     else:
         print(json.dumps(values, sort_keys=True))
     return 0
