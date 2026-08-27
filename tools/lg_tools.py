@@ -718,6 +718,8 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         domain: str = "general",
         heading: str | None = None,
         memory_kind: str | None = None,
+        subject: str | None = None,
+        state: Annotated[Any, InjectedState] = None,
     ) -> str:
         """Store a fact, preference, or note in long-term memory.
 
@@ -736,6 +738,8 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
                 ``"profile"``, ``"standing"``, ``"fact"``, ``"decision"``,
                 ``"note"``, ``"episode"``, ``"reference"``, ``"legacy"``.
                 When omitted the chunk is untyped (backward-compatible).
+            subject: The entity this memory describes (e.g. the operator's
+                name, a project, a tool). Aids recall filtering.
 
         Returns ``"Stored chunk N in 'domain'."`` on success.
         """
@@ -759,6 +763,11 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         kw: dict[str, Any] = {"source_type": "conversation"}
         if memory_kind is not None:
             kw["memory_kind"] = memory_kind
+        if subject is not None:
+            kw["subject"] = subject
+        sid = _session_id_from(state) if state is not None else ""
+        if sid:
+            kw["namespace"] = sid
 
         def _write():
             try:
@@ -997,15 +1006,26 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         return rendered
 
     @tool
-    async def memory_list(domain: str | None = None, limit: int = 10) -> str:
-        """List the most recent chunks. Filter by domain when given.
+    async def memory_list(
+        domain: str | None = None,
+        limit: int = 10,
+        memory_kind: str | None = None,
+    ) -> str:
+        """List the most recent chunks. Filter by domain and/or memory_kind.
 
         Useful when the operator asks for recent activity ("what did I
         log today?") or wants to inspect what the agent has stored.
         Shows memory_kind and review_state when present.
+
+        Args:
+            domain: Restrict to one domain bucket.
+            limit: Max entries (default 10).
+            memory_kind: Restrict to one typed kind (e.g. ``"profile"``).
         """
         clamped_limit = max(1, min(int(limit), _MEMORY_LIST_MAX_LIMIT))
-        chunks = knowledge_store.list_chunks(domain=domain, limit=clamped_limit)
+        chunks = knowledge_store.list_chunks(
+            domain=domain, limit=clamped_limit, memory_kind=memory_kind,
+        )
         if not chunks:
             return f"No chunks in {domain or 'any domain'}."
         lines = []

@@ -326,3 +326,41 @@ def test_add_document_passes_typed_fields(tmp_path):
     assert c.subject == "api-docs"
     assert c.review_state == "confirmed"
     assert c.expires_at == "2027-06-01T00:00:00+00:00"
+
+
+# ── tool-level tests ────────────────────────────────────────────────────────
+
+
+def test_list_chunks_filter_by_memory_kind(tmp_path):
+    """list_chunks(memory_kind=...) returns only matching rows."""
+    store = KnowledgeStore(tmp_path / "kb.db")
+    store.add_chunk("profile fact", domain="general", memory_kind="profile")
+    store.add_chunk("a note", domain="general", memory_kind="note")
+    store.add_chunk("untyped", domain="general")
+
+    only_profile = store.list_chunks(memory_kind="profile")
+    assert len(only_profile) == 1
+    assert only_profile[0].memory_kind == "profile"
+
+    only_notes = store.list_chunks(memory_kind="note")
+    assert len(only_notes) == 1
+    assert only_notes[0].memory_kind == "note"
+
+    all_rows = store.list_chunks()
+    assert len(all_rows) == 3
+
+
+def test_add_chunk_with_subject(tmp_path):
+    """subject is stored and round-trips through list_chunks."""
+    store = KnowledgeStore(tmp_path / "kb.db")
+    cid = store.add_chunk(
+        "Josh prefers dark mode",
+        domain="preferences",
+        memory_kind="profile",
+        subject="operator",
+    )
+    assert cid is not None
+    chunks = store.list_chunks(domain="preferences")
+    assert len(chunks) == 1
+    assert chunks[0].subject == "operator"
+    assert chunks[0].memory_kind == "profile"
