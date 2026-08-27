@@ -315,3 +315,69 @@ def test_other_non_text_blocks_still_placeholder():
 
     msg = AIMessage(content=[{"type": "image_url", "image_url": {"url": "x"}}, {"type": "text", "text": "hi"}])
     assert text_of(msg) == "_[image_url]_\n\nhi"
+
+
+# ── the capture actually arms on the real stream path ───────────────────────────
+
+
+class _FakeStream:
+    """Stands in for `root_client.responses.create(...)` — a context manager over
+    a canned Responses event sequence."""
+
+    def __init__(self, events):
+        self._events = events
+
+    def __enter__(self):
+        return iter(self._events)
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _FakeResponses:
+    def __init__(self, events):
+        self._events = events
+        self.payloads: list[dict] = []
+
+    def create(self, **payload):
+        self.payloads.append(payload)
+        return _FakeStream(self._events)
+
+
+class _FakeRootClient:
+    def __init__(self, events):
+        self.responses = _FakeResponses(events)
+
+
+def test_capture_arms_on_the_real_stream_path():
+    """Regression: arming was first written on `_stream_responses`, which
+    `ChatOpenAI._stream` reaches via `super()._stream_responses(...)` — an explicit
+    `super(ChatOpenAI, self)` bind that skips the subclass entirely. The override was
+    dead code, and every test that set the contextvar by hand still passed. This one
+    drives the client's OWN stream, so nothing sets the contextvar but the client."""
+    client = _client()
+    events = [
+        _reasoning_added(0, "rs_1"),
+        _reasoning_done(0, "rs_1", "BLOB1"),
+        _text_delta(1, "hi"),
+    ]
+    object.__setattr__(client, "root_client", _FakeRootClient(events))
+
+    acc = None
+    for gen in client._stream([HumanMessage("hi")]):
+        acc = gen.message if acc is None else acc + gen.message
+
+    reasoning = [b for b in acc.content if b.get("type") == "reasoning"]
+    assert reasoning and reasoning[0]["encrypted_content"] == "BLOB1"
+    assert reasoning[0][ISSUER_KEY] == ISSUER
+    assert acc.text == "hi"
+
+
+def test_the_contextvar_is_released_after_the_stream():
+    """It gates a process-wide wrapper — leaking it would arm capture for every
+    other client in the process."""
+    client = _client()
+    object.__setattr__(client, "root_client", _FakeRootClient([_text_delta(0, "hi")]))
+
+    list(client._stream([HumanMessage("hi")]))
+    assert _CAPTURE_ISSUER.get() == ""

@@ -200,17 +200,24 @@ class CodexChatOpenAI(_ReasoningChatOpenAI):
             payload["input"] = sanitize_responses_input(payload["input"], issuer=self._issuer)
         return payload
 
-    def _stream_responses(self, *args, **kwargs):
+    # Arming happens on `_stream`/`_astream`, NOT on `_stream_responses`.
+    # `ChatOpenAI._stream` routes with `super()._stream_responses(...)` — an
+    # explicit `super(ChatOpenAI, self)` bind that skips right past this subclass,
+    # so an override there is dead code and the capture would never arm in
+    # production while every unit test that sets the contextvar itself still
+    # passes. `_stream`/`_astream` are dispatched on the instance, so they are the
+    # seam that actually runs.
+    def _stream(self, *args, **kwargs):
         token = _CAPTURE_ISSUER.set(self._issuer)
         try:
-            yield from super()._stream_responses(*args, **kwargs)
+            yield from super()._stream(*args, **kwargs)
         finally:
             _CAPTURE_ISSUER.reset(token)
 
-    async def _astream_responses(self, *args, **kwargs):
+    async def _astream(self, *args, **kwargs):
         token = _CAPTURE_ISSUER.set(self._issuer)
         try:
-            async for chunk in super()._astream_responses(*args, **kwargs):
+            async for chunk in super()._astream(*args, **kwargs):
                 yield chunk
         finally:
             _CAPTURE_ISSUER.reset(token)
