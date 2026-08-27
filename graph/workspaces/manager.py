@@ -454,7 +454,14 @@ def create(
         cfg.write_text(_CONFIG_TEMPLATE.format(name=name, id=wid), encoding="utf-8")
         (cfg_dir / "secrets.yaml").write_text("# Per-workspace secrets overlay.\n", encoding="utf-8")
         if inherit_model:
-            _overlay_model(cfg, ws, inherit_model)  # model connections only — not plugins/skills
+            try:
+                _overlay_model(cfg, ws, inherit_model)  # model connections only — not plugins/skills
+            except WorkspaceError:
+                shutil.rmtree(ws, ignore_errors=True)
+                raise
+            except Exception as exc:  # noqa: BLE001 — turn inheritance I/O/parser failures into a controlled refusal
+                shutil.rmtree(ws, ignore_errors=True)
+                raise WorkspaceError("could not inherit the host's model connections; no agent was created") from exc
         if shared_skills:
             _stamp_identity(cfg, name, True, instance_id=wid)
 
@@ -1116,19 +1123,20 @@ def _overlay_model(cfg: Path, ws: Path, src: str) -> None:
     A provider-qualified model is incomplete without its ``providers:`` registry and
     gateway keys.  OAuth transfer is finalized by :func:`create` only after bundle
     seeding succeeds.  Plugins, skills, identity, and unrelated secrets remain isolated.
-    Best-effort + comment-preserving.
+    Comment-preserving; a read/write failure aborts creation rather than leaving a
+    partially inherited agent.
     """
     src_path = Path(src).expanduser()
     src_cfg = src_path / "langgraph-config.yaml" if src_path.is_dir() else src_path
     if not src_cfg.exists():
         return
-    import yaml
-
+    from graph.config import load_config_docs
     from graph.config_io import load_yaml_doc, save_secrets, save_yaml_doc
 
-    # Read the host's model as PLAIN data (not ruamel) — a ruamel node carries a parent ref and
-    # can't be grafted into another document. The destination stays ruamel (comment-preserving).
-    host = yaml.safe_load(read_text_utf8(src_cfg)) or {}
+    # Use the same host⊕agent cascade the source runtime uses. Reading only the leaf
+    # strands a box-scoped model/provider registry, while the sister template's local
+    # defaults then shadow the very connection it was meant to inherit.
+    host, source_secrets = load_config_docs(src_cfg)
     new = load_yaml_doc(cfg)
     inherited_secrets: dict[str, dict] = {}
     if isinstance(host, dict) and isinstance(new, dict):
@@ -1168,17 +1176,16 @@ def _overlay_model(cfg: Path, ws: Path, src: str) -> None:
             changed = True
         if changed:
             save_yaml_doc(new, cfg)  # save_yaml_doc(doc, path) — doc first
-    src_sec = (src_path if src_path.is_dir() else src_path.parent) / "secrets.yaml"
-    if src_sec.exists():
-        # Only model credentials cross this blank-agent boundary.  Copying the whole
-        # overlay also leaked plugin/delegate secrets despite the API's isolation promise.
-        source_secrets = yaml.safe_load(read_text_utf8(src_sec)) or {}
-        if isinstance(source_secrets, dict):
-            # The explicit secrets overlay wins over stale inline legacy keys.
-            for section in ("model", "providers"):
-                values = source_secrets.get(section)
-                if isinstance(values, dict) and values:
-                    inherited_secrets.setdefault(section, {}).update(values)
+    if isinstance(source_secrets, dict):
+        # Only model credentials cross this blank-agent boundary. The explicit
+        # secrets overlay wins when NONBLANK, matching runtime's ``secret or inline``
+        # fallback; a blank redacted/stale value must not erase a working inline key.
+        for section in ("model", "providers"):
+            values = source_secrets.get(section)
+            if isinstance(values, dict):
+                nonblank = {key: value for key, value in values.items() if value}
+                if nonblank:
+                    inherited_secrets.setdefault(section, {}).update(nonblank)
     if inherited_secrets:
         save_secrets(inherited_secrets, cfg.parent / "secrets.yaml")
 

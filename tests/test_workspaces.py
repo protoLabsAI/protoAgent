@@ -1075,6 +1075,81 @@ def test_overlay_model_carries_complete_connections_without_blank_agent_state(ro
     assert_owner_only(box / "anthropic-oauth.json")
 
 
+def test_overlay_model_uses_effective_host_scoped_model_and_providers(root, tmp_path, monkeypatch):
+    """Fleet inheritance reads the source's canonical Host⊕Agent document: a box-only
+    model/provider registry must replace the sister template's local gateway default."""
+    from infra.paths import reset_instance_paths
+
+    box = tmp_path / "box"
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(box))
+    monkeypatch.setenv("PROTOAGENT_HOST_CONFIG", str(box / "host-config.yaml"))
+    reset_instance_paths()
+    box.mkdir()
+    (box / "host-config.yaml").write_text(
+        "model:\n  name: box-gateway:box/model\n"
+        "providers:\n"
+        "  - id: box-gateway\n    type: openai-compat\n    base_url: https://box.example/v1\n"
+    )
+    host = tmp_path / "host"
+    host.mkdir()
+    (host / "langgraph-config.yaml").write_text("identity:\n  name: Host\n")
+    (host / "secrets.yaml").write_text("providers:\n  box-gateway: sk-box\n")
+
+    rec = manager.create("sister", inherit_model=str(host))
+    cfg_dir = root / rec["id"] / "config"
+    cfg = yaml.safe_load((cfg_dir / "langgraph-config.yaml").read_text())
+
+    assert cfg["model"]["name"] == "box-gateway:box/model"
+    assert cfg["providers"] == [
+        {"id": "box-gateway", "type": "openai-compat", "base_url": "https://box.example/v1"}
+    ]
+    assert yaml.safe_load((cfg_dir / "secrets.yaml").read_text()) == {
+        "providers": {"box-gateway": "sk-box"}
+    }
+
+
+def test_overlay_model_blank_secret_values_preserve_inline_legacy_keys(root, tmp_path):
+    """Runtime resolves ``nonblank secret or inline``; inheritance must not let blank
+    overlay placeholders erase a working inline model/provider credential."""
+    host = tmp_path / "host"
+    host.mkdir()
+    (host / "langgraph-config.yaml").write_text(
+        "model:\n  name: gateway:model\n  api_key: sk-inline-model\n"
+        "providers:\n"
+        "  - id: gateway\n    type: openai-compat\n    base_url: https://gateway.example/v1\n"
+        "    api_key: sk-inline-provider\n"
+    )
+    (host / "secrets.yaml").write_text('model:\n  api_key: ""\nproviders:\n  gateway: ""\n')
+
+    rec = manager.create("sister", inherit_model=str(host))
+    cfg_dir = root / rec["id"] / "config"
+    cfg = yaml.safe_load((cfg_dir / "langgraph-config.yaml").read_text())
+    secrets = yaml.safe_load((cfg_dir / "secrets.yaml").read_text())
+
+    assert "api_key" not in cfg["model"] and "api_key" not in cfg["providers"][0]
+    assert secrets == {
+        "model": {"api_key": "sk-inline-model"},
+        "providers": {"gateway": "sk-inline-provider"},
+    }
+
+
+def test_overlay_model_save_failure_cleans_partial_workspace(root, tmp_path, monkeypatch):
+    """Inheritance I/O failures are controlled refusals and remove the pre-record
+    workspace instead of leaving an orphan directory that blocks or confuses retries."""
+    from graph import config_io
+
+    host = tmp_path / "host"
+    host.mkdir()
+    (host / "langgraph-config.yaml").write_text("model:\n  name: gateway:model\n")
+    monkeypatch.setattr(config_io, "save_yaml_doc", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")))
+
+    with pytest.raises(manager.WorkspaceError, match="could not inherit"):
+        manager.create("sister", inherit_model=str(host))
+
+    assert manager.list_workspaces() == []
+    assert not root.exists() or list(root.iterdir()) == []
+
+
 def test_overlay_model_refuses_conflicting_box_oauth_without_partial_workspace(root, tmp_path, monkeypatch):
     """A legacy instance login cannot overwrite a different box login just to create
     a sister; both credentials and the fleet stay unchanged on the refusal."""
