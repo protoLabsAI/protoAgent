@@ -103,7 +103,7 @@ when your change touches those surfaces. The full breakdown:
 | Web unit | `npm run test:unit --workspace @protoagent/web` |
 | Web e2e | `npm run test:e2e --workspace @protoagent/web` (Playwright/chromium) |
 | Changelog entry | a `changelog.d/<pr>.<kind>.md` fragment — shape and kinds in [changelog.d/README.md](./changelog.d/README.md) (bullet with a **bold lead-in** ending in `(#NNNN)`; never edit `CHANGELOG.md` directly) |
-| Windows tests | `python -m pytest tests/ -q` minus [tests/windows_native_exclusions.txt](./tests/windows_native_exclusions.txt) — CI runs it on `windows-latest`; run locally only on a Windows host. The exclusion list is the #2412 burndown: shrink it, never grow it |
+| Windows tests | A stable `Windows tests (native)` aggregate gate. Python/runtime changes run the complete `python -m pytest tests/ -q` suite minus [tests/windows_native_exclusions.txt](./tests/windows_native_exclusions.txt) across two isolated, duration-balanced `windows-latest` shards; Tauri-native changes run `cargo test --locked` on Windows. Known docs/web/marketing-only changes skip both expensive lanes, while pushes to `main` and changes to the classifier/workflow run both. Refresh the checked-in timing seed after a major suite shift with `uv run --with pytest-split==0.11.0 --with pytest --with pytest-asyncio python -m pytest tests/ -q --store-durations --durations-path tests/windows_test_durations.json`. The exclusion list is the #2412 burndown: shrink it, never grow it |
 
 If a change is genuinely test-free (docs, config, pure refactor), say so
 explicitly in the PR description — but that is the exception, not the default.
