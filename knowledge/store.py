@@ -93,6 +93,12 @@ class Chunk:
     # D9, kept forever); ``_BULK_DELETE_REASON`` = a reversible bulk delete-by-source
     # (#1770) that the grace sweep may eventually reap.
     invalidation_reason: str | None = None
+    # Typed memory schema (#3072) — additive columns for memory classification.
+    # NULL on legacy/untyped rows; delivery behavior unchanged (owned by #3187).
+    memory_kind: str | None = None
+    subject: str | None = None
+    review_state: str | None = None
+    expires_at: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -108,6 +114,10 @@ class Chunk:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "invalidated_at": self.invalidated_at,
+            "memory_kind": self.memory_kind,
+            "subject": self.subject,
+            "review_state": self.review_state,
+            "expires_at": self.expires_at,
         }
 
 
@@ -279,7 +289,11 @@ CREATE TABLE IF NOT EXISTS chunks (
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL,
     invalidated_at TEXT,
-    invalidation_reason TEXT
+    invalidation_reason TEXT,
+    memory_kind   TEXT,
+    subject       TEXT,
+    review_state  TEXT,
+    expires_at    TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_chunks_domain     ON chunks(domain);
@@ -422,6 +436,25 @@ class KnowledgeStore:
                 db.execute("CREATE INDEX IF NOT EXISTS idx_chunks_epoch ON chunks(epoch)")
             except sqlite3.DatabaseError as exc:
                 log.debug("[knowledge] epoch migration skipped: %s", exc)
+            # Migration: typed memory schema (#3072) — additive columns for
+            # memory classification (memory_kind, subject, review_state,
+            # expires_at). Same nullable pattern; existing rows stay NULL
+            # (classified as legacy). Delivery behavior unchanged (owned by
+            # #3187).
+            try:
+                cols = {r[1] for r in db.execute("PRAGMA table_info(chunks)")}
+                if "memory_kind" not in cols:
+                    db.execute("ALTER TABLE chunks ADD COLUMN memory_kind TEXT")
+                if "subject" not in cols:
+                    db.execute("ALTER TABLE chunks ADD COLUMN subject TEXT")
+                if "review_state" not in cols:
+                    db.execute("ALTER TABLE chunks ADD COLUMN review_state TEXT")
+                if "expires_at" not in cols:
+                    db.execute("ALTER TABLE chunks ADD COLUMN expires_at TEXT")
+                db.execute("CREATE INDEX IF NOT EXISTS idx_chunks_memory_kind ON chunks(memory_kind)")
+                db.execute("CREATE INDEX IF NOT EXISTS idx_chunks_review_state ON chunks(review_state)")
+            except sqlite3.DatabaseError as exc:
+                log.debug("[knowledge] typed memory schema migration skipped: %s", exc)
             self._fts_available = _has_fts5(db)
             if self._fts_available:
                 db.executescript(_FTS_SCHEMA)
@@ -495,6 +528,10 @@ class KnowledgeStore:
         finding_type: str | None = None,
         namespace: str | None = None,
         epoch: str | None = None,
+        memory_kind: str | None = None,
+        subject: str | None = None,
+        review_state: str | None = None,
+        expires_at: str | None = None,
     ) -> int | None:
         """Insert a chunk. Returns the new row id, or None on failure.
 
@@ -507,6 +544,10 @@ class KnowledgeStore:
         ``epoch`` (#1634) tags the chunk with the era it was learned in (an
         opaque string, e.g. a reset date) so ``search(epoch=...)`` can scope
         retrieval to the current era of a resettable world.
+
+        ``memory_kind`` / ``subject`` / ``review_state`` / ``expires_at``
+        (#3072) are typed-memory classification columns — additive, nullable,
+        backward-compatible. Delivery behavior unchanged (owned by #3187).
         """
         if not content or not content.strip():
             return None
@@ -521,8 +562,14 @@ class KnowledgeStore:
             cur = db.execute(
                 "INSERT INTO chunks "
                 "(content, domain, heading, source, source_type, finding_type, "
-                "namespace, epoch, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (content, domain, heading, source, source_type, finding_type, namespace, epoch, now, now),
+                "namespace, epoch, memory_kind, subject, review_state, expires_at, "
+                "created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    content, domain, heading, source, source_type, finding_type,
+                    namespace, epoch, memory_kind, subject, review_state, expires_at,
+                    now, now,
+                ),
             )
             db.commit()
             chunk_id = int(cur.lastrowid)
@@ -570,6 +617,10 @@ class KnowledgeStore:
         finding_type: str | None = None,
         namespace: str | None = None,
         epoch: str | None = None,
+        memory_kind: str | None = None,
+        subject: str | None = None,
+        review_state: str | None = None,
+        expires_at: str | None = None,
         max_chars: int | None = None,
         overlap_chars: int | None = None,
         min_chars: int | None = None,
@@ -613,6 +664,10 @@ class KnowledgeStore:
                 finding_type=finding_type,
                 namespace=namespace,
                 epoch=epoch,
+                memory_kind=memory_kind,
+                subject=subject,
+                review_state=review_state,
+                expires_at=expires_at,
             )
             if cid is not None:
                 ids.append(cid)
@@ -691,6 +746,8 @@ class KnowledgeStore:
         namespace: str | list[str] | None = None,
         include_invalidated: bool = False,
         epoch: str | None = None,
+        memory_kind: str | None = None,
+        review_state: str | None = None,
     ) -> list[dict[str, Any]]:
         """Top-k chunks matching ``query``. Shape matches what the
         ``KnowledgeMiddleware`` consumes: each result has ``table``,
@@ -709,6 +766,9 @@ class KnowledgeStore:
         ``epoch`` (#1634) restricts hits to chunks tagged with exactly that
         epoch (see :meth:`add_chunk`) — chunks from other eras, and untagged
         chunks, don't match. ``None`` = unfiltered (today's behavior).
+
+        ``memory_kind`` / ``review_state`` (#3072) restrict hits to chunks
+        with exactly that typed-memory classification. ``None`` = unfiltered.
         """
         if not query or not query.strip():
             return []
@@ -717,9 +777,15 @@ class KnowledgeStore:
             return []
         try:
             rows = (
-                self._search_fts(db, query, k, domain, namespace, include_invalidated, epoch)
+                self._search_fts(
+                    db, query, k, domain, namespace, include_invalidated, epoch,
+                    memory_kind=memory_kind, review_state=review_state,
+                )
                 if self._fts_available
-                else self._search_like(db, query, k, domain, namespace, include_invalidated, epoch)
+                else self._search_like(
+                    db, query, k, domain, namespace, include_invalidated, epoch,
+                    memory_kind=memory_kind, review_state=review_state,
+                )
             )
         except sqlite3.DatabaseError as exc:
             log.warning("[knowledge] search failed: %s", exc)
@@ -748,6 +814,9 @@ class KnowledgeStore:
         namespace: str | list[str] | None = None,
         include_invalidated: bool = False,
         epoch: str | None = None,
+        *,
+        memory_kind: str | None = None,
+        review_state: str | None = None,
     ) -> list[sqlite3.Row]:
         # Sanitize to FTS5-safe tokens; OR them so a multi-word query
         # matches any of the keywords (closer to LIKE behaviour).
@@ -769,6 +838,12 @@ class KnowledgeStore:
         if epoch:
             where.append("c.epoch = ?")
             params.append(epoch)
+        if memory_kind:
+            where.append("c.memory_kind = ?")
+            params.append(memory_kind)
+        if review_state:
+            where.append("c.review_state = ?")
+            params.append(review_state)
         ns_sql, ns_params = _namespace_clause(namespace, col="c.namespace")
         if ns_sql:
             where.append(ns_sql)
@@ -791,6 +866,9 @@ class KnowledgeStore:
         namespace: str | list[str] | None = None,
         include_invalidated: bool = False,
         epoch: str | None = None,
+        *,
+        memory_kind: str | None = None,
+        review_state: str | None = None,
     ) -> list[sqlite3.Row]:
         tokens = [t for t in re.findall(r"[\w']+", query) if t]
         if not tokens:
@@ -815,6 +893,12 @@ class KnowledgeStore:
         if epoch:
             sql += " AND epoch = ?"
             params.append(epoch)
+        if memory_kind:
+            sql += " AND memory_kind = ?"
+            params.append(memory_kind)
+        if review_state:
+            sql += " AND review_state = ?"
+            params.append(review_state)
         ns_sql, ns_params = _namespace_clause(namespace)
         if ns_sql:
             sql += f" AND {ns_sql}"
@@ -830,6 +914,8 @@ class KnowledgeStore:
         *,
         namespace: str | None = None,
         include_invalidated: bool = False,
+        memory_kind: str | None = None,
+        review_state: str | None = None,
     ) -> list[Chunk]:
         """Most-recent-first chunk listing. Used by ``memory_list`` and the
         fact consolidator. ``namespace`` (ADR 0021) optionally scopes to one
@@ -837,7 +923,10 @@ class KnowledgeStore:
 
         Superseded rows (ADR 0069 D9) are excluded by default — so hot-memory
         injection, ``memory_list``, and the fact consolidator only see valid
-        rows. ``include_invalidated=True`` is the audit escape hatch."""
+        rows. ``include_invalidated=True`` is the audit escape hatch.
+
+        ``memory_kind`` / ``review_state`` (#3072) optionally restrict the
+        listing to chunks with that typed-memory classification."""
         db = self._get_db()
         if db is None:
             return []
@@ -851,6 +940,12 @@ class KnowledgeStore:
         if namespace is not None:
             clauses.append("namespace = ?")
             params.append(namespace)
+        if memory_kind is not None:
+            clauses.append("memory_kind = ?")
+            params.append(memory_kind)
+        if review_state is not None:
+            clauses.append("review_state = ?")
+            params.append(review_state)
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         params.append(limit)
         try:

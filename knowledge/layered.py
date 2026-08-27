@@ -56,18 +56,23 @@ class LayeredKnowledgeStore:
         namespace: str | list[str] | None = None,
         include_invalidated: bool = False,
         epoch: str | None = None,
+        memory_kind: str | None = None,
+        review_state: str | None = None,
     ) -> list[dict]:
         """Top-k across BOTH tiers, fused by RRF over each tier's rank, tier-tagged.
         A chunk promoted into the commons (same content as its private original) is
         de-duped — the private record wins (it's editable) but keeps the summed score.
         ``namespace`` (ADR 0069 D3a), ``include_invalidated`` (ADR 0069 D9 —
-        superseded rows are excluded by default), and ``epoch`` (#1634 — era
-        scoping) are passed through to both tiers."""
+        superseded rows are excluded by default), ``epoch`` (#1634 — era scoping),
+        and ``memory_kind`` / ``review_state`` (#3072 — typed-memory classification)
+        are passed through to both tiers."""
         priv = self._private.search(
-            query, k, domain=domain, namespace=namespace, include_invalidated=include_invalidated, epoch=epoch
+            query, k, domain=domain, namespace=namespace, include_invalidated=include_invalidated, epoch=epoch,
+            memory_kind=memory_kind, review_state=review_state,
         )
         comm = self._commons.search(
-            query, k, domain=domain, namespace=namespace, include_invalidated=include_invalidated, epoch=epoch
+            query, k, domain=domain, namespace=namespace, include_invalidated=include_invalidated, epoch=epoch,
+            memory_kind=memory_kind, review_state=review_state,
         )
 
         fused: dict[str, dict] = {}
