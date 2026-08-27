@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.153.1] - 2026-08-27
+
+### Fixed
+- **Desktop startup no longer floods the console with failed panel and event requests (#3173).**
+  The loading gate now keeps the full console unmounted until the sidecar answers its runtime readiness probe, while preserving authentication, setup, recovery, and manual-continue flows.
+
 ## [0.153.0] - 2026-08-26
 
 ### Added
