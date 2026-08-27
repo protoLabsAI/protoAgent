@@ -10,15 +10,14 @@ what Hermes does (the reference implementation):
   Agent SDK (2026-06) explicitly licenses a third-party app authenticating with a
   user's Claude subscription, so this is sanctioned.
 
-- ``openai-codex`` — BOOTSTRAP from the Codex CLI's store (``~/.codex/auth.json``),
-  then keep and refresh our OWN copy under the instance root, so day-to-day refreshes
-  never write the CLI's file. Note what owning a copy does NOT buy: the bootstrap
-  *copies* the CLI's refresh token, and OpenAI's refresh tokens are single-use, so the
-  first refresh after an import still rotates that token out from under the CLI — and
-  out from under any sibling instance that imported the same one. That is recoverable
-  rather than terminal: a rejected refresh re-imports whatever credential the CLI holds
-  now (see :func:`resolve_codex_oauth`). Using ChatGPT/Codex OAuth from a third-party
-  app is a grayer ToS area than the Claude path; see ADR 0097.
+- ``openai-codex`` — OWN one protoAgent credential in the box-scoped store shared by
+  every sister. The console device flow mints it independently. An operator may instead
+  import the Codex CLI's store explicitly; that immediately rotates the single-use
+  refresh token and transfers ownership, so the CLI must sign in again. Resolution never
+  silently bootstraps a missing store. A rejected store can narrowly recover from a
+  demonstrably newer live CLI login left by an explicit handover/re-login. Using
+  ChatGPT/Codex OAuth from a third-party app is a grayer ToS area than the Claude path;
+  see ADR 0097.
 
 This module resolves *credentials only* — the ``BaseChatModel`` builders live in
 :mod:`graph.providers.anthropic_oauth` and :mod:`graph.providers.openai_codex`.
@@ -894,22 +893,16 @@ def resolve_codex_oauth(paths: InstancePaths | None = None, *, force_refresh: bo
 
 
 def _resolve_codex_oauth_locked(paths: InstancePaths | None = None, *, force_refresh: bool = False) -> CodexOAuthCreds:
-    """Return a fresh Codex access token + account id, refreshing/bootstrapping as needed.
+    """Return a fresh Codex access token + account id from protoAgent's shared store.
 
-    1. Read our own instance-scoped store; if absent, bootstrap it once from the
-       Codex CLI's ``~/.codex/auth.json``.
-    2. If the access token is expiring, refresh against OpenAI and persist our copy
-       (we never write the CLI's file, though the refresh does rotate the token it holds).
-    3. If that refresh is REJECTED, our stored token had already been spent — by a sibling
-       instance that bootstrapped from the same CLI login, or by the CLI itself. Re-import
-       the CLI's current credential when it differs from ours, so a fresh ``codex login``
-       is enough to recover. Without this the 401 is permanent: step 1 only bootstraps
-       when the store file is *missing*, so a store holding a dead token never re-reads
-       the CLI file and the error's own advice cannot work.
+    A missing store is a sign-in error: only the console device flow or the explicit
+    ``import_codex_cli_credential`` ownership transfer may create one. Expiring tokens
+    refresh in place without writing the CLI file. If a refresh is rejected, resolution
+    first adopts a token another protoAgent process just rotated; the legacy recovery path
+    may then adopt only a different, still-live CLI credential.
 
-    Serialized per store (#2441): concurrent resolutions can't both spend the same
-    single-use refresh token — a warm read is lock-free, but the refresh/bootstrap path
-    takes the store lock and re-reads, so a waiter reuses the token the first caller minted.
+    The caller holds the stable provider-scope lock. The inner store lock and re-read
+    serialize the refresh write, so every process and fleet sister shares one owner.
     """
     paths = paths or instance_paths()
     store = _codex_store_path(paths)
@@ -923,7 +916,7 @@ def _resolve_codex_oauth_locked(paths: InstancePaths | None = None, *, force_ref
     if tokens and not force_refresh and not _codex_needs_refresh(tokens, _CODEX_REFRESH_SKEW_S):
         return _creds(tokens, str(tokens["access_token"]).strip(), "instance_store")
 
-    # Slow path: refresh or first bootstrap — serialized so single-use refresh is spent once.
+    # Slow path: refresh or missing-store refusal — serialized so the token is spent once.
     with _store_lock(store), _file_lock(store):
         tokens = _read_codex_tokens(store)  # re-read: a peer may have refreshed while we waited
         source = "instance_store"

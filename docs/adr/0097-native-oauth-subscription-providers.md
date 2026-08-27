@@ -45,12 +45,13 @@ unchanged.
 | Provider | Client | Auth | Credentials |
 | --- | --- | --- | --- |
 | `anthropic-oauth` | `ChatAnthropic` (Bearer subclass) | `auth_token` + OAuth betas + claude-code UA | **read live** from `~/.claude/.credentials.json` / `CLAUDE_CODE_OAUTH_TOKEN` (Claude Code owns login + refresh) |
-| `openai-codex` | `ChatOpenAI` (Responses API) | Bearer + `ChatGPT-Account-Id` + `store=false` + `include=[reasoning.encrypted_content]` | **bootstrap-then-own**: import `~/.codex/auth.json` once, then keep + refresh our own instance-scoped copy |
+| `openai-codex` | `ChatOpenAI` (Responses API) | Bearer + `ChatGPT-Account-Id` + `store=false` + `include=[reasoning.encrypted_content]` | **protoAgent-owned**: console sign-in mints a box-shared credential; importing `~/.codex/auth.json` is an explicit ownership transfer |
 
 The asymmetry mirrors Hermes and is deliberate: Anthropic's OAuth client is painful to mint
-independently, so we borrow Claude Code's live token; OpenAI's device-code flow is runnable
-standalone, and OAuth refresh tokens are **single-use**, so owning our own refreshed copy
-avoids racing the Codex CLI to a 401.
+independently, so we can borrow Claude Code's live token; OpenAI's device-code flow is
+runnable standalone. OAuth refresh tokens are **single-use**, so a missing Codex store is
+never silently bootstrapped from the CLI. Explicit import rotates the token immediately,
+transferring ownership to protoAgent and requiring a subsequent `codex login` for the CLI.
 
 ### Seam
 
@@ -111,7 +112,7 @@ flow directly (`graph/providers/oauth_login.py`, `/api/config/oauth/{start,poll,
 - **anthropic-oauth** — Claude Code's PKCE flow: "Sign in" opens
   `platform.claude.com/oauth/authorize`; the user approves, Anthropic displays a
   `code#state`, they paste it back, and we exchange at `platform.claude.com/v1/oauth/token`
-  and store the tokens (instance-scoped `anthropic-oauth.json`), refreshed on use.
+  and store the tokens (`anthropic-oauth.json` at the box tier), refreshed on use.
 
 **ToS escalation (deliberate, operator's call):** the Claude flow authenticates with Claude
 Code's *own* public OAuth client id (`9d1c250a-…`) — i.e. protoAgent performs the login *as*
@@ -125,8 +126,8 @@ The first cut had sign-in but no exit and no concurrency safety. Both are now cl
 
 - **Disconnect / cancel / revoke (#2440).** `disconnect(provider)` best-effort revokes
   protoAgent's own token (OpenAI `/oauth/revoke`), **always** deletes protoAgent's
-  instance-scoped store even if revocation fails, and writes a disconnect marker so the
-  provider does not auto-resolve (no Codex-CLI re-bootstrap, no stored/CLI Claude token)
+  resolved store even if revocation fails, and writes a disconnect marker so the
+  provider does not auto-resolve (no Codex-CLI recovery, no stored/CLI Claude token)
   until an in-console sign-in reconnects. The vendor CLI's own auth file is never touched.
   Wizard **Cancel** now aborts the server-side pending flow. New routes:
   `/api/config/oauth/{cancel,disconnect}`. Marker + stores keep the owner-only ACL via the
@@ -137,6 +138,9 @@ The first cut had sign-in but no exit and no concurrency safety. Both are now cl
   lock so it can't race a refresh that would rewrite the store after deletion.
 
 ## Fleet inheritance amendment (2026-08-27, #3196)
+
+This amendment supersedes the instance-scoped and automatic-bootstrap ownership wording
+in the original decision and lifecycle notes above.
 
 protoAgent-owned OAuth stores now default to the box tier, so every instance and fleet
 sister resolves one shared credential owner. Fleet creation
