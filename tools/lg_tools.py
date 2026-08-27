@@ -896,10 +896,16 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         # search embeds the query over HTTP on hybrid stores — keep it off the loop.
         import asyncio
 
-        results = await asyncio.to_thread(
-            knowledge_store.search, query, k=clamped_k,
-            domain=(domain or None), memory_kind=(memory_kind or None),
-        )
+        def _search():
+            try:
+                return knowledge_store.search(
+                    query, k=clamped_k,
+                    domain=(domain or None), memory_kind=(memory_kind or None),
+                )
+            except TypeError:  # plugin backend predating the new kwargs
+                return knowledge_store.search(query, k=clamped_k, domain=(domain or None))
+
+        results = await asyncio.to_thread(_search)
         if not results:
             return "No matches."
         lines = []
@@ -1021,10 +1027,13 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         ``"fact"``, ``"profile"``).
         """
         clamped_limit = max(1, min(int(limit), _MEMORY_LIST_MAX_LIMIT))
-        chunks = knowledge_store.list_chunks(
-            domain=domain, limit=clamped_limit,
-            memory_kind=(memory_kind or None),
-        )
+        try:
+            chunks = knowledge_store.list_chunks(
+                domain=domain, limit=clamped_limit,
+                memory_kind=(memory_kind or None),
+            )
+        except TypeError:  # plugin backend predating the new kwargs
+            chunks = knowledge_store.list_chunks(domain=domain, limit=clamped_limit)
         if not chunks:
             return f"No chunks in {domain or 'any domain'}."
         lines = []
