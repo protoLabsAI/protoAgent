@@ -134,11 +134,14 @@ def test_two_reasoning_items_keep_their_own_blobs_in_order():
 
 def test_capture_is_inert_for_every_other_client():
     """The wrapper sits on a module-level function shared with the gateway path, so
-    'off unless we asked for it' is the whole safety argument."""
+    'off unless we asked for it' is the whole safety argument. Asserted on the STAMP,
+    not the blob: langchain >= 1.6 surfaces the blob on its own, and suppressing that
+    for other clients would be a regression, not a safeguard."""
     acc = _accumulate([_reasoning_added(0, "rs_1"), _reasoning_done(0, "rs_1", "BLOB1")], issuer="")
 
     reasoning = [b for b in acc.content if b.get("type") == "reasoning"]
-    assert "encrypted_content" not in reasoning[0]
+    assert ISSUER_KEY not in reasoning[0]
+    assert not any(k.startswith("_protoagent") for k in reasoning[0])
 
 
 def test_a_done_event_with_no_blob_adds_nothing():

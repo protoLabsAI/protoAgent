@@ -7,21 +7,24 @@ half of the contract — never send an item the backend cannot verify. This modu
 now also delivers the other half: capture the blob, and only replay it where it
 can actually be decrypted.
 
-**Why capture needs code at all.** langchain-openai's streaming Responses path
-reads a reasoning item at ``response.output_item.added``, where
-``encrypted_content`` is still null, and has no ``response.output_item.done``
-branch for reasoning (it has one for ``compaction``, which carries the same kind
-of blob). The terminal ``response.completed`` event rebuilds the full message but
-keeps only ``parsed``/usage/``response_metadata``. So the blob is visible exactly
-once, in an event the converter drops on the floor. `_install_reasoning_capture`
-re-emits that event as a content-block delta which merges onto the reasoning block
-already in flight — by ``index``, the way every other streamed block merges.
+**Why capture needs code at all.** ``encrypted_content`` reaches a stream in
+exactly one event — ``response.output_item.done`` for the reasoning item. The
+``.added`` event that opens the item has the field still null, and the terminal
+``response.completed`` event rebuilds the full message but keeps only
+``parsed``/usage/``response_metadata``. langchain-openai **≥ 1.6** handles that
+event; **< 1.6** drops it on the floor, so the blob was never captured at all.
+``pyproject`` floors langchain-openai at 1.0, so both are live.
 
-The wrapper is installed on the module-level converter (there is no instance seam)
-but is **inert unless ``_CAPTURE_ISSUER`` is set**, and only this module's client
-sets it, for the duration of its own stream. Any other ``ChatOpenAI`` in the
-process — a gateway client, a plain Responses user — goes through the original
-code path unchanged.
+`_install_reasoning_capture` therefore does two things at that one event: it
+synthesizes the content-block delta when the installed langchain didn't (merging
+onto the in-flight reasoning block by ``index``, the way every other streamed
+block merges), and it stamps the issuer either way. On a modern langchain the
+first half is a no-op — the wrapper only ever adds what is missing.
+
+It is installed on the module-level converter (there is no instance seam) but is
+**inert unless ``_CAPTURE_ISSUER`` is set**, and only this module's client sets
+it, for the duration of its own stream. Any other ``ChatOpenAI`` in the process —
+a gateway client, a plain Responses user — is untouched.
 
 **Why the issuer stamp.** ``encrypted_content`` is sealed to the endpoint *and
 account* that minted it; replaying a blob anywhere else is a hard
@@ -152,9 +155,7 @@ def _install_reasoning_capture() -> None:
     def _capture(chunk, current_index, current_output_index, current_sub_index, *args, **kwargs):
         result = original(chunk, current_index, current_output_index, current_sub_index, *args, **kwargs)
         issuer = _CAPTURE_ISSUER.get()
-        if not issuer or result[3] is not None:
-            return result
-        if getattr(chunk, "type", "") != "response.output_item.done":
+        if not issuer or getattr(chunk, "type", "") != "response.output_item.done":
             return result
         item = getattr(chunk, "item", None)
         if getattr(item, "type", "") != "reasoning":
@@ -166,14 +167,28 @@ def _install_reasoning_capture() -> None:
         from langchain_core.messages import AIMessageChunk
         from langchain_core.outputs import ChatGenerationChunk
 
-        # `index` is what merges this onto the reasoning block opened by the
-        # item's `.added` event; the summary-delta events in between never
-        # advance it. `type` is deliberately ABSENT: merge_dicts concatenates
-        # two equal strings for any key but `id`, so re-sending it would yield
-        # "reasoningreasoning". `id` is safe (equal values are skipped) and is
-        # what keeps the merge from binding to a neighbouring block.
-        block = {"index": current_index, "id": getattr(item, "id", None), "encrypted_content": blob}
-        block[ISSUER_KEY] = issuer
+        generation = result[3]
+        if generation is not None:
+            # langchain >= 1.6 already surfaces the blob; only the stamp is ours.
+            content = [
+                {**b, ISSUER_KEY: issuer} if isinstance(b, dict) and b.get("encrypted_content") else b
+                for b in generation.message.content
+            ]
+            message = generation.message.model_copy(update={"content": content})
+            return (result[0], result[1], result[2], ChatGenerationChunk(message=message))
+
+        # langchain < 1.6 drops this event, so the blob has to be re-emitted.
+        # `index` merges it onto the block the item's `.added` event opened; the
+        # summary deltas in between never advance it. `type` is deliberately
+        # ABSENT — merge_dicts concatenates two equal strings for any key but
+        # `id`, so re-sending it would yield "reasoningreasoning". `id` IS safe
+        # (equal values are skipped) and keeps the merge off a neighbouring block.
+        block = {
+            "index": current_index,
+            "id": getattr(item, "id", None),
+            "encrypted_content": blob,
+            ISSUER_KEY: issuer,
+        }
         return (
             current_index,
             current_output_index,
