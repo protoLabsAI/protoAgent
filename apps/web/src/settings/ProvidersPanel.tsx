@@ -2,10 +2,10 @@ import "./settings.css";
 import "./providers.css";
 
 import { DropdownSelect, Input, SecretInput } from "@protolabsai/ui/forms";
-import { Badge, Button } from "@protolabsai/ui/primitives";
+import { Badge, Button, Callout } from "@protolabsai/ui/primitives";
 import { ConfirmDialog, Dialog, useToast } from "@protolabsai/ui/overlays";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Plus, Trash2 } from "lucide-react";
+import { KeyRound, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import { api } from "../lib/api";
@@ -105,8 +105,7 @@ export function ProvidersPanel() {
   const rows = data?.providers ?? [];
 
   return (
-    <div className="settings-subsection settings-subsection--lead" data-testid="providers-panel">
-      <h2 className="panel-kicker">Connections</h2>
+    <div className="providers-panel" data-testid="providers-panel">
       <p className="muted">
         Every model source this agent can use. Model slots pick from all of them — there is no
         default to switch between.
@@ -114,68 +113,65 @@ export function ProvidersPanel() {
 
       {isLoading ? <p className="muted">Loading…</p> : null}
 
-      {rows.map((p) => (
-        <div key={p.id} className="provider-row" data-testid="provider-row">
-          <div className="provider-row__head">
-            <div>
-              <span className="provider-row__name">{p.display}</span>
-              <code className="provider-row__id">{p.id}</code>
-              <Badge>{TYPE_LABEL[p.type] ?? p.type}</Badge>
-            </div>
-            <div className="provider-row__actions">
-              {!OAUTH_PROVIDER_LABEL[p.type] ? (
+      <div className="provider-list">
+        {rows.map((p) => (
+          <div key={p.id} className="provider-row" data-testid="provider-row">
+            <div className="provider-row__head">
+              <div>
+                <span className="provider-row__name">{p.display}</span>
+                <code className="provider-row__id">{p.id}</code>
+                <Badge>{TYPE_LABEL[p.type] ?? p.type}</Badge>
+              </div>
+              <div className="provider-row__actions">
                 <Button size="sm" variant="ghost" onClick={() => setFormTarget(p)}>
                   Edit
                 </Button>
-              ) : null}
-              <Button size="sm" variant="ghost" onClick={() => probe.mutate(p.id)} disabled={probe.isPending}>
-                Test
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                aria-label={`Remove ${p.display}`}
-                onClick={() => {
-                  if (rows.length === 1 && p.in_use_by.length === 0) setConfirmLast(p.id);
-                  else remove.mutate({ id: p.id, confirm: false });
-                }}
-                disabled={remove.isPending}
-              >
-                <Trash2 size={14} />
-              </Button>
+                <Button size="sm" variant="ghost" onClick={() => probe.mutate(p.id)} disabled={probe.isPending}>
+                  Test
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  aria-label={`Remove ${p.display}`}
+                  onClick={() => {
+                    if (rows.length === 1 && p.in_use_by.length === 0) setConfirmLast(p.id);
+                    else remove.mutate({ id: p.id, confirm: false });
+                  }}
+                  disabled={remove.isPending}
+                >
+                  <Trash2 size={14} />
+                </Button>
+              </div>
             </div>
+
+            {p.base_url ? <div className="provider-row__meta">{p.base_url}</div> : null}
+
+            {/* An OAuth connection carries its own sign-in lifecycle; an endpoint carries a key. */}
+            {OAUTH_PROVIDER_LABEL[p.type] ? (
+              <OAuthAccountCard provider={p.type} />
+            ) : (
+              <Callout tone={p.has_key ? "success" : "warning"}>
+                <KeyRound size={15} />{" "}
+                {p.has_key
+                  ? "Connected — API key stored."
+                  : "No API key — slots naming this connection will fail."}
+              </Callout>
+            )}
+
+            {/* Why a delete may be refused, before it is attempted. */}
+            {p.in_use_by.length ? (
+              <div className="provider-row__meta provider-row__inuse">
+                In use by {p.in_use_by.length} slot{p.in_use_by.length === 1 ? "" : "s"}:{" "}
+                {p.in_use_by.join(", ")}
+              </div>
+            ) : null}
+
+            {models[p.id]?.length ? (
+              <div className="provider-row__meta">{models[p.id].slice(0, 8).join(" · ")}</div>
+            ) : null}
           </div>
-
-          {p.base_url ? <div className="provider-row__meta">{p.base_url}</div> : null}
-
-          {/* An OAuth connection carries its own sign-in lifecycle; an endpoint carries a key. */}
-          {OAUTH_PROVIDER_LABEL[p.type] ? (
-            <OAuthAccountCard provider={p.type} onEdit={() => setFormTarget(p)} />
-          ) : (
-            <div className="provider-row__meta">
-              {p.has_key ? (
-                <span className="provider-row__ok">
-                  <Check size={12} /> key stored
-                </span>
-              ) : (
-                <span className="provider-row__warn">no API key — slots naming it will fail</span>
-              )}
-            </div>
-          )}
-
-          {/* Why a delete may be refused, before it is attempted. */}
-          {p.in_use_by.length ? (
-            <div className="provider-row__meta provider-row__inuse">
-              In use by {p.in_use_by.length} slot{p.in_use_by.length === 1 ? "" : "s"}:{" "}
-              {p.in_use_by.join(", ")}
-            </div>
-          ) : null}
-
-          {models[p.id]?.length ? (
-            <div className="provider-row__meta">{models[p.id].slice(0, 8).join(" · ")}</div>
-          ) : null}
-        </div>
-      ))}
+        ))}
+      </div>
 
       <Button size="sm" variant="ghost" onClick={() => setFormTarget("add")} data-testid="add-provider">
         <Plus size={14} /> Add a connection

@@ -119,7 +119,12 @@ test("Model shows the agent's Model + Routing fields", async ({ page }) => {
   await openSettings(page);
   await section(page, "Model");
   await expect(page.locator(".pl-accordion__title").first()).toBeVisible();
-  expect(await page.locator(".pl-accordion__title").allTextContents()).toEqual(["Model", "Favorite models", "Routing"]);
+  expect(await page.locator(".pl-accordion__title").allTextContents()).toEqual([
+    "Connections",
+    "Model",
+    "Favorite models",
+    "Routing",
+  ]);
   await expandAllGroups(page);
   await expect(page.locator('.setting-row[data-key="routing.aux_model"] input')).toHaveValue("protolabs/fast");
   // The endpoint/key/provider triple is no longer part of this form (ADR 0106) —
