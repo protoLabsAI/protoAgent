@@ -9,7 +9,7 @@ import { ChevronDown, ChevronUp, RotateCcw, Save } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
-import { Accordion, AccordionItem, PanelHeader } from "@protolabsai/ui/navigation";
+import { Accordion, AccordionItem, PanelHeader, Tabs } from "@protolabsai/ui/navigation";
 import { useToast } from "@protolabsai/ui/overlays";
 import { StagePanel } from "../app/ErrorBoundary";
 import { HelpLink, TestConnectionButton } from "../app/ui-kit";
@@ -19,6 +19,27 @@ import { queryKeys, settingsSchemaQuery } from "../lib/queries";
 import type { SettingsField, SettingsGroup } from "../lib/types";
 import { PathPicker } from "./PathPicker";
 import { fieldVisible } from "./visibility";
+
+export type PluginSettingsTab = { id: string; label: string; groups: SettingsGroup[] };
+
+/** Build the ordered Configure tabs while retaining unassigned fields in the
+ * backward-compatible Configuration fallback. Exported to pin the wire-to-UI
+ * contract without coupling tests to Dialog focus management. */
+export function pluginSettingsTabs(groups: SettingsGroup[]): PluginSettingsTab[] {
+  const fallback = groups.filter((group) => !group.settings_tab);
+  const declared = new Map<string, PluginSettingsTab & { order: number }>();
+  for (const group of groups) {
+    const meta = group.settings_tab;
+    if (!meta) continue;
+    const tab = declared.get(meta.id);
+    if (tab) tab.groups.push(group);
+    else declared.set(meta.id, { id: meta.id, label: meta.label, order: meta.order, groups: [group] });
+  }
+  const tabs: PluginSettingsTab[] = [...declared.values()]
+    .sort((a, b) => a.order - b.order)
+    .map(({ id, label, groups: tabGroups }) => ({ id, label, groups: tabGroups }));
+  return fallback.length ? [{ id: "__configuration", label: "Configuration", groups: fallback }, ...tabs] : tabs;
+}
 
 // Drop-in full-panel wrapper (section + Suspense + ErrorBoundary) so any surface can
 // embed a category's settings as a standalone panel — Agent, Knowledge, central Settings.
@@ -83,6 +104,18 @@ export function SettingsCategory({
   }, [data.groups, category, categories, pluginId]);
   const [dirty, setDirty] = useState<Record<string, unknown>>({});
   const dirtyKeys = Object.keys(dirty);
+  const configureTabs = useMemo(() => pluginSettingsTabs(groups), [groups]);
+  const [activeSettingsTab, setActiveSettingsTab] = useState("");
+  useEffect(() => {
+    if (!pluginId || !configureTabs.length) return;
+    if (!configureTabs.some((tab) => tab.id === activeSettingsTab)) setActiveSettingsTab(configureTabs[0].id);
+  }, [pluginId, configureTabs, activeSettingsTab]);
+  const activeConfigureTab =
+    configureTabs.find((tab) => tab.id === activeSettingsTab) ?? configureTabs[0];
+  const visiblePluginGroups =
+    pluginId && configureTabs.length > 1
+      ? activeConfigureTab.groups
+      : groups;
   // Action feedback is a TOAST, not an inline line — transient success/error belongs in the
   // global toaster (the in-progress state is already on each button's pending spinner).
   const toast = useToast();
@@ -272,6 +305,15 @@ export function SettingsCategory({
         {/* While a background refetch is in flight (the #1643 fresh-install hydration
             re-pulls the schema), an empty group set is "still loading", not "nothing
             here" — don't flash the misleading empty hint. */}
+        {pluginId && configureTabs.length > 1 ? (
+          <Tabs
+            responsive
+            ariaLabel={`${title} sections`}
+            items={configureTabs.map((tab) => ({ id: tab.id, label: tab.label }))}
+            active={activeSettingsTab || configureTabs[0].id}
+            onSelect={setActiveSettingsTab}
+          />
+        ) : null}
         {!groups.length && !footer && !lead ? (
           <p className="muted">{isFetching ? "Loading settings…" : emptyHint || "Nothing to configure here."}</p>
         ) : null}
@@ -285,9 +327,13 @@ export function SettingsCategory({
             FLAT — the row's Configure toggle is the disclosure, so a nested accordion
             would be a second click. The full Settings view keeps the collapsible groups. */}
         {pluginId ? (
-          <div className="settings-groups">
-            {groups.map((group) => (
-              <div className="settings-flat-group" key={group.section}>{renderGroupBody(group)}</div>
+          <div
+            className="settings-groups"
+            role={configureTabs.length > 1 ? "tabpanel" : undefined}
+            aria-label={configureTabs.length > 1 ? activeConfigureTab.label : undefined}
+          >
+            {visiblePluginGroups.map((group) => (
+              <div className="settings-flat-group" key={`${group.section}:${group.settings_tab?.id || "configuration"}`}>{renderGroupBody(group)}</div>
             ))}
           </div>
         ) : (

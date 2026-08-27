@@ -1798,6 +1798,10 @@ def build_schema(
         current = section_cfg.get(key)
         ftype = spec.get("type", "string")
         group = _plugin_group(sch, spec)
+        tab_id = str(spec.get("tab") or "")
+        tabs = list(getattr(sch, "settings_tabs", []) or [])
+        tab_index = next((i for i, tab in enumerate(tabs) if tab.get("id") == tab_id), None)
+        tab = tabs[tab_index] if tab_index is not None else None
         entry = {
             "key": full_key,
             "label": spec.get("label", key),
@@ -1834,28 +1838,45 @@ def build_schema(
             entry["depends_on"] = {**dep, "key": dk}
         # `plugin_id` tags the group with its owning plugin so the console can fold
         # the config into that plugin's row in the Plugins surface (ADR 0059, bd-23a.3).
-        groups.setdefault(group, {"section": group, "fields": [], "plugin_id": getattr(sch, "plugin_id", None)})[
+        # One display group may contribute fields to several Configure tabs. Keep
+        # those as distinct schema groups while preserving the authored section
+        # label; the NUL-delimited key is internal and never leaves this function.
+        plugin_id = getattr(sch, "plugin_id", None)
+        group_key = f"plugin:{plugin_id}\0{group}\0{tab_id}"
+        groups.setdefault(group_key, {"section": group, "fields": [], "plugin_id": plugin_id})[
             "fields"
         ].append(entry)
+        if tab is not None:
+            groups[group_key]["settings_tab"] = {
+                "id": tab["id"],
+                "label": tab["label"],
+                "order": tab_index,
+            }
         # A plugin that declares `test: true` (ADR 0029) gets a generic console
         # "Test connection" button posting the group's fields to its test route.
         if getattr(sch, "test", False):
-            groups[group]["test"] = {"endpoint": f"/api/config/test-{sch.section}"}
+            groups[group_key]["test"] = {"endpoint": f"/api/config/test-{sch.section}"}
         # Optional setup-guide link (ADR 0059) — rendered generically next to the
         # group, so a plugin needs no bespoke console frontend.
         if getattr(sch, "guide_url", ""):
-            groups[group]["guide_url"] = sch.guide_url
+            groups[group_key]["guide_url"] = sch.guide_url
 
     out = list(groups.values())
     # Insertion order = first appearance in FIELDS (core), then plugins.
-    section_pos = {g["section"]: i for i, g in enumerate(out)}
+    # Position by the group object, not its display section: plugin groups may
+    # intentionally reuse a generic label across tabs/plugins. Keying this map by
+    # the label made the last duplicate steal the first one's position.
+    group_pos = {id(g): i for i, g in enumerate(out)}
     for g in out:
-        g["category"] = _category_for(g["section"])
+        # A plugin's authored group label is presentation, not a core section id.
+        # Generic names such as "Runtime" must remain under Plugins instead of
+        # accidentally inheriting the core Runtime → Behavior category mapping.
+        g["category"] = "Plugins" if g.get("plugin_id") else _category_for(g["section"])
 
     def _sort_key(g: dict) -> tuple[int, int]:
         cat = g["category"]
         cat_rank = _CATEGORY_ORDER.index(cat) if cat in _CATEGORY_ORDER else len(_CATEGORY_ORDER)
-        return (cat_rank, section_pos[g["section"]])
+        return (cat_rank, group_pos[id(g)])
 
     out.sort(key=_sort_key)
     return out

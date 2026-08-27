@@ -561,6 +561,29 @@ settings:                      # System → Settings group (named after the sect
 **Field types:** `string` · `text` (multiline string — a system prompt / template) ·
 `number` · `bool` · `select` (with `options: [...]`) · `string_list` · `secret`.
 
+**Tabbed Configure dialogs:** a larger plugin can declare an ordered tab registry,
+then assign ordinary schema-backed fields by stable tab id. Labels are presentation;
+ids are identity. Fields without `tab` remain in an implicit **Configuration** tab,
+and a plugin without `settings_tabs` keeps the original single flat form.
+
+```yaml
+settings_tabs:
+  - { id: runtime, label: Runtime }
+  - { id: review, label: "Review & merge" }
+
+settings:
+  - { key: coder, label: "Coding agent", type: string, tab: runtime }
+  - { key: max_concurrent, label: "Concurrent tasks", type: number, tab: runtime }
+  - { key: auto_merge, label: "Auto merge", type: bool, tab: review }
+  - { key: webhook_secret, label: "Webhook secret", type: secret } # Configuration
+```
+
+Tab ids must match `[A-Za-z0-9][A-Za-z0-9_-]*` and be unique within the
+manifest. An invalid descriptor or an unknown field reference is ignored with a
+warning; the affected field falls back to Configuration rather than disappearing.
+Tab switching retains one shared dirty state, so **Save & apply** submits pending
+changes from every tab together.
+
 **Conditional fields** — add `depends_on` to show a field only once a sibling is set
 (e.g. an "enable X" toggle gates X's options); reactive to the in-form value:
 

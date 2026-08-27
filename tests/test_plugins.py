@@ -57,6 +57,56 @@ def test_manifest_parse(tmp_path) -> None:
     assert load_manifest(tmp_path / "bad") is None  # missing id
 
 
+def test_manifest_parses_ordered_settings_tabs_and_field_references(tmp_path) -> None:
+    _make_plugin(
+        tmp_path,
+        "tabbed",
+        manifest_extra=(
+            "settings_tabs:\n"
+            "  - {id: runtime, label: Runtime}\n"
+            "  - {id: review, label: 'Review & merge'}\n"
+            "settings:\n"
+            "  - {key: coder, label: Coder, type: string, tab: runtime}\n"
+            "  - {key: auto_merge, label: Auto merge, type: bool, tab: review}\n"
+            "  - {key: note, label: Note, type: text}\n"
+        ),
+    )
+    manifest = load_manifest(tmp_path / "tabbed")
+    assert manifest is not None
+    assert manifest.settings_tabs == [
+        {"id": "runtime", "label": "Runtime"},
+        {"id": "review", "label": "Review & merge"},
+    ]
+    assert [setting.get("tab") for setting in manifest.settings] == ["runtime", "review", None]
+
+
+def test_manifest_settings_tabs_reject_invalid_duplicates_and_unknown_refs(tmp_path, caplog) -> None:
+    import logging as _logging
+
+    _make_plugin(
+        tmp_path,
+        "tabbed",
+        manifest_extra=(
+            "settings_tabs:\n"
+            "  - {id: runtime, label: Runtime}\n"
+            "  - {id: runtime, label: Duplicate}\n"
+            "  - {id: 'not safe', label: Unsafe}\n"
+            "  - {id: missing-label}\n"
+            "settings:\n"
+            "  - {key: known, label: Known, tab: runtime}\n"
+            "  - {key: fallback, label: Fallback, tab: missing}\n"
+        ),
+    )
+    with caplog.at_level(_logging.WARNING, logger="protoagent.plugins"):
+        manifest = load_manifest(tmp_path / "tabbed")
+    assert manifest is not None
+    assert manifest.settings_tabs == [{"id": "runtime", "label": "Runtime"}]
+    assert manifest.settings[0]["tab"] == "runtime"
+    assert "tab" not in manifest.settings[1]
+    assert "duplicate settings tab" in caplog.text
+    assert "unknown settings tab" in caplog.text
+
+
 # --- Optional dep tier (#1953) — `requires_pip:` entries may be {pkg, optional} ---
 
 

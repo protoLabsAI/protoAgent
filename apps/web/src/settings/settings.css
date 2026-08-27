@@ -293,3 +293,4 @@
   border-radius: 6px;
   color: var(--pl-color-fg-muted);
 }
+.plugin-settings-dialog .pl-tabs-wrap { margin-bottom: 12px; }

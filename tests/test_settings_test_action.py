@@ -84,3 +84,90 @@ def test_build_schema_surfaces_guide_url(monkeypatch):
     g = next(g for g in ss.build_schema(LangGraphConfig()) if g["section"] == "Discord")
     assert g.get("guide_url") == "https://example.com/guide"
     assert g.get("test") == {"endpoint": "/api/config/test-discord"}
+
+
+def test_build_schema_surfaces_ordered_settings_tab_metadata(monkeypatch):
+    class FakeSch:
+        plugin_id = "project_board"
+        section = "project_board"
+        defaults = {"coder": "", "auto_merge": False, "note": ""}
+        settings_tabs = [
+            {"id": "runtime", "label": "Runtime"},
+            {"id": "review", "label": "Review & merge"},
+        ]
+        test = False
+
+    specs = [
+        {"key": "auto_merge", "label": "Auto merge", "type": "bool", "group": "Options", "tab": "review"},
+        {"key": "coder", "label": "Coder", "type": "string", "group": "Options", "tab": "runtime"},
+        {"key": "note", "label": "Note", "type": "text", "group": "Options"},
+    ]
+    monkeypatch.setattr(
+        ss,
+        "_plugin_field_specs",
+        lambda: [(FakeSch(), f"project_board.{spec['key']}", spec["key"], spec) for spec in specs],
+    )
+    groups = [g for g in ss.build_schema(LangGraphConfig()) if g.get("plugin_id") == "project_board"]
+    assert [g.get("settings_tab") for g in groups] == [
+        {"id": "review", "label": "Review & merge", "order": 1},
+        {"id": "runtime", "label": "Runtime", "order": 0},
+        None,
+    ]
+    assert [g["section"] for g in groups] == ["Options", "Options", "Options"]
+    assert {g["category"] for g in groups} == {"Plugins"}
+
+
+def test_plugin_groups_with_same_display_name_never_cross_plugin_boundaries(monkeypatch):
+    class First:
+        plugin_id = "first"
+        section = "first"
+        defaults = {"enabled": False}
+        settings_tabs = [{"id": "runtime", "label": "Runtime"}]
+        test = False
+
+    class Second:
+        plugin_id = "second"
+        section = "second"
+        defaults = {"enabled": False}
+        settings_tabs = [{"id": "runtime", "label": "Runtime"}]
+        test = False
+
+    spec = {"key": "enabled", "label": "Enabled", "type": "bool", "group": "Runtime", "tab": "runtime"}
+    monkeypatch.setattr(
+        ss,
+        "_plugin_field_specs",
+        lambda: [
+            (First(), "first.enabled", "enabled", spec),
+            (Second(), "second.enabled", "enabled", spec),
+        ],
+    )
+    groups = [g for g in ss.build_schema(LangGraphConfig()) if g.get("plugin_id") in {"first", "second"}]
+    assert len(groups) == 2
+    assert {g["plugin_id"] for g in groups} == {"first", "second"}
+    assert {g["fields"][0]["key"] for g in groups} == {"first.enabled", "second.enabled"}
+    assert {g["category"] for g in groups} == {"Plugins"}
+
+
+def test_duplicate_plugin_group_labels_keep_authored_insertion_order(monkeypatch):
+    class FakeSch:
+        plugin_id = "board"
+        section = "board"
+        defaults = {"first": "", "middle": "", "last": ""}
+        settings_tabs = [
+            {"id": "one", "label": "One"},
+            {"id": "two", "label": "Two"},
+        ]
+        test = False
+
+    specs = [
+        {"key": "first", "label": "First", "group": "Runtime", "tab": "one"},
+        {"key": "middle", "label": "Middle", "group": "Other"},
+        {"key": "last", "label": "Last", "group": "Runtime", "tab": "two"},
+    ]
+    monkeypatch.setattr(
+        ss,
+        "_plugin_field_specs",
+        lambda: [(FakeSch(), f"board.{spec['key']}", spec["key"], spec) for spec in specs],
+    )
+    groups = [g for g in ss.build_schema(LangGraphConfig()) if g.get("plugin_id") == "board"]
+    assert [g["fields"][0]["key"] for g in groups] == ["board.first", "board.middle", "board.last"]
