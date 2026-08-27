@@ -45,9 +45,10 @@ onto primitives it already has:
 
 ## Write paths
 
-1. **Memory tools** — the agent calls `memory_ingest` (and friends:
-   `memory_recall`, `memory_list`, `memory_stats`, `forget_memory`) to record a
-   fact the user shared. See [Starter tools](../reference/starter-tools.md).
+1. **Memory tools** — the agent calls `memory_ingest` to record a fact the user
+   shared, `memory_recall` to search durable knowledge, and `session_search` /
+   `recall_session` to find prior conversations by content or id. See
+   [Starter tools](../reference/starter-tools.md).
 2. **Session summaries** — `SessionSummaryMiddleware` writes a per-session JSON
    summary (messages, top tool calls, final output — all reasoning-stripped) to
    the session-memory dir on each terminal turn, atomically (temp file →
@@ -108,7 +109,9 @@ prompt layer, don't just hope the store stays clean). Three parts, in order:
    from the first *user* message only (no assistant text — that's the identity
    confusion + poisoning surface). The digest is cached with a 60 s TTL and
    suppressed on goal-driven turns. The full summary of any listed session is
-   one tool call away: `recall_session(session_id)`.
+   one tool call away with `recall_session(session_id)`; when the id is unknown,
+   `session_search(query)` searches reasoning-stripped, credential-redacted transcript
+   content in a lazy FTS5 index and returns ids to expand.
 2. **Hot memory.** `domain="hot"` chunks are always-on operator facts: the
    newest 100 under a 6 000-char budget inject **every turn**, loaded fresh per
    turn so a just-added fact is seen immediately. Because that makes a silent
