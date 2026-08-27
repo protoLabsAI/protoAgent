@@ -146,6 +146,117 @@ def test_warm_grace_default_spares_recently_active(tmp_path, monkeypatch):
     assert supervisor.enforce_warm_cap(keep=0) == []  # 0 = unlimited, no-op
 
 
+# ── fleet roster order (ADR 0042 hub control-plane) ───────────────────────────
+# A persisted, id-based, hub-scoped display order for the fleet list. status() applies it
+# while reconciling every currently-known member; set_roster_order() validates a complete
+# permutation under the state lock and never mutates saved order on a rejected payload.
+
+
+def _roster_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
+    supervisor._probe_cache.clear()
+
+
+def _host_id() -> str:
+    return next(s for s in supervisor.status() if s.get("host"))["id"]
+
+
+def test_set_and_apply_roster_order(tmp_path, monkeypatch):
+    """A complete permutation of the current member ids (host + local + remote) is
+    persisted, and subsequent status() reads return members in exactly that order."""
+    _roster_env(tmp_path, monkeypatch)
+    a = manager.create("alpha")["id"]
+    b = manager.create("bravo")["id"]
+    r = supervisor.add_remote("rem", "http://100.64.0.5:7870")["id"]
+    host = _host_id()
+
+    saved = supervisor.set_roster_order([r, b, host, a])
+    assert saved == [r, b, host, a]
+    assert [s["id"] for s in supervisor.status()] == [r, b, host, a]
+
+
+def test_roster_order_survives_restart(tmp_path, monkeypatch):
+    """The saved order lives on disk (roster.json), so a fresh read (a hub restart)
+    reconstructs it and status() returns members in it."""
+    _roster_env(tmp_path, monkeypatch)
+    a = manager.create("alpha")["id"]
+    b = manager.create("bravo")["id"]
+    host = _host_id()
+    supervisor.set_roster_order([b, a, host])
+
+    # A restart is just a fresh read of the file — nothing is cached in-process.
+    assert supervisor._roster_path().exists()
+    assert supervisor.get_roster_order() == [b, a, host]
+    assert [s["id"] for s in supervisor.status()] == [b, a, host]
+
+
+def test_roster_reconciles_added_and_removed_members(tmp_path, monkeypatch):
+    """After an order is saved: a member added later is included exactly once, after the
+    ordered members, in discovery order; a member removed later just drops out. Every
+    current member appears exactly once and the saved relative order is retained
+    (local / remote / host reconciliation)."""
+    _roster_env(tmp_path, monkeypatch)
+    a = manager.create("alpha")["id"]
+    b = manager.create("bravo")["id"]
+    host = _host_id()
+    supervisor.set_roster_order([b, host, a])
+
+    # A local agent added AFTER the save: not in the saved order → appended last.
+    d = manager.create("delta")["id"]
+    ids = [s["id"] for s in supervisor.status()]
+    assert ids == [b, host, a, d]  # saved trio kept, new member last
+    assert len(ids) == len(set(ids))
+
+    # A remote added later reconciles the same way (remotes follow locals in discovery order).
+    r = supervisor.add_remote("rem", "http://100.64.0.6:7870")["id"]
+    assert [s["id"] for s in supervisor.status()] == [b, host, a, d, r]
+
+    # Removing a member that WAS ordered drops it — no duplicate, saved order preserved.
+    manager.remove(a, purge=True)
+    ids = [s["id"] for s in supervisor.status()]
+    assert ids == [b, host, d, r] and len(ids) == len(set(ids))
+
+
+def test_set_roster_order_rejects_invalid_without_mutating(tmp_path, monkeypatch):
+    """Duplicate / unknown / missing / malformed submissions are each rejected with a
+    FleetError, and the previously-saved order is left untouched on every rejection."""
+    _roster_env(tmp_path, monkeypatch)
+    a = manager.create("alpha")["id"]
+    b = manager.create("bravo")["id"]
+    host = _host_id()
+
+    good = supervisor.set_roster_order([a, b, host])
+    assert supervisor.get_roster_order() == good
+
+    with pytest.raises(supervisor.FleetError):
+        supervisor.set_roster_order([a, a, host])  # duplicate id
+    with pytest.raises(supervisor.FleetError):
+        supervisor.set_roster_order([a, b, host, "ghost-9999"])  # unknown id
+    with pytest.raises(supervisor.FleetError):
+        supervisor.set_roster_order([a, b])  # missing the host → incomplete
+    with pytest.raises(supervisor.FleetError):
+        supervisor.set_roster_order([a, b, ""])  # blank id
+    with pytest.raises(supervisor.FleetError):
+        supervisor.set_roster_order([a, b, 123])  # non-string id
+    with pytest.raises(supervisor.FleetError):
+        supervisor.set_roster_order("not-a-list")  # malformed payload
+
+    # Saved order is UNCHANGED after every rejection.
+    assert supervisor.get_roster_order() == good
+    assert [s["id"] for s in supervisor.status()] == good
+
+
+def test_roster_order_unset_keeps_default_order(tmp_path, monkeypatch):
+    """With no order saved, status() returns the default host-first discovery order —
+    the pre-feature contract is unchanged when the roster is never touched."""
+    _roster_env(tmp_path, monkeypatch)
+    manager.create("alpha")
+    manager.create("bravo")
+    assert supervisor.get_roster_order() == []
+    rows = supervisor.status()
+    assert rows[0]["host"] is True  # host still first by default
+
+
 # ── remote fleet members (ADR 0042 §I) ────────────────────────────────────────
 def test_remote_member_lifecycle(tmp_path, monkeypatch):
     monkeypatch.setenv("PROTOAGENT_WORKSPACES_DIR", str(tmp_path / "ws"))
