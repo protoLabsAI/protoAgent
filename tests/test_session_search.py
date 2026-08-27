@@ -99,7 +99,7 @@ def test_search_treats_fts_operators_as_literal_terms(tmp_path):
 
 
 def test_search_redacts_credentials_before_indexing(tmp_path):
-    token = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
+    token = "api_key=" + "redactionfixture" * 3
     _write(tmp_path, "chat-secret", f"failure used {token}")
 
     assert search_session_summaries(token, memory_dir=str(tmp_path)) == []
