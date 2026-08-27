@@ -53,8 +53,6 @@ def _reset_schema(conn: sqlite3.Connection) -> None:
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
-        INSERT INTO session_search_meta (key, value)
-        VALUES ('schema_version', '1');
 
         CREATE TABLE session_search_files (
             session_id TEXT PRIMARY KEY,
@@ -71,6 +69,10 @@ def _reset_schema(conn: sqlite3.Connection) -> None:
             tokenize='unicode61'
         );
         """
+    )
+    conn.execute(
+        "INSERT INTO session_search_meta (key, value) VALUES ('schema_version', ?)",
+        (str(_SCHEMA_VERSION),),
     )
     conn.commit()
 

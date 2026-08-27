@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 
 import pytest
 
@@ -41,6 +42,20 @@ def test_search_indexes_existing_summaries_and_returns_attribution(tmp_path):
     assert rows[0]["surface"] == "chat"
     assert "Playwright" in rows[0]["excerpt"]
     assert (tmp_path / ".session-search.sqlite3").is_file()
+
+
+def test_schema_reset_persists_the_declared_version(monkeypatch, tmp_path):
+    import graph.session_search as session_search_module
+
+    monkeypatch.setattr(session_search_module, "_SCHEMA_VERSION", 2)
+    _write(tmp_path, "chat-versioned", "schema version probe")
+    assert search_session_summaries("schema version", memory_dir=str(tmp_path))
+
+    with sqlite3.connect(tmp_path / ".session-search.sqlite3") as conn:
+        stored = conn.execute(
+            "SELECT value FROM session_search_meta WHERE key = 'schema_version'"
+        ).fetchone()
+    assert stored == ("2",)
 
 
 def test_search_reconciles_rewrites_and_deletes(tmp_path):

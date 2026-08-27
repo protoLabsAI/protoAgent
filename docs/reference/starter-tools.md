@@ -32,7 +32,7 @@ Two things then happen to the **whole** assembled set, not just the core part:
 
 ## At a glance {#at-a-glance}
 
-39 tools in twelve groups. Each group's heading says what makes it appear.
+41 tools in twelve groups. Each group's heading says what makes it appear.
 
 ### General — always bound
 
