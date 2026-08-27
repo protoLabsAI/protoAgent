@@ -409,6 +409,7 @@ class ProtoAgentExecutor(AgentExecutor):
 
         started = time.monotonic()
         accumulated = ""
+        _text_after_tool = False
         deltas: list[dict] = []
         usage = {
             "input_tokens": 0,
@@ -658,6 +659,9 @@ class ProtoAgentExecutor(AgentExecutor):
                     await _flush_reasoning()
 
                 if event_type == "text":
+                    if _text_after_tool and accumulated:
+                        accumulated += "\n\n"
+                    _text_after_tool = False
                     accumulated += payload
                     _text_buf += payload
                     if _should_flush(_text_buf, _text_flushed_at):
@@ -696,6 +700,7 @@ class ProtoAgentExecutor(AgentExecutor):
                         # is the on_tool_start-had-no-run_id fallback, not a real
                         # sub-millisecond call (there's always at least async/model-loop
                         # overhead) — treated the same as "unmeasured", not "instant".
+                        _text_after_tool = True
                         if isinstance(payload, dict):
                             end_name = payload.get("name")
                             duration_ms = payload.get("duration_ms")

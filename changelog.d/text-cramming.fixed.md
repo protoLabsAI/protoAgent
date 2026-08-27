@@ -1,0 +1,1 @@
+- **Fix text cramming in durable artifacts** — agent text produced before and after tool calls was concatenated without separators in the stored artifact, making turns unreadable in the chat history and turns API.
