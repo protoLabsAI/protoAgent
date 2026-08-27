@@ -80,7 +80,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   agent had already read the message, its bubble comes back and the composer says so rather
   than queueing a silent duplicate.
 
-- **Fix text cramming in durable artifacts** — agent text produced before and after tool calls was concatenated without separators in the stored artifact, making turns unreadable in the chat history and turns API.
+- **Fix text cramming in durable artifacts (#3210).** Agent text produced before and after tool calls was concatenated without separators in the stored artifact, making turns unreadable in the chat history and turns API.
 
 ### Docs
 - **Fleet model-connection documentation now matches box-shared OAuth ownership (#3198).**

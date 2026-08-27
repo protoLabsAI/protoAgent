@@ -13,7 +13,7 @@
       "New fleet sisters inherit every configured model connection and credential (#3196).",
       "A Codex/ChatGPT-subscription chat no longer bricks itself on a reasoning item the backend can't verify (#3199).",
       "↑ now pulls a queued message out of the turn instead of copying it (#3212).",
-      "Fix text cramming in durable artifacts",
+      "Fix text cramming in durable artifacts (#3210).",
       "Fleet model-connection documentation now matches box-shared OAuth ownership (#3198)."
     ]
   },
