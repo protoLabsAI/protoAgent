@@ -1,0 +1,142 @@
+name: Upstream canary
+
+# The PR gates install from uv.lock, so a red PR means that PR broke something.
+# That determinism costs one thing: nothing would then notice when a new upstream
+# release breaks us, until somebody bumped the lock and inherited the mess.
+#
+# This job is the other half. Nightly, on main, it installs UNPINNED — what a
+# fresh `pip install` / Docker build / contributor checkout actually resolves —
+# runs the full suite, and files ONE tracking issue when that combination fails.
+# Upstream drift then arrives as its own issue, with the version delta attached,
+# instead of as a mystery failure on whichever PR happened to be open.
+#
+# It is deliberately non-blocking: nothing here gates a merge.
+
+on:
+  schedule:
+    # 09:17 UTC daily — off the hour, so it isn't queued behind everyone's cron.
+    - cron: "17 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: upstream-canary
+  cancel-in-progress: false
+
+env:
+  ISSUE_TITLE: "Upstream drift: the suite fails against latest dependencies"
+
+jobs:
+  canary:
+    name: Suite vs latest upstream
+    runs-on: ubuntu-latest # workspace-config: allow-hosted-runner public repo — GH-hosted is free
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install UNPINNED (what a fresh install resolves)
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest pytest-asyncio
+
+      - name: Report the drift vs uv.lock
+        id: drift
+        run: |
+          . .venv/bin/activate
+          python scripts/dep_drift.py --markdown | tee drift.md
+          {
+            echo "## Dependency drift vs \`uv.lock\`"
+            echo
+            cat drift.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run the full suite
+        id: suite
+        continue-on-error: true
+        run: |
+          . .venv/bin/activate
+          set -o pipefail
+          python -m pytest tests/ -q --tb=short 2>&1 | tee suite.log
+
+      - name: Run the seam contracts alone (names the moved API)
+        id: seams
+        if: steps.suite.outcome == 'failure'
+        continue-on-error: true
+        run: |
+          . .venv/bin/activate
+          set -o pipefail
+          python -m pytest tests/test_upstream_seams.py -q --tb=short 2>&1 | tee seams.log
+
+      - name: Open or update the tracking issue
+        if: steps.suite.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "The full suite fails against the dependency versions a fresh install resolves"
+            echo "today. The PR gates install from \`uv.lock\`, so **this does not block anyone** —"
+            echo "but it is what a new contributor, the Docker image and the desktop sidecar get."
+            echo
+            echo "### Dependency drift vs \`uv.lock\`"
+            echo
+            cat drift.md
+            echo
+            echo "### Seam contracts"
+            echo
+            if [ -f seams.log ]; then
+              echo "A failure here names the upstream API that moved:"
+              echo
+              echo '```'
+              tail -30 seams.log
+              echo '```'
+            else
+              echo "_not run_"
+            fi
+            echo
+            echo "### Suite tail"
+            echo
+            echo '```'
+            tail -40 suite.log
+            echo '```'
+            echo
+            echo "Run locally: \`python scripts/dep_drift.py\`"
+            echo
+            echo "_Updated by [\`upstream-canary\`](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})._"
+          } > body.md
+
+          EXISTING=$(gh issue list --state open --search "\"$ISSUE_TITLE\" in:title" \
+            --json number,title --jq ".[] | select(.title == \"$ISSUE_TITLE\") | .number" | head -1)
+
+          if [ -n "$EXISTING" ]; then
+            echo "updating existing issue #$EXISTING"
+            gh issue comment "$EXISTING" --body-file body.md
+          else
+            gh issue create --title "$ISSUE_TITLE" --body-file body.md
+          fi
+
+      - name: Close the tracking issue once latest is green again
+        if: steps.suite.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          EXISTING=$(gh issue list --state open --search "\"$ISSUE_TITLE\" in:title" \
+            --json number,title --jq ".[] | select(.title == \"$ISSUE_TITLE\") | .number" | head -1)
+          if [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --comment \
+              "The suite passes against latest again ([run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})). Closing; the canary will reopen this if it regresses."
+          fi
+
+      - name: Fail the run when the suite failed
+        # Reported as a failed run so the Actions tab and any watcher notice —
+        # after the issue has been written, which is why the suite step used
+        # continue-on-error rather than failing in place.
+        if: steps.suite.outcome == 'failure'
+        run: exit 1

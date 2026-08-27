@@ -183,14 +183,26 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - name: Install dependencies
-        # venv keeps tests/conftest.py's site.getsitepackages() reorder
-        # resolving correctly (see #175).
+      - uses: astral-sh/setup-uv@v6
+        with:
+          # Must match the lint job (and prepare-release.yml): uv's lock output is
+          # version-dependent, and `--frozen` compares against what it produced.
+          version: "0.11.29"
+      - name: Install dependencies (from uv.lock)
+        # PINNED, not resolved: a red PR here means THIS change broke something.
+        # CI used to install unpinned while uv.lock held much older versions, so
+        # the two tested different code and an upstream release landed as a
+        # failure on whichever PR was open at the time. What a fresh pip install
+        # resolves is still covered — by the live-smoke job below (production
+        # dep set) and nightly by upstream-canary.yml.
+        # `uv sync` writes the same .venv the steps below activate, and keeps
+        # tests/conftest.py's site.getsitepackages() reorder resolving (#175).
+        # pytest is not a project dependency, so it is added separately — never
+        # via `uv run pytest`, which falls back to a global binary when the venv
+        # has none.
         run: |
-          python -m venv .venv
-          . .venv/bin/activate
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt pytest pytest-asyncio
+          uv sync --frozen --python 3.12
+          uv pip install pytest pytest-asyncio
       - name: Run tests
         # Kept as a bare pytest call (not `python scripts/gate.py`) so lint and
         # tests stay separate jobs with parallel execution and clear failure
@@ -250,16 +262,19 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - name: Install dependencies
-        # Mirrors the Ubuntu tests job (venv per #175); git-bash keeps the
-        # steps byte-comparable with the POSIX legs. pytest-split is CI-only and
-        # pinned; the committed duration seed balances the two isolated jobs.
+      - uses: astral-sh/setup-uv@v6
+        with:
+          # Must match the lint job (and prepare-release.yml): uv's lock output is
+          # version-dependent, and `--frozen` compares against what it produced.
+          version: "0.11.29"
+      - name: Install dependencies (from uv.lock)
+        # Mirrors the Ubuntu tests job: pinned to the lock (see its note).
+        # pytest-split is CI-only and pinned; the committed duration seed
+        # balances the two isolated jobs.
         shell: bash
         run: |
-          python -m venv .venv
-          source .venv/Scripts/activate
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt pytest pytest-asyncio pytest-split==0.11.0
+          uv sync --frozen --python 3.12
+          uv pip install pytest pytest-asyncio pytest-split==0.11.0
       - name: Run full-suite shard ${{ matrix.group }}/2
         # tests/windows_native_exclusions.txt is the #2412 burndown: files that
         # failed natively at the 2026-08-08 baseline (currently empty). The two
@@ -356,14 +371,17 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - name: Install dependencies
-        # Mirror the `tests` job: full requirements.txt in a venv so
+      - uses: astral-sh/setup-uv@v6
+        with:
+          # Must match the lint job (and prepare-release.yml): uv's lock output is
+          # version-dependent, and `--frozen` compares against what it produced.
+          version: "0.11.29"
+      - name: Install dependencies (from uv.lock)
+        # Mirror the `tests` job: pinned to the lock, same .venv layout so
         # tests/conftest.py's site.getsitepackages() reorder resolves (#175).
         run: |
-          python -m venv .venv
-          . .venv/bin/activate
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt pytest pytest-asyncio
+          uv sync --frozen --python 3.12
+          uv pip install pytest pytest-asyncio
       - name: Boot real multi-instance fleet (hub + members) and exercise it
         # PA_RUN_INTEGRATION=1 flips on the real-subprocess harness the default
         # `pytest tests/` skips. Covers instance isolation, hub→member proxy
@@ -389,6 +407,9 @@ jobs:
         # `--ui none` tier). Installing it here — not the full requirements.txt —
         # also guards the lean-image import gap class (e.g. the FastAPI-missing
         # bug that only push-to-main caught, #426).
+        # Deliberately UNPINNED while the test jobs above install from uv.lock:
+        # this job's whole purpose is what the shipped image actually resolves,
+        # which a lockfile install would stop testing.
         run: |
           python -m venv .venv
           . .venv/bin/activate
