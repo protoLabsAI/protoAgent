@@ -714,7 +714,7 @@ impl UpdateRequestState {
         state.next_id
     }
 
-    fn take(&self) -> Option<u64> {
+    fn consume(&self) -> Option<u64> {
         self.0.lock().unwrap().pending.take()
     }
 
@@ -861,6 +861,21 @@ struct UpdateCheckSnapshot {
     outcome: Option<UpdateCheckOutcome>,
 }
 
+impl UpdateCheckSnapshot {
+    fn completed_after(&self, observed_generation: u64) -> Option<UpdateCheckOutcome> {
+        if self.generation > observed_generation {
+            self.outcome.clone()
+        } else {
+            None
+        }
+    }
+
+    fn record(&mut self, outcome: UpdateCheckOutcome) {
+        self.generation = self.generation.saturating_add(1);
+        self.outcome = Some(outcome);
+    }
+}
+
 /// Serialize updater manifest reads and share the result among callers that overlap.
 /// Launch, periodic, and tray checks can otherwise race through the updater plugin and
 /// produce duplicate prompts. A caller that starts after the prior check completed still
@@ -903,17 +918,13 @@ async fn coordinated_update_check<R: Runtime>(app: &AppHandle<R>) -> UpdateCheck
     // generation before taking the gate and therefore performs its own fresh check.
     {
         let snapshot = coordinator.snapshot.lock().unwrap();
-        if snapshot.generation > observed_generation {
-            if let Some(outcome) = snapshot.outcome.clone() {
-                return outcome;
-            }
+        if let Some(outcome) = snapshot.completed_after(observed_generation) {
+            return outcome;
         }
     }
 
     let outcome = perform_update_check(app).await;
-    let mut snapshot = coordinator.snapshot.lock().unwrap();
-    snapshot.generation = snapshot.generation.saturating_add(1);
-    snapshot.outcome = Some(outcome.clone());
+    coordinator.snapshot.lock().unwrap().record(outcome.clone());
     outcome
 }
 
@@ -1097,18 +1108,19 @@ async fn updater_check<R: Runtime>(app: AppHandle<R>) -> Result<Option<UpdateInf
     }
 }
 
-/// Pull the latest tray request after the frontend listener is registered. Only the
+/// Consume the latest tray request after the frontend listener is registered. Only the
 /// primary window may consume it, so an already-open secondary chat window cannot steal
 /// a boot-time request or open a duplicate dialog.
 #[tauri::command]
-fn updater_take_request<R: Runtime>(
+fn updater_consume_request<R: Runtime>(
     app: AppHandle<R>,
     window: tauri::WebviewWindow<R>,
 ) -> Option<u64> {
     if window.label() != PRIMARY_WINDOW_LABEL {
         return None;
     }
-    app.try_state::<UpdateRequestState>().and_then(|state| state.take())
+    app.try_state::<UpdateRequestState>()
+        .and_then(|state| state.consume())
 }
 
 /// Clear a request delivered over the live event path. The id comparison is critical:
@@ -1193,7 +1205,7 @@ pub fn run() {
             updater_check,
             updater_install,
             updater_launch_result,
-            updater_take_request,
+            updater_consume_request,
             updater_ack_request,
             hide_launcher,
             focus_main,
@@ -1478,8 +1490,8 @@ mod update_request_tests {
 
         assert_eq!(state.record(), 1);
         assert_eq!(state.record(), 2);
-        assert_eq!(state.take(), Some(2));
-        assert_eq!(state.take(), None);
+        assert_eq!(state.consume(), Some(2));
+        assert_eq!(state.consume(), None);
     }
 
     #[test]
@@ -1487,9 +1499,9 @@ mod update_request_tests {
         let state = UpdateRequestState::default();
 
         assert_eq!(state.record(), 1);
-        assert_eq!(state.take(), Some(1));
+        assert_eq!(state.consume(), Some(1));
         assert_eq!(state.record(), 2);
-        assert_eq!(state.take(), Some(2));
+        assert_eq!(state.consume(), Some(2));
     }
 
     #[test]
@@ -1499,11 +1511,30 @@ mod update_request_tests {
         let first = state.record();
         let second = state.record();
         state.acknowledge(first);
-        assert_eq!(state.take(), Some(second));
+        assert_eq!(state.consume(), Some(second));
 
         let third = state.record();
         state.acknowledge(third);
-        assert_eq!(state.take(), None);
+        assert_eq!(state.consume(), None);
+    }
+}
+
+#[cfg(test)]
+mod update_check_coordinator_tests {
+    use super::{UpdateCheckOutcome, UpdateCheckSnapshot};
+
+    #[test]
+    fn a_waiter_reuses_only_a_check_completed_after_it_started_waiting() {
+        let mut snapshot = UpdateCheckSnapshot::default();
+        let observed = snapshot.generation;
+
+        assert!(snapshot.completed_after(observed).is_none());
+        snapshot.record(UpdateCheckOutcome::Current);
+        assert!(matches!(
+            snapshot.completed_after(observed),
+            Some(UpdateCheckOutcome::Current)
+        ));
+        assert!(snapshot.completed_after(snapshot.generation).is_none());
     }
 }
 

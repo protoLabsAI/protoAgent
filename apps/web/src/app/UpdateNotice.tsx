@@ -34,7 +34,9 @@ export function UpdateNotice() {
   const [error, setError] = useState<string | null>(null);
   const checkInFlight = useRef<Promise<void> | null>(null);
   const interactiveRequested = useRef(false);
-  const directCheckStarted = useRef(false);
+  const interactiveCheckStarted = useRef(false);
+  const launchFoundUpdate = useRef(false);
+  const launchSettled = useRef<Promise<void>>(Promise.resolve());
   const lastRequestId = useRef(0);
 
   const present = useCallback((next: UpdateInfo, show: boolean) => {
@@ -50,9 +52,11 @@ export function UpdateNotice() {
   // periodic timer into one piece of UI feedback.
   const runCheck = useCallback(
     (interactive: boolean) => {
-      if (interactive) interactiveRequested.current = true;
+      if (interactive) {
+        interactiveRequested.current = true;
+        interactiveCheckStarted.current = true;
+      }
       if (checkInFlight.current) return checkInFlight.current;
-      directCheckStarted.current = true;
       const task = (async () => {
         try {
           const next = await api.checkUpdate();
@@ -91,31 +95,57 @@ export function UpdateNotice() {
     if (!enabled) return;
     let cancelled = false;
     let retry: number | undefined;
+    let resolveSettled: (() => void) | null = null;
+    launchFoundUpdate.current = false;
+    launchSettled.current = new Promise<void>((resolve) => {
+      resolveSettled = resolve;
+    });
+    const settle = () => {
+      resolveSettled?.();
+      resolveSettled = null;
+    };
     const poll = async (tries: number) => {
       if (cancelled) return;
-      const r = await api.launchUpdateResult();
-      if (cancelled) return;
-      if (r === null) return; // not desktop / older shell — the timer cycle below covers it
-      if (!r.done) {
-        // Check still in flight (it races the webview boot) — cheap re-read, bounded.
-        if (tries < 20) retry = window.setTimeout(() => poll(tries + 1), 1_000);
+      let r: Awaited<ReturnType<typeof api.launchUpdateResult>>;
+      try {
+        r = await api.launchUpdateResult();
+      } catch {
+        settle();
         return;
       }
-      // A direct tray/periodic check is newer than this immutable launch snapshot.
-      if (r.update && !directCheckStarted.current) present(r.update, true);
+      if (cancelled) return;
+      if (r === null) {
+        settle(); // older shell — release the normal timer cycle
+        return;
+      }
+      if (!r.done) {
+        // Check still in flight (it races the webview boot) — cheap re-read, bounded.
+        if (tries < 20) {
+          retry = window.setTimeout(() => poll(tries + 1), 1_000);
+        } else {
+          settle(); // bounded wait: periodic checks must eventually resume
+        }
+        return;
+      }
+      launchFoundUpdate.current = Boolean(r.update);
+      // Only an interactive tray check owns presentation over launch. Ambient polling
+      // waits below and therefore can never downgrade the launch modal to a pill.
+      if (r.update && !interactiveCheckStarted.current) present(r.update, true);
+      settle();
     };
     poll(0);
     return () => {
       cancelled = true;
       window.clearTimeout(retry);
+      settle();
     };
     // Mount-only on purpose: the launch result is immutable once done.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, present]);
 
-  // Subscribe BEFORE pulling the durable request. If a click lands between those
+  // Subscribe BEFORE consuming the durable request. If a click lands between those
   // operations it arrives both ways; the monotonic id makes that harmless. Rust targets
-  // the event and pull command to `main`, and the primary marker keeps secondary windows
+  // the event and consume command to `main`, and the primary marker keeps secondary windows
   // from running any ambient update UX at all.
   useEffect(() => {
     if (!enabled) return;
@@ -135,7 +165,7 @@ export function UpdateNotice() {
         return;
       }
       unlisten = off;
-      const pending = await api.takeUpdateRequest();
+      const pending = await api.consumeUpdateRequest();
       if (!cancelled && pending !== null) handle(pending);
     });
     return () => {
@@ -149,6 +179,8 @@ export function UpdateNotice() {
     let cancelled = false;
     const run = async () => {
       if (cancelled || update) return;
+      await launchSettled.current;
+      if (cancelled || launchFoundUpdate.current || update) return;
       await runCheck(false);
     };
     const first = window.setTimeout(run, FIRST_CHECK_MS);

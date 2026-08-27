@@ -1,4 +1,4 @@
-import { act, createElement as h, type ReactNode } from "react";
+import { act, createElement as h, StrictMode, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
   checkUpdate: vi.fn<() => Promise<UpdateInfo | null>>(),
   installUpdate: vi.fn(),
   launchUpdateResult: vi.fn(),
-  takeUpdateRequest: vi.fn(),
+  consumeUpdateRequest: vi.fn(),
   ackUpdateRequest: vi.fn(),
   listen: vi.fn(),
   toast: vi.fn(),
@@ -21,7 +21,7 @@ vi.mock("../lib/api", () => ({
     checkUpdate: mocks.checkUpdate,
     installUpdate: mocks.installUpdate,
     launchUpdateResult: mocks.launchUpdateResult,
-    takeUpdateRequest: mocks.takeUpdateRequest,
+    consumeUpdateRequest: mocks.consumeUpdateRequest,
     ackUpdateRequest: mocks.ackUpdateRequest,
   },
   isDesktopWebview: () => true,
@@ -89,7 +89,7 @@ beforeEach(() => {
   mocks.checkUpdate.mockReset();
   mocks.installUpdate.mockReset();
   mocks.launchUpdateResult.mockReset().mockResolvedValue({ done: true, update: null });
-  mocks.takeUpdateRequest.mockReset().mockResolvedValue(null);
+  mocks.consumeUpdateRequest.mockReset().mockResolvedValue(null);
   mocks.ackUpdateRequest.mockReset().mockResolvedValue(undefined);
   mocks.toast.mockReset();
   mocks.listen.mockReset().mockImplementation(async (_event: string, handler: (requestId: number) => void) => {
@@ -116,7 +116,7 @@ describe("UpdateNotice tray requests", () => {
   });
 
   it("replays a request captured by Rust before the listener mounted", async () => {
-    mocks.takeUpdateRequest.mockResolvedValue(7);
+    mocks.consumeUpdateRequest.mockResolvedValue(7);
     mocks.checkUpdate.mockResolvedValue(updateA);
 
     await mountNotice();
@@ -124,6 +124,20 @@ describe("UpdateNotice tray requests", () => {
     await vi.waitFor(() => expect(mocks.checkUpdate).toHaveBeenCalledTimes(1));
     expect(mocks.ackUpdateRequest).toHaveBeenCalledWith(7);
     expect(document.body.textContent).toContain("0.141.0");
+    expect(document.querySelector('[data-testid="update-dialog"]')).not.toBeNull();
+  });
+
+  it("deduplicates a live event against the same durable pending pull", async () => {
+    const pending = deferred<number | null>();
+    mocks.consumeUpdateRequest.mockReturnValue(pending.promise);
+    mocks.checkUpdate.mockResolvedValue(updateA);
+    await mountNotice();
+
+    await act(async () => mocks.eventHandler?.(7));
+    await act(async () => pending.resolve(7));
+
+    expect(mocks.checkUpdate).toHaveBeenCalledTimes(1);
+    expect(mocks.ackUpdateRequest).toHaveBeenCalledTimes(1);
     expect(document.querySelector('[data-testid="update-dialog"]')).not.toBeNull();
   });
 
@@ -143,11 +157,17 @@ describe("UpdateNotice tray requests", () => {
     expect(mocks.toast).toHaveBeenCalledWith(expect.objectContaining({ tone: "success", title: "You're up to date" }));
   });
 
-  it("surfaces an interactive check error but keeps ambient checks quiet", async () => {
+  it("keeps ambient errors quiet but surfaces the same error for an interactive request", async () => {
+    vi.useFakeTimers();
     mocks.checkUpdate.mockRejectedValue(new Error("manifest unavailable"));
-    await mountNotice();
+    await act(async () => root.render(h(UpdateNotice)));
+
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    expect(mocks.checkUpdate).toHaveBeenCalledTimes(1);
+    expect(mocks.toast).not.toHaveBeenCalled();
 
     await act(async () => mocks.eventHandler?.(1));
+    expect(mocks.checkUpdate).toHaveBeenCalledTimes(2);
     expect(mocks.toast).toHaveBeenCalledWith(
       expect.objectContaining({ tone: "error", title: "Couldn't check for updates", message: "manifest unavailable" }),
     );
@@ -168,5 +188,52 @@ describe("UpdateNotice tray requests", () => {
     expect(mocks.toast).toHaveBeenCalledWith(
       expect.objectContaining({ tone: "info", title: "A newer update is now available" }),
     );
+  });
+});
+
+describe("UpdateNotice launch and ambient ownership", () => {
+  it("auto-opens an update found by the launch check", async () => {
+    mocks.launchUpdateResult.mockResolvedValue({ done: true, update: updateA });
+
+    await mountNotice();
+
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="update-dialog"]')).not.toBeNull());
+    expect(document.body.textContent).toContain("Release A");
+    expect(mocks.checkUpdate).not.toHaveBeenCalled();
+  });
+
+  it("waits past the 10s ambient timer for a slow launch check and still auto-opens it", async () => {
+    vi.useFakeTimers();
+    let launchDone = false;
+    mocks.launchUpdateResult.mockImplementation(async () =>
+      launchDone ? { done: true, update: updateA } : { done: false, update: null },
+    );
+    mocks.checkUpdate.mockResolvedValue(null);
+    await act(async () => root.render(h(StrictMode, null, h(UpdateNotice))));
+
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    expect(mocks.checkUpdate).not.toHaveBeenCalled();
+    expect(document.querySelector('[data-testid="update-dialog"]')).toBeNull();
+
+    launchDone = true;
+    await act(async () => vi.advanceTimersByTimeAsync(1_000));
+
+    expect(document.querySelector('[data-testid="update-dialog"]')).not.toBeNull();
+    expect(document.body.textContent).toContain("Release A");
+    expect(mocks.checkUpdate).not.toHaveBeenCalled();
+  });
+
+  it("releases ambient polling after the bounded launch wait expires", async () => {
+    vi.useFakeTimers();
+    mocks.launchUpdateResult.mockResolvedValue({ done: false, update: null });
+    mocks.checkUpdate.mockResolvedValue(null);
+    await act(async () => root.render(h(UpdateNotice)));
+
+    await act(async () => vi.advanceTimersByTimeAsync(19_000));
+    expect(mocks.checkUpdate).not.toHaveBeenCalled();
+
+    await act(async () => vi.advanceTimersByTimeAsync(1_000));
+    expect(mocks.checkUpdate).toHaveBeenCalledTimes(1);
+    expect(mocks.toast).not.toHaveBeenCalled();
   });
 });

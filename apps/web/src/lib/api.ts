@@ -2398,13 +2398,13 @@ export const api = {
       return null; // older shell without the command — UpdateNotice falls back to its timers
     }
   },
-  /** Latest tray request retained by Rust across the webview's boot/listener race.
-   * The command returns a request only to the primary `main` window. */
-  async takeUpdateRequest(): Promise<number | null> {
+  /** Destructively consume the latest tray request retained by Rust across the
+   * webview's boot/listener race. Only the primary `main` window can receive it. */
+  async consumeUpdateRequest(): Promise<number | null> {
     const core = tauriCore();
     if (!core) return null;
     try {
-      return (await core.invoke<number | null>("updater_take_request")) ?? null;
+      return (await core.invoke<number | null>("updater_consume_request")) ?? null;
     } catch {
       return null; // older shell without the durable request command
     }
