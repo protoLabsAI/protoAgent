@@ -730,6 +730,33 @@ def test_installed_route_carries_load_error(monkeypatch):
     assert by_id["fine"]["error"] is None
 
 
+def test_installed_route_exposes_ordered_configure_tabs(monkeypatch, tmp_path):
+    """Inventory metadata keeps the full descriptor so clients can distinguish a
+    schema form from a sandboxed Configure page (#3180)."""
+    from graph.plugins import installer
+
+    plugin_dir = tmp_path / "boardy"
+    plugin_dir.mkdir()
+    (plugin_dir / "protoagent.plugin.yaml").write_text(
+        "id: boardy\n"
+        "name: Boardy\n"
+        "settings_tabs:\n"
+        "  - {id: projects, label: Projects, path: /plugins/boardy/config/projects}\n"
+        "  - {id: automation, label: Automation}\n",
+        encoding="utf-8",
+    )
+    _wire(monkeypatch, enabled=["boardy"], disabled=[], meta=[{"id": "boardy", "enabled": True}])
+    monkeypatch.setattr(installer, "live_plugins_dir", lambda: tmp_path)
+    monkeypatch.setattr(installer, "list_installed", lambda: [{"id": "boardy", "present": True}])
+    monkeypatch.setattr(installer, "_deps_satisfied", lambda *_a, **_k: (True, []))
+
+    row = _client().get("/api/plugins/installed").json()["plugins"][0]
+    assert row["manifest"]["settings_tabs"] == [
+        {"id": "projects", "label": "Projects", "path": "/plugins/boardy/config/projects"},
+        {"id": "automation", "label": "Automation"},
+    ]
+
+
 def test_updates_route_returns_check_results(monkeypatch):
     from graph.plugins import installer
 

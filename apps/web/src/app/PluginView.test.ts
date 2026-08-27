@@ -17,6 +17,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resolveMenu } from "../contextMenu/registry";
 import { useContextMenuStore } from "../contextMenu/store";
+import { registeredKeybindings } from "../ext/keybindingRegistry";
+import { useUI } from "../state/uiStore";
 import { consoleTheme, PL_TOKEN_VARS, PluginView, pluginIdFromView, pluginMenuType } from "./PluginView";
 import type { PluginView as PluginViewType } from "../lib/types";
 
@@ -119,6 +121,7 @@ describe("PluginView — the protoagent:theme re-post carries updated values", (
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -209,6 +212,148 @@ describe("PluginView — the protoagent:theme re-post carries updated values", (
 // cross-origin under the desktop app), so the PAGE reports it. These pin the host half:
 // what it accepts, where the menu lands, what the item does when chosen, and that nothing
 // outlives the frame.
+describe("PluginView — embedded Configure mode", () => {
+  let container: HTMLElement;
+  let root: Root;
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 200 })));
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps the iframe bridge but ignores rail background-mount requests", async () => {
+    const view: PluginViewType = {
+      id: "projects",
+      label: "Projects",
+      path: "/plugins/boardy/config/projects",
+      key: "plugin:boardy:settings:projects",
+    };
+    await act(async () => {
+      root.render(h(PluginView, { view, embedded: true }));
+    });
+    for (let i = 0; i < 10 && !container.querySelector("iframe"); i++) {
+      await act(async () => {
+        await Promise.resolve();
+      });
+    }
+    const frame = container.querySelector("iframe")!;
+    expect(frame).toBeTruthy();
+    expect(container.querySelector(".plugin-view--embedded")).toBeTruthy();
+    await act(async () => {
+      frame.dispatchEvent(new Event("load"));
+      window.dispatchEvent(new MessageEvent("message", {
+        source: frame.contentWindow,
+        origin: window.location.origin,
+        data: { type: "protoagent:subscribe", patterns: ["boardy.#"], background: true },
+      }));
+    });
+    expect(useUI.getState().pluginBackground[view.key!]).toBeUndefined();
+  });
+
+  it("isolates Configure shortcuts and rejects a navigated frame's foreign-origin messages", async () => {
+    const view: PluginViewType = {
+      id: "projects",
+      label: "Projects",
+      path: "/plugins/boardy/config/projects",
+      key: "plugin:boardy:settings:projects",
+    };
+    await act(async () => {
+      root.render(h(PluginView, { view, embedded: true }));
+    });
+    for (let i = 0; i < 10 && !container.querySelector("iframe"); i++) {
+      await act(async () => Promise.resolve());
+    }
+    const frame = container.querySelector("iframe")!;
+    const registration = {
+      type: "protoagent:keybindings",
+      bindings: [{ id: "refresh", label: "Refresh", keys: "mod+r" }],
+    };
+
+    await act(async () => {
+      window.dispatchEvent(new MessageEvent("message", {
+        source: frame.contentWindow,
+        origin: "https://foreign.example",
+        data: registration,
+      }));
+    });
+    expect(registeredKeybindings().some((binding) => binding.id.includes("boardy"))).toBe(false);
+
+    await act(async () => {
+      window.dispatchEvent(new MessageEvent("message", {
+        source: frame.contentWindow,
+        origin: window.location.origin,
+        data: registration,
+      }));
+    });
+    expect(registeredKeybindings().map((binding) => binding.id)).toContain(
+      "plugin.boardy.settings.projects.refresh",
+    );
+  });
+
+  it("surfaces the owning plugin's unloaded state instead of mounting a 404 page", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 404 })));
+    const view: PluginViewType = {
+      id: "projects",
+      label: "Projects",
+      path: "/plugins/boardy/config/projects",
+      key: "plugin:boardy:settings:projects",
+      pluginLoaded: false,
+    };
+    await act(async () => {
+      root.render(h(PluginView, { view, embedded: true }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600);
+    });
+
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("isn’t mounted yet");
+  });
+
+  it("retries a failed page probe in place", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 404 })
+      .mockResolvedValueOnce({ ok: false, status: 404 })
+      .mockResolvedValueOnce({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", fetchMock);
+    const view: PluginViewType = {
+      id: "projects",
+      label: "Projects",
+      path: "/plugins/boardy/config/projects",
+      key: "plugin:boardy:settings:projects",
+    };
+    await act(async () => {
+      root.render(h(PluginView, { view, embedded: true }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600);
+    });
+    expect(container.querySelector('[role="alert"]')).toBeTruthy();
+
+    const retry = [...container.querySelectorAll("button")].find((button) => button.textContent === "Retry")!;
+    await act(async () => {
+      retry.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(container.querySelector("iframe")).toBeTruthy();
+  });
+});
+
 describe("PluginView — the plugin context-menu bridge (#3030)", () => {
   let container: HTMLElement;
   let root: Root;
@@ -243,7 +388,11 @@ describe("PluginView — the plugin context-menu bridge (#3030)", () => {
   // A message as the console sees it: from THIS frame's window (the host's trust check).
   const fromFrame = (frame: HTMLIFrameElement, data: unknown) =>
     act(() => {
-      window.dispatchEvent(new MessageEvent("message", { data, source: frame.contentWindow }));
+      window.dispatchEvent(new MessageEvent("message", {
+        data,
+        source: frame.contentWindow,
+        origin: window.location.origin,
+      }));
     });
 
   beforeEach(() => {

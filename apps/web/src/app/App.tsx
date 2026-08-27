@@ -318,6 +318,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   const openGlobalSettings = useUI((s) => s.openGlobalSettings);
   const closeGlobalSettings = useUI((s) => s.closeGlobalSettings);
   const configurePlugin = useUI((s) => s.configurePlugin);
+  const configurePluginRuntime = runtime?.plugins?.find((plugin) => plugin.id === configurePlugin?.id);
   const closePluginConfig = useUI((s) => s.closePluginConfig);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [sessionSheetOpen, setSessionSheetOpen] = useState(false);
@@ -1239,6 +1240,9 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
       <PluginSettingsDialog
         pluginId={configurePlugin.id}
         pluginName={configurePlugin.name}
+        settingsTabs={configurePluginRuntime?.settings_tabs}
+        pluginLoaded={configurePluginRuntime?.loaded}
+        pluginError={configurePluginRuntime?.error}
         open
         onClose={closePluginConfig}
       />

@@ -11,8 +11,8 @@ what you expect.
 
 ::: tip Origin
 The console posts to the iframe's **resolved origin**, and ignores any message whose `source` isn't
-this iframe's `contentWindow`. A view served from an absolute URL escapes that origin and the
-handshake silently never completes — which is why `views[].path` must be a same-origin relative path
+this iframe's `contentWindow` **or whose origin no longer matches**. A view served from an absolute
+URL escapes that origin and the handshake silently never completes — which is why `views[].path` must be a same-origin relative path
 (the manifest parser warns about this; see [`views`](/reference/plugin-manifest#field-views)).
 :::
 
@@ -105,7 +105,9 @@ window.addEventListener("message", (e) => {
 
 - **Ids are forced into `plugin.<pluginId>.<your id>`**, so a page cannot register or silently
   replace a core binding like `chat.new`, or collide with another plugin. The id echoed back to you
-  is *your* local one, not the namespaced one.
+  is *your* local one, not the namespaced one. Configure pages add the stable
+  `.settings.<tabId>` segment before your id so their bindings cannot replace a simultaneously
+  mounted rail/background view from the same plugin.
 - **The chord you name is a default.** The operator's override wins, through the same
   Settings ▸ Keyboard path as every other binding.
 - **Re-registering replaces the whole set** (`bindings: []` clears it), so a chord you drop can't

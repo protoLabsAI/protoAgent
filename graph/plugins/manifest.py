@@ -6,6 +6,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import unquote
 
 import yaml
 
@@ -65,11 +66,11 @@ class PluginManifest:
     config: dict = field(default_factory=dict)
     secrets: list[str] = field(default_factory=list)
     settings: list[dict] = field(default_factory=list)
-    # Ordered Configure-dialog tabs for schema-backed settings (#3179). Each entry
-    # is ``{id, label}``; a setting opts in with ``tab: <id>``. IDs are stable
-    # identity while labels may change. Plugins that omit this keep the original
-    # single flat Configuration form. Future descriptor keys may add other
-    # host-rendered tab kinds without changing this ordered registry.
+    # Ordered Configure-dialog tabs (#3179/#3180). A schema-backed ``{id, label}``
+    # descriptor is targeted by ``settings[].tab``; a path-backed ``{id, label,
+    # path}`` descriptor embeds plugin-owned UI from /plugins/<id>/... through the
+    # sandboxed view bridge. One descriptor has one kind — settings cannot target a
+    # path-backed tab. Plugins that omit this keep the flat Configuration form.
     settings_tabs: list[dict] = field(default_factory=list)
     # Test action (ADR 0029) — when true, the plugin serves a credential check at
     # `POST /api/config/test-<config_section>` (e.g. the chat_surface wirer mounts
@@ -160,12 +161,32 @@ _NON_SAME_ORIGIN_PATH = re.compile(r"https?://|^//|localhost|:\d", re.IGNORECASE
 _VALID_SETTINGS_TAB_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 
+def _iframe_page_route(path: object) -> str:
+    """Canonical route portion of a manifest iframe URL.
+
+    Browser navigation and the ASGI request path percent-decode the route before
+    auth/router matching. Normalize the manifest spelling the same way (including
+    nested encodings) so validation, public-chrome exemptions, and served-route
+    diagnostics cannot disagree. Query/fragment remain on the iframe URL but never
+    participate in either boundary.
+    """
+    route = str(path or "").strip().split("?", 1)[0].split("#", 1)[0]
+    while True:
+        decoded = unquote(route)
+        if decoded == route:
+            break
+        route = decoded
+    return route
+
+
 def _parse_settings_tabs(tabs, plugin_id: str) -> list[dict]:
     """Normalize ordered ``settings_tabs`` descriptors to unique ``{id, label, …}`` mappings.
 
     Invalid entries are ignored with a warning so one presentation typo cannot stop
     plugin discovery. Unknown keys are preserved for forward-compatible descriptor
-    extensions; the base schema-backed contract only consumes ``id`` and ``label``.
+    extensions. ``path`` is the sandboxed plugin-owned kind (#3180) and is kept
+    only when it is a root-relative page inside this plugin's exact public
+    ``/plugins/<id>/...`` namespace.
     """
     if not isinstance(tabs, (list, tuple)):
         return []
@@ -186,8 +207,30 @@ def _parse_settings_tabs(tabs, plugin_id: str) -> list[dict]:
         if tab_id in seen:
             log.warning("[plugins] %s: duplicate settings tab id %r — keeping first", plugin_id, tab_id)
             continue
+        normalized = {**raw, "id": tab_id, "label": label}
+        if "path" in raw:
+            path = str(raw.get("path") or "").strip()
+            route = _iframe_page_route(path)
+            parts = route.split("/")
+            root = f"/plugins/{plugin_id}/"
+            if (
+                not path
+                or not route.startswith(root)
+                or "\\" in route
+                or any(part in {".", ".."} for part in parts)
+            ):
+                log.warning(
+                    "[plugins] %s: settings tab %r Configure path %r must be a same-origin "
+                    "page under /plugins/%s/... — ignored",
+                    plugin_id,
+                    tab_id,
+                    path,
+                    plugin_id,
+                )
+                continue
+            normalized["path"] = path
         seen.add(tab_id)
-        kept.append({**raw, "id": tab_id, "label": label})
+        kept.append(normalized)
     return kept
 
 
@@ -196,6 +239,7 @@ def _parse_settings(settings, tabs: list[dict], plugin_id: str) -> list[dict]:
     if not isinstance(settings, (list, tuple)):
         return []
     known_tabs = {tab["id"] for tab in tabs}
+    path_tabs = {tab["id"] for tab in tabs if tab.get("path")}
     kept: list[dict] = []
     for raw in settings:
         if not isinstance(raw, dict):
@@ -206,6 +250,15 @@ def _parse_settings(settings, tabs: list[dict], plugin_id: str) -> list[dict]:
             if tab_id not in known_tabs:
                 log.warning(
                     "[plugins] %s: setting %r references unknown settings tab %r — using Configuration",
+                    plugin_id,
+                    spec.get("key"),
+                    tab_id,
+                )
+                spec.pop("tab", None)
+            elif tab_id in path_tabs:
+                log.warning(
+                    "[plugins] %s: setting %r cannot target path-backed settings tab %r "
+                    "— using Configuration",
                     plugin_id,
                     spec.get("key"),
                     tab_id,
@@ -304,10 +357,20 @@ def _view_public_paths(views: list[dict]) -> list[str]:
         if isinstance(palette, dict):
             candidates.append(palette.get("path"))
         for c in candidates:
-            p = str(c or "").split("?", 1)[0].split("#", 1)[0].strip()
+            p = _iframe_page_route(c)
             if p:
                 out.append(p)
     return out
+
+
+def _settings_tab_public_paths(tabs: list[dict]) -> list[str]:
+    """Public page chrome for path-backed Configure tabs (#3180).
+
+    Validation in ``_parse_settings_tabs`` has already confined every path to the
+    declaring plugin's /plugins/<id>/ subtree. Query/fragment select page state;
+    the middleware exemption is the underlying route only.
+    """
+    return [_iframe_page_route(tab["path"]) for tab in tabs if tab.get("path")]
 
 
 def _load_schema_ref(ref: str, plugin_dir: Path, plugin_id: str, topic: str) -> dict | None:
@@ -536,8 +599,8 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
     settings_tabs = _parse_settings_tabs(data.get("settings_tabs"), pid)
     settings = _parse_settings(data.get("settings"), settings_tabs, pid)
     views = _parse_views(data.get("views"), pid)
-    # public_paths = explicitly-declared exempt paths PLUS every view's own page
-    # path (view pages are public chrome — see _view_public_paths). Both run
+    # public_paths = explicitly-declared exempt paths PLUS every iframe page's
+    # path (rail views and Configure tabs are public chrome). All run
     # through the namespace validator; dict.fromkeys dedupes while preserving order
     # (a view path a manifest also lists explicitly collapses to one).
     public_paths = list(
@@ -545,6 +608,7 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
             [
                 *_parse_public_paths(data.get("public_paths"), pid),
                 *_parse_public_paths(_view_public_paths(views), pid),
+                *_parse_public_paths(_settings_tab_public_paths(settings_tabs), pid),
             ]
         )
     )

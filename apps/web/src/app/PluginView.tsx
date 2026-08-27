@@ -1,5 +1,6 @@
 import designTokens from "@protolabsai/design/tokens.json";
 import { Spinner } from "@protolabsai/ui/data";
+import { Button } from "@protolabsai/ui/primitives";
 import { AlertTriangle, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -113,8 +114,11 @@ export function consoleTheme(): Record<string, string> {
 // of the page the plugin serves, with optional view-tabs, a loading overlay, a
 // failure fallback, and a post-load handshake that hands the page the operator
 // bearer + theme tokens via postMessage (never a token in the URL).
-// Mount with `key={view key}` so switching views resets state.
-export function PluginView({ view }: { view: PluginViewType }) {
+// Mount with `key={view key}` so switching views resets state. ``embedded`` is for a
+// host-owned container such as the per-plugin Configure dialog: it keeps the same iframe
+// isolation/bridge but does not let the page opt into App's rail background-mount policy
+// or offer the redundant Configure context-menu action from inside Configure itself.
+export function PluginView({ view, embedded = false }: { view: PluginViewType; embedded?: boolean }) {
   const tabs = view.tabs ?? [];
   const [activeTab, setActiveTab] = useState(tabs[0]?.id ?? "");
   const src = useMemo(() => {
@@ -129,6 +133,7 @@ export function PluginView({ view }: { view: PluginViewType }) {
   // resolves we show the loading state; this keeps a 404 from ever rendering the server's
   // bare {"detail":"Not Found"} body as the "view".
   const [reachable, setReachable] = useState(false);
+  const [probeAttempt, setProbeAttempt] = useState(0);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   // Pending init re-post timers (see handleLoad) — cleared on unmount / src change.
   const initTimers = useRef<number[]>([]);
@@ -157,6 +162,11 @@ export function PluginView({ view }: { view: PluginViewType }) {
   // script. Reset when the frame is re-pointed.
   const navigatedRef = useRef(false);
   const pluginId = useMemo(() => pluginIdFromView(view), [view.key, view.path]);
+  // A rail/background view and its Configure page can be mounted simultaneously.
+  // Keep the established plugin-wide ids for rail views, but give embedded pages a
+  // stable tab-local namespace so registering `refresh` in Configure cannot replace
+  // (and then delete on dialog close) the still-mounted rail view's `refresh` binding.
+  const bindingPluginId = embedded && pluginId && view.id ? `${pluginId}.settings.${view.id}` : pluginId;
   // Background delivery (#1640): a `background: true` subscribe from the page asks App
   // to keep this view mounted (hidden) when another surface is active. Store-reported;
   // App owns the mount policy.
@@ -225,14 +235,20 @@ export function PluginView({ view }: { view: PluginViewType }) {
     // rail icon's menu offers (ADR 0036 D6) — a view that suppressed the browser menu should
     // never leave the operator with an EMPTY menu, so this is appended even for an empty set.
     if (entries.length) entries.push({ id: "plugin-view-div", divider: true });
-    entries.push({
-      id: "plugin-view-configure",
-      label: "Configure…",
-      icon: <SlidersHorizontal size={14} />,
-      // The view's label stands in for the plugin's display name — App resolves the real
-      // one from runtime status for the rail menu, which isn't worth a query from here.
-      run: () => useUI.getState().openPluginConfig(pluginId, view.label),
-    });
+    if (!embedded) {
+      entries.push({
+        id: "plugin-view-configure",
+        label: "Configure…",
+        icon: <SlidersHorizontal size={14} />,
+        // The view's label stands in for the plugin's display name — App resolves the real
+        // one from runtime status for the rail menu, which isn't worth a query from here.
+        run: () => useUI.getState().openPluginConfig(pluginId, view.label),
+      });
+    }
+    // Configure embeds intentionally omit the recursive Configure action. If the
+    // page did not contribute any of its own items either, do not open empty host
+    // chrome over the iframe.
+    if (!entries.length) return;
 
     useContextMenuStore.getState().openMenu(
       pluginMenuType(pluginId),
@@ -281,6 +297,7 @@ export function PluginView({ view }: { view: PluginViewType }) {
   //   • otherwise → the HTTP status. One retry covers a sub-second race with a hot-mount reload.
   useEffect(() => {
     let cancelled = false;
+    let retryTimer: number | undefined;
     navigatedRef.current = false; // re-pointed frame: back to about:blank until it navigates
     setLoaded(false);
     setError(null);
@@ -307,7 +324,7 @@ export function PluginView({ view }: { view: PluginViewType }) {
         // Retry once on a server-side miss — covers the brief window where the rail
         // renders the view before the hot-mount include_router commits (#822 reload race).
         if (attempt === 0 && (res.status === 404 || res.status >= 500)) {
-          setTimeout(() => void probe(1), 600);
+          retryTimer = window.setTimeout(() => void probe(1), 600);
           return;
         }
         setError(describeFailure(res.status));
@@ -315,7 +332,7 @@ export function PluginView({ view }: { view: PluginViewType }) {
         if (cancelled) return;
         // True network/CORS failure (connection refused, blocked) — no status to read.
         if (attempt === 0) {
-          setTimeout(() => void probe(1), 600);
+          retryTimer = window.setTimeout(() => void probe(1), 600);
           return;
         }
         setError(describeFailure(null));
@@ -325,8 +342,9 @@ export function PluginView({ view }: { view: PluginViewType }) {
     void probe(0);
     return () => {
       cancelled = true;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     };
-  }, [src, view.pluginLoaded, view.pluginError]);
+  }, [src, view.pluginLoaded, view.pluginError, probeAttempt]);
 
   // Event-bus relay across the sandbox (ADR 0039, extended #1640). The page subscribes via
   // `protoagent:subscribe {patterns, since?, background?}`; the host forwards matching bus
@@ -359,6 +377,10 @@ export function PluginView({ view }: { view: PluginViewType }) {
     const onWindowMessage = (e: MessageEvent) => {
       // Only trust messages from THIS iframe's window.
       if (!frameRef.current || e.source !== frameRef.current.contentWindow) return;
+      // The frame may navigate after mount while retaining the same contentWindow.
+      // Source-only validation would then let an unrelated origin publish events,
+      // register shortcuts, or open host context menus through the old bridge.
+      if (e.origin !== origin) return;
       // It spoke, so it's the navigated plugin page — not the about:blank placeholder. This
       // is what unblocks the `since` replay below: the page's first `subscribe` beats the
       // parent's load event, and the replay posts back inside this very handler.
@@ -377,14 +399,16 @@ export function PluginView({ view }: { view: PluginViewType }) {
         if (!req) return;
         // Hidden-delivery opt-in/out (#1640) — only an explicit boolean toggles it, so
         // pre-#1640 subscribes (no `background` field) never touch the mount policy.
-        if (req.background !== undefined && view.key) setPluginBackground(view.key, req.background);
+        if (!embedded && req.background !== undefined && view.key) {
+          setPluginBackground(view.key, req.background);
+        }
         relay.subscribe(req);
       } else if (m.type === "protoagent:keybindings") {
         // The page declares chords it wants (#1457). Ids are namespaced in the parser —
         // a view can't register or replace a core binding, or collide with another
         // plugin. The chord it names is a DEFAULT: the operator's override wins through
         // the same Settings ▸ Keyboard path as everything else.
-        const specs = parsePluginKeybindings(m, pluginId);
+        const specs = parsePluginKeybindings(m, bindingPluginId);
         if (!specs) return;
         // Re-registering REPLACES the previous set, so a view that drops a chord doesn't
         // leave a ghost binding firing into a page that forgot about it.
@@ -458,7 +482,7 @@ export function PluginView({ view }: { view: PluginViewType }) {
         useContextMenuStore.getState().close();
       }
     };
-  }, [src, pluginId, view.key, setPluginBackground]);
+  }, [src, pluginId, bindingPluginId, view.key, embedded, setPluginBackground]);
 
   // Live re-theme (ADR 0026/0042). The console fires a `protoagent:theme` window event on
   // any theme/accent change (watchThemeChanges in agentTheme.ts observes the root's
@@ -517,17 +541,20 @@ export function PluginView({ view }: { view: PluginViewType }) {
         <Tabs responsive active={activeTab} onSelect={setActiveTab}
               items={tabs.map((t) => ({ id: t.id, label: t.label }))} />
       )}
-      <section className="panel stage-panel plugin-view">
+      <section className={embedded ? "plugin-view plugin-view--embedded" : "panel stage-panel plugin-view"}>
       <div className="plugin-view-body">
         {error ? (
           <div className="plugin-view-state" role="alert">
             <AlertTriangle size={18} />
             <span>Couldn’t load “{view.label}”. {error}</span>
+            <Button type="button" size="sm" variant="ghost" onClick={() => setProbeAttempt((attempt) => attempt + 1)}>
+              Retry
+            </Button>
           </div>
         ) : (
           <>
             {!loaded ? (
-              <div className="plugin-view-state">
+              <div className="plugin-view-state" role="status">
                 <Spinner size={18} />
                 <span>Loading {view.label}…</span>
               </div>

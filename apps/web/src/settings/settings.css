@@ -294,3 +294,10 @@
   color: var(--pl-color-fg-muted);
 }
 .plugin-settings-dialog .pl-tabs-wrap { margin-bottom: 12px; }
+.plugin-configure-view { min-height: min(60vh, 560px); display: flex; }
+.plugin-configure-view > .plugin-view--embedded {
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+}

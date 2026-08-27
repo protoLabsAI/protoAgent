@@ -105,9 +105,18 @@ export type RuntimeStatus = {
     // is still blank — its tools return a "needs setup" notice until it's configured.
     incomplete?: boolean;
     needs_config?: { key: string; label: string }[];
+    // Ordered Configure-dialog registry (#3179/#3180). A path marks a
+    // plugin-owned sandbox tab; pathless descriptors organize schema fields.
+    settings_tabs?: PluginSettingsTabDescriptor[];
     // Console surfaces (ADR 0026): rail views the plugin contributes.
     views?: PluginView[];
   }[];
+};
+
+export type PluginSettingsTabDescriptor = {
+  id: string;
+  label: string;
+  path?: string;
 };
 
 // A plugin-contributed console surface (ADR 0026): a rail icon opening an iframe
@@ -187,6 +196,7 @@ export type InstalledPlugin = {
     requires_env?: string[];
     requires_pip?: string[];
     views?: string[];
+    settings_tabs?: PluginSettingsTabDescriptor[];
     secrets?: string[];
   };
 };

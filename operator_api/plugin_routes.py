@@ -191,6 +191,10 @@ def register_plugin_routes(app) -> None:
                     "requires_pip": m.requires_pip,
                     "optional_pip": m.optional_pip,
                     "views": [v.get("label") for v in m.views],
+                    # Full ordered Configure-tab descriptors (#3179/#3180), not
+                    # labels only: inventory clients need to distinguish generic
+                    # schema tabs from path-backed sandbox pages.
+                    "settings_tabs": list(m.settings_tabs),
                     "secrets": m.secrets,
                 }
                 # Actionable install state (#2013 adjacent): which declared pip deps
