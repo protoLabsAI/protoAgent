@@ -116,7 +116,8 @@ flow directly (`graph/providers/oauth_login.py`, `/api/config/oauth/{start,poll,
 - **anthropic-oauth** — Claude Code's PKCE flow: "Sign in" opens
   `platform.claude.com/oauth/authorize`; the user approves, Anthropic displays a
   `code#state`, they paste it back, and we exchange at `platform.claude.com/v1/oauth/token`
-  and store the tokens (`anthropic-oauth.json` at the box tier), refreshed on use.
+  and store the tokens in protoAgent's resolved store (box tier by default; an existing
+  legacy instance override remains until promotion), refreshed on use.
 
 **ToS escalation (deliberate, operator's call):** the Claude flow authenticates with Claude
 Code's *own* public OAuth client id (`9d1c250a-…`) — i.e. protoAgent performs the login *as*
