@@ -162,6 +162,11 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
   // script. Reset when the frame is re-pointed.
   const navigatedRef = useRef(false);
   const pluginId = useMemo(() => pluginIdFromView(view), [view.key, view.path]);
+  // A rail/background view and its Configure page can be mounted simultaneously.
+  // Keep the established plugin-wide ids for rail views, but give embedded pages a
+  // stable tab-local namespace so registering `refresh` in Configure cannot replace
+  // (and then delete on dialog close) the still-mounted rail view's `refresh` binding.
+  const bindingPluginId = embedded && pluginId && view.id ? `${pluginId}.settings.${view.id}` : pluginId;
   // Background delivery (#1640): a `background: true` subscribe from the page asks App
   // to keep this view mounted (hidden) when another surface is active. Store-reported;
   // App owns the mount policy.
@@ -372,6 +377,10 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
     const onWindowMessage = (e: MessageEvent) => {
       // Only trust messages from THIS iframe's window.
       if (!frameRef.current || e.source !== frameRef.current.contentWindow) return;
+      // The frame may navigate after mount while retaining the same contentWindow.
+      // Source-only validation would then let an unrelated origin publish events,
+      // register shortcuts, or open host context menus through the old bridge.
+      if (e.origin !== origin) return;
       // It spoke, so it's the navigated plugin page — not the about:blank placeholder. This
       // is what unblocks the `since` replay below: the page's first `subscribe` beats the
       // parent's load event, and the replay posts back inside this very handler.
@@ -399,7 +408,7 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
         // a view can't register or replace a core binding, or collide with another
         // plugin. The chord it names is a DEFAULT: the operator's override wins through
         // the same Settings ▸ Keyboard path as everything else.
-        const specs = parsePluginKeybindings(m, pluginId);
+        const specs = parsePluginKeybindings(m, bindingPluginId);
         if (!specs) return;
         // Re-registering REPLACES the previous set, so a view that drops a chord doesn't
         // leave a ghost binding firing into a page that forgot about it.
@@ -473,7 +482,7 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
         useContextMenuStore.getState().close();
       }
     };
-  }, [src, pluginId, view.key, embedded, setPluginBackground]);
+  }, [src, pluginId, bindingPluginId, view.key, embedded, setPluginBackground]);
 
   // Live re-theme (ADR 0026/0042). The console fires a `protoagent:theme` window event on
   // any theme/accent change (watchThemeChanges in agentTheme.ts observes the root's

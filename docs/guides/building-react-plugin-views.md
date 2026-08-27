@@ -394,7 +394,10 @@ addEventListener("message", (e) => {
 The `keys` you name is a **default**; an operator override always wins. Re-posting
 `protoagent:keybindings` **replaces** your previous set (post `bindings: []` to clear).
 Your ids are namespaced to `plugin.<your-id>.<id>` by the host, so you can't register,
-replace, or shadow a core binding — or collide with another plugin.
+replace, or shadow a core binding — or collide with another plugin. In a custom Configure
+tab, the host inserts `.settings.<tab-id>` before your local id so opening the dialog cannot
+replace a shortcut owned by your still-mounted rail/background view. The id posted back to
+the page remains your original local id in both contexts.
 
 **Let host chords through.** Forward anything you didn't handle yourself, so ⌘K still
 opens the palette while your view has focus:

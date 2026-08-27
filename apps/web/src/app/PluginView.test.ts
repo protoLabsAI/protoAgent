@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resolveMenu } from "../contextMenu/registry";
 import { useContextMenuStore } from "../contextMenu/store";
+import { registeredKeybindings } from "../ext/keybindingRegistry";
 import { useUI } from "../state/uiStore";
 import { consoleTheme, PL_TOKEN_VARS, PluginView, pluginIdFromView, pluginMenuType } from "./PluginView";
 import type { PluginView as PluginViewType } from "../lib/types";
@@ -251,10 +252,51 @@ describe("PluginView — embedded Configure mode", () => {
       frame.dispatchEvent(new Event("load"));
       window.dispatchEvent(new MessageEvent("message", {
         source: frame.contentWindow,
+        origin: window.location.origin,
         data: { type: "protoagent:subscribe", patterns: ["boardy.#"], background: true },
       }));
     });
     expect(useUI.getState().pluginBackground[view.key!]).toBeUndefined();
+  });
+
+  it("isolates Configure shortcuts and rejects a navigated frame's foreign-origin messages", async () => {
+    const view: PluginViewType = {
+      id: "projects",
+      label: "Projects",
+      path: "/plugins/boardy/config/projects",
+      key: "plugin:boardy:settings:projects",
+    };
+    await act(async () => {
+      root.render(h(PluginView, { view, embedded: true }));
+    });
+    for (let i = 0; i < 10 && !container.querySelector("iframe"); i++) {
+      await act(async () => Promise.resolve());
+    }
+    const frame = container.querySelector("iframe")!;
+    const registration = {
+      type: "protoagent:keybindings",
+      bindings: [{ id: "refresh", label: "Refresh", keys: "mod+r" }],
+    };
+
+    await act(async () => {
+      window.dispatchEvent(new MessageEvent("message", {
+        source: frame.contentWindow,
+        origin: "https://foreign.example",
+        data: registration,
+      }));
+    });
+    expect(registeredKeybindings().some((binding) => binding.id.includes("boardy"))).toBe(false);
+
+    await act(async () => {
+      window.dispatchEvent(new MessageEvent("message", {
+        source: frame.contentWindow,
+        origin: window.location.origin,
+        data: registration,
+      }));
+    });
+    expect(registeredKeybindings().map((binding) => binding.id)).toContain(
+      "plugin.boardy.settings.projects.refresh",
+    );
   });
 
   it("surfaces the owning plugin's unloaded state instead of mounting a 404 page", async () => {
@@ -346,7 +388,11 @@ describe("PluginView — the plugin context-menu bridge (#3030)", () => {
   // A message as the console sees it: from THIS frame's window (the host's trust check).
   const fromFrame = (frame: HTMLIFrameElement, data: unknown) =>
     act(() => {
-      window.dispatchEvent(new MessageEvent("message", { data, source: frame.contentWindow }));
+      window.dispatchEvent(new MessageEvent("message", {
+        data,
+        source: frame.contentWindow,
+        origin: window.location.origin,
+      }));
     });
 
   beforeEach(() => {
