@@ -63,6 +63,12 @@ async def _operator_runtime_status():
         warnings = [warn] if warn else []
     except Exception:  # noqa: BLE001 — status must never raise
         warnings = []
+    config = STATE.graph_config
+    if config is not None and bool(getattr(config, "self_improvement_enabled", False)) and STATE.scheduler is None:
+        warnings.append(
+            "Self-improvement reviews are enabled but the scheduler is unavailable; "
+            "post-goal and post-task reviews will not run until middleware.scheduler is enabled."
+        )
     # Fleet version skew (version-coherence P2) — also live + self-clearing: a
     # member that survived an app update keeps running the OLD binary until
     # restarted; banner it the same way as a co-located sibling. Inside a member
@@ -334,6 +340,7 @@ async def _operator_subagent_run(req: dict):
         prompt=req.get("prompt", ""),
         subagent_type=req.get("type") or req.get("subagent_type", "researcher"),
         extra_tools=STATE.plugin_tools + STATE.mcp_tools,
+        session_id=req.get("session_id", ""),
     )
 
 

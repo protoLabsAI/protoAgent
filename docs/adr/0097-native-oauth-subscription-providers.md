@@ -44,13 +44,18 @@ unchanged.
 
 | Provider | Client | Auth | Credentials |
 | --- | --- | --- | --- |
-| `anthropic-oauth` | `ChatAnthropic` (Bearer subclass) | `auth_token` + OAuth betas + claude-code UA | **read live** from `~/.claude/.credentials.json` / `CLAUDE_CODE_OAUTH_TOKEN` (Claude Code owns login + refresh) |
-| `openai-codex` | `ChatOpenAI` (Responses API) | Bearer + `ChatGPT-Account-Id` + `store=false` + `include=[reasoning.encrypted_content]` | **bootstrap-then-own**: import `~/.codex/auth.json` once, then keep + refresh our own instance-scoped copy |
+| `anthropic-oauth` | `ChatAnthropic` (Bearer subclass) | `auth_token` + OAuth betas + claude-code UA | env override → protoAgent's refreshable store (box by default) → live Claude Code file/keychain fallback |
+| `openai-codex` | `ChatOpenAI` (Responses API) | Bearer + `ChatGPT-Account-Id` + `store=false` + `include=[reasoning.encrypted_content]` | console sign-in mints a box-shared credential by default; explicit CLI import rotates and hands the live credential to protoAgent |
 
 The asymmetry mirrors Hermes and is deliberate: Anthropic's OAuth client is painful to mint
-independently, so we borrow Claude Code's live token; OpenAI's device-code flow is runnable
-standalone, and OAuth refresh tokens are **single-use**, so owning our own refreshed copy
-avoids racing the Codex CLI to a 401.
+independently, so we can borrow Claude Code's live token; OpenAI's device-code flow is
+runnable standalone. OAuth refresh tokens are **single-use**, so a missing Codex store is
+never silently bootstrapped from the CLI. Explicit import rotates the token immediately,
+handing the live credential to protoAgent and requiring a subsequent `codex login` for
+the CLI. The store retains vendor-origin provenance, so disconnect deletes protoAgent's
+copy without remotely revoking a credential that originated in another application.
+On upgraded instances, an existing legacy instance-local store remains the resolver and
+sign-in target until fleet creation promotes it to the box tier.
 
 ### Seam
 
@@ -111,7 +116,8 @@ flow directly (`graph/providers/oauth_login.py`, `/api/config/oauth/{start,poll,
 - **anthropic-oauth** — Claude Code's PKCE flow: "Sign in" opens
   `platform.claude.com/oauth/authorize`; the user approves, Anthropic displays a
   `code#state`, they paste it back, and we exchange at `platform.claude.com/v1/oauth/token`
-  and store the tokens (instance-scoped `anthropic-oauth.json`), refreshed on use.
+  and store the tokens in protoAgent's resolved store (box tier by default; an existing
+  legacy instance override remains until promotion), refreshed on use.
 
 **ToS escalation (deliberate, operator's call):** the Claude flow authenticates with Claude
 Code's *own* public OAuth client id (`9d1c250a-…`) — i.e. protoAgent performs the login *as*
@@ -125,18 +131,21 @@ The first cut had sign-in but no exit and no concurrency safety. Both are now cl
 
 - **Disconnect / cancel / revoke (#2440).** `disconnect(provider)` best-effort revokes
   protoAgent's own token (OpenAI `/oauth/revoke`), **always** deletes protoAgent's
-  instance-scoped store even if revocation fails, and writes a disconnect marker so the
-  provider does not auto-resolve (no Codex-CLI re-bootstrap, no stored/CLI Claude token)
+  resolved store even if revocation fails, and writes a disconnect marker so the
+  provider does not auto-resolve (no Codex-CLI recovery, no stored/CLI Claude token)
   until an in-console sign-in reconnects. The vendor CLI's own auth file is never touched.
   Wizard **Cancel** now aborts the server-side pending flow. New routes:
   `/api/config/oauth/{cancel,disconnect}`. Marker + stores keep the owner-only ACL via the
   `atomic_write` funnel.
 - **Serialized refresh (#2441).** Codex read→refresh→write is serialized by a per-store
   `threading.Lock` with a double-checked re-read, so two in-process consumers can't both
-  spend the single-use refresh token; warm reads stay lock-free. Disconnect takes the same
-  lock so it can't race a refresh that would rewrite the store after deletion.
+  spend the single-use refresh token. The later fleet amendment adds a stable provider
+  scope lock around warm resolution, refresh, transfer, sign-in/import, and disconnect.
 
 ## Fleet inheritance amendment (2026-08-27, #3196)
+
+This amendment supersedes the instance-scoped and automatic-bootstrap ownership wording
+in the original decision and lifecycle notes above.
 
 protoAgent-owned OAuth stores now default to the box tier, so every instance and fleet
 sister resolves one shared credential owner. Fleet creation
@@ -158,8 +167,93 @@ writes. The store-path lock nests inside it. This makes a waiting disconnect re-
 the post-transfer box owner instead of deleting the stale instance path, and brings
 Anthropic refresh under the same cross-process serialization as Codex.
 
+## Encrypted-reasoning replay was HALF wired (2026-08-27)
+
+The live-validation note above records that encrypted-reasoning replay "did not block the
+tool loop in practice". That was true of the tool loop and wrong about the wire: replay was
+not absent, it was **half present**, and the missing half is a 400 that bricks a thread.
+
+    400 invalid_encrypted_content — The encrypted content for item rs_… could not be
+    verified. Reason: Encrypted content could not be decrypted or parsed.
+
+With `store=false` the backend keeps no reasoning state, so a replayed reasoning item must
+carry its own `encrypted_content`. langchain-openai's **streaming** Responses path never
+captures that blob — it reads the item at `response.output_item.added` (where the field is
+still null), and the terminal `response.completed` event rebuilds the full message but keeps
+only `parsed`/usage/`response_metadata` from it. The item's `rs_…` **id** does survive into
+`additional_kwargs["reasoning"]`, and langchain replays it. protoAgent always streams (the
+backend mandates it), so this is the only shape it ever produced: an item referenced by an id
+the backend never stored, with nothing to verify. `include=["reasoning.encrypted_content"]`
+was asking for a blob nothing read.
+
+Worse than a failed turn: the item is checkpointed, so every later turn in the thread re-sent
+it and failed identically — the thread was bricked, the same failure class
+`ToolCallRepairMiddleware` exists to heal for a dangling `tool_call`.
+
+Two fixes, both containment (capturing the blob is still open, below):
+
+- **`graph/providers/codex_client.py`** — `CodexChatOpenAI` sanitizes the outbound Responses
+  `input`: a reasoning item with no blob is **dropped** (restoring the stateless continuity
+  this ADR believed it already had), and an item that *does* carry one keeps it but loses its
+  `id` (`store=false` cannot resolve an item id — the blob is self-contained).
+- **`graph/middleware/codex_reasoning_replay.py`** — the same 400 can still arrive from
+  causes the sender cannot see: `encrypted_content` is sealed to the endpoint that minted it,
+  and this repo lets each slot name its own connection, each chat tab override the model per
+  turn, and a failed turn retry against the fallback chain — every one of which replays one
+  thread's history to an endpoint that did not mint it (a rotated credential does the same).
+  `CodexReasoningReplayRecoveryMiddleware` strips the replay state, retries once, and then
+  rewrites the offending assistant messages in place by id so the bad item leaves the
+  checkpoint. Registered on the lead **and** subagent stacks; a no-op unless that specific
+  error fires.
+
+Hermes's Codex adapter (`agent/codex_responses_adapter.py`) reached the same rules
+independently — including the id strip and a session-wide replay kill switch — and its
+`_issuer_kind` stamp is the model for the cross-issuer filter listed below.
+
+## Encrypted-reasoning replay, delivered (2026-08-27, #3199 follow-up)
+
+#3199 contained the damage — never send an item the backend can't verify. This wires the
+capability the containment was standing in for, and closes the "contained, not delivered"
+open item.
+
+**Capture.** langchain-openai's streaming Responses path has no `response.output_item.done`
+branch for reasoning (it has one for `compaction`, which carries the same kind of blob), and
+the terminal `response.completed` event keeps only `parsed`/usage/`response_metadata`. So the
+blob is visible in exactly one event, which the converter drops. `codex_client`
+`_install_reasoning_capture` re-emits that event as a content-block delta that merges onto the
+reasoning block already in flight, by `index`. The wrapper sits on the shared module-level
+converter — there is no instance seam — but is **inert unless a contextvar this module's
+client sets is present**, so every other `ChatOpenAI` in the process is untouched.
+
+**`output_version` flipped to `responses/v1`.** `v0` collapses a turn's reasoning into ONE
+`additional_kwargs` slot: later items overwrite earlier ones, and streamed fragments of two
+different items merge into each other — so it structurally cannot carry per-item blobs. The
+block format keeps each item separate and in order, and langchain replays it that way. The
+rendering half of the v0 pin was already paid off (every answer site reads `AIMessage.text`,
+which yields text blocks only); `text_of` now skips reasoning blocks outright rather than
+writing a `_[reasoning]_` placeholder into exports/session memory/chat bundles, which is what
+ADR 0021 asks for anyway. `PROTOAGENT_CODEX_OUTPUT_VERSION=v0` is the escape hatch.
+
+**Issuer stamping.** `encrypted_content` is sealed to the endpoint *and account* that minted
+it. Each captured item carries `issuer_fingerprint(base_url, account_id)` — a truncated
+digest, so a checkpoint never stores a raw account id — and replay drops items stamped with a
+different issuer. Unstamped items (checkpointed before this) still replay. This is the guard
+that makes per-slot providers, per-tab model override and the fallback chain safe on a shared
+thread; without it, the recovery middleware would be firing routinely instead of never.
+
+**Not verified live.** The wire shape is tested end to end against the real converter, the
+real merge and the real payload builder, but no turn has been driven against a real ChatGPT
+subscription with this on. If the backend objects, `CodexReasoningReplayRecoveryMiddleware`
+(#3199) strips the replay state and retries — the thread degrades to stateless continuity
+rather than breaking, which is exactly why that half shipped first.
+
 ## Open items
 
+- **Encrypted-reasoning replay is unverified against a live subscription.** Capture,
+  issuer stamping and replay are wired (above) and covered by wire-shape tests, but no turn
+  has been driven against a real ChatGPT account with it on. Worth an upstream issue too:
+  langchain-openai should handle `output_item.done` for reasoning items the way it already
+  does for `compaction`, which would let protoAgent drop its converter wrapper.
 - **Claude end-to-end still unproven on a real subscription** — the sign-in URL + PKCE +
   refresh are unit-tested and the flow runs, but no Pro/Max approval has been driven here yet
   (tool loop, streaming, `cache_control`).

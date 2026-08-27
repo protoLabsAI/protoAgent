@@ -20,6 +20,7 @@ Claude path; this provider is opt-in via ``model.provider: openai-codex``.
 from __future__ import annotations
 
 import logging
+import os
 from typing import TYPE_CHECKING, Any
 
 from graph.providers.oauth import resolve_codex_oauth
@@ -46,7 +47,8 @@ def build_codex_llm(
     backend, and sets the subscription-required headers and ``store``/``include``
     flags. ``model_name`` overrides ``config.model_name`` for aux/subagent slots.
     """
-    from graph.llm import _ReasoningChatOpenAI  # local import — avoids a cycle at module load
+    # Local import — avoids a cycle at module load (the client subclasses graph.llm's).
+    from graph.providers.codex_client import build_codex_client, issuer_fingerprint
 
     creds = resolve_codex_oauth()  # raises OAuthCredentialError if none
 
@@ -75,15 +77,24 @@ def build_codex_llm(
         "base_url": creds.base_url,
         "api_key": creds.access_token,
         "use_responses_api": True,
-        # Pin legacy string content. langchain-openai now DEFAULTS output_version to
-        # "responses/v1", which packs the answer into structured content blocks that
-        # protoAgent's answer/rendering pipeline stringifies raw (the console would show
-        # "[{'type':'text',...}]"). "v0" gives a plain string. The block format enables
-        # cross-turn encrypted-reasoning replay — that's the ADR 0097 multi-turn
-        # follow-up, wired once the pipeline understands the blocks.
-        "output_version": "v0",
-        # The ChatGPT backend mandates store=false; include still requests encrypted
-        # reasoning so a follow-up can thread it once the block path is wired.
+        # Content blocks, not the legacy "v0" string. This is the follow-up the v0
+        # pin was holding open: "v0" collapses a turn's reasoning into ONE
+        # additional_kwargs slot (later items overwrite the first, and streamed
+        # fragments of two different items merge into each other), so it cannot
+        # carry per-item encrypted blobs. "responses/v1" keeps each reasoning item
+        # as its own block, in order, and langchain replays them that way — which
+        # is what makes cross-turn encrypted-reasoning continuity possible at all.
+        # The rendering half of the pin was already paid off: every answer site
+        # reads `AIMessage.text`, which yields text blocks only.
+        # PROTOAGENT_CODEX_OUTPUT_VERSION is the escape hatch back to "v0" (no
+        # replay, but no block-shaped content either) if a surface turns out to
+        # still assume the string shape.
+        "output_version": os.environ.get("PROTOAGENT_CODEX_OUTPUT_VERSION", "").strip() or "responses/v1",
+        # The ChatGPT backend mandates store=false, so a replayed reasoning item must
+        # carry its own blob — hence `include`. langchain-openai's streaming path
+        # drops the event that carries it; `codex_client` re-surfaces it and stamps
+        # the issuer, so this now asks for a blob that is actually read, kept, and
+        # replayed only back to the endpoint that minted it.
         "store": False,
         "include": ["reasoning.encrypted_content"],
         # The Codex backend manages its own output truncation and rejects
@@ -100,4 +111,8 @@ def build_codex_llm(
     if config.top_p is not None:
         kwargs["top_p"] = config.top_p
 
-    return _ReasoningChatOpenAI(**kwargs)
+    # The blob is sealed to endpoint+account: stamp WHICH one, so a later turn that
+    # lands on another connection drops those items instead of 400-ing on them.
+    return build_codex_client(
+        issuer=issuer_fingerprint(creds.base_url, creds.account_id or ""), **kwargs
+    )

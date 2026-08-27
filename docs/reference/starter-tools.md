@@ -65,7 +65,7 @@ answer. Hard-denied to subagents; auto-answered on autonomous turns so nothing d
 |---|---|
 | [`load_skill(name)`](#load_skill) | Expand one `<available_skills>` entry into its full procedure. |
 | [`list_skills()`](#list_skills) | Every indexed skill — name · source · confidence · description. |
-| [`save_skill(name, description, body, tools=None)`](#save_skill) | Create a new skill. Additive-only: refuses to overwrite. |
+| [`save_skill(name, description, body, tools=None, provenance_reason="", source_session_id="")`](#save_skill) | Create a new skill. Additive-only: refuses to overwrite. |
 | [`recent_activity(limit=30, window_hours=168)`](#recent_activity) | Read-only digest of recent turns + a telemetry rollup. |
 
 ### Memory & knowledge — bound when a `KnowledgeStore` exists
@@ -152,7 +152,9 @@ Defaults to **true**, same verifier requirement. See [Watches](/guides/watches) 
 
 | Tool | What it does | Bound when |
 |---|---|---|
-| [`edit_soul(section, content, mode="replace")`](#edit_soul) | Rewrite one section of the agent's own `SOUL.md`. Lead agent only. | `soul.self_edit_enabled: true` (default **off**) |
+| [`edit_soul(section, content, mode="replace", reason="", source_session_id="")`](#edit_soul) | Rewrite one section of the agent's own `SOUL.md`. | legacy lead opt-in, or bounded auto self-improvement |
+| [`update_skill(name, description, body, reason, tools=None, source_session_id="")`](#update_skill) | Replace an editable skill and archive its outgoing version. | auto self-improvement on a private/layered store |
+| [`delete_skill(name, reason, source_session_id="")`](#delete_skill) | Delete an editable skill and archive its outgoing version. | auto self-improvement on a private/layered store |
 | [`set_config(updates)`](#set_config) | Change the agent's own **operational** config — models, routing, plugin settings. Lead agent only. | `tools.self_config_enabled: true` (default **off**) |
 | [`search_tools(query="", limit=10)`](#search_tools) | Load deferred tools by capability. | `tools.deferred.enabled: true` (default **off**) |
 
@@ -343,10 +345,11 @@ separate sandboxed panel.
 
 ## Skills & curation
 
-`load_skill` is the runtime half of [progressive disclosure](/guides/skills); the other three
+`load_skill` is the runtime half of [progressive disclosure](/guides/skills); the curation tools
 back the scheduled `/dream` (memory consolidation) and `/distill` (workflow → skill) passes
 ([ADR 0054](/adr/0054-dream-distill-curation-subagents)). They read `STATE` at call time and
-self-gate, which is why they're unconditional here.
+self-gate, which is why they're unconditional here. The update/delete tools are separately
+guarded by the unified self-improvement policy.
 
 ### `load_skill`
 
@@ -371,13 +374,37 @@ extends instead of duplicating. Read-only.
 ### `save_skill`
 
 ```python
-def save_skill(name: str, description: str, body: str, tools: list[str] | None = None) -> str
+def save_skill(name: str, description: str, body: str, tools: list[str] | None = None,
+               provenance_reason: str = "", source_session_id: str = "") -> str
 ```
 
 Create a new skill. **Additive-only**: it refuses if the name already exists and never
 overwrites. Saved with `source=distilled` and curator-managed confidence, so a mistaken
 capture decays and self-cleans rather than accumulating. `description` is required — it's how
-the skill gets matched.
+the skill gets matched. A self-improvement pass can supply `provenance_reason`; the producing
+session is recorded automatically.
+
+### `update_skill`
+
+```python
+def update_skill(name: str, description: str, body: str, reason: str,
+                 tools: list[str] | None = None, source_session_id: str = "") -> str
+```
+
+Available only when the self-improvement review and skills facet are both `auto`. Replaces a
+user or learned skill, preserving user-facing metadata and existing tool hints when none are
+supplied. Bundled/commons skills are read-only, and flat shared stores receive no automatic
+skill writers. The outgoing file is copied unchanged under `skills/.history/<slug>/` before
+the live artifact changes; a JSON sidecar records the mutation session and reason.
+
+### `delete_skill`
+
+```python
+def delete_skill(name: str, reason: str, source_session_id: str = "") -> str
+```
+
+Uses the same gate and read-only rules as `update_skill`. The complete outgoing artifact is
+archived before deletion, providing the rollback copy named in the tool result.
 
 ### `recent_activity`
 
@@ -846,12 +873,15 @@ valid write.
 ### `edit_soul`
 
 ```python
-async def edit_soul(section: str, content: str, mode: str = "replace") -> str
+async def edit_soul(section: str, content: str, mode: str = "replace",
+                    reason: str = "", source_session_id: str = "") -> str
 ```
 
 **Guarded, off by default** ([ADR 0081](/adr/0081-self-authored-persona-edit-soul)). Bound to
-the **lead agent only** when an operator sets `soul.self_edit_enabled: true`; bounded subagents
-never receive it. It lets the agent durably refine its own persona by rewriting one markdown
+the **lead agent** when an operator sets `soul.self_edit_enabled: true`. The one exception is
+the built-in, policy-bounded `self-improve` reviewer: it receives the tool only when the master,
+post-goal review, and persona modes are all `auto`. Other bounded subagents never receive it.
+It lets the agent durably refine its own persona by rewriting one markdown
 **section** of `SOUL.md` — `section` matches case-insensitively (a missing one is created),
 `mode` is `replace` or `append`.
 
@@ -867,7 +897,7 @@ the current turn is unaffected — without `tools/` importing `server/`. Where n
 wired (subagent, eval, script), the save still lands and applies on the next natural reload.
 
 **Never silent.** Every accepted edit publishes a `persona.self_edited` event (section, mode,
-new revision) on the event bus, so the operator sees an identity change in the console even
+new revision, producing session, and optional `reason`) on the event bus, so the operator sees an identity change in the console even
 when it happens on an autonomous turn — and it leaves a trail if a prompt injection ever drove
 one. That transparency guardrail came out of ADR 0081's due diligence against prior art: Hermes
 keeps `SOUL.md` operator-only; OpenClaw invites unguarded self-edit and treats the soul as a

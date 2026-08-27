@@ -187,7 +187,7 @@ class SkillsIndex:
     # ── Write path ────────────────────────────────────────────────────────────
 
     @_locked
-    def add_skill(self, artifact: object, source: str = "emitted") -> None:
+    def add_skill(self, artifact: object, source: str = "emitted") -> int | None:
         """Insert a SkillV1Artifact into the FTS5 index.
 
         Accepts any object with matching attributes so this module does not
@@ -199,7 +199,7 @@ class SkillsIndex:
         name = getattr(artifact, "name", "") or ""
         if not name:
             log.debug("[skills] skipping artifact with empty name")
-            return
+            return None
 
         description = getattr(artifact, "description", "") or ""
         prompt_template = getattr(artifact, "prompt_template", "") or ""
@@ -224,7 +224,7 @@ class SkillsIndex:
 
         conn = self._open_conn()
         try:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 INSERT INTO skills_fts
                     (name, description, prompt_template, tools_used,
@@ -248,8 +248,10 @@ class SkillsIndex:
             )
             conn.commit()
             log.debug("[skills] indexed skill: %s (source=%s)", name, source)
+            return int(cursor.lastrowid)
         except sqlite3.Error as exc:
             log.error("[skills] failed to index skill %s: %s", name, exc)
+            return None
 
     @_locked
     def replace_disk_skills(self, artifacts: list[object]) -> None:
@@ -332,7 +334,7 @@ class SkillsIndex:
         try:
             cur = conn.execute(
                 """
-                SELECT rowid AS id, name, description, prompt_template, tools_used,
+                SELECT rowid AS id, name, description, prompt_template, tools_used, source_session_id,
                        created_at, confidence, last_used, source, user_facing, slash, user_only
                 FROM skills_fts WHERE name = ? LIMIT 1
                 """,
@@ -354,7 +356,7 @@ class SkillsIndex:
         try:
             cur = conn.execute(
                 """
-                SELECT rowid AS id, name, description, prompt_template, tools_used,
+                SELECT rowid AS id, name, description, prompt_template, tools_used, source_session_id,
                        created_at, confidence, last_used, source, user_facing, slash, user_only
                 FROM skills_fts
                 """
@@ -375,6 +377,7 @@ class SkillsIndex:
             "description": row["description"],
             "prompt_template": row["prompt_template"],
             "tools_used": (row["tools_used"] or "").split(),
+            "source_session_id": (row["source_session_id"] if "source_session_id" in keys else "") or "",
             "created_at": row["created_at"],
             "confidence": float(row["confidence"]) if row["confidence"] is not None else 1.0,
             "last_used": row["last_used"],
@@ -393,7 +396,7 @@ class SkillsIndex:
         try:
             cur = conn.execute(
                 """
-                SELECT rowid AS id, name, description, prompt_template, tools_used,
+                SELECT rowid AS id, name, description, prompt_template, tools_used, source_session_id,
                        created_at, confidence, last_used, source, user_facing, slash, user_only
                 FROM skills_fts
                 WHERE user_facing = '1'
@@ -418,14 +421,16 @@ class SkillsIndex:
             log.error("[skills] update_confidence failed for %s: %s", skill_id, exc)
 
     @_locked
-    def delete_skill(self, skill_id: int) -> None:
+    def delete_skill(self, skill_id: int) -> bool:
         """Remove a skill by rowid (used by the curator's dedup/prune passes)."""
         conn = self._open_conn()
         try:
-            conn.execute("DELETE FROM skills_fts WHERE rowid = ?", (int(skill_id),))
+            cursor = conn.execute("DELETE FROM skills_fts WHERE rowid = ?", (int(skill_id),))
             conn.commit()
+            return cursor.rowcount > 0
         except sqlite3.Error as exc:
             log.error("[skills] delete_skill failed for %s: %s", skill_id, exc)
+            return False
 
     @_locked
     def rebuild_index(self, artifacts: list[object]) -> None:

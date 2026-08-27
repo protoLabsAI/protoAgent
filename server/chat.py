@@ -2049,7 +2049,7 @@ async def _chat_langgraph_stream_impl(
                     return
                 sub_tool_id = f"subagent:{sub_type}"
                 yield ("tool_start", {"id": sub_tool_id, "name": sub_tool_id, "input": sub_prompt})
-                sub_out = await _run_parsed_subagent(sub_type, sub_prompt)
+                sub_out = await _run_parsed_subagent(sub_type, sub_prompt, session_id=session_id)
                 yield ("tool_end", {"id": sub_tool_id, "name": sub_tool_id, "output": sub_out[:300]})
                 yield ("done", sub_out)
                 return

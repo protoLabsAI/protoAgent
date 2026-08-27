@@ -283,3 +283,13 @@ async def test_runtime_status_carries_plugin_setup_gaps(monkeypatch):
         assert not [w for w in status["warnings"] if w.startswith("Project Board:")]
     finally:
         setup_gaps.reset()
+
+
+async def test_runtime_status_warns_when_self_improvement_has_no_scheduler(monkeypatch):
+    from graph.config import LangGraphConfig
+    from runtime.state import STATE
+
+    monkeypatch.setattr(STATE, "graph_config", LangGraphConfig(self_improvement_enabled=True))
+    monkeypatch.setattr(STATE, "scheduler", None)
+    status = await ch._operator_runtime_status()
+    assert any("Self-improvement reviews are enabled" in warning for warning in status["warnings"])

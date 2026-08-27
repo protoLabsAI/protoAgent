@@ -429,6 +429,44 @@ FIELDS: list[Field] = [
         "and reversible, and applies on the next turn.",
         ui_hidden=True,
     ),
+    Field(
+        "self_improvement.enabled",
+        "self_improvement_enabled",
+        "Enable self-improvement reviews",
+        "bool",
+        "Self-improvement",
+        "After a goal or tracked task completes, review the session for durable persona and skill improvements. "
+        "Requires middleware.scheduler; runtime status warns if it is unavailable. Off by default. Auto modes "
+        "permit durable self-modification; proposal mode is tool-restricted.",
+    ),
+    Field(
+        "self_improvement.soul_md",
+        "self_improvement_soul_md",
+        "Persona changes",
+        "select",
+        "Self-improvement",
+        "How a self-improvement review handles worthwhile SOUL.md persona changes.",
+        options=["off", "propose", "auto"],
+    ),
+    Field(
+        "self_improvement.skills",
+        "self_improvement_skills",
+        "Skill changes",
+        "select",
+        "Self-improvement",
+        "How a self-improvement review handles skill creation, updates, and deletion. Auto writes are "
+        "blocked for flat shared stores because their rollback history would be instance-private.",
+        options=["off", "propose", "auto"],
+    ),
+    Field(
+        "self_improvement.distillation",
+        "self_improvement_distillation",
+        "Post-goal review",
+        "select",
+        "Self-improvement",
+        "Whether post-goal distillation is disabled, proposal-only, or allowed to apply enabled facets.",
+        options=["off", "propose", "auto"],
+    ),
     # ── Prompt caching ───────────────────────────────────────────────────────
     Field(
         "prompt_cache.enabled",
@@ -1607,6 +1645,7 @@ _SECTION_CATEGORY = {
     "Caching": "Model",
     # Behavior — how the agent thinks, loops, and decides.
     "Goal mode": "Behavior",
+    "Self-improvement": "Behavior",
     # Watches (ADR 0067) sit beside Goal mode, not inside it: the two are independent
     # dispositions (drive vs. supervise) and each has its own enable flag.
     "Watches": "Behavior",

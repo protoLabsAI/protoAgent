@@ -146,6 +146,10 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "watch_interval": 30.0,  # ADR 0067 global poll cadence (example keeps `interval:` commented)
     "watch_keep_terminal_h": 24.0,  # terminal-watch retention (example keeps it commented)
     "soul_self_edit_enabled": False,
+    "self_improvement_enabled": False,
+    "self_improvement_soul_md": "auto",
+    "self_improvement_skills": "propose",
+    "self_improvement_distillation": "propose",
     "soul_drift_enabled": True,  # #1986 read-only persona-drift curation pass, on by default
     "soul_drift_interval_hours": 24,
     "soul_drift_threshold": 0.25,
@@ -847,6 +851,32 @@ def test_soul_drift_config_knobs_parse(tmp_path):
     assert cfg.soul_drift_enabled is False
     assert cfg.soul_drift_interval_hours == 12
     assert cfg.soul_drift_threshold == 0.5
+
+
+def test_self_improvement_policy_parses_as_one_config_surface(tmp_path):
+    path = _write_yaml(
+        tmp_path,
+        """
+        self_improvement:
+          enabled: true
+          soul_md: propose
+          skills: auto
+          distillation: auto
+        """,
+    )
+    cfg = LangGraphConfig.from_yaml(path)
+    assert cfg.self_improvement_enabled is True
+    assert cfg.self_improvement_soul_md == "propose"
+    assert cfg.self_improvement_skills == "auto"
+    assert cfg.self_improvement_distillation == "auto"
+
+
+def test_self_improvement_null_section_falls_back_to_defaults(tmp_path):
+    cfg = LangGraphConfig.from_yaml(_write_yaml(tmp_path, "self_improvement:\n"))
+    assert cfg.self_improvement_enabled is False
+    assert cfg.self_improvement_soul_md == "auto"
+    assert cfg.self_improvement_skills == "propose"
+    assert cfg.self_improvement_distillation == "propose"
 
 
 def test_soul_drift_defaults_when_section_absent_or_null(tmp_path):

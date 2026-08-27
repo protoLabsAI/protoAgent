@@ -871,6 +871,10 @@
           "title": "0106 — Providers are a registry; every model reference names its provider"
         },
         {
+          "path": "adr/0107-unified-self-improvement-policy.md",
+          "title": "0107 — Unified, policy-bounded self-improvement reviews"
+        },
+        {
           "path": "adr/0108-context-architecture-v2.md",
           "title": "0108 — Context Architecture v2: lifecycle, authority, and projection"
         },
