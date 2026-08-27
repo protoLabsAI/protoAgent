@@ -186,6 +186,10 @@ export function App() {
         once="protoagent.introSeen"
         viewTransition
       />
+      {/* Desktop updater ownership must mount before the sidecar boot gate: a tray click
+          while the engine is warming is a shell event and must never be lost or start
+          backend-dependent workspace queries. Secondary windows self-disable. */}
+      <UpdateNotice />
       {!bootReady && !authNeeded && (
         <div role="status" aria-live="polite">
           <BootGate
@@ -804,8 +808,6 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
           finishes (per-window SSE can't see it — this watches the other slugs'
           persisted in-flight turns and polls their durable tasks via the hub). */}
       <FleetTurnWatch />
-      {/* In-app update notice (desktop/Tauri): ambient pill → changelog + Update & Restart. */}
-      <UpdateNotice />
       {/* Background subagents (ADR 0050): when a detached job finishes, push its result
           live into the spawning chat (a system message + toast) if it's still open —
           instead of waiting for the next message to surface it. */}

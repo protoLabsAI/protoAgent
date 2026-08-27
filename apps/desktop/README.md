@@ -39,11 +39,21 @@ To point the desktop UI at a *different* server instead of the bundled one, set 
 
 ## Updates
 
-The app updates itself in place (tauri-plugin-updater): a silent check at launch
-(release builds only) plus a tray "Check for Updates…" item. It polls
-`latest.json` on the GitHub Release, verifies the bundle's minisign signature
-against the org public key baked into `tauri.conf.json`, installs, and
-relaunches — agent data (`PROTOAGENT_HOME`, workspaces) is untouched.
+The app updates itself in place with `tauri-plugin-updater`. The Rust shell checks
+at launch while the sidecar starts, and the primary React window owns the single
+update experience for launch, six-hour background, and tray-triggered checks: the
+release-notes dialog, download progress, and **Update & Restart** action. Choosing
+**Check for Updates…** reveals and focuses the primary window; already-current and
+error results appear there as notifications. Secondary chat windows never prompt.
+
+Tray requests are retained by the shell until the primary webview subscribes, so a
+click during the loading screen is not lost and does not require the sidecar HTTP API.
+Overlapping launch, periodic, and tray checks are coalesced. Before downloading, the
+shell re-reads `latest.json` and compares it with the version the operator confirmed:
+if Latest changed, the new release is presented for renewed confirmation instead of
+silently installing a different build. The selected bundle's minisign signature is
+verified against the org public key baked into `tauri.conf.json`; installation then
+relaunches the app, leaving agent data (`PROTOAGENT_HOME`, workspaces) untouched.
 
 - Updater bundles are only produced in CI when the org `TAURI_SIGNING_PRIVATE_KEY`
   is present; a release without them simply has no in-app update (the `latest.json`
