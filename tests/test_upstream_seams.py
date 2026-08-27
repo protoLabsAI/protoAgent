@@ -96,7 +96,10 @@ def test_responses_chunk_converter_exists_with_its_index_threading_signature():
     instance seam for it. If it is renamed or its index-threading contract
     changes, encrypted reasoning stops being captured and stamped — cross-turn
     reasoning continuity silently degrades to none."""
-    convert = openai_base._convert_responses_chunk_to_generation_chunk
+    # `inspect.unwrap` so this pins UPSTREAM's contract even when protoAgent's own
+    # capture shim is installed over it — otherwise the assertion quietly becomes a
+    # test of our wrapper, and only when some earlier test happened to import it.
+    convert = inspect.unwrap(openai_base._convert_responses_chunk_to_generation_chunk)
     params = list(inspect.signature(convert).parameters)
     assert params[:4] == ["chunk", "current_index", "current_output_index", "current_sub_index"]
     assert "output_version" in params

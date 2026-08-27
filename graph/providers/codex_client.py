@@ -50,6 +50,7 @@ Outbound rules, applied to every Responses ``input``:
 from __future__ import annotations
 
 import contextvars
+import functools
 import hashlib
 import logging
 from typing import Any
@@ -144,7 +145,12 @@ def _install_reasoning_capture() -> None:
 
     Idempotent, and gated on ``_CAPTURE_ISSUER`` so it changes nothing for any
     other client in the process. Delegates to the original for every event —
-    it only ever ADDS a chunk where the original produced none.
+    it only ever ADDS what the installed langchain left out.
+
+    ``functools.wraps`` is load-bearing, not decoration: it leaves ``__wrapped__``
+    pointing at the original, so anything introspecting this function (notably
+    ``tests/test_upstream_seams.py``, which pins UPSTREAM's signature) sees
+    langchain's contract rather than this shim's ``*args``.
     """
     from langchain_openai.chat_models import base as lc_base
 
@@ -152,6 +158,7 @@ def _install_reasoning_capture() -> None:
     if getattr(original, "_protoagent_reasoning_capture", False):
         return
 
+    @functools.wraps(original)
     def _capture(chunk, current_index, current_output_index, current_sub_index, *args, **kwargs):
         result = original(chunk, current_index, current_output_index, current_sub_index, *args, **kwargs)
         issuer = _CAPTURE_ISSUER.get()
