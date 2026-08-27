@@ -152,6 +152,32 @@ Stack decision (UI team, on #137): **Radix for hard interactive primitives (Menu
 | [#224](https://github.com/protoLabsAI/protoContent/issues/224) | `plugin-kit.js` classic-`<script>` contract is impossible (the file is ESM — `Unexpected token 'export'`, the `window.protoPluginView` global never sets) | P2 | Filed 2026-06-12. **App-side fixed** (notes-adopts-kit PR): the notes editor + `chat_example` + both plugin-view docs now load the kit via dynamic `import(base + "/_ds/plugin-kit.js")` from a module script. |
 | [#225](https://github.com/protoLabsAI/protoContent/issues/225) | `SideNav` — vertical section navigation (`Tabs` is horizontal-only; the settings Workspace home's 11 sections overflowed/read as "intense" in a strip) | P2 | **Shipped in ui 0.30.0 (PR #227), adopted 2026-06-13** — `SettingsSurface` uses `<SideNav>` (scope toggle in its `header` slot + sections as the rail); the interim `.settings-sidenav*` rail + CSS are retired. We omit `responsive` (its 15rem collapse-to-`<select>` is wider than our compact in-rail column, so it'd render a dropdown not the vertical nav). Collapsible field groups use the `Accordion`/`AccordionItem` shipped in 0.29. |
 
+### Fleet roster reorder — reusable sortable-list / drag-to-reorder primitive (#3197)
+
+**Gap.** The accessible fleet reorder controls (#3197, `FleetManagerPanel`) let an operator reorder the
+roster. The guaranteed non-pointer baseline — explicit **move-up / move-down** buttons — is built from the
+DS `Button` primitive (icon variant + `aria-label`), so it needs **no new DS work**. But the *additive*
+drag-and-drop interaction has no home in the DS.
+
+**Evidence.** Audited installed `@protolabsai/ui@0.60.1`: there is **no reusable sortable-list / DnD
+primitive**. The only drag-to-reorder behavior in the package is baked into **`AppShell`'s surface rail**
+(the rail's `railOrder` index→id sortable, `app/App.tsx`) — it is coupled to the rail's own item model
+and is not consumable by an arbitrary controlled list like the fleet member rows. No `SortableList`,
+`Reorder`, `Draggable`, or `useSortable` export exists on any subpath.
+
+**Proposed API.** A controlled, presentation-only `SortableList` (or `Reorder`): takes ordered `items` +
+an `onReorder(nextIds)` callback, owns the pointer/keyboard drag mechanics and a11y (roving focus, grab/
+drop announcements, `aria-roledescription`), and emits the complete id order out — the app keeps
+persistence + the reorder API call. Must degrade to the same keyboard path the move-buttons already give.
+
+**Priority / status.** P2, additive. **Filed as a [#137](https://github.com/protoLabsAI/protoContent/issues/137)
+child** (the AppShell / interaction-primitives umbrella); the proven console reorder logic
+(`reorderFleetIds` / `applyFleetOrder`) is handed over as the reference. Until it ships, the console
+deliberately ships the **accessible move controls only** — no bespoke reusable DnD control, and no new DnD
+dependency outside the npm≥11 lockfile/attribution workflow. When the DS primitive lands, DnD reuses the
+existing id-based submit + `applyFleetOrder` reconcile path (same visual + submission behavior), and this
+row is retired.
+
 ## Console adoption status (branch `ds-adoption-sweep`, 2026-06-09)
 
 Sharing standard: **`docs/design/component-sharing-standard.md`** (the contract). Each row is a held commit; all green (68/68 e2e, tsc+build).
