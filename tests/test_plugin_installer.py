@@ -931,6 +931,10 @@ def test_normalize_config_inputs_rejects_core_sections():
     lands in `model.api_key` or widens `projects`/`egress` is a lying form."""
     with pytest.raises(installer.InstallError, match="core section"):
         installer.normalize_config_inputs("b", [{"key": "model.api_key", "label": "API key", "type": "string"}])
+    with pytest.raises(installer.InstallError, match="core section"):
+        installer.normalize_config_inputs(
+            "b", [{"key": "self_improvement.enabled", "label": "Automatic improvement", "type": "boolean"}]
+        )
     assert installer.normalize_config_inputs("b", [{"key": "egress.allowed_hosts", "label": "x"}], strict=False) == []
     assert installer.normalize_config_inputs("b", [{"key": "project_board.repo", "label": "Repo", "type": "path"}])
 

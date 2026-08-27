@@ -821,6 +821,24 @@ async def test_fire_emits_a2a_1_0_wire_shape(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_self_improvement_fire_preserves_slash_command(tmp_path, monkeypatch):
+    """The bounded reviewer command must stay at byte zero through scheduler wake framing."""
+    import httpx
+
+    cap = _CaptureClient()
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **k: cap)
+    scheduler = _make_scheduler(tmp_path)
+    job = scheduler.add_job(
+        "/self-improve\nreview data",
+        "0 9 * * *",
+        job_id="self-improvement-session-42-1",
+        context_id="session-42",
+    )
+    assert await scheduler._fire(job) is True
+    assert cap.json["params"]["message"]["parts"][0]["text"] == "/self-improve\nreview data"
+
+
+@pytest.mark.asyncio
 async def test_schedule_task_dedupes_identical_jobs(tmp_path):
     """schedule_task must not create a second job identical to an active one
     (same prompt + schedule) — the common cause of scheduled-task spam."""

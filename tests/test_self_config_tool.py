@@ -39,6 +39,7 @@ def _call(tool, updates):
         "auth.token",                # the operator API's gate
         "mcp.servers",               # out-of-process capability
         "soul.self_edit_enabled",    # persona has its own guarded path
+        "self_improvement.enabled",  # no self-enabling automatic mutation
         "tools.self_config_enabled", # no widening its own fence
         "tools.disabled",            # ...or re-enabling a tool the operator removed
         "delegates",                 # each entry is an executable the host spawns

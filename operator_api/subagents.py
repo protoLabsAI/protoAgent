@@ -36,6 +36,7 @@ async def run_manual_subagent(
     prompt: str,
     subagent_type: str = "researcher",
     extra_tools: Any = None,
+    session_id: str = "",
 ) -> str:
     """Run one manually launched subagent task.
 
@@ -60,6 +61,7 @@ async def run_manual_subagent(
         prompt=prompt,
         subagent_type=subagent_type,
         extra_tools=extra_tools,
+        session_id=session_id,
     )
 
 

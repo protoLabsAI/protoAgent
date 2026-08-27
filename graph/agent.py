@@ -535,6 +535,16 @@ def _subagent_tools(sub_config, tool_map: dict) -> list:
     return [tool_map[name] for name in sub_config.tools if name in tool_map and name not in HITL_TOOL_NAMES]
 
 
+def _policy_tool_map(config, subagent_type: str, tool_map: dict) -> dict:
+    """Apply built-in subagent policy gates before an allowlist resolves."""
+    if subagent_type != "self-improve":
+        return tool_map
+    from graph.self_improvement import review_tool_names
+
+    allowed = review_tool_names(config)
+    return {name: tool for name, tool in tool_map.items() if name in allowed}
+
+
 def _extract_subagent_usage(messages, *, subagent_type: str, fallback_model: str = "") -> list[dict]:
     """Per-model-call usage rows from a finished sub-graph's message list (#2872).
 
@@ -612,6 +622,7 @@ async def _run_subagent(
     truncate: int | None = None,
     parent_task_id: str | None = None,
     usage_sink: list[dict] | None = None,
+    session_id: str = "",
 ) -> str:
     """Run a single subagent delegation and return its output text.
 
@@ -639,6 +650,7 @@ async def _run_subagent(
     if not (prompt or "").strip() and getattr(sub_config, "default_prompt", ""):
         prompt = sub_config.default_prompt
 
+    tool_map = _policy_tool_map(config, subagent_type, tool_map)
     sub_tools = _subagent_tools(sub_config, tool_map)
     if not sub_tools and getattr(sub_config, "tools", None):
         # The subagent DECLARED tools and none resolved — a misconfiguration
@@ -746,6 +758,7 @@ async def _run_subagent(
         tools=sub_tools,
         middleware=sub_middleware,
         system_prompt=build_subagent_prompt(subagent_type),
+        state_schema=ProtoAgentState,
     )
 
     # Tag every event the subagent emits with the parent delegation's tool-call id.
@@ -781,7 +794,7 @@ async def _run_subagent(
         ):
             try:
                 async for state in subagent.astream(
-                    {"messages": [{"role": "user", "content": prompt}]},
+                    {"messages": [{"role": "user", "content": prompt}], "session_id": session_id},
                     config=sub_run_config,
                     stream_mode="values",
                 ):
@@ -853,6 +866,8 @@ async def run_manual_subagent(
     subagent_type: str = "researcher",
     truncate: int | None = None,
     extra_tools=None,
+    reload_callback=None,
+    session_id: str = "",
 ) -> str:
     """Run a subagent outside the lead agent's ``task`` tool.
 
@@ -873,6 +888,10 @@ async def run_manual_subagent(
     # through every caller); goal mode from config.
     from runtime.state import STATE
 
+    self_improvement_run = subagent_type == "self-improve"
+    if self_improvement_run:
+        from graph.self_improvement import mode, skill_auto_allowed
+
     all_tools = get_all_tools(
         knowledge_store,
         scheduler=scheduler,
@@ -881,6 +900,15 @@ async def run_manual_subagent(
         goal_enabled=getattr(config, "goal_enabled", False),
         watches_enabled=getattr(config, "watches_enabled", False),
         graph_config=config,
+        soul_edit_enabled=(
+            self_improvement_run
+            and getattr(config, "self_improvement_enabled", False)
+            and mode(config, "distillation") == "auto"
+            and mode(config, "soul_md") == "auto"
+        ),
+        skill_edit_enabled=self_improvement_run and skill_auto_allowed(config),
+        self_improvement_provenance_required=self_improvement_run,
+        reload_callback=reload_callback if self_improvement_run else None,
     )
     if extra_tools:
         all_tools = all_tools + list(extra_tools)
@@ -889,6 +917,7 @@ async def run_manual_subagent(
     # create_agent_graph).
     all_tools = drop_disabled_tools(all_tools)
     tool_map = {t.name: t for t in all_tools}
+    tool_map = _policy_tool_map(config, subagent_type, tool_map)
     available_subagents = ", ".join(SUBAGENT_REGISTRY.keys()) or "(none configured)"
 
     return await _run_subagent(
@@ -899,6 +928,7 @@ async def run_manual_subagent(
         prompt=prompt,
         subagent_type=subagent_type,
         truncate=truncate,
+        session_id=session_id,
     )
 
 
@@ -1377,6 +1407,8 @@ def create_agent_graph(
         # Guarded self-authored persona (ADR 0079/0081). Lead-only: subagent builds omit
         # both, so edit_soul never binds on a bounded subagent. reload_callback is the
         # server-owned graph reload (injected, not imported) that makes an edit live next turn.
+        # The unified policy never widens an ordinary lead turn. Its privileged
+        # writers are bound only in run_manual_subagent's bounded self-improve path.
         soul_edit_enabled=getattr(config, "soul_self_edit_enabled", False),
         self_config_enabled=getattr(config, "tools_self_config_enabled", False),
         reload_callback=reload_callback,

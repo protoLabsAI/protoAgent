@@ -871,6 +871,10 @@
           "title": "0106 — Providers are a registry; every model reference names its provider"
         },
         {
+          "path": "adr/0107-unified-self-improvement-policy.md",
+          "title": "0107 — Unified, policy-bounded self-improvement reviews"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }

@@ -109,12 +109,15 @@ def parse_skill_md(path: Path) -> SkillV1Artifact | None:
     if user_only:
         user_facing = True
 
+    provenance = meta.get("provenance") if isinstance(meta.get("provenance"), dict) else {}
+    source_session_id = str(provenance.get("session_id", "")).strip() or f"skill-md:{path.parent.name}"
+
     return SkillV1Artifact(
         name=name,
         description=description,
         prompt_template=body.strip(),
         tools_used=tools_used,
-        source_session_id=f"skill-md:{path.parent.name}",
+        source_session_id=source_session_id,
         user_facing=user_facing,
         slash=slash,
         user_only=user_only,

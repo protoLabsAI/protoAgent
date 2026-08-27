@@ -210,13 +210,50 @@ Hermes's Codex adapter (`agent/codex_responses_adapter.py`) reached the same rul
 independently — including the id strip and a session-wide replay kill switch — and its
 `_issuer_kind` stamp is the model for the cross-issuer filter listed below.
 
+## Encrypted-reasoning replay, delivered (2026-08-27, #3199 follow-up)
+
+#3199 contained the damage — never send an item the backend can't verify. This wires the
+capability the containment was standing in for, and closes the "contained, not delivered"
+open item.
+
+**Capture.** langchain-openai's streaming Responses path has no `response.output_item.done`
+branch for reasoning (it has one for `compaction`, which carries the same kind of blob), and
+the terminal `response.completed` event keeps only `parsed`/usage/`response_metadata`. So the
+blob is visible in exactly one event, which the converter drops. `codex_client`
+`_install_reasoning_capture` re-emits that event as a content-block delta that merges onto the
+reasoning block already in flight, by `index`. The wrapper sits on the shared module-level
+converter — there is no instance seam — but is **inert unless a contextvar this module's
+client sets is present**, so every other `ChatOpenAI` in the process is untouched.
+
+**`output_version` flipped to `responses/v1`.** `v0` collapses a turn's reasoning into ONE
+`additional_kwargs` slot: later items overwrite earlier ones, and streamed fragments of two
+different items merge into each other — so it structurally cannot carry per-item blobs. The
+block format keeps each item separate and in order, and langchain replays it that way. The
+rendering half of the v0 pin was already paid off (every answer site reads `AIMessage.text`,
+which yields text blocks only); `text_of` now skips reasoning blocks outright rather than
+writing a `_[reasoning]_` placeholder into exports/session memory/chat bundles, which is what
+ADR 0021 asks for anyway. `PROTOAGENT_CODEX_OUTPUT_VERSION=v0` is the escape hatch.
+
+**Issuer stamping.** `encrypted_content` is sealed to the endpoint *and account* that minted
+it. Each captured item carries `issuer_fingerprint(base_url, account_id)` — a truncated
+digest, so a checkpoint never stores a raw account id — and replay drops items stamped with a
+different issuer. Unstamped items (checkpointed before this) still replay. This is the guard
+that makes per-slot providers, per-tab model override and the fallback chain safe on a shared
+thread; without it, the recovery middleware would be firing routinely instead of never.
+
+**Not verified live.** The wire shape is tested end to end against the real converter, the
+real merge and the real payload builder, but no turn has been driven against a real ChatGPT
+subscription with this on. If the backend objects, `CodexReasoningReplayRecoveryMiddleware`
+(#3199) strips the replay state and retries — the thread degrades to stateless continuity
+rather than breaking, which is exactly why that half shipped first.
+
 ## Open items
 
-- **Encrypted-reasoning replay is contained, not delivered.** Cross-turn reasoning
-  continuity on `openai-codex` is OFF: capturing the blob needs an `output_item.done`
-  handler for reasoning items that langchain-openai does not have (worth an upstream
-  issue). Once captured, replayed items should carry an issuer stamp (endpoint + account)
-  and be filtered when the current endpoint differs — Hermes's `_classify_responses_issuer`.
+- **Encrypted-reasoning replay is unverified against a live subscription.** Capture,
+  issuer stamping and replay are wired (above) and covered by wire-shape tests, but no turn
+  has been driven against a real ChatGPT account with it on. Worth an upstream issue too:
+  langchain-openai should handle `output_item.done` for reasoning items the way it already
+  does for `compaction`, which would let protoAgent drop its converter wrapper.
 - **Claude end-to-end still unproven on a real subscription** — the sign-in URL + PKCE +
   refresh are unit-tested and the flow runs, but no Pro/Max approval has been driven here yet
   (tool loop, streaming, `cache_control`).

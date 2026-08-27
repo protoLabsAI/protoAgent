@@ -8,6 +8,8 @@ import asyncio
 from datetime import datetime, timezone
 
 from activity.store import ActivityLog
+from graph.extensions.skills import SkillV1Artifact
+from graph.skills.authoring import remove_skill
 from graph.skills.index import SkillsIndex
 from knowledge.store import KnowledgeStore
 from observability.telemetry_store import TelemetryStore
@@ -15,6 +17,7 @@ from runtime.state import STATE
 from tools.lg_tools import (
     _build_curation_tools,
     _build_memory_tools,
+    _build_skill_editor_tools,
     get_all_tools,
     load_skill,
 )
@@ -161,6 +164,130 @@ def test_save_skill_requires_name_and_description(tmp_path, monkeypatch):
     save_skill = _by_name(_build_curation_tools())["save_skill"]
     assert "name is required" in save_skill.invoke({"name": "  ", "description": "d", "body": "b"})
     assert "description is required" in save_skill.invoke({"name": "n", "description": "", "body": "b"})
+
+
+def test_save_skill_rejects_empty_and_colliding_storage_slugs(tmp_path, monkeypatch):
+    idx = SkillsIndex(str(tmp_path / "s.db"))
+    monkeypatch.setattr(STATE, "skills_index", idx)
+    save_skill = _by_name(_build_curation_tools())["save_skill"]
+
+    assert "ASCII letter or digit" in save_skill.invoke({"name": "💥", "description": "d", "body": "b"})
+    assert "Created skill" in save_skill.invoke({"name": "A/B", "description": "d", "body": "b"})
+    assert "collides" in save_skill.invoke({"name": "A B", "description": "d", "body": "b"})
+
+
+def test_skill_delete_refuses_root_and_slug_collisions(tmp_path, monkeypatch):
+    root = tmp_path / "skills"
+    root.mkdir()
+    marker = root / "keep.txt"
+    marker.write_text("keep")
+    assert remove_skill(root, "💥") is False
+    assert marker.exists()
+
+    idx = SkillsIndex(str(tmp_path / "s.db"))
+    monkeypatch.setattr(STATE, "skills_index", idx)
+    for name in ("A/B", "A B"):
+        idx.add_skill(SkillV1Artifact(name=name, description="d", prompt_template="b"), source="distilled")
+    delete_skill = _by_name(_build_skill_editor_tools())["delete_skill"]
+    assert "collides" in delete_skill.invoke({"name": "A/B", "reason": "obsolete"})
+    assert len(idx.all_skills()) == 2
+
+
+def test_reviewer_skill_provenance_uses_trusted_injected_session(tmp_path, monkeypatch):
+    idx = SkillsIndex(str(tmp_path / "s.db"))
+    monkeypatch.setattr(STATE, "skills_index", idx)
+    save_skill = _by_name(_build_curation_tools(provenance_required=True))["save_skill"]
+
+    refused = save_skill.func(
+        "Deploy", "d", "b", provenance_reason="", source_session_id="forged", state={"session_id": "trusted"}
+    )
+    assert "provenance reason" in refused
+    created = save_skill.func(
+        "Deploy",
+        "d",
+        "b",
+        provenance_reason="verified retry ordering",
+        source_session_id="forged",
+        state={"session_id": "trusted"},
+    )
+    assert "Created skill" in created
+    assert idx.all_skills()[0]["source_session_id"] == "trusted"
+
+
+def test_reviewer_skill_writes_never_report_unconfirmed_index_mutations(tmp_path, monkeypatch):
+    home = tmp_path / "instance"
+    monkeypatch.setenv("PROTOAGENT_HOME", str(home))
+    idx = SkillsIndex(str(tmp_path / "s.db"))
+    monkeypatch.setattr(STATE, "skills_index", idx)
+
+    save_skill = _by_name(_build_curation_tools())["save_skill"]
+    save_skill.invoke({"name": "Deploy", "description": "old", "body": "old body"})
+    original_delete = idx.delete_skill
+    monkeypatch.setattr(idx, "delete_skill", lambda _skill_id: False)
+    editors = _by_name(_build_skill_editor_tools())
+
+    update = editors["update_skill"].invoke(
+        {"name": "Deploy", "description": "new", "body": "new body", "reason": "verified"}
+    )
+    assert update.startswith("Error updating skill")
+    assert "old body" in (home / "skills" / "deploy" / "SKILL.md").read_text()
+    delete = editors["delete_skill"].invoke({"name": "Deploy", "reason": "verified"})
+    assert delete.startswith("Error:") and "confirm deletion" in delete
+    assert len(idx.all_skills()) == 1
+
+    monkeypatch.setattr(idx, "delete_skill", original_delete)
+    monkeypatch.setattr(idx, "add_skill", lambda *_args, **_kwargs: None)
+    reviewer_save = _by_name(_build_curation_tools(provenance_required=True))["save_skill"]
+    create = reviewer_save.func(
+        "Release",
+        "d",
+        "b",
+        provenance_reason="verified",
+        state={"session_id": "session-42"},
+    )
+    assert create.startswith("Error:") and "did not confirm creation" in create
+
+
+def test_skill_update_and_delete_archive_outgoing_versions(tmp_path, monkeypatch):
+    home = tmp_path / "instance"
+    monkeypatch.setenv("PROTOAGENT_HOME", str(home))
+    idx = SkillsIndex(str(tmp_path / "s.db"))
+    monkeypatch.setattr(STATE, "skills_index", idx)
+    save_skill = _by_name(_build_curation_tools())["save_skill"]
+    save_skill.invoke({"name": "Deploy", "description": "old", "body": "old body"})
+
+    editors = _by_name(_build_skill_editor_tools())
+    out = editors["update_skill"].invoke(
+        {
+            "name": "Deploy",
+            "description": "new",
+            "body": "new body",
+            "reason": "learned retry ordering",
+            "source_session_id": "session-42",
+        }
+    )
+    assert "Updated skill" in out and "archived" in out
+    assert idx.all_skills()[0]["prompt_template"] == "new body"
+    assert idx.all_skills()[0]["source_session_id"] == "session-42"
+    history = list((home / "skills" / ".history" / "deploy").glob("*-SKILL.md"))
+    assert len(history) == 1 and "old body" in history[0].read_text()
+
+    live_path = home / "skills" / "deploy" / "SKILL.md"
+    history_live = live_path.read_bytes().replace(b"\n", b"\r\n") + b"<!-- exact -->\r\n"
+    live_path.write_bytes(history_live)
+    out = editors["delete_skill"].invoke({"name": "Deploy", "reason": "superseded by release skill"})
+    assert "Deleted skill" in out and idx.all_skills() == []
+    archived = sorted((home / "skills" / ".history" / "deploy").glob("*-SKILL.md"))
+    assert len(archived) == 2
+    assert archived[-1].read_bytes() == history_live
+    assert '"reason": "superseded by release skill"' in archived[-1].with_suffix(".json").read_text()
+
+
+def test_skill_edit_tools_are_guarded_by_binding_flag():
+    off = {t.name for t in get_all_tools()}
+    on = {t.name for t in get_all_tools(skill_edit_enabled=True)}
+    assert {"update_skill", "delete_skill"}.isdisjoint(off)
+    assert {"update_skill", "delete_skill"} <= on
 
 
 # ── load_skill (on-demand body lookup, ADR 0060) ──────────────────────────────
