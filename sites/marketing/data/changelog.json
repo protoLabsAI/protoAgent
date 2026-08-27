@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.153.1",
+    "date": "2026-08-27",
+    "changes": [
+      "Desktop startup no longer floods the console with failed panel and event requests (#3173)."
+    ]
+  },
+  {
     "version": "v0.153.0",
     "date": "2026-08-26",
     "changes": [
