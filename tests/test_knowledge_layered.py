@@ -97,6 +97,30 @@ def test_promote_unknown_id_returns_none(tmp_path):
     assert LayeredKnowledgeStore(private, commons).promote(9999) is None
 
 
+def test_promote_forwards_typed_memory_fields(tmp_path):
+    """promote() must carry memory_kind/subject/review_state/expires_at into the commons."""
+    private, commons = _stores(tmp_path)
+    cid = private.add_chunk(
+        "user prefers terse replies",
+        domain="general",
+        memory_kind="standing",
+        subject="operator",
+        review_state="approved",
+        expires_at="2027-01-01",
+    )
+    layered = LayeredKnowledgeStore(private, commons)
+    rec = layered.promote(cid)
+    assert rec is not None
+
+    commons_chunks = commons.list_chunks()
+    assert len(commons_chunks) == 1
+    c = commons_chunks[0]
+    assert c.memory_kind == "standing"
+    assert c.subject == "operator"
+    assert c.review_state == "approved"
+    assert c.expires_at == "2027-01-01"
+
+
 def test_stats_split_by_tier(tmp_path):
     private, commons = _stores(tmp_path)
     private.add_chunk("a", domain="finding")

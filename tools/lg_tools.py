@@ -717,6 +717,8 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         content: str,
         domain: str = "general",
         heading: str | None = None,
+        memory_kind: str | None = None,
+        subject: str | None = None,
     ) -> str:
         """Store a fact, preference, or note in long-term memory.
 
@@ -731,6 +733,12 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
                 ``"general"``. Defaults to ``"general"``.
             heading: Optional short label (e.g. ``"coffee"``) used as a
                 stable de-dupe key by the eval suite and curator.
+            memory_kind: Optional typed classification — one of
+                ``"profile"``, ``"standing"``, ``"fact"``, ``"decision"``,
+                ``"note"``, ``"episode"``, ``"reference"``, ``"legacy"``.
+                When omitted the chunk is untyped (backward-compatible).
+            subject: The entity this memory describes (e.g. the operator's
+                name, a project, a tool). Aids recall filtering.
 
         Returns ``"Stored chunk N in 'domain'."`` on success.
         """
@@ -751,10 +759,16 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         # tier (ADR 0069 D8) — this write path is model-driven, not operator-.
         import asyncio
 
+        kw: dict[str, Any] = {"source_type": "conversation"}
+        if memory_kind is not None:
+            kw["memory_kind"] = memory_kind
+        if subject is not None:
+            kw["subject"] = subject
+
         def _write():
             try:
-                return knowledge_store.add_chunk(content, domain=domain, heading=heading, source_type="conversation")
-            except TypeError:  # plugin backend predating the source_type kwarg
+                return knowledge_store.add_chunk(content, domain=domain, heading=heading, **kw)
+            except TypeError:  # plugin backend predating the new kwargs
                 return knowledge_store.add_chunk(content, domain=domain, heading=heading)
 
         chunk_id = await asyncio.to_thread(_write)
@@ -851,7 +865,12 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         )
 
     @tool
-    async def memory_recall(query: str, k: int = 5, domain: str | None = None) -> str:
+    async def memory_recall(
+        query: str,
+        k: int = 5,
+        domain: str | None = None,
+        memory_kind: str | None = None,
+    ) -> str:
         """Search long-term memory for chunks relevant to ``query``.
 
         Returns the top-k matches, one per line, each citing its provenance
@@ -866,6 +885,10 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         agent's history), not your own actions; pass the domain you actually
         want (e.g. your own, or ``claude-import`` to inspect the inherited set).
 
+        ``memory_kind`` optionally restricts results to one typed-memory
+        classification (e.g. ``"fact"``, ``"decision"``, ``"profile"``).
+        Omit to search all kinds (backward-compatible default).
+
         Returns ``"No matches."`` when the store is empty or nothing
         scores above the keyword threshold.
         """
@@ -873,7 +896,11 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         # search embeds the query over HTTP on hybrid stores — keep it off the loop.
         import asyncio
 
-        results = await asyncio.to_thread(knowledge_store.search, query, k=clamped_k, domain=(domain or None))
+        search_kw: dict[str, Any] = {"k": clamped_k, "domain": domain or None}
+        if memory_kind is not None:
+            search_kw["memory_kind"] = memory_kind
+
+        results = await asyncio.to_thread(knowledge_store.search, query, **search_kw)
         if not results:
             return "No matches."
         lines = [
@@ -975,14 +1002,26 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         return rendered
 
     @tool
-    async def memory_list(domain: str | None = None, limit: int = 10) -> str:
-        """List the most recent chunks. Filter by domain when given.
+    async def memory_list(
+        domain: str | None = None,
+        limit: int = 10,
+        memory_kind: str | None = None,
+    ) -> str:
+        """List the most recent chunks. Filter by domain and/or memory_kind.
 
         Useful when the operator asks for recent activity ("what did I
         log today?") or wants to inspect what the agent has stored.
+        Shows memory_kind and review_state when present.
+
+        Args:
+            domain: Restrict to one domain bucket.
+            limit: Max entries (default 10).
+            memory_kind: Restrict to one typed kind (e.g. ``"profile"``).
         """
         clamped_limit = max(1, min(int(limit), _MEMORY_LIST_MAX_LIMIT))
-        chunks = knowledge_store.list_chunks(domain=domain, limit=clamped_limit)
+        chunks = knowledge_store.list_chunks(
+            domain=domain, limit=clamped_limit, memory_kind=memory_kind,
+        )
         if not chunks:
             return f"No chunks in {domain or 'any domain'}."
         lines = []
@@ -996,7 +1035,13 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
             # created_at already leads the line, so the citation adds
             # src/ns/trust only.
             cite = _memory_citation(source=c.source, namespace=c.namespace, source_type=c.source_type)
-            lines.append(f"#{c.id} {c.created_at} {head} {preview}{cite}")
+            # Show typed-memory classification when present (#3072).
+            kind_tag = ""
+            if getattr(c, "memory_kind", None):
+                kind_tag += f" kind={c.memory_kind}"
+            if getattr(c, "review_state", None):
+                kind_tag += f" review={c.review_state}"
+            lines.append(f"#{c.id} {c.created_at} {head} {preview}{cite}{kind_tag}")
         return "\n".join(lines)
 
     @tool
