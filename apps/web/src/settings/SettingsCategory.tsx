@@ -6,10 +6,10 @@ import { Badge, Button } from "@protolabsai/ui/primitives";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronUp, RotateCcw, Save } from "lucide-react";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 
-import { Accordion, AccordionItem, PanelHeader } from "@protolabsai/ui/navigation";
+import { Accordion, AccordionItem, PanelHeader, Tabs } from "@protolabsai/ui/navigation";
 import { useToast } from "@protolabsai/ui/overlays";
 import { StagePanel } from "../app/ErrorBoundary";
 import { HelpLink, TestConnectionButton } from "../app/ui-kit";
@@ -19,6 +19,27 @@ import { queryKeys, settingsSchemaQuery } from "../lib/queries";
 import type { SettingsField, SettingsGroup } from "../lib/types";
 import { PathPicker } from "./PathPicker";
 import { fieldVisible } from "./visibility";
+
+export type PluginSettingsTab = { id: string; label: string; groups: SettingsGroup[] };
+
+/** Build the ordered Configure tabs while retaining unassigned fields in the
+ * backward-compatible Configuration fallback. Exported to pin the wire-to-UI
+ * contract without coupling tests to Dialog focus management. */
+export function pluginSettingsTabs(groups: SettingsGroup[]): PluginSettingsTab[] {
+  const fallback = groups.filter((group) => !group.settings_tab);
+  const declared = new Map<string, PluginSettingsTab & { order: number }>();
+  for (const group of groups) {
+    const meta = group.settings_tab;
+    if (!meta) continue;
+    const tab = declared.get(meta.id);
+    if (tab) tab.groups.push(group);
+    else declared.set(meta.id, { id: meta.id, label: meta.label, order: meta.order, groups: [group] });
+  }
+  const tabs: PluginSettingsTab[] = [...declared.values()]
+    .sort((a, b) => a.order - b.order)
+    .map(({ id, label, groups: tabGroups }) => ({ id, label, groups: tabGroups }));
+  return fallback.length ? [{ id: "__configuration", label: "Configuration", groups: fallback }, ...tabs] : tabs;
+}
 
 // Drop-in full-panel wrapper (section + Suspense + ErrorBoundary) so any surface can
 // embed a category's settings as a standalone panel — Agent, Knowledge, central Settings.
@@ -83,6 +104,52 @@ export function SettingsCategory({
   }, [data.groups, category, categories, pluginId]);
   const [dirty, setDirty] = useState<Record<string, unknown>>({});
   const dirtyKeys = Object.keys(dirty);
+  const configureTabs = useMemo(() => pluginSettingsTabs(groups), [groups]);
+  const [activeSettingsTab, setActiveSettingsTab] = useState("");
+  useEffect(() => {
+    if (!pluginId || !configureTabs.length) return;
+    if (!configureTabs.some((tab) => tab.id === activeSettingsTab)) setActiveSettingsTab(configureTabs[0].id);
+  }, [pluginId, configureTabs, activeSettingsTab]);
+  const activeConfigureTab =
+    configureTabs.find((tab) => tab.id === activeSettingsTab) ?? configureTabs[0];
+  const effectiveSettingsTab = activeConfigureTab?.id ?? "";
+  const configureTabListRef = useRef<HTMLDivElement>(null);
+  const configureTabPanelId = `${useId()}-plugin-settings-panel`;
+  useEffect(() => {
+    if (!pluginId || configureTabs.length <= 1) return;
+    const buttons = configureTabListRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? [];
+    buttons.forEach((button, index) => {
+      const tab = configureTabs[index];
+      if (!tab) return;
+      button.id = `${configureTabPanelId}-tab-${tab.id}`;
+      button.setAttribute("aria-controls", configureTabPanelId);
+      button.tabIndex = tab.id === effectiveSettingsTab ? 0 : -1;
+    });
+  }, [pluginId, configureTabs, effectiveSettingsTab, configureTabPanelId]);
+  const onConfigureTabKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (!pluginId || configureTabs.length <= 1) return;
+    const target = event.target as HTMLElement;
+    if (target.getAttribute("role") !== "tab") return;
+    const buttons = [...(configureTabListRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? [])]
+      .filter((button) => !button.disabled);
+    const current = buttons.indexOf(target as HTMLButtonElement);
+    if (current < 0) return;
+    let next = current;
+    if (event.key === "ArrowRight") next = (current + 1) % buttons.length;
+    else if (event.key === "ArrowLeft") next = (current - 1 + buttons.length) % buttons.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = buttons.length - 1;
+    else return;
+    event.preventDefault();
+    const button = buttons[next];
+    const tab = configureTabs.find((item) => `${configureTabPanelId}-tab-${item.id}` === button.id);
+    if (tab) setActiveSettingsTab(tab.id);
+    button.focus();
+  };
+  const visiblePluginGroups =
+    pluginId && configureTabs.length > 1
+      ? activeConfigureTab.groups
+      : groups;
   // Action feedback is a TOAST, not an inline line — transient success/error belongs in the
   // global toaster (the in-progress state is already on each button's pending spinner).
   const toast = useToast();
@@ -173,7 +240,11 @@ export function SettingsCategory({
   const [testingSection, setTestingSection] = useState<string | null>(null);
   const groupFields = (group: SettingsGroup): Record<string, unknown> => {
     const out: Record<string, unknown> = {};
-    for (const f of group.fields) {
+    // `test: true` is plugin-level. Tab metadata may split one authored group into
+    // several wire groups, but the endpoint must still receive the whole current
+    // plugin section (including dirty values on inactive tabs) exactly once.
+    const fieldGroups = group.plugin_id ? groups.filter((candidate) => candidate.plugin_id === group.plugin_id) : [group];
+    for (const f of fieldGroups.flatMap((candidate) => candidate.fields)) {
       const short = f.key.split(".").pop() as string;
       if (f.key in dirty) out[short] = dirty[f.key];
       else if (f.type !== "secret") out[short] = f.value;
@@ -272,6 +343,17 @@ export function SettingsCategory({
         {/* While a background refetch is in flight (the #1643 fresh-install hydration
             re-pulls the schema), an empty group set is "still loading", not "nothing
             here" — don't flash the misleading empty hint. */}
+        {pluginId && configureTabs.length > 1 ? (
+          <div ref={configureTabListRef} onKeyDown={onConfigureTabKeyDown}>
+            <Tabs
+              responsive
+              ariaLabel={`${title} sections`}
+              items={configureTabs.map((tab) => ({ id: tab.id, label: tab.label }))}
+              active={effectiveSettingsTab}
+              onSelect={setActiveSettingsTab}
+            />
+          </div>
+        ) : null}
         {!groups.length && !footer && !lead ? (
           <p className="muted">{isFetching ? "Loading settings…" : emptyHint || "Nothing to configure here."}</p>
         ) : null}
@@ -285,9 +367,14 @@ export function SettingsCategory({
             FLAT — the row's Configure toggle is the disclosure, so a nested accordion
             would be a second click. The full Settings view keeps the collapsible groups. */}
         {pluginId ? (
-          <div className="settings-groups">
-            {groups.map((group) => (
-              <div className="settings-flat-group" key={group.section}>{renderGroupBody(group)}</div>
+          <div
+            className="settings-groups"
+            role={configureTabs.length > 1 ? "tabpanel" : undefined}
+            id={configureTabs.length > 1 ? configureTabPanelId : undefined}
+            aria-labelledby={configureTabs.length > 1 ? `${configureTabPanelId}-tab-${effectiveSettingsTab}` : undefined}
+          >
+            {visiblePluginGroups.map((group) => (
+              <div className="settings-flat-group" key={`${group.section}:${group.settings_tab?.id || "configuration"}`}>{renderGroupBody(group)}</div>
             ))}
           </div>
         ) : (

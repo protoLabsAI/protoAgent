@@ -383,6 +383,9 @@ export type SettingsGroup = {
   // Plugins surface fold this group into that plugin's Installed row.
   plugin_id?: string;
   guide_url?: string;  // ADR 0059 — optional setup-guide link rendered next to the group
+  // Manifest-declared Configure tab (#3179). `order` is the descriptor's position
+  // in settings_tabs; groups without it stay in the implicit Configuration tab.
+  settings_tab?: { id: string; label: string; order: number };
 };
 
 // External secrets manager (ADR 0080) — GET /api/secrets/status + POST /api/secrets/sync.

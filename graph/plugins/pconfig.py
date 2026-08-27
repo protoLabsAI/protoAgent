@@ -59,6 +59,7 @@ class PluginConfigSchema:
     settings: list = field(default_factory=list)
     test: bool = False  # has a /api/config/test-<section> check (ADR 0029)
     guide_url: str = ""  # optional setup-guide link rendered next to the group (ADR 0059)
+    settings_tabs: list = field(default_factory=list)  # ordered {id, label, …} Configure tabs (#3179)
 
 
 def discover_plugin_config(roots, enabled_ids, disabled_ids=None, *, strict: bool = False) -> list[PluginConfigSchema]:
@@ -112,6 +113,7 @@ def discover_plugin_config(roots, enabled_ids, disabled_ids=None, *, strict: boo
                         list(m.settings or []),
                         test=bool(getattr(m, "test", False)),
                         guide_url=str(getattr(m, "guide_url", "") or ""),
+                        settings_tabs=list(getattr(m, "settings_tabs", []) or []),
                     )
                 )
         return out

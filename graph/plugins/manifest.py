@@ -65,6 +65,12 @@ class PluginManifest:
     config: dict = field(default_factory=dict)
     secrets: list[str] = field(default_factory=list)
     settings: list[dict] = field(default_factory=list)
+    # Ordered Configure-dialog tabs for schema-backed settings (#3179). Each entry
+    # is ``{id, label}``; a setting opts in with ``tab: <id>``. IDs are stable
+    # identity while labels may change. Plugins that omit this keep the original
+    # single flat Configuration form. Future descriptor keys may add other
+    # host-rendered tab kinds without changing this ordered registry.
+    settings_tabs: list[dict] = field(default_factory=list)
     # Test action (ADR 0029) — when true, the plugin serves a credential check at
     # `POST /api/config/test-<config_section>` (e.g. the chat_surface wirer mounts
     # one), and the console renders a generic "Test connection" button for the
@@ -151,6 +157,64 @@ class PluginManifest:
 # the proxy origin and breaks both. We warn (not reject) so a typo is loud but the
 # plugin still loads.
 _NON_SAME_ORIGIN_PATH = re.compile(r"https?://|^//|localhost|:\d", re.IGNORECASE)
+_VALID_SETTINGS_TAB_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+
+def _parse_settings_tabs(tabs, plugin_id: str) -> list[dict]:
+    """Normalize ordered ``settings_tabs`` descriptors to unique ``{id, label, …}`` mappings.
+
+    Invalid entries are ignored with a warning so one presentation typo cannot stop
+    plugin discovery. Unknown keys are preserved for forward-compatible descriptor
+    extensions; the base schema-backed contract only consumes ``id`` and ``label``.
+    """
+    if not isinstance(tabs, (list, tuple)):
+        return []
+    kept: list[dict] = []
+    seen: set[str] = set()
+    for raw in tabs:
+        if not isinstance(raw, dict):
+            log.warning("[plugins] %s: settings_tabs entry must be a mapping — ignored", plugin_id)
+            continue
+        tab_id = str(raw.get("id", "")).strip()
+        label = str(raw.get("label", "")).strip()
+        if not _VALID_SETTINGS_TAB_ID.fullmatch(tab_id) or not label:
+            log.warning(
+                "[plugins] %s: settings_tabs entry needs a safe id and non-empty label — ignored",
+                plugin_id,
+            )
+            continue
+        if tab_id in seen:
+            log.warning("[plugins] %s: duplicate settings tab id %r — keeping first", plugin_id, tab_id)
+            continue
+        seen.add(tab_id)
+        kept.append({**raw, "id": tab_id, "label": label})
+    return kept
+
+
+def _parse_settings(settings, tabs: list[dict], plugin_id: str) -> list[dict]:
+    """Keep mapping settings and drop invalid tab references to the flat fallback."""
+    if not isinstance(settings, (list, tuple)):
+        return []
+    known_tabs = {tab["id"] for tab in tabs}
+    kept: list[dict] = []
+    for raw in settings:
+        if not isinstance(raw, dict):
+            continue
+        spec = dict(raw)
+        if "tab" in spec:
+            tab_id = str(spec.get("tab", "")).strip()
+            if tab_id not in known_tabs:
+                log.warning(
+                    "[plugins] %s: setting %r references unknown settings tab %r — using Configuration",
+                    plugin_id,
+                    spec.get("key"),
+                    tab_id,
+                )
+                spec.pop("tab", None)
+            else:
+                spec["tab"] = tab_id
+        kept.append(spec)
+    return kept
 
 
 def _parse_views(views, plugin_id: str) -> list[dict]:
@@ -469,7 +533,8 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
 
     cfg = data.get("config")
     secrets = data.get("secrets")
-    settings = data.get("settings")
+    settings_tabs = _parse_settings_tabs(data.get("settings_tabs"), pid)
+    settings = _parse_settings(data.get("settings"), settings_tabs, pid)
     views = _parse_views(data.get("views"), pid)
     # public_paths = explicitly-declared exempt paths PLUS every view's own page
     # path (view pages are public chrome — see _view_public_paths). Both run
@@ -504,7 +569,8 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
         config_section=str(data.get("config_section", "")).strip() or pid,
         config=cfg if isinstance(cfg, dict) else {},
         secrets=[str(s) for s in secrets] if isinstance(secrets, (list, tuple)) else [],
-        settings=[s for s in settings if isinstance(s, dict)] if isinstance(settings, (list, tuple)) else [],
+        settings=settings,
+        settings_tabs=settings_tabs,
         test=bool(data.get("test", False)),
         guide_url=str(data.get("guide_url", "") or "").strip(),
         views=views,
