@@ -1,0 +1,58 @@
+# Dependency updates arrive as reviewable PRs with CI attached, rather than
+# drifting in silently between lock bumps.
+#
+# The PR gates install from `uv.lock` (checks.yml), so the lock IS what CI tests —
+# which makes an un-bumped lock invisible until someone notices. These grouped PRs
+# are the routine way it gets bumped; `upstream-canary.yml` is the alarm for when
+# latest breaks before anyone has merged the bump.
+version: 2
+
+updates:
+  # Python, via uv.lock + pyproject.toml.
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      # The model clients and the graph runtime move together and break together
+      # — a langchain-core bump that langchain-openai hasn't caught up with is a
+      # bad afternoon. One PR, so CI judges the combination that will ship.
+      ai-stack:
+        patterns:
+          - "langchain*"
+          - "langgraph*"
+          - "langsmith"
+          - "langfuse"
+          - "openai"
+          - "anthropic"
+          - "tiktoken"
+      # Everything else, batched, so routine patches don't cost five reviews.
+      python-routine:
+        exclude-patterns:
+          - "langchain*"
+          - "langgraph*"
+          - "langsmith"
+          - "langfuse"
+          - "openai"
+          - "anthropic"
+          - "tiktoken"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Action versions — pinned by tag across ~14 workflows, so they rot quietly.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      actions:
+        patterns:
+          - "*"
