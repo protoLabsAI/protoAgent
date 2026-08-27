@@ -46,6 +46,7 @@ import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
 import { inputHistory, pushInputHistory } from "./inputHistory";
 import { dismissedToolCallSet, rememberDismissedToolCall } from "./dismissedToolCalls";
 import { registerChatEscapeHandler, resolveEscapeAction } from "./escapeStop";
+import { resolveComposerUp } from "./queuedRecall";
 import { finalizeStoppedMessages, resolveStopTarget } from "./stopTurn";
 import { lastOperatorAssistantId, rewindableTailId, replaceText } from "./parts";
 import { createRevealQueue } from "./revealQueue";
@@ -1000,6 +1001,20 @@ function ChatSessionSlot({
         return;
       }
     }
+    // ↑ with a message QUEUED and nothing typed pulls that message back out of the turn to
+    // edit (#2837) — decided in queuedRecall.ts. Ahead of the history ring below: the live
+    // queued message beats the copy of it the ring also holds.
+    if (
+      event.key === "ArrowUp" &&
+      !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
+    ) {
+      const up = resolveComposerUp(draft, steerQueueRef.current);
+      if (up.kind === "edit-queued") {
+        event.preventDefault();
+        void editQueuedSteer(up.steerId);
+        return;
+      }
+    }
     // Terminal-style input history (#1496): ↑ recalls the previous submitted message when the
     // caret is on the FIRST line; ↓ walks back toward the live draft when on the LAST line — so
     // multi-line editing keeps normal caret movement and history only triggers at the edges.
@@ -1228,14 +1243,16 @@ function ChatSessionSlot({
     }
   }
 
-  // Cancel a queued steer via the ✕ on its pending bubble. Drop the bubble
-  // optimistically so the click feels instant, then DELETE it server-side. If the
-  // agent had already drained it (`removed: false`), it's too late to cancel — it
-  // shaped the reply, so settle it into the thread instead of lying it never ran.
-  async function cancelSteer(id: string) {
-    if (!session) return;
+  // Take a still-queued steer back out of the running turn — the shared body behind the ✕
+  // (cancel it) and ↑ (pull it into the composer to edit). Drops the bubble optimistically
+  // so either interaction feels instant, then DELETEs it server-side. If the agent had
+  // already drained it (`removed: false`), it's too late — it shaped the reply, so the
+  // bubble is restored instead of lying it never ran. The outcome tells the ↑ caller
+  // whether the message is really out of the turn or still on its way to the agent.
+  async function dequeueSteer(id: string): Promise<"removed" | "consumed" | "failed"> {
+    if (!session) return "failed";
     const item = steerQueueRef.current.find((q) => q.id === id);
-    if (!item) return;
+    if (!item) return "failed";
     setSteerQueue(steerQueueRef.current.filter((q) => q.id !== id));
     try {
       const { removed } = await api.cancelSteer(session.id, id);
@@ -1249,7 +1266,9 @@ function ChatSessionSlot({
         if (!alreadySettled && !steerQueueRef.current.some((queued) => queued.id === id)) {
           setSteerQueue([...steerQueueRef.current, item]);
         }
+        return "consumed";
       }
+      return "removed";
     } catch (e) {
       // Couldn't reach the backend — restore the bubble rather than drop a steer
       // that may still be queued (avoid concurrent-add clobber by re-checking).
@@ -1257,6 +1276,37 @@ function ChatSessionSlot({
         setSteerQueue([...steerQueueRef.current, item]);
       }
       onError(`Couldn't cancel message: ${errMsg(e)}`);
+      return "failed";
+    }
+  }
+
+  // The ✕ on a pending bubble: drop the queued steer outright.
+  async function cancelSteer(id: string) {
+    await dequeueSteer(id);
+  }
+
+  // ↑ on an empty composer: pull the newest queued steer OUT of the turn and back into the
+  // composer to edit (#2837 — see queuedRecall.ts for why the old history-ring recall was
+  // the wrong thing). Optimistic and in that order: bubble out, text in, caret at the end,
+  // so the field is editable the instant the key lands. If the agent had already read it,
+  // the bubble comes back and we say so rather than leaving a silent duplicate — the text
+  // stays in the composer either way, because destroying an operator's in-hand edit to undo
+  // our own optimism is worse than an explained duplicate they can clear or send.
+  async function editQueuedSteer(id: string) {
+    const item = steerQueueRef.current.find((q) => q.id === id);
+    if (!item) return;
+    setDraft(item.text);
+    histIndexRef.current = null; // the pulled text IS the draft now, not a position in the ring
+    histStashRef.current = "";
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current;
+      if (!ta) return;
+      ta.focus();
+      ta.selectionStart = ta.selectionEnd = item.text.length; // readline: edit from the end
+      refreshSlash(); // the recalled text may itself start with a "/" or "@" token
+    });
+    if ((await dequeueSteer(id)) === "consumed") {
+      onError("The agent already read that message, so it stays in this turn. Your copy is in the composer — edit and send it as a follow-up, or clear it.");
     }
   }
 
