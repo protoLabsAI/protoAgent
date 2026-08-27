@@ -16,9 +16,10 @@ permissions:
   contents: read
 
 # Cost control: a new push to a PR supersedes the old one, so cancel the in-flight run
-# instead of letting both finish (the Windows leg bills 2× and runs ~14 min — five rapid
-# pushes were five full matrices). Keyed per PR; `main` pushes get a unique per-commit group
-# and are never cancelled, so every landed commit is still fully tested.
+# instead of letting both finish. Windows bills at 2×; even with path classification and
+# parallel shards, five rapid pushes must not become five overlapping native matrices.
+# Keyed per PR; `main` pushes get a unique per-commit group and are never cancelled, so
+# every landed commit is still fully tested.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -198,20 +199,47 @@ jobs:
           . .venv/bin/activate
           python -m pytest tests/ -q
 
-  windows-tests:
-    name: Windows tests (native)
-    # Phase-3 gate from #2412: protoAgent ships a Windows desktop release, but
-    # until this job the only native PR feedback was a contributor's own
-    # machine. Runs the suite minus the tracked POSIX-only backlog (below);
-    # anything not excluded failing on Windows gates the PR.
-    #
-    # Cost: the Windows runner bills 2× and takes ~14 min, so skip it while a PR is a
-    # DRAFT (work-in-progress) — it runs the moment the PR is marked ready for review, and
-    # always on push-to-main. Combined with the workflow `concurrency` above, a WIP branch
-    # no longer spends a Windows matrix on every intermediate push.
+  windows-scope:
+    name: Classify Windows test scope
+    # Drafts retain the existing zero-Windows-cost behavior. Ready PRs classify
+    # their entire base...head diff; pushes to main always request both suites.
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
+    timeout-minutes: 5
+    outputs:
+      python_tests: ${{ steps.scope.outputs.python_tests }}
+      rust_tests: ${{ steps.scope.outputs.rust_tests }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Classify changed paths
+        id: scope
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            git diff --name-only -z "${BASE_SHA}...${HEAD_SHA}" \
+              | python scripts/windows_ci_scope.py --stdin0 --github-output >> "${GITHUB_OUTPUT}"
+          else
+            python scripts/windows_ci_scope.py --all --github-output >> "${GITHUB_OUTPUT}"
+          fi
+
+  windows-python-tests:
+    name: Windows Python tests (shard ${{ matrix.group }}/2)
+    # The previous single job spent 15–18 of its ~19 minutes in pytest. Two
+    # isolated runners preserve the complete suite while halving the critical
+    # path; pytest-split keeps collection/order semantics within each shard.
+    needs: windows-scope
+    if: needs.windows-scope.outputs.python_tests == 'true'
     runs-on: windows-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
-    timeout-minutes: 35
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [1, 2]
     env:
       # PEP 686 direction, and half the historic Windows-only failures were
       # cp1252 UnicodeEncodeErrors in test output rather than real defects.
@@ -224,22 +252,95 @@ jobs:
           cache: pip
       - name: Install dependencies
         # Mirrors the Ubuntu tests job (venv per #175); git-bash keeps the
-        # steps byte-comparable with the POSIX legs.
+        # steps byte-comparable with the POSIX legs. pytest-split is CI-only and
+        # pinned; the committed duration seed balances the two isolated jobs.
         shell: bash
         run: |
           python -m venv .venv
           source .venv/Scripts/activate
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pytest pytest-asyncio
-      - name: Run tests (suite minus the tracked POSIX-only backlog)
+          pip install -r requirements.txt pytest pytest-asyncio pytest-split==0.11.0
+      - name: Run full-suite shard ${{ matrix.group }}/2
         # tests/windows_native_exclusions.txt is the #2412 burndown: files that
-        # failed natively at the 2026-08-08 baseline. Everything else (~4650
-        # tests) must pass on Windows or this job fails the PR.
+        # failed natively at the 2026-08-08 baseline (currently empty). The two
+        # groups are disjoint and exhaustive, so every non-excluded test still
+        # gates the PR.
         shell: bash
         run: |
           source .venv/Scripts/activate
-          IGNORES=$(grep -vE '^\s*(#|$)' tests/windows_native_exclusions.txt | sed 's|^|--ignore=|' || true)
-          python -m pytest tests/ -q $IGNORES
+          IGNORE_ARGS=()
+          while IFS= read -r path; do
+            if [[ -n "${path}" && ! "${path}" =~ ^[[:space:]]*# ]]; then
+              IGNORE_ARGS+=("--ignore=${path}")
+            fi
+          done < tests/windows_native_exclusions.txt
+          python -m pytest tests/ -q "${IGNORE_ARGS[@]}" \
+            --splits 2 --group ${{ matrix.group }} --splitting-algorithm least_duration \
+            --durations-path tests/windows_test_durations.json
+
+  windows-rust-tests:
+    name: Windows desktop Rust tests
+    # The old "native" job only ran Python, so desktop-only PRs waited ~19 min
+    # without exercising their Rust changes. This conditional lane tests the
+    # actual Tauri crate and normally finishes before the Python shards.
+    needs: windows-scope
+    if: needs.windows-scope.outputs.rust_tests == 'true'
+    runs-on: windows-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo dependencies and build output
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/desktop/src-tauri/target
+          key: ${{ runner.os }}-desktop-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+      - name: Create test-only sidecar placeholder
+        shell: pwsh
+        run: |
+          $path = "apps/desktop/src-tauri/binaries/protoagent-server-x86_64-pc-windows-msvc.exe"
+          New-Item -ItemType Directory -Force (Split-Path $path) | Out-Null
+          New-Item -ItemType File -Force $path | Out-Null
+      - name: Run desktop Rust tests
+        working-directory: apps/desktop/src-tauri
+        run: cargo test --locked
+
+  windows-tests:
+    name: Windows tests (native)
+    # Stable aggregate check: branch protection keeps one durable name while
+    # implementation fans out or skips irrelevant expensive lanes. A workflow-
+    # level paths filter would leave required checks pending; job skips resolve.
+    needs: [windows-scope, windows-python-tests, windows-rust-tests]
+    if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
+    timeout-minutes: 5
+    steps:
+      - name: Require every selected Windows lane
+        shell: bash
+        env:
+          SCOPE_RESULT: ${{ needs.windows-scope.result }}
+          PYTHON_REQUIRED: ${{ needs.windows-scope.outputs.python_tests }}
+          PYTHON_RESULT: ${{ needs.windows-python-tests.result }}
+          RUST_REQUIRED: ${{ needs.windows-scope.outputs.rust_tests }}
+          RUST_RESULT: ${{ needs.windows-rust-tests.result }}
+        run: |
+          if [ "${SCOPE_RESULT}" != "success" ]; then
+            echo "::error::Windows scope classification did not succeed (${SCOPE_RESULT})."
+            exit 1
+          fi
+          if [ "${PYTHON_REQUIRED}" = "true" ] && [ "${PYTHON_RESULT}" != "success" ]; then
+            echo "::error::Selected Windows Python shards did not succeed (${PYTHON_RESULT})."
+            exit 1
+          fi
+          if [ "${RUST_REQUIRED}" = "true" ] && [ "${RUST_RESULT}" != "success" ]; then
+            echo "::error::Selected Windows Rust tests did not succeed (${RUST_RESULT})."
+            exit 1
+          fi
+          echo "Windows gate complete: python=${PYTHON_REQUIRED}/${PYTHON_RESULT}, rust=${RUST_REQUIRED}/${RUST_RESULT}"
 
   fleet-integration:
     name: Fleet integration (multi-instance)

@@ -197,7 +197,7 @@ real, just not blocking:
 |---|---|---|
 | Changelog entry | `scripts/changelog_gate.sh` — the merge-base diff must add a `changelog.d/<issue>.<kind>.md` fragment (#2322). Editing `CHANGELOG.md` directly does *not* satisfy it. Escape hatches: the `skip-changelog` label (apply it and the gate re-runs itself), `release/*` branches, dependabot | Lives in its own `changelog.yml` so labeling can re-trigger it (#2293); the split deliberately carried no protection migration |
 | Fleet integration (multi-instance) | the multi-instance fleet suite | Boots a real hub + members; too slow and too environment-sensitive to block every PR |
-| Windows tests (native) | the suite minus the tracked POSIX-only backlog | Promotion to required is tracked in #2455 |
+| Windows tests (native) | Stable aggregate over two full-suite Python shards and a conditional desktop Rust lane. A fail-safe diff classifier skips irrelevant native runners for known docs/web/marketing-only PRs; `main` always runs both | Promotion to required is tracked in #2455 |
 
 Direct pushes, force-pushes, and branch deletion are blocked. Approvals are set
 to **0** so the solo/automated flow (you + the release bot) is never blocked on
