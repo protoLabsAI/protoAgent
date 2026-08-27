@@ -604,3 +604,177 @@ test("a sister agent's window: the fleet panel won't stop or remove the agent se
   // A sibling keeps its controls — the guard is about SELF, not about being a member window.
   await expect(page.locator(".fleet-row", { hasText: "roxy" }).getByRole("button", { name: "Start" })).toBeVisible();
 });
+
+// ── Roster reordering (#3197) — the persisted-order API (PUT /api/fleet/order) + the
+// accessible move-up/move-down controls (ADR 0042 hub control-plane) ─────────────────────
+// The reorder gesture is presentation-only: it must submit the COMPLETE immutable-id order
+// (never editable names), persist across a refetch, roll back a rejected reorder without
+// dropping rows or breaking the non-reorder row actions, and stay off the discovery list
+// (a found row is not a member). Drag-and-drop is intentionally NOT covered: the UI slice
+// deferred it (no reusable DS sortable/DnD primitive — a component-gap request was filed
+// instead of a bespoke control), so the move-up/move-down buttons are the whole reorder
+// surface. If a native-DnD affordance ever ships, add its drag path here.
+
+// The member rows only (never a `--found` discovery result), in DOM order — i.e. the roster's
+// live display order. Baseline order from the FLEET fixture is: main (host), ava, roxy.
+const memberNames = (page) => page.locator(".fleet-row:not(.fleet-row--found) .fleet-name");
+
+test("reorder: the accessible move control submits the immutable-id order + the list updates (#3197)", async ({ page }) => {
+  await openAgents(page);
+
+  // Capture the reorder PUT, then let the mock persist + answer (route.continue).
+  let ordered = null;
+  await page.route("**/api/fleet/order", async (route) => {
+    if (route.request().method() === "PUT") ordered = route.request().postDataJSON();
+    return route.continue();
+  });
+
+  await expect(memberNames(page)).toHaveText([/main/, /ava/, /roxy/]);
+
+  // Boundary controls are disabled: the first row can't move up, the last can't move down —
+  // so a move can never submit a no-op / out-of-range order.
+  await expect(
+    page.locator(".fleet-row", { hasText: "main" }).getByRole("button", { name: "Move main up in the fleet order" }),
+  ).toBeDisabled();
+  await expect(
+    page.locator(".fleet-row", { hasText: "roxy" }).getByRole("button", { name: "Move roxy down in the fleet order" }),
+  ).toBeDisabled();
+
+  // Drive the reorder through the KEYBOARD (focus + Enter), not a drag — the guaranteed
+  // non-pointer / screen-reader path. Move roxy up one slot: ava ⇄ roxy.
+  const moveRoxyUp = page
+    .locator(".fleet-row", { hasText: "roxy" })
+    .getByRole("button", { name: "Move roxy up in the fleet order" });
+  await moveRoxyUp.focus();
+  await page.keyboard.press("Enter");
+
+  // The PUT carries EVERY member's IMMUTABLE id (host included), in the new order — a complete
+  // permutation, not a partial slice.
+  await expect.poll(() => ordered?.order).toEqual(["main", "roxy", "ava"]);
+  // …and the visible roster reflects it (optimistic apply now, confirmed by the settle refetch).
+  await expect(memberNames(page)).toHaveText([/main/, /roxy/, /ava/]);
+});
+
+test("reorder: the payload uses the immutable id even after the member is renamed (#3197)", async ({ page }) => {
+  await openAgents(page);
+  // Rename ava → nova: the display label moves, the id/slug ("ava") is unchanged (the reorder
+  // payload must key on the STABLE id, since a member can rename itself and names aren't unique).
+  const ava = page.locator(".fleet-row", { hasText: "ava" });
+  await ava.getByRole("button", { name: /Rename/ }).click();
+  const input = page.getByLabel("New agent name");
+  await input.fill("nova");
+  await input.press("Enter");
+  await expect(page.locator(".fleet-row", { hasText: "nova" })).toBeVisible();
+
+  let ordered = null;
+  await page.route("**/api/fleet/order", async (route) => {
+    if (route.request().method() === "PUT") ordered = route.request().postDataJSON();
+    return route.continue();
+  });
+
+  // Move the renamed member down (nova ⇄ roxy). The control is addressed by the new LABEL,
+  // but the request must carry the stable id "ava" — never "nova".
+  await page
+    .locator(".fleet-row", { hasText: "nova" })
+    .getByRole("button", { name: "Move nova down in the fleet order" })
+    .click();
+  await expect.poll(() => ordered?.order).toEqual(["main", "roxy", "ava"]);
+});
+
+test("reorder: a refetched fleet renders in the saved order (#3197)", async ({ page }) => {
+  await openAgents(page);
+  await expect(memberNames(page)).toHaveText([/main/, /ava/, /roxy/]);
+
+  // Move roxy up and let the mock persist the new order (no route interception). WAIT for the
+  // PUT to land before reloading — a reload mid-flight would abort the write, so the mock has to
+  // have persisted the reorder before the refetch below can observe it.
+  const saved = page.waitForResponse(
+    (r) => r.url().endsWith("/api/fleet/order") && r.request().method() === "PUT",
+  );
+  await page
+    .locator(".fleet-row", { hasText: "roxy" })
+    .getByRole("button", { name: "Move roxy up in the fleet order" })
+    .click();
+  await saved;
+  await expect(memberNames(page)).toHaveText([/main/, /roxy/, /ava/]);
+
+  // Reload the console + reopen the panel: the SAVED order comes back from the server (the mock
+  // reordered this scope's roster), not the fixture's baseline.
+  await openAgents(page);
+  await expect(memberNames(page)).toHaveText([/main/, /roxy/, /ava/]);
+});
+
+test("reorder: a rejected reorder rolls back without losing rows or breaking row actions (#3197)", async ({ page }) => {
+  await openAgents(page);
+  await expect(memberNames(page)).toHaveText([/main/, /ava/, /roxy/]);
+
+  // The reorder API rejects the write (the contract's 400 error envelope). The UI rolls the
+  // optimistic move back to the pre-move snapshot and re-syncs with the server on settle.
+  await page.route("**/api/fleet/order", async (route) => {
+    if (route.request().method() !== "PUT") return route.fallback();
+    return route.fulfill({ status: 400, json: { detail: "order must be a complete permutation of the current fleet member ids" } });
+  });
+  await page
+    .locator(".fleet-row", { hasText: "roxy" })
+    .getByRole("button", { name: "Move roxy up in the fleet order" })
+    .click();
+
+  // The failure surfaces as a toast, and the roster reconciles to the original order — every
+  // row survives, in baseline order, with no duplicate and no vanished member.
+  await expect(page.locator(".pl-toast", { hasText: /Couldn.t reorder the fleet/ })).toBeVisible();
+  await expect(memberNames(page)).toHaveText([/main/, /ava/, /roxy/]);
+
+  // The non-reorder row actions are uncorrupted: stopping a member after the failed reorder
+  // still flips its status (a rejected reorder didn't leave the rows in a broken state).
+  await page.unroute("**/api/fleet/order");
+  const ava = page.locator(".fleet-row", { hasText: "ava" });
+  await ava.getByRole("button", { name: "Stop" }).click();
+  await expect(ava.getByRole("button", { name: "Start" })).toBeVisible();
+  await expect(ava.locator(".pl-dot--success")).toHaveCount(0);
+});
+
+test("reorder: only actual members get move controls — discovery rows don't (#3197)", async ({ page }) => {
+  await openAgents(page);
+  // A member row carries the reorder group…
+  await expect(
+    page
+      .locator(".fleet-row:not(.fleet-row--found)", { hasText: "ava" })
+      .getByRole("button", { name: "Move ava down in the fleet order" }),
+  ).toBeVisible();
+
+  // …but a DISCOVERED sibling is a candidate, not a member, so its row gets no reorder controls —
+  // you can't reorder something that isn't in the roster yet.
+  await page.getByRole("button", { name: /Discover agents/ }).click();
+  const found = page.locator(".fleet-row--found", { hasText: "remy" });
+  await expect(found).toBeVisible();
+  await expect(found.locator(".fleet-row-reorder")).toHaveCount(0);
+  await expect(found.getByRole("button", { name: /Move .* in the fleet order/ })).toHaveCount(0);
+});
+
+test("reorder API: the mock enforces the complete-permutation contract, incl. the error (#3197)", async ({ page }, testInfo) => {
+  // Assert the mock control-plane is faithful to the real supervisor.set_roster_order contract
+  // (a hub route, so hit it directly with the fleet scope this spec's beforeEach reset). The
+  // request context doesn't inherit setExtraHTTPHeaders, so carry the scope header explicitly.
+  const headers = { "x-e2e-fleet": `fleet-spec-${testInfo.parallelIndex}` };
+  const order = "/api/fleet/order";
+
+  // Not a complete permutation of the current member ids → rejected 400 with a detail envelope,
+  // WITHOUT touching the saved order (the same failure the FastAPI route raises).
+  const incomplete = await page.request.put(order, { headers, data: { order: ["main"] } });
+  expect(incomplete.status()).toBe(400);
+  expect((await incomplete.json()).detail).toBeTruthy();
+  // An unknown id (never a member) is rejected the same way.
+  const unknown = await page.request.put(order, { headers, data: { order: ["main", "ava", "ghost"] } });
+  expect(unknown.status()).toBe(400);
+  // A duplicate id (not a valid permutation) is rejected too.
+  const dupe = await page.request.put(order, { headers, data: { order: ["main", "ava", "ava"] } });
+  expect(dupe.status()).toBe(400);
+
+  // A COMPLETE permutation of the current member ids is accepted and echoed back verbatim.
+  const ok = await page.request.put(order, { headers, data: { order: ["main", "roxy", "ava"] } });
+  expect(ok.ok()).toBeTruthy();
+  expect((await ok.json()).order).toEqual(["main", "roxy", "ava"]);
+  // …and the saved order now reads back from GET /api/fleet in that order (ids preserved).
+  const roster = await (await page.request.get("/api/fleet", { headers })).json();
+  expect(roster.agents.map((a) => a.id)).toEqual(["main", "roxy", "ava"]);
+});

@@ -1203,7 +1203,30 @@ const server = createServer(async (req, res) => {
     if (req.method === "DELETE" && /^\/api\/plugins\/workflows\/[^/]+$/.test(pathname)) {
       return sendJson(res, { deleted: true });
     }
-    // Fleet (ADR 0042) — mutate this scope's fleet so create/start/stop/activate/remove round-trip.
+    // Fleet (ADR 0042) — mutate this scope's fleet so create/start/stop/activate/reorder/remove round-trip.
+    // Persisted roster DISPLAY order (ADR 0042 hub control-plane, #3197). Mirrors the real
+    // supervisor.set_roster_order behind PUT /api/fleet/order: the body is `{order: [<id>, …]}`,
+    // a COMPLETE permutation of the CURRENT member ids (host + local + remote) by IMMUTABLE id —
+    // never an editable name/label. A duplicate / unknown / missing / malformed list is rejected
+    // 400 (the same error envelope the FastAPI route raises) WITHOUT touching the saved order; on
+    // success this scope's roster is reordered so a later GET /api/fleet reads members back in the
+    // saved order. Reorder is presentation-only — ids, config, credentials and process state are
+    // untouched, so no member is dropped or duplicated.
+    if (pathname === "/api/fleet/order" && req.method === "PUT") {
+      const order = Array.isArray(body.order) ? body.order.map(String) : null;
+      const ids = fleet.agents.map((a) => a.id);
+      const isPermutation =
+        order !== null &&
+        order.length === ids.length &&
+        new Set(order).size === order.length &&
+        order.every((id) => ids.includes(id));
+      if (!isPermutation) {
+        return sendJson(res, { detail: "order must be a complete permutation of the current fleet member ids" }, 400);
+      }
+      const current = fleet.agents;
+      fleet.agents = order.map((id) => current.find((a) => a.id === id));
+      return sendJson(res, { ok: true, order });
+    }
     if (pathname === "/api/fleet" && req.method === "POST") {
       const name = String(body.name || "").trim();
       if (!/^[A-Za-z0-9-_]+$/.test(name)) return sendJson(res, { detail: "invalid name" }, 400);
