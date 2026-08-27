@@ -95,7 +95,8 @@ def test_build_schema_surfaces_ordered_settings_tab_metadata(monkeypatch):
             {"id": "runtime", "label": "Runtime"},
             {"id": "review", "label": "Review & merge"},
         ]
-        test = False
+        test = True
+        guide_url = "https://example.com/project-board"
 
     specs = [
         {"key": "auto_merge", "label": "Auto merge", "type": "bool", "group": "Options", "tab": "review"},
@@ -115,6 +116,12 @@ def test_build_schema_surfaces_ordered_settings_tab_metadata(monkeypatch):
     ]
     assert [g["section"] for g in groups] == ["Options", "Options", "Options"]
     assert {g["category"] for g in groups} == {"Plugins"}
+    assert [g.get("test") for g in groups] == [
+        None,
+        None,
+        {"endpoint": "/api/config/test-project_board"},
+    ]
+    assert [g.get("guide_url") for g in groups] == [None, None, "https://example.com/project-board"]
 
 
 def test_plugin_groups_with_same_display_name_never_cross_plugin_boundaries(monkeypatch):

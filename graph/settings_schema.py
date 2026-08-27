@@ -1791,6 +1791,11 @@ def build_schema(
     # rendered + saved through the same generic Settings surface (key = dotted
     # YAML path, so apply_updates_to_yaml + secret routing handle it for free).
     plugin_cfg = getattr(config, "plugin_config", {}) or {}
+    # Plugin-level actions belong on ONE visible group even when tab metadata splits
+    # one authored display group into several schema groups. Repeating Test/Guide on
+    # every tab is misleading, and a per-tab Test payload silently omits sibling-tab
+    # credentials that the endpoint previously received together.
+    plugin_actions: dict[str, dict] = {}
     for sch, full_key, key, spec in _plugin_field_specs():
         if is_hidden_setting(full_key, hidden):
             continue  # settings.hidden (#2172) covers plugin-declared fields/groups too
@@ -1852,16 +1857,31 @@ def build_schema(
                 "label": tab["label"],
                 "order": tab_index,
             }
-        # A plugin that declares `test: true` (ADR 0029) gets a generic console
-        # "Test connection" button posting the group's fields to its test route.
-        if getattr(sch, "test", False):
-            groups[group_key]["test"] = {"endpoint": f"/api/config/test-{sch.section}"}
-        # Optional setup-guide link (ADR 0059) — rendered generically next to the
-        # group, so a plugin needs no bespoke console frontend.
-        if getattr(sch, "guide_url", ""):
-            groups[group_key]["guide_url"] = sch.guide_url
+        if plugin_id is not None:
+            actions = plugin_actions.setdefault(plugin_id, {})
+            if getattr(sch, "test", False):
+                actions["test"] = {"endpoint": f"/api/config/test-{sch.section}"}
+            if getattr(sch, "guide_url", ""):
+                actions["guide_url"] = sch.guide_url
 
+    # Put each plugin-level action on the first DISPLAYED tab: Configuration when
+    # unassigned fields exist, otherwise the lowest manifest tab order. The schema
+    # field order may interleave tabs and must not decide where the one action lands.
     out = list(groups.values())
+    group_pos = {id(group): index for index, group in enumerate(out)}
+    for plugin_id, actions in plugin_actions.items():
+        candidates = [group for group in out if group.get("plugin_id") == plugin_id]
+        if not candidates:
+            continue
+        target = min(
+            candidates,
+            key=lambda group: (
+                0 if not group.get("settings_tab") else 1 + int(group["settings_tab"]["order"]),
+                group_pos[id(group)],
+            ),
+        )
+        target.update(actions)
+
     # Insertion order = first appearance in FIELDS (core), then plugins.
     # Position by the group object, not its display section: plugin groups may
     # intentionally reuse a generic label across tabs/plugins. Keying this map by

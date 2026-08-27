@@ -89,12 +89,16 @@ describe("schema-backed plugin Configure tabs", () => {
 
     expect(container.textContent).toContain("Coder");
     expect(container.textContent).not.toContain("Review model");
-    expect(container.querySelector('[role="tabpanel"]')?.getAttribute("aria-label")).toBe("Runtime");
+    expect(container.querySelector('[role="tabpanel"]')?.getAttribute("aria-labelledby")).toBe(
+      container.querySelector('[role="tab"][aria-selected="true"]')?.id,
+    );
     await change("project_board.coder", "codex-fast");
 
     await clickLabel("Review & merge");
     expect(container.textContent).toContain("Review model");
-    expect(container.querySelector('[role="tabpanel"]')?.getAttribute("aria-label")).toBe("Review & merge");
+    expect(container.querySelector('[role="tabpanel"]')?.getAttribute("aria-labelledby")).toBe(
+      container.querySelector('[role="tab"][aria-selected="true"]')?.id,
+    );
     expect(container.textContent).toContain("1 unsaved change");
     await change("project_board.review_model", "claude-opus");
 
@@ -108,5 +112,68 @@ describe("schema-backed plugin Configure tabs", () => {
       { "project_board.coder": "codex-fast", "project_board.review_model": "claude-opus" },
       "agent",
     );
+  });
+
+  it("implements roving tab focus, arrow keys, and labelled panel relationships", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryData(queryKeys.settings, { groups });
+    await act(async () => {
+      root.render(
+        h(QueryClientProvider, { client },
+          h(ToastProvider, null,
+            h(SettingsCategory, { category: "Plugins", pluginId: "project_board", title: "Configuration" }),
+          ),
+        ),
+      );
+    });
+
+    const tabs = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+    const panel = container.querySelector<HTMLElement>('[role="tabpanel"]')!;
+    expect(tabs.map((tab) => tab.tabIndex)).toEqual([0, -1]);
+    expect(tabs[0].getAttribute("aria-controls")).toBe(panel.id);
+    expect(tabs[1].getAttribute("aria-controls")).toBe(panel.id);
+    expect(panel.getAttribute("aria-labelledby")).toBe(tabs[0].id);
+
+    tabs[0].focus();
+    await act(async () => tabs[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+    expect(document.activeElement).toBe(tabs[1]);
+    expect(tabs.map((tab) => tab.tabIndex)).toEqual([-1, 0]);
+    expect(panel.getAttribute("aria-labelledby")).toBe(tabs[1].id);
+    expect(container.textContent).toContain("Review model");
+
+    await act(async () => tabs[1].dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true })));
+    expect(document.activeElement).toBe(tabs[0]);
+    await act(async () => tabs[0].dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
+    expect(document.activeElement).toBe(tabs[1]);
+    await act(async () => tabs[1].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })));
+    expect(document.activeElement).toBe(tabs[0]);
+  });
+
+  it("tests the full plugin section once across split tabs using current dirty values", async () => {
+    const testGroups = groups.map((group) => ({
+      ...group,
+      test: group.settings_tab?.id === "runtime" ? { endpoint: "/api/config/test-project_board" } : undefined,
+    }));
+    const probe = vi.spyOn(api, "testConfig").mockResolvedValue({ ok: true, identity: "board", error: null });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryData(queryKeys.settings, { groups: testGroups });
+    await act(async () => {
+      root.render(
+        h(QueryClientProvider, { client },
+          h(ToastProvider, null,
+            h(SettingsCategory, { category: "Plugins", pluginId: "project_board", title: "Configuration" }),
+          ),
+        ),
+      );
+    });
+
+    await change("project_board.coder", "codex-fast");
+    expect([...container.querySelectorAll("button")].filter((button) => button.textContent?.includes("Test connection"))).toHaveLength(1);
+    await clickLabel("Test connection");
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(probe).toHaveBeenCalledWith("/api/config/test-project_board", {
+      coder: "codex-fast",
+      review_model: "claude",
+    });
   });
 });

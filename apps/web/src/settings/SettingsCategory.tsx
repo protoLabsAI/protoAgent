@@ -6,8 +6,8 @@ import { Badge, Button } from "@protolabsai/ui/primitives";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronUp, RotateCcw, Save } from "lucide-react";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 
 import { Accordion, AccordionItem, PanelHeader, Tabs } from "@protolabsai/ui/navigation";
 import { useToast } from "@protolabsai/ui/overlays";
@@ -112,6 +112,40 @@ export function SettingsCategory({
   }, [pluginId, configureTabs, activeSettingsTab]);
   const activeConfigureTab =
     configureTabs.find((tab) => tab.id === activeSettingsTab) ?? configureTabs[0];
+  const effectiveSettingsTab = activeConfigureTab?.id ?? "";
+  const configureTabListRef = useRef<HTMLDivElement>(null);
+  const configureTabPanelId = `${useId()}-plugin-settings-panel`;
+  useEffect(() => {
+    if (!pluginId || configureTabs.length <= 1) return;
+    const buttons = configureTabListRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? [];
+    buttons.forEach((button, index) => {
+      const tab = configureTabs[index];
+      if (!tab) return;
+      button.id = `${configureTabPanelId}-tab-${tab.id}`;
+      button.setAttribute("aria-controls", configureTabPanelId);
+      button.tabIndex = tab.id === effectiveSettingsTab ? 0 : -1;
+    });
+  }, [pluginId, configureTabs, effectiveSettingsTab, configureTabPanelId]);
+  const onConfigureTabKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (!pluginId || configureTabs.length <= 1) return;
+    const target = event.target as HTMLElement;
+    if (target.getAttribute("role") !== "tab") return;
+    const buttons = [...(configureTabListRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? [])]
+      .filter((button) => !button.disabled);
+    const current = buttons.indexOf(target as HTMLButtonElement);
+    if (current < 0) return;
+    let next = current;
+    if (event.key === "ArrowRight") next = (current + 1) % buttons.length;
+    else if (event.key === "ArrowLeft") next = (current - 1 + buttons.length) % buttons.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = buttons.length - 1;
+    else return;
+    event.preventDefault();
+    const button = buttons[next];
+    const tab = configureTabs.find((item) => `${configureTabPanelId}-tab-${item.id}` === button.id);
+    if (tab) setActiveSettingsTab(tab.id);
+    button.focus();
+  };
   const visiblePluginGroups =
     pluginId && configureTabs.length > 1
       ? activeConfigureTab.groups
@@ -206,7 +240,11 @@ export function SettingsCategory({
   const [testingSection, setTestingSection] = useState<string | null>(null);
   const groupFields = (group: SettingsGroup): Record<string, unknown> => {
     const out: Record<string, unknown> = {};
-    for (const f of group.fields) {
+    // `test: true` is plugin-level. Tab metadata may split one authored group into
+    // several wire groups, but the endpoint must still receive the whole current
+    // plugin section (including dirty values on inactive tabs) exactly once.
+    const fieldGroups = group.plugin_id ? groups.filter((candidate) => candidate.plugin_id === group.plugin_id) : [group];
+    for (const f of fieldGroups.flatMap((candidate) => candidate.fields)) {
       const short = f.key.split(".").pop() as string;
       if (f.key in dirty) out[short] = dirty[f.key];
       else if (f.type !== "secret") out[short] = f.value;
@@ -306,13 +344,15 @@ export function SettingsCategory({
             re-pulls the schema), an empty group set is "still loading", not "nothing
             here" — don't flash the misleading empty hint. */}
         {pluginId && configureTabs.length > 1 ? (
-          <Tabs
-            responsive
-            ariaLabel={`${title} sections`}
-            items={configureTabs.map((tab) => ({ id: tab.id, label: tab.label }))}
-            active={activeSettingsTab || configureTabs[0].id}
-            onSelect={setActiveSettingsTab}
-          />
+          <div ref={configureTabListRef} onKeyDown={onConfigureTabKeyDown}>
+            <Tabs
+              responsive
+              ariaLabel={`${title} sections`}
+              items={configureTabs.map((tab) => ({ id: tab.id, label: tab.label }))}
+              active={effectiveSettingsTab}
+              onSelect={setActiveSettingsTab}
+            />
+          </div>
         ) : null}
         {!groups.length && !footer && !lead ? (
           <p className="muted">{isFetching ? "Loading settings…" : emptyHint || "Nothing to configure here."}</p>
@@ -330,7 +370,8 @@ export function SettingsCategory({
           <div
             className="settings-groups"
             role={configureTabs.length > 1 ? "tabpanel" : undefined}
-            aria-label={configureTabs.length > 1 ? activeConfigureTab.label : undefined}
+            id={configureTabs.length > 1 ? configureTabPanelId : undefined}
+            aria-labelledby={configureTabs.length > 1 ? `${configureTabPanelId}-tab-${effectiveSettingsTab}` : undefined}
           >
             {visiblePluginGroups.map((group) => (
               <div className="settings-flat-group" key={`${group.section}:${group.settings_tab?.id || "configuration"}`}>{renderGroupBody(group)}</div>
