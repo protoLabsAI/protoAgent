@@ -871,6 +871,10 @@
           "title": "0106 — Providers are a registry; every model reference names its provider"
         },
         {
+          "path": "adr/0107-context-architecture-v2.md",
+          "title": "0107 — Context Architecture v2: lifecycle, authority, and projection"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
