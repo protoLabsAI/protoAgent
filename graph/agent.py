@@ -382,6 +382,21 @@ def _build_middleware(
         fallbacks = [create_llm(config, model_name=m) for m in config.routing_fallback_models]
         middleware.append(ObservableModelFallbackMiddleware(*fallbacks))
 
+    # Self-heal the other thread-bricking history defect (ADR 0097): a replayed
+    # encrypted-reasoning blob the provider cannot verify — a cross-issuer replay
+    # after a model swap, a rotated credential, a relay that doesn't really persist
+    # reasoning state. Left alone it 400s every later turn in the thread.
+    #
+    # INSIDE the failover wrapper on purpose: a fallback attempt is exactly when a
+    # thread's reasoning items meet an endpoint that didn't mint them, and the
+    # failover middleware swallows each attempt's error and re-raises the PRIMARY
+    # one — so from outside it, that 400 is invisible. Outside provider shaping, so
+    # the retried request is still shaped for whichever model it lands on. No-op
+    # unless that specific error actually fires.
+    from graph.middleware.codex_reasoning_replay import CodexReasoningReplayRecoveryMiddleware
+
+    middleware.append(CodexReasoningReplayRecoveryMiddleware())
+
     # Plugin-contributed middleware (ADR 0032) — appended after the core chain but
     # before MessageCapture, so their before/after-model + tool hooks run and the
     # turn is still captured. Each is already an instance (factories resolved in
@@ -713,6 +728,12 @@ async def _run_subagent(
     if config.routing_fallback_models:
         sub_fallbacks = [create_llm(config, model_name=m) for m in config.routing_fallback_models]
         sub_middleware.append(ObservableModelFallbackMiddleware(*sub_fallbacks))
+    # Same history self-heal as the lead stack, in the same slot: a delegation
+    # replays the subagent's own thread, so a rejected reasoning blob bricks it the
+    # same way. See the lead chain for why this sits inside the failover wrapper.
+    from graph.middleware.codex_reasoning_replay import CodexReasoningReplayRecoveryMiddleware
+
+    sub_middleware.append(CodexReasoningReplayRecoveryMiddleware())
     # Native-OAuth wire shape — LAST, so the transform sees the final system
     # message (and sits inside PromptCapture above). Without these, a Claude/
     # ChatGPT-subscription instance could chat but every delegation failed:
