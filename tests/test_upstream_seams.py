@@ -24,7 +24,7 @@ from __future__ import annotations
 import inspect
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 from langchain_core.utils._merge import merge_dicts
 from langchain_openai import ChatOpenAI
 from langchain_openai.chat_models import base as openai_base
@@ -56,17 +56,59 @@ def test_chunk_converter_is_the_inbound_seam():
     params = list(inspect.signature(ChatOpenAI._convert_chunk_to_generation_chunk).parameters)
     assert params[1:4] == ["chunk", "default_chunk_class", "base_generation_info"]
 
+    # …and that it still converts, so this pins behavior rather than a name.
+    model = ChatOpenAI(model="gpt-4o-mini", api_key="x")
+    chunk = model._convert_chunk_to_generation_chunk(
+        {"choices": [{"delta": {"content": "hi"}, "index": 0}]},
+        AIMessageChunk,
+        None,
+    )
+    assert chunk is not None and chunk.message.text == "hi"
 
-def test_stream_dispatch_reaches_a_subclass_override_of_stream_not_stream_responses():
+
+class _FakeStream:
+    """A `responses.create(...)` result: a context manager over canned events."""
+
+    def __init__(self, events):
+        self._events = events
+
+    def __enter__(self):
+        return iter(self._events)
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _FakeResponses:
+    def __init__(self, events):
+        self._events = events
+        self.payloads: list[dict] = []
+
+    def create(self, **payload):
+        self.payloads.append(payload)
+        return _FakeStream(self._events)
+
+
+class _FakeRootClient:
+    def __init__(self, events=()):
+        self.responses = _FakeResponses(list(events))
+
+
+def test_stream_dispatch_skips_a_subclass_override_of_stream_responses():
     """`ChatOpenAI._stream` routes the Responses path with
     `super()._stream_responses(...)` — an explicit `super(ChatOpenAI, self)` bind
     that SKIPS any subclass override of `_stream_responses`. Anything that must
     wrap a Responses stream has to hook `_stream`/`_astream` instead.
 
-    This is not hypothetical: the Codex reasoning capture was first written on
+    Not hypothetical: the Codex reasoning capture was first written on
     `_stream_responses`, where it was dead code in production while every unit
-    test still passed. If upstream ever dispatches on the instance instead, this
-    test flips and the workaround can be simplified."""
+    test that armed itself still passed.
+
+    The probe therefore overrides ONLY `_stream_responses` and lets the REAL
+    `ChatOpenAI._stream` run (against a stubbed client, so nothing leaves the
+    machine). Two assertions, and both matter: the override must not be reached,
+    AND the base implementation must have run instead — without the second, a
+    `_stream` that silently did nothing would also pass."""
     reached = []
 
     class _Probe(ChatOpenAI):
@@ -74,17 +116,20 @@ def test_stream_dispatch_reaches_a_subclass_override_of_stream_not_stream_respon
             reached.append("_stream_responses")
             return iter([])
 
-        def _stream(self, *args, **kwargs):
-            reached.append("_stream")
-            return iter([])
-
     probe = _Probe(model="gpt-5-codex", api_key="x", use_responses_api=True)
+    fake = _FakeRootClient()
+    object.__setattr__(probe, "root_client", fake)
+
     list(probe._stream([HumanMessage("hi")]))
 
-    assert reached == ["_stream"], (
-        "`_stream` is the seam that actually runs. If `_stream_responses` now appears here, "
-        "langchain-openai changed its dispatch and graph/providers/codex_client.py can hook "
-        "the narrower method again."
+    assert reached == [], (
+        "langchain-openai now dispatches _stream_responses on the instance. That is the "
+        "narrower seam, so graph/providers/codex_client.py can hook it directly instead of "
+        "wrapping _stream/_astream."
+    )
+    assert fake.responses.payloads, (
+        "the base _stream_responses did not run either — this test can no longer tell "
+        "'override bypassed' from 'nothing happened'; re-derive the dispatch path."
     )
 
 
