@@ -32,19 +32,28 @@ export function UpdateNotice() {
   const [phase, setPhase] = useState<Phase>("available");
   const [pct, setPct] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const updateRef = useRef<UpdateInfo | null>(null);
   const checkInFlight = useRef<Promise<void> | null>(null);
   const interactiveRequested = useRef(false);
-  const interactiveCheckStarted = useRef(false);
-  const launchFoundUpdate = useRef(false);
+  const interactivePending = useRef(false);
+  const interactiveAuthoritative = useRef(false);
   const launchSettled = useRef<Promise<void>>(Promise.resolve());
   const lastRequestId = useRef(0);
 
   const present = useCallback((next: UpdateInfo, show: boolean) => {
+    updateRef.current = next;
     setUpdate(next);
     setPhase("available");
     setPct(0);
     setError(null);
     if (show) setOpen(true);
+  }, []);
+
+  const clearUpdate = useCallback(() => {
+    updateRef.current = null;
+    setUpdate(null);
+    setOpen(false);
+    setPhase("available");
   }, []);
 
   // One frontend check at a time. Rust applies the same single-flight contract across
@@ -54,16 +63,18 @@ export function UpdateNotice() {
     (interactive: boolean) => {
       if (interactive) {
         interactiveRequested.current = true;
-        interactiveCheckStarted.current = true;
+        interactivePending.current = true;
       }
       if (checkInFlight.current) return checkInFlight.current;
       const task = (async () => {
         try {
           const next = await api.checkUpdate();
           const shouldReport = interactiveRequested.current;
+          if (shouldReport) interactiveAuthoritative.current = true;
           if (next) {
             present(next, shouldReport);
           } else if (shouldReport) {
+            clearUpdate();
             toast({ tone: "success", title: "You're up to date", message: "This is the latest version of protoAgent." });
           }
         } catch (e) {
@@ -75,6 +86,7 @@ export function UpdateNotice() {
             });
           }
         } finally {
+          interactivePending.current = false;
           interactiveRequested.current = false;
           checkInFlight.current = null;
         }
@@ -82,7 +94,7 @@ export function UpdateNotice() {
       checkInFlight.current = task;
       return task;
     },
-    [present, toast],
+    [clearUpdate, present, toast],
   );
 
   // Launch check (#2203): the Rust shell runs ONE update check in parallel with engine
@@ -96,7 +108,6 @@ export function UpdateNotice() {
     let cancelled = false;
     let retry: number | undefined;
     let resolveSettled: (() => void) | null = null;
-    launchFoundUpdate.current = false;
     launchSettled.current = new Promise<void>((resolve) => {
       resolveSettled = resolve;
     });
@@ -127,10 +138,14 @@ export function UpdateNotice() {
         }
         return;
       }
-      launchFoundUpdate.current = Boolean(r.update);
-      // Only an interactive tray check owns presentation over launch. Ambient polling
-      // waits below and therefore can never downgrade the launch modal to a pill.
-      if (r.update && !interactiveCheckStarted.current) present(r.update, true);
+      if (r.update) {
+        // A current/available result from an interactive check is newer authority than
+        // the immutable launch snapshot. An error is not: wait for an overlapping tray
+        // check, then fall back to the launch update if that check could not answer.
+        if (interactivePending.current) await checkInFlight.current;
+        if (cancelled) return;
+        if (!interactiveAuthoritative.current) present(r.update, true);
+      }
       settle();
     };
     poll(0);
@@ -178,9 +193,9 @@ export function UpdateNotice() {
     if (!enabled) return;
     let cancelled = false;
     const run = async () => {
-      if (cancelled || update) return;
+      if (cancelled || updateRef.current) return;
       await launchSettled.current;
-      if (cancelled || launchFoundUpdate.current || update) return;
+      if (cancelled || updateRef.current) return;
       await runCheck(false);
     };
     const first = window.setTimeout(run, FIRST_CHECK_MS);
@@ -190,7 +205,7 @@ export function UpdateNotice() {
       window.clearTimeout(first);
       window.clearInterval(timer);
     };
-  }, [enabled, runCheck, update]);
+  }, [enabled, runCheck]);
 
   if (!enabled || !update) return null;
 
@@ -216,9 +231,7 @@ export function UpdateNotice() {
           message: `Review ${result.update.version} before updating.`,
         });
       } else {
-        setUpdate(null);
-        setOpen(false);
-        setPhase("available");
+        clearUpdate();
         toast({
           tone: "success",
           title: "You're up to date",

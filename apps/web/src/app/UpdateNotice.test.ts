@@ -236,4 +236,60 @@ describe("UpdateNotice launch and ambient ownership", () => {
     expect(mocks.checkUpdate).toHaveBeenCalledTimes(1);
     expect(mocks.toast).not.toHaveBeenCalled();
   });
+
+  it("resumes six-hour ambient polling after a launch update is no longer available at install", async () => {
+    vi.useFakeTimers();
+    mocks.launchUpdateResult.mockResolvedValue({ done: true, update: updateA });
+    mocks.installUpdate.mockResolvedValue({ status: "upToDate" });
+    mocks.checkUpdate.mockResolvedValue(null);
+    await act(async () => root.render(h(UpdateNotice)));
+
+    expect(document.querySelector('[data-testid="update-dialog"]')).not.toBeNull();
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    expect(mocks.checkUpdate).not.toHaveBeenCalled();
+
+    await act(async () => buttonByText("Update & Restart")?.click());
+    expect(document.querySelector('[data-testid="update-dialog"]')).toBeNull();
+
+    await act(async () => vi.advanceTimersByTimeAsync(6 * 60 * 60 * 1000 - 10_000));
+    expect(mocks.checkUpdate).toHaveBeenCalledTimes(1);
+    expect(mocks.toast).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to a stored launch update when a pre-poll tray check errors", async () => {
+    const launch = deferred<{ done: boolean; update: UpdateInfo | null }>();
+    const interactive = deferred<UpdateInfo | null>();
+    mocks.launchUpdateResult.mockReturnValue(launch.promise);
+    mocks.checkUpdate.mockReturnValue(interactive.promise);
+    await act(async () => root.render(h(UpdateNotice)));
+
+    await act(async () => mocks.eventHandler?.(1));
+    await act(async () => launch.resolve({ done: true, update: updateA }));
+    expect(document.querySelector('[data-testid="update-dialog"]')).toBeNull();
+
+    await act(async () => interactive.reject(new Error("manifest unavailable")));
+    expect(mocks.toast).toHaveBeenCalledWith(
+      expect.objectContaining({ tone: "error", title: "Couldn't check for updates", message: "manifest unavailable" }),
+    );
+    expect(document.querySelector('[data-testid="update-dialog"]')).not.toBeNull();
+    expect(document.body.textContent).toContain("Release A");
+  });
+
+  it("suppresses the immutable launch snapshot after an authoritative interactive result", async () => {
+    vi.useFakeTimers();
+    let launchDone = false;
+    mocks.launchUpdateResult.mockImplementation(async () =>
+      launchDone ? { done: true, update: updateA } : { done: false, update: null },
+    );
+    mocks.checkUpdate.mockResolvedValue(null);
+    await act(async () => root.render(h(UpdateNotice)));
+
+    await act(async () => mocks.eventHandler?.(1));
+    launchDone = true;
+    await act(async () => vi.advanceTimersByTimeAsync(1_000));
+
+    expect(mocks.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "You're up to date" }));
+    expect(document.querySelector('[data-testid="update-dialog"]')).toBeNull();
+    expect(document.body.textContent).not.toContain("Release A");
+  });
 });
