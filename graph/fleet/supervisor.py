@@ -691,6 +691,119 @@ def _record_remote_version(rid: str, version: str) -> None:
             _save_remotes(remotes)
 
 
+# ── fleet roster order (ADR 0042 hub control-plane) ───────────────────────────
+# A persisted, presentation-only ordering for the fleet list: a permutation of the
+# CURRENT member ids (host + local workspaces + remotes), keyed by IMMUTABLE id so a
+# display rename never disturbs it. Hub-scoped like fleet.json (#813) and kept in a
+# SIBLING roster.json — NOT inside fleet.json, whose {id: record} map every liveness
+# path iterates as records (a mixed-in order list would break them). This is roster
+# metadata, distinct from member identity and remote credentials — none of which it
+# touches. Read-modify-write is guarded by the existing supervisor state lock.
+
+
+def _roster_path() -> Path:
+    return manager.workspaces_root() / "roster.json"
+
+
+def _load_roster_order() -> list[str]:
+    """The saved roster order as a list of member ids (``[]`` when unsaved). Tolerant:
+    a missing / corrupt / non-UTF-8 / wrong-shaped file reads as unsaved rather than
+    raising on the ``status()`` read path that every console fleet surface goes through —
+    matching the posture ``_load_state`` / ``_load_remotes`` / ``_load_archetype_catalog``
+    already take for their own files. ``read_text()`` on invalid UTF-8 raises
+    ``UnicodeDecodeError`` (not ``JSONDecodeError``), so it is caught explicitly here —
+    otherwise a byte-corrupt roster.json would 500 both ``status()`` and GET /api/fleet."""
+    p = _roster_path()
+    if not p.exists():
+        return []
+    try:
+        d = json.loads(p.read_text())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+        log.warning("[fleet] %s unreadable (%s) — roster order treated as unsaved", p, e)
+        return []
+    order = d.get("order") if isinstance(d, dict) else d
+    if not isinstance(order, list):
+        return []
+    return [x for x in order if isinstance(x, str) and x]
+
+
+def _save_roster_order(order: list[str]) -> None:
+    from infra.paths import atomic_write
+
+    atomic_write(_roster_path(), json.dumps({"order": order}, indent=2) + "\n")
+
+
+def _known_member_ids() -> list[str]:
+    """Every currently-known fleet member id in default (discovery) order — the host,
+    then local workspaces, then remote members — mirroring EXACTLY the entries
+    ``status()`` builds, so ``set_roster_order`` validates a submission against the same
+    roster the reader reconciles against. Acquires no state lock (reads
+    ``manager.list_workspaces`` / ``list_remotes`` / ``_host_entry`` directly), so it is
+    safe to call inside a ``_state_lock()`` block without self-deadlocking."""
+    ids = [_host_entry()["id"]]
+    ids += [ws.get("id", ws["name"]) for ws in manager.list_workspaces()]
+    ids += [rec["id"] for rec in list_remotes()]
+    return ids
+
+
+def _apply_roster_order(entries: list[dict], order: list[str]) -> list[dict]:
+    """Order fleet ``entries`` (each carrying an immutable ``id``) by the saved roster
+    ``order``, reconciling live membership against it: an entry whose id appears in
+    ``order`` sorts to that rank; an entry NOT named in ``order`` (a member added since
+    the order was saved, or one never ordered) keeps its original relative position and
+    follows every ordered entry. A saved id with no live entry (a removed member) simply
+    contributes no row. Every input entry appears exactly once — nothing is lost or
+    duplicated. An empty ``order`` is a no-op (the default host/local/remote order)."""
+    if not order:
+        return entries
+    rank = {mid: i for i, mid in enumerate(order)}
+    # Stable sort: ids absent from the saved order all share the sentinel rank, so they
+    # retain discovery order among themselves and land after every id the order names.
+    return sorted(entries, key=lambda e: rank.get(str(e.get("id")), len(order)))
+
+
+def get_roster_order() -> list[str]:
+    """The persisted roster order (member ids), or ``[]`` when none is saved."""
+    return _load_roster_order()
+
+
+def set_roster_order(order: object) -> list[str]:
+    """Persist the fleet roster DISPLAY order — a COMPLETE permutation of the current
+    member ids (host + local + remote), by immutable id. Validated under the state lock
+    against the live roster so a stale or malformed submission can't corrupt saved order:
+
+      * not a list, or any non-string / blank id  → rejected
+      * a duplicate id                             → rejected
+      * an id no current member has (unknown)      → rejected
+      * a current member id left out (missing)     → rejected
+
+    On ANY rejection the saved order is left untouched and a ``FleetError`` is raised;
+    only a fully-valid permutation is written (atomic). Returns the persisted order.
+
+    Hub-only by construction like the rest of the registry: a member runs
+    ``PROTOAGENT_INSTANCE``-scoped, so its own ``roster.json`` is its own."""
+    if not isinstance(order, list):
+        raise FleetError("roster order must be a list of member ids")
+    if not all(isinstance(x, str) and x.strip() for x in order):
+        raise FleetError("roster order must be non-blank member id strings")
+    ids = list(order)
+    if len(ids) != len(set(ids)):
+        raise FleetError("roster order has duplicate member ids")
+    # Validate + persist atomically under the SAME lock every fleet.json RMW takes, so the
+    # order can't be validated against a roster a concurrent add/remove is mid-change.
+    with _state_lock():
+        current = set(_known_member_ids())
+        submitted = set(ids)
+        unknown = submitted - current
+        if unknown:
+            raise FleetError(f"roster order names unknown member(s): {', '.join(sorted(unknown))}")
+        missing = current - submitted
+        if missing:
+            raise FleetError(f"roster order is missing current member(s): {', '.join(sorted(missing))}")
+        _save_roster_order(ids)
+    return ids
+
+
 def status() -> list[dict]:
     """The host (this instance) + every workspace + remote members, with live status
     (running/stopped; for remotes, the last cached reachability probe)."""
@@ -757,7 +870,11 @@ def status() -> list[dict]:
                 "a2a": f"{url}/a2a" if url else None,
             }
         )
-    return out
+    # Apply the saved roster display order (ADR 0042 hub control-plane), reconciling live
+    # membership: ordered members first in the saved order, any member added since (or never
+    # ordered) keeps discovery order and follows. Unsaved → the default host/local/remote
+    # order built above. A plain, tolerant read — no lock, like list_remotes on this path.
+    return _apply_roster_order(out, _load_roster_order())
 
 
 def up(names: list[str] | None = None) -> list[dict]:

@@ -35,6 +35,21 @@ def register_fleet_routes(app) -> None:
         await asyncio.to_thread(supervisor.refresh_remote_probes)
         return {"agents": await asyncio.to_thread(supervisor.status)}
 
+    @app.put("/api/fleet/order")
+    async def _set_fleet_order(req: dict):
+        """Persist the fleet roster DISPLAY order (ADR 0042 hub control-plane). Body:
+        ``{order: [<member id>, ...]}`` — a COMPLETE permutation of the current member ids
+        (host + local + remote), by IMMUTABLE id (never an editable name/label). The supervisor
+        validates it under the state lock against the live roster and rejects a duplicate /
+        unknown / missing / malformed list WITHOUT touching the saved order (400); on success,
+        subsequent GET /api/fleet reads return members in this order, reconciled as members are
+        later added or removed. Hub-only — a member's ``roster.json`` is its own."""
+        try:
+            order = await asyncio.to_thread(supervisor.set_roster_order, (req or {}).get("order"))
+        except supervisor.FleetError as exc:
+            raise HTTPException(400, str(exc))
+        return {"ok": True, "order": order}
+
     @app.post("/api/fleet/remotes")
     async def _add_remote(req: dict):
         """Register a remote protoAgent as a SWITCHABLE fleet member (ADR 0042 §I): it gets a

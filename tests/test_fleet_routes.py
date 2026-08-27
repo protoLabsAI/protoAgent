@@ -353,6 +353,52 @@ def test_stop_entire_fleet(client):
     assert all(not a["running"] for a in client.get("/api/fleet").json()["agents"] if not a.get("host"))
 
 
+# ── fleet roster order (ADR 0042 hub control-plane) ───────────────────────────
+
+
+def test_put_fleet_order_persists_and_reorders(client):
+    """PUT /api/fleet/order persists a complete id permutation; the next GET /api/fleet
+    returns members in that order."""
+    client.post("/api/fleet", json={"name": "alpha", "start": False})
+    client.post("/api/fleet", json={"name": "bravo", "start": False})
+    ids = [a["id"] for a in client.get("/api/fleet").json()["agents"]]  # [host, alpha, bravo]
+    new_order = list(reversed(ids))
+
+    r = client.put("/api/fleet/order", json={"order": new_order})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True and body["order"] == new_order
+    assert [a["id"] for a in client.get("/api/fleet").json()["agents"]] == new_order
+
+
+def test_put_fleet_order_rejects_bad_payloads(client):
+    """Duplicate / unknown / missing / malformed → 400, and the saved order is untouched."""
+    client.post("/api/fleet", json={"name": "alpha", "start": False})
+    ids = [a["id"] for a in client.get("/api/fleet").json()["agents"]]  # [host, alpha]
+
+    assert client.put("/api/fleet/order", json={"order": ids}).status_code == 200  # baseline good
+    assert client.put("/api/fleet/order", json={"order": ids + ids[:1]}).status_code == 400  # duplicate
+    assert client.put("/api/fleet/order", json={"order": ids + ["nope-0000"]}).status_code == 400  # unknown
+    assert client.put("/api/fleet/order", json={"order": ids[:1]}).status_code == 400  # missing member
+    assert client.put("/api/fleet/order", json={"order": "nope"}).status_code == 400  # malformed
+    # The baseline order is still in force — no rejected payload mutated it.
+    assert [a["id"] for a in client.get("/api/fleet").json()["agents"]] == ids
+
+
+def test_put_fleet_order_reconciles_new_member(client):
+    """A member added after an order is saved appears exactly once, after the ordered
+    members, with the saved relative order retained."""
+    client.post("/api/fleet", json={"name": "alpha", "start": False})
+    ids = [a["id"] for a in client.get("/api/fleet").json()["agents"]]  # [host, alpha]
+    client.put("/api/fleet/order", json={"order": list(reversed(ids))})  # [alpha, host]
+
+    client.post("/api/fleet", json={"name": "bravo", "start": False})  # new, unordered
+    out = [a["id"] for a in client.get("/api/fleet").json()["agents"]]
+    assert out[:2] == list(reversed(ids))  # saved order kept
+    assert len(out) == 3 and len(set(out)) == 3  # bravo included once, nothing lost
+    assert out[2] not in ids  # the new member is appended last
+
+
 def test_reserved_host_name_is_400(client):
     # `host` is the reserved slug for this instance — a peer named `host` would shadow it.
     assert client.post("/api/fleet", json={"name": "host"}).status_code == 400
