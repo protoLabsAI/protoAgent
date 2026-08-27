@@ -719,7 +719,6 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         heading: str | None = None,
         memory_kind: str | None = None,
         subject: str | None = None,
-        state: Annotated[Any, InjectedState] = None,
     ) -> str:
         """Store a fact, preference, or note in long-term memory.
 
@@ -765,9 +764,6 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
             kw["memory_kind"] = memory_kind
         if subject is not None:
             kw["subject"] = subject
-        sid = _session_id_from(state) if state is not None else ""
-        if sid:
-            kw["namespace"] = sid
 
         def _write():
             try:
