@@ -10,6 +10,10 @@ does the same job over one tool alongside a2a/openai delegates and a console pan
 What remains is the ACP client library that the ``delegates`` plugin and the ACP
 runtime (ADR 0033) import:
 
+- ``dispatch_tapped(delegate, prompt, …)`` — the PUBLIC one-shot tapped dispatch seam
+  (#3235): a fresh private session (the delegate's pooled ``delegate_to`` client is
+  never touched), by-kind permissions, live tool/thought/text callbacks,
+  cancel-kills-child, teardown on every exit, returning a ``TappedResult``.
 - ``_client_for(spec)`` — get-or-create a cached ``AcpClient`` for a launch+policy
   signature (the cache key includes ``workdir``).
 - ``evict_client(spec)`` — pop one exact cached client AND terminate its subprocess.
@@ -26,12 +30,15 @@ the client applies to the coding agent's ``session/request_permission`` requests
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import itertools
 import logging
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Callable
 
-from .acp_client import AcpClient
+from .acp_client import AcpClient, ProgressCallback, TappedResult, ToolCallback
 
 log = logging.getLogger("protoagent.plugins.coding_agent")
 
@@ -237,3 +244,200 @@ async def forget_session(spec: dict) -> bool:
     except OSError:
         log.warning("[coding_agent/%s] could not delete persisted session", spec.get("name"), exc_info=True)
     return evicted or removed
+
+
+# ── the public tapped-dispatch seam (#3235) ───────────────────────────────────
+
+# Fallback turn budget when neither the call nor the delegate names one — matches
+# ``AcpClient.prompt``'s own default. A configured delegate normally carries its own
+# ``timeout_s`` (the delegates plugin defaults it to 1800s).
+_DEFAULT_TAPPED_TIMEOUT_S = 600.0
+
+
+def _delegate_spec(delegate) -> dict:
+    """Normalize ``delegate`` into the spec dict the client pool keys on.
+
+    Accepts either a spec mapping (the ``_client_for`` shape) or a delegate-shaped
+    object such as the delegates plugin's ``Delegate`` dataclass — duck-typed, so this
+    library never imports that plugin (the dependency already points the other way).
+    The object branch mirrors ``AcpAdapter._spec`` field-for-field: a tapped dispatch
+    must resolve the SAME base launch+policy signature as a ``delegate_to`` dispatch of
+    that delegate, so the per-dispatch tapped key is a true variant of the pooled key —
+    a delegate removal's ``evict_clients`` prefix match then reaps tapped clients the
+    same way it reaps conversation variants — and the permission resolver is built from
+    the same fields either way.
+    """
+    if isinstance(delegate, Mapping):
+        spec = dict(delegate)
+    else:
+        spec = {
+            "name": str(getattr(delegate, "name", "") or ""),
+            "command": str(getattr(delegate, "command", "") or ""),
+            "args": [str(a) for a in (getattr(delegate, "args", None) or [])],
+            "workdir": str(getattr(delegate, "workdir", "") or ""),
+            "env": getattr(delegate, "env", None) or None,
+            "env_remove": list(getattr(delegate, "env_remove", None) or []),
+            "permissions": str(getattr(delegate, "permissions", "") or "auto"),
+            "allow_kinds": list(getattr(delegate, "allow_kinds", None) or []),
+            "deny_kinds": list(getattr(delegate, "deny_kinds", None) or []),
+            "conversation_key": str(getattr(delegate, "conversation_key", "") or ""),
+            "permissions_ceiling": str(getattr(delegate, "permissions_ceiling", "") or ""),
+            "timeout_s": getattr(delegate, "timeout_s", None),
+        }
+    # A mapping caller may pass only the launch essentials; fill the keys the pool,
+    # the permission resolver, and the cache key index into directly.
+    spec.setdefault("name", "acp")
+    spec.setdefault("args", [])
+    spec.setdefault("env", None)
+    spec.setdefault("env_remove", [])
+    spec.setdefault("permissions", "auto")
+    spec.setdefault("allow_kinds", [])
+    spec.setdefault("deny_kinds", [])
+    if not (spec.get("command") and spec.get("workdir")):
+        from .acp_client import AcpError
+
+        raise AcpError("dispatch_tapped needs a delegate with command + workdir")
+    return spec
+
+
+# Monotonic discriminator for per-dispatch tapped clients: appended to the registry key
+# so no two tapped dispatches — and no tapped dispatch and pooled ``delegate_to``
+# dispatch — can ever share (or evict) each other's client.
+_TAPPED_SEQ = itertools.count(1)
+
+
+def _tapped_client(spec: dict) -> tuple[tuple, AcpClient]:
+    """Build the PRIVATE single-turn client for one tapped dispatch.
+
+    Deliberately NOT ``_client_for``: the pooled client for this delegate signature may
+    be serving an ordinary ``delegate_to`` turn right now, and an eviction-based start
+    (the original forget-then-reuse) terminated that dispatch mid-flight. A tapped turn
+    gets its own client instead — the pooled client, its live session, and its persisted
+    thread are never touched. ``session_id_path=None`` is what makes the turn fresh *by
+    construction*: nothing to ``session/load``, nothing persisted for a later dispatch
+    to resume.
+
+    Still registered in ``_CLIENTS`` — under ``(*_cache_key(spec), "tapped", n)``, a key
+    no pooled dispatch can collide with — so ``close_all()`` reaps an in-flight tapped
+    child on server shutdown, and a delegate removal's ``evict_clients`` prefix match
+    finds it alongside the delegate's conversation variants.
+    """
+    key = (*_cache_key(spec), "tapped", next(_TAPPED_SEQ))
+    client = AcpClient(
+        spec["command"],
+        spec["args"],
+        cwd=spec["workdir"],
+        env=spec["env"],
+        env_remove=spec.get("env_remove"),
+        name=spec["name"],
+        permission=_make_permission(spec),
+        session_id_path=None,  # fresh session/new, and nothing persisted to resume
+    )
+    _CLIENTS[key] = client
+    return key, client
+
+
+async def _reap_tapped(key: tuple, client: AcpClient) -> None:
+    """Tear down one tapped client: pop its registry entry (synchronously, so the handle
+    is ours before the first await) and reap the subprocess tree.
+
+    Cancellation-hardened: ``close()`` awaits the child, and a cancel delivered in that
+    window used to bypass the dispatch's only ``CancelledError`` handler — leaving the
+    finished turn's client popped from the registry but its process alive. Here that
+    cancel falls back to a synchronous SIGKILL of the whole tree before re-raising, so
+    the child dies on this path too. Any other close failure is swallowed: teardown is
+    best-effort, and the turn's outcome (result or original error) matters more.
+    """
+    _CLIENTS.pop(key, None)
+    try:
+        await client.close()
+    except asyncio.CancelledError:
+        client.kill_now()
+        raise
+    except Exception:  # noqa: BLE001 — teardown is best-effort
+        log.warning("[coding_agent/%s] close after tapped dispatch failed", client.name, exc_info=True)
+
+
+async def dispatch_tapped(
+    delegate,
+    prompt: str,
+    *,
+    on_tool: ToolCallback | None = None,
+    on_thought: ProgressCallback | None = None,
+    on_text: ProgressCallback | None = None,
+    timeout: float | None = None,
+) -> TappedResult:
+    """Run ONE fully-tapped coder turn against ``delegate`` and return a `TappedResult`.
+
+    The public seam for orchestrators that need more than ``delegate_to``'s prose reply
+    — live callbacks while the coder works, and the wire signals (usage, plan, stop
+    reason, dead end) when it stops. It exists so callers (the project board's build
+    loop) stop reaching into this package's private client pool (#3235). One call owns
+    the whole lifecycle:
+
+    * **fresh, private session** — the turn runs on its OWN single-shot client, never
+      the pooled one, built with no persisted-session path: nothing to ``session/load``
+      (a resumed thread would carry memory of a workdir whose contents may no longer
+      exist — the disposable-worktree caller), nothing persisted for a later dispatch
+      to resume. And because the delegate's pooled ``delegate_to`` client — possibly
+      mid-turn — and its persisted thread are never touched, starting a tapped dispatch
+      can never interrupt an in-flight ordinary dispatch of the same delegate.
+    * **permission policy** — the delegate's by-kind resolver (ADR 0024) is rebuilt
+      from the spec on every dispatch, honoring ``permissions`` / ``allow_kinds`` /
+      ``deny_kinds`` / ``permissions_ceiling``.
+    * **callback forwarding** — ``on_tool`` receives the structured tool start/end
+      event dicts, ``on_thought`` the coder's reasoning deltas, ``on_text`` the
+      answer-text deltas, exactly as ``AcpClient.prompt`` streams them. All optional
+      and best-effort: a raising callback never breaks the turn.
+    * **cancel kills the child** — ``asyncio.CancelledError`` drops the private handle
+      and synchronously SIGKILLs the coder's whole process tree before re-raising, so
+      stopping the caller stops the coder (no awaits on the cancellation path). A
+      cancel that lands *after* the turn finished, mid-teardown, is covered too: the
+      interrupted graceful close falls back to the same synchronous SIGKILL.
+    * **teardown on every exit** — success or failure, the private client is dropped
+      from the registry and its subprocess reaped; a tapped dispatch never leaves a
+      child behind (and never evicts a client a pooled dispatch is using).
+
+    Args:
+        delegate: the dispatch target — a spec mapping (``command`` + ``workdir``
+            required; ``name``/``permissions``/``env``/… optional) or a delegate-shaped
+            object such as the delegates plugin's ``Delegate`` dataclass.
+        prompt: the user turn to send.
+        on_tool: async callback for structured tool start/end event dicts.
+        on_thought: async callback for the coder's reasoning-text deltas.
+        on_text: async callback for answer-text deltas.
+        timeout: seconds to await the turn; defaults to the delegate's ``timeout_s``
+            (else 600).
+
+    Raises `AcpError` on any transport/protocol failure — with the child already torn
+    down either way.
+    """
+    spec = _delegate_spec(delegate)
+    key, client = _tapped_client(spec)
+    if timeout is None:
+        try:
+            timeout = float(spec.get("timeout_s") or 0) or _DEFAULT_TAPPED_TIMEOUT_S
+        except (TypeError, ValueError):
+            timeout = _DEFAULT_TAPPED_TIMEOUT_S
+    try:
+        reply = await client.prompt(
+            prompt,
+            tool_callback=on_tool,
+            thought_callback=on_thought,
+            text_callback=on_text,
+            timeout=timeout,
+        )
+        # Snapshot BEFORE teardown: the signals are per-client state and the client is
+        # about to be reaped.
+        result = client.tapped_result(reply)
+    except asyncio.CancelledError:
+        # Mid-cancellation: an awaited teardown would itself be cancelled before the
+        # tree died. Forget the handle and SIGKILL the whole tree synchronously.
+        _CLIENTS.pop(key, None)
+        client.kill_now()
+        raise
+    except BaseException:
+        await _reap_tapped(key, client)
+        raise
+    await _reap_tapped(key, client)
+    return result

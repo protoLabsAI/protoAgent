@@ -235,6 +235,7 @@ export default defineConfig({
             { text: "Plugin CLI", link: "/reference/plugin-cli" },
             { text: "Plugin view bridge (wire protocol)", link: "/reference/plugin-view-bridge" },
             { text: "Event bus topics", link: "/reference/plugin-events" },
+            { text: "Coding-agent dispatch (ACP)", link: "/reference/plugin-coding-agent" },
           ],
         },
         {

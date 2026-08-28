@@ -21,6 +21,10 @@ import re
 import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from plugins.coding_agent.acp_client import ProgressCallback, TappedResult, ToolCallback
 
 logger = logging.getLogger("protoagent.plugins.delegates")
 
@@ -1366,6 +1370,41 @@ class AcpAdapter(Adapter):
         except AcpError as exc:
             # Attribute it. `delegate_to` renders a DelegateError as a bare `Error: <msg>`,
             # so without the name a fan-out across several coders can't tell which one blew up.
+            raise DelegateError(f"delegate {d.name!r} ({d.command}): {exc}") from exc
+
+    async def dispatch_tapped(
+        self,
+        d: Delegate,
+        prompt: str,
+        *,
+        on_tool: ToolCallback | None = None,
+        on_thought: ProgressCallback | None = None,
+        on_text: ProgressCallback | None = None,
+        timeout: float | None = None,
+    ) -> TappedResult:
+        """One fully-tapped coder turn — live tool/thought/text callbacks plus the wire
+        signals (usage, plan, stop reason, dead end) as a ``TappedResult``.
+
+        The public alternative to reaching into ``plugins.coding_agent``'s private
+        client pool (#3235). Everything lifecycle-shaped — fresh-session forgetting,
+        the by-kind permission policy, cancel-kills-child, teardown on every exit —
+        is owned by ``plugins.coding_agent.dispatch_tapped``; this wrapper only hands
+        it the parsed ``Delegate`` (whose ``timeout_s`` becomes the default budget)
+        and attributes failures the way ``dispatch`` does. Deliberately SEPARATE from
+        ``dispatch``: that path's contract (pooled sessions, managed git, the
+        incomplete-reply marker) is unchanged — a tapped turn is one-shot by design,
+        and its stop reason rides the result rather than being folded into the text.
+        """
+        from plugins.coding_agent import dispatch_tapped
+        from plugins.coding_agent.acp_client import AcpError
+
+        try:
+            return await dispatch_tapped(
+                d, prompt, on_tool=on_tool, on_thought=on_thought, on_text=on_text, timeout=timeout
+            )
+        except AcpError as exc:
+            # Same attribution as `_prompt`: name the delegate and its command, so a
+            # fan-out across several coders can tell which one blew up.
             raise DelegateError(f"delegate {d.name!r} ({d.command}): {exc}") from exc
 
     async def _dispatch_managed(

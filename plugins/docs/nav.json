@@ -362,6 +362,10 @@
         {
           "path": "reference/plugin-events.md",
           "title": "Event bus topics"
+        },
+        {
+          "path": "reference/plugin-coding-agent.md",
+          "title": "Coding-agent dispatch (ACP)"
         }
       ]
     },

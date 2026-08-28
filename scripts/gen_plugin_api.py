@@ -24,6 +24,9 @@ What it introspects, and what that pins:
 * ``graph.plugins.testkit`` → the host-free test harness.
 * ``graph.plugins.cli._build_parser`` → the ``python -m server plugin …`` subcommands,
   read straight off argparse so flags and defaults can't drift.
+* ``plugins.coding_agent`` → the coding-agent (ACP) dispatch library: the public
+  tapped-dispatch seam (``dispatch_tapped`` / ``TappedResult``) and the client-pool
+  lifecycle helpers an orchestrator plugin may call.
 
 Prose comes from docstrings and, for dataclass fields, the comment block above the field —
 both are already reference-grade here, and generating from them means a docstring edit *is*
@@ -826,6 +829,47 @@ def page_events() -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
+def page_coding_agent() -> str:
+    import plugins.coding_agent as coding_agent
+    from plugins.coding_agent.acp_client import TappedResult
+
+    out = [
+        BANNER,
+        "# Coding-agent dispatch API",
+        "",
+        "`plugins/coding_agent` — the ACP client library behind the `acp` delegate type",
+        "([ADR 0024](/adr/0024-spawn-cli-coding-agents-acp),",
+        "[ADR 0025](/adr/0025-unified-delegate-registry-and-panel)): it launches a CLI coding",
+        "agent (protoCLI, Claude Code, Codex, …) over the Agent Client Protocol and pools one",
+        "client per launch+policy signature. Most plugins never call it — `delegate_to` (via the",
+        "delegates plugin's `AcpAdapter`) is the normal path, and it returns the coder's reply",
+        "as prose.",
+        "",
+        "This page is for **orchestrator** plugins that need more than prose: the tapped-dispatch",
+        "seam streams tool/thought/text callbacks live and returns the wire signals (usage, plan,",
+        "stop reason, dead end) while still owning the whole client lifecycle — it exists so",
+        "callers stop reaching into this package's private client pool. Callers holding a parsed",
+        "`Delegate` reach the same seam through `AcpAdapter.dispatch_tapped`. Generated from",
+        "`plugins/coding_agent/__init__.py` and `plugins/coding_agent/acp_client.py`.",
+        "",
+        "## `TappedResult`",
+        "",
+        _clean_doc(TappedResult.__doc__),
+        "",
+        "| Field | Type | Meaning |",
+        "|---|---|---|",
+    ]
+    docs = _field_docs(TappedResult)
+    for f in dataclass_fields(TappedResult):
+        # _cell the type too: `dict | None` carries a pipe that would split the row.
+        out.append(f"| `{f.name}` | {_cell(_fmt_type(f))} | {_cell(docs.get(f.name, ''))} |")
+    out += ["", "## Functions", ""]
+    for name, fn in sorted(_public_functions(coding_agent)):
+        prefix = "await " if inspect.iscoroutinefunction(fn) else ""
+        out += [f"### `{name}`", "", "```python", f"{prefix}{name}{_sig(fn)}", "```", "", _clean_doc(fn.__doc__), ""]
+    return "\n".join(out).rstrip() + "\n"
+
+
 PAGES = {
     "plugin-manifest.md": page_manifest,
     "plugin-registry-api.md": page_registry,
@@ -833,6 +877,7 @@ PAGES = {
     "plugin-testkit.md": page_testkit,
     "plugin-cli.md": page_cli,
     "plugin-events.md": page_events,
+    "plugin-coding-agent.md": page_coding_agent,
 }
 
 
