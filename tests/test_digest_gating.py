@@ -338,6 +338,41 @@ def test_config_coerces_the_policy_and_warns_on_garbage(caplog):
     assert any("prior_sessions" in r.message for r in caplog.records)
 
 
+def test_bare_off_in_yaml_turns_the_digest_off(caplog):
+    """`prior_sessions: off` written the documented way, parsed the way YAML
+    actually parses it.
+
+    YAML 1.1 reads a bare ``off`` as the BOOLEAN False (so do ``no`` and ``false``),
+    and this knob's off switch is spelled exactly that. Before the fix, False fell
+    through ``value or ""`` as blank and resolved to the DEFAULT — ``newest``, the
+    most expensive setting, the exact opposite of the request, silently. Live on the
+    dev instance that delivered a 10-session digest to an operator who had asked for
+    none. The test above passes the STRING "off" and so could never see it; these go
+    through the parser.
+    """
+    import yaml
+
+    from graph.config import _coerce_prior_sessions
+
+    for spelling in ("off", "no", "false"):
+        parsed = yaml.safe_load(f"prior_sessions: {spelling}")["prior_sessions"]
+        assert parsed is False, f"YAML changed: bare {spelling} no longer parses as False"
+        assert _coerce_prior_sessions(parsed, "newest") == "off"
+
+    # Quoted stays a plain string, and the other direction is not a value this knob
+    # has — `on`/`yes` warn and take the default rather than inventing "true".
+    assert _coerce_prior_sessions(yaml.safe_load("v: 'off'")["v"], "newest") == "off"
+    with caplog.at_level("WARNING"):
+        assert _coerce_prior_sessions(yaml.safe_load("v: on")["v"], "newest") == "newest"
+    assert any("prior_sessions" in r.message for r in caplog.records)
+
+
+def test_bare_off_reaches_the_projection_as_off():
+    """End of the wiring: a False from YAML must arrive at the projection as the
+    off policy, not merely be tidied up inside the config layer."""
+    assert ProjectionOptions.from_config(SimpleNamespace(context_prior_sessions=False)).prior_sessions_policy == "off"
+
+
 def test_from_config_reads_and_normalizes_the_policy():
     assert ProjectionOptions.from_config(SimpleNamespace(context_prior_sessions=" RELEVANT ")).prior_sessions_policy == "relevant"
     assert ProjectionOptions.from_config(SimpleNamespace(context_prior_sessions="bogus")).prior_sessions_policy == "newest"
