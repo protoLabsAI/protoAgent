@@ -879,6 +879,10 @@
           "title": "0108 — Context Architecture v2: lifecycle, authority, and projection"
         },
         {
+          "path": "adr/0109-project-board-one-board-n-repos.md",
+          "title": "0109 — project_board: one board, one store, N repos"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }

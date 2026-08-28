@@ -1,6 +1,9 @@
 # 0055 — Multi-team orchestration: federated boards over A2A (scale-out)
 
-- Status: Accepted
+- Status: Accepted. *Amended 2026-08-28:* the one-repo binding inside the
+  single-board sub-decision is superseded by
+  [ADR 0109](./0109-project-board-one-board-n-repos.md) (one board, one store,
+  N repos); the single-board shape and the federation decision stand.
 - Date: 2026-06-17
 - Builds on: ADR 0042 (fleet — slug-routed agents, remote members, `delegate_to`
   over A2A, mDNS/tailnet discovery), ADR 0024/0025 (CLI coding agents over ACP +
@@ -48,6 +51,12 @@ registry:
 - **`project_board` stays single-board.** We do **not** build a `boards:` list or
   a board registry inside the plugin. The plugin's job shrinks to "run *this*
   team's board well"; cross-team is the fleet's job.
+
+  *Superseded in part by [ADR 0109](./0109-project-board-one-board-n-repos.md)
+  (2026-08-28): the board **stays** single — still no in-process registry — but
+  it is no longer bound to a single repo. One board/one store now spans N repos,
+  with per-feature repo routing inside the plugin; cross-**team** federation
+  remains the fleet's job exactly as decided here.*
 
 ### Sub-decisions
 
