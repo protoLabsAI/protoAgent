@@ -325,12 +325,16 @@ def test_render_digest_round_trips_the_loader_bytes(tmp_path):
 
 
 def test_config_coerces_the_policy_and_warns_on_garbage(caplog):
+    """The config layer normalizes + warns but passes an unknown value through
+    (the drift guard's consumption contract); the PROJECTION layer is where an
+    unknown value reads as ``newest`` — asserted in the from_config test below."""
     from graph.config import _coerce_prior_sessions
 
     assert _coerce_prior_sessions(" Relevant ", "newest") == "relevant"
     assert _coerce_prior_sessions("off", "newest") == "off"
+    assert _coerce_prior_sessions("", "newest") == "newest"
     with caplog.at_level("WARNING"):
-        assert _coerce_prior_sessions("sometimes", "newest") == "newest"
+        assert _coerce_prior_sessions("sometimes", "newest") == "sometimes"
     assert any("prior_sessions" in r.message for r in caplog.records)
 
 

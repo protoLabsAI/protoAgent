@@ -430,18 +430,22 @@ def _coerce_budget_pct(value, default: float) -> float:
 
 
 def _coerce_prior_sessions(value, default: str) -> str:
-    """``context.prior_sessions`` → one of ``newest``/``relevant``/``off``
-    (ADR 0108 D9). Anything else falls back to the default (warned — a typo'd
-    policy must not silently change what the model sees)."""
+    """``context.prior_sessions`` normalized (ADR 0108 D9). A value outside
+    ``newest``/``relevant``/``off`` is WARNED but passed through — the config
+    layer consumes the key verbatim (test_config_drift_guard's contract); the
+    projection layer (``graph.projection._coerce_prior_sessions_policy``) reads
+    any unknown value as ``newest``, so a typo can't change what the model sees.
+    A blank value falls back to the default."""
     v = str(value or "").strip().lower()
-    if v in ("newest", "relevant", "off"):
-        return v
-    log.warning(
-        "[config] context.prior_sessions=%r is not one of newest|relevant|off — using %r",
-        value,
-        default,
-    )
-    return default
+    if not v:
+        return default
+    if v not in ("newest", "relevant", "off"):
+        log.warning(
+            "[config] context.prior_sessions=%r is not one of newest|relevant|off — treated as %r",
+            value,
+            default,
+        )
+    return v
 
 
 def _falsey(value, *, default: bool) -> bool:
