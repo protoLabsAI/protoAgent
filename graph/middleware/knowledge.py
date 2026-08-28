@@ -1,7 +1,8 @@
 """KnowledgeMiddleware — injects relevant knowledge context before LLM calls.
 
-Queries the KnowledgeStore with the last user message and adds
-top-k results to the state's `context` field.
+Queries the KnowledgeStore with the last user message and composes
+a dynamic context projection delivered ephemerally via ``wrap_model_call``
+(ADR 0108 D2) — the projection never enters the checkpointer.
 
 Also loads prior session summaries from disk and injects them as a
 <prior_sessions> block at the start of each session's context.
@@ -332,15 +333,9 @@ class KnowledgeMiddleware(AgentMiddleware):
         Guarded on the newest message being a FRESH human input: a HITL resume
         (``Command(resume=…)``) or a kicker retry re-enters the graph without new
         input, and must not recompose.
-
-        The legacy ``context`` channel is explicitly cleared either way (#2774's
-        reasoning): it is last-write-wins and checkpointer-persisted, so a value
-        left behind by an older build (or a pre-upgrade thread) would otherwise
-        be re-delivered by PromptCacheMiddleware forever.
         """
         from graph.context_frame import is_context_frame
 
-        clear = {"context": "", "context_sections": []}
         messages = state.get("messages") or []
         last = messages[-1] if messages else None
         if not isinstance(last, HumanMessage) or is_context_frame(last):
@@ -351,10 +346,10 @@ class KnowledgeMiddleware(AgentMiddleware):
         if not ctx:
             self._turn_projection = None
             self._turn_sections = None
-            return clear
+            return None
         self._turn_projection = ctx
         self._turn_sections = (composed or {}).get("context_sections")
-        return clear
+        return None
 
     def compose_context(self, state, runtime=None, *, record: bool = True) -> dict | None:
         """The dynamic-context composer behind ``before_model``.
@@ -492,11 +487,6 @@ class KnowledgeMiddleware(AgentMiddleware):
             parts.append(("Working state", working_state))
 
         if not parts:
-            # Explicitly CLEAR the channel rather than returning None (#2774,
-            # ADR 0101). ``context`` is a last-write-wins channel persisted in
-            # the checkpointer: a None here would leave the PREVIOUS call's
-            # composition in state, and PromptCacheMiddleware would re-append
-            # it — the model seeing stale injected memory attributed as current.
             return {"context": "", "context_sections": []}
 
         # Both keys always move together so a call that composes nothing never

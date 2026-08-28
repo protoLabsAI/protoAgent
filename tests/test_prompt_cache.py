@@ -1,4 +1,4 @@
-"""Tests for PromptCacheMiddleware (Anthropic caching + context delivery)."""
+"""Tests for PromptCacheMiddleware (Anthropic prompt caching)."""
 
 from types import SimpleNamespace
 
@@ -31,29 +31,27 @@ def _run(mw, req):
     return captured["req"]
 
 
-def test_anthropic_caches_stable_prefix_and_delivers_context():
+def test_anthropic_caches_stable_prefix():
     mw = PromptCacheMiddleware()
-    req = _Req("claude-opus-4-7", SystemMessage(content="STABLE PROMPT"), state={"context": "retrieved knowledge"})
+    req = _Req("claude-opus-4-7", SystemMessage(content="STABLE PROMPT"))
     out = _run(mw, req)
     blocks = out.system_message.content
     assert isinstance(blocks, list)
+    assert len(blocks) == 1
     assert blocks[0]["text"] == "STABLE PROMPT"
-    assert blocks[0]["cache_control"] == {"type": "ephemeral"}  # cached prefix
-    # context delivered AFTER the breakpoint, uncached
-    assert "retrieved knowledge" in blocks[1]["text"]
-    assert "cache_control" not in blocks[1]
+    assert blocks[0]["cache_control"] == {"type": "ephemeral"}
 
 
 def test_gateway_alias_gets_cache_blocks_by_default():
     # #2255: attempt-by-default — an alias like protolabs/* no longer silently
     # skips caching just because its NAME doesn't look Anthropic.
     mw = PromptCacheMiddleware()
-    req = _Req("protolabs/reasoning", SystemMessage(content="PROMPT"), state={"context": "knowledge here"})
+    req = _Req("protolabs/reasoning", SystemMessage(content="PROMPT"))
     out = _run(mw, req)
     blocks = out.system_message.content
     assert isinstance(blocks, list)
+    assert len(blocks) == 1
     assert blocks[0]["cache_control"] == {"type": "ephemeral"}
-    assert "knowledge here" in blocks[1]["text"]
 
 
 def test_anthropic_no_context_caches_only():
@@ -84,14 +82,6 @@ def test_force_caches_non_anthropic():
     req = _Req("protolabs/reasoning", SystemMessage(content="P"), state={})
     out = _run(mw, req)
     assert out.system_message.content[0]["cache_control"] == {"type": "ephemeral"}
-
-
-def test_disabled_still_delivers_context_but_no_cache():
-    mw = PromptCacheMiddleware(enabled=False)
-    req = _Req("claude-opus-4-7", SystemMessage(content="P"), state={"context": "ctx"})
-    out = _run(mw, req)
-    assert isinstance(out.system_message.content, str)  # no cache blocks
-    assert "ctx" in out.system_message.content
 
 
 # ── fail-loud outcome watching (#2255) ─────────────────────────────────────────

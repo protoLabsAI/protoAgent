@@ -1,19 +1,10 @@
-"""PromptCacheMiddleware — Anthropic prompt caching + knowledge-context delivery.
+"""PromptCacheMiddleware — Anthropic prompt caching for the stable system prefix.
 
-Two coupled jobs, both at the `wrap_model_call` boundary (the only place that
-sees the final ModelRequest):
-
-1. **Deliver anything staged on the legacy ``context`` channel.** Since #2776
-   (ADR 0101 D2) the dynamic context layer rides the message stream as a
-   per-turn frame, so this channel is empty on a stock build — the delivery
-   path stays for forks/plugins that write ``state["context"]`` directly, and
-   for threads checkpointed by an older build. When non-empty it appends after
-   the stable prefix, exactly as before.
-
-2. **Cache the stable prefix.** We set ``cache_control`` on the stable
-   system-prompt block (the big, turn-stable prefix: persona + tool guidance).
-   With the context block gone (#2776), nothing sits between that breakpoint
-   and the message history — the precondition for history caching (#2777).
+Sets ``cache_control`` on the stable system-prompt block (the big, turn-stable
+prefix: persona + tool guidance). Dynamic context rides the message stream as
+a per-turn frame (ADR 0108 D2, KnowledgeMiddleware), so nothing sits between
+the breakpoint and the message history — the precondition for history caching
+(#2777).
 
 **Attempt-by-default, fail loud (#2255).** Caching used to be gated on an
 Anthropic-looking model NAME — which silently disabled it for every gateway
@@ -35,8 +26,6 @@ watches the outcome instead:
   "not reporting");
 - ``force=True`` keeps meaning "the operator knows best": always attach, never
   auto-fall back (a rejection propagates instead of degrading silently).
-
-Context **delivery happens regardless** of any of this.
 """
 
 from __future__ import annotations
@@ -114,23 +103,13 @@ class PromptCacheMiddleware(AgentMiddleware):
         sysmsg = getattr(request, "system_message", None)
         if sysmsg is None:
             return request, False
-        ctx = (getattr(request, "state", None) or {}).get("context")
         cache = self._should_cache(request)
-        if not ctx and not cache:
+        if not cache:
             return request, False  # nothing to do — safe no-op
 
         stable = _message_text(sysmsg)
-        if cache:
-            # Block list: stable prefix (cached) + volatile context (uncached).
-            blocks = [{"type": "text", "text": stable, "cache_control": self._cache_control()}]
-            if ctx:
-                blocks.append({"type": "text", "text": f"\n\n# Context\n\n{ctx}"})
-            new_sys = sysmsg.model_copy(update={"content": blocks})
-        else:
-            # No caching (disabled, or this model rejected blocks): deliver
-            # context as plain appended text — universally safe.
-            new_sys = sysmsg.model_copy(update={"content": f"{stable}\n\n# Context\n\n{ctx}"})
-            return request.override(system_message=new_sys), cache
+        blocks = [{"type": "text", "text": stable, "cache_control": self._cache_control()}]
+        new_sys = sysmsg.model_copy(update={"content": blocks})
         # Rolling history breakpoints (#2777) — view-only: request.override never
         # persists, so the checkpointer's stored messages stay clean strings.
         new_msgs = self._mark_history(request)
@@ -218,7 +197,7 @@ class PromptCacheMiddleware(AgentMiddleware):
 
     def _fall_back(self, request, exc: Exception):
         """Disable blocks for this model for the session and return the plain
-        (string-delivery) retry request."""
+        (no-cache) retry request."""
         model = self._model_name(request)
         self._blocks_disabled.add(model)
         log.warning(
