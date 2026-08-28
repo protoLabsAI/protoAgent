@@ -1329,17 +1329,17 @@ while True:
 
 
 def _capture_clients(monkeypatch) -> list:
-    """Wrap the module-global client factory so a test can reach the AcpClient a
+    """Wrap the per-dispatch private-client factory so a test can reach the AcpClient a
     dispatch_tapped call created — the only handle on its subprocess."""
     created: list = []
-    real = P._client_for
+    real = P._tapped_client
 
     def capture(spec):
-        client = real(spec)
+        key, client = real(spec)
         created.append(client)
-        return client
+        return key, client
 
-    monkeypatch.setattr(P, "_client_for", capture)
+    monkeypatch.setattr(P, "_tapped_client", capture)
     return created
 
 
@@ -1397,9 +1397,10 @@ async def test_dispatch_tapped_forwards_callbacks_and_returns_wire_signals(tmp_p
     assert tools[1]["output"] == "wrote 3 lines"
     assert thoughts == ["planning the edit"]
     assert "".join(texts) == "All done"
-    # Teardown on the success path: nothing pooled, and the child is reaped.
+    # Teardown on the success path: the private client left the registry and the
+    # child is reaped.
     assert created and created[0]._proc.returncode is not None
-    assert P._cache_key(P._delegate_spec(_tapped_delegate(script, tmp_path))) not in P._CLIENTS
+    assert created[0] not in P._CLIENTS.values()
 
 
 async def test_dispatch_tapped_surfaces_a_dead_end(tmp_path):
@@ -1420,10 +1421,12 @@ async def test_dispatch_tapped_applies_the_delegate_permission_policy(fake_agent
     assert result.reply == "Hello world [reject]"
 
 
-async def test_dispatch_tapped_forgets_the_persisted_session(tmp_path, monkeypatch):
-    """Fresh-session forgetting: a persisted session id from a previous run — for an
-    agent that DOES advertise loadSession — must not be resumed. The seam deletes it
-    first, so the loader agent records session/new, never session/load."""
+async def test_dispatch_tapped_is_fresh_without_touching_the_persisted_session(tmp_path, monkeypatch):
+    """Fresh session WITHOUT clobbering shared state: even with a persisted session id
+    on disk — for an agent that DOES advertise loadSession — the tapped turn opens a
+    fresh session/new (its private client has no session-id path to load), and the
+    pooled path's persisted id survives untouched for the next delegate_to to resume
+    (first-review finding on #3235: that state belongs to the pooled path)."""
     script = tmp_path / "loader_agent.py"
     script.write_text(_LOADER_AGENT, encoding="utf-8")
     marker = tmp_path / "which.marker"
@@ -1436,7 +1439,9 @@ async def test_dispatch_tapped_forgets_the_persisted_session(tmp_path, monkeypat
     delegate = _tapped_delegate(script, tmp_path, name="fresh", env={"MARKER": str(marker)})
     result = await P.dispatch_tapped(delegate, "continue the thread", timeout=30.0)
     assert result.reply == "fresh"
-    assert marker.read_text() == "new"  # forgotten first ⇒ a fresh session/new
+    assert marker.read_text() == "new"  # a fresh session/new, never session/load
+    # The pooled thread's persisted id was neither read nor deleted.
+    assert json.loads(sess.read_text(encoding="utf-8"))["sessionId"] == "s1"
 
 
 async def test_dispatch_tapped_tears_down_on_failure(tmp_path, monkeypatch):
@@ -1449,7 +1454,7 @@ async def test_dispatch_tapped_tears_down_on_failure(tmp_path, monkeypatch):
     with pytest.raises(AcpError):
         await P.dispatch_tapped(delegate, "go", timeout=10.0)
     assert created and created[0]._proc.returncode is not None  # reaped, not leaked
-    assert P._cache_key(P._delegate_spec(delegate)) not in P._CLIENTS
+    assert created[0] not in P._CLIENTS.values()
 
 
 async def test_dispatch_tapped_cancel_kills_the_child(tmp_path, monkeypatch):
@@ -1478,7 +1483,93 @@ async def test_dispatch_tapped_cancel_kills_the_child(tmp_path, monkeypatch):
             break
         await asyncio.sleep(0.05)
     assert proc.returncode is not None, "cancel did not kill the coder subprocess"
-    assert P._cache_key(P._delegate_spec(delegate)) not in P._CLIENTS
+    assert created[0] not in P._CLIENTS.values()
+
+
+async def test_dispatch_tapped_never_evicts_the_pooled_delegate_client(fake_agent, tmp_path):
+    """A tapped dispatch must not evict or terminate the delegate's pooled
+    `delegate_to` client: the original forget-first start closed the shared pool entry,
+    interrupting an in-flight ordinary dispatch of the same delegate (first-review
+    finding on #3235). The pooled entry stays cached and its close() never fires."""
+
+    class _PooledProbe:
+        closed = False
+
+        async def close(self):
+            self.closed = True
+
+    delegate = _tapped_delegate(fake_agent, tmp_path, name="shared")
+    pooled_key = P._cache_key(P._delegate_spec(delegate))
+    probe = _PooledProbe()
+    P._CLIENTS[pooled_key] = probe
+    try:
+        result = await P.dispatch_tapped(delegate, "go", timeout=30.0)
+        assert result.reply == "Hello world [ok]"
+        assert P._CLIENTS.get(pooled_key) is probe  # still pooled…
+        assert probe.closed is False  # …and never terminated
+    finally:
+        P._CLIENTS.pop(pooled_key, None)
+
+
+async def test_dispatch_tapped_cancel_during_teardown_still_reaps_the_child(tmp_path, monkeypatch):
+    """A cancel delivered AFTER prompt() returns, while the final teardown await is
+    pending, must still kill the child — the first review of #3235 caught the success
+    path's last await sitting outside the only CancelledError handler."""
+    script = tmp_path / "tapped_agent.py"
+    script.write_text(_TAPPED_AGENT, encoding="utf-8")
+    entered_close = asyncio.Event()
+    release_close = asyncio.Event()
+    created: list = []
+    real_factory = P._tapped_client
+
+    def factory(spec):
+        key, client = real_factory(spec)
+        real_close = client.close
+
+        async def stalled_close():
+            entered_close.set()
+            await release_close.wait()  # park the teardown await so a cancel can land in it
+            await real_close()
+
+        client.close = stalled_close
+        created.append(client)
+        return key, client
+
+    monkeypatch.setattr(P, "_tapped_client", factory)
+    delegate = _tapped_delegate(script, tmp_path, name="latecancel")
+    task = asyncio.create_task(P.dispatch_tapped(delegate, "go", timeout=30.0))
+    await asyncio.wait_for(entered_close.wait(), timeout=30.0)
+    # The turn is complete and the dispatch is parked on its final teardown await.
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    proc = created[0]._proc
+    for _ in range(200):  # SIGKILLed synchronously; the loop's watcher reaps it
+        if proc.returncode is not None:
+            break
+        await asyncio.sleep(0.05)
+    assert proc.returncode is not None, "cancel during teardown left the coder subprocess un-reaped"
+    assert created[0] not in P._CLIENTS.values()
+
+
+async def test_tapped_clients_are_registered_for_shutdown_and_delegate_removal(tmp_path):
+    """The private tapped client still lands in the shared registry — under a key no
+    pooled dispatch can collide with — so a server shutdown (close_all) or a delegate
+    removal (evict_clients) reaps an in-flight tapped child instead of stranding it."""
+    spec = P._delegate_spec({"name": "proto", "command": "proto", "workdir": str(tmp_path)})
+    key_a, client_a = P._tapped_client(spec)
+    key_b, client_b = P._tapped_client(spec)
+    try:
+        assert key_a != key_b  # unique per dispatch — two tapped turns never collide
+        assert key_a != P._cache_key(spec)  # …nor with the delegate's pooled key
+        assert P._CLIENTS[key_a] is client_a and P._CLIENTS[key_b] is client_b
+        # Delegate removal's prefix match reaps tapped variants like conversation ones.
+        assert await P.evict_clients(spec) is True
+        assert key_a not in P._CLIENTS and key_b not in P._CLIENTS
+    finally:
+        P._CLIENTS.pop(key_a, None)
+        P._CLIENTS.pop(key_b, None)
 
 
 async def test_acp_adapter_dispatch_tapped_forwards_and_attributes_failures(fake_agent, tmp_path):
@@ -1500,8 +1591,9 @@ async def test_acp_adapter_dispatch_tapped_forwards_and_attributes_failures(fake
     result = await adapter.dispatch_tapped(d, "go", timeout=30.0)
     assert result.reply == "Hello world [ok]"
     assert result.stop_reason == "end_turn"
-    # The duck-typed Delegate resolves the same pool key the adapter's own spec does,
-    # so either side's teardown finds the other's client.
+    # The duck-typed Delegate resolves the same base signature the adapter's own spec
+    # does — the per-dispatch tapped key is a true variant of the pooled key, so a
+    # delegate removal's evict_clients prefix match covers tapped clients too.
     assert P._delegate_spec(d)["timeout_s"] == d.timeout_s
     assert P._cache_key(P._delegate_spec(d)) == P._cache_key(AcpAdapter._spec(d))
 

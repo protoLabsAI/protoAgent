@@ -64,10 +64,13 @@ reason, dead end) when it stops. It exists so callers (the project board's build
 loop) stop reaching into this package's private client pool ([#3235](https://github.com/protoLabsAI/protoAgent/issues/3235)). One call owns
 the whole lifecycle:
 
-* **fresh-session forgetting** — any pooled client for this delegate signature is
-  evicted and its persisted ACP session id deleted *before* dispatch, so the turn
-  opens a fresh `session/new` instead of `session/load`-resuming a thread whose
-  workdir contents may no longer exist (the disposable-worktree caller).
+* **fresh, private session** — the turn runs on its OWN single-shot client, never
+  the pooled one, built with no persisted-session path: nothing to `session/load`
+  (a resumed thread would carry memory of a workdir whose contents may no longer
+  exist — the disposable-worktree caller), nothing persisted for a later dispatch
+  to resume. And because the delegate's pooled `delegate_to` client — possibly
+  mid-turn — and its persisted thread are never touched, starting a tapped dispatch
+  can never interrupt an in-flight ordinary dispatch of the same delegate.
 * **permission policy** — the delegate's by-kind resolver ([ADR 0024](/adr/0024-spawn-cli-coding-agents-acp)) is rebuilt
   from the spec on every dispatch, honoring `permissions` / `allow_kinds` /
   `deny_kinds` / `permissions_ceiling`.
@@ -75,11 +78,14 @@ the whole lifecycle:
   event dicts, `on_thought` the coder's reasoning deltas, `on_text` the
   answer-text deltas, exactly as `AcpClient.prompt` streams them. All optional
   and best-effort: a raising callback never breaks the turn.
-* **cancel kills the child** — `asyncio.CancelledError` pops the pooled handle
+* **cancel kills the child** — `asyncio.CancelledError` drops the private handle
   and synchronously SIGKILLs the coder's whole process tree before re-raising, so
-  stopping the caller stops the coder (no awaits on the cancellation path).
-* **teardown on every exit** — success or failure, the subprocess is evicted from
-  the pool and reaped; a tapped dispatch never leaves a child behind.
+  stopping the caller stops the coder (no awaits on the cancellation path). A
+  cancel that lands *after* the turn finished, mid-teardown, is covered too: the
+  interrupted graceful close falls back to the same synchronous SIGKILL.
+* **teardown on every exit** — success or failure, the private client is dropped
+  from the registry and its subprocess reaped; a tapped dispatch never leaves a
+  child behind (and never evicts a client a pooled dispatch is using).
 
 **Args:**
 
