@@ -93,6 +93,59 @@
   background: var(--brand-violet);
 }
 
+/* The per-turn projection (ADR 0108 D2) is neither the cacheable prefix nor the
+   legacy tail — its own tint, or the breakdown can't show the one split it exists
+   to show. */
+.prompt-viewer__budget-fill--projected {
+  background: var(--pl-color-accent, var(--brand-violet));
+  opacity: 0.75;
+}
+
+/* A section the delivery budget shed (ADR 0108 D6) — striped so "this was cut"
+   reads without relying on the ✂ glyph alone. */
+.prompt-viewer__budget-fill--shed {
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgb(255 255 255 / 45%) 0,
+    rgb(255 255 255 / 45%) 2px,
+    transparent 2px,
+    transparent 5px
+  );
+}
+
+.prompt-viewer__shed {
+  color: var(--pl-color-fg-subtle);
+}
+
+/* Delivery budget (ADR 0108 D6): the CEILING on projected context, distinct from
+   the section-size bars above it. */
+.prompt-viewer__delivery-budget {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  padding: 8px 0;
+}
+
+.prompt-viewer__budget-fill--delivery {
+  background: var(--brand-violet);
+}
+
+.prompt-viewer__overflow {
+  color: var(--pl-color-fg-subtle);
+  font-size: 11px;
+}
+
+/* The speculative next-call preview is a projection, not a record — say so
+   before any of its numbers are read. */
+.prompt-viewer__speculative {
+  font-size: 12px;
+  color: var(--pl-color-fg-subtle);
+  border-left: 2px solid var(--brand-violet);
+  padding: 4px 0 4px 8px;
+  margin: 4px 0;
+}
+
 .prompt-viewer__budget-tokens {
   color: var(--pl-color-fg-subtle);
   font-variant-numeric: tabular-nums;

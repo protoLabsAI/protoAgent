@@ -15,9 +15,18 @@ export function fmtTok(n: number): string {
   return String(n);
 }
 
-/** Byte-for-byte what the model received: stable prefix + volatile tail. */
+/** Byte-for-byte what the model received: stable prefix, then the per-turn
+ *  projection, then the legacy volatile tail — the same order `_sections`
+ *  reports (stable → projected → context).
+ *
+ *  Post-#3234 captures and the /preview synthesis carry an EMPTY
+ *  `system.context` and put everything in `projected_context`, so reading only
+ *  stable+context renders an empty body for exactly the calls this dialog is
+ *  now most used to inspect. Pre-#3188 rows are the mirror case (context set,
+ *  projected empty), and concatenating both is safe because the server never
+ *  populates the two channels for the same call. */
 export function promptText(call: PromptCall): string {
-  return `${call.system.stable}${call.system.context}`;
+  return `${call.system.stable}${call.projected_context ?? ""}${call.system.context}`;
 }
 
 /** One segmented-Tabs item per model call of the turn. */
@@ -33,10 +42,55 @@ export function usageLine(call: PromptCall): string {
   return `in ${fmtTok(u.input_tokens)}${cache} · out ${fmtTok(u.output_tokens)}`;
 }
 
-/** "stable 41.2k chars · context tail 1.3k chars" — where the split lands. */
+/** "stable 41.2k chars · context tail 1.3k chars" — where the split lands. The
+ *  tail counts BOTH channels: post-#3234 calls carry the projection in
+ *  `projected_context` and leave `system.context` empty, and reporting 0 there
+ *  read as "nothing dynamic was delivered" when several kB had been. */
 export function splitLine(call: PromptCall): string {
-  const tail = call.system.context.length;
+  const tail = (call.projected_context ?? "").length + call.system.context.length;
   return `stable ${fmtTok(call.system.stable.length)} chars · context tail ${fmtTok(tail)} chars`;
+}
+
+/** The delivery budget as a renderable summary (ADR 0108 D6) — the ceiling, what
+ *  was delivered against it, the headroom left, and a fill percent for the bar.
+ *  `null` when the call composed unbounded (no budget in force), which is the
+ *  common case on a large-window model.
+ *
+ *  Distinct from `budgetRows` below: this is the DELIVERY CEILING, that is the
+ *  section-size breakdown. They answer different questions and must not be
+ *  labeled alike. */
+export type DeliveryBudget = {
+  chars: number;
+  used: number;
+  headroom: number;
+  pct: number;
+  overflow: { label: string; dropped_items: number; dropped_chars: number }[];
+};
+
+export function deliveryBudget(call: PromptCall): DeliveryBudget | null {
+  const b = call.budget;
+  if (!b || !b.chars) return null;
+  const used = Math.max(0, b.used);
+  return {
+    chars: b.chars,
+    used,
+    headroom: Math.max(0, b.chars - used),
+    // Clamped: an over-budget compose (working state + always-on alone
+    // exceeding the ceiling, which D6 delivers rather than sheds) must render
+    // as a full bar, not overflow the track.
+    pct: Math.min(100, Math.max(1, Math.round((used / b.chars) * 100))),
+    overflow: b.overflow ?? [],
+  };
+}
+
+/** "Prior sessions −3 entries (−1.2k chars) · RAG hits −8 entries (−9.1k chars)"
+ *  — what the budget dropped, in shed order. Empty when nothing was shed. */
+export function overflowLine(call: PromptCall): string {
+  const rows = call.budget?.overflow ?? [];
+  if (!rows.length) return "";
+  return rows
+    .map((o) => `${o.label} −${o.dropped_items} ${o.dropped_items === 1 ? "entry" : "entries"} (−${fmtTok(o.dropped_chars)} chars)`)
+    .join(" · ");
 }
 
 /** One renderable budget row (#2243 P2): the section plus its share of the

@@ -1438,7 +1438,20 @@ export type PromptSection = {
   label: string;
   chars: number;
   approx_tokens: number;
-  scope: "stable" | "context";
+  // "projected" (ADR 0108 D2/#3191) is the per-turn projection that replaced the
+  // legacy "context" tail — both appear so pre- and post-#3188 captures render.
+  scope: "stable" | "projected" | "context";
+  // ADR 0108 D6 — the delivery budget shed part of this section (or all of it).
+  // Absent means untouched; the server only stamps the truthy case.
+  truncated?: boolean;
+};
+// The delivery budget in force for a call (ADR 0108 D6). `chars` is the ceiling,
+// `used` what was delivered; `overflow` names what the budget dropped to fit.
+// Null/absent when delivery was unbounded (no model window known, or budget_pct 0).
+export type PromptBudget = {
+  chars: number;
+  used: number;
+  overflow: { label: string; dropped_items: number; dropped_chars: number }[];
 };
 export type PromptCall = {
   call_index: number;
@@ -1451,12 +1464,21 @@ export type PromptCall = {
   // transform changed it. wire_differs with an EMPTY wire = nothing reached the
   // wire at all (the #2519 failure class). Optional for pre-#2527 server skew.
   system: { stable: string; context: string; wire_differs?: boolean; wire?: string };
+  // ADR 0108 D2 (#3191) — the per-turn projection as delivered. The legacy
+  // `system.context` tail is empty on post-#3234 captures and on the preview,
+  // so the readable prompt is stable + projected_context + context.
+  projected_context?: string;
   // Optional for skew with pre-P2 servers; empty = captured unsegmented.
   sections?: PromptSection[];
+  // ADR 0108 D6 — the ceiling this call composed under; null when unbounded.
+  budget?: PromptBudget | null;
   // #2388 P3 — set on rows captured inside a subagent run; "" on main-loop calls.
   subagent_type?: string;
   // #2388 P3 — true on the speculative next-call preview (usage is all zeros).
   preview?: boolean;
+  // #2388 P3 — the preview ran the dynamic layer WITHOUT a model call or an
+  // injection-log write, so it is a projection of the next turn, not a record.
+  speculative?: boolean;
   // #2527 — provider delivery note on the preview (how the text ships on this wire).
   delivery?: string;
   usage: PromptCallUsage;
