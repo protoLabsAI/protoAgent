@@ -127,6 +127,11 @@ class ProjectionOptions:
         # gives ``budget_pct: 0``, so direct construction can't disagree with it.
         if self.budget_chars is not None and self.budget_chars <= 0:
             object.__setattr__(self, "budget_chars", None)
+        # Same reason for the digest policy: "OFF"/" Relevant " constructed
+        # directly must mean what from_config makes of them, not silently newest.
+        normalized = _coerce_prior_sessions_policy(self.prior_sessions_policy)
+        if normalized != self.prior_sessions_policy:
+            object.__setattr__(self, "prior_sessions_policy", normalized)
 
     @classmethod
     def from_config(cls, config) -> ProjectionOptions:
@@ -688,10 +693,21 @@ def _load_digest(
     Never raises."""
     try:
         if loader is not None:
+            # Decide kwargs-vs-bare from the SIGNATURE, once. A catch-and-retry on
+            # TypeError would silently re-invoke a modern loader that raised
+            # TypeError internally — shipping a digest with the exclusion dropped.
+            # An unreadable signature (C callable, mock) is assumed modern.
             try:
-                out = loader(query=query, exclude_session_id=exclude_session_id)
-            except TypeError:  # legacy zero-arg loader (tests, older callers)
-                out = loader()
+                import inspect
+
+                params = inspect.signature(loader).parameters
+                accepts = any(
+                    p.kind is inspect.Parameter.VAR_KEYWORD or p.name in ("query", "exclude_session_id")
+                    for p in params.values()
+                )
+            except (TypeError, ValueError):
+                accepts = True
+            out = loader(query=query, exclude_session_id=exclude_session_id) if accepts else loader()
         else:
             from graph.middleware.memory import load_digest
 

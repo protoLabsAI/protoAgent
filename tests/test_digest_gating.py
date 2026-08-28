@@ -351,3 +351,78 @@ def test_yaml_section_maps_prior_sessions(tmp_path):
     cfg_path.write_text("context:\n  prior_sessions: relevant\n", encoding="utf-8")
     cfg = LangGraphConfig.from_yaml(str(cfg_path))
     assert cfg.context_prior_sessions == "relevant"
+
+
+# ---------------------------------------------------------------------------
+# Review round: pool refill on the production path (B2) + hardening
+# ---------------------------------------------------------------------------
+
+
+def test_middleware_digest_refills_when_the_active_session_is_dropped(tmp_path):
+    """The shared TTL pool holds one MORE entry than the digest shows, and the
+    trim runs AFTER the per-call exclusion — so a session whose own summary is
+    dropped still gets a full-length digest instead of one entry short."""
+    from langchain_core.messages import HumanMessage
+
+    from graph.middleware.knowledge import KnowledgeMiddleware
+
+    now = time.time()
+    # 11 summaries: "newest" is the active session, then s01 (newest) … s10.
+    _write(tmp_path, "active", "the current thread", mtime=now)
+    for i in range(1, 11):
+        _write(tmp_path, f"s{i:02d}", f"topic {i}", mtime=now - i * 60)
+
+    mw = KnowledgeMiddleware(None)
+    mw._prior_sessions_cache = mw.load_memory(memory_path=str(tmp_path))
+    mw._prior_sessions_loaded_at = time.monotonic()
+
+    def _ids(session_id: str) -> list[str]:
+        mw.compose_context(
+            {"messages": [HumanMessage(content="hi")], "session_id": session_id}, record=False
+        )
+        return list(mw._prior_sessions_ids)
+
+    mine = _ids("active")
+    assert "active" not in mine
+    assert len(mine) == 10, f"digest ran short: {mine}"
+    assert "s10" in mine  # the spare refilled the slot the exclusion freed
+
+    # A session that isn't in the pool sees the plain newest-10 (active included).
+    other = _ids("someone-else")
+    assert other[0] == "active" and len(other) == 10 and "s10" not in other
+
+
+def test_modern_loader_raising_typeerror_is_not_retried_bare(monkeypatch):
+    """A TypeError raised INSIDE a modern loader must not trigger the legacy
+    bare-call retry — that would ship a digest with the exclusion silently
+    dropped. The kwargs-vs-bare decision comes from the signature."""
+    _quiet_working_state(monkeypatch)
+    calls = {"n": 0}
+
+    def loader(*, query="", exclude_session_id=""):
+        calls["n"] += 1
+        raise TypeError("boom inside the loader")
+
+    p = compose_projected_context(
+        "q", None, None, {}, record=False, options=ProjectionOptions(), prior_sessions=loader
+    )
+    assert calls["n"] == 1  # invoked once, not retried
+    assert p.digest_ids == [] and "<prior_sessions" not in p.text
+
+
+def test_directly_constructed_options_normalize_the_policy():
+    """``ProjectionOptions(prior_sessions_policy="OFF")`` must mean what
+    from_config makes of it, not silently newest."""
+    assert ProjectionOptions(prior_sessions_policy="OFF").prior_sessions_policy == "off"
+    assert ProjectionOptions(prior_sessions_policy=" Relevant ").prior_sessions_policy == "relevant"
+    assert ProjectionOptions(prior_sessions_policy="bogus").prior_sessions_policy == "newest"
+
+
+def test_off_policy_holds_when_constructed_uppercase(monkeypatch):
+    _quiet_working_state(monkeypatch)
+    loader, calls = _spy_loader()
+    compose_projected_context(
+        "q", None, None, {}, record=False,
+        options=ProjectionOptions(prior_sessions_policy="OFF"), prior_sessions=loader,
+    )
+    assert calls["n"] == 0

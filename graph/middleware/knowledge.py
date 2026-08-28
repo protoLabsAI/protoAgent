@@ -113,6 +113,7 @@ class KnowledgeMiddleware(AgentMiddleware):
         self._prior_sessions_pool: list | None = None
         self._prior_sessions_dir_exists: bool = True
         self._prior_sessions_max_tokens: int = 2000
+        self._prior_sessions_max: int = 10  # entries the digest SHOWS (the pool holds one spare)
         # ADR 0108 D2: the per-turn projection is composed in before_agent and
         # delivered ephemerally via wrap_model_call (request.override) so it
         # never enters the checkpointer.  Stable within the turn's tool loop.
@@ -157,14 +158,19 @@ class KnowledgeMiddleware(AgentMiddleware):
         from graph.middleware.memory import finish_digest, load_digest_pool
         from graph.middleware.memory import memory_path as _memory_path
 
-        pool, exists = load_digest_pool(memory_path or _memory_path(), max_sessions)
-        # Stash the PRE-TRIM pool (ADR 0108 D9): _cached_digest re-filters and
-        # re-renders per call so the active-session exclusion is per session
-        # while the disk read stays TTL-cached.
+        # One MORE than the digest shows (ADR 0108 D9): the cache is shared across
+        # sessions, so the active-session exclusion can only run per call — the
+        # spare entry is what refills the digest when the caller's own summary is
+        # dropped from the pool. Trimmed back to max_sessions in _cached_digest,
+        # AFTER that filter, so the refill happens on the path production uses.
+        pool, exists = load_digest_pool(memory_path or _memory_path(), max_sessions + 1)
+        # Stash the PRE-TRIM pool: _cached_digest re-filters and re-renders per
+        # call while the disk read stays TTL-cached.
         self._prior_sessions_pool = list(pool)
         self._prior_sessions_dir_exists = exists
         self._prior_sessions_max_tokens = max_tokens
-        res = finish_digest(pool, max_tokens, dir_exists=exists)
+        self._prior_sessions_max = max_sessions
+        res = finish_digest(pool[:max_sessions], max_tokens, dir_exists=exists)
         self._prior_sessions_ids = [e.session_id for e in res.entries]
         return res.block
 
@@ -203,7 +209,13 @@ class KnowledgeMiddleware(AgentMiddleware):
         pool = self._prior_sessions_pool
         if exclude_session_id:
             pool = [e for e in pool if e.session_id != exclude_session_id]
-        res = finish_digest(pool, self._prior_sessions_max_tokens, dir_exists=self._prior_sessions_dir_exists)
+        # Trim AFTER the exclusion (the pool holds one spare) so dropping the
+        # caller's own summary refills from disk instead of shortening the digest.
+        res = finish_digest(
+            pool[: self._prior_sessions_max],
+            self._prior_sessions_max_tokens,
+            dir_exists=self._prior_sessions_dir_exists,
+        )
         self._prior_sessions_ids = [e.session_id for e in res.entries]
         return res
 

@@ -165,8 +165,10 @@ prompt layer, don't just hope the store stays clean). Three parts, in order:
    **active session's own summary is never injected as a "prior" session**
    (it is the newest file on disk from turn 2 on — the loader excludes it
    before the newest-N cut, so the digest refills instead of running short).
-   Under `newest` the newest-N pool is cached with a 60 s TTL and the
-   per-session exclusion + token trim run per call; `relevant` reads fresh
+   Under `newest` the shared cache holds one *more* summary than the digest
+   shows, refreshed on a 60 s TTL; the per-session exclusion, the length trim
+   and the token trim then run per call, so dropping the caller's own summary
+   refills the freed slot rather than shortening its digest. `relevant` reads fresh
    (query-dependent by definition — one index sync, one FTS query, up to N
    small JSON reads per turn). The digest is suppressed on goal-driven turns.
    The full summary of any listed session is one tool call away with
