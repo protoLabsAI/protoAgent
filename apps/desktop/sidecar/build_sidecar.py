@@ -258,7 +258,17 @@ BR_FETCH_RAW_URL = "https://raw.githubusercontent.com/protoLabsAI/projectBoard-p
 def load_br_fetch(source: str | None = None, *, ref: str | None = None):
     """The project_board plugin's ``br_fetch`` module — the SINGLE source of the
     br pin. Loaded from a checkout (``PROJECT_BOARD_SRC``) or the plugin repo's
-    raw file, and exec'd standalone (its module level is stdlib-only by design)."""
+    raw file, and exec'd standalone (its module level is stdlib-only by design).
+
+    The module is REGISTERED in ``sys.modules`` before it is exec'd. That is not
+    tidiness: ``br_fetch`` uses postponed annotations, so its ``@dataclass``
+    reaches ``dataclasses._is_type``, which resolves the class's own module with
+    ``sys.modules.get(cls.__module__).__dict__``. Unregistered, that ``get``
+    returns None and the build dies with a bare
+    ``AttributeError: 'NoneType' object has no attribute '__dict__'`` — which is
+    what took out the darwin and linux legs of the v0.155.0 desktop build. The
+    registration is undone afterwards so a build process is left as it was found."""
+    import sys
     import types
 
     source = os.environ.get(ENV_PROJECT_BOARD_SRC, "").strip() if source is None else source
@@ -275,9 +285,18 @@ def load_br_fetch(source: str | None = None, *, ref: str | None = None):
         origin = BR_FETCH_RAW_URL.format(ref=ref)
         with urllib.request.urlopen(origin, timeout=60) as resp:
             code = resp.read().decode("utf-8")
-    module = types.ModuleType("project_board_br_fetch")
+    name = "project_board_br_fetch"
+    module = types.ModuleType(name)
     module.__file__ = origin
-    exec(compile(code, origin, "exec"), module.__dict__)
+    previous = sys.modules.get(name)
+    sys.modules[name] = module
+    try:
+        exec(compile(code, origin, "exec"), module.__dict__)
+    finally:
+        if previous is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = previous
     return module
 
 
