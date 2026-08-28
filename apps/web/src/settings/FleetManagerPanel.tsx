@@ -1,7 +1,7 @@
 import "../fleet/fleet.css";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link2, Pencil, Play, Plus, Radar, Server, Square, Trash2, Unlink2 } from "lucide-react";
+import { ChevronDown, ChevronUp, GripVertical, Link2, Pencil, Play, Plus, Radar, Server, Square, Trash2, Unlink2 } from "lucide-react";
 import { useState } from "react";
 
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
@@ -14,7 +14,7 @@ import { QuickSetting } from "./QuickSetting";
 import { agentHref, api, currentSlug } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { fleetQuery, queryKeys, settingsSchemaQuery } from "../lib/queries";
-import type { DiscoveredAgent, FleetAgent, SettingsGroup } from "../lib/types";
+import type { DiscoveredAgent, FleetAgent, FleetStatus, SettingsGroup } from "../lib/types";
 
 /** The manual add-remote form is submittable only with a name and an http(s) URL. Exported
  * (pure) so the enable rule is unit-tested without rendering the panel. The server does the
@@ -62,6 +62,96 @@ export function updateAutostartRoster(
 ): string[] {
   const others = roster.filter((entry) => entry !== agent.id && entry !== agent.name);
   return enabled ? [...others, agent.id] : others;
+}
+
+// ── Manual roster reordering (#3197) ──────────────────────────────────────────
+// DS-component audit (per the slice's requirement): the installed @protolabsai/ui catalog
+// (ai · app · command · data · forms · markdown · menu · navigation · overlays · primitives ·
+// splash · styles · theming · tool) ships NO sortable / reorderable-list primitive, so there
+// is nothing to adopt. Rather than pull in a drag-and-drop dependency (none is installed) or
+// stand up a bespoke *reusable* DnD component — which the ledger says must be preceded by an
+// upstream protoContent issue — the reorder interaction is implemented INLINE in this panel
+// with the native HTML5 Drag-and-Drop API plus DS <Button> move controls. It adds no
+// dependency and no reusable component, so that upstream gate is not crossed by this slice;
+// generalizing a DS <Sortable> would be the upstream ask if reorder UI is ever reused.
+//
+// The functions below are pure and exported so the ordering math (payload order, drag/control
+// reordering, list boundaries, the equivalent non-pointer path, and the optimistic/rollback
+// reconciliation) is unit-tested without rendering the panel.
+
+/** The COMPLETE, immutable-id permutation the reorder API requires — stable ids in display
+ * order, never editable names/labels (a rename must not perturb order). The server rejects
+ * anything but a complete permutation of the live roster (#3200). */
+export function fleetOrderIds(agents: Pick<FleetAgent, "id">[]): string[] {
+  return agents.map((a) => a.id);
+}
+
+/** Move the item at `from` to `to`, returning a NEW array. An out-of-range or equal index is
+ * a no-op (returns the same array) so a drop onto self or a move past a list edge can't drop,
+ * duplicate, or lose a row. */
+export function moveInList<T>(list: T[], from: number, to: number): T[] {
+  if (from === to || from < 0 || from >= list.length || to < 0 || to >= list.length) return list;
+  const next = list.slice();
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  return next;
+}
+
+/** Reorder the roster by DRAG: the dragged member (`sourceId`) lands at the slot of the row it
+ * was dropped on (`targetId`). An unknown id or a self-drop is a no-op. */
+export function reorderByDrag(agents: FleetAgent[], sourceId: string, targetId: string): FleetAgent[] {
+  const from = agents.findIndex((a) => a.id === sourceId);
+  const to = agents.findIndex((a) => a.id === targetId);
+  if (from < 0 || to < 0) return agents;
+  return moveInList(agents, from, to);
+}
+
+/** Reorder the roster by an explicit move CONTROL — the accessible, non-pointer path that must
+ * be EQUIVALENT to a drag: shift the member one slot up/down. A move that would cross a list
+ * boundary is a no-op (the control is disabled there too). */
+export function moveMember(agents: FleetAgent[], id: string, dir: "up" | "down"): FleetAgent[] {
+  const from = agents.findIndex((a) => a.id === id);
+  if (from < 0) return agents;
+  return moveInList(agents, from, dir === "up" ? from - 1 : from + 1);
+}
+
+/** Whether a member at `index` can move one slot in `dir` — false at the matching list
+ * boundary (top can't move up, bottom can't move down). */
+export function canMove(index: number, length: number, dir: "up" | "down"): boolean {
+  return dir === "up" ? index > 0 : index < length - 1;
+}
+
+/** The move control's `disabled` state: at the list boundary OR while a reorder save is in
+ * flight. The busy gate keeps a single order in reconciliation at a time — the optimistic
+ * write and its invalidation own the roster until they settle. */
+export function moveDisabled(index: number, length: number, dir: "up" | "down", pending: boolean): boolean {
+  return pending || !canMove(index, length, dir);
+}
+
+/** The move control's accessible name. The control is icon-only, so it needs a real label, and
+ * it names the member (display `label ?? name`, never the id) so a screen reader announces
+ * WHICH row moves and in which direction. */
+export function moveLabel(dir: "up" | "down", agent: Pick<FleetAgent, "name" | "label">): string {
+  return `Move ${agent.label ?? agent.name} ${dir}`;
+}
+
+/** Reorder a roster to match a complete id permutation, PRESERVING every row object (only the
+ * sequence changes) — the optimistic write the reorder mutation applies, and the shape a
+ * successful save's reconciling GET returns. Ids not present are dropped; any roster member
+ * missing from `order` is kept, appended in its original order — so an in-flight roster change
+ * (a poll landing mid-reorder) can never lose a row. */
+export function orderAgentsByIds(agents: FleetAgent[], order: string[]): FleetAgent[] {
+  const byId = new Map(agents.map((a) => [a.id, a]));
+  const seen = new Set(order);
+  const ordered = order.map((id) => byId.get(id)).filter((a): a is FleetAgent => Boolean(a));
+  const leftover = agents.filter((a) => !seen.has(a.id));
+  return [...ordered, ...leftover];
+}
+
+/** True when two id sequences are identical — a boundary move or a self-drop yields the same
+ * order, so there's nothing to submit. Guards the mutation from a no-op round-trip. */
+export function sameOrder(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((id, i) => id === b[i]);
 }
 
 // Fleet manager (ADR 0042) — Settings → Agents. Lists the workspace agents with live
@@ -311,6 +401,47 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
     onSettled: () => qc.invalidateQueries({ queryKey: queryKeys.fleet }),
   });
 
+  // Manual roster reordering (#3197). Submit the COMPLETE immutable-id order and write it
+  // optimistically so the row jumps immediately; then invalidate queryKeys.fleet on BOTH
+  // success and failure so the 3s polling query stays authoritative — a rejected save rolls
+  // the roster back and the reconciling GET restores the server's order without losing a row.
+  const reorder = useMutation({
+    mutationFn: (order: string[]) => api.reorderFleet(order),
+    onMutate: async (order) => {
+      await qc.cancelQueries({ queryKey: queryKeys.fleet });
+      const previous = qc.getQueryData<FleetStatus>(queryKeys.fleet);
+      if (previous) {
+        qc.setQueryData<FleetStatus>(queryKeys.fleet, {
+          ...previous,
+          agents: orderAgentsByIds(previous.agents, order),
+        });
+      }
+      return { previous };
+    },
+    onError: (e, _order, ctx) => {
+      if (ctx?.previous) qc.setQueryData<FleetStatus>(queryKeys.fleet, ctx.previous);
+      toast({ tone: "error", title: "Couldn't reorder the fleet", message: errMsg(e) });
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: queryKeys.fleet }),
+  });
+  // The stable id of the row currently being dragged — held in component state, not the drag
+  // event's dataTransfer, so the pointer path reorders the same way the buttons do.
+  const [dragId, setDragId] = useState<string | null>(null);
+  // Reorder only when there's more than one member; a single row (or the discovery results,
+  // which are NOT members) has nothing to reorder, so the affordances don't render there.
+  const reorderable = agents.length > 1;
+  const submitOrder = (nextAgents: FleetAgent[]) => {
+    if (reorder.isPending) return; // one order reconciling at a time (the busy gate)
+    const order = fleetOrderIds(nextAgents);
+    if (sameOrder(order, fleetOrderIds(agents))) return; // boundary move / self-drop → no-op
+    reorder.mutate(order);
+  };
+  const onDropRow = (targetId: string) => {
+    const source = dragId;
+    setDragId(null);
+    if (source && source !== targetId) submitOrder(reorderByDrag(agents, source, targetId));
+  };
+
   return (
     <section className="panel stage-panel">
       <PanelHeader
@@ -366,10 +497,62 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
           />
         ) : (
           <ul className="fleet-list">
-            {agents.map((a) => {
+            {agents.map((a, idx) => {
               const isActive = slugOf(a) === slug; // slug = stable id, not name
               return (
-                <li key={a.id} className={`fleet-row${isActive ? " active" : ""}`}>
+                <li
+                  key={a.id}
+                  className={`fleet-row${isActive ? " active" : ""}${dragId === a.id ? " dragging" : ""}`}
+                  onDragOver={reorderable ? (e) => e.preventDefault() : undefined}
+                  onDrop={
+                    reorderable
+                      ? (e) => {
+                          e.preventDefault();
+                          onDropRow(a.id);
+                        }
+                      : undefined
+                  }
+                >
+                  {/* Manual reordering (#3197): a drag handle (native HTML5 DnD — the whole row is
+                      the drop target above) plus explicit move-up/move-down controls, the
+                      EQUIVALENT accessible non-pointer path. Both submit the complete immutable-id
+                      order. Renders only when there's more than one member to reorder. */}
+                  {reorderable ? (
+                    <span className="fleet-reorder">
+                      <span
+                        className="fleet-drag-handle"
+                        draggable
+                        aria-hidden="true"
+                        title="Drag to reorder"
+                        onDragStart={() => setDragId(a.id)}
+                        onDragEnd={() => setDragId(null)}
+                      >
+                        <GripVertical size={14} />
+                      </span>
+                      <span className="fleet-move-controls">
+                        <Button
+                          icon
+                          variant="ghost"
+                          aria-label={moveLabel("up", a)}
+                          title={moveLabel("up", a)}
+                          disabled={moveDisabled(idx, agents.length, "up", reorder.isPending)}
+                          onClick={() => submitOrder(moveMember(agents, a.id, "up"))}
+                        >
+                          <ChevronUp size={14} />
+                        </Button>
+                        <Button
+                          icon
+                          variant="ghost"
+                          aria-label={moveLabel("down", a)}
+                          title={moveLabel("down", a)}
+                          disabled={moveDisabled(idx, agents.length, "down", reorder.isPending)}
+                          onClick={() => submitOrder(moveMember(agents, a.id, "down"))}
+                        >
+                          <ChevronDown size={14} />
+                        </Button>
+                      </span>
+                    </span>
+                  ) : null}
                   {/* A remote's `running` IS its reachability probe (it has no local process),
                       so an offline remote is "unreachable", not "stopped" — and its dot reads
                       warning, not neutral, since it's a fault to act on rather than an idle agent. */}

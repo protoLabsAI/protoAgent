@@ -1954,6 +1954,20 @@ export const api = {
   fleet() {
     return request<FleetStatus>("/api/fleet");
   },
+  // Persist the fleet roster's DISPLAY order (ADR 0042 hub control-plane, #3197). `order` is
+  // the COMPLETE, immutable-id permutation of the live roster (host + local + remote) — stable
+  // ids, NEVER an editable name/label, so a rename can't perturb order. Hub-only (a member's
+  // roster.json is its own), so this stays on the hub and is never slug-routed. The server
+  // validates the permutation under its state lock and 400s a duplicate / unknown / missing /
+  // malformed list WITHOUT touching the saved order; on success it echoes the applied order and
+  // subsequent GET /api/fleet reads return members in it, reconciled as members are later
+  // added or removed.
+  reorderFleet(order: string[]) {
+    return request<{ ok: boolean; order: string[] }>("/api/fleet/order", {
+      method: "PUT",
+      body: { order },
+    });
+  },
   flags() {
     return request<FlagsPayload>("/api/flags");
   },
