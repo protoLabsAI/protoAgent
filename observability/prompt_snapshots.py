@@ -123,6 +123,10 @@ class PromptSnapshotStore:
                 # NULL = faithful delivery (or pre-observer row); '' = the call
                 # carried NO system text (the #2519 failure class, made visible).
                 ("calls", "wire_text"),
+                # #3191 (ADR 0108 D2): the projected context (memory, skills,
+                # working state) delivered ephemerally via wrap_model_call.
+                ("calls", "projected_context"),
+                ("calls", "projected_sections"),
             ):
                 try:
                     db.execute(f"ALTER TABLE {_table} ADD COLUMN {_col} TEXT")
@@ -153,6 +157,8 @@ class PromptSnapshotStore:
         parent_task_id: str = "",
         subagent_type: str = "",
         wire_text: str | None = None,
+        projected_context: str | None = None,
+        projected_sections: list | None = None,
     ) -> None:
         """Append one snapshot row and trim to the retention caps in the same
         transaction. Best-effort — never raises (a capture write must not break
@@ -203,8 +209,9 @@ class PromptSnapshotStore:
             db.execute(
                 "INSERT INTO calls (task_id, session_id, trace_id, call_index, ts, stable_hash,"
                 " context_text, model, input_tokens, output_tokens, cache_read_tokens,"
-                " cache_creation_tokens, context_sections, parent_task_id, subagent_type, wire_text)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " cache_creation_tokens, context_sections, parent_task_id, subagent_type, wire_text,"
+                " projected_context, projected_sections)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     task_id or "",
                     session_id or "",
@@ -222,6 +229,8 @@ class PromptSnapshotStore:
                     parent_task_id or "",
                     subagent_type or "",
                     wire_text,  # None = faithful; '' = nothing delivered (#2527)
+                    projected_context,  # None = no projection (#3191)
+                    json.dumps(projected_sections) if projected_sections else None,
                 ),
             )
             trimmed = 0
@@ -254,6 +263,7 @@ class PromptSnapshotStore:
         "SELECT c.task_id, c.session_id, c.trace_id, c.call_index, c.ts, c.model, c.wire_text,"
         " c.context_text, c.input_tokens, c.output_tokens, c.cache_read_tokens,"
         " c.cache_creation_tokens, c.context_sections, c.parent_task_id, c.subagent_type,"
+        " c.projected_context, c.projected_sections,"
         " b.text AS stable_text, b.sections AS stable_sections"
         " FROM calls c LEFT JOIN stable_blobs b ON b.hash = c.stable_hash"
     )
@@ -264,7 +274,7 @@ class PromptSnapshotStore:
         Python lists (None stays None — 'captured unsegmented' is a state the
         reader distinguishes from 'no sections')."""
         d = dict(row)
-        for col in ("stable_sections", "context_sections"):
+        for col in ("stable_sections", "context_sections", "projected_sections"):
             raw = d.get(col)
             if raw:
                 try:

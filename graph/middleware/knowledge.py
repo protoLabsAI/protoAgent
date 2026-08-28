@@ -350,8 +350,10 @@ class KnowledgeMiddleware(AgentMiddleware):
         ctx = (composed or {}).get("context") or ""
         if not ctx:
             self._turn_projection = None
+            self._turn_sections = None
             return clear
         self._turn_projection = ctx
+        self._turn_sections = (composed or {}).get("context_sections")
         return clear
 
     def compose_context(self, state, runtime=None, *, record: bool = True) -> dict | None:
@@ -600,13 +602,16 @@ class KnowledgeMiddleware(AgentMiddleware):
         excluded from the model-visible surface here.  The fresh projection
         (composed once in ``before_agent``) is appended as the last message so
         the model sees current context without it entering the checkpointer.
+
+        Stashes the projected text for PromptCaptureMiddleware (#3191).
         """
-        from graph.context_frame import context_frame_message, is_context_frame
+        from graph.context_frame import context_frame_message, is_context_frame, stash_projected_context
 
         msgs = getattr(request, "messages", None) or []
         cleaned = [m for m in msgs if not is_context_frame(m)]
         if self._turn_projection:
             cleaned.append(context_frame_message(self._turn_projection))
+            stash_projected_context(self._turn_projection, self._turn_sections)
         if len(cleaned) != len(msgs) or self._turn_projection:
             return request.override(messages=cleaned)
         return request

@@ -355,3 +355,117 @@ def test_wire_stranded_prompt_records_empty_string():
     with request_metadata_scope({"a2a.task_id": "wire-4"}):
         _run_wire_chain(req, _response(), _StrandingTransform())
     assert _row("wire-4")["wire_text"] == ""
+
+
+# ── projected-context capture (ADR 0108 D2, #3191) ──────────────────────────
+
+
+def test_projected_context_stash_is_captured():
+    """KnowledgeMiddleware stashes projected context inside wrap_model_call;
+    PromptCapture (outer) pops it and records it alongside the system prompt."""
+    from graph.context_frame import stash_projected_context
+
+    capture = PromptCaptureMiddleware()
+    req = _Req("claude-opus-4-7", SystemMessage(content="STABLE"), state={})
+
+    def inner_handler(r):
+        stash_projected_context("memory block", [{"label": "Hot memory", "chars": 12}])
+        return _response()
+
+    with request_metadata_scope({"a2a.task_id": "proj-1"}):
+        capture.wrap_model_call(req, inner_handler)
+
+    row = _row("proj-1")
+    assert row["projected_context"] == "memory block"
+    assert row["projected_sections"] == [{"label": "Hot memory", "chars": 12}]
+
+
+def test_projected_context_accumulates_from_multiple_stashers():
+    """Both KnowledgeMiddleware and ToolDeltaMiddleware may stash in the same
+    call stack — stash_projected_context accumulates text and keeps the first
+    sections."""
+    from graph.context_frame import stash_projected_context
+
+    capture = PromptCaptureMiddleware()
+    req = _Req("claude-opus-4-7", SystemMessage(content="STABLE"), state={})
+
+    def inner_handler(r):
+        stash_projected_context("knowledge ctx", [{"label": "Skills", "chars": 5}])
+        stash_projected_context("tool delta notice")
+        return _response()
+
+    with request_metadata_scope({"a2a.task_id": "proj-2"}):
+        capture.wrap_model_call(req, inner_handler)
+
+    row = _row("proj-2")
+    assert "knowledge ctx" in row["projected_context"]
+    assert "tool delta notice" in row["projected_context"]
+    assert row["projected_sections"] == [{"label": "Skills", "chars": 5}]
+
+
+def test_projected_context_absent_when_nothing_stashed():
+    """When no inner middleware stashes anything, projected columns are NULL."""
+    capture = PromptCaptureMiddleware()
+    req = _Req("claude-opus-4-7", SystemMessage(content="STABLE"), state={})
+    with request_metadata_scope({"a2a.task_id": "proj-3"}):
+        capture.wrap_model_call(req, lambda _r: _response())
+
+    row = _row("proj-3")
+    assert row["projected_context"] is None
+    assert row["projected_sections"] is None
+
+
+def test_incognito_clears_projected_stash():
+    """Incognito skips capture and clears the stash so it doesn't leak to
+    a subsequent non-incognito call."""
+    from graph.context_frame import pop_projected_context, stash_projected_context
+
+    capture = PromptCaptureMiddleware()
+    req = _Req("claude-opus-4-7", SystemMessage(content="S"), state={"incognito": True})
+
+    def inner_handler(r):
+        stash_projected_context("leaked")
+        return _response()
+
+    with request_metadata_scope({"a2a.task_id": "proj-incog"}):
+        capture.wrap_model_call(req, inner_handler)
+
+    assert prompt_snapshots().calls_for_task("proj-incog") == []
+    assert pop_projected_context() == (None, None)
+
+
+def test_no_system_message_clears_projected_stash():
+    """A request with no system message skips capture and clears the stash."""
+    from graph.context_frame import pop_projected_context, stash_projected_context
+
+    capture = PromptCaptureMiddleware()
+    req = _Req("claude-opus-4-7", None, state={})
+
+    def inner_handler(r):
+        stash_projected_context("orphaned")
+        return _response()
+
+    with request_metadata_scope({"a2a.task_id": "proj-nosys"}):
+        capture.wrap_model_call(req, inner_handler)
+
+    assert prompt_snapshots().calls_for_task("proj-nosys") == []
+    assert pop_projected_context() == (None, None)
+
+
+def test_legacy_context_sections_used_when_no_projected_stash():
+    """Pre-#3188 builds deliver via the context channel. When there is a
+    legacy context tail but no projected stash, context_sections from state
+    are recorded (backwards compatibility). Run through PromptCache so the
+    context is appended to the system message as it would be in production."""
+    capture = PromptCaptureMiddleware()
+    sections = [{"label": "Legacy skills", "chars": 42}]
+    req = _Req("claude-opus-4-7", SystemMessage(content="STABLE"), state={
+        "context": "legacy context",
+        "context_sections": sections,
+    })
+    with request_metadata_scope({"a2a.task_id": "proj-legacy"}):
+        _run_chained(req, _response(), capture=capture, cache=PromptCacheMiddleware(enabled=False))
+
+    row = _row("proj-legacy")
+    assert row["context_sections"] == sections
+    assert row["projected_context"] is None
