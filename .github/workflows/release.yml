@@ -36,7 +36,7 @@ jobs:
       attestations: write
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ inputs.tag || github.ref }}
@@ -111,7 +111,7 @@ jobs:
       - name: Attest build provenance
         if: vars.ATTESTATIONS_ENABLED == 'true'
         continue-on-error: true
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.build.outputs.digest }}
@@ -169,7 +169,7 @@ jobs:
       - name: Generate + post release notes
         id: relnotes
         continue-on-error: true
-        uses: protoLabsAI/release-tools@d6bfc09ce7d17da3f196f3b54afde5830b8a6398 # v2.4.0 — first version with the out-file input (#1516/#1615)
+        uses: protoLabsAI/release-tools@32a25e78a7709d8476cf66de27b269f1820efdcc # v2.4.0 — first version with the out-file input (#1516/#1615)
         with:
           version: ${{ steps.version.outputs.tag }}
           previous-version: ${{ steps.version.outputs.prev_tag }}

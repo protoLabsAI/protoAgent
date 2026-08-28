@@ -36,13 +36,13 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           # Full history so the changelog steps below can resolve a merge-base —
           # like changelog.yml, they judge only the PR's own diff (base...HEAD),
           # not entries that landed on main since fork.
           fetch-depth: 0
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
       - name: Verify workspace config (.beads / .automaker / owned runners)
@@ -138,8 +138,8 @@ jobs:
     runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install pinned lint tools
@@ -149,7 +149,7 @@ jobs:
         # must not import server/ or operator_api/) + the grandfathered burndown
         # list live in pyproject.toml [tool.importlinter].
         run: pip install ruff==0.15.10 import-linter==2.11
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           # Pinned like ruff/import-linter above, and for a sharper reason: uv's lock
           # OUTPUT is version-dependent. 0.11.29 and 0.11.13 disagree about how to record
@@ -178,12 +178,12 @@ jobs:
     runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           # Must match the lint job (and prepare-release.yml): uv's lock output is
           # version-dependent, and `--frozen` compares against what it produced.
@@ -222,7 +222,7 @@ jobs:
       python_tests: ${{ steps.scope.outputs.python_tests }}
       rust_tests: ${{ steps.scope.outputs.rust_tests }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Classify changed paths
@@ -257,12 +257,12 @@ jobs:
       # cp1252 UnicodeEncodeErrors in test output rather than real defects.
       PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           # Must match the lint job (and prepare-release.yml): uv's lock output is
           # version-dependent, and `--frozen` compares against what it produced.
@@ -303,11 +303,11 @@ jobs:
     runs-on: windows-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Cache Cargo dependencies and build output
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -366,12 +366,12 @@ jobs:
     # from `tests` so its real-boot slowness never gates the fast unit run.
     timeout-minutes: 12
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           # Must match the lint job (and prepare-release.yml): uv's lock output is
           # version-dependent, and `--frozen` compares against what it produced.
@@ -397,8 +397,8 @@ jobs:
     runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -435,8 +435,8 @@ jobs:
       image: mcr.microsoft.com/playwright:v1.61.1-noble
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
           cache: npm
