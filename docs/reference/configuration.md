@@ -597,7 +597,7 @@ Only read when `middleware.knowledge` is `true`.
 | `embeddings` | `false` | Opt-in hybrid `HybridKnowledgeStore` (FTS5 keyword + vector similarity, RRF-fused); off = keyword-only FTS5. Off by default so a fresh install never depends on a gateway embedding route (#1681). |
 | `embed_model` | `qwen3-embedding` | Gateway embedding model used when `embeddings` is on — must be a model your gateway serves (not the chat model). |
 | `facts` | `true` | Extract semantic facts during the conversation-harvest pass. |
-| `top_k` | `10` | RAG hits auto-injected into the prompt per turn. |
+| `top_k` | `5` | RAG hits auto-injected into the prompt per turn. A negative value is not a smaller cap — it removes the cap, so it is read as `0` with a warning; `0` itself means no auto-injection. |
 
 The bundled store is keyword-only FTS5 by default; once your gateway serves `embed_model`, opt in with `embeddings: true` for hybrid search — keyword fused with vector similarity (RRF), with an embedding circuit breaker that falls back to FTS5 on an outage. One `chunks` table; the `domain` column distinguishes operator-set notes (`memory_ingest`), always-on hot facts (`hot`), episodic summaries stored by `conversation_harvest` (`conversation`), and extracted facts (`fact`).
 

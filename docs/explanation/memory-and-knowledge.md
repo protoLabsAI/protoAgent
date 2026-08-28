@@ -365,7 +365,7 @@ tuning guidance in [Tune the knowledge store](../guides/knowledge.md)):
 | `embeddings` | `false` | opt-in hybrid semantic + keyword search (vs keyword-only) |
 | `embed_model` | `qwen3-embedding` | gateway embedding model (set per your gateway) |
 | `facts` | `true` | extract semantic facts during the session-end pass |
-| `top_k` | `10` | how many RAG chunks inject per turn |
+| `top_k` | `5` | how many RAG chunks inject per turn (`0` = none; negative is read as `0`) |
 | `inject_namespaces` | `[]` | namespaces allowed to auto-inject (empty = unfiltered; `""` matches un-namespaced) |
 | `inject_min_trust` | `1` | trust floor for auto-injection: 1 = down-weight only, 2 = drop external, 3 = operator-only |
 | `hot_write_confirm` | `false` | when on, the agent's `memory_ingest` and `knowledge_ingest` refuse always-on writes (`domain="hot"` or `delivery_policy="always"`) |

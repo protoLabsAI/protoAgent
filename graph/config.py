@@ -1162,9 +1162,12 @@ class LangGraphConfig:
     # Opt in when your gateway serves `embed_model`; keyword recall works
     # everywhere, and the circuit breaker still guards runtime outages when on.
     knowledge_embeddings: bool = False
-    # How many recalled chunks are injected per turn. Bumped 5 → 10 (RAG bake-off:
-    # more candidates in-context lifted answer quality at sub-million-chunk scale).
-    knowledge_top_k: int = 10
+    # How many recalled chunks are injected per turn. 5, matching the documented
+    # example YAML, `ProjectionOptions.top_k` and `KnowledgeMiddleware`'s ctor —
+    # this field was the lone outlier at 10, so a config that OMITTED the key
+    # injected twice what every other statement of the default promised (#3259).
+    # The RAG bake-off that argued for 10 is not lost: set `knowledge.top_k: 10`.
+    knowledge_top_k: int = 5
     # Namespace scope for the AUTO-INJECT RAG search (ADR 0069 D3a). Empty (the
     # default) = unfiltered — today's behavior, so box-commons sharing keeps
     # working. When set, only chunks whose `namespace` matches a listed value

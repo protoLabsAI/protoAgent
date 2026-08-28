@@ -601,3 +601,128 @@ def test_namespace_scope_and_trust_floor_on_the_extracted_search(monkeypatch):
 
     # Floor 1 keeps everything, operator-authored first, in-tier order preserved.
     assert [h["id"] for h in rank_by_trust(hits, ProjectionOptions(top_k=5))] == [2, 1]
+
+
+# ---------------------------------------------------------------------------
+# top_k is a CAP, never a licence (#3259)
+#
+# A live injection row delivered 26 RAG chunks under `knowledge.top_k: 5`. The
+# caps all read correctly; what nothing guarded was a NON-POSITIVE top_k. A
+# negative value defeats both of them at once — `k` reaches SQLite as `LIMIT -1`
+# ("no limit", so the store returns every matching row) and `rank_by_trust`'s
+# `kept[: top_k]` becomes `kept[:-1]`, which drops ONE element instead of
+# capping. These drive the real store, because the SQL semantics are the bug.
+# ---------------------------------------------------------------------------
+
+
+def _seeded_store(tmp_path, n=12):
+    """A real store whose every row matches one query — so an uncapped read is
+    visibly uncapped rather than incidentally small."""
+    from knowledge.store import KnowledgeStore
+
+    store = KnowledgeStore(tmp_path / "kb.db")
+    for i in range(n):
+        store.add_chunk(f"gravity note number {i} about the agent runtime", source_type="extracted")
+    return store
+
+
+def test_negative_top_k_delivers_nothing_through_the_real_store(tmp_path):
+    """`top_k: -1` must inject ZERO hits, not the whole store minus one."""
+    from graph.projection import rank_by_trust, search_scoped
+
+    store = _seeded_store(tmp_path)
+    assert len(store.search("gravity note", k=-1)) == 12  # LIMIT -1 = no limit, at the SQL layer
+
+    opts = ProjectionOptions(top_k=-1)
+    assert opts.top_k == 0  # clamped at construction, so every downstream read is bounded
+    hits = search_scoped(store, "gravity note", opts)
+    assert hits == []
+    assert rank_by_trust(hits, opts) == []
+
+
+def test_zero_top_k_keeps_its_documented_meaning_and_stays_quiet(tmp_path, caplog):
+    """`knowledge.top_k: 0` = "no auto-injected hits" — a deliberate setting, not a mistake."""
+    from graph.projection import rank_by_trust, search_scoped
+
+    store = _seeded_store(tmp_path)
+    with caplog.at_level("WARNING", logger="graph.projection"):
+        opts = ProjectionOptions(top_k=0)
+    assert opts.top_k == 0
+    assert not [r for r in caplog.records if "top_k" in r.getMessage()]
+    assert search_scoped(store, "gravity note", opts) == []
+    assert rank_by_trust([{"id": 1, "source_type": "operator"}], opts) == []
+
+
+def test_negative_top_k_warns_and_names_the_value(caplog):
+    with caplog.at_level("WARNING", logger="graph.projection"):
+        ProjectionOptions(top_k=-3)
+    msgs = [r.getMessage() for r in caplog.records if "top_k" in r.getMessage()]
+    assert len(msgs) == 1
+    assert "-3" in msgs[0]
+
+
+def test_positive_top_k_is_untouched(tmp_path):
+    from graph.projection import rank_by_trust, search_scoped
+
+    store = _seeded_store(tmp_path)
+    opts = ProjectionOptions(top_k=5)
+    assert opts.top_k == 5
+    hits = search_scoped(store, "gravity note", opts)
+    assert len(hits) == 5
+    assert len(rank_by_trust(hits, opts)) == 5
+
+
+def test_delivery_boundary_trims_an_over_long_result_set(caplog):
+    """The invariant: whatever reaches the budget, no more than top_k is DELIVERED.
+
+    Structural, not defensive-by-faith — the text and the recorded ids are
+    rendered from the same trimmed list, so they can never disagree (which is
+    what made #3259 an over-injection rather than a logging artefact)."""
+    from graph.projection import _Candidates, _fit_to_budget
+
+    over = [
+        {"id": i, "preview": f"hit {i}", "domain": "fact", "source_type": "extracted"}
+        for i in range(30)
+    ]
+    c = _Candidates(
+        digest="", digest_ids=[], digest_entries=[], hot="", hot_ids=[],
+        results=list(over), skill_block="", skill_listed=0, skill_full_rows=0, working_state="",
+    )
+    with caplog.at_level("WARNING", logger="graph.projection"):
+        delivered = _fit_to_budget(c, ProjectionOptions(top_k=5, budget_chars=None), None, [])
+
+    assert delivered.rag_ids == [0, 1, 2, 3, 4]
+    assert delivered.text.count("- [fact] hit ") == 5  # the TEXT is trimmed too, not just the ids
+    assert any("over-delivery" in r.getMessage() for r in caplog.records)
+
+
+def test_over_delivery_cannot_reach_the_injection_log(monkeypatch):
+    """End-to-end: even with the ranking cap defeated, the recorded row is bounded."""
+    import graph.projection as projection
+    from graph.projection import compose_projected_context
+
+    monkeypatch.setattr(projection, "rank_by_trust", lambda results, opts: list(results))
+    store = _FakeStore(
+        results=[
+            {"id": i, "preview": f"hit {i}", "domain": "fact", "source_type": "extracted"}
+            for i in range(30)
+        ]
+    )
+    rows: list[tuple] = []
+    compose_projected_context(
+        "q", store, None, {"session_id": "s-1"},
+        options=ProjectionOptions(top_k=5),
+        prior_sessions=lambda **kw: ("", []),
+        record_fn=lambda state, parts, dig, hot, rag: rows.append((dig, hot, rag)),
+    )
+    assert rows and rows[0][2] == [0, 1, 2, 3, 4]
+
+
+def test_knowledge_top_k_default_is_the_documented_five():
+    """One knob, one default: the dataclass, the middleware ctor, the example YAML
+    and `graph/config.py` must all say 5 — a config that omits the key injects 5."""
+    from graph.config import LangGraphConfig
+
+    assert LangGraphConfig.knowledge_top_k == 5
+    assert ProjectionOptions.top_k == 5
+    assert ProjectionOptions.from_config(LangGraphConfig.from_dict({})).top_k == 5
