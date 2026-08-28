@@ -1508,6 +1508,7 @@ def create_agent_graph(
     prompt_parts = build_system_prompt_parts(
         include_subagents=include_subagents,
         projects=(config.effective_filesystem_projects() if config.filesystem_enabled else None),
+        bound_tool_names=frozenset(t.name for t in all_tools),
     )
     system_prompt = "\n\n".join(text for _label, text in prompt_parts)
 
@@ -1559,7 +1560,10 @@ def create_simple_agent(config: LangGraphConfig, knowledge_store=None, scheduler
     llm = create_llm(config)
     all_tools = get_all_tools(knowledge_store, scheduler=scheduler, graph_config=config)
 
-    system_prompt = build_system_prompt(include_subagents=False)
+    system_prompt = build_system_prompt(
+        include_subagents=False,
+        bound_tool_names=frozenset(t.name for t in all_tools),
+    )
 
     return create_react_agent(
         model=llm,

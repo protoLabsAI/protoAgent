@@ -48,25 +48,76 @@ def test_falls_back_to_workspace_soul_when_no_instance_soul(monkeypatch, tmp_pat
     assert "Legacy runtime persona." in prompt
 
 
-# --- Operating model doctrine (ADR 0079) -----------------------------------
+# --- Operating model doctrine (ADR 0079, #3190 capability-derived) ----------
+
+# All operating-model tool names for convenience.
+_ALL_OM_TOOLS = frozenset({
+    "set_goal", "update_goal_plan", "abandon_goal",
+    "task_create", "task_update", "task_close",
+    "schedule_task", "create_watch", "wait",
+    "current_time",  # always-bound filler
+})
 
 
-def test_operating_model_doctrine_is_always_present():
-    """The autonomous operating model ships in every system prompt (core, not fork-gated):
-    the OODA framing + all four composable primitives + the async-handoff rule."""
-    prompt = build_system_prompt(include_subagents=False)
+def test_operating_model_with_all_capabilities():
+    """When all operating-model tools are bound, the full doctrine ships — the
+    OODA framing + all four composable primitives + the async-handoff rule."""
+    prompt = build_system_prompt(include_subagents=False, bound_tool_names=_ALL_OM_TOOLS)
     assert "# Operating model" in prompt
-    # the loop
     for step in ("Observe", "Orient", "Decide", "Act"):
         assert step in prompt
-    # the four primitives composed (not just listed as isolated tools)
     for tool in ("set_goal", "task_create", "schedule_task", "create_watch", "update_goal_plan"):
         assert tool in prompt
-    # the async-handoff rule (the roxy-exhausted fix) + working_state observe
     assert "Do not spin" in prompt
     assert "<working_state>" in prompt
 
 
+def test_operating_model_omits_unbound_capabilities():
+    """When only tasks are bound, goal/schedule/watch tools are absent from the
+    prompt — the agent gets instructions only for what it can actually use."""
+    tasks_only = frozenset({"task_create", "task_update", "task_close", "current_time"})
+    prompt = build_system_prompt(include_subagents=False, bound_tool_names=tasks_only)
+    assert "# Operating model" in prompt
+    assert "task_create" in prompt
+    assert "set_goal" not in prompt
+    assert "schedule_task" not in prompt
+    assert "create_watch" not in prompt
+    assert "wait" not in prompt
+
+
+def test_operating_model_absent_when_no_autonomous_tools():
+    """A stripped deployment with none of the autonomous primitives gets no
+    operating model section at all — a shorter, honest prompt."""
+    minimal = frozenset({"current_time", "calculator", "web_search"})
+    prompt = build_system_prompt(include_subagents=False, bound_tool_names=minimal)
+    assert "# Operating model" not in prompt
+    assert "set_goal" not in prompt
+    assert "Do not spin" not in prompt
+
+
+def test_operating_model_legacy_none_emits_everything():
+    """Legacy callers that don't pass bound_tool_names get the full section."""
+    prompt = build_system_prompt(include_subagents=False, bound_tool_names=None)
+    assert "# Operating model" in prompt
+    for tool in ("set_goal", "task_create", "schedule_task", "create_watch"):
+        assert tool in prompt
+
+
+def test_guidelines_omit_wait_when_unbound():
+    """The Guidelines section should not reference ``wait`` when it isn't bound."""
+    no_wait = frozenset({"current_time", "task_create"})
+    prompt = build_system_prompt(include_subagents=False, bound_tool_names=no_wait)
+    # The wait guideline starts with "When you're waiting"
+    assert "wait(seconds" not in prompt
+
+
+def test_guidelines_include_wait_when_bound():
+    """The Guidelines section references ``wait`` when it is bound."""
+    with_wait = frozenset({"current_time", "wait"})
+    prompt = build_system_prompt(include_subagents=False, bound_tool_names=with_wait)
+    assert "wait(seconds" in prompt
+
+
 def test_working_state_block_is_referenced_for_observe():
-    prompt = build_system_prompt(include_subagents=False)
+    prompt = build_system_prompt(include_subagents=False, bound_tool_names=_ALL_OM_TOOLS)
     assert "working-state" in prompt.lower() or "<working_state>" in prompt
