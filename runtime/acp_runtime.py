@@ -197,15 +197,21 @@ def _tool_families_note(exposed: set[str] | None) -> tuple[str, str]:
     return what, persist
 
 
-def persona_doc(config, *, exposed=None) -> str:
+_RESOLVE_EXPOSED = object()  # sentinel: persona_doc resolves the bus's exposed set itself
+
+
+def persona_doc(config, *, exposed=_RESOLVE_EXPOSED) -> str:
     """The persona an ACP coding agent should adopt as its own — SOUL.md + a short operating
     note. Written to AGENTS.md in the session cwd so the agent loads it into ITS system prompt
     (the slot that beats its built-in identity). A focused doc, NOT protoAgent's full native
     system prompt (which carries loop-specific bits like the <output> response format).
 
-    ``exposed`` — the tool names the operator MCP bus actually serves this brain
-    (``runtime.operator_mcp_tools.sidecar_exposed_names``). The operating note names only
-    those (#3190: never describe a capability the model cannot call); ``None`` names none.
+    The operating note names only the tool families the operator MCP bus actually serves
+    this brain (#3190: never describe a capability the model cannot call). By default the
+    set is resolved here through the same derivation the prefix uses
+    (``runtime.operator_mcp_tools.sidecar_exposed_names``) — it is called at session start,
+    a real turn, so the stores it depends on are booted; a failed resolution names nothing
+    rather than guessing. ``exposed`` overrides it (a set, or ``None`` = unknown).
     """
     try:
         from graph.config_io import read_soul
@@ -215,6 +221,14 @@ def persona_doc(config, *, exposed=None) -> str:
         soul = ""
     if not soul:
         return ""
+    if exposed is _RESOLVE_EXPOSED:
+        try:
+            from runtime.operator_mcp_tools import sidecar_exposed_names
+
+            exposed = set(sidecar_exposed_names(config))
+        except Exception:  # noqa: BLE001 — name nothing rather than guess
+            log.warning("[acp-runtime] could not resolve the bus's exposed tools for the persona", exc_info=True)
+            exposed = None
     what, persist = _tool_families_note(None if exposed is None else set(exposed))
     return (
         "# Your identity & operating rules\n\n"
@@ -423,22 +437,12 @@ class AcpRuntime:
             projects=None,
         )
 
-    def _exposed_tool_names(self) -> frozenset[str] | None:
-        """The bus's exposed set as the assembler resolved it (None until a real turn, or when
-        the assembler is a custom one that carries no such set)."""
-        resolver = getattr(self._context, "_resolve_bound_tool_names", None)
-        if resolver is None:
-            return None
-        try:
-            return resolver()
-        except Exception:  # noqa: BLE001 — persona is best-effort
-            return None
-
     def _write_persona_files(self) -> None:
         """Write the persona where the coding agent will read it as its own identity:
         AGENTS.md (universal) + a vendor file for this agent. Best-effort. The operating note
-        names only the tools the bus exposes (#3248)."""
-        doc = persona_doc(self.config, exposed=self._exposed_tool_names())
+        names only the tools the bus exposes — persona_doc resolves that set through the same
+        derivation the prefix uses (#3248)."""
+        doc = persona_doc(self.config)
         if not doc.strip():
             return
         try:

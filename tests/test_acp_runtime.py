@@ -1126,18 +1126,35 @@ def test_persona_doc_names_only_exposed_tools(monkeypatch):
     assert "subagent" not in wide  # no task tool rides the bus — never promised
 
 
-def test_persona_files_use_the_resolved_exposed_set(tmp_path, monkeypatch):
-    """_write_persona_files runs before the first turn's assemble: it resolves the exposed
-    set through the assembler (once, cached) so AGENTS.md and the prefix agree."""
+def test_persona_files_and_prefix_share_one_exposed_set(tmp_path, monkeypatch):
+    """persona_doc(config) resolves the bus's exposed set itself, through the same derivation
+    the assembler uses for the prefix — so AGENTS.md and the prefix always agree."""
     import runtime.acp_runtime as rt_mod
+    from runtime.operator_mcp_tools import sidecar_exposed_names
 
     _bare_host_state(monkeypatch)
     monkeypatch.setattr("graph.config_io.read_soul", lambda: "You are Aria.")
     cfg = _cfg(knowledge_middleware=False, goal_enabled=False, operator_mcp_tools=["task_create", "calculator"])
     rt = AcpRuntime(cfg, cwd=str(tmp_path))
-    assert rt._exposed_tool_names() == frozenset({"task_create", "calculator"})
-    assert rt._context.bound_tool_names == frozenset({"task_create", "calculator"})  # cached for the prefix
     rt._write_persona_files()
     doc = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
     assert "`task_create`" in doc and "set_goal" not in doc and "schedule_task" not in doc
     assert rt_mod.persona_doc(cfg, exposed={"task_create", "calculator"}) == doc
+    assert rt_mod.persona_doc(cfg) == doc  # the default resolution IS the shared derivation
+    rt._context.assemble(query="")
+    assert rt._context.bound_tool_names == frozenset(sidecar_exposed_names(cfg)) == frozenset({"task_create", "calculator"})
+
+
+def test_persona_doc_names_nothing_when_resolution_fails(monkeypatch):
+    import runtime.acp_runtime as rt_mod
+
+    monkeypatch.setattr("graph.config_io.read_soul", lambda: "You are Aria.")
+
+    def boom(config):
+        raise RuntimeError("stores not booted")
+
+    monkeypatch.setattr("runtime.operator_mcp_tools.sidecar_exposed_names", boom)
+    doc = rt_mod.persona_doc(_cfg())
+    assert "You are Aria." in doc and "list its tools" in doc
+    for absent in ("set_goal", "schedule_task", "task_create", "memory_", "notes_", "subagent"):
+        assert absent not in doc, absent
