@@ -36,6 +36,7 @@ import shutil
 import signal
 import time
 from collections import deque
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Awaitable, Callable
@@ -61,6 +62,35 @@ _DEAD_END_STOP_REASONS = frozenset({"refusal", "cancelled"})
 #: retry classifier as the outcome booked every truncated run as a success (#3015).
 _UNFINISHED_STOP_REASONS = frozenset({"refusal", "cancelled", "max_tokens"})
 ToolCallback = Callable[[dict], Awaitable[None]]  # structured tool start/end events
+
+
+@dataclass(frozen=True)
+class TappedResult:
+    """One tapped coder turn — the reply plus the wire signals ``prompt()``'s ``-> str``
+    contract cannot carry.
+
+    Returned by the public ``plugins.coding_agent.dispatch_tapped`` seam (#3235), which
+    snapshots it off the client the moment the turn finishes — before teardown — so an
+    orchestrator reads a per-turn value instead of racing another dispatch for pooled
+    instance state. Frozen: it is a record of a turn that already happened.
+    """
+
+    # The coder's accumulated answer text — the same string ``prompt()`` returns.
+    reply: str
+    # Latest ACP-native context pressure ({used, size} tokens) from a ``usage_update``,
+    # or None when the agent never sent one. NOT billable usage (the coder's own
+    # provider meters that) — see ``AcpClient.last_usage``.
+    usage: dict | None
+    # The coder's own live plan (its todo list: {content, status, priority} entries)
+    # from the last ``plan`` update, or None — not every coder plans.
+    plan: list | None
+    # Why the turn ended, straight from ACP's ``session/prompt`` result (``end_turn``,
+    # ``refusal``, ``max_tokens``, …), or None when the agent reported none.
+    stop_reason: str | None
+    # Why the turn is NOT worth retrying (``refusal`` / ``cancelled``), or None when a
+    # retry is sane — ``AcpClient.dead_end()``'s answer, precomputed so the caller
+    # doesn't re-derive the classification (#2279).
+    dead_end: str | None
 
 
 def _tool_output_preview(update: dict, limit: int = 300) -> str:
@@ -1441,3 +1471,20 @@ class AcpClient:
         """
         reason = (self.last_stop_reason or "").strip()
         return reason if reason in _UNFINISHED_STOP_REASONS else None
+
+    def tapped_result(self, reply: str) -> TappedResult:
+        """Snapshot the turn that just finished as a ``TappedResult``.
+
+        Read immediately after this client's own ``prompt()`` returns — exactly as
+        reliable as the reply text itself, since usage/plan/stop-reason are per-client
+        state the same serialized turn just wrote. Taking the snapshot *before* the
+        caller tears the client down is what lets ``dispatch_tapped`` evict the
+        subprocess on every exit without losing the turn's wire signals.
+        """
+        return TappedResult(
+            reply=reply,
+            usage=self.last_usage,
+            plan=self.last_plan,
+            stop_reason=self.last_stop_reason,
+            dead_end=self.dead_end(),
+        )

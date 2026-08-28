@@ -101,6 +101,18 @@ def test_every_sdk_function_is_documented(gen) -> None:
     assert not missing, f"Undocumented SDK calls: {missing}. Run `python scripts/gen_plugin_api.py`."
 
 
+def test_every_coding_agent_function_is_documented(gen) -> None:
+    """The coding-agent dispatch library is a public seam (#3235) — a new public
+    function there (the tapped-dispatch surface, the pool lifecycle helpers) must
+    reach the reference the same way an SDK call does."""
+    import plugins.coding_agent as coding_agent
+
+    page = (REFERENCE / "plugin-coding-agent.md").read_text(encoding="utf-8")
+    missing = [name for name, _ in gen._public_functions(coding_agent) if f"### `{name}`" not in page]
+    assert not missing, f"Undocumented coding_agent functions: {missing}. Run `python scripts/gen_plugin_api.py`."
+    assert "dispatch_tapped" in page and "`TappedResult`" in page
+
+
 def test_every_manifest_field_is_documented(gen) -> None:
     from dataclasses import fields
 

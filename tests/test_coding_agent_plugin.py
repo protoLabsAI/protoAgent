@@ -1282,3 +1282,237 @@ async def test_queued_prompt_times_out_with_a_clear_error(tmp_path, monkeypatch)
     finally:
         client._turn_lock.release()
         await client.close()
+
+
+# ── dispatch_tapped: the public tapped-dispatch seam (#3235) ──────────────────
+
+# Emits every tapped signal in one turn: a tool start + completed end, a thought
+# chunk, the coder's plan, ACP-native usage, then the answer chunks — so one test
+# can prove every callback fires AND every TappedResult field is carried.
+_TAPPED_AGENT = r"""
+import sys, json
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+def update(u):
+    send({"jsonrpc": "2.0", "method": "session/update",
+          "params": {"sessionId": "s1", "update": u}})
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    method, mid = msg.get("method"), msg.get("id")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": mid, "result": {"protocolVersion": 1}})
+    elif method == "session/new":
+        send({"jsonrpc": "2.0", "id": mid, "result": {"sessionId": "s1"}})
+    elif method == "session/prompt":
+        update({"sessionUpdate": "tool_call", "toolCallId": "t1",
+                "title": "Editing app.py", "kind": "edit"})
+        update({"sessionUpdate": "tool_call_update", "toolCallId": "t1",
+                "title": "Editing app.py", "status": "completed",
+                "content": [{"type": "content",
+                             "content": {"type": "text", "text": "wrote 3 lines"}}]})
+        update({"sessionUpdate": "agent_thought_chunk",
+                "content": {"type": "text", "text": "planning the edit"}})
+        update({"sessionUpdate": "plan", "entries": [
+            {"content": "edit app.py", "status": "completed", "priority": "high"}]})
+        update({"sessionUpdate": "usage_update", "used": 1200, "size": 200000})
+        for chunk in ("All ", "done"):
+            update({"sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": chunk}})
+        send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
+"""
+
+
+def _capture_clients(monkeypatch) -> list:
+    """Wrap the module-global client factory so a test can reach the AcpClient a
+    dispatch_tapped call created — the only handle on its subprocess."""
+    created: list = []
+    real = P._client_for
+
+    def capture(spec):
+        client = real(spec)
+        created.append(client)
+        return client
+
+    monkeypatch.setattr(P, "_client_for", capture)
+    return created
+
+
+def _tapped_delegate(script, tmp_path, name="tapped", **extra) -> dict:
+    return {
+        "name": name,
+        "command": sys.executable,
+        "args": [str(script)],
+        "workdir": str(tmp_path),
+        **extra,
+    }
+
+
+async def test_dispatch_tapped_forwards_callbacks_and_returns_wire_signals(tmp_path, monkeypatch):
+    """The whole point of the seam: on_tool/on_thought/on_text fire live, and the
+    TappedResult carries reply + usage + plan + stop_reason off the wire."""
+    from plugins.coding_agent.acp_client import TappedResult
+
+    assert P.TappedResult is TappedResult  # re-exported at the package top level
+    script = tmp_path / "tapped_agent.py"
+    script.write_text(_TAPPED_AGENT, encoding="utf-8")
+    created = _capture_clients(monkeypatch)
+    tools: list[dict] = []
+    thoughts: list[str] = []
+    texts: list[str] = []
+
+    async def on_tool(event: dict) -> None:
+        tools.append(event)
+
+    async def on_thought(delta: str) -> None:
+        thoughts.append(delta)
+
+    async def on_text(delta: str) -> None:
+        texts.append(delta)
+
+    result = await P.dispatch_tapped(
+        _tapped_delegate(script, tmp_path),
+        "build it",
+        on_tool=on_tool,
+        on_thought=on_thought,
+        on_text=on_text,
+        timeout=30.0,
+    )
+
+    assert isinstance(result, TappedResult)
+    assert result.reply == "All done"
+    assert result.usage == {"used": 1200, "size": 200000}
+    assert result.plan == [{"content": "edit app.py", "status": "completed", "priority": "high"}]
+    assert result.stop_reason == "end_turn"
+    assert result.dead_end is None
+    # Structured tool start/end events, reasoning deltas, and answer-text deltas all
+    # reached their callbacks.
+    assert [e["phase"] for e in tools] == ["start", "end"]
+    assert tools[0]["name"] == "Editing app.py"
+    assert tools[1]["output"] == "wrote 3 lines"
+    assert thoughts == ["planning the edit"]
+    assert "".join(texts) == "All done"
+    # Teardown on the success path: nothing pooled, and the child is reaped.
+    assert created and created[0]._proc.returncode is not None
+    assert P._cache_key(P._delegate_spec(_tapped_delegate(script, tmp_path))) not in P._CLIENTS
+
+
+async def test_dispatch_tapped_surfaces_a_dead_end(tmp_path):
+    """A refusal comes back classified (stop_reason + dead_end), not as bare text —
+    the signal the retry ladder needs to stop escalating tiers (#2279)."""
+    script = tmp_path / "stop_refusal_tapped.py"
+    script.write_text(_STOP_REASON_AGENT_TMPL.replace("__REASON__", "refusal"), encoding="utf-8")
+    result = await P.dispatch_tapped(_tapped_delegate(script, tmp_path, name="refuse"), "go", timeout=30.0)
+    assert result.stop_reason == "refusal"
+    assert result.dead_end == "refusal"
+
+
+async def test_dispatch_tapped_applies_the_delegate_permission_policy(fake_agent, tmp_path):
+    """The seam owns the permission policy: a readonly delegate's edit request is
+    rejected (the fake echoes the chosen option id back into the reply)."""
+    delegate = _tapped_delegate(fake_agent, tmp_path, name="ro-tap", permissions="readonly")
+    result = await P.dispatch_tapped(delegate, "edit a file", timeout=30.0)
+    assert result.reply == "Hello world [reject]"
+
+
+async def test_dispatch_tapped_forgets_the_persisted_session(tmp_path, monkeypatch):
+    """Fresh-session forgetting: a persisted session id from a previous run — for an
+    agent that DOES advertise loadSession — must not be resumed. The seam deletes it
+    first, so the loader agent records session/new, never session/load."""
+    script = tmp_path / "loader_agent.py"
+    script.write_text(_LOADER_AGENT, encoding="utf-8")
+    marker = tmp_path / "which.marker"
+    sess = tmp_path / "sess.json"
+    sess.write_text(
+        json.dumps({"sessionId": "s1", "cwd": str(tmp_path), "command": sys.executable}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(P, "_session_id_path", lambda spec: sess)
+    delegate = _tapped_delegate(script, tmp_path, name="fresh", env={"MARKER": str(marker)})
+    result = await P.dispatch_tapped(delegate, "continue the thread", timeout=30.0)
+    assert result.reply == "fresh"
+    assert marker.read_text() == "new"  # forgotten first ⇒ a fresh session/new
+
+
+async def test_dispatch_tapped_tears_down_on_failure(tmp_path, monkeypatch):
+    """Teardown on EVERY exit: a coder that dies mid-turn still leaves no pooled
+    client and no live subprocess behind — the error propagates as AcpError."""
+    script = tmp_path / "dies_agent.py"
+    script.write_text(_DIES_AGENT, encoding="utf-8")
+    created = _capture_clients(monkeypatch)
+    delegate = _tapped_delegate(script, tmp_path, name="dies")
+    with pytest.raises(AcpError):
+        await P.dispatch_tapped(delegate, "go", timeout=10.0)
+    assert created and created[0]._proc.returncode is not None  # reaped, not leaked
+    assert P._cache_key(P._delegate_spec(delegate)) not in P._CLIENTS
+
+
+async def test_dispatch_tapped_cancel_kills_the_child(tmp_path, monkeypatch):
+    """Cancel kills the child: cancelling the dispatch task SIGKILLs the coder's
+    process tree (no orphan keeps building) and drops it from the pool — the exact
+    'I stopped the loop and the delegate didn't stop' failure the seam owns."""
+    script = tmp_path / "hang_agent.py"
+    script.write_text(_CANCEL_AGENT, encoding="utf-8")
+    created = _capture_clients(monkeypatch)
+    delegate = _tapped_delegate(script, tmp_path, name="hang")
+
+    task = asyncio.create_task(P.dispatch_tapped(delegate, "hang please", timeout=60.0))
+    # Wait until the child is up and the prompt is in flight before cancelling.
+    for _ in range(400):
+        if created and created[0]._proc is not None and created[0]._turn_session_id:
+            break
+        await asyncio.sleep(0.05)
+    assert created and created[0]._proc is not None, "child never started"
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    proc = created[0]._proc
+    for _ in range(200):  # SIGKILLed synchronously; the loop's watcher reaps it
+        if proc.returncode is not None:
+            break
+        await asyncio.sleep(0.05)
+    assert proc.returncode is not None, "cancel did not kill the coder subprocess"
+    assert P._cache_key(P._delegate_spec(delegate)) not in P._CLIENTS
+
+
+async def test_acp_adapter_dispatch_tapped_forwards_and_attributes_failures(fake_agent, tmp_path):
+    """The delegates adapter's wrapper: a parsed Delegate dispatches through the seam
+    (duck-typed — same cache key as dispatch/teardown) and an AcpError comes back as
+    a DelegateError naming the delegate, exactly like dispatch."""
+    from plugins.delegates.adapters import AcpAdapter, DelegateError
+
+    adapter = AcpAdapter()
+    d = adapter.parse(
+        {
+            "name": "tap-adapter",
+            "type": "acp",
+            "command": sys.executable,
+            "args": [str(fake_agent)],
+            "workdir": str(tmp_path),
+        }
+    )
+    result = await adapter.dispatch_tapped(d, "go", timeout=30.0)
+    assert result.reply == "Hello world [ok]"
+    assert result.stop_reason == "end_turn"
+    # The duck-typed Delegate resolves the same pool key the adapter's own spec does,
+    # so either side's teardown finds the other's client.
+    assert P._delegate_spec(d)["timeout_s"] == d.timeout_s
+    assert P._cache_key(P._delegate_spec(d)) == P._cache_key(AcpAdapter._spec(d))
+
+    bad = adapter.parse(
+        {
+            "name": "boom",
+            "type": "acp",
+            "command": "definitely-not-a-real-binary-xyz",
+            "args": [],
+            "workdir": str(tmp_path),
+        }
+    )
+    with pytest.raises(DelegateError, match="boom"):
+        await adapter.dispatch_tapped(bad, "go", timeout=10.0)
