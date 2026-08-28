@@ -27,50 +27,164 @@ from pathlib import Path
 from graph.subagents.config import SUBAGENT_REGISTRY
 
 
-# The autonomous operating model (ADR 0079). You are not just a request/response bot — you are a
-# long-horizon operator that manages its own work over time. Your four durable primitives compose
-# into ONE loop; this section is what turns "five separate tools" into "a system that runs itself".
-_OPERATING_MODEL = """
-# Operating model
+# Capability group membership — which tool names imply which operating-model
+# paragraphs. Derived from the binding gates in tools/lg_tools.py:get_all_tools.
+_GOAL_TOOLS = frozenset({"set_goal", "update_goal_plan", "abandon_goal"})
+_TASK_TOOLS = frozenset({"task_create", "task_update", "task_close"})
+_SCHEDULE_TOOLS = frozenset({"schedule_task"})
+_WATCH_TOOLS = frozenset({"create_watch"})
+_WAIT_TOOLS = frozenset({"wait"})
 
-You operate as a long-horizon autonomous agent, not a one-shot responder. You hold objectives
-across turns and drive them to done — observing your own state, planning, acting, and correcting.
 
-Your durable working-state is shown to you each turn in a `<working_state>` block:
-your **active goal + its plan**, your **open tasks**, your **active watches**, and your
-**pending schedules**. Read it first — it is what you are responsible for.
+def _build_operating_model(bound_tools: frozenset[str] | None = None) -> str:
+    """Build the operating model section (ADR 0079, #3190), including only
+    paragraphs whose capabilities are actually bound.
 
-Run this loop:
+    When ``bound_tools`` is None (legacy callers), the full section is emitted
+    unconditionally — the pre-#3190 behavior.
+    """
+    has_goal = bound_tools is None or bool(bound_tools & _GOAL_TOOLS)
+    has_tasks = bound_tools is None or bool(bound_tools & _TASK_TOOLS)
+    has_schedule = bound_tools is None or bool(bound_tools & _SCHEDULE_TOOLS)
+    has_watch = bound_tools is None or bool(bound_tools & _WATCH_TOOLS)
+    has_wait = bound_tools is None or bool(bound_tools & _WAIT_TOOLS)
+    has_any = has_goal or has_tasks or has_schedule or has_watch
 
-- **Observe** — read `<working_state>` and why you are awake (an operator asked, a schedule
-  fired, or a watch tripped — stated at the top of the turn). Take in what changed.
-- **Orient** — keep your **plan** current with `update_goal_plan` (it is your world-model:
-  what's done, what's next, what failed — persisted and fed back to you every turn). Break the
-  goal into concrete **tasks** with `task_create`; the task board is the goal's backlog.
-- **Decide** — pick the next concrete step. Decide whether to do it now, or, if it depends on
-  something that isn't ready, to hand it off (below).
-- **Act** — do the step (directly or by delegating with `task`). Update/close tasks as you go.
+    if not has_any and not has_wait:
+        return ""
 
-Compose your primitives — they are one system, not four:
+    lines = ["# Operating model", ""]
 
-- **Goal** (`set_goal`) — your standing objective. A deterministic verifier decides DONE, never
-  your own say-so; keep working until it passes, or call `abandon_goal` if it's truly out of scope.
-- **Tasks** (`task_create`/`task_update`/`task_close`) — the goal's backlog. Decompose the goal
-  into tasks and drive them down; this is your board (NOT any built-in todo tool).
-- **Schedule** (`schedule_task`) — do something *later* or on a cadence (a follow-up, a recurring
-  sweep). The prompt you schedule must be self-contained.
-- **Watch** (`create_watch`) — supervise an external *condition* (a deploy, CI, a metric, a peer's
-  PR); when it trips you're brought back to react. Hold as many as you need, in parallel.
+    lines.append(
+        "You operate as a long-horizon autonomous agent, not a one-shot responder. You hold objectives\n"
+        "across turns and drive them to done — observing your own state, planning, acting, and correcting."
+    )
 
-**Do not spin waiting on async work.** When your next step depends on something in flight — a
-build, a delegated peer agent, CI, a review — do NOT burn turns polling it. Set a **watch** on
-the condition (or a **schedule** for a known time, or `wait` for a short countdown) and END the
-turn. You'll be resumed with context when it's actually ready. Persisting means yielding and
-coming back, not looping.
+    if has_any:
+        ws_items = []
+        if has_goal:
+            ws_items.append("your **active goal + its plan**")
+        if has_tasks:
+            ws_items.append("your **open tasks**")
+        if has_watch:
+            ws_items.append("your **active watches**")
+        if has_schedule:
+            ws_items.append("your **pending schedules**")
+        lines.append("")
+        lines.append(
+            "Your durable working-state is shown to you each turn in a `<working_state>` block:\n"
+            + ", ".join(ws_items)
+            + ". Read it first — it is what you are responsible for."
+        )
 
-**Self-correct.** If your plan isn't producing progress, change the approach and say so in the
-plan. If you're blocked, record what's blocking you. Don't repeat an action that already failed.
-""".strip()
+        # OODA loop — adapt references to bound capabilities only
+        lines.append("")
+        lines.append("Run this loop:")
+        lines.append("")
+
+        observe_triggers = ["an operator asked"]
+        if has_schedule:
+            observe_triggers.append("a schedule fired")
+        if has_watch:
+            observe_triggers.append("a watch tripped")
+        lines.append(
+            "- **Observe** — read `<working_state>` and why you are awake ("
+            + ", ".join(observe_triggers)
+            + " — stated at the top of the turn). Take in what changed."
+        )
+
+        orient_parts = []
+        if has_goal:
+            orient_parts.append(
+                "keep your **plan** current with `update_goal_plan` (it is your world-model:\n"
+                "  what's done, what's next, what failed — persisted and fed back to you every turn)"
+            )
+        if has_tasks:
+            orient_parts.append(
+                "break the goal into concrete **tasks** with `task_create`; "
+                "the task board is the goal's backlog"
+                if has_goal
+                else "break work into concrete **tasks** with `task_create`"
+            )
+        if orient_parts:
+            lines.append("- **Orient** — " + ". ".join(orient_parts) + ".")
+        lines.append(
+            "- **Decide** — pick the next concrete step. Decide whether to do it now, or, if it depends on\n"
+            "  something that isn't ready, to hand it off (below)."
+        )
+        act_note = " Update/close tasks as you go." if has_tasks else ""
+        lines.append(
+            "- **Act** — do the step (directly or by delegating with `task`)." + act_note
+        )
+
+        # Primitives block — only include bound groups
+        primitives = []
+        if has_goal:
+            primitives.append(
+                "- **Goal** (`set_goal`) — your standing objective. A deterministic verifier decides DONE, never\n"
+                "  your own say-so; keep working until it passes, or call `abandon_goal` if it's truly out of scope."
+            )
+        if has_tasks:
+            primitives.append(
+                "- **Tasks** (`task_create`/`task_update`/`task_close`) — the goal's backlog. Decompose the goal\n"
+                "  into tasks and drive them down; this is your board (NOT any built-in todo tool)."
+                if has_goal
+                else "- **Tasks** (`task_create`/`task_update`/`task_close`) — your work board. Decompose work\n"
+                "  into tasks and drive them down."
+            )
+        if has_schedule:
+            primitives.append(
+                "- **Schedule** (`schedule_task`) — do something *later* or on a cadence (a follow-up, a recurring\n"
+                "  sweep). The prompt you schedule must be self-contained."
+            )
+        if has_watch:
+            primitives.append(
+                "- **Watch** (`create_watch`) — supervise an external *condition* (a deploy, CI, a metric, a peer's\n"
+                "  PR); when it trips you're brought back to react. Hold as many as you need, in parallel."
+            )
+        if primitives:
+            lines.append("")
+            count = len(primitives)
+            lines.append(
+                f"Compose your primitive{'s' if count > 1 else ''}"
+                + (f" — {'they are' if count > 1 else 'it is'} one system"
+                   + (", not " + str(count) if count > 1 else "") + ":"
+                   if count > 1
+                   else ":")
+            )
+            lines.append("")
+            lines.extend(primitives)
+
+    # Async-handoff rule — adapt to available primitives
+    if has_watch or has_schedule or has_wait:
+        handoff_options = []
+        if has_watch:
+            handoff_options.append("a **watch** on the condition")
+        if has_schedule:
+            handoff_options.append("a **schedule** for a known time")
+        if has_wait:
+            handoff_options.append("`wait` for a short countdown")
+        lines.append("")
+        if len(handoff_options) == 1:
+            options_text = handoff_options[0]
+        else:
+            options_text = " (or ".join(handoff_options) + ")"
+        lines.append(
+            "**Do not spin waiting on async work.** When your next step depends on something in flight — a\n"
+            "build, a delegated peer agent, CI, a review — do NOT burn turns polling it. Set "
+            + options_text
+            + " and END the\nturn. You'll be resumed with context when it's actually ready. "
+            "Persisting means yielding and\ncoming back, not looping."
+        )
+
+    lines.append("")
+    lines.append(
+        "**Self-correct.** If your plan isn't producing progress, change the approach and say so"
+        + (" in the\nplan" if has_goal else "")
+        + ". If you're blocked, record what's blocking you. Don't repeat an action that already failed."
+    )
+
+    return "\n".join(lines).strip()
 
 
 def _read_file(path: str | Path) -> str:
@@ -86,6 +200,7 @@ def build_system_prompt(
     include_subagents: bool = True,
     context: str = "",
     projects=None,
+    bound_tool_names: frozenset[str] | None = None,
 ) -> str:
     """Build the complete system prompt for the lead agent.
 
@@ -97,6 +212,11 @@ def build_system_prompt(
     the list of managed project workspaces ``[{name, path, write}]`` is named in
     the prompt so the agent knows the dirs it can operate on (and which are
     read-only). Inert when None.
+
+    ``bound_tool_names`` (#3190, ADR 0108 D6) — the set of tool names actually
+    bound on this graph build. When provided, capability-specific doctrine
+    (operating model, guidelines) is generated only for bound capabilities.
+    None emits everything unconditionally (legacy behavior).
     """
     return "\n\n".join(
         text
@@ -105,6 +225,7 @@ def build_system_prompt(
             include_subagents=include_subagents,
             context=context,
             projects=projects,
+            bound_tool_names=bound_tool_names,
         )
     )
 
@@ -114,12 +235,17 @@ def build_system_prompt_parts(
     include_subagents: bool = True,
     context: str = "",
     projects=None,
+    bound_tool_names: frozenset[str] | None = None,
 ) -> list[tuple[str, str]]:
     """The lead-agent system prompt as labeled ``(label, text)`` sections —
     the segmentation substrate for the prompt viewer's context-budget
     breakdown (#2243 P2). ``build_system_prompt`` is exactly these texts
     joined with a blank line (a test pins the equivalence), so the labels
     annotate the REAL prompt, never a reconstruction.
+
+    ``bound_tool_names`` (#3190): when provided, capability-specific sections
+    are generated only for tools that are actually bound. None = emit
+    everything (legacy behavior, safe default for callers that don't thread it).
     """
     parts: list[tuple[str, str]] = []
 
@@ -184,29 +310,44 @@ def build_system_prompt_parts(
     if context:
         parts.append(("Context", f"\n# Context\n\n{context}"))
 
-    # 3.5 Operating model — the autonomous doctrine (ADR 0079). Core, always shipped: it
-    # teaches the agent to compose its four durable primitives (goal · tasks · schedule ·
-    # watch) into ONE self-managing OODA loop, instead of treating each as an isolated tool.
-    parts.append(("Operating model", _OPERATING_MODEL))
+    # 3.5 Operating model — the autonomous doctrine (ADR 0079, #3190). Capability-derived:
+    # only names tools that are actually bound. Empty when none of the autonomous primitives
+    # (goal, tasks, schedule, watch, wait) are present — a stripped deployment gets a
+    # shorter, honest prompt instead of instructions it can't follow.
+    op_model = _build_operating_model(bound_tool_names)
+    if op_model:
+        parts.append(("Operating model", op_model))
 
     # 4. Operator guidelines — OVERRIDE THIS in your fork
-    parts.append(("Guidelines", """
-# Guidelines
-
-- Prefer direct answers for simple requests; use tools when they add
-  information the user asked for.
-- Delegate to subagents via the `task` tool only for genuinely parallel
-  or specialized work.
-- If a tool fails, read the error, try once with corrected inputs, then
-  surface the failure to the user with the concrete error string.
-- When you're waiting for something to finish — a ship/build/job to
-  complete, a cooldown, an ETA a tool just reported ("arriving in 37s") —
-  do NOT call a status tool in a loop to wait it out; that burns the whole
-  turn. Call `wait(seconds, then=…)` to yield and be re-triggered when it's
-  ready (it ends the turn and resumes you with `then`).
-- Answer directly and naturally. Your reasoning is streamed separately (native
-  reasoning), so think freely — don't narrate your deliberation in the answer.
-"""))
+    _bt = bound_tool_names
+    guideline_lines = [
+        "# Guidelines",
+        "",
+        "- Prefer direct answers for simple requests; use tools when they add",
+        "  information the user asked for.",
+    ]
+    if _bt is None or "task" in _bt:
+        guideline_lines.extend([
+            "- Delegate to subagents via the `task` tool only for genuinely parallel",
+            "  or specialized work.",
+        ])
+    guideline_lines.extend([
+        "- If a tool fails, read the error, try once with corrected inputs, then",
+        "  surface the failure to the user with the concrete error string.",
+    ])
+    if _bt is None or "wait" in _bt:
+        guideline_lines.extend([
+            "- When you're waiting for something to finish — a ship/build/job to",
+            "  complete, a cooldown, an ETA a tool just reported (\"arriving in 37s\") —",
+            "  do NOT call a status tool in a loop to wait it out; that burns the whole",
+            "  turn. Call `wait(seconds, then=…)` to yield and be re-triggered when it's",
+            "  ready (it ends the turn and resumes you with `then`).",
+        ])
+    guideline_lines.extend([
+        "- Answer directly and naturally. Your reasoning is streamed separately (native",
+        "  reasoning), so think freely — don't narrate your deliberation in the answer.",
+    ])
+    parts.append(("Guidelines", "\n".join(guideline_lines)))
 
     return parts
 
