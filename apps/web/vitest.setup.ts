@@ -1,9 +1,9 @@
 // Make the Web Storage globals the SAME on every Node the suite might run on (#3213).
 //
-// Node 20-25 ship no Web Storage globals, so vitest's jsdom environment installs jsdom's
-// `localStorage` / `sessionStorage` and everything works. Node 26 defines its own accessors for
-// both on `globalThis` (the `--experimental-webstorage` surface), and vitest's global population
-// leaves a pre-existing accessor in place — so on Node 26:
+// Nodes that ship no Web Storage globals (checked here: 20, 22, 23, 24) let vitest's jsdom
+// environment install jsdom's `localStorage` / `sessionStorage`, and everything works. Node 26
+// defines its own accessors for both on `globalThis` (the `--experimental-webstorage` surface),
+// and vitest's global population leaves a pre-existing accessor in place — so on Node 26:
 //
 //   * `localStorage` reads `undefined` (Node only backs it when the process was started with
 //     `--localstorage-file`), which killed 127 tests across 18 files at `localStorage.clear()`
@@ -13,7 +13,10 @@
 //
 // CI pins Node 20 and never saw either. `.nvmrc` points humans at the same version, but that is
 // convenience: this file is the correctness half, so a future Node can't quietly re-break the
-// suite. jsdom's own Storage is what gets installed, deliberately — a Map-backed stand-in would
+// suite. The repair keys off BEHAVIOR, not a version range, precisely because the boundary is a
+// moving target — and because `typeof globalThis.localStorage` reads "undefined" whether the
+// global is absent or a getter returning undefined, so only a property descriptor tells a
+// working Node from a broken one. jsdom's own Storage is what gets installed, deliberately — a Map-backed stand-in would
 // drift on the semantics the console relies on (string coercion, `null` for a missing key,
 // named-property access). It has to come from a fresh JSDOM: once the environment is populated,
 // `document.defaultView` IS `globalThis`, so there is no intact jsdom window left to borrow from.

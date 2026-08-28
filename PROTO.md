@@ -66,7 +66,7 @@ TypeScript is the console.
   `@protoagent/web`). **Changing/bumping a dependency requires npm ≥ 11**
   (`npm install -g npm@11`) — see the npm-10 no-op gotcha below.
 - **Console Node version:** `.nvmrc` pins **Node 20**, matching CI — `nvm use` at the repo root.
-  Node 24+ pre-defines the Web Storage globals, which shadowed jsdom's in the unit suite and
+  Node 26 pre-defines the Web Storage globals (20/22/23/24 don't), which shadowed jsdom's in the unit suite and
   failed 127 tests at `localStorage.clear()` on a clean tree; `apps/web/vitest.setup.ts` now
   repairs that so a newer Node still runs green, but `.nvmrc` is what keeps you on CI's version
   in the first place (#3213).
