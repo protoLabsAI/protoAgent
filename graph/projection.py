@@ -189,9 +189,17 @@ class ProjectionOptions:
 
 def _coerce_prior_sessions_policy(value) -> str:
     """``context.prior_sessions`` → one of newest|relevant|off; anything else
-    reads as ``newest`` (``graph/config.py`` already warned at load time)."""
+    reads as ``newest`` (``graph/config.py`` already warned at load time).
+
+    ``False`` means ``off``: YAML 1.1 parses a bare ``off`` as that boolean, and
+    this is duck-typed over whatever object a runtime hands in — an external
+    runtime with its own settings can deliver the raw value without passing
+    through the config layer's coercion. Falling back to ``newest`` there would
+    hand the model the most expensive digest for an explicit off (#3252)."""
     from graph.middleware.memory import PRIOR_SESSION_POLICIES
 
+    if value is False:
+        return "off"
     v = str(value or "").strip().lower()
     return v if v in PRIOR_SESSION_POLICIES else "newest"
 

@@ -435,7 +435,27 @@ def _coerce_prior_sessions(value, default: str) -> str:
     layer consumes the key verbatim (test_config_drift_guard's contract); the
     projection layer (``graph.projection._coerce_prior_sessions_policy``) reads
     any unknown value as ``newest``, so a typo can't change what the model sees.
-    A blank value falls back to the default."""
+    A blank value falls back to the default.
+
+    YAML 1.1 parses a bare ``off`` as the BOOLEAN False (likewise ``no``/``false``),
+    and this knob's off switch is spelled exactly that way — so an operator writing
+    the documented ``prior_sessions: off`` handed this function ``False``, which
+    ``value or ""`` read as blank and resolved to the DEFAULT. The default is
+    ``newest``: the most expensive setting, the opposite of the request, with no
+    warning to say so. False-y booleans therefore mean ``off`` here. (Sibling knobs
+    like ``self_improvement.*`` never hit this — their default already IS ``off``,
+    so the blank fallback happens to land right.)"""
+    if value is False:
+        return "off"
+    if value is True:
+        # `on`/`yes`/`true` — YAML's other booleans. This knob has no such value.
+        log.warning(
+            "[config] context.prior_sessions=%r is not one of newest|relevant|off — treated as %r "
+            "(quote the value if you meant the string)",
+            value,
+            default,
+        )
+        return default
     v = str(value or "").strip().lower()
     if not v:
         return default
