@@ -1,22 +1,27 @@
 // Make the Web Storage globals the SAME on every Node the suite might run on (#3213).
 //
-// Nodes that ship no Web Storage globals (checked here: 20, 22, 23, 24) let vitest's jsdom
-// environment install jsdom's `localStorage` / `sessionStorage`, and everything works. Node 26
-// defines its own accessors for both on `globalThis` (the `--experimental-webstorage` surface),
-// and vitest's global population leaves a pre-existing accessor in place — so on Node 26:
+// Nodes that ship no Web Storage globals (verified: 20, 22, 23, 24) let vitest's jsdom
+// environment install jsdom's `localStorage` / `sessionStorage`, and everything works. Node 25
+// promoted Web Storage to enabled-by-default (opt-in behind `--experimental-webstorage` since
+// 22), so 25 and 26 define their own accessors for both on `globalThis` — and vitest's global
+// population leaves a pre-existing accessor in place. The damage differs by version, which is
+// why this file probes rather than sniffs:
 //
-//   * `localStorage` reads `undefined` (Node only backs it when the process was started with
-//     `--localstorage-file`), which killed 127 tests across 18 files at `localStorage.clear()`
-//     — on a clean tree, looking for all the world like the repo was broken;
-//   * `sessionStorage` silently resolves to NODE's Storage instead of jsdom's, so those tests
-//     pass against a different object than the console talks to in a browser.
+//   * Node 25 THROWS on `globalThis.localStorage` (no `--localstorage-file` backing store):
+//     133 of 1352 tests fail across 19 files;
+//   * Node 26 returns `undefined` from the same accessor instead: 127 across 18 files, every
+//     one of them at `localStorage.clear()` — on a clean tree, looking for all the world like
+//     the repo was broken;
+//   * on both, `sessionStorage` silently resolves to NODE's Storage instead of jsdom's, so
+//     those tests pass against a different object than the console talks to in a browser.
 //
 // CI pins Node 20 and never saw either. `.nvmrc` points humans at the same version, but that is
 // convenience: this file is the correctness half, so a future Node can't quietly re-break the
-// suite. The repair keys off BEHAVIOR, not a version range, precisely because the boundary is a
-// moving target — and because `typeof globalThis.localStorage` reads "undefined" whether the
-// global is absent or a getter returning undefined, so only a property descriptor tells a
-// working Node from a broken one. jsdom's own Storage is what gets installed, deliberately — a Map-backed stand-in would
+// suite. The repair keys off BEHAVIOR — can it store and return a value? — not a version range,
+// precisely because the boundary moves and the breakage doesn't even look the same on the two
+// affected versions (25 throws, 26 returns undefined). Sniffing is also easy to get wrong:
+// `typeof globalThis.localStorage` reads "undefined" whether the global is absent or a getter
+// returning undefined, so only a property descriptor tells a working Node from a broken one. jsdom's own Storage is what gets installed, deliberately — a Map-backed stand-in would
 // drift on the semantics the console relies on (string coercion, `null` for a missing key,
 // named-property access). It has to come from a fresh JSDOM: once the environment is populated,
 // `document.defaultView` IS `globalThis`, so there is no intact jsdom window left to borrow from.

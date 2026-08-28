@@ -2,10 +2,10 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 // Environment guard (#3213). Storage-backed suites — the chat input-history ring, the uiStore
 // persist migration, scratch state — assume working `localStorage`/`sessionStorage`. When the
-// host Node pre-defines those globals (26+ ships them behind `--experimental-webstorage`),
+// host Node pre-defines those globals (Node 25 promoted Web Storage to enabled-by-default),
 // vitest's jsdom environment leaves the pre-existing accessor alone and jsdom's Storage never
-// lands: `localStorage` reads `undefined` and 127 tests die on `localStorage.clear()` with no
-// hint that the Node version is the cause. vitest.setup.ts repairs that; this file is what fails
+// lands: `localStorage` throws on 25 / reads `undefined` on 26, and 133 resp. 127 tests die on
+// `localStorage.clear()` with no hint that the Node version is the cause. vitest.setup.ts repairs that; this file is what fails
 // FIRST, and legibly, if the repair ever stops working.
 //
 // The repair installs Storage from a second JSDOM realm, so it must bring the `Storage`
@@ -60,7 +60,7 @@ describe("test environment: Web Storage", () => {
 
   it("starts each test file with empty storage", () => {
     // Per-file isolation keeps one suite's persisted state out of the next one's assertions.
-    // (Verified as intact on Node 26 before the shim — vitest gives each file a fresh
+    // (Verified as intact on Node 25/26 before the shim — vitest gives each file a fresh
     // environment — so the shim must not be what breaks it.)
     localStorage.clear();
     expect(localStorage.length).toBe(0);
