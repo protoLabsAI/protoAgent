@@ -159,6 +159,12 @@ let INSTALLED_PLUGINS = [];
 // SSE reconnects, matching the real bus (events/bus.py assigns one counter per process).
 let eventSeq = 0;
 
+// Steer ids the "agent" is pretending to have already read: their DELETE answers
+// `removed: false` instead of the default happy path, so a spec can drive the
+// already-drained branch (bubble restored, not dropped). Populated by the POST handler
+// from a "too late" sentinel in the steer text — see the steer routes below (#3214).
+const drainedSteers = new Set();
+
 // Per-plugin update fixtures, keyed by id — seeds non-default freshness states
 // (behind / pinned / errored) for any pre-seeded plugin. After a successful
 // `POST /{id}/update` the entry is cleared so the row flips to "up to date".
@@ -984,15 +990,22 @@ const server = createServer(async (req, res) => {
         complete: Boolean(supplied),
       });
     }
-    // Mid-turn steering enqueue — accept + echo (the console ignores the body).
+    // Mid-turn steering enqueue — accept + echo (the console ignores the body). A steer whose
+    // text says "too late" is REMEMBERED as already drained, so its DELETE answers
+    // `removed: false` below: the sentinel that makes the agent-already-read-it path drivable
+    // (#3214). Same trick as "hold the turn open" — the spec picks the branch by what it types.
     if (/^\/api\/chat\/sessions\/[^/]+\/steer$/.test(pathname) && req.method === "POST") {
       const body = await readBody(req);
+      if (body.id && /too late/i.test(String(body.text ?? ""))) drainedSteers.add(String(body.id));
       return sendJson(res, { ok: true, id: body.id ?? null, pending: 0 });
     }
-    // Mid-turn steering cancel (the ✕ on a queued bubble) — dequeue still-queued.
-    // `removed: true` is the happy path the #1103 e2e drives (cancel before drain).
+    // Mid-turn steering cancel (the ✕ on a queued bubble, or ↑ pulling it back to edit) —
+    // dequeue still-queued. `removed: true` is the happy path the #1103 e2e drives (cancel
+    // before drain); `removed: false` means the agent already read it, so the console restores
+    // the bubble rather than pretending it never ran.
     if (/^\/api\/chat\/sessions\/[^/]+\/steer\/[^/]+$/.test(pathname) && req.method === "DELETE") {
-      return sendJson(res, { removed: true, pending: 0 });
+      const id = decodeURIComponent(pathname.split("/").pop());
+      return sendJson(res, { removed: !drainedSteers.has(id), pending: 0 });
     }
     // Goal lifecycle re-arm (ADR 0079) — extend/restart. Echo a resumed re-arm.
     if (/^\/api\/goals\/[^/]+\/rearm$/.test(pathname) && req.method === "POST") {
