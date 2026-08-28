@@ -538,3 +538,71 @@ def test_knowledge_promote_not_layered_hints(monkeypatch, tmp_path):
     assert r["enabled"] is True and r["promoted"] is False and "layered" in r["error"]
     r = c.post("/api/knowledge/1/forget").json()
     assert r["forgotten"] is False and "layered" in r["error"]
+
+
+# ── lifecycle-preserving edits + review filter (ADR 0108 D7, review round) ────
+
+
+def test_chunk_update_keeps_lifecycle_and_confirms(monkeypatch, tmp_path):
+    from knowledge.store import KnowledgeStore
+
+    store = KnowledgeStore(tmp_path / "kb.db")
+    cid = store.add_chunk(
+        "agent guess",
+        domain="notes",
+        source_type="conversation",
+        subject="ops",
+        delivery_policy="on_demand",
+        expires_at="2027-03-01T00:00:00+00:00",
+        namespace="proj-x",
+    )
+    before = store.list_chunks(limit=1)[0]
+    assert before.review_state == "pending"
+    c = _client(monkeypatch, knowledge=store)
+    r = c.put(f"/api/knowledge/chunks/{cid}", json={"content": "agent guess, corrected"})
+    assert r.status_code == 200 and r.json()["replaced"] is True
+    after = store.list_chunks(limit=1)[0]
+    assert after.id != cid and after.content == "agent guess, corrected"
+    assert after.domain == "notes"  # defaults to the row's own domain
+    assert (after.subject, after.delivery_policy, after.expires_at, after.namespace) == (
+        "ops",
+        "on_demand",
+        "2027-03-01T00:00:00+00:00",
+        "proj-x",
+    )
+    assert after.memory_kind == before.memory_kind
+    assert after.source_type == "operator" and after.review_state == "confirmed"  # an edit asserts the content
+
+
+def test_chunk_update_keeps_a_rejected_row_rejected(monkeypatch, tmp_path):
+    from knowledge.store import KnowledgeStore
+
+    store = KnowledgeStore(tmp_path / "kb.db")
+    cid = store.add_chunk("bad guess", domain="notes", source_type="conversation")
+    assert store.set_review_state(cid, "rejected")
+    c = _client(monkeypatch, knowledge=store)
+    assert c.put(f"/api/knowledge/chunks/{cid}", json={"content": "bad guess, edited"}).status_code == 200
+    assert store.list_chunks(limit=1)[0].review_state == "rejected"  # re-opening is the review route's job
+
+
+def test_chunk_update_unknown_id_is_404(monkeypatch, tmp_path):
+    from knowledge.store import KnowledgeStore
+
+    c = _client(monkeypatch, knowledge=KnowledgeStore(tmp_path / "kb.db"))
+    assert c.put("/api/knowledge/chunks/999", json={"content": "x"}).status_code == 404
+
+
+def test_knowledge_search_review_state_filter(monkeypatch, tmp_path):
+    from knowledge.store import KnowledgeStore
+
+    store = KnowledgeStore(tmp_path / "kb.db")
+    store.add_chunk("console truth", domain="general", source_type="operator")
+    store.add_chunk("agent guess", domain="general", source_type="conversation")
+    c = _client(monkeypatch, knowledge=store)
+    listed = c.get("/api/knowledge/search?review_state=pending").json()["results"]
+    assert [r["content"] for r in listed] == ["agent guess"]
+    hits = c.get("/api/knowledge/search?q=truth&review_state=confirmed").json()["results"]
+    assert [r["content"] for r in hits] == ["console truth"]
+    assert c.get("/api/knowledge/search?q=truth&review_state=pending").json()["results"] == []
+    assert c.get("/api/knowledge/search?review_state=maybe").status_code == 400
+    assert len(c.get("/api/knowledge/search?review_state=").json()["results"]) == 2  # empty = unfiltered

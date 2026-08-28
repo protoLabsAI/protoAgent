@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from knowledge.store import Chunk
 
+from knowledge.store import REVIEW_CONFIRMED
+
 log = logging.getLogger(__name__)
 
 # RRF constant for the SECOND-level fusion ACROSS tiers (each tier already fused its own
@@ -179,7 +181,10 @@ class LayeredKnowledgeStore:
             epoch=chunk.get("epoch"),
             memory_kind=chunk.get("memory_kind"),
             subject=chunk.get("subject"),
-            review_state=chunk.get("review_state"),
+            # Promotion IS the operator's curation (ADR 0041) — the commons copy is
+            # confirmed by construction, whatever the private row's verdict was,
+            # and nothing reviews a commons row afterwards (ADR 0108 D7.2).
+            review_state=REVIEW_CONFIRMED,
             expires_at=chunk.get("expires_at"),
             delivery_policy=chunk.get("delivery_policy"),
         )

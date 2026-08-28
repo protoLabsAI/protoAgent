@@ -688,3 +688,126 @@ def test_grace_sweep_never_reaps_superseded_rows(tmp_path):
     audit = {c.id for c in store.list_chunks(domain="fact", limit=10, include_invalidated=True)}
     assert audit == {old, new}
     assert store.get_chunk(old)["invalidation_reason"] == f"superseded_by:{new}"
+
+
+# ── review-state backfill + store-side normalization (ADR 0108 D7, review round) ──
+
+
+def test_review_state_backfill_stamps_legacy_rows_once(tmp_path):
+    """A #3242-shaped DB (all five typed columns, D4 stamp already set, NULL
+    review_state everywhere) gets a SECOND one-shot pass on first open: the tier
+    rule stamps every NULL verdict, a verdict already set survives, the D4 pass
+    does not re-run, and a later NULL never triggers a rescan."""
+    path = tmp_path / "post3242.db"
+    db = sqlite3.connect(str(path))
+    db.execute(
+        "CREATE TABLE chunks ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, content TEXT NOT NULL, "
+        "domain TEXT NOT NULL DEFAULT 'general', heading TEXT, source TEXT, "
+        "source_type TEXT, finding_type TEXT, namespace TEXT, epoch TEXT, "
+        "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, "
+        "invalidated_at TEXT, invalidation_reason TEXT, "
+        "memory_kind TEXT, subject TEXT, review_state TEXT, expires_at TEXT, delivery_policy TEXT)"
+    )
+    db.execute("CREATE TABLE _kb_meta (key TEXT PRIMARY KEY, value TEXT)")
+    db.execute("INSERT INTO _kb_meta(key, value) VALUES ('typed_memory_backfill', 'd4-stamp')")
+    for content, source_type in (("console fact", "operator"), ("agent note", "conversation"), ("web page", "web"), ("unstamped", None)):
+        db.execute(
+            "INSERT INTO chunks (content, domain, source_type, memory_kind, created_at, updated_at) "
+            "VALUES (?, 'general', ?, 'reference', 'x', 'x')",
+            (content, source_type),
+        )
+    db.execute(
+        "INSERT INTO chunks (content, domain, source_type, memory_kind, review_state, created_at, updated_at) "
+        "VALUES ('already rejected', 'general', 'conversation', 'note', 'rejected', 'x', 'x')"
+    )
+    db.commit()
+    db.close()
+
+    store = KnowledgeStore(path)  # first open under the D7 build
+    verdicts = {c.content: c.review_state for c in store.list_chunks(limit=10)}
+    assert verdicts == {
+        "console fact": "confirmed",
+        "agent note": "pending",
+        "web page": "pending",
+        "unstamped": "pending",
+        "already rejected": "rejected",
+    }
+    assert store.get_meta("review_state_backfill")
+    assert store.get_meta("typed_memory_backfill") == "d4-stamp"  # the D4 pass did not re-run
+
+    # One-shot: a NULL written behind the store's back after the stamp is not rescanned.
+    raw = sqlite3.connect(str(path))
+    raw.execute("INSERT INTO chunks (content, domain, created_at, updated_at) VALUES ('raw after stamp', 'general', 'x', 'x')")
+    raw.commit()
+    raw.close()
+    again = {c.content: c.review_state for c in KnowledgeStore(path).list_chunks(limit=10)}
+    assert again["raw after stamp"] is None
+    assert again["console fact"] == "confirmed" and again["already rejected"] == "rejected"
+
+
+def test_review_state_backfill_covers_a_pre_3205_db_too(tmp_path):
+    """A DB that predates every typed column goes through D4's pass (kind/policy)
+    AND D7's pass (verdict) on the same first open."""
+    path = tmp_path / "old.db"
+    db = sqlite3.connect(str(path))
+    db.execute(
+        "CREATE TABLE chunks ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, content TEXT NOT NULL, "
+        "domain TEXT NOT NULL DEFAULT 'general', heading TEXT, source TEXT, "
+        "source_type TEXT, finding_type TEXT, namespace TEXT, epoch TEXT, "
+        "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, invalidated_at TEXT, invalidation_reason TEXT)"
+    )
+    db.execute("INSERT INTO chunks (content, domain, source_type, created_at, updated_at) VALUES ('old operator row', 'hot', 'operator', 'x', 'x')")
+    db.execute("INSERT INTO chunks (content, domain, created_at, updated_at) VALUES ('old anonymous row', 'general', 'x', 'x')")
+    db.commit()
+    db.close()
+    rows = {c.content: c for c in KnowledgeStore(path).list_chunks(limit=10)}
+    assert (rows["old operator row"].memory_kind, rows["old operator row"].delivery_policy, rows["old operator row"].review_state) == ("standing", "always", "confirmed")
+    assert (rows["old anonymous row"].memory_kind, rows["old anonymous row"].delivery_policy, rows["old anonymous row"].review_state) == ("reference", None, "pending")
+
+
+def test_add_chunk_normalizes_review_state_and_expires_at(tmp_path, caplog):
+    """Store-side normalization: the verdict is folded to the canonical spelling
+    and an unknown one falls back to the tier rule (logged); ``expires_at`` is
+    stored as UTC ISO with a ``+00:00`` offset (naive = UTC), and an unparseable
+    value is dropped (logged) rather than stored as text no comparison could use."""
+    store = KnowledgeStore(tmp_path / "kb.db")
+    store.add_chunk("cased", domain="d", source_type="operator", review_state=" Rejected ")
+    store.add_chunk("bogus", domain="d", source_type="operator", review_state="maybe")
+    store.add_chunk("naive", domain="d", expires_at="2027-03-01T12:00:00")
+    store.add_chunk("zulu", domain="d", expires_at="2027-03-01T12:00:00Z")
+    store.add_chunk("offset", domain="d", expires_at="2027-03-01T14:00:00+02:00")
+    store.add_chunk("garbage", domain="d", expires_at="next tuesday")
+    by = {c.content: c for c in store.list_chunks(limit=10)}
+    assert by["cased"].review_state == "rejected"
+    assert by["bogus"].review_state == "confirmed"  # tier rule (operator) after the refusal
+    assert by["naive"].expires_at == "2027-03-01T12:00:00+00:00"
+    assert by["zulu"].expires_at == "2027-03-01T12:00:00+00:00"
+    assert by["offset"].expires_at == "2027-03-01T12:00:00+00:00"
+    assert by["garbage"].expires_at is None
+    assert "unknown review_state" in caplog.text
+    assert "unparseable expires_at" in caplog.text
+
+
+def test_superseded_by_id_helper():
+    from knowledge.store import _BULK_DELETE_REASON, superseded_by_id
+
+    assert superseded_by_id("superseded_by:17") == 17
+    assert superseded_by_id(None) is None
+    assert superseded_by_id("") is None
+    assert superseded_by_id(_BULK_DELETE_REASON) is None
+    assert superseded_by_id("superseded_by:zz") is None
+
+
+def test_promote_confirms_the_commons_copy(tmp_path):
+    """Promotion IS the operator's curation: the commons copy is confirmed by
+    construction; the private row keeps its own verdict."""
+    priv = KnowledgeStore(tmp_path / "priv.db")
+    commons = KnowledgeStore(tmp_path / "commons.db")
+    layered = LayeredKnowledgeStore(priv, commons)
+    pid = priv.add_chunk("pending private", domain="d", source_type="conversation")
+    assert priv.list_chunks(limit=1)[0].review_state == "pending"
+    assert layered.promote(pid) is not None
+    assert commons.list_chunks(limit=1)[0].review_state == "confirmed"
+    assert priv.list_chunks(limit=1)[0].review_state == "pending"

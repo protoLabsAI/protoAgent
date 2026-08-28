@@ -692,15 +692,39 @@ def register_knowledge_routes(app) -> None:
         content = str(body.get("content", "")).strip()
         if not content:
             return JSONResponse({"detail": "content is required"}, status_code=400)
-        new_id = await asyncio.to_thread(
-            lambda: STATE.knowledge_store.add_chunk(
-                content,
-                str(body.get("domain", "") or "general"),
-                heading=(str(body.get("heading", "")).strip() or None),
-                source=(body.get("source") or "console"),
-                source_type="operator",
-            )
-        )
+        # An edit is a NEW revision (add first, then delete the old — a failed add
+        # never loses the original). The revision keeps the row's lifecycle (ADR
+        # 0108 D7): its typed columns ride along, and the verdict follows the
+        # tier rule — an operator edit is an assertion about the content, so it
+        # is ``confirmed`` — EXCEPT a ``rejected`` row stays rejected; re-opening
+        # is the review route's job, not a side effect of fixing a typo.
+        get_chunk = getattr(STATE.knowledge_store, "get_chunk", None)
+        cur = await asyncio.to_thread(get_chunk, chunk_id) if callable(get_chunk) else None
+        if cur is None and callable(get_chunk):
+            return JSONResponse({"detail": "no chunk with that id"}, status_code=404)
+        cur = cur or {}
+        carry = {
+            key: cur.get(key)
+            for key in ("memory_kind", "subject", "delivery_policy", "expires_at", "namespace", "epoch")
+            if cur.get(key) is not None
+        }
+        if cur.get("review_state") == "rejected":
+            carry["review_state"] = "rejected"
+        domain = str(body.get("domain", "") or cur.get("domain") or "general")
+        heading = str(body.get("heading", "")).strip() or None
+        source = body.get("source") or "console"
+
+        def _add():
+            try:
+                return STATE.knowledge_store.add_chunk(
+                    content, domain, heading=heading, source=source, source_type="operator", **carry
+                )
+            except TypeError:  # plugin backend predating the lifecycle kwargs
+                return STATE.knowledge_store.add_chunk(
+                    content, domain, heading=heading, source=source, source_type="operator"
+                )
+
+        new_id = await asyncio.to_thread(_add)
         if new_id is None:
             return JSONResponse({"detail": "the store rejected the new revision"}, status_code=400)
         deleted = await asyncio.to_thread(STATE.knowledge_store.delete_by_id, chunk_id)

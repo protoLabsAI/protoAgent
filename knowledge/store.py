@@ -321,12 +321,28 @@ _BULK_DELETE_REASON = "source_delete"
 # sweep (which matches ``_BULK_DELETE_REASON`` only) — but queryable as a chain.
 SUPERSEDED_BY_PREFIX = "superseded_by:"
 
+
+def superseded_by_id(reason: str | None) -> int | None:
+    """The replacing row's id encoded in an ``invalidation_reason``
+    (``superseded_by:<id>``), or None for a legacy NULL reason, the bulk-delete
+    marker, or anything malformed — callers render ``[superseded by #id]`` vs
+    plain ``[superseded]`` on this."""
+    if not reason or not str(reason).startswith(SUPERSEDED_BY_PREFIX):
+        return None
+    try:
+        return int(str(reason)[len(SUPERSEDED_BY_PREFIX) :])
+    except ValueError:
+        return None
+
+
 # ── typed memory: review state (ADR 0108 D4 / D7) ────────────────────────────
 # Whether an operator has confirmed the row. ``add_chunk`` stamps every write
 # (D7): operator-authored rows (trust tier 3) start ``confirmed``; agent-derived
 # and ingested/external rows start ``pending`` until an operator confirms or
-# rejects them through the memory inspector. NULL (rows written before D7 that
-# the backfill didn't touch) reads as ``pending``.
+# rejects them through the memory inspector. Rows written before D7 are stamped
+# the same way by a one-shot pass on the first open (``_backfill_review_state``),
+# so every filter can compare the column directly — NULL never has to "read as"
+# anything.
 REVIEW_CONFIRMED = "confirmed"
 REVIEW_PENDING = "pending"
 REVIEW_REJECTED = "rejected"
@@ -347,6 +363,9 @@ DELIVERY_POLICIES = frozenset({DELIVERY_ALWAYS, DELIVERY_RETRIEVED, DELIVERY_ON_
 # ``_kb_meta`` flag stamped once the one-shot typed-memory backfill has run, so a
 # pass that failed mid-way retries on the next open and a finished one never re-runs.
 _TYPED_MEMORY_BACKFILL_KEY = "typed_memory_backfill"
+# Its ADR 0108 D7 sibling: the D4 pass filled memory_kind / delivery_policy only and
+# is already stamped on live DBs, so the review-state pass needs its own stamp.
+_REVIEW_STATE_BACKFILL_KEY = "review_state_backfill"
 
 
 def infer_delivery_policy(domain: str | None) -> str | None:
@@ -410,6 +429,38 @@ def _backfill_typed_memory(db: sqlite3.Connection) -> int:
     if updates:
         db.executemany("UPDATE chunks SET memory_kind = ?, delivery_policy = ? WHERE id = ?", updates)
     return len(updates)
+
+
+def _backfill_review_state(db: sqlite3.Connection) -> int:
+    """One-shot ADR 0108 D7.2 pass: stamp a ``review_state`` on every row that has
+    none, from who wrote it (:func:`infer_review_state` — operator rows
+    ``confirmed``, everything else ``pending``), exactly as ``add_chunk`` does
+    for new writes. Only NULL cells are written — a verdict already set stays —
+    so a re-run is a no-op. Returns the number of rows touched; the caller owns
+    the transaction."""
+    rows = db.execute("SELECT id, source_type FROM chunks WHERE review_state IS NULL").fetchall()
+    updates = [(infer_review_state(r["source_type"]), int(r["id"])) for r in rows]
+    if updates:
+        db.executemany("UPDATE chunks SET review_state = ? WHERE id = ? AND review_state IS NULL", updates)
+    return len(updates)
+
+
+def _normalize_expires_at(value: str | datetime | None) -> str | None:
+    """Store-side shape for ``expires_at`` (ADR 0108 D7.4): a UTC ISO-8601 string
+    in the ``_now_iso()`` form (``+00:00`` offset) so the delivery layer's SQL
+    string comparison against "now" is sound. A naive timestamp is taken as UTC;
+    an unparseable one is logged and dropped (no expiry) rather than stored as
+    text that would never compare correctly."""
+    if value is None:
+        return None
+    try:
+        parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).strip())
+    except ValueError:
+        log.warning("[knowledge] add_chunk: unparseable expires_at %r ignored (no expiry)", value)
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC).isoformat()
 
 
 _SCHEMA = """
@@ -619,6 +670,27 @@ class KnowledgeStore:
                         log.info("[knowledge] typed-memory backfill classified %d legacy rows (ADR 0108 D4)", touched)
             except sqlite3.DatabaseError as exc:
                 log.debug("[knowledge] delivery_policy migration skipped: %s", exc)
+            # Migration: ADR 0108 D7.2 — every row carries a review verdict. The D4
+            # pass above filled memory_kind / delivery_policy only and is already
+            # stamped on live DBs, so this is a SECOND one-shot pass under its own
+            # ``_kb_meta`` stamp: NULL review_state → the tier rule (operator rows
+            # confirmed, everything else pending). NULL-cells-only, so a pass that
+            # died mid-way retries next open and a finished one never re-runs.
+            try:
+                stamped = db.execute(
+                    "SELECT value FROM _kb_meta WHERE key = ?", (_REVIEW_STATE_BACKFILL_KEY,)
+                ).fetchone()
+                if stamped is None:
+                    touched = _backfill_review_state(db)
+                    db.execute(
+                        "INSERT INTO _kb_meta(key, value) VALUES(?, ?) "
+                        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                        (_REVIEW_STATE_BACKFILL_KEY, _now_iso()),
+                    )
+                    if touched:
+                        log.info("[knowledge] review-state backfill stamped %d rows (ADR 0108 D7)", touched)
+            except sqlite3.DatabaseError as exc:
+                log.debug("[knowledge] review_state backfill skipped: %s", exc)
             self._fts_available = _has_fts5(db)
             if self._fts_available:
                 db.executescript(_FTS_SCHEMA)
@@ -746,8 +818,22 @@ class KnowledgeStore:
             delivery_policy = infer_delivery_policy(domain)
         if memory_kind is None:
             memory_kind = infer_memory_kind(domain, source_type)
+        # Store-side normalization (ADR 0108 D7): the verdict column is compared
+        # verbatim by every filter, so fold case/whitespace and refuse to store a
+        # value no filter would ever match — an unknown state is logged and falls
+        # back to the tier rule rather than poisoning the column.
+        if review_state is not None:
+            normalized = str(review_state).strip().lower()
+            if normalized in REVIEW_STATES:
+                review_state = normalized
+            else:
+                log.warning(
+                    "[knowledge] add_chunk: unknown review_state %r ignored (tier rule applies)", review_state
+                )
+                review_state = None
         if review_state is None:
             review_state = infer_review_state(source_type)
+        expires_at = _normalize_expires_at(expires_at)
         db = self._get_db()
         if db is None:
             return None

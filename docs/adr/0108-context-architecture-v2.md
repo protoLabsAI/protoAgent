@@ -253,6 +253,13 @@ confirmation and expiration.
 
 Implements: #3185.
 
+*Amendment (#3246):* tier 1 (ingested / external) and unknown source types also
+start `review_state="pending"`, not only the agent tier — a write path that
+doesn't identify itself gets the least trust, not the benefit of the doubt.
+SDK and eval writes with no `source_type` are tier 1. Rows that predate the
+rule are stamped by a one-shot backfill on first open (its own `_kb_meta`
+marker, `review_state_backfill`, separate from the D4 pass).
+
 ### D8 — Surface parity: one projection for every runtime
 
 The native runtime (`KnowledgeMiddleware`) and external runtimes
@@ -358,6 +365,10 @@ calls `compose_projected_context()`.
 Budget-driven delivery, relevance-gated digest, write lifecycle
 (confirmation + expiration). Rollback: revert to unbounded injection and
 unconditional digest.
+
+Shipped: D7 in #3246 (creation stamps via the trust tier, `set_review_state` +
+`POST /api/memory/chunks/{id}/review`, the `superseded_by:<id>` chain with
+insert-then-invalidate, `expires_in_days` on `memory_ingest`).
 
 ### Compatibility behavior
 

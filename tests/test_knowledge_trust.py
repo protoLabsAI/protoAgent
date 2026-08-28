@@ -455,6 +455,10 @@ def test_memory_ingest_expires_in_days(tmp_path):
         assert asyncio.run(ingest.ainvoke({"content": "x", "expires_in_days": bad})).startswith(
             "Error: expires_in_days"
         )
+    # A bool is not a day count and 2.5 would silently become 2 — refused at the tool,
+    # below the arg schema (call the coroutine directly, as a permissive schema would).
+    for bad in (True, 2.5):
+        assert asyncio.run(ingest.coroutine(content="x", expires_in_days=bad)).startswith("Error: expires_in_days")
     assert len(store.list_chunks(limit=10)) == 1  # nothing stored for the refused values
 
 
@@ -484,9 +488,12 @@ def test_memory_recall_include_superseded_labels_history(tmp_path):
     old = store.add_chunk("deploy day is Friday", domain="fact")
     new = store.add_chunk("deploy day is Thursday", domain="fact")
     assert store.invalidate_chunk(old, superseded_by=new)
+    legacy = store.add_chunk("deploy day was Monday", domain="fact")
+    assert store.invalidate_chunk(legacy)  # pre-D7 supersede: no chain, NULL reason
     recall = _by_name(_build_memory_tools(store))["memory_recall"]
     current = asyncio.run(recall.ainvoke({"query": "deploy day"}))
-    assert "Thursday" in current and "Friday" not in current
+    assert "Thursday" in current and "Friday" not in current and "Monday" not in current
     history = asyncio.run(recall.ainvoke({"query": "deploy day", "include_superseded": True}))
-    assert "[superseded] [fact] deploy day is Friday" in history
-    assert "Thursday" in history and "[superseded] [fact] deploy day is Thursday" not in history
+    assert f"[superseded by #{new}] [fact] deploy day is Friday" in history
+    assert "[superseded] [fact] deploy day was Monday" in history
+    assert "Thursday" in history and "superseded] [fact] deploy day is Thursday" not in history

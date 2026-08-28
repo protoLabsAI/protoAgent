@@ -19,7 +19,12 @@ Two rules from the ADR:
   arXiv 2606.01435) — inserts the new row FIRST and then marks the old row
   ``invalidated_at=now`` with ``invalidation_reason="superseded_by:<new id>"``
   (ADR 0108 D7.3 — the audit chain). Insert-then-invalidate means a failed
-  insert never loses the old fact. History is kept for audit; retrieval
+  insert never loses the old fact; the reverse — the insert landed but the
+  invalidation didn't — is logged and leaves BOTH rows valid until the next
+  revision supersedes them (never silently, never by deleting). On a layered
+  store only PRIVATE rows are ever superseded: a commons match still dedups
+  by content, but is never invalidated (ids are per-backend — the commons id
+  would hit an unrelated private row). History is kept for audit; retrieval
   excludes invalidated rows by default. Nothing here UPDATEs content in place
   or DELETEs.
 
@@ -144,8 +149,10 @@ def consolidate_and_store(
     try:
         existing = knowledge_store.list_chunks(domain="fact", namespace=namespace, limit=500)
         # (chunk id, token set) per valid fact — ids so a supersede can target
-        # the exact row; id None marks batch-local entries (nothing to invalidate).
-        candidates: list[tuple[int | None, set[str]]] = [(c.id, _tokens(c.content)) for c in existing]
+        # the exact row; id None means "nothing to invalidate" (batch-local
+        # entries, and COMMONS rows on a layered store: ids are per-backend,
+        # so the commons id would name an unrelated PRIVATE row).
+        candidates: list[tuple[int | None, set[str]]] = [_candidate(c) for c in existing]
     except Exception:  # noqa: BLE001 — minimal stub or read failure ⇒ add-only
         candidates = []
 
@@ -174,11 +181,30 @@ def consolidate_and_store(
         if rid is None:
             continue
         counts["added"] += 1
-        if old_id is not None and callable(invalidate) and _supersede(invalidate, old_id, rid):
-            counts["superseded"] += 1
-            del candidates[best_idx]  # no longer valid — drop from comparisons
+        if old_id is not None and callable(invalidate):
+            if _supersede(invalidate, old_id, rid):
+                counts["superseded"] += 1
+                del candidates[best_idx]  # no longer valid — drop from comparisons
+            else:
+                log.warning(
+                    "[memory] fact %s landed but its predecessor %s could not be invalidated — "
+                    "both stay valid until the next revision",
+                    rid,
+                    old_id,
+                )
         candidates.append((rid, ft))  # dedup/supersede within this batch too
     return counts
+
+
+def _candidate(row) -> tuple[int | None, set[str]]:
+    """``(id-to-invalidate, token set)`` for one existing fact. Rows are ``Chunk``
+    objects on a plain store and — on a layered store — tier-tagged rows from BOTH
+    tiers (``Chunk`` since #3245, dicts before it); a commons row keeps its content
+    for dedup but gets id None so it is never invalidated through the private
+    store."""
+    get = row.get if isinstance(row, dict) else (lambda key, default=None: getattr(row, key, default))
+    row_id = None if get("tier") == "commons" else get("id")
+    return (row_id, _tokens(get("content") or ""))
 
 
 def _supersede(invalidate, old_id: int, new_id: int) -> bool:

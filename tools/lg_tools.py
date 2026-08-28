@@ -52,7 +52,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
-from knowledge.store import DELIVERY_ALWAYS, DELIVERY_POLICIES, REVIEW_STATES
+from knowledge.store import DELIVERY_ALWAYS, DELIVERY_POLICIES, REVIEW_STATES, superseded_by_id
 from scheduler.interface import is_cron, parse_ttl
 from tools.fallbacks import with_fallback
 
@@ -733,6 +733,16 @@ def _norm_delivery_policy(value) -> tuple[str | None, str | None]:
     return normalized, None
 
 
+def _superseded_label(row: dict) -> str:
+    """``"[superseded by #17] "`` for a row whose replacement is known from the
+    ADR 0108 D7.3 chain, ``"[superseded] "`` for a legacy (NULL-reason) supersede,
+    ``""`` for a valid row. Keyed on ``invalidated_at`` — the reason only adds the id."""
+    if not row.get("invalidated_at"):
+        return ""
+    new_id = superseded_by_id(row.get("invalidation_reason"))
+    return f"[superseded by #{new_id}] " if new_id is not None else "[superseded] "
+
+
 def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None) -> list:
     """Bind memory tools to a ``KnowledgeStore``. Returns a list.
 
@@ -795,12 +805,17 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
             return policy_error
         expires_at: str | None = None
         if expires_in_days is not None:
+            # Whole days only: a bool is not a count, and 2.5 would silently become 2.
             try:
                 days = int(expires_in_days)
+                whole = not isinstance(expires_in_days, bool) and days == expires_in_days
             except (TypeError, ValueError):
-                days = 0
-            if days < 1 or days > _MEMORY_EXPIRES_MAX_DAYS:
-                return f"Error: expires_in_days must be between 1 and {_MEMORY_EXPIRES_MAX_DAYS} (got {expires_in_days!r})."
+                days, whole = 0, False
+            if not whole or days < 1 or days > _MEMORY_EXPIRES_MAX_DAYS:
+                return (
+                    f"Error: expires_in_days must be a whole number of days between 1 and "
+                    f"{_MEMORY_EXPIRES_MAX_DAYS} (got {expires_in_days!r})."
+                )
             expires_at = (datetime.now(UTC) + timedelta(days=days)).isoformat()
         # Always-on confirm gate (ADR 0069 D8): domain="hot" chunks — and, since
         # ADR 0108 D4, any chunk with delivery_policy="always" — are injected in
@@ -990,7 +1005,7 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         if not results:
             return "No matches."
         lines = [
-            ("[superseded] " if r.get("invalidated_at") else "")
+            _superseded_label(r)
             + f"[{r.get('domain', '?')}] {r['preview']}"
             + _memory_citation(
                 source=r.get("source"),

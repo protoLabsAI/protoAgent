@@ -165,3 +165,18 @@ async def test_knowledge_purge_degrades_on_a_backend_without_purge_domain(monkey
     monkeypatch.setattr(sdk.STATE, "knowledge_store", store, raising=False)
     assert await sdk.knowledge_purge("loop-lessons") == 0
     assert store.calls == []  # never touched
+
+
+@pytest.mark.asyncio
+async def test_knowledge_add_validates_and_normalizes_review_state(monkeypatch):
+    """A verdict no filter would ever match is a plugin bug — a clear ValueError at
+    the boundary, never a silently-pending row; a valid one is folded to canonical."""
+    from graph import sdk
+
+    store = _TypedStore()
+    monkeypatch.setattr(sdk.STATE, "knowledge_store", store, raising=False)
+    with pytest.raises(ValueError, match="review_state must be one of"):
+        await sdk.knowledge_add("x", domain="d", review_state="maybe")
+    assert store.calls == []  # refused before the store was touched
+    await sdk.knowledge_add("y", domain="d", review_state=" Confirmed ")
+    assert store.calls[-1][7] == "confirmed"

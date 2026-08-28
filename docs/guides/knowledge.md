@@ -288,8 +288,13 @@ control first (SpAIware-class memory poisoning gets *detected* here), UX second:
   confirms, rejects, or re-opens it with `POST /api/memory/chunks/{id}/review`
   (`{"state": "confirmed" | "rejected" | "pending"}`), and
   `GET /api/knowledge/search?review_state=pending` lists the queue. Rejecting
-  never deletes — the row just stops being deliverable. On a layered store the
-  verdict targets the private tier; commons rows stay with promote/forget.
+  never deletes — the row just stops being deliverable (D6, #3187). On a layered
+  store the verdict targets the private tier; commons rows stay with
+  promote/forget — a caller holding a commons row must send `"tier": "commons"`
+  in the body to be refused (400) rather than land the verdict on the private
+  row that shares the numeric id; an omitted tier means private. An operator
+  edit of a chunk keeps its lifecycle (kind, subject, policy, expiry, scope) and
+  confirms the new revision, except a rejected row stays rejected.
 
 ## Sharing knowledge across a fleet (the commons)
 

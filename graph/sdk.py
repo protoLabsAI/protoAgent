@@ -210,6 +210,15 @@ async def knowledge_add(
     ISO-8601 UTC timestamp after which it lapses. Omitted = the store's own stamping:
     kind inferred from the domain, retrieved, ``"pending"`` (a plugin write is not
     operator intent), no expiry."""
+    if review_state is not None:
+        # Boundary validation (like the tool-side delivery_policy check): a plugin
+        # passing a verdict no filter would ever match is a bug worth a clear error,
+        # not a silently-pending row.
+        from knowledge.store import REVIEW_STATES
+
+        review_state = str(review_state).strip().lower()
+        if review_state not in REVIEW_STATES:
+            raise ValueError(f"review_state must be one of {', '.join(sorted(REVIEW_STATES))} (got {review_state!r})")
     store = getattr(STATE, "knowledge_store", None)
     if store is None:
         return None

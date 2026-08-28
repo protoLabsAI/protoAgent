@@ -250,9 +250,12 @@ def register_memory_routes(app) -> None:
     # Every agent-derived or ingested write starts ``review_state="pending"``;
     # the operator confirms, rejects, or re-opens it here. Rejecting never
     # deletes — the row keeps its content and history, it just stops being
-    # deliverable (D6 filters on the verdict). On a layered store the verdict
-    # targets the PRIVATE tier (ids are per-backend; commons rows are curated
-    # via promote/forget, never reviewed through this route).
+    # deliverable (D6, #3187, filters on the verdict). On a layered store the
+    # verdict targets the PRIVATE tier (ids are per-backend; commons rows are
+    # curated via promote/forget, never reviewed through this route) — so a
+    # caller holding a commons row MUST send ``{"tier": "commons"}`` to be
+    # refused rather than land the verdict on the private row that shares the
+    # numeric id; an omitted tier means private.
 
     @app.post("/api/memory/chunks/{chunk_id}/review")
     async def _api_memory_chunk_review(chunk_id: int, body: dict | None = None):
