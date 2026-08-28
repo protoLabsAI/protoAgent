@@ -99,7 +99,8 @@ def _list_sessions() -> list[dict]:
 
 def _hot_chunks(store) -> list[dict]:
     """Hot-memory rows in the console's chunk shape. list_chunks yields Chunk
-    objects (plain store) or tier-tagged dicts (LayeredKnowledgeStore).
+    objects (plain and layered stores — the layered one stamps ``.tier``) or
+    dicts (a custom backend); ``as_dict()`` carries the tier either way.
 
     Commons-tier rows are EXCLUDED: on a layered store ``get_hot_memory`` (the
     actual per-turn injection) and ``add_chunk``/``delete_by_id`` all delegate

@@ -17,6 +17,11 @@ overridden. Drop-in for ``KnowledgeStore`` everywhere the runtime uses it.
 from __future__ import annotations
 
 import logging
+from dataclasses import fields, is_dataclass, replace
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from knowledge.store import Chunk
 
 log = logging.getLogger(__name__)
 
@@ -24,11 +29,34 @@ log = logging.getLogger(__name__)
 # FTS5 ∪ vector). 60 is the standard default (matches HybridKnowledgeStore's rrf_k).
 _RRF_K = 60
 
+# ``stats()`` keys that are NOT domains: the grand total and the tier split. Kept in
+# step with ``graph.snapshot_op._NON_DOMAIN_STAT_KEYS`` (the seed's domain discovery).
+_SPLIT_KEYS = frozenset({"total", "private", "commons"})
+
 
 def _dedup_key(row: dict) -> str:
     """Identity for cross-tier de-dup: a chunk promoted into the commons has the SAME
     content as its private original, so key on content (ids differ across tiers)."""
     return (row.get("content") or "").strip()
+
+
+def _tag(chunk, tier: str):
+    """Stamp a backend's ``list_chunks`` row with its tier, keeping the row's TYPE.
+
+    Real backends yield ``Chunk`` dataclasses (``knowledge.store.Chunk`` has a ``tier``
+    field for exactly this); a custom ``KnowledgeBackend`` may yield dicts, which get
+    a ``"tier"`` key instead. Either way the caller sees the same shape it would from
+    the backend itself — the layered store is a drop-in, not a different API.
+
+    A dataclass WITHOUT a ``tier`` field (a backend's own row type — unreachable today,
+    but the Protocol allows it) degrades to its ``as_dict()`` plus the key rather than
+    a ``TypeError`` from ``replace``.
+    """
+    if is_dataclass(chunk) and not isinstance(chunk, type) and "tier" in {f.name for f in fields(chunk)}:
+        return replace(chunk, tier=tier)
+    if hasattr(chunk, "as_dict"):
+        return {**chunk.as_dict(), "tier": tier}
+    return {**dict(chunk), "tier": tier}
 
 
 class LayeredKnowledgeStore:
@@ -90,21 +118,41 @@ class LayeredKnowledgeStore:
         ranked = sorted(fused.values(), key=lambda r: scores[_dedup_key(r)], reverse=True)
         return ranked[:k]
 
-    def list_chunks(self, *args, **kwargs) -> list[dict]:
+    def list_chunks(self, *args, **kwargs) -> list[Chunk] | list[dict]:
         """Union both tiers' chunks, tier-tagged (backs the console's tier badges).
-        Private first. Each chunk carries its own tier's row id (ids are per-backend)."""
-        rows = [{**c.as_dict(), "tier": "private"} for c in self._private.list_chunks(*args, **kwargs)]
-        rows += [{**c.as_dict(), "tier": "commons"} for c in self._commons.list_chunks(*args, **kwargs)]
+        Private first. Each chunk carries its own tier's row id (ids are per-backend).
+
+        Rows keep the backend's own type — ``Chunk`` objects with ``.tier`` set (so
+        ``as_dict()`` carries ``"tier"``), never a different shape. Every consumer of
+        ``list_chunks`` reads rows by attribute (``memory_list``, the fact
+        consolidator, the snapshot seed); returning dicts here made all three fail
+        silently or loudly the moment a commons was configured."""
+        rows = [_tag(c, "private") for c in self._private.list_chunks(*args, **kwargs)]
+        rows += [_tag(c, "commons") for c in self._commons.list_chunks(*args, **kwargs)]
         return rows
 
     def stats(self) -> dict:
-        """Per-tier counts so callers can see the split (``private``/``commons``/``total``)."""
-        priv = self._private.stats()
-        comm = self._commons.stats()
+        """Per-domain chunk counts merged across BOTH tiers, plus the tier split.
+
+        Shape: ``{<domain>: n, ..., "total": N, "private": P, "commons": C}`` — the same
+        per-domain keys a single ``KnowledgeStore.stats()`` returns (summed over the
+        tiers) so readers that treat every non-``total`` key as a domain
+        (``memory_stats``, the snapshot seed's domain discovery, the Store view) see
+        real domains, while readers of the split keys keep working. A domain literally
+        named ``private``/``commons``/``total`` is shadowed by the split keys."""
+        priv = self._private.stats() or {}
+        comm = self._commons.stats() or {}
+        merged: dict[str, int] = {}
+        for tier_stats in (priv, comm):
+            for domain, n in tier_stats.items():
+                if domain in _SPLIT_KEYS:
+                    continue
+                merged[domain] = merged.get(domain, 0) + int(n)
         return {
+            **merged,
+            "total": int(priv.get("total", 0)) + int(comm.get("total", 0)),
             "private": int(priv.get("total", 0)),
             "commons": int(comm.get("total", 0)),
-            "total": int(priv.get("total", 0)) + int(comm.get("total", 0)),
         }
 
     # ── commons curation: promote (private→commons) + forget ──────────────────

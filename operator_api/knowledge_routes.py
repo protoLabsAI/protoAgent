@@ -396,8 +396,8 @@ def register_knowledge_routes(app) -> None:
                 rows = await asyncio.to_thread(STATE.knowledge_store.search, q, k=k, domain=domain or None)
                 results = [_knowledge_row(r) for r in rows]
             else:
-                # list_chunks yields Chunk objects (plain store) or tier-tagged dicts
-                # (LayeredKnowledgeStore) — normalize either.
+                # list_chunks yields Chunk objects (plain + layered stores; the layered
+                # one stamps .tier) or dicts (a custom backend) — normalize either.
                 results = [
                     _knowledge_row(c if isinstance(c, dict) else c.as_dict())
                     for c in STATE.knowledge_store.list_chunks(domain=domain or None, limit=k)
