@@ -167,8 +167,10 @@ def test_preview_runs_compose_without_recording(monkeypatch):
     assert calls["record"] is False  # speculation must NOT write the injection log
     call = body["call"]
     assert call["preview"] is True
+    assert call["speculative"] is True
     assert call["system"]["stable"] == "STABLE-A\n\nSTABLE-B"
-    assert call["system"]["context"] == "TAIL"
+    assert call["system"]["context"] == ""  # legacy context channel is empty post-#3188
+    assert call["projected_context"] == "TAIL"
     labels = [s["label"] for s in call["sections"]]
     assert labels == ["SOUL", "Guidelines", "Skills index"]
     assert call["usage"]["input_tokens"] == 0  # nothing ran

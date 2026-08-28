@@ -60,14 +60,20 @@ class ToolDeltaMiddleware(AgentMiddleware):
 
     def wrap_model_call(self, request, handler):
         if self._pending_note:
+            from graph.context_frame import stash_projected_context
+
             msgs = list(getattr(request, "messages", None) or [])
             msgs.append(context_frame_message(self._pending_note))
+            stash_projected_context(self._pending_note)
             return handler(request.override(messages=msgs))
         return handler(request)
 
     async def awrap_model_call(self, request, handler):
         if self._pending_note:
+            from graph.context_frame import stash_projected_context
+
             msgs = list(getattr(request, "messages", None) or [])
             msgs.append(context_frame_message(self._pending_note))
+            stash_projected_context(self._pending_note)
             return await handler(request.override(messages=msgs))
         return await handler(request)

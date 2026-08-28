@@ -125,9 +125,15 @@ class PromptCaptureMiddleware(AgentMiddleware):
             # Incognito threads leave NO durable trail (ADR 0069 D3b) — a
             # persisted prompt snapshot would be one. Skip entirely.
             if (getattr(request, "state", None) or {}).get("incognito"):
+                from graph.context_frame import pop_projected_context
+
+                pop_projected_context()
                 return
             split = _split_system(request)
             if split is None:
+                from graph.context_frame import pop_projected_context
+
+                pop_projected_context()
                 return
             stable, context_tail = split
 
@@ -144,16 +150,22 @@ class PromptCaptureMiddleware(AgentMiddleware):
             from graph.middleware.request_context import current_request_metadata
             from observability import tracing
 
-            # Dynamic-tail sections ride the state beside `context` (written as a
-            # pair by KnowledgeMiddleware) — but a lingering pair from an earlier
-            # call only applies when THIS request still carries a tail.
+            # ADR 0108 D2 (#3191): the projected context (memory, skills, working
+            # state, tool-delta notices) is stashed by the inner middleware during
+            # wrap_model_call and popped here. This replaced the legacy path that
+            # read context_sections from state["context_sections"].
+            from graph.context_frame import pop_projected_context
+
+            projected_text, projected_sections = pop_projected_context()
+
+            # Legacy fallback: pre-#3188 builds still deliver via the context
+            # channel. Read sections from state only when the legacy tail is
+            # non-empty AND no projected stash was found.
             context_sections = None
-            if context_tail:
+            if context_tail and not projected_text:
                 context_sections = (getattr(request, "state", None) or {}).get("context_sections")
 
             self._store().record(
-                # A subagent row never claims the turn's task_id — it nests under it
-                # via parent_task_id, so the main-loop tabs stay uncontaminated.
                 task_id=("" if self._parent_task_id else str(current_request_metadata().get("a2a.task_id") or "")),
                 session_id=tracing.current_session_id() or "",
                 trace_id=tracing.current_trace_id() or "",
@@ -165,6 +177,8 @@ class PromptCaptureMiddleware(AgentMiddleware):
                 stable_sections=self._stable_sections,
                 context_sections=context_sections,
                 wire_text=wire_text,
+                projected_context=projected_text,
+                projected_sections=projected_sections,
                 **_usage_from(response),
             )
         except Exception:  # noqa: BLE001 — capture must never touch the turn

@@ -44,11 +44,18 @@ def _configured_caps() -> tuple[int | None, int | None]:
 
 def _sections(row: dict) -> list[dict]:
     """The call's labeled sections in prompt order — stable prefix first, then
-    the dynamic tail — as ``{label, chars, approx_tokens, scope}`` rows (#2243
-    P2). ``approx_tokens`` uses the chars/4 estimator (the injection-log
-    precedent). Empty when the call was captured unsegmented (pre-P2 rows)."""
+    the dynamic context — as ``{label, chars, approx_tokens, scope}`` rows
+    (#2243 P2). ``approx_tokens`` uses the chars/4 estimator (the injection-log
+    precedent). Empty when the call was captured unsegmented (pre-P2 rows).
+
+    ADR 0108 D2 (#3191): projected sections (``projected_sections``) replace
+    the legacy ``context_sections`` for post-#3188 captures."""
     out: list[dict] = []
-    for scope, col in (("stable", "stable_sections"), ("context", "context_sections")):
+    for scope, col in (
+        ("stable", "stable_sections"),
+        ("projected", "projected_sections"),
+        ("context", "context_sections"),
+    ):
         for s in row.get(col) or []:
             if not isinstance(s, dict):
                 continue
@@ -87,6 +94,7 @@ def _shape(row: dict) -> dict:
             "wire_differs": wire is not None,
             "wire": wire or "",
         },
+        "projected_context": row.get("projected_context") or "",
         "sections": _sections(row),
         "subagent_type": row.get("subagent_type") or "",
         "usage": {
@@ -220,17 +228,21 @@ def register_prompt_routes(app) -> None:
             except Exception:  # noqa: BLE001 — preview degrades to the stable half, honestly flagged
                 log.debug("[prompts] speculative compose failed", exc_info=True)
         stable_text = "\n\n".join(text for _label, text in parts)
+        projected = (ctx or {}).get("context") or ""
         row = {
             "call_index": -1,
             "ts": "",
             "model": "",
             "stable_text": stable_text,
-            "context_text": (ctx or {}).get("context") or "",
+            "context_text": "",
             "stable_sections": [{"label": label, "chars": len(text)} for label, text in parts],
-            "context_sections": (ctx or {}).get("context_sections"),
+            "context_sections": None,
+            "projected_context": projected,
+            "projected_sections": (ctx or {}).get("context_sections"),
         }
         shaped = _shape(row)
         shaped["preview"] = True
+        shaped["speculative"] = True
         # Delivery note (#2527): the preview is a composed reconstruction — say how
         # the native-OAuth providers actually ship it so the surface doesn't imply
         # a system-role message that never exists on that wire.

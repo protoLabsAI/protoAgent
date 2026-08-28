@@ -14,6 +14,8 @@ middleware) and both readers (export/bundle rendering) import from here.
 
 from __future__ import annotations
 
+import contextvars
+
 from langchain_core.messages import HumanMessage
 
 # Marker on ``additional_kwargs``: this message is an injected frame, not
@@ -41,3 +43,34 @@ def is_context_frame(message) -> bool:
     return bool(getattr(message, "additional_kwargs", None) or {}) and bool(
         message.additional_kwargs.get(CONTEXT_FRAME_KWARG)
     )
+
+
+# ---------------------------------------------------------------------------
+# Projected-context stash (ADR 0108 D2, #3191)
+# ---------------------------------------------------------------------------
+# KnowledgeMiddleware (inner) stashes what it projected; PromptCaptureMiddleware
+# (outer) pops it after the handler returns.  Same call stack, task-local via
+# ContextVar, so concurrent calls can't cross wires.
+
+_PROJECTED_CONTEXT: contextvars.ContextVar[tuple[str, list[dict] | None] | None] = contextvars.ContextVar(
+    "protoagent_projected_context", default=None
+)
+
+
+def stash_projected_context(text: str, sections: list[dict] | None = None) -> None:
+    """Called by KnowledgeMiddleware._project_messages inside wrap_model_call."""
+    existing = _PROJECTED_CONTEXT.get()
+    if existing is not None:
+        prev_text, prev_sections = existing
+        text = prev_text + "\n\n" + text
+        sections = prev_sections or sections
+    _PROJECTED_CONTEXT.set((text, sections))
+
+
+def pop_projected_context() -> tuple[str | None, list[dict] | None]:
+    """Called by PromptCaptureMiddleware._capture after the handler returns."""
+    val = _PROJECTED_CONTEXT.get()
+    _PROJECTED_CONTEXT.set(None)
+    if val is None:
+        return None, None
+    return val
