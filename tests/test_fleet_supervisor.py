@@ -971,6 +971,20 @@ def test_member_tenant_url_respects_explicit_workspace_override(tmp_path, monkey
     assert captured["env"]["A2A_PUBLIC_URL"] == "http://custom:9999/base"  # explicit wins
 
 
+def test_spawned_member_inherits_br_bin(tmp_path, monkeypatch):
+    """The desktop shell hands the bundled beads-rust path to the sidecar as BR_BIN
+    (#3236); a hub-spawned member must inherit it through the ``{**os.environ, **env}``
+    merge — that's what makes EVERY desktop member's project_board resolve the same
+    distributed binary (br.source "env") instead of each starting its own auto-fetch."""
+    captured = _env_capturing_fleet(tmp_path, monkeypatch)
+    monkeypatch.setenv("BR_BIN", "/Applications/protoAgent.app/Contents/MacOS/br")
+    manager.create("kappa", port=7899)
+
+    supervisor.start("kappa")
+
+    assert captured["env"]["BR_BIN"] == "/Applications/protoAgent.app/Contents/MacOS/br"
+
+
 def test_spawned_member_gets_own_agent_name(tmp_path, monkeypatch):
     """A hub-spawned member must NOT inherit the hub's AGENT_NAME — else it runs under the
     hub's name in every AGENT_NAME-namespaced subsystem (metrics prefix, trace tags,

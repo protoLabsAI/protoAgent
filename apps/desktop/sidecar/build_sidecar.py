@@ -17,11 +17,16 @@ submodule, and ``mcp.cli`` raises at import when typer is missing.)
 
 The target triple matches Tauri's expectation (``rustc`` host), so the binary
 lands at the exact name Tauri looks for during ``tauri build``.
+
+Also fetches the PINNED beads-rust ``br`` CLI for the target into
+``binaries/br-<target-triple>`` — the second externalBin Tauri bundles (#3236).
+See the br section below; Windows has no pin and skips it.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -214,6 +219,117 @@ CLI_FORWARD_MODULES = [
 ]
 
 
+# ── the pinned `br` sidecar (#3236) ──────────────────────────────────────────────
+# The desktop app DISTRIBUTES the beads-rust `br` CLI the project_board plugin is
+# built on, as a second Tauri externalBin (`binaries/br-<target-triple>`), so a
+# fresh desktop install never leans on the plugin's runtime auto-fetch (which
+# stays the fallback for non-desktop deployments — Docker, source runs). The pin
+# lives in the PLUGIN's br_fetch.py (BR_VERSION + per-platform BR_SHA256) and is
+# loaded from there at build time — never copied here, so the two cannot drift —
+# and the fetched binary must REPORT that version (`br --version`) before it
+# ships. The Tauri shell hands the bundled path to the server as BR_BIN (lib.rs),
+# which the plugin's existing precedence honours (explicit BR_BIN > its fetched
+# copy > PATH) — a desktop member reports br.source "env" and never starts a fetch.
+BR_NAME = "br"
+# rustc target triple → br_fetch.BR_SHA256 platform key. Windows is DELIBERATELY
+# absent — the plugin's auto-fetch has no Windows pin either, and its
+# WINDOWS_HINT (manual install + BR_BIN) stays the story there; musl triples
+# likewise (the pinned assets are glibc builds). tauri.windows.conf.json drops
+# the externalBin to match, so the Windows leg never looks for a binary this
+# build never makes.
+BR_TRIPLE_PLATFORMS = {
+    "aarch64-apple-darwin": "darwin_arm64",
+    "x86_64-apple-darwin": "darwin_amd64",
+    "x86_64-unknown-linux-gnu": "linux_amd64",
+    "aarch64-unknown-linux-gnu": "linux_arm64",
+}
+# Where the pin's module comes from: a local checkout named by PROJECT_BOARD_SRC
+# (a dir holding br_fetch.py, or the file itself — offline/dev builds), else the
+# plugin repo's raw br_fetch.py at PROJECT_BOARD_REF (default main) — the same
+# own-org trust level as the release workflow's `npx @protolabsai/release-tools`.
+ENV_PROJECT_BOARD_SRC = "PROJECT_BOARD_SRC"
+ENV_PROJECT_BOARD_REF = "PROJECT_BOARD_REF"
+# Escape hatch for a lean sidecar-only freeze (e.g. a local live_smoke run with
+# no network) — a full `tauri build` on macOS/Linux still requires the binary.
+ENV_SKIP_BR = "SKIP_BR_SIDECAR"
+BR_FETCH_RAW_URL = "https://raw.githubusercontent.com/protoLabsAI/projectBoard-plugin/{ref}/br_fetch.py"
+
+
+def load_br_fetch(source: str | None = None, *, ref: str | None = None):
+    """The project_board plugin's ``br_fetch`` module — the SINGLE source of the
+    br pin. Loaded from a checkout (``PROJECT_BOARD_SRC``) or the plugin repo's
+    raw file, and exec'd standalone (its module level is stdlib-only by design)."""
+    import types
+
+    source = os.environ.get(ENV_PROJECT_BOARD_SRC, "").strip() if source is None else source
+    if source:
+        path = Path(source).expanduser()
+        if path.is_dir():
+            path = path / "br_fetch.py"
+        code = path.read_text(encoding="utf-8")
+        origin = str(path)
+    else:
+        import urllib.request
+
+        ref = ref or os.environ.get(ENV_PROJECT_BOARD_REF, "").strip() or "main"
+        origin = BR_FETCH_RAW_URL.format(ref=ref)
+        with urllib.request.urlopen(origin, timeout=60) as resp:
+            code = resp.read().decode("utf-8")
+    module = types.ModuleType("project_board_br_fetch")
+    module.__file__ = origin
+    exec(compile(code, origin, "exec"), module.__dict__)
+    return module
+
+
+def br_reports_pin(output: str, version: str) -> bool:
+    """True when ``br --version`` output reports EXACTLY ``version`` as a whole
+    token. A plain substring test is a trap — ``1.2.3`` is inside ``1.2.30``,
+    ``11.2.3`` and ``1.2.3.4`` — so the pin must be bounded on both sides:
+    nothing digit/dot before it (rejects ``11.2.3``) and nothing
+    version-extending after it (rejects ``1.2.30``, ``1.2.3.4``, ``1.2.3-rc1``).
+    A ``v`` prefix is formatting, not a different version, and still matches.
+    The desktop-build workflow's verify gate calls THIS predicate too, so the
+    equality has one home."""
+    return re.search(rf"(?<![0-9.]){re.escape(version)}(?![0-9A-Za-z._-])", output) is not None
+
+
+def fetch_br_sidecar(triple: str, dest_dir: Path = BINARIES_DIR, *, br_fetch=None, run=None) -> Path | None:
+    """Fetch the pinned beads-rust ``br`` for ``triple`` into ``dest_dir`` as
+    ``br-<triple>`` — the second externalBin Tauri bundles. Returns the path, or
+    None when the target has no pin (Windows/musl — out of scope; the plugin's
+    manual-install hint applies there) or when ``SKIP_BR_SIDECAR`` is set.
+    ``br_fetch``/``run`` are injection points for tests (defaults: the module
+    ``load_br_fetch`` resolves, ``subprocess.run``)."""
+    platform = BR_TRIPLE_PLATFORMS.get(triple)
+    if platform is None:
+        print(
+            f"note: no br pin for target {triple} — skipping the br sidecar "
+            "(Windows/musl are out of scope; the plugin's manual-install hint applies)",
+            file=sys.stderr,
+        )
+        return None
+    if os.environ.get(ENV_SKIP_BR, "").strip():
+        print(f"note: {ENV_SKIP_BR} is set — skipping the br sidecar fetch", file=sys.stderr)
+        return None
+    br_fetch = br_fetch or load_br_fetch()
+    spec = br_fetch.fetch_spec(platform=platform)
+    if spec is None:
+        sys.exit(f"build_sidecar: the plugin's br_fetch has no pin for {platform!r} (target {triple})")
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / f"{BR_NAME}-{triple}"
+    print(f"fetching pinned br v{spec.version} ({platform}) for {triple} ...")
+    br_fetch.fetch_br(spec, dest)
+    # The binary must REPORT the pin (`br --version`) — a wrong asset or alias
+    # drift on the release page must fail the build here, never ship. The build
+    # target is the rustc HOST triple, so executing it is always possible. (The
+    # desktop-build workflow re-asserts the same equality as its own gate.)
+    run = run or subprocess.run
+    out = run([str(dest), "--version"], capture_output=True, text=True, check=True).stdout or ""
+    if not br_reports_pin(out, spec.version):
+        sys.exit(f"build_sidecar: fetched br reports {out.strip()!r} — not exactly the pinned v{spec.version}")
+    return dest
+
+
 def target_triple() -> str:
     """Tauri names sidecars ``<bin>-<rustc-host-triple>``; match it."""
     out = subprocess.run(["rustc", "-Vv"], capture_output=True, text=True, check=True).stdout
@@ -243,6 +359,14 @@ def main() -> None:
             "(tauri's beforeBuildCommand rebuilds dist with --base / afterwards; that's fine —\n"
             "this freeze's copy is already inside the binary by then. See #2411.)"
         )
+
+    # The pinned `br` sidecar (#3236) — fetched BEFORE the slow freeze so a bad
+    # pin or a network failure fails fast. Lands at binaries/br-<triple>, the
+    # second externalBin tauri.conf.json names (Windows is excluded there too,
+    # via tauri.windows.conf.json — no pin exists for it).
+    br_dest = fetch_br_sidecar(triple)
+    if br_dest is not None:
+        print(f"br sidecar -> {br_dest}")
 
     add_data: list[str] = []
     for src, dest in BUNDLED_DATA:
