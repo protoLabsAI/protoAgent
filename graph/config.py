@@ -442,9 +442,10 @@ def _coerce_prior_sessions(value, default: str) -> str:
     the documented ``prior_sessions: off`` handed this function ``False``, which
     ``value or ""`` read as blank and resolved to the DEFAULT. The default is
     ``newest``: the most expensive setting, the opposite of the request, with no
-    warning to say so. False-y booleans therefore mean ``off`` here. (Sibling knobs
-    like ``self_improvement.*`` never hit this — their default already IS ``off``,
-    so the blank fallback happens to land right.)"""
+    warning to say so. False-y booleans therefore mean ``off`` here. (The sibling
+    ``self_improvement.*`` knobs take the same YAML values and were never immune —
+    they landed right only on the ``or "off"`` literal in their own expression, so
+    they resolve theirs through :func:`yaml_word_for_bool`; see its docstring.)"""
     if value is False:
         return "off"
     if value is True:
@@ -466,6 +467,30 @@ def _coerce_prior_sessions(value, default: str) -> str:
             default,
         )
     return v
+
+
+def yaml_word_for_bool(value):
+    """The word an operator wrote, for a STRING knob YAML parsed as a bool (#3253).
+
+    YAML 1.1 reads a bare ``off``/``no``/``false`` as ``False`` and ``on``/``yes``/
+    ``true`` as ``True``, so a knob whose values are spelled that way never sees the
+    word. ``False`` becomes ``"off"`` and ``True`` becomes ``"on"``; everything else
+    — including ``None`` and ``""``, which genuinely mean unset — passes through.
+
+    The ``self_improvement.*`` knobs (``off | propose | auto``) read their value as
+    ``str(... or "off")``. That lands ``False`` on ``"off"`` **by coincidence**: the
+    literal in the ``or`` fallback happens to be the same word the operator meant.
+    Note it is that literal doing the work, not the field defaults — those are
+    ``auto``/``propose``/``propose``. So the blank path is one refactor away from the
+    ``context.prior_sessions`` bug: replace the magic ``"off"`` with the field's own
+    default (the obvious cleanup) and a bare ``off`` on ``soul_md`` silently becomes
+    ``auto``. Mapping the word explicitly makes the answer independent of that
+    literal, and stops a bare ``on`` from becoming the string ``"True"``."""
+    if value is True:
+        return "on"
+    if value is False:
+        return "off"
+    return value
 
 
 def _falsey(value, *, default: bool) -> bool:
@@ -2000,14 +2025,19 @@ class LangGraphConfig:
             self_improvement_enabled=bool(
                 self_improvement.get("enabled", cls.self_improvement_enabled)
             ),
+            # `off | propose | auto`, so YAML hands a bare `off` here as False (#3253).
+            # The `or "off"` literal below lands that right by coincidence, not the
+            # field defaults (auto/propose/propose); yaml_word_for_bool makes it right
+            # on purpose, and keeps a bare `on` from becoming the string "True".
             self_improvement_soul_md=str(
-                self_improvement.get("soul_md", cls.self_improvement_soul_md) or "off"
+                yaml_word_for_bool(self_improvement.get("soul_md", cls.self_improvement_soul_md)) or "off"
             ),
             self_improvement_skills=str(
-                self_improvement.get("skills", cls.self_improvement_skills) or "off"
+                yaml_word_for_bool(self_improvement.get("skills", cls.self_improvement_skills)) or "off"
             ),
             self_improvement_distillation=str(
-                self_improvement.get("distillation", cls.self_improvement_distillation) or "off"
+                yaml_word_for_bool(self_improvement.get("distillation", cls.self_improvement_distillation))
+                or "off"
             ),
             soul_drift_enabled=bool(soul_drift.get("enabled", cls.soul_drift_enabled)),
             soul_drift_interval_hours=int(

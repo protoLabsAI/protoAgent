@@ -169,6 +169,7 @@ context:
   # back to newest) | off (no automatic digest — session_search/recall_session
   # stay the on-demand path). The active session's own summary is never
   # injected as a "prior" session, whatever the policy.
+  # `off` may be written bare or quoted — both mean the policy (#3253).
   prior_sessions: newest
 
 # Skill index — SQLite FTS5 store for learned skill-v1 artifacts.

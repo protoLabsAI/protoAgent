@@ -57,7 +57,9 @@ context:
                            # to newest) | off (no automatic digest —
                            # session_search/recall_session on demand). The
                            # active session's own summary is never injected as
-                           # a "prior" session, whatever the policy.
+                           # a "prior" session, whatever the policy. `off` works
+                           # bare or quoted — YAML reads a bare `off` as the
+                           # boolean false, and it is restored to the policy.
 ```
 
 The budget never drops below 16k chars (room for always-on memory + the digest),
