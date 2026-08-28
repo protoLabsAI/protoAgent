@@ -35,8 +35,8 @@ jobs:
     runs-on: ubuntu-latest # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 

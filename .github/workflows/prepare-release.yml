@@ -43,7 +43,7 @@ jobs:
       pull-requests: write
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 0
@@ -52,11 +52,11 @@ jobs:
           # downstream workflows on pushes it makes.
           token: ${{ secrets.GH_PAT }}
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           # MUST match checks.yml's pin — that job's `uv lock --check` validates what this
           # job writes, so a version skew between them would open a release PR that its own

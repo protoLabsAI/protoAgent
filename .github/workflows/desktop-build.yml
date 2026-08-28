@@ -90,17 +90,17 @@ jobs:
             target: x86_64-pc-windows-msvc
             bundles: nsis
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.ref }}
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
       - name: Setup Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version: '20'
 
@@ -470,12 +470,12 @@ jobs:
       # in-app updater notes (below). By publish time CHANGELOG.md already holds the
       # dated `## [VERSION]` section — the bump PR (prepare-release.yml) merged before
       # the tag. Without this the job has no working tree (it only `gh release`s).
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag }}
 
       - name: Setup Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version: '20'
 
