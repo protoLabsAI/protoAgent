@@ -46,16 +46,17 @@ def _run_chained(req, response, capture=None, cache=None):
 
 
 def test_captures_blocks_split_with_task_id_and_usage():
-    # Anthropic path: PromptCache emits [stable(cache_control), tail] blocks —
+    # Anthropic path: PromptCache emits [stable(cache_control)] blocks —
     # capture stores them verbatim, keyed by the executor-threaded task id,
-    # with the response's real usage.
+    # with the response's real usage. Context delivery is now ephemeral
+    # (ADR 0108 D2) and does not appear in context_text.
     usage = {
         "input_tokens": 120,
         "output_tokens": 30,
         "total_tokens": 150,
         "input_token_details": {"cache_read": 100, "cache_creation": 7},
     }
-    req = _Req("claude-opus-4-7", SystemMessage(content="STABLE"), state={"context": "hot memory"})
+    req = _Req("claude-opus-4-7", SystemMessage(content="STABLE"))
     with request_metadata_scope({"a2a.task_id": "task-9"}):
         out = _run_chained(req, _response(usage))
     assert out.result[0].content == "ok"  # the response passes through untouched
@@ -64,24 +65,22 @@ def test_captures_blocks_split_with_task_id_and_usage():
     assert len(calls) == 1
     row = calls[0]
     assert row["stable_text"] == "STABLE"
-    assert "hot memory" in row["context_text"]
-    # stable + tail is byte-for-byte what the model received.
-    assert row["context_text"].startswith("\n\n# Context\n\n")
+    assert row["context_text"] == ""
     assert row["model"] == "claude-opus-4-7"
     assert (row["input_tokens"], row["output_tokens"]) == (120, 30)
     assert (row["cache_read_tokens"], row["cache_creation_tokens"]) == (100, 7)
 
 
-def test_captures_plain_string_split_when_cache_disabled():
+def test_captures_stable_only_when_cache_disabled():
     # Caching off (disabled, or a model that rejected blocks — #2255): PromptCache
-    # appends the tail as plain text — capture recovers the same stable/tail split
-    # by matching the exact suffix.
-    req = _Req("protolabs/reasoning", SystemMessage(content="STABLE"), state={"context": "ctx"})
+    # passes the request through; the snapshot is the plain system prompt with an
+    # empty tail (context delivery is now ephemeral, ADR 0108 D2).
+    req = _Req("protolabs/reasoning", SystemMessage(content="STABLE"))
     with request_metadata_scope({"a2a.task_id": "task-str"}):
         _run_chained(req, _response(), cache=PromptCacheMiddleware(enabled=False))
     row = prompt_snapshots().calls_for_task("task-str")[0]
     assert row["stable_text"] == "STABLE"
-    assert row["context_text"] == "\n\n# Context\n\nctx"
+    assert row["context_text"] == ""
 
 
 def test_captures_untouched_prompt_when_cache_noops():
@@ -452,20 +451,14 @@ def test_no_system_message_clears_projected_stash():
     assert pop_projected_context() == (None, None)
 
 
-def test_legacy_context_sections_used_when_no_projected_stash():
-    """Pre-#3188 builds deliver via the context channel. When there is a
-    legacy context tail but no projected stash, context_sections from state
-    are recorded (backwards compatibility). Run through PromptCache so the
-    context is appended to the system message as it would be in production."""
+def test_context_sections_none_without_projected_stash():
+    """ADR 0108 D2: the legacy state["context_sections"] fallback is removed.
+    Without a projected-context stash, context_sections is always None."""
     capture = PromptCaptureMiddleware()
-    sections = [{"label": "Legacy skills", "chars": 42}]
-    req = _Req("claude-opus-4-7", SystemMessage(content="STABLE"), state={
-        "context": "legacy context",
-        "context_sections": sections,
-    })
+    req = _Req("claude-opus-4-7", SystemMessage(content="STABLE"))
     with request_metadata_scope({"a2a.task_id": "proj-legacy"}):
         _run_chained(req, _response(), capture=capture, cache=PromptCacheMiddleware(enabled=False))
 
     row = _row("proj-legacy")
-    assert row["context_sections"] == sections
+    assert row["context_sections"] is None
     assert row["projected_context"] is None

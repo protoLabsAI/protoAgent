@@ -6,11 +6,10 @@ transforms (ADR 0097: the Claude identity prepend, the Codex instructions move)
 run INSIDE this wrap, so what the wire carries can differ from what composes
 here — ``WirePromptCaptureMiddleware`` (innermost, #2527) stashes the effective
 wire text and ``_capture`` records it beside the composed prompt whenever the
-two diverge. A row's ``wire_text`` is NULL when delivery was faithful. The cache boundary already marks the stable/dynamic split:
-``blocks[0]`` is the stable ``build_system_prompt`` blob (hash-deduped by the
-store), ``blocks[1]`` the volatile ``state["context"]`` tail. On the
-non-Anthropic path PromptCache appends that tail as plain text instead — this
-recovers the split by matching the exact appended suffix.
+two diverge. A row's ``wire_text`` is NULL when delivery was faithful. The
+cache boundary marks the stable system prefix; dynamic context is delivered
+ephemerally via the message stream (ADR 0108 D2) and captured via the
+projected-context stash from KnowledgeMiddleware.
 
 Because ``wrap_model_call`` wraps the handler, the response is in-hook too, so
 the call's real ``usage_metadata`` (input/output/cache tokens) is stored with
@@ -42,7 +41,12 @@ def _model_name(request) -> str:
 def _split_system(request) -> tuple[str, str] | None:
     """The final system prompt as ``(stable, context_tail)`` — verbatim, so
     ``stable + context_tail`` is byte-for-byte what the model received. None
-    when the request carries no system message (nothing to capture)."""
+    when the request carries no system message (nothing to capture).
+
+    Since ADR 0108 D2 the dynamic context rides the message stream, not the
+    system prompt, so the context tail is always empty on the string path.
+    The block-list path (Anthropic) still splits at block boundaries.
+    """
     sysmsg = getattr(request, "system_message", None)
     if sysmsg is None:
         return None
@@ -53,12 +57,6 @@ def _split_system(request) -> tuple[str, str] | None:
             return None
         return texts[0], "".join(texts[1:])
     if isinstance(content, str):
-        ctx = (getattr(request, "state", None) or {}).get("context") or ""
-        if ctx:
-            # The exact string PromptCache appended on the no-blocks path.
-            suffix = f"\n\n# Context\n\n{ctx}"
-            if content.endswith(suffix):
-                return content[: -len(suffix)], suffix
         return content, ""
     return None
 
@@ -152,18 +150,11 @@ class PromptCaptureMiddleware(AgentMiddleware):
 
             # ADR 0108 D2 (#3191): the projected context (memory, skills, working
             # state, tool-delta notices) is stashed by the inner middleware during
-            # wrap_model_call and popped here. This replaced the legacy path that
-            # read context_sections from state["context_sections"].
+            # wrap_model_call and popped here.
             from graph.context_frame import pop_projected_context
 
             projected_text, projected_sections = pop_projected_context()
-
-            # Legacy fallback: pre-#3188 builds still deliver via the context
-            # channel. Read sections from state only when the legacy tail is
-            # non-empty AND no projected stash was found.
             context_sections = None
-            if context_tail and not projected_text:
-                context_sections = (getattr(request, "state", None) or {}).get("context_sections")
 
             self._store().record(
                 task_id=("" if self._parent_task_id else str(current_request_metadata().get("a2a.task_id") or "")),

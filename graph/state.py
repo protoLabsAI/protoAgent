@@ -43,13 +43,5 @@ class ProtoAgentState(AgentState):
     # tool call outside it. Unset → no fence (ordinary turns).
     subagent_fence: NotRequired[list[str]]
 
-    # Knowledge context injected by KnowledgeMiddleware before LLM call
-    context: NotRequired[str]
-
-    # Labeled sections of that context (#2243 P2) — [{label, chars}], written by
-    # KnowledgeMiddleware alongside `context` (always the pair together) and read
-    # by PromptCaptureMiddleware for the viewer's per-section budget breakdown.
-    context_sections: NotRequired[list]
-
     # Captured message() tool content
     captured_messages: Annotated[list[str], operator.add]

@@ -289,12 +289,11 @@ def test_before_model_injects_prior_sessions(tmp_path):
     state = {"messages": [HumanMessage(content="What did we discuss?")]}
 
     result = mw.before_agent(state, runtime=None)
-    assert result is not None
+    # before_agent returns None — context is delivered ephemerally (ADR 0108 D2).
+    assert result is None
     ctx = _frame_text(mw)
     assert "<prior_sessions>" in ctx
     assert "inject-sess" in ctx
-    # The legacy channel is cleared, never written (#2776).
-    assert result["context"] == "" and result["context_sections"] == []
 
 
 def test_before_model_suppresses_prior_sessions_in_goal_turn(tmp_path):
@@ -391,8 +390,9 @@ async def test_abefore_model_runs_search_off_event_loop():
 
     result = await mw.abefore_agent(state, runtime=None)
 
-    # Same behavior as the sync path…
-    assert result is not None
+    # Same behavior as the sync path — returns None (no state update), but the
+    # projection is stashed for ephemeral delivery (ADR 0108 D2).
+    assert result is None
     assert "remembered fact" in _frame_text(mw)
     # …but the blocking search ran on a worker thread, not the event loop.
     assert seen_threads, "store.search was never called"
@@ -610,11 +610,9 @@ def test_no_envelope_without_memory_parts():
     assert "<available_skills>" in ctx
 
 
-def test_before_agent_clears_the_legacy_channel_when_nothing_composes(tmp_path):
-    """#2774 / #2776 / ADR 0101: ``context`` is a last-write-wins channel persisted
-    in the checkpointer. Even with frame delivery, before_agent must EXPLICITLY
-    clear it — a value left by an older build (or a pre-upgrade thread) would be
-    re-delivered by PromptCacheMiddleware forever."""
+def test_before_agent_returns_none_when_nothing_composes(tmp_path):
+    """ADR 0108 D2: the legacy context/context_sections state keys are removed.
+    before_agent returns None when nothing composes — no state update needed."""
     from langchain_core.messages import HumanMessage
 
     mw = _make_middleware()  # mock store, zero hits; no prior sessions, no skills
@@ -625,7 +623,7 @@ def test_before_agent_clears_the_legacy_channel_when_nothing_composes(tmp_path):
 
     state = {"messages": [HumanMessage(content="hello")]}
     result = mw.before_agent(state, runtime=None)
-    assert result == {"context": "", "context_sections": []}
+    assert result is None
 
 
 def test_before_agent_skips_reentry_without_fresh_input(tmp_path):
@@ -758,8 +756,8 @@ def test_projection_replaces_old_frames_with_fresh(tmp_path):
 
 
 def test_before_agent_no_longer_returns_messages():
-    """ADR 0108 D2: before_agent clears legacy channels but never returns a
-    messages key — the projection is delivered via wrap_model_call only."""
+    """ADR 0108 D2: before_agent returns None — no state update needed.
+    The projection is delivered via wrap_model_call only."""
     from langchain_core.messages import HumanMessage
 
     mw = _make_middleware()
@@ -769,9 +767,7 @@ def test_before_agent_no_longer_returns_messages():
     mw._prior_sessions_loaded_at = time.monotonic()
 
     result = mw.before_agent({"messages": [HumanMessage(content="q")]}, runtime=None)
-    assert "messages" not in (result or {})
-    assert result["context"] == ""
-    assert result["context_sections"] == []
+    assert result is None
     assert mw._turn_projection is not None
 
 

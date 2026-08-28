@@ -102,25 +102,21 @@ def _capture_call(req, *, stable_sections=None):
     cache.wrap_model_call(req, lambda r: capture.wrap_model_call(r, lambda _r: response))
 
 
-def test_capture_persists_stable_and_context_sections():
+def test_capture_persists_stable_sections():
     stable_sections = [{"label": "SOUL", "chars": 6}]
-    state = {
-        "context": "hot memory",
-        "context_sections": [{"label": "Injected memory (1 memories)", "chars": 10}],
-    }
-    req = _Req("claude-opus-4-7", SystemMessage(content="STABLE"), state=state)
+    req = _Req("claude-opus-4-7", SystemMessage(content="STABLE"))
     with request_metadata_scope({"a2a.task_id": "task-sec"}):
         _capture_call(req, stable_sections=stable_sections)
     row = prompt_snapshots().calls_for_task("task-sec")[0]
     assert row["stable_sections"] == stable_sections
-    assert row["context_sections"] == state["context_sections"]
+    # context_sections come from the projected-context stash (ADR 0108 D2),
+    # not from state — None when no projection was stashed.
+    assert row["context_sections"] is None
 
 
-def test_capture_drops_lingering_sections_when_tail_absent():
-    # A later call with no context must not pair the old sections with an
-    # empty tail.
-    state = {"context_sections": [{"label": "stale", "chars": 5}]}
-    req = _Req("protolabs/reasoning", SystemMessage(content="S"), state=state)
+def test_capture_context_sections_none_without_projection():
+    # Without a projected-context stash, context_sections is always None.
+    req = _Req("protolabs/reasoning", SystemMessage(content="S"))
     with request_metadata_scope({"a2a.task_id": "task-stale"}):
         _capture_call(req)
     row = prompt_snapshots().calls_for_task("task-stale")[0]

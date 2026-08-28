@@ -152,15 +152,11 @@ def test_wrap_model_call_delivers_the_tagged_frame():
     assert frame.additional_kwargs["protoagent_injected_context"] is True
 
 
-def test_before_agent_never_touches_the_context_channel():
-    """#2776 / ADR 0101 D2: delivery stays off the ``context`` channel."""
+def test_before_agent_returns_no_state_update():
+    """Delivery is ephemeral (ADR 0108 D2) — before_agent returns None."""
     tool_delta.record_toolset(["a"])
     tool_delta.record_toolset(["a", "b"])
-    staged = {
-        "context": "<available_skills>…</available_skills>",
-        "context_sections": [{"label": "Skills", "chars": 38}],
-    }
-    out = _mw().before_agent(staged, None)
+    out = _mw().before_agent({}, None)
     assert out is None  # no state update at all
 
 
