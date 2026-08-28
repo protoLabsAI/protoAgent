@@ -118,6 +118,24 @@ def test_guidelines_include_wait_when_bound():
     assert "wait(seconds" in prompt
 
 
+def test_wait_only_produces_clean_handoff_text():
+    """When only wait is bound, the handoff sentence has no stray parenthesis."""
+    wait_only = frozenset({"wait", "current_time"})
+    prompt = build_system_prompt(include_subagents=False, bound_tool_names=wait_only)
+    assert "Do not spin" in prompt
+    assert "`wait` for a short countdown and END" in prompt
+    assert ")" not in prompt.split("Do not spin")[1].split("and END")[0]
+
+
+def test_watch_only_produces_clean_handoff_text():
+    """When only watch is bound, the handoff sentence has no stray parenthesis."""
+    watch_only = frozenset({"create_watch", "current_time"})
+    prompt = build_system_prompt(include_subagents=False, bound_tool_names=watch_only)
+    assert "Do not spin" in prompt
+    assert "create_watch" in prompt
+    assert "schedule_task" not in prompt
+
+
 def test_working_state_block_is_referenced_for_observe():
     prompt = build_system_prompt(include_subagents=False, bound_tool_names=_ALL_OM_TOOLS)
     assert "working-state" in prompt.lower() or "<working_state>" in prompt

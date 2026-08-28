@@ -165,11 +165,15 @@ def _build_operating_model(bound_tools: frozenset[str] | None = None) -> str:
         if has_wait:
             handoff_options.append("`wait` for a short countdown")
         lines.append("")
+        if len(handoff_options) == 1:
+            options_text = handoff_options[0]
+        else:
+            options_text = " (or ".join(handoff_options) + ")"
         lines.append(
             "**Do not spin waiting on async work.** When your next step depends on something in flight — a\n"
             "build, a delegated peer agent, CI, a review — do NOT burn turns polling it. Set "
-            + " (or ".join(handoff_options)
-            + ") and END the\nturn. You'll be resumed with context when it's actually ready. "
+            + options_text
+            + " and END the\nturn. You'll be resumed with context when it's actually ready. "
             "Persisting means yielding and\ncoming back, not looping."
         )
 
