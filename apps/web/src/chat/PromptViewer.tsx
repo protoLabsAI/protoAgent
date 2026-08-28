@@ -49,7 +49,9 @@ export function openPromptViewer(taskId: string, sessionId?: string): void {
   });
 }
 
-function PromptViewerBody({ taskId, sessionId }: { taskId: string; sessionId?: string }) {
+/** Exported for the unit harness only — the dialog is opened via
+ *  `openPromptViewer`, which mounts this inside the shared DocumentViewer host. */
+export function PromptViewerBody({ taskId, sessionId }: { taskId: string; sessionId?: string }) {
   const [calls, setCalls] = useState<PromptCall[] | null>(null);
   const [subs, setSubs] = useState<PromptCall[]>([]);
   const [prev, setPrev] = useState<PromptCall | null>(null);
@@ -117,6 +119,15 @@ function PromptViewerBody({ taskId, sessionId }: { taskId: string; sessionId?: s
   }, [taskId]);
 
   // Fetch the preview the first time its tab is selected, then keep it.
+  //
+  // `previewState` is READ here but deliberately NOT a dep. It is set inside the
+  // effect, so listing it self-cancels the fetch: setPreviewState("loading")
+  // re-runs the effect, the cleanup flips `alive = false` so the in-flight
+  // response is discarded, and the re-run's own guard returns early because the
+  // state is no longer "idle" — leaving the tab stuck on "Composing…" forever.
+  // The guard alone is enough to prevent a re-fetch: React rebuilds this closure
+  // every render, so a run triggered by `active`/`preview`/`sessionId` still sees
+  // the current state. Do not "fix" the dep array.
   useEffect(() => {
     if (active !== PREVIEW_TAB || preview || previewState !== "idle") return;
     let alive = true;
@@ -141,7 +152,9 @@ function PromptViewerBody({ taskId, sessionId }: { taskId: string; sessionId?: s
     return () => {
       alive = false;
     };
-  }, [active, preview, previewState, sessionId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- previewState is set
+    // inside this effect; see the note above.
+  }, [active, preview, sessionId]);
 
   if (status === "loading") {
     return (
