@@ -139,3 +139,38 @@ def test_watch_only_produces_clean_handoff_text():
 def test_working_state_block_is_referenced_for_observe():
     prompt = build_system_prompt(include_subagents=False, bound_tool_names=_ALL_OM_TOOLS)
     assert "working-state" in prompt.lower() or "<working_state>" in prompt
+
+
+# --- Subagent roster filtering (ADR 0108 D3) ---------------------------------
+
+def test_subagent_roster_shows_only_lead_visible():
+    """The prompt's subagent section lists only lead-visible subagents."""
+    prompt = build_system_prompt(include_subagents=True)
+    # Lead-visible subagents must appear
+    for name in ("researcher", "dream", "distill"):
+        assert f"**{name}**" in prompt, f"lead-visible subagent '{name}' missing from prompt"
+
+    # Workflow-internal subagents must NOT appear
+    for name in (
+        "antagonist", "verifier", "synthesizer",
+        "codebase-mapper", "review-finder", "review-synthesizer",
+        "self-improve",
+    ):
+        assert f"**{name}**" not in prompt, (
+            f"workflow-only subagent '{name}' should not appear in the lead prompt"
+        )
+
+
+def test_workflow_subagents_still_in_registry():
+    """Filtering from the prompt must not remove entries from SUBAGENT_REGISTRY —
+    the workflow engine resolves subagents from the registry directly."""
+    from graph.subagents.config import SUBAGENT_REGISTRY
+
+    for name in (
+        "antagonist", "verifier", "synthesizer",
+        "codebase-mapper", "review-finder", "review-synthesizer",
+        "self-improve",
+    ):
+        assert name in SUBAGENT_REGISTRY, (
+            f"workflow subagent '{name}' must remain in SUBAGENT_REGISTRY"
+        )

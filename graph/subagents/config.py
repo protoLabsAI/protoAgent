@@ -57,6 +57,12 @@ class SubagentConfig:
     # prompt fully specifies the job (a user prompt is just an optional focus
     # hint); blank (the default) keeps the empty prompt passing through unchanged.
     default_prompt: str = ""
+    # Whether this subagent appears in the lead agent's system-prompt roster.
+    # Workflow-internal subagents (orchestrated by workflow YAML, never directly
+    # picked by the lead via `task`) should be False — their roster entries add
+    # zero routing value and inflate the prompt. The registry still resolves them
+    # for workflow dispatch regardless of this flag.
+    lead_visible: bool = True
 
 
 RESEARCHER_CONFIG = SubagentConfig(
@@ -154,6 +160,7 @@ ones.""",
 # agent grades its own homework.
 
 ANTAGONIST_CONFIG = SubagentConfig(
+    lead_visible=False,
     name="antagonist",
     description=(
         "Adversarial reviewer for a body of research. Steelmans the strongest "
@@ -192,6 +199,7 @@ Hard stop at max_turns.""",
 )
 
 VERIFIER_CONFIG = SubagentConfig(
+    lead_visible=False,
     name="verifier",
     description=(
         "Independent claim-checker for a body of research. Extracts the key "
@@ -247,6 +255,7 @@ Hard stop at max_turns.""",
 )
 
 SYNTHESIZER_CONFIG = SubagentConfig(
+    lead_visible=False,
     name="synthesizer",
     description=(
         "Writes the final balanced research report from gathered findings, the "
@@ -291,6 +300,7 @@ Output the report directly.""",
 # verdict. Read-only by construction (fs read tools + github read tools).
 
 CODEBASE_MAPPER_CONFIG = SubagentConfig(
+    lead_visible=False,
     name="codebase-mapper",
     description=(
         "Maps how the registered codebase(s) relate to a question under "
@@ -350,6 +360,7 @@ marked partial.""",
 # All three speak the findings contract in graph/review/findings.py.
 
 REVIEW_FINDER_CONFIG = SubagentConfig(
+    lead_visible=False,
     name="review-finder",
     description=(
         "Reads a PR/commit diff from ONE assigned review angle (correctness, "
@@ -455,6 +466,7 @@ Hard stop at max_turns: return what you have (partial findings beat none).""",
 )
 
 REVIEW_SYNTHESIZER_CONFIG = SubagentConfig(
+    lead_visible=False,
     name="review-synthesizer",
     description=(
         "Merges several review-finders' findings lists into one deduped, ranked "
@@ -697,6 +709,7 @@ bead ids) + what you skipped and why. Hard stop at max_turns.""",
 
 
 SELF_IMPROVE_CONFIG = SubagentConfig(
+    lead_visible=False,
     name="self-improve",
     description=(
         "Policy-bounded post-goal review for durable persona and skill improvements. "

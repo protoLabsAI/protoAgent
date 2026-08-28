@@ -445,6 +445,8 @@ def _build_subagent_section() -> str:
     ]
 
     for name, config in SUBAGENT_REGISTRY.items():
+        if not config.lead_visible:
+            continue
         lines.append(f"- **{name}**: {config.description}")
         if config.tools:
             lines.append(f"  Tools: {', '.join(config.tools)}")
