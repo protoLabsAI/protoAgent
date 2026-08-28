@@ -63,6 +63,12 @@ SNAPSHOT_VERSION = 1
 #: nobody would enjoy auditing it line by line under time pressure.
 MEMORY_DOMAINS = frozenset({"hot", "session", "conversation", "finding"})
 
+#: ``store.stats()`` keys that are counts, not domains: the grand total and, on a
+#: ``LayeredKnowledgeStore``, the tier split. Domain discovery skips them — before this,
+#: a layered store's ``private``/``commons`` keys were "discovered" as domains, nothing
+#: matched, and the seed exported empty. Kept in step with ``knowledge.layered._SPLIT_KEYS``.
+_NON_DOMAIN_STAT_KEYS = frozenset({"total", "private", "commons"})
+
 #: Files that must never enter a snapshot, matched by name anywhere in the tree. The
 #: structural strip handles config VALUES; these are whole files that exist only to hold
 #: credentials or machine identity, so no amount of redaction makes them portable.
@@ -772,7 +778,8 @@ def collect_knowledge_seed(store, *, domains: list[str] | None = None, max_chars
         log.warning("[snapshot] knowledge stats failed — exporting no seed", exc_info=True)
         return seed
 
-    wanted = [d for d in (domains or [k for k in stats if k != "total"]) if d not in MEMORY_DOMAINS]
+    discovered = [k for k in stats if k not in _NON_DOMAIN_STAT_KEYS]
+    wanted = [d for d in (domains or discovered) if d not in MEMORY_DOMAINS]
     used = 0
     for domain in sorted(wanted):
         try:

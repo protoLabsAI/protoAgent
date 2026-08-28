@@ -25,6 +25,10 @@ log = logging.getLogger(__name__)
 # FTS5 ∪ vector). 60 is the standard default (matches HybridKnowledgeStore's rrf_k).
 _RRF_K = 60
 
+# ``stats()`` keys that are NOT domains: the grand total and the tier split. Kept in
+# step with ``graph.snapshot_op._NON_DOMAIN_STAT_KEYS`` (the seed's domain discovery).
+_SPLIT_KEYS = frozenset({"total", "private", "commons"})
+
 
 def _dedup_key(row: dict) -> str:
     """Identity for cross-tier de-dup: a chunk promoted into the commons has the SAME
@@ -118,13 +122,27 @@ class LayeredKnowledgeStore:
         return rows
 
     def stats(self) -> dict:
-        """Per-tier counts so callers can see the split (``private``/``commons``/``total``)."""
-        priv = self._private.stats()
-        comm = self._commons.stats()
+        """Per-domain chunk counts merged across BOTH tiers, plus the tier split.
+
+        Shape: ``{<domain>: n, ..., "total": N, "private": P, "commons": C}`` — the same
+        per-domain keys a single ``KnowledgeStore.stats()`` returns (summed over the
+        tiers) so readers that treat every non-``total`` key as a domain
+        (``memory_stats``, the snapshot seed's domain discovery, the Store view) see
+        real domains, while readers of the split keys keep working. A domain literally
+        named ``private``/``commons``/``total`` is shadowed by the split keys."""
+        priv = self._private.stats() or {}
+        comm = self._commons.stats() or {}
+        merged: dict[str, int] = {}
+        for tier_stats in (priv, comm):
+            for domain, n in tier_stats.items():
+                if domain in _SPLIT_KEYS:
+                    continue
+                merged[domain] = merged.get(domain, 0) + int(n)
         return {
+            **merged,
+            "total": int(priv.get("total", 0)) + int(comm.get("total", 0)),
             "private": int(priv.get("total", 0)),
             "commons": int(comm.get("total", 0)),
-            "total": int(priv.get("total", 0)) + int(comm.get("total", 0)),
         }
 
     # ── commons curation: promote (private→commons) + forget ──────────────────

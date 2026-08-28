@@ -15,7 +15,10 @@ and satisfies this Protocol. It's a documentation + optional ``isinstance`` aid
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from knowledge.store import Chunk
 
 
 @runtime_checkable
@@ -41,8 +44,12 @@ class KnowledgeBackend(Protocol):
     def get_hot_memory(self, max_chars: int = 6000) -> str:
         """Return the always-on context block injected by KnowledgeMiddleware."""
 
-    def list_chunks(self, *args, **kwargs) -> list[dict]:
-        """List stored chunks (for the knowledge console + tools)."""
+    def list_chunks(self, *args, **kwargs) -> list[Chunk] | list[dict]:
+        """List stored chunks (for the knowledge console + tools).
+
+        The built-in stores (plain, hybrid, layered) return ``Chunk`` rows — consumers
+        read them by attribute; a custom backend may return dicts of the same keys.
+        """
 
     def stats(self) -> dict:
         """Return counts/health for the knowledge console + status."""

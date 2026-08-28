@@ -127,7 +127,26 @@ def test_stats_split_by_tier(tmp_path):
     private.add_chunk("b", domain="finding")
     commons.add_chunk("c", domain="reference")
     st = LayeredKnowledgeStore(private, commons).stats()
-    assert st == {"private": 2, "commons": 1, "total": 3}
+    # Per-domain counts merged across tiers + the tier split + the grand total.
+    assert st == {"finding": 2, "reference": 1, "total": 3, "private": 2, "commons": 1}
+
+
+def test_stats_merges_a_domain_present_in_both_tiers(tmp_path):
+    """A domain with rows in BOTH tiers sums; the split keys are always present.
+
+    memory_stats and the snapshot seed's domain discovery treat every non-count
+    key as a domain — on the old tier-only shape they saw "private"/"commons"
+    as domains and no real ones."""
+    private, commons = _stores(tmp_path)
+    private.add_chunk("a", domain="reference")
+    commons.add_chunk("b", domain="reference")
+    commons.add_chunk("c", domain="reference")
+    st = LayeredKnowledgeStore(private, commons).stats()
+    assert st["reference"] == 3
+    assert (st["private"], st["commons"], st["total"]) == (1, 2, 3)
+    # Empty store: split keys still present, no phantom domains.
+    empty = LayeredKnowledgeStore(*_stores(tmp_path / "empty")).stats()
+    assert empty == {"total": 0, "private": 0, "commons": 0}
 
 
 def test_hot_memory_delegates_to_private(tmp_path):
@@ -301,3 +320,23 @@ def test_snapshot_seed_exports_layered_rows(tmp_path):
     assert seed.counts == {"reference": 2}
     assert "## deploys\n\nHow the deploy pipeline works" in seed.docs["reference"]
     assert "Fleet conventions" in seed.docs["reference"]
+
+
+def test_snapshot_seed_discovers_domains_on_a_layered_store(tmp_path):
+    """With NO explicit ``domains=`` the seed discovers them from ``stats()`` — on the
+    old tier-only stats shape it "discovered" private/commons, matched nothing, and
+    exported empty (the second cause of the empty seed, after the dict rows).
+    Memory domains stay dropped whatever the tiers hold."""
+    from graph.snapshot_op import collect_knowledge_seed
+
+    private, commons = _stores(tmp_path)
+    private.add_chunk("How the deploy pipeline works", domain="reference")
+    private.add_chunk("operator prefers dark mode", domain="hot")  # memory — never exported
+    commons.add_chunk("Fleet conventions", domain="playbook")
+    layered = LayeredKnowledgeStore(private, commons)
+
+    seed = collect_knowledge_seed(layered)
+    assert seed.counts == {"playbook": 1, "reference": 1}
+    assert "Fleet conventions" in seed.docs["playbook"]
+    assert "How the deploy pipeline works" in seed.docs["reference"]
+    assert "hot" not in seed.docs and "private" not in seed.docs and "commons" not in seed.docs
