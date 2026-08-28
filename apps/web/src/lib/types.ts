@@ -1340,7 +1340,21 @@ export type KnowledgeChunk = {
   // Tier (ADR 0041 / bd-2wu): "private" | "commons" — present only when the store is
   // layered (commons ∪ private); null otherwise. Drives the tier badge + promote/unshare.
   tier?: "private" | "commons" | null;
+  // Typed memory (ADR 0108 D4/D7): what the row IS, when it enters the prompt, and
+  // whether an operator has reviewed it. Absent/null on rows written before the
+  // typed columns existed or on custom backends. `review_state` null reads as
+  // "pending" (ADR 0108 D4) — the console draws the chip only when the backend
+  // sends a value, so an old backend never shows a verdict it can't act on.
+  memory_kind?: string | null;
+  delivery_policy?: "always" | "retrieved" | "on_demand" | string | null;
+  review_state?: ReviewState | string | null;
 };
+
+// Operator review verdict on a memory row (ADR 0108 D7). Agent-derived writes
+// start `pending`; the operator confirms or rejects them from the console
+// (POST /api/memory/chunks/{id}/review). `rejected` rows are kept for audit but
+// leave delivery (D6); `pending` still delivers.
+export type ReviewState = "confirmed" | "pending" | "rejected";
 
 // One hot-memory row (GET /api/memory/hot): a knowledge chunk plus whether it's
 // inside the CURRENT per-turn injection window (the newest ~100 domain="hot"

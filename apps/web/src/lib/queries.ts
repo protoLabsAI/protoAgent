@@ -1,7 +1,7 @@
 import { queryOptions } from "@tanstack/react-query";
 
 import { api, currentSlug } from "./api";
-import type { FleetTelemetry } from "./types";
+import type { FleetTelemetry, ReviewState } from "./types";
 
 // Centralized query keys + option factories (ADR 0013). Surfaces read these via
 // `useSuspenseQuery(...)`; mutations invalidate the matching key. Keep keys
@@ -464,8 +464,14 @@ export const playbooksQuery = () =>
 // query string, so each term is its own cache entry. The surface reads it
 // non-suspense with `placeholderData: keepPreviousData` so typing doesn't blank
 // the list; invalidated (whole `knowledge` subtree) after curate / share / ingest.
-export const knowledgeQuery = (q: string) =>
+// `reviewState` (ADR 0108 D7) keys the "pending review" queue as its own cache entry
+// so toggling the filter never blanks or mislabels the unfiltered list.
+export const knowledgeQuery = (q: string, reviewState?: ReviewState) =>
   queryOptions({
-    queryKey: [...queryKeys.knowledge, q] as const,
-    queryFn: () => api.knowledgeSearch(q),
+    // The unfiltered key keeps its historical shape ([slug, "knowledge", q]); the
+    // review filter is an extra trailing segment only when it is set.
+    queryKey: reviewState
+      ? ([...queryKeys.knowledge, q, `review:${reviewState}`] as const)
+      : ([...queryKeys.knowledge, q] as const),
+    queryFn: () => api.knowledgeSearch(q, { reviewState }),
   });

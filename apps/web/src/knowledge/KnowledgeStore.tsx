@@ -3,7 +3,7 @@ import { Alert } from "@protolabsai/ui/data";
 import { ConfirmDialog, Dialog, useToast } from "@protolabsai/ui/overlays";
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowDownFromLine, ArrowUpToLine, ChevronRight, ChevronsDownUp, ChevronsUpDown, Database, FileUp, Library, Pencil, Plus, Trash2 } from "lucide-react";
+import { ArrowDownFromLine, ArrowUpToLine, ChevronRight, ChevronsDownUp, ChevronsUpDown, ClipboardCheck, Database, FileUp, Library, Pencil, Plus, Trash2 } from "lucide-react";
 
 import { useEffect, useState } from "react";
 
@@ -14,6 +14,8 @@ import { PanelHeader } from "@protolabsai/ui/navigation";
 import { knowledgeQuery, queryKeys } from "../lib/queries";
 import { QuickSetting } from "../settings/QuickSetting";
 import type { KnowledgeChunk } from "../lib/types";
+
+import { ReviewActions, ReviewChip } from "./ReviewVerdict";
 
 // The shape every knowledge list/search query caches — reused for optimistic
 // bulk-delete cache surgery (#1770) without re-declaring the response fields.
@@ -313,8 +315,13 @@ export function KnowledgeStore() {
     return () => window.clearTimeout(t);
   }, [query]);
 
+  // "Pending review" queue (ADR 0108 D7): narrow the list to rows awaiting an operator
+  // verdict. Its own cache entry (the query key carries the filter), so toggling never
+  // relabels the unfiltered list.
+  const [pendingOnly, setPendingOnly] = useState(false);
+
   const { data, isFetching, error, refetch } = useQuery({
-    ...knowledgeQuery(debouncedQuery),
+    ...knowledgeQuery(debouncedQuery, pendingOnly ? "pending" : undefined),
     placeholderData: keepPreviousData,
   });
   const enabled = data?.enabled ?? true;
@@ -517,6 +524,7 @@ export function KnowledgeStore() {
                   <Badge status="neutral">private</Badge>
                 </span>
               ) : null}
+              <ReviewChip chunk={c} />
               {c.heading ? <strong>{c.heading}</strong> : null}
             </div>
             <p className="playbook-desc">{c.content || c.preview}</p>
@@ -529,6 +537,8 @@ export function KnowledgeStore() {
           <div className="playbook-meta">
             <span title="added">{ago(c.created_at)}</span>
             <span className="knowledge-chunk-actions">
+              {/* Review verdict (ADR 0108 D7) — nothing for commons rows (read-only here). */}
+              <ReviewActions chunk={c} />
               {c.tier === "private" ? (
                 <Button
                   icon
@@ -584,13 +594,24 @@ export function KnowledgeStore() {
     <section className="panel stage-panel" data-testid="knowledge-store">
       <PanelHeader
         title="Knowledge"
-        kicker={`searchable knowledge base${total ? ` · ${total} entr${total === 1 ? "y" : "ies"}` : ""}${stats.commons ? ` · ${stats.commons} shared` : ""}`}
+        kicker={`searchable knowledge base${total ? ` · ${total} entr${total === 1 ? "y" : "ies"}` : ""}${stats.commons ? ` · ${stats.commons} shared` : ""}${pendingOnly ? " · pending review" : ""}`}
         actions={
           <>
             {/* Quick-set recall behaviour right where you inspect what the agent knows (ADR 0048). */}
             <QuickSetting keys={["knowledge.top_k", "knowledge.embeddings"]} title="Recall" label="Knowledge recall settings" />
             {enabled ? (
               <>
+                <Button
+                  icon
+                  variant={pendingOnly ? "primary" : "ghost"}
+                  type="button"
+                  onClick={() => setPendingOnly((v) => !v)}
+                  title={pendingOnly ? "Show every entry" : "Show only entries awaiting review"}
+                  aria-label="pending review filter"
+                  aria-pressed={pendingOnly}
+                >
+                  <ClipboardCheck size={16} />
+                </Button>
                 {groupSources.length > 0 ? (
                   <Button
                     icon
@@ -682,7 +703,12 @@ export function KnowledgeStore() {
             The knowledge store is off (enable <code>middleware.knowledge</code>).
           </Empty>
         ) : results.length === 0 ? (
-          query.trim() ? (
+          pendingOnly ? (
+            <Empty
+              title="Nothing awaiting review"
+              description="agent-written memories start pending; confirm or reject them here as they arrive."
+            />
+          ) : query.trim() ? (
             <Empty>No entries match your search.</Empty>
           ) : (
             <Empty
