@@ -91,7 +91,9 @@ def acp_operator_allowlist(config) -> list[str]:
     optional *restriction*, never a requirement. ONE derivation, used by the spawn spec
     (``runtime.acp_runtime.operator_mcp_server_spec``) AND by the host-side prefix/persona
     (:func:`sidecar_exposed_names`) so the two can never drift (#3248)."""
-    configured = list(getattr(config, "operator_mcp_tools", None) or [])
+    # Strip each name: the sidecar strips when parsing OPERATOR_MCP_TOOLS, so a padded
+    # YAML entry (" calculator ") must not make the host match a literal the child never sees.
+    configured = [str(t).strip() for t in (getattr(config, "operator_mcp_tools", None) or []) if str(t).strip()]
     return configured or ["*"]
 
 
@@ -103,7 +105,7 @@ class _SidecarTasksStorePresent:
 
 
 def _exposed_tools(config, allow: set[str], *, knowledge_store, scheduler, inbox_store, tasks_store, plugin_tools):
-    from tools.lg_tools import get_all_tools
+    from tools.lg_tools import drop_disabled_tools, get_all_tools
 
     if not allow:
         return []
@@ -120,6 +122,10 @@ def _exposed_tools(config, allow: set[str], *, knowledge_store, scheduler, inbox
         )
     )
     tools += list(plugin_tools or [])
+    # The fork tool denylist (tools.disabled/hidden) is applied over the ASSEMBLED set in
+    # graph.agent — get_all_tools doesn't filter it — so the bus must filter here too or a
+    # disabled tool stays callable over MCP even though it never binds to the graph (#3248).
+    tools = drop_disabled_tools(tools)
     # "*" = expose everything (minus a small danger set you must opt into by name) — so you
     # don't have to enumerate every tool. List specific names instead for tight control.
     star = "*" in allow
