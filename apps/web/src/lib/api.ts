@@ -57,6 +57,7 @@ import type {
   SlashCommand,
   SoulVersion,
   Playbook,
+  ReviewState,
   Subagent,
   ToolInfo,
   FleetTelemetry,
@@ -1138,13 +1139,17 @@ export const api = {
     return request<{ enabled: boolean; playbooks: Playbook[] }>("/api/playbooks");
   },
 
-  knowledgeSearch(q: string) {
+  // `reviewState` (ADR 0108 D7) narrows a LISTING (empty q) or a search to rows with
+  // that operator verdict — the console's "pending review" queue. Omitted = all rows.
+  knowledgeSearch(q: string, opts: { reviewState?: ReviewState } = {}) {
+    const params = new URLSearchParams({ q });
+    if (opts.reviewState) params.set("review_state", opts.reviewState);
     return request<{
       enabled: boolean;
       query: string;
       results: KnowledgeChunk[];
       stats: Record<string, number>;
-    }>(`/api/knowledge/search?q=${encodeURIComponent(q)}`);
+    }>(`/api/knowledge/search?${params.toString()}`);
   },
 
   // #1701 Slice 2: redeem a plugin composer-form — POST the field values back to the
@@ -1271,6 +1276,18 @@ export const api = {
     return request<{ enabled: boolean; deleted: boolean }>(`/api/memory/hot/${chunkId}`, {
       method: "DELETE",
     });
+  },
+  // Operator review verdict (ADR 0108 D7): confirm / reject / re-open (pending) one
+  // memory row. `tier` MUST ride along on a layered store — ids are per-backend and the
+  // route only refuses a commons id when told it is one; without it the verdict would
+  // land on whatever PRIVATE row shares the number. 400 = bad state or a commons row,
+  // 404 = unknown id, 501 = an ADR 0031 backend without verdicts, enabled:false = the
+  // store is off. Every non-2xx surfaces as an ApiError carrying the server `detail`.
+  reviewMemoryChunk(chunkId: number, body: { state: ReviewState; tier?: "private" | "commons" | null }) {
+    return request<{ enabled?: boolean; id?: number | null; review_state?: ReviewState | null }>(
+      `/api/memory/chunks/${chunkId}/review`,
+      { method: "POST", body },
+    );
   },
   // Injection record (ADR 0069 D6): which memory entered which turn.
   memoryInjections(sessionId = "", limit = 50) {

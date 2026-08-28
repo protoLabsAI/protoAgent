@@ -19,6 +19,7 @@ import type {
   MemorySessionDigest,
 } from "../lib/types";
 
+import { ReviewActions, ReviewChip } from "../knowledge/ReviewVerdict";
 import { injectionSummary } from "./injectionSummary";
 import "./memory.css";
 
@@ -332,11 +333,15 @@ function HotMemoryPanel() {
                           <Badge status="warning">not injecting</Badge>
                         </span>
                       ) : null}
+                      <ReviewChip chunk={c} />
                     </span>
                     <span className="memory-row-topic">{c.content || c.preview}</span>
                     <span className="memory-row-meta">{ago(c.created_at)}</span>
                   </div>
                   <span className="knowledge-chunk-actions">
+                    {/* Review verdict (ADR 0108 D7): hot rows are private-tier, so the
+                        actions always apply here (a rejected hot row leaves the window). */}
+                    <ReviewActions chunk={c} />
                     <Button
                       icon
                       variant="ghost"
