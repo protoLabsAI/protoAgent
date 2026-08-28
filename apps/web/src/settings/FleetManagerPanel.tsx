@@ -1,7 +1,7 @@
 import "../fleet/fleet.css";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link2, Pencil, Play, Plus, Radar, Server, Square, Trash2, Unlink2 } from "lucide-react";
+import { ChevronDown, ChevronUp, GripVertical, Link2, Pencil, Play, Plus, Radar, Server, Square, Trash2, Unlink2 } from "lucide-react";
 import { useState } from "react";
 
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
@@ -14,7 +14,7 @@ import { QuickSetting } from "./QuickSetting";
 import { agentHref, api, currentSlug } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { fleetQuery, queryKeys, settingsSchemaQuery } from "../lib/queries";
-import type { DiscoveredAgent, FleetAgent, SettingsGroup } from "../lib/types";
+import type { DiscoveredAgent, FleetAgent, FleetStatus, SettingsGroup } from "../lib/types";
 
 /** The manual add-remote form is submittable only with a name and an http(s) URL. Exported
  * (pure) so the enable rule is unit-tested without rendering the panel. The server does the
@@ -64,6 +64,79 @@ export function updateAutostartRoster(
   return enabled ? [...others, agent.id] : others;
 }
 
+// ── Manual roster reordering (#3197) — the pure ordering core ─────────────────────────
+// The API contract is the COMPLETE immutable-id permutation of the roster (host + local +
+// remote): stable ids only, never the editable name/label, so a rename can't perturb order.
+// These helpers are exported (pure) so drag math, the move-control payload, boundary/busy
+// disabling, accessible labels and the failure-safe reconciliation are unit-tested without
+// rendering the panel.
+
+/** The order PUT to /api/fleet/order — the roster ids in their current display order. */
+export function fleetOrderIds<T extends { id: string }>(agents: readonly T[]): string[] {
+  return agents.map((a) => a.id);
+}
+
+/** Two id orders are identical — used to skip a no-op PUT (a drop back onto the same slot, or
+ *  a move that ran off a list boundary). */
+export function sameOrder(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((id, i) => id === b[i]);
+}
+
+/** Move the id at `index` one slot up/down, returning a NEW array — or the SAME order when the
+ *  move runs off either end (the caller then skips the PUT via `sameOrder`). The move-up /
+ *  move-down controls' payload: the accessible, non-pointer reorder path. */
+export function moveInList(ids: string[], index: number, dir: "up" | "down"): string[] {
+  const target = dir === "up" ? index - 1 : index + 1;
+  if (index < 0 || index >= ids.length || target < 0 || target >= ids.length) return ids;
+  const next = ids.slice();
+  [next[index], next[target]] = [next[target], next[index]];
+  return next;
+}
+
+/** Drag `from` → `to`: pull the dragged id out and re-insert it at the target slot, returning a
+ *  NEW array — or the SAME order for a self-drop / out-of-range index. The drag-and-drop payload. */
+export function reorderByDrag(ids: string[], from: number, to: number): string[] {
+  if (from === to || from < 0 || to < 0 || from >= ids.length || to >= ids.length) return ids;
+  const next = ids.slice();
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  return next;
+}
+
+/** Can the row at `index` still move in `dir`? False at the matching list boundary. */
+export function canMove(index: number, dir: "up" | "down", length: number): boolean {
+  return dir === "up" ? index > 0 : index < length - 1;
+}
+
+/** A move control is disabled at its boundary OR while a reorder save is in flight (busy). */
+export function moveDisabled(index: number, dir: "up" | "down", length: number, pending: boolean): boolean {
+  return pending || !canMove(index, dir, length);
+}
+
+/** The move control's accessible name — the DISPLAY name (label ?? name), never the id. */
+export function moveLabel(agent: Pick<FleetAgent, "name" | "label">, dir: "up" | "down"): string {
+  return `Move ${agent.label ?? agent.name} ${dir}`;
+}
+
+/** Reconcile a target id order against the live roster WITHOUT losing a row: rank the agents to
+ *  match `order`, drop ids no longer present, and append any agent `order` omits (a member added
+ *  or removed between the optimistic write and the server's echo) at the tail. Backs the
+ *  optimistic cache write AND keeps every existing row + its actions across a success or a
+ *  failure roll-back, so the polling `queryKeys.fleet` stays authoritative. */
+export function orderAgentsByIds<T extends { id: string }>(agents: T[], order: string[]): T[] {
+  const byId = new Map(agents.map((a) => [a.id, a]));
+  const ranked: T[] = [];
+  for (const id of order) {
+    const a = byId.get(id);
+    if (a) {
+      ranked.push(a);
+      byId.delete(id);
+    }
+  }
+  for (const a of agents) if (byId.has(a.id)) ranked.push(a); // never drop a live row
+  return ranked;
+}
+
 // Fleet manager (ADR 0042) — Settings → Agents. Lists the workspace agents with live
 // status (the query polls every 3s, so a crashed agent flips to stopped on its own) and
 // per-row start / stop / remove. "+ New agent" opens the archetype picker via `onNew`.
@@ -99,6 +172,7 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
   });
 
   const agents = fleet.data?.agents ?? [];
+  const orderIds = fleetOrderIds(agents); // the complete immutable-id order (drag + move payload)
   const autostartRoster = fleetAutostartRoster(hostSettings.data?.groups);
   const autostartAvailable = Boolean(
     hostSettings.data?.groups.flatMap((group) => group.fields).some((field) => field.key === "fleet.autostart"),
@@ -311,6 +385,42 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
     onSettled: () => qc.invalidateQueries({ queryKey: queryKeys.fleet }),
   });
 
+  // Manual roster reordering (#3197) — persist the display order to PUT /api/fleet/order.
+  // The order is the COMPLETE immutable-id permutation (host + local + remote); the panel
+  // updates the polling query's cache OPTIMISTICALLY (the new order shows at once) and then
+  // invalidates `queryKeys.fleet` on BOTH success and failure so GET /api/fleet stays
+  // authoritative — a rejected permutation rolls back to the server's order and refetches; an
+  // accepted one is refetched and reconciled. Only the ordering changes: no name / URL / token
+  // / process state / immutable id is ever touched.
+  const [dragId, setDragId] = useState<string | null>(null); // the id being dragged (pointer path)
+  const reorder = useMutation({
+    mutationFn: (order: string[]) => api.reorderFleet(order),
+    onMutate: async (order) => {
+      await qc.cancelQueries({ queryKey: queryKeys.fleet }); // don't let an in-flight poll clobber the optimistic order
+      const prev = qc.getQueryData<FleetStatus>(queryKeys.fleet);
+      qc.setQueryData<FleetStatus>(queryKeys.fleet, (cur) =>
+        cur ? { ...cur, agents: orderAgentsByIds(cur.agents, order) } : cur,
+      );
+      return { prev };
+    },
+    onError: (e, _order, ctx) => {
+      if (ctx?.prev) qc.setQueryData(queryKeys.fleet, ctx.prev); // roll the optimistic order back
+      toast({ tone: "error", title: "Couldn't reorder the fleet", message: errMsg(e) });
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: queryKeys.fleet }),
+  });
+  const submitOrder = (order: string[]) => {
+    if (!sameOrder(order, orderIds)) reorder.mutate(order); // skip a no-op PUT (self-drop / boundary move)
+  };
+  const moveRow = (id: string, dir: "up" | "down") =>
+    submitOrder(moveInList(orderIds, orderIds.indexOf(id), dir));
+  const dropOnRow = (targetId: string) => {
+    if (dragId && dragId !== targetId) {
+      submitOrder(reorderByDrag(orderIds, orderIds.indexOf(dragId), orderIds.indexOf(targetId)));
+    }
+    setDragId(null);
+  };
+
   return (
     <section className="panel stage-panel">
       <PanelHeader
@@ -368,8 +478,64 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
           <ul className="fleet-list">
             {agents.map((a) => {
               const isActive = slugOf(a) === slug; // slug = stable id, not name
+              const index = orderIds.indexOf(a.id);
               return (
-                <li key={a.id} className={`fleet-row${isActive ? " active" : ""}`}>
+                <li
+                  key={a.id}
+                  className={`fleet-row${isActive ? " active" : ""}${dragId === a.id ? " dragging" : ""}`}
+                  // Every roster row is a drop slot (the pinned host included, so a member can be
+                  // dropped above it); only non-host rows carry a drag handle to START a drag.
+                  onDragOver={(e) => {
+                    if (dragId && dragId !== a.id) e.preventDefault(); // preventDefault marks a valid drop target
+                  }}
+                  onDrop={() => dropOnRow(a.id)}
+                >
+                  {/* Manual roster reordering (#3197): a pointer drag handle + explicit move-up /
+                      move-down controls (the accessible, non-pointer equivalent). Rendered on
+                      every MEMBER row; the host ("this instance") is pinned — it carries neither
+                      handle nor controls, so it stays a zero-button row, but is still a valid drop
+                      slot. The DS bundles dnd-kit but exposes it only as AppShell-rail + TabBar
+                      reorder (tab/rail-shaped, and its keyboard path is explicitly unwired) — no
+                      generic sortable-list primitive fits a rich fleet row, so this stays inline
+                      (native HTML5 DnD, no new dependency, no reusable component). */}
+                  <div className="fleet-reorder">
+                    {a.host ? null : (
+                      <>
+                        <span
+                          className="fleet-drag-handle"
+                          draggable
+                          aria-hidden="true"
+                          title="Drag to reorder"
+                          onDragStart={() => setDragId(a.id)}
+                          onDragEnd={() => setDragId(null)}
+                        >
+                          <GripVertical size={14} />
+                        </span>
+                        <span className="fleet-move-controls">
+                          <Button
+                            icon
+                            variant="ghost"
+                            title={moveLabel(a, "up")}
+                            aria-label={moveLabel(a, "up")}
+                            disabled={moveDisabled(index, "up", orderIds.length, reorder.isPending)}
+                            onClick={() => moveRow(a.id, "up")}
+                          >
+                            <ChevronUp size={14} />
+                          </Button>
+                          <Button
+                            icon
+                            variant="ghost"
+                            title={moveLabel(a, "down")}
+                            aria-label={moveLabel(a, "down")}
+                            disabled={moveDisabled(index, "down", orderIds.length, reorder.isPending)}
+                            onClick={() => moveRow(a.id, "down")}
+                          >
+                            <ChevronDown size={14} />
+                          </Button>
+                        </span>
+                      </>
+                    )}
+                  </div>
                   {/* A remote's `running` IS its reachability probe (it has no local process),
                       so an offline remote is "unreachable", not "stopped" — and its dot reads
                       warning, not neutral, since it's a fault to act on rather than an idle agent. */}
