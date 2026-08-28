@@ -252,6 +252,7 @@ export default defineConfig({
           collapsed: false,
           items: [
             { text: "Architecture", link: "/explanation/architecture" },
+            { text: "Prompt contracts", link: "/explanation/prompt-contracts" },
             { text: "Output protocol", link: "/explanation/output-protocol" },
             { text: "Mid-turn steering", link: "/explanation/steering" },
             { text: "LiteLLM gateway", link: "/explanation/litellm-gateway" },

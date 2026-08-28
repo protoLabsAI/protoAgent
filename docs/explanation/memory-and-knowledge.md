@@ -270,6 +270,7 @@ hybrid via `evals.sweep`. See [Eval your fork](../guides/evals.md).
 - [Tune the knowledge store](../guides/knowledge.md) — the tuning knobs + the delivery-control recipes
 - [ADR 0041 — Workspaces & tiered stores](../adr/0041-workspaces-and-tiered-stores.md) — the private/commons tiering behind `knowledge.scope`
 - [Run a fleet](../guides/fleet.md) — sharing a knowledge commons across many agents on one host
+- [Prompt contracts](prompt-contracts.md) — the stable prompt this projected context is deliberately kept out of, and the size ceilings that keep it cacheable
 - [Model output](output-protocol.md) — native reasoning + the leaked-reasoning guard this enforces
 - [Skills](../guides/skills.md) — procedural memory (Playbooks)
 - [Starter tools](../reference/starter-tools.md) — the `memory_*` tools
