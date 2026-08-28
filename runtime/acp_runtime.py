@@ -335,10 +335,27 @@ class AcpRuntime:
         knowledge_on = bool(getattr(self.config, "knowledge_middleware", True))
         # This runtime holds no thread/session id for a turn, so the assembler has none and
         # never records injection rows (ADR 0069 D6 rows must be attributable to a turn).
+        #
+        # The prefix must be honest about THIS runtime's tool plane (#3190): the brain's
+        # tools are whatever the operator MCP bus exposes (operator_mcp_server_spec), and
+        # nothing else.
+        # - `task` / `task_batch` are built only in graph/agent.py and never ride the bus, so
+        #   the Subagent Delegation roster would describe a capability the brain cannot call.
+        # - The capability doctrine (goal / tasks / schedule / watch / wait) follows the exact
+        #   exposed set, resolved at the first turn — the stores the allowlist is computed
+        #   over are booted by then — never a guessed set.
+        # - The fenced filesystem tools (ADR 0007) are appended in graph/agent.py, outside
+        #   get_all_tools, so the bus never carries them: no Managed projects section here.
+        #   A coding-agent brain brings its own file tools.
+        from runtime.operator_mcp_tools import resolve_exposed_names
+
         return ContextAssembler(
             config=self.config,
             knowledge_store=getattr(STATE, "knowledge_store", None) if knowledge_on else None,
             skills_index=getattr(STATE, "skills_index", None),
+            include_subagents=False,
+            bound_tool_names_factory=lambda: frozenset(resolve_exposed_names(self.config)),
+            projects=None,
         )
 
     def _write_persona_files(self) -> None:

@@ -95,7 +95,7 @@ def test_assemble_context_threads_bound_tool_names(monkeypatch):
     """assemble_context must thread bound_tool_names to build_stable_prefix."""
     captured = {}
 
-    def fake_prefix(config=None, *, include_subagents=True, bound_tool_names=None):
+    def fake_prefix(config=None, *, include_subagents=True, bound_tool_names=None, projects=None):
         captured["bound_tool_names"] = bound_tool_names
         return "prefix"
 
@@ -130,3 +130,111 @@ def test_assembler_object_implements_the_contract():
     ctx = asm.assemble(query="x")
     assert ctx.stable_prefix and "hit for x" in ctx.volatile_delta
     asm.after_turn(user="x", response="y")  # no-op in slice 2, must not raise
+
+
+# ── an honest prefix for external runtimes (#3190) ───────────────────────────────────
+
+
+def test_build_stable_prefix_threads_projects(monkeypatch):
+    """`projects` reaches build_system_prompt exactly like the native loop passes it."""
+    from runtime.context import build_stable_prefix
+
+    captured = {}
+
+    def fake_build_system_prompt(**kw):
+        captured.update(kw)
+        return "P"
+
+    monkeypatch.setattr("graph.prompts.build_system_prompt", fake_build_system_prompt)
+    projects = [{"name": "api", "path": "/p/api", "write": True}]
+    build_stable_prefix(include_subagents=False, bound_tool_names=frozenset(), projects=projects)
+    assert captured["projects"] == projects
+    assert captured["include_subagents"] is False and captured["bound_tool_names"] == frozenset()
+
+
+def test_managed_projects_section_reaches_the_prefix():
+    from runtime.context import build_stable_prefix
+
+    prefix = build_stable_prefix(
+        include_subagents=False,
+        bound_tool_names=frozenset({"current_time"}),
+        projects=[{"name": "api", "path": "/p/api", "write": True}],
+    )
+    assert "# Managed projects" in prefix and "**api** (read-write) — `/p/api`" in prefix
+    bare = build_stable_prefix(include_subagents=False, bound_tool_names=frozenset({"current_time"}))
+    assert "# Managed projects" not in bare
+
+
+def test_assembler_threads_projects(monkeypatch):
+    captured = {}
+
+    def fake_prefix(config=None, *, include_subagents=True, bound_tool_names=None, projects=None):
+        captured.update(include_subagents=include_subagents, bound_tool_names=bound_tool_names, projects=projects)
+        return "P"
+
+    monkeypatch.setattr("runtime.context.build_stable_prefix", fake_prefix)
+    projects = [{"name": "api", "path": "/p/api", "write": False}]
+    ContextAssembler(config=_cfg(), include_subagents=False, projects=projects).assemble(query="")
+    assert captured == {"include_subagents": False, "bound_tool_names": None, "projects": projects}
+
+
+def test_assembler_resolves_bound_tool_names_lazily_and_once(monkeypatch):
+    """The exposed set is knowable only once the stores are booted, so it is resolved at
+    the first assemble() — exactly once — and reaches the prefix builder."""
+    seen = []
+
+    def fake_prefix(config=None, *, include_subagents=True, bound_tool_names=None, projects=None):
+        seen.append(bound_tool_names)
+        return "P"
+
+    monkeypatch.setattr("runtime.context.build_stable_prefix", fake_prefix)
+    calls = []
+
+    def factory():
+        calls.append(1)
+        return {"calculator", "current_time"}
+
+    asm = ContextAssembler(config=_cfg(), bound_tool_names_factory=factory)
+    assert asm.bound_tool_names is None  # nothing resolved at construction
+    asm.assemble(query="")
+    asm.assemble(query="again")
+    assert calls == [1]
+    assert asm.bound_tool_names == frozenset({"calculator", "current_time"})
+    assert seen == [frozenset({"calculator", "current_time"})] * 2
+
+
+def test_assembler_factory_failure_falls_back_to_full_doctrine(monkeypatch):
+    """A factory that raises must not break the turn: the prefix builds with the legacy
+    None (full doctrine), the failure is logged once, and it is not retried every turn."""
+    seen = []
+
+    def fake_prefix(config=None, *, include_subagents=True, bound_tool_names=None, projects=None):
+        seen.append(bound_tool_names)
+        return "P"
+
+    monkeypatch.setattr("runtime.context.build_stable_prefix", fake_prefix)
+    calls = []
+
+    def broken():
+        calls.append(1)
+        raise RuntimeError("stores not booted")
+
+    asm = ContextAssembler(config=_cfg(), bound_tool_names_factory=broken)
+    asm.assemble(query="")
+    asm.assemble(query="")
+    assert calls == [1] and seen == [None, None] and asm.bound_tool_names is None
+
+
+def test_explicit_bound_tool_names_win_over_the_factory(monkeypatch):
+    seen = []
+
+    def fake_prefix(config=None, *, include_subagents=True, bound_tool_names=None, projects=None):
+        seen.append(bound_tool_names)
+        return "P"
+
+    monkeypatch.setattr("runtime.context.build_stable_prefix", fake_prefix)
+    asm = ContextAssembler(
+        config=_cfg(), bound_tool_names=frozenset({"wait"}), bound_tool_names_factory=lambda: {"nope"}
+    )
+    asm.assemble(query="")
+    assert seen == [frozenset({"wait"})]

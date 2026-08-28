@@ -974,3 +974,67 @@ async def test_acp_client_records_plan_updates_latest_wins():
         {"content": "read the failing test", "status": "completed", "priority": "high"},
         {"content": "fix the off-by-one", "status": "in_progress", "priority": ""},
     ]
+
+
+def test_default_context_is_honest_about_the_bus(tmp_path, monkeypatch):
+    """The ACP runtime's stable prefix describes only what the operator MCP bus exposes
+    (#3190): no Subagent Delegation roster (`task` never rides the bus), the capability
+    doctrine follows the exact exposed set — resolved lazily at the first turn — and no
+    Managed projects section (the fenced fs tools are appended in graph/agent.py, outside
+    get_all_tools, so the bus never carries them)."""
+    import runtime.state as rs
+    from graph.prompts import _GOAL_TOOLS
+
+    for attr in ("knowledge_store", "scheduler", "inbox_store", "tasks_store"):
+        monkeypatch.setattr(rs.STATE, attr, None, raising=False)
+    monkeypatch.setattr(rs.STATE, "plugin_tools", [], raising=False)
+    monkeypatch.setattr(rs.STATE, "skills_index", None, raising=False)
+
+    cfg = _cfg(
+        knowledge_middleware=False,
+        goal_enabled=False,
+        operator_mcp_tools=["calculator", "current_time", "task_list"],
+    )
+    rt = AcpRuntime(cfg, cwd=str(tmp_path))
+    ctx = rt._context
+    assert ctx.include_subagents is False and ctx.projects is None
+    assert ctx.bound_tool_names is None  # resolved at the first turn, not at construction
+
+    prefix = ctx.assemble(query="").stable_prefix
+    # `task_list` is allowlisted but binds only when a tasks store exists — with none
+    # booted it is NOT exposed, and the resolved set says so (honest, not the allowlist).
+    assert ctx.bound_tool_names == frozenset({"calculator", "current_time"})
+    assert "# Subagent Delegation" not in prefix
+    assert "# Managed projects" not in prefix
+    assert "# Operating model" not in prefix  # no goal/tasks/schedule/watch/wait on the bus
+    assert "`task`" not in prefix
+    for tool in _GOAL_TOOLS:
+        assert tool not in prefix
+
+
+def test_default_context_doctrine_follows_the_exposed_set(tmp_path, monkeypatch):
+    """Expose the goal tools over the bus and the goal doctrine appears — nothing else."""
+    import runtime.state as rs
+    from graph.prompts import _GOAL_TOOLS, _SCHEDULE_TOOLS, _TASK_TOOLS
+
+    for attr in ("knowledge_store", "scheduler", "inbox_store", "tasks_store"):
+        monkeypatch.setattr(rs.STATE, attr, None, raising=False)
+    monkeypatch.setattr(rs.STATE, "plugin_tools", [], raising=False)
+    monkeypatch.setattr(rs.STATE, "skills_index", None, raising=False)
+
+    cfg = _cfg(knowledge_middleware=False, goal_enabled=True, operator_mcp_tools=["*"])
+    ctx = AcpRuntime(cfg, cwd=str(tmp_path))._context
+    prefix = ctx.assemble(query="").stable_prefix
+    if not (ctx.bound_tool_names or frozenset()) & _GOAL_TOOLS:
+        # The goal tools bind only when a verifier is registered (get_all_tools) — an
+        # environment without one exposes none, and the honest prefix carries none.
+        assert "# Operating model" not in prefix
+        import pytest
+
+        pytest.skip("no goal tools exposed in this environment (no verifier registered)")
+    assert "# Operating model" in prefix
+    assert any(t in prefix for t in _GOAL_TOOLS)
+    assert "# Subagent Delegation" not in prefix
+    # tasks/schedule stores are absent → their tools are not exposed → their doctrine is absent
+    for tool in _TASK_TOOLS | _SCHEDULE_TOOLS:
+        assert tool not in prefix
