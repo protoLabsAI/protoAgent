@@ -79,18 +79,26 @@ the per-turn volatile delta — the same projected context the native loop deliv
 (ADR 0108 D8) — and `AssembledContext.as_prompt(message)` orders them *prefix, then
 delta, then the turn's message*.
 
-**The ACP prefix is honest by construction.** `runtime/acp_runtime.py` builds its
+**What the ACP runtime actually builds.** `runtime/acp_runtime.py` constructs its
 assembler with `include_subagents=False` (the `task` / `task_batch` tools exist only in
-`graph/agent.py` and never ride the operator MCP bus) and a `bound_tool_names` set
-resolved at the first turn from `runtime/operator_mcp_tools.py::resolve_exposed_names`
-— the exact allowlisted-**and-bound** set the bus serves, never a guess (a factory that
-fails leaves the legacy `None` with a warning). So the ACP prefix names no capability
-the brain cannot call: an allowlist without goal tools yields no goal doctrine, and a
-bus with no `task_create` yields no tasks doctrine. It carries no `Managed projects`
-section on purpose: the fenced filesystem tools are appended in `graph/agent.py`
-outside `get_all_tools`, so the bus never exposes them (a coding-agent brain has its
-own file tools). `projects` is threaded through `build_stable_prefix` /
-`assemble_context` / `ContextAssembler` for a runtime whose tool plane does carry them.
+`graph/agent.py` and never ride the operator MCP bus), `projects=None` (the fenced
+filesystem tools are appended in `graph/agent.py` outside `get_all_tools`, so the bus
+never exposes them — a coding-agent brain has its own file tools), and
+`bound_tool_names` resolved at the first turn by
+`runtime/operator_mcp_tools.py::sidecar_exposed_names` — the set the **sidecar** serves,
+computed from the same allowlist derivation the spawn spec hands it
+(`acp_operator_allowlist`: the configured names, or `*` when unset) under the sidecar's
+own boot assumptions (it always creates a tasks store). One derivation on both sides, so
+the bus and the prompt cannot drift; a resolver that fails leaves the legacy `None` with
+a warning rather than a guessed set.
+
+**What the deprecated ACP brain reads today.** The stable prefix is the `ContextAssembler`
+contract (#3190 box 2) and is what a future external runtime sends; the current ACP path
+sends only the volatile delta plus the message, and carries the persona as `AGENTS.md`
+(`persona_doc`) — whose operating note names only the tool families in that same exposed
+set, and names none when the set is not yet known. `projects` is threaded through
+`build_stable_prefix` / `assemble_context` / `ContextAssembler` for a runtime whose tool
+plane does carry the filesystem tools.
 
 Callers that cannot know their tool set may still pass `bound_tool_names=None` and
 receive the full doctrine — honest only when every capability is really reachable;

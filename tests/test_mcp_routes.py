@@ -277,3 +277,19 @@ def test_mcp_catalog_is_bundled_in_the_desktop_sidecar():
     bundled = {src for src, _dest in mod.BUNDLED_DATA}
     assert "config/mcp-catalog.json" in bundled
     assert "config/plugin-catalog.json" in bundled  # its sibling — same bundling trap
+
+
+def test_exposed_reports_the_sidecar_set_under_an_acp_runtime(monkeypatch):
+    """With an ACP brain the client IS the spawned sidecar: unset allowlist means "*" and a
+    tasks store the sidecar boots itself — the route reports that set, not the host's (#3248)."""
+    import runtime.state as rs
+
+    _wire_exposed(monkeypatch, tools=[])
+    rs.STATE.graph_config.agent_runtime = "acp:codex"
+    body = _client().get("/api/mcp/exposed").json()
+    assert body["acp_default"] is True and body["star"] is True
+    assert "task_create" in body["tools"] and body["count"] == len(body["tools"]) > 0
+
+    rs.STATE.graph_config.agent_runtime = "native"
+    body = _client().get("/api/mcp/exposed").json()
+    assert body["acp_default"] is False and body["tools"] == []

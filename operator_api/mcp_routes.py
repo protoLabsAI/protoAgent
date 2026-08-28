@@ -125,17 +125,31 @@ def register_mcp_routes(app) -> None:
         ``operator_mcp_profile`` + ``operator_mcp_tools`` allowlist + ``PROTOAGENT_MCP_TRUST``
         resolve. Previously introspectable only by reading the sidecar's boot logs
         (ADR 0075 D2/D3). Read-only; behind the standard operator-API auth gate."""
-        from runtime.operator_mcp_tools import resolve_allow, resolve_exposed_names
+        from runtime.operator_mcp_tools import (
+            acp_operator_allowlist,
+            resolve_allow,
+            resolve_exposed_names,
+            sidecar_exposed_names,
+        )
 
         cfg = STATE.graph_config
-        allow = resolve_allow(cfg)
-        names = resolve_exposed_names(cfg)
+        # Under an ACP runtime the client is the brain's sidecar, which is handed the ACP
+        # default allowlist ("*" when unset) and boots its own stores — report THAT set,
+        # the one shared derivation the runtime itself uses (#3248), not the host's view.
+        acp_brain = str(getattr(cfg, "agent_runtime", "") or "").strip().lower().startswith("acp")
+        if acp_brain:
+            allow = resolve_allow(cfg, tools=acp_operator_allowlist(cfg))
+            names = sidecar_exposed_names(cfg, allow=allow)
+        else:
+            allow = resolve_allow(cfg)
+            names = resolve_exposed_names(cfg)
         profile = str(getattr(cfg, "operator_mcp_profile", "") or "").strip() or None
         return {
             "tools": sorted(names),
             "count": len(names),
             "profile": profile,
             "star": "*" in allow,
+            "acp_default": acp_brain,
             "trust_override": os.environ.get("PROTOAGENT_MCP_TRUST", "").strip().lower() == "full",
         }
 

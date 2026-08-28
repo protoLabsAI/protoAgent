@@ -198,7 +198,7 @@ def test_allowlist_exposes_create_watch_when_watches_enabled(monkeypatch):
     the goal tools do."""
     import graph.goals.verifiers as verifiers
 
-    monkeypatch.setattr(verifiers, "plugin_verifier_names", lambda: ["fake-verifier"])
+    monkeypatch.setattr(verifiers, "_PLUGIN_VERIFIERS", {"test:check": object()})
 
     on = _cfg(["create_watch", "list_watches"])
     on.watches_enabled = True
@@ -207,3 +207,59 @@ def test_allowlist_exposes_create_watch_when_watches_enabled(monkeypatch):
     off = _cfg(["create_watch", "list_watches"])
     off.watches_enabled = False
     assert operator_tools(off) == []
+
+
+# ── the ACP sidecar's exposed set, derived once for both sides (#3248) ────────────────
+
+
+def test_acp_operator_allowlist_defaults_to_star():
+    from runtime.operator_mcp_tools import acp_operator_allowlist
+
+    assert acp_operator_allowlist(_cfg([])) == ["*"]
+    assert acp_operator_allowlist(_cfg(["calculator"])) == ["calculator"]
+
+
+def _served_by_a_sidecar(cfg, monkeypatch):
+    """What server.operator_mcp would expose for *cfg*: it receives acp_operator_allowlist
+    via OPERATOR_MCP_TOOLS and boots its own stores — a tasks store unconditionally."""
+    from runtime.operator_mcp_tools import acp_operator_allowlist, operator_tools
+
+    child = _cfg(acp_operator_allowlist(cfg))
+    child.goal_enabled = cfg.goal_enabled
+    monkeypatch.setattr(STATE, "tasks_store", object(), raising=False)  # the sidecar's TaskStore()
+    try:
+        return {t.name for t in operator_tools(child)}
+    finally:
+        monkeypatch.setattr(STATE, "tasks_store", None, raising=False)  # back to the bare host
+
+
+@pytest.mark.parametrize(
+    ("tools", "goal_enabled"),
+    [
+        ([], False),  # (a) unset allowlist → the sidecar serves "*"
+        (["task_list", "calculator"], False),  # (b) explicit allowlist naming a task tool
+        ([], True),  # (c) goal flag flipped — the host must follow the same gate
+    ],
+)
+def test_host_computes_exactly_what_the_sidecar_serves(monkeypatch, tools, goal_enabled):
+    """sidecar_exposed_names() on a host with NO tasks store equals operator_tools() in a
+    sidecar that always has one — the two sides can't drift (#3248 B1/B2)."""
+    from runtime.operator_mcp_tools import sidecar_exposed_names
+
+    monkeypatch.setattr("graph.goals.verifiers._PLUGIN_VERIFIERS", {"test:check": object()})
+    cfg = _cfg(tools)
+    cfg.goal_enabled = goal_enabled
+    served = _served_by_a_sidecar(cfg, monkeypatch)
+    assert STATE.tasks_store is None  # the host really has none
+    host = set(sidecar_exposed_names(cfg))
+    assert host == served
+    assert "task_list" in host  # the sidecar's unconditional tasks store, mirrored
+    assert ("set_goal" in host) is goal_enabled
+
+
+def test_sidecar_set_honors_the_trust_override(monkeypatch):
+    from runtime.operator_mcp_tools import sidecar_exposed_names
+
+    monkeypatch.setenv("PROTOAGENT_MCP_TRUST", "full")
+    names = set(sidecar_exposed_names(_cfg(["calculator"])))
+    assert {"calculator", "current_time", "task_list"} <= names  # "*", not the one name

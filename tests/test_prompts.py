@@ -187,13 +187,26 @@ def test_template_soul_names_no_capability_tools():
 
     from graph.prompts import _GOAL_TOOLS, _SCHEDULE_TOOLS, _TASK_TOOLS, _WAIT_TOOLS, _WATCH_TOOLS
 
+    from tests.test_prompt_budgets import FIXTURE_SOUL
+
     repo_soul = (Path(build_system_prompt.__code__.co_filename).parent.parent / "config" / "SOUL.md").read_text(
         encoding="utf-8"
     )
-    fixture_soul = "# Identity\nFixture persona for prompt-budget measurement.\n"
     names = _GOAL_TOOLS | _SCHEDULE_TOOLS | _TASK_TOOLS | _WATCH_TOOLS | _WAIT_TOOLS
-    for text in (repo_soul, fixture_soul):
+    for text in (repo_soul, FIXTURE_SOUL):
         for name in names:
             # `wait` is an English word — match only its tool forms (`wait`, wait(...)).
             pattern = rf"`{name}`|\b{name}\(" if name == "wait" else rf"\b{name}\b"
             assert not re.search(pattern, text), f"SOUL mentions capability tool {name!r}"
+
+
+def test_act_line_names_task_only_when_bound():
+    """The operating model's Act step mentions delegating with `task` only when the
+    `task` tool is bound — a subagent build or an external runtime without it gets none."""
+    with_task = build_system_prompt(include_subagents=False, bound_tool_names=_ALL_OM_TOOLS | {"task"})
+    assert "delegating with `task`" in with_task
+    without = build_system_prompt(include_subagents=False, bound_tool_names=_ALL_OM_TOOLS)
+    assert "# Operating model" in without and "delegating with `task`" not in without
+    assert "- **Act** — do the step." in without
+    legacy = build_system_prompt(include_subagents=False, bound_tool_names=None)
+    assert "delegating with `task`" in legacy

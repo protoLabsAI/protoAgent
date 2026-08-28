@@ -281,7 +281,7 @@ async def test_run_turn_normal_reply_passes_through_unchanged(tmp_path):
 async def test_persona_written_as_agents_md(tmp_path, monkeypatch):
     import runtime.acp_runtime as rt_mod
 
-    monkeypatch.setattr(rt_mod, "persona_doc", lambda config: "# Your identity\nYou are Aria.")
+    monkeypatch.setattr(rt_mod, "persona_doc", lambda config, **kw: "# Your identity\nYou are Aria.")
     rt = AcpRuntime(_cfg(), cwd=str(tmp_path), client_factory=_FakeClient, context=_FakeCtx())
     rt._ensure_client()  # writes persona files before the client starts
     assert (tmp_path / "AGENTS.md").read_text() == "# Your identity\nYou are Aria."
@@ -483,7 +483,7 @@ async def test_acp_client_handles_list_shaped_content_without_crashing():
 async def test_persona_written_to_copilot_instructions(tmp_path, monkeypatch):
     import runtime.acp_runtime as rt_mod
 
-    monkeypatch.setattr(rt_mod, "persona_doc", lambda config: "# id\nYou are Aria.")
+    monkeypatch.setattr(rt_mod, "persona_doc", lambda config, **kw: "# id\nYou are Aria.")
     rt = AcpRuntime(
         types.SimpleNamespace(agent_runtime="acp:copilot"),
         cwd=str(tmp_path),
@@ -1001,9 +1001,9 @@ def test_default_context_is_honest_about_the_bus(tmp_path, monkeypatch):
     assert ctx.bound_tool_names is None  # resolved at the first turn, not at construction
 
     prefix = ctx.assemble(query="").stable_prefix
-    # `task_list` is allowlisted but binds only when a tasks store exists — with none
-    # booted it is NOT exposed, and the resolved set says so (honest, not the allowlist).
-    assert ctx.bound_tool_names == frozenset({"calculator", "current_time"})
+    # The set is what the SIDECAR serves: it always boots a tasks store, so `task_list`
+    # is exposed even though this host has none (server/operator_mcp._boot_stores_only).
+    assert ctx.bound_tool_names == frozenset({"calculator", "current_time", "task_list"})
     assert "# Subagent Delegation" not in prefix
     assert "# Managed projects" not in prefix
     assert "# Operating model" not in prefix  # no goal/tasks/schedule/watch/wait on the bus
@@ -1021,23 +1021,22 @@ def test_default_context_doctrine_follows_the_exposed_set(tmp_path, monkeypatch)
         monkeypatch.setattr(rs.STATE, attr, None, raising=False)
     monkeypatch.setattr(rs.STATE, "plugin_tools", [], raising=False)
     monkeypatch.setattr(rs.STATE, "skills_index", None, raising=False)
+    # The goal tools bind only with a registered plugin verifier (get_all_tools).
+    monkeypatch.setattr("graph.goals.verifiers._PLUGIN_VERIFIERS", {"test:check": object()})
 
     cfg = _cfg(knowledge_middleware=False, goal_enabled=True, operator_mcp_tools=["*"])
     ctx = AcpRuntime(cfg, cwd=str(tmp_path))._context
     prefix = ctx.assemble(query="").stable_prefix
-    if not (ctx.bound_tool_names or frozenset()) & _GOAL_TOOLS:
-        # The goal tools bind only when a verifier is registered (get_all_tools) — an
-        # environment without one exposes none, and the honest prefix carries none.
-        assert "# Operating model" not in prefix
-        import pytest
-
-        pytest.skip("no goal tools exposed in this environment (no verifier registered)")
+    assert ctx.bound_tool_names & _GOAL_TOOLS
     assert "# Operating model" in prefix
-    assert any(t in prefix for t in _GOAL_TOOLS)
+    assert all(t in prefix for t in _GOAL_TOOLS)
     assert "# Subagent Delegation" not in prefix
-    # tasks/schedule stores are absent → their tools are not exposed → their doctrine is absent
-    for tool in _TASK_TOOLS | _SCHEDULE_TOOLS:
-        assert tool not in prefix
+    # The sidecar always boots a tasks store → task_create is served → tasks doctrine present;
+    # no scheduler on this config → schedule_task absent → no schedule doctrine.
+    assert "task_create" in ctx.bound_tool_names and any(t in prefix for t in _TASK_TOOLS)
+    for tool in _SCHEDULE_TOOLS:
+        assert tool not in ctx.bound_tool_names and tool not in prefix
+    assert "`task`" not in prefix  # delegation is not on the bus either
 
 
 def test_default_context_carries_watch_doctrine_when_exposed(tmp_path, monkeypatch):
@@ -1051,7 +1050,7 @@ def test_default_context_carries_watch_doctrine_when_exposed(tmp_path, monkeypat
         monkeypatch.setattr(rs.STATE, attr, None, raising=False)
     monkeypatch.setattr(rs.STATE, "plugin_tools", [], raising=False)
     monkeypatch.setattr(rs.STATE, "skills_index", None, raising=False)
-    monkeypatch.setattr(verifiers, "plugin_verifier_names", lambda: ["fake-verifier"])
+    monkeypatch.setattr(verifiers, "_PLUGIN_VERIFIERS", {"test:check": object()})
 
     cfg = _cfg(
         knowledge_middleware=False,
@@ -1066,3 +1065,79 @@ def test_default_context_carries_watch_doctrine_when_exposed(tmp_path, monkeypat
     assert "# Subagent Delegation" not in prefix
     for tool in _GOAL_TOOLS:
         assert tool not in prefix
+
+
+def _bare_host_state(monkeypatch):
+    import runtime.state as rs
+
+    for attr in ("knowledge_store", "scheduler", "inbox_store", "tasks_store", "skills_index"):
+        monkeypatch.setattr(rs.STATE, attr, None, raising=False)
+    monkeypatch.setattr(rs.STATE, "plugin_tools", [], raising=False)
+
+
+def test_default_context_unset_allowlist_follows_the_star_bus(tmp_path, monkeypatch):
+    """Allowlist unset → the spawn spec hands the sidecar "*" → the prefix carries the
+    doctrine that bus serves (tasks, via the sidecar's own tasks store) — not the empty
+    set a raw-config resolution would produce (#3248 B1)."""
+    from graph.prompts import _TASK_TOOLS
+    from runtime.operator_mcp_tools import sidecar_exposed_names
+
+    _bare_host_state(monkeypatch)
+    cfg = _cfg(knowledge_middleware=False, goal_enabled=False, operator_mcp_tools=[])
+    rt = AcpRuntime(cfg, cwd=str(tmp_path))
+    spec = operator_mcp_server_spec(cfg)
+    assert {e["name"]: e["value"] for e in spec["env"]}["OPERATOR_MCP_TOOLS"] == "*"
+    prefix = rt._context.assemble(query="").stable_prefix
+    assert rt._context.bound_tool_names == frozenset(sidecar_exposed_names(cfg))
+    assert "task_create" in rt._context.bound_tool_names
+    assert "# Operating model" in prefix and any(t in prefix for t in _TASK_TOOLS)
+    assert "# Subagent Delegation" not in prefix and "`task`" not in prefix
+
+
+def test_spec_forwards_the_trust_override(monkeypatch):
+    monkeypatch.setenv("PROTOAGENT_MCP_TRUST", "full")
+    env = {e["name"]: e["value"] for e in operator_mcp_server_spec(_cfg(operator_mcp_tools=["calculator"]))["env"]}
+    assert env["PROTOAGENT_MCP_TRUST"] == "full" and env["OPERATOR_MCP_TOOLS"] == "calculator"
+    monkeypatch.delenv("PROTOAGENT_MCP_TRUST")
+    env = {e["name"]: e["value"] for e in operator_mcp_server_spec(_cfg(operator_mcp_tools=["calculator"]))["env"]}
+    assert "PROTOAGENT_MCP_TRUST" not in env
+
+
+def test_persona_doc_names_only_exposed_tools(monkeypatch):
+    import runtime.acp_runtime as rt_mod
+
+    monkeypatch.setattr("graph.config_io.read_soul", lambda: "You are Aria.")
+    narrow = rt_mod.persona_doc(_cfg(), exposed={"calculator", "memory_recall", "current_time"})
+    for absent in ("set_goal", "schedule_task", "task_create", "notes_", "subagent"):
+        assert absent not in narrow, absent
+    assert "`memory_*`" in narrow and "You are Aria." in narrow
+    assert "IMPORTANT" not in narrow  # nothing persistent is exposed → no persistence rules
+
+    unknown = rt_mod.persona_doc(_cfg(), exposed=None)
+    for absent in ("set_goal", "schedule_task", "task_create", "memory_", "notes_", "subagent"):
+        assert absent not in unknown, absent
+    assert "list its tools" in unknown
+
+    wide = rt_mod.persona_doc(
+        _cfg(), exposed={"task_create", "task_list", "memory_ingest", "notes_list", "set_goal", "schedule_task", "web_search"}
+    )
+    for present in ("`task_create`", "`memory_ingest`", "`notes_*`", "`set_goal`", "`schedule_task`", "IMPORTANT"):
+        assert present in wide, present
+    assert "subagent" not in wide  # no task tool rides the bus — never promised
+
+
+def test_persona_files_use_the_resolved_exposed_set(tmp_path, monkeypatch):
+    """_write_persona_files runs before the first turn's assemble: it resolves the exposed
+    set through the assembler (once, cached) so AGENTS.md and the prefix agree."""
+    import runtime.acp_runtime as rt_mod
+
+    _bare_host_state(monkeypatch)
+    monkeypatch.setattr("graph.config_io.read_soul", lambda: "You are Aria.")
+    cfg = _cfg(knowledge_middleware=False, goal_enabled=False, operator_mcp_tools=["task_create", "calculator"])
+    rt = AcpRuntime(cfg, cwd=str(tmp_path))
+    assert rt._exposed_tool_names() == frozenset({"task_create", "calculator"})
+    assert rt._context.bound_tool_names == frozenset({"task_create", "calculator"})  # cached for the prefix
+    rt._write_persona_files()
+    doc = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
+    assert "`task_create`" in doc and "set_goal" not in doc and "schedule_task" not in doc
+    assert rt_mod.persona_doc(cfg, exposed={"task_create", "calculator"}) == doc

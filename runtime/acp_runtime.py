@@ -79,8 +79,11 @@ def operator_mcp_server_spec(config) -> dict:
     optional *restriction* (a named allowlist), not a requirement. Empty/unset ⇒ ``"*"``
     (everything, minus the redundant code-exec tool the coding agent already has — see
     ``runtime.operator_mcp_tools._STAR_EXCLUDE``)."""
-    configured = list(getattr(config, "operator_mcp_tools", None) or [])
-    allow = configured or ["*"]  # empty ⇒ full toolset, parity with the native runtime
+    from runtime.operator_mcp_tools import acp_operator_allowlist
+
+    # ONE derivation shared with the host-side prefix/persona (sidecar_exposed_names) so
+    # what the bus serves and what the brain is told can never drift (#3248).
+    allow = acp_operator_allowlist(config)
     # ACP's stdio MCP-server schema wants env as an array of {name, value} (not a dict).
     # The agent spawns this command in its OWN cwd, so put the repo on PYTHONPATH — else
     # `-m server.operator_mcp` can't import (unless protoagent is pip-installed).
@@ -108,6 +111,11 @@ def operator_mcp_server_spec(config) -> dict:
     # Pass the resolved allowlist to the child explicitly — the spawned server otherwise
     # reads operator_mcp.tools from YAML, which wouldn't carry the "*" default.
     env.append({"name": "OPERATOR_MCP_TOOLS", "value": ",".join(allow)})
+    # The spec env REPLACES the child's environment, so the host's trust override has to
+    # travel too — otherwise the host resolves "*" while the child resolves the list.
+    trust = os.environ.get("PROTOAGENT_MCP_TRUST")
+    if trust:
+        env.append({"name": "PROTOAGENT_MCP_TRUST", "value": trust})
     # Frozen desktop sidecar: sys.executable IS the server entrypoint and rejects
     # `-m server.operator_mcp` argv (#1603's class) — use the dispatch verb instead.
     if getattr(sys, "frozen", False):
@@ -136,11 +144,69 @@ def _strip_injection(text: str) -> str:
     return "\n".join(ln for ln in text.splitlines() if not ln.strip().lower().startswith(bad))
 
 
-def persona_doc(config) -> str:
+def _tool_families_note(exposed: set[str] | None) -> tuple[str, str]:
+    """The two persona sentences that name operator tools, built ONLY from what the bus
+    exposes (#3248). ``None`` = the set is unknown (no booted stores yet): name nothing
+    rather than guess. Returns ``(what_you_have, persistence_rules)``; either may be ""."""
+    if exposed is None:
+        return (
+            "You run inside **protoAgent**, which gives you **operator tools over MCP** (the "
+            "`protoagent-operator` server) — list its tools to see what is available.",
+            "",
+        )
+    names = set(exposed)
+    families: list[str] = []
+    rules: list[str] = []
+    task_tools = sorted(n for n in ("task_create", "task_list", "task_update", "task_close") if n in names)
+    if task_tools:
+        families.append("tasks (your task/issue board — " + ", ".join(f"`{n}`" for n in task_tools) + ")")
+    if "task_create" in names:
+        rules.append(
+            "Creating a task or issue → `task_create` (your own TaskCreate/todo is ephemeral to "
+            "this session and is invisible in protoAgent)"
+        )
+    if any(n.startswith("memory_") for n in names):
+        families.append("`memory_*`")
+    if "memory_ingest" in names:
+        rules.append("remembering a fact → `memory_ingest`")
+    if any(n.startswith("notes_") for n in names):
+        families.append("`notes_*`")
+        rules.append("saving a note → `notes_*`")
+    if "set_goal" in names:
+        families.append("`set_goal`")
+        rules.append("a standing goal → `set_goal`")
+    if "schedule_task" in names:
+        families.append("`schedule_task`")
+        rules.append("future work → `schedule_task`")
+    named = {*task_tools, *(n for n in names if n.startswith(("memory_", "notes_"))), "set_goal", "schedule_task"}
+    if names - named:
+        families.append("more")
+    if not names:
+        return ("You run inside **protoAgent**; no operator tools are exposed to you over MCP on this instance.", "")
+    what = (
+        "You run inside **protoAgent**, which gives you a set of **operator tools over MCP** "
+        "(the `protoagent-operator` server): " + ", ".join(families) + "."
+    )
+    if not rules:
+        return what, "Use your own file/shell tools for code as usual."
+    persist = (
+        "**IMPORTANT — for anything that must persist, use these protoAgent operator tools, NOT "
+        "your own built-in todo/task/memory tools.** " + "; ".join(rules) + ". "
+        "Use your own file/shell tools for code as usual."
+    )
+    return what, persist
+
+
+def persona_doc(config, *, exposed=None) -> str:
     """The persona an ACP coding agent should adopt as its own — SOUL.md + a short operating
     note. Written to AGENTS.md in the session cwd so the agent loads it into ITS system prompt
     (the slot that beats its built-in identity). A focused doc, NOT protoAgent's full native
-    system prompt (which carries loop-specific bits like the <output> response format)."""
+    system prompt (which carries loop-specific bits like the <output> response format).
+
+    ``exposed`` — the tool names the operator MCP bus actually serves this brain
+    (``runtime.operator_mcp_tools.sidecar_exposed_names``). The operating note names only
+    those (#3190: never describe a capability the model cannot call); ``None`` names none.
+    """
     try:
         from graph.config_io import read_soul
 
@@ -149,18 +215,15 @@ def persona_doc(config) -> str:
         soul = ""
     if not soul:
         return ""
+    what, persist = _tool_families_note(None if exposed is None else set(exposed))
     return (
         "# Your identity & operating rules\n\n"
         "Adopt the persona and rules below as your own — they override your default identity.\n\n"
-        "You run inside **protoAgent**, which gives you a set of **operator tools over MCP** "
-        "(the `protoagent-operator` server): tasks (your task/issue board — `task_create`, "
-        "`task_list`, …), `memory_*`, `notes_*`, `set_goal`, `schedule_task`, subagents, and more.\n\n"
-        "**IMPORTANT — for anything that must persist, use these protoAgent operator tools, NOT "
-        "your own built-in todo/task/memory tools.** Creating a task or issue → `task_create` "
-        "(your own TaskCreate/todo is ephemeral to this session and is invisible in protoAgent). "
-        "Saving a note → `notes_*`; remembering a fact → `memory_ingest`; a standing goal → "
-        "`set_goal`; future work → `schedule_task`. Use your own file/shell tools for code as usual.\n\n"
-        "---\n\n" + soul
+        + what
+        + "\n\n"
+        + (persist + "\n\n" if persist else "")
+        + "---\n\n"
+        + soul
     )
 
 
@@ -347,21 +410,35 @@ class AcpRuntime:
         # - The fenced filesystem tools (ADR 0007) are appended in graph/agent.py, outside
         #   get_all_tools, so the bus never carries them: no Managed projects section here.
         #   A coding-agent brain brings its own file tools.
-        from runtime.operator_mcp_tools import resolve_exposed_names
+        from runtime.operator_mcp_tools import sidecar_exposed_names
 
         return ContextAssembler(
             config=self.config,
             knowledge_store=getattr(STATE, "knowledge_store", None) if knowledge_on else None,
             skills_index=getattr(STATE, "skills_index", None),
             include_subagents=False,
-            bound_tool_names_factory=lambda: frozenset(resolve_exposed_names(self.config)),
+            # What the SIDECAR serves (its boot assumptions, the allowlist the spawn spec hands
+            # it) — not what the host's STATE happens to hold.
+            bound_tool_names_factory=lambda: frozenset(sidecar_exposed_names(self.config)),
             projects=None,
         )
 
+    def _exposed_tool_names(self) -> frozenset[str] | None:
+        """The bus's exposed set as the assembler resolved it (None until a real turn, or when
+        the assembler is a custom one that carries no such set)."""
+        resolver = getattr(self._context, "_resolve_bound_tool_names", None)
+        if resolver is None:
+            return None
+        try:
+            return resolver()
+        except Exception:  # noqa: BLE001 — persona is best-effort
+            return None
+
     def _write_persona_files(self) -> None:
         """Write the persona where the coding agent will read it as its own identity:
-        AGENTS.md (universal) + a vendor file for this agent. Best-effort."""
-        doc = persona_doc(self.config)
+        AGENTS.md (universal) + a vendor file for this agent. Best-effort. The operating note
+        names only the tools the bus exposes (#3248)."""
+        doc = persona_doc(self.config, exposed=self._exposed_tool_names())
         if not doc.strip():
             return
         try:
