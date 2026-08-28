@@ -124,6 +124,10 @@ def assemble_context(
         state or {},
         incognito=incognito,
         record=record,
+        # No per-turn model here: an external runtime's model is fixed for the
+        # session (there is no per-chat override to follow), so the knobs stay
+        # sized off the configured default — the native path passes the turn's
+        # ``state["model"]`` instead (ADR 0108 D6).
         options=ProjectionOptions.from_config(config),
     )
     return AssembledContext(stable_prefix=prefix, volatile_delta=projected.text, sources=list(projected.sources))

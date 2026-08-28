@@ -237,6 +237,11 @@ ceiling is derived from the window the gateway reports for the model; no
 window (logged once — the knob is inert), or `budget_pct: 0`, means unbounded.
 The stable prompt is not part of it — only what is injected on top per turn.
 
+The ceiling follows **the turn's** model, not the configured default: a chat tab
+switched to a smaller model gets that model's allowance (and its skill-index
+cap), so it can't carry a large model's budget into a small window. A model the
+gateway doesn't report falls back to the configured default's window.
+
 Within the budget, the parts fill in a fixed priority (highest first):
 
 1. **Working state** — the agent's own live commitments (trusted, operational).

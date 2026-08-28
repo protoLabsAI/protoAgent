@@ -285,6 +285,10 @@ def _build_middleware(
                 knowledge_store if config.knowledge_middleware else None,
                 skills_index=_skills_index,
                 options=ProjectionOptions.from_config(config),
+                # …and the config itself, so the window-derived knobs can be
+                # re-read against a per-chat model override (the graph is
+                # compiled once, but each tab picks its own model).
+                config=config,
             )
         )
 
@@ -333,6 +337,9 @@ def _build_middleware(
                 at_fraction=getattr(config, "pruning_at_fraction", 0.6),
                 keep_messages=getattr(config, "pruning_keep_messages", 20),
                 min_chars=getattr(config, "pruning_min_chars", 4000),
+                # Same reason as KnowledgeMiddleware: the trigger is sized off the
+                # window, so it has to follow a per-chat model override.
+                config=config,
             )
         )
 
