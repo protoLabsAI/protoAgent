@@ -109,12 +109,11 @@ class TestBeforeAgent:
     """
 
     def test_stashes_projection_not_messages(self, monkeypatch):
-        """before_agent stashes the projection — no messages key in the result."""
+        """before_agent stashes the projection — returns None (no state update)."""
         mw = _mw(store=_FakeStore(hot="Agent is a helpful assistant"))
         monkeypatch.setattr(mw, "load_memory", lambda *a, **kw: "")
         result = mw.before_agent(_state_with_human(), runtime=None)
-        assert result is not None
-        assert "messages" not in result
+        assert result is None
         assert mw._turn_projection is not None
 
     def test_projection_contains_injected_memory_section(self, monkeypatch):
@@ -147,13 +146,12 @@ class TestBeforeAgent:
         assert "<working_state>" in mw._turn_projection
         assert "test goal" in mw._turn_projection
 
-    def test_clears_legacy_context_channel(self, monkeypatch):
-        """before_agent always clears the legacy context channel (#2774)."""
+    def test_no_state_update_on_compose(self, monkeypatch):
+        """ADR 0108 D2: before_agent returns None — legacy context channel removed."""
         mw = _mw(store=_FakeStore(hot="x"))
         monkeypatch.setattr(mw, "load_memory", lambda *a, **kw: "")
         result = mw.before_agent(_state_with_human(), runtime=None)
-        assert result.get("context") == ""
-        assert result.get("context_sections") == []
+        assert result is None
 
     def test_no_recompose_on_context_frame_input(self, monkeypatch):
         """When the last message is already a context frame, no new frame is composed."""
