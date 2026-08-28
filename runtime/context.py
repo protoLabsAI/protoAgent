@@ -131,7 +131,11 @@ class ContextAssembler:
 
     ``record`` is True here (unlike the bare :func:`assemble_context`): an assembler is
     bound to a runtime's real turns, so what it composes did enter a model call and
-    belongs in the injection log (ADR 0069 D6). Set it False for a speculative assembler.
+    belongs in the injection log (ADR 0069 D6) — but only when the turn is attributable.
+    A row with an empty ``session_id`` answers nobody's "what entered THIS turn?", so a
+    call records only when a session id is known: ``session_id`` on the assembler (the
+    runtime's thread) or per call. No id → composed and delivered, never recorded.
+    Set ``record=False`` for a speculative assembler.
     """
 
     config: object = None
@@ -140,8 +144,10 @@ class ContextAssembler:
     include_subagents: bool = True
     bound_tool_names: frozenset[str] | None = None
     record: bool = True
+    session_id: str | None = None
 
-    def assemble(self, *, query: str = "") -> AssembledContext:
+    def assemble(self, *, query: str = "", session_id: str | None = None) -> AssembledContext:
+        sid = session_id or self.session_id
         return assemble_context(
             self.config,
             query=query,
@@ -149,7 +155,8 @@ class ContextAssembler:
             skills_index=self.skills_index,
             include_subagents=self.include_subagents,
             bound_tool_names=self.bound_tool_names,
-            record=self.record,
+            state={"session_id": sid} if sid else {},
+            record=bool(self.record and sid),  # attributable turns only — "" is not an id
         )
 
     def after_turn(self, *, user: str = "", response: str = "") -> None:

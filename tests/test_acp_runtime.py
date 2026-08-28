@@ -67,6 +67,24 @@ def test_operator_mcp_spec_honors_explicit_restriction():
     assert env["OPERATOR_MCP_TOOLS"] == "task_list,web_search"
 
 
+def test_default_context_mirrors_native_knowledge_switch(tmp_path, monkeypatch):
+    """Parity with graph/agent.py (ADR 0108 D8): `middleware.knowledge: false` withholds
+    the store from the composer on the ACP runtime too — no hot memory / RAG over ACP —
+    while the skill index stays wired. And the runtime holds no per-turn session id, so
+    its assembler never records injection rows (ADR 0069 D6 rows must be attributable)."""
+    import runtime.state as rs
+
+    store, skills = object(), object()
+    monkeypatch.setattr(rs.STATE, "knowledge_store", store, raising=False)
+    monkeypatch.setattr(rs.STATE, "skills_index", skills, raising=False)
+
+    on = AcpRuntime(_cfg(knowledge_middleware=True), cwd=str(tmp_path))
+    assert on._context.knowledge_store is store and on._context.skills_index is skills
+    off = AcpRuntime(_cfg(knowledge_middleware=False), cwd=str(tmp_path))
+    assert off._context.knowledge_store is None and off._context.skills_index is skills
+    assert on._context.session_id is None and off._context.session_id is None
+
+
 class _FakeCtx:
     def __init__(self):
         self.after = []

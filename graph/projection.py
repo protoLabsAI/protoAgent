@@ -102,7 +102,7 @@ class ProjectionOptions:
         except Exception:  # noqa: BLE001 — no profile / partial config → the 8KB fallback
             window = None
         return cls(
-            top_k=int(getattr(config, "knowledge_top_k", cls.top_k) or cls.top_k),
+            top_k=_int_or_default(getattr(config, "knowledge_top_k", cls.top_k), cls.top_k),
             inject_namespaces=tuple(namespaces),
             inject_min_trust=max(1, int(getattr(config, "knowledge_inject_min_trust", cls.inject_min_trust))),
             skills_top_k=_int_or_default(getattr(config, "skills_top_k", cls.skills_top_k), cls.skills_top_k),
@@ -111,7 +111,8 @@ class ProjectionOptions:
 
 
 def _int_or_default(value, default: int) -> int:
-    # An explicit 0 keeps its documented "list none" meaning — only None falls back.
+    # An explicit 0 keeps its meaning (skills.top_k: list none; knowledge.top_k: no
+    # auto-injected hits) exactly as graph/agent.py passes it through — only None falls back.
     return default if value is None else int(value)
 
 
@@ -121,8 +122,9 @@ class ProjectedContext:
 
     ``text`` is the model-visible projection; ``sections`` annotate it
     (``{"label", "chars"}`` per part — what PromptCaptureMiddleware persists);
-    the id lists are the injection attribution (ADR 0069 D6); ``sources`` is the
-    telemetry summary an external runtime reports (``AssembledContext.sources``).
+    the id lists are the injection attribution (ADR 0069 D6); ``sources`` is a
+    telemetry-only summary (surfaced as ``AssembledContext.sources``) — nothing
+    reads it, and the spelling of its entries is not a contract.
     """
 
     text: str = ""
@@ -216,6 +218,10 @@ def compose_projected_context(
         except Exception as exc:  # noqa: BLE001 - never break the loop on memory
             log.debug("[projection] hot memory load failed: %s", exc)
 
+    # Always-on skill index (progressive disclosure, ADR 0060) — built before the RAG
+    # search, the order the native composer always had (same side effects, same order).
+    skill_block, listed = _skill_index(skills_index, opts)
+
     # 3. RAG hits on the turn's query — trust-ranked, namespace-scoped (ADR 0069 D3a/D8).
     if query and not incognito and knowledge_store is not None:
         results = rank_by_trust(search_scoped(knowledge_store, query, opts), opts)
@@ -262,9 +268,8 @@ def compose_projected_context(
         if record:
             (record_fn or record_injection)(state, memory_parts, digest_ids, hot_ids, rag_ids)
 
-    # 4. Always-on skill index (progressive disclosure, ADR 0060): capability,
-    #    not memory — outside the envelope, present on incognito threads too.
-    skill_block, listed = _skill_index(skills_index, opts)
+    # 4. The skill index: capability, not memory — outside the envelope, present
+    #    on incognito threads too.
     if skill_block:
         parts.append(("Skills index", skill_block))
         sources.append(f"skills:{listed}")

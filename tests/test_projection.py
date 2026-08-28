@@ -336,9 +336,10 @@ def test_default_recorder_writes_attributed_row_only_when_record_true(monkeypatc
     assert row["approx_tokens"] >= 1
 
 
-def test_context_assembler_records_but_the_bare_function_does_not(monkeypatch):
-    """A bound assembler's calls are real turns (record by default); a bare
-    assemble_context() is a composition and must never fabricate a record."""
+def test_context_assembler_records_attributable_turns_only(monkeypatch):
+    """A bound assembler's calls are real turns (record by default) — but only when a
+    session id makes the row attributable; a bare assemble_context() is a composition
+    and must never fabricate a record."""
     import graph.projection as proj
     from runtime.context import ContextAssembler, assemble_context
 
@@ -352,11 +353,93 @@ def test_context_assembler_records_but_the_bare_function_does_not(monkeypatch):
     assemble_context(cfg, query=_QUERY, knowledge_store=store)
     assert calls == []
 
+    # No session id → not attributable → composed and delivered, never recorded.
     ContextAssembler(config=cfg, knowledge_store=store).assemble(query=_QUERY)
-    assert len(calls) == 1
+    ContextAssembler(config=cfg, knowledge_store=store, session_id="").assemble(query=_QUERY)
+    assert calls == []
 
-    ContextAssembler(config=cfg, knowledge_store=store, record=False).assemble(query=_QUERY)
-    assert len(calls) == 1
+    ContextAssembler(config=cfg, knowledge_store=store, session_id="s-1").assemble(query=_QUERY)
+    assert len(calls) == 1 and calls[0][0] == {"session_id": "s-1"}
+
+    # A per-call id works too; record=False wins over any id.
+    ContextAssembler(config=cfg, knowledge_store=store).assemble(query=_QUERY, session_id="s-2")
+    assert len(calls) == 2 and calls[1][0] == {"session_id": "s-2"}
+    ContextAssembler(config=cfg, knowledge_store=store, record=False, session_id="s-1").assemble(query=_QUERY)
+    assert len(calls) == 2
+
+
+def test_assembler_records_attributed_row_via_default_recorder(monkeypatch):
+    """Through the real recorder seam: the row carries the assembler's session id, and
+    an assembler without one writes nothing."""
+    import observability.injection_log as il
+    from runtime.context import ContextAssembler
+
+    rows: list[dict] = []
+    monkeypatch.setattr(il, "injection_log", lambda: SimpleNamespace(record=lambda **kw: rows.append(kw)))
+    _clear_working_state(monkeypatch)
+    _pin_disk_digest(monkeypatch)
+    cfg = SimpleNamespace(knowledge_top_k=5, skills_top_k=24)
+    store = _FakeStore(hot_entries=_HOT, results=_RAG)
+
+    ContextAssembler(config=cfg, knowledge_store=store).assemble(query=_QUERY)
+    assert rows == []
+    ContextAssembler(config=cfg, knowledge_store=store, session_id="s-1").assemble(query=_QUERY)
+    assert [r["session_id"] for r in rows] == ["s-1"]
+    assert rows[0]["hot_chunk_ids"] == [7, 9] and rows[0]["rag_chunk_ids"] == [31, 32]
+
+
+def test_digest_loader_not_invoked_on_incognito_or_goal_turns(monkeypatch):
+    """The composer asks for the digest only on turns that can use it. (main refreshed
+    the middleware's TTL cache unconditionally, incognito and goal turns included; the
+    per-turn OUTPUT for a given cache state is unchanged — only the refresh timing is.)"""
+    from graph.goals.goal_turn import goal_turn
+    from graph.projection import compose_projected_context
+
+    _clear_working_state(monkeypatch)
+    store = _FakeStore(hot_entries=_HOT, results=_RAG)
+    calls: list = []
+
+    def loader():
+        calls.append(1)
+        return _DIGEST, list(_DIGEST_IDS)
+
+    kw = dict(record=False, options=_options(), prior_sessions=loader)
+    compose_projected_context(_QUERY, store, None, {}, incognito=True, **kw)
+    assert calls == []
+    with goal_turn():
+        compose_projected_context(_QUERY, store, None, {}, **kw)
+    assert calls == []
+    assert "<prior_sessions>" in compose_projected_context(_QUERY, store, None, {}, **kw).text
+    assert calls == [1]
+
+
+def test_from_config_matches_agent_py_hand_wiring(monkeypatch):
+    """Drift guard: graph/agent.py hand-wires KnowledgeMiddleware(...) from config;
+    ProjectionOptions.from_config(config) must land on the same options — including
+    the 2%-of-window-as-chars skill budget. Follow-up (D6 #3187): agent.py passes
+    options=ProjectionOptions.from_config(config) so there is one wiring."""
+    import graph.model_window as mwin
+
+    monkeypatch.setattr(mwin, "context_window_for", lambda config, model_name=None: 128_000)
+    cfg = SimpleNamespace(
+        api_base="http://gateway",
+        knowledge_top_k=7,
+        skills_top_k=3,
+        knowledge_inject_namespaces=["", "project:x"],
+        knowledge_inject_min_trust=2,
+    )
+    window = mwin.context_window_for(cfg)
+    mw = KnowledgeMiddleware(  # graph/agent.py's exact formula
+        None,
+        top_k=cfg.knowledge_top_k,
+        skills_index=None,
+        skills_top_k=cfg.skills_top_k,
+        skills_index_chars=int(window * 0.02 * 4) if window else 8192,
+        inject_namespaces=cfg.knowledge_inject_namespaces,
+        inject_min_trust=cfg.knowledge_inject_min_trust,
+    )
+    assert mw._options() == ProjectionOptions.from_config(cfg)
+    assert mw._options().skills_index_chars == int(128_000 * 0.02 * 4)
 
 
 # ---------------------------------------------------------------------------
@@ -380,8 +463,10 @@ def test_options_from_config_mirrors_the_native_wiring(monkeypatch):
     assert opts.skills_top_k == 3
     assert opts.skills_index_chars == 8192  # no gateway profile → the 8KB fallback
 
-    # An explicit skills_top_k=0 keeps its "list none" meaning; a floor below 1 clamps.
+    # An explicit 0 keeps its meaning for BOTH knobs (skills: list none; knowledge: no
+    # auto-injected hits) — agent.py passes 0 through, so must we; a floor below 1 clamps.
     assert ProjectionOptions.from_config(SimpleNamespace(skills_top_k=0)).skills_top_k == 0
+    assert ProjectionOptions.from_config(SimpleNamespace(knowledge_top_k=0)).top_k == 0
     assert ProjectionOptions.from_config(SimpleNamespace(knowledge_inject_min_trust=0)).inject_min_trust == 1
 
     # With a model window the skill budget is ~2% of it as chars, like graph/agent.py.

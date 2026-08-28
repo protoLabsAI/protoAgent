@@ -153,13 +153,16 @@ class KnowledgeMiddleware(AgentMiddleware):
     # ---------------------------------------------------------------------------
 
     def _skill_index_block(self) -> str:
-        """The always-on ``<available_skills>`` index (ADR 0060, #2867) —
-        :func:`graph.projection.skill_index_block` with this middleware's caps."""
+        """The always-on ``<available_skills>`` index (ADR 0060, #2867) with this
+        middleware's caps — a test-facing call surface only. ``compose_context``
+        does NOT route through it: to influence the projection, patch
+        ``graph.projection._skill_index``."""
         return skill_index_block(self._skills_index, top_k=self._skills_top_k, chars=self._skills_index_chars)
 
     def _working_state_block(self, state) -> str:
-        """The agent's own live commitments (ADR 0079) —
-        :func:`graph.projection.working_state_block`."""
+        """The agent's own live commitments (ADR 0079) — a test-facing call surface
+        only. ``compose_context`` does NOT route through it: to influence the
+        projection, patch ``graph.projection.working_state_block``."""
         return working_state_block(state)
 
     def _record_injection(
@@ -172,8 +175,8 @@ class KnowledgeMiddleware(AgentMiddleware):
     ) -> None:
         """Append this model call's injected-memory row to the per-instance
         injection log (ADR 0069 D6) — :func:`graph.projection.record_injection`.
-        Kept as a method so the composer's ``record_fn`` resolves the instance
-        (a test can patch it here)."""
+        The ONE instance-level patch point the composer honors: ``compose_context``
+        threads it in as ``record_fn``, so patching it here takes effect."""
         record_injection(state, memory_parts, digest_ids, hot_ids, rag_ids)
 
     # ---------------------------------------------------------------------------
@@ -226,7 +229,7 @@ class KnowledgeMiddleware(AgentMiddleware):
         move together — nothing composed is ``""`` + ``[]``).
         """
         last_human: str | None = None
-        for msg in reversed(state.get("messages", [])):
+        for msg in reversed(state.get("messages") or []):
             if isinstance(msg, HumanMessage):
                 last_human = msg.content if isinstance(msg.content, str) else str(msg.content)
                 break
