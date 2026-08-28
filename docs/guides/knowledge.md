@@ -197,9 +197,11 @@ knowledge:
                             # memory inspector) writes hot memory
 ```
 
-The gate binds the **agent's own write path** (`memory_ingest`) — the simple
-mechanism: a refusal with instructions, nothing is parked or half-stored.
-Operator console surfaces stamp `source_type: operator` and are unaffected.
+The gate binds the **agent's own write paths** — `memory_ingest` (a `domain="hot"`
+or `delivery_policy="always"` write) and `knowledge_ingest` (a source filed under
+`domain="hot"`) — the simple mechanism: a refusal with instructions, nothing is
+parked, fetched or half-stored. Operator console surfaces stamp
+`source_type: operator` and are unaffected.
 
 ### Staleness: supersede, don't delete
 

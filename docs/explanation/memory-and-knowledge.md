@@ -122,9 +122,11 @@ prompt layer, don't just hope the store stays clean). Three parts, in order:
    event, and an optional gate (`knowledge.hot_write_confirm`) makes the
    agent's own write path refuse `domain="hot"` entirely, reserving always-on
    promotion for operator surfaces. Since [ADR 0108 D4](../adr/0108-context-architecture-v2.md)
-   each hot chunk also carries `delivery_policy="always"`, and the gate refuses
-   that policy on *any* domain; the per-turn reader still selects on
-   `domain="hot"` until D6 (#3187) switches delivery to the policy column.
+   each hot chunk also carries `delivery_policy="always"` (a hot write is stamped
+   with it whatever the caller said), and the gate refuses that policy on *any*
+   domain — through `memory_ingest` and `knowledge_ingest` alike; the per-turn
+   reader still selects on `domain="hot"` until D6 (#3187) switches delivery to
+   the policy column.
 3. **RAG hits.** The store is searched with the last user message and the
    top-k results (default 10) inject, each line ending with its stored date and
    trust label — `(stored 2026-07-01; trust: agent)`. Two policies shape the
@@ -228,7 +230,7 @@ tuning guidance in [Tune the knowledge store](../guides/knowledge.md)):
 | `top_k` | `10` | how many RAG chunks inject per turn |
 | `inject_namespaces` | `[]` | namespaces allowed to auto-inject (empty = unfiltered; `""` matches un-namespaced) |
 | `inject_min_trust` | `1` | trust floor for auto-injection: 1 = down-weight only, 2 = drop external, 3 = operator-only |
-| `hot_write_confirm` | `false` | when on, the agent's `memory_ingest` refuses always-on writes (`domain="hot"` or `delivery_policy="always"`) |
+| `hot_write_confirm` | `false` | when on, the agent's `memory_ingest` and `knowledge_ingest` refuse always-on writes (`domain="hot"` or `delivery_policy="always"`) |
 | `scope` | `scoped` | tier ([ADR 0041](../adr/0041-workspaces-and-tiered-stores.md)): `scoped` (private) · `shared` (host commons) · `layered` (read commons ∪ private, write private). See [Tune the knowledge store → Sharing across a fleet](../guides/knowledge.md#sharing-knowledge-across-a-fleet-the-commons) |
 | `middleware.knowledge` | `true` | turn the whole subsystem on/off |
 

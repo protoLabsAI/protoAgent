@@ -395,3 +395,41 @@ def test_memory_list_and_recall_expose_delivery_policy(tmp_path):
     assert "checklist" in only_lazy and "Friday" not in only_lazy
     recalled = asyncio.run(tools["memory_recall"].ainvoke({"query": "deploy", "delivery_policy": "always"}))
     assert "Friday" in recalled and "checklist" not in recalled
+
+
+def test_tools_normalize_delivery_policy_case(tmp_path):
+    """The tool boundary folds case/whitespace: "ALWAYS" is stored as "always"
+    (and, with the gate off, lands)."""
+    store = KnowledgeStore(tmp_path / "kb.db")
+    ingest = _by_name(_build_memory_tools(store, graph_config=SimpleNamespace(knowledge_hot_write_confirm=False)))[
+        "memory_ingest"
+    ]
+    out = asyncio.run(ingest.ainvoke({"content": "pin this", "domain": "general", "delivery_policy": " ALWAYS "}))
+    assert out.startswith("Stored chunk")
+    assert store.list_chunks(limit=1)[0].delivery_policy == "always"
+
+
+def test_tools_reject_unknown_delivery_policy(tmp_path):
+    """An unknown policy is refused at the tool boundary with the allowed values
+    named — nothing is stored — on ingest, recall and list alike."""
+    store = KnowledgeStore(tmp_path / "kb.db")
+    tools = _by_name(_build_memory_tools(store))
+    out = asyncio.run(tools["memory_ingest"].ainvoke({"content": "pin this", "delivery_policy": "hot"}))
+    assert out.startswith("Error:") and "always" in out and "'hot'" in out
+    assert store.list_chunks() == []
+    recalled = asyncio.run(tools["memory_recall"].ainvoke({"query": "anything", "delivery_policy": "nope"}))
+    assert recalled.startswith("Error:") and "on_demand" in recalled
+    listed = asyncio.run(tools["memory_list"].ainvoke({"delivery_policy": "nope"}))
+    assert listed.startswith("Error:")
+
+
+def test_confirm_gate_on_refuses_knowledge_ingest_hot(tmp_path):
+    """knowledge_ingest(domain="hot") is an agent path to an always-on row via a
+    local file — the gate covers it too, before anything is read or spawned."""
+    doc = tmp_path / "note.md"
+    doc.write_text("pin me every turn")
+    store = KnowledgeStore(tmp_path / "kb.db")
+    tools = _by_name(_build_memory_tools(store, graph_config=SimpleNamespace(knowledge_hot_write_confirm=True)))
+    out = asyncio.run(tools["knowledge_ingest"].ainvoke({"source": str(doc), "domain": "hot"}))
+    assert out.startswith("Error:") and "knowledge_ingest" in out and "operator" in out
+    assert store.list_chunks() == []  # nothing stored

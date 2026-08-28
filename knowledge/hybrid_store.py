@@ -31,7 +31,13 @@ import sqlite3
 import time
 from collections.abc import Callable
 
-from knowledge.store import _BULK_DELETE_REASON, KnowledgeStore, _namespace_clause, _normalize_before
+from knowledge.store import (
+    _BULK_DELETE_REASON,
+    KnowledgeStore,
+    _delivery_policy_clause,
+    _namespace_clause,
+    _normalize_before,
+)
 from observability import metrics
 
 log = logging.getLogger(__name__)
@@ -421,9 +427,10 @@ class HybridKnowledgeStore(KnowledgeStore):
         if review_state:
             where.append("c.review_state = ?")
             params.append(review_state)
-        if delivery_policy:
-            where.append("c.delivery_policy = ?")
-            params.append(delivery_policy)
+        dp_sql, dp_params = _delivery_policy_clause(delivery_policy, col="c.delivery_policy")
+        if dp_sql:
+            where.append(dp_sql)
+            params.extend(dp_params)
         ns_sql, ns_params = _namespace_clause(namespace, col="c.namespace")
         if ns_sql:
             where.append(ns_sql)

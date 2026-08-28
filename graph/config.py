@@ -1100,10 +1100,11 @@ class LangGraphConfig:
     # auto-injection; 3 auto-injects operator-authored rows only. memory_recall
     # is never gated — excluded content stays reachable on demand.
     knowledge_inject_min_trust: int = 1
-    # Hot-memory write confirm gate (ADR 0069 D8). When True, the agent's own
-    # write path (memory_ingest) refuses domain="hot" writes with an error
-    # telling it to ask the operator — only operator surfaces (console
-    # knowledge/memory routes) put facts in front of the model every turn.
+    # Always-on write confirm gate (ADR 0069 D8, widened by ADR 0108 D4). When
+    # True, the agent's own write paths (memory_ingest and knowledge_ingest)
+    # refuse always-on writes — domain="hot" or delivery_policy="always" — with
+    # an error telling the model to ask the operator; only operator surfaces
+    # (console knowledge/memory routes) put facts in front of the model every turn.
     # Default False: single-operator boxes keep the frictionless flow; every
     # hot write emits a `memory.hot_written` bus event either way.
     knowledge_hot_write_confirm: bool = False

@@ -464,7 +464,9 @@ video and image sources via STT/vision.
 
 This is the only path that gets a transcript or decodes a file; `web_search` + `fetch_url`
 won't. When a background manager is present ([ADR 0050](/adr/0050-background-subagents-reactive-notifications))
-a slow source is detached as a background job instead of blocking the turn.
+a slow source is detached as a background job instead of blocking the turn. Filing a source
+under `domain="hot"` is an always-on write, so with `knowledge.hot_write_confirm` on the tool
+refuses it the same way `memory_ingest` does — before anything is fetched.
 
 ### `memory_recall`
 

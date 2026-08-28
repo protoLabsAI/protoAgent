@@ -379,24 +379,28 @@ def test_add_chunk_with_delivery_policy(tmp_path):
     assert store.search("deploying", k=5)[0]["delivery_policy"] == "on_demand"
 
 
-def test_hot_domain_infers_always_policy(tmp_path):
-    """A domain="hot" write with no explicit policy is stamped "always"; other
-    domains stay NULL (= retrieved); an explicit policy always wins."""
+def test_hot_domain_forces_always_policy(tmp_path):
+    """A domain="hot" write is stamped "always" whatever the caller passed —
+    the reader keys on the domain, so a hot row IS always-on and the column
+    must say so (no hot+non-always rows can exist). Other domains stay NULL
+    (= retrieved)."""
     store = KnowledgeStore(tmp_path / "kb.db")
     store.add_chunk("pinned fact", domain="hot")
     store.add_chunk("plain fact", domain="general")
-    store.add_chunk("hot but explicit", domain="hot", delivery_policy="on_demand")
+    store.add_chunk("hot claiming otherwise", domain="hot", delivery_policy="on_demand")
     by_content = {c.content: c for c in store.list_chunks(limit=10)}
     assert by_content["pinned fact"].delivery_policy == "always"
     assert by_content["plain fact"].delivery_policy is None
-    assert by_content["hot but explicit"].delivery_policy == "on_demand"
+    assert by_content["hot claiming otherwise"].delivery_policy == "always"
+    assert store.list_chunks(domain="hot") == store.list_chunks(domain="hot", delivery_policy="always")
     # Inference never touches memory_kind — #3205's omitted-stays-NULL contract holds.
     assert by_content["pinned fact"].memory_kind is None
 
 
 def test_list_and_search_filter_by_delivery_policy(tmp_path):
-    """list_chunks / search(delivery_policy=...) match the explicit value only —
-    NULL rows (= retrieved) do not match "retrieved"; both FTS and LIKE paths."""
+    """list_chunks / search(delivery_policy=...) match the value — and because
+    NULL *means* retrieved, "retrieved" matches the untyped row too; FTS and
+    LIKE paths alike."""
     store = KnowledgeStore(tmp_path / "kb.db")
     store.add_chunk("alpha always", domain="d", delivery_policy="always")
     store.add_chunk("alpha on demand", domain="d", delivery_policy="on_demand")
@@ -404,30 +408,61 @@ def test_list_and_search_filter_by_delivery_policy(tmp_path):
 
     always = store.list_chunks(delivery_policy="always")
     assert [c.content for c in always] == ["alpha always"]
-    assert store.list_chunks(delivery_policy="retrieved") == []
+    assert [c.content for c in store.list_chunks(delivery_policy="retrieved")] == ["alpha untyped"]
     assert len(store.list_chunks()) == 3
 
     hits = store.search("alpha", k=10, delivery_policy="on_demand")
     assert [h["content"] for h in hits] == ["alpha on demand"]
+    assert [h["content"] for h in store.search("alpha", k=10, delivery_policy="retrieved")] == ["alpha untyped"]
     assert len(store.search("alpha", k=10)) == 3
 
-    store._fts_available = False  # the LIKE fallback respects it too
+    store._fts_available = False  # the LIKE fallback respects both rules too
     like_hits = store.search("alpha", k=10, delivery_policy="always")
     assert [h["content"] for h in like_hits] == ["alpha always"]
+    assert [h["content"] for h in store.search("alpha", k=10, delivery_policy="retrieved")] == ["alpha untyped"]
 
 
 def test_hybrid_search_filters_delivery_policy_both_rankings(tmp_path):
     """delivery_policy filters the vector ranking as well as FTS5 — an
-    off-policy chunk can't surface as a vector-only hit."""
+    off-policy chunk can't surface as a vector-only hit — and "retrieved"
+    reaches NULL rows on the vector path too."""
     store = HybridKnowledgeStore(tmp_path / "kb.db", embed_fn=_const_embed)
     store.add_chunk("gamma delta", domain="d", delivery_policy="always")
     store.add_chunk("gamma delta too", domain="d", delivery_policy="on_demand")
+    store.add_chunk("gamma delta untyped", domain="d")
     # Vector-only path (no shared tokens with the query).
     hits = store.search("zzzzz", k=5, delivery_policy="always")
     assert [h["content"] for h in hits] == ["gamma delta"]
+    assert [h["content"] for h in store.search("zzzzz", k=5, delivery_policy="retrieved")] == ["gamma delta untyped"]
     # FTS path.
     fts_hits = store.search("gamma", k=5, delivery_policy="on_demand")
     assert [h["content"] for h in fts_hits] == ["gamma delta too"]
+
+
+def test_chunk_from_row_ignores_unknown_columns(tmp_path):
+    """A row from a DB a newer build has widened (a column this build doesn't
+    know) still builds a Chunk — the unknown column is dropped, not fatal."""
+    from knowledge.store import Chunk
+
+    c = Chunk.from_row(
+        {
+            "id": 1, "content": "x", "domain": "general", "heading": None, "source": None,
+            "source_type": None, "finding_type": None, "created_at": "t", "updated_at": "t",
+            "future_column_from_d7": "whatever",
+        }
+    )
+    assert c.id == 1 and c.delivery_policy is None
+    assert not hasattr(c, "future_column_from_d7")
+
+    # End to end: the store reads a table carrying an extra column.
+    path = tmp_path / "wide.db"
+    store = KnowledgeStore(path)
+    store.add_chunk("survives", domain="general")
+    db = sqlite3.connect(str(path))
+    db.execute("ALTER TABLE chunks ADD COLUMN future_column_from_d7 TEXT")
+    db.commit()
+    db.close()
+    assert [c.content for c in KnowledgeStore(path).list_chunks(limit=5)] == ["survives"]
 
 
 def test_layered_search_forwards_delivery_policy_to_both_tiers(tmp_path):
@@ -532,7 +567,7 @@ def test_backfill_retries_until_stamped(tmp_path):
     db.execute("INSERT INTO chunks (content, domain, created_at, updated_at) VALUES ('orphan hot', 'hot', 'x', 'x')")
     db.execute(
         "INSERT INTO chunks (content, domain, memory_kind, delivery_policy, created_at, updated_at) "
-        "VALUES ('fully typed', 'hot', 'profile', 'on_demand', 'x', 'x')"
+        "VALUES ('fully typed', 'general', 'profile', 'on_demand', 'x', 'x')"
     )
     db.commit()
     db.close()

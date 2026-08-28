@@ -535,10 +535,11 @@ FIELDS: list[Field] = [
         "Confirm agent hot-memory writes",
         "bool",
         "Knowledge",
-        "When on, the agent's memory_ingest tool refuses to write always-on hot memory "
-        '(domain "hot") and instructs the model to ask you instead — only operator '
-        "surfaces (the knowledge browser / memory inspector) can put facts in front of the "
-        "model every turn. Every hot write emits a memory.hot_written event either way.",
+        "When on, the agent's memory_ingest and knowledge_ingest tools refuse to write "
+        'always-on memory (domain "hot" or delivery_policy "always") and instruct the model '
+        "to ask you instead — only operator surfaces (the knowledge browser / memory "
+        "inspector) can put facts in front of the model every turn. Every hot write emits a "
+        "memory.hot_written event either way.",
     ),
     # Tier (ADR 0041 / bd-2wu) — mirrors `skills.scope`; the commons lives at `commons.path`.
     Field(
