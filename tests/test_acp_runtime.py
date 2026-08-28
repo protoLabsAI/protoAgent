@@ -1038,3 +1038,31 @@ def test_default_context_doctrine_follows_the_exposed_set(tmp_path, monkeypatch)
     # tasks/schedule stores are absent → their tools are not exposed → their doctrine is absent
     for tool in _TASK_TOOLS | _SCHEDULE_TOOLS:
         assert tool not in prefix
+
+
+def test_default_context_carries_watch_doctrine_when_exposed(tmp_path, monkeypatch):
+    """Expose the watch tools over the bus (watches enabled + a verifier registered) and the
+    honest prefix carries the watch doctrine — and still no goal doctrine, no roster."""
+    import runtime.state as rs
+    import graph.goals.verifiers as verifiers
+    from graph.prompts import _GOAL_TOOLS
+
+    for attr in ("knowledge_store", "scheduler", "inbox_store", "tasks_store"):
+        monkeypatch.setattr(rs.STATE, attr, None, raising=False)
+    monkeypatch.setattr(rs.STATE, "plugin_tools", [], raising=False)
+    monkeypatch.setattr(rs.STATE, "skills_index", None, raising=False)
+    monkeypatch.setattr(verifiers, "plugin_verifier_names", lambda: ["fake-verifier"])
+
+    cfg = _cfg(
+        knowledge_middleware=False,
+        goal_enabled=False,
+        watches_enabled=True,
+        operator_mcp_tools=["create_watch", "current_time"],
+    )
+    ctx = AcpRuntime(cfg, cwd=str(tmp_path))._context
+    prefix = ctx.assemble(query="").stable_prefix
+    assert ctx.bound_tool_names == frozenset({"create_watch", "current_time"})
+    assert "# Operating model" in prefix and "create_watch" in prefix
+    assert "# Subagent Delegation" not in prefix
+    for tool in _GOAL_TOOLS:
+        assert tool not in prefix

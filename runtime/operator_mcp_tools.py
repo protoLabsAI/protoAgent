@@ -91,6 +91,9 @@ def operator_tools(config):
             inbox_store=STATE.inbox_store,
             tasks_store=STATE.tasks_store,
             goal_enabled=bool(getattr(config, "goal_enabled", False)),
+            # Mirror goal_enabled: without this the watch tools could never bind here, so an
+            # allowlist naming create_watch silently exposed nothing (#3248).
+            watches_enabled=bool(getattr(config, "watches_enabled", False)),
         )
     )
     tools += list(getattr(STATE, "plugin_tools", None) or [])

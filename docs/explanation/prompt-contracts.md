@@ -71,20 +71,30 @@ Unknown names get a one-line generic prompt.
 
 ## 3. External / ACP runtime — `build_stable_prefix()`
 
-`runtime/context.py::build_stable_prefix(config, include_subagents, bound_tool_names)`
-**delegates to `build_system_prompt`**, so for the same `include_subagents` and
-`bound_tool_names` the external prefix is byte-equal to the lead prompt (a test asserts
-it). The parity is not total: `projects` is not threaded on the external path today
-(`graph/agent.py` passes `config.effective_filesystem_projects()`; `build_stable_prefix`
-does not), so a managed-projects deployment's ACP prefix omits the `Managed projects`
-section. `assemble_context()` / `ContextAssembler.assemble()` then attach the per-turn
-volatile delta — the same projected context the native loop delivers (ADR 0108 D8) —
-and `AssembledContext.as_prompt(message)` orders them *prefix, then delta, then the
-turn's message*.
+`runtime/context.py::build_stable_prefix(config, include_subagents, bound_tool_names,
+projects)` **delegates to `build_system_prompt`**, so for the same `include_subagents`,
+`bound_tool_names` and `projects` the external prefix is byte-equal to the lead prompt
+(a test asserts it). `assemble_context()` / `ContextAssembler.assemble()` then attach
+the per-turn volatile delta — the same projected context the native loop delivers
+(ADR 0108 D8) — and `AssembledContext.as_prompt(message)` orders them *prefix, then
+delta, then the turn's message*.
 
-Because tools on this path resolve lazily (an MCP bus at session start), callers may
-pass `bound_tool_names=None` and receive the full doctrine — honest only when every
-capability is really reachable; thread the real set as soon as it is known.
+**The ACP prefix is honest by construction.** `runtime/acp_runtime.py` builds its
+assembler with `include_subagents=False` (the `task` / `task_batch` tools exist only in
+`graph/agent.py` and never ride the operator MCP bus) and a `bound_tool_names` set
+resolved at the first turn from `runtime/operator_mcp_tools.py::resolve_exposed_names`
+— the exact allowlisted-**and-bound** set the bus serves, never a guess (a factory that
+fails leaves the legacy `None` with a warning). So the ACP prefix names no capability
+the brain cannot call: an allowlist without goal tools yields no goal doctrine, and a
+bus with no `task_create` yields no tasks doctrine. It carries no `Managed projects`
+section on purpose: the fenced filesystem tools are appended in `graph/agent.py`
+outside `get_all_tools`, so the bus never exposes them (a coding-agent brain has its
+own file tools). `projects` is threaded through `build_stable_prefix` /
+`assemble_context` / `ContextAssembler` for a runtime whose tool plane does carry them.
+
+Callers that cannot know their tool set may still pass `bound_tool_names=None` and
+receive the full doctrine — honest only when every capability is really reachable;
+prefer a `bound_tool_names_factory` resolved at the first real turn.
 
 ## 4. Provider-transformed — `ProviderShapeMiddleware`
 
@@ -138,7 +148,8 @@ billing).
 | Subagent · smallest (`self-improve`) | 1,091 | 272 |
 | Subagent · largest lead-visible (`researcher`) | 3,317 | 829 |
 | Subagent · largest overall (`review-finder`) | 7,051 | 1,762 |
-| ACP prefix (same `include_subagents` / `bound_tool_names`; no `projects`) | = lead | = lead |
+| ACP prefix (same `include_subagents` / `bound_tool_names` / `projects`) | = lead | = lead |
+| ACP prefix as the runtime builds it (no roster, doctrine only for exposed tools, no projects) | ≤ lead | ≤ lead |
 | Provider transform (`anthropic-oauth`) | + 57 (identity line) | + 14 |
 
 The SOUL is excluded on purpose: it is operator content with no engineering ceiling.

@@ -189,3 +189,21 @@ def test_env_trust_full_overrides_deny_default(monkeypatch):
     names = {t.name for t in operator_tools(_cfg([]))}  # empty allowlist would be deny-all
     assert "calculator" in names and "current_time" in names  # env forces full
     assert "ask_human" not in names  # HITL still hard-excluded
+
+
+def test_allowlist_exposes_create_watch_when_watches_enabled(monkeypatch):
+    """operator_tools must pass ``watches_enabled`` through like ``goal_enabled`` (#3248):
+    before this, the watch tools could never bind here, so naming ``create_watch`` in the
+    allowlist silently exposed nothing. They also need a registered verifier, exactly as
+    the goal tools do."""
+    import graph.goals.verifiers as verifiers
+
+    monkeypatch.setattr(verifiers, "plugin_verifier_names", lambda: ["fake-verifier"])
+
+    on = _cfg(["create_watch", "list_watches"])
+    on.watches_enabled = True
+    assert {t.name for t in operator_tools(on)} == {"create_watch", "list_watches"}
+
+    off = _cfg(["create_watch", "list_watches"])
+    off.watches_enabled = False
+    assert operator_tools(off) == []
