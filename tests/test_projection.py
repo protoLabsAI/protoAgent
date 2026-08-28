@@ -24,6 +24,7 @@ from types import SimpleNamespace
 from langchain_core.messages import HumanMessage
 
 from graph.middleware.knowledge import KnowledgeMiddleware
+from graph.projection import ProjectionOptions
 
 
 _GOLDEN = Path(__file__).parent / "fixtures" / "projection_native_golden.json"
@@ -202,3 +203,286 @@ def test_native_compose_context_matches_golden(monkeypatch):
     assert (digest_ids, hot_ids, rag_ids) == (_DIGEST_IDS, [7, 9], [31, 32])
     # The RAG search saw the last human message.
     assert store.search_calls and store.search_calls[0][0] == _QUERY
+
+
+# ---------------------------------------------------------------------------
+# The standalone composer — same world, same bytes
+# ---------------------------------------------------------------------------
+
+
+def _golden() -> dict:
+    return json.loads(_GOLDEN.read_text(encoding="utf-8"))
+
+
+def _options() -> ProjectionOptions:
+    return ProjectionOptions(top_k=5, skills_top_k=24, skills_index_chars=8192)
+
+
+def _pin_disk_digest(monkeypatch) -> None:
+    """The default digest loader reads disk; pin it to the golden's digest."""
+    import graph.middleware.memory as mem
+
+    monkeypatch.setattr(mem, "load_prior_sessions_digest", lambda *a, **k: (_DIGEST, list(_DIGEST_IDS)))
+
+
+def test_standalone_composer_reproduces_native_golden(monkeypatch):
+    """compose_projected_context() with the same inputs is the native projection."""
+    from graph.projection import compose_projected_context
+
+    _install_working_state(monkeypatch)
+    store = _FakeStore(hot_entries=_HOT, results=_RAG)
+    recorded: list = []
+
+    projected = compose_projected_context(
+        _QUERY,
+        store,
+        _FakeIndex(_SKILLS),
+        {"session_id": "sess-1"},
+        incognito=False,
+        record=True,
+        options=_options(),
+        prior_sessions=lambda: (_DIGEST, list(_DIGEST_IDS)),
+        record_fn=lambda *a: recorded.append(a),
+    )
+    golden = _golden()
+    assert projected.text == golden["context"]
+    assert projected.sections == golden["context_sections"]
+    assert not projected.empty
+    assert projected.as_legacy_dict() == golden
+    assert (projected.digest_ids, projected.hot_ids, projected.rag_ids) == (_DIGEST_IDS, [7, 9], [31, 32])
+    assert projected.sources == ["prior_sessions", "hot:2", "knowledge:2", "skills:2", "working_state"]
+    assert len(recorded) == 1
+
+
+def test_external_runtime_delta_is_the_native_projection(monkeypatch):
+    """ADR 0108 D8 parity: runtime/context.py's volatile delta for the same world is
+    byte-identical to what KnowledgeMiddleware injects — the external path now carries
+    the <injected_memory> envelope, hot memory, trust-ranked hits, the budgeted skill
+    index, and <working_state>."""
+    from runtime.context import assemble_context
+
+    _install_working_state(monkeypatch)
+    _pin_disk_digest(monkeypatch)
+    cfg = SimpleNamespace(knowledge_top_k=5, skills_top_k=24)  # no api_base → 8KB skill budget
+    store = _FakeStore(hot_entries=_HOT, results=_RAG)
+
+    ctx = assemble_context(
+        cfg,
+        query=_QUERY,
+        knowledge_store=store,
+        skills_index=_FakeIndex(_SKILLS),
+        state={"session_id": "sess-1"},
+        record=False,
+    )
+    assert ctx.volatile_delta == _golden()["context"]
+    assert ctx.sources == ["prior_sessions", "hot:2", "knowledge:2", "skills:2", "working_state"]
+    assert ctx.stable_prefix  # the persona half is untouched by the delta
+
+
+def test_external_incognito_suppresses_memory_keeps_skills_and_working_state(monkeypatch):
+    from runtime.context import assemble_context
+
+    _install_working_state(monkeypatch)
+    _pin_disk_digest(monkeypatch)
+    store = _FakeStore(hot_entries=[(1, "secret fact")], results=_RAG)
+
+    ctx = assemble_context(
+        SimpleNamespace(knowledge_top_k=5, skills_top_k=24),
+        query=_QUERY,
+        knowledge_store=store,
+        skills_index=_FakeIndex(_SKILLS),
+        state={"session_id": "sess-1"},
+        incognito=True,
+        record=False,
+    )
+    delta = ctx.volatile_delta
+    assert "<injected_memory>" not in delta
+    assert "secret fact" not in delta and "<prior_sessions>" not in delta and "changelog.d" not in delta
+    assert store.search_calls == []  # no RAG search at all on an incognito turn
+    assert "<available_skills>" in delta and "<working_state>" in delta
+    assert ctx.sources == ["skills:2", "working_state"]
+
+
+# ---------------------------------------------------------------------------
+# Injection log — recorded exactly when a turn happened
+# ---------------------------------------------------------------------------
+
+
+def test_default_recorder_writes_attributed_row_only_when_record_true(monkeypatch):
+    from graph.projection import compose_projected_context
+    import observability.injection_log as il
+
+    rows: list[dict] = []
+    monkeypatch.setattr(il, "injection_log", lambda: SimpleNamespace(record=lambda **kw: rows.append(kw)))
+    _clear_working_state(monkeypatch)
+    store = _FakeStore(hot_entries=_HOT, results=_RAG)
+
+    compose_projected_context(
+        _QUERY, store, None, {"session_id": "sess-1"},
+        record=False, options=_options(), prior_sessions=lambda: (_DIGEST, list(_DIGEST_IDS)),
+    )
+    assert rows == []  # speculative: the full layer ran, nothing claims a turn happened
+
+    compose_projected_context(
+        _QUERY, store, None, {"session_id": "sess-1"},
+        record=True, options=_options(), prior_sessions=lambda: (_DIGEST, list(_DIGEST_IDS)),
+    )
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["session_id"] == "sess-1"
+    assert row["digest_session_ids"] == _DIGEST_IDS
+    assert row["hot_chunk_ids"] == [7, 9]
+    assert row["rag_chunk_ids"] == [31, 32]
+    assert row["approx_tokens"] >= 1
+
+
+def test_context_assembler_records_but_the_bare_function_does_not(monkeypatch):
+    """A bound assembler's calls are real turns (record by default); a bare
+    assemble_context() is a composition and must never fabricate a record."""
+    import graph.projection as proj
+    from runtime.context import ContextAssembler, assemble_context
+
+    calls: list = []
+    monkeypatch.setattr(proj, "record_injection", lambda *a: calls.append(a))
+    _clear_working_state(monkeypatch)
+    _pin_disk_digest(monkeypatch)
+    cfg = SimpleNamespace(knowledge_top_k=5, skills_top_k=24)
+    store = _FakeStore(hot_entries=_HOT, results=_RAG)
+
+    assemble_context(cfg, query=_QUERY, knowledge_store=store)
+    assert calls == []
+
+    ContextAssembler(config=cfg, knowledge_store=store).assemble(query=_QUERY)
+    assert len(calls) == 1
+
+    ContextAssembler(config=cfg, knowledge_store=store, record=False).assemble(query=_QUERY)
+    assert len(calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Options — one delivery policy, read the way agent.py wires it
+# ---------------------------------------------------------------------------
+
+
+def test_options_from_config_mirrors_the_native_wiring(monkeypatch):
+    assert ProjectionOptions.from_config(None) == ProjectionOptions()
+
+    cfg = SimpleNamespace(
+        knowledge_top_k=7,
+        knowledge_inject_namespaces=["", "project:x"],
+        knowledge_inject_min_trust=2,
+        skills_top_k=3,
+    )
+    opts = ProjectionOptions.from_config(cfg)
+    assert opts.top_k == 7
+    assert opts.inject_namespaces == ("", "project:x")
+    assert opts.inject_min_trust == 2
+    assert opts.skills_top_k == 3
+    assert opts.skills_index_chars == 8192  # no gateway profile → the 8KB fallback
+
+    # An explicit skills_top_k=0 keeps its "list none" meaning; a floor below 1 clamps.
+    assert ProjectionOptions.from_config(SimpleNamespace(skills_top_k=0)).skills_top_k == 0
+    assert ProjectionOptions.from_config(SimpleNamespace(knowledge_inject_min_trust=0)).inject_min_trust == 1
+
+    # With a model window the skill budget is ~2% of it as chars, like graph/agent.py.
+    import graph.model_window as mw
+
+    monkeypatch.setattr(mw, "context_window_for", lambda config, model_name=None: 200_000)
+    assert ProjectionOptions.from_config(cfg).skills_index_chars == int(200_000 * 0.02 * 4)
+
+
+def test_projected_context_empty_shape():
+    from graph.projection import ProjectedContext
+
+    empty = ProjectedContext()
+    assert empty.empty
+    assert empty.as_legacy_dict() == {"context": "", "context_sections": []}
+
+
+# ---------------------------------------------------------------------------
+# Rules the composer owns — independent of which runtime calls it
+# ---------------------------------------------------------------------------
+
+
+def test_no_query_means_no_rag_search(monkeypatch):
+    from graph.projection import compose_projected_context
+
+    _clear_working_state(monkeypatch)
+    store = _FakeStore(hot_entries=_HOT, results=_RAG)
+    projected = compose_projected_context(
+        "", store, None, {}, record=False, options=_options(), prior_sessions=lambda: ("", []),
+    )
+    assert store.search_calls == []
+    assert "[Relevant knowledge" not in projected.text
+    assert "[Always-on facts (hot memory):]" in projected.text
+    assert projected.sources == ["hot:2"]
+
+
+def test_goal_turn_suppresses_the_digest_only(monkeypatch):
+    from graph.goals.goal_turn import goal_turn
+    from graph.projection import compose_projected_context
+
+    _clear_working_state(monkeypatch)
+    store = _FakeStore(hot_entries=_HOT, results=_RAG)
+    kw = dict(record=False, options=_options(), prior_sessions=lambda: (_DIGEST, list(_DIGEST_IDS)))
+
+    with goal_turn():
+        projected = compose_projected_context(_QUERY, store, None, {}, **kw)
+    assert "<prior_sessions>" not in projected.text
+    assert projected.digest_ids == []
+    assert "[Always-on facts (hot memory):]" in projected.text and projected.rag_ids == [31, 32]
+    assert projected.sources == ["hot:2", "knowledge:2"]
+
+    assert "<prior_sessions>" in compose_projected_context(_QUERY, store, None, {}, **kw).text
+
+
+def test_hot_memory_fallback_for_a_backend_without_the_entries_reader(monkeypatch):
+    from graph.projection import compose_projected_context
+
+    _clear_working_state(monkeypatch)
+
+    class _LegacyStore:
+        def get_hot_memory(self, max_chars: int = 6000) -> str:
+            return "operator prefers dark mode"
+
+        def search(self, query, k=5, **kw):
+            return []
+
+    projected = compose_projected_context(
+        "", _LegacyStore(), None, {}, record=False, options=_options(), prior_sessions=lambda: ("", []),
+    )
+    assert "[Always-on facts (hot memory):]\noperator prefers dark mode" in projected.text
+    assert projected.hot_ids == []  # un-attributed, but still delivered
+    assert projected.sections[0]["label"] == "Injected memory"  # no id-attributed count to show
+    assert projected.sources == ["hot"]
+
+
+def test_namespace_scope_and_trust_floor_on_the_extracted_search(monkeypatch):
+    """search_scoped over-fetches 3× under a trust floor and post-filters a legacy
+    backend without the namespace kwarg; rank_by_trust drops below-floor hits and
+    stable-sorts the rest by tier."""
+    from graph.projection import rank_by_trust, search_scoped
+
+    class _Legacy:
+        def __init__(self):
+            self.calls = []
+
+        def search(self, query, k=5):  # predates the namespace kwarg
+            self.calls.append(k)
+            return [
+                {"id": 1, "namespace": "", "source_type": "ingest", "preview": "ext"},
+                {"id": 2, "namespace": "project:x", "source_type": "operator", "preview": "op"},
+                {"id": 3, "namespace": "other", "source_type": "operator", "preview": "elsewhere"},
+            ]
+
+    store = _Legacy()
+    opts = ProjectionOptions(top_k=2, inject_namespaces=("", "project:x"), inject_min_trust=2)
+    hits = search_scoped(store, "q", opts)
+    assert store.calls == [6]  # top_k × 3 under a floor
+    assert [h["id"] for h in hits] == [1, 2]  # the out-of-scope namespace is post-filtered
+
+    ranked = rank_by_trust(hits, opts)
+    assert [h["id"] for h in ranked] == [2]  # ingest (tier 1) is below the floor of 2
+
+    # Floor 1 keeps everything, operator-authored first, in-tier order preserved.
+    assert [h["id"] for h in rank_by_trust(hits, ProjectionOptions(top_k=5))] == [2, 1]

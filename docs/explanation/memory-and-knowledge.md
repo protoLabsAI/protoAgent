@@ -130,6 +130,23 @@ prompt layer, don't just hope the store stays clean). Three parts, in order:
 The always-on `<available_skills>` index stays **outside** the envelope — it is
 capability, not memory ([ADR 0060](../adr/0060-skill-progressive-disclosure.md)).
 
+### One projection for every runtime (ADR 0108 D8)
+
+The composition above is a standalone function —
+`graph.projection.compose_projected_context()` — not middleware logic. The
+native loop's `KnowledgeMiddleware` calls it with the last user message, the
+thread's incognito flag, and its TTL-cached digest; an external runtime
+(`runtime/context.py`, the ACP path) calls the same function from
+`assemble_context()`. So a brain outside the graph is fed the same
+`<injected_memory>` envelope, hot memory, trust-ranked hits, budgeted skill
+index, and `<working_state>` the native loop injects, with the incognito rule
+and the injection log applied identically — and the delivery knobs come off the
+same config (`ProjectionOptions.from_config`). The middleware keeps only what is
+graph-specific: the turn-entry guard, the digest cache, and the ephemeral
+delivery ([ADR 0108](../adr/0108-context-architecture-v2.md) D2). The result is
+a typed `ProjectedContext` — text, per-section labels, the injected ids, and
+the sources that fed it.
+
 ### Trust tiers
 
 Every chunk's `source_type` ranks into three deterministic tiers

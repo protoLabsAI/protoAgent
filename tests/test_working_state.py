@@ -95,7 +95,7 @@ def test_goal_without_plan_nudges_to_record_one(clear_state, monkeypatch):
 
 
 def test_plan_is_capped(clear_state, monkeypatch):
-    from graph.middleware.knowledge import _WS_PLAN_CAP
+    from graph.projection import _WS_PLAN_CAP
 
     goal = SimpleNamespace(status="active", iteration=1, max_iterations=8, condition="c")
     monkeypatch.setattr(rs.STATE, "goal_controller", _GoalCtrl(goal, plan="x" * (_WS_PLAN_CAP + 500)), raising=False)
