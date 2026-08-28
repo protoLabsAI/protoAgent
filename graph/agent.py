@@ -296,10 +296,10 @@ def _build_middleware(
     # an agent that refuses work it can now do is a worse failure than a missed
     # injection, so this must not ride a switchable subsystem.
     #
-    # Both this and KnowledgeMiddleware deliver via tagged message frames at
-    # before_agent (#2776, ADR 0101 D2) — additive under the messages reducer, so
-    # registration order is no longer load-bearing; keeping knowledge first just
-    # puts the memory frame ahead of the toolset notice in the turn's input.
+    # Both this and KnowledgeMiddleware deliver via wrap_model_call
+    # (request.override, ADR 0108 D2) — ephemeral, never checkpointed.
+    # KnowledgeMiddleware is outer in the wrap_model_call chain so it strips
+    # stale frames before ToolDelta appends its fresh note.
     from graph.middleware.tool_delta import ToolDeltaMiddleware
 
     middleware.append(ToolDeltaMiddleware())

@@ -130,8 +130,8 @@ def test_middleware_post_filters_for_legacy_backend():
     out_of_scope = {"table": "chunks", "preview": "out", "id": 2, "namespace": "projects/beta"}
     store = _CapturingStore(results=[in_scope, out_of_scope], accepts_namespace=False)
     mw = _mw(store, inject_namespaces=["projects/alpha"])
-    result = mw.before_agent({"messages": [HumanMessage(content="q")]}, runtime=None)
-    ctx = result["messages"][0].content
+    mw.before_agent({"messages": [HumanMessage(content="q")]}, runtime=None)
+    ctx = mw._turn_projection or ""
     assert "in" in ctx and "out" not in ctx
 
 
@@ -175,13 +175,13 @@ def test_incognito_skips_injection_but_keeps_skills(tmp_path):
     mw = _mw(store, skills_index=_FakeSkillsIndex())
     mw._prior_sessions_cache = "<prior_sessions>\n  x\n</prior_sessions>"
 
-    normal = mw.before_agent({"messages": [HumanMessage(content="gravity apples")]}, runtime=None)
-    assert "<injected_memory>" in normal["messages"][0].content
+    mw.before_agent({"messages": [HumanMessage(content="gravity apples")]}, runtime=None)
+    assert "<injected_memory>" in (mw._turn_projection or "")
 
-    incog = mw.before_agent(
+    mw.before_agent(
         {"messages": [HumanMessage(content="gravity apples")], "incognito": True}, runtime=None
     )
-    incog_ctx = incog["messages"][0].content
+    incog_ctx = mw._turn_projection or ""
     assert "<injected_memory>" not in incog_ctx
     assert "<prior_sessions>" not in incog_ctx
     assert "hot memory" not in incog_ctx
@@ -261,10 +261,10 @@ def test_injection_log_records_attributed_ids(tmp_path, monkeypatch):
     rag_id = store.add_chunk("gravity pulls apples")
 
     mw = KnowledgeMiddleware(knowledge_store=store)
-    result = mw.before_agent(
+    mw.before_agent(
         {"messages": [HumanMessage(content="gravity apples")], "session_id": "sess-now"}, runtime=None
     )
-    assert "<injected_memory>" in result["messages"][0].content
+    assert "<injected_memory>" in (mw._turn_projection or "")
 
     rows = injection_log().recent()
     assert len(rows) == 1

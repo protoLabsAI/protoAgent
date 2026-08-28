@@ -99,11 +99,10 @@ def _seed_three_tiers(store: KnowledgeStore) -> None:
 
 
 def _context(mw, query="gravity fact"):
-    # #2776: the composed context is delivered as the turn's injected frame
-    # message (before_agent), no longer staged on the `context` channel.
-    result = mw.before_agent({"messages": [HumanMessage(content=query)]}, runtime=None)
-    msgs = (result or {}).get("messages") or []
-    return msgs[0].content if msgs else ""
+    # ADR 0108 D2 (#3188): before_agent stashes the projection on the
+    # middleware instance; it is delivered ephemerally via wrap_model_call.
+    mw.before_agent({"messages": [HumanMessage(content=query)]}, runtime=None)
+    return mw._turn_projection or ""
 
 
 def test_injection_down_weights_low_tiers(tmp_path):
