@@ -4,11 +4,13 @@ import type { PromptCall, PromptRetention } from "../lib/types";
 import {
   budgetRows,
   callTabs,
+  deliveryBudget,
   diffLine,
   fmtTok,
   historyLine,
   historyRows,
   historyTopToolsLine,
+  overflowLine,
   promptNoteMarkdown,
   promptText,
   retentionLine,
@@ -40,6 +42,64 @@ describe("fmtTok", () => {
 describe("promptText", () => {
   it("concatenates stable + tail byte-for-byte", () => {
     expect(promptText(mk())).toBe("STABLE\n\n# Context\n\ntail");
+  });
+  // ADR 0108 D2: post-#3234 captures and the /preview synthesis carry an EMPTY
+  // system.context and put the whole per-turn projection in projected_context.
+  // Reading only stable+context rendered those calls as a bare stable prefix.
+  it("includes the projection when the legacy tail is empty", () => {
+    const call = mk({ system: { stable: "STABLE", context: "" }, projected_context: "\n\nPROJECTED" });
+    expect(promptText(call)).toBe("STABLE\n\nPROJECTED");
+  });
+  it("is unchanged for pre-#3188 rows that have no projection", () => {
+    expect(promptText(mk({ projected_context: "" }))).toBe("STABLE\n\n# Context\n\ntail");
+  });
+});
+
+describe("splitLine", () => {
+  it("counts the projection in the tail, not just the legacy channel", () => {
+    const call = mk({ system: { stable: "x".repeat(2000), context: "" }, projected_context: "y".repeat(1300) });
+    expect(splitLine(call)).toBe("stable 2.0k chars · context tail 1.3k chars");
+  });
+});
+
+describe("deliveryBudget", () => {
+  it("is null when delivery was unbounded", () => {
+    expect(deliveryBudget(mk())).toBeNull();
+    expect(deliveryBudget(mk({ budget: null }))).toBeNull();
+  });
+  it("reports ceiling, used, headroom and a fill percent", () => {
+    const d = deliveryBudget(mk({ budget: { chars: 16000, used: 12000, overflow: [] } }));
+    expect(d).toEqual({ chars: 16000, used: 12000, headroom: 4000, pct: 75, overflow: [] });
+  });
+  it("clamps an over-budget compose to a full bar", () => {
+    // D6 delivers working state + always-on even when they alone exceed the
+    // ceiling, so `used > chars` is a real state, not a bug — it must not
+    // render a bar wider than its track.
+    const d = deliveryBudget(mk({ budget: { chars: 2000, used: 2089, overflow: [] } }));
+    expect(d?.pct).toBe(100);
+    expect(d?.headroom).toBe(0);
+  });
+});
+
+describe("overflowLine", () => {
+  it("is empty when nothing was shed", () => {
+    expect(overflowLine(mk())).toBe("");
+    expect(overflowLine(mk({ budget: { chars: 100, used: 50, overflow: [] } }))).toBe("");
+  });
+  it("names what the budget dropped, in shed order, singular-aware", () => {
+    const call = mk({
+      budget: {
+        chars: 3000,
+        used: 2479,
+        overflow: [
+          { label: "RAG hits", dropped_items: 8, dropped_chars: 9100 },
+          { label: "Prior sessions", dropped_items: 1, dropped_chars: 1200 },
+        ],
+      },
+    });
+    expect(overflowLine(call)).toBe(
+      "RAG hits −8 entries (−9.1k chars) · Prior sessions −1 entry (−1.2k chars)",
+    );
   });
 });
 

@@ -11,20 +11,35 @@ import { useEffect, useState } from "react";
 
 import { openDocument } from "../docviewer";
 import { api, ApiError } from "../lib/api";
-import type { PromptBreakdown, PromptCall } from "../lib/types";
+import type { PromptBreakdown, PromptCall, PromptSection } from "../lib/types";
 import { Markdown } from "./LazyMarkdown";
 import {
   budgetRows,
   callTabs,
+  deliveryBudget,
   diffLine,
   fmtTok,
   historyRows,
   historyTopToolsLine,
+  overflowLine,
   promptText,
   sectionDiff,
   splitLine,
   usageLine,
 } from "./promptView";
+
+/** Tab id for the speculative next-call preview — namespaced so it can't
+ *  collide with a call index or a "sub:<i>" id. */
+const PREVIEW_TAB = "preview:next";
+
+/** Bar tint per section scope. "projected" (ADR 0108 D2) is its own colour —
+ *  falling through to the stable tint painted the per-turn projection as if it
+ *  were the cacheable prefix, the one distinction this breakdown exists to show. */
+function scopeFill(scope: PromptSection["scope"]): string {
+  if (scope === "context") return " prompt-viewer__budget-fill--context";
+  if (scope === "projected") return " prompt-viewer__budget-fill--projected";
+  return "";
+}
 
 export function openPromptViewer(taskId: string, sessionId?: string): void {
   openDocument({
@@ -34,7 +49,9 @@ export function openPromptViewer(taskId: string, sessionId?: string): void {
   });
 }
 
-function PromptViewerBody({ taskId, sessionId }: { taskId: string; sessionId?: string }) {
+/** Exported for the unit harness only — the dialog is opened via
+ *  `openPromptViewer`, which mounts this inside the shared DocumentViewer host. */
+export function PromptViewerBody({ taskId, sessionId }: { taskId: string; sessionId?: string }) {
   const [calls, setCalls] = useState<PromptCall[] | null>(null);
   const [subs, setSubs] = useState<PromptCall[]>([]);
   const [prev, setPrev] = useState<PromptCall | null>(null);
@@ -50,6 +67,12 @@ function PromptViewerBody({ taskId, sessionId }: { taskId: string; sessionId?: s
   // labeled "as of now" rather than pinned to this turn. Best-effort: absent
   // (older server, dead thread) just hides the block.
   const [history, setHistory] = useState<PromptBreakdown | null>(null);
+  // Speculative next-call preview (#2388 P3) — loaded ON DEMAND, never with the
+  // dialog: it re-runs the whole dynamic layer (retrieval included), so it is
+  // the one tab that costs something to open.
+  const [preview, setPreview] = useState<PromptCall | null>(null);
+  const [previewState, setPreviewState] = useState<"idle" | "loading" | "error" | "unavailable">("idle");
+  const [previewNote, setPreviewNote] = useState("");
 
   useEffect(() => {
     if (!sessionId) return;
@@ -95,6 +118,44 @@ function PromptViewerBody({ taskId, sessionId }: { taskId: string; sessionId?: s
     };
   }, [taskId]);
 
+  // Fetch the preview the first time its tab is selected, then keep it.
+  //
+  // `previewState` is READ here but deliberately NOT a dep. It is set inside the
+  // effect, so listing it self-cancels the fetch: setPreviewState("loading")
+  // re-runs the effect, the cleanup flips `alive = false` so the in-flight
+  // response is discarded, and the re-run's own guard returns early because the
+  // state is no longer "idle" — leaving the tab stuck on "Composing…" forever.
+  // The guard alone is enough to prevent a re-fetch: React rebuilds this closure
+  // every render, so a run triggered by `active`/`preview`/`sessionId` still sees
+  // the current state. Do not "fix" the dep array.
+  useEffect(() => {
+    if (active !== PREVIEW_TAB || preview || previewState !== "idle") return;
+    let alive = true;
+    setPreviewState("loading");
+    api
+      .promptPreview(sessionId ?? "")
+      .then((res) => {
+        if (!alive) return;
+        if (res.call) {
+          setPreview(res.call);
+          setPreviewState("idle");
+        } else {
+          setPreviewNote(res.reason || (res.enabled ? "" : "prompt capture is off"));
+          setPreviewState("unavailable");
+        }
+      })
+      .catch((e) => {
+        if (!alive) return;
+        setPreviewNote(e instanceof Error ? e.message : String(e));
+        setPreviewState("error");
+      });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- previewState is set
+    // inside this effect; see the note above.
+  }, [active, preview, sessionId]);
+
   if (status === "loading") {
     return (
       <div className="prompt-viewer__status">
@@ -123,20 +184,29 @@ function PromptViewerBody({ taskId, sessionId }: { taskId: string; sessionId?: s
   }
 
   // Tabs: main-loop calls, then any subagent calls nested under this turn (#2388 P3,
-  // keyed "sub:<i>" so they can't collide with main call indexes).
+  // keyed "sub:<i>" so they can't collide with main call indexes), then the
+  // speculative next-call preview (keyed PREVIEW_TAB, loaded on selection).
+  const isPreview = active === PREVIEW_TAB;
+  // The preview tab with nothing loaded must NOT fall through to calls[0] — that
+  // would render this turn's first call under a "speculative next call" banner.
+  const previewPending = isPreview && !preview;
   const call =
+    (isPreview ? (preview ?? undefined) : undefined) ??
     (active.startsWith("sub:") ? subs[Number(active.slice(4))] : undefined) ??
     calls.find((c) => String(c.call_index) === active) ??
     calls[0];
   const usage = usageLine(call);
   const budget = budgetRows(call);
+  const delivery = deliveryBudget(call);
+  const overflow = overflowLine(call);
   // Diff anchor (#2388 P3): a later call diffs against the previous call of the SAME
   // turn (in-payload); the first call diffs against the previous TURN's last call
   // (`prev` — null on the first turn, an incognito gap, or a retention trim). Only
   // meaningful when both sides carry P2 section rows; degrade honestly otherwise.
-  const isSub = active.startsWith("sub:");
-  const anchorCall = isSub ? null : (calls.find((c) => c.call_index === call.call_index - 1) ?? prev);
-  const anchorName = isSub
+  // The preview has no anchor: it is the NEXT call, not one of this turn's.
+  const noAnchor = active.startsWith("sub:") || isPreview;
+  const anchorCall = noAnchor ? null : (calls.find((c) => c.call_index === call.call_index - 1) ?? prev);
+  const anchorName = noAnchor
     ? ""
     : calls.some((c) => c.call_index === call.call_index - 1)
       ? `call ${call.call_index}`
@@ -154,7 +224,7 @@ function PromptViewerBody({ taskId, sessionId }: { taskId: string; sessionId?: s
 
   return (
     <div className="prompt-viewer">
-      {calls.length > 1 || subs.length ? (
+      {calls.length > 1 || subs.length || sessionId ? (
         <Tabs
           variant="segmented"
           responsive
@@ -162,11 +232,33 @@ function PromptViewerBody({ taskId, sessionId }: { taskId: string; sessionId?: s
           items={[
             ...callTabs(calls),
             ...subs.map((s, i) => ({ id: `sub:${i}`, label: s.subagent_type || "subagent" })),
+            // Only offered when we know the session to preview FOR — the route
+            // composes against that session's own history and exclusion rules.
+            ...(sessionId ? [{ id: PREVIEW_TAB, label: "Next call (preview)" }] : []),
           ]}
           active={active}
           onSelect={setActive}
         />
       ) : null}
+      {isPreview ? (
+        <div className="prompt-viewer__speculative" role="note">
+          Speculative — this runs the dynamic layer (retrieval included) for the NEXT call. No model
+          call was made and nothing was written to the injection log, so what actually ships can
+          still differ.
+        </div>
+      ) : null}
+      {previewPending ? (
+        <div className="prompt-viewer__status">
+          {previewState === "loading" ? (
+            <>
+              <Spinner size={16} /> Composing the next call…
+            </>
+          ) : (
+            `Couldn't preview the next call${previewNote ? ` — ${previewNote}` : ""}.`
+          )}
+        </div>
+      ) : (
+        <>
       <div className="prompt-viewer__meta">
         {call.model ? <code>{call.model}</code> : null}
         <span>{splitLine(call)}</span>
@@ -179,19 +271,50 @@ function PromptViewerBody({ taskId, sessionId }: { taskId: string; sessionId?: s
           {copied ? "Copied" : "Copy"}
         </Button>
       </div>
-      {!isSub ? (
+      {!noAnchor ? (
         <div className="prompt-viewer__diff" aria-label="changes vs the comparison call">
           {diffLine(deltas, anchorName)}
         </div>
       ) : null}
+      {delivery ? (
+        <div className="prompt-viewer__delivery-budget" aria-label="delivery budget">
+          <div className="prompt-viewer__history-head">
+            Delivery budget — {fmtTok(delivery.used)} of {fmtTok(delivery.chars)} chars used,{" "}
+            {fmtTok(delivery.headroom)} spare{" "}
+            <span className="prompt-viewer__history-note">(ADR 0108 D6 — the ceiling on projected context)</span>
+          </div>
+          <div className="prompt-viewer__budget-row">
+            <span className="prompt-viewer__budget-label">delivered</span>
+            <span className="prompt-viewer__budget-bar">
+              <span
+                className={`prompt-viewer__budget-fill prompt-viewer__budget-fill--delivery${delivery.overflow.length ? " prompt-viewer__budget-fill--shed" : ""}`}
+                style={{ width: `${delivery.pct}%` }}
+              />
+            </span>
+            <span className="prompt-viewer__budget-tokens">{delivery.pct}%</span>
+          </div>
+          {overflow ? (
+            <div className="prompt-viewer__overflow" role="note">
+              Shed to fit: {overflow}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       {budget.length ? (
-        <div className="prompt-viewer__budget" aria-label="context budget by section">
+        <div className="prompt-viewer__budget" aria-label="section sizes">
           {budget.map((row, i) => (
-            <div className="prompt-viewer__budget-row" key={i} title={`${row.chars.toLocaleString()} chars`}>
-              <span className="prompt-viewer__budget-label">{row.label}</span>
+            <div
+              className="prompt-viewer__budget-row"
+              key={i}
+              title={`${row.chars.toLocaleString()} chars${row.truncated ? " — shed by the delivery budget" : ""}`}
+            >
+              <span className="prompt-viewer__budget-label">
+                {row.label}
+                {row.truncated ? <span className="prompt-viewer__shed" title="shed by the delivery budget"> ✂</span> : null}
+              </span>
               <span className="prompt-viewer__budget-bar">
                 <span
-                  className={`prompt-viewer__budget-fill${row.scope === "context" ? " prompt-viewer__budget-fill--context" : ""}`}
+                  className={`prompt-viewer__budget-fill${scopeFill(row.scope)}${row.truncated ? " prompt-viewer__budget-fill--shed" : ""}`}
                   style={{ width: `${row.pct}%` }}
                 />
               </span>
@@ -248,6 +371,8 @@ function PromptViewerBody({ taskId, sessionId }: { taskId: string; sessionId?: s
         <div className="prompt-viewer__md">
           <Markdown>{promptText(call)}</Markdown>
         </div>
+      )}
+        </>
       )}
     </div>
   );
