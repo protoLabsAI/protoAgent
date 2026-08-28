@@ -366,9 +366,17 @@ Budget-driven delivery, relevance-gated digest, write lifecycle
 (confirmation + expiration). Rollback: revert to unbounded injection and
 unconditional digest.
 
-Shipped: D7 in #3246 (creation stamps via the trust tier, `set_review_state` +
-`POST /api/memory/chunks/{id}/review`, the `superseded_by:<id>` chain with
-insert-then-invalidate, `expires_in_days` on `memory_ingest`).
+Shipped:
+
+- D7 in #3246: creation stamps via the trust tier, `set_review_state` +
+  `POST /api/memory/chunks/{id}/review`, the `superseded_by:<id>` chain with
+  insert-then-invalidate, `expires_in_days` on `memory_ingest`.
+- D6 in #3247: `context.budget_pct` (default 8%, floored at 16k chars, `0` =
+  unbounded), the fixed priority/shed order in `graph/projection.py`, always-on
+  selected by `delivery_policy="always"`, `deliverable=True` (rejected/expired
+  excluded) on every store's `list_chunks`/`search`, and the budget summary on
+  the prompt preview API. The `delivery_order` config key named under
+  Compatibility was not added — the order is fixed by this decision.
 
 ### Compatibility behavior
 
