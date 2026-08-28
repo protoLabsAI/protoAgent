@@ -40,6 +40,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from knowledge.trust import trust_tier
+
 log = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = "/sandbox/knowledge/agent.db"
@@ -90,8 +92,9 @@ class Chunk:
     invalidated_at: str | None = None
     epoch: str | None = None
     # Why the row was invalidated: NULL = auto-supersession audit history (ADR 0069
-    # D9, kept forever); ``_BULK_DELETE_REASON`` = a reversible bulk delete-by-source
-    # (#1770) that the grace sweep may eventually reap.
+    # D9, kept forever); ``superseded_by:<id>`` = the same, naming the row that
+    # replaced it (ADR 0108 D7 — the audit chain); ``_BULK_DELETE_REASON`` = a
+    # reversible bulk delete-by-source (#1770) that the grace sweep may eventually reap.
     invalidation_reason: str | None = None
     # Typed memory schema (#3072) — additive columns for memory classification.
     # NULL on legacy/untyped rows; delivery behavior unchanged (owned by #3187).
@@ -312,6 +315,23 @@ def _has_fts5(db: sqlite3.Connection) -> bool:
 # this marker they'd be indistinguishable and the sweep would wipe supersession history.
 _BULK_DELETE_REASON = "source_delete"
 
+# ``invalidation_reason`` prefix stamped by :meth:`KnowledgeStore.invalidate_chunk` when a
+# supersede names its replacement (ADR 0108 D7): ``superseded_by:<new row id>``. Audit
+# history exactly like the NULL-reason supersession rows — never reaped by the grace
+# sweep (which matches ``_BULK_DELETE_REASON`` only) — but queryable as a chain.
+SUPERSEDED_BY_PREFIX = "superseded_by:"
+
+# ── typed memory: review state (ADR 0108 D4 / D7) ────────────────────────────
+# Whether an operator has confirmed the row. ``add_chunk`` stamps every write
+# (D7): operator-authored rows (trust tier 3) start ``confirmed``; agent-derived
+# and ingested/external rows start ``pending`` until an operator confirms or
+# rejects them through the memory inspector. NULL (rows written before D7 that
+# the backfill didn't touch) reads as ``pending``.
+REVIEW_CONFIRMED = "confirmed"
+REVIEW_PENDING = "pending"
+REVIEW_REJECTED = "rejected"
+REVIEW_STATES = frozenset({REVIEW_CONFIRMED, REVIEW_PENDING, REVIEW_REJECTED})
+
 # ── typed memory: delivery policy (ADR 0108 D4) ─────────────────────────────
 # WHEN a chunk enters the prompt, made explicit on the row instead of overloading
 # ``domain``: ``"always"`` = every turn (what ``domain="hot"`` has always meant),
@@ -341,11 +361,12 @@ def infer_delivery_policy(domain: str | None) -> str | None:
 
 
 def infer_memory_kind(domain: str | None, source_type: str | None = None) -> str:
-    """The ``memory_kind`` a legacy ``domain`` (+ ``source_type``) implies — the
-    ADR 0108 D4 backfill table, one branch per row. ``domain`` is freeform TEXT
-    (SDK callers, snapshot imports), so anything unmapped is ``"legacy"``:
-    nothing is guessed at, nothing is lost. Backfill-only — the write path keeps
-    #3205's contract that an omitted ``memory_kind`` stays NULL."""
+    """The ``memory_kind`` a ``domain`` (+ ``source_type``) implies — the ADR 0108
+    D4 backfill table, one branch per row. ``domain`` is freeform TEXT (SDK
+    callers, snapshot imports), so anything unmapped is ``"legacy"``: nothing is
+    guessed at, nothing is lost. One source of truth for the one-shot backfill
+    AND the write path: since ADR 0108 D7 ``add_chunk`` stamps an omitted
+    ``memory_kind`` with this, so a row is never untyped."""
     if domain == "hot":
         return "standing"
     if domain == "preferences":
@@ -357,6 +378,16 @@ def infer_memory_kind(domain: str | None, source_type: str | None = None) -> str
     if domain == "conversation":
         return "note"
     return "legacy"
+
+
+def infer_review_state(source_type: str | None) -> str:
+    """The ``review_state`` a write starts in (ADR 0108 D7.2), from who wrote it:
+    an operator surface (trust tier 3 — console routes stamp ``"operator"``) is
+    direct operator intent and starts ``"confirmed"``; everything else — the
+    agent's own writes (tier 2) and ingested/third-party content (tier 1,
+    unknown source types included) — starts ``"pending"`` until an operator
+    confirms or rejects it. Deterministic: a plain tier lookup, never a model."""
+    return REVIEW_CONFIRMED if trust_tier(source_type) == 3 else REVIEW_PENDING
 
 
 def _backfill_typed_memory(db: sqlite3.Connection) -> int:
@@ -689,6 +720,15 @@ class KnowledgeStore:
         caller passed: the per-turn reader still keys on the domain, so a hot
         row IS always-on today, and the column must say so or D6's switch to
         the column would strand it.
+
+        **Every write is typed (ADR 0108 D7.1).** An omitted ``memory_kind`` is
+        stamped from ``domain`` + ``source_type`` (:func:`infer_memory_kind` —
+        the same table the one-shot backfill used) and an omitted
+        ``review_state`` from who wrote it (:func:`infer_review_state`:
+        operator surfaces start ``"confirmed"``, the agent's own and ingested
+        writes start ``"pending"``). Explicit caller values always win.
+        ``subject`` and ``expires_at`` can't be inferred and stay NULL unless
+        given.
         """
         if not content or not content.strip():
             return None
@@ -704,6 +744,10 @@ class KnowledgeStore:
             delivery_policy = DELIVERY_ALWAYS
         elif delivery_policy is None:
             delivery_policy = infer_delivery_policy(domain)
+        if memory_kind is None:
+            memory_kind = infer_memory_kind(domain, source_type)
+        if review_state is None:
+            review_state = infer_review_state(source_type)
         db = self._get_db()
         if db is None:
             return None
@@ -1149,26 +1193,60 @@ class KnowledgeStore:
         finally:
             db.close()
 
-    def invalidate_chunk(self, chunk_id: int) -> bool:
+    def invalidate_chunk(self, chunk_id: int, *, superseded_by: int | None = None) -> bool:
         """Mark one chunk superseded (ADR 0069 D9): set ``invalidated_at`` to
         now, keeping the row for audit/history. Invalidated rows drop out of
         ``search``/``list_chunks``/hot memory by default but stay reachable via
         the ``include_invalidated`` escape hatch. Idempotent-safe: returns True
         only when a VALID row was invalidated (already-invalidated or unknown
-        ids return False)."""
+        ids return False).
+
+        ``superseded_by`` (ADR 0108 D7.3) names the row that replaced this one:
+        the reason is stamped ``superseded_by:<id>`` so the audit trail is a
+        chain, not just a timestamp. Omitted = the legacy NULL reason. Either
+        way the row is audit history the grace sweep (:meth:`purge_invalidated`)
+        never reaps — that sweep matches the bulk delete-by-source marker only."""
         db = self._get_db()
         if db is None:
             return False
         try:
             now = _now_iso()
+            reason = f"{SUPERSEDED_BY_PREFIX}{int(superseded_by)}" if superseded_by is not None else None
             cur = db.execute(
-                "UPDATE chunks SET invalidated_at = ?, updated_at = ? WHERE id = ? AND invalidated_at IS NULL",
-                (now, now, int(chunk_id)),
+                "UPDATE chunks SET invalidated_at = ?, invalidation_reason = ?, updated_at = ? "
+                "WHERE id = ? AND invalidated_at IS NULL",
+                (now, reason, now, int(chunk_id)),
             )
             db.commit()
             return cur.rowcount > 0
         except sqlite3.DatabaseError:
             log.exception("[knowledge] invalidate_chunk failed")
+            return False
+        finally:
+            db.close()
+
+    def set_review_state(self, chunk_id: int, state: str) -> bool:
+        """Confirm, reject, or re-open one chunk (ADR 0108 D7.2) — the operator's
+        verdict on an agent-derived or ingested memory. ``state`` must be one of
+        :data:`REVIEW_STATES` (``ValueError`` otherwise — a caller bug, not a
+        missing row). Returns True when a row was updated, False for an unknown
+        id. The row keeps its content and history; only ``review_state`` (and
+        ``updated_at``) change — rejecting never deletes."""
+        state = str(state or "").strip().lower()
+        if state not in REVIEW_STATES:
+            raise ValueError(f"review_state must be one of {', '.join(sorted(REVIEW_STATES))} (got {state!r})")
+        db = self._get_db()
+        if db is None:
+            return False
+        try:
+            cur = db.execute(
+                "UPDATE chunks SET review_state = ?, updated_at = ? WHERE id = ?",
+                (state, _now_iso(), int(chunk_id)),
+            )
+            db.commit()
+            return cur.rowcount > 0
+        except sqlite3.DatabaseError:
+            log.exception("[knowledge] set_review_state failed")
             return False
         finally:
             db.close()
@@ -1469,7 +1547,8 @@ class KnowledgeStore:
 
         Reaps ONLY rows stamped ``invalidation_reason = _BULK_DELETE_REASON`` by
         :meth:`invalidate_by_source`. Auto-supersession rows (ADR 0069 D9, which set
-        ``invalidated_at`` with a NULL reason) are deliberately excluded and kept
+        ``invalidated_at`` with a NULL reason — or, since ADR 0108 D7, a
+        ``superseded_by:<id>`` chain marker) are deliberately excluded and kept
         forever as audit history — the ``include_invalidated`` escape hatch stays
         populated. Without this reason filter the sweep would silently wipe that
         supersession history on the first bulk delete.

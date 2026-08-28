@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import sqlite3
 
+import pytest
+
 from knowledge.hybrid_store import HybridKnowledgeStore
 from knowledge.layered import LayeredKnowledgeStore
 from knowledge.store import KnowledgeStore
@@ -47,21 +49,100 @@ def test_add_chunk_with_memory_kind(tmp_path):
     assert d["expires_at"] == "2027-01-01T00:00:00+00:00"
 
 
-def test_add_chunk_without_kind_defaults_none(tmp_path):
-    """Backward compatibility: omitting typed fields leaves them NULL."""
+def test_add_chunk_without_kind_is_stamped_by_the_store(tmp_path):
+    """ADR 0108 D7.1: an omitted ``memory_kind`` / ``review_state`` is stamped by
+    the store (kind from the domain, verdict from who wrote it — an unstamped
+    writer is the least-trusted tier, so ``pending``); the fields the store
+    can't infer (``subject``, ``expires_at``) stay NULL. Supersedes #3205's
+    omitted-stays-NULL contract."""
     store = KnowledgeStore(tmp_path / "kb.db")
     cid = store.add_chunk("plain fact", domain="general")
     assert cid is not None
     c = store.list_chunks(limit=1)[0]
-    assert c.memory_kind is None
+    assert c.memory_kind == "reference"
     assert c.subject is None
-    assert c.review_state is None
+    assert c.review_state == "pending"
     assert c.expires_at is None
     d = c.as_dict()
-    assert d["memory_kind"] is None
+    assert d["memory_kind"] == "reference"
     assert d["subject"] is None
-    assert d["review_state"] is None
+    assert d["review_state"] == "pending"
     assert d["expires_at"] is None
+
+
+def test_add_chunk_stamps_kind_and_review_state_by_tier(tmp_path):
+    """Creation stamps (ADR 0108 D7.1): kind comes from domain + source_type via the
+    same table the backfill used; review_state from the writer's trust tier —
+    operator (3) → confirmed, agent (2) and external/unknown (1) → pending.
+    Explicit caller values always win."""
+    store = KnowledgeStore(tmp_path / "kb.db")
+    store.add_chunk("console fact", domain="general", source_type="operator")
+    store.add_chunk("agent note", domain="general", source_type="conversation")
+    store.add_chunk("web page", domain="general", source_type="web")
+    store.add_chunk("unstamped", domain="general")
+    store.add_chunk("hot pin", domain="hot", source_type="operator")
+    store.add_chunk(
+        "explicit wins", domain="general", source_type="operator", memory_kind="decision", review_state="rejected"
+    )
+    by = {c.content: c for c in store.list_chunks(limit=10)}
+    assert (by["console fact"].memory_kind, by["console fact"].review_state) == ("reference", "confirmed")
+    assert (by["agent note"].memory_kind, by["agent note"].review_state) == ("note", "pending")
+    assert (by["web page"].memory_kind, by["web page"].review_state) == ("reference", "pending")
+    assert (by["unstamped"].memory_kind, by["unstamped"].review_state) == ("reference", "pending")
+    assert (by["hot pin"].memory_kind, by["hot pin"].review_state) == ("standing", "confirmed")
+    assert by["hot pin"].delivery_policy == "always"
+    assert (by["explicit wins"].memory_kind, by["explicit wins"].review_state) == ("decision", "rejected")
+    assert all(c.subject is None and c.expires_at is None for c in by.values())
+
+
+def test_set_review_state_on_plain_hybrid_and_layered_stores(tmp_path):
+    """The operator's verdict (ADR 0108 D7.2): confirm / reject / re-open by id;
+    normalized; ValueError for an unknown state (caller bug), False for an
+    unknown id. On a layered store the verdict targets the PRIVATE tier only."""
+    plain = KnowledgeStore(tmp_path / "p.db")
+    cid = plain.add_chunk("agent guess", domain="d", source_type="conversation")
+    assert plain.list_chunks(limit=1)[0].review_state == "pending"
+    assert plain.set_review_state(cid, "confirmed") is True
+    assert plain.list_chunks(limit=1)[0].review_state == "confirmed"
+    assert plain.set_review_state(cid, " REJECTED ") is True  # normalized
+    assert plain.list_chunks(limit=1)[0].review_state == "rejected"
+    assert plain.list_chunks(limit=1)[0].content == "agent guess"  # rejecting never deletes
+    assert plain.set_review_state(999, "confirmed") is False
+    with pytest.raises(ValueError):
+        plain.set_review_state(cid, "maybe")
+
+    hybrid = HybridKnowledgeStore(tmp_path / "h.db", embed_fn=_const_embed)
+    hid = hybrid.add_chunk("hybrid guess", domain="d")
+    assert hybrid.set_review_state(hid, "confirmed") is True
+    assert hybrid.list_chunks(limit=1)[0].review_state == "confirmed"
+
+    priv = KnowledgeStore(tmp_path / "priv.db")
+    commons = KnowledgeStore(tmp_path / "commons.db")
+    layered = LayeredKnowledgeStore(priv, commons)
+    pid = priv.add_chunk("private row", domain="d")
+    commons.add_chunk("commons row", domain="d")
+    assert layered.set_review_state(pid, "confirmed") is True
+    assert priv.list_chunks(limit=1)[0].review_state == "confirmed"
+    assert commons.list_chunks(limit=1)[0].review_state == "pending"  # never touched
+
+
+def test_invalidate_chunk_records_the_superseded_by_chain(tmp_path):
+    """ADR 0108 D7.3: a supersede names its replacement in ``invalidation_reason``
+    (``superseded_by:<id>``); the legacy call keeps the NULL reason. Both drop
+    out of valid listings and stay reachable through ``include_invalidated``."""
+    store = KnowledgeStore(tmp_path / "kb.db")
+    old = store.add_chunk("deploys on Fridays after standup", domain="fact")
+    new = store.add_chunk("deploys on Fridays after lunch", domain="fact")
+    assert store.invalidate_chunk(old, superseded_by=new) is True
+    assert store.invalidate_chunk(old, superseded_by=new) is False  # already invalidated
+    row = store.get_chunk(old)
+    assert row["invalidated_at"] and row["invalidation_reason"] == f"superseded_by:{new}"
+    legacy = store.add_chunk("unchained supersede", domain="fact")
+    assert store.invalidate_chunk(legacy) is True
+    assert store.get_chunk(legacy)["invalidation_reason"] is None
+    assert {c.id for c in store.list_chunks(domain="fact", limit=10)} == {new}
+    audit = {c.id for c in store.list_chunks(domain="fact", limit=10, include_invalidated=True)}
+    assert audit == {old, new, legacy}
 
 
 # ── migration ────────────────────────────────────────────────────────────────
@@ -295,9 +376,11 @@ def test_existing_rows_unaffected(tmp_path):
     assert c.source_type == "chat"
     assert c.namespace == "ns1"
     assert c.epoch == "e1"
-    assert c.memory_kind is None
+    # Stamped on write since ADR 0108 D7: general + a chat source → reference,
+    # written by the agent tier → pending. Nothing the store can't infer is guessed.
+    assert c.memory_kind == "reference"
     assert c.subject is None
-    assert c.review_state is None
+    assert c.review_state == "pending"
     assert c.expires_at is None
 
     # Searchable.
@@ -393,8 +476,8 @@ def test_hot_domain_forces_always_policy(tmp_path):
     assert by_content["plain fact"].delivery_policy is None
     assert by_content["hot claiming otherwise"].delivery_policy == "always"
     assert store.list_chunks(domain="hot") == store.list_chunks(domain="hot", delivery_policy="always")
-    # Inference never touches memory_kind — #3205's omitted-stays-NULL contract holds.
-    assert by_content["pinned fact"].memory_kind is None
+    # The kind stamp (ADR 0108 D7.1) rides the same table: a hot row is "standing".
+    assert by_content["pinned fact"].memory_kind == "standing"
 
 
 def test_list_and_search_filter_by_delivery_policy(tmp_path):
@@ -545,13 +628,14 @@ def test_backfill_classifies_legacy_rows_once(tmp_path):
     assert rows["typed hot row"].delivery_policy == "always"
     assert store.get_meta("typed_memory_backfill")  # stamped done
 
-    # One-shot: a row written untyped AFTER the backfill stays untyped across
-    # reopens — the pass is a legacy classification, not a standing rule.
-    store.add_chunk("post-backfill untyped", domain="general")
+    # One-shot: a row written AFTER the backfill is typed by the write path
+    # (ADR 0108 D7.1 — the same table), and a reopen changes nothing.
+    store.add_chunk("post-backfill write", domain="general")
     reopened = KnowledgeStore(path)
     again = {c.content: c for c in reopened.list_chunks(limit=50)}
-    assert again["post-backfill untyped"].memory_kind is None
-    assert again["post-backfill untyped"].delivery_policy is None
+    assert again["post-backfill write"].memory_kind == "reference"
+    assert again["post-backfill write"].delivery_policy is None
+    assert again["post-backfill write"].review_state == "pending"
     for content, _domain, _source_type, kind, policy in _BACKFILL_CASES:  # unchanged
         assert again[content].memory_kind == kind
         assert again[content].delivery_policy == policy
@@ -584,5 +668,23 @@ def test_fresh_db_is_stamped_without_rows(tmp_path):
     it's stamped on first open so later opens never rescan."""
     store = KnowledgeStore(tmp_path / "fresh.db")
     assert store.get_meta("typed_memory_backfill")
-    store.add_chunk("later untyped", domain="general")
-    assert KnowledgeStore(tmp_path / "fresh.db").list_chunks(limit=1)[0].memory_kind is None
+    store.add_chunk("later write", domain="loop-lessons")
+    # Typed by the write path (ADR 0108 D7.1), not by a rescan — an unmapped
+    # domain is "legacy" either way.
+    assert KnowledgeStore(tmp_path / "fresh.db").list_chunks(limit=1)[0].memory_kind == "legacy"
+
+
+def test_grace_sweep_never_reaps_superseded_rows(tmp_path):
+    """The bulk-delete grace sweep (#1770) matches its own marker only: a row
+    invalidated with a ``superseded_by:<id>`` chain (ADR 0108 D7.3) is audit
+    history and survives ``purge_invalidated(0)``; the bulk-deleted row goes."""
+    store = KnowledgeStore(tmp_path / "kb.db")
+    old = store.add_chunk("old fact", domain="fact")
+    new = store.add_chunk("new fact", domain="fact")
+    assert store.invalidate_chunk(old, superseded_by=new)
+    store.add_chunk("bulk ingested", domain="docs", source="doc.pdf", source_type="pdf")
+    assert store.invalidate_by_source("doc.pdf") == 1
+    assert store.purge_invalidated(0) == 1  # only the bulk-deleted row
+    audit = {c.id for c in store.list_chunks(domain="fact", limit=10, include_invalidated=True)}
+    assert audit == {old, new}
+    assert store.get_chunk(old)["invalidation_reason"] == f"superseded_by:{new}"

@@ -56,12 +56,12 @@ When a knowledge store is wired, the agent gets these (operator-curatable under
 
 | Tool | What it does |
 |---|---|
-| `memory_ingest(content, domain, heading?, memory_kind?, subject?, delivery_policy?)` | store a self-contained fact/note for later recall — optionally typed: what it is, and whether it enters the prompt `always` / when `retrieved` (default) / only `on_demand` ([ADR 0108 D4](/adr/0108-context-architecture-v2)) |
+| `memory_ingest(content, domain, heading?, memory_kind?, subject?, delivery_policy?, expires_in_days?)` | store a self-contained fact/note for later recall — optionally typed: what it is, whether it enters the prompt `always` / when `retrieved` (default) / only `on_demand` ([ADR 0108 D4](/adr/0108-context-architecture-v2)), and a shelf life in days (D7). Every agent write starts `review_state="pending"` until the operator confirms it |
 | `knowledge_ingest(source, domain, title?)` | fetch + extract + store a **URL or local file** — YouTube/web/PDF/audio/video — through the full [ingestion pipeline](/guides/ingestion#from-the-agent) |
-| `memory_recall(query, k=5, domain?, memory_kind?, delivery_policy?)` | search long-term memory (hybrid, or FTS5 if the breaker is open); the typed filters narrow to one kind / delivery policy |
+| `memory_recall(query, k=5, domain?, memory_kind?, delivery_policy?, include_superseded=False)` | search long-term memory (hybrid, or FTS5 if the breaker is open); the typed filters narrow to one kind / delivery policy; `include_superseded` also returns replaced rows, tagged `[superseded]` |
 | `session_search(query, limit=5, surface?)` | search prior session transcripts by content, then expand a result with `recall_session` |
 | `recall_session(session_id)` | read one prior session summary by id |
-| `memory_list(domain?, limit=10, memory_kind?, delivery_policy?)` | browse recent chunks with their typed-memory tags (used by `/dream` consolidation) |
+| `memory_list(domain?, limit=10, memory_kind?, delivery_policy?, review_state?)` | browse recent chunks with their typed-memory tags — `kind=` / `policy=` / `review=` / `expires=` (used by `/dream` consolidation); `review_state="pending"` is what still awaits the operator's verdict |
 | `memory_stats()` | per-domain chunk counts |
 | `forget_memory(chunk_id, reason?)` | **hard-delete** one chunk by id (targeted; see [staleness](#staleness-supersede-dont-delete) — explicit deletes are real deletes) |
 
@@ -212,8 +212,11 @@ D9) instead of judging it with a model at write time:
 - **Facts are superseded, never silently replaced.** When the session-end fact
   pass extracts a fact that *revises* one already stored (same subject, changed
   details — detected by a deterministic token-overlap band, no LLM involved),
-  the old row is stamped `invalidated_at` and the new row inserted. History is
-  kept for audit; nothing is updated in place or deleted.
+  the new row is inserted first and the old row is then stamped `invalidated_at`
+  with `invalidation_reason="superseded_by:<new id>"` ([ADR 0108 D7](/adr/0108-context-architecture-v2)
+  — the audit chain; a failed insert never loses the old fact). History is kept
+  for audit; nothing is updated in place or deleted. `memory_recall(...,
+  include_superseded=True)` shows that history, tagged `[superseded]`.
 - **Retrieval excludes invalidated rows by default.** `search`/`list_chunks`
   on all three stores (plain, hybrid — both rankings — and layered), hot-memory
   injection, and `memory_recall` only surface valid rows. Audit tooling can
@@ -235,7 +238,8 @@ D9) instead of judging it with a model at write time:
   by design, so a mistaken cleanup is recoverable. The soft delete carries an
   `invalidation_reason` marker so the sweep reaps **only** these bulk delete-by-source
   rows — auto-supersession audit history (above), which stamps `invalidated_at` with
-  no reason, is never touched and stays reachable via `include_invalidated`.
+  no reason or a `superseded_by:<id>` chain marker, is never touched and stays
+  reachable via `include_invalidated`.
 
 ### Plugin knowledge lifecycle
 
@@ -279,6 +283,13 @@ control first (SpAIware-class memory poisoning gets *detected* here), UX second:
   per row. Deleting stops the injection immediately.
 - **Injections** — the per-turn record above, filterable by session id; a
   session row's syringe button jumps straight to its filtered record.
+- **Review verdicts** ([ADR 0108 D7](/adr/0108-context-architecture-v2)) — every
+  agent-derived or ingested row starts `review_state="pending"`; the operator
+  confirms, rejects, or re-opens it with `POST /api/memory/chunks/{id}/review`
+  (`{"state": "confirmed" | "rejected" | "pending"}`), and
+  `GET /api/knowledge/search?review_state=pending` lists the queue. Rejecting
+  never deletes — the row just stops being deliverable. On a layered store the
+  verdict targets the private tier; commons rows stay with promote/forget.
 
 ## Sharing knowledge across a fleet (the commons)
 

@@ -131,7 +131,7 @@ don't match (both search modes filter). `None` = unfiltered.
 ### `sdk.knowledge_add` {#sdk-knowledge-add}
 
 ```python
-await sdk.knowledge_add(content: str, *, domain: str = 'general', heading: str | None = None, epoch: str | None = None, memory_kind: str | None = None, delivery_policy: str | None = None) -> int | None
+await sdk.knowledge_add(content: str, *, domain: str = 'general', heading: str | None = None, epoch: str | None = None, memory_kind: str | None = None, delivery_policy: str | None = None, review_state: str | None = None, expires_at: str | None = None) -> int | None
 ```
 
 Add one chunk to the agent's knowledge graph; return its id, or `None` when no
@@ -142,8 +142,12 @@ typically a reset date (`epoch="2026-06-29"`). On the next wipe the plugin just
 searches with the NEW epoch: old lessons stay for post-mortems but stop matching.
 `memory_kind` / `delivery_policy` ([ADR 0108](/adr/0108-context-architecture-v2) D4) are the typed-memory columns —
 what the chunk IS (`"fact"`, `"note"`, `"reference"`, …) and WHEN it enters the
-prompt (`"always"` / `"retrieved"` / `"on_demand"`). Omitted = untyped /
-retrieved, exactly as before.
+prompt (`"always"` / `"retrieved"` / `"on_demand"`). `review_state` /
+`expires_at` ([ADR 0108](/adr/0108-context-architecture-v2) D7) are the write lifecycle: whether an operator has
+confirmed the row (`"confirmed"` / `"pending"` / `"rejected"`) and an optional
+ISO-8601 UTC timestamp after which it lapses. Omitted = the store's own stamping:
+kind inferred from the domain, retrieved, `"pending"` (a plugin write is not
+operator intent), no expiry.
 
 ### `sdk.knowledge_purge` {#sdk-knowledge-purge}
 

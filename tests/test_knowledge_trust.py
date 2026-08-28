@@ -433,3 +433,60 @@ def test_confirm_gate_on_refuses_knowledge_ingest_hot(tmp_path):
     out = asyncio.run(tools["knowledge_ingest"].ainvoke({"source": str(doc), "domain": "hot"}))
     assert out.startswith("Error:") and "knowledge_ingest" in out and "operator" in out
     assert store.list_chunks() == []  # nothing stored
+
+
+# ---------------------------------------------------------------------------
+# 6) Write lifecycle on the tool surface (ADR 0108 D7)
+# ---------------------------------------------------------------------------
+
+
+def test_memory_ingest_expires_in_days(tmp_path):
+    from datetime import UTC, datetime, timedelta
+
+    store = KnowledgeStore(tmp_path / "kb.db")
+    ingest = _by_name(_build_memory_tools(store))["memory_ingest"]
+    out = asyncio.run(ingest.ainvoke({"content": "staging is down this week", "expires_in_days": 7}))
+    assert out.startswith("Stored chunk")
+    row = store.list_chunks(limit=1)[0]
+    assert row.expires_at is not None
+    lapses_in = datetime.fromisoformat(row.expires_at) - datetime.now(UTC)  # stored as ISO-8601 UTC
+    assert abs(lapses_in - timedelta(days=7)) < timedelta(minutes=1)
+    for bad in (0, -3, 4000):
+        assert asyncio.run(ingest.ainvoke({"content": "x", "expires_in_days": bad})).startswith(
+            "Error: expires_in_days"
+        )
+    assert len(store.list_chunks(limit=10)) == 1  # nothing stored for the refused values
+
+
+def test_memory_ingest_starts_pending_and_list_filters_review_state(tmp_path):
+    store = KnowledgeStore(tmp_path / "kb.db")
+    tools = _by_name(_build_memory_tools(store))
+    asyncio.run(tools["memory_ingest"].ainvoke({"content": "operator prefers vim"}))
+    store.add_chunk("console truth", domain="general", source_type="operator")
+    listed = asyncio.run(tools["memory_list"].ainvoke({}))
+    assert "review=pending" in listed and "review=confirmed" in listed
+    pending = asyncio.run(tools["memory_list"].ainvoke({"review_state": "pending"}))
+    assert "vim" in pending and "console truth" not in pending
+    confirmed = asyncio.run(tools["memory_list"].ainvoke({"review_state": " Confirmed "}))
+    assert "console truth" in confirmed and "vim" not in confirmed
+    assert asyncio.run(tools["memory_list"].ainvoke({"review_state": "maybe"})).startswith("Error: review_state")
+
+
+def test_memory_list_shows_expiry_tag(tmp_path):
+    store = KnowledgeStore(tmp_path / "kb.db")
+    store.add_chunk("lapsing", domain="d", expires_at="2027-03-01T00:00:00+00:00")
+    listed = asyncio.run(_by_name(_build_memory_tools(store))["memory_list"].ainvoke({}))
+    assert "expires=2027-03-01" in listed
+
+
+def test_memory_recall_include_superseded_labels_history(tmp_path):
+    store = KnowledgeStore(tmp_path / "kb.db")
+    old = store.add_chunk("deploy day is Friday", domain="fact")
+    new = store.add_chunk("deploy day is Thursday", domain="fact")
+    assert store.invalidate_chunk(old, superseded_by=new)
+    recall = _by_name(_build_memory_tools(store))["memory_recall"]
+    current = asyncio.run(recall.ainvoke({"query": "deploy day"}))
+    assert "Thursday" in current and "Friday" not in current
+    history = asyncio.run(recall.ainvoke({"query": "deploy day", "include_superseded": True}))
+    assert "[superseded] [fact] deploy day is Friday" in history
+    assert "Thursday" in history and "[superseded] [fact] deploy day is Thursday" not in history

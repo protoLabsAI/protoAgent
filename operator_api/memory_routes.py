@@ -14,7 +14,9 @@ domain-scoped view the inspector needs: a hot edit is pinned to
 ``domain="hot"`` (can't silently demote the chunk out of always-on injection)
 and a hot delete only resolves ids that ARE hot chunks (can't reach arbitrary
 KB rows). Session-summary ids share the ``recall_session`` filename guard, so
-a crafted id can't path-traverse out of the memory dir.
+a crafted id can't path-traverse out of the memory dir. The review verdict
+(ADR 0108 D7.2 — confirm / reject / re-open an agent-derived or ingested row)
+is an operator act, so it lives here and nowhere on the agent's tool surface.
 
 Auth: gated by the server-level ``/api/*`` bearer middleware
 (``a2a_impl.auth``) like every other operator route — nothing here is public.
@@ -243,3 +245,42 @@ def register_memory_routes(app) -> None:
             return JSONResponse({"detail": "no hot-memory chunk with that id"}, status_code=404)
         deleted = await asyncio.to_thread(store.delete_by_id, chunk_id)
         return {"enabled": True, "deleted": bool(deleted)}
+
+    # --- Review verdicts (ADR 0108 D7.2) --------------------------------------
+    # Every agent-derived or ingested write starts ``review_state="pending"``;
+    # the operator confirms, rejects, or re-opens it here. Rejecting never
+    # deletes — the row keeps its content and history, it just stops being
+    # deliverable (D6 filters on the verdict). On a layered store the verdict
+    # targets the PRIVATE tier (ids are per-backend; commons rows are curated
+    # via promote/forget, never reviewed through this route).
+
+    @app.post("/api/memory/chunks/{chunk_id}/review")
+    async def _api_memory_chunk_review(chunk_id: int, body: dict | None = None):
+        from knowledge.store import REVIEW_STATES
+
+        store = STATE.knowledge_store
+        if store is None:
+            return {"enabled": False, "id": None, "review_state": None}
+        body = body or {}
+        state = str(body.get("state", "")).strip().lower()
+        if state not in REVIEW_STATES:
+            return JSONResponse(
+                {"detail": f"state must be one of {', '.join(sorted(REVIEW_STATES))}"}, status_code=400
+            )
+        if str(body.get("tier") or "") == "commons":
+            return JSONResponse(
+                {"detail": "commons rows are curated via promote/forget, not reviewed here"}, status_code=400
+            )
+        setter = getattr(store, "set_review_state", None)
+        if not callable(setter):
+            return JSONResponse({"detail": "this knowledge backend has no review states"}, status_code=501)
+        try:
+            updated = await asyncio.to_thread(setter, chunk_id, state)
+        except ValueError as exc:  # the store's own validation — mirrors the 400 above
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        except Exception:  # noqa: BLE001 — never 500 the console with a traceback
+            log.exception("[memory] review verdict for chunk %s failed", chunk_id)
+            return JSONResponse({"detail": "review update failed"}, status_code=500)
+        if not updated:
+            return JSONResponse({"detail": "no chunk with that id"}, status_code=404)
+        return {"enabled": True, "id": chunk_id, "review_state": state}

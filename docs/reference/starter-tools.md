@@ -75,12 +75,12 @@ Built by default; drop the whole group with `middleware.knowledge: false`. See
 
 | Tool | What it does |
 |---|---|
-| [`memory_ingest(content, domain="general", heading=None, memory_kind=None, subject=None, delivery_policy=None)`](#memory_ingest) | Store text you already have — optionally typed (what it is, when it enters the prompt). |
+| [`memory_ingest(content, domain="general", heading=None, memory_kind=None, subject=None, delivery_policy=None, expires_in_days=None)`](#memory_ingest) | Store text you already have — optionally typed (what it is, when it enters the prompt, how long it lasts). |
 | [`knowledge_ingest(source, domain="general", title=None)`](#knowledge_ingest) | Fetch + extract + chunk a URL or file — the only path to a YouTube transcript or a PDF. |
-| [`memory_recall(query, k=5, domain=None, memory_kind=None, delivery_policy=None)`](#memory_recall) | Search memory; returns cited matches. |
+| [`memory_recall(query, k=5, domain=None, memory_kind=None, delivery_policy=None, include_superseded=False)`](#memory_recall) | Search memory; returns cited matches (optionally the superseded history too). |
 | [`session_search(query, limit=5, surface="")`](#session_search) | Search prior session transcripts by content and return expandable session ids. |
 | [`recall_session(session_id)`](#recall_session) | Expand one `<prior_sessions>` line into that session's full summary. |
-| [`memory_list(domain=None, limit=10, memory_kind=None, delivery_policy=None)`](#memory_list) | Most-recent-first listing, with each chunk's `#id` and typed-memory tags. |
+| [`memory_list(domain=None, limit=10, memory_kind=None, delivery_policy=None, review_state=None)`](#memory_list) | Most-recent-first listing, with each chunk's `#id` and typed-memory / review / expiry tags. |
 | [`memory_stats()`](#memory_stats) | Per-domain chunk counts. |
 | [`forget_memory(chunk_id, reason="")`](#forget_memory) | Hard-delete exactly one chunk by id. |
 
@@ -432,6 +432,7 @@ async def memory_ingest(
     memory_kind: str | None = None,
     subject: str | None = None,
     delivery_policy: str | None = None,
+    expires_in_days: int | None = None,
 ) -> str
 ```
 
@@ -441,12 +442,16 @@ recalling later. `domain` is a logical bucket (`"preferences"`, `"context"`, `"g
 
 The typed-memory arguments ([ADR 0108 D4](/adr/0108-context-architecture-v2)) are all
 optional: `memory_kind` says what the chunk *is* (`"profile"`, `"standing"`, `"fact"`,
-`"decision"`, `"note"`, `"episode"`, `"reference"`), `subject` what it's about, and
-`delivery_policy` *when* it enters the prompt — `"always"` (every turn, the same promotion
-as `domain="hot"`), `"retrieved"` (on a relevant query; the default when omitted) or
-`"on_demand"` (only through `memory_recall`). When `knowledge.hot_write_confirm` is on the
-tool refuses always-on writes — `domain="hot"` *or* `delivery_policy="always"` — and tells
-the model to ask the operator.
+`"decision"`, `"note"`, `"episode"`, `"reference"`; inferred from the domain when omitted),
+`subject` what it's about, and `delivery_policy` *when* it enters the prompt — `"always"`
+(every turn, the same promotion as `domain="hot"`), `"retrieved"` (on a relevant query; the
+default when omitted) or `"on_demand"` (only through `memory_recall`). When
+`knowledge.hot_write_confirm` is on the tool refuses always-on writes — `domain="hot"` *or*
+`delivery_policy="always"` — and tells the model to ask the operator.
+
+`expires_in_days` (ADR 0108 D7, 1–3650) gives a volatile fact a shelf life: the row is kept
+but leaves delivery once it lapses. Every memory the agent stores starts
+`review_state="pending"` until the operator confirms it in the Memory inspector.
 
 Returns `"Stored chunk 17 in 'preferences'."`, or an error string when the store is
 unavailable.
@@ -477,6 +482,7 @@ async def memory_recall(
     domain: str | None = None,
     memory_kind: str | None = None,
     delivery_policy: str | None = None,
+    include_superseded: bool = False,
 ) -> str
 ```
 
@@ -492,8 +498,9 @@ provenance — domain, stored date, namespace:
 inherited or imported knowledge (a domain like `claude-import` is another codebase's history,
 not this agent's actions). `memory_kind` and `delivery_policy` narrow it to one typed-memory
 classification ([ADR 0108 D4](/adr/0108-context-architecture-v2)); `delivery_policy="on_demand"`
-is the only way an on-demand memory surfaces. Returns `"No matches."` when nothing clears the
-threshold.
+is the only way an on-demand memory surfaces. `include_superseded=True` (D7) also returns
+rows a newer revision replaced, each tagged `[superseded]` — the audit history for "what did
+we believe before?". Returns `"No matches."` when nothing clears the threshold.
 
 ### `session_search`
 
@@ -526,13 +533,19 @@ on-demand path to the content. Errors cleanly on an unknown or malformed id.
 
 ```python
 async def memory_list(
-    domain: str | None = None, limit: int = 10, memory_kind: str | None = None, delivery_policy: str | None = None
+    domain: str | None = None,
+    limit: int = 10,
+    memory_kind: str | None = None,
+    delivery_policy: str | None = None,
+    review_state: str | None = None,
 ) -> str
 ```
 
-Most-recent-first listing, filtered by domain, `memory_kind` and/or `delivery_policy` when
-given. Each row carries the `#<id>` that `forget_memory` takes, plus `kind=` / `policy=` /
-`review=` tags when the chunk is typed. Useful for "what did I log today?".
+Most-recent-first listing, filtered by domain, `memory_kind`, `delivery_policy` and/or
+`review_state` when given. Each row carries the `#<id>` that `forget_memory` takes, plus
+`kind=` / `policy=` / `review=` / `expires=` tags. `review_state="pending"` lists what still
+awaits the operator's verdict — confirmation is theirs to give, never the agent's. Useful for
+"what did I log today?".
 
 ### `memory_stats`
 

@@ -16,9 +16,12 @@ Two rules from the ADR:
 - **Supersede, don't delete** (ADR 0069 D9). A new fact that *revises* an
   existing one — same subject, changed details, detected by a deterministic
   token-overlap band, never an LLM freshness judgment (Mem0's 2026 reversal +
-  arXiv 2606.01435) — marks the old row ``invalidated_at=now`` and inserts the
-  new row. History is kept for audit; retrieval excludes invalidated rows by
-  default. Nothing here UPDATEs content in place or DELETEs.
+  arXiv 2606.01435) — inserts the new row FIRST and then marks the old row
+  ``invalidated_at=now`` with ``invalidation_reason="superseded_by:<new id>"``
+  (ADR 0108 D7.3 — the audit chain). Insert-then-invalidate means a failed
+  insert never loses the old fact. History is kept for audit; retrieval
+  excludes invalidated rows by default. Nothing here UPDATEs content in place
+  or DELETEs.
 
 Facts carry a ``namespace`` so per-project/owner scoping (ADR 0007) is a filter
 later, not a migration.
@@ -119,12 +122,13 @@ def consolidate_and_store(
 
     A new fact whose token overlap with an existing valid fact lands in the
     supersede band (``_SUPERSEDE_JACCARD`` ≤ Jaccard < ``_DEDUP_JACCARD``)
-    replaces it: the old row gets ``invalidated_at=now`` (kept for audit —
-    never UPDATE-in-place, never DELETE) and the new row is inserted. The
-    incoming fact wins purely because it is newer — deterministic
-    timestamps/ids, no LLM freshness judging. ``list_chunks`` excludes
-    invalidated rows by default, so comparisons only ever run against
-    currently-valid facts.
+    replaces it: the new row is inserted FIRST, then the old row gets
+    ``invalidated_at=now`` + ``invalidation_reason="superseded_by:<new id>"``
+    (ADR 0108 D7.3; kept for audit — never UPDATE-in-place, never DELETE). A
+    failed insert therefore never invalidates anything. The incoming fact wins
+    purely because it is newer — deterministic timestamps/ids, no LLM
+    freshness judging. ``list_chunks`` excludes invalidated rows by default,
+    so comparisons only ever run against currently-valid facts.
 
     ``source`` is the originating session/thread id (provenance, ADR 0069 D5);
     when the caller has none it falls back to the legacy ``"harvest"`` literal
@@ -153,13 +157,10 @@ def consolidate_and_store(
         if best >= _DEDUP_JACCARD:
             counts["skipped"] += 1
             continue
-        if best >= _SUPERSEDE_JACCARD:
-            # Revision of an existing fact: invalidate the single best match,
-            # then insert the new row below (supersede, don't delete).
-            old_id = candidates[best_idx][0]
-            if old_id is not None and callable(invalidate) and invalidate(old_id):
-                counts["superseded"] += 1
-                del candidates[best_idx]  # no longer valid — drop from comparisons
+        # Revision of an existing fact (supersede band): remember the single best
+        # match; it is invalidated only AFTER the new row has landed, so a failed
+        # insert never loses the old fact (ADR 0108 D7.3).
+        old_id = candidates[best_idx][0] if best >= _SUPERSEDE_JACCARD else None
         # Facts live in their own domain (not "finding") so retrieval + the Store
         # view can distinguish semantic facts from other chunk types.
         rid = knowledge_store.add_chunk(
@@ -170,10 +171,24 @@ def consolidate_and_store(
             finding_type="fact",
             namespace=namespace,
         )
-        if rid is not None:
-            counts["added"] += 1
-            candidates.append((rid, ft))  # dedup/supersede within this batch too
+        if rid is None:
+            continue
+        counts["added"] += 1
+        if old_id is not None and callable(invalidate) and _supersede(invalidate, old_id, rid):
+            counts["superseded"] += 1
+            del candidates[best_idx]  # no longer valid — drop from comparisons
+        candidates.append((rid, ft))  # dedup/supersede within this batch too
     return counts
+
+
+def _supersede(invalidate, old_id: int, new_id: int) -> bool:
+    """Invalidate ``old_id`` naming ``new_id`` as its replacement. A backend whose
+    ``invalidate_chunk`` predates the ``superseded_by`` kwarg (an ADR 0031 plugin
+    store) gets the legacy call — the row is still superseded, just unchained."""
+    try:
+        return bool(invalidate(old_id, superseded_by=new_id))
+    except TypeError:
+        return bool(invalidate(old_id))
 
 
 async def extract_and_store_facts(

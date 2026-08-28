@@ -385,22 +385,39 @@ def register_knowledge_routes(app) -> None:
     # the most-recent chunks (a browsable default); a non-empty ``q`` runs FTS5
     # search. Read-only; never 500s the console.
     @app.get("/api/knowledge/search")
-    async def _api_knowledge_search(q: str = "", k: int = 30, domain: str | None = None):
+    async def _api_knowledge_search(
+        q: str = "", k: int = 30, domain: str | None = None, review_state: str | None = None
+    ):
         if STATE.knowledge_store is None:
             return {"enabled": False, "query": q, "results": [], "stats": {}}
+        # ``review_state`` (ADR 0108 D7.2) narrows the browser to one verdict — the
+        # inspector's "pending" queue. Forwarded only when set, so a plugin backend
+        # that predates the kwarg keeps serving the unfiltered listing.
+        filters: dict = {}
+        if review_state is not None and review_state != "":
+            from knowledge.store import REVIEW_STATES
+
+            state = review_state.strip().lower()
+            if state not in REVIEW_STATES:
+                return JSONResponse(
+                    {"detail": f"review_state must be one of {', '.join(sorted(REVIEW_STATES))}"}, status_code=400
+                )
+            filters["review_state"] = state
         results: list[dict] = []
         try:
             if q and q.strip():
                 # search() embeds the query over HTTP on hybrid stores — run it
                 # off the event loop (same pattern as graph/checkpointer.py).
-                rows = await asyncio.to_thread(STATE.knowledge_store.search, q, k=k, domain=domain or None)
+                rows = await asyncio.to_thread(
+                    STATE.knowledge_store.search, q, k=k, domain=domain or None, **filters
+                )
                 results = [_knowledge_row(r) for r in rows]
             else:
                 # list_chunks yields Chunk objects (plain + layered stores; the layered
                 # one stamps .tier) or dicts (a custom backend) — normalize either.
                 results = [
                     _knowledge_row(c if isinstance(c, dict) else c.as_dict())
-                    for c in STATE.knowledge_store.list_chunks(domain=domain or None, limit=k)
+                    for c in STATE.knowledge_store.list_chunks(domain=domain or None, limit=k, **filters)
                 ]
         except Exception:  # noqa: BLE001 — never 500 the console
             log.exception("[knowledge] search failed")

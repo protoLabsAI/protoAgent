@@ -69,9 +69,10 @@ class LayeredKnowledgeStore:
 
     def __getattr__(self, name):
         # Everything not overridden below (add_chunk/add_finding/add_document, the
-        # delete_*/purge_domain family, get_hot_memory, stats, find_chunk_containing,
-        # reset_embed_breaker, path, close, …) targets the PRIVATE store — writes
-        # (and purges) never touch the commons; it's curated via promote/forget only.
+        # delete_*/purge_domain family, invalidate_chunk/set_review_state (ADR 0108 D7),
+        # get_hot_memory, stats, find_chunk_containing, reset_embed_breaker, path,
+        # close, …) targets the PRIVATE store — writes (and purges, and review
+        # verdicts) never touch the commons; it's curated via promote/forget only.
         return getattr(self._private, name)
 
     # ── read: commons ∪ private, fused with RRF over rank ─────────────────────

@@ -122,3 +122,61 @@ def test_extract_and_store_facts_end_to_end(tmp_path):
 def test_extract_noop_without_store():
     counts = asyncio.run(extract_and_store_facts("x", knowledge_store=None, config=object()))
     assert counts == {"added": 0, "skipped": 0, "superseded": 0}
+
+
+# ── supersession chain (ADR 0108 D7.3) ───────────────────────────────────────
+
+_OLD = "operator deploys on fridays after standup"
+_REVISED = "operator deploys on fridays after lunch"  # Jaccard 5/7 ≈ 0.71 — the supersede band
+
+
+def test_supersede_inserts_first_then_chains_the_old_row(tmp_path):
+    store = KnowledgeStore(tmp_path / "kb.db")
+    consolidate_and_store(store, [_OLD], namespace="p")
+    old = store.list_chunks(domain="fact", limit=10)[0]
+    counts = consolidate_and_store(store, [_REVISED], namespace="p")
+    assert counts == {"added": 1, "skipped": 0, "superseded": 1}
+    valid = store.list_chunks(domain="fact", limit=10)
+    assert [c.content for c in valid] == [_REVISED]
+    audit = store.get_chunk(old.id)
+    assert audit["invalidated_at"]
+    assert audit["invalidation_reason"] == f"superseded_by:{valid[0].id}"
+
+
+def test_failed_insert_never_invalidates_the_old_fact(tmp_path):
+    store = KnowledgeStore(tmp_path / "kb.db")
+    consolidate_and_store(store, [_OLD], namespace="p")
+
+    class _Flaky:
+        def list_chunks(self, **kw):
+            return store.list_chunks(**kw)
+
+        def invalidate_chunk(self, *a, **kw):
+            return store.invalidate_chunk(*a, **kw)
+
+        def add_chunk(self, *a, **kw):
+            return None  # the insert fails
+
+    counts = consolidate_and_store(_Flaky(), [_REVISED], namespace="p")
+    assert counts == {"added": 0, "skipped": 0, "superseded": 0}
+    assert [c.content for c in store.list_chunks(domain="fact", limit=10)] == [_OLD]  # still valid
+
+
+def test_supersede_falls_back_on_a_backend_without_the_chain_kwarg(tmp_path):
+    store = KnowledgeStore(tmp_path / "kb.db")
+    consolidate_and_store(store, [_OLD], namespace="p")
+
+    class _Legacy:
+        def list_chunks(self, **kw):
+            return store.list_chunks(**kw)
+
+        def add_chunk(self, *a, **kw):
+            return store.add_chunk(*a, **kw)
+
+        def invalidate_chunk(self, chunk_id):  # pre-D7 signature: no superseded_by
+            return store.invalidate_chunk(chunk_id)
+
+    counts = consolidate_and_store(_Legacy(), [_REVISED], namespace="p")
+    assert counts["superseded"] == 1
+    invalidated = [c for c in store.list_chunks(domain="fact", limit=10, include_invalidated=True) if c.invalidated_at]
+    assert len(invalidated) == 1 and invalidated[0].invalidation_reason is None  # superseded, unchained
