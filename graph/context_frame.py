@@ -46,31 +46,60 @@ def is_context_frame(message) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Projected-context stash (ADR 0108 D2, #3191)
+# Projected-context stash (ADR 0108 D2, #3191; task-boundary fix #3250)
 # ---------------------------------------------------------------------------
 # KnowledgeMiddleware (inner) stashes what it projected; PromptCaptureMiddleware
-# (outer) pops it after the handler returns.  Same call stack, task-local via
-# ContextVar, so concurrent calls can't cross wires.
+# (outer) pops it after the handler returns.
+#
+# The two are NOT in the same call stack: the outer awaits a handler that runs the
+# inner middleware in a CHILD asyncio task. A ContextVar set() there mutates the
+# child's copy of the context and is invisible to the parent that awaited it, so
+# the original design recorded nothing in production while passing every same-stack
+# unit test (#3250 — 6267 chars stashed, popped as None, on a live turn).
+#
+# So the parent owns a mutable HOLDER: it opens a frame before calling the handler,
+# and the child MUTATES that object rather than rebinding the var. Mutation of a
+# shared object crosses the task boundary; rebinding never does. Two concurrent
+# turns still can't cross wires — each parent opens its own holder, and each child
+# inherits only its own parent's.
 
-_PROJECTED_CONTEXT: contextvars.ContextVar[tuple[str, list[dict] | None] | None] = contextvars.ContextVar(
+_PROJECTED_CONTEXT: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
     "protoagent_projected_context", default=None
 )
 
 
+def open_projection_frame() -> contextvars.Token:
+    """Open a capture frame; the caller MUST pass the token back to
+    ``pop_projected_context`` so a nested capture can't strand the outer one."""
+    return _PROJECTED_CONTEXT.set({"text": "", "sections": None})
+
+
 def stash_projected_context(text: str, sections: list[dict] | None = None) -> None:
-    """Called by KnowledgeMiddleware._project_messages inside wrap_model_call."""
-    existing = _PROJECTED_CONTEXT.get()
-    if existing is not None:
-        prev_text, prev_sections = existing
-        text = prev_text + "\n\n" + text
-        sections = prev_sections or sections
-    _PROJECTED_CONTEXT.set((text, sections))
+    """Called by KnowledgeMiddleware._project_messages inside wrap_model_call.
+
+    A no-op when nobody opened a frame (capture disabled, or a call outside the
+    capture middleware) — better a dropped record than a stash that leaks into
+    whichever unrelated call pops next.
+    """
+    frame = _PROJECTED_CONTEXT.get()
+    if frame is None:
+        return
+    frame["text"] = f"{frame['text']}\n\n{text}" if frame["text"] else text
+    if frame["sections"] is None:
+        frame["sections"] = sections
 
 
-def pop_projected_context() -> tuple[str | None, list[dict] | None]:
-    """Called by PromptCaptureMiddleware._capture after the handler returns."""
-    val = _PROJECTED_CONTEXT.get()
-    _PROJECTED_CONTEXT.set(None)
-    if val is None:
+def pop_projected_context(token: contextvars.Token | None = None) -> tuple[str | None, list[dict] | None]:
+    """Called by PromptCaptureMiddleware._capture after the handler returns.
+
+    ``token`` restores the previous frame (a subagent's capture nests inside its
+    parent's); without one the frame is simply cleared.
+    """
+    frame = _PROJECTED_CONTEXT.get()
+    if token is not None:
+        _PROJECTED_CONTEXT.reset(token)
+    else:
+        _PROJECTED_CONTEXT.set(None)
+    if not frame or not frame["text"]:
         return None, None
-    return val
+    return frame["text"], frame["sections"]

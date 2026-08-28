@@ -118,20 +118,20 @@ class PromptCaptureMiddleware(AgentMiddleware):
         store.max_calls = self._max_calls
         return store
 
-    def _capture(self, request, response) -> None:
+    def _capture(self, request, response, token=None) -> None:
         try:
             # Incognito threads leave NO durable trail (ADR 0069 D3b) — a
             # persisted prompt snapshot would be one. Skip entirely.
             if (getattr(request, "state", None) or {}).get("incognito"):
                 from graph.context_frame import pop_projected_context
 
-                pop_projected_context()
+                pop_projected_context(token)
                 return
             split = _split_system(request)
             if split is None:
                 from graph.context_frame import pop_projected_context
 
-                pop_projected_context()
+                pop_projected_context(token)
                 return
             stable, context_tail = split
 
@@ -153,7 +153,7 @@ class PromptCaptureMiddleware(AgentMiddleware):
             # wrap_model_call and popped here.
             from graph.context_frame import pop_projected_context
 
-            projected_text, projected_sections = pop_projected_context()
+            projected_text, projected_sections = pop_projected_context(token)
             context_sections = None
 
             self._store().record(
@@ -175,12 +175,29 @@ class PromptCaptureMiddleware(AgentMiddleware):
         except Exception:  # noqa: BLE001 — capture must never touch the turn
             log.debug("[prompt-capture] snapshot failed", exc_info=True)
 
+    # The frame is opened HERE, before the handler runs, so the inner middleware
+    # (a child task) mutates a holder this context owns — see graph/context_frame.py
+    # for why a ContextVar set() in the child cannot reach us (#3250).
     def wrap_model_call(self, request, handler):
-        response = handler(request)
-        self._capture(request, response)
+        from graph.context_frame import open_projection_frame, pop_projected_context
+
+        token = open_projection_frame()
+        try:
+            response = handler(request)
+        except BaseException:
+            pop_projected_context(token)  # a failed call leaves no frame behind
+            raise
+        self._capture(request, response, token)
         return response
 
     async def awrap_model_call(self, request, handler):
-        response = await handler(request)
-        self._capture(request, response)
+        from graph.context_frame import open_projection_frame, pop_projected_context
+
+        token = open_projection_frame()
+        try:
+            response = await handler(request)
+        except BaseException:
+            pop_projected_context(token)
+            raise
+        self._capture(request, response, token)
         return response

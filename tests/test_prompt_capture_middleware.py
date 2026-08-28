@@ -451,6 +451,97 @@ def test_no_system_message_clears_projected_stash():
     assert pop_projected_context() == (None, None)
 
 
+def test_projected_context_crosses_a_child_task_boundary():
+    """THE production shape (#3250): the inner middleware does not run in the outer's
+    call stack — the handler is awaited and the inner runs in a CHILD asyncio task.
+
+    A ContextVar ``set()`` in a child mutates that task's copy of the context and is
+    invisible to the parent, so the original stash recorded nothing in production
+    while every same-stack test above passed. On a live turn: 6267 characters
+    stashed, popped as ``None``, and the column has no fallback since #3234 removed
+    the legacy context channel. This test is the one that fails on that design.
+    """
+    from graph.context_frame import stash_projected_context
+
+    capture = PromptCaptureMiddleware()
+    req = _Req("claude-opus-4-7", SystemMessage(content="STABLE"), state={})
+
+    async def handler(_r):
+        async def inner():  # the boundary the real pipeline puts between us
+            stash_projected_context("memory block", [{"label": "Hot memory", "chars": 12}])
+            return _response()
+
+        return await asyncio.create_task(inner())
+
+    async def _go():
+        with request_metadata_scope({"a2a.task_id": "proj-task"}):
+            await capture.awrap_model_call(req, handler)
+
+    asyncio.run(_go())
+
+    row = _row("proj-task")
+    assert row["projected_context"] == "memory block"
+    assert row["projected_sections"] == [{"label": "Hot memory", "chars": 12}]
+
+
+def test_projected_context_does_not_leak_between_concurrent_calls():
+    """Two turns in flight at once must not read each other's projection: each
+    capture opens its OWN holder, and a child only ever inherits its own parent's."""
+    from graph.context_frame import stash_projected_context
+
+    async def one(task_id, text):
+        capture = PromptCaptureMiddleware()
+        req = _Req("claude-opus-4-7", SystemMessage(content="STABLE"), state={})
+
+        async def handler(_r):
+            async def inner():
+                await asyncio.sleep(0)  # interleave the two turns
+                stash_projected_context(text)
+                return _response()
+
+            return await asyncio.create_task(inner())
+
+        with request_metadata_scope({"a2a.task_id": task_id}):
+            await capture.awrap_model_call(req, handler)
+
+    async def _go():
+        await asyncio.gather(one("proj-conc-a", "context A"), one("proj-conc-b", "context B"))
+
+    asyncio.run(_go())
+
+    assert _row("proj-conc-a")["projected_context"] == "context A"
+    assert _row("proj-conc-b")["projected_context"] == "context B"
+
+
+def test_failed_model_call_leaves_no_frame_behind():
+    """A raising handler must close its frame — otherwise the next call on this
+    context pops a stale projection and files it against the wrong turn."""
+    from graph.context_frame import pop_projected_context, stash_projected_context
+
+    capture = PromptCaptureMiddleware()
+    req = _Req("claude-opus-4-7", SystemMessage(content="STABLE"), state={})
+
+    def boom(_r):
+        stash_projected_context("half-composed")
+        raise RuntimeError("model call failed")
+
+    with request_metadata_scope({"a2a.task_id": "proj-boom"}):
+        with contextlib.suppress(RuntimeError):
+            capture.wrap_model_call(req, boom)
+
+    assert prompt_snapshots().calls_for_task("proj-boom") == []
+    assert pop_projected_context() == (None, None)
+
+
+def test_stash_outside_a_capture_frame_is_dropped():
+    """No frame open (capture disabled, or a call that never reaches the middleware)
+    ⇒ the stash goes nowhere rather than waiting to attach itself to a later call."""
+    from graph.context_frame import pop_projected_context, stash_projected_context
+
+    stash_projected_context("nobody is listening")
+    assert pop_projected_context() == (None, None)
+
+
 def test_context_sections_none_without_projected_stash():
     """ADR 0108 D2: the legacy state["context_sections"] fallback is removed.
     Without a projected-context stash, context_sections is always None."""
