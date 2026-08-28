@@ -2,7 +2,9 @@
 
 Tests the additive migration (memory_kind, subject, review_state, expires_at)
 and the filter plumbing across all three store types without changing delivery
-behavior (owned by #3187).
+behavior (owned by #3187). The ADR 0108 D4 slice — the ``delivery_policy``
+column, hot→always write inference, and the one-shot backfill that classifies
+legacy rows from ``domain`` — is covered at the bottom.
 """
 
 from __future__ import annotations
@@ -90,10 +92,15 @@ def test_migration_adds_columns(tmp_path):
     store.add_chunk("new typed row", domain="general", memory_kind="fact", subject="project-x")
 
     rows = {c.content: c for c in store.list_chunks(limit=10)}
-    assert rows["legacy row"].memory_kind is None
+    # The pre-#3072 row went through BOTH migrations: the typed columns were
+    # added, then the ADR 0108 D4 backfill classified it from its domain
+    # (general + non-conversation source_type → "reference"; not hot → no policy).
+    assert rows["legacy row"].memory_kind == "reference"
     assert rows["legacy row"].subject is None
+    assert rows["legacy row"].delivery_policy is None
     assert rows["new typed row"].memory_kind == "fact"
     assert rows["new typed row"].subject == "project-x"
+    assert rows["new typed row"].delivery_policy is None
 
     # Indexes were created.
     idx_db = sqlite3.connect(str(path))
@@ -101,6 +108,7 @@ def test_migration_adds_columns(tmp_path):
     idx_db.close()
     assert "idx_chunks_memory_kind" in indexes
     assert "idx_chunks_review_state" in indexes
+    assert "idx_chunks_delivery_policy" in indexes
 
 
 # ── search filters ───────────────────────────────────────────────────────────
@@ -353,3 +361,228 @@ def test_promote_preserves_typed_fields(tmp_path):
     assert c.subject == "operator"
     assert c.review_state == "confirmed"
     assert c.expires_at == "2027-01-01T00:00:00+00:00"
+    # Inferred from domain="hot" on the private write, forwarded by promote (ADR 0108 D4).
+    assert c.delivery_policy == "always"
+
+
+# ── delivery_policy + backfill (ADR 0108 D4) ─────────────────────────────────
+
+
+def test_add_chunk_with_delivery_policy(tmp_path):
+    """delivery_policy is stored, listed, searched and serialized like the other typed fields."""
+    store = KnowledgeStore(tmp_path / "kb.db")
+    cid = store.add_chunk("ask before deploying", domain="d", memory_kind="standing", delivery_policy="on_demand")
+    assert cid is not None
+    c = store.list_chunks(domain="d", limit=1)[0]
+    assert c.delivery_policy == "on_demand"
+    assert c.as_dict()["delivery_policy"] == "on_demand"
+    assert store.search("deploying", k=5)[0]["delivery_policy"] == "on_demand"
+
+
+def test_hot_domain_forces_always_policy(tmp_path):
+    """A domain="hot" write is stamped "always" whatever the caller passed —
+    the reader keys on the domain, so a hot row IS always-on and the column
+    must say so (no hot+non-always rows can exist). Other domains stay NULL
+    (= retrieved)."""
+    store = KnowledgeStore(tmp_path / "kb.db")
+    store.add_chunk("pinned fact", domain="hot")
+    store.add_chunk("plain fact", domain="general")
+    store.add_chunk("hot claiming otherwise", domain="hot", delivery_policy="on_demand")
+    by_content = {c.content: c for c in store.list_chunks(limit=10)}
+    assert by_content["pinned fact"].delivery_policy == "always"
+    assert by_content["plain fact"].delivery_policy is None
+    assert by_content["hot claiming otherwise"].delivery_policy == "always"
+    assert store.list_chunks(domain="hot") == store.list_chunks(domain="hot", delivery_policy="always")
+    # Inference never touches memory_kind — #3205's omitted-stays-NULL contract holds.
+    assert by_content["pinned fact"].memory_kind is None
+
+
+def test_list_and_search_filter_by_delivery_policy(tmp_path):
+    """list_chunks / search(delivery_policy=...) match the value — and because
+    NULL *means* retrieved, "retrieved" matches the untyped row too; FTS and
+    LIKE paths alike."""
+    store = KnowledgeStore(tmp_path / "kb.db")
+    store.add_chunk("alpha always", domain="d", delivery_policy="always")
+    store.add_chunk("alpha on demand", domain="d", delivery_policy="on_demand")
+    store.add_chunk("alpha untyped", domain="d")
+
+    always = store.list_chunks(delivery_policy="always")
+    assert [c.content for c in always] == ["alpha always"]
+    assert [c.content for c in store.list_chunks(delivery_policy="retrieved")] == ["alpha untyped"]
+    assert len(store.list_chunks()) == 3
+
+    hits = store.search("alpha", k=10, delivery_policy="on_demand")
+    assert [h["content"] for h in hits] == ["alpha on demand"]
+    assert [h["content"] for h in store.search("alpha", k=10, delivery_policy="retrieved")] == ["alpha untyped"]
+    assert len(store.search("alpha", k=10)) == 3
+
+    store._fts_available = False  # the LIKE fallback respects both rules too
+    like_hits = store.search("alpha", k=10, delivery_policy="always")
+    assert [h["content"] for h in like_hits] == ["alpha always"]
+    assert [h["content"] for h in store.search("alpha", k=10, delivery_policy="retrieved")] == ["alpha untyped"]
+
+
+def test_hybrid_search_filters_delivery_policy_both_rankings(tmp_path):
+    """delivery_policy filters the vector ranking as well as FTS5 — an
+    off-policy chunk can't surface as a vector-only hit — and "retrieved"
+    reaches NULL rows on the vector path too."""
+    store = HybridKnowledgeStore(tmp_path / "kb.db", embed_fn=_const_embed)
+    store.add_chunk("gamma delta", domain="d", delivery_policy="always")
+    store.add_chunk("gamma delta too", domain="d", delivery_policy="on_demand")
+    store.add_chunk("gamma delta untyped", domain="d")
+    # Vector-only path (no shared tokens with the query).
+    hits = store.search("zzzzz", k=5, delivery_policy="always")
+    assert [h["content"] for h in hits] == ["gamma delta"]
+    assert [h["content"] for h in store.search("zzzzz", k=5, delivery_policy="retrieved")] == ["gamma delta untyped"]
+    # FTS path.
+    fts_hits = store.search("gamma", k=5, delivery_policy="on_demand")
+    assert [h["content"] for h in fts_hits] == ["gamma delta too"]
+
+
+def test_chunk_from_row_ignores_unknown_columns(tmp_path):
+    """A row from a DB a newer build has widened (a column this build doesn't
+    know) still builds a Chunk — the unknown column is dropped, not fatal."""
+    from knowledge.store import Chunk
+
+    c = Chunk.from_row(
+        {
+            "id": 1, "content": "x", "domain": "general", "heading": None, "source": None,
+            "source_type": None, "finding_type": None, "created_at": "t", "updated_at": "t",
+            "future_column_from_d7": "whatever",
+        }
+    )
+    assert c.id == 1 and c.delivery_policy is None
+    assert not hasattr(c, "future_column_from_d7")
+
+    # End to end: the store reads a table carrying an extra column.
+    path = tmp_path / "wide.db"
+    store = KnowledgeStore(path)
+    store.add_chunk("survives", domain="general")
+    db = sqlite3.connect(str(path))
+    db.execute("ALTER TABLE chunks ADD COLUMN future_column_from_d7 TEXT")
+    db.commit()
+    db.close()
+    assert [c.content for c in KnowledgeStore(path).list_chunks(limit=5)] == ["survives"]
+
+
+def test_layered_search_forwards_delivery_policy_to_both_tiers(tmp_path):
+    private = KnowledgeStore(tmp_path / "private.db")
+    commons = KnowledgeStore(tmp_path / "commons.db")
+    layered = LayeredKnowledgeStore(private, commons)
+    private.add_chunk("private pin", domain="d", delivery_policy="always")
+    commons.add_chunk("commons pin", domain="d", delivery_policy="always")
+    commons.add_chunk("commons lazy", domain="d", delivery_policy="on_demand")
+
+    always = layered.search("pin lazy private commons", k=10, delivery_policy="always")
+    assert sorted(h["content"] for h in always) == ["commons pin", "private pin"]
+    lazy = layered.search("pin lazy private commons", k=10, delivery_policy="on_demand")
+    assert [h["content"] for h in lazy] == ["commons lazy"]
+
+
+def test_add_document_passes_delivery_policy(tmp_path):
+    store = KnowledgeStore(tmp_path / "kb.db")
+    ids = store.add_document("doc-sized content with a policy", domain="d", delivery_policy="on_demand")
+    assert len(ids) >= 1
+    assert store.list_chunks(domain="d", limit=1)[0].delivery_policy == "on_demand"
+
+
+def _post_3205_db(path):
+    """A DB exactly as PR #3205 left it: the four typed columns exist, no
+    delivery_policy, every existing row untyped (NULL) — the backfill's input."""
+    db = sqlite3.connect(str(path))
+    db.execute(
+        "CREATE TABLE chunks ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, content TEXT NOT NULL, "
+        "domain TEXT NOT NULL DEFAULT 'general', heading TEXT, source TEXT, "
+        "source_type TEXT, finding_type TEXT, namespace TEXT, epoch TEXT, "
+        "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, "
+        "invalidated_at TEXT, invalidation_reason TEXT, "
+        "memory_kind TEXT, subject TEXT, review_state TEXT, expires_at TEXT)"
+    )
+    return db
+
+
+# One row per ADR 0108 D4 backfill-table branch:
+# (content, domain, source_type) → (memory_kind, delivery_policy).
+_BACKFILL_CASES = [
+    ("hot row", "hot", None, "standing", "always"),
+    ("preferences row", "preferences", None, "profile", None),
+    ("general conversation row", "general", "conversation", "note", None),
+    ("general ingest row", "general", "ingest", "reference", None),
+    ("general untyped-source row", "general", None, "reference", None),
+    ("finding row", "finding", "chat", "fact", None),
+    ("fact row", "fact", "extracted", "fact", None),
+    ("conversation row", "conversation", "harvest", "note", None),
+    ("plugin freeform row", "loop-lessons", None, "legacy", None),
+]
+
+
+def test_backfill_classifies_legacy_rows_once(tmp_path):
+    """Opening a #3205-era DB classifies every untyped row from its domain per
+    the ADR 0108 D4 table, leaves already-typed cells alone, and never runs again."""
+    path = tmp_path / "post3205.db"
+    db = _post_3205_db(path)
+    for content, domain, source_type, _kind, _policy in _BACKFILL_CASES:
+        db.execute(
+            "INSERT INTO chunks (content, domain, source_type, created_at, updated_at) VALUES (?, ?, ?, 'x', 'x')",
+            (content, domain, source_type),
+        )
+    # Already typed by a #3205-era writer: memory_kind must survive, but the
+    # hot domain still earns its policy (that cell was NULL).
+    db.execute(
+        "INSERT INTO chunks (content, domain, memory_kind, created_at, updated_at) "
+        "VALUES ('typed hot row', 'hot', 'decision', 'x', 'x')"
+    )
+    db.commit()
+    db.close()
+
+    store = KnowledgeStore(path)  # first open under the D4 build → backfill
+    rows = {c.content: c for c in store.list_chunks(limit=50)}
+    for content, _domain, _source_type, kind, policy in _BACKFILL_CASES:
+        assert rows[content].memory_kind == kind, content
+        assert rows[content].delivery_policy == policy, content
+    assert rows["typed hot row"].memory_kind == "decision"
+    assert rows["typed hot row"].delivery_policy == "always"
+    assert store.get_meta("typed_memory_backfill")  # stamped done
+
+    # One-shot: a row written untyped AFTER the backfill stays untyped across
+    # reopens — the pass is a legacy classification, not a standing rule.
+    store.add_chunk("post-backfill untyped", domain="general")
+    reopened = KnowledgeStore(path)
+    again = {c.content: c for c in reopened.list_chunks(limit=50)}
+    assert again["post-backfill untyped"].memory_kind is None
+    assert again["post-backfill untyped"].delivery_policy is None
+    for content, _domain, _source_type, kind, policy in _BACKFILL_CASES:  # unchanged
+        assert again[content].memory_kind == kind
+        assert again[content].delivery_policy == policy
+
+
+def test_backfill_retries_until_stamped(tmp_path):
+    """The done-marker is the _kb_meta stamp, not the column's existence: with
+    the column present but no stamp (a pass that died after the ALTER), the next
+    open classifies what's still NULL — and an already-typed cell is untouched."""
+    path = tmp_path / "retry.db"
+    db = _post_3205_db(path)
+    db.execute("ALTER TABLE chunks ADD COLUMN delivery_policy TEXT")  # column born, pass never finished
+    db.execute("INSERT INTO chunks (content, domain, created_at, updated_at) VALUES ('orphan hot', 'hot', 'x', 'x')")
+    db.execute(
+        "INSERT INTO chunks (content, domain, memory_kind, delivery_policy, created_at, updated_at) "
+        "VALUES ('fully typed', 'general', 'profile', 'on_demand', 'x', 'x')"
+    )
+    db.commit()
+    db.close()
+
+    store = KnowledgeStore(path)
+    rows = {c.content: c for c in store.list_chunks(limit=10)}
+    assert (rows["orphan hot"].memory_kind, rows["orphan hot"].delivery_policy) == ("standing", "always")
+    assert (rows["fully typed"].memory_kind, rows["fully typed"].delivery_policy) == ("profile", "on_demand")
+    assert store.get_meta("typed_memory_backfill")
+
+
+def test_fresh_db_is_stamped_without_rows(tmp_path):
+    """A brand-new store has the column from the schema and nothing to classify —
+    it's stamped on first open so later opens never rescan."""
+    store = KnowledgeStore(tmp_path / "fresh.db")
+    assert store.get_meta("typed_memory_backfill")
+    store.add_chunk("later untyped", domain="general")
+    assert KnowledgeStore(tmp_path / "fresh.db").list_chunks(limit=1)[0].memory_kind is None

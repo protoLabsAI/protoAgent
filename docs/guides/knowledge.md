@@ -56,12 +56,12 @@ When a knowledge store is wired, the agent gets these (operator-curatable under
 
 | Tool | What it does |
 |---|---|
-| `memory_ingest(content, domain, heading?)` | store a self-contained fact/note for later recall |
+| `memory_ingest(content, domain, heading?, memory_kind?, subject?, delivery_policy?)` | store a self-contained fact/note for later recall — optionally typed: what it is, and whether it enters the prompt `always` / when `retrieved` (default) / only `on_demand` ([ADR 0108 D4](/adr/0108-context-architecture-v2)) |
 | `knowledge_ingest(source, domain, title?)` | fetch + extract + store a **URL or local file** — YouTube/web/PDF/audio/video — through the full [ingestion pipeline](/guides/ingestion#from-the-agent) |
-| `memory_recall(query, k=5)` | search long-term memory (hybrid, or FTS5 if the breaker is open) |
+| `memory_recall(query, k=5, domain?, memory_kind?, delivery_policy?)` | search long-term memory (hybrid, or FTS5 if the breaker is open); the typed filters narrow to one kind / delivery policy |
 | `session_search(query, limit=5, surface?)` | search prior session transcripts by content, then expand a result with `recall_session` |
 | `recall_session(session_id)` | read one prior session summary by id |
-| `memory_list(domain?, limit=10)` | browse recent chunks (used by `/dream` consolidation) |
+| `memory_list(domain?, limit=10, memory_kind?, delivery_policy?)` | browse recent chunks with their typed-memory tags (used by `/dream` consolidation) |
 | `memory_stats()` | per-domain chunk counts |
 | `forget_memory(chunk_id, reason?)` | **hard-delete** one chunk by id (targeted; see [staleness](#staleness-supersede-dont-delete) — explicit deletes are real deletes) |
 
@@ -174,8 +174,12 @@ citations carry the same `trust:` label.
 ### Hot-memory write visibility (ADR 0069 D8)
 
 `domain="hot"` chunks are injected in front of the model **every turn**, which
-makes a silent hot write the highest-leverage poisoning move there is. Two
-controls:
+makes a silent hot write the highest-leverage poisoning move there is. Since
+[ADR 0108 D4](/adr/0108-context-architecture-v2) the same promotion is spelled
+out on the row as `delivery_policy="always"` (a hot write is stamped with it
+automatically; rows that predate the column were classified once on the first
+open after the upgrade), and both controls below cover the policy as well as
+the domain. Two controls:
 
 - **Every hot write is a visible event.** Any write that creates a hot chunk —
   the agent's `memory_ingest`, the console routes, a plugin via the SDK —
@@ -187,14 +191,17 @@ controls:
 ```yaml
 knowledge:
   hot_write_confirm: false  # default: agent hot writes allowed (single-operator flow)
-  # hot_write_confirm: true # memory_ingest REFUSES domain="hot" writes with a clear
-                            # error telling the model to ask you; only the console
-                            # (Knowledge → Store / memory inspector) writes hot memory
+  # hot_write_confirm: true # memory_ingest REFUSES always-on writes (domain="hot" or
+                            # delivery_policy="always") with a clear error telling the
+                            # model to ask you; only the console (Knowledge → Store /
+                            # memory inspector) writes hot memory
 ```
 
-The gate binds the **agent's own write path** (`memory_ingest`) — the simple
-mechanism: a refusal with instructions, nothing is parked or half-stored.
-Operator console surfaces stamp `source_type: operator` and are unaffected.
+The gate binds the **agent's own write paths** — `memory_ingest` (a `domain="hot"`
+or `delivery_policy="always"` write) and `knowledge_ingest` (a source filed under
+`domain="hot"`) — the simple mechanism: a refusal with instructions, nothing is
+parked, fetched or half-stored. Operator console surfaces stamp
+`source_type: operator` and are unaffected.
 
 ### Staleness: supersede, don't delete
 

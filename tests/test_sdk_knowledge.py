@@ -87,6 +87,32 @@ async def test_knowledge_add_and_search_pass_epoch_when_set(monkeypatch):
     ]
 
 
+class _TypedStore(_LifecycleStore):
+    """A backend with the ADR 0108 D4 typed-memory kwargs on add_chunk."""
+
+    def add_chunk(self, content, domain="general", heading=None, *, epoch=None, memory_kind=None, delivery_policy=None):
+        self.calls.append(("add", content, domain, heading, epoch, memory_kind, delivery_policy))
+        return 44
+
+
+@pytest.mark.asyncio
+async def test_knowledge_add_passes_typed_memory_kwargs_only_when_set(monkeypatch):
+    """memory_kind / delivery_policy (ADR 0108 D4) reach the store when a plugin sets
+    them — and are NOT forwarded otherwise, so a pre-D4 backend (``_FakeStore``,
+    exercised by ``test_knowledge_add_wraps_the_store``) keeps working."""
+    from graph import sdk
+
+    store = _TypedStore()
+    monkeypatch.setattr(sdk.STATE, "knowledge_store", store, raising=False)
+    cid = await sdk.knowledge_add("standing rule", domain="st-routes", memory_kind="standing", delivery_policy="always")
+    assert cid == 44
+    await sdk.knowledge_add("plain", domain="st-routes")
+    assert store.calls == [
+        ("add", "standing rule", "st-routes", None, None, "standing", "always"),
+        ("add", "plain", "st-routes", None, None, None, None),
+    ]
+
+
 @pytest.mark.asyncio
 async def test_knowledge_purge_wraps_the_store(monkeypatch):
     from graph import sdk

@@ -31,7 +31,13 @@ import sqlite3
 import time
 from collections.abc import Callable
 
-from knowledge.store import _BULK_DELETE_REASON, KnowledgeStore, _namespace_clause, _normalize_before
+from knowledge.store import (
+    _BULK_DELETE_REASON,
+    KnowledgeStore,
+    _delivery_policy_clause,
+    _namespace_clause,
+    _normalize_before,
+)
 from observability import metrics
 
 log = logging.getLogger(__name__)
@@ -399,6 +405,7 @@ class HybridKnowledgeStore(KnowledgeStore):
         *,
         memory_kind: str | None = None,
         review_state: str | None = None,
+        delivery_policy: str | None = None,
     ) -> list[int]:
         """Return chunk ids ranked by cosine similarity (brute force)."""
         db = self._get_db()
@@ -420,6 +427,10 @@ class HybridKnowledgeStore(KnowledgeStore):
         if review_state:
             where.append("c.review_state = ?")
             params.append(review_state)
+        dp_sql, dp_params = _delivery_policy_clause(delivery_policy, col="c.delivery_policy")
+        if dp_sql:
+            where.append(dp_sql)
+            params.extend(dp_params)
         ns_sql, ns_params = _namespace_clause(namespace, col="c.namespace")
         if ns_sql:
             where.append(ns_sql)
@@ -465,6 +476,7 @@ class HybridKnowledgeStore(KnowledgeStore):
         epoch: str | None = None,
         memory_kind: str | None = None,
         review_state: str | None = None,
+        delivery_policy: str | None = None,
     ) -> list[dict]:
         """RRF-fuse the FTS5 ranking with a vector ranking.
 
@@ -476,8 +488,8 @@ class HybridKnowledgeStore(KnowledgeStore):
         rankings by default; ``include_invalidated=True`` is the audit escape
         hatch. ``epoch`` (#1634) likewise filters BOTH rankings — an
         out-of-era chunk can't surface as a vector-only hit.
-        ``memory_kind`` / ``review_state`` (#3072) likewise filter BOTH
-        rankings.
+        ``memory_kind`` / ``review_state`` (#3072) and ``delivery_policy``
+        (ADR 0108 D4) likewise filter BOTH rankings.
         """
         if not query or not query.strip():
             return []
@@ -492,6 +504,7 @@ class HybridKnowledgeStore(KnowledgeStore):
                 epoch=epoch,
                 memory_kind=memory_kind,
                 review_state=review_state,
+                delivery_policy=delivery_policy,
             )
             query_vec = self._embed(query)
             if query_vec is None:
@@ -500,6 +513,7 @@ class HybridKnowledgeStore(KnowledgeStore):
             vec_ids = self._vector_search(
                 query_vec, self._vector_k, domain, namespace, include_invalidated, epoch,
                 memory_kind=memory_kind, review_state=review_state,
+                delivery_policy=delivery_policy,
             )
             if not vec_ids:
                 return base[:k]

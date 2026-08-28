@@ -52,6 +52,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
+from knowledge.store import DELIVERY_ALWAYS, DELIVERY_POLICIES
 from scheduler.interface import is_cron, parse_ttl
 from tools.fallbacks import with_fallback
 
@@ -699,6 +700,35 @@ def _memory_citation(
     return f" ({', '.join(parts)})" if parts else ""
 
 
+# The one refusal every agent-side always-on write path returns when the operator has
+# turned `knowledge.hot_write_confirm` on (ADR 0069 D8, widened by ADR 0108 D4): a
+# domain="hot" or delivery_policy="always" chunk is in front of the model EVERY turn,
+# so promotion to always-on is reserved for operator surfaces. Shared by
+# memory_ingest and knowledge_ingest so the two can't drift.
+_ALWAYS_ON_REFUSAL = (
+    'Error: always-on memory writes (domain "hot" or delivery_policy "always", via memory_ingest '
+    "or knowledge_ingest) need operator confirmation on this instance (knowledge.hot_write_confirm "
+    "is on). Ask the operator to add it via the console (Knowledge → Store or the Memory "
+    "inspector), or store it in a regular domain with the default (retrieved) policy instead."
+)
+
+
+def _norm_delivery_policy(value) -> tuple[str | None, str | None]:
+    """Validate + normalize a ``delivery_policy`` at the TOOL boundary (the store and
+    SDK stay permissive, like #3205's ``memory_kind``). Returns ``(normalized, None)``
+    — case/whitespace folded so ``"ALWAYS"`` is ``"always"`` — or ``(None, error)`` with
+    the tool-worded refusal for a value outside ``DELIVERY_POLICIES``. ``None`` passes
+    through untouched (= retrieved)."""
+    if value is None:
+        return None, None
+    normalized = str(value).strip().lower()
+    if normalized not in DELIVERY_POLICIES:
+        return None, (
+            f"Error: delivery_policy must be one of {', '.join(sorted(DELIVERY_POLICIES))} (got {value!r})."
+        )
+    return normalized, None
+
+
 def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None) -> list:
     """Bind memory tools to a ``KnowledgeStore``. Returns a list.
 
@@ -719,6 +749,7 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         heading: str | None = None,
         memory_kind: str | None = None,
         subject: str | None = None,
+        delivery_policy: str | None = None,
     ) -> str:
         """Store a fact, preference, or note in long-term memory.
 
@@ -739,21 +770,28 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
                 When omitted the chunk is untyped (backward-compatible).
             subject: The entity this memory describes (e.g. the operator's
                 name, a project, a tool). Aids recall filtering.
+            delivery_policy: WHEN the memory enters the prompt (ADR 0108 D4) —
+                ``"always"`` (every turn, like ``domain="hot"``), ``"retrieved"``
+                (on a relevant query), ``"on_demand"`` (only via memory_recall).
+                Omit for the default (retrieved). ``domain="hot"`` implies
+                ``"always"`` automatically.
 
         Returns ``"Stored chunk N in 'domain'."`` on success.
         """
-        # Hot-memory confirm gate (ADR 0069 D8): domain="hot" chunks are
-        # injected in front of the model EVERY turn, so when the operator has
-        # turned the gate on, this (the agent's own write path) refuses hot
-        # writes with instructions to ask — only operator surfaces (console
-        # knowledge/memory routes) may promote content to always-on.
-        if (domain or "").strip().lower() == "hot" and getattr(graph_config, "knowledge_hot_write_confirm", False):
-            return (
-                "Error: hot-memory writes need operator confirmation on this instance "
-                "(knowledge.hot_write_confirm is on). Ask the operator to add it via the "
-                "console (Knowledge → Store or the Memory inspector), or store it in a "
-                "regular domain instead."
-            )
+        delivery_policy, policy_error = _norm_delivery_policy(delivery_policy)
+        if policy_error:
+            return policy_error
+        # Always-on confirm gate (ADR 0069 D8): domain="hot" chunks — and, since
+        # ADR 0108 D4, any chunk with delivery_policy="always" — are injected in
+        # front of the model EVERY turn, so when the operator has turned the gate
+        # on, this (the agent's own write path, alongside knowledge_ingest)
+        # refuses always-on writes with instructions to ask — only operator
+        # surfaces (console knowledge/memory routes) may promote content to
+        # always-on. The domain compare lowercases on purpose (over-refusal is
+        # the safe side); the store itself keys on the exact "hot".
+        wants_always_on = (domain or "").strip().lower() == "hot" or delivery_policy == DELIVERY_ALWAYS
+        if wants_always_on and getattr(graph_config, "knowledge_hot_write_confirm", False):
+            return _ALWAYS_ON_REFUSAL
         # add_chunk embeds over HTTP on hybrid stores — keep it off the loop.
         # source_type="conversation" ranks the row in the agent-derived trust
         # tier (ADR 0069 D8) — this write path is model-driven, not operator-.
@@ -764,6 +802,8 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
             kw["memory_kind"] = memory_kind
         if subject is not None:
             kw["subject"] = subject
+        if delivery_policy is not None:
+            kw["delivery_policy"] = delivery_policy
 
         def _write():
             try:
@@ -839,6 +879,11 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         if not src:
             return "Error: provide a URL or a local file path to ingest."
         dom = (domain or "general").strip() or "general"
+        # Same always-on confirm gate as memory_ingest (ADR 0069 D8 / ADR 0108 D4):
+        # a local file filed under domain="hot" is an agent path to an always-on
+        # row too, so it must refuse the same way — before any fetch or job spawn.
+        if dom.lower() == "hot" and getattr(graph_config, "knowledge_hot_write_confirm", False):
+            return _ALWAYS_ON_REFUSAL
         is_url = src.lower().startswith(("http://", "https://"))
 
         # Fast local text ingests inline; a network fetch / media transcription (which
@@ -870,6 +915,7 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         k: int = 5,
         domain: str | None = None,
         memory_kind: str | None = None,
+        delivery_policy: str | None = None,
     ) -> str:
         """Search long-term memory for chunks relevant to ``query``.
 
@@ -889,9 +935,16 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         classification (e.g. ``"fact"``, ``"decision"``, ``"profile"``).
         Omit to search all kinds (backward-compatible default).
 
+        ``delivery_policy`` optionally restricts results to one delivery policy
+        (``"always"``, ``"retrieved"``, ``"on_demand"`` — ADR 0108 D4). This is
+        the only way ``"on_demand"`` memories surface. Omit to search all.
+
         Returns ``"No matches."`` when the store is empty or nothing
         scores above the keyword threshold.
         """
+        delivery_policy, policy_error = _norm_delivery_policy(delivery_policy)
+        if policy_error:
+            return policy_error
         clamped_k = max(1, min(int(k), _MEMORY_RECALL_MAX_K))
         # search embeds the query over HTTP on hybrid stores — keep it off the loop.
         import asyncio
@@ -899,6 +952,8 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         search_kw: dict[str, Any] = {"k": clamped_k, "domain": domain or None}
         if memory_kind is not None:
             search_kw["memory_kind"] = memory_kind
+        if delivery_policy is not None:
+            search_kw["delivery_policy"] = delivery_policy
 
         results = await asyncio.to_thread(knowledge_store.search, query, **search_kw)
         if not results:
@@ -1006,22 +1061,30 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         domain: str | None = None,
         limit: int = 10,
         memory_kind: str | None = None,
+        delivery_policy: str | None = None,
     ) -> str:
-        """List the most recent chunks. Filter by domain and/or memory_kind.
+        """List the most recent chunks. Filter by domain, memory_kind and/or
+        delivery_policy.
 
         Useful when the operator asks for recent activity ("what did I
         log today?") or wants to inspect what the agent has stored.
-        Shows memory_kind and review_state when present.
+        Shows memory_kind, delivery_policy and review_state when present.
 
         Args:
             domain: Restrict to one domain bucket.
             limit: Max entries (default 10).
             memory_kind: Restrict to one typed kind (e.g. ``"profile"``).
+            delivery_policy: Restrict to one delivery policy (``"always"``,
+                ``"retrieved"``, ``"on_demand"`` — ADR 0108 D4).
         """
+        delivery_policy, policy_error = _norm_delivery_policy(delivery_policy)
+        if policy_error:
+            return policy_error
         clamped_limit = max(1, min(int(limit), _MEMORY_LIST_MAX_LIMIT))
-        chunks = knowledge_store.list_chunks(
-            domain=domain, limit=clamped_limit, memory_kind=memory_kind,
-        )
+        list_kw: dict[str, Any] = {"domain": domain, "limit": clamped_limit, "memory_kind": memory_kind}
+        if delivery_policy is not None:  # only forward when set — plugin backends predating it keep working
+            list_kw["delivery_policy"] = delivery_policy
+        chunks = knowledge_store.list_chunks(**list_kw)
         if not chunks:
             return f"No chunks in {domain or 'any domain'}."
         lines = []
@@ -1039,6 +1102,8 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
             kind_tag = ""
             if getattr(c, "memory_kind", None):
                 kind_tag += f" kind={c.memory_kind}"
+            if getattr(c, "delivery_policy", None):
+                kind_tag += f" policy={c.delivery_policy}"
             if getattr(c, "review_state", None):
                 kind_tag += f" review={c.review_state}"
             lines.append(f"#{c.id} {c.created_at} {head} {preview}{cite}{kind_tag}")

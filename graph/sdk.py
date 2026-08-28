@@ -186,20 +186,37 @@ async def knowledge_search(
 
 
 async def knowledge_add(
-    content: str, *, domain: str = "general", heading: str | None = None, epoch: str | None = None
+    content: str,
+    *,
+    domain: str = "general",
+    heading: str | None = None,
+    epoch: str | None = None,
+    memory_kind: str | None = None,
+    delivery_policy: str | None = None,
 ) -> int | None:
     """Add one chunk to the agent's knowledge graph; return its id, or ``None`` when no
     store is configured / it was a no-op. ``domain`` is the bucket, ``heading`` an
     optional title — e.g. ``knowledge_add(lesson, domain="loop-lessons", heading=cls)``.
     ``epoch`` (#1634) tags the chunk with the era it was learned in — an opaque string,
     typically a reset date (``epoch="2026-06-29"``). On the next wipe the plugin just
-    searches with the NEW epoch: old lessons stay for post-mortems but stop matching."""
+    searches with the NEW epoch: old lessons stay for post-mortems but stop matching.
+    ``memory_kind`` / ``delivery_policy`` (ADR 0108 D4) are the typed-memory columns —
+    what the chunk IS (``"fact"``, ``"note"``, ``"reference"``, …) and WHEN it enters the
+    prompt (``"always"`` / ``"retrieved"`` / ``"on_demand"``). Omitted = untyped /
+    retrieved, exactly as before."""
     store = getattr(STATE, "knowledge_store", None)
     if store is None:
         return None
-    if epoch is None:
-        return await asyncio.to_thread(store.add_chunk, content, domain=domain, heading=heading)
-    return await asyncio.to_thread(store.add_chunk, content, domain=domain, heading=heading, epoch=epoch)
+    # Only pass the optional columns a caller actually set — an ADR 0031 plugin backend
+    # predating a kwarg keeps working untouched on the common path.
+    extra: dict[str, str] = {}
+    if epoch is not None:
+        extra["epoch"] = epoch
+    if memory_kind is not None:
+        extra["memory_kind"] = memory_kind
+    if delivery_policy is not None:
+        extra["delivery_policy"] = delivery_policy
+    return await asyncio.to_thread(store.add_chunk, content, domain=domain, heading=heading, **extra)
 
 
 async def knowledge_purge(domain: str, *, before: str | None = None) -> int:

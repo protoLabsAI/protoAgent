@@ -58,21 +58,22 @@ class LayeredKnowledgeStore:
         epoch: str | None = None,
         memory_kind: str | None = None,
         review_state: str | None = None,
+        delivery_policy: str | None = None,
     ) -> list[dict]:
         """Top-k across BOTH tiers, fused by RRF over each tier's rank, tier-tagged.
         A chunk promoted into the commons (same content as its private original) is
         de-duped — the private record wins (it's editable) but keeps the summed score.
         ``namespace`` (ADR 0069 D3a), ``include_invalidated`` (ADR 0069 D9 —
         superseded rows are excluded by default), ``epoch`` (#1634 — era scoping),
-        and ``memory_kind`` / ``review_state`` (#3072 — typed-memory classification)
-        are passed through to both tiers."""
+        ``memory_kind`` / ``review_state`` (#3072 — typed-memory classification) and
+        ``delivery_policy`` (ADR 0108 D4) are passed through to both tiers."""
         priv = self._private.search(
             query, k, domain=domain, namespace=namespace, include_invalidated=include_invalidated, epoch=epoch,
-            memory_kind=memory_kind, review_state=review_state,
+            memory_kind=memory_kind, review_state=review_state, delivery_policy=delivery_policy,
         )
         comm = self._commons.search(
             query, k, domain=domain, namespace=namespace, include_invalidated=include_invalidated, epoch=epoch,
-            memory_kind=memory_kind, review_state=review_state,
+            memory_kind=memory_kind, review_state=review_state, delivery_policy=delivery_policy,
         )
 
         fused: dict[str, dict] = {}
@@ -131,6 +132,7 @@ class LayeredKnowledgeStore:
             subject=chunk.get("subject"),
             review_state=chunk.get("review_state"),
             expires_at=chunk.get("expires_at"),
+            delivery_policy=chunk.get("delivery_policy"),
         )
         if self._commons.id_for_exact_content(content) is None:
             log.error("[knowledge] promote(%s): commons write did not land — is the commons writable?", chunk_id)

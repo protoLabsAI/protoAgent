@@ -35,7 +35,7 @@ import os
 import re
 import sqlite3
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -99,6 +99,9 @@ class Chunk:
     subject: str | None = None
     review_state: str | None = None
     expires_at: str | None = None
+    # WHEN the chunk enters the prompt (ADR 0108 D4): "always" | "retrieved" |
+    # "on_demand"; NULL = retrieved. See ``infer_delivery_policy``.
+    delivery_policy: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -118,7 +121,21 @@ class Chunk:
             "subject": self.subject,
             "review_state": self.review_state,
             "expires_at": self.expires_at,
+            "delivery_policy": self.delivery_policy,
         }
+
+    @classmethod
+    def from_row(cls, row) -> Chunk:
+        """Build a Chunk from a ``SELECT *`` row, ignoring columns this build
+        doesn't know. The chunks table only ever grows (nullable, additive
+        migrations — ADR 0108 D4 and whatever D7 adds), and the commons DB is
+        host-level and shared, so an older build routinely reads a DB a newer
+        build has already widened; a strict ``Chunk(**dict(row))`` would fail
+        on the first unknown column."""
+        return cls(**{k: v for k, v in dict(row).items() if k in _CHUNK_FIELDS})
+
+
+_CHUNK_FIELDS = frozenset(f.name for f in fields(Chunk))
 
 
 def _resolve_path(db_path: str | Path | None, *, scoped: bool = True) -> Path:
@@ -246,6 +263,20 @@ def _namespace_clause(namespace: str | list[str] | None, col: str = "namespace")
     return "(" + " OR ".join(arms) + ")", params
 
 
+def _delivery_policy_clause(policy: str | None, col: str = "delivery_policy") -> tuple[str, list[str]]:
+    """SQL predicate + params for a ``delivery_policy`` filter (ADR 0108 D4).
+
+    NULL *means* retrieved (the column's documented default), so asking for
+    ``"retrieved"`` matches NULL rows too — otherwise every legacy/untyped row
+    would vanish from a policy-scoped read. Falsy → no predicate (unfiltered).
+    """
+    if not policy:
+        return "", []
+    if policy == DELIVERY_RETRIEVED:
+        return f"({col} IS NULL OR {col} = ?)", [policy]
+    return f"{col} = ?", [policy]
+
+
 def _fts_quote(token: str) -> str:
     """Quote a token for FTS5 MATCH so it's treated as a literal phrase.
 
@@ -275,6 +306,75 @@ def _has_fts5(db: sqlite3.Connection) -> bool:
 # this marker they'd be indistinguishable and the sweep would wipe supersession history.
 _BULK_DELETE_REASON = "source_delete"
 
+# ── typed memory: delivery policy (ADR 0108 D4) ─────────────────────────────
+# WHEN a chunk enters the prompt, made explicit on the row instead of overloading
+# ``domain``: ``"always"`` = every turn (what ``domain="hot"`` has always meant),
+# ``"retrieved"`` = on a RAG match, ``"on_demand"`` = tool call only. NULL reads
+# as ``"retrieved"``. D4 only records the policy; the per-turn reader
+# (``get_hot_memory_entries``) still selects on ``domain="hot"`` until D6
+# (#3187) switches delivery over to this column.
+DELIVERY_ALWAYS = "always"
+DELIVERY_RETRIEVED = "retrieved"
+DELIVERY_ON_DEMAND = "on_demand"
+DELIVERY_POLICIES = frozenset({DELIVERY_ALWAYS, DELIVERY_RETRIEVED, DELIVERY_ON_DEMAND})
+
+# ``_kb_meta`` flag stamped once the one-shot typed-memory backfill has run, so a
+# pass that failed mid-way retries on the next open and a finished one never re-runs.
+_TYPED_MEMORY_BACKFILL_KEY = "typed_memory_backfill"
+
+
+def infer_delivery_policy(domain: str | None) -> str | None:
+    """The ``delivery_policy`` a legacy ``domain`` implies (ADR 0108 D4 backfill
+    table): ``"hot"`` is always-on; everything else is NULL (= retrieved). One
+    source of truth for the backfill AND the write path, so they can't drift."""
+    # Exact-match ``domain == "hot"`` deliberately mirrors the reader —
+    # ``get_hot_memory_entries()`` → ``list_chunks(domain="hot")`` — so "Hot" is
+    # not hot memory today and isn't classified as such; the agent tool gate's
+    # lowercasing is an intentional over-refusal on the write side.
+    return DELIVERY_ALWAYS if domain == "hot" else None
+
+
+def infer_memory_kind(domain: str | None, source_type: str | None = None) -> str:
+    """The ``memory_kind`` a legacy ``domain`` (+ ``source_type``) implies — the
+    ADR 0108 D4 backfill table, one branch per row. ``domain`` is freeform TEXT
+    (SDK callers, snapshot imports), so anything unmapped is ``"legacy"``:
+    nothing is guessed at, nothing is lost. Backfill-only — the write path keeps
+    #3205's contract that an omitted ``memory_kind`` stays NULL."""
+    if domain == "hot":
+        return "standing"
+    if domain == "preferences":
+        return "profile"
+    if domain == "general":
+        return "note" if source_type == "conversation" else "reference"
+    if domain in ("finding", "fact"):
+        return "fact"
+    if domain == "conversation":
+        return "note"
+    return "legacy"
+
+
+def _backfill_typed_memory(db: sqlite3.Connection) -> int:
+    """One-shot ADR 0108 D4 classification of legacy rows: fill NULL
+    ``memory_kind`` / ``delivery_policy`` from ``domain`` (+ ``source_type``).
+    #3205 added the typed columns but left every existing row NULL. Only NULL
+    cells are written — a row that's already typed keeps what it has — so a
+    re-run is a no-op. Returns the number of rows touched. The caller owns the
+    transaction (it commits with the rest of ``_init_db``)."""
+    rows = db.execute(
+        "SELECT id, domain, source_type, memory_kind, delivery_policy FROM chunks "
+        "WHERE memory_kind IS NULL OR delivery_policy IS NULL"
+    ).fetchall()
+    updates: list[tuple[str | None, str | None, int]] = []
+    for r in rows:
+        kind = r["memory_kind"] if r["memory_kind"] is not None else infer_memory_kind(r["domain"], r["source_type"])
+        policy = r["delivery_policy"] if r["delivery_policy"] is not None else infer_delivery_policy(r["domain"])
+        if kind != r["memory_kind"] or policy != r["delivery_policy"]:
+            updates.append((kind, policy, int(r["id"])))
+    if updates:
+        db.executemany("UPDATE chunks SET memory_kind = ?, delivery_policy = ? WHERE id = ?", updates)
+    return len(updates)
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS chunks (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -293,7 +393,8 @@ CREATE TABLE IF NOT EXISTS chunks (
     memory_kind   TEXT,
     subject       TEXT,
     review_state  TEXT,
-    expires_at    TEXT
+    expires_at    TEXT,
+    delivery_policy TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_chunks_domain     ON chunks(domain);
@@ -455,6 +556,32 @@ class KnowledgeStore:
                 db.execute("CREATE INDEX IF NOT EXISTS idx_chunks_review_state ON chunks(review_state)")
             except sqlite3.DatabaseError as exc:
                 log.debug("[knowledge] typed memory schema migration skipped: %s", exc)
+            # Migration: delivery_policy column + one-shot typed-memory backfill
+            # (ADR 0108 D4). Additive + nullable like the rest. The backfill
+            # classifies every legacy row from ``domain`` exactly once (see
+            # ``_backfill_typed_memory``); the ``_kb_meta`` stamp — not the
+            # column's existence — is what marks it done, so a pass that failed
+            # after the ALTER still retries next open. Delivery keeps reading
+            # domain="hot" until D6 (#3187).
+            try:
+                cols = {r[1] for r in db.execute("PRAGMA table_info(chunks)")}
+                if "delivery_policy" not in cols:
+                    db.execute("ALTER TABLE chunks ADD COLUMN delivery_policy TEXT")
+                db.execute("CREATE INDEX IF NOT EXISTS idx_chunks_delivery_policy ON chunks(delivery_policy)")
+                stamped = db.execute(
+                    "SELECT value FROM _kb_meta WHERE key = ?", (_TYPED_MEMORY_BACKFILL_KEY,)
+                ).fetchone()
+                if stamped is None:
+                    touched = _backfill_typed_memory(db)
+                    db.execute(
+                        "INSERT INTO _kb_meta(key, value) VALUES(?, ?) "
+                        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                        (_TYPED_MEMORY_BACKFILL_KEY, _now_iso()),
+                    )
+                    if touched:
+                        log.info("[knowledge] typed-memory backfill classified %d legacy rows (ADR 0108 D4)", touched)
+            except sqlite3.DatabaseError as exc:
+                log.debug("[knowledge] delivery_policy migration skipped: %s", exc)
             self._fts_available = _has_fts5(db)
             if self._fts_available:
                 db.executescript(_FTS_SCHEMA)
@@ -532,6 +659,7 @@ class KnowledgeStore:
         subject: str | None = None,
         review_state: str | None = None,
         expires_at: str | None = None,
+        delivery_policy: str | None = None,
     ) -> int | None:
         """Insert a chunk. Returns the new row id, or None on failure.
 
@@ -548,12 +676,28 @@ class KnowledgeStore:
         ``memory_kind`` / ``subject`` / ``review_state`` / ``expires_at``
         (#3072) are typed-memory classification columns — additive, nullable,
         backward-compatible. Delivery behavior unchanged (owned by #3187).
+
+        ``delivery_policy`` (ADR 0108 D4) says WHEN the chunk enters the prompt
+        — ``"always"`` / ``"retrieved"`` / ``"on_demand"``; omitted = NULL =
+        retrieved. A ``domain="hot"`` write is stamped ``"always"`` whatever the
+        caller passed: the per-turn reader still keys on the domain, so a hot
+        row IS always-on today, and the column must say so or D6's switch to
+        the column would strand it.
         """
         if not content or not content.strip():
             return None
         content = _strip_stored_reasoning(content)
         if not content.strip():
             return None
+        if domain == "hot":
+            if delivery_policy not in (None, DELIVERY_ALWAYS):
+                log.debug(
+                    "[knowledge] add_chunk: domain=hot forces delivery_policy=always (caller passed %r)",
+                    delivery_policy,
+                )
+            delivery_policy = DELIVERY_ALWAYS
+        elif delivery_policy is None:
+            delivery_policy = infer_delivery_policy(domain)
         db = self._get_db()
         if db is None:
             return None
@@ -563,12 +707,12 @@ class KnowledgeStore:
                 "INSERT INTO chunks "
                 "(content, domain, heading, source, source_type, finding_type, "
                 "namespace, epoch, memory_kind, subject, review_state, expires_at, "
-                "created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "delivery_policy, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     content, domain, heading, source, source_type, finding_type,
                     namespace, epoch, memory_kind, subject, review_state, expires_at,
-                    now, now,
+                    delivery_policy, now, now,
                 ),
             )
             db.commit()
@@ -621,6 +765,7 @@ class KnowledgeStore:
         subject: str | None = None,
         review_state: str | None = None,
         expires_at: str | None = None,
+        delivery_policy: str | None = None,
         max_chars: int | None = None,
         overlap_chars: int | None = None,
         min_chars: int | None = None,
@@ -668,6 +813,7 @@ class KnowledgeStore:
                 subject=subject,
                 review_state=review_state,
                 expires_at=expires_at,
+                delivery_policy=delivery_policy,
             )
             if cid is not None:
                 ids.append(cid)
@@ -748,6 +894,7 @@ class KnowledgeStore:
         epoch: str | None = None,
         memory_kind: str | None = None,
         review_state: str | None = None,
+        delivery_policy: str | None = None,
     ) -> list[dict[str, Any]]:
         """Top-k chunks matching ``query``. Shape matches what the
         ``KnowledgeMiddleware`` consumes: each result has ``table``,
@@ -769,6 +916,8 @@ class KnowledgeStore:
 
         ``memory_kind`` / ``review_state`` (#3072) restrict hits to chunks
         with exactly that typed-memory classification. ``None`` = unfiltered.
+        ``delivery_policy`` (ADR 0108 D4) likewise; ``"retrieved"`` also matches
+        NULL rows, since NULL *means* retrieved (``_delivery_policy_clause``).
         """
         if not query or not query.strip():
             return []
@@ -780,11 +929,13 @@ class KnowledgeStore:
                 self._search_fts(
                     db, query, k, domain, namespace, include_invalidated, epoch,
                     memory_kind=memory_kind, review_state=review_state,
+                    delivery_policy=delivery_policy,
                 )
                 if self._fts_available
                 else self._search_like(
                     db, query, k, domain, namespace, include_invalidated, epoch,
                     memory_kind=memory_kind, review_state=review_state,
+                    delivery_policy=delivery_policy,
                 )
             )
         except sqlite3.DatabaseError as exc:
@@ -817,6 +968,7 @@ class KnowledgeStore:
         *,
         memory_kind: str | None = None,
         review_state: str | None = None,
+        delivery_policy: str | None = None,
     ) -> list[sqlite3.Row]:
         # Sanitize to FTS5-safe tokens; OR them so a multi-word query
         # matches any of the keywords (closer to LIKE behaviour).
@@ -844,6 +996,10 @@ class KnowledgeStore:
         if review_state:
             where.append("c.review_state = ?")
             params.append(review_state)
+        dp_sql, dp_params = _delivery_policy_clause(delivery_policy, col="c.delivery_policy")
+        if dp_sql:
+            where.append(dp_sql)
+            params.extend(dp_params)
         ns_sql, ns_params = _namespace_clause(namespace, col="c.namespace")
         if ns_sql:
             where.append(ns_sql)
@@ -869,6 +1025,7 @@ class KnowledgeStore:
         *,
         memory_kind: str | None = None,
         review_state: str | None = None,
+        delivery_policy: str | None = None,
     ) -> list[sqlite3.Row]:
         tokens = [t for t in re.findall(r"[\w']+", query) if t]
         if not tokens:
@@ -899,6 +1056,10 @@ class KnowledgeStore:
         if review_state:
             sql += " AND review_state = ?"
             params.append(review_state)
+        dp_sql, dp_params = _delivery_policy_clause(delivery_policy)
+        if dp_sql:
+            sql += f" AND {dp_sql}"
+            params.extend(dp_params)
         ns_sql, ns_params = _namespace_clause(namespace)
         if ns_sql:
             sql += f" AND {ns_sql}"
@@ -916,6 +1077,7 @@ class KnowledgeStore:
         include_invalidated: bool = False,
         memory_kind: str | None = None,
         review_state: str | None = None,
+        delivery_policy: str | None = None,
     ) -> list[Chunk]:
         """Most-recent-first chunk listing. Used by ``memory_list`` and the
         fact consolidator. ``namespace`` (ADR 0021) optionally scopes to one
@@ -925,8 +1087,9 @@ class KnowledgeStore:
         injection, ``memory_list``, and the fact consolidator only see valid
         rows. ``include_invalidated=True`` is the audit escape hatch.
 
-        ``memory_kind`` / ``review_state`` (#3072) optionally restrict the
-        listing to chunks with that typed-memory classification."""
+        ``memory_kind`` / ``review_state`` (#3072) and ``delivery_policy``
+        (ADR 0108 D4) optionally restrict the listing to chunks with that
+        typed-memory classification."""
         db = self._get_db()
         if db is None:
             return []
@@ -946,6 +1109,10 @@ class KnowledgeStore:
         if review_state is not None:
             clauses.append("review_state = ?")
             params.append(review_state)
+        dp_sql, dp_params = _delivery_policy_clause(delivery_policy)
+        if dp_sql:
+            clauses.append(dp_sql)
+            params.extend(dp_params)
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         params.append(limit)
         try:
@@ -955,7 +1122,7 @@ class KnowledgeStore:
             rows = []
         finally:
             db.close()
-        return [Chunk(**dict(r)) for r in rows]
+        return [Chunk.from_row(r) for r in rows]
 
     def delete_by_id(self, chunk_id: int) -> bool:
         """HARD-delete one chunk by id. This is the operator-intent path
@@ -1080,7 +1247,7 @@ class KnowledgeStore:
             row = None
         finally:
             db.close()
-        return Chunk(**dict(row)) if row else None
+        return Chunk.from_row(row) if row else None
 
     def get_chunk(self, chunk_id: int) -> dict | None:
         """Return one chunk's full row as a dict by id, or None. The reader the

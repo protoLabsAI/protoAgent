@@ -27,6 +27,8 @@ the agent knows; rows are distinguished by a few columns:
 | `namespace` | optional per-project / per-owner scope (ADR 0021) — a *filter* for multi-project forks, never required |
 | `source` / `source_type` | provenance: for conversation-derived rows (harvest summaries, extracted facts, background reports) `source` is the **originating session/thread id** (ADR 0069 D5); for ingested content it is the **document origin** (URL/path); other writes may leave it unset or stamp the writing surface (e.g. `console`). `source_type` names the write path and maps onto a [trust tier](#trust-tiers) |
 | `created_at` / `invalidated_at` | when the row was stored, and — for superseded facts — when a newer revision replaced it (ADR 0069 D9; retrieval excludes invalidated rows by default) |
+| `memory_kind` / `subject` / `review_state` / `expires_at` | typed memory (#3072, [ADR 0108 D4](../adr/0108-context-architecture-v2.md)): what the chunk *is* (`profile`, `standing`, `fact`, `decision`, `note`, `episode`, `reference`, `legacy`), what it's about, whether an operator confirmed it, and when it lapses. `NULL` on untyped rows |
+| `delivery_policy` | *when* the chunk enters the prompt (ADR 0108 D4): `always` (every turn — what `domain="hot"` has always meant; a hot write is stamped `always` automatically), `retrieved` (on a RAG match — the `NULL` default), `on_demand` (only via `memory_recall`). Rows that predate the column were classified once from `domain` on the first open after the upgrade |
 | `heading`, `content` | the chunk itself |
 
 ## Three kinds of memory
@@ -119,7 +121,12 @@ prompt layer, don't just hope the store stays clean). Three parts, in order:
    agent tool, console route, or plugin — emits a `memory.hot_written` bus
    event, and an optional gate (`knowledge.hot_write_confirm`) makes the
    agent's own write path refuse `domain="hot"` entirely, reserving always-on
-   promotion for operator surfaces.
+   promotion for operator surfaces. Since [ADR 0108 D4](../adr/0108-context-architecture-v2.md)
+   each hot chunk also carries `delivery_policy="always"` (a hot write is stamped
+   with it whatever the caller said), and the gate refuses that policy on *any*
+   domain — through `memory_ingest` and `knowledge_ingest` alike; the per-turn
+   reader still selects on `domain="hot"` until D6 (#3187) switches delivery to
+   the policy column.
 3. **RAG hits.** The store is searched with the last user message and the
    top-k results (default 10) inject, each line ending with its stored date and
    trust label — `(stored 2026-07-01; trust: agent)`. Two policies shape the
@@ -223,7 +230,7 @@ tuning guidance in [Tune the knowledge store](../guides/knowledge.md)):
 | `top_k` | `10` | how many RAG chunks inject per turn |
 | `inject_namespaces` | `[]` | namespaces allowed to auto-inject (empty = unfiltered; `""` matches un-namespaced) |
 | `inject_min_trust` | `1` | trust floor for auto-injection: 1 = down-weight only, 2 = drop external, 3 = operator-only |
-| `hot_write_confirm` | `false` | when on, the agent's `memory_ingest` refuses `domain="hot"` writes |
+| `hot_write_confirm` | `false` | when on, the agent's `memory_ingest` and `knowledge_ingest` refuse always-on writes (`domain="hot"` or `delivery_policy="always"`) |
 | `scope` | `scoped` | tier ([ADR 0041](../adr/0041-workspaces-and-tiered-stores.md)): `scoped` (private) · `shared` (host commons) · `layered` (read commons ∪ private, write private). See [Tune the knowledge store → Sharing across a fleet](../guides/knowledge.md#sharing-knowledge-across-a-fleet-the-commons) |
 | `middleware.knowledge` | `true` | turn the whole subsystem on/off |
 

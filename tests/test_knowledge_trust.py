@@ -343,3 +343,93 @@ def test_confirm_gate_on_operator_route_still_writes(tmp_path, monkeypatch):
     cid = store.add_chunk("operator pin", "hot", source="console", source_type="operator")
     assert cid is not None
     assert [t for t, _ in events] == ["memory.hot_written"]
+
+
+# ---------------------------------------------------------------------------
+# 5) delivery_policy (ADR 0108 D4) — the gate covers "always" on any domain,
+#    and the typed column rides the agent's memory tools end to end
+# ---------------------------------------------------------------------------
+
+
+def test_confirm_gate_on_refuses_always_policy_write(tmp_path):
+    """delivery_policy="always" is the same always-on promotion as domain="hot" —
+    the gate covers it too, whatever the domain says."""
+    store = KnowledgeStore(tmp_path / "kb.db")
+    ingest = _by_name(_build_memory_tools(store, graph_config=SimpleNamespace(knowledge_hot_write_confirm=True)))[
+        "memory_ingest"
+    ]
+    out = asyncio.run(ingest.ainvoke({"content": "pin this", "domain": "general", "delivery_policy": "always"}))
+    assert out.startswith("Error:")
+    assert "operator" in out  # tells the model to ask, not to retry
+    assert store.list_chunks(limit=5) == []  # nothing parked/stored
+
+
+def test_confirm_gate_on_leaves_non_always_policies_alone(tmp_path):
+    store = KnowledgeStore(tmp_path / "kb.db")
+    ingest = _by_name(_build_memory_tools(store, graph_config=SimpleNamespace(knowledge_hot_write_confirm=True)))[
+        "memory_ingest"
+    ]
+    out = asyncio.run(ingest.ainvoke({"content": "a lazy note", "domain": "general", "delivery_policy": "on_demand"}))
+    assert out.startswith("Stored chunk")
+    assert store.list_chunks(limit=1)[0].delivery_policy == "on_demand"
+
+
+def test_memory_ingest_delivery_policy_reaches_the_store(tmp_path):
+    store = KnowledgeStore(tmp_path / "kb.db")
+    ingest = _by_name(_build_memory_tools(store))["memory_ingest"]
+    out = asyncio.run(ingest.ainvoke({"content": "pin this", "domain": "general", "delivery_policy": "always"}))
+    assert out.startswith("Stored chunk")
+    row = store.list_chunks(limit=1)[0]
+    assert row.delivery_policy == "always"
+    assert row.source_type == "conversation"  # still the agent-derived tier
+
+
+def test_memory_list_and_recall_expose_delivery_policy(tmp_path):
+    store = KnowledgeStore(tmp_path / "kb.db")
+    store.add_chunk("the deploy day is Friday", domain="fact", delivery_policy="always")
+    store.add_chunk("the deploy checklist is long", domain="fact", delivery_policy="on_demand")
+    tools = _by_name(_build_memory_tools(store))
+    listed = asyncio.run(tools["memory_list"].ainvoke({}))
+    assert "policy=always" in listed and "policy=on_demand" in listed
+    only_lazy = asyncio.run(tools["memory_list"].ainvoke({"delivery_policy": "on_demand"}))
+    assert "checklist" in only_lazy and "Friday" not in only_lazy
+    recalled = asyncio.run(tools["memory_recall"].ainvoke({"query": "deploy", "delivery_policy": "always"}))
+    assert "Friday" in recalled and "checklist" not in recalled
+
+
+def test_tools_normalize_delivery_policy_case(tmp_path):
+    """The tool boundary folds case/whitespace: "ALWAYS" is stored as "always"
+    (and, with the gate off, lands)."""
+    store = KnowledgeStore(tmp_path / "kb.db")
+    ingest = _by_name(_build_memory_tools(store, graph_config=SimpleNamespace(knowledge_hot_write_confirm=False)))[
+        "memory_ingest"
+    ]
+    out = asyncio.run(ingest.ainvoke({"content": "pin this", "domain": "general", "delivery_policy": " ALWAYS "}))
+    assert out.startswith("Stored chunk")
+    assert store.list_chunks(limit=1)[0].delivery_policy == "always"
+
+
+def test_tools_reject_unknown_delivery_policy(tmp_path):
+    """An unknown policy is refused at the tool boundary with the allowed values
+    named — nothing is stored — on ingest, recall and list alike."""
+    store = KnowledgeStore(tmp_path / "kb.db")
+    tools = _by_name(_build_memory_tools(store))
+    out = asyncio.run(tools["memory_ingest"].ainvoke({"content": "pin this", "delivery_policy": "hot"}))
+    assert out.startswith("Error:") and "always" in out and "'hot'" in out
+    assert store.list_chunks() == []
+    recalled = asyncio.run(tools["memory_recall"].ainvoke({"query": "anything", "delivery_policy": "nope"}))
+    assert recalled.startswith("Error:") and "on_demand" in recalled
+    listed = asyncio.run(tools["memory_list"].ainvoke({"delivery_policy": "nope"}))
+    assert listed.startswith("Error:")
+
+
+def test_confirm_gate_on_refuses_knowledge_ingest_hot(tmp_path):
+    """knowledge_ingest(domain="hot") is an agent path to an always-on row via a
+    local file — the gate covers it too, before anything is read or spawned."""
+    doc = tmp_path / "note.md"
+    doc.write_text("pin me every turn")
+    store = KnowledgeStore(tmp_path / "kb.db")
+    tools = _by_name(_build_memory_tools(store, graph_config=SimpleNamespace(knowledge_hot_write_confirm=True)))
+    out = asyncio.run(tools["knowledge_ingest"].ainvoke({"source": str(doc), "domain": "hot"}))
+    assert out.startswith("Error:") and "knowledge_ingest" in out and "operator" in out
+    assert store.list_chunks() == []  # nothing stored
