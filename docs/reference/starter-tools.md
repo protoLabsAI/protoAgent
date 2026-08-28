@@ -451,7 +451,9 @@ default when omitted) or `"on_demand"` (only through `memory_recall`). When
 
 `expires_in_days` (ADR 0108 D7, 1–3650) gives a volatile fact a shelf life: the row is kept
 but leaves delivery once it lapses. Every memory the agent stores starts
-`review_state="pending"` until the operator confirms it in the Memory inspector.
+`review_state="pending"` until the operator confirms it in the Memory inspector, and carries the
+session it was written in as its `source` — stamped from the graph state, not passed by the model,
+so `memory_recall` can cite `src:` for it later.
 
 Returns `"Stored chunk 17 in 'preferences'."`, or an error string when the store is
 unavailable.

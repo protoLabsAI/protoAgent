@@ -111,7 +111,13 @@ Every write is typed on the way in, and every memory has a lifecycle after it:
    always win; `subject` and `expires_at` are never guessed. Rows that predate
    this rule are stamped the same way by a one-shot pass on the first open after
    upgrading (its own `_kb_meta` marker, separate from the D4 pass), so every
-   row carries a verdict and filters compare the column directly.
+   row carries a verdict and filters compare the column directly. A
+   `memory_ingest` write also records **which session it happened in**, in the
+   `source` column — the same machine-readable link the harvest path already
+   wrote there (ADR 0069 D5), so `memory_recall` cites `src:` for an
+   agent-remembered fact just as it does for a harvested one. The session id is
+   read from the graph state the tool was invoked with, never from the model:
+   provenance the model could set is provenance it could forge.
 2. **Confirmation.** The operator confirms, rejects, or re-opens a row with
    `POST /api/memory/chunks/{id}/review` and a body of `{"state": "confirmed" |
    "rejected" | "pending"}` — the Memory inspector's verdict. Rejecting never

@@ -320,7 +320,7 @@ How context behaves across the five runtime modes:
 |------|--------------|---------------|-------------------|---------------|--------------|
 | **Native** (LangGraph) | Full SOUL + roster + doctrine | Checkpointed (messages channel) | Composed per turn by `compose_projected_context()` | All write paths available | Full: always-on + RAG + digest |
 | **ACP** (external runtime) | Same via `build_stable_prefix()` | External runtime's own storage | Same via `compose_projected_context()` (D8) | Via operator MCP tool bridge | Same (D8 parity) |
-| **Subagent** (`task()` delegation) | Subagent-specific prompt (`build_subagent_prompt()`) | Own checkpoint (scoped thread) | Composed per turn (own middleware stack) | Writes scoped to parent's store | Reads from parent's store |
+| **Subagent** (`task()` delegation) | Subagent-specific prompt (`build_subagent_prompt()`), returned verbatim — no SOUL, no roster | Own checkpoint (scoped thread) | **None** — the subagent stack has no `KnowledgeMiddleware`, so nothing is projected: no `<injected_memory>` framing, skills index, working state, incognito rule or D6 budget. Memory is reachable only as an explicit `memory_recall` tool where the subagent's allowlist grants it (pull-on-demand). Giving subagents a defined context contract is tracked on #3189 | Writes scoped to parent's store | Reads from parent's store |
 | **Autonomous** (goal-driven turn) | Same as native | Same session checkpoint | Digest SUPPRESSED (goal-turn override); working state + RAG active | All write paths | No digest; RAG + always-on |
 | **Incognito** (ADR 0069 D3b) | Same as native | Checkpointed but memory-isolated | Working state + skills only (no memory injection) | NO writes to knowledge store | Skills index only (no memory) |
 
