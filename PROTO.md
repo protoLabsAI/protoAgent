@@ -65,6 +65,11 @@ TypeScript is the console.
 - **Console deps:** `npm ci` at the repo root (npm workspaces; the web app is
   `@protoagent/web`). **Changing/bumping a dependency requires npm ≥ 11**
   (`npm install -g npm@11`) — see the npm-10 no-op gotcha below.
+- **Console Node version:** `.nvmrc` pins **Node 20**, matching CI — `nvm use` at the repo root.
+  Node 24+ pre-defines the Web Storage globals, which shadowed jsdom's in the unit suite and
+  failed 127 tests at `localStorage.clear()` on a clean tree; `apps/web/vitest.setup.ts` now
+  repairs that so a newer Node still runs green, but `.nvmrc` is what keeps you on CI's version
+  in the first place (#3213).
 - **Console dev loop (frontend):** `npm run dev` (HMR) / `npm run preview` (built dist) serve
   the console on `:5173` and **proxy all backend calls (`/api`, `/a2a`, events, `/agents`,
   `/plugins`, `/_ds`) to `PROTOAGENT_API_BASE`, default `http://127.0.0.1:7871`** — the
