@@ -30,7 +30,7 @@ knowledge:
   embeddings: true            # opt-in hybrid (semantic+keyword); default false → keyword-only
   embed_model: qwen3-embedding # gateway EMBEDDING model (not the chat model);
                               #   must be served by your gateway (check GET /v1/models)
-  top_k: 10                   # hits injected into the prompt per turn
+  top_k: 5                    # hits injected into the prompt per turn (0 = none)
   vector_k: 20                # vector candidates fetched before RRF fusion (hybrid)
   rrf_k: 60                   # RRF constant — higher = keyword & semantic weigh more evenly
   min_score: 0.0              # drop fused hits below this score (0 = keep all)

@@ -100,10 +100,15 @@ InjectionRecorder = Callable[[dict, list[str], list[str], list[int], list[int]],
 class ProjectionOptions:
     """The delivery knobs the composer reads — one shape for both runtimes.
 
-    Defaults match ``KnowledgeMiddleware``'s constructor; :meth:`from_config`
-    reads them off a graph config the way ``graph/agent.py`` wires the
-    middleware, so an external runtime gets the native delivery policy rather
-    than a policy of its own.
+    The defaults below are the EFFECTIVE runtime defaults: they match
+    ``KnowledgeMiddleware``'s constructor, the documented example YAML **and**
+    the ``graph/config.py`` fields :meth:`from_config` reads, so "the default"
+    is one number whichever path builds these. (It was not: ``knowledge_top_k``
+    defaulted to 10 there while every other statement of it said 5, and since a
+    real config always SUPPLIES that attribute, the class default here was never
+    the one a live agent got — #3259.) :meth:`from_config` reads them off a graph
+    config the way ``graph/agent.py`` wires the middleware, so an external
+    runtime gets the native delivery policy rather than a policy of its own.
     """
 
     top_k: int = 5  # RAG hits auto-injected per turn (knowledge.top_k)
@@ -123,6 +128,24 @@ class ProjectionOptions:
     prior_sessions_policy: str = "newest"
 
     def __post_init__(self) -> None:
+        # A NEGATIVE top_k is not a smaller cap — it is no cap at all, twice over
+        # (#3259): ``k`` reaches SQLite as ``LIMIT -1``, which means "no limit", so
+        # the store hands back every matching row; and ``rank_by_trust``'s
+        # ``kept[: top_k]`` becomes ``kept[:-1]``, which drops ONE element instead
+        # of capping. The delivery budget then decides what ships, and a turn
+        # injects whatever happens to fit. ``settings_schema`` already declares
+        # ``minimum=1`` for ``knowledge.top_k``, but a YAML config never passes
+        # through schema validation — so the floor has to live here, on the shape
+        # BOTH runtimes read. 0 is untouched: it is the documented "no auto-injected
+        # hits" (``_int_or_default`` preserves an explicit 0 deliberately).
+        if self.top_k < 0:
+            log.warning(
+                "[projection] knowledge.top_k=%s is negative — treated as 0 (no auto-injected "
+                "hits). A negative value does not cap retrieval, it removes the cap; set a "
+                "positive count, or 0 to turn auto-injection off deliberately.",
+                self.top_k,
+            )
+            object.__setattr__(self, "top_k", 0)
         # A non-positive budget means unbounded — the same reading from_config
         # gives ``budget_pct: 0``, so direct construction can't disagree with it.
         if self.budget_chars is not None and self.budget_chars <= 0:
@@ -531,8 +554,27 @@ def _fit_to_budget(c: _Candidates, opts: ProjectionOptions, skills_index, summar
 
     Deterministic: the same candidates and budget always deliver the same text.
     ``None`` budget = unbounded — the assembly is byte-identical to pre-D6.
+
+    Delivery invariant (#3259): at most ``top_k`` RAG hits leave here, whatever
+    arrives. The ranking layer already trims, so this only ever fires on a bug —
+    but a live turn injected 26 hits under ``top_k: 5``, and the failure was
+    silent because the text and the injection-log ids agreed with each other and
+    with nothing else. Trimming the CANDIDATES (not the ids afterwards) keeps
+    that agreement while making the count honest: warn and trim rather than
+    raise, because a stale cap must not cost the operator their turn.
     """
     budget = opts.budget_chars
+    cap = max(0, opts.top_k)
+    if len(c.results) > cap:
+        log.warning(
+            "[projection] over-delivery blocked: %d RAG hits reached the delivery budget under "
+            "knowledge.top_k=%d — trimmed to %d. The ranking layer should have capped this; "
+            "please report it with the session id (#3259).",
+            len(c.results),
+            opts.top_k,
+            cap,
+        )
+        c.results = c.results[:cap]
     d = _compose(c)
     if budget is None or len(d.text) <= budget:
         return _finish(d, budget, overflow=[], memory_shed=False, skills_shed=False)
