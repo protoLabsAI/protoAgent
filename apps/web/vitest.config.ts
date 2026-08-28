@@ -7,7 +7,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "jsdom",
-    // Repairs the Web Storage globals on Nodes that pre-define them (26+), where jsdom's
+    // Repairs the Web Storage globals on Nodes that pre-define them (25+), where jsdom's
     // would otherwise never be installed. See the file for the full failure mode (#3213).
     setupFiles: ["./vitest.setup.ts"],
     include: ["src/**/*.test.ts"],
