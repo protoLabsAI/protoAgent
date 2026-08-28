@@ -115,6 +115,35 @@ jobs:
             echo "warn: live label fetch failed — falling back to the event snapshot"
           fi
           bash scripts/changelog_gate.sh "origin/${GITHUB_BASE_REF}"
+      - name: uv.lock must not silently downgrade a dependency
+        # A dependency PR is titled after ONE package; its lockfile is not so
+        # disciplined. #3218 was titled "bump websockets 15.0.1 -> 17.0.1" and
+        # also took langchain 1.3.18 -> 1.3.2, langgraph 1.2.11 -> 1.2.2 and
+        # langgraph-sdk 0.4.2 -> 0.3.15 — websockets 17 only resolves once
+        # langgraph-sdk drops below 0.4.2, which caps it. Reviewed from the title
+        # and the green checks, merged, and the graph runtime ran four hours
+        # older with every gate still green: a downgrade is not a test failure,
+        # it is a silently older product.
+        #
+        # Labels are read LIVE from the API for the same reason as the changelog
+        # step above — so "apply the label, press Re-run failed jobs" works.
+        # Downgrades that ARE intended (the langgraph/websockets trade is a real
+        # one) pass with `lock-downgrade-ok`. Additions and removals never fail:
+        # a dependency dropping an extra is routine, and gating on it would just
+        # teach people to ignore this check.
+        if: github.event_name == 'pull_request'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --no-tags --depth=1 origin "${GITHUB_BASE_REF}"
+          ALLOW=""
+          if gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
+               --jq '.labels[].name' | grep -qx 'lock-downgrade-ok'; then
+            echo "note: lock-downgrade-ok label present — downgrades reported, not enforced"
+            ALLOW="--allow-downgrades"
+          fi
+          python scripts/lock_diff.py --base "origin/${GITHUB_BASE_REF}" ${ALLOW}
       - name: Entries must be under [Unreleased], not an already-dated heading
         # Same placement check as changelog.yml (the WHERE to the gate's WHETHER
         # — see the comments there), made required for the same #2903 reason as
