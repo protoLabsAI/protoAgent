@@ -277,7 +277,13 @@ def _deliverable_clauses(col_prefix: str = "") -> tuple[list[str], list[str]]:
     operator REJECTED (``review_state='rejected'``) or one past its ``expires_at``
     never enters the prompt. NULL review state (= pending) and NULL expiry are
     deliverable. Superseded rows are excluded separately (``invalidated_at``).
-    Returns ``(sql_clauses, params)`` — ``col_prefix`` is ``"c."`` on joined SQL."""
+    Returns ``(sql_clauses, params)`` — ``col_prefix`` is ``"c."`` on joined SQL.
+
+    The expiry test is a STRING compare against ``_now_iso()`` — it assumes
+    ``expires_at`` is stored in the same ``YYYY-MM-DDTHH:MM:SS.ffffff+00:00``
+    ISO shape (the write funnel normalizes it — ADR 0108 D7); a bare date
+    (``2027-01-01``) still orders correctly, an offset other than ``+00:00``
+    does not. The projection's ``deliverable_hit`` parses instead."""
     p = col_prefix
     return (
         [

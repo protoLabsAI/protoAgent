@@ -209,9 +209,12 @@ the sources that fed it.
 
 The projection is **bounded**: it may use at most `context.budget_pct` of the
 model's context window (default 8%, chars//4 — the same token heuristic the
-rest of the runtime uses). The ceiling is derived from the window the gateway
-reports for the model; no window, or `budget_pct: 0`, means unbounded. The
-stable prompt is not part of it — only what is injected on top per turn.
+rest of the runtime uses), and never less than **16 000 chars** — roughly the
+always-on cap (6 000) plus the digest cap (~2 000 tokens), so a small-window
+model keeps its standing context whole and sheds only what lies beyond it. The
+ceiling is derived from the window the gateway reports for the model; no
+window (logged once — the knob is inert), or `budget_pct: 0`, means unbounded.
+The stable prompt is not part of it — only what is injected on top per turn.
 
 Within the budget, the parts fill in a fixed priority (highest first):
 
@@ -224,21 +227,25 @@ Within the budget, the parts fill in a fixed priority (highest first):
 Over budget, the lowest-priority parts shed first, each step re-measured so
 nothing is cut mid-line: RAG hits go one whole hit at a time from the
 lowest-ranked end, then the digest as a unit, then the skill index gives up
-descriptions down to its identity floor — every skill's name stays listed
-([ADR 0060](../adr/0060-skill-progressive-disclosure.md), #2867). Working state
-and always-on memory are **never shed**: if they alone exceed the budget they
-are delivered anyway and a warning names the sizes, because a silently
-missing standing instruction is worse than an oversized prompt. The order is
-fixed by the ADR — there is no `delivery_order` knob to reorder it.
+descriptions one row at a time down to its identity floor — every skill's name
+stays listed ([ADR 0060](../adr/0060-skill-progressive-disclosure.md), #2867).
+Working state and always-on memory are **never shed**: if they alone exceed
+the budget they are delivered anyway and a warning names the sizes (once per
+distinct standing-context size), because a silently missing standing
+instruction is worse than an oversized prompt. The order is fixed by the ADR —
+there is no `delivery_order` knob to reorder it.
 
-What was shed is visible: the projection's `budget` summary (ceiling, chars
-used, and an `overflow` list — label, items and chars dropped per part) rides
-with the section annotations into the prompt inspector's preview, each shed
-section is marked `truncated`, and the injection log records the ids that
-actually **entered** the turn, never those merely retrieved. With the default
-8% on a 128k-window model the ceiling is ~10k tokens — more than a typical
-turn injects (6 000 chars of always-on memory, a ~2 000-token digest, ten
-hits, a 2%-of-window skill index) — so nothing is shed until you lower it.
+What was shed is visible: the prompt **preview API** (`GET /api/prompts/preview`)
+carries the `budget` summary — ceiling, chars used, and an `overflow` list
+(label, items and chars dropped per part) — and marks each shed section
+`truncated`; the console inspector renders both in a follow-up. The injection
+log records the ids that actually **entered** the turn, never those merely
+retrieved. With the default 8% on a 128k-window model the ceiling is ~10k
+tokens — more than a typical turn injects (6 000 chars of always-on memory, a
+~2 000-token digest, ten hits, a 2%-of-window skill index) — so nothing is
+shed there until you lower it; on a 32k window or smaller the 16k-char floor is
+the budget, so RAG hits and skill descriptions beyond it now shed where they
+used to be unbounded.
 
 ### Trust tiers
 

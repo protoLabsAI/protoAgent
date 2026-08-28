@@ -609,7 +609,7 @@ The per-turn injected context — working state, always-on memory, the skill ind
 
 | Key | Default | What |
 |---|---|---|
-| `budget_pct` | `8` | Ceiling for the injected context as a percentage of the model's context window (chars//4). Over budget the lowest-priority parts shed first — RAG hits, then the prior-session digest, then skill descriptions (skill names never drop); working state and always-on memory are never shed. `0` = unbounded; unbounded too when the gateway reports no window for the model. The priority order is fixed. |
+| `budget_pct` | `8` | Ceiling for the injected context as a percentage of the model's context window (chars//4), never below 16 000 chars (room for always-on memory + the digest — on a ≤32k window the floor applies). Over budget the lowest-priority parts shed first — RAG hits, then the prior-session digest, then skill descriptions (skill names never drop); working state and always-on memory are never shed. `0` = unbounded; unbounded too when the gateway reports no window for the model (logged once). The priority order is fixed. The prompt preview API reports the budget and what was shed. |
 
 ## `skills`
 

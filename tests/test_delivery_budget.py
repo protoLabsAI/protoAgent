@@ -87,11 +87,19 @@ _WS = "<working_state>\nGOAL [active] (iteration 1/3): ship it\n</working_state>
 
 @pytest.fixture
 def quiet(monkeypatch):
-    """No working state, no goal turn, no disk: every test states what it wants."""
+    """No working state, no goal turn, no disk, fresh once-per-process flags:
+    every test states what it wants."""
     import graph.projection as proj
 
     monkeypatch.setattr(proj, "working_state_block", lambda state: "")
     monkeypatch.setattr(proj, "_in_goal_turn", lambda: False)
+    proj._NEVER_SHED_WARNED.clear()
+    monkeypatch.setattr(proj, "_INERT_BUDGET_LOGGED", False)
+
+
+def _full_rows(text: str) -> int:
+    """Skill rows carrying a description end with ``</skill>``; name-only rows are self-closing."""
+    return text.count("</skill>")
 
 
 def _compose(store, index, *, budget, digest=True, ws=None, monkeypatch=None, top_k=5):
@@ -122,8 +130,17 @@ def test_budget_derives_from_window_and_pct(monkeypatch):
     # A missing attribute → the documented 8% default; 0 → unbounded.
     assert ProjectionOptions.from_config(SimpleNamespace(api_base="http://gw")).budget_chars == int(128_000 * 0.08 * 4)
     assert ProjectionOptions.from_config(SimpleNamespace(api_base="http://gw", context_budget_pct=0)).budget_chars is None
-    assert ProjectionOptions.from_config(SimpleNamespace(api_base="http://gw", context_budget_pct="2.5")).budget_chars == int(
-        128_000 * 0.025 * 4
+    # 2.5% of 128k = 12 800 chars — below the floor, so the floor applies.
+    from graph.projection import _MIN_BUDGET_CHARS
+
+    assert int(128_000 * 0.025 * 4) < _MIN_BUDGET_CHARS
+    assert (
+        ProjectionOptions.from_config(SimpleNamespace(api_base="http://gw", context_budget_pct="2.5")).budget_chars
+        == _MIN_BUDGET_CHARS
+    )
+    # 20% of 128k = 102 400 chars — above the floor, the percentage rules.
+    assert ProjectionOptions.from_config(SimpleNamespace(api_base="http://gw", context_budget_pct=20)).budget_chars == int(
+        128_000 * 0.20 * 4
     )
 
 
@@ -423,3 +440,126 @@ def test_empty_projection_keeps_the_legacy_shape():
         "context_sections": [],
         "budget": {"chars": 100, "used": 0, "overflow": []},
     }
+
+
+# ── the skill shed walks by ROWS (monotone, one index read per compose) ───────
+
+
+def test_a_small_overshoot_drops_exactly_one_description(quiet):
+    store = _Store(hot=_HOT)
+    index = _Index(_SKILLS)
+    full = _compose(store, index, budget=None, digest=False)
+    assert _full_rows(full.text) == 6
+    for overshoot in (1, 3, 5):
+        p = _compose(store, index, budget=len(full.text) - overshoot, digest=False)
+        assert _full_rows(p.text) == 5, overshoot
+        assert all(f'name="skill-{i}"' in p.text for i in range(6))
+        assert p.overflow == [
+            {"label": "Skills index", "dropped_items": 1, "dropped_chars": p.overflow[0]["dropped_chars"]}
+        ]
+        assert len(p.text) <= len(full.text) - overshoot
+
+
+def test_descriptions_kept_is_monotone_in_the_budget(quiet):
+    store = _Store(hot=_HOT)
+    index = _Index(_SKILLS)
+    full = _compose(store, index, budget=None, digest=False)
+    kept = []
+    for budget in [*range(len(full.text) - 1400, len(full.text), 23), len(full.text)]:
+        p = _compose(store, index, budget=budget, digest=False)
+        kept.append(_full_rows(p.text))
+        assert all(f'name="skill-{i}"' in p.text for i in range(6))  # identities never drop
+    assert kept == sorted(kept)  # non-decreasing in the budget
+    assert kept[0] < 6 and kept[-1] == 6
+
+
+def test_the_skill_index_is_read_once_per_compose(quiet):
+    class _Counting(_Index):
+        reads = 0
+
+        def skill_summaries(self, limit=None):
+            type(self).reads += 1
+            return super().skill_summaries(limit)
+
+    index = _Counting(_SKILLS)
+    store = _Store(hot=_HOT)
+    p = _compose(store, index, budget=10, digest=False)  # everything shed to the floor
+    assert _Counting.reads == 1
+    assert _full_rows(p.text) == 0 and all(f'name="skill-{i}"' in p.text for i in range(6))
+
+
+# ── the derived budget has a floor; the warning is heard once ────────────────
+
+
+def test_budget_never_below_the_floor(monkeypatch):
+    import graph.model_window as mwin
+    from graph.projection import _MIN_BUDGET_CHARS
+
+    for window, expected in ((8_000, _MIN_BUDGET_CHARS), (32_000, _MIN_BUDGET_CHARS), (128_000, 40_960)):
+        monkeypatch.setattr(mwin, "context_window_for", lambda config, model_name=None, w=window: w)
+        cfg = SimpleNamespace(api_base="http://gw", context_budget_pct=8.0)
+        assert ProjectionOptions.from_config(cfg).budget_chars == expected, window
+    assert _MIN_BUDGET_CHARS == 16_000  # ≈ always-on cap 6k + digest cap ~8k + headroom
+
+
+def test_never_shed_warning_is_heard_once_per_standing_context(quiet, monkeypatch, caplog):
+    index = _Index(_SKILLS)
+    with caplog.at_level(logging.WARNING, logger="graph.projection"):
+        for _ in range(3):
+            _compose(_Store(hot=_HOT), index, budget=10, ws=_WS, monkeypatch=monkeypatch)
+        # A change in the standing context (a new always-on fact) is heard again.
+        _compose(_Store(hot=[*_HOT, (11, "a new standing rule")]), index, budget=10, ws=_WS, monkeypatch=monkeypatch)
+    assert len([r for r in caplog.records if "never-shed" in r.getMessage()]) == 2
+
+
+def test_inert_budget_is_logged_once(quiet, monkeypatch, caplog):
+    import graph.model_window as mwin
+
+    monkeypatch.setattr(mwin, "context_window_for", lambda config, model_name=None: None)
+    with caplog.at_level(logging.WARNING, logger="graph.projection"):
+        for _ in range(3):
+            assert ProjectionOptions.from_config(SimpleNamespace(api_base="http://gw", context_budget_pct=8.0)).budget_chars is None
+    inert = [r for r in caplog.records if "inert" in r.getMessage()]
+    assert len(inert) == 1 and "unbounded" in inert[0].getMessage()
+
+
+# ── shapes ───────────────────────────────────────────────────────────────────
+
+
+def test_everything_shed_keeps_the_overflow(quiet):
+    p = _compose(_Store(results=_hits(3)), None, budget=1, digest=False)
+    assert p.text == "" and p.used_chars == 0 and p.sections == [] and p.rag_ids == []
+    assert p.overflow == [{"label": "RAG hits", "dropped_items": 3, "dropped_chars": p.overflow[0]["dropped_chars"]}]
+    assert p.as_legacy_dict() == {
+        "context": "",
+        "context_sections": [],
+        "budget": {"chars": 1, "used": 0, "overflow": p.overflow},
+    }
+
+
+def test_non_positive_budget_reads_as_unbounded():
+    assert ProjectionOptions(budget_chars=0).budget_chars is None
+    assert ProjectionOptions(budget_chars=-5).budget_chars is None
+    assert ProjectionOptions(budget_chars=1).budget_chars == 1
+
+
+def test_deliverable_hit_parses_iso_shapes():
+    assert deliverable_hit({"expires_at": "2999-01-01T00:00:00Z"})
+    assert not deliverable_hit({"expires_at": "2000-01-01T00:00:00Z"})
+    assert deliverable_hit({"expires_at": "2999-01-01T00:00:00"})  # naive → UTC
+    assert not deliverable_hit({"expires_at": "2000-01-01"})  # a bare date
+    assert deliverable_hit({"expires_at": "2999-06-01T12:00:00+02:00"})
+    assert deliverable_hit({"expires_at": "not a date"})  # string fallback, never raises
+
+
+def test_budget_pct_yaml_coercion(tmp_path, caplog):
+    from graph.config import LangGraphConfig
+
+    cases = {"blank": ('""', 8.0), "negative": ("-3", 0.0), "text": ("abc", 8.0), "decimal": ("2.5", 2.5)}
+    with caplog.at_level(logging.WARNING, logger="graph.config"):
+        for name, (raw, expected) in cases.items():
+            p = tmp_path / f"{name}.yaml"
+            p.write_text(f"context:\n  budget_pct: {raw}\n")
+            assert LangGraphConfig.from_yaml(p).context_budget_pct == expected, name
+    warned = [r.getMessage() for r in caplog.records if "context.budget_pct" in r.getMessage()]
+    assert len(warned) == 2  # blank + text; a negative value is a valid "off"

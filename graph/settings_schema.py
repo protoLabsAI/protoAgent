@@ -539,10 +539,12 @@ FIELDS: list[Field] = [
         "state, always-on memory, the skill index, the prior-session digest, recalled "
         "knowledge) may use. When it overflows, the lowest-priority parts shed first — "
         "recalled knowledge, then the prior-session digest, then skill descriptions; "
-        "working state and always-on memory are never shed. The default (8% ≈ 10k tokens "
-        "on a 128k window) is larger than a typical turn injects, so nothing is shed until "
-        "you lower it. 0 = no budget. No budget either when the gateway reports no window "
-        "for the model.",
+        "working state and always-on memory are never shed. Never below 16k chars (≈4k "
+        "tokens — room for always-on memory and the prior-session digest), so on a 32k "
+        "window or smaller the floor applies. The default (8% ≈ 10k tokens on a 128k "
+        "window) is larger than a typical turn injects, so nothing is shed until you lower "
+        "it. 0 = no budget. No budget either when the gateway reports no window for the "
+        "model.",
         minimum=0,
         maximum=100,
     ),

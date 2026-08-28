@@ -53,9 +53,13 @@ context:
                   # state and always-on memory are never shed. 0 = unbounded.
 ```
 
-With the default 8% on a 128k-window model that is ~10k tokens — more than a
-typical turn injects — so nothing is shed until you lower it. The prompt
-inspector's preview shows the ceiling, the chars used and what was shed.
+The budget never drops below 16k chars (room for always-on memory + the digest),
+so on a 32k window or smaller that floor is the budget and only RAG hits / skill
+descriptions beyond it shed. With the default 8% on a 128k-window model it is
+~10k tokens — more than a typical turn injects — so nothing is shed there until
+you lower it. The prompt preview API (`GET /api/prompts/preview`) reports the
+ceiling, the chars used and what was shed; the inspector renders it in a
+follow-up.
 
 Rules of thumb:
 - **Recall too thin?** raise `top_k` (more injected) and/or `vector_k` (bigger candidate

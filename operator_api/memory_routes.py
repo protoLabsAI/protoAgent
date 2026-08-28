@@ -115,7 +115,10 @@ def _hot_chunks(store) -> list[dict]:
     # Always-on is a delivery POLICY since ADR 0108 D6 — the same selection the
     # per-turn reader (get_hot_memory_entries) makes, so the inspector lists
     # exactly what can inject: every domain="hot" row (stamped always on write)
-    # plus any row on another domain pinned always-on.
+    # plus any row on another domain pinned always-on. Deliberately WITHOUT the
+    # reader's `deliverable` filter: a rejected or expired pin is still an
+    # always-on row the operator may want to see (and un-reject); it lists with
+    # ``injecting: false`` because the reader's window excludes it.
     rows = store.list_chunks(delivery_policy="always", limit=_HOT_LIST_LIMIT)
     return [
         _knowledge_row(c)
@@ -228,14 +231,29 @@ def register_memory_routes(app) -> None:
         heading = str(body.get("heading", "")).strip() or cur.get("heading") or None
         domain = cur.get("domain") or "hot"
         source = cur.get("source") or "console"
+        # Lifecycle-preserving (the ADR 0108 D7 shape): the revision carries the
+        # row's typed fields — kind, subject, expiry, scope, epoch — instead of
+        # silently untyping it; a REJECTED pin stays rejected (an edit is not a
+        # review), anything else is an operator's own write → confirmed.
+        get_chunk = getattr(store, "get_chunk", None)
+        full = (await asyncio.to_thread(get_chunk, chunk_id) if callable(get_chunk) else None) or cur
+        carried = {
+            k: full.get(k)
+            for k in ("memory_kind", "subject", "expires_at", "namespace", "epoch")
+            if full.get(k) is not None
+        }
+        carried["review_state"] = "rejected" if full.get("review_state") == "rejected" else "confirmed"
 
         def _add():
             try:
                 return store.add_chunk(
                     content, domain, heading=heading, source=source, source_type="operator",
-                    delivery_policy="always",
+                    delivery_policy="always", **carried,
                 )
-            except TypeError:  # plugin backend predating the policy kwarg — hot domain still pins
+            except TypeError:
+                # A plugin backend predating the typed kwargs. Its OWN reader still
+                # keys always-on on the hot domain, so re-adding as "hot" is the same
+                # pin, not a demotion — and it never stored the typed fields it drops.
                 return store.add_chunk(content, "hot", heading=heading, source=source, source_type="operator")
 
         new_id = await asyncio.to_thread(_add)

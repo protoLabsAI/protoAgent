@@ -65,6 +65,21 @@ _INJECTED_MEMORY_HEADER = (
     "agent's own actions. Don't narrate inherited-domain facts as your own work. -->"
 )
 
+# ADR 0108 D6: the derived budget never drops below this many chars. ≈ the
+# always-on cap (6 000) + the digest cap (~2 000 tokens ≈ 8 000) + headroom, so
+# always-on memory and the digest are never fought over on a small-window model
+# (LiteLLM reports 8k/32k for many local/legacy models — 8% of those is less
+# than one turn's standing context). Below the floor a small window sheds only
+# RAG hits and skill descriptions beyond it; today those were unbounded.
+_MIN_BUDGET_CHARS = 16_000
+
+# The "never-shed sections exceed the budget" warning fires once per distinct
+# (working_state_chars, always_on_chars) per process — an 8k-window model would
+# otherwise say the same thing every turn. Keyed on the sizes so a CHANGE in the
+# standing context (a new always-on fact) is heard again.
+_NEVER_SHED_WARNED: set[tuple[int, int]] = set()
+_INERT_BUDGET_LOGGED = False
+
 # How a caller supplies the prior-sessions digest: ``() -> (block, session_ids)``.
 DigestLoader = Callable[[], tuple[str, list[str]]]
 # How a caller records an injection: ``(state, memory_parts, digest_ids, hot_ids, rag_ids)``.
@@ -92,10 +107,16 @@ class ProjectionOptions:
     skills_top_k: int = 24  # full-description rows in the skill index (skills.top_k; <=0 = none)
     skills_index_chars: int = 8192  # char ceiling for the skill index block (<=0 = uncapped)
     # ADR 0108 D6: the whole projection's char ceiling (context.budget_pct of the
-    # model window × 4 chars/token). None = unbounded — no window known, or the
-    # operator set budget_pct to 0. Applies to the projected context only, never
-    # to the stable prompt.
+    # model window × 4 chars/token, never below _MIN_BUDGET_CHARS). None =
+    # unbounded — no window known, or the operator set budget_pct to 0. Applies
+    # to the projected context only, never to the stable prompt.
     budget_chars: int | None = None
+
+    def __post_init__(self) -> None:
+        # A non-positive budget means unbounded — the same reading from_config
+        # gives ``budget_pct: 0``, so direct construction can't disagree with it.
+        if self.budget_chars is not None and self.budget_chars <= 0:
+            object.__setattr__(self, "budget_chars", None)
 
     @classmethod
     def from_config(cls, config) -> ProjectionOptions:
@@ -106,9 +127,11 @@ class ProjectionOptions:
         partial config (tests, a runtime with its own settings object) still
         composes. The skill-index char budget derives from the model window
         (~2% as chars) and the projection budget from ``context_budget_pct``
-        (default 8% — see ``graph/config.py``); both need a known window, so a
-        gateway that reports none leaves the skill index at 8KB and delivery
-        unbounded.
+        (default 8% — see ``graph/config.py``), floored at ``_MIN_BUDGET_CHARS``
+        so a small-window model keeps its always-on memory and digest whole;
+        both need a known window, so a gateway that reports none leaves the
+        skill index at 8KB and delivery unbounded (logged once — the knob is
+        inert until the window is known).
         """
         if config is None:
             return cls()
@@ -123,13 +146,26 @@ class ProjectionOptions:
             budget_pct = float(getattr(config, "context_budget_pct", 8.0))
         except (TypeError, ValueError):
             budget_pct = 8.0
+        budget_chars = None
+        if budget_pct > 0:
+            if window:
+                budget_chars = max(int(window * budget_pct / 100 * 4), _MIN_BUDGET_CHARS)
+            else:
+                global _INERT_BUDGET_LOGGED
+                if not _INERT_BUDGET_LOGGED:
+                    _INERT_BUDGET_LOGGED = True
+                    log.warning(
+                        "[projection] context.budget_pct=%s is inert — the gateway reports no context "
+                        "window for the model, so delivery is unbounded",
+                        budget_pct,
+                    )
         return cls(
             top_k=_int_or_default(getattr(config, "knowledge_top_k", cls.top_k), cls.top_k),
             inject_namespaces=tuple(namespaces),
             inject_min_trust=max(1, int(getattr(config, "knowledge_inject_min_trust", cls.inject_min_trust))),
             skills_top_k=_int_or_default(getattr(config, "skills_top_k", cls.skills_top_k), cls.skills_top_k),
             skills_index_chars=int(window * 0.02 * 4) if window else cls.skills_index_chars,
-            budget_chars=int(window * budget_pct / 100 * 4) if (window and budget_pct > 0) else None,
+            budget_chars=budget_chars,
         )
 
 
@@ -257,7 +293,9 @@ def compose_projected_context(
 
     # Always-on skill index (progressive disclosure, ADR 0060) — built before the RAG
     # search, the order the native composer always had (same side effects, same order).
-    skill_block, listed, full_rows = _skill_index(skills_index, opts)
+    # The index is read ONCE per compose; the budget re-renders from that list.
+    summaries = _skill_summaries(skills_index, opts)
+    skill_block, listed, full_rows = _skill_index(skills_index, opts, summaries=summaries)
 
     # 3. RAG hits on the turn's query — trust-ranked, namespace-scoped, deliverable-only
     #    (ADR 0069 D3a/D8, ADR 0108 D6). Ranked best-first: the budget sheds from the end.
@@ -284,6 +322,7 @@ def compose_projected_context(
         ),
         opts,
         skills_index,
+        summaries,
     )
     if delivered.memory_parts and record:
         (record_fn or record_injection)(
@@ -404,7 +443,7 @@ def _compose(c: _Candidates) -> _Delivered:
     )
 
 
-def _fit_to_budget(c: _Candidates, opts: ProjectionOptions, skills_index) -> _Delivered:
+def _fit_to_budget(c: _Candidates, opts: ProjectionOptions, skills_index, summaries: list[dict]) -> _Delivered:
     """Deliver the candidates within ``opts.budget_chars`` (ADR 0108 D6).
 
     Priority (highest first): working state, always-on memory, skill index,
@@ -417,11 +456,14 @@ def _fit_to_budget(c: _Candidates, opts: ProjectionOptions, skills_index) -> _De
     2. The prior-session digest — as one unit: the loader hands in a rendered
        block under its own ~2k-token cap (D9 restructures it into attributed
        entries; per-entry shedding lands with that).
-    3. The skill index — re-rendered under a smaller char cap so descriptions
-       give way, then at the identity floor (name-only rows, ADR 0060 / #2867):
-       never below it.
+    3. The skill index — one description ROW at a time (the last full row
+       becomes a name-only row), re-rendered from the summaries already read
+       for this compose, then the identity floor (every name, no descriptions —
+       ADR 0060 / #2867): never below it. Monotone in the budget, at most
+       ``skills_top_k`` renders, no extra store reads.
     4. Working state and always-on memory are NEVER shed. If what remains still
-       exceeds the budget it is delivered anyway and a warning names the sizes.
+       exceeds the budget it is delivered anyway and a warning names the sizes
+       (once per distinct sizes per process).
 
     Deterministic: the same candidates and budget always deliver the same text.
     ``None`` budget = unbounded — the assembly is byte-identical to pre-D6.
@@ -453,32 +495,26 @@ def _fit_to_budget(c: _Candidates, opts: ProjectionOptions, skills_index) -> _De
         overflow.append({"label": "Prior sessions", "dropped_items": n, "dropped_chars": before_len - len(d.text)})
         memory_shed = True
 
-    # 3. The skill index — shrink descriptions to what fits, then the identity floor.
+    # 3. The skill index — one description row at a time, then the identity floor.
     if len(d.text) > budget and c.skill_block:
         before_len, before_full = len(d.text), c.skill_full_rows
-        floor_block, floor_listed, floor_full = _skill_index(skills_index, opts, bare_only=True)
-        without = _compose(replace(c, skill_block=""))
-        remaining = budget - len(without.text) - (2 if without.text else 0)  # the "\n\n" separator
-        # The index's char cap bounds its ROWS (the header/footer ride free), so walk
-        # the cap down by each render's overshoot until the block fits the room left.
-        # A cap small enough to drop identities is never accepted — the floor is next.
-        cap = remaining
-        for _ in range(16):
-            if cap <= 0 or len(d.text) <= budget:
-                break
-            block, listed, full = _skill_index(skills_index, replace(opts, skills_index_chars=cap))
-            if listed < floor_listed:
-                break
-            if len(block) < len(c.skill_block):
-                c.skill_block, c.skill_listed, c.skill_full_rows = block, listed, full
-                d = _compose(c)
-            over = len(block) - remaining
-            if over <= 0:
-                break
-            cap -= over
-        if len(d.text) > budget and len(floor_block) < len(c.skill_block):
-            c.skill_block, c.skill_listed, c.skill_full_rows = floor_block, floor_listed, floor_full
+        # Walk down by ROWS: skills_top_k = full_rows-1, full_rows-2, … turns the last
+        # full-description row into a name-only row each step (the char cap and the
+        # name rows are untouched, so no identity is ever lost). Re-rendered from the
+        # summaries this compose already read — no further store reads.
+        for n in range(c.skill_full_rows - 1, 0, -1):
+            block, listed, full = _skill_index(skills_index, replace(opts, skills_top_k=n), summaries=summaries)
+            c.skill_block, c.skill_listed, c.skill_full_rows = block, listed, full
             d = _compose(c)
+            if len(d.text) <= budget:
+                break
+        if len(d.text) > budget:
+            floor_block, floor_listed, floor_full = _skill_index(
+                skills_index, opts, bare_only=True, summaries=summaries
+            )
+            if len(floor_block) < len(c.skill_block):
+                c.skill_block, c.skill_listed, c.skill_full_rows = floor_block, floor_listed, floor_full
+                d = _compose(c)
         if len(d.text) < before_len:
             overflow.append(
                 {
@@ -489,9 +525,12 @@ def _fit_to_budget(c: _Candidates, opts: ProjectionOptions, skills_index) -> _De
             )
             skills_shed = True
 
-    # 4. Never-shed remainder.
+    # 4. Never-shed remainder — heard once per distinct standing-context size.
     if len(d.text) > budget:
-        log.warning(
+        key = (len(c.working_state), len(c.hot))
+        emit = log.debug if key in _NEVER_SHED_WARNED else log.warning
+        _NEVER_SHED_WARNED.add(key)
+        emit(
             "[projection] never-shed sections exceed the context budget: used=%d budget=%d "
             "(working_state=%d, always_on=%d, skills_floor=%d chars) — raise context.budget_pct "
             "or trim the always-on memory",
@@ -522,9 +561,10 @@ def _finish(d: _Delivered, budget: int | None, *, overflow: list[dict], memory_s
         sections.append(entry)
     d.sections = sections
     if not d.text:
-        # Nothing composed: the legacy "" + [] shape (ids empty too), carrying
-        # only the budget in force so the preview can still show the ceiling.
-        d.projected = ProjectedContext(budget_chars=budget)
+        # Nothing delivered: the legacy "" + [] shape (ids empty too), carrying the
+        # budget in force and what was shed — "everything shed" is not "nothing
+        # composed", and the preview should say which.
+        d.projected = ProjectedContext(budget_chars=budget, overflow=overflow)
         return d
     d.projected = ProjectedContext(
         text=d.text,
@@ -616,11 +656,27 @@ def search_scoped(knowledge_store, query: str, opts: ProjectionOptions) -> list[
 def deliverable_hit(r: dict) -> bool:
     """Whether a retrieved row may enter the prompt (ADR 0108 D6 + D7.4): not
     operator-rejected and not past its ``expires_at``. Mirrors the store-level
-    ``deliverable=True`` predicate for backends that don't implement it."""
+    ``deliverable=True`` predicate for backends that don't implement it.
+    ``expires_at`` is parsed as ISO-8601 (``Z`` and naive timestamps read as
+    UTC); an unparseable value falls back to the string compare the SQL
+    predicate makes."""
     if r.get("review_state") == "rejected":
         return False
     expires = r.get("expires_at")
-    return not expires or str(expires) > _now_iso()
+    if not expires:
+        return True
+    parsed = _parse_iso(expires)
+    if parsed is None:
+        return str(expires) > _now_iso()
+    return parsed > datetime.now(timezone.utc)
+
+
+def _parse_iso(value) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
 def _now_iso() -> str:
@@ -668,11 +724,31 @@ def skill_index_block(skills_index, *, top_k: int = 24, chars: int = 8192) -> st
     return _skill_index(skills_index, ProjectionOptions(skills_top_k=top_k, skills_index_chars=chars))[0]
 
 
-def _skill_index(skills_index, opts: ProjectionOptions, *, bare_only: bool = False) -> tuple[str, int, int]:
+def _skill_summaries(skills_index, opts: ProjectionOptions) -> list[dict]:
+    """The index's ``skill_summaries()`` — ONE read per compose (the budget
+    re-renders from this list). Empty when there is no index, the operator
+    turned it off (``skills.top_k: 0``), or the read fails; never raises."""
+    if skills_index is None or opts.skills_top_k <= 0:
+        return []
+    try:
+        return list(skills_index.skill_summaries() or [])
+    except Exception as exc:  # noqa: BLE001 — never break a turn on skill listing
+        log.warning("[projection] skill index error: %s", exc)
+        return []
+
+
+def _skill_index(
+    skills_index,
+    opts: ProjectionOptions,
+    *,
+    bare_only: bool = False,
+    summaries: list[dict] | None = None,
+) -> tuple[str, int, int]:
     """:func:`skill_index_block` plus the number of skills listed (full + bare
     rows) and the number of full-description rows. ``bare_only`` renders the
     identity floor — every skill as a name-only row (under the same hard
-    ceiling) — what the delivery budget falls back to (ADR 0108 D6)."""
+    ceiling) — what the delivery budget falls back to (ADR 0108 D6).
+    ``summaries`` skips the index read (the composer reads once and re-renders)."""
     if skills_index is None:
         return "", 0, 0
     # skills.top_k: 0 keeps its documented "list none" meaning — the operator
@@ -680,11 +756,8 @@ def _skill_index(skills_index, opts: ProjectionOptions, *, bare_only: bool = Fal
     # still emit every name (post-#2868 review catch).
     if opts.skills_top_k <= 0:
         return "", 0, 0
-    try:
-        summaries = skills_index.skill_summaries()
-    except Exception as exc:  # noqa: BLE001 — never break a turn on skill listing
-        log.warning("[projection] skill index error: %s", exc)
-        return "", 0, 0
+    if summaries is None:
+        summaries = _skill_summaries(skills_index, opts)
     if not summaries:
         return "", 0, 0
 

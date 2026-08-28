@@ -381,6 +381,43 @@ def test_hot_edit_keeps_the_rows_own_domain(tmp_path, monkeypatch):
     assert (content, domain, kwargs["delivery_policy"]) == ("imperial units", "preferences", "always")
 
 
+def test_hot_edit_carries_the_rows_lifecycle_fields(tmp_path, monkeypatch):
+    """An edit is a revision, not a re-classification: the row's typed fields ride
+    into the new row, and an operator's own edit is confirmed."""
+    ks = _HotKS()
+    ks.rows = [{"id": 3, "content": "metric units", "domain": "preferences", "delivery_policy": "always"}]
+    ks.get_chunk = lambda cid: {
+        "id": cid,
+        "domain": "preferences",
+        "memory_kind": "profile",
+        "subject": "operator",
+        "expires_at": "2027-01-01T00:00:00+00:00",
+        "namespace": "project:x",
+        "epoch": None,
+        "review_state": "pending",
+    }
+    c = _client(monkeypatch, tmp_path, knowledge=ks)
+    assert c.put("/api/memory/hot/3", json={"content": "imperial units"}).status_code == 200
+    _content, domain, kwargs = ks.added[0]
+    assert domain == "preferences"
+    assert {k: kwargs[k] for k in ("memory_kind", "subject", "expires_at", "namespace")} == {
+        "memory_kind": "profile",
+        "subject": "operator",
+        "expires_at": "2027-01-01T00:00:00+00:00",
+        "namespace": "project:x",
+    }
+    assert "epoch" not in kwargs  # None is not carried
+    assert kwargs["review_state"] == "confirmed" and kwargs["delivery_policy"] == "always"
+
+
+def test_hot_edit_keeps_a_rejected_pin_rejected(tmp_path, monkeypatch):
+    ks = _HotKS()
+    ks.get_chunk = lambda cid: {"id": cid, "domain": "hot", "review_state": "rejected"}
+    c = _client(monkeypatch, tmp_path, knowledge=ks)
+    assert c.put("/api/memory/hot/3", json={"content": "still rejected"}).status_code == 200
+    assert ks.added[0][2]["review_state"] == "rejected"
+
+
 def test_hot_edit_falls_back_for_a_backend_without_the_policy_kwarg(tmp_path, monkeypatch):
     """A plugin backend predating delivery_policy still gets the edit — pinned the
     old way (domain "hot"), never lost."""
