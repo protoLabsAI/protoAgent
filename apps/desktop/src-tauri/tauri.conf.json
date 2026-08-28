@@ -20,7 +20,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "externalBin": ["binaries/protoagent-server"],
+    "externalBin": ["binaries/protoagent-server", "binaries/br"],
     "macOS": {
       "hardenedRuntime": true,
       "entitlements": "./entitlements.plist",
