@@ -52,7 +52,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
-from knowledge.store import DELIVERY_ALWAYS, DELIVERY_POLICIES
+from knowledge.store import DELIVERY_ALWAYS, DELIVERY_POLICIES, REVIEW_STATES, superseded_by_id
 from scheduler.interface import is_cron, parse_ttl
 from tools.fallbacks import with_fallback
 
@@ -526,6 +526,10 @@ def _dominant_content_node(node):
 
 _MEMORY_RECALL_MAX_K = 20
 _MEMORY_LIST_MAX_LIMIT = 200
+# ``memory_ingest(expires_in_days=...)`` ceiling (ADR 0108 D7.4): ten years. Relative on
+# purpose — a model asked for an absolute timestamp guesses, and a guess in the past
+# would expire the memory on its first read.
+_MEMORY_EXPIRES_MAX_DAYS = 3650
 _RECALL_SESSION_MAX_CHARS = 6000
 
 # Operator/fork tool denylist — names dropped from the agent's toolset. Set once from
@@ -729,6 +733,16 @@ def _norm_delivery_policy(value) -> tuple[str | None, str | None]:
     return normalized, None
 
 
+def _superseded_label(row: dict) -> str:
+    """``"[superseded by #17] "`` for a row whose replacement is known from the
+    ADR 0108 D7.3 chain, ``"[superseded] "`` for a legacy (NULL-reason) supersede,
+    ``""`` for a valid row. Keyed on ``invalidated_at`` — the reason only adds the id."""
+    if not row.get("invalidated_at"):
+        return ""
+    new_id = superseded_by_id(row.get("invalidation_reason"))
+    return f"[superseded by #{new_id}] " if new_id is not None else "[superseded] "
+
+
 def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None) -> list:
     """Bind memory tools to a ``KnowledgeStore``. Returns a list.
 
@@ -750,6 +764,7 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         memory_kind: str | None = None,
         subject: str | None = None,
         delivery_policy: str | None = None,
+        expires_in_days: int | None = None,
     ) -> str:
         """Store a fact, preference, or note in long-term memory.
 
@@ -767,7 +782,7 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
             memory_kind: Optional typed classification — one of
                 ``"profile"``, ``"standing"``, ``"fact"``, ``"decision"``,
                 ``"note"``, ``"episode"``, ``"reference"``, ``"legacy"``.
-                When omitted the chunk is untyped (backward-compatible).
+                When omitted the store infers one from the domain.
             subject: The entity this memory describes (e.g. the operator's
                 name, a project, a tool). Aids recall filtering.
             delivery_policy: WHEN the memory enters the prompt (ADR 0108 D4) —
@@ -775,12 +790,33 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
                 (on a relevant query), ``"on_demand"`` (only via memory_recall).
                 Omit for the default (retrieved). ``domain="hot"`` implies
                 ``"always"`` automatically.
+            expires_in_days: Optional shelf life (ADR 0108 D7.4), 1–3650 days
+                from now — for volatile facts ("the staging box is down this
+                week"). The row is kept but stops being delivered once it
+                lapses; omit for no expiry.
+
+        Every memory you store starts ``review_state="pending"`` until the
+        operator confirms it in the Memory inspector (ADR 0108 D7.2).
 
         Returns ``"Stored chunk N in 'domain'."`` on success.
         """
         delivery_policy, policy_error = _norm_delivery_policy(delivery_policy)
         if policy_error:
             return policy_error
+        expires_at: str | None = None
+        if expires_in_days is not None:
+            # Whole days only: a bool is not a count, and 2.5 would silently become 2.
+            try:
+                days = int(expires_in_days)
+                whole = not isinstance(expires_in_days, bool) and days == expires_in_days
+            except (TypeError, ValueError):
+                days, whole = 0, False
+            if not whole or days < 1 or days > _MEMORY_EXPIRES_MAX_DAYS:
+                return (
+                    f"Error: expires_in_days must be a whole number of days between 1 and "
+                    f"{_MEMORY_EXPIRES_MAX_DAYS} (got {expires_in_days!r})."
+                )
+            expires_at = (datetime.now(UTC) + timedelta(days=days)).isoformat()
         # Always-on confirm gate (ADR 0069 D8): domain="hot" chunks — and, since
         # ADR 0108 D4, any chunk with delivery_policy="always" — are injected in
         # front of the model EVERY turn, so when the operator has turned the gate
@@ -804,6 +840,8 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
             kw["subject"] = subject
         if delivery_policy is not None:
             kw["delivery_policy"] = delivery_policy
+        if expires_at is not None:
+            kw["expires_at"] = expires_at
 
         def _write():
             try:
@@ -916,6 +954,7 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         domain: str | None = None,
         memory_kind: str | None = None,
         delivery_policy: str | None = None,
+        include_superseded: bool = False,
     ) -> str:
         """Search long-term memory for chunks relevant to ``query``.
 
@@ -939,6 +978,11 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         (``"always"``, ``"retrieved"``, ``"on_demand"`` — ADR 0108 D4). This is
         the only way ``"on_demand"`` memories surface. Omit to search all.
 
+        ``include_superseded`` (ADR 0108 D7.3) also returns rows a newer
+        revision replaced — the audit history, tagged ``[superseded]`` — for
+        "what did we believe before?" questions. Off by default: current
+        knowledge only.
+
         Returns ``"No matches."`` when the store is empty or nothing
         scores above the keyword threshold.
         """
@@ -954,12 +998,15 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
             search_kw["memory_kind"] = memory_kind
         if delivery_policy is not None:
             search_kw["delivery_policy"] = delivery_policy
+        if include_superseded:  # only forward when set — plugin backends predating it keep working
+            search_kw["include_invalidated"] = True
 
         results = await asyncio.to_thread(knowledge_store.search, query, **search_kw)
         if not results:
             return "No matches."
         lines = [
-            f"[{r.get('domain', '?')}] {r['preview']}"
+            _superseded_label(r)
+            + f"[{r.get('domain', '?')}] {r['preview']}"
             + _memory_citation(
                 source=r.get("source"),
                 created_at=r.get("created_at"),
@@ -1062,13 +1109,14 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         limit: int = 10,
         memory_kind: str | None = None,
         delivery_policy: str | None = None,
+        review_state: str | None = None,
     ) -> str:
-        """List the most recent chunks. Filter by domain, memory_kind and/or
-        delivery_policy.
+        """List the most recent chunks. Filter by domain, memory_kind,
+        delivery_policy and/or review_state.
 
         Useful when the operator asks for recent activity ("what did I
         log today?") or wants to inspect what the agent has stored.
-        Shows memory_kind, delivery_policy and review_state when present.
+        Shows memory_kind, delivery_policy, review_state and expiry when present.
 
         Args:
             domain: Restrict to one domain bucket.
@@ -1076,14 +1124,24 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
             memory_kind: Restrict to one typed kind (e.g. ``"profile"``).
             delivery_policy: Restrict to one delivery policy (``"always"``,
                 ``"retrieved"``, ``"on_demand"`` — ADR 0108 D4).
+            review_state: Restrict to one operator verdict (``"confirmed"``,
+                ``"pending"``, ``"rejected"`` — ADR 0108 D7). Confirmation is
+                the operator's act, done in the Memory inspector — never
+                yours; use this to see what is still waiting on them.
         """
         delivery_policy, policy_error = _norm_delivery_policy(delivery_policy)
         if policy_error:
             return policy_error
+        if review_state is not None:
+            review_state = str(review_state).strip().lower()
+            if review_state not in REVIEW_STATES:
+                return f"Error: review_state must be one of {', '.join(sorted(REVIEW_STATES))} (got {review_state!r})."
         clamped_limit = max(1, min(int(limit), _MEMORY_LIST_MAX_LIMIT))
         list_kw: dict[str, Any] = {"domain": domain, "limit": clamped_limit, "memory_kind": memory_kind}
         if delivery_policy is not None:  # only forward when set — plugin backends predating it keep working
             list_kw["delivery_policy"] = delivery_policy
+        if review_state is not None:
+            list_kw["review_state"] = review_state
         chunks = knowledge_store.list_chunks(**list_kw)
         if not chunks:
             return f"No chunks in {domain or 'any domain'}."
@@ -1106,6 +1164,8 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
                 kind_tag += f" policy={c.delivery_policy}"
             if getattr(c, "review_state", None):
                 kind_tag += f" review={c.review_state}"
+            if getattr(c, "expires_at", None):  # date precision — enough to see it's lapsing
+                kind_tag += f" expires={str(c.expires_at)[:10]}"
             lines.append(f"#{c.id} {c.created_at} {head} {preview}{cite}{kind_tag}")
         return "\n".join(lines)
 

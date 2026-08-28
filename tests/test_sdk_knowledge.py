@@ -88,10 +88,21 @@ async def test_knowledge_add_and_search_pass_epoch_when_set(monkeypatch):
 
 
 class _TypedStore(_LifecycleStore):
-    """A backend with the ADR 0108 D4 typed-memory kwargs on add_chunk."""
+    """A backend with the ADR 0108 D4 typed-memory + D7 lifecycle kwargs on add_chunk."""
 
-    def add_chunk(self, content, domain="general", heading=None, *, epoch=None, memory_kind=None, delivery_policy=None):
-        self.calls.append(("add", content, domain, heading, epoch, memory_kind, delivery_policy))
+    def add_chunk(
+        self,
+        content,
+        domain="general",
+        heading=None,
+        *,
+        epoch=None,
+        memory_kind=None,
+        delivery_policy=None,
+        review_state=None,
+        expires_at=None,
+    ):
+        self.calls.append(("add", content, domain, heading, epoch, memory_kind, delivery_policy, review_state, expires_at))
         return 44
 
 
@@ -108,8 +119,25 @@ async def test_knowledge_add_passes_typed_memory_kwargs_only_when_set(monkeypatc
     assert cid == 44
     await sdk.knowledge_add("plain", domain="st-routes")
     assert store.calls == [
-        ("add", "standing rule", "st-routes", None, None, "standing", "always"),
-        ("add", "plain", "st-routes", None, None, None, None),
+        ("add", "standing rule", "st-routes", None, None, "standing", "always", None, None),
+        ("add", "plain", "st-routes", None, None, None, None, None, None),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_knowledge_add_passes_lifecycle_kwargs_only_when_set(monkeypatch):
+    """review_state / expires_at (ADR 0108 D7) ride the same only-when-set rule."""
+    from graph import sdk
+
+    store = _TypedStore()
+    monkeypatch.setattr(sdk.STATE, "knowledge_store", store, raising=False)
+    await sdk.knowledge_add(
+        "volatile", domain="st-routes", review_state="confirmed", expires_at="2027-01-01T00:00:00+00:00"
+    )
+    await sdk.knowledge_add("plain", domain="st-routes")
+    assert store.calls == [
+        ("add", "volatile", "st-routes", None, None, None, None, "confirmed", "2027-01-01T00:00:00+00:00"),
+        ("add", "plain", "st-routes", None, None, None, None, None, None),
     ]
 
 
@@ -137,3 +165,18 @@ async def test_knowledge_purge_degrades_on_a_backend_without_purge_domain(monkey
     monkeypatch.setattr(sdk.STATE, "knowledge_store", store, raising=False)
     assert await sdk.knowledge_purge("loop-lessons") == 0
     assert store.calls == []  # never touched
+
+
+@pytest.mark.asyncio
+async def test_knowledge_add_validates_and_normalizes_review_state(monkeypatch):
+    """A verdict no filter would ever match is a plugin bug — a clear ValueError at
+    the boundary, never a silently-pending row; a valid one is folded to canonical."""
+    from graph import sdk
+
+    store = _TypedStore()
+    monkeypatch.setattr(sdk.STATE, "knowledge_store", store, raising=False)
+    with pytest.raises(ValueError, match="review_state must be one of"):
+        await sdk.knowledge_add("x", domain="d", review_state="maybe")
+    assert store.calls == []  # refused before the store was touched
+    await sdk.knowledge_add("y", domain="d", review_state=" Confirmed ")
+    assert store.calls[-1][7] == "confirmed"

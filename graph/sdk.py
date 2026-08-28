@@ -193,6 +193,8 @@ async def knowledge_add(
     epoch: str | None = None,
     memory_kind: str | None = None,
     delivery_policy: str | None = None,
+    review_state: str | None = None,
+    expires_at: str | None = None,
 ) -> int | None:
     """Add one chunk to the agent's knowledge graph; return its id, or ``None`` when no
     store is configured / it was a no-op. ``domain`` is the bucket, ``heading`` an
@@ -202,8 +204,21 @@ async def knowledge_add(
     searches with the NEW epoch: old lessons stay for post-mortems but stop matching.
     ``memory_kind`` / ``delivery_policy`` (ADR 0108 D4) are the typed-memory columns —
     what the chunk IS (``"fact"``, ``"note"``, ``"reference"``, …) and WHEN it enters the
-    prompt (``"always"`` / ``"retrieved"`` / ``"on_demand"``). Omitted = untyped /
-    retrieved, exactly as before."""
+    prompt (``"always"`` / ``"retrieved"`` / ``"on_demand"``). ``review_state`` /
+    ``expires_at`` (ADR 0108 D7) are the write lifecycle: whether an operator has
+    confirmed the row (``"confirmed"`` / ``"pending"`` / ``"rejected"``) and an optional
+    ISO-8601 UTC timestamp after which it lapses. Omitted = the store's own stamping:
+    kind inferred from the domain, retrieved, ``"pending"`` (a plugin write is not
+    operator intent), no expiry."""
+    if review_state is not None:
+        # Boundary validation (like the tool-side delivery_policy check): a plugin
+        # passing a verdict no filter would ever match is a bug worth a clear error,
+        # not a silently-pending row.
+        from knowledge.store import REVIEW_STATES
+
+        review_state = str(review_state).strip().lower()
+        if review_state not in REVIEW_STATES:
+            raise ValueError(f"review_state must be one of {', '.join(sorted(REVIEW_STATES))} (got {review_state!r})")
     store = getattr(STATE, "knowledge_store", None)
     if store is None:
         return None
@@ -216,6 +231,10 @@ async def knowledge_add(
         extra["memory_kind"] = memory_kind
     if delivery_policy is not None:
         extra["delivery_policy"] = delivery_policy
+    if review_state is not None:
+        extra["review_state"] = review_state
+    if expires_at is not None:
+        extra["expires_at"] = expires_at
     return await asyncio.to_thread(store.add_chunk, content, domain=domain, heading=heading, **extra)
 
 

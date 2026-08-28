@@ -385,22 +385,39 @@ def register_knowledge_routes(app) -> None:
     # the most-recent chunks (a browsable default); a non-empty ``q`` runs FTS5
     # search. Read-only; never 500s the console.
     @app.get("/api/knowledge/search")
-    async def _api_knowledge_search(q: str = "", k: int = 30, domain: str | None = None):
+    async def _api_knowledge_search(
+        q: str = "", k: int = 30, domain: str | None = None, review_state: str | None = None
+    ):
         if STATE.knowledge_store is None:
             return {"enabled": False, "query": q, "results": [], "stats": {}}
+        # ``review_state`` (ADR 0108 D7.2) narrows the browser to one verdict — the
+        # inspector's "pending" queue. Forwarded only when set, so a plugin backend
+        # that predates the kwarg keeps serving the unfiltered listing.
+        filters: dict = {}
+        if review_state is not None and review_state != "":
+            from knowledge.store import REVIEW_STATES
+
+            state = review_state.strip().lower()
+            if state not in REVIEW_STATES:
+                return JSONResponse(
+                    {"detail": f"review_state must be one of {', '.join(sorted(REVIEW_STATES))}"}, status_code=400
+                )
+            filters["review_state"] = state
         results: list[dict] = []
         try:
             if q and q.strip():
                 # search() embeds the query over HTTP on hybrid stores — run it
                 # off the event loop (same pattern as graph/checkpointer.py).
-                rows = await asyncio.to_thread(STATE.knowledge_store.search, q, k=k, domain=domain or None)
+                rows = await asyncio.to_thread(
+                    STATE.knowledge_store.search, q, k=k, domain=domain or None, **filters
+                )
                 results = [_knowledge_row(r) for r in rows]
             else:
                 # list_chunks yields Chunk objects (plain + layered stores; the layered
                 # one stamps .tier) or dicts (a custom backend) — normalize either.
                 results = [
                     _knowledge_row(c if isinstance(c, dict) else c.as_dict())
-                    for c in STATE.knowledge_store.list_chunks(domain=domain or None, limit=k)
+                    for c in STATE.knowledge_store.list_chunks(domain=domain or None, limit=k, **filters)
                 ]
         except Exception:  # noqa: BLE001 — never 500 the console
             log.exception("[knowledge] search failed")
@@ -675,15 +692,39 @@ def register_knowledge_routes(app) -> None:
         content = str(body.get("content", "")).strip()
         if not content:
             return JSONResponse({"detail": "content is required"}, status_code=400)
-        new_id = await asyncio.to_thread(
-            lambda: STATE.knowledge_store.add_chunk(
-                content,
-                str(body.get("domain", "") or "general"),
-                heading=(str(body.get("heading", "")).strip() or None),
-                source=(body.get("source") or "console"),
-                source_type="operator",
-            )
-        )
+        # An edit is a NEW revision (add first, then delete the old — a failed add
+        # never loses the original). The revision keeps the row's lifecycle (ADR
+        # 0108 D7): its typed columns ride along, and the verdict follows the
+        # tier rule — an operator edit is an assertion about the content, so it
+        # is ``confirmed`` — EXCEPT a ``rejected`` row stays rejected; re-opening
+        # is the review route's job, not a side effect of fixing a typo.
+        get_chunk = getattr(STATE.knowledge_store, "get_chunk", None)
+        cur = await asyncio.to_thread(get_chunk, chunk_id) if callable(get_chunk) else None
+        if cur is None and callable(get_chunk):
+            return JSONResponse({"detail": "no chunk with that id"}, status_code=404)
+        cur = cur or {}
+        carry = {
+            key: cur.get(key)
+            for key in ("memory_kind", "subject", "delivery_policy", "expires_at", "namespace", "epoch")
+            if cur.get(key) is not None
+        }
+        if cur.get("review_state") == "rejected":
+            carry["review_state"] = "rejected"
+        domain = str(body.get("domain", "") or cur.get("domain") or "general")
+        heading = str(body.get("heading", "")).strip() or None
+        source = body.get("source") or "console"
+
+        def _add():
+            try:
+                return STATE.knowledge_store.add_chunk(
+                    content, domain, heading=heading, source=source, source_type="operator", **carry
+                )
+            except TypeError:  # plugin backend predating the lifecycle kwargs
+                return STATE.knowledge_store.add_chunk(
+                    content, domain, heading=heading, source=source, source_type="operator"
+                )
+
+        new_id = await asyncio.to_thread(_add)
         if new_id is None:
             return JSONResponse({"detail": "the store rejected the new revision"}, status_code=400)
         deleted = await asyncio.to_thread(STATE.knowledge_store.delete_by_id, chunk_id)

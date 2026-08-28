@@ -444,3 +444,50 @@ def test_hot_disabled_without_store(tmp_path, monkeypatch):
         "id": None,
         "replaced": False,
     }
+
+
+# ── review verdicts (ADR 0108 D7.2) ──────────────────────────────────────────
+
+
+def test_review_route_confirms_rejects_and_reopens(tmp_path, monkeypatch):
+    from knowledge.store import KnowledgeStore
+
+    store = KnowledgeStore(tmp_path / "kb.db")
+    cid = store.add_chunk("agent guess", domain="general", source_type="conversation")
+    assert store.list_chunks(limit=1)[0].review_state == "pending"  # the agent tier starts pending
+    c = _client(monkeypatch, tmp_path, knowledge=store)
+    r = c.post(f"/api/memory/chunks/{cid}/review", json={"state": "confirmed"})
+    assert r.status_code == 200
+    assert r.json() == {"enabled": True, "id": cid, "review_state": "confirmed"}
+    assert store.list_chunks(limit=1)[0].review_state == "confirmed"
+    r = c.post(f"/api/memory/chunks/{cid}/review", json={"state": " Rejected "})  # normalized
+    assert r.status_code == 200 and r.json()["review_state"] == "rejected"
+    assert store.list_chunks(limit=1)[0].content == "agent guess"  # rejecting never deletes
+    assert c.post(f"/api/memory/chunks/{cid}/review", json={"state": "pending"}).status_code == 200
+    assert store.list_chunks(limit=1)[0].review_state == "pending"
+
+
+def test_review_route_rejects_bad_state_unknown_id_commons_and_no_store(tmp_path, monkeypatch):
+    from knowledge.store import KnowledgeStore
+
+    store = KnowledgeStore(tmp_path / "kb.db")
+    cid = store.add_chunk("agent guess", domain="general", source_type="conversation")
+    c = _client(monkeypatch, tmp_path, knowledge=store)
+    assert c.post(f"/api/memory/chunks/{cid}/review", json={"state": "maybe"}).status_code == 400
+    assert c.post(f"/api/memory/chunks/{cid}/review", json={}).status_code == 400
+    assert c.post("/api/memory/chunks/999/review", json={"state": "confirmed"}).status_code == 404
+    # Commons rows are curated via promote/forget — a verdict on one is refused
+    # rather than landing on whatever PRIVATE row shares the numeric id.
+    r = c.post(f"/api/memory/chunks/{cid}/review", json={"state": "confirmed", "tier": "commons"})
+    assert r.status_code == 400
+    assert store.list_chunks(limit=1)[0].review_state == "pending"  # untouched by every refusal
+    # A backend without review states (the ADR 0031 minimum) → 501, not a crash.
+    c2 = _client(monkeypatch, tmp_path, knowledge=_HotKS())
+    assert c2.post("/api/memory/chunks/3/review", json={"state": "confirmed"}).status_code == 501
+    # No store at all → the enabled=False shape every memory route uses.
+    c3 = _client(monkeypatch, tmp_path)
+    assert c3.post("/api/memory/chunks/1/review", json={"state": "confirmed"}).json() == {
+        "enabled": False,
+        "id": None,
+        "review_state": None,
+    }

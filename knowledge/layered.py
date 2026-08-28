@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from knowledge.store import Chunk
 
+from knowledge.store import REVIEW_CONFIRMED
+
 log = logging.getLogger(__name__)
 
 # RRF constant for the SECOND-level fusion ACROSS tiers (each tier already fused its own
@@ -69,9 +71,10 @@ class LayeredKnowledgeStore:
 
     def __getattr__(self, name):
         # Everything not overridden below (add_chunk/add_finding/add_document, the
-        # delete_*/purge_domain family, get_hot_memory, stats, find_chunk_containing,
-        # reset_embed_breaker, path, close, …) targets the PRIVATE store — writes
-        # (and purges) never touch the commons; it's curated via promote/forget only.
+        # delete_*/purge_domain family, invalidate_chunk/set_review_state (ADR 0108 D7),
+        # get_hot_memory, stats, find_chunk_containing, reset_embed_breaker, path,
+        # close, …) targets the PRIVATE store — writes (and purges, and review
+        # verdicts) never touch the commons; it's curated via promote/forget only.
         return getattr(self._private, name)
 
     # ── read: commons ∪ private, fused with RRF over rank ─────────────────────
@@ -178,7 +181,10 @@ class LayeredKnowledgeStore:
             epoch=chunk.get("epoch"),
             memory_kind=chunk.get("memory_kind"),
             subject=chunk.get("subject"),
-            review_state=chunk.get("review_state"),
+            # Promotion IS the operator's curation (ADR 0041) — the commons copy is
+            # confirmed by construction, whatever the private row's verdict was,
+            # and nothing reviews a commons row afterwards (ADR 0108 D7.2).
+            review_state=REVIEW_CONFIRMED,
             expires_at=chunk.get("expires_at"),
             delivery_policy=chunk.get("delivery_policy"),
         )

@@ -95,6 +95,52 @@ demonstrably can't self-adjudicate staleness, so recency is handled with
 explicit signals at retrieval time instead: every injected hit carries its
 stored date, and the model weighs freshness from timestamps it can see.
 
+### Write lifecycle (ADR 0108 D7)
+
+Every write is typed on the way in, and every memory has a lifecycle after it:
+
+1. **Creation stamps.** `add_chunk` fills what the caller left blank:
+   `memory_kind` from the domain (+ source type — the same table the one-shot
+   D4 backfill used), `delivery_policy` (`always` for `domain="hot"`, otherwise
+   retrieved) and `review_state` from **who wrote it**: an operator surface
+   ([trust tier](#trust-tiers) 3 — the console's Knowledge and Memory routes)
+   starts `confirmed`; the agent's own writes (tier 2 — `memory_ingest`, fact
+   extraction, harvest) and ingested / third-party content (tier 1 — document
+   ingests, snapshot seeds, and any write with no `source_type` at all, which is
+   how plugin SDK and eval writes arrive) start `pending`. Explicit values
+   always win; `subject` and `expires_at` are never guessed. Rows that predate
+   this rule are stamped the same way by a one-shot pass on the first open after
+   upgrading (its own `_kb_meta` marker, separate from the D4 pass), so every
+   row carries a verdict and filters compare the column directly.
+2. **Confirmation.** The operator confirms, rejects, or re-opens a row with
+   `POST /api/memory/chunks/{id}/review` and a body of `{"state": "confirmed" |
+   "rejected" | "pending"}` — the Memory inspector's verdict. Rejecting never
+   deletes: the row keeps its content and history and simply stops being
+   deliverable (D6, #3187, filters on the verdict). The agent has no confirm
+   tool; `memory_list(review_state="pending")` shows it what is still waiting on
+   the operator. An operator *edit* (`PUT /api/knowledge/chunks/{id}`) is an
+   assertion about the content, so the new revision is `confirmed` and keeps the
+   row's kind, subject, policy, expiry and scope — except a `rejected` row stays
+   rejected (re-opening is the review route's job). Promoting a row into the
+   commons confirms the commons copy by construction.
+3. **Supersession chain.** A revision invalidates the old row *after* the new
+   one has landed, stamping `invalidation_reason="superseded_by:<new id>"` — a
+   queryable audit chain, never a delete, and never reaped by the bulk-delete
+   grace sweep (which matches its own marker only). A failed insert therefore
+   never loses the old fact; the reverse (the insert landed, the invalidation
+   didn't) is logged and leaves both rows valid until the next revision. On a
+   layered store only private rows are ever superseded — a commons match still
+   dedups by content but is never invalidated. `memory_recall(include_superseded=True)`
+   surfaces that history tagged `[superseded by #<id>]` (or `[superseded]` for a
+   pre-chain row).
+4. **Expiration.** `memory_ingest(expires_in_days=N)` (1–3650) stamps
+   `expires_at`; the row is kept but leaves delivery once it lapses.
+   `memory_list` shows `expires=YYYY-MM-DD` on such rows.
+
+Plugins get the same lifecycle through `sdk.knowledge_add(review_state=,
+expires_at=)`; a plugin write that sets neither starts `pending`, like any
+other non-operator write.
+
 ## Delivery: what enters the prompt (ADR 0069)
 
 `KnowledgeMiddleware` runs before each model call and assembles the injected

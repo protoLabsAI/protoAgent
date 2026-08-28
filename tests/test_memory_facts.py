@@ -122,3 +122,105 @@ def test_extract_and_store_facts_end_to_end(tmp_path):
 def test_extract_noop_without_store():
     counts = asyncio.run(extract_and_store_facts("x", knowledge_store=None, config=object()))
     assert counts == {"added": 0, "skipped": 0, "superseded": 0}
+
+
+# ── supersession chain (ADR 0108 D7.3) ───────────────────────────────────────
+
+_OLD = "operator deploys on fridays after standup"
+_REVISED = "operator deploys on fridays after lunch"  # Jaccard 5/7 ≈ 0.71 — the supersede band
+
+
+def test_supersede_inserts_first_then_chains_the_old_row(tmp_path):
+    store = KnowledgeStore(tmp_path / "kb.db")
+    consolidate_and_store(store, [_OLD], namespace="p")
+    old = store.list_chunks(domain="fact", limit=10)[0]
+    counts = consolidate_and_store(store, [_REVISED], namespace="p")
+    assert counts == {"added": 1, "skipped": 0, "superseded": 1}
+    valid = store.list_chunks(domain="fact", limit=10)
+    assert [c.content for c in valid] == [_REVISED]
+    audit = store.get_chunk(old.id)
+    assert audit["invalidated_at"]
+    assert audit["invalidation_reason"] == f"superseded_by:{valid[0].id}"
+
+
+def test_failed_insert_never_invalidates_the_old_fact(tmp_path):
+    store = KnowledgeStore(tmp_path / "kb.db")
+    consolidate_and_store(store, [_OLD], namespace="p")
+
+    class _Flaky:
+        def list_chunks(self, **kw):
+            return store.list_chunks(**kw)
+
+        def invalidate_chunk(self, *a, **kw):
+            return store.invalidate_chunk(*a, **kw)
+
+        def add_chunk(self, *a, **kw):
+            return None  # the insert fails
+
+    counts = consolidate_and_store(_Flaky(), [_REVISED], namespace="p")
+    assert counts == {"added": 0, "skipped": 0, "superseded": 0}
+    assert [c.content for c in store.list_chunks(domain="fact", limit=10)] == [_OLD]  # still valid
+
+
+def test_supersede_falls_back_on_a_backend_without_the_chain_kwarg(tmp_path):
+    store = KnowledgeStore(tmp_path / "kb.db")
+    consolidate_and_store(store, [_OLD], namespace="p")
+
+    class _Legacy:
+        def list_chunks(self, **kw):
+            return store.list_chunks(**kw)
+
+        def add_chunk(self, *a, **kw):
+            return store.add_chunk(*a, **kw)
+
+        def invalidate_chunk(self, chunk_id):  # pre-D7 signature: no superseded_by
+            return store.invalidate_chunk(chunk_id)
+
+    counts = consolidate_and_store(_Legacy(), [_REVISED], namespace="p")
+    assert counts["superseded"] == 1
+    invalidated = [c for c in store.list_chunks(domain="fact", limit=10, include_invalidated=True) if c.invalidated_at]
+    assert len(invalidated) == 1 and invalidated[0].invalidation_reason is None  # superseded, unchained
+
+
+def test_supersede_never_targets_a_commons_row_on_a_layered_store(tmp_path):
+    """Layered ids are per-backend: the best match may be a COMMONS row whose
+    numeric id also names an unrelated PRIVATE row. A commons match still dedups
+    by content but is never invalidated — the colliding private row is untouched."""
+    from knowledge.layered import LayeredKnowledgeStore
+
+    priv = KnowledgeStore(tmp_path / "priv.db")
+    commons = KnowledgeStore(tmp_path / "commons.db")
+    layered = LayeredKnowledgeStore(priv, commons)
+    priv_id = priv.add_chunk("an unrelated private fact about lunch", domain="fact", namespace="p")
+    commons_id = commons.add_chunk(_OLD, domain="fact", namespace="p")
+    assert priv_id == commons_id == 1  # the collision the fix guards against
+    counts = consolidate_and_store(layered, [_REVISED], namespace="p")
+    assert counts == {"added": 1, "skipped": 0, "superseded": 0}
+    assert priv.get_chunk(priv_id)["invalidated_at"] is None
+    assert commons.get_chunk(commons_id)["invalidated_at"] is None
+    assert [c.content for c in priv.list_chunks(domain="fact", limit=10)] == [
+        _REVISED,
+        "an unrelated private fact about lunch",
+    ]
+    # And a commons DUPLICATE (not a revision) is still skipped by content.
+    assert consolidate_and_store(layered, [_OLD], namespace="p") == {"added": 0, "skipped": 1, "superseded": 0}
+
+
+def test_supersede_failure_after_insert_is_logged_and_keeps_both(tmp_path, caplog):
+    store = KnowledgeStore(tmp_path / "kb.db")
+    consolidate_and_store(store, [_OLD], namespace="p")
+
+    class _Stuck:
+        def list_chunks(self, **kw):
+            return store.list_chunks(**kw)
+
+        def add_chunk(self, *a, **kw):
+            return store.add_chunk(*a, **kw)
+
+        def invalidate_chunk(self, *a, **kw):
+            return False  # the invalidation didn't take
+
+    counts = consolidate_and_store(_Stuck(), [_REVISED], namespace="p")
+    assert counts == {"added": 1, "skipped": 0, "superseded": 0}
+    assert len(store.list_chunks(domain="fact", limit=10)) == 2  # both valid, nothing lost
+    assert "both stay valid" in caplog.text

@@ -98,15 +98,17 @@ def test_promote_unknown_id_returns_none(tmp_path):
 
 
 def test_promote_forwards_typed_memory_fields(tmp_path):
-    """promote() must carry memory_kind/subject/review_state/expires_at into the commons."""
+    """promote() must carry memory_kind/subject/expires_at into the commons; the
+    commons copy's verdict is ``confirmed`` by construction (ADR 0108 D7.2 —
+    promotion IS the operator's curation), whatever the private row's was."""
     private, commons = _stores(tmp_path)
     cid = private.add_chunk(
         "user prefers terse replies",
         domain="general",
         memory_kind="standing",
         subject="operator",
-        review_state="approved",
-        expires_at="2027-01-01",
+        review_state="pending",
+        expires_at="2027-01-01",  # date-only → stored as UTC ISO by the store
     )
     layered = LayeredKnowledgeStore(private, commons)
     rec = layered.promote(cid)
@@ -117,8 +119,9 @@ def test_promote_forwards_typed_memory_fields(tmp_path):
     c = commons_chunks[0]
     assert c.memory_kind == "standing"
     assert c.subject == "operator"
-    assert c.review_state == "approved"
-    assert c.expires_at == "2027-01-01"
+    assert c.review_state == "confirmed"
+    assert c.expires_at == "2027-01-01T00:00:00+00:00"
+    assert private.list_chunks(limit=1)[0].review_state == "pending"  # the private verdict is its own
 
 
 def test_stats_split_by_tier(tmp_path):
