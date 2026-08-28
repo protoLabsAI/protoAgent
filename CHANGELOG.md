@@ -15,6 +15,235 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.155.0] - 2026-08-28
+
+### Added
+- **Per-turn context is delivered, not stored (#3188) (ADR 0108 D2).**
+  Derived context frames (memory, skills, working state, tool-delta notices) are now
+  delivered ephemerally via `wrap_model_call(request.override)` instead of being
+  checkpointed as conversation history. This eliminates stale context accumulation in
+  long-running threads and reduces checkpoint size.
+
+- **The system prompt describes only the tools the agent actually has (#3190) (ADR 0108 D3).**
+  The operating model and guidelines sections now reference only tools that are actually
+  bound, so capability-stripped deployments and subagents stop receiving instructions for
+  capabilities they cannot use.
+
+- **Prompt snapshots capture the context the model was actually given (#3191) (ADR 0108 D5).**
+  The projected context (memory, skills, working state, tool-delta notices) is now captured
+  alongside each prompt snapshot, closing the gap where dynamic context frames were absent
+  from the last-call and per-task views.
+
+- **The fleet roster can be reordered — by drag, or by keyboard (#3197).** Settings → Agents
+  now lets an operator arrange the roster: drag a member row by its handle, or use the per-row
+  move-up / move-down controls (the accessible, non-pointer equivalent, with names like
+  "Move ava up" and boundary/busy disabling). The new order is submitted as the complete
+  immutable-`id` permutation to `PUT /api/fleet/order` (the hub-scoped backend from #3200) and
+  applied optimistically, then reconciled through the polling fleet query on both success and
+  failure so a rejected order rolls back to the server's. The pinned host ("this instance")
+  carries no controls but is still a valid drop slot; no name, URL, token, process state or
+  immutable id is ever changed.
+
+- **A `uv.lock` downgrade can no longer slip through behind a one-package title (#3224).** A
+  dependency PR is named after one package; its lockfile is not so disciplined — raising one
+  pin can walk others backwards, because a resolver will satisfy a new constraint by
+  downgrading something else. #3218 was titled "bump websockets 15.0.1 → 17.0.1" and also took
+  `langchain` 1.3.18 → 1.3.2, `langgraph` 1.2.11 → 1.2.2 and `langgraph-sdk` 0.4.2 → 0.3.15,
+  and merged green, because a downgrade isn't a test failure — it's a silently older product.
+  A required check now diffs the branch's lock against the base and fails on any downgrade,
+  naming each one; additions and removals are reported but never fail. Intended downgrades
+  pass with the `lock-downgrade-ok` label. `python scripts/lock_diff.py` runs it locally.
+
+- **The subagent roster lists only the subagents the lead can actually pick (#3232) (ADR 0108 D3).**
+  The system prompt's subagent section now lists the 3 lead-visible subagents (researcher,
+  dream, distill) and omits 7 workflow-internal ones the lead never delegates to directly —
+  a ~2,000 character prompt reduction.
+
+- **Public tapped-dispatch seam on the coding-agent plugin (#3235).** `plugins.coding_agent`
+  now exposes `dispatch_tapped(delegate, prompt, *, on_tool=None, on_thought=None,
+  on_text=None, timeout=None) -> TappedResult` — one call that owns the whole coder-turn
+  lifecycle (a fresh private session that never touches the delegate's pooled
+  `delegate_to` client, the by-kind permission policy, cancel-kills-child — even a cancel
+  landing mid-teardown — and teardown on every exit) while streaming tool/thought/text
+  callbacks live and returning
+  the wire signals (`reply`, `usage`, `plan`, `stop_reason`, `dead_end`) the `-> str`
+  dispatch path cannot carry. `AcpAdapter.dispatch_tapped` forwards a parsed `Delegate` to
+  the same seam with `dispatch`-style failure attribution, replacing the project board's
+  private ACP client-pool reaches without weakening `AcpAdapter.dispatch`'s contract. The
+  library's public surface is now a generated reference page
+  (`docs/reference/plugin-coding-agent.md`, via `scripts/gen_plugin_api.py`) with a CI
+  coverage guard.
+
+- **The desktop app now ships the board's `br` CLI, pinned (#3236).** A fresh desktop
+  install with no beads-rust on PATH used to lean on the project_board plugin's runtime
+  auto-fetch — a binary download at first board use. The desktop build now fetches the
+  pinned beads-rust release for the build target into a second Tauri sidecar
+  (`binaries/br-<target-triple>`), with the plugin's `br_fetch.py` (`BR_VERSION` +
+  `BR_SHA256`) as the single source of the pin — loaded at build time, never copied — and
+  verifies the fetched binary reports exactly that version before it ships. The shell
+  hands the installed path to the server as `BR_BIN`, so the plugin's existing precedence
+  (explicit `BR_BIN` > its fetched copy > PATH) resolves the distributed binary: status
+  reports `br.source: "env"` and no runtime fetch ever starts; fleet members inherit the
+  same env at spawn. The auto-fetch remains the non-desktop fallback, and Windows stays
+  out of scope (no pin — the plugin's manual-install hint still applies there).
+
+- **Memory rows now say when they enter the prompt (#3242) (ADR 0108 D4).** A new
+  `delivery_policy` column on the knowledge store — `always` (every turn, what
+  `domain="hot"` has always meant), `retrieved` (on a relevant query; the default, and what
+  an untyped row reads as) or `on_demand` (only through `memory_recall`) — rides
+  `memory_ingest` / `memory_recall` / `memory_list`, the console's knowledge rows and
+  `sdk.knowledge_add`. A hot write is stamped `always` whatever the caller said, and the
+  `knowledge.hot_write_confirm` gate now refuses every agent path to an always-on row:
+  `delivery_policy="always"` on any domain via `memory_ingest`, and `domain="hot"` via
+  `knowledge_ingest` as well. On the first open after upgrading, existing rows are
+  classified once from their `domain` into `memory_kind` and `delivery_policy` (#3205 added
+  the typed columns but left every row untyped); the pass only fills empty cells and is
+  recorded so it never re-runs. Delivery itself is unchanged until D6 switches the
+  always-on reader to the new column.
+
+- **One context projection for every runtime (#3243) (ADR 0108 D8).** The per-turn volatile composer is now a standalone function, `graph.projection.compose_projected_context()`, that both the native `KnowledgeMiddleware` and external runtimes (`runtime/context.py`, the ACP path) call. An external brain is fed exactly what the native loop injects — the `<injected_memory>` envelope, always-on hot memory, trust-ranked and namespace-scoped RAG hits, the budgeted `<available_skills>` index, and `<working_state>` — with the incognito rule and the injection log applied identically; `middleware.knowledge: false` now withholds memory on the ACP runtime too, and injection rows are recorded only for attributable turns. Per-turn native output is unchanged for a given cache state (golden-tested). The digest loader now runs only on turns that can use the digest (not incognito or goal turns) — main refreshed the cache unconditionally; per-turn output for a given cache state is unchanged. The result is a typed `ProjectedContext`.
+
+- **The four prompt contracts are documented and size-gated (#3244) (ADR 0108).** `docs/explanation/prompt-contracts.md` spells out what goes into the lead, subagent, external/ACP and provider-transformed prompts — builder, section order, exclusions, knobs — with a measured size table, and `tests/test_prompt_budgets.py` turns that table into CI goldens: per-section ceilings at measured x1.2 plus the structural invariants (lead-visible roster only, capability-derived doctrine never names an unbound tool, ACP prefix equals the lead prompt, provider transforms preserve the composed text). A prompt that silently grows now fails the build with the actual and allowed sizes printed.
+
+- **Every memory now has a write lifecycle (#3246) (ADR 0108 D7).** A chunk is typed
+  on the way in — the store stamps an omitted `memory_kind` from its domain and an
+  omitted `review_state` from who wrote it: rows the operator adds through the
+  console start `confirmed`, rows the agent stores or ingests start `pending`.
+  Operators confirm, reject, or re-open a row with
+  `POST /api/memory/chunks/{id}/review` (rejecting never deletes) and list the
+  queue with `GET /api/knowledge/search?review_state=pending`. When a fresher fact
+  replaces an older one, the new row lands first and the old one is chained to it
+  (`superseded_by:<id>`) as audit history the bulk-delete sweep never reaps;
+  `memory_recall(include_superseded=True)` shows that history tagged
+  `[superseded]`. `memory_ingest(expires_in_days=…)` gives a volatile fact a shelf
+  life, `memory_list` shows `expires=` and filters by `review_state`, and
+  `sdk.knowledge_add` accepts `review_state` / `expires_at`.
+
+- **Injected context is now bounded and policy-driven (#3247) (ADR 0108 D6).** A new `context.budget_pct` (default 8% of the model window, never below 16k chars) caps everything injected per turn; over budget the lowest-priority parts shed first — recalled knowledge, then the prior-session digest, then skill descriptions one at a time (names never drop) — while working state and always-on memory are never shed. Always-on memory is now selected by `delivery_policy="always"` rather than the `hot` domain (every hot write already carries it), so a fact on any domain can be pinned always-on, and rejected or expired rows never enter the prompt. The prompt preview API carries the budget summary and per-section `truncated` flags; the inspector renders them in a follow-up.
+
+- **Confirm, reject, or re-open agent-written memories from the console (#3249) (ADR 0108 D7).** Knowledge → Store and Memory → Hot memory rows show a review chip, pending rows get Confirm / Reject actions, and a pending-review filter queues everything awaiting a verdict. Commons rows stay read-only.
+
+- **The prior-session digest is now evaluated, not blindly injected (#3252) (ADR 0108 D9).** A session's own summary is never listed as a "prior" session (it was the newest entry in its own digest from turn 2 on), a new `context.prior_sessions` policy picks what the digest recalls — `newest` (default, unchanged), `relevant` (only sessions matching the turn's query via session-search FTS, falling back to newest), or `off` (on-demand `session_search`/`recall_session` only) — and under the context budget the digest sheds entry by entry (oldest or lowest-rank first) instead of vanishing whole.
+
+- **The prompt inspector shows the delivery budget and what it shed (#3257).** The ceiling on
+  projected context (ADR 0108 D6) has been in the API since #3247 and nothing read it — the
+  console never called the preview route at all. The dialog now renders the budget strip, marks
+  the sections the budget cut, and offers a speculative next-call preview. Two bugs surfaced on
+  the way: the prompt body read only the legacy context channel, so post-#3234 captures rendered
+  as a bare stable prefix, and a projected section was painted in the stable colour.
+
+- **Remembering something now records which session you were in when it happened (#3258).** The agent's
+  own memory writes carried no provenance: `memory_recall` has cited each row's source session
+  since ADR 0069 D5, but only harvested and operator-written rows ever set it, so anything the
+  agent chose to remember came back uncited. It now stamps the originating session, read from the
+  turn's own state rather than from the model — so a recalled fact can say where it came from,
+  and the two agent-authored write paths finally agree on how to say it.
+
+### Changed
+- **CI actions bumped, but only the ones a PR actually exercises (#3225).** `actions/checkout`
+  5→7, `setup-node` 5→7, `setup-python` 6→7, `setup-uv` 6→7 and `cache` 4→6 all run on every
+  PR, so this PR's own green checks are real evidence. The rest of Dependabot's group —
+  `upload-artifact` 4→7, `download-artifact` 4→8, `attest-build-provenance` 3→4,
+  `github-script` 8→9 — lives only in `desktop-build`, `publish` and `issue-gate`, which never
+  run on a PR, so bumping them together would have shipped the release and desktop pipelines
+  untested behind an all-green tick.
+
+### Fixed
+- **The console unit suite runs on Node 25 and 26 again (#3213).** Node 25 promoted Web Storage to
+  enabled-by-default, so it and Node 26 pre-define the `localStorage`/`sessionStorage` globals and
+  vitest's jsdom environment leaves a pre-existing global in place. On a clean checkout that failed
+  133 of 1352 tests on Node 25 (where the global throws) and 127 on Node 26 (where it reads
+  `undefined`), all at `localStorage.clear()`, while `sessionStorage` quietly resolved to Node's
+  implementation rather than jsdom's. CI pins Node 20 and never saw it, so the gate looked broken
+  only on contributors' machines. The suite now installs jsdom's Storage (and its constructor,
+  which the persist tests spy on) whenever the host Node's is unusable — a behavioral check, so it
+  keeps working whatever a future Node does — and `.nvmrc` points humans at CI's Node.
+
+- **Cover the queued message the agent already read (#3214).** The e2e mock always answered the
+  steer-cancel endpoint with `removed: true`, so the branch that runs when the agent drains a
+  queued message before the operator takes it back — the one that restores the pending bubble
+  instead of claiming the message never ran — had no end-to-end coverage. The mock can now be
+  told a steer was already read, and two specs pin the behavior for both the ✕ and the ↑ paths.
+
+- **The cache warmer and the ACP runtime warm the prompt the agent will actually send (#3230).**
+  `bound_tool_names` is threaded through both, so capability-stripped deployments warm the
+  correct prefix instead of a different one, and receive only the operating-model sections
+  for their bound tools.
+
+- **A configured commons no longer breaks memory listing, fact dedup and snapshot export (#3245).** `LayeredKnowledgeStore.list_chunks()` returned tier-tagged dicts while every other store returns `Chunk` rows, so with a commons configured the `memory_list` tool crashed, fact consolidation silently stopped de-duplicating, and the agent snapshot's knowledge seed exported empty. Rows are now `Chunk` objects with a `tier` field ("private" / "commons"); the console's tier badges are unchanged.
+
+- **The external agent is told about the tools its bus actually serves (#3248).** The ACP brain's persona (AGENTS.md) and the external `ContextAssembler` prefix now describe only what the operator MCP bus exposes. Both are derived from the same allowlist the sidecar is handed (the configured names, or every tool when unset) under the sidecar's own boot assumptions, resolved at the first turn — never guessed — so the persona no longer names `set_goal`, `schedule_task`, tasks or "subagents" when the bus does not serve them, and the prefix carries no Subagent Delegation roster or doctrine for unexposed capabilities. Fixed on the way: a standalone operator-MCP sidecar now registers the plugin bundle's goal verifiers (verifier-gated goal and watch tools were served as nothing while the host claimed all of them) and applies the fork tool denylist, the operator MCP filters `tools.disabled`/`tools.hidden` names it previously kept serving, `create_watch` can be exposed when watches are enabled, the operating model names `task` only when it is bound, `PROTOAGENT_MCP_TRUST` reaches the spawned sidecar, and `GET /api/mcp/exposed` reports the sidecar's set under an ACP runtime.
+
+- **Prompt snapshots record the turn's projected context again (#3250).** The projection
+  (recalled memory, skills index, working state) is composed by an inner middleware and recorded
+  by an outer one, handed across via a `ContextVar` — but the two are not in the same call stack:
+  the inner runs in a child asyncio task, whose `set()` is invisible to the parent that awaited
+  it. Every snapshot stored an empty projection while the context itself reached the model
+  normally, and with the legacy context channel removed there was no fallback. The outer now owns
+  a mutable frame that the inner fills in, so what the model was actually given is what gets
+  recorded.
+
+- **`context.prior_sessions: off` now actually turns the prior-session digest off (#3253).** YAML
+  parses a bare `off` as the boolean `false`, which the config layer read as "unset" and resolved
+  to the default — `newest`, the most expensive setting and the opposite of the request, with no
+  warning, so an operator who switched the digest off was still shown ten sessions of it every
+  turn. Only the quoted form worked. `off`, `no` and `false` all mean off now, in the config layer
+  and in the projection reader an external runtime can hand a raw value to.
+
+- **The `self_improvement` policy knobs accept a bare `on`/`off` in YAML (#3255).** These are
+  `off | propose | auto` strings, but YAML 1.1 parses a bare `off` as the boolean false
+  and `on` as true — so `skills: on` was stored as the string `"True"`, and `soul_md: off`
+  landed on the right answer only because a magic `or "off"` literal in the parse happened
+  to match it, one refactor away from the silent misfire that hit `context.prior_sessions`
+  (#3253). The word the operator wrote is now resolved explicitly.
+
+- **The context budget follows the model a chat tab is actually using (#3256).** The console lets
+  each tab pick its own model, but everything sized off the model's context window — the
+  projected-context budget, the skill-index cap, the tool-result pruning trigger — was frozen
+  when the graph was compiled. A tab switched to a smaller model kept the default model's
+  allowance: on a 32k model that meant a budget of roughly half its entire input window, and a
+  pruning trigger sized four times too high to fire when it should. Each now follows the turn's
+  model, and a model the gateway doesn't recognize falls back to the configured default rather
+  than to no limit at all.
+
+- **A negative `knowledge.top_k` removed the injection cap instead of tightening it, and the
+  default is now the documented 5 (#3260).** One live turn injected 26 recalled chunks under
+  `knowledge.top_k: 5` — really injected, not just mis-logged: the prompt snapshot carries all
+  26 rendered hit lines. Every cap on the retrieval path was correct; what nothing guarded was
+  a non-positive value, which defeats two of them at once. The count reaches SQLite as
+  `LIMIT -1`, which means no limit, so the store returns every matching row; and the trust
+  ranker's `kept[: top_k]` becomes `kept[:-1]`, which drops one hit instead of capping. The
+  delivery budget then decided what shipped, so the turn injected whatever happened to fit.
+  A negative value is now read as 0 with a warning naming it, `0` keeps its documented "no
+  auto-injected hits" meaning, and a delivery-boundary check trims and warns rather than
+  raising, so over-injection is structurally impossible whatever the cause. Separately, and
+  a behavior change: `knowledge.top_k` defaults to 5 rather than 10, so an install that omits
+  the key now injects 5 recalled chunks per turn instead of 10 — set `knowledge.top_k: 10` to
+  keep the old volume. It was the lone outlier; the dataclass, the middleware and the shipped
+  example config all already said 5.
+
+### Removed
+- **The legacy `context`/`context_sections` state channel is gone (#3234) (ADR 0108 D2).**
+  Knowledge context delivery now uses only the ephemeral middleware projection introduced in
+  #3226; the old checkpointed state keys are removed from the graph schema.
+
+### Docs
+- **Dependency-bump PRs now say what to do about the attribution gate (#3221).** Every
+  Dependabot PR lands failing `Attribution in sync`, because `gen_attribution.py` reads
+  installed package metadata and Dependabot can't run it — the bump is fine, the PR just
+  isn't finished. PROTO.md now carries the four-command fix, plus the two things a green
+  dependency PR does *not* prove: Dependabot rewrites version *caps* in `pyproject.toml`
+  (not just the lock), and an `actions/*` bump is untested against the six release and
+  desktop workflows that never run on a PR. `mcp` is pinned out of Dependabot's reach until
+  `langchain-mcp-adapters` actually imports on mcp 2.x.
+
+- **ADR 0109 — one board, one store, N repos (#3237).** `project_board`'s board stays a
+  per-instance singleton but is no longer bound to a single repo: features carry their
+  target repo and the plugin routes each dispatch to it, while cross-team federation
+  remains the fleet's job (ADRs 0042/0055) and the beads store is pinned to the instance
+  store, never a repo checkout. ADR 0055's single-board sub-decision is marked superseded
+  in part, in place; the federation decision stands. Non-goal: no in-process board registry.
+
 ## [0.154.0] - 2026-08-27
 
 ### Added

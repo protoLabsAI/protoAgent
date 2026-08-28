@@ -1,5 +1,42 @@
 [
   {
+    "version": "v0.155.0",
+    "date": "2026-08-28",
+    "changes": [
+      "Per-turn context is delivered, not stored (#3188).",
+      "The system prompt describes only the tools the agent actually has (#3190).",
+      "Prompt snapshots capture the context the model was actually given (#3191).",
+      "The fleet roster can be reordered — by drag, or by keyboard (#3197).",
+      "A uv.lock downgrade can no longer slip through behind a one-package title (#3224).",
+      "The subagent roster lists only the subagents the lead can actually pick (#3232).",
+      "Public tapped-dispatch seam on the coding-agent plugin (#3235).",
+      "The desktop app now ships the board's br CLI, pinned (#3236).",
+      "Memory rows now say when they enter the prompt (#3242).",
+      "One context projection for every runtime (#3243).",
+      "The four prompt contracts are documented and size-gated (#3244).",
+      "Every memory now has a write lifecycle (#3246).",
+      "Injected context is now bounded and policy-driven (#3247).",
+      "Confirm, reject, or re-open agent-written memories from the console (#3249).",
+      "The prior-session digest is now evaluated, not blindly injected (#3252).",
+      "The prompt inspector shows the delivery budget and what it shed (#3257).",
+      "Remembering something now records which session you were in when it happened (#3258).",
+      "CI actions bumped, but only the ones a PR actually exercises (#3225).",
+      "The console unit suite runs on Node 25 and 26 again (#3213).",
+      "Cover the queued message the agent already read (#3214).",
+      "The cache warmer and the ACP runtime warm the prompt the agent will actually send (#3230).",
+      "A configured commons no longer breaks memory listing, fact dedup and snapshot export (#3245).",
+      "The external agent is told about the tools its bus actually serves (#3248).",
+      "Prompt snapshots record the turn's projected context again (#3250).",
+      "context.prior_sessions: off now actually turns the prior-session digest off (#3253).",
+      "The self_improvement policy knobs accept a bare on/off in YAML (#3255).",
+      "The context budget follows the model a chat tab is actually using (#3256).",
+      "A negative knowledge.top_k removed the injection cap instead of tightening it, and the default is now the documented 5 (#3260).",
+      "The legacy context/context_sections state channel is gone (#3234).",
+      "Dependency-bump PRs now say what to do about the attribution gate (#3221).",
+      "ADR 0109 — one board, one store, N repos (#3237)."
+    ]
+  },
+  {
     "version": "v0.154.0",
     "date": "2026-08-27",
     "changes": [
