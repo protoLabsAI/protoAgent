@@ -17,6 +17,18 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "chore(deps)"
+    ignore:
+      # mcp 2.x REMOVED `RequestContext` from `mcp.shared.context`, which
+      # langchain-mcp-adapters still imports — and the adapter's metadata says
+      # `mcp>=1.24.0` with no upper bound, so a resolver left alone picks 2.x and
+      # every MCP import fails. pyproject caps it at `<2` for that reason, but a
+      # cap is not protection: Dependabot rewrote it to `<3` (#3219, closed —
+      # the suite and both Windows shards went red). Ignored here so it stops
+      # being re-proposed weekly.
+      # LIFT THIS the day a langchain-mcp-adapters release actually imports on
+      # mcp 2.x, together with the cap in pyproject.toml.
+      - dependency-name: "mcp"
+        versions: [">=2"]
     groups:
       # The model clients and the graph runtime move together and break together
       # — a langchain-core bump that langchain-openai hasn't caught up with is a
