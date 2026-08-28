@@ -548,6 +548,23 @@ FIELDS: list[Field] = [
         minimum=0,
         maximum=100,
     ),
+    # Prior-session digest policy (ADR 0108 D9).
+    Field(
+        "context.prior_sessions",
+        "context_prior_sessions",
+        "Prior-session digest",
+        "select",
+        "Knowledge",
+        "How the cross-session digest is chosen each turn. \"newest\" (default) injects "
+        "one attributed line for each of the newest sessions, exactly as before. "
+        "\"relevant\" injects only sessions whose content matches what was just asked "
+        "(session-search FTS, best match first), falling back to \"newest\" when the "
+        "query is empty or the index is unavailable. \"off\" injects no automatic digest "
+        "— the agent still reaches past sessions on demand via session_search / "
+        "recall_session. Whatever the policy, the current session's own summary is never "
+        "injected as a \"prior\" session.",
+        options=["newest", "relevant", "off"],
+    ),
     # Hot-memory write confirm gate (ADR 0069 D8).
     Field(
         "knowledge.hot_write_confirm",
@@ -1506,6 +1523,7 @@ _KNOWLEDGE_SUBSECTION = {
     "knowledge.min_score": "Recall",
     "skills.top_k": "Recall",  # skills surfaced into context — a recall-count sibling
     "context.budget_pct": "Recall",  # the ceiling on everything Recall puts in the prompt (ADR 0108 D6)
+    "context.prior_sessions": "Recall",  # which sessions the digest recalls each turn (ADR 0108 D9)
     # Ingestion — bringing documents in (extraction, chunking, enrichment).
     "knowledge.transcribe_model": "Ingestion",
     "knowledge.image_describe_model": "Ingestion",

@@ -16,7 +16,7 @@ import os
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -410,6 +410,169 @@ def format_session_summary(summary: dict) -> str:
     return "\n".join(lines)
 
 
+class DigestEntry(NamedTuple):
+    """One attributed digest line, keyed by the session it summarizes — the
+    unit ADR 0108 D9's budget shed drops (oldest / lowest-rank first)."""
+
+    session_id: str
+    line: str
+
+
+class DigestResult(NamedTuple):
+    """A rendered ``<prior_sessions>`` block plus the entries it carries, in
+    keep-first order — what a ``prior_sessions`` digest loader hands the
+    projection composer (ADR 0108 D9). ``block`` is authoritative: when nothing
+    sheds it passes through byte-identically; the entries only matter once the
+    delivery budget starts dropping them (re-rendered via :func:`render_digest`)."""
+
+    block: str
+    entries: list  # list[DigestEntry]
+
+
+#: The ``context.prior_sessions`` policies (ADR 0108 D9).
+PRIOR_SESSION_POLICIES = frozenset({"newest", "relevant", "off"})
+
+
+def render_digest(entries: list[DigestEntry]) -> str:
+    """Render digest entries exactly as the loader does — header + one line per
+    session. ``[]`` renders ``""`` (the budget shed everything: the section is
+    dropped, never an empty tag)."""
+    if not entries:
+        return ""
+    return "<prior_sessions>\n" + "\n".join([_DIGEST_HEADER, *(e.line for e in entries)]) + "\n</prior_sessions>"
+
+
+def finish_digest(
+    entries: list[DigestEntry], max_tokens: int = 2000, *, dir_exists: bool = True
+) -> DigestResult:
+    """Token-trim (char/4, dropping from the END — oldest under ``newest``,
+    lowest-rank under ``relevant``) and render. Preserves the loader's empty
+    shapes: no memory dir → ``""``; a dir with nothing usable → ``<prior_sessions/>``."""
+    if not dir_exists:
+        return DigestResult("", [])
+    kept = list(entries)
+    while kept:
+        if max(1, len("\n".join([_DIGEST_HEADER, *(e.line for e in kept)])) // 4) <= max_tokens:
+            break
+        kept.pop()  # drop from the end (keep-first ordering)
+    if not kept:
+        return DigestResult("<prior_sessions/>", [])
+    return DigestResult(render_digest(kept), kept)
+
+
+def load_digest_pool(
+    memory_dir: str | None = None,
+    max_sessions: int = 10,
+    *,
+    exclude_session_id: str = "",
+) -> tuple[list[DigestEntry], bool]:
+    """The newest-``max_sessions`` digest entries (pre token-trim) and whether
+    the memory dir exists at all.
+
+    ``exclude_session_id`` (ADR 0108 D9, #3186): the ACTIVE session's own
+    summary — persisted on every terminal turn since ADR 0069 D4 — must never
+    appear as a "prior" session in its own thread. It is skipped BEFORE the
+    newest-N cut (by filename, plus a post-parse id check for files whose name
+    doesn't match their content), so the pool refills with the next-newest.
+    Never raises."""
+    if memory_dir is None:
+        memory_dir = memory_path()
+    if not os.path.isdir(memory_dir):
+        return [], False
+    excluded_names: set[str] = set()
+    if exclude_session_id and is_safe_session_id(exclude_session_id):
+        try:
+            excluded_names = {os.path.basename(p) for p in session_file_candidates(exclude_session_id, memory_dir)}
+        except Exception:  # noqa: BLE001 — the post-parse check still guards
+            excluded_names = set()
+    try:
+        files: list[tuple[float, str]] = []
+        for fname in os.listdir(memory_dir):
+            if not fname.endswith(".json"):
+                continue
+            if fname.startswith(("background:", "background%3A")):
+                # Background worker summaries are disposable (ADR 0070 D3). The
+                # writer no longer produces them; this read-side filter also
+                # keeps LEGACY files already on disk out of the digest — under
+                # either the raw or the '%3A'-encoded filename.
+                continue
+            if fname in excluded_names:
+                continue  # the active session is not a "prior" session
+            fpath = os.path.join(memory_dir, fname)
+            try:
+                files.append((os.path.getmtime(fpath), fpath))
+            except OSError:
+                continue
+        files.sort(reverse=True)  # newest first
+    except OSError:
+        return [], False
+    pool: list[DigestEntry] = []
+    for _, fpath in files[:max_sessions]:
+        try:
+            with open(fpath, encoding="utf-8") as fh:
+                summary = json.load(fh)
+        except (OSError, json.JSONDecodeError, ValueError):
+            continue
+        sid = str(summary.get("session_id") or "unknown")
+        if exclude_session_id and sid == exclude_session_id:
+            continue
+        pool.append(DigestEntry(sid, _digest_line(summary)))
+    return pool, True
+
+
+def load_digest(
+    policy: str = "newest",
+    *,
+    query: str = "",
+    exclude_session_id: str = "",
+    memory_dir: str | None = None,
+    max_sessions: int = 10,
+    max_tokens: int = 2000,
+) -> DigestResult:
+    """The prior-sessions digest under a ``context.prior_sessions`` policy
+    (ADR 0108 D9). ``newest`` = the newest-N pool; ``relevant`` = the FTS-ranked
+    sessions matching ``query`` (graph.session_search, #3073 — bm25 then newest,
+    deterministic), falling back to ``newest`` on an empty query, an
+    unavailable/erroring index, or zero matches. ``off`` is the caller's job —
+    this function is simply never called. Adds one index sync + one FTS query +
+    ≤N small JSON reads per call under ``relevant``. Never raises."""
+    q = (query or "").strip()
+    if policy == "relevant" and q:
+        try:
+            # Lazy: session_search imports this module at its top level.
+            from graph.session_search import search_session_summaries
+
+            matches = search_session_summaries(
+                q,
+                memory_dir=memory_dir,
+                limit=max_sessions,
+                exclude_session_id=exclude_session_id,
+            )
+        except Exception:  # noqa: BLE001 — no FTS5 / no terms / index error → newest
+            log.debug("[memory] relevant digest unavailable — falling back to newest", exc_info=True)
+            matches = []
+        base = memory_dir or memory_path()
+        pairs: list[DigestEntry] = []
+        for m in matches:
+            sid = str(m.get("session_id") or "")
+            if not sid or not is_safe_session_id(sid):
+                continue
+            for fpath in session_file_candidates(sid, base):
+                if not os.path.isfile(fpath):
+                    continue
+                try:
+                    with open(fpath, encoding="utf-8") as fh:
+                        summary = json.load(fh)
+                except (OSError, json.JSONDecodeError, ValueError):
+                    break
+                pairs.append(DigestEntry(sid, _digest_line(summary)))
+                break
+        if pairs:
+            return finish_digest(pairs, max_tokens, dir_exists=True)
+    pool, exists = load_digest_pool(memory_dir, max_sessions, exclude_session_id=exclude_session_id)
+    return finish_digest(pool, max_tokens, dir_exists=exists)
+
+
 def load_prior_sessions(
     memory_dir: str | None = None,
     max_sessions: int = 10,
@@ -434,56 +597,17 @@ def load_prior_sessions_digest(
     memory_dir: str | None = None,
     max_sessions: int = 10,
     max_tokens: int = 2000,
+    *,
+    exclude_session_id: str = "",
 ) -> tuple[str, list[str]]:
     """:func:`load_prior_sessions` plus the session ids the digest ended up
     carrying (post token-trim), in digest order — the attribution the per-turn
-    injection record needs (ADR 0069 D6) without re-parsing the block."""
-    if memory_dir is None:
-        memory_dir = memory_path()
-    if not os.path.isdir(memory_dir):
-        return "", []
-    try:
-        entries: list[tuple[float, str]] = []
-        for fname in os.listdir(memory_dir):
-            if not fname.endswith(".json"):
-                continue
-            if fname.startswith(("background:", "background%3A")):
-                # Background worker summaries are disposable (ADR 0070 D3). The
-                # writer no longer produces them; this read-side filter also
-                # keeps LEGACY files already on disk out of the digest — under
-                # either the raw or the '%3A'-encoded filename.
-                continue
-            fpath = os.path.join(memory_dir, fname)
-            try:
-                entries.append((os.path.getmtime(fpath), fpath))
-            except OSError:
-                continue
-        entries.sort(reverse=True)  # newest first
-    except OSError:
-        return "", []
-    if not entries:
-        return "<prior_sessions/>", []
-
-    summaries: list[dict] = []
-    for _, fpath in entries[:max_sessions]:
-        try:
-            with open(fpath, encoding="utf-8") as fh:
-                summaries.append(json.load(fh))
-        except (OSError, json.JSONDecodeError, ValueError):
-            continue
-    if not summaries:
-        return "<prior_sessions/>", []
-
-    # (session_id, line) pairs so the ids stay parallel through the token trim.
-    lines = [(str(s.get("session_id") or "unknown"), _digest_line(s)) for s in summaries]
-    while lines:
-        if max(1, len("\n".join([_DIGEST_HEADER, *(line for _, line in lines)])) // 4) <= max_tokens:
-            break
-        lines.pop()  # drop oldest (newest-first ordering)
-    if not lines:
-        return "<prior_sessions/>", []
-    block = "<prior_sessions>\n" + "\n".join([_DIGEST_HEADER, *(line for _, line in lines)]) + "\n</prior_sessions>"
-    return block, [sid for sid, _ in lines]
+    injection record needs (ADR 0069 D6) without re-parsing the block.
+    ``exclude_session_id`` (ADR 0108 D9) keeps the active session's own summary
+    out of its digest — see :func:`load_digest_pool`."""
+    pool, exists = load_digest_pool(memory_dir, max_sessions, exclude_session_id=exclude_session_id)
+    res = finish_digest(pool, max_tokens, dir_exists=exists)
+    return res.block, [e.session_id for e in res.entries]
 
 
 # ---------------------------------------------------------------------------

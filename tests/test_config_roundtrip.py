@@ -184,6 +184,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "knowledge_inject_namespaces": [],
     "knowledge_inject_min_trust": 1,
     "context_budget_pct": 8.0,
+    "context_prior_sessions": "newest",
     "knowledge_hot_write_confirm": False,
     "knowledge_middleware": True,
     "knowledge_top_k": 5,

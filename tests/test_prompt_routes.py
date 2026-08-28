@@ -292,3 +292,45 @@ def test_shape_carries_the_owning_task_id(monkeypatch):
     c = _client(monkeypatch)
     body = c.get("/api/prompts/last", params={"session_id": "sess-9"}).json()
     assert body["call"]["task_id"] == "task-9"
+
+
+def test_preview_excludes_the_previewed_sessions_own_summary(monkeypatch, tmp_path):
+    """ADR 0108 D9: the preview must see the digest the REAL turn would get.
+
+    This GET isn't wrapped by ``trace_session``, so without the route passing the
+    previewed ``session_id`` into the compose state the active-session exclusion
+    resolves to "" and the preview lists the session's OWN summary as a "prior"
+    session — a digest the turn itself never receives.
+    """
+    import json
+    import time
+
+    import runtime.state as rs
+    from graph.middleware.knowledge import KnowledgeMiddleware
+    from graph.middleware.memory import session_filename
+
+    for sid, topic in (("sess-me", "the current conversation"), ("sess-other", "release prep")):
+        (tmp_path / session_filename(sid)).write_text(
+            json.dumps(
+                {
+                    "session_id": sid,
+                    "messages": [{"role": "user", "content": topic}],
+                    "timestamp": "2026-08-28T12:00:00+00:00",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    km = KnowledgeMiddleware(None)
+    km._prior_sessions_cache = km.load_memory(memory_path=str(tmp_path))
+    km._prior_sessions_loaded_at = time.monotonic()
+
+    graph = SimpleNamespace(
+        system_prompt_parts=[("SOUL", "STABLE-A")], knowledge_middleware=km, aget_state=None
+    )
+    c = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "graph", graph, raising=False)
+
+    projected = c.get("/api/prompts/preview?session_id=sess-me").json()["call"]["projected_context"]
+    assert "sess-other" in projected  # the digest is there…
+    assert "sess-me" not in projected  # …without the previewed session's own line

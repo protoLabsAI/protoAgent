@@ -219,10 +219,20 @@ def _options() -> ProjectionOptions:
 
 
 def _pin_disk_digest(monkeypatch) -> None:
-    """The default digest loader reads disk; pin it to the golden's digest."""
+    """The default digest loader reads disk; pin it to the golden's digest.
+
+    Both seams: the legacy ``load_prior_sessions_digest`` (older callers) and
+    the ADR 0108 D9 policy dispatcher ``load_digest`` the composer's default
+    path uses — entries carry the golden ids so the section label ("N sessions")
+    and attribution stay byte-identical."""
     import graph.middleware.memory as mem
 
     monkeypatch.setattr(mem, "load_prior_sessions_digest", lambda *a, **k: (_DIGEST, list(_DIGEST_IDS)))
+    monkeypatch.setattr(
+        mem,
+        "load_digest",
+        lambda *a, **k: mem.DigestResult(_DIGEST, [mem.DigestEntry(sid, "") for sid in _DIGEST_IDS]),
+    )
 
 
 def test_standalone_composer_reproduces_native_golden(monkeypatch):

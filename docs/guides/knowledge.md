@@ -41,16 +41,23 @@ knowledge:
   db_path: /sandbox/knowledge/agent.db  # → ~/.protoagent/knowledge/agent.db fallback
 ```
 
-One knob lives outside the block — the ceiling on everything the store (and the
+Two knobs live outside the block — the ceiling on everything the store (and the
 digest, skill index and working state) may put into a turn
-([ADR 0108 D6](/adr/0108-context-architecture-v2)):
+([ADR 0108 D6](/adr/0108-context-architecture-v2)), and which sessions the
+prior-session digest recalls ([ADR 0108 D9](/adr/0108-context-architecture-v2)):
 
 ```yaml
 context:
   budget_pct: 8   # % of the model window the per-turn injected context may use;
-                  # over budget, RAG hits shed first, then the prior-session
-                  # digest, then skill descriptions (names never drop); working
+                  # over budget, RAG hits shed first, then prior-session digest
+                  # entries, then skill descriptions (names never drop); working
                   # state and always-on memory are never shed. 0 = unbounded.
+  prior_sessions: newest   # newest (default) | relevant (only sessions matching
+                           # the turn's query via session-search FTS; falls back
+                           # to newest) | off (no automatic digest —
+                           # session_search/recall_session on demand). The
+                           # active session's own summary is never injected as
+                           # a "prior" session, whatever the policy.
 ```
 
 The budget never drops below 16k chars (room for always-on memory + the digest),

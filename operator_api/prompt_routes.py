@@ -213,6 +213,11 @@ def register_prompt_routes(app) -> None:
         state: dict = {"messages": [], "incognito": False}
         sid = session_id.strip()
         if sid:
+            # The previewed session's own identity (ADR 0108 D9): this GET is not
+            # wrapped by ``trace_session``, so without it ``_active_session_id``
+            # resolves "" and the preview shows THIS session's own summary as a
+            # "prior" session — a digest the real turn never receives.
+            state["session_id"] = sid
             aget_state = getattr(graph, "aget_state", None)
             if aget_state is not None:
                 try:

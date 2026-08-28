@@ -429,6 +429,25 @@ def _coerce_budget_pct(value, default: float) -> float:
     return max(pct, 0.0)
 
 
+def _coerce_prior_sessions(value, default: str) -> str:
+    """``context.prior_sessions`` normalized (ADR 0108 D9). A value outside
+    ``newest``/``relevant``/``off`` is WARNED but passed through — the config
+    layer consumes the key verbatim (test_config_drift_guard's contract); the
+    projection layer (``graph.projection._coerce_prior_sessions_policy``) reads
+    any unknown value as ``newest``, so a typo can't change what the model sees.
+    A blank value falls back to the default."""
+    v = str(value or "").strip().lower()
+    if not v:
+        return default
+    if v not in ("newest", "relevant", "off"):
+        log.warning(
+            "[config] context.prior_sessions=%r is not one of newest|relevant|off — treated as %r",
+            value,
+            default,
+        )
+    return v
+
+
 def _falsey(value, *, default: bool) -> bool:
     """Is this config value a NO? ``default`` is the answer when the key is absent.
 
@@ -1129,6 +1148,16 @@ class LangGraphConfig:
     # lower it to make the budget bite. 0 = unbounded. Unbounded too when the
     # gateway reports no window for the model. YAML: `context.budget_pct`.
     context_budget_pct: float = 8.0
+    # Prior-session digest policy (ADR 0108 D9). "newest" (default) injects the
+    # newest-N session digest exactly as before; "relevant" gates the digest on
+    # the turn's query via the session-search FTS index (#3073) — only sessions
+    # matching what was asked, bm25-then-newest, falling back to "newest" on an
+    # empty query, a missing FTS5 build, or zero matches; "off" injects no
+    # automatic digest at all (session_search / recall_session stay the
+    # on-demand path). Whatever the policy, the ACTIVE session's own summary is
+    # never injected as a "prior" session. Default stays "newest" pending the
+    # #3186 eval. YAML: `context.prior_sessions`.
+    context_prior_sessions: str = "newest"
     # Always-on write confirm gate (ADR 0069 D8, widened by ADR 0108 D4). When
     # True, the agent's own write paths (memory_ingest and knowledge_ingest)
     # refuse always-on writes — domain="hot" or delivery_policy="always" — with
@@ -2021,6 +2050,9 @@ class LangGraphConfig:
             knowledge_inject_min_trust=knowledge.get("inject_min_trust", cls.knowledge_inject_min_trust),
             knowledge_hot_write_confirm=knowledge.get("hot_write_confirm", cls.knowledge_hot_write_confirm),
             context_budget_pct=_coerce_budget_pct(context.get("budget_pct", cls.context_budget_pct), cls.context_budget_pct),
+            context_prior_sessions=_coerce_prior_sessions(
+                context.get("prior_sessions", cls.context_prior_sessions), cls.context_prior_sessions
+            ),
             knowledge_vector_k=knowledge.get("vector_k", cls.knowledge_vector_k),
             knowledge_rrf_k=knowledge.get("rrf_k", cls.knowledge_rrf_k),
             knowledge_min_score=knowledge.get("min_score", cls.knowledge_min_score),

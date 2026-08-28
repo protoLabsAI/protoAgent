@@ -164,6 +164,12 @@ memory:
 # unbounded (also unbounded when the gateway reports no window for the model).
 context:
   budget_pct: 8
+  # Prior-session digest policy (ADR 0108 D9): newest (default) | relevant
+  # (only sessions matching the turn's query, via session-search FTS; falls
+  # back to newest) | off (no automatic digest — session_search/recall_session
+  # stay the on-demand path). The active session's own summary is never
+  # injected as a "prior" session, whatever the policy.
+  prior_sessions: newest
 
 # Skill index — SQLite FTS5 store for learned skill-v1 artifacts.
 # Skills (emitted by task() or authored as SKILL.md) are indexed here and listed
