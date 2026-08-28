@@ -100,6 +100,11 @@ def _knowledge_row(d: dict) -> dict:
         "source_type": d.get("source_type"),
         "finding_type": d.get("finding_type"),
         "created_at": d.get("created_at"),
+        # Typed memory (#3072 / ADR 0108 D4): what the chunk IS, whether an operator
+        # confirmed it, and WHEN it enters the prompt. Null on legacy/untyped rows.
+        "memory_kind": d.get("memory_kind"),
+        "review_state": d.get("review_state"),
+        "delivery_policy": d.get("delivery_policy"),
         # RRF relevance score on a hybrid store (#1043); null for unranked rows
         # (plain FTS store / list_chunks).
         "score": d.get("score"),
