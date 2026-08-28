@@ -64,7 +64,12 @@ def test_boot_stores_builds_skills_index(tmp_path, monkeypatch):
     monkeypatch.setattr(
         ai,
         "_build_plugins",
-        lambda config, existing_tools=None: types.SimpleNamespace(tools=[], skill_dirs=[], meta={}),
+        # The registry fields ride every real bundle; _boot_stores_only now applies them
+        # (#3248), so the duck-typed stub carries empty ones.
+        lambda config, existing_tools=None: types.SimpleNamespace(
+            tools=[], skill_dirs=[], meta={},
+            goal_verifiers={}, goal_verifier_meta=None, goal_hooks={}, watch_hooks={}, lifecycle_hooks={},
+        ),
     )
     monkeypatch.setattr(STATE, "tasks_store", object(), raising=False)  # skip real TaskStore
     monkeypatch.setattr(STATE, "skills_index", None, raising=False)
@@ -189,3 +194,167 @@ def test_env_trust_full_overrides_deny_default(monkeypatch):
     names = {t.name for t in operator_tools(_cfg([]))}  # empty allowlist would be deny-all
     assert "calculator" in names and "current_time" in names  # env forces full
     assert "ask_human" not in names  # HITL still hard-excluded
+
+
+def test_allowlist_exposes_create_watch_when_watches_enabled(monkeypatch):
+    """operator_tools must pass ``watches_enabled`` through like ``goal_enabled`` (#3248):
+    before this, the watch tools could never bind here, so naming ``create_watch`` in the
+    allowlist silently exposed nothing. They also need a registered verifier, exactly as
+    the goal tools do."""
+    import graph.goals.verifiers as verifiers
+
+    monkeypatch.setattr(verifiers, "_PLUGIN_VERIFIERS", {"test:check": object()})
+
+    on = _cfg(["create_watch", "list_watches"])
+    on.watches_enabled = True
+    assert {t.name for t in operator_tools(on)} == {"create_watch", "list_watches"}
+
+    off = _cfg(["create_watch", "list_watches"])
+    off.watches_enabled = False
+    assert operator_tools(off) == []
+
+
+# ── the ACP sidecar's exposed set, derived once for both sides (#3248) ────────────────
+
+
+def test_acp_operator_allowlist_defaults_to_star():
+    from runtime.operator_mcp_tools import acp_operator_allowlist
+
+    assert acp_operator_allowlist(_cfg([])) == ["*"]
+    assert acp_operator_allowlist(_cfg(["calculator"])) == ["calculator"]
+
+
+def _served_by_a_sidecar(cfg, monkeypatch):
+    """What server.operator_mcp would expose for *cfg*: it receives acp_operator_allowlist
+    via OPERATOR_MCP_TOOLS and boots its own stores — a tasks store unconditionally."""
+    from runtime.operator_mcp_tools import acp_operator_allowlist, operator_tools
+
+    child = _cfg(acp_operator_allowlist(cfg))
+    child.goal_enabled = cfg.goal_enabled
+    child.watches_enabled = getattr(cfg, "watches_enabled", True)
+    monkeypatch.setattr(STATE, "tasks_store", object(), raising=False)  # the sidecar's TaskStore()
+    try:
+        return {t.name for t in operator_tools(child)}
+    finally:
+        monkeypatch.setattr(STATE, "tasks_store", None, raising=False)  # back to the bare host
+
+
+@pytest.mark.parametrize(
+    ("tools", "goal_enabled"),
+    [
+        ([], False),  # (a) unset allowlist → the sidecar serves "*"
+        (["task_list", "calculator"], False),  # (b) explicit allowlist naming a task tool
+        ([], True),  # (c) goal flag flipped — the host must follow the same gate
+    ],
+)
+def test_host_computes_exactly_what_the_sidecar_serves(monkeypatch, tools, goal_enabled):
+    """sidecar_exposed_names() on a host with NO tasks store equals operator_tools() in a
+    sidecar that always has one — the two sides can't drift (#3248 B1/B2)."""
+    from runtime.operator_mcp_tools import sidecar_exposed_names
+
+    monkeypatch.setattr("graph.goals.verifiers._PLUGIN_VERIFIERS", {"test:check": object()})
+    cfg = _cfg(tools)
+    cfg.goal_enabled = goal_enabled
+    served = _served_by_a_sidecar(cfg, monkeypatch)
+    assert STATE.tasks_store is None  # the host really has none
+    host = set(sidecar_exposed_names(cfg))
+    assert host == served
+    assert "task_list" in host  # the sidecar's unconditional tasks store, mirrored
+    assert ("set_goal" in host) is goal_enabled
+
+
+def test_sidecar_set_honors_the_trust_override(monkeypatch):
+    from runtime.operator_mcp_tools import sidecar_exposed_names
+
+    monkeypatch.setenv("PROTOAGENT_MCP_TRUST", "full")
+    names = set(sidecar_exposed_names(_cfg(["calculator"])))
+    assert {"calculator", "current_time", "task_list"} <= names  # "*", not the one name
+
+
+def test_acp_operator_allowlist_strips_names():
+    from runtime.operator_mcp_tools import acp_operator_allowlist
+
+    assert acp_operator_allowlist(_cfg([" calculator ", "", "  "])) == ["calculator"]
+
+
+def test_boot_stores_applies_registries_and_denylist(tmp_path, monkeypatch):
+    """_boot_stores_only must apply the bundle's registries (verifier-gated tools were
+    served by the host derivation but NOT by a real sidecar, whose registry stayed empty)
+    and the fork tool denylist (a standalone sidecar served tools.disabled names)."""
+    import types
+
+    import server.agent_init as ai
+    import tools.lg_tools as lg
+    from server.operator_mcp import _boot_stores_only
+
+    monkeypatch.setattr(ai, "_build_knowledge_store", lambda c: None)
+    monkeypatch.setattr(ai, "_build_scheduler", lambda c: None)
+    monkeypatch.setattr(ai, "_build_inbox_store", lambda c: None)
+    monkeypatch.setattr(ai, "_apply_plugin_knowledge_backend", lambda c, ks, p: ks)
+    monkeypatch.setattr(ai, "_build_skills_index", lambda c, extra_skill_dirs=None: None)
+    bundle = types.SimpleNamespace(tools=[], skill_dirs=[], meta={})
+    monkeypatch.setattr(ai, "_build_plugins", lambda config, existing_tools=None: bundle)
+    applied = []
+    monkeypatch.setattr(ai, "_apply_plugin_registries", lambda plugins: applied.append(plugins))
+    monkeypatch.setattr(STATE, "tasks_store", object(), raising=False)
+    monkeypatch.setattr(lg, "_disabled_tools", set())
+
+    cfg = _cfg([])
+    cfg.tools_disabled = ["calculator", "web_search"]
+    cfg.tools_hidden = ["web_search", "execute_code"]
+    _boot_stores_only(cfg)
+
+    assert applied == [bundle]  # the same registration full init runs (#1752 semantics)
+    assert lg._disabled_tools == {"calculator", "web_search", "execute_code"}  # hidden ⊂ denied
+
+
+@pytest.mark.parametrize(("goal_enabled", "watches_enabled"), [(True, True), (True, False), (False, True)])
+def test_host_and_sidecar_agree_with_registries_and_denylist(monkeypatch, goal_enabled, watches_enabled):
+    """Registries applied the way _boot_stores_only now applies them + a denylisted tool:
+    the host derivation equals the sidecar's served set, verifier-gated tools included,
+    and the disabled name is absent on BOTH sides even under the "*" allowlist."""
+    import types
+
+    import server.agent_init as ai
+    import tools.lg_tools as lg
+    from graph.goals import verifiers
+    from runtime.operator_mcp_tools import sidecar_exposed_names
+
+    monkeypatch.setattr(verifiers, "_PLUGIN_VERIFIERS", {})
+    monkeypatch.setattr(verifiers, "_PLUGIN_VERIFIER_META", {})
+    ai._apply_plugin_registries(
+        types.SimpleNamespace(
+            goal_verifiers={"p:v": object()}, goal_verifier_meta=None,
+            goal_hooks={}, watch_hooks={}, lifecycle_hooks={},
+        )
+    )
+    monkeypatch.setattr(lg, "_disabled_tools", {"calculator"})
+
+    cfg = _cfg([])
+    cfg.goal_enabled = goal_enabled
+    cfg.watches_enabled = watches_enabled
+    served = _served_by_a_sidecar(cfg, monkeypatch)
+    host = set(sidecar_exposed_names(cfg))
+    assert host == served
+    assert "calculator" not in host  # denylist holds on the bus, "*" notwithstanding
+    assert ("set_goal" in host) is goal_enabled
+    assert ("create_watch" in host) is watches_enabled
+
+
+def test_registryless_sidecar_serves_no_verifier_gated_tools(monkeypatch):
+    """With an EMPTY verifier registry (the pre-fix standalone sidecar) neither side may
+    claim the goal/watch tools — the drift the re-check probe demonstrated."""
+    import tools.lg_tools as lg
+    from graph.goals import verifiers
+    from runtime.operator_mcp_tools import sidecar_exposed_names
+
+    monkeypatch.setattr(verifiers, "_PLUGIN_VERIFIERS", {})
+    monkeypatch.setattr(lg, "_disabled_tools", set())
+    cfg = _cfg([])
+    cfg.goal_enabled = True
+    cfg.watches_enabled = True
+    served = _served_by_a_sidecar(cfg, monkeypatch)
+    host = set(sidecar_exposed_names(cfg))
+    assert host == served
+    for gated in ("set_goal", "update_goal_plan", "abandon_goal", "create_watch", "list_watches"):
+        assert gated not in host

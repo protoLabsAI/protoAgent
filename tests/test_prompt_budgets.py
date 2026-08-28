@@ -36,6 +36,10 @@ LEAD_MINIMAL_MAX = 500  # no subagents, no autonomous primitives
 SUBAGENT_PROMPT_MAX = 8_500
 LEAD_VISIBLE_SUBAGENT_PROMPT_MAX = 4_000
 
+#: The persona every measurement runs under — tiny, and (like the repo default) free of
+#: capability tool names; ``tests/test_prompts.py`` guards both.
+FIXTURE_SOUL = "# Identity\nFixture persona for prompt-budget measurement.\n"
+
 _RAISE_HINT = (
     "raise the ceiling in tests/test_prompt_budgets.py only with a "
     "docs/explanation/prompt-contracts.md update explaining why"
@@ -52,7 +56,7 @@ def _fixture_soul_and_no_delegates(monkeypatch, tmp_path: Path):
     """A deterministic prompt: tiny fixture SOUL, no delegate registry."""
     soul = tmp_path / "config" / "SOUL.md"
     soul.parent.mkdir(parents=True)
-    soul.write_text("# Identity\nFixture persona for prompt-budget measurement.\n", encoding="utf-8")
+    soul.write_text(FIXTURE_SOUL, encoding="utf-8")
     monkeypatch.setenv("PROTOAGENT_HOME", str(tmp_path))
     from runtime.state import STATE
 

@@ -124,8 +124,14 @@ def _build_operating_model(bound_tools: frozenset[str] | None = None) -> str:
             "  something that isn't ready, to hand it off (below)."
         )
         act_note = " Update/close tasks as you go." if has_tasks else ""
+        # Delegation is a capability too: name `task` only when it is bound (a subagent
+        # build or an external runtime whose tool plane carries no task tool gets no hint).
+        has_task_tool = bound_tools is None or "task" in bound_tools
         lines.append(
-            "- **Act** — do the step (directly or by delegating with `task`)." + act_note
+            "- **Act** — do the step"
+            + (" (directly or by delegating with `task`)" if has_task_tool else "")
+            + "."
+            + act_note
         )
 
         # Primitives block — only include bound groups

@@ -65,35 +65,67 @@ def _profile_allow(profile: str) -> set[str] | None:
     return None
 
 
-def resolve_allow(config) -> set[str]:
+def resolve_allow(config, *, tools: list[str] | None = None) -> set[str]:
     """The effective allowlist: ``PROTOAGENT_MCP_TRUST=full`` env override > the profile
-    (unioned with any explicit names) > the explicit ``operator_mcp_tools`` list."""
+    (unioned with any explicit names) > the explicit ``operator_mcp_tools`` list.
+
+    ``tools`` substitutes for ``config.operator_mcp_tools`` — the sidecar spawned by the
+    ACP runtime receives its list via ``OPERATOR_MCP_TOOLS`` and applies exactly this
+    resolution to it, so a host computing "what does that sidecar serve?" passes the same
+    list here (:func:`acp_operator_allowlist`) and gets the same answer.
+    """
     if os.environ.get("PROTOAGENT_MCP_TRUST", "").strip().lower() == "full":
         return {"*"}
-    allow = set(getattr(config, "operator_mcp_tools", []) or [])
+    source = tools if tools is not None else (getattr(config, "operator_mcp_tools", []) or [])
+    allow = set(source)
     prof = _profile_allow(getattr(config, "operator_mcp_profile", ""))
     if prof is not None:
         allow |= prof
     return allow
 
 
-def operator_tools(config):
-    """The allowlisted tools (core + plugin) to expose — empty allowlist ⇒ none."""
-    from tools.lg_tools import get_all_tools
+def acp_operator_allowlist(config) -> list[str]:
+    """The allowlist an ACP-spawned operator MCP is handed: the configured names, or ``"*"``
+    when unset — under an ACP runtime the coding agent IS the brain and gets the full
+    toolset by default (parity with the native runtime), ``operator_mcp.tools`` being an
+    optional *restriction*, never a requirement. ONE derivation, used by the spawn spec
+    (``runtime.acp_runtime.operator_mcp_server_spec``) AND by the host-side prefix/persona
+    (:func:`sidecar_exposed_names`) so the two can never drift (#3248)."""
+    # Strip each name: the sidecar strips when parsing OPERATOR_MCP_TOOLS, so a padded
+    # YAML entry (" calculator ") must not make the host match a literal the child never sees.
+    configured = [str(t).strip() for t in (getattr(config, "operator_mcp_tools", None) or []) if str(t).strip()]
+    return configured or ["*"]
 
-    allow = resolve_allow(config)
+
+class _SidecarTasksStorePresent:
+    """Stand-in for the tasks store the sidecar ALWAYS boots (``server.operator_mcp.
+    _boot_stores_only`` creates a ``TaskStore`` unconditionally). The task tools only close
+    over their store at build time, so a placeholder is enough to learn their NAMES here —
+    the host never opens the sidecar's DB just to compute a prefix."""
+
+
+def _exposed_tools(config, allow: set[str], *, knowledge_store, scheduler, inbox_store, tasks_store, plugin_tools):
+    from tools.lg_tools import drop_disabled_tools, get_all_tools
+
     if not allow:
         return []
     tools = list(
         get_all_tools(
-            STATE.knowledge_store,
-            scheduler=STATE.scheduler,
-            inbox_store=STATE.inbox_store,
-            tasks_store=STATE.tasks_store,
+            knowledge_store,
+            scheduler=scheduler,
+            inbox_store=inbox_store,
+            tasks_store=tasks_store,
             goal_enabled=bool(getattr(config, "goal_enabled", False)),
+            # Mirror goal_enabled: without this the watch tools could never bind here, so an
+            # allowlist naming create_watch silently exposed nothing (#3248).
+            watches_enabled=bool(getattr(config, "watches_enabled", False)),
         )
     )
-    tools += list(getattr(STATE, "plugin_tools", None) or [])
+    tools += list(plugin_tools or [])
+    # The fork tool denylist (tools.disabled/hidden) is applied over the ASSEMBLED set in
+    # graph.agent — get_all_tools doesn't filter it — so the bus must filter here too or a
+    # disabled tool stays callable over MCP even though it never binds to the graph (#3248).
+    tools = drop_disabled_tools(tools)
     # "*" = expose everything (minus a small danger set you must opt into by name) — so you
     # don't have to enumerate every tool. List specific names instead for tight control.
     star = "*" in allow
@@ -111,8 +143,55 @@ def operator_tools(config):
     return out
 
 
-def resolve_exposed_names(config) -> list[str]:
+def operator_tools(config, *, allow: set[str] | None = None):
+    """The allowlisted tools (core + plugin) to expose — empty allowlist ⇒ none.
+
+    ``allow`` overrides :func:`resolve_allow` for callers that already resolved the
+    effective set (the ACP host computing what its sidecar serves)."""
+    return _exposed_tools(
+        config,
+        resolve_allow(config) if allow is None else set(allow),
+        knowledge_store=STATE.knowledge_store,
+        scheduler=STATE.scheduler,
+        inbox_store=STATE.inbox_store,
+        tasks_store=STATE.tasks_store,
+        plugin_tools=getattr(STATE, "plugin_tools", None),
+    )
+
+
+def resolve_exposed_names(config, *, allow: set[str] | None = None) -> list[str]:
     """The tool names the operator MCP would expose for *config* — powers the
     ``GET /api/mcp/exposed`` discovery route (the exposed set was previously
     introspectable only by reading logs). Requires the stores to be booted."""
-    return [t.name for t in operator_tools(config)]
+    return [t.name for t in operator_tools(config, allow=allow)]
+
+
+def sidecar_exposed_names(config, *, allow: set[str] | None = None) -> list[str]:
+    """The tool names the ACP-spawned sidecar (``server.operator_mcp``) serves for *config*,
+    computed on the host under the SIDECAR's boot assumptions rather than the host's — so
+    the honest prefix (``runtime.context.ContextAssembler``) and the brain's persona describe
+    exactly the bus the brain talks to (#3248).
+
+    The sidecar rebuilds its stores from the same config the host booted its own from, so
+    presence matches for knowledge / scheduler / inbox and the plugin tools come from the
+    same loader — with ONE structural difference mirrored here: it creates a tasks store
+    unconditionally, so the task tools are always served. ``allow`` defaults to what the
+    spawn spec hands the sidecar (:func:`acp_operator_allowlist`) resolved exactly as the
+    sidecar resolves it (:func:`resolve_allow`, incl. the ``PROTOAGENT_MCP_TRUST`` override
+    the spec forwards). Requires the host stores to be booted (a real turn), never guesses.
+    """
+    if allow is None:
+        allow = resolve_allow(config, tools=acp_operator_allowlist(config))
+    tasks_store = STATE.tasks_store if getattr(STATE, "tasks_store", None) is not None else _SidecarTasksStorePresent()
+    return [
+        t.name
+        for t in _exposed_tools(
+            config,
+            set(allow),
+            knowledge_store=STATE.knowledge_store,
+            scheduler=STATE.scheduler,
+            inbox_store=STATE.inbox_store,
+            tasks_store=tasks_store,
+            plugin_tools=getattr(STATE, "plugin_tools", None),
+        )
+    ]

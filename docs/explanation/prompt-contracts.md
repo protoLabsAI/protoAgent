@@ -71,20 +71,38 @@ Unknown names get a one-line generic prompt.
 
 ## 3. External / ACP runtime — `build_stable_prefix()`
 
-`runtime/context.py::build_stable_prefix(config, include_subagents, bound_tool_names)`
-**delegates to `build_system_prompt`**, so for the same `include_subagents` and
-`bound_tool_names` the external prefix is byte-equal to the lead prompt (a test asserts
-it). The parity is not total: `projects` is not threaded on the external path today
-(`graph/agent.py` passes `config.effective_filesystem_projects()`; `build_stable_prefix`
-does not), so a managed-projects deployment's ACP prefix omits the `Managed projects`
-section. `assemble_context()` / `ContextAssembler.assemble()` then attach the per-turn
-volatile delta — the same projected context the native loop delivers (ADR 0108 D8) —
-and `AssembledContext.as_prompt(message)` orders them *prefix, then delta, then the
-turn's message*.
+`runtime/context.py::build_stable_prefix(config, include_subagents, bound_tool_names,
+projects)` **delegates to `build_system_prompt`**, so for the same `include_subagents`,
+`bound_tool_names` and `projects` the external prefix is byte-equal to the lead prompt
+(a test asserts it). `assemble_context()` / `ContextAssembler.assemble()` then attach
+the per-turn volatile delta — the same projected context the native loop delivers
+(ADR 0108 D8) — and `AssembledContext.as_prompt(message)` orders them *prefix, then
+delta, then the turn's message*.
 
-Because tools on this path resolve lazily (an MCP bus at session start), callers may
-pass `bound_tool_names=None` and receive the full doctrine — honest only when every
-capability is really reachable; thread the real set as soon as it is known.
+**What the ACP runtime actually builds.** `runtime/acp_runtime.py` constructs its
+assembler with `include_subagents=False` (the `task` / `task_batch` tools exist only in
+`graph/agent.py` and never ride the operator MCP bus), `projects=None` (the fenced
+filesystem tools are appended in `graph/agent.py` outside `get_all_tools`, so the bus
+never exposes them — a coding-agent brain has its own file tools), and
+`bound_tool_names` resolved at the first turn by
+`runtime/operator_mcp_tools.py::sidecar_exposed_names` — the set the **sidecar** serves,
+computed from the same allowlist derivation the spawn spec hands it
+(`acp_operator_allowlist`: the configured names, or `*` when unset) under the sidecar's
+own boot assumptions (it always creates a tasks store). One derivation on both sides, so
+the bus and the prompt cannot drift; a resolver that fails leaves the legacy `None` with
+a warning rather than a guessed set.
+
+**What the deprecated ACP brain reads today.** The stable prefix is the `ContextAssembler`
+contract (#3190 box 2) and is what a future external runtime sends; the current ACP path
+sends only the volatile delta plus the message, and carries the persona as `AGENTS.md`
+(`persona_doc`) — whose operating note names only the tool families in that same exposed
+set, and names none when the set is not yet known. `projects` is threaded through
+`build_stable_prefix` / `assemble_context` / `ContextAssembler` for a runtime whose tool
+plane does carry the filesystem tools.
+
+Callers that cannot know their tool set may still pass `bound_tool_names=None` and
+receive the full doctrine — honest only when every capability is really reachable;
+prefer a `bound_tool_names_factory` resolved at the first real turn.
 
 ## 4. Provider-transformed — `ProviderShapeMiddleware`
 
@@ -138,7 +156,8 @@ billing).
 | Subagent · smallest (`self-improve`) | 1,091 | 272 |
 | Subagent · largest lead-visible (`researcher`) | 3,317 | 829 |
 | Subagent · largest overall (`review-finder`) | 7,051 | 1,762 |
-| ACP prefix (same `include_subagents` / `bound_tool_names`; no `projects`) | = lead | = lead |
+| ACP prefix (same `include_subagents` / `bound_tool_names` / `projects`) | = lead | = lead |
+| ACP prefix as the runtime builds it (no roster, doctrine only for exposed tools, no projects) | ≤ lead | ≤ lead |
 | Provider transform (`anthropic-oauth`) | + 57 (identity line) | + 14 |
 
 The SOUL is excluded on purpose: it is operator content with no engineering ceiling.

@@ -20,6 +20,7 @@ The ACP runtime calls `assemble_context()` to build its prompt + `after_turn()` 
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -59,19 +60,27 @@ def build_stable_prefix(
     *,
     include_subagents: bool = True,
     bound_tool_names: frozenset[str] | None = None,
+    projects: list[dict] | None = None,
 ) -> str:
     """The cacheable persona + static instructions — the system prompt. Turn-stable.
 
     Reuses `graph.prompts.build_system_prompt` (reads SOUL) so the native loop and any
-    external runtime share one persona — no drift.
+    external runtime share one persona — no drift. Same inputs ⇒ byte-equal prompt.
 
     ``bound_tool_names`` (#3190): when provided, capability-specific operating-model
     sections are generated only for tools that are actually bound. None emits everything
-    unconditionally (legacy behavior).
+    unconditionally (legacy behavior). ``projects`` (ADR 0007) names the managed project
+    workspaces exactly as ``graph/agent.py`` does for the native loop — pass it only when
+    the runtime's tool plane really carries the fenced filesystem tools, or the section
+    describes tools the brain cannot call.
     """
     from graph.prompts import build_system_prompt
 
-    return build_system_prompt(include_subagents=include_subagents, bound_tool_names=bound_tool_names)
+    return build_system_prompt(
+        include_subagents=include_subagents,
+        projects=projects,
+        bound_tool_names=bound_tool_names,
+    )
 
 
 def assemble_context(
@@ -82,6 +91,7 @@ def assemble_context(
     skills_index=None,
     include_subagents: bool = True,
     bound_tool_names: frozenset[str] | None = None,
+    projects: list[dict] | None = None,
     state: dict | None = None,
     incognito: bool = False,
     record: bool = False,
@@ -101,7 +111,12 @@ def assemble_context(
     """
     from graph.projection import ProjectionOptions, compose_projected_context
 
-    prefix = build_stable_prefix(config, include_subagents=include_subagents, bound_tool_names=bound_tool_names)
+    prefix = build_stable_prefix(
+        config,
+        include_subagents=include_subagents,
+        bound_tool_names=bound_tool_names,
+        projects=projects,
+    )
     projected = compose_projected_context(
         query or "",
         knowledge_store,
@@ -136,6 +151,14 @@ class ContextAssembler:
     call records only when a session id is known: ``session_id`` on the assembler (the
     runtime's thread) or per call. No id → composed and delivered, never recorded.
     Set ``record=False`` for a speculative assembler.
+
+    The prefix is honest about the runtime's tool plane (#3190): ``include_subagents``
+    and ``bound_tool_names`` describe what the brain can actually call, and ``projects``
+    is passed only by a runtime whose tool plane carries the fenced filesystem tools.
+    When the bound set is knowable only once the stores behind it are booted, give
+    ``bound_tool_names_factory`` instead: it is resolved ONCE, at the first ``assemble()``
+    (a real turn — the stores are up by then), and cached. A factory that fails leaves
+    the legacy ``None`` (full doctrine) with a warning — never a guessed set.
     """
 
     config: object = None
@@ -143,8 +166,21 @@ class ContextAssembler:
     skills_index: object = None
     include_subagents: bool = True
     bound_tool_names: frozenset[str] | None = None
+    projects: list[dict] | None = None
     record: bool = True
     session_id: str | None = None
+    bound_tool_names_factory: Callable[[], frozenset[str] | None] | None = None
+    _bound_resolved: bool = field(default=False, init=False, repr=False, compare=False)
+
+    def _resolve_bound_tool_names(self) -> frozenset[str] | None:
+        if self.bound_tool_names is None and self.bound_tool_names_factory is not None and not self._bound_resolved:
+            self._bound_resolved = True  # one attempt: a broken factory must not re-raise every turn
+            try:
+                names = self.bound_tool_names_factory()
+                self.bound_tool_names = frozenset(names) if names is not None else None
+            except Exception:  # noqa: BLE001 — the prefix must still build; None = legacy full doctrine
+                log.warning("[context] bound-tool resolution failed; emitting the full doctrine", exc_info=True)
+        return self.bound_tool_names
 
     def assemble(self, *, query: str = "", session_id: str | None = None) -> AssembledContext:
         sid = session_id or self.session_id
@@ -154,7 +190,8 @@ class ContextAssembler:
             knowledge_store=self.knowledge_store,
             skills_index=self.skills_index,
             include_subagents=self.include_subagents,
-            bound_tool_names=self.bound_tool_names,
+            bound_tool_names=self._resolve_bound_tool_names(),
+            projects=self.projects,
             state={"session_id": sid} if sid else {},
             record=bool(self.record and sid),  # attributable turns only — "" is not an id
         )

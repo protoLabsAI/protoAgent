@@ -70,6 +70,24 @@ def _boot_stores_only(config):
     STATE.plugin_skill_dirs = plugins.skill_dirs
     STATE.plugin_meta = plugins.meta
     STATE.knowledge_store = ai._apply_plugin_knowledge_backend(config, STATE.knowledge_store, plugins)
+    # Push the bundle's goal verifiers + goal/watch/lifecycle hooks into their LIVE module
+    # registries, exactly as full init does (#3248): get_all_tools gates set_goal and the
+    # watch tools on a non-empty verifier registry, so without this a standalone sidecar
+    # served NONE of them while the host's prefix derivation (sidecar_exposed_names)
+    # claimed all — and an armed watch's verifier resolved as unknown. Pure registration
+    # (four GIL-atomic rebinds), no server side effects.
+    ai._apply_plugin_registries(plugins)
+    # The fork tool denylist (tools.disabled + hidden ⊂ disabled), mirroring agent_init:
+    # the sidecar otherwise starts with an empty denylist and serves every named tool.
+    from tools.lg_tools import set_disabled_tools
+
+    set_disabled_tools(
+        list(
+            dict.fromkeys(
+                [*(getattr(config, "tools_disabled", None) or []), *(getattr(config, "tools_hidden", None) or [])]
+            )
+        )
+    )
     # Build the skills index too (mirrors agent_init) — load_skill / list_skills /
     # save_skill read STATE.skills_index, which is None in a fresh sidecar process.
     # Without this, an ACP agent calling load_skill through this server got
