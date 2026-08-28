@@ -13,7 +13,7 @@ Why this matters (ADR 0108, D3 and D8):
   stripped deployment gets a shorter prompt instead of instructions it cannot follow.
 - **Caching.** The stable prefix is byte-identical turn to turn (ADR 0101). Anything
   per-turn — retrieved memory, the skills index, working state — is **projected**
-  into the request as the last message, never appended to the system prompt.
+  into the request as the last message, never appended to the stable prefix.
 - **Parity.** Every runtime (native LangGraph loop, external/ACP, subagents) builds
   its prompt from the same functions, so there is one persona and one doctrine.
 
@@ -30,7 +30,7 @@ the equivalence, so the labels annotate the real prompt). Section order:
 | 2 | `Subagents` | `_build_subagent_section()` over `SUBAGENT_REGISTRY` | `include_subagents=True`; lists only `lead_visible` entries |
 | 3 | `Managed projects` | `_build_projects_section(projects)` | `projects` non-empty (ADR 0007 fenced fs toolset) |
 | 4 | `Collaboration` | `_build_collaboration_section()` | a delegate registry has names (#3042) |
-| 5 | `Context` | the `context` argument, verbatim | legacy callers only — the runtime delivers context as a projected message (ADR 0108 D2) |
+| 5 | `Context` | the `context` argument under a `# Context` heading | legacy callers only — no runtime caller passes it since ADR 0108 D2 (context is a projected message) |
 | 6 | `Operating model` | `_build_operating_model(bound_tool_names)` | at least one autonomous primitive is bound (goal / tasks / schedule / watch / wait) |
 | 7 | `Guidelines` | inline, fork-override point | always; the `task` and `wait` lines only when those tools are bound |
 
@@ -42,15 +42,17 @@ bound at the model API, never rendered into prose.
 
 **Knobs that change the text:**
 
-- `bound_tool_names` — the capability map in `graph/prompts.py` (`_GOAL_TOOLS`,
-  `_TASK_TOOLS`, `_SCHEDULE_TOOLS`, `_WATCH_TOOLS`, `_WAIT_TOOLS`) decides which
-  operating-model paragraphs and guideline lines appear. `None` means "emit
-  everything" (legacy callers).
+- `bound_tool_names` — the capability map `graph/prompts.py::CAPABILITY_GROUPS`
+  (goal / tasks / schedule / watch / wait → tool names) decides which operating-model
+  paragraphs appear; the `task` and `wait` guideline lines are gated the same way.
+  `None` means "emit everything" (legacy callers).
 - `include_subagents` — whether the roster section exists at all.
 - `SubagentConfig.lead_visible` — a workflow-internal subagent (`antagonist`,
   `verifier`, `synthesizer`, `codebase-mapper`, `review-finder`, `review-synthesizer`,
   `self-improve`) stays in the registry but never enters the lead's roster. Before this
-  filter the roster was ~49% of the stable prompt.
+  filter the roster measured 4,989 chars of a ~10k-char stable prompt. Plugin subagents
+  registered at boot default to `lead_visible=True`, so a live roster is larger than the
+  three-entry template fixture; the ceiling below guards the template's static composition.
 - `config/SOUL.md` — the persona; the only part an operator is expected to edit.
 - `projects` and a configured delegate registry add their sections.
 
@@ -58,19 +60,24 @@ bound at the model API, never rendered into prose.
 
 `build_subagent_prompt(agent_name)` returns `SUBAGENT_REGISTRY[name].system_prompt`
 **verbatim** — no SOUL, no roster, no operating model, no guidelines. A subagent's
-prompt is its role description; its tool surface is the `tools` /
-`disallowed_tools` allowlist on the same `SubagentConfig`, and `task` is always
-disallowed (subagents cannot spawn subagents). Unknown names get a one-line generic
-prompt.
+prompt is its role description; its tool surface is the `tools` allowlist on the same
+`SubagentConfig`, resolved by `graph/agent.py::_subagent_tools` against a tool map
+snapshotted *before* the `task` / `task_batch` tools are appended — that is what makes
+"subagents cannot spawn subagents" structural (the `disallowed_tools` field on the
+config is not consulted; the HITL interrupt tools are additionally hard-denied there).
+Unknown names get a one-line generic prompt.
 
 `lead_visible` has **no effect** on this contract — it only filters the lead's roster.
 
 ## 3. External / ACP runtime — `build_stable_prefix()`
 
 `runtime/context.py::build_stable_prefix(config, include_subagents, bound_tool_names)`
-**delegates to `build_system_prompt`** with the same arguments, so for the same
-inputs the external prefix is byte-equal to the lead prompt (a test asserts it).
-`assemble_context()` / `ContextAssembler.assemble()` then attach the per-turn
+**delegates to `build_system_prompt`**, so for the same `include_subagents` and
+`bound_tool_names` the external prefix is byte-equal to the lead prompt (a test asserts
+it). The parity is not total: `projects` is not threaded on the external path today
+(`graph/agent.py` passes `config.effective_filesystem_projects()`; `build_stable_prefix`
+does not), so a managed-projects deployment's ACP prefix omits the `Managed projects`
+section. `assemble_context()` / `ContextAssembler.assemble()` then attach the per-turn
 volatile delta — the same projected context the native loop delivers (ADR 0108 D8) —
 and `AssembledContext.as_prompt(message)` orders them *prefix, then delta, then the
 turn's message*.
@@ -97,6 +104,23 @@ one provider's shape can never leak into another's request.
 Neither transform edits a single character of the composed text; they change *where*
 and *in what container* it travels.
 
+### What else touches the system message
+
+Two more middleware re-container the system message on the way out, for every
+provider:
+
+- **`PromptCacheMiddleware`** (`graph/middleware/prompt_cache.py`, mounted first in
+  `graph/agent.py`) turns the system text into a block list carrying `cache_control`,
+  so the stable prefix is the cache anchor. Text unchanged.
+- **`RoomCastMiddleware`** (`graph/middleware/room_cast.py`, mounted inside
+  PromptCache so the anchor holds) appends one ephemeral per-thread `[room]` cast line
+  as the **last** system block once a delegate has spoken on the thread — idempotent,
+  never persisted, never part of the prefix.
+
+So the model-visible system message is: *[identity line]* · stable prefix (cached) ·
+*[room cast]*, with the identity line present only for `anthropic-oauth` and the cast
+only on multi-participant threads.
+
 ## Measured sizes
 
 Static composition under the test fixture — a 57-character SOUL, every autonomous
@@ -114,8 +138,8 @@ billing).
 | Subagent · smallest (`self-improve`) | 1,091 | 272 |
 | Subagent · largest lead-visible (`researcher`) | 3,317 | 829 |
 | Subagent · largest overall (`review-finder`) | 7,051 | 1,762 |
-| ACP prefix | = lead | = lead |
-| Provider transform (`anthropic-oauth`) | + identity line | + ~20 |
+| ACP prefix (same `include_subagents` / `bound_tool_names`; no `projects`) | = lead | = lead |
+| Provider transform (`anthropic-oauth`) | + 57 (identity line) | + 14 |
 
 The SOUL is excluded on purpose: it is operator content with no engineering ceiling.
 

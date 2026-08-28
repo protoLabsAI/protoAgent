@@ -19,11 +19,7 @@ from pathlib import Path
 import pytest
 
 from graph.prompts import (
-    _GOAL_TOOLS,
-    _SCHEDULE_TOOLS,
-    _TASK_TOOLS,
-    _WAIT_TOOLS,
-    _WATCH_TOOLS,
+    CAPABILITY_GROUPS,
     build_subagent_prompt,
     build_system_prompt,
     build_system_prompt_parts,
@@ -45,13 +41,6 @@ _RAISE_HINT = (
     "docs/explanation/prompt-contracts.md update explaining why"
 )
 
-CAPABILITY_GROUPS = {
-    "goal": _GOAL_TOOLS,
-    "tasks": _TASK_TOOLS,
-    "schedule": _SCHEDULE_TOOLS,
-    "watch": _WATCH_TOOLS,
-    "wait": _WAIT_TOOLS,
-}
 ALL_CAPABILITY_TOOLS = frozenset().union(*CAPABILITY_GROUPS.values())
 # Every autonomous primitive plus the two tools the guidelines gate on.
 ALL_BOUND = ALL_CAPABILITY_TOOLS | {"task", "current_time"}
@@ -109,6 +98,9 @@ def test_lead_minimal_within_budget():
     s = _sections(include_subagents=False, bound_tool_names=FILLER_ONLY)
     assert set(s) == {"SOUL", "Guidelines"}, sorted(s)
     _assert_under("lead minimal (ex-SOUL)", len(s["Guidelines"]), LEAD_MINIMAL_MAX)
+    # The `task` guideline is gated on the tool being bound; a leak would sit under the
+    # ceiling, so pin it by content too.
+    assert "`task`" not in s["Guidelines"]
 
 
 def test_build_system_prompt_is_parts_joined():
@@ -134,6 +126,7 @@ def test_empty_bound_set_has_no_operating_model():
     s = _sections(include_subagents=False, bound_tool_names=FILLER_ONLY)
     assert "Operating model" not in s
     prompt = "\n\n".join(s.values())
+    assert "`task`" not in prompt
     for tool in ALL_CAPABILITY_TOOLS:
         assert tool not in prompt, f"unbound tool {tool!r} is mentioned in a minimal prompt"
 

@@ -35,6 +35,17 @@ _SCHEDULE_TOOLS = frozenset({"schedule_task"})
 _WATCH_TOOLS = frozenset({"create_watch"})
 _WAIT_TOOLS = frozenset({"wait"})
 
+#: The capability map, public: group name → the tool names that switch its doctrine on.
+#: ``tests/test_prompt_budgets.py`` iterates this to pin the honesty invariant (binding
+#: one group never names another's tools); add a group here when you add a paragraph.
+CAPABILITY_GROUPS: dict[str, frozenset[str]] = {
+    "goal": _GOAL_TOOLS,
+    "tasks": _TASK_TOOLS,
+    "schedule": _SCHEDULE_TOOLS,
+    "watch": _WATCH_TOOLS,
+    "wait": _WAIT_TOOLS,
+}
+
 
 def _build_operating_model(bound_tools: frozenset[str] | None = None) -> str:
     """Build the operating model section (ADR 0079, #3190), including only
