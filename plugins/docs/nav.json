@@ -388,6 +388,10 @@
           "title": "Architecture"
         },
         {
+          "path": "explanation/prompt-contracts.md",
+          "title": "Prompt contracts"
+        },
+        {
           "path": "explanation/output-protocol.md",
           "title": "Output protocol"
         },
