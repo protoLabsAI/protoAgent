@@ -17,7 +17,11 @@ overridden. Drop-in for ``KnowledgeStore`` everywhere the runtime uses it.
 from __future__ import annotations
 
 import logging
-from dataclasses import replace
+from dataclasses import fields, is_dataclass, replace
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from knowledge.store import Chunk
 
 log = logging.getLogger(__name__)
 
@@ -43,10 +47,16 @@ def _tag(chunk, tier: str):
     field for exactly this); a custom ``KnowledgeBackend`` may yield dicts, which get
     a ``"tier"`` key instead. Either way the caller sees the same shape it would from
     the backend itself — the layered store is a drop-in, not a different API.
+
+    A dataclass WITHOUT a ``tier`` field (a backend's own row type — unreachable today,
+    but the Protocol allows it) degrades to its ``as_dict()`` plus the key rather than
+    a ``TypeError`` from ``replace``.
     """
-    if isinstance(chunk, dict):
-        return {**chunk, "tier": tier}
-    return replace(chunk, tier=tier)
+    if is_dataclass(chunk) and not isinstance(chunk, type) and "tier" in {f.name for f in fields(chunk)}:
+        return replace(chunk, tier=tier)
+    if hasattr(chunk, "as_dict"):
+        return {**chunk.as_dict(), "tier": tier}
+    return {**dict(chunk), "tier": tier}
 
 
 class LayeredKnowledgeStore:
@@ -108,7 +118,7 @@ class LayeredKnowledgeStore:
         ranked = sorted(fused.values(), key=lambda r: scores[_dedup_key(r)], reverse=True)
         return ranked[:k]
 
-    def list_chunks(self, *args, **kwargs) -> list:
+    def list_chunks(self, *args, **kwargs) -> list[Chunk] | list[dict]:
         """Union both tiers' chunks, tier-tagged (backs the console's tier badges).
         Private first. Each chunk carries its own tier's row id (ids are per-backend).
 

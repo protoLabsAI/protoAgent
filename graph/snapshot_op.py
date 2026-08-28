@@ -789,6 +789,13 @@ def collect_knowledge_seed(store, *, domains: list[str] | None = None, max_chars
             continue
         parts: list[str] = []
         for chunk in chunks:
+            # PRIVATE tier only. A snapshot is the agent's own portable knowledge
+            # (ADR 0091); the commons is host-shared curated knowledge that exists on
+            # the destination fleet independently — and exporting it would (a) make
+            # the console route (private ∪ commons) disagree with the unbooted CLI
+            # path (private only) and (b) let commons rows eat the max_chars cap.
+            if getattr(chunk, "tier", None) == "commons":
+                continue
             body = (getattr(chunk, "content", "") or "").strip()
             if not body:
                 continue

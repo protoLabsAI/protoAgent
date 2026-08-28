@@ -1119,6 +1119,11 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         for k, v in s.items():
             if k == "total":
                 continue
+            # A layered store (ADR 0041) also reports its tier split; label it so the
+            # model doesn't read "private"/"commons" as domains it could memory_list.
+            if k in ("private", "commons"):
+                lines.append(f"  tier {k}: {v}")
+                continue
             lines.append(f"  {k}: {v}")
         return "\n".join(lines)
 

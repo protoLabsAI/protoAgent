@@ -290,6 +290,13 @@ def test_memory_list_tool_renders_on_a_layered_store(tmp_path):
     listed = asyncio.run(tools["memory_list"].ainvoke({}))
     assert "[preferences] style:" in listed and "terse replies" in listed
     assert "deploy window is Friday" in listed
+    # memory_stats labels the tier split so the model doesn't take "private"/"commons"
+    # for domains it could memory_list; domain lines are unchanged.
+    stats = asyncio.run(tools["memory_stats"].ainvoke({}))
+    assert "Total: 2" in stats
+    assert "  tier private: 1" in stats and "  tier commons: 1" in stats
+    assert "  preferences: 1" in stats and "  general: 1" in stats
+    assert "  private: 1" not in stats.replace("tier private", "")
 
 
 def test_fact_consolidation_dedups_on_a_layered_store(tmp_path):
@@ -317,26 +324,28 @@ def test_snapshot_seed_exports_layered_rows(tmp_path):
     layered = LayeredKnowledgeStore(private, commons)
 
     seed = collect_knowledge_seed(layered, domains=["reference"])
-    assert seed.counts == {"reference": 2}
+    # PRIVATE tier only: the commons is host-shared curated knowledge that exists on the
+    # destination independently (ADR 0091) — a commons row never rides along.
+    assert seed.counts == {"reference": 1}
     assert "## deploys\n\nHow the deploy pipeline works" in seed.docs["reference"]
-    assert "Fleet conventions" in seed.docs["reference"]
+    assert "Fleet conventions" not in seed.docs["reference"]
 
 
 def test_snapshot_seed_discovers_domains_on_a_layered_store(tmp_path):
     """With NO explicit ``domains=`` the seed discovers them from ``stats()`` — on the
     old tier-only stats shape it "discovered" private/commons, matched nothing, and
     exported empty (the second cause of the empty seed, after the dict rows).
-    Memory domains stay dropped whatever the tiers hold."""
+    Memory domains stay dropped whatever the tiers hold, and a commons-only domain is
+    discovered but has no private rows, so it is not exported."""
     from graph.snapshot_op import collect_knowledge_seed
 
     private, commons = _stores(tmp_path)
     private.add_chunk("How the deploy pipeline works", domain="reference")
     private.add_chunk("operator prefers dark mode", domain="hot")  # memory — never exported
-    commons.add_chunk("Fleet conventions", domain="playbook")
+    commons.add_chunk("Fleet conventions", domain="playbook")  # commons — never exported
     layered = LayeredKnowledgeStore(private, commons)
 
     seed = collect_knowledge_seed(layered)
-    assert seed.counts == {"playbook": 1, "reference": 1}
-    assert "Fleet conventions" in seed.docs["playbook"]
+    assert seed.counts == {"reference": 1}
     assert "How the deploy pipeline works" in seed.docs["reference"]
-    assert "hot" not in seed.docs and "private" not in seed.docs and "commons" not in seed.docs
+    assert set(seed.docs) == {"reference"}  # no hot, no playbook, no private/commons phantoms
