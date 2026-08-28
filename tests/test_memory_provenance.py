@@ -98,3 +98,70 @@ def test_memory_recall_unscoped_still_returns_all_domains(tmp_path):
     recall = _by_name(_build_memory_tools(ks))["memory_recall"]
     out = asyncio.run(recall.ainvoke({"query": "shipped"}))
     assert "[general]" in out and "[claude-import]" in out
+
+
+# ── memory_ingest STAMPS the provenance the readers above cite (#3185) ───────
+#
+# The citation tests above assert the read side renders `src:` — but until
+# #3185 the agent's own write path never set it, so those citations only ever
+# fired for harvest-written or operator-written rows. memory_ingest now stamps
+# the session it ran in, read from the injected graph state (ADR 0069 D5).
+
+
+def test_memory_ingest_stamps_the_session_it_ran_in(tmp_path):
+    """The write path records its originating session, and it round-trips."""
+    ks = KnowledgeStore(db_path=str(tmp_path / "kb.db"))
+    ingest = _by_name(_build_memory_tools(ks))["memory_ingest"]
+
+    out = asyncio.run(
+        ingest.ainvoke(
+            {
+                "content": "the operator prefers tabs over spaces",
+                "domain": "preferences",
+                "state": {"session_id": "a2a:chat-77"},
+            }
+        )
+    )
+    assert out.startswith("Stored chunk ")
+
+    chunk = ks.list_chunks(limit=1)[0]
+    assert chunk.source == "a2a:chat-77"
+    assert chunk.as_dict()["source"] == "a2a:chat-77"
+
+
+def test_memory_ingest_provenance_reaches_the_citation(tmp_path):
+    """End to end: what the write stamped is what a later recall cites."""
+    ks = KnowledgeStore(db_path=str(tmp_path / "kb.db"))
+    tools = _by_name(_build_memory_tools(ks))
+
+    asyncio.run(
+        tools["memory_ingest"].ainvoke(
+            {"content": "deploys go out on Thursdays", "state": {"session_id": "a2a:chat-88"}}
+        )
+    )
+    out = asyncio.run(tools["memory_recall"].ainvoke({"query": "deploys Thursdays"}))
+    assert "src: a2a:chat-88" in out
+
+
+def test_memory_ingest_without_state_stores_as_before(tmp_path):
+    """No graph state (tool driven outside a turn) — stores fine, no bogus source."""
+    ks = KnowledgeStore(db_path=str(tmp_path / "kb.db"))
+    ingest = _by_name(_build_memory_tools(ks))["memory_ingest"]
+
+    out = asyncio.run(ingest.ainvoke({"content": "a fact with no session"}))
+    assert out.startswith("Stored chunk ")
+
+    chunk = ks.list_chunks(limit=1)[0]
+    assert not chunk.source  # NULL, not the string "None" or an empty-ish sentinel
+    # And the reader renders no dangling citation for it.
+    assert _memory_citation(source=chunk.source) == ""
+
+
+def test_memory_ingest_provenance_is_not_model_settable(tmp_path):
+    """The model cannot forge provenance: `source` is not an argument, and the
+    injected state is hidden from the tool schema the model sees."""
+    ks = KnowledgeStore(db_path=str(tmp_path / "kb.db"))
+    ingest = _by_name(_build_memory_tools(ks))["memory_ingest"]
+
+    assert "source" not in ingest.args
+    assert "state" not in ingest.args

@@ -765,6 +765,7 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         subject: str | None = None,
         delivery_policy: str | None = None,
         expires_in_days: int | None = None,
+        state: Annotated[Any, InjectedState] = None,
     ) -> str:
         """Store a fact, preference, or note in long-term memory.
 
@@ -783,8 +784,11 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
                 ``"profile"``, ``"standing"``, ``"fact"``, ``"decision"``,
                 ``"note"``, ``"episode"``, ``"reference"``, ``"legacy"``.
                 When omitted the store infers one from the domain.
-            subject: The entity this memory describes (e.g. the operator's
-                name, a project, a tool). Aids recall filtering.
+            subject: Name the entity this memory is ABOUT — the operator, a
+                project, a service, a tool (e.g. ``"staging-db"``). Supply it
+                whenever the memory has an identifiable subject: it is the key
+                that lets a later fact about the same thing supersede this row
+                instead of accumulating a near-duplicate beside it.
             delivery_policy: WHEN the memory enters the prompt (ADR 0108 D4) —
                 ``"always"`` (every turn, like ``domain="hot"``), ``"retrieved"``
                 (on a relevant query), ``"on_demand"`` (only via memory_recall).
@@ -796,7 +800,9 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
                 lapses; omit for no expiry.
 
         Every memory you store starts ``review_state="pending"`` until the
-        operator confirms it in the Memory inspector (ADR 0108 D7.2).
+        operator confirms it in the Memory inspector (ADR 0108 D7.2), and is
+        stamped with the session it was written in — you don't pass that and
+        can't set it.
 
         Returns ``"Stored chunk N in 'domain'."`` on success.
         """
@@ -834,6 +840,16 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         import asyncio
 
         kw: dict[str, Any] = {"source_type": "conversation"}
+        # Provenance (#3185, ADR 0069 D5): stamp the session this was written in.
+        # `source` is already the machine-readable session/thread link on the OTHER
+        # agent-authored path (conversation_harvest -> memory_facts passes the thread
+        # id), so an agent-written row carries the same shape wherever it came from.
+        # Read from the INJECTED STATE, never from the model: tracing.current_session_id()
+        # reads empty inside a tool body (see _session_id_from), and provenance the model
+        # could set is provenance it could forge. Same seam save_skill uses.
+        session_id = _session_id_from(state)
+        if session_id:
+            kw["source"] = session_id
         if memory_kind is not None:
             kw["memory_kind"] = memory_kind
         if subject is not None:
