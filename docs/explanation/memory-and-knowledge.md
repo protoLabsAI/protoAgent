@@ -151,15 +151,28 @@ third-party — never instructions and never part of the current conversation
 prompt layer, don't just hope the store stays clean). Three parts, in order:
 
 1. **The prior-sessions digest.** One **attributed line per session** — id ·
-   timestamp · surface (chat/a2a/…) · topic · message count — for the
-   newest 10 session summaries under a ~2 000-token cap, behind a framing
-   header that says these are *other, separate* sessions. The topic derives
-   from the first *user* message only (no assistant text — that's the identity
-   confusion + poisoning surface). The digest is cached with a 60 s TTL and
-   suppressed on goal-driven turns. The full summary of any listed session is
-   one tool call away with `recall_session(session_id)`; when the id is unknown,
-   `session_search(query)` searches reasoning-stripped, credential-redacted transcript
-   content in a lazy FTS5 index and returns ids to expand.
+   timestamp · surface (chat/a2a/…) · topic · message count — under a
+   ~2 000-token cap, behind a framing header that says these are *other,
+   separate* sessions. The topic derives from the first *user* message only
+   (no assistant text — that's the identity confusion + poisoning surface).
+   Which sessions the digest lists is a policy, `context.prior_sessions`
+   ([ADR 0108 D9](../adr/0108-context-architecture-v2.md)): `newest` (default)
+   takes the newest 10 summaries; `relevant` takes only sessions whose content
+   matches the turn's query (the session-search FTS index, best match first,
+   falling back to `newest` on an empty query, a build without FTS5, or zero
+   matches); `off` injects no automatic digest at all — `session_search` /
+   `recall_session` remain the on-demand path. Whatever the policy, the
+   **active session's own summary is never injected as a "prior" session**
+   (it is the newest file on disk from turn 2 on — the loader excludes it
+   before the newest-N cut, so the digest refills instead of running short).
+   Under `newest` the newest-N pool is cached with a 60 s TTL and the
+   per-session exclusion + token trim run per call; `relevant` reads fresh
+   (query-dependent by definition — one index sync, one FTS query, up to N
+   small JSON reads per turn). The digest is suppressed on goal-driven turns.
+   The full summary of any listed session is one tool call away with
+   `recall_session(session_id)`; when the id is unknown, `session_search(query)`
+   searches reasoning-stripped, credential-redacted transcript content in a
+   lazy FTS5 index and returns ids to expand.
 2. **Always-on memory ("hot").** Chunks with `delivery_policy="always"` are
    always-on operator facts: the newest 100 under a 6 000-char budget inject
    **every turn**, loaded fresh per turn so a just-added fact is seen
@@ -226,7 +239,9 @@ Within the budget, the parts fill in a fixed priority (highest first):
 
 Over budget, the lowest-priority parts shed first, each step re-measured so
 nothing is cut mid-line: RAG hits go one whole hit at a time from the
-lowest-ranked end, then the digest as a unit, then the skill index gives up
+lowest-ranked end, then the prior-session digest one **entry** at a time from
+the end (oldest under `newest`, lowest-rank under `relevant` — ADR 0108 D9;
+the section drops when none remain), then the skill index gives up
 descriptions one row at a time down to its identity floor — every skill's name
 stays listed ([ADR 0060](../adr/0060-skill-progressive-disclosure.md), #2867).
 Working state and always-on memory are **never shed**: if they alone exceed

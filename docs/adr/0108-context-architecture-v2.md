@@ -377,6 +377,11 @@ Shipped:
   excluded) on every store's `list_chunks`/`search`, and the budget summary on
   the prompt preview API. The `delivery_order` config key named under
   Compatibility was not added — the order is fixed by this decision.
+- D9 in #3252: active-session exclusion (a thread's own summary is never a
+  "prior" session), `context.prior_sessions: newest|relevant|off` (default
+  `newest` pending the #3186 eval; `relevant` gates on the session-search FTS
+  index, no LLM judge), and per-entry digest shedding under the D6 budget
+  (`DigestResult` entries, dropped oldest / lowest-rank first).
 
 ### Compatibility behavior
 

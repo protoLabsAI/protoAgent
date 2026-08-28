@@ -104,6 +104,15 @@ class KnowledgeMiddleware(AgentMiddleware):
         self._prior_sessions_cache: str | None = None
         self._prior_sessions_ids: list[str] = []
         self._prior_sessions_loaded_at: float = 0.0
+        # ADR 0108 D9: the TTL cache holds the RAW newest-N entry POOL, not a
+        # rendered block — this middleware is shared across sessions, and the
+        # active-session exclusion is per call, so a rendered cache would bake
+        # one session's exclusion into every other session's digest. ``None``
+        # marks "never loaded" (a test that primes _prior_sessions_cache
+        # directly keeps the legacy rendered-block path).
+        self._prior_sessions_pool: list | None = None
+        self._prior_sessions_dir_exists: bool = True
+        self._prior_sessions_max_tokens: int = 2000
         # ADR 0108 D2: the per-turn projection is composed in before_agent and
         # delivered ephemerally via wrap_model_call (request.override) so it
         # never enters the checkpointer.  Stable within the turn's tool loop.
@@ -145,24 +154,58 @@ class KnowledgeMiddleware(AgentMiddleware):
         ``self._prior_sessions_ids`` so the per-turn injection record (ADR 0069
         D6) can attribute what was injected. Never raises.
         """
-        from graph.middleware.memory import load_prior_sessions_digest
+        from graph.middleware.memory import finish_digest, load_digest_pool
         from graph.middleware.memory import memory_path as _memory_path
 
-        block, self._prior_sessions_ids = load_prior_sessions_digest(
-            memory_path or _memory_path(), max_sessions, max_tokens
-        )
-        return block
+        pool, exists = load_digest_pool(memory_path or _memory_path(), max_sessions)
+        # Stash the PRE-TRIM pool (ADR 0108 D9): _cached_digest re-filters and
+        # re-renders per call so the active-session exclusion is per session
+        # while the disk read stays TTL-cached.
+        self._prior_sessions_pool = list(pool)
+        self._prior_sessions_dir_exists = exists
+        self._prior_sessions_max_tokens = max_tokens
+        res = finish_digest(pool, max_tokens, dir_exists=exists)
+        self._prior_sessions_ids = [e.session_id for e in res.entries]
+        return res.block
 
-    def _cached_digest(self) -> tuple[str, list[str]]:
+    def _cached_digest(self, *, query: str = "", exclude_session_id: str = ""):
         """The TTL-cached prior-sessions digest (lazy + periodic refresh) — what
-        this middleware hands the shared composer instead of a fresh disk read."""
+        this middleware hands the shared composer instead of a fresh disk read.
+
+        ADR 0108 D9: under ``context.prior_sessions: relevant`` the digest is
+        query-dependent by definition, so the pool cache is bypassed and the
+        canonical loader runs fresh; under ``newest`` the cached POOL is
+        filtered for the calling session (its own summary is never a "prior"
+        session) and token-trimmed per call. A test that primed
+        ``_prior_sessions_cache`` with a rendered block keeps getting exactly
+        that block (legacy ``(block, ids)`` shape — the composer sheds it as
+        one unit)."""
         import time
 
+        policy = self._options().prior_sessions_policy
+        if policy == "off":  # defensive — the composer gates before calling
+            return "", []
+        if policy == "relevant":
+            from graph.middleware.memory import load_digest
+
+            return load_digest("relevant", query=query, exclude_session_id=exclude_session_id)
         now = time.monotonic()
-        if self._prior_sessions_cache is None or (now - self._prior_sessions_loaded_at) > _PRIOR_SESSIONS_TTL_S:
+        if (
+            self._prior_sessions_cache is None and self._prior_sessions_pool is None
+        ) or (now - self._prior_sessions_loaded_at) > _PRIOR_SESSIONS_TTL_S:
             self._prior_sessions_cache = self.load_memory()
             self._prior_sessions_loaded_at = now
-        return self._prior_sessions_cache or "", list(self._prior_sessions_ids)
+        if self._prior_sessions_pool is None:
+            # Legacy primed-block path (tests): serve the block verbatim.
+            return self._prior_sessions_cache or "", list(self._prior_sessions_ids)
+        from graph.middleware.memory import finish_digest
+
+        pool = self._prior_sessions_pool
+        if exclude_session_id:
+            pool = [e for e in pool if e.session_id != exclude_session_id]
+        res = finish_digest(pool, self._prior_sessions_max_tokens, dir_exists=self._prior_sessions_dir_exists)
+        self._prior_sessions_ids = [e.session_id for e in res.entries]
+        return res
 
     # ---------------------------------------------------------------------------
     # Parts — thin delegates to graph.projection (ADR 0108 D8)

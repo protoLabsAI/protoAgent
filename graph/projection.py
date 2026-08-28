@@ -80,8 +80,13 @@ _MIN_BUDGET_CHARS = 16_000
 _NEVER_SHED_WARNED: set[tuple[int, int]] = set()
 _INERT_BUDGET_LOGGED = False
 
-# How a caller supplies the prior-sessions digest: ``() -> (block, session_ids)``.
-DigestLoader = Callable[[], tuple[str, list[str]]]
+# How a caller supplies the prior-sessions digest (ADR 0108 D9): called with
+# ``(query=..., exclude_session_id=...)`` and returning a
+# ``graph.middleware.memory.DigestResult`` (block + per-entry attribution, so
+# the budget can shed entry by entry). A legacy zero-arg loader returning
+# ``(block, session_ids)`` still works — the composer falls back to calling it
+# bare and sheds the digest as one unit (the D6 behavior).
+DigestLoader = Callable[..., object]
 # How a caller records an injection: ``(state, memory_parts, digest_ids, hot_ids, rag_ids)``.
 InjectionRecorder = Callable[[dict, list[str], list[str], list[int], list[int]], None]
 
@@ -111,6 +116,11 @@ class ProjectionOptions:
     # unbounded — no window known, or the operator set budget_pct to 0. Applies
     # to the projected context only, never to the stable prompt.
     budget_chars: int | None = None
+    # ADR 0108 D9: how the prior-session digest is chosen — "newest" (the
+    # newest-N pool, today's behavior), "relevant" (FTS-gated to the turn's
+    # query, falling back to newest), or "off" (no automatic digest;
+    # session_search/recall_session remain the on-demand path).
+    prior_sessions_policy: str = "newest"
 
     def __post_init__(self) -> None:
         # A non-positive budget means unbounded — the same reading from_config
@@ -161,12 +171,24 @@ class ProjectionOptions:
                     )
         return cls(
             top_k=_int_or_default(getattr(config, "knowledge_top_k", cls.top_k), cls.top_k),
+            prior_sessions_policy=_coerce_prior_sessions_policy(
+                getattr(config, "context_prior_sessions", cls.prior_sessions_policy)
+            ),
             inject_namespaces=tuple(namespaces),
             inject_min_trust=max(1, int(getattr(config, "knowledge_inject_min_trust", cls.inject_min_trust))),
             skills_top_k=_int_or_default(getattr(config, "skills_top_k", cls.skills_top_k), cls.skills_top_k),
             skills_index_chars=int(window * 0.02 * 4) if window else cls.skills_index_chars,
             budget_chars=budget_chars,
         )
+
+
+def _coerce_prior_sessions_policy(value) -> str:
+    """``context.prior_sessions`` → one of newest|relevant|off; anything else
+    reads as ``newest`` (``graph/config.py`` already warned at load time)."""
+    from graph.middleware.memory import PRIOR_SESSION_POLICIES
+
+    v = str(value or "").strip().lower()
+    return v if v in PRIOR_SESSION_POLICIES else "newest"
 
 
 def _int_or_default(value, default: int) -> int:
@@ -269,11 +291,23 @@ def compose_projected_context(
     state = state or {}
     opts = options or ProjectionOptions()
 
-    # 1. Prior-session digest (ADR 0069 D1) — skipped on incognito + goal turns.
-    digest, digest_ids = "", []
-    if not incognito and not _in_goal_turn():
-        digest, ids = _load_digest(prior_sessions)
-        digest_ids = list(ids) if digest else []
+    # 1. Prior-session digest (ADR 0069 D1) — skipped on incognito + goal turns,
+    #    and entirely under ``context.prior_sessions: off`` (ADR 0108 D9: the
+    #    loader is never invoked; session_search stays the on-demand path). The
+    #    active session's own summary never appears as a "prior" session — its id
+    #    (state, else the tracing contextvar: the same chain the summary WRITER
+    #    resolves, so exclusion can't miss what persistence keyed) rides to the
+    #    loader as ``exclude_session_id``.
+    digest, digest_entries, digest_ids = "", [], []
+    if opts.prior_sessions_policy != "off" and not incognito and not _in_goal_turn():
+        digest, digest_entries, digest_ids = _load_digest(
+            prior_sessions,
+            policy=opts.prior_sessions_policy,
+            query=query,
+            exclude_session_id=_active_session_id(state),
+        )
+        if not digest:
+            digest_entries, digest_ids = [], []
 
     # 2. Always-on memory — delivery_policy="always" (ADR 0108 D6; every
     #    domain="hot" row carries it). Read per turn (not cached) so a
@@ -312,6 +346,7 @@ def compose_projected_context(
         _Candidates(
             digest=digest,
             digest_ids=digest_ids,
+            digest_entries=digest_entries,
             hot=hot,
             hot_ids=hot_ids,
             results=list(results),
@@ -342,6 +377,9 @@ class _Candidates:
 
     digest: str
     digest_ids: list[str]
+    # Per-entry attribution (ADR 0108 D9) — empty for a legacy (block, ids)
+    # loader, in which case the budget sheds the digest as one unit.
+    digest_entries: list
     hot: str
     hot_ids: list[int]
     results: list[dict]  # ranked best-first — the budget pops from the END
@@ -487,13 +525,29 @@ def _fit_to_budget(c: _Candidates, opts: ProjectionOptions, skills_index, summar
             overflow.append({"label": "RAG hits", "dropped_items": dropped, "dropped_chars": before_len - len(d.text)})
             memory_shed = True
 
-    # 2. The prior-session digest — one unit.
+    # 2. The prior-session digest — entry by entry from the END (oldest under
+    #    ``newest``, lowest-rank under ``relevant`` — ADR 0108 D9), the section
+    #    dropped when none remain. A legacy loader hands no entries; its digest
+    #    sheds as one unit exactly as D6 shipped.
     if len(d.text) > budget and c.digest:
         before_len, n = len(d.text), len(c.digest_ids)
-        c.digest, c.digest_ids = "", []
-        d = _compose(c)
-        overflow.append({"label": "Prior sessions", "dropped_items": n, "dropped_chars": before_len - len(d.text)})
-        memory_shed = True
+        if c.digest_entries:
+            from graph.middleware.memory import render_digest
+
+            while c.digest_entries and len(d.text) > budget:
+                c.digest_entries.pop()
+                c.digest = render_digest(c.digest_entries)
+                c.digest_ids = [e.session_id for e in c.digest_entries]
+                d = _compose(c)
+        else:
+            c.digest, c.digest_ids = "", []
+            d = _compose(c)
+        dropped = n - len(c.digest_ids)
+        if dropped:
+            overflow.append(
+                {"label": "Prior sessions", "dropped_items": dropped, "dropped_chars": before_len - len(d.text)}
+            )
+            memory_shed = True
 
     # 3. The skill index — one description row at a time, then the identity floor.
     if len(d.text) > budget and c.skill_block:
@@ -605,21 +659,51 @@ def _in_goal_turn() -> bool:
         return False
 
 
-def _load_digest(loader: DigestLoader | None) -> tuple[str, list[str]]:
-    """The prior-sessions digest from the caller's loader, or the canonical
-    on-disk one (``load_prior_sessions_digest`` — resolved ``memory_path()``,
-    read-time reasoning stripping, ADR 0021). Never raises."""
+def _active_session_id(state: dict) -> str:
+    """The current session's id for digest exclusion (ADR 0108 D9) — graph
+    state first, then the tracing contextvar (the same chain the summary writer
+    resolves in ``graph.middleware.memory._persist_session``). Never raises."""
+    sid = str(state.get("session_id") or "")
+    if sid:
+        return sid
+    try:
+        from observability import tracing
+
+        return tracing.current_session_id() or ""
+    except Exception:  # noqa: BLE001 — no tracing context → no exclusion
+        return ""
+
+
+def _load_digest(
+    loader: DigestLoader | None, *, policy: str = "newest", query: str = "", exclude_session_id: str = ""
+) -> tuple[str, list, list[str]]:
+    """The prior-sessions digest as ``(block, entries, session_ids)``.
+
+    The caller's loader is invoked with ``(query=, exclude_session_id=)`` and
+    may return a ``graph.middleware.memory.DigestResult``; a legacy zero-arg
+    loader returning ``(block, ids)`` is called bare and yields no entries (the
+    budget then sheds its digest as one unit). With no loader, the canonical
+    on-disk digest is read under ``policy`` (``graph.middleware.memory.load_digest``
+    — resolved ``memory_path()``, read-time reasoning stripping, ADR 0021).
+    Never raises."""
     try:
         if loader is not None:
-            block, ids = loader()
+            try:
+                out = loader(query=query, exclude_session_id=exclude_session_id)
+            except TypeError:  # legacy zero-arg loader (tests, older callers)
+                out = loader()
         else:
-            from graph.middleware.memory import load_prior_sessions_digest
+            from graph.middleware.memory import load_digest
 
-            block, ids = load_prior_sessions_digest()
-        return (block or ""), list(ids or [])
+            out = load_digest(policy, query=query, exclude_session_id=exclude_session_id)
+        if hasattr(out, "block") and hasattr(out, "entries"):
+            entries = list(out.entries or [])
+            return (out.block or ""), entries, [e.session_id for e in entries]
+        block, ids = out  # type: ignore[misc]
+        return (block or ""), [], list(ids or [])
     except Exception:  # noqa: BLE001 — a digest hiccup skips the digest, never the turn
         log.debug("[projection] prior-sessions digest skipped", exc_info=True)
-        return "", []
+        return "", [], []
 
 
 def search_scoped(knowledge_store, query: str, opts: ProjectionOptions) -> list[dict]:
