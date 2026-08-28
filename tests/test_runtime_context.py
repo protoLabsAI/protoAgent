@@ -67,6 +67,61 @@ def test_as_prompt_keeps_prefix_first_then_volatile_then_message():
     assert prompt.startswith("PERSONA")
 
 
+def test_build_stable_prefix_threads_bound_tool_names(monkeypatch):
+    """build_stable_prefix must forward bound_tool_names to build_system_prompt
+    so ACP runtimes get capability-derived prompts, not the full operating model.
+    Regression for #3230."""
+    from runtime.context import build_stable_prefix
+
+    captured = {}
+
+    def fake_build_system_prompt(**kwargs):
+        captured.update(kwargs)
+        return "prompt"
+
+    monkeypatch.setattr("graph.prompts.build_system_prompt", fake_build_system_prompt)
+
+    names = frozenset({"search", "read_file"})
+    build_stable_prefix(include_subagents=False, bound_tool_names=names)
+
+    assert captured.get("bound_tool_names") == names
+    assert captured.get("include_subagents") is False
+
+
+def test_assemble_context_threads_bound_tool_names(monkeypatch):
+    """assemble_context must thread bound_tool_names to build_stable_prefix."""
+    captured = {}
+
+    def fake_prefix(config=None, *, include_subagents=True, bound_tool_names=None):
+        captured["bound_tool_names"] = bound_tool_names
+        return "prefix"
+
+    monkeypatch.setattr("runtime.context.build_stable_prefix", fake_prefix)
+
+    names = frozenset({"task_create"})
+    ctx = assemble_context(_cfg(), query="", bound_tool_names=names)
+    assert captured["bound_tool_names"] == names
+    assert ctx.stable_prefix == "prefix"
+
+
+def test_context_assembler_threads_bound_tool_names(monkeypatch):
+    """ContextAssembler must thread its bound_tool_names field through to
+    assemble_context."""
+    captured = {}
+    original_assemble = assemble_context
+
+    def spy_assemble(*args, **kwargs):
+        captured.update(kwargs)
+        return original_assemble(*args, **kwargs)
+
+    monkeypatch.setattr("runtime.context.assemble_context", spy_assemble)
+
+    names = frozenset({"search"})
+    asm = ContextAssembler(config=_cfg(), bound_tool_names=names)
+    asm.assemble(query="x")
+    assert captured.get("bound_tool_names") == names
+
+
 def test_assembler_object_implements_the_contract():
     asm = ContextAssembler(config=_cfg(), knowledge_store=_FakeStore(), skills_index=_FakeSkills())
     ctx = asm.assemble(query="x")
