@@ -82,6 +82,15 @@ export function sameOrder(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((id, i) => id === b[i]);
 }
 
+/** Whether a full-order PUT should fire: the order must actually CHANGE, and no reorder save may
+ *  already be in flight. The single guard for BOTH reorder paths (drag + move controls) — a second
+ *  concurrent PUT could complete out of order, or an earlier failure's roll-back could overwrite a
+ *  later drag's intended order, so a pending save blocks the next submission entirely (the drag
+ *  handle and the move buttons also disable while pending, this is the shared backstop). */
+export function shouldSubmitOrder(next: string[], current: string[], pending: boolean): boolean {
+  return !pending && !sameOrder(next, current);
+}
+
 /** Move the id at `index` one slot up/down, returning a NEW array — or the SAME order when the
  *  move runs off either end (the caller then skips the PUT via `sameOrder`). The move-up /
  *  move-down controls' payload: the accessible, non-pointer reorder path. */
@@ -410,7 +419,11 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
     onSettled: () => qc.invalidateQueries({ queryKey: queryKeys.fleet }),
   });
   const submitOrder = (order: string[]) => {
-    if (!sameOrder(order, orderIds)) reorder.mutate(order); // skip a no-op PUT (self-drop / boundary move)
+    // The single choke point for BOTH reorder paths (drag + move controls): fire only for a real
+    // change AND when no save is already in flight — a concurrent full-order PUT could complete out
+    // of order, or an earlier failure's roll-back could clobber a later drag's intended order. Skips
+    // a no-op PUT (self-drop / boundary move) too.
+    if (shouldSubmitOrder(order, orderIds, reorder.isPending)) reorder.mutate(order);
   };
   const moveRow = (id: string, dir: "up" | "down") =>
     submitOrder(moveInList(orderIds, orderIds.indexOf(id), dir));
@@ -502,11 +515,21 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                     {a.host ? null : (
                       <>
                         <span
-                          className="fleet-drag-handle"
-                          draggable
+                          className={`fleet-drag-handle${reorder.isPending ? " disabled" : ""}`}
+                          // A reorder save already in flight disables the drag path exactly as the
+                          // move buttons disable (moveDisabled(..., reorder.isPending)): otherwise a
+                          // second drag's drop would fire a concurrent full-order PUT that could
+                          // complete out of order or roll back over this drag's intended order.
+                          draggable={!reorder.isPending}
                           aria-hidden="true"
-                          title="Drag to reorder"
-                          onDragStart={() => setDragId(a.id)}
+                          title={reorder.isPending ? "Saving the new order…" : "Drag to reorder"}
+                          onDragStart={(e) => {
+                            if (reorder.isPending) {
+                              e.preventDefault(); // belt-and-suspenders: draggable={false} already blocks it
+                              return;
+                            }
+                            setDragId(a.id);
+                          }}
                           onDragEnd={() => setDragId(null)}
                         >
                           <GripVertical size={14} />

@@ -38,6 +38,12 @@
 .fleet-drag-handle:active {
   cursor: grabbing;
 }
+/* A reorder save in flight disables the drag path (like the move buttons) — dim it and drop the
+   grab cursor so it reads as inert while the PUT is pending (#3197). */
+.fleet-drag-handle.disabled {
+  cursor: default;
+  opacity: 0.4;
+}
 .fleet-move-controls {
   display: inline-flex;
   align-items: center;

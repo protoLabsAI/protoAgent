@@ -13,6 +13,7 @@ import {
   orderAgentsByIds,
   reorderByDrag,
   sameOrder,
+  shouldSubmitOrder,
   slugOf,
   updateAutostartRoster,
 } from "./FleetManagerPanel";
@@ -193,6 +194,26 @@ describe("sameOrder — skip a no-op PUT", () => {
     expect(sameOrder(["a", "b"], ["a", "b"])).toBe(true);
     expect(sameOrder(["a", "b"], ["b", "a"])).toBe(false);
     expect(sameOrder(["a"], ["a", "b"])).toBe(false);
+  });
+});
+
+describe("shouldSubmitOrder — the single guard shared by the drag AND move-control paths", () => {
+  const current = ["host", "ava", "roxy"];
+
+  it("submits a real change only when no reorder save is in flight", () => {
+    expect(shouldSubmitOrder(["ava", "host", "roxy"], current, false)).toBe(true);
+  });
+
+  it("blocks a SECOND concurrent full-order PUT while a save is pending (the drag-path fix)", () => {
+    // Even a genuinely different order is refused mid-save: a concurrent PUT could complete out of
+    // order, or an earlier failure's roll-back could clobber this order. The drag handle disables
+    // for the same reason the move buttons already did (moveDisabled(..., pending)).
+    expect(shouldSubmitOrder(["ava", "host", "roxy"], current, true)).toBe(false);
+  });
+
+  it("skips a no-op PUT (self-drop / boundary move) regardless of pending", () => {
+    expect(shouldSubmitOrder(["host", "ava", "roxy"], current, false)).toBe(false);
+    expect(shouldSubmitOrder(["host", "ava", "roxy"], current, true)).toBe(false);
   });
 });
 
