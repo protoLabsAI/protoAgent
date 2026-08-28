@@ -34,22 +34,40 @@ from graph.tool_delta import format_delta, take_pending_delta
 log = logging.getLogger(__name__)
 
 
-def _compose(state) -> dict | None:
-    """Append the one-shot notice as its own tagged frame message."""
-    delta = take_pending_delta()
-    if delta is None:
-        return None  # the overwhelmingly common case — no allocation, no injection
-    note = format_delta(delta)
-    if not note:
-        return None
-    return {"messages": [context_frame_message(note)]}
-
-
 class ToolDeltaMiddleware(AgentMiddleware):
-    """Inject a one-shot notice when the bound toolset changed since the last turn."""
+    """Inject a one-shot notice when the bound toolset changed since the last turn.
+
+    ADR 0108 D2 (#3188): the notice is composed in ``before_agent`` (once per
+    turn) and delivered ephemerally via ``wrap_model_call`` so it never enters
+    the checkpointer.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._pending_note: str | None = None
 
     def before_agent(self, state, runtime) -> dict | None:  # type: ignore[override]
-        return _compose(state)
+        delta = take_pending_delta()
+        if delta is None:
+            self._pending_note = None
+            return None
+        note = format_delta(delta)
+        self._pending_note = note or None
+        return None
 
     async def abefore_agent(self, state, runtime) -> dict | None:  # type: ignore[override]
-        return _compose(state)
+        return self.before_agent(state, runtime)
+
+    def wrap_model_call(self, request, handler):
+        if self._pending_note:
+            msgs = list(getattr(request, "messages", None) or [])
+            msgs.append(context_frame_message(self._pending_note))
+            return handler(request.override(messages=msgs))
+        return handler(request)
+
+    async def awrap_model_call(self, request, handler):
+        if self._pending_note:
+            msgs = list(getattr(request, "messages", None) or [])
+            msgs.append(context_frame_message(self._pending_note))
+            return await handler(request.override(messages=msgs))
+        return await handler(request)

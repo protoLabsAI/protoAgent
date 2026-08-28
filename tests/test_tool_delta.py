@@ -108,24 +108,52 @@ def _mw():
 def test_no_change_injects_nothing():
     tool_delta.record_toolset(["a"])
     tool_delta.record_toolset(["a"])
-    assert _mw().before_agent({}, None) is None
+    mw = _mw()
+    mw.before_agent({}, None)
+    assert mw._pending_note is None
 
 
-def test_a_change_is_injected_as_a_tagged_frame_message():
+def test_a_change_is_stashed_for_wrap_model_call():
+    """ADR 0108 D2: the delta is no longer returned as a state update — it is
+    stashed on the middleware for ephemeral delivery via wrap_model_call."""
     tool_delta.record_toolset(["a"])
     tool_delta.record_toolset(["a", "board_register_project"])
-    out = _mw().before_agent({}, None)
-    frame = out["messages"][0]
+    mw = _mw()
+    out = mw.before_agent({}, None)
+    assert out is None  # no state update
+    assert mw._pending_note is not None
+    assert "board_register_project" in mw._pending_note
+
+
+def test_wrap_model_call_delivers_the_tagged_frame():
+    """The frame reaches the model via request.override(messages=...), never the
+    checkpointer."""
+    from dataclasses import dataclass
+
+    tool_delta.record_toolset(["a"])
+    tool_delta.record_toolset(["a", "board_register_project"])
+    mw = _mw()
+    mw.before_agent({}, None)
+
+    @dataclass
+    class _Req:
+        messages: list
+        def override(self, **kw):
+            return _Req(**{**{"messages": self.messages}, **kw})
+
+    captured = []
+    def handler(req):
+        captured.append(req)
+        return "ok"
+
+    mw.wrap_model_call(_Req(messages=[]), handler)
+    frame = captured[0].messages[-1]
     assert "board_register_project" in frame.content
     assert frame.additional_kwargs["protoagent_injected_context"] is True
 
 
-def test_it_never_touches_the_context_channel():
-    """#2776 / ADR 0101 D2: delivery moved off the last-write-wins ``context``
-    channel — once nothing rewrites that channel per call, a one-shot note left
-    there would be re-sent forever. A tagged frame message under the additive
-    ``messages`` reducer is one-shot by construction and can't clobber (or be
-    clobbered by) anything another middleware staged."""
+def test_before_agent_never_touches_the_context_channel():
+    """#2776 / ADR 0101 D2: delivery stays off the ``context`` channel."""
     tool_delta.record_toolset(["a"])
     tool_delta.record_toolset(["a", "b"])
     staged = {
@@ -133,20 +161,26 @@ def test_it_never_touches_the_context_channel():
         "context_sections": [{"label": "Skills", "chars": 38}],
     }
     out = _mw().before_agent(staged, None)
-    assert "context" not in out and "context_sections" not in out
-    assert "b" in out["messages"][0].content
+    assert out is None  # no state update at all
 
 
 def test_the_injection_is_one_shot_across_turns():
     tool_delta.record_toolset(["a"])
     tool_delta.record_toolset(["a", "b"])
-    assert _mw().before_agent({}, None) is not None
-    assert _mw().before_agent({}, None) is None
+    mw = _mw()
+    mw.before_agent({}, None)
+    assert mw._pending_note is not None
+    mw.before_agent({}, None)
+    assert mw._pending_note is None
 
 
 async def test_the_async_hook_behaves_identically():
     tool_delta.record_toolset(["a"])
     tool_delta.record_toolset(["a", "b"])
-    out = await _mw().abefore_agent({}, None)
-    assert "b" in out["messages"][0].content
-    assert await _mw().abefore_agent({}, None) is None
+    mw = _mw()
+    out = await mw.abefore_agent({}, None)
+    assert out is None
+    assert mw._pending_note is not None
+    assert "b" in mw._pending_note
+    await mw.abefore_agent({}, None)
+    assert mw._pending_note is None

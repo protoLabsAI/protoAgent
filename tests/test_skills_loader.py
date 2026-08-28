@@ -139,9 +139,9 @@ def test_before_model_injects_available_skills(tmp_path: Path) -> None:
     # No knowledge store — proves skills work KB-less (the None-store guard).
     mw = KnowledgeMiddleware(None, skills_index=index)
     state = {"messages": [HumanMessage(content="please research the web for me")]}
-    out = mw.before_agent(state, runtime=None)
-    assert out is not None
-    ctx = out["messages"][0].content  # the turn's injected frame (#2776)
+    mw.before_agent(state, runtime=None)
+    ctx = mw._turn_projection or ""
+    assert ctx
     assert "<available_skills>" in ctx
     assert "web-research" in ctx
 

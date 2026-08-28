@@ -101,30 +101,32 @@ class TestContextFrame:
 
 
 class TestBeforeAgent:
-    """before_agent() returns a messages state update containing a context frame."""
+    """before_agent() composes the projection and stashes it for wrap_model_call.
 
-    def test_returns_messages_with_context_frame(self, monkeypatch):
-        """before_agent returns a dict with a 'messages' key containing a frame."""
+    ADR 0108 D2: before_agent no longer returns a messages state update.
+    The projection is stored on the middleware instance and delivered
+    ephemerally via wrap_model_call(request.override).
+    """
+
+    def test_stashes_projection_not_messages(self, monkeypatch):
+        """before_agent stashes the projection — no messages key in the result."""
         mw = _mw(store=_FakeStore(hot="Agent is a helpful assistant"))
-        # Suppress prior-sessions disk read
         monkeypatch.setattr(mw, "load_memory", lambda *a, **kw: "")
         result = mw.before_agent(_state_with_human(), runtime=None)
         assert result is not None
-        msgs = result.get("messages", [])
-        assert len(msgs) == 1
-        assert is_context_frame(msgs[0])
+        assert "messages" not in result
+        assert mw._turn_projection is not None
 
-    def test_frame_contains_injected_memory_section(self, monkeypatch):
-        """The frame includes an <injected_memory> envelope when memory is injected."""
+    def test_projection_contains_injected_memory_section(self, monkeypatch):
+        """The projection includes an <injected_memory> envelope when memory is injected."""
         mw = _mw(store=_FakeStore(hot="Always remember: be helpful"))
         monkeypatch.setattr(mw, "load_memory", lambda *a, **kw: "")
-        result = mw.before_agent(_state_with_human(), runtime=None)
-        frame = result["messages"][0]
-        assert "<injected_memory>" in frame.content
-        assert "Always remember: be helpful" in frame.content
+        mw.before_agent(_state_with_human(), runtime=None)
+        assert "<injected_memory>" in mw._turn_projection
+        assert "Always remember: be helpful" in mw._turn_projection
 
-    def test_frame_contains_working_state_when_active(self, monkeypatch):
-        """The frame includes <working_state> when the agent has active commitments."""
+    def test_projection_contains_working_state_when_active(self, monkeypatch):
+        """The projection includes <working_state> when the agent has active commitments."""
         import runtime.state as rs
 
         goal = SimpleNamespace(
@@ -135,18 +137,15 @@ class TestBeforeAgent:
             _store=SimpleNamespace(read_plan=lambda sid: "step 1"),
         )
         monkeypatch.setattr(rs.STATE, "goal_controller", goal_ctrl, raising=False)
-        # Clean up other state surfaces
         for attr in ("tasks_store", "watch_controller", "scheduler"):
             monkeypatch.setattr(rs.STATE, attr, None, raising=False)
 
         mw = _mw(store=None)
         monkeypatch.setattr(mw, "load_memory", lambda *a, **kw: "")
-        # session_id is required for working-state to resolve the active goal
         state = {**_state_with_human(), "session_id": "test-session"}
-        result = mw.before_agent(state, runtime=None)
-        frame = result["messages"][0]
-        assert "<working_state>" in frame.content
-        assert "test goal" in frame.content
+        mw.before_agent(state, runtime=None)
+        assert "<working_state>" in mw._turn_projection
+        assert "test goal" in mw._turn_projection
 
     def test_clears_legacy_context_channel(self, monkeypatch):
         """before_agent always clears the legacy context channel (#2774)."""
@@ -182,18 +181,11 @@ class TestBeforeAgent:
         mw = _mw(store=store)
         monkeypatch.setattr(mw, "load_memory", lambda *a, **kw: "prior session data")
         state = {**_state_with_human("query"), "incognito": True}
-        result = mw.before_agent(state, runtime=None)
-        if result is None:
-            return
-        # If something is injected, memory content must be absent.
-        injected = ""
-        if "messages" in result:
-            injected = result["messages"][0].content
-        else:
-            injected = result.get("context", "")
-        assert "secret fact" not in injected
-        assert "rag hit" not in injected
-        assert "prior session" not in injected
+        mw.before_agent(state, runtime=None)
+        projection = mw._turn_projection or ""
+        assert "secret fact" not in projection
+        assert "rag hit" not in projection
+        assert "prior session" not in projection
 
 
 # ---------------------------------------------------------------------------

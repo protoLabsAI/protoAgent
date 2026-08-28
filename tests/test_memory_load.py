@@ -37,11 +37,13 @@ def _make_middleware(knowledge_store=None):
     return KnowledgeMiddleware(store, top_k=5)
 
 
-def _frame_text(result) -> str:
-    """Composed context of the turn's injected frame message ('' when none) —
-    #2776 moved delivery from the `context` channel to a before_agent frame."""
-    msgs = (result or {}).get("messages") or []
-    return msgs[0].content if msgs else ""
+def _frame_text(mw) -> str:
+    """The projection text stashed by before_agent (ADR 0108 D2).
+
+    Since #3188, frames are delivered ephemerally via wrap_model_call, not as
+    state updates.  The composed text lives on the middleware instance.
+    """
+    return mw._turn_projection or ""
 
 
 def _write_session(directory: str, session_id: str, content: dict) -> str:
@@ -288,7 +290,7 @@ def test_before_model_injects_prior_sessions(tmp_path):
 
     result = mw.before_agent(state, runtime=None)
     assert result is not None
-    ctx = _frame_text(result)
+    ctx = _frame_text(mw)
     assert "<prior_sessions>" in ctx
     assert "inject-sess" in ctx
     # The legacy channel is cleared, never written (#2776).
@@ -313,10 +315,11 @@ def test_before_model_suppresses_prior_sessions_in_goal_turn(tmp_path):
     state = {"messages": [HumanMessage(content="continue the goal")]}
 
     # Normal turn injects it; goal-driven turn suppresses it.
-    assert "<prior_sessions>" in _frame_text(mw.before_agent(state, runtime=None))
+    mw.before_agent(state, runtime=None)
+    assert "<prior_sessions>" in _frame_text(mw)
     with goal_turn():
-        result = mw.before_agent(state, runtime=None)
-    ctx = _frame_text(result)
+        mw.before_agent(state, runtime=None)
+    ctx = _frame_text(mw)
     assert "<prior_sessions>" not in ctx
     assert "leak-sess" not in ctx
 
@@ -390,7 +393,7 @@ async def test_abefore_model_runs_search_off_event_loop():
 
     # Same behavior as the sync path…
     assert result is not None
-    assert "remembered fact" in _frame_text(result)
+    assert "remembered fact" in _frame_text(mw)
     # …but the blocking search ran on a worker thread, not the event loop.
     assert seen_threads, "store.search was never called"
     assert seen_threads[0] is not threading.main_thread()
@@ -571,7 +574,8 @@ def test_envelope_wraps_memory_parts_not_skills(tmp_path):
 
     from langchain_core.messages import HumanMessage
 
-    ctx = _frame_text(mw.before_agent({"messages": [HumanMessage(content="q")]}, runtime=None))
+    mw.before_agent({"messages": [HumanMessage(content="q")]}, runtime=None)
+    ctx = _frame_text(mw)
 
     assert ctx.count("<injected_memory>") == 1  # ONE envelope for all memory parts
     env = ctx[ctx.index("<injected_memory>") : ctx.index("</injected_memory>")]
@@ -600,7 +604,8 @@ def test_no_envelope_without_memory_parts():
 
     from langchain_core.messages import HumanMessage
 
-    ctx = _frame_text(mw.before_agent({"messages": [HumanMessage(content="q")]}, runtime=None))
+    mw.before_agent({"messages": [HumanMessage(content="q")]}, runtime=None)
+    ctx = _frame_text(mw)
     assert "<injected_memory>" not in ctx
     assert "<available_skills>" in ctx
 
@@ -646,7 +651,12 @@ def test_before_agent_skips_reentry_without_fresh_input(tmp_path):
 
 def test_frame_message_is_tagged_and_enveloped(tmp_path):
     """The frame is a HumanMessage tagged machine-injected, wrapped in
-    <injected_context> so the role is unmistakable even without the kwarg."""
+    <injected_context> so the role is unmistakable even without the kwarg.
+
+    ADR 0108 D2: the frame is no longer in before_agent's state update — it is
+    delivered ephemerally via wrap_model_call (request.override).
+    """
+    from dataclasses import dataclass
     from langchain_core.messages import HumanMessage
 
     _write_session(str(tmp_path), "tag-sess", _sample_session("tag-sess"))
@@ -656,11 +666,113 @@ def test_frame_message_is_tagged_and_enveloped(tmp_path):
     mw._prior_sessions_cache = mw.load_memory(memory_path=str(tmp_path))
     mw._prior_sessions_loaded_at = time.monotonic()
 
-    result = mw.before_agent({"messages": [HumanMessage(content="q")]}, runtime=None)
-    frame = result["messages"][0]
+    state = {"messages": [HumanMessage(content="q")]}
+    result = mw.before_agent(state, runtime=None)
+    assert "messages" not in (result or {})
+
+    @dataclass
+    class _FakeRequest:
+        messages: list
+        def override(self, **kw):
+            return _FakeRequest(**{**{"messages": self.messages}, **kw})
+
+    request = _FakeRequest(messages=state["messages"])
+    projected = mw._project_messages(request)
+    frame = projected.messages[-1]
     assert frame.additional_kwargs["protoagent_injected_context"] is True
     assert frame.content.startswith("<injected_context>")
     assert frame.content.rstrip().endswith("</injected_context>")
+
+
+# ── ADR 0108 D2: checkpoint-frame stripping + ephemeral projection ───────────
+
+
+def test_old_checkpoint_frames_are_stripped_from_model_visible_messages(tmp_path):
+    """Existing checkpoints may contain context frames persisted under the v1
+    delivery model.  They must be excluded from the model-visible surface but
+    retained in the checkpoint for audit (#3188)."""
+    from dataclasses import dataclass
+
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    from graph.context_frame import context_frame_message
+
+    @dataclass
+    class _Req:
+        messages: list
+        def override(self, **kw):
+            return _Req(**{**{"messages": self.messages}, **kw})
+
+    mw = _make_middleware()
+    mw._turn_projection = None  # no fresh projection this turn
+
+    old_frame = context_frame_message("stale injected context from turn 3")
+    msgs = [
+        HumanMessage(content="hello"),
+        old_frame,
+        AIMessage(content="hi"),
+        HumanMessage(content="next"),
+    ]
+    projected = mw._project_messages(_Req(messages=msgs))
+    # The old frame is gone from the model-visible list.
+    assert len(projected.messages) == 3
+    assert all(not hasattr(m, "additional_kwargs") or
+               not m.additional_kwargs.get("protoagent_injected_context")
+               for m in projected.messages)
+
+
+def test_projection_replaces_old_frames_with_fresh(tmp_path):
+    """Old checkpoint frames are stripped AND the fresh projection is appended."""
+    from dataclasses import dataclass
+
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    from graph.context_frame import context_frame_message
+
+    @dataclass
+    class _Req:
+        messages: list
+        def override(self, **kw):
+            return _Req(**{**{"messages": self.messages}, **kw})
+
+    _write_session(str(tmp_path), "proj-sess", _sample_session("proj-sess"))
+    mw = _make_middleware()
+    import time
+
+    mw._prior_sessions_cache = mw.load_memory(memory_path=str(tmp_path))
+    mw._prior_sessions_loaded_at = time.monotonic()
+
+    state = {"messages": [HumanMessage(content="q")]}
+    mw.before_agent(state, runtime=None)
+    assert mw._turn_projection  # something was composed
+
+    old_frame = context_frame_message("stale v1 frame")
+    msgs = [HumanMessage(content="q"), old_frame, AIMessage(content="…"), HumanMessage(content="next")]
+
+    projected = mw._project_messages(_Req(messages=msgs))
+    frames = [m for m in projected.messages
+              if getattr(m, "additional_kwargs", {}).get("protoagent_injected_context")]
+    assert len(frames) == 1  # exactly one: the fresh projection
+    assert "stale v1 frame" not in frames[0].content
+    assert "proj-sess" in frames[0].content
+
+
+def test_before_agent_no_longer_returns_messages():
+    """ADR 0108 D2: before_agent clears legacy channels but never returns a
+    messages key — the projection is delivered via wrap_model_call only."""
+    from langchain_core.messages import HumanMessage
+
+    mw = _make_middleware()
+    import time
+
+    mw._prior_sessions_cache = "<prior_sessions>x</prior_sessions>"
+    mw._prior_sessions_loaded_at = time.monotonic()
+
+    result = mw.before_agent({"messages": [HumanMessage(content="q")]}, runtime=None)
+    assert "messages" not in (result or {})
+    assert result["context"] == ""
+    assert result["context_sections"] == []
+    assert mw._turn_projection is not None
 
 
 # ── #2867: identities never drop — budget squeezes descriptions, not names ─────

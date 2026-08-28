@@ -125,6 +125,10 @@ class KnowledgeMiddleware(AgentMiddleware):
         self._prior_sessions_cache: str | None = None
         self._prior_sessions_ids: list[str] = []
         self._prior_sessions_loaded_at: float = 0.0
+        # ADR 0108 D2: the per-turn projection is composed in before_agent and
+        # delivered ephemerally via wrap_model_call (request.override) so it
+        # never enters the checkpointer.  Stable within the turn's tool loop.
+        self._turn_projection: str | None = None
 
     # ---------------------------------------------------------------------------
     # Session memory loading
@@ -317,39 +321,38 @@ class KnowledgeMiddleware(AgentMiddleware):
         )
 
     def before_agent(self, state, runtime) -> dict | None:
-        """Compose the turn's dynamic context ONCE and append it to the message
-        stream as part of the turn's input frame (#2776, ADR 0101 D2).
+        """Compose the turn's dynamic context ONCE and stash it for ephemeral
+        delivery via ``wrap_model_call`` (ADR 0108 D2, #3188).
 
-        This replaced the per-model-call ``before_model`` composition on purpose:
-        recomposing per call put a churning block between the cached stable
-        prefix and the history — Anthropic's cache key is prefix-based, so every
-        recomposition invalidated any history caching for the rest of the turn.
-        Composed once at turn entry, the frame is appended to the log and caches
-        like every other message; nothing between prefix and history varies
-        intra-turn (this also subsumes #2779 — the skills-index MRU order and
-        ``<working_state>`` are now snapshotted per turn by construction).
+        The projection is composed here (once per turn entry, not per model
+        call) so it is stable within the tool loop, but is NOT returned as a
+        ``messages`` state update — ``wrap_model_call`` delivers it via
+        ``request.override(messages=…)`` which never enters the checkpointer.
 
         Guarded on the newest message being a FRESH human input: a HITL resume
         (``Command(resume=…)``) or a kicker retry re-enters the graph without new
-        input, and must not inject a second frame mid-conversation.
+        input, and must not recompose.
 
         The legacy ``context`` channel is explicitly cleared either way (#2774's
         reasoning): it is last-write-wins and checkpointer-persisted, so a value
         left behind by an older build (or a pre-upgrade thread) would otherwise
         be re-delivered by PromptCacheMiddleware forever.
         """
-        from graph.context_frame import context_frame_message, is_context_frame
+        from graph.context_frame import is_context_frame
 
         clear = {"context": "", "context_sections": []}
         messages = state.get("messages") or []
         last = messages[-1] if messages else None
         if not isinstance(last, HumanMessage) or is_context_frame(last):
+            self._turn_projection = None
             return None  # re-entry without fresh input — no recompose, no state churn
         composed = self.compose_context(state, runtime, record=True)
         ctx = (composed or {}).get("context") or ""
         if not ctx:
+            self._turn_projection = None
             return clear
-        return {"messages": [context_frame_message(ctx)], **clear}
+        self._turn_projection = ctx
+        return clear
 
     def compose_context(self, state, runtime=None, *, record: bool = True) -> dict | None:
         """The dynamic-context composer behind ``before_model``.
@@ -584,3 +587,32 @@ class KnowledgeMiddleware(AgentMiddleware):
         import asyncio
 
         return await asyncio.to_thread(self.before_agent, state, runtime)
+
+    # ---------------------------------------------------------------------------
+    # ADR 0108 D2 — ephemeral projection delivery
+    # ---------------------------------------------------------------------------
+
+    def _project_messages(self, request):
+        """Strip stale checkpoint frames, append the fresh turn projection.
+
+        Old checkpoints may contain context frames persisted under the v1
+        delivery model.  They are retained in the checkpoint for audit but
+        excluded from the model-visible surface here.  The fresh projection
+        (composed once in ``before_agent``) is appended as the last message so
+        the model sees current context without it entering the checkpointer.
+        """
+        from graph.context_frame import context_frame_message, is_context_frame
+
+        msgs = getattr(request, "messages", None) or []
+        cleaned = [m for m in msgs if not is_context_frame(m)]
+        if self._turn_projection:
+            cleaned.append(context_frame_message(self._turn_projection))
+        if len(cleaned) != len(msgs) or self._turn_projection:
+            return request.override(messages=cleaned)
+        return request
+
+    def wrap_model_call(self, request, handler):
+        return handler(self._project_messages(request))
+
+    async def awrap_model_call(self, request, handler):
+        return await handler(self._project_messages(request))

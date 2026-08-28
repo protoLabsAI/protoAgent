@@ -7,9 +7,9 @@ and assert:
 
   1. ``SessionSummaryMiddleware`` persists a session summary to disk after a turn
      (its ``after_agent`` hook runs in the real loop).
-  2. ``KnowledgeMiddleware`` reads that summary back and injects a
-     ``<prior_sessions>`` block on a NEW session (its ``before_agent`` fires and
-     appends the turn's injected context frame to the message stream, #2776).
+  2. ``KnowledgeMiddleware`` composes the projection and delivers it ephemerally
+     via ``wrap_model_call`` — the projection does NOT appear in the
+     checkpointed messages (ADR 0108 D2, #3188).
 
 Regression guard for the #1247/#1249 consolidation: ``SessionSummaryMiddleware``
 is write-only and ``KnowledgeMiddleware`` solely owns the prior-sessions
@@ -88,13 +88,10 @@ async def test_session_memory_persists_and_injects_in_a_real_turn(tmp_path, monk
         {"messages": [HumanMessage(content="hi again")], "session_id": "sessB"},
         config={"configurable": {"thread_id": "sessB"}},
     )
-    # #2776: the context rides the message stream as a tagged frame, not the
-    # `context` channel — this exercises before_agent through a REAL graph run.
+    # ADR 0108 D2 (#3188): context frames are delivered ephemerally via
+    # wrap_model_call(request.override) and are NOT checkpointed.
     from graph.context_frame import is_context_frame
 
     frames = [m for m in result.get("messages", []) if is_context_frame(m)]
-    assert frames, "KnowledgeMiddleware did not inject a context frame — before_agent never fired"
-    context = frames[0].content
-    assert "<prior_sessions>" in context, "the frame carries no <prior_sessions> block"
-    assert "teal" in context, "prior session content (from sessA) was not carried into the new session"
+    assert not frames, "context frames should NOT appear in checkpointed messages after #3188"
     assert not (result.get("context") or ""), "the legacy context channel must stay empty (#2776)"
