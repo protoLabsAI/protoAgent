@@ -606,3 +606,42 @@ def test_knowledge_search_review_state_filter(monkeypatch, tmp_path):
     assert c.get("/api/knowledge/search?q=truth&review_state=pending").json()["results"] == []
     assert c.get("/api/knowledge/search?review_state=maybe").status_code == 400
     assert len(c.get("/api/knowledge/search?review_state=").json()["results"]) == 2  # empty = unfiltered
+
+
+def test_chunk_update_keeps_an_always_on_row_always_on(monkeypatch, tmp_path):
+    """ADR 0108 D6 + D7 (B4): an always-on row on a NON-hot domain edited from the
+    Knowledge view keeps ``delivery_policy="always"`` — it must not silently leave
+    the always-on set — and still lists in the memory inspector's hot view (which
+    selects by policy, exactly like the per-turn reader)."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import runtime.state as rs
+    from knowledge.store import KnowledgeStore
+    from operator_api.memory_routes import register_memory_routes
+
+    store = KnowledgeStore(tmp_path / "kb.db")
+    cid = store.add_chunk(
+        "operator prefers metric units", domain="preferences",
+        delivery_policy="always", source_type="operator", subject="operator",
+    )
+    monkeypatch.setattr(rs.STATE, "knowledge_store", store, raising=False)
+    monkeypatch.setattr(rs.STATE, "skills_index", None, raising=False)
+    app = FastAPI()
+    register_knowledge_routes(app)
+    register_memory_routes(app)
+    c = TestClient(app)
+
+    body = c.put(f"/api/knowledge/chunks/{cid}", json={"content": "operator prefers imperial units"}).json()
+    assert body["replaced"] is True
+    new_id = body["id"]
+
+    rows = store.list_chunks(delivery_policy="always")
+    assert [r.id for r in rows] == [new_id]
+    assert rows[0].domain == "preferences" and rows[0].delivery_policy == "always"
+    assert rows[0].subject == "operator"  # lifecycle fields ride along (D7)
+
+    hot = c.get("/api/memory/hot").json()
+    assert [r["id"] for r in hot["chunks"]] == [new_id]
+    assert hot["chunks"][0]["injecting"] is True  # in the per-turn window too
+    assert [i for i, _ in store.get_hot_memory_entries()] == [new_id]

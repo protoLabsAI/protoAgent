@@ -160,19 +160,24 @@ prompt layer, don't just hope the store stays clean). Three parts, in order:
    one tool call away with `recall_session(session_id)`; when the id is unknown,
    `session_search(query)` searches reasoning-stripped, credential-redacted transcript
    content in a lazy FTS5 index and returns ids to expand.
-2. **Hot memory.** `domain="hot"` chunks are always-on operator facts: the
-   newest 100 under a 6 000-char budget inject **every turn**, loaded fresh per
-   turn so a just-added fact is seen immediately. Because that makes a silent
-   hot write the highest-leverage poisoning move available, every hot write —
-   agent tool, console route, or plugin — emits a `memory.hot_written` bus
-   event, and an optional gate (`knowledge.hot_write_confirm`) makes the
-   agent's own write path refuse `domain="hot"` entirely, reserving always-on
-   promotion for operator surfaces. Since [ADR 0108 D4](../adr/0108-context-architecture-v2.md)
-   each hot chunk also carries `delivery_policy="always"` (a hot write is stamped
-   with it whatever the caller said), and the gate refuses that policy on *any*
-   domain — through `memory_ingest` and `knowledge_ingest` alike; the per-turn
-   reader still selects on `domain="hot"` until D6 (#3187) switches delivery to
-   the policy column.
+2. **Always-on memory ("hot").** Chunks with `delivery_policy="always"` are
+   always-on operator facts: the newest 100 under a 6 000-char budget inject
+   **every turn**, loaded fresh per turn so a just-added fact is seen
+   immediately. Always-on is a *policy*, not a domain
+   ([ADR 0108 D4 + D6](../adr/0108-context-architecture-v2.md)): every
+   `domain="hot"` write is stamped with it whatever the caller said, so the
+   legacy hot domain still works, and a row on any other domain (say a
+   `preferences` fact) can be pinned always-on the same way. Rows an operator
+   has rejected (`review_state="rejected"`) or that have passed their
+   `expires_at` never deliver, whatever their policy. Because always-on makes
+   a silent write the highest-leverage poisoning move available, every
+   always-on write — agent tool, console route, or plugin — emits a
+   `memory.hot_written` bus event, and an optional gate
+   (`knowledge.hot_write_confirm`) makes the agent's own write paths
+   (`memory_ingest`, `knowledge_ingest`) refuse `domain="hot"` and
+   `delivery_policy="always"` alike, reserving always-on promotion for
+   operator surfaces. The console's Memory → Hot memory list shows exactly the
+   always-on set the reader selects.
 3. **RAG hits.** The store is searched with the last user message and the
    top-k results (default 10) inject, each line ending with its stored date and
    trust label — `(stored 2026-07-01; trust: agent)`. Two policies shape the
@@ -199,6 +204,48 @@ graph-specific: the turn-entry guard, the digest cache, and the ephemeral
 delivery ([ADR 0108](../adr/0108-context-architecture-v2.md) D2). The result is
 a typed `ProjectedContext` — text, per-section labels, the injected ids, and
 the sources that fed it.
+
+### Delivery budget and priority (ADR 0108 D6)
+
+The projection is **bounded**: it may use at most `context.budget_pct` of the
+model's context window (default 8%, chars//4 — the same token heuristic the
+rest of the runtime uses), and never less than **16 000 chars** — roughly the
+always-on cap (6 000) plus the digest cap (~2 000 tokens), so a small-window
+model keeps its standing context whole and sheds only what lies beyond it. The
+ceiling is derived from the window the gateway reports for the model; no
+window (logged once — the knob is inert), or `budget_pct: 0`, means unbounded.
+The stable prompt is not part of it — only what is injected on top per turn.
+
+Within the budget, the parts fill in a fixed priority (highest first):
+
+1. **Working state** — the agent's own live commitments (trusted, operational).
+2. **Always-on memory** — `delivery_policy="always"`.
+3. **The skill index** — capability awareness.
+4. **The prior-session digest** — cross-session continuity.
+5. **RAG hits** — relevance-matched knowledge.
+
+Over budget, the lowest-priority parts shed first, each step re-measured so
+nothing is cut mid-line: RAG hits go one whole hit at a time from the
+lowest-ranked end, then the digest as a unit, then the skill index gives up
+descriptions one row at a time down to its identity floor — every skill's name
+stays listed ([ADR 0060](../adr/0060-skill-progressive-disclosure.md), #2867).
+Working state and always-on memory are **never shed**: if they alone exceed
+the budget they are delivered anyway and a warning names the sizes (once per
+distinct standing-context size), because a silently missing standing
+instruction is worse than an oversized prompt. The order is fixed by the ADR —
+there is no `delivery_order` knob to reorder it.
+
+What was shed is visible: the prompt **preview API** (`GET /api/prompts/preview`)
+carries the `budget` summary — ceiling, chars used, and an `overflow` list
+(label, items and chars dropped per part) — and marks each shed section
+`truncated`; the console inspector renders both in a follow-up. The injection
+log records the ids that actually **entered** the turn, never those merely
+retrieved. With the default 8% on a 128k-window model the ceiling is ~10k
+tokens — more than a typical turn injects (6 000 chars of always-on memory, a
+~2 000-token digest, ten hits, a 2%-of-window skill index) — so nothing is
+shed there until you lower it; on a 32k window or smaller the 16k-char floor is
+the budget, so RAG hits and skill descriptions beyond it now shed where they
+used to be unbounded.
 
 ### Trust tiers
 
@@ -296,6 +343,7 @@ tuning guidance in [Tune the knowledge store](../guides/knowledge.md)):
 | `hot_write_confirm` | `false` | when on, the agent's `memory_ingest` and `knowledge_ingest` refuse always-on writes (`domain="hot"` or `delivery_policy="always"`) |
 | `scope` | `scoped` | tier ([ADR 0041](../adr/0041-workspaces-and-tiered-stores.md)): `scoped` (private) · `shared` (host commons) · `layered` (read commons ∪ private, write private). See [Tune the knowledge store → Sharing across a fleet](../guides/knowledge.md#sharing-knowledge-across-a-fleet-the-commons) |
 | `middleware.knowledge` | `true` | turn the whole subsystem on/off |
+| `context.budget_pct` | `8` | (its own `context:` block) the projected-context ceiling as a % of the model window ([D6](#delivery-budget-and-priority-adr-0108-d6)); `0` = unbounded |
 
 Three environment knobs override paths and persistence directly:
 

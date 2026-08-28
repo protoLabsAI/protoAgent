@@ -261,7 +261,9 @@ class _HotKS:
         self.next_id = 9
 
     def list_chunks(self, domain=None, limit=50, **kwargs):
-        assert domain == "hot"  # the inspector never lists other domains
+        # The inspector lists ALWAYS-ON rows by delivery policy (ADR 0108 D6) —
+        # never by domain, so a `preferences` row pinned always-on shows too.
+        assert domain is None and kwargs.get("delivery_policy") == "always"
         return self.rows
 
     def add_chunk(self, content, domain="general", **kwargs):
@@ -356,15 +358,81 @@ def test_hot_budget_break_marks_all_not_injecting(tmp_path, monkeypatch):
     assert all(r["injecting"] is False for r in rows)
 
 
-def test_hot_edit_pins_domain_and_adds_before_deleting(tmp_path, monkeypatch):
+def test_hot_edit_pins_policy_and_adds_before_deleting(tmp_path, monkeypatch):
     ks = _HotKS()
     c = _client(monkeypatch, tmp_path, knowledge=ks)
     body = c.put("/api/memory/hot/3", json={"content": "prefers light mode"}).json()
     assert body == {"enabled": True, "id": 9, "replaced": True}
     content, domain, kwargs = ks.added[0]
-    assert (content, domain) == ("prefers light mode", "hot")  # never demoted out of hot
+    assert (content, domain) == ("prefers light mode", "hot")  # the row keeps its own domain
+    assert kwargs["delivery_policy"] == "always"  # never demoted out of always-on (ADR 0108 D6)
     assert kwargs["source_type"] == "operator"
     assert ks.deleted == [3]
+
+
+def test_hot_edit_keeps_the_rows_own_domain(tmp_path, monkeypatch):
+    """A `preferences` row pinned always-on is edited in place — pinned by POLICY,
+    not re-domained to "hot" (ADR 0108 D6)."""
+    ks = _HotKS()
+    ks.rows = [{"id": 3, "content": "metric units", "domain": "preferences", "delivery_policy": "always"}]
+    c = _client(monkeypatch, tmp_path, knowledge=ks)
+    assert c.put("/api/memory/hot/3", json={"content": "imperial units"}).status_code == 200
+    content, domain, kwargs = ks.added[0]
+    assert (content, domain, kwargs["delivery_policy"]) == ("imperial units", "preferences", "always")
+
+
+def test_hot_edit_carries_the_rows_lifecycle_fields(tmp_path, monkeypatch):
+    """An edit is a revision, not a re-classification: the row's typed fields ride
+    into the new row, and an operator's own edit is confirmed."""
+    ks = _HotKS()
+    ks.rows = [{"id": 3, "content": "metric units", "domain": "preferences", "delivery_policy": "always"}]
+    ks.get_chunk = lambda cid: {
+        "id": cid,
+        "domain": "preferences",
+        "memory_kind": "profile",
+        "subject": "operator",
+        "expires_at": "2027-01-01T00:00:00+00:00",
+        "namespace": "project:x",
+        "epoch": None,
+        "review_state": "pending",
+    }
+    c = _client(monkeypatch, tmp_path, knowledge=ks)
+    assert c.put("/api/memory/hot/3", json={"content": "imperial units"}).status_code == 200
+    _content, domain, kwargs = ks.added[0]
+    assert domain == "preferences"
+    assert {k: kwargs[k] for k in ("memory_kind", "subject", "expires_at", "namespace")} == {
+        "memory_kind": "profile",
+        "subject": "operator",
+        "expires_at": "2027-01-01T00:00:00+00:00",
+        "namespace": "project:x",
+    }
+    assert "epoch" not in kwargs  # None is not carried
+    assert kwargs["review_state"] == "confirmed" and kwargs["delivery_policy"] == "always"
+
+
+def test_hot_edit_keeps_a_rejected_pin_rejected(tmp_path, monkeypatch):
+    ks = _HotKS()
+    ks.get_chunk = lambda cid: {"id": cid, "domain": "hot", "review_state": "rejected"}
+    c = _client(monkeypatch, tmp_path, knowledge=ks)
+    assert c.put("/api/memory/hot/3", json={"content": "still rejected"}).status_code == 200
+    assert ks.added[0][2]["review_state"] == "rejected"
+
+
+def test_hot_edit_falls_back_for_a_backend_without_the_policy_kwarg(tmp_path, monkeypatch):
+    """A plugin backend predating delivery_policy still gets the edit — pinned the
+    old way (domain "hot"), never lost."""
+    ks = _HotKS()
+
+    def _strict_add(content, domain="general", **kwargs):
+        if "delivery_policy" in kwargs:
+            raise TypeError("unexpected keyword argument 'delivery_policy'")
+        ks.added.append((content, domain, kwargs))
+        return 9
+
+    ks.add_chunk = _strict_add
+    c = _client(monkeypatch, tmp_path, knowledge=ks)
+    assert c.put("/api/memory/hot/3", json={"content": "x"}).json()["id"] == 9
+    assert ks.added[0][1] == "hot" and "delivery_policy" not in ks.added[0][2]
 
 
 def test_hot_edit_keeps_old_row_when_add_fails(tmp_path, monkeypatch):

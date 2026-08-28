@@ -49,7 +49,8 @@ def _sections(row: dict) -> list[dict]:
     precedent). Empty when the call was captured unsegmented (pre-P2 rows).
 
     ADR 0108 D2 (#3191): projected sections (``projected_sections``) replace
-    the legacy ``context_sections`` for post-#3188 captures."""
+    the legacy ``context_sections`` for post-#3188 captures. A projected section
+    the delivery budget shed from carries ``truncated: true`` (ADR 0108 D6)."""
     out: list[dict] = []
     for scope, col in (
         ("stable", "stable_sections"),
@@ -60,14 +61,15 @@ def _sections(row: dict) -> list[dict]:
             if not isinstance(s, dict):
                 continue
             chars = int(s.get("chars") or 0)
-            out.append(
-                {
-                    "label": str(s.get("label") or ""),
-                    "chars": chars,
-                    "approx_tokens": chars // 4,
-                    "scope": scope,
-                }
-            )
+            entry = {
+                "label": str(s.get("label") or ""),
+                "chars": chars,
+                "approx_tokens": chars // 4,
+                "scope": scope,
+            }
+            if s.get("truncated"):
+                entry["truncated"] = True
+            out.append(entry)
     return out
 
 
@@ -243,6 +245,11 @@ def register_prompt_routes(app) -> None:
         shaped = _shape(row)
         shaped["preview"] = True
         shaped["speculative"] = True
+        # The delivery budget in force for this compose (ADR 0108 D6):
+        # {"chars", "used", "overflow": [{"label", "dropped_items", "dropped_chars"}]}
+        # — null when delivery is unbounded (no window known / budget_pct 0) or
+        # nothing composed. The shed sections above carry ``truncated``.
+        shaped["budget"] = (ctx or {}).get("budget")
         # Delivery note (#2527): the preview is a composed reconstruction — say how
         # the native-OAuth providers actually ship it so the surface doesn't imply
         # a system-role message that never exists on that wire.

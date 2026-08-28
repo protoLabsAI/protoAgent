@@ -20,15 +20,24 @@ test patches — come in as callables (``prior_sessions``, ``record_fn``); the
 delivery knobs come in as one :class:`ProjectionOptions`. The stable prefix
 (persona + operating model) is NOT composed here — that is ``graph.prompts``.
 
-D6 (#3187) adds the token budget and the section priority order to this same
-function; until then delivery is unbounded, exactly as before the extraction.
+Delivery is bounded and policy-driven (ADR 0108 D6, #3187): the projection may
+use at most ``ProjectionOptions.budget_chars`` (``context.budget_pct`` of the
+model window, chars//4). The fill priority is working state → always-on memory
+(``delivery_policy="always"``) → skill index → prior-session digest → RAG hits;
+over budget the lowest-priority parts shed first — RAG hits one by one from the
+lowest-ranked end, then the digest, then skill descriptions down to the
+identity floor (names never drop). Working state and always-on memory are never
+shed: if they alone exceed the budget they are delivered anyway and a warning
+names the sizes. With no budget (no window known, or ``budget_pct: 0``)
+delivery is unbounded — byte-identical to the pre-D6 composer.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +65,21 @@ _INJECTED_MEMORY_HEADER = (
     "agent's own actions. Don't narrate inherited-domain facts as your own work. -->"
 )
 
+# ADR 0108 D6: the derived budget never drops below this many chars. ≈ the
+# always-on cap (6 000) + the digest cap (~2 000 tokens ≈ 8 000) + headroom, so
+# always-on memory and the digest are never fought over on a small-window model
+# (LiteLLM reports 8k/32k for many local/legacy models — 8% of those is less
+# than one turn's standing context). Below the floor a small window sheds only
+# RAG hits and skill descriptions beyond it; today those were unbounded.
+_MIN_BUDGET_CHARS = 16_000
+
+# The "never-shed sections exceed the budget" warning fires once per distinct
+# (working_state_chars, always_on_chars) per process — an 8k-window model would
+# otherwise say the same thing every turn. Keyed on the sizes so a CHANGE in the
+# standing context (a new always-on fact) is heard again.
+_NEVER_SHED_WARNED: set[tuple[int, int]] = set()
+_INERT_BUDGET_LOGGED = False
+
 # How a caller supplies the prior-sessions digest: ``() -> (block, session_ids)``.
 DigestLoader = Callable[[], tuple[str, list[str]]]
 # How a caller records an injection: ``(state, memory_parts, digest_ids, hot_ids, rag_ids)``.
@@ -82,15 +106,32 @@ class ProjectionOptions:
     inject_min_trust: int = 1  # ADR 0069 D8 — 1 = nothing excluded, only down-weighted
     skills_top_k: int = 24  # full-description rows in the skill index (skills.top_k; <=0 = none)
     skills_index_chars: int = 8192  # char ceiling for the skill index block (<=0 = uncapped)
+    # ADR 0108 D6: the whole projection's char ceiling (context.budget_pct of the
+    # model window × 4 chars/token, never below _MIN_BUDGET_CHARS). None =
+    # unbounded — no window known, or the operator set budget_pct to 0. Applies
+    # to the projected context only, never to the stable prompt.
+    budget_chars: int | None = None
+
+    def __post_init__(self) -> None:
+        # A non-positive budget means unbounded — the same reading from_config
+        # gives ``budget_pct: 0``, so direct construction can't disagree with it.
+        if self.budget_chars is not None and self.budget_chars <= 0:
+            object.__setattr__(self, "budget_chars", None)
 
     @classmethod
     def from_config(cls, config) -> ProjectionOptions:
-        """Mirror the ``KnowledgeMiddleware`` wiring in ``graph/agent.py``.
+        """The ONE wiring ``graph/agent.py`` (native) and ``runtime/context.py``
+        (external) build their delivery knobs from.
 
         Duck-typed: a missing attribute falls back to the class default, so a
         partial config (tests, a runtime with its own settings object) still
         composes. The skill-index char budget derives from the model window
-        (~2% as chars) exactly as the native path does, 8KB when unknown.
+        (~2% as chars) and the projection budget from ``context_budget_pct``
+        (default 8% — see ``graph/config.py``), floored at ``_MIN_BUDGET_CHARS``
+        so a small-window model keeps its always-on memory and digest whole;
+        both need a known window, so a gateway that reports none leaves the
+        skill index at 8KB and delivery unbounded (logged once — the knob is
+        inert until the window is known).
         """
         if config is None:
             return cls()
@@ -101,12 +142,30 @@ class ProjectionOptions:
             window = context_window_for(config)
         except Exception:  # noqa: BLE001 — no profile / partial config → the 8KB fallback
             window = None
+        try:
+            budget_pct = float(getattr(config, "context_budget_pct", 8.0))
+        except (TypeError, ValueError):
+            budget_pct = 8.0
+        budget_chars = None
+        if budget_pct > 0:
+            if window:
+                budget_chars = max(int(window * budget_pct / 100 * 4), _MIN_BUDGET_CHARS)
+            else:
+                global _INERT_BUDGET_LOGGED
+                if not _INERT_BUDGET_LOGGED:
+                    _INERT_BUDGET_LOGGED = True
+                    log.warning(
+                        "[projection] context.budget_pct=%s is inert — the gateway reports no context "
+                        "window for the model, so delivery is unbounded",
+                        budget_pct,
+                    )
         return cls(
             top_k=_int_or_default(getattr(config, "knowledge_top_k", cls.top_k), cls.top_k),
             inject_namespaces=tuple(namespaces),
             inject_min_trust=max(1, int(getattr(config, "knowledge_inject_min_trust", cls.inject_min_trust))),
             skills_top_k=_int_or_default(getattr(config, "skills_top_k", cls.skills_top_k), cls.skills_top_k),
             skills_index_chars=int(window * 0.02 * 4) if window else cls.skills_index_chars,
+            budget_chars=budget_chars,
         )
 
 
@@ -121,10 +180,17 @@ class ProjectedContext:
     """What the composer delivered for one model call.
 
     ``text`` is the model-visible projection; ``sections`` annotate it
-    (``{"label", "chars"}`` per part — what PromptCaptureMiddleware persists);
-    the id lists are the injection attribution (ADR 0069 D6); ``sources`` is a
-    telemetry-only summary (surfaced as ``AssembledContext.sources``) — nothing
-    reads it, and the spelling of its entries is not a contract.
+    (``{"label", "chars"}`` per part — what PromptCaptureMiddleware persists —
+    plus ``"truncated": True`` on a part the budget shed from); the id lists
+    are the injection attribution (ADR 0069 D6) — what was DELIVERED, after
+    shedding; ``sources`` is a telemetry-only summary (surfaced as
+    ``AssembledContext.sources``) — nothing reads it, and the spelling of its
+    entries is not a contract.
+
+    The budget fields (ADR 0108 D6): ``budget_chars`` is the ceiling in force
+    (None = unbounded), ``used_chars`` is ``len(text)``, and ``overflow`` lists
+    what was shed — ``{"label", "dropped_items", "dropped_chars"}`` per part, in
+    shed order (RAG hits, prior sessions, skills index).
     """
 
     text: str = ""
@@ -133,6 +199,9 @@ class ProjectedContext:
     hot_ids: list[int] = field(default_factory=list)
     rag_ids: list[int] = field(default_factory=list)
     sources: list[str] = field(default_factory=list)
+    budget_chars: int | None = None
+    used_chars: int = 0
+    overflow: list[dict] = field(default_factory=list)
 
     @property
     def empty(self) -> bool:
@@ -142,8 +211,14 @@ class ProjectedContext:
         """The ``{"context", "context_sections"}`` pair the middleware's
         ``compose_context`` has always returned (the preview route and the
         before_agent stash read it). Both keys move together — an empty
-        projection is ``""`` + ``[]``, never one without the other."""
-        return {"context": self.text, "context_sections": list(self.sections)}
+        projection is ``""`` + ``[]``, never one without the other. When a
+        budget is in force a third key, ``budget`` (``{"chars", "used",
+        "overflow"}``), rides along for the preview/inspector; unbounded
+        delivery keeps the two-key shape exactly."""
+        out = {"context": self.text, "context_sections": list(self.sections)}
+        if self.budget_chars is not None:
+            out["budget"] = {"chars": self.budget_chars, "used": self.used_chars, "overflow": list(self.overflow)}
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -185,25 +260,25 @@ def compose_projected_context(
     on-disk digest fresh (``graph.middleware.memory.load_prior_sessions_digest``).
     The digest is suppressed on goal-driven turns (``graph.goals.goal_turn``):
     unrelated cross-session history biases the self-driving loop.
+
+    Delivery is bounded by ``options.budget_chars`` (ADR 0108 D6) — see
+    :func:`_fit_to_budget` for the priority and shed order. The injection log
+    records what was DELIVERED (ids after shedding), never what was merely
+    retrieved.
     """
     state = state or {}
     opts = options or ProjectionOptions()
-    memory_parts: list[str] = []
-    digest_ids: list[str] = []
-    hot_ids: list[int] = []
-    rag_ids: list[int] = []
-    sources: list[str] = []
 
     # 1. Prior-session digest (ADR 0069 D1) — skipped on incognito + goal turns.
+    digest, digest_ids = "", []
     if not incognito and not _in_goal_turn():
         digest, ids = _load_digest(prior_sessions)
-        if digest:
-            memory_parts.append(digest)
-            digest_ids = list(ids)
-            sources.append("prior_sessions")
+        digest_ids = list(ids) if digest else []
 
-    # 2. Hot memory — always-on operator facts (domain="hot"). Read per turn (not
-    #    cached) so a freshly-added hot fact is seen immediately.
+    # 2. Always-on memory — delivery_policy="always" (ADR 0108 D6; every
+    #    domain="hot" row carries it). Read per turn (not cached) so a
+    #    freshly-added always-on fact is seen immediately.
+    hot, hot_ids = "", []
     if not incognito and knowledge_store is not None and hasattr(knowledge_store, "get_hot_memory"):
         try:
             if hasattr(knowledge_store, "get_hot_memory_entries"):
@@ -212,49 +287,133 @@ def compose_projected_context(
                 hot = "\n".join(piece for _, piece in entries)
             else:  # custom backend without the id-attributed reader
                 hot = knowledge_store.get_hot_memory()
-            if hot:
-                memory_parts.append(f"[Always-on facts (hot memory):]\n{hot}")
-                sources.append(f"hot:{len(hot_ids)}" if hot_ids else "hot")
         except Exception as exc:  # noqa: BLE001 - never break the loop on memory
             log.debug("[projection] hot memory load failed: %s", exc)
+            hot, hot_ids = "", []
 
     # Always-on skill index (progressive disclosure, ADR 0060) — built before the RAG
     # search, the order the native composer always had (same side effects, same order).
-    skill_block, listed = _skill_index(skills_index, opts)
+    # The index is read ONCE per compose; the budget re-renders from that list.
+    summaries = _skill_summaries(skills_index, opts)
+    skill_block, listed, full_rows = _skill_index(skills_index, opts, summaries=summaries)
 
-    # 3. RAG hits on the turn's query — trust-ranked, namespace-scoped (ADR 0069 D3a/D8).
+    # 3. RAG hits on the turn's query — trust-ranked, namespace-scoped, deliverable-only
+    #    (ADR 0069 D3a/D8, ADR 0108 D6). Ranked best-first: the budget sheds from the end.
+    results: list[dict] = []
     if query and not incognito and knowledge_store is not None:
         results = rank_by_trust(search_scoped(knowledge_store, query, opts), opts)
-        if results:
-            # Each hit carries its stored date (ADR 0069 D9) — a deterministic
-            # recency signal in-context, so the model can weigh freshness itself
-            # instead of any LLM freshness judge — and its trust tier (ADR 0069
-            # D8): operator-authored vs agent-derived vs external/ingested content.
-            from knowledge.trust import trust_label
 
-            context_parts = ["[Relevant knowledge from previous sessions:]"]
-            for r in results:
-                # Tag each hit with its source DOMAIN, not the physical table
-                # (always "chunks" — no signal). An imported domain like
-                # `claude-import` reads back as inherited reference, so the model
-                # stops narrating another codebase's history as its own (#2161).
-                line = f"- [{r.get('domain') or 'memory'}] {r['preview']}"
-                stored = str(r.get("created_at") or "")[:10]
-                meta = [f"stored {stored}"] if stored else []
-                meta.append(f"trust: {trust_label(r.get('source_type'))}")
-                line += f" ({'; '.join(meta)})"
-                context_parts.append(line)
-                if r.get("id") is not None:
-                    rag_ids.append(r["id"])
-            memory_parts.append("\n".join(context_parts))
-            sources.append(f"knowledge:{len(results)}")
+    # 4/5. Skills (capability, not memory) and the agent's own live commitments
+    #      (ADR 0079 — the "Observe" step) are gathered even on goal turns and
+    #      incognito threads: the suppressions above are memory suppressions.
+    working_state = working_state_block(state)
 
-    # Labeled sections (#2243 P2): the same texts that compose the context,
-    # annotated at the composer — PromptCaptureMiddleware persists them so the
-    # viewer can render a per-section context budget. The memory label carries
-    # the id-attributed counts the injection log already tracks.
+    delivered = _fit_to_budget(
+        _Candidates(
+            digest=digest,
+            digest_ids=digest_ids,
+            hot=hot,
+            hot_ids=hot_ids,
+            results=list(results),
+            skill_block=skill_block,
+            skill_listed=listed,
+            skill_full_rows=full_rows,
+            working_state=working_state,
+        ),
+        opts,
+        skills_index,
+        summaries,
+    )
+    if delivered.memory_parts and record:
+        (record_fn or record_injection)(
+            state, delivered.memory_parts, delivered.digest_ids, delivered.hot_ids, delivered.rag_ids
+        )
+    return delivered.projected
+
+
+# ---------------------------------------------------------------------------
+# Assembly + the delivery budget (ADR 0108 D6)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _Candidates:
+    """Everything retrieved for the turn, before the budget decides what ships."""
+
+    digest: str
+    digest_ids: list[str]
+    hot: str
+    hot_ids: list[int]
+    results: list[dict]  # ranked best-first — the budget pops from the END
+    skill_block: str
+    skill_listed: int
+    skill_full_rows: int
+    working_state: str
+
+
+@dataclass
+class _Delivered:
+    """One assembly of the candidates — the model-visible text plus its attribution."""
+
+    text: str
+    sections: list[dict]
+    memory_parts: list[str]
+    digest_ids: list[str]
+    hot_ids: list[int]
+    rag_ids: list[int]
+    sources: list[str]
+    projected: ProjectedContext = field(default_factory=ProjectedContext)
+
+
+def _render_rag(results: list[dict]) -> tuple[str, list[int]]:
+    """The ``[Relevant knowledge from previous sessions:]`` part, one line per hit."""
+    if not results:
+        return "", []
+    # Each hit carries its stored date (ADR 0069 D9) — a deterministic
+    # recency signal in-context, so the model can weigh freshness itself
+    # instead of any LLM freshness judge — and its trust tier (ADR 0069
+    # D8): operator-authored vs agent-derived vs external/ingested content.
+    from knowledge.trust import trust_label
+
+    context_parts = ["[Relevant knowledge from previous sessions:]"]
+    rag_ids: list[int] = []
+    for r in results:
+        # Tag each hit with its source DOMAIN, not the physical table
+        # (always "chunks" — no signal). An imported domain like
+        # `claude-import` reads back as inherited reference, so the model
+        # stops narrating another codebase's history as its own (#2161).
+        line = f"- [{r.get('domain') or 'memory'}] {r['preview']}"
+        stored = str(r.get("created_at") or "")[:10]
+        meta = [f"stored {stored}"] if stored else []
+        meta.append(f"trust: {trust_label(r.get('source_type'))}")
+        line += f" ({'; '.join(meta)})"
+        context_parts.append(line)
+        if r.get("id") is not None:
+            rag_ids.append(r["id"])
+    return "\n".join(context_parts), rag_ids
+
+
+def _compose(c: _Candidates) -> _Delivered:
+    """Assemble the candidates exactly as the composer always has: the
+    ``<injected_memory>`` envelope (digest, always-on memory, RAG hits — in that
+    order), then the skill index, then working state; labeled sections (#2243
+    P2) annotate the same texts so the viewer can render a per-section budget."""
+    memory_parts: list[str] = []
+    sources: list[str] = []
+    digest_ids = list(c.digest_ids) if c.digest else []
+    hot_ids = list(c.hot_ids)
+    if c.digest:
+        memory_parts.append(c.digest)
+        sources.append("prior_sessions")
+    if c.hot:
+        memory_parts.append(f"[Always-on facts (hot memory):]\n{c.hot}")
+        sources.append(f"hot:{len(hot_ids)}" if hot_ids else "hot")
+    rag_text, rag_ids = _render_rag(c.results)
+    if rag_text:
+        memory_parts.append(rag_text)
+        sources.append(f"knowledge:{len(c.results)}")
+
     parts: list[tuple[str, str]] = []
-
     if memory_parts:
         bits = []
         if digest_ids:
@@ -265,34 +424,161 @@ def compose_projected_context(
             bits.append(f"{len(rag_ids)} docs")
         label = "Injected memory" + (f" ({' · '.join(bits)})" if bits else "")
         parts.append((label, _wrap_injected_memory(memory_parts)))
-        if record:
-            (record_fn or record_injection)(state, memory_parts, digest_ids, hot_ids, rag_ids)
-
-    # 4. The skill index: capability, not memory — outside the envelope, present
-    #    on incognito threads too.
-    if skill_block:
-        parts.append(("Skills index", skill_block))
-        sources.append(f"skills:{listed}")
-
-    # 5. The agent's own live commitments (ADR 0079 — the "Observe" step). Always
-    #    injected, even on goal turns and incognito threads: operational state the
-    #    agent must see to self-manage, not recalled memory, so the suppressions
-    #    above don't apply. Empty-safe (returns "" when nothing is active).
-    working_state = working_state_block(state)
-    if working_state:
-        parts.append(("Working state", working_state))
+    # The skill index: capability, not memory — outside the envelope.
+    if c.skill_block:
+        parts.append(("Skills index", c.skill_block))
+        sources.append(f"skills:{c.skill_listed}")
+    # The agent's own live commitments (ADR 0079): trusted, outside the envelope.
+    if c.working_state:
+        parts.append(("Working state", c.working_state))
         sources.append("working_state")
-
-    if not parts:
-        return ProjectedContext()
-    return ProjectedContext(
+    return _Delivered(
         text="\n\n".join(text for _label, text in parts),
         sections=[{"label": label, "chars": len(text)} for label, text in parts],
+        memory_parts=memory_parts,
         digest_ids=digest_ids,
         hot_ids=hot_ids,
         rag_ids=rag_ids,
         sources=sources,
     )
+
+
+def _fit_to_budget(c: _Candidates, opts: ProjectionOptions, skills_index, summaries: list[dict]) -> _Delivered:
+    """Deliver the candidates within ``opts.budget_chars`` (ADR 0108 D6).
+
+    Priority (highest first): working state, always-on memory, skill index,
+    prior-session digest, RAG hits. Over budget, shed lowest-priority first —
+    each step re-assembles and re-measures, so separators and the envelope are
+    accounted for, and nothing is cut mid-line:
+
+    1. RAG hits, one whole hit at a time from the lowest-ranked end, then the
+       section.
+    2. The prior-session digest — as one unit: the loader hands in a rendered
+       block under its own ~2k-token cap (D9 restructures it into attributed
+       entries; per-entry shedding lands with that).
+    3. The skill index — one description ROW at a time (the last full row
+       becomes a name-only row), re-rendered from the summaries already read
+       for this compose, then the identity floor (every name, no descriptions —
+       ADR 0060 / #2867): never below it. Monotone in the budget, at most
+       ``skills_top_k`` renders, no extra store reads.
+    4. Working state and always-on memory are NEVER shed. If what remains still
+       exceeds the budget it is delivered anyway and a warning names the sizes
+       (once per distinct sizes per process).
+
+    Deterministic: the same candidates and budget always deliver the same text.
+    ``None`` budget = unbounded — the assembly is byte-identical to pre-D6.
+    """
+    budget = opts.budget_chars
+    d = _compose(c)
+    if budget is None or len(d.text) <= budget:
+        return _finish(d, budget, overflow=[], memory_shed=False, skills_shed=False)
+
+    overflow: list[dict] = []
+    memory_shed = skills_shed = False
+
+    # 1. RAG hits — lowest-ranked first (the ranking is best-first; pop the end).
+    if c.results:
+        before_len, before_n = len(d.text), len(c.results)
+        while c.results and len(d.text) > budget:
+            c.results.pop()
+            d = _compose(c)
+        dropped = before_n - len(c.results)
+        if dropped:
+            overflow.append({"label": "RAG hits", "dropped_items": dropped, "dropped_chars": before_len - len(d.text)})
+            memory_shed = True
+
+    # 2. The prior-session digest — one unit.
+    if len(d.text) > budget and c.digest:
+        before_len, n = len(d.text), len(c.digest_ids)
+        c.digest, c.digest_ids = "", []
+        d = _compose(c)
+        overflow.append({"label": "Prior sessions", "dropped_items": n, "dropped_chars": before_len - len(d.text)})
+        memory_shed = True
+
+    # 3. The skill index — one description row at a time, then the identity floor.
+    if len(d.text) > budget and c.skill_block:
+        before_len, before_full = len(d.text), c.skill_full_rows
+        # Walk down by ROWS: skills_top_k = full_rows-1, full_rows-2, … turns the last
+        # full-description row into a name-only row each step (the char cap and the
+        # name rows are untouched, so no identity is ever lost). Re-rendered from the
+        # summaries this compose already read — no further store reads.
+        for n in range(c.skill_full_rows - 1, 0, -1):
+            block, listed, full = _skill_index(skills_index, replace(opts, skills_top_k=n), summaries=summaries)
+            c.skill_block, c.skill_listed, c.skill_full_rows = block, listed, full
+            d = _compose(c)
+            if len(d.text) <= budget:
+                break
+        if len(d.text) > budget:
+            floor_block, floor_listed, floor_full = _skill_index(
+                skills_index, opts, bare_only=True, summaries=summaries
+            )
+            if len(floor_block) < len(c.skill_block):
+                c.skill_block, c.skill_listed, c.skill_full_rows = floor_block, floor_listed, floor_full
+                d = _compose(c)
+        if len(d.text) < before_len:
+            overflow.append(
+                {
+                    "label": "Skills index",
+                    "dropped_items": before_full - c.skill_full_rows,
+                    "dropped_chars": before_len - len(d.text),
+                }
+            )
+            skills_shed = True
+
+    # 4. Never-shed remainder — heard once per distinct standing-context size.
+    if len(d.text) > budget:
+        key = (len(c.working_state), len(c.hot))
+        # (Not named `emit` — the plugin-events catalog scanner reads `emit("…")` as a bus topic.)
+        say = log.debug if key in _NEVER_SHED_WARNED else log.warning
+        _NEVER_SHED_WARNED.add(key)
+        say(
+            "[projection] never-shed sections exceed the context budget: used=%d budget=%d "
+            "(working_state=%d, always_on=%d, skills_floor=%d chars) — raise context.budget_pct "
+            "or trim the always-on memory",
+            len(d.text),
+            budget,
+            len(c.working_state),
+            len(c.hot),
+            len(c.skill_block),
+        )
+    if overflow:
+        log.info(
+            "[projection] context budget %d chars: shed %s",
+            budget,
+            "; ".join(f"{o['label']} (-{o['dropped_items']} items, -{o['dropped_chars']} chars)" for o in overflow),
+        )
+    return _finish(d, budget, overflow=overflow, memory_shed=memory_shed, skills_shed=skills_shed)
+
+
+def _finish(d: _Delivered, budget: int | None, *, overflow: list[dict], memory_shed: bool, skills_shed: bool) -> _Delivered:
+    """Attach the budget bookkeeping and build the :class:`ProjectedContext`."""
+    sections = []
+    for s in d.sections:
+        entry = dict(s)
+        if (memory_shed and entry["label"].startswith("Injected memory")) or (
+            skills_shed and entry["label"] == "Skills index"
+        ):
+            entry["truncated"] = True
+        sections.append(entry)
+    d.sections = sections
+    if not d.text:
+        # Nothing delivered: the legacy "" + [] shape (ids empty too), carrying the
+        # budget in force and what was shed — "everything shed" is not "nothing
+        # composed", and the preview should say which.
+        d.projected = ProjectedContext(budget_chars=budget, overflow=overflow)
+        return d
+    d.projected = ProjectedContext(
+        text=d.text,
+        sections=sections,
+        digest_ids=d.digest_ids,
+        hot_ids=d.hot_ids,
+        rag_ids=d.rag_ids,
+        sources=d.sources,
+        budget_chars=budget,
+        used_chars=len(d.text),
+        overflow=overflow,
+    )
+    return d
 
 
 # ---------------------------------------------------------------------------
@@ -338,9 +624,11 @@ def _load_digest(loader: DigestLoader | None) -> tuple[str, list[str]]:
 
 def search_scoped(knowledge_store, query: str, opts: ProjectionOptions) -> list[dict]:
     """The auto-inject RAG search, namespace-scoped when configured (ADR 0069
-    D3a). A backend whose ``search`` predates the ``namespace`` kwarg gets the
-    unfiltered call and a post-filter on each hit's ``namespace`` field, so the
-    configured scope holds either way.
+    D3a) and deliverable-only (ADR 0108 D6 — rejected and expired rows never
+    enter the prompt unasked; ``memory_recall`` still reaches them). A backend
+    whose ``search`` predates the ``deliverable`` and/or ``namespace`` kwargs
+    gets the call it understands and a post-filter on each hit — the configured
+    scope and the eligibility rule hold either way.
 
     When a trust floor is active (``inject_min_trust`` > 1, ADR 0069 D8) the
     candidate pool is over-fetched (3×) so hits the floor will drop don't leave
@@ -348,14 +636,52 @@ def search_scoped(knowledge_store, query: str, opts: ProjectionOptions) -> list[
     :func:`rank_by_trust` filters then trims back to ``top_k``."""
     k = opts.top_k if opts.inject_min_trust <= 1 else opts.top_k * 3
     namespaces = list(opts.inject_namespaces)
-    if not namespaces:
-        return knowledge_store.search(query, k=k)
+    kwargs: dict = {"k": k}
+    if namespaces:
+        kwargs["namespace"] = namespaces
     try:
-        return knowledge_store.search(query, k=k, namespace=namespaces)
-    except TypeError:
-        allowed = set(namespaces)
-        results = knowledge_store.search(query, k=k)
-        return [r for r in results if (r.get("namespace") or "") in allowed]
+        results = knowledge_store.search(query, deliverable=True, **kwargs)
+    except TypeError:  # backend predates the deliverable kwarg (ADR 0108 D6)
+        try:
+            results = knowledge_store.search(query, **kwargs)
+        except TypeError:  # …and the namespace kwarg (ADR 0069 D3a): unfiltered + post-filter
+            if not namespaces:
+                raise
+            allowed = set(namespaces)
+            results = [r for r in knowledge_store.search(query, k=k) if (r.get("namespace") or "") in allowed]
+    # The post-filter is idempotent on a backend that honored the kwarg and the
+    # whole rule on one that ignored it.
+    return [r for r in results if deliverable_hit(r)]
+
+
+def deliverable_hit(r: dict) -> bool:
+    """Whether a retrieved row may enter the prompt (ADR 0108 D6 + D7.4): not
+    operator-rejected and not past its ``expires_at``. Mirrors the store-level
+    ``deliverable=True`` predicate for backends that don't implement it.
+    ``expires_at`` is parsed as ISO-8601 (``Z`` and naive timestamps read as
+    UTC); an unparseable value falls back to the string compare the SQL
+    predicate makes."""
+    if r.get("review_state") == "rejected":
+        return False
+    expires = r.get("expires_at")
+    if not expires:
+        return True
+    parsed = _parse_iso(expires)
+    if parsed is None:
+        return str(expires) > _now_iso()
+    return parsed > datetime.now(timezone.utc)
+
+
+def _parse_iso(value) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def rank_by_trust(results: list[dict], opts: ProjectionOptions) -> list[dict]:
@@ -399,22 +725,42 @@ def skill_index_block(skills_index, *, top_k: int = 24, chars: int = 8192) -> st
     return _skill_index(skills_index, ProjectionOptions(skills_top_k=top_k, skills_index_chars=chars))[0]
 
 
-def _skill_index(skills_index, opts: ProjectionOptions) -> tuple[str, int]:
-    """:func:`skill_index_block` plus the number of skills listed (full + bare rows)."""
+def _skill_summaries(skills_index, opts: ProjectionOptions) -> list[dict]:
+    """The index's ``skill_summaries()`` — ONE read per compose (the budget
+    re-renders from this list). Empty when there is no index, the operator
+    turned it off (``skills.top_k: 0``), or the read fails; never raises."""
+    if skills_index is None or opts.skills_top_k <= 0:
+        return []
+    try:
+        return list(skills_index.skill_summaries() or [])
+    except Exception as exc:  # noqa: BLE001 — never break a turn on skill listing
+        log.warning("[projection] skill index error: %s", exc)
+        return []
+
+
+def _skill_index(
+    skills_index,
+    opts: ProjectionOptions,
+    *,
+    bare_only: bool = False,
+    summaries: list[dict] | None = None,
+) -> tuple[str, int, int]:
+    """:func:`skill_index_block` plus the number of skills listed (full + bare
+    rows) and the number of full-description rows. ``bare_only`` renders the
+    identity floor — every skill as a name-only row (under the same hard
+    ceiling) — what the delivery budget falls back to (ADR 0108 D6).
+    ``summaries`` skips the index read (the composer reads once and re-renders)."""
     if skills_index is None:
-        return "", 0
+        return "", 0, 0
     # skills.top_k: 0 keeps its documented "list none" meaning — the operator
     # turned the index off; without this, the identities-never-drop path would
     # still emit every name (post-#2868 review catch).
     if opts.skills_top_k <= 0:
-        return "", 0
-    try:
-        summaries = skills_index.skill_summaries()
-    except Exception as exc:  # noqa: BLE001 — never break a turn on skill listing
-        log.warning("[projection] skill index error: %s", exc)
-        return "", 0
+        return "", 0, 0
+    if summaries is None:
+        summaries = _skill_summaries(skills_index, opts)
     if not summaries:
-        return "", 0
+        return "", 0, 0
 
     lines = [
         "<available_skills>",
@@ -433,7 +779,7 @@ def _skill_index(skills_index, opts: ProjectionOptions) -> tuple[str, int]:
         slash_attr = f' slash="/{slash}"' if slash else ""
         full = f'  <skill name="{s["name"]}"{slash_attr}>{s.get("description", "")}</skill>'
         bare = f'  <skill name="{s["name"]}"{slash_attr}/>'
-        if full_rows < opts.skills_top_k and (budget <= 0 or spent + len(full) <= budget):
+        if not bare_only and full_rows < opts.skills_top_k and (budget <= 0 or spent + len(full) <= budget):
             lines.append(full)
             spent += len(full)
             full_rows += 1
@@ -452,7 +798,7 @@ def _skill_index(skills_index, opts: ProjectionOptions) -> tuple[str, int]:
         # is countable and reachable, just not enumerable in-context.
         lines.append(f"  <!-- +{skipped} more — call list_skills to see them all. -->")
     lines.append("</available_skills>")
-    return "\n".join(lines), listed
+    return "\n".join(lines), listed, full_rows
 
 
 def working_state_block(state: dict | None) -> str:

@@ -413,6 +413,22 @@ _FALSE_STRINGS = {"false", "no", "off", "0", ""}
 _OFFICIAL_SOURCES_DEFAULT = ("github.com/protoLabsAI/*",)
 
 
+def _coerce_budget_pct(value, default: float) -> float:
+    """``context.budget_pct`` → float (ADR 0108 D6). A blank, missing-value or
+    non-numeric entry falls back to the default (warned — the operator's knob
+    would otherwise be silently inert); a negative value reads as ``0`` =
+    unbounded, the documented off switch."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        log.warning("[config] context.budget_pct is blank — using the default %s%%", default)
+        return float(default)
+    try:
+        pct = float(value)
+    except (TypeError, ValueError):
+        log.warning("[config] context.budget_pct=%r is not a number — using the default %s%%", value, default)
+        return float(default)
+    return max(pct, 0.0)
+
+
 def _falsey(value, *, default: bool) -> bool:
     """Is this config value a NO? ``default`` is the answer when the key is absent.
 
@@ -1100,6 +1116,19 @@ class LangGraphConfig:
     # auto-injection; 3 auto-injects operator-authored rows only. memory_recall
     # is never gated — excluded content stays reachable on demand.
     knowledge_inject_min_trust: int = 1
+    # Projected-context budget (ADR 0108 D6): the per-turn injected context —
+    # working state, always-on memory, the skill index, the prior-session digest,
+    # RAG hits — may use at most this percentage of the model's context window
+    # (chars//4 token heuristic). When it overflows, the lowest-priority sections
+    # shed first (RAG hits, then the digest, then skill descriptions); working
+    # state and always-on memory are never shed. Floored at 16k chars (≈ the
+    # always-on cap + the digest cap) so a small-window model keeps its standing
+    # context whole — on a ≤32k window the floor applies and only RAG hits /
+    # skill descriptions beyond it shed. 8% of a 128k window is ~10k tokens —
+    # more than a typical turn injects, so the default sheds nothing there;
+    # lower it to make the budget bite. 0 = unbounded. Unbounded too when the
+    # gateway reports no window for the model. YAML: `context.budget_pct`.
+    context_budget_pct: float = 8.0
     # Always-on write confirm gate (ADR 0069 D8, widened by ADR 0108 D4). When
     # True, the agent's own write paths (memory_ingest and knowledge_ingest)
     # refuse always-on writes — domain="hot" or delivery_policy="always" — with
@@ -1803,6 +1832,7 @@ class LangGraphConfig:
         subagents = data.get("subagents", {})
         middleware = data.get("middleware", {})
         knowledge = data.get("knowledge", {})
+        context = data.get("context") or {}  # ADR 0108 D6 — `or {}`: an all-commented block parses to None
         skills = data.get("skills", {})
         mcp = data.get("mcp", {})
         operator_mcp = data.get("operator_mcp", {})
@@ -1990,6 +2020,7 @@ class LangGraphConfig:
             knowledge_inject_namespaces=list(knowledge.get("inject_namespaces", []) or []),
             knowledge_inject_min_trust=knowledge.get("inject_min_trust", cls.knowledge_inject_min_trust),
             knowledge_hot_write_confirm=knowledge.get("hot_write_confirm", cls.knowledge_hot_write_confirm),
+            context_budget_pct=_coerce_budget_pct(context.get("budget_pct", cls.context_budget_pct), cls.context_budget_pct),
             knowledge_vector_k=knowledge.get("vector_k", cls.knowledge_vector_k),
             knowledge_rrf_k=knowledge.get("rrf_k", cls.knowledge_rrf_k),
             knowledge_min_score=knowledge.get("min_score", cls.knowledge_min_score),

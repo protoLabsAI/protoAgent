@@ -176,6 +176,50 @@ def test_preview_runs_compose_without_recording(monkeypatch):
     assert call["usage"]["input_tokens"] == 0  # nothing ran
 
 
+def _preview_with(monkeypatch, composed: dict) -> dict:
+    import runtime.state as rs
+
+    class _KM:
+        def compose_context(self, state, runtime=None, *, record=True):
+            return composed
+
+    graph = SimpleNamespace(
+        system_prompt_parts=[("SOUL", "STABLE-A")],
+        knowledge_middleware=_KM(),
+        aget_state=None,
+    )
+    c = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "graph", graph, raising=False)
+    return c.get("/api/prompts/preview").json()["call"]
+
+
+def test_preview_carries_the_delivery_budget_and_truncated_flags(monkeypatch):
+    """ADR 0108 D6: the budget in force and what was shed reach the preview API,
+    and a shed section keeps its ``truncated`` flag through ``_sections``."""
+    budget = {"chars": 100, "used": 7, "overflow": [{"label": "RAG hits", "dropped_items": 3, "dropped_chars": 300}]}
+    call = _preview_with(
+        monkeypatch,
+        {
+            "context": "TAIL",
+            "context_sections": [
+                {"label": "Injected memory (2 docs)", "chars": 4, "truncated": True},
+                {"label": "Skills index", "chars": 3},
+            ],
+            "budget": budget,
+        },
+    )
+    assert call["budget"] == budget
+    by_label = {s["label"]: s for s in call["sections"]}
+    assert by_label["Injected memory (2 docs)"]["truncated"] is True
+    assert "truncated" not in by_label["Skills index"]
+    assert "truncated" not in by_label["SOUL"]
+
+
+def test_preview_budget_is_null_when_delivery_is_unbounded(monkeypatch):
+    call = _preview_with(monkeypatch, {"context": "TAIL", "context_sections": [{"label": "Skills index", "chars": 4}]})
+    assert call["budget"] is None
+
+
 def test_preview_degrades_without_graph_stamps(monkeypatch):
     import runtime.state as rs
 

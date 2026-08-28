@@ -528,6 +528,26 @@ FIELDS: list[Field] = [
         minimum=1,
         maximum=3,
     ),
+    # Projected-context budget (ADR 0108 D6).
+    Field(
+        "context.budget_pct",
+        "context_budget_pct",
+        "Injected-context budget (% of model window)",
+        "number",
+        "Knowledge",
+        "How much of the model's context window the per-turn injected context (working "
+        "state, always-on memory, the skill index, the prior-session digest, recalled "
+        "knowledge) may use. When it overflows, the lowest-priority parts shed first — "
+        "recalled knowledge, then the prior-session digest, then skill descriptions; "
+        "working state and always-on memory are never shed. Never below 16k chars (≈4k "
+        "tokens — room for always-on memory and the prior-session digest), so on a 32k "
+        "window or smaller the floor applies. The default (8% ≈ 10k tokens on a 128k "
+        "window) is larger than a typical turn injects, so nothing is shed until you lower "
+        "it. 0 = no budget. No budget either when the gateway reports no window for the "
+        "model.",
+        minimum=0,
+        maximum=100,
+    ),
     # Hot-memory write confirm gate (ADR 0069 D8).
     Field(
         "knowledge.hot_write_confirm",
@@ -1485,6 +1505,7 @@ _KNOWLEDGE_SUBSECTION = {
     "knowledge.rrf_k": "Recall",
     "knowledge.min_score": "Recall",
     "skills.top_k": "Recall",  # skills surfaced into context — a recall-count sibling
+    "context.budget_pct": "Recall",  # the ceiling on everything Recall puts in the prompt (ADR 0108 D6)
     # Ingestion — bringing documents in (extraction, chunking, enrichment).
     "knowledge.transcribe_model": "Ingestion",
     "knowledge.image_describe_model": "Ingestion",

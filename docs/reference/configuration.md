@@ -601,7 +601,15 @@ Only read when `middleware.knowledge` is `true`.
 
 The bundled store is keyword-only FTS5 by default; once your gateway serves `embed_model`, opt in with `embeddings: true` for hybrid search — keyword fused with vector similarity (RRF), with an embedding circuit breaker that falls back to FTS5 on an outage. One `chunks` table; the `domain` column distinguishes operator-set notes (`memory_ingest`), always-on hot facts (`hot`), episodic summaries stored by `conversation_harvest` (`conversation`), and extracted facts (`fact`).
 
-**Hot memory** — chunks stored under `domain='hot'` are *always-on*: `KnowledgeMiddleware` injects them into context every turn (vs. retrieved-on-relevance), re-read each turn so a freshly-added hot fact is seen immediately. Set one with `memory_ingest(content, domain="hot")` for facts the agent should never forget (operator preferences, standing constraints).
+**Hot memory** — chunks with `delivery_policy='always'` are *always-on*: the projection injects them into context every turn (vs. retrieved-on-relevance), re-read each turn so a freshly-added fact is seen immediately. A `domain='hot'` write is stamped with that policy automatically ([ADR 0108 D4 + D6](../adr/0108-context-architecture-v2.md)), so `memory_ingest(content, domain="hot")` still pins a fact the agent should never forget (operator preferences, standing constraints) — and so does `delivery_policy="always"` on any domain. Rejected or expired rows never inject.
+
+## `context`
+
+The per-turn injected context — working state, always-on memory, the skill index, the prior-session digest, RAG hits — on top of the stable prompt ([ADR 0108 D6](../adr/0108-context-architecture-v2.md)).
+
+| Key | Default | What |
+|---|---|---|
+| `budget_pct` | `8` | Ceiling for the injected context as a percentage of the model's context window (chars//4), never below 16 000 chars (room for always-on memory + the digest — on a ≤32k window the floor applies). Over budget the lowest-priority parts shed first — RAG hits, then the prior-session digest, then skill descriptions (skill names never drop); working state and always-on memory are never shed. `0` = unbounded; unbounded too when the gateway reports no window for the model (logged once). The priority order is fixed. The prompt preview API reports the budget and what was shed. |
 
 ## `skills`
 
