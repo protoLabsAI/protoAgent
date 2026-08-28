@@ -413,11 +413,15 @@ def test_digest_loader_not_invoked_on_incognito_or_goal_turns(monkeypatch):
     assert calls == [1]
 
 
-def test_from_config_matches_agent_py_hand_wiring(monkeypatch):
-    """Drift guard: graph/agent.py hand-wires KnowledgeMiddleware(...) from config;
-    ProjectionOptions.from_config(config) must land on the same options — including
-    the 2%-of-window-as-chars skill budget. Follow-up (D6 #3187): agent.py passes
-    options=ProjectionOptions.from_config(config) so there is one wiring."""
+def test_middleware_is_wired_from_one_options_object(monkeypatch):
+    """ONE wiring (ADR 0108 D6): graph/agent.py builds KnowledgeMiddleware with
+    ``options=ProjectionOptions.from_config(config)``. The middleware reports exactly
+    those options (budget included) and derives its individual knobs from them, so
+    the native path and the external runtime — which reads the same
+    ``from_config`` — cannot drift."""
+    import inspect
+
+    import graph.agent as agent_mod
     import graph.model_window as mwin
 
     monkeypatch.setattr(mwin, "context_window_for", lambda config, model_name=None: 128_000)
@@ -427,19 +431,27 @@ def test_from_config_matches_agent_py_hand_wiring(monkeypatch):
         skills_top_k=3,
         knowledge_inject_namespaces=["", "project:x"],
         knowledge_inject_min_trust=2,
+        context_budget_pct=8.0,
     )
-    window = mwin.context_window_for(cfg)
-    mw = KnowledgeMiddleware(  # graph/agent.py's exact formula
-        None,
-        top_k=cfg.knowledge_top_k,
-        skills_index=None,
-        skills_top_k=cfg.skills_top_k,
-        skills_index_chars=int(window * 0.02 * 4) if window else 8192,
-        inject_namespaces=cfg.knowledge_inject_namespaces,
-        inject_min_trust=cfg.knowledge_inject_min_trust,
+    opts = ProjectionOptions.from_config(cfg)
+    assert opts.skills_index_chars == int(128_000 * 0.02 * 4)
+    assert opts.budget_chars == int(128_000 * 8.0 / 100 * 4)
+
+    mw = KnowledgeMiddleware(None, skills_index=None, options=opts)
+    assert mw._options() is opts
+    # The individual knobs (test-facing surfaces) mirror the options object.
+    assert (mw._top_k, mw._skills_top_k, mw._skills_index_chars, mw._inject_namespaces, mw._inject_min_trust) == (
+        7,
+        3,
+        opts.skills_index_chars,
+        ["", "project:x"],
+        2,
     )
-    assert mw._options() == ProjectionOptions.from_config(cfg)
-    assert mw._options().skills_index_chars == int(128_000 * 0.02 * 4)
+    # Without options the individual kwargs stand alone — and delivery is unbounded.
+    assert KnowledgeMiddleware(None, top_k=9)._options() == ProjectionOptions(top_k=9)
+    # And agent.py really does build it this way (no hand-wired kwargs to drift).
+    assert "options=ProjectionOptions.from_config(config)" in inspect.getsource(agent_mod)
+    assert "skills_index_chars=int(" not in inspect.getsource(agent_mod)
 
 
 # ---------------------------------------------------------------------------

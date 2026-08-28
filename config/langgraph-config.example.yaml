@@ -152,6 +152,18 @@ memory:
   max_sessions: 10
   max_tokens: 2000
 
+# Projected context — everything injected per turn on top of the stable prompt
+# (working state, always-on memory, the skill index, the prior-session digest,
+# recalled knowledge) — is bounded to this share of the model's context window
+# (ADR 0108 D6). Over budget, the lowest-priority parts shed first: recalled
+# knowledge, then the prior-session digest, then skill descriptions (names never
+# drop); working state and always-on memory are never shed. 8% of a 128k window
+# is ~10k tokens — more than a typical turn injects, so the default sheds nothing;
+# lower it to make the budget bite. 0 = unbounded (also unbounded when the gateway
+# reports no window for the model).
+context:
+  budget_pct: 8
+
 # Skill index — SQLite FTS5 store for learned skill-v1 artifacts.
 # Skills (emitted by task() or authored as SKILL.md) are indexed here and listed
 # in the system prompt as an always-on <available_skills> index (name + summary);

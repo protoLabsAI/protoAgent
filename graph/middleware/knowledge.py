@@ -60,8 +60,20 @@ class KnowledgeMiddleware(AgentMiddleware):
         skills_index_chars: int = 8192,
         inject_namespaces: list[str] | None = None,
         inject_min_trust: int = 1,
+        options: ProjectionOptions | None = None,
     ):
         super().__init__()
+        # ``options`` (ADR 0108 D6) is THE wiring graph/agent.py uses —
+        # ``ProjectionOptions.from_config(config)`` — and carries the one knob the
+        # individual kwargs can't (the projected-context budget). When given it
+        # overrides the individual kwargs, which stay for tests and direct callers.
+        if options is not None:
+            top_k = options.top_k
+            skills_top_k = options.skills_top_k
+            skills_index_chars = options.skills_index_chars
+            inject_namespaces = list(options.inject_namespaces)
+            inject_min_trust = options.inject_min_trust
+        self._options_override = options
         self._store = knowledge_store
         self._top_k = top_k
         # Trust floor for the auto-inject RAG hits (ADR 0069 D8,
@@ -99,7 +111,11 @@ class KnowledgeMiddleware(AgentMiddleware):
         self._turn_sections: list[dict] | None = None
 
     def _options(self) -> ProjectionOptions:
-        """This middleware's delivery knobs in the shared composer's shape."""
+        """This middleware's delivery knobs in the shared composer's shape — the
+        ``options`` it was built with (agent.py's ``from_config`` wiring, budget
+        included), else the individual kwargs (unbounded delivery)."""
+        if self._options_override is not None:
+            return self._options_override
         return ProjectionOptions(
             top_k=self._top_k,
             inject_namespaces=tuple(self._inject_namespaces),
@@ -226,7 +242,9 @@ class KnowledgeMiddleware(AgentMiddleware):
         previewing a prompt never fabricates a "this entered the turn" record.
 
         Returns the ``{"context", "context_sections"}`` pair (both keys always
-        move together — nothing composed is ``""`` + ``[]``).
+        move together — nothing composed is ``""`` + ``[]``), plus a ``budget``
+        summary (``{"chars", "used", "overflow"}``) when a projected-context
+        budget is configured (ADR 0108 D6).
         """
         last_human: str | None = None
         for msg in reversed(state.get("messages") or []):

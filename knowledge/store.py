@@ -272,6 +272,22 @@ def _namespace_clause(namespace: str | list[str] | None, col: str = "namespace")
     return "(" + " OR ".join(arms) + ")", params
 
 
+def _deliverable_clauses(col_prefix: str = "") -> tuple[list[str], list[str]]:
+    """The delivery layer's eligibility predicate (ADR 0108 D6 + D7.4): a row an
+    operator REJECTED (``review_state='rejected'``) or one past its ``expires_at``
+    never enters the prompt. NULL review state (= pending) and NULL expiry are
+    deliverable. Superseded rows are excluded separately (``invalidated_at``).
+    Returns ``(sql_clauses, params)`` — ``col_prefix`` is ``"c."`` on joined SQL."""
+    p = col_prefix
+    return (
+        [
+            f"({p}review_state IS NULL OR {p}review_state != 'rejected')",
+            f"({p}expires_at IS NULL OR {p}expires_at > ?)",
+        ],
+        [_now_iso()],
+    )
+
+
 def _delivery_policy_clause(policy: str | None, col: str = "delivery_policy") -> tuple[str, list[str]]:
     """SQL predicate + params for a ``delivery_policy`` filter (ADR 0108 D4).
 
@@ -854,9 +870,12 @@ class KnowledgeStore:
             db.commit()
             chunk_id = int(cur.lastrowid)
             # Hot-memory write visibility (ADR 0069 D8): every write funnels
-            # through here, so this one hook covers every writer of the
-            # always-on domain — agent tool, operator routes, plugin SDK.
-            if domain == "hot":
+            # through here, so this one hook covers every writer of an
+            # always-on row — agent tool, operator routes, plugin SDK. Keyed on
+            # the STORED policy (ADR 0108 D6): a ``domain="hot"`` write is
+            # forced to ``always`` above, so this is a superset of the old
+            # domain check — a ``preferences`` row pinned always-on fires too.
+            if delivery_policy == DELIVERY_ALWAYS:
                 _publish_hot_write(chunk_id, source, source_type, content)
             return chunk_id
         except sqlite3.DatabaseError:
@@ -1031,10 +1050,17 @@ class KnowledgeStore:
         memory_kind: str | None = None,
         review_state: str | None = None,
         delivery_policy: str | None = None,
+        deliverable: bool = False,
     ) -> list[dict[str, Any]]:
         """Top-k chunks matching ``query``. Shape matches what the
         ``KnowledgeMiddleware`` consumes: each result has ``table``,
         ``preview``, plus the underlying chunk fields.
+
+        ``deliverable=True`` (ADR 0108 D6) applies the delivery layer's
+        eligibility predicate — rejected (``review_state='rejected'``) and
+        expired (``expires_at`` in the past) rows are excluded. The projection
+        passes it; tool-driven recall (``memory_recall``) does not, so excluded
+        rows stay reachable on demand.
 
         Uses FTS5 when available, else a tokenized LIKE fallback. Returns
         an empty list on no matches or DB failure (never raises).
@@ -1065,13 +1091,13 @@ class KnowledgeStore:
                 self._search_fts(
                     db, query, k, domain, namespace, include_invalidated, epoch,
                     memory_kind=memory_kind, review_state=review_state,
-                    delivery_policy=delivery_policy,
+                    delivery_policy=delivery_policy, deliverable=deliverable,
                 )
                 if self._fts_available
                 else self._search_like(
                     db, query, k, domain, namespace, include_invalidated, epoch,
                     memory_kind=memory_kind, review_state=review_state,
-                    delivery_policy=delivery_policy,
+                    delivery_policy=delivery_policy, deliverable=deliverable,
                 )
             )
         except sqlite3.DatabaseError as exc:
@@ -1105,6 +1131,7 @@ class KnowledgeStore:
         memory_kind: str | None = None,
         review_state: str | None = None,
         delivery_policy: str | None = None,
+        deliverable: bool = False,
     ) -> list[sqlite3.Row]:
         # Sanitize to FTS5-safe tokens; OR them so a multi-word query
         # matches any of the keywords (closer to LIKE behaviour).
@@ -1136,6 +1163,10 @@ class KnowledgeStore:
         if dp_sql:
             where.append(dp_sql)
             params.extend(dp_params)
+        if deliverable:
+            d_sql, d_params = _deliverable_clauses("c.")
+            where.extend(d_sql)
+            params.extend(d_params)
         ns_sql, ns_params = _namespace_clause(namespace, col="c.namespace")
         if ns_sql:
             where.append(ns_sql)
@@ -1162,6 +1193,7 @@ class KnowledgeStore:
         memory_kind: str | None = None,
         review_state: str | None = None,
         delivery_policy: str | None = None,
+        deliverable: bool = False,
     ) -> list[sqlite3.Row]:
         tokens = [t for t in re.findall(r"[\w']+", query) if t]
         if not tokens:
@@ -1196,6 +1228,10 @@ class KnowledgeStore:
         if dp_sql:
             sql += f" AND {dp_sql}"
             params.extend(dp_params)
+        if deliverable:
+            d_sql, d_params = _deliverable_clauses()
+            sql += " AND " + " AND ".join(d_sql)
+            params.extend(d_params)
         ns_sql, ns_params = _namespace_clause(namespace)
         if ns_sql:
             sql += f" AND {ns_sql}"
@@ -1214,6 +1250,7 @@ class KnowledgeStore:
         memory_kind: str | None = None,
         review_state: str | None = None,
         delivery_policy: str | None = None,
+        deliverable: bool = False,
     ) -> list[Chunk]:
         """Most-recent-first chunk listing. Used by ``memory_list`` and the
         fact consolidator. ``namespace`` (ADR 0021) optionally scopes to one
@@ -1225,7 +1262,9 @@ class KnowledgeStore:
 
         ``memory_kind`` / ``review_state`` (#3072) and ``delivery_policy``
         (ADR 0108 D4) optionally restrict the listing to chunks with that
-        typed-memory classification."""
+        typed-memory classification. ``deliverable=True`` (ADR 0108 D6) applies
+        the delivery layer's eligibility predicate — rejected and expired rows
+        are excluded (the always-on reader passes it; ``memory_list`` does not)."""
         db = self._get_db()
         if db is None:
             return []
@@ -1249,6 +1288,10 @@ class KnowledgeStore:
         if dp_sql:
             clauses.append(dp_sql)
             params.extend(dp_params)
+        if deliverable:
+            d_sql, d_params = _deliverable_clauses()
+            clauses.extend(d_sql)
+            params.extend(d_params)
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         params.append(limit)
         try:
@@ -1343,10 +1386,18 @@ class KnowledgeStore:
         Id-attributed so the per-turn injection record (ADR 0069 D6) can name
         exactly which hot chunks entered a model call. Same selection/budget
         semantics as ``get_hot_memory`` (one source of truth — it joins this).
-        Superseded chunks never inject: ``list_chunks`` excludes
-        ``invalidated_at`` rows by default (ADR 0069 D9).
+
+        "Hot" means ``delivery_policy="always"`` (ADR 0108 D6) — no longer
+        ``domain="hot"``: a ``domain="hot"`` write is stamped ``always`` (D4), so
+        every legacy hot row still injects, and a row on any other domain pinned
+        always-on injects too. Superseded chunks never inject (``list_chunks``
+        excludes ``invalidated_at`` rows, ADR 0069 D9), and neither do rejected
+        or expired ones (``deliverable=True``, D6/D7). The method keeps its name
+        so custom backends and the console keep working unchanged.
         """
-        chunks = self.list_chunks(domain="hot", limit=100)  # newest-first, valid-only
+        chunks = self.list_chunks(  # newest-first, valid + deliverable only
+            delivery_policy=DELIVERY_ALWAYS, limit=100, deliverable=True
+        )
         entries: list[tuple[int, str]] = []
         total = 0
         for c in chunks:  # newest-first → oldest trimmed when over budget
@@ -1358,12 +1409,14 @@ class KnowledgeStore:
         return entries
 
     def get_hot_memory(self, max_chars: int = 6000) -> str:
-        """Concatenate every ``domain="hot"`` chunk for always-on injection.
+        """Concatenate every always-on (``delivery_policy="always"``) chunk.
 
         "Hot" chunks are operator facts that should be in front of the model
-        every turn (vs. retrieved-on-relevance). ``KnowledgeMiddleware`` reads
-        this each turn so a newly-added hot fact is seen immediately. Returns
-        "" when there are none; trims oldest-first if over ``max_chars``.
+        every turn (vs. retrieved-on-relevance). The projection reads this each
+        turn so a newly-added always-on fact is seen immediately. Returns ""
+        when there are none; trims oldest-first if over ``max_chars``. Selection
+        is by delivery policy, not domain, since ADR 0108 D6 (see
+        :meth:`get_hot_memory_entries`).
         """
         return "\n".join(piece for _, piece in self.get_hot_memory_entries(max_chars))
 

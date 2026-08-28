@@ -10,8 +10,9 @@ injection truth: ``in_digest`` (session is in the current digest window) and
 ``injecting`` (hot chunk is in the current per-turn window).
 
 Generic chunk CRUD already lives in ``knowledge_routes``; these routes add the
-domain-scoped view the inspector needs: a hot edit is pinned to
-``domain="hot"`` (can't silently demote the chunk out of always-on injection)
+policy-scoped view the inspector needs: a hot edit is pinned to
+``delivery_policy="always"`` (can't silently demote the chunk out of always-on
+injection — ADR 0108 D6; the row keeps its own domain)
 and a hot delete only resolves ids that ARE hot chunks (can't reach arbitrary
 KB rows). Session-summary ids share the ``recall_session`` filename guard, so
 a crafted id can't path-traverse out of the memory dir. The review verdict
@@ -111,7 +112,11 @@ def _hot_chunks(store) -> list[dict]:
     ``delete_by_id`` hit whatever PRIVATE row shares that numeric id (an
     arbitrary KB chunk). Commons curation stays with promote/forget on the
     knowledge surface."""
-    rows = store.list_chunks(domain="hot", limit=_HOT_LIST_LIMIT)
+    # Always-on is a delivery POLICY since ADR 0108 D6 — the same selection the
+    # per-turn reader (get_hot_memory_entries) makes, so the inspector lists
+    # exactly what can inject: every domain="hot" row (stamped always on write)
+    # plus any row on another domain pinned always-on.
+    rows = store.list_chunks(delivery_policy="always", limit=_HOT_LIST_LIMIT)
     return [
         _knowledge_row(c)
         for c in (c if isinstance(c, dict) else c.as_dict() for c in rows)
@@ -169,7 +174,8 @@ def register_memory_routes(app) -> None:
         return {"deleted": True, "session_id": session_id}
 
     # --- Hot memory ----------------------------------------------------------
-    # The domain="hot" chunks get_hot_memory injects every turn.
+    # The delivery_policy="always" chunks get_hot_memory injects every turn
+    # (ADR 0108 D6 — a policy, not a domain; domain="hot" rows carry it).
 
     @app.get("/api/memory/hot")
     async def _api_memory_hot():
@@ -182,8 +188,9 @@ def register_memory_routes(app) -> None:
             log.exception("[memory] hot-memory list failed")
             return {"enabled": True, "chunks": []}
         # "injecting" = the chunk is in the CURRENT per-turn window: the ids
-        # get_hot_memory_entries returns (newest 100 domain="hot" chunks under
-        # the 6000-char budget) — the same reader the middleware injects from.
+        # get_hot_memory_entries returns (newest 100 delivery_policy="always"
+        # chunks under the 6000-char budget, minus rejected/expired ones) — the
+        # same reader the projection injects from.
         # On a LayeredKnowledgeStore, __getattr__ delegates it to the PRIVATE
         # store, whose ids are consistent with the listed rows (commons rows
         # are already excluded by _hot_chunks). A custom backend without the
@@ -214,17 +221,24 @@ def register_memory_routes(app) -> None:
             return JSONResponse({"detail": "no hot-memory chunk with that id"}, status_code=404)
         # Same composition as the generic chunk edit (knowledge_routes): add the
         # new revision FIRST, then delete the old — a failed add must never lose
-        # the original. domain is pinned to "hot" so an inspector edit can't
-        # move the chunk out of always-on injection.
-        new_id = await asyncio.to_thread(
-            lambda: store.add_chunk(
-                content,
-                "hot",
-                heading=(str(body.get("heading", "")).strip() or cur.get("heading") or None),
-                source=cur.get("source") or "console",
-                source_type="operator",
-            )
-        )
+        # the original. delivery_policy is pinned to "always" so an inspector
+        # edit can't move the chunk out of always-on injection (ADR 0108 D6);
+        # the row keeps its OWN domain — a `preferences` row pinned always-on
+        # must not be re-domained to "hot" by an edit.
+        heading = str(body.get("heading", "")).strip() or cur.get("heading") or None
+        domain = cur.get("domain") or "hot"
+        source = cur.get("source") or "console"
+
+        def _add():
+            try:
+                return store.add_chunk(
+                    content, domain, heading=heading, source=source, source_type="operator",
+                    delivery_policy="always",
+                )
+            except TypeError:  # plugin backend predating the policy kwarg — hot domain still pins
+                return store.add_chunk(content, "hot", heading=heading, source=source, source_type="operator")
+
+        new_id = await asyncio.to_thread(_add)
         if new_id is None:
             return JSONResponse({"detail": "the store rejected the new revision"}, status_code=400)
         deleted = await asyncio.to_thread(store.delete_by_id, chunk_id)

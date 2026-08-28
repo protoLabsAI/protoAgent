@@ -272,23 +272,19 @@ def _build_middleware(
     # is active, so skills work even on a KB-less agent (the store is None-tolerant).
     _skills_index = skills_index if config.skills_enabled else None
     if (config.knowledge_middleware and knowledge_store) or _skills_index is not None:
-        # ~2% of the model window as CHARS (tokens*4) for the skills index —
-        # Codex-style ceiling; 8KB when no window is reported (#2867).
-        try:
-            from graph.model_window import context_window_for
+        # ONE wiring (ADR 0108 D6/D8): every delivery knob — RAG top-k, namespace
+        # scope, trust floor, the skill-index caps (~2% of the model window as chars,
+        # 8KB when no window is reported, #2867) and the projected-context budget
+        # (`context.budget_pct`) — is read off the config by
+        # ProjectionOptions.from_config, the same reader the external runtime uses,
+        # so the two paths cannot drift.
+        from graph.projection import ProjectionOptions
 
-            _skills_window = context_window_for(config)
-        except Exception:  # noqa: BLE001 — no profile → the 8KB fallback
-            _skills_window = None
         middleware.append(
             KnowledgeMiddleware(
                 knowledge_store if config.knowledge_middleware else None,
-                top_k=config.knowledge_top_k,
                 skills_index=_skills_index,
-                skills_top_k=config.skills_top_k,
-                skills_index_chars=int(_skills_window * 0.02 * 4) if _skills_window else 8192,
-                inject_namespaces=config.knowledge_inject_namespaces,
-                inject_min_trust=config.knowledge_inject_min_trust,
+                options=ProjectionOptions.from_config(config),
             )
         )
 

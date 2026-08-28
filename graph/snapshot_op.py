@@ -765,7 +765,9 @@ def collect_knowledge_seed(store, *, domains: list[str] | None = None, max_chars
     **Memory domains are dropped unconditionally** (``MEMORY_DOMAINS``), whatever the caller
     asks for. What an agent recalls about a person's sessions is not knowledge about a
     subject, and a snapshot is a thing you hand to someone else. A caller cannot opt into it
-    by naming the domain, because the decision is not the caller's to make here.
+    by naming the domain, because the decision is not the caller's to make here. Since
+    ADR 0108 D6 always-on memory is a *policy*, not a domain — a chunk on any domain with
+    ``delivery_policy="always"`` is memory by the same reasoning and is dropped too.
 
     ``max_chars`` is a backstop against an unbounded export: a mature agent's knowledge base
     can be very large, and a snapshot is meant to be a file you can hand over. Truncation is
@@ -795,6 +797,9 @@ def collect_knowledge_seed(store, *, domains: list[str] | None = None, max_chars
             # the console route (private ∪ commons) disagree with the unbooted CLI
             # path (private only) and (b) let commons rows eat the max_chars cap.
             if getattr(chunk, "tier", None) == "commons":
+                continue
+            # Always-on rows are memory whatever their domain (ADR 0108 D6) — never travel.
+            if getattr(chunk, "delivery_policy", None) == "always":
                 continue
             body = (getattr(chunk, "content", "") or "").strip()
             if not body:

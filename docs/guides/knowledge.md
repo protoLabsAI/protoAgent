@@ -41,9 +41,27 @@ knowledge:
   db_path: /sandbox/knowledge/agent.db  # → ~/.protoagent/knowledge/agent.db fallback
 ```
 
+One knob lives outside the block — the ceiling on everything the store (and the
+digest, skill index and working state) may put into a turn
+([ADR 0108 D6](/adr/0108-context-architecture-v2)):
+
+```yaml
+context:
+  budget_pct: 8   # % of the model window the per-turn injected context may use;
+                  # over budget, RAG hits shed first, then the prior-session
+                  # digest, then skill descriptions (names never drop); working
+                  # state and always-on memory are never shed. 0 = unbounded.
+```
+
+With the default 8% on a 128k-window model that is ~10k tokens — more than a
+typical turn injects — so nothing is shed until you lower it. The prompt
+inspector's preview shows the ceiling, the chars used and what was shed.
+
 Rules of thumb:
 - **Recall too thin?** raise `top_k` (more injected) and/or `vector_k` (bigger candidate
   pool). **Context too noisy / off-topic?** raise `min_score` to set a relevance floor.
+- **Turns too fat?** lower `context.budget_pct` — the low-priority parts (hits, digest,
+  skill descriptions) give way first; your standing always-on facts never do.
 - `rrf_k` rebalances semantic vs keyword — lower lets semantic dominate. Tune it against
   the retrieval eval harness rather than by feel.
 - Chunking (`chunk_*`) and `contextual_enrichment` are ingest-time knobs — see
@@ -173,13 +191,14 @@ citations carry the same `trust:` label.
 
 ### Hot-memory write visibility (ADR 0069 D8)
 
-`domain="hot"` chunks are injected in front of the model **every turn**, which
-makes a silent hot write the highest-leverage poisoning move there is. Since
-[ADR 0108 D4](/adr/0108-context-architecture-v2) the same promotion is spelled
-out on the row as `delivery_policy="always"` (a hot write is stamped with it
-automatically; rows that predate the column were classified once on the first
-open after the upgrade), and both controls below cover the policy as well as
-the domain. Two controls:
+`delivery_policy="always"` chunks are injected in front of the model **every
+turn**, which makes a silent always-on write the highest-leverage poisoning move
+there is. Always-on is a policy, not a domain
+([ADR 0108 D4 + D6](/adr/0108-context-architecture-v2)): a `domain="hot"` write
+is stamped with it automatically (rows that predate the column were classified
+once on the first open after the upgrade), the per-turn reader selects on the
+policy, and a row on any other domain can be pinned always-on the same way.
+Both controls below cover the policy as well as the domain. Two controls:
 
 - **Every hot write is a visible event.** Any write that creates a hot chunk —
   the agent's `memory_ingest`, the console routes, a plugin via the SDK —
