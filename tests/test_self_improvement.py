@@ -190,3 +190,57 @@ async def test_achieved_goal_enqueues_review_through_lifecycle(tmp_path):
         assert len(scheduler.jobs) == 1
     finally:
         set_plugin_verifiers({})
+
+
+# ---------------------------------------------------------------------------
+# #3253 sibling: these knobs take the same YAML values context.prior_sessions did
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("knob,attr", [
+    ("soul_md", "self_improvement_soul_md"),
+    ("skills", "self_improvement_skills"),
+    ("distillation", "self_improvement_distillation"),
+])
+def test_bare_yaml_off_is_the_off_policy_not_a_lucky_blank(tmp_path, knob, attr):
+    """PIN, not a regression test — this passes before the fix too.
+
+    YAML parses a bare ``off`` as False, which ``str(... or "off")`` turns into
+    "off" by coincidence: the magic literal in the ``or`` happens to be the word
+    the operator meant (the field defaults are auto/propose/propose, so they are
+    not what saves it). Pinning it means the obvious cleanup — swapping that
+    literal for the field's own default — fails here instead of silently turning
+    ``soul_md: off`` into ``auto``, which is exactly how #3253 happened."""
+    from graph.config import LangGraphConfig
+
+    cfg_path = tmp_path / f"si-{knob}.yaml"
+    cfg_path.write_text(f"self_improvement:\n  {knob}: off\n", encoding="utf-8")
+    assert getattr(LangGraphConfig.from_yaml(str(cfg_path)), attr) == "off"
+
+
+def test_bare_yaml_on_keeps_the_word_instead_of_stringifying_true(tmp_path):
+    """The one true regression test here — FAILS on the old code.
+
+    A bare ``on`` is the boolean True, and ``str(True)`` is the string "True":
+    not one of off|propose|auto, and nothing the operator wrote."""
+    from graph.config import LangGraphConfig
+
+    cfg_path = tmp_path / "si-on.yaml"
+    cfg_path.write_text("self_improvement:\n  skills: on\n", encoding="utf-8")
+    cfg = LangGraphConfig.from_yaml(str(cfg_path))
+    assert cfg.self_improvement_skills == "on"
+    assert cfg.self_improvement_skills != "True"
+
+
+def test_ordinary_values_and_absent_keys_are_untouched(tmp_path):
+    """The fix must not disturb the normal path or the genuine unset."""
+    from graph.config import LangGraphConfig
+
+    cfg_path = tmp_path / "si-plain.yaml"
+    cfg_path.write_text(
+        "self_improvement:\n  soul_md: propose\n  distillation: auto\n", encoding="utf-8"
+    )
+    cfg = LangGraphConfig.from_yaml(str(cfg_path))
+    assert cfg.self_improvement_soul_md == "propose"
+    assert cfg.self_improvement_distillation == "auto"
+    assert cfg.self_improvement_skills == LangGraphConfig.self_improvement_skills
