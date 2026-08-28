@@ -123,8 +123,17 @@ git commit -am "chore(deps): regenerate attribution" && git push
 into a whole-world upgrade. Check `git status` before committing — the only file
 that should have changed is `THIRD_PARTY_LICENSES.md`.
 
-Pushing to the branch also hands the PR over from Dependabot (it stops rebasing
-it), which is what you want at that point anyway.
+Pushing to the branch has two consequences, and the second one is a trap:
+
+1. Dependabot stops managing the PR (no more rebases), which is what you want
+   at that point anyway.
+2. **The PR's actor stops being `dependabot[bot]` and becomes you** — and
+   `scripts/changelog_gate.sh` exempts bot PRs by exactly that check. So the
+   changelog gate, green a moment ago, goes red on a dependency bump that has
+   nothing to put in release notes. Apply the `skip-changelog` label; it
+   re-runs its own gate, but `Verify workspace config` (which carries the twin
+   check in `checks.yml`) does not re-trigger on a label event, so re-run that
+   job by hand.
 
 Two things to look at before you do any of this, because a green suite does not
 cover them:
