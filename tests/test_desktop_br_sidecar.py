@@ -129,6 +129,31 @@ def test_a_binary_reporting_the_wrong_version_fails_the_build(bs, tmp_path) -> N
         bs.fetch_br_sidecar("aarch64-apple-darwin", tmp_path, br_fetch=fake, run=_fake_run("br 1.0.0\n"))
 
 
+def test_a_version_superstring_is_not_the_pin(bs, tmp_path) -> None:
+    """The review trap (#3236): the pin is a SUBSTRING of `1.2.30`, `11.2.3`
+    and `1.2.3.4`, so a containment check would ship a DIFFERENT release. The
+    gate must demand the pin as a whole token — every superstring fails."""
+    fake = _fake_br_fetch(version="1.2.3")
+    for reported in ("br 1.2.30\n", "br 11.2.3\n", "br 1.2.3.4\n", "br 1.2.3-rc1\n", "br 1.2.3rc1\n"):
+        with pytest.raises(SystemExit, match="not exactly the pinned"):
+            bs.fetch_br_sidecar("aarch64-apple-darwin", tmp_path, br_fetch=fake, run=_fake_run(reported))
+
+
+def test_br_reports_pin_is_an_exact_token_match(bs) -> None:
+    """The one predicate both gates share (fetch_br_sidecar here, the
+    desktop-build workflow's verify step in CI): exact version as a whole
+    token, with a `v` prefix tolerated as formatting."""
+    assert bs.br_reports_pin("br 1.2.3\n", "1.2.3")
+    assert bs.br_reports_pin("br v1.2.3 (release build)\n", "1.2.3")
+    assert bs.br_reports_pin("beads-rust br version 1.2.3\n", "1.2.3")
+    assert not bs.br_reports_pin("br 1.2.30\n", "1.2.3")
+    assert not bs.br_reports_pin("br 11.2.3\n", "1.2.3")
+    assert not bs.br_reports_pin("br 1.2.3.4\n", "1.2.3")
+    assert not bs.br_reports_pin("br 1.2.3-rc1\n", "1.2.3")
+    assert not bs.br_reports_pin("br 0.1.2.3\n", "1.2.3")
+    assert not bs.br_reports_pin("", "1.2.3")
+
+
 def test_a_pinless_platform_verdict_from_the_plugin_fails_loudly(bs, tmp_path) -> None:
     """The triple map says a pin should exist; the plugin says it doesn't. That
     is drift between the two repos — fail, don't silently ship no br."""

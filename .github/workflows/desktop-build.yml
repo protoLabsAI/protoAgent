@@ -194,20 +194,29 @@ jobs:
         # version truth is the project_board plugin's br_fetch.py (BR_VERSION /
         # BR_SHA256 — build_sidecar loads it at build time, never copies it).
         # This gate pins the two together: the binary about to be bundled must
-        # REPORT exactly that version. Windows is skipped on purpose — no pin
-        # exists there, no br is bundled, and the plugin's manual-install hint
-        # still applies at runtime.
+        # REPORT exactly that version — via build_sidecar.br_reports_pin, the
+        # SAME exact-token predicate the build itself enforces (a shell
+        # substring test would accept `br 1.2.30` for a `1.2.3` pin). Windows
+        # is skipped on purpose — no pin exists there, no br is bundled, and
+        # the plugin's manual-install hint still applies at runtime.
         run: |
           set -euo pipefail
           BIN="apps/desktop/src-tauri/binaries/br-${{ matrix.target }}"
           test -x "$BIN"
-          PIN="$(python3 -c 'import sys; sys.path.insert(0, "apps/desktop/sidecar"); import build_sidecar; print(build_sidecar.load_br_fetch().BR_VERSION)')"
-          GOT="$("$BIN" --version | head -1)"
-          echo "plugin pin: v${PIN} — bundled: ${GOT}"
-          case "$GOT" in
-            *"$PIN"*) ;;
-            *) echo "::error::bundled br (${GOT}) does not match the plugin pin v${PIN}"; exit 1 ;;
-          esac
+          python3 - "$BIN" <<'PY'
+          import subprocess
+          import sys
+
+          sys.path.insert(0, "apps/desktop/sidecar")
+          import build_sidecar
+
+          pin = build_sidecar.load_br_fetch().BR_VERSION
+          got = subprocess.run([sys.argv[1], "--version"], capture_output=True, text=True, check=True).stdout
+          print(f"plugin pin: v{pin} — bundled: {got.strip()}")
+          if not build_sidecar.br_reports_pin(got, pin):
+              print(f"::error::bundled br ({got.strip()!r}) does not report exactly the plugin pin v{pin}")
+              sys.exit(1)
+          PY
 
       - name: Smoke-test the frozen sidecar
         shell: bash

@@ -26,6 +26,7 @@ See the br section below; Windows has no pin and skips it.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -280,6 +281,18 @@ def load_br_fetch(source: str | None = None, *, ref: str | None = None):
     return module
 
 
+def br_reports_pin(output: str, version: str) -> bool:
+    """True when ``br --version`` output reports EXACTLY ``version`` as a whole
+    token. A plain substring test is a trap — ``1.2.3`` is inside ``1.2.30``,
+    ``11.2.3`` and ``1.2.3.4`` — so the pin must be bounded on both sides:
+    nothing digit/dot before it (rejects ``11.2.3``) and nothing
+    version-extending after it (rejects ``1.2.30``, ``1.2.3.4``, ``1.2.3-rc1``).
+    A ``v`` prefix is formatting, not a different version, and still matches.
+    The desktop-build workflow's verify gate calls THIS predicate too, so the
+    equality has one home."""
+    return re.search(rf"(?<![0-9.]){re.escape(version)}(?![0-9A-Za-z._-])", output) is not None
+
+
 def fetch_br_sidecar(triple: str, dest_dir: Path = BINARIES_DIR, *, br_fetch=None, run=None) -> Path | None:
     """Fetch the pinned beads-rust ``br`` for ``triple`` into ``dest_dir`` as
     ``br-<triple>`` — the second externalBin Tauri bundles. Returns the path, or
@@ -312,8 +325,8 @@ def fetch_br_sidecar(triple: str, dest_dir: Path = BINARIES_DIR, *, br_fetch=Non
     # desktop-build workflow re-asserts the same equality as its own gate.)
     run = run or subprocess.run
     out = run([str(dest), "--version"], capture_output=True, text=True, check=True).stdout or ""
-    if spec.version not in out:
-        sys.exit(f"build_sidecar: fetched br reports {out.strip()!r} — not the pinned v{spec.version}")
+    if not br_reports_pin(out, spec.version):
+        sys.exit(f"build_sidecar: fetched br reports {out.strip()!r} — not exactly the pinned v{spec.version}")
     return dest
 
 
