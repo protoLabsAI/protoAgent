@@ -528,9 +528,10 @@ def _fit_to_budget(c: _Candidates, opts: ProjectionOptions, skills_index, summar
     # 4. Never-shed remainder — heard once per distinct standing-context size.
     if len(d.text) > budget:
         key = (len(c.working_state), len(c.hot))
-        emit = log.debug if key in _NEVER_SHED_WARNED else log.warning
+        # (Not named `emit` — the plugin-events catalog scanner reads `emit("…")` as a bus topic.)
+        say = log.debug if key in _NEVER_SHED_WARNED else log.warning
         _NEVER_SHED_WARNED.add(key)
-        emit(
+        say(
             "[projection] never-shed sections exceed the context budget: used=%d budget=%d "
             "(working_state=%d, always_on=%d, skills_floor=%d chars) — raise context.budget_pct "
             "or trim the always-on memory",
