@@ -418,6 +418,23 @@ def test_hot_excludes_commons_tier(tmp_path, monkeypatch):
     assert ks.deleted == [] and ks.added == []  # private row 7 untouched
 
 
+def test_hot_list_on_a_real_layered_store(tmp_path, monkeypatch):
+    """The real LayeredKnowledgeStore yields tier-tagged Chunk rows (not dicts):
+    the private hot row lists with its tier and injecting flag, the commons hot
+    row is excluded exactly as with the dict double above."""
+    from knowledge.layered import LayeredKnowledgeStore
+    from knowledge.store import KnowledgeStore
+
+    private = KnowledgeStore(str(tmp_path / "priv.db"))
+    commons = KnowledgeStore(str(tmp_path / "commons.db"))
+    pid = private.add_chunk("operator prefers dark mode", domain="hot", source="console")
+    commons.add_chunk("shared fact", domain="hot", source="commons")
+    c = _client(monkeypatch, tmp_path, knowledge=LayeredKnowledgeStore(private, commons))
+
+    chunks = c.get("/api/memory/hot").json()["chunks"]
+    assert [(r["id"], r["tier"], r["injecting"]) for r in chunks] == [(pid, "private", True)]
+
+
 def test_hot_disabled_without_store(tmp_path, monkeypatch):
     c = _client(monkeypatch, tmp_path)
     assert c.get("/api/memory/hot").json() == {"enabled": False, "chunks": []}

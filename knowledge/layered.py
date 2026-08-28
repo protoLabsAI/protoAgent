@@ -17,6 +17,7 @@ overridden. Drop-in for ``KnowledgeStore`` everywhere the runtime uses it.
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 
 log = logging.getLogger(__name__)
 
@@ -29,6 +30,19 @@ def _dedup_key(row: dict) -> str:
     """Identity for cross-tier de-dup: a chunk promoted into the commons has the SAME
     content as its private original, so key on content (ids differ across tiers)."""
     return (row.get("content") or "").strip()
+
+
+def _tag(chunk, tier: str):
+    """Stamp a backend's ``list_chunks`` row with its tier, keeping the row's TYPE.
+
+    Real backends yield ``Chunk`` dataclasses (``knowledge.store.Chunk`` has a ``tier``
+    field for exactly this); a custom ``KnowledgeBackend`` may yield dicts, which get
+    a ``"tier"`` key instead. Either way the caller sees the same shape it would from
+    the backend itself — the layered store is a drop-in, not a different API.
+    """
+    if isinstance(chunk, dict):
+        return {**chunk, "tier": tier}
+    return replace(chunk, tier=tier)
 
 
 class LayeredKnowledgeStore:
@@ -90,11 +104,17 @@ class LayeredKnowledgeStore:
         ranked = sorted(fused.values(), key=lambda r: scores[_dedup_key(r)], reverse=True)
         return ranked[:k]
 
-    def list_chunks(self, *args, **kwargs) -> list[dict]:
+    def list_chunks(self, *args, **kwargs) -> list:
         """Union both tiers' chunks, tier-tagged (backs the console's tier badges).
-        Private first. Each chunk carries its own tier's row id (ids are per-backend)."""
-        rows = [{**c.as_dict(), "tier": "private"} for c in self._private.list_chunks(*args, **kwargs)]
-        rows += [{**c.as_dict(), "tier": "commons"} for c in self._commons.list_chunks(*args, **kwargs)]
+        Private first. Each chunk carries its own tier's row id (ids are per-backend).
+
+        Rows keep the backend's own type — ``Chunk`` objects with ``.tier`` set (so
+        ``as_dict()`` carries ``"tier"``), never a different shape. Every consumer of
+        ``list_chunks`` reads rows by attribute (``memory_list``, the fact
+        consolidator, the snapshot seed); returning dicts here made all three fail
+        silently or loudly the moment a commons was configured."""
+        rows = [_tag(c, "private") for c in self._private.list_chunks(*args, **kwargs)]
+        rows += [_tag(c, "commons") for c in self._commons.list_chunks(*args, **kwargs)]
         return rows
 
     def stats(self) -> dict:

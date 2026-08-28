@@ -83,10 +83,10 @@ def test_promote_is_idempotent_and_forget(tmp_path):
     assert commons.stats()["total"] == 1
 
     # The commons copy is searchable + tagged commons; private original is untouched.
-    chunk = layered.list_chunks()  # union, tier-tagged
-    assert {"private", "commons"} == {c["tier"] for c in chunk}
+    chunk = layered.list_chunks()  # union, tier-tagged Chunk rows
+    assert {"private", "commons"} == {c.tier for c in chunk}
 
-    commons_id = next(c["id"] for c in layered.list_chunks() if c["tier"] == "commons")
+    commons_id = next(c.id for c in layered.list_chunks() if c.tier == "commons")
     assert layered.forget_from_commons(commons_id) is True
     assert commons.stats()["total"] == 0
     assert private.stats()["total"] == 1  # private untouched by forget
@@ -204,3 +204,100 @@ def test_first_build_claims_the_commons_stamp(tmp_path, monkeypatch):
     _build_knowledge_store(_cfg(tmp_path))
     stamp = KnowledgeStore(str(tmp_path / "commons" / "knowledge.db"), scoped=False).get_meta("embed_model")
     assert stamp == "modelY"
+
+
+# ── list_chunks keeps the backend's row TYPE (Liskov) ─────────────────────────
+#
+# Every consumer of list_chunks reads rows by attribute — memory_list, the fact
+# consolidator, the snapshot seed. When the layered store returned tier-tagged
+# dicts instead, all three broke the moment a commons was configured: the tool
+# crashed, dedup degraded to add-only (swallowed by its except), and the seed
+# exported nothing (getattr(dict, "content", "") is ""). These pin the contract
+# from the consumers' side.
+
+
+def test_list_chunks_returns_tier_tagged_chunk_rows(tmp_path):
+    from knowledge.store import Chunk
+
+    private, commons = _stores(tmp_path)
+    private.add_chunk("private fact", domain="general")
+    commons.add_chunk("shared fact", domain="general")
+    layered = LayeredKnowledgeStore(private, commons)
+
+    rows = layered.list_chunks()
+    assert all(isinstance(r, Chunk) for r in rows)
+    assert [(r.content, r.tier) for r in rows] == [("private fact", "private"), ("shared fact", "commons")]
+    # The tier travels with as_dict() (the console's row shape) and a single-backend
+    # store leaves it None — the field is stamped, not stored.
+    assert [r.as_dict()["tier"] for r in rows] == ["private", "commons"]
+    assert private.list_chunks()[0].tier is None
+    assert private.list_chunks()[0].as_dict()["tier"] is None
+    # Filters still reach both tiers.
+    assert [r.tier for r in layered.list_chunks(domain="general")] == ["private", "commons"]
+    assert layered.list_chunks(domain="nope") == []
+
+
+def test_list_chunks_tags_dict_rows_from_a_custom_backend(tmp_path):
+    """A custom KnowledgeBackend may yield dicts; the layered store keeps THAT shape too."""
+
+    class _DictBackend:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def list_chunks(self, *a, **kw):
+            return list(self._rows)
+
+    layered = LayeredKnowledgeStore(
+        _DictBackend([{"id": 1, "content": "p", "domain": "general"}]),
+        _DictBackend([{"id": 1, "content": "c", "domain": "general"}]),
+    )
+    assert layered.list_chunks() == [
+        {"id": 1, "content": "p", "domain": "general", "tier": "private"},
+        {"id": 1, "content": "c", "domain": "general", "tier": "commons"},
+    ]
+
+
+def test_memory_list_tool_renders_on_a_layered_store(tmp_path):
+    import asyncio
+
+    from tools.lg_tools import _build_memory_tools
+
+    private, commons = _stores(tmp_path)
+    private.add_chunk("the operator prefers terse replies", domain="preferences", heading="style")
+    commons.add_chunk("fleet-wide deploy window is Friday", domain="general")
+    layered = LayeredKnowledgeStore(private, commons)
+    tools = {t.name: t for t in _build_memory_tools(layered)}
+
+    listed = asyncio.run(tools["memory_list"].ainvoke({}))
+    assert "[preferences] style:" in listed and "terse replies" in listed
+    assert "deploy window is Friday" in listed
+
+
+def test_fact_consolidation_dedups_on_a_layered_store(tmp_path):
+    from graph.memory_facts import consolidate_and_store
+
+    private, commons = _stores(tmp_path)
+    layered = LayeredKnowledgeStore(private, commons)
+    assert consolidate_and_store(layered, ["The operator prefers metric units"], namespace="p") == {
+        "added": 1,
+        "skipped": 0,
+        "superseded": 0,
+    }
+    # Re-running the same fact must be a skip, not a second private row.
+    counts = consolidate_and_store(layered, ["The operator prefers metric units"], namespace="p")
+    assert counts == {"added": 0, "skipped": 1, "superseded": 0}
+    assert len(private.list_chunks(domain="fact", limit=10)) == 1
+
+
+def test_snapshot_seed_exports_layered_rows(tmp_path):
+    from graph.snapshot_op import collect_knowledge_seed
+
+    private, commons = _stores(tmp_path)
+    private.add_chunk("How the deploy pipeline works", domain="reference", heading="deploys")
+    commons.add_chunk("Fleet conventions", domain="reference")
+    layered = LayeredKnowledgeStore(private, commons)
+
+    seed = collect_knowledge_seed(layered, domains=["reference"])
+    assert seed.counts == {"reference": 2}
+    assert "## deploys\n\nHow the deploy pipeline works" in seed.docs["reference"]
+    assert "Fleet conventions" in seed.docs["reference"]

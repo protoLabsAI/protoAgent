@@ -102,6 +102,11 @@ class Chunk:
     # WHEN the chunk enters the prompt (ADR 0108 D4): "always" | "retrieved" |
     # "on_demand"; NULL = retrieved. See ``infer_delivery_policy``.
     delivery_policy: str | None = None
+    # NOT a column. Which backend a row came from on a tiered read (ADR 0041):
+    # "private" | "commons", stamped by ``LayeredKnowledgeStore.list_chunks``;
+    # None on a single-backend store. Keep it LAST — positional construction
+    # elsewhere must not shift.
+    tier: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -122,6 +127,7 @@ class Chunk:
             "review_state": self.review_state,
             "expires_at": self.expires_at,
             "delivery_policy": self.delivery_policy,
+            "tier": self.tier,
         }
 
     @classmethod
