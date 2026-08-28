@@ -55,7 +55,7 @@ their volatile-delta paths diverge:
 - The native path wraps memory in `<injected_memory>` with untrusted-reference
   framing, composes `<working_state>`, uses the budgeted skill index, records
   injections to the ADR 0069 D6 log, respects incognito scoping.
-- The external path (`retrieve_volatile()`) uses a different format for the
+- The external path (`retrieve_volatile()`, pre-#3243) uses a different format for the
   same content, has no injection logging, no working-state injection, no
   incognito support, and a different skill-index format.
 
@@ -349,6 +349,9 @@ renders snapshots. Rollback: stop writing snapshots (the table is additive).
 `compose_projected_context()` extracted as standalone function. Both native
 and external runtimes call it. System prompt composition formalized.
 Rollback: revert to separate composition paths.
+
+Shipped in #3243 (D8). `retrieve_volatile()` was removed; `runtime/context.py`
+calls `compose_projected_context()`.
 
 ### Phase 5: delivery policy + digest evaluation (#3187, #3186, #3185)
 

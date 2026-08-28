@@ -1,15 +1,20 @@
-"""Runtime context contract (ADR 0033, slice 2).
+"""Runtime context contract (ADR 0033, slice 2; ADR 0108 D8).
 
 Two planes reach any brain: the **tool plane** (the operator MCP bus, slice 1) and the
 **context plane** — the *injected* stuff (persona, retrieved knowledge, skills, prior
-sessions). This module is the context plane's contract, so context is produced one way and
-consumed by any runtime (native LangGraph today, an ACP coding agent in slice 3).
+sessions, the agent's own working state). This module is the context plane's contract,
+so context is produced one way and consumed by any runtime (native LangGraph today, an
+ACP coding agent in slice 3).
 
 Caching discipline (ADR 0033 D5): the **stable prefix** (persona + static instructions) is
 byte-identical turn to turn — cache it. The **volatile delta** (what's retrieved for *this*
-turn) goes after it and never mutates the prefix. The native runtime satisfies this via
-middleware (`build_system_prompt` for the prefix, `KnowledgeMiddleware` for the delta); the
-ACP runtime calls `assemble_context()` to build its prompt + `after_turn()` to write back.
+turn) goes after it and never mutates the prefix. Both halves are shared with the native
+loop: `build_system_prompt` composes the prefix for every runtime, and the delta is the same
+:func:`graph.projection.compose_projected_context` the native `KnowledgeMiddleware` delivers
+(ADR 0108 D8) — one projection, so an external brain sees the `<injected_memory>` envelope,
+hot memory, trust-ranked RAG hits, the budgeted skill index, and `<working_state>` exactly
+as the native loop does, with the incognito rule and the injection log applied identically.
+The ACP runtime calls `assemble_context()` to build its prompt + `after_turn()` to write back.
 """
 
 from __future__ import annotations
@@ -26,7 +31,7 @@ class AssembledContext:
     """The two halves of a turn's context, kept apart so the prefix stays cacheable."""
 
     stable_prefix: str  # persona + static instructions — turn-stable, cache it
-    volatile_delta: str = ""  # knowledge/skills/prior-sessions retrieved for THIS turn
+    volatile_delta: str = ""  # knowledge/skills/prior-sessions/working-state projected for THIS turn
     sources: list[str] = field(default_factory=list)  # what fed the delta (telemetry/debug)
 
     def as_prompt(self, message: str) -> str:
@@ -69,83 +74,6 @@ def build_stable_prefix(
     return build_system_prompt(include_subagents=include_subagents, bound_tool_names=bound_tool_names)
 
 
-def _format_skills(summaries: list[dict], total: int) -> str:
-    """The always-on skill index (ADR 0060) for an external brain — name + summary
-    of available skills. The brain loads a full procedure on demand via the
-    ``load_skill`` operator tool (bridged through the operator MCP server)."""
-    lines = ["[Available skills — call load_skill(name) to read one's full steps:]"]
-    for s in summaries:
-        name = s.get("name", "skill")
-        desc = " ".join((s.get("description") or "").split())
-        lines.append(f"- {name}: {desc}".rstrip())
-    if total > len(summaries):
-        lines.append(f"- (+{total - len(summaries)} more — call list_skills.)")
-    return "\n".join(lines)
-
-
-def _format_knowledge(results) -> str:
-    # Mirrors KnowledgeMiddleware's block ({table, preview} + stored date, ADR 0069
-    # D9) so an external brain sees exactly what the native loop would inject.
-    lines = ["[Relevant knowledge from previous sessions:]"]
-    for r in results:
-        line = f"- [{r.get('table', '')}] {r.get('preview', '')}"
-        stored = str(r.get("created_at") or "")[:10]
-        if stored:
-            line += f" (stored {stored})"
-        lines.append(line)
-    return "\n".join(lines)
-
-
-def retrieve_volatile(
-    config=None, *, query: str = "", knowledge_store=None, skills_index=None, memory_path: str = "/sandbox/memory/"
-):
-    """The per-turn context blocks (prior sessions + skills + knowledge). Never raises.
-
-    Same stores + query as `KnowledgeMiddleware`, so an external brain is fed what the
-    native loop would inject. Returns ``(delta_text, sources)``.
-    """
-    blocks: list[str] = []
-    sources: list[str] = []
-    q = (query or "").strip()
-
-    try:
-        from graph.middleware.memory import load_prior_sessions
-
-        prior = load_prior_sessions(memory_path)
-        if prior:
-            blocks.append(prior)
-            sources.append("prior_sessions")
-    except Exception:  # noqa: BLE001
-        log.debug("[context] prior-sessions load skipped", exc_info=True)
-
-    # The skill index is the same regardless of the turn's query (progressive
-    # disclosure, ADR 0060) — inject it whenever an index is present, not gated on q.
-    if skills_index is not None:
-        try:
-            # Default to 5 only when unset — an explicit skills_top_k=0 means "list
-            # none" (an `or 5` would silently override it, unlike the middleware path).
-            top_k = getattr(config, "skills_top_k", 5)
-            k = int(top_k if top_k is not None else 5)
-            summaries = skills_index.skill_summaries(limit=k)
-            if summaries:
-                blocks.append(_format_skills(summaries, skills_index.discoverable_count()))
-                sources.append(f"skills:{len(summaries)}")
-        except Exception:  # noqa: BLE001
-            log.warning("[context] skill index failed", exc_info=True)
-
-    if knowledge_store is not None and q:
-        try:
-            k = int(getattr(config, "knowledge_top_k", 5) or 5)
-            results = knowledge_store.search(q, k=k)
-            if results:
-                blocks.append(_format_knowledge(results))
-                sources.append(f"knowledge:{len(results)}")
-        except Exception:  # noqa: BLE001
-            log.warning("[context] knowledge retrieval failed", exc_info=True)
-
-    return "\n\n".join(blocks), sources
-
-
 def assemble_context(
     config=None,
     *,
@@ -154,16 +82,36 @@ def assemble_context(
     skills_index=None,
     include_subagents: bool = True,
     bound_tool_names: frozenset[str] | None = None,
+    state: dict | None = None,
+    incognito: bool = False,
+    record: bool = False,
 ) -> AssembledContext:
-    """Build a turn's context as a cacheable prefix + a volatile delta (ADR 0033 D4)."""
+    """Build a turn's context as a cacheable prefix + a volatile delta (ADR 0033 D4).
+
+    The delta is the shared projection (ADR 0108 D8): ``query`` is the retrieval key
+    (empty → no RAG search; the skill index and working state are query-independent),
+    ``state`` carries an optional ``session_id`` for working-state / injection-log
+    attribution, ``incognito`` suppresses every memory part (ADR 0069 D3b). The delivery
+    knobs (top-k, namespace scope, trust floor, skill-index caps) are read off ``config``
+    exactly as the native middleware is wired, so both runtimes follow one policy.
+
+    ``record`` defaults to False here: a bare call is a composition, not evidence that a
+    model call happened, and the injection log (ADR 0069 D6) must never be fabricated.
+    :class:`ContextAssembler` — what a runtime holds for real turns — records by default.
+    """
+    from graph.projection import ProjectionOptions, compose_projected_context
+
     prefix = build_stable_prefix(config, include_subagents=include_subagents, bound_tool_names=bound_tool_names)
-    delta, sources = retrieve_volatile(
-        config,
-        query=query,
-        knowledge_store=knowledge_store,
-        skills_index=skills_index,
+    projected = compose_projected_context(
+        query or "",
+        knowledge_store,
+        skills_index,
+        state or {},
+        incognito=incognito,
+        record=record,
+        options=ProjectionOptions.from_config(config),
     )
-    return AssembledContext(stable_prefix=prefix, volatile_delta=delta, sources=sources)
+    return AssembledContext(stable_prefix=prefix, volatile_delta=projected.text, sources=list(projected.sources))
 
 
 def after_turn(knowledge_store=None, *, user: str = "", response: str = "") -> None:
@@ -179,15 +127,27 @@ def after_turn(knowledge_store=None, *, user: str = "", response: str = "") -> N
 
 @dataclass
 class ContextAssembler:
-    """A concrete `RuntimeContext` bound to stores — what a runtime holds + calls."""
+    """A concrete `RuntimeContext` bound to stores — what a runtime holds + calls.
+
+    ``record`` is True here (unlike the bare :func:`assemble_context`): an assembler is
+    bound to a runtime's real turns, so what it composes did enter a model call and
+    belongs in the injection log (ADR 0069 D6) — but only when the turn is attributable.
+    A row with an empty ``session_id`` answers nobody's "what entered THIS turn?", so a
+    call records only when a session id is known: ``session_id`` on the assembler (the
+    runtime's thread) or per call. No id → composed and delivered, never recorded.
+    Set ``record=False`` for a speculative assembler.
+    """
 
     config: object = None
     knowledge_store: object = None
     skills_index: object = None
     include_subagents: bool = True
     bound_tool_names: frozenset[str] | None = None
+    record: bool = True
+    session_id: str | None = None
 
-    def assemble(self, *, query: str = "") -> AssembledContext:
+    def assemble(self, *, query: str = "", session_id: str | None = None) -> AssembledContext:
+        sid = session_id or self.session_id
         return assemble_context(
             self.config,
             query=query,
@@ -195,6 +155,8 @@ class ContextAssembler:
             skills_index=self.skills_index,
             include_subagents=self.include_subagents,
             bound_tool_names=self.bound_tool_names,
+            state={"session_id": sid} if sid else {},
+            record=bool(self.record and sid),  # attributable turns only — "" is not an id
         )
 
     def after_turn(self, *, user: str = "", response: str = "") -> None:

@@ -330,9 +330,14 @@ class AcpRuntime:
     def _default_context(self) -> ContextAssembler:
         from runtime.state import STATE
 
+        # Mirror graph/agent.py: `middleware.knowledge: false` means no memory injection on
+        # ANY runtime — the store is withheld from the composer (the skill index still injects).
+        knowledge_on = bool(getattr(self.config, "knowledge_middleware", True))
+        # This runtime holds no thread/session id for a turn, so the assembler has none and
+        # never records injection rows (ADR 0069 D6 rows must be attributable to a turn).
         return ContextAssembler(
             config=self.config,
-            knowledge_store=getattr(STATE, "knowledge_store", None),
+            knowledge_store=getattr(STATE, "knowledge_store", None) if knowledge_on else None,
             skills_index=getattr(STATE, "skills_index", None),
         )
 

@@ -35,9 +35,12 @@ def test_stable_prefix_is_turn_stable_for_caching():
 
 
 def test_volatile_delta_reflects_retrieval_and_query():
+    # ADR 0108 D8: the delta is the NATIVE projection — RAG hits ride inside the
+    # <injected_memory> envelope and the skill index is the <available_skills> block.
     ctx = assemble_context(_cfg(), query="ship it", knowledge_store=_FakeStore(), skills_index=_FakeSkills())
+    assert "<injected_memory>" in ctx.volatile_delta
     assert "hit for ship it" in ctx.volatile_delta  # knowledge block, query-bound
-    assert "deploy: how to deploy" in ctx.volatile_delta  # skills block
+    assert '<skill name="deploy">how to deploy</skill>' in ctx.volatile_delta  # skills block
     assert any(s.startswith("knowledge:") for s in ctx.sources)
     assert any(s.startswith("skills:") for s in ctx.sources)
 
@@ -47,7 +50,7 @@ def test_no_query_means_no_knowledge_but_skills_still_listed():
     always-on (ADR 0060), so it appears regardless of the query."""
     ctx = assemble_context(_cfg(), query="", knowledge_store=_FakeStore(), skills_index=_FakeSkills())
     assert "hit for" not in ctx.volatile_delta
-    assert "deploy: how to deploy" in ctx.volatile_delta
+    assert '<skill name="deploy">how to deploy</skill>' in ctx.volatile_delta
 
 
 def test_skills_top_k_zero_lists_no_skills():
