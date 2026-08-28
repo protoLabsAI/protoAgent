@@ -14,6 +14,40 @@
 .fleet-row.active {
   background: var(--pl-color-bg-hover);
 }
+/* The row being dragged dims so the drop target reads clearly (#3197). */
+.fleet-row.dragging {
+  opacity: 0.5;
+}
+/* Manual roster reordering (#3197) — a leading reorder cell: a drag handle (native HTML5 DnD,
+   pointer path) + explicit move-up / move-down controls (the accessible, non-pointer path).
+   Rendered on every roster row (empty on the pinned host); a FIXED width (grip + two 30px DS
+   icon buttons) keeps every row's status dot aligned whether or not the row is reorderable. */
+.fleet-reorder {
+  flex: 0 0 auto;
+  width: 80px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.fleet-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  color: var(--pl-color-fg-subtle);
+  cursor: grab;
+}
+.fleet-drag-handle:active {
+  cursor: grabbing;
+}
+/* A reorder save in flight disables the drag path (like the move buttons) — dim it and drop the
+   grab cursor so it reads as inert while the PUT is pending (#3197). */
+.fleet-drag-handle.disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+.fleet-move-controls {
+  display: inline-flex;
+  align-items: center;
+}
 /* The row status dot is the DS <StatusDot> now (FleetSwitcher + FleetManager both use it);
    the hand-rolled .fleet-dot* is retired. */
 .fleet-row-main {
