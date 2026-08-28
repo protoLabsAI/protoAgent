@@ -68,9 +68,12 @@ dependencies = [
   # `RequestContext` from `mcp.shared.context`, which mcp 2.0.0 removed. The cap has to
   # live HERE, on the transitive dep, because the adapter's own metadata says `mcp>=1.24.0`
   # with no upper bound: it declares a compatibility it does not have, so a resolver left
-  # to itself picks mcp 2.x and every MCP import fails. Verified against 0.3.1 (the newest
-  # release, past our own <0.3 cap) — it breaks the same way, so bumping the adapter is not
-  # the escape hatch. Lift this when a release of the adapter actually imports on mcp 2.x.
+  # to itself picks mcp 2.x and every MCP import fails. Bumping the adapter is NOT the
+  # escape hatch — 0.3.x breaks on mcp 2.x the same way 0.2.x did; it is only the mcp pin
+  # that keeps MCP importable. (0.3.2 is verified against mcp 1.27.2: the adapter imports,
+  # `mcp.shared.context.RequestContext` is present, and the 137 MCP tests pass.)
+  # Lift this when a release of the adapter actually imports on mcp 2.x — and note that
+  # dependabot.yml ignores mcp >=2 until then, so that has to be lifted too.
   "mcp>=1.2,<2",
   "ddgs>=9.0",
   "beautifulsoup4>=4.12",
