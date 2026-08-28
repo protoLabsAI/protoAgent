@@ -460,8 +460,16 @@ def test_middleware_is_wired_from_one_options_object(monkeypatch):
     # Without options the individual kwargs stand alone — and delivery is unbounded.
     assert KnowledgeMiddleware(None, top_k=9)._options() == ProjectionOptions(top_k=9)
     # And agent.py really does build it this way (no hand-wired kwargs to drift).
-    assert "options=ProjectionOptions.from_config(config)" in inspect.getsource(agent_mod)
-    assert "skills_index_chars=int(" not in inspect.getsource(agent_mod)
+    src = inspect.getsource(agent_mod)
+    assert "options=ProjectionOptions.from_config(config)" in src
+    assert "skills_index_chars=int(" not in src
+    # It must ALSO hand over the config, or the window-derived knobs can't follow
+    # a per-chat model override and silently keep the default model's allowance
+    # (a 32k tab carrying a 196k budget — the bug this pairing exists to prevent).
+    knowledge_call = src.split("KnowledgeMiddleware(", 1)[1].split(")\n", 1)[0]
+    assert "config=config" in knowledge_call
+    pruner_call = src.split("ToolResultPrunerMiddleware(", 1)[1].split(")\n", 1)[0]
+    assert "config=config" in pruner_call
 
 
 # ---------------------------------------------------------------------------

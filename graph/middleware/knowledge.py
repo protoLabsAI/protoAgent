@@ -61,6 +61,7 @@ class KnowledgeMiddleware(AgentMiddleware):
         inject_namespaces: list[str] | None = None,
         inject_min_trust: int = 1,
         options: ProjectionOptions | None = None,
+        config=None,
     ):
         super().__init__()
         # ``options`` (ADR 0108 D6) is THE wiring graph/agent.py uses —
@@ -74,6 +75,15 @@ class KnowledgeMiddleware(AgentMiddleware):
             inject_namespaces = list(options.inject_namespaces)
             inject_min_trust = options.inject_min_trust
         self._options_override = options
+        # The config ``options`` was read from, kept so the window-derived knobs
+        # (budget + skill-index cap) can be re-read against THIS turn's model —
+        # the console's per-chat override (ADR 0108 D6). None = no per-model
+        # resolution; the construction-time options stand for every turn.
+        # Memo is per instance, not per process: a config hot-reload builds a new
+        # middleware, so the derived options can never outlive the config they
+        # came from. Keyed by the resolved model name ("" = configured default).
+        self._config = config
+        self._options_by_model: dict[str, ProjectionOptions] = {}
         self._store = knowledge_store
         self._top_k = top_k
         # Trust floor for the auto-inject RAG hits (ADR 0069 D8,
@@ -120,10 +130,29 @@ class KnowledgeMiddleware(AgentMiddleware):
         self._turn_projection: str | None = None
         self._turn_sections: list[dict] | None = None
 
-    def _options(self) -> ProjectionOptions:
+    def _options(self, state=None) -> ProjectionOptions:
         """This middleware's delivery knobs in the shared composer's shape — the
         ``options`` it was built with (agent.py's ``from_config`` wiring, budget
-        included), else the individual kwargs (unbounded delivery)."""
+        included), else the individual kwargs (unbounded delivery).
+
+        ``state`` supplies the turn's model (the console's per-chat override):
+        the budget and skill-index cap are sized off the model window, so a tab
+        switched to a smaller model must not keep the default model's allowance.
+        Without a config to re-read, or with no override on this turn, the
+        construction-time options stand — today's numbers, unchanged.
+        """
+        if self._config is not None and state is not None:
+            model = ""
+            try:
+                model = str((state or {}).get("model") or "").strip()
+            except AttributeError:  # not a mapping — fall through to the built options
+                model = ""
+            if model:
+                cached = self._options_by_model.get(model)
+                if cached is None:
+                    cached = ProjectionOptions.from_config(self._config, model_name=model)
+                    self._options_by_model[model] = cached
+                return cached
         if self._options_override is not None:
             return self._options_override
         return ProjectionOptions(
@@ -313,7 +342,7 @@ class KnowledgeMiddleware(AgentMiddleware):
             state,
             incognito=bool(state.get("incognito")),
             record=record,
-            options=self._options(),
+            options=self._options(state),
             prior_sessions=self._cached_digest,
             record_fn=self._record_injection,
         )

@@ -90,18 +90,31 @@ class ToolResultPrunerMiddleware(AgentMiddleware):
         at_fraction: float = 0.6,
         keep_messages: int = 20,
         min_chars: int = 4_000,
+        config=None,
     ) -> None:
         super().__init__()
         self._max_input = max_input_tokens
+        # The config the window came from, so the trigger can follow a per-chat
+        # model override instead of the configured default (the graph is compiled
+        # once; each tab picks its own model). None = the constructed window.
+        self._config = config
         self._at = max(0.05, min(float(at_fraction), 1.0))
         self._keep = max(0, int(keep_messages))
         # Below this a rewrite saves less than its marker costs in attention.
         # Must exceed head+tail or a "pruned" result could GROW.
         self._min_chars = max(int(min_chars), STUB_HEAD_CHARS + STUB_TAIL_CHARS + 400)
 
-    def _threshold_tokens(self) -> int:
-        if self._max_input:
-            return int(self._max_input * self._at)
+    def _threshold_tokens(self, state=None) -> int:
+        window = self._max_input
+        if self._config is not None and state is not None:
+            try:
+                from graph.model_window import context_window_for_turn
+
+                window = context_window_for_turn(self._config, state) or window
+            except Exception:  # noqa: BLE001 — never break a turn over model metadata
+                pass
+        if window:
+            return int(window * self._at)
         return FALLBACK_TRIGGER_TOKENS
 
     def before_model(self, state, runtime) -> dict | None:
@@ -109,7 +122,7 @@ class ToolResultPrunerMiddleware(AgentMiddleware):
         if len(messages) <= self._keep:
             return None
         est = _est_tokens(messages)
-        if est < self._threshold_tokens():
+        if est < self._threshold_tokens(state):
             return None
 
         replacements = []

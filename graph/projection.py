@@ -134,7 +134,7 @@ class ProjectionOptions:
             object.__setattr__(self, "prior_sessions_policy", normalized)
 
     @classmethod
-    def from_config(cls, config) -> ProjectionOptions:
+    def from_config(cls, config, *, model_name: str | None = None) -> ProjectionOptions:
         """The ONE wiring ``graph/agent.py`` (native) and ``runtime/context.py``
         (external) build their delivery knobs from.
 
@@ -147,6 +147,13 @@ class ProjectionOptions:
         both need a known window, so a gateway that reports none leaves the
         skill index at 8KB and delivery unbounded (logged once — the knob is
         inert until the window is known).
+
+        ``model_name`` sizes those two against a specific model instead of
+        ``config.model_name`` — the per-chat override (``KnowledgeMiddleware``
+        passes the turn's ``state["model"]``). ``None`` = the configured default.
+        Re-running the whole reader per model rather than recomputing the two
+        window-derived fields keeps ONE derivation: a per-model path that
+        computed them itself is exactly the drift this method exists to prevent.
         """
         if config is None:
             return cls()
@@ -154,7 +161,13 @@ class ProjectionOptions:
         try:
             from graph.model_window import context_window_for
 
-            window = context_window_for(config)
+            window = context_window_for(config, model_name)
+            if window is None and model_name:
+                # The gateway doesn't report this model (a stale tab, a name it
+                # no longer serves). Size against the configured default rather
+                # than dropping to "no window" — an unknown override must not
+                # silently unbound delivery.
+                window = context_window_for(config)
         except Exception:  # noqa: BLE001 — no profile / partial config → the 8KB fallback
             window = None
         try:

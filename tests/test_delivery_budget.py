@@ -563,3 +563,133 @@ def test_budget_pct_yaml_coercion(tmp_path, caplog):
             assert LangGraphConfig.from_yaml(p).context_budget_pct == expected, name
     warned = [r.getMessage() for r in caplog.records if "context.budget_pct" in r.getMessage()]
     assert len(warned) == 2  # blank + text; a negative value is a valid "off"
+
+
+# ── the budget follows the TURN's model, not the configured default ──────────
+#
+# The console lets each chat tab pick its own model (ModelOverrideMiddleware
+# swaps the LLM off ``state["model"]``), but the graph is compiled once. These
+# drive the REAL graph/model_window resolver against a faked gateway rather
+# than monkeypatching context_window_for away — stubbing it is precisely how
+# the mismatch these cover shipped unnoticed.
+
+
+class _GatewayResp:
+    def __init__(self, payload):
+        self._payload = payload
+
+    status_code = 200
+
+    def json(self):
+        return self._payload
+
+
+@pytest.fixture
+def two_model_gateway(monkeypatch):
+    """A gateway reporting a big default model and a small one to switch to."""
+    import httpx
+
+    import graph.model_window as mwin
+
+    mwin.reset_window_cache()
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        lambda url, headers=None, timeout=None: _GatewayResp(
+            {
+                "data": [
+                    {"model_name": "protolabs/smart", "model_info": {"max_input_tokens": 196608}},
+                    {"model_name": "protolabs/mid", "model_info": {"max_input_tokens": 80000}},
+                    {"model_name": "protolabs/fast", "model_info": {"max_input_tokens": 32768}},
+                    {"model_name": "protolabs/tiny", "model_info": {"max_input_tokens": 8192}},
+                ]
+            }
+        ),
+    )
+    yield SimpleNamespace(
+        api_base="https://gw.example/v1",
+        api_key="sk-test",
+        model_name="protolabs/smart",
+        context_budget_pct=8.0,
+    )
+    mwin.reset_window_cache()
+
+
+def _mw(cfg):
+    from graph.middleware.knowledge import KnowledgeMiddleware
+
+    return KnowledgeMiddleware(None, options=ProjectionOptions.from_config(cfg), config=cfg)
+
+
+def test_budget_and_skill_cap_follow_a_per_chat_model_override(two_model_gateway):
+    from graph.projection import _MIN_BUDGET_CHARS
+
+    cfg = two_model_gateway
+    mw = _mw(cfg)
+    default = mw._options({})
+    switched = mw._options({"model": "protolabs/fast"})
+
+    # The configured default is unchanged...
+    assert default.budget_chars == 62914 == int(196608 * 0.08 * 4)
+    assert default.skills_index_chars == 15728 == int(196608 * 0.02 * 4)
+    # ...and a tab on the 32k model no longer carries it: 62 914 chars was ~48%
+    # of that model's ENTIRE input window spent on the projection, and a 15 728
+    # char skill index on top. 8% of 32 768 lands under the floor, so the budget
+    # is the floor — the skill cap, which has none, tracks the window directly.
+    assert switched.budget_chars == _MIN_BUDGET_CHARS == 16_000
+    assert switched.skills_index_chars == 2621 == int(32768 * 0.02 * 4)
+    assert switched.budget_chars < default.budget_chars
+    assert switched.skills_index_chars < default.skills_index_chars
+
+
+def test_the_floor_still_holds_for_a_small_window_override(two_model_gateway):
+    from graph.projection import _MIN_BUDGET_CHARS
+
+    # 8% of 8 192 tokens = 2 621 chars — under the floor, so always-on memory and
+    # the digest are still never fought over (the D6 contract).
+    assert int(8192 * 0.08 * 4) < _MIN_BUDGET_CHARS
+    assert _mw(two_model_gateway)._options({"model": "protolabs/tiny"}).budget_chars == _MIN_BUDGET_CHARS
+
+
+def test_absent_blank_or_unknown_model_reproduces_todays_numbers(two_model_gateway):
+    cfg = two_model_gateway
+    mw = _mw(cfg)
+    built = ProjectionOptions.from_config(cfg)
+    for state in ({}, {"model": ""}, {"model": "   "}, {"model": "not/a-model"}, None):
+        opts = mw._options(state)
+        assert opts.budget_chars == built.budget_chars, state
+        assert opts.skills_index_chars == built.skills_index_chars, state
+    # A middleware built without a config can't re-derive — the construction-time
+    # options stand, exactly as before.
+    no_cfg = _mw(cfg)
+    no_cfg._config = None
+    assert no_cfg._options({"model": "protolabs/fast"}) == built
+
+
+def test_per_model_options_are_memoized_without_leaking(two_model_gateway):
+    mw = _mw(two_model_gateway)
+    mid_a = mw._options({"model": "protolabs/mid"})
+    mid_b = mw._options({"model": "protolabs/mid"})
+    tiny = mw._options({"model": "protolabs/tiny"})
+    assert mid_a is mid_b  # memoized per model
+    assert tiny is not mid_a
+    # 8% of 80k clears the floor; 8% of 8k does not — distinct, not cross-fed.
+    assert mid_a.budget_chars == 25_600
+    assert tiny.budget_chars == 16_000
+    assert set(mw._options_by_model) == {"protolabs/mid", "protolabs/tiny"}
+
+
+def test_pruning_threshold_follows_the_turns_model(two_model_gateway):
+    """The same construction-time-window trap in ToolResultPrunerMiddleware."""
+    from graph.middleware.tool_result_pruner import ToolResultPrunerMiddleware
+    from graph.model_window import context_window_for
+
+    cfg = two_model_gateway
+    mw = ToolResultPrunerMiddleware(
+        max_input_tokens=context_window_for(cfg), at_fraction=0.6, config=cfg
+    )
+    assert mw._threshold_tokens({}) == int(196608 * 0.6)
+    assert mw._threshold_tokens({"model": "protolabs/fast"}) == int(32768 * 0.6)
+    # Unknown/absent model, or no config: the constructed window stands.
+    assert mw._threshold_tokens({"model": "not/a-model"}) == int(196608 * 0.6)
+    assert mw._threshold_tokens(None) == int(196608 * 0.6)

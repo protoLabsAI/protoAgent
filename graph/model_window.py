@@ -101,6 +101,23 @@ def context_window_for(config: LangGraphConfig, model_name: str | None = None) -
     return _WINDOWS.get(base, {}).get(model)
 
 
+def context_window_for_turn(config: LangGraphConfig, state) -> int | None:
+    """The window for THIS turn's model, not the configured default.
+
+    The console lets each chat tab pick its own model; the choice rides the
+    ``model`` state channel (``graph/state.py``) and ``ModelOverrideMiddleware``
+    swaps the LLM per turn. Anything sized off the window — the projected-context
+    budget and skill-index cap (ADR 0108 D6), the tool-result pruning threshold —
+    has to follow that override or a tab on a small model gets a large model's
+    allowance. Unset/blank ⇒ the configured default, i.e. exactly today's number.
+    """
+    try:
+        model = (state or {}).get("model") or ""
+    except AttributeError:  # not a mapping (a runtime with its own state object)
+        model = ""
+    return context_window_for(config, str(model).strip() or None)
+
+
 def reset_window_cache() -> None:
     """Drop the cached windows — call after a config change (gateway/key) or in tests."""
     _WINDOWS.clear()
