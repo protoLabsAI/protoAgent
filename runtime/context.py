@@ -49,15 +49,24 @@ class RuntimeContext(Protocol):
     def after_turn(self, *, user: str = "", response: str = "") -> None: ...
 
 
-def build_stable_prefix(config=None, *, include_subagents: bool = True) -> str:
+def build_stable_prefix(
+    config=None,
+    *,
+    include_subagents: bool = True,
+    bound_tool_names: frozenset[str] | None = None,
+) -> str:
     """The cacheable persona + static instructions — the system prompt. Turn-stable.
 
     Reuses `graph.prompts.build_system_prompt` (reads SOUL) so the native loop and any
     external runtime share one persona — no drift.
+
+    ``bound_tool_names`` (#3190): when provided, capability-specific operating-model
+    sections are generated only for tools that are actually bound. None emits everything
+    unconditionally (legacy behavior).
     """
     from graph.prompts import build_system_prompt
 
-    return build_system_prompt(include_subagents=include_subagents)
+    return build_system_prompt(include_subagents=include_subagents, bound_tool_names=bound_tool_names)
 
 
 def _format_skills(summaries: list[dict], total: int) -> str:
@@ -138,10 +147,16 @@ def retrieve_volatile(
 
 
 def assemble_context(
-    config=None, *, query: str = "", knowledge_store=None, skills_index=None, include_subagents: bool = True
+    config=None,
+    *,
+    query: str = "",
+    knowledge_store=None,
+    skills_index=None,
+    include_subagents: bool = True,
+    bound_tool_names: frozenset[str] | None = None,
 ) -> AssembledContext:
     """Build a turn's context as a cacheable prefix + a volatile delta (ADR 0033 D4)."""
-    prefix = build_stable_prefix(config, include_subagents=include_subagents)
+    prefix = build_stable_prefix(config, include_subagents=include_subagents, bound_tool_names=bound_tool_names)
     delta, sources = retrieve_volatile(
         config,
         query=query,
@@ -170,6 +185,7 @@ class ContextAssembler:
     knowledge_store: object = None
     skills_index: object = None
     include_subagents: bool = True
+    bound_tool_names: frozenset[str] | None = None
 
     def assemble(self, *, query: str = "") -> AssembledContext:
         return assemble_context(
@@ -178,6 +194,7 @@ class ContextAssembler:
             knowledge_store=self.knowledge_store,
             skills_index=self.skills_index,
             include_subagents=self.include_subagents,
+            bound_tool_names=self.bound_tool_names,
         )
 
     def after_turn(self, *, user: str = "", response: str = "") -> None:

@@ -94,6 +94,52 @@ async def test_start_pings_then_stop(monkeypatch):
     assert warmer._task is None
 
 
+def test_build_caller_passes_bound_tool_names(monkeypatch):
+    """_build_caller must pass bound_tool_names matching the tools it binds,
+    so the warmed prefix matches the real agent's prefix (not the full
+    operating model). Regression for #3230."""
+    import sys
+    import types
+    from unittest.mock import MagicMock
+
+    class FakeTool:
+        def __init__(self, name):
+            self.name = name
+
+    fake_tools = [FakeTool("search"), FakeTool("read_file")]
+
+    # Stub heavy modules that _build_caller lazy-imports so the test runs
+    # without langgraph / litellm on the path.
+    lg_tools_mod = types.ModuleType("tools.lg_tools")
+    lg_tools_mod.get_all_tools = lambda *a, **kw: fake_tools  # type: ignore[attr-defined]
+
+    llm_mod = types.ModuleType("graph.llm")
+    llm_mod.create_llm = lambda *a, **kw: MagicMock(  # type: ignore[attr-defined]
+        bind_tools=lambda t: MagicMock(ainvoke=MagicMock()),
+    )
+
+    lc_messages = types.ModuleType("langchain_core.messages")
+    lc_messages.HumanMessage = type("HumanMessage", (), {"__init__": lambda self, **kw: None})  # type: ignore[attr-defined]
+    lc_messages.SystemMessage = type("SystemMessage", (), {"__init__": lambda self, **kw: None})  # type: ignore[attr-defined]
+
+    for name, mod in [("tools.lg_tools", lg_tools_mod), ("graph.llm", llm_mod), ("langchain_core.messages", lc_messages)]:
+        monkeypatch.setitem(sys.modules, name, mod)
+
+    captured = {}
+
+    def patched_build_system_prompt(**kwargs):
+        captured.update(kwargs)
+        return "system prompt"
+
+    monkeypatch.setattr("graph.prompts.build_system_prompt", patched_build_system_prompt)
+
+    warmer = CacheWarmer(_cfg())
+    warmer._build_caller()
+
+    assert "bound_tool_names" in captured, "build_system_prompt was not called with bound_tool_names"
+    assert captured["bound_tool_names"] == frozenset({"search", "read_file"})
+
+
 @pytest.mark.asyncio
 async def test_loop_survives_ping_failure(monkeypatch):
     calls = {"n": 0}

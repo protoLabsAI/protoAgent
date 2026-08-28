@@ -88,7 +88,10 @@ class CacheWarmer:
         # Same stable prefix + cache breakpoint PromptCacheMiddleware writes,
         # so we warm the cache key real requests will hit. include_subagents
         # matches the default graph build (task/task_batch in the toolset).
-        stable = build_system_prompt(include_subagents=True)
+        stable = build_system_prompt(
+            include_subagents=True,
+            bound_tool_names=frozenset(t.name for t in tools),
+        )
         system = SystemMessage(
             content=[
                 {"type": "text", "text": stable, "cache_control": self._cache_control()},
