@@ -193,3 +193,66 @@ def test_the_shell_hands_the_bundled_br_to_the_server_as_br_bin() -> None:
     src = (TAURI / "src" / "lib.rs").read_text(encoding="utf-8")
     assert "bundled_br_path" in src, "lib.rs lost the bundled-br resolver"
     assert 'env("BR_BIN"' in src, "lib.rs no longer hands BR_BIN to the sidecar spawn env"
+
+
+# ── load_br_fetch executes the plugin's module (#3263) ──────────────────────
+
+
+def test_load_br_fetch_runs_a_module_that_uses_postponed_annotations(bs, tmp_path):
+    """The shape the REAL br_fetch.py has — and the shape that broke the v0.155.0
+    desktop build on darwin and linux.
+
+    `br_fetch` uses `from __future__ import annotations`, so its `@dataclass`
+    annotations are strings, and `dataclasses._process_class` resolves them via
+    `sys.modules.get(cls.__module__).__dict__`. Exec'd into a module that was never
+    registered, that `get` returns None and the build dies with a bare
+    `AttributeError: 'NoneType' object has no attribute '__dict__'` — no mention of
+    dataclasses, modules, or the plugin. A stand-in WITHOUT postponed annotations
+    passes either way, which is why this pins the real one.
+    """
+    src = tmp_path / "br_fetch.py"
+    src.write_text(
+        "from __future__ import annotations\n"
+        "from dataclasses import dataclass\n"
+        "BR_VERSION = '0.1.23'\n"
+        "BR_SHA256 = {'aarch64-apple-darwin': 'abc'}\n"
+        "@dataclass(frozen=True)\n"
+        "class Pin:\n"
+        "    triple: str\n"
+        "    sha: str\n",
+        encoding="utf-8",
+    )
+    module = bs.load_br_fetch(str(src))
+    assert module.BR_VERSION == "0.1.23"
+    assert module.Pin(triple="aarch64-apple-darwin", sha="abc").sha == "abc"
+
+
+def test_load_br_fetch_leaves_sys_modules_as_it_found_it(bs, tmp_path):
+    """The registration is a means, not a side effect: a build process that loaded
+    the plugin module must not be left with a synthetic entry in sys.modules."""
+    import sys
+
+    name = "project_board_br_fetch"
+    src = tmp_path / "br_fetch.py"
+    src.write_text("BR_VERSION = '0.1.23'\nBR_SHA256 = {}\n", encoding="utf-8")
+
+    sys.modules.pop(name, None)
+    bs.load_br_fetch(str(src))
+    assert name not in sys.modules, "an absent name must be absent again, not left bound"
+
+    # sys.modules can legitimately hold None for a name — restoring via `.get()`
+    # would treat that as absent and DELETE the binding.
+    sys.modules[name] = None
+    try:
+        bs.load_br_fetch(str(src))
+        assert name in sys.modules and sys.modules[name] is None
+    finally:
+        sys.modules.pop(name, None)
+
+    sentinel = types.ModuleType(name)
+    sys.modules[name] = sentinel
+    try:
+        bs.load_br_fetch(str(src))
+        assert sys.modules[name] is sentinel
+    finally:
+        sys.modules.pop(name, None)
