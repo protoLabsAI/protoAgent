@@ -342,19 +342,6 @@ fn augmented_sidecar_path() -> String {
     entries.join(":")
 }
 
-/// The bundled `br` (beads-rust) sidecar, resolved next to this executable —
-/// Tauri installs every externalBin there (macOS: Contents/MacOS). None when
-/// this build ships no br (Windows — no pin; a lean local build) or the file
-/// is missing: nothing is set and the project_board plugin's own resolution
-/// (auto-fetch / PATH / the manual-install hint) applies unchanged.
-fn bundled_br_path() -> Option<std::path::PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let dir = exe.parent()?;
-    let name = if cfg!(windows) { "br.exe" } else { "br" };
-    let path = dir.join(name);
-    path.is_file().then_some(path)
-}
-
 /// Launch the bundled protoAgent server (console UI tier) as a sidecar.
 ///
 /// The frozen binary is read-only, so its writable state (live config,
@@ -409,24 +396,6 @@ fn spawn_sidecar<R: Runtime>(app: &AppHandle<R>, port: u16) {
         .env("PROTOAGENT_PARENT_PID", std::process::id().to_string())
         .env("PROTOAGENT_HOME", config_dir.to_string_lossy().to_string())
         .env("PROTOAGENT_BOX_ROOT", config_dir.to_string_lossy().to_string());
-
-    // The desktop distributes a PINNED `br` (beads-rust — the board plugin's CLI)
-    // as a second sidecar (#3236): build_sidecar.py fetches the release the
-    // plugin's own br_fetch.py pins, and Tauri installs it next to this
-    // executable. Hand that path to the server as BR_BIN so the plugin's existing
-    // precedence (explicit BR_BIN > its fetched copy > PATH) resolves the
-    // DISTRIBUTED binary: the board reports br.source "env" and the runtime
-    // auto-fetch never starts on desktop. Fleet members inherit the hub's env at
-    // spawn (graph/fleet/supervisor.py merges os.environ), so every member
-    // resolves the same pinned binary. An operator's own BR_BIN (a terminal
-    // launch) still wins, and when no br is bundled (Windows — no pin) nothing is
-    // set: the plugin's fallback story, including the Windows manual-install
-    // hint, applies unchanged.
-    if std::env::var("BR_BIN").map(|v| v.trim().is_empty()).unwrap_or(true) {
-        if let Some(br) = bundled_br_path() {
-            command = command.env("BR_BIN", br.to_string_lossy().to_string());
-        }
-    }
 
     // A Finder/Dock/launchd launch (macOS) or a .desktop launch (Linux) strips PATH
     // down to the session's minimal set, hiding Homebrew/nvm/Volta/asdf/cargo — so
