@@ -258,7 +258,7 @@ def test_load_br_fetch_leaves_sys_modules_as_it_found_it(bs, tmp_path):
         sys.modules.pop(name, None)
 
 
-def test_a_br_that_cannot_run_reports_its_own_error(bs, tmp_path, monkeypatch, capsys):
+def test_a_br_that_cannot_run_reports_its_own_error(bs, tmp_path):
     """The GLIBC case (#3266): the fetched binary exists but cannot execute. The
     build must print the child's stderr — `capture_output` swallows it, and a bare
     CalledProcessError sent the last diagnosis through downloading the asset and
