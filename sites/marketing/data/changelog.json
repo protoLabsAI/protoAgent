@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.155.2",
+    "date": "2026-08-29",
+    "changes": [
+      "The Linux desktop build ships again, without a bundled br (#3266)."
+    ]
+  },
+  {
     "version": "v0.155.1",
     "date": "2026-08-29",
     "changes": [
