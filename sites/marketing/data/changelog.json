@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.155.1",
+    "date": "2026-08-29",
+    "changes": [
+      "The desktop build no longer dies loading the board CLI's pin (#3263)."
+    ]
+  },
+  {
     "version": "v0.155.0",
     "date": "2026-08-28",
     "changes": [

@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.155.1] - 2026-08-29
+
+### Fixed
+- **The desktop build no longer dies loading the board CLI's pin (#3263).** `build_sidecar.py`
+  executes the project_board plugin's `br_fetch.py` to read the pinned `br` version, but did so in
+  a module it never registered in `sys.modules`. That file uses postponed annotations, so its
+  dataclass resolves its own module through `sys.modules` — which returned nothing, and the build
+  died with a bare `AttributeError: 'NoneType' object has no attribute '__dict__'`. It took out
+  the macOS and Linux legs of the v0.155.0 desktop build without a single change in this repo.
+
 ## [0.155.0] - 2026-08-28
 
 ### Added
