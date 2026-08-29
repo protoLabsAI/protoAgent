@@ -233,8 +233,26 @@ def test_load_br_fetch_leaves_sys_modules_as_it_found_it(bs, tmp_path):
     import sys
 
     name = "project_board_br_fetch"
-    before = sys.modules.get(name)
     src = tmp_path / "br_fetch.py"
     src.write_text("BR_VERSION = '0.1.23'\nBR_SHA256 = {}\n", encoding="utf-8")
+
+    sys.modules.pop(name, None)
     bs.load_br_fetch(str(src))
-    assert sys.modules.get(name) is before
+    assert name not in sys.modules, "an absent name must be absent again, not left bound"
+
+    # sys.modules can legitimately hold None for a name — restoring via `.get()`
+    # would treat that as absent and DELETE the binding.
+    sys.modules[name] = None
+    try:
+        bs.load_br_fetch(str(src))
+        assert name in sys.modules and sys.modules[name] is None
+    finally:
+        sys.modules.pop(name, None)
+
+    sentinel = types.ModuleType(name)
+    sys.modules[name] = sentinel
+    try:
+        bs.load_br_fetch(str(src))
+        assert sys.modules[name] is sentinel
+    finally:
+        sys.modules.pop(name, None)

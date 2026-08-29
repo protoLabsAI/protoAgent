@@ -288,12 +288,16 @@ def load_br_fetch(source: str | None = None, *, ref: str | None = None):
     name = "project_board_br_fetch"
     module = types.ModuleType(name)
     module.__file__ = origin
-    previous = sys.modules.get(name)
+    # A sentinel, not ``.get(name)``: ``sys.modules`` can legitimately hold None for a
+    # name (the legacy "this submodule does not exist" marker), and None-means-absent
+    # would delete that binding on the way out instead of restoring it.
+    missing = object()
+    previous = sys.modules.get(name, missing)
     sys.modules[name] = module
     try:
         exec(compile(code, origin, "exec"), module.__dict__)
     finally:
-        if previous is None:
+        if previous is missing:
             sys.modules.pop(name, None)
         else:
             sys.modules[name] = previous
