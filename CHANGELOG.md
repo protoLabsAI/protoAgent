@@ -15,6 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.155.3] - 2026-08-29
+
+### Changed
+- **The desktop app no longer bundles the `br` CLI (#3271).** Shipping a pinned `br` was meant to
+  spare a fresh desktop install the board plugin's first-run download; it ended up dictating the
+  `br` version for every agent the app spawns. When the pin moved to 0.3.2 the bundled binary
+  refused to read boards an older `br` had created — "schema version mismatch: expected 17, found
+  13" — and a live agent's board stopped loading after an app update. It also cost two desktop
+  releases: one to an unregistered module in the pin loader, one to a `br` build requiring a newer
+  glibc than the desktop targets. The plugin's own resolution (explicit `BR_BIN`, its fetched copy,
+  then `PATH`) is the single story again, on every platform, which is what worked before.
+
 ## [0.155.2] - 2026-08-29
 
 ### Fixed

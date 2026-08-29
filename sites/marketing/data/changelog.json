@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.155.3",
+    "date": "2026-08-29",
+    "changes": [
+      "The desktop app no longer bundles the br CLI (#3271)."
+    ]
+  },
+  {
     "version": "v0.155.2",
     "date": "2026-08-29",
     "changes": [
