@@ -15,6 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.155.2] - 2026-08-29
+
+### Fixed
+- **The Linux desktop build ships again, without a bundled `br` (#3266).** The pinned beads-rust
+  `br` for linux_amd64 requires GLIBC 2.39, and the Linux desktop is built on Ubuntu 22.04
+  (glibc 2.35) deliberately, for the broadest glibc reach in the shipped app — so the build could
+  not run the binary it was about to bundle, and the whole desktop publish stopped, taking macOS
+  and Windows down with it even though both had built. Building on a newer runner would only move
+  the breakage to users on 22.04 LTS and Debian 12. Linux now takes the posture Windows already
+  had: no bundled `br`, and the board plugin's existing fallback applies. A fetched `br` that
+  cannot execute now reports its own error instead of a bare exit code.
+
 ## [0.155.1] - 2026-08-29
 
 ### Fixed
