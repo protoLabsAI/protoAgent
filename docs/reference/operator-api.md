@@ -144,3 +144,18 @@ record.
 |---|---|---|
 | GET | `/api/telemetry/{summary,recent,export,insights}` | Cost/usage telemetry |
 | GET · PUT · DELETE | `/api/theme` | Read / set / clear the saved theme |
+
+## Diagnostics
+
+Member-local, read-only reads for inspecting a fleet member without shell access (#3168). Served on **every** member, so the hub reaches a local peer and a registered remote alike via `/agents/{slug}/api/diagnostics/...`.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/diagnostics/logs?lines=N` | Bounded tail of this member's log ring. `lines` is clamped (1–1000, default 200) rather than rejected; the response carries `note` when it was adjusted. |
+| GET | `/api/diagnostics/tasks/{task_id}` | One exact A2A task: `state`, `status_message`, `history`, `artifacts`, `accumulated_text`, `context_id`, `last_updated`. |
+
+**Diagnostics output is sensitive operator data** — logs and task rows can carry prompts, user content, and tool arguments. Both endpoints are operator-tier (the ADR 0066 federation credential is denied `/api` outright), read-only, bounded in history/artifact/text size, and scrubbed by the shared credential redactor before returning.
+
+Responses degrade rather than 500: an unknown task is `404`, a member with no task store is `503`, and a malformed store row returns `200` with the unparseable columns named in `malformed[]`. A **stopped or unreachable member** is the proxy's case and answers `409`/`502`/`504` from `/agents/{slug}/*`. Truncation is always reported in `truncated[]` — a partial history is never presented as a complete one.
+
+The log source is an in-process ring buffer sized by `LOG_BUFFER_LINES`, not `agent.log`; see [environment variables](environment-variables.md#logging) for why.

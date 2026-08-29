@@ -155,6 +155,9 @@ A **complete** `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY` pair wins outright 
 |---|---|---|
 | `LOG_LEVEL` | `INFO` | Python logging level. Valid: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
 | `LOG_FORMAT` | `text` | Set to `json` to emit one JSON object per log line (keys: `ts`, `level`, `logger`, `message`, plus `exc`/`exc_type` on errors and any `extra=` fields) — parse-stable for aggregators (Loki, CloudWatch, Datadog). Anything else keeps the human-readable format. Same level + stderr stream either way. |
+| `LOG_BUFFER_LINES` | `2000` | Records retained in the in-process ring buffer that backs `GET /api/diagnostics/logs` (#3168). `0` retains nothing (a full opt-out — the endpoint then reports `enabled: false`); capped at 50000. Unparseable values keep the default rather than failing startup. Read once when logging is first configured, so a change takes effect on the next process. |
+
+The ring buffer is the fleet-diagnostics log source, and it is deliberately *not* `agent.log`: that file is a raw stdout/stderr redirect the fleet supervisor sets up for hub-spawned **local** children only, so registered remote members, foreground runs (`python -m server`), and desktop-run members have no such file. An in-process ring exists on every member whatever its deployment shape. It holds logging records only — raw `print()` output and an interpreter crash traceback are not captured (boot-death output is surfaced separately, by the supervisor's spawn watch).
 
 The template configures logging at startup (`observability/logging_config.py`) — without an explicit level, Python's default WARNING would hide `logger.info(...)` lines like "webhook delivered", making A2A issues invisible in container logs.
 

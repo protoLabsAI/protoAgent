@@ -922,6 +922,13 @@ def _main():
     # Trajectory read surface (ADR 0102 S2) — events + call reconstruction over
     # the S1 writer's per-conversation log.
     register_trajectory_routes(fastapi_app)
+    # --- Fleet diagnostics (#3168) -----------------------------------------
+    # Member-local, read-only, operator-tier: bounded log tail + exact A2A task
+    # inspection. Served on EVERY member so the hub reaches a local peer and a
+    # registered remote through the one /agents/{slug}/* proxy.
+    from operator_api.diagnostics_routes import register_diagnostics_routes
+
+    register_diagnostics_routes(fastapi_app)
 
     # Memory-injection record (ADR 0069 D6) — which memory items entered which
     # turn. Read-only forensics surface over observability/injection_log.py.
