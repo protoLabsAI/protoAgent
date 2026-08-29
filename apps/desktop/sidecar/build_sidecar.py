@@ -347,7 +347,18 @@ def fetch_br_sidecar(triple: str, dest_dir: Path = BINARIES_DIR, *, br_fetch=Non
     # target is the rustc HOST triple, so executing it is always possible. (The
     # desktop-build workflow re-asserts the same equality as its own gate.)
     run = run or subprocess.run
-    out = run([str(dest), "--version"], capture_output=True, text=True, check=True).stdout or ""
+    probe = run([str(dest), "--version"], capture_output=True, text=True)
+    if probe.returncode != 0:
+        # Say WHY. Without this the failure is a bare CalledProcessError and the
+        # child's stderr — "GLIBC_2.39 not found", the actual answer — is swallowed
+        # by capture_output. Diagnosing #3266 meant downloading the asset and
+        # reading its ELF version requirements, which is not a reasonable ask.
+        sys.exit(
+            f"build_sidecar: the fetched br for {triple} could not run "
+            f"(exit {probe.returncode}). Its own words:\n"
+            f"{(probe.stderr or probe.stdout or '(no output)').strip()}"
+        )
+    out = probe.stdout or ""
     if not br_reports_pin(out, spec.version):
         sys.exit(f"build_sidecar: fetched br reports {out.strip()!r} — not exactly the pinned v{spec.version}")
     return dest

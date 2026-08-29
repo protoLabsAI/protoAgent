@@ -256,3 +256,27 @@ def test_load_br_fetch_leaves_sys_modules_as_it_found_it(bs, tmp_path):
         assert sys.modules[name] is sentinel
     finally:
         sys.modules.pop(name, None)
+
+
+def test_a_br_that_cannot_run_reports_its_own_error(bs, tmp_path, monkeypatch, capsys):
+    """The GLIBC case (#3266): the fetched binary exists but cannot execute. The
+    build must print the child's stderr — `capture_output` swallows it, and a bare
+    CalledProcessError sent the last diagnosis through downloading the asset and
+    reading its ELF version requirements by hand."""
+    import pytest
+
+    dest_dir = tmp_path / "binaries"
+    fake = types.SimpleNamespace(
+        BR_VERSION="0.3.2",
+        fetch_spec=lambda platform=None, **k: types.SimpleNamespace(version="0.3.2", platform="linux_amd64"),
+        fetch_br=lambda spec, dest: dest.write_bytes(b"not-really-a-binary"),
+    )
+
+    def cannot_run(cmd, **kw):
+        return types.SimpleNamespace(
+            returncode=1, stdout="", stderr="br: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.39' not found"
+        )
+
+    with pytest.raises(SystemExit) as exc:
+        bs.fetch_br_sidecar("x86_64-unknown-linux-gnu", dest_dir, br_fetch=fake, run=cannot_run)
+    assert "GLIBC_2.39" in str(exc.value), "the child's own words must reach the operator"
