@@ -211,3 +211,48 @@ def test_ring_buffer_caps_a_single_huge_record():
     message = buf.snapshot(1)[0]["message"]
     assert len(message) < _RING_MAX_MESSAGE_CHARS + 100
     assert "more chars truncated" in message
+
+
+def test_snapshot_copies_under_the_handler_lock():
+    """`snapshot()` must hold the handler lock while copying `_records`.
+
+    Deliberately asserts the LOCKING CONTRACT rather than trying to reproduce a torn
+    read. On CPython-with-GIL `list(deque)` is effectively atomic — 4 writer threads
+    against 20k copies could not provoke "deque mutated during iteration" — so a
+    race-style test here passes with or without the fix and proves nothing. The lock is
+    defensive and cheap: it is what stdlib handlers do (logging's own `handle()` takes
+    this same lock around `emit()`), and a free-threaded build removes the GIL's
+    accidental protection. This test fails if someone drops it.
+    """
+    from observability.logging_config import RingBufferHandler
+
+    buf = RingBufferHandler(10)
+    for i in range(5):
+        _emit(buf, f"line {i}")
+
+    events: list[str] = []
+    real = buf.lock
+
+    class _RecordingLock:
+        def acquire(self, *a, **kw):
+            events.append("acquire")
+            return real.acquire(*a, **kw)
+
+        def release(self):
+            events.append("release")
+            return real.release()
+
+        def __enter__(self):
+            self.acquire()
+            return self
+
+        def __exit__(self, *exc):
+            self.release()
+
+    buf.lock = _RecordingLock()
+    try:
+        assert [r["message"] for r in buf.snapshot(2)] == ["line 3", "line 4"]
+    finally:
+        buf.lock = real
+
+    assert events == ["acquire", "release"], f"snapshot did not lock: {events}"

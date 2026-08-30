@@ -98,6 +98,24 @@ def test_logs_redact_credentials(ring):
     assert "sk-abcdefghijklmnopqrstuvwxyz012345" not in text
 
 
+def test_zero_capacity_buffer_reports_disabled(monkeypatch):
+    """``LOG_BUFFER_LINES=0`` is a deliberate opt-out, so it must report DISABLED.
+
+    Regression: the route previously answered ``enabled: true, capacity: 0``, which is
+    indistinguishable from a working-but-empty buffer and reads as a broken agent — and
+    it contradicted the documented contract.
+    """
+    from observability import logging_config
+
+    monkeypatch.setattr(logging_config, "_ring", logging_config.RingBufferHandler(0), raising=False)
+    body = _client().get("/api/diagnostics/logs").json()
+    assert body["enabled"] is False
+    assert body["capacity"] == 0
+    assert body["returned"] == 0 and body["lines"] == []
+    # The note distinguishes the opt-out from "logging was never configured".
+    assert body["note"] == "log buffer disabled (LOG_BUFFER_LINES=0)"
+
+
 def test_logs_degrade_when_buffer_unconfigured(monkeypatch):
     from observability import logging_config
 
@@ -222,6 +240,22 @@ async def test_long_text_is_truncated_and_flagged(engine, monkeypatch):
     body = _client().get("/api/diagnostics/tasks/task-long").json()
     assert body["accumulated_text"] == "x" * 10
     assert "accumulated_text" in body["truncated"]
+
+
+async def test_long_status_message_is_capped(engine, monkeypatch):
+    """Regression: ``status_message`` was the one text field escaping ``_MAX_TEXT_CHARS``,
+    which put a hole in the output bound this endpoint advertises."""
+    from operator_api import diagnostics_routes
+
+    monkeypatch.setattr(diagnostics_routes, "_MAX_TEXT_CHARS", 12)
+    await _insert(
+        engine,
+        id="task-loud",
+        status={"state": "failed", "message": {"parts": [{"kind": "text", "text": "y" * 900}]}},
+    )
+    body = _client().get("/api/diagnostics/tasks/task-loud").json()
+    assert body["status_message"] == "y" * 12
+    assert "status_message" in body["truncated"]
 
 
 async def test_task_output_is_redacted(engine):

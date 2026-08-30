@@ -123,7 +123,12 @@ def _summarize_task(row: Any) -> dict[str, Any]:
     state = status.get("state") if isinstance(status, dict) else None
     status_message = ""
     if isinstance(status, dict) and isinstance(status.get("message"), dict):
-        status_message = _text_from_parts(status["message"].get("parts"))
+        # Capped like every other text field — a status message is caller-supplied and
+        # unbounded in the store, so leaving it out of the cap put a hole in the bound
+        # this endpoint advertises.
+        status_message, hit = _truncate(_text_from_parts(status["message"].get("parts")))
+        if hit:
+            truncated.append("status_message")
 
     # Accumulated output = the text the member has produced on this task, which is what
     # an operator chasing "where did the answer go" actually wants.
@@ -212,6 +217,18 @@ def register_diagnostics_routes(app) -> None:
         if buffer is None:
             # configure_logging() never ran — a library/test embedding, not a server.
             return {"enabled": False, "lines": [], "returned": 0, "capacity": 0, "note": "log buffer not configured"}
+        if buffer.capacity() == 0:
+            # ``LOG_BUFFER_LINES=0`` is a deliberate opt-out for an operator who does not
+            # want log content resident in memory. Report it as DISABLED rather than as an
+            # enabled-but-permanently-empty buffer: the two are indistinguishable to a
+            # caller otherwise, and "enabled with nothing in it" reads as a broken agent.
+            return {
+                "enabled": False,
+                "lines": [],
+                "returned": 0,
+                "capacity": 0,
+                "note": "log buffer disabled (LOG_BUFFER_LINES=0)",
+            }
 
         records = buffer.snapshot(limit)
         payload = {

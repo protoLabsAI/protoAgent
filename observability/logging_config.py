@@ -140,18 +140,35 @@ class RingBufferHandler(logging.Handler):
     def snapshot(self, limit: int) -> list[dict[str, Any]]:
         """The most recent ``limit`` records, oldest first.
 
-        ``deque`` append/popleft are atomic, so a concurrent writer can only add or
-        evict entries around this copy — never corrupt it.
+        Copies under the handler lock — the stdlib pattern; logging's own ``handle()``
+        takes this same lock around ``emit()``, so reader and writer are mutually
+        excluded.
+
+        Defensive rather than a fixed bug: in principle ``list()`` over a deque a writer
+        is evicting from can raise ``RuntimeError: deque mutated during iteration``, but
+        that could NOT be provoked on CPython-with-GIL (four writer threads against
+        20k copies of a 10k deque), where the copy is effectively atomic. The lock costs
+        nothing and a free-threaded build removes that accidental protection, so it is
+        taken here rather than relied upon not to matter.
         """
         if limit <= 0:
             return []
-        return list(self._records)[-limit:]
+        self.acquire()
+        try:
+            items = list(self._records)
+        finally:
+            self.release()
+        return items[-limit:]
 
     def capacity(self) -> int:
         return self._records.maxlen or 0
 
     def clear(self) -> None:
-        self._records.clear()
+        self.acquire()
+        try:
+            self._records.clear()
+        finally:
+            self.release()
 
 
 # Created ONCE and re-attached (never rebuilt) by ``configure_logging`` — a second
