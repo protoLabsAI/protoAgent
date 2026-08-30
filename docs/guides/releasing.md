@@ -60,6 +60,17 @@ polls) and promotes the release to **Latest**. See `apps/desktop/README.md` §§
 > **Dispatching without a tag** (from a branch) is a **test build**: bundles upload as
 > workflow artifacts only — no release, no `latest.json`, no `Latest` change.
 
+> **One failed platform withholds the whole publish — and there is a door.** The fan-in
+> normally requires every leg, because a partial `latest.json` skews versions across
+> platforms. The cost showed up on 2026-08-28: macOS and Windows built and signed, a Linux
+> packaging failure withheld the manifest, and *nobody* updated. If a leg fails and the fix
+> is not minutes away, re-dispatch with `-f allow_partial=true`: the manifest ships for the
+> platforms that built and the release is promoted, so their users update. Users on the
+> failed platform keep their current version (their updater sees no entry for them) and
+> must download a fresh install from the previous release until a follow-up ships — the
+> public download page is deliberately NOT refreshed on a partial. Prefer fixing forward;
+> reach for this when the alternative is nobody updating at all.
+
 > **`Latest` tracks the last desktop release, not the newest tag.** `release.yml` creates
 > every release `--latest=false`; a release is promoted to `Latest` only when its desktop
 > build's fan-in has uploaded `latest.json`, so the in-app updater never 404s on a release
