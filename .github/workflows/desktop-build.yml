@@ -44,6 +44,10 @@ on:
       tag:
         description: 'Tag to publish a desktop release for (vX.Y.Z). Blank = test build (artifacts only, no release).'
         required: false
+      allow_partial:
+        description: 'Publish even if a platform leg failed — RECOVERY ONLY. See the fan-in note below.'
+        type: boolean
+        default: false
 
 concurrency:
   # Keyed on the dispatched tag (or ref) so two release dispatches don't collide.
@@ -460,9 +464,25 @@ jobs:
     name: updater manifest (latest.json)
     needs: build
     # Only for a publish dispatch (a `tag` was supplied) — a test build (no tag) has no
-    # release to attach a manifest to. `needs: build` ties it to a successful matrix.
+    # release to attach a manifest to.
+    #
+    # Normally this requires the WHOLE matrix (see the note above: a partial manifest
+    # skews versions across platforms). `allow_partial` is the RECOVERY door for the case
+    # that cost two publishes on 2026-08-28: macOS and Windows built and signed, one
+    # Linux packaging failure withheld the manifest, and NOBODY updated — including the
+    # platforms with perfectly good binaries sitting on the release.
+    #
+    # What partial actually costs, so the choice is informed: the in-app updater reads
+    # `releases/latest/download/latest.json`, so the release must be promoted to 'Latest'
+    # for anyone to update. Users on the FAILED platform then see a Latest release with
+    # no installer for them — their in-app update correctly no-ops (no platform key), but
+    # a FRESH download has to come from the previous release. That is the trade: two
+    # platforms updating versus one platform's download page being a version behind.
+    # Default stays all-or-nothing; reach for this when a leg fails and the fix is not
+    # minutes away.
     if: >-
-      inputs.tag != '' && github.repository == 'protoLabsAI/protoAgent'
+      always() && inputs.tag != '' && github.repository == 'protoLabsAI/protoAgent' &&
+      (needs.build.result == 'success' || (inputs.allow_partial && needs.build.result == 'failure'))
     runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     timeout-minutes: 10
     steps:
@@ -524,6 +544,10 @@ jobs:
           # "not a git repository" — stranding latest.json off the release
           # (the in-app updater manifest). The download step above already
           # passes --repo for the same reason.
+          if [ "${{ needs.build.result }}" != "success" ]; then
+            PLATFORMS="$(python3 -c "import json;print(', '.join(json.load(open('latest.json')).get('platforms',{})))" 2>/dev/null || echo '?')"
+            echo "::warning::PARTIAL publish (allow_partial): a platform leg failed. latest.json carries ${PLATFORMS}. Users on any missing platform keep their current version and must download from the previous release until a follow-up ships."
+          fi
           gh release upload "$TAG" latest.json --repo "${{ github.repository }}" --clobber
           # Promote to 'Latest' ONLY now that latest.json (and every binary) is on the
           # release — this closes the in-app-updater 404 window. release.yml creates the
