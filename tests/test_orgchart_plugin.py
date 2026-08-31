@@ -58,9 +58,15 @@ def test_short_strips_label_and_caps():
 
 def test_a2a_edges_scope_and_token_resolution(monkeypatch):
     monkeypatch.setenv("PEER_TOK", "sekrit")
+    monkeypatch.delenv("UNSET_TOK", raising=False)
     dels = [
         {"type": "a2a", "name": "a", "url": "http://a:1/a2a", "auth": {"token": "inline"}, "scope": "host"},
         {"type": "a2a", "name": "b", "url": "http://b:1", "auth": {"credentialsEnv": "PEER_TOK"}},
+        # both fields: the stored/overlaid token wins — the SAME order dispatch
+        # (adapters._secret) uses, so the chart authenticates the way delegate_to would
+        {"type": "a2a", "name": "both", "url": "http://e:1", "auth": {"credentialsEnv": "PEER_TOK", "token": "stored"}},
+        # no stored value, env var named but unset: resolves to nothing (matches dispatch)
+        {"type": "a2a", "name": "unset", "url": "http://f:1", "auth": {"credentialsEnv": "UNSET_TOK"}},
         {"type": "a2a", "name": "redacted", "url": "http://c:1"},  # peer-reported: no auth
         {"type": "acp", "name": "coder", "url": "http://d:1"},  # non-a2a: skipped
         {"type": "a2a", "name": "nourl"},
@@ -69,6 +75,8 @@ def test_a2a_edges_scope_and_token_resolution(monkeypatch):
     assert [(e["name"], e["token"], e["scope"]) for e in edges] == [
         ("a", "inline", "host"),
         ("b", "sekrit", None),
+        ("both", "stored", None),
+        ("unset", "", None),
         ("redacted", "", None),
     ]
 

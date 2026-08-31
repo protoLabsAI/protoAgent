@@ -161,13 +161,16 @@ def _short(s: str, cap: int = 34) -> str:
 
 def _token_for(raw: dict) -> str:
     auth = raw.get("auth") or {}
-    tok = auth.get("token")  # merged_delegates() overlays the stored secret back here
+    # Mirrors adapters._secret's resolution (stored/overlaid value first, env var
+    # fallback) — the SAME order dispatch uses. The chart's claim is "can delegate
+    # to", so the crawl must authenticate exactly the way delegate_to would; if the
+    # stored token is stale while the env holds the rotated one, dispatch is broken
+    # and the edge SHOULD show red — a green edge here would lie about it.
+    tok = str(auth.get("token") or "").strip()
     if tok:
-        return str(tok)
-    env = auth.get("credentialsEnv")
-    if env:
-        return os.environ.get(env, "") or ""
-    return ""
+        return tok
+    env = str(auth.get("credentialsEnv") or "").strip()
+    return os.environ.get(env, "") if env else ""
 
 
 def _a2a_edges(dlist, via: str = "delegate") -> list[dict]:
