@@ -179,25 +179,57 @@ def test_apply_updates_deletes_from_an_independent_map_section(tmp_path: Path) -
 
 
 def test_apply_updates_deletes_at_more_than_one_nesting_depth(tmp_path: Path) -> None:
-    """r1: the sentinel works at every depth — here a three-levels-deep key
-    (delegates.acme.routes.slow) is removed while its own siblings survive."""
+    """r1: the sentinel is not pinned to a single depth. In one call a section member
+    one level deep (delegates.acme) and a map member two levels deep (delegates.beta.slow)
+    are both removed by a None — each leaving its own siblings intact, while the
+    non-None sibling map (delegates.beta) merges rather than being clobbered."""
     from graph import config_io
 
     yaml_path = tmp_path / "c.yaml"
     yaml_path.write_text(
         "delegates:\n"
         "  acme:\n"
-        "    routes:\n"
-        "      fast: http://fast\n"
-        "      slow: http://slow\n"
+        "    url: http://acme\n"
+        "  beta:\n"
+        "    fast: http://fast\n"
+        "    slow: http://slow\n"
     )
 
     doc = config_io.load_yaml_doc(yaml_path)
-    config_io.apply_updates_to_yaml(doc, {"delegates": {"acme": {"routes": {"slow": None}}}})
+    config_io.apply_updates_to_yaml(
+        doc, {"delegates": {"acme": None, "beta": {"slow": None}}}
+    )
 
-    routes = doc["delegates"]["acme"]["routes"]
-    assert "slow" not in routes
-    assert routes["fast"] == "http://fast"
+    assert "acme" not in doc["delegates"]  # removed one level deep
+    assert "slow" not in doc["delegates"]["beta"]  # removed two levels deep
+    assert doc["delegates"]["beta"]["fast"] == "http://fast"  # its sibling survives
+
+
+def test_apply_updates_leaf_dict_replaces_not_deep_merges(tmp_path: Path) -> None:
+    """r3: a non-None dict at the innermost merged depth REPLACES the stored mapping
+    rather than deep-merging into it — a submitted map member with `branch` omitted
+    drops `branch`. Deep-merging here would strand omitted members in the YAML forever
+    (the very bug this card fixes), so the long-standing fixed-depth leaf assignment
+    must stay a replacement; deletion is expressed only by the None sentinel."""
+    from graph import config_io
+
+    yaml_path = tmp_path / "c.yaml"
+    yaml_path.write_text(
+        "project_board:\n"
+        "  projects:\n"
+        "    acme:\n"
+        "      repo: org/old\n"
+        "      branch: main\n"
+    )
+
+    doc = config_io.load_yaml_doc(yaml_path)
+    config_io.apply_updates_to_yaml(
+        doc, {"project_board": {"projects": {"acme": {"repo": "org/new"}}}}
+    )
+
+    acme = doc["project_board"]["projects"]["acme"]
+    assert acme["repo"] == "org/new"  # replaced value written
+    assert "branch" not in acme  # omitted member dropped, not deep-merged back
 
 
 def test_apply_updates_delete_of_absent_key_is_idempotent(tmp_path: Path) -> None:
