@@ -936,7 +936,7 @@ function ChatSessionSlot({
   }
 
   // Publish this slot's client-slash dispatcher so a command can be run from OUTSIDE the
-  // composer — the ⌘K palette next. Exactly the escapeStop registration above:
+  // composer (#3283) — the ⌘K palette next. Exactly the escapeStop registration above:
   // gated on `visible` so the dispatch always targets the session the operator is looking
   // at, and NO dep array, because `runClientSlash` is a fresh per-render closure over the
   // draft/form/flag/serverCommands state a command needs (the seam's guarded unregister

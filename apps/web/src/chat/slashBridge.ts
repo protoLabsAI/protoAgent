@@ -1,4 +1,4 @@
-// Dispatch a CLIENT slash command (ADR 0061) from OUTSIDE the chat composer.
+// Dispatch a CLIENT slash command (ADR 0061) from OUTSIDE the chat composer (#3283).
 //
 // `runClientSlash` lives inside `ChatSessionSlot` and closes over per-slot React state —
 // the draft setter, the composer-form opener, the fetched server command list, the
