@@ -161,16 +161,16 @@ def _short(s: str, cap: int = 34) -> str:
 
 def _token_for(raw: dict) -> str:
     auth = raw.get("auth") or {}
-    # The live env var wins over an inline/overlaid token (the pre-v0.2 priority): an
-    # entry carrying both fields most likely rotates via the env, and the stored token
-    # is the stale copy. The inline token — where merged_delegates() overlays the
-    # secret back — is the fallback, not a dead end, when the env var is unset.
-    env = auth.get("credentialsEnv")
-    if env:
-        tok = os.environ.get(env, "")
-        if tok:
-            return tok
-    return str(auth.get("token") or "")
+    # Mirrors adapters._secret's resolution (stored/overlaid value first, env var
+    # fallback) — the SAME order dispatch uses. The chart's claim is "can delegate
+    # to", so the crawl must authenticate exactly the way delegate_to would; if the
+    # stored token is stale while the env holds the rotated one, dispatch is broken
+    # and the edge SHOULD show red — a green edge here would lie about it.
+    tok = str(auth.get("token") or "").strip()
+    if tok:
+        return tok
+    env = str(auth.get("credentialsEnv") or "").strip()
+    return os.environ.get(env, "") if env else ""
 
 
 def _a2a_edges(dlist, via: str = "delegate") -> list[dict]:
