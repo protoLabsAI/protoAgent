@@ -72,9 +72,10 @@ export type ForwardedKey = { combo: string; editable: boolean };
  *  host so a global shortcut still works while the view has focus.
  *
  * `editable` is the PAGE's claim that focus is in one of its own text fields; the host
- * honours it so ⌘K doesn't fire out from under someone typing in a plugin's search box.
- * Defaults to false when absent (an older kit) — the same default the host applies to a
- * non-editable target. */
+ * honours it so a chord that has NOT opted into `allowInInput` doesn't fire out from under
+ * someone typing in a plugin's search box. It is not a blanket mute: `allowInInput` bindings
+ * — the palette among them — still fire, by design (resolve.ts). Defaults to false when
+ * absent (an older kit) — the same default the host applies to a non-editable target. */
 export function parseForwardedKey(m: unknown): ForwardedKey | null {
   if (!m || typeof m !== "object") return null;
   const msg = m as Record<string, unknown>;
