@@ -161,13 +161,16 @@ def _short(s: str, cap: int = 34) -> str:
 
 def _token_for(raw: dict) -> str:
     auth = raw.get("auth") or {}
-    tok = auth.get("token")  # merged_delegates() overlays the stored secret back here
-    if tok:
-        return str(tok)
+    # The live env var wins over an inline/overlaid token (the pre-v0.2 priority): an
+    # entry carrying both fields most likely rotates via the env, and the stored token
+    # is the stale copy. The inline token — where merged_delegates() overlays the
+    # secret back — is the fallback, not a dead end, when the env var is unset.
     env = auth.get("credentialsEnv")
     if env:
-        return os.environ.get(env, "") or ""
-    return ""
+        tok = os.environ.get(env, "")
+        if tok:
+            return tok
+    return str(auth.get("token") or "")
 
 
 def _a2a_edges(dlist, via: str = "delegate") -> list[dict]:

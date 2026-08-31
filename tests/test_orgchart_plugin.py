@@ -58,9 +58,14 @@ def test_short_strips_label_and_caps():
 
 def test_a2a_edges_scope_and_token_resolution(monkeypatch):
     monkeypatch.setenv("PEER_TOK", "sekrit")
+    monkeypatch.delenv("UNSET_TOK", raising=False)
     dels = [
         {"type": "a2a", "name": "a", "url": "http://a:1/a2a", "auth": {"token": "inline"}, "scope": "host"},
         {"type": "a2a", "name": "b", "url": "http://b:1", "auth": {"credentialsEnv": "PEER_TOK"}},
+        # both fields: the LIVE env var wins over the stored copy (pre-v0.2 priority)
+        {"type": "a2a", "name": "both", "url": "http://e:1", "auth": {"credentialsEnv": "PEER_TOK", "token": "stale"}},
+        # env var named but unset: the inline token is the fallback, not a dead end
+        {"type": "a2a", "name": "unset", "url": "http://f:1", "auth": {"credentialsEnv": "UNSET_TOK", "token": "inline2"}},
         {"type": "a2a", "name": "redacted", "url": "http://c:1"},  # peer-reported: no auth
         {"type": "acp", "name": "coder", "url": "http://d:1"},  # non-a2a: skipped
         {"type": "a2a", "name": "nourl"},
@@ -69,6 +74,8 @@ def test_a2a_edges_scope_and_token_resolution(monkeypatch):
     assert [(e["name"], e["token"], e["scope"]) for e in edges] == [
         ("a", "inline", "host"),
         ("b", "sekrit", None),
+        ("both", "sekrit", None),
+        ("unset", "inline2", None),
         ("redacted", "", None),
     ]
 
