@@ -13,7 +13,7 @@ import { useIsMobile } from "../lib/useIsMobile";
 import { useKbIntents } from "../keybindings/intents";
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
-import { chatMentionsQuery, goalsQuery, runtimeStatusQuery } from "../lib/queries";
+import { chatCommandsQuery, chatMentionsQuery, goalsQuery, runtimeStatusQuery } from "../lib/queries";
 import { useUI } from "../state/uiStore";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
 import type { ChatMessage, ChatPart, ConsumedSteer, HitlPayload, SlashCommand, SystemNoteTone, ToolCall } from "../lib/types";
@@ -46,6 +46,7 @@ import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
 import { inputHistory, pushInputHistory } from "./inputHistory";
 import { dismissedToolCallSet, rememberDismissedToolCall } from "./dismissedToolCalls";
 import { registerChatEscapeHandler, resolveEscapeAction } from "./escapeStop";
+import { registerSlashDispatcher } from "./slashBridge";
 import { resolveComposerUp } from "./queuedRecall";
 import { finalizeStoppedMessages, resolveStopTarget } from "./stopTurn";
 import { lastOperatorAssistantId, rewindableTailId, replaceText } from "./parts";
@@ -758,9 +759,13 @@ function ChatSessionSlot({
     setAttachments((a) => a.filter((x) => x.id !== id));
   }
 
-  // Slash-command autocomplete. Commands the server handles (e.g. /goal) are
-  // fetched once; the dropdown is active while typing a "/name" token (before a space).
-  const [commands, setCommands] = useState<SlashCommand[]>([]);
+  // Slash-command autocomplete. The dropdown is active while typing a "/name" token
+  // (before a space). Commands the SERVER handles (e.g. /goal, plugin commands, user-facing
+  // skills) come from a shared QUERY, not a per-slot fetch: the list is identical for every
+  // open chat tab, so one key means one fetch shared by every composer — and by the ⌘K
+  // palette, which lists the same commands.
+  const commandsQ = useQuery(chatCommandsQuery());
+  const commands = useMemo(() => commandsQ.data?.commands ?? [], [commandsQ.data]);
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
   // The "/name" token the caret currently sits in ({query, start}), or null. Recomputed
@@ -797,10 +802,6 @@ function ChatSessionSlot({
   // operator can delete, not hidden sticky state.
   const pendingRun = useRef<string[]>([]);
   const runAnswered = useRef(false);
-
-  useEffect(() => {
-    api.chatCommands().then((r) => setCommands(r.commands)).catch(() => {});
-  }, []);
 
   // Re-parse the slash token from the textarea's current value + caret. Called on input,
   // on caret moves (native keyup/click/select/focus listeners below), and after any
@@ -933,6 +934,18 @@ function ChatSessionSlot({
       serverCommands: commands,
     });
   }
+
+  // Publish this slot's client-slash dispatcher so a command can be run from OUTSIDE the
+  // composer — the ⌘K palette next. Exactly the escapeStop registration above:
+  // gated on `visible` so the dispatch always targets the session the operator is looking
+  // at, and NO dep array, because `runClientSlash` is a fresh per-render closure over the
+  // draft/form/flag/serverCommands state a command needs (the seam's guarded unregister
+  // makes the per-render churn safe). `sessionId` rides along so a caller can tell a slot
+  // with no session — where 13 of the 16 core commands decline — from no slot at all.
+  useEffect(() => {
+    if (!visible) return;
+    return registerSlashDispatcher({ run: runClientSlash, sessionId: session?.id ?? null });
+  });
 
   function completeCommand(cmd: SlashCommand) {
     // Replace ONLY the "/name" token the caret is in — surrounding text is preserved so a

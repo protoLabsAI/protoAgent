@@ -93,6 +93,12 @@ export const queryKeys = {
   get chatMentions() {
     return ns("delegates", "mentions");
   },
+  // SERVER slash commands (`/api/chat/commands` — `/goal`, plugin commands, user-facing
+  // skills). Its own top-level key, not a `delegates` subkey: the set comes from the
+  // server's plugin/skill registry, which nothing in the console mutates.
+  get chatCommands() {
+    return ns("chat", "commands");
+  },
   get acpAgents() {
     return ns("acp", "agents");
   },
@@ -415,6 +421,24 @@ export const chatMentionsQuery = () =>
     queryKey: queryKeys.chatMentions,
     queryFn: () => api.chatMentions(),
     retry: false,
+  });
+
+// SERVER slash commands for the composer's `/` menu (and anything else that lists them —
+// the ⌘K palette next). Was a bare `useEffect` + `api.chatCommands()` + slot-local
+// useState inside ChatSessionSlot, so EVERY open chat tab refetched the same list on
+// mount with no shared cache and no key anything could invalidate. One query key, one
+// fetch. Generous staleTime for the same reason settingsSchemaQuery has one: it's read
+// per chat tab, and the set only changes when the server's plugin/skill registry does
+// (a restart). No `retry: false` here — unlike chatMentions a 404 isn't an expected
+// answer, and the shared default (one retry, riding out cold-start codes) is a strict
+// improvement on the fire-and-forget `.catch(() => {})` this replaces. It's a plain
+// `useQuery`, so a failure just leaves the server rows out of the menu (client commands
+// still list) rather than tripping an error boundary.
+export const chatCommandsQuery = () =>
+  queryOptions({
+    queryKey: queryKeys.chatCommands,
+    queryFn: () => api.chatCommands(),
+    staleTime: 5 * 60_000,
   });
 
 export const installedPluginsQuery = () =>

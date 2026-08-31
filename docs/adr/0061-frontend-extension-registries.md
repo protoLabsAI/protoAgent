@@ -90,6 +90,26 @@ menu from `registeredSlashCommands()` + the server list, and `runClientSlash` di
   (`keybindings/coreKeybindings.ts`) register through this same seam. Re-exported from
   `src/ext/index.ts` alongside the seams above (#1457) so a fork reaches it the same way.
 
+### Dispatching a client command from OUTSIDE the composer (`slashBridge`, internal)
+
+`runClientSlash` lives inside `ChatSessionSlot` and closes over per-slot React state (the
+draft setter, the composer-form opener, the fetched server command list, the developer-flag
+predicate, `noteToThread`), so no other surface can build a `SlashContext` — and a caller
+must never synthesize one: a no-op `noteToThread` would silently swallow the output of every
+command that answers with a system note. So the **visible** slot publishes its dispatcher on
+`apps/web/src/chat/slashBridge.ts` — module-level, last-write-wins, guarded unregister, the
+same imperative-seam shape (and the same directory) as `chat/escapeStop.ts`, which solves
+this for the Escape keybinding. `runSlashFromOutside(raw)` (leading slash optional) returns
+`false` when nothing handled it, and `slashDispatchTarget()` reports whether a slot is
+mounted at all and whether it has a session: 13 of the 16 core commands `return false` on a
+null `sessionId`, which in the composer means "fall through to the draft" but outside it
+means "nothing visibly happened" — so a caller checks first rather than dispatching blind.
+
+**Deliberately NOT a fork registry, and NOT re-exported from `src/ext/index.ts`.** It is a
+host-internal bridge between two core surfaces (the ⌘K palette and the chat composer), not
+an extension point: a fork adds a command with `registerSlashCommand` and gets palette
+dispatch for free. `escapeStop` sets that precedent — same shape, same non-export.
+
 ### UI-state slices (shipped, `createUISlice`)
 
 - **`createUISlice(namespace, initial)`** (`apps/web/src/ext/uiStateRegistry.ts`) — a fork
