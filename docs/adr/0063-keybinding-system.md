@@ -68,3 +68,6 @@ registries — ADR 0061, the contextMenu store+host — ADR 0036, per-key persis
 - ADR 0061 (`src/ext/` fork registries — the seam pattern), ADR 0036 (context-menu store+host),
   ADR 0042 (persisted client state), ADR 0057 (command palette — ⌘⇧K now a regular binding).
   Module: `apps/web/src/keybindings/` + `apps/web/src/ext/keybindingRegistry.ts`.
+- Changing a core `defaultKeys` is a **docs** change too: `coreDefaults.test.ts` pins the
+  chord in the console, and `tests/test_keybinding_docs.py` pins every page that advertises
+  it (the guard added after #2949's ⌘K/⌘⇧K swap left this table inverted for months, #3281).

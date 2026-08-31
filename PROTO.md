@@ -271,6 +271,14 @@ These are the failures that actually recur — read them before you edit.
   The same applies to `docs/reference/plugin-view-bridge.md` when the console
   grows a `protoagent:*` bridge message (`tests/test_plugin_view_bridge_docs.py`).
 
+- **Rebinding a core chord reddens a docs test.** Changing a `defaultKeys` in
+  `apps/web/src/keybindings/coreKeybindings.ts` makes every page that advertises that
+  chord wrong, so `tests/test_keybinding_docs.py` re-derives the glyph from the source
+  and fails with the exact `file:line` of each stale claim. It reads the constructions
+  that carry a claim — "Command palette (⌘⇧K)", "⌘K clear" — so a *historical* mention
+  is fine as long as the glyph doesn't sit next to the name it no longer opens. #2949
+  swapped ⌘K/⌘⇧K with nothing watching, and the docs stayed inverted until #3281.
+
 - **Import layering (enforced by `lint-imports`).** `graph/` and the infra
   packages (`a2a_impl/ observability/ security/ infra/ tools/ knowledge/
   events/ scheduler/ runtime/ ops/`) must **never** import `server/` or
