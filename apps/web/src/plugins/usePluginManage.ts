@@ -3,7 +3,7 @@ import { useToast } from "@protolabsai/ui/overlays";
 
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
-import { queryKeys, runtimeStatusQuery } from "../lib/queries";
+import { invalidateChatCommands, queryKeys, runtimeStatusQuery } from "../lib/queries";
 
 // A plugin the actions target — just its id (for the API) + name (for the toast).
 export type PluginRef = { id: string; name: string };
@@ -24,7 +24,7 @@ export function usePluginRefresh() {
     qc.invalidateQueries({ queryKey: queryKeys.installedPlugins });
     qc.invalidateQueries({ queryKey: queryKeys.pluginUpdates });
     qc.invalidateQueries({ queryKey: queryKeys.settings });
-    qc.invalidateQueries({ queryKey: queryKeys.chatCommands });
+    invalidateChatCommands(qc);
   };
 }
 

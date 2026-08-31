@@ -942,11 +942,21 @@ function ChatSessionSlot({
   // draft/form/flag/serverCommands state a command needs (the seam's guarded unregister
   // makes the per-render churn safe). Deliberately NOT gated on `surfaceActive` too: this
   // slot stays mounted for the app's lifetime (#613), so keeping it registered while the
-  // operator is on another rail is what lets ⌘K reach chat from anywhere. `sessionId` rides
-  // along because a session-less slot can't usefully run a command — see slashDispatch.ts.
+  // operator is on another rail is what lets ⌘K reach chat from anywhere.
+  //
+  // Which is exactly why `surfaceActive` is REPORTED instead: while the chat surface isn't
+  // the active rail surface its whole <section> is `display: none`, so a command answering
+  // through `noteToThread` (or opening the /effort picker in the composer panel) draws into
+  // a subtree the operator can't see — a true return that shows nothing. `sessionId` rides
+  // along for the same reason on the other axis: a session-less slot can't usefully run one.
+  // The caller checks both and raises the surface first — see slashDispatch.ts.
   useEffect(() => {
     if (!visible) return;
-    return registerSlashDispatcher({ run: runClientSlash, sessionId: session?.id ?? null });
+    return registerSlashDispatcher({
+      run: runClientSlash,
+      sessionId: session?.id ?? null,
+      surfaceActive,
+    });
   });
 
   function completeCommand(cmd: SlashCommand) {

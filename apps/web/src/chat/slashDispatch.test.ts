@@ -28,14 +28,14 @@ describe("slash dispatch seam", () => {
 
   it("dispatches the raw command to the registered slot", () => {
     const run = vi.fn(() => true);
-    register({ run, sessionId: "s1" });
+    register({ run, sessionId: "s1", surfaceActive: true });
     expect(runSlashFromOutside("effort high")).toBe(true);
     expect(run).toHaveBeenCalledWith("effort high");
   });
 
   it("tolerates the leading slash so a display token can't read as 'no chat surface'", () => {
     const run = vi.fn(() => true);
-    register({ run, sessionId: "s1" });
+    register({ run, sessionId: "s1", surfaceActive: true });
     expect(runSlashFromOutside("/help")).toBe(true);
     expect(run).toHaveBeenCalledWith("help");
   });
@@ -46,7 +46,7 @@ describe("slash dispatch seam", () => {
     // the seam short-circuits on a null sessionId instead of asking the slot — which would
     // make it lie about flag-off commands, and about the three that DO work session-less.
     const run = vi.fn(() => false);
-    register({ run, sessionId: null });
+    register({ run, sessionId: null, surfaceActive: true });
     expect(runSlashFromOutside("clear")).toBe(false);
     expect(run).toHaveBeenCalledWith("clear");
   });
@@ -55,14 +55,14 @@ describe("slash dispatch seam", () => {
     // A palette row hands over a display token ("/effort high") possibly padded; the slot's
     // runClientSlash splits on whitespace, so the arg tail has to survive intact.
     const run = vi.fn(() => true);
-    register({ run, sessionId: "s1" });
+    register({ run, sessionId: "s1", surfaceActive: true });
     expect(runSlashFromOutside("  /effort high  ")).toBe(true);
     expect(run).toHaveBeenCalledWith("effort high");
   });
 
   it("never dispatches an empty token", () => {
     const run = vi.fn(() => true);
-    register({ run, sessionId: "s1" });
+    register({ run, sessionId: "s1", surfaceActive: true });
     expect(runSlashFromOutside("   ")).toBe(false);
     expect(runSlashFromOutside("/")).toBe(false);
     expect(run).not.toHaveBeenCalled();
@@ -71,30 +71,30 @@ describe("slash dispatch seam", () => {
   it("last write wins — the newly visible slot replaces the outgoing one", () => {
     const a = vi.fn(() => true);
     const b = vi.fn(() => true);
-    register({ run: a, sessionId: "a" });
-    register({ run: b, sessionId: "b" });
+    register({ run: a, sessionId: "a", surfaceActive: true });
+    register({ run: b, sessionId: "b", surfaceActive: true });
     runSlashFromOutside("help");
     expect(a).not.toHaveBeenCalled();
     expect(b).toHaveBeenCalledTimes(1);
-    expect(slashDispatchTarget()).toEqual({ sessionId: "b" });
+    expect(slashDispatchTarget()).toEqual({ sessionId: "b", surfaceActive: true });
   });
 
   it("a stale unregister never drops a fresh registration (cleanup-order safety)", () => {
     const a = vi.fn(() => true);
     const b = vi.fn(() => true);
-    const offA = register({ run: a, sessionId: "a" });
-    register({ run: b, sessionId: "b" });
+    const offA = register({ run: a, sessionId: "a", surfaceActive: true });
+    register({ run: b, sessionId: "b", surfaceActive: true });
     // Slot A's effect cleanup can run AFTER slot B registered (React re-render ordering) —
     // it must only clear its own target.
     offA();
     expect(runSlashFromOutside("help")).toBe(true);
     expect(b).toHaveBeenCalledTimes(1);
-    expect(slashDispatchTarget()).toEqual({ sessionId: "b" });
+    expect(slashDispatchTarget()).toEqual({ sessionId: "b", surfaceActive: true });
   });
 
   it("unregistering the live target makes the seam inert again", () => {
     const run = vi.fn(() => true);
-    const off = register({ run, sessionId: "s1" });
+    const off = register({ run, sessionId: "s1", surfaceActive: true });
     off();
     expect(runSlashFromOutside("help")).toBe(false);
     expect(run).not.toHaveBeenCalled();
@@ -107,19 +107,71 @@ describe("slashDispatchTarget — what a caller must check before offering a com
     expect(slashDispatchTarget()).toBeNull();
   });
 
+  it("reports a HIDDEN chat surface — true from run() would draw where nobody can see it", () => {
+    // The slot stays registered while the operator is on Settings or a plugin rail (#613 —
+    // that is what lets the palette reach chat from anywhere), but the surface's <section>
+    // is `display: none` there. Every command that answers through `noteToThread` (/help,
+    // /perf, /trajectory, /prompt, /watch) and the two that open a composer picker (/effort,
+    // /model) would run, return true, and show the operator nothing. So the projection has
+    // to carry it: a caller raises the chat surface first, and this is how it knows to.
+    register({ run: () => true, sessionId: "s1", surfaceActive: false });
+    expect(slashDispatchTarget()).toEqual({ sessionId: "s1", surfaceActive: false });
+  });
+
+  it("keeps dispatching into a hidden surface — the seam reports, it does not veto", () => {
+    // Refusing would break the case the registration exists for: /clear, /bypass and
+    // friends are legitimate to fire without yanking the operator onto the chat rail. The
+    // caller decides; the seam just refuses to hide the fact.
+    const run = vi.fn(() => true);
+    register({ run, sessionId: "s1", surfaceActive: false });
+    expect(runSlashFromOutside("clear")).toBe(true);
+    expect(run).toHaveBeenCalledWith("clear");
+  });
+
+  it("tracks visibility across re-registrations, like sessionId", () => {
+    // The slot re-registers every render, so raising the chat surface flips this on the
+    // next one — a caller that raised the surface and then re-read must see the new answer.
+    register({ run: () => true, sessionId: "s1", surfaceActive: false });
+    register({ run: () => true, sessionId: "s1", surfaceActive: true });
+    expect(slashDispatchTarget()).toEqual({ sessionId: "s1", surfaceActive: true });
+  });
+
   it("reports a mounted slot that has NO session — session-scoped commands will decline", () => {
-    register({ run: () => false, sessionId: null });
-    expect(slashDispatchTarget()).toEqual({ sessionId: null });
+    register({ run: () => false, sessionId: null, surfaceActive: true });
+    expect(slashDispatchTarget()).toEqual({ sessionId: null, surfaceActive: true });
   });
 
   it("reports the visible slot's session id", () => {
-    register({ run: () => true, sessionId: "sess-42" });
-    expect(slashDispatchTarget()).toEqual({ sessionId: "sess-42" });
+    register({ run: () => true, sessionId: "sess-42", surfaceActive: true });
+    expect(slashDispatchTarget()).toEqual({ sessionId: "sess-42", surfaceActive: true });
   });
 
   it("tracks the CURRENT registration, not the first one (per-render re-registration)", () => {
-    register({ run: () => true, sessionId: "sess-1" });
-    register({ run: () => true, sessionId: "sess-2" });
-    expect(slashDispatchTarget()).toEqual({ sessionId: "sess-2" });
+    register({ run: () => true, sessionId: "sess-1", surfaceActive: true });
+    register({ run: () => true, sessionId: "sess-2", surfaceActive: true });
+    expect(slashDispatchTarget()).toEqual({ sessionId: "sess-2", surfaceActive: true });
+  });
+});
+
+// The projection is only as honest as what the slot puts INTO it. Both fields are live
+// per-render values in ChatSurface (`session?.id`, the `surfaceActive` prop); pinning a
+// literal there — the easy "it's always visible when you'd dispatch" assumption — would
+// restore the exact silent no-op this seam reports its way out of, and every test above
+// would still pass because they register by hand.
+const CHAT_SURFACE = (
+  import.meta.glob("./ChatSurface.tsx", { query: "?raw", import: "default", eager: true }) as Record<
+    string,
+    string
+  >
+)["./ChatSurface.tsx"];
+
+describe("the chat slot's registration (source guard)", () => {
+  it("passes its live session and visibility, never a literal", () => {
+    const call = CHAT_SURFACE.match(/registerSlashDispatcher\(\{[\s\S]*?\}\)/)?.[0];
+    expect(call, "ChatSurface must register through registerSlashDispatcher({...})").toBeTruthy();
+    expect(call).toContain("surfaceActive");
+    expect(call).not.toMatch(/surfaceActive:\s*(true|false)\b/);
+    expect(call).toContain("sessionId");
+    expect(call).not.toMatch(/sessionId:\s*"/);
   });
 });

@@ -1,4 +1,4 @@
-import { queryOptions } from "@tanstack/react-query";
+import { queryOptions, type QueryClient } from "@tanstack/react-query";
 
 import { api, currentSlug } from "./api";
 import type { FleetTelemetry, ReviewState } from "./types";
@@ -93,10 +93,10 @@ export const queryKeys = {
   get chatMentions() {
     return ns("delegates", "mentions");
   },
-  // SERVER slash commands (`/api/chat/commands` — `/goal`, plugin commands, user-facing
-  // skills). Its own top-level key rather than a `plugins` subkey: plugins are only ONE of
-  // its sources (skills, workflows and subagents resolve into the same list), so it can't
-  // ride a prefix invalidation — `usePluginRefresh` names this key explicitly instead.
+  // SERVER slash commands (`/api/chat/commands` — `/goal`, plugin commands, workflows,
+  // subagents, user-facing skills). Its own top-level key rather than a `plugins` subkey:
+  // plugins are only ONE of its sources, so it can't ride a prefix invalidation — every
+  // surface that writes one of the four names this key, via `invalidateChatCommands`.
   get chatCommands() {
     return ns("chat", "commands");
   },
@@ -430,13 +430,19 @@ export const chatMentionsQuery = () =>
 // mount with no shared cache and no key anything could invalidate. One query key, one
 // fetch.
 //
-// The endpoint is LIVE, not static: `_operator_chat_commands` reads the registries at
-// request time, so enabling/installing a plugin changes the answer with no restart. That
-// is why the key exists — `usePluginRefresh` invalidates it on every plugin mutation AND
-// on the `plugin.#` bus topic, which is the same fix the `chatMentions` key above got for
-// the `@` menu. The generous staleTime only covers what has no mutation to hang off: a
-// skill the AGENT authors mid-session (graph/skills/authoring) publishes no console event,
-// so it surfaces within the window instead of instantly.
+// NO staleTime override, deliberately. The endpoint is LIVE, not static:
+// `_operator_chat_commands` re-resolves the registries per request, so the answer changes
+// with no restart. The client default (5s, queryClient.ts) is what keeps this a strict
+// improvement on the per-slot fetch it replaces rather than a regression: the slots that
+// mount together at boot still share ONE fetch (the dedupe this key exists for), while a
+// chat tab opened later still refetches on mount exactly as the old `useEffect` did. A
+// longer window would buy nothing and cost freshness — `staleTime` schedules no refetch,
+// it only withholds one, and with `refetchOnWindowFocus: false` and no `refetchInterval`
+// the ONLY triggers are a new observer mounting while stale and an explicit invalidation.
+//
+// Invalidation is the other half, because the list folds in four sources
+// (graph/slash_commands.py): plugin commands, workflows, subagents and user-facing skills.
+// Each console surface that writes one must call `invalidateChatCommands` — see its note.
 //
 // No `retry: false` here — unlike chatMentions a 404 isn't an expected answer, and the
 // shared default (one retry, riding out cold-start codes) is a strict improvement on the
@@ -447,8 +453,26 @@ export const chatCommandsQuery = () =>
   queryOptions({
     queryKey: queryKeys.chatCommands,
     queryFn: () => api.chatCommands(),
-    staleTime: 5 * 60_000,
   });
+
+/** Refresh the `/`-menu command list after a mutation that changes what
+ *  `/api/chat/commands` answers.
+ *
+ *  Call this from EVERY such path. The endpoint folds FOUR registries into one list
+ *  (graph/slash_commands.py `resolve_slash_commands`) — plugin `register_chat_command`
+ *  tokens, workflow recipes, subagents, and user-facing skills — so no single surface owns
+ *  the key and no key prefix covers it: the plugins manager, Workflow Studio and the
+ *  Playbooks editor each invalidate a DIFFERENT key for their own list, and every one of
+ *  them also changes this one. Missing the call doesn't break a surface, it just leaves the
+ *  newly-created `/command` out of the composer's autocomplete until the next chat tab
+ *  opens (5s staleness) or a reload — the quiet failure `chatCommandsFreshness.test.ts` guards.
+ *
+ *  Not everything HAS a console mutation: a skill the agent authors mid-turn
+ *  (graph/skills/authoring) publishes no console event and no bus topic, so it surfaces on
+ *  the next newly-mounted chat tab rather than instantly. */
+export function invalidateChatCommands(qc: QueryClient): Promise<void> {
+  return qc.invalidateQueries({ queryKey: queryKeys.chatCommands });
+}
 
 export const installedPluginsQuery = () =>
   queryOptions({
