@@ -83,6 +83,34 @@ menu from `registeredSlashCommands()` + the server list, and `runClientSlash` di
   bypass). Handler context: `{ close }`. (Distinct from plugin manifest `palette` views,
   ADR 0057, which morph the palette body into a plugin iframe — these RUN trusted in-process
   code.)
+
+  A command carries presentation alongside behavior — `icon`, `hint`, a **display-only**
+  `shortcut` string (the real binding is `registerKeybinding`; this just advertises it),
+  and `disabled` + `disabledReason` so a row that can't run stays discoverable and explains
+  itself instead of vanishing. Unlike the other registries this one is **last-write-wins by
+  id** (matching `registerKeybinding`) and returns a **guarded unregister** — it removes the
+  command only while that command is still the registered one, so a stale closure can't evict
+  a newer registration. A re-registered id keeps its original display position.
+
+  Two additions make it usable beyond a fixed deep-link:
+
+  - **`when?: (ctx: PaletteGateContext) => boolean`** is a **render-time** gate, not a
+    registration-time filter, and that distinction is load-bearing. Registration happens once
+    at module load, before `/api/flags` has answered — and `useFlagPredicate` fails **closed**
+    while that request is in flight (ADR 0068), so a filter evaluated at registration would
+    hide a flag-gated row *permanently*. Evaluating `when` on every root render lets the
+    late-arriving flag flip the row on. `PaletteGateContext` is deliberately tiny and
+    serializable-ish — `{ flagOn(id), isHost }` — and because the gate runs for every command
+    on every root render it must be **cheap and pure**.
+  - **`registerPaletteSource(fn: () => PaletteCommand[])`** contributes commands computed at
+    **read** time rather than registration time, for rows that track live data (open chat
+    tabs, a roster). Same guarded-unregister contract; a source that throws is skipped rather
+    than blanking the palette. Statics win an id collision over sources.
+
+  Consumers observe the registry the way they observe the DS one: **`subscribePaletteCommands(fn)`**
+  plus a monotonic **`paletteCommandsVersion()`** (bumped on every register/unregister) is exactly
+  the `useSyncExternalStore` pair, so a command registered *after* the root view's first render
+  still appears — the pre-existing read-once-in-an-effect shape could never show it.
 - **`registerKeybinding`** (`apps/web/src/ext/keybindingRegistry.ts`, ADR 0063) — binds a
   default keyboard shortcut (optionally focus-scoped to a `data-kb-scope` panel). Every
   registered binding auto-appears in **Settings ▸ Keyboard** (user-rebindable, with conflict
