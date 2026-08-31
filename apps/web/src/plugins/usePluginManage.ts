@@ -10,11 +10,13 @@ export type PluginRef = { id: string; name: string };
 
 // The ONE post-mutation refresh for anything that changes the installed-plugin set
 // (install / update / uninstall / sync). Invalidates: runtime (the rail icons + the
-// loaded set), the installed inventory (removable list), the freshness poll, and the
+// loaded set), the installed inventory (removable list), the freshness poll, the
 // settings schema — a new/removed plugin changes which config fields exist (#1423),
 // and a stale schema renders a freshly installed plugin's Configure dialog empty
-// until a page refresh (#1643). Every install path must call this (or invalidate
-// the same keys); keeping it in one place is the fix for that class of bug.
+// until a page refresh (#1643) — and the chat slash commands, since a plugin's
+// `register_chat_command` tokens are served live from the registry the hot-reload
+// just rebuilt (#3283). Every install path must call this (or invalidate the same
+// keys); keeping it in one place is the fix for that class of bug.
 export function usePluginRefresh() {
   const qc = useQueryClient();
   return () => {
@@ -22,6 +24,7 @@ export function usePluginRefresh() {
     qc.invalidateQueries({ queryKey: queryKeys.installedPlugins });
     qc.invalidateQueries({ queryKey: queryKeys.pluginUpdates });
     qc.invalidateQueries({ queryKey: queryKeys.settings });
+    qc.invalidateQueries({ queryKey: queryKeys.chatCommands });
   };
 }
 

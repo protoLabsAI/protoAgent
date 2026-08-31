@@ -94,8 +94,9 @@ export const queryKeys = {
     return ns("delegates", "mentions");
   },
   // SERVER slash commands (`/api/chat/commands` — `/goal`, plugin commands, user-facing
-  // skills). Its own top-level key, not a `delegates` subkey: the set comes from the
-  // server's plugin/skill registry, which nothing in the console mutates.
+  // skills). Its own top-level key rather than a `plugins` subkey: plugins are only ONE of
+  // its sources (skills, workflows and subagents resolve into the same list), so it can't
+  // ride a prefix invalidation — `usePluginRefresh` names this key explicitly instead.
   get chatCommands() {
     return ns("chat", "commands");
   },
@@ -427,13 +428,21 @@ export const chatMentionsQuery = () =>
 // the ⌘K palette next). Was a bare `useEffect` + `api.chatCommands()` + slot-local
 // useState inside ChatSessionSlot, so EVERY open chat tab refetched the same list on
 // mount with no shared cache and no key anything could invalidate. One query key, one
-// fetch. Generous staleTime for the same reason settingsSchemaQuery has one: it's read
-// per chat tab, and the set only changes when the server's plugin/skill registry does
-// (a restart). No `retry: false` here — unlike chatMentions a 404 isn't an expected
-// answer, and the shared default (one retry, riding out cold-start codes) is a strict
-// improvement on the fire-and-forget `.catch(() => {})` this replaces. It's a plain
-// `useQuery`, so a failure just leaves the server rows out of the menu (client commands
-// still list) rather than tripping an error boundary.
+// fetch.
+//
+// The endpoint is LIVE, not static: `_operator_chat_commands` reads the registries at
+// request time, so enabling/installing a plugin changes the answer with no restart. That
+// is why the key exists — `usePluginRefresh` invalidates it on every plugin mutation AND
+// on the `plugin.#` bus topic, which is the same fix the `chatMentions` key above got for
+// the `@` menu. The generous staleTime only covers what has no mutation to hang off: a
+// skill the AGENT authors mid-session (graph/skills/authoring) publishes no console event,
+// so it surfaces within the window instead of instantly.
+//
+// No `retry: false` here — unlike chatMentions a 404 isn't an expected answer, and the
+// shared default (one retry, riding out cold-start codes) is a strict improvement on the
+// fire-and-forget `.catch(() => {})` this replaces. It's a plain `useQuery`, so a failure
+// just leaves the server rows out of the menu (client commands still list) rather than
+// tripping an error boundary.
 export const chatCommandsQuery = () =>
   queryOptions({
     queryKey: queryKeys.chatCommands,

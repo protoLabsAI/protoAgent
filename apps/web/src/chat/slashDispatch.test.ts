@@ -1,12 +1,13 @@
 // The imperative seam a client slash command is dispatched through from OUTSIDE the chat
 // composer (ADR 0061). Same contract as escapeStop's handler seam — last-write-wins,
 // guarded unregister, inert when nothing is registered — plus the two facts a caller needs
-// before it offers a command: is a slot mounted, and does it have a session (13 of the 16
-// core commands decline a null session, and from outside there is no draft to fall through
-// to, so a caller must be able to see that BEFORE dispatching).
+// before it offers a command: is a slot mounted, and does it have a session. Both matter
+// because from outside there is no draft to fall through to, so a command that declines is
+// a SILENT no-op; the session half of that contract (which commands decline, and which
+// "succeed" into a note nobody sees) is pinned in coreSlashCommands.test.ts.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { registerSlashDispatcher, runSlashFromOutside, slashDispatchTarget } from "./slashBridge";
+import { registerSlashDispatcher, runSlashFromOutside, slashDispatchTarget } from "./slashDispatch";
 
 // The seam is module state; every test registers explicitly, so clear any leak between them.
 const offs: (() => void)[] = [];
@@ -41,8 +42,22 @@ describe("slash dispatch seam", () => {
 
   it("passes a command's own false through — declining is NOT the same as unhandled to the slot, but both mean 'fall back'", () => {
     // e.g. /clear with no session, or a flag-off command: runClientSlash returns false.
-    register({ run: () => false, sessionId: null });
+    // The `run` assertion is the load-bearing half: without it this passes just as well if
+    // the seam short-circuits on a null sessionId instead of asking the slot — which would
+    // make it lie about flag-off commands, and about the three that DO work session-less.
+    const run = vi.fn(() => false);
+    register({ run, sessionId: null });
     expect(runSlashFromOutside("clear")).toBe(false);
+    expect(run).toHaveBeenCalledWith("clear");
+  });
+
+  it("normalizes only the wrapper — the leading slash and surrounding space, never the args", () => {
+    // A palette row hands over a display token ("/effort high") possibly padded; the slot's
+    // runClientSlash splits on whitespace, so the arg tail has to survive intact.
+    const run = vi.fn(() => true);
+    register({ run, sessionId: "s1" });
+    expect(runSlashFromOutside("  /effort high  ")).toBe(true);
+    expect(run).toHaveBeenCalledWith("effort high");
   });
 
   it("never dispatches an empty token", () => {

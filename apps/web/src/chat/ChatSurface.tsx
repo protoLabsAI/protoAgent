@@ -46,7 +46,7 @@ import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
 import { inputHistory, pushInputHistory } from "./inputHistory";
 import { dismissedToolCallSet, rememberDismissedToolCall } from "./dismissedToolCalls";
 import { registerChatEscapeHandler, resolveEscapeAction } from "./escapeStop";
-import { registerSlashDispatcher } from "./slashBridge";
+import { registerSlashDispatcher } from "./slashDispatch";
 import { resolveComposerUp } from "./queuedRecall";
 import { finalizeStoppedMessages, resolveStopTarget } from "./stopTurn";
 import { lastOperatorAssistantId, rewindableTailId, replaceText } from "./parts";
@@ -940,8 +940,10 @@ function ChatSessionSlot({
   // gated on `visible` so the dispatch always targets the session the operator is looking
   // at, and NO dep array, because `runClientSlash` is a fresh per-render closure over the
   // draft/form/flag/serverCommands state a command needs (the seam's guarded unregister
-  // makes the per-render churn safe). `sessionId` rides along so a caller can tell a slot
-  // with no session — where 13 of the 16 core commands decline — from no slot at all.
+  // makes the per-render churn safe). Deliberately NOT gated on `surfaceActive` too: this
+  // slot stays mounted for the app's lifetime (#613), so keeping it registered while the
+  // operator is on another rail is what lets ⌘K reach chat from anywhere. `sessionId` rides
+  // along because a session-less slot can't usefully run a command — see slashDispatch.ts.
   useEffect(() => {
     if (!visible) return;
     return registerSlashDispatcher({ run: runClientSlash, sessionId: session?.id ?? null });
