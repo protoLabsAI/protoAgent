@@ -6,24 +6,42 @@ hunting through rails and menus ([ADR 0057](/adr/0057-command-palette)).
 
 ## What's in it
 
-- **Go to any surface** — every resolvable view (Chat, Activity, Inbox, Plugins,
-  Settings, plugin rail views) is a "go to" command, listed first.
-- **Deep links** — jump straight to Activity/Inbox, Plugins → Discover/Install, or a
-  specific Settings tab.
-- **Toggle a fleet agent** — **Toggle Fleet Agent** opens a picker of the local,
-  non-host fleet members with their live on/off state; picking one brings it online (or
-  takes it offline) and confirms with a toast — no Settings dive. The host is never
-  listed (stopping it would kill the session), and the agent this window is proxied to is
-  disabled ("current") so you can't stop your own console out from under yourself.
-- **Inline chat** — start typing a question and the palette morphs into a quick chat
-  with the focused agent (its own thread, persisted locally) — handy for a one-off ask
-  without leaving what you're doing.
+- **Go to any surface** — every resolvable view (Chat, Knowledge, Memory, Work, plugin
+  rail views, fork surfaces) is a "go to" command. Type its name and it's there.
+- **Deep links** — jump straight to Plugins → Discover/Install, or a specific Settings
+  tab.
+- **Fleet Room** — the co-present roster, with DM / open-console / start / stop on each
+  member row. Every live member's *name* is a keyword on this command, so typing an
+  agent's name lands you one step from them.
+- **Inline chat** — **Ask &lt;agent&gt;** morphs the palette into a quick chat with the
+  focused agent (its own thread, persisted locally) — handy for a one-off ask without
+  leaving what you're doing. It sits alongside the **Chat** *surface*, which is the real
+  conversation.
 - **Plugin views** — a plugin view can opt to render *inside* the palette by declaring
-  `palette: "inline"` on its view (so a lightweight tool can live behind ⌘K instead of
-  taking a rail slot).
+  `palette: "inline"` on its view (so a lightweight tool can live behind the palette
+  instead of taking a rail slot).
 
-Commands are ranked in a fixed order — surfaces, then deep links, then chat — so
-navigation always stays at the top.
+## Two lists, not one
+
+The palette shows a **short** list when you haven't typed anything: what you ran recently
+first, then a curated root (agents, plugin views, commands). Every rail surface is
+deliberately *not* in that list — there are too many of them to be useful before you've
+said what you want.
+
+The moment you type, the list becomes the **whole** corpus — every surface included, no
+cap — ordered by how well each row matches:
+
+1. the label IS what you typed
+2. the label starts with it
+3. a word in the label starts with it
+4. the label contains it
+5. a keyword / hint / group / source contains it
+6. the label matches loosely (fuzzy)
+
+Ties break on how often and how recently you've run the command, then on registration
+order, so the list is stable and the thing you actually use rises. Matching itself is
+unchanged from the design system's rule — every whitespace-separated term must appear
+somewhere in the row — so a row that used to be findable still is.
 
 ## For plugin authors
 
@@ -36,5 +54,9 @@ When opened from ⌘K, the palette renders the view's body in place.
 > plugin reaches the palette via an inline **view**.
 
 The palette is wired in `apps/web/src/app/App.tsx` (the `@protolabsai/ui/command-palette`
-substrate + `usePaletteHotkey`); the registry is built in
-`apps/web/src/app/usePaletteRegistry.ts`.
+substrate) and in the desktop launcher window (`apps/web/src/app/Launcher.tsx`); both
+build their registry through `apps/web/src/app/usePaletteRegistry.ts`, a re-export barrel
+over `apps/web/src/app/palette/` — `registry.ts` (what core contributes), `rank.ts`
+(matching + ordering), `recents.ts` (the frecency store) and `rootView.tsx` (the root list
+itself, which the console owns rather than the design system: see the note at the top of
+that file for the upstream gap and when it can be retired).

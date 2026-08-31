@@ -541,7 +541,9 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   // Every resolvable View becomes a "go to" command (via openView → setSurface);
   // deep-link actions ride alongside. Plugin-declared `commands:` + inline plugin
   // views are step 3. The registry re-resolves as plugin views appear/disappear.
-  const { views: paletteViews } = buildViews({
+  // The WHOLE facade, not just `.views`: the palette resolves each surface by id through
+  // `viewFor` (ADR 0056), so this is the first real consumer of the resolver half.
+  const paletteFacade = buildViews({
     core: CORE_SURFACES,
     plugins: allPluginViews.map((v) => ({ key: v.key, label: v.label, icon: pluginViewIcon(v.icon) })),
     ext: registeredSurfaces()
@@ -582,7 +584,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
     }),
     [chatAgentName],
   );
-  const paletteRegistry = usePaletteRegistry(paletteViews, inlinePaletteViews, paletteChat);
+  const paletteRegistry = usePaletteRegistry(paletteFacade, inlinePaletteViews, paletteChat);
   // Palette open-state lives in the keybinding intents store now: ⌘K is a regular,
   // rebindable keybinding (ADR 0063) that toggles it — no DS-internal hotkey hook.
   const paletteOpen = useKbIntents((s) => s.paletteOpen);
