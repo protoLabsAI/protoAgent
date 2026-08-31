@@ -97,7 +97,7 @@ type UIState = {
   // horizontal icon rail in the util bar + a full-width panel). A surface is on exactly
   // one dock, at a position — OR in `hidden`. `hidden` holds surfaces the operator hid
   // from the rails WITHOUT disabling the plugin: enabled-but-not-shown. railSurfaces()
-  // renders only the dock arrays, so a hidden id has no rail icon; restore it from ⌘K
+  // renders only the dock arrays, so a hidden id has no rail icon; restore it from the palette
   // (openView un-hides) or by moving it to a dock. The reconcilers never resurrect a
   // hidden id onto a dock (only prune it from `hidden` when the plugin is uninstalled).
   railOrder: { left: string[]; right: string[]; bottom: string[]; hidden: string[] };

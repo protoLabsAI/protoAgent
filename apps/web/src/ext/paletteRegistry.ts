@@ -1,5 +1,5 @@
 // Build-time fork seam for ROOT COMMAND-PALETTE commands (ADR 0061, extends ADR 0038 D3).
-// A fork (or core) calls `registerPaletteCommand()` to add a ⌘K command in the "Commands"
+// A fork (or core) calls `registerPaletteCommand()` to add a palette command in the "Commands"
 // group — WITHOUT editing `usePaletteRegistry.ts`, so `git pull upstream` stays conflict-
 // free. Sibling of `registerSlashCommand` / `registerSurface`: static registration at module
 // load, first-wins (HMR-safe). usePaletteRegistry maps these onto DS palette `Command`s.
@@ -31,7 +31,7 @@ export type PaletteCommand = {
 
 const _commands: PaletteCommand[] = [];
 
-/** Register a root ⌘K command. First registration of an id wins (HMR-safe). */
+/** Register a root palette command. First registration of an id wins (HMR-safe). */
 export function registerPaletteCommand(cmd: PaletteCommand): void {
   const id = (cmd?.id || "").trim();
   if (!id || typeof cmd.run !== "function") return;

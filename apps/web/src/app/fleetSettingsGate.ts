@@ -1,5 +1,5 @@
 // Gate for the fleet affordances a console window offers: the header dropdown's "New agent"
-// + "Fleet settings" items, and the ⌘K Fleet Room. Originally hub-only (#1708/#1999) on the
+// + "Fleet settings" items, and the palette's Fleet Room. Originally hub-only (#1708/#1999) on the
 // theory that any member window manages a fleet-of-one and so could only spawn NESTED agents
 // by accident. That holds for exactly one of the four windows below — a spawned member
 // reached DIRECTLY on its own port — so the gate asks that question alone, and every sister

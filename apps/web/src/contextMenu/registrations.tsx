@@ -49,8 +49,9 @@ registerContextMenu({
     ];
     // Management actions. "Manage plugins…" (open the all-plugins manager, Settings ▸ Plugins)
     // is always present; Configure (plugin views only) opens the owning plugin's settings dialog;
-    // Hide moves the surface to railOrder.hidden (restore from ⌘K or "Move to …"). Chat is never
-    // hidden — it mounts unconditionally on its dock, so a hidden chat would render with no rail icon.
+    // Hide moves the surface to railOrder.hidden (restore from the palette or "Move to …").
+    // Chat is never hidden — it mounts unconditionally on its dock, so a hidden chat would
+    // render with no rail icon.
     // Built-in / uninstall / update, all gated on the plugin's origin, cluster under Configure.
     const manage: MenuEntry[] = [];
     if (ctx.pluginId) {
@@ -147,7 +148,7 @@ registerContextMenu({
 // (`ctx.side`) and then opened, plus a rail-wide "Manage plugins…" action that opens Settings ▸
 // Plugins. The App-side trigger resolves each hidden id's label (core/plugin/ext metadata lives
 // there) + the clicked side into `ctx`. When nothing is hidden, a disabled hint shows so that part
-// still confirms the feature. The discoverable counterpart to ⌘K (ADR 0035/0036).
+// still confirms the feature. The discoverable counterpart to the palette (ADR 0035/0036).
 registerContextMenu({
   type: "rail-background",
   items: (ctx: { side?: "left" | "right" | "bottom"; hidden?: { id: string; label: string }[] }): MenuEntry[] => {
