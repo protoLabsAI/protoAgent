@@ -2,7 +2,7 @@ import { Activity, BarChart3, Bot, BookMarked, Boxes, Brain, Cpu, Database, Flas
 import { useFlagPredicate } from "../flags/flags";
 import { settingsSectionGroups } from "./sections";
 import type { LucideIcon } from "lucide-react";
-import type { SectionMeta, SettingsSectionIcon, SettingsSectionId } from "./sections";
+import type { SettingsSection, SettingsSectionIcon, SettingsSectionId } from "./sections";
 import { useEffect, type ReactNode } from "react";
 
 import { SideNav, Tabs } from "@protolabsai/ui/navigation";
@@ -187,8 +187,11 @@ export function SettingsSurface({ initialSection }: { only?: "host" | "workspace
       </span>
     ) : undefined;
 
-  const toItem = (s: SectionMeta) => {
-    const Icon = ICONS[s.icon as SettingsSectionIcon];
+  // No cast on either lookup: settingsSectionGroups hands back rows with literal ids/icons,
+  // so an entry these maps don't cover is a type error here rather than `undefined` — a
+  // crashed <Icon /> or a blank content pane at runtime.
+  const toItem = (s: SettingsSection) => {
+    const Icon = ICONS[s.icon];
     return {
       id: s.id,
       label: s.label,
@@ -202,7 +205,7 @@ export function SettingsSurface({ initialSection }: { only?: "host" | "workspace
     <div className="settings-shell">
       <SideNav responsive={isMobile} ariaLabel="Settings sections" groups={navGroups} active={active.id} onSelect={(id) => setSection(id)} />
       <div className="settings-content">
-        {RENDERERS[active.id as SettingsSectionId]()}
+        {RENDERERS[active.id]()}
       </div>
     </div>
   );

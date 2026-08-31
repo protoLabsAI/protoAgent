@@ -64,10 +64,12 @@ describe("Settings ▸ Box narrows (not disappears) off the host console", () =>
   });
 
   it("…because the group is dropped on EMPTINESS, never on the host axis", () => {
-    // The other half of the same rule, and the one behaviour the real table can't demonstrate:
-    // Fleet carries neither gate, so BOX_SECTIONS is never actually empty. Source guard, so the
-    // edit that swaps the condition back to `onHost ? …` (the original bug) is caught.
-    expect(src).toMatch(/\.\.\.\(boxSections\.length \? \[\{ label: GROUP_LABELS\.box/);
-    expect(src).not.toMatch(/onHost \? \[\{ label: GROUP_LABELS\.box/);
+    // The half no input can exercise: Fleet carries neither gate, so BOX_SECTIONS is never
+    // empty and the false branch is unreachable from outside. What this adds over the
+    // behaviour above is the REASON Box survived off the host — pin the condition itself, so
+    // `onHost ? …` (the original bug) can't come back on the day Fleet grows a gate, which is
+    // precisely when the two readings would start to disagree again.
+    const cond = src.match(/\.\.\.\(([^?]*)\?\s*\[\{\s*label: GROUP_LABELS\.box/)?.[1] ?? "";
+    expect(cond.trim()).toBe("boxSections.length");
   });
 });

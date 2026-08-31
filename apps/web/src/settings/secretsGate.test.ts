@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { visibleSections } from "./sectionGate";
+import { settingsSections } from "./sections";
 // The section table lives in ./sections (a leaf); SettingsSurface.tsx now holds only renderers.
 import src from "./sections.ts?raw";
+import surfaceSrc from "./SettingsSurface.tsx?raw";
 import flags from "../../../../runtime/flags.py?raw";
 
 // Settings ▸ Secrets is gated to the dev channel (ADR 0068). The external secrets manager's
@@ -42,12 +44,24 @@ describe("Settings ▸ Secrets is flag-gated (#2120)", () => {
     expect(obj).toContain('flag: "secrets-panel"');
   });
 
-  it("the section table routes every gated list through the pure gate", () => {
-    // The surface must call the SAME visibleSections this test exercises — and the
-    // agent group (where secrets lives) must go through shown().
-    expect(src).toContain('import { visibleSections } from "./sectionGate"');
-    expect(src).toMatch(/const shown = \(list: readonly SectionMeta\[\]\) => visibleSections\(list, flagOn, onHost\)/);
-    expect(src).toMatch(/shown\(AGENT_SECTIONS\)/);
+  it("the REAL agent group is run through that gate — nav and id resolution both", () => {
+    // The two cases above prove the gate on a synthetic table; this proves the real `secrets`
+    // row is actually fed through it, via the same assembly the surface renders from.
+    // Filtering only the nav would leave a persisted "secrets" id rendering the pre-release
+    // panel on the prod channel — the exact failure #2120 is about.
+    expect(settingsSections({ flagOn: () => false, onHost: true }).map((s) => s.id)).not.toContain(
+      "secrets",
+    );
+    expect(
+      settingsSections({ flagOn: (f) => f === "secrets-panel", onHost: true }).map((s) => s.id),
+    ).toContain("secrets");
+  });
+
+  it("…and SettingsSurface renders from that assembly instead of re-deriving one", () => {
+    // The one claim no test on the leaf can make: a surface that rebuilt its own section list
+    // would keep every assertion in this file green while showing a flag-off panel. Source
+    // guard because there is nothing else to hold — the component's own path is e2e-only.
+    expect(surfaceSrc).toContain("settingsSectionGroups({");
   });
 
   it("the flag ships at tier dev", () => {

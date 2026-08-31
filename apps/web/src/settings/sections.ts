@@ -8,8 +8,8 @@ import type { GatedSection } from "./sectionGate";
 // consumer that merely needs to NAME a settings section (⌘K, a deep link, the desktop
 // Launcher window, which mounts the palette registry but never mounts App) read the table
 // without welding the whole settings tree onto its path: importing anything at all from
-// SettingsSurface.tsx eagerly drags ~89 modules / ~800 KB of panel source with it, and CI has
-// no bundle-size gate that would catch the regression. sections.leaf.test.ts pins the rule.
+// SettingsSurface.tsx eagerly drags ~90 modules / ~800 KB of panel source with it, and CI has
+// no bundle-size gate that would catch the regression. sections.test.ts pins the rule.
 //
 // SettingsSurface.tsx COMPOSES this table with the halves that genuinely need React: the
 // `render: () => …` per id and the name → lucide component map.
@@ -133,6 +133,9 @@ export const GROUP_LABELS = {
   console: "This console",
 } as const;
 
+/** The four nav headings, as a literal union — a `.label ===` match can't be fat-fingered. */
+export type SettingsGroupLabel = (typeof GROUP_LABELS)[keyof typeof GROUP_LABELS];
+
 /** Every declared section, gates ignored — the domain of the id/icon unions below. */
 export const ALL_SECTIONS = [
   ...AGENT_SECTIONS,
@@ -146,14 +149,30 @@ export const ALL_SECTIONS = [
 export type SettingsSectionId = (typeof ALL_SECTIONS)[number]["id"];
 /** The lucide names the table actually uses — keeps SettingsSurface's icon map exhaustive. */
 export type SettingsSectionIcon = (typeof ALL_SECTIONS)[number]["icon"];
+/**
+ * A row of the table with its literal `id`/`icon` INTACT — deliberately not widened to
+ * SectionMeta. Widening is what would force an `as SettingsSectionId` at every lookup, and a
+ * cast is exactly where `Record<SettingsSectionId, …>` stops being a guarantee: it is checked
+ * where the map is declared but not where it is read. Keeping the literals means a row that
+ * reached `settingsSectionGroups` without reaching ALL_SECTIONS (two hand-kept compositions of
+ * the same arrays) fails to type-check here, instead of rendering a blank pane and no glyph.
+ */
+export type SettingsSection = (typeof ALL_SECTIONS)[number];
 
-export type SectionGroup = { label: string; sections: SectionMeta[] };
+export type SectionGroup = { label: SettingsGroupLabel; sections: SettingsSection[] };
 
 export type SectionVisibility = {
   /** ADR 0068 flag predicate — useFlagPredicate() in the console. */
   flagOn: (id: string) => boolean;
-  /** isHostConsole(); false in a sister agent's window. */
-  onHost?: boolean;
+  /**
+   * isHostConsole(); false in a sister agent's window. REQUIRED, unlike `developerVisible`:
+   * there is no safe default for it. Defaulting it to `true` (as this once did) hands a
+   * consumer that forgot it the host console's answer, so a member window would offer
+   * Overview/Telemetry deep links that then resolve to the first section instead — the exact
+   * silent fallback quirk 2 below exists to prevent. Omitting `developerVisible` only ever
+   * offers LESS, so that one keeps its default.
+   */
+  onHost: boolean;
   /** developerPanelVisible(channel) — appends the Developer section to "This console". */
   developerVisible?: boolean;
 };
@@ -171,14 +190,16 @@ export type SectionVisibility = {
  */
 export function settingsSectionGroups({
   flagOn,
-  onHost = true,
+  onHost,
   developerVisible = false,
 }: SectionVisibility): SectionGroup[] {
-  const shown = (list: readonly SectionMeta[]) => visibleSections(list, flagOn, onHost);
+  // Generic, not `(list: readonly SectionMeta[])`: the annotation would widen every row to
+  // SectionMeta here and lose the literal ids/icons the consumer's exhaustive maps key off.
+  const shown = <T extends SectionMeta>(list: readonly T[]) => visibleSections(list, flagOn, onHost);
   const agentSections = shown(AGENT_SECTIONS);
   const capabilitySections = shown(CAPABILITY_SECTIONS);
   const boxSections = shown(BOX_SECTIONS);
-  const consoleSections: SectionMeta[] = developerVisible
+  const consoleSections: SettingsSection[] = developerVisible
     ? [...CONSOLE_SECTIONS, DEVELOPER_SECTION]
     : [...CONSOLE_SECTIONS];
   return [
@@ -194,6 +215,6 @@ export function settingsSectionGroups({
  * against. Flattening the groups (rather than re-deriving) is what keeps nav and resolution
  * from drifting apart: a section that is not in some group is not reachable, full stop.
  */
-export function settingsSections(visibility: SectionVisibility): SectionMeta[] {
+export function settingsSections(visibility: SectionVisibility): SettingsSection[] {
   return settingsSectionGroups(visibility).flatMap((g) => g.sections);
 }

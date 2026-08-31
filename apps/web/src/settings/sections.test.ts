@@ -14,7 +14,7 @@ import sectionsSrc from "./sections.ts?raw";
 // sections.ts exists so a consumer that only needs to NAME a settings section — ⌘K, a deep
 // link, the desktop Launcher window (which mounts the palette registry but never mounts App) —
 // can read the table without importing the settings tree. `import … from "./SettingsSurface"`
-// eagerly welds ~89 modules / ~800 KB of panel source (FleetManagerPanel, PluginsSurface,
+// eagerly welds ~90 modules / ~800 KB of panel source (FleetManagerPanel, PluginsSurface,
 // ToolsPanel, TelemetrySurface, 20-odd panels and 26 lucide components) onto that path, and CI
 // has NO bundle-size gate, so the regression would ship silently. Hence a SOURCE guard: the
 // only thing that can be checked is what the module is allowed to import.
@@ -114,7 +114,7 @@ describe("section ids and order are a contract", () => {
   });
 
   it("the group labels and their order are unchanged", () => {
-    expect(settingsSectionGroups({ flagOn: () => true }).map((g) => g.label)).toEqual([
+    expect(settingsSectionGroups({ flagOn: () => true, onHost: true }).map((g) => g.label)).toEqual([
       "Agent",
       "Capabilities",
       "Box",
@@ -125,5 +125,16 @@ describe("section ids and order are a contract", () => {
   it("every id is unique", () => {
     const ids = ALL_SECTIONS.map((s) => s.id);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("every declared section is reachable — ALL_SECTIONS is exactly the ungated nav", () => {
+    // ALL_SECTIONS (the domain of SettingsSectionId/Icon, hence of SettingsSurface's two
+    // exhaustive maps) and settingsSectionGroups are two hand-kept compositions of the same
+    // five arrays. Drift one way is a TYPE error — a row that reaches a group but not
+    // ALL_SECTIONS isn't a SettingsSection. Drift the other way is not: adding to ALL_SECTIONS
+    // alone mints an id that demands a renderer and an icon nothing can ever reach. This is
+    // the assertion that catches that direction.
+    const reachable = settingsSections({ flagOn: () => true, onHost: true, developerVisible: true });
+    expect(reachable.map((s) => s.id)).toEqual(ALL_SECTIONS.map((s) => s.id));
   });
 });

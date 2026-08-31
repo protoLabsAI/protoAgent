@@ -19,9 +19,11 @@ describe("Settings ▸ Devices is flag-gated", () => {
   it("flag-off sections are filtered from nav AND from id resolution", () => {
     // Filtering only the nav would leave a persisted "devices" id rendering the panel. The
     // resolvable set IS the flattened nav, so one assertion covers both.
-    const ids = settingsSections({ flagOn: () => false }).map((s) => s.id);
+    const ids = settingsSections({ flagOn: () => false, onHost: true }).map((s) => s.id);
     expect(ids).not.toContain("devices");
-    const on = settingsSections({ flagOn: (f) => f === "settings.devices" }).map((s) => s.id);
+    const on = settingsSections({ flagOn: (f) => f === "settings.devices", onHost: true }).map(
+      (s) => s.id,
+    );
     expect(on).toContain("devices");
   });
 
