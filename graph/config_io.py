@@ -876,13 +876,48 @@ def pop_keys_from_yaml(doc: Any, dotted_keys: list[str]) -> Any:
     return doc
 
 
+# Deletion sentinel for ``apply_updates_to_yaml``: inside a nested mapping an update
+# value of ``None`` means "remove this key", not "write null". This is the one durable
+# way a resolved config update can express REMOVAL — the third lifecycle operation
+# alongside addition and replacement (ADR 0047) — so map-owned config
+# (``project_board.projects``, a plugin config map, a delegates map) can drop a member
+# through the normal persist/readback path instead of every caller re-implementing it.
+_DELETE = None
+
+
 def apply_updates_to_yaml(doc: Any, updates: dict[str, Any]) -> Any:
     """Merge a nested updates dict into the loaded YAML document.
 
-    Uses __setitem__ on whatever container ruamel loaded (CommentedMap
-    acts like dict), so comments / key order / unknown sections are
-    preserved. Keys that don't exist yet get added at the end of the
-    containing section.
+    Uses __setitem__ / __delitem__ on whatever container ruamel loaded
+    (CommentedMap acts like dict), so comments / key order / unknown sections are
+    preserved. Keys that don't exist yet get added at the end of the containing
+    section.
+
+    **Fixed-depth merge (unchanged).** A section merges into an existing section and
+    a section-member map merges into an existing member map — siblings under each are
+    kept — but the innermost value is ASSIGNED, not deep-merged: a non-``None`` mapping
+    at the leaf REPLACES the stored mapping wholesale, so its own omitted members are
+    dropped rather than stranded. (Recursively deep-merging every level would silently
+    retain removed members — the exact bug this change exists to fix — so the leaf
+    assignment stays a replacement.)
+
+    **Deletion sentinel (nested map entries only).** Within a section's mapping an
+    update value of ``None`` REMOVES that key from ``doc`` instead of writing ``null``
+    or retaining the old value — at the section-member level (``{'section': {'key':
+    None}}``) and one level deeper, inside a member map (``{'section': {'key': {'inner':
+    None}}}``). That is what lets a caller submit a surviving map with a removed member
+    (``{'project_board': {'projects': {'gone': None}}}`` drops only ``gone``) and have
+    it actually leave the persisted YAML, siblings / comments / order intact. Deletion
+    is idempotent — a key that isn't present is simply skipped.
+
+    It is deliberately confined to *nested* entries: a TOP-LEVEL section whose update
+    value is ``None`` is written through unchanged (``doc[section] = None``), so a
+    documented nullable top-level scalar keeps its explicit-null semantics and is never
+    silently dropped. Clearing a nested *scalar* setting back to its inherited default
+    is the reset path's job (``pop_keys_from_yaml`` / ``_reset_settings_keys``), so by
+    the settings-apply contract a ``None`` that reaches a nested entry is an explicit
+    deletion, not a "set to null". A falsy *real* value (``False`` / ``0`` / ``""``) is
+    never the sentinel. Non-``None`` merge behavior — add or replace — is unchanged.
     """
     for section, values in updates.items():
         if not isinstance(values, dict):
@@ -891,10 +926,20 @@ def apply_updates_to_yaml(doc: Any, updates: dict[str, Any]) -> Any:
         if section not in doc or not isinstance(doc.get(section), dict):
             doc[section] = {}
         for key, val in values.items():
+            if val is _DELETE:
+                # Section-member deletion sentinel: drop the key, don't null it.
+                if isinstance(doc[section], dict) and key in doc[section]:
+                    del doc[section][key]
+                continue
             if isinstance(val, dict):
                 if key not in doc[section] or not isinstance(doc[section].get(key), dict):
                     doc[section][key] = {}
                 for inner_key, inner_val in val.items():
+                    if inner_val is _DELETE:
+                        # The same sentinel one level deeper, within the member map.
+                        if inner_key in doc[section][key]:
+                            del doc[section][key][inner_key]
+                        continue
                     doc[section][key][inner_key] = inner_val
             else:
                 doc[section][key] = val

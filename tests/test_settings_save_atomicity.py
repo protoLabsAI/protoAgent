@@ -163,6 +163,37 @@ def test_soul_is_not_rolled_back(monkeypatch, isolated_config, tmp_path: Path) -
     assert written == ["# New persona"], "the SOUL write stands even when the reload fails"
 
 
+def test_apply_settings_deletes_a_nested_map_member_via_none(monkeypatch, isolated_config) -> None:
+    """#3275 end-to-end: submitting a surviving map with one member set to None removes
+    ONLY that member through the real _apply_settings_changes seam (validate -> persist ->
+    reload), and a normal YAML readback confirms it — the caller never hand-edits YAML.
+    Sibling projects, an unknown sibling key, and an unrelated section all survive."""
+    leaf, _secrets, _host = isolated_config
+    import server.agent_init as ai
+
+    leaf.write_text(
+        "project_board:\n"
+        "  projects:\n"
+        "    keep:\n"
+        "      repo: org/keep\n"
+        "    gone:\n"
+        "      repo: org/gone\n"
+        "  poll_seconds: 30\n"
+        "model:\n"
+        "  name: m\n"
+    )
+    monkeypatch.setattr(ai, "_reload_langgraph_agent", lambda: (True, "reloaded"))
+
+    ok, _ = ai._apply_settings_changes(config={"project_board": {"projects": {"gone": None}}})
+
+    assert ok is True
+    saved = _read(leaf)
+    assert "gone" not in saved["project_board"]["projects"]  # removed
+    assert saved["project_board"]["projects"]["keep"] == {"repo": "org/keep"}  # sibling kept
+    assert saved["project_board"]["poll_seconds"] == 30  # unknown sibling kept
+    assert saved["model"]["name"] == "m"  # unrelated section untouched
+
+
 def test_pure_reload_failure_touches_nothing(monkeypatch, isolated_config) -> None:
     """A bare reload has no write to undo — it must not invent one."""
     leaf, _secrets, _host = isolated_config
