@@ -124,7 +124,10 @@ class PluginManifest:
     # data and that declared action is the only thing the palette can run.
     # Unlike a bad view path (which only blanks an iframe) a bad route becomes an
     # AUTHENTICATED call carrying the operator bearer, so anything reaching outside
-    # the plugin's own namespace — an absolute or cross-origin route, a ../ escape,
+    # the plugin's own namespace — an absolute or cross-origin route, a ../ escape
+    # (percent-encoded spellings unwrapped first), a route carrying a tab, newline or
+    # other control character (the URL parser DELETES those before it resolves the dot
+    # segments, so `.<TAB>./.<TAB>./config` validates clean and requests /api/config),
     # a topic in another plugin's namespace, a view or command this manifest never
     # declared — is DROPPED with a warning rather than kept. See `_parse_commands`.
     # The console adapter that compiles these is the other half of ADR 0057 §5 step 3
@@ -389,6 +392,15 @@ _COMMAND_ACTIONS = ("navigate", "open_view", "tool", "emit", "command")
 # verb for an authenticated call is how a read becomes a write.
 _COMMAND_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 _VALID_COMMAND_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+# ASCII tab, LF and CR are *deleted* from a URL by the WHATWG parser as its very first
+# step — before it resolves `..` — so `.<TAB>.` is not a dot-dot segment to a validator
+# that reads the declared string and IS one to the `fetch` that follows:
+# `new URL("/api/plugins/evil/.\t./.\t./config")` has pathname `/api/config`. The other
+# C0 controls (and DEL) are never legitimate in a route either, so a route carrying any
+# of them is dropped outright rather than sanitized — that is what keeps the string
+# `_parse_command_route` checks identical to the one the browser will match, which is the
+# whole contract the docstring below describes.
+_URL_RESHAPING_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 
 
 def _parse_command_route(raw, plugin_id: str, *, command_id: str, label: str) -> str | None:
@@ -404,11 +416,16 @@ def _parse_command_route(raw, plugin_id: str, *, command_id: str, label: str) ->
     against a core endpoint. The precedent to mirror is ``_parse_public_paths``:
     namespace-scoping IS the security boundary, and its trailing slash is load-bearing.
 
-    Percent-encoding is unwrapped first (``%2e%2e`` is ``..`` by the time a browser
-    normalizes the path), and the composed path is re-checked against the namespace
-    root with ``posixpath.normpath`` — ``posixpath`` and not ``os.path``, because URL
-    routes stay ``/``-separated on the Windows leg where ``os.path`` would treat a
-    backslash as a separator and normalize a different string than the browser does.
+    Every check therefore runs on the string *the browser will match*, not the string
+    the manifest spelled. That takes two normalizations up front, in the browser's own
+    order: percent-encoding is unwrapped (``%2e%2e`` is ``..`` by the time a browser
+    normalizes the path), and any URL-reshaping control character is rejected, because
+    the URL parser strips tab/LF/CR *before* it resolves ``..`` — ``%2e%09%2e/%2e%09%2e``
+    decodes to no dot-dot segment here and arrives as ``../..`` at request time. Only
+    then is the composed path re-checked against the namespace root with
+    ``posixpath.normpath`` — ``posixpath`` and not ``os.path``, because URL routes stay
+    ``/``-separated on the Windows leg where ``os.path`` would treat a backslash as a
+    separator and normalize a different string than the browser does.
     """
     declared = str(raw or "").strip()
     route = _percent_decoded(declared)
@@ -416,6 +433,12 @@ def _parse_command_route(raw, plugin_id: str, *, command_id: str, label: str) ->
     reason = ""
     if not route:
         reason = "is empty"
+    elif _URL_RESHAPING_CHARS.search(route):
+        reason = (
+            "carries a tab, newline or other control character — the URL parser deletes "
+            "those before it resolves '..', so the route the browser requests is not the "
+            "one declared"
+        )
     elif _NON_SAME_ORIGIN_PATH.search(route):
         reason = "carries a scheme, host or port"
     elif route.startswith("/"):

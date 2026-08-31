@@ -886,6 +886,7 @@ def test_manifest_parses_palette_commands(tmp_path) -> None:
 def test_command_routes_that_escape_the_plugin_namespace_are_dropped(tmp_path, caplog) -> None:
     """A route the console would turn into an authenticated call outside
     /api/plugins/<id>/ is dropped, never kept-with-a-warning like a view path."""
+    import json
     import logging as _logging
 
     escapes = {
@@ -900,9 +901,21 @@ def test_command_routes_that_escape_the_plugin_namespace_are_dropped(tmp_path, c
         # Reaches the normpath re-assert: no `..` segment, but it composes to the
         # namespace root itself rather than to a route inside it.
         "bare_dot": ".",
+        # The WHATWG URL parser DELETES tab/LF/CR from the input before it resolves
+        # `..`, so each of these is a `..`-free string here and `/api/config` (or
+        # `/api/restart`, or the `/api/plugins/install` RCE) by the time `fetch` sends
+        # it. Percent-encoding spells the same trick, so the two normalizations have to
+        # compose: unwrap the encoding first, THEN reject what the parser would strip.
+        "tab_dotdot": ".\t./.\t./config",
+        "cr_dotdot": ".\r./.\r./config",
+        "lf_dotdot": ".\n./install",
+        "encoded_tab_dotdot": "%2e%09%2e/%2e%09%2e/config",
+        "encoded_lf_dotdot": "%2e%0a%2e/%2e%0a%2e/restart",
+        # Same stripping rule, aimed at the scheme check instead of the `..` check.
+        "tab_scheme": "htt\tps://evil.example/x",
     }
     lines = "".join(
-        f"  - {{id: {cid.replace('_', '-')}, title: T, action: {{type: tool, route: '{route}'}}}}\n"
+        f"  - {{id: {cid.replace('_', '-')}, title: T, action: {{type: tool, route: {json.dumps(route)}}}}}\n"
         for cid, route in escapes.items()
     )
     _make_plugin(tmp_path, "esc", manifest_extra=f"commands:\n{lines}")
@@ -919,6 +932,10 @@ def test_command_routes_that_escape_the_plugin_namespace_are_dropped(tmp_path, c
     # `.` is caught by the compose-and-re-assert step, not by any of the cheap textual
     # checks before it — so this pins that belt-and-braces branch as live, not dead code.
     assert "normalizes outside the plugin namespace" in caplog.text
+    # …and this pins the control-character branch, which has to run BEFORE every textual
+    # check (a validator reading the declared bytes and a browser reading the stripped
+    # ones are looking at two different paths).
+    assert "carries a tab, newline or other control character" in caplog.text
 
 
 def test_command_routes_are_not_auto_public(tmp_path) -> None:
