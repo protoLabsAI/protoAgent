@@ -22,6 +22,7 @@ from graph.config import LangGraphConfig, Provider, SubagentDef
 from graph.config_io import (
     apply_updates_to_yaml,
     config_to_dict,
+    load_yaml_doc,
     save_yaml_doc,
 )
 
@@ -694,6 +695,30 @@ def test_real_merge_path_preserves_omitted_and_overwrites_emitted(tmp_path):
     assert reloaded.a2a_description == "kept_desc"  # omitted section preserved
     assert reloaded.model_name == "protolabs/reasoning"  # emitted key overwritten
     assert doc["model"]["extra_key"] == "keep_me"  # unknown key untouched by the merge
+
+
+def test_none_deletes_a_map_member_across_save_readback(tmp_path):
+    """#3275: a None in a nested map update REMOVES that member, and the removal
+    survives the full apply -> save_yaml_doc -> from_yaml readback — so a caller
+    confirms a deletion through the normal config path, no hand-editing. Uses
+    ``plugins.update_policy``, a real map-valued field ({plugin_id: policy}) that
+    from_yaml parses back into a dataclass attr; the sibling member and unrelated
+    plugins.* keys ride through untouched (add/replace merge behavior unchanged)."""
+    path = _write_yaml(
+        tmp_path,
+        "plugins:\n"
+        "  enabled: [alpha, beta]\n"
+        "  update_policy:\n"
+        "    alpha: auto\n"
+        "    beta: manual\n",
+    )
+    doc = load_yaml_doc(Path(path))
+    apply_updates_to_yaml(doc, {"plugins": {"update_policy": {"beta": None}}})
+    save_yaml_doc(doc, Path(path))
+
+    cfg = LangGraphConfig.from_yaml(path)
+    assert cfg.plugins_update_policy == {"alpha": "auto"}  # beta removed, alpha kept
+    assert cfg.plugins_enabled == ["alpha", "beta"]  # unrelated key intact
 
 
 def test_empty_string_secret_falls_through_to_main_yaml(tmp_path):

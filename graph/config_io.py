@@ -876,13 +876,62 @@ def pop_keys_from_yaml(doc: Any, dotted_keys: list[str]) -> Any:
     return doc
 
 
+# Deletion sentinel for ``apply_updates_to_yaml``: inside a nested mapping an update
+# value of ``None`` means "remove this key", not "write null". This is the one durable
+# way a resolved config update can express REMOVAL — the third lifecycle operation
+# alongside addition and replacement (ADR 0047) — so map-owned config
+# (``project_board.projects``, a plugin config map, a delegates map) can drop a member
+# through the normal persist/readback path instead of every caller re-implementing it.
+_DELETE = None
+
+
+def _merge_update_mapping(dst: Any, updates: dict[str, Any]) -> None:
+    """Recursively merge ``updates`` into the mapping ``dst`` (mutated in place).
+
+    The nested worker for :func:`apply_updates_to_yaml`, carrying the deletion
+    sentinel: at EVERY depth, an update value of ``None`` DELETES that key from
+    ``dst`` rather than writing ``null`` — idempotent, a key that isn't present is
+    simply skipped. A dict value deep-merges into an existing mapping (creating one
+    when the slot is absent or not a mapping); any other value (including falsy
+    reals like ``False`` / ``0`` / ``""``) is written as-is. ``None`` is the ONLY
+    sentinel — a falsy scalar is a real value, never a deletion. Every write goes
+    through ``__setitem__`` / ``__delitem__`` on whatever container ruamel loaded,
+    so comments, key order and unknown siblings survive.
+    """
+    for key, val in updates.items():
+        if val is _DELETE:
+            if isinstance(dst, dict) and key in dst:
+                del dst[key]
+            continue
+        if isinstance(val, dict):
+            if not isinstance(dst.get(key), dict):
+                dst[key] = {}
+            _merge_update_mapping(dst[key], val)
+        else:
+            dst[key] = val
+
+
 def apply_updates_to_yaml(doc: Any, updates: dict[str, Any]) -> Any:
     """Merge a nested updates dict into the loaded YAML document.
 
-    Uses __setitem__ on whatever container ruamel loaded (CommentedMap
-    acts like dict), so comments / key order / unknown sections are
-    preserved. Keys that don't exist yet get added at the end of the
-    containing section.
+    Uses __setitem__ / __delitem__ on whatever container ruamel loaded
+    (CommentedMap acts like dict), so comments / key order / unknown sections are
+    preserved. Keys that don't exist yet get added at the end of the containing
+    section.
+
+    **Deletion sentinel (nested entries only).** Inside a nested mapping, an update
+    value of ``None`` REMOVES that key from ``doc`` — at any nesting depth — instead
+    of writing ``null`` or retaining the old value. That is what lets a caller submit
+    a surviving map with a removed member (``{'project_board': {'projects': {'gone':
+    None}}}`` drops only ``gone``) and have it actually leave the persisted YAML,
+    siblings / comments / order intact. It is deliberately confined to *nested*
+    entries: a TOP-LEVEL section whose update value is ``None`` is written through
+    unchanged (``doc[section] = None``), so a documented nullable top-level scalar
+    keeps its explicit-null semantics and is never silently dropped. Clearing a
+    nested *scalar* setting back to its inherited default is the reset path's job
+    (``pop_keys_from_yaml`` / ``_reset_settings_keys``), so by the settings-apply
+    contract a ``None`` that reaches a nested entry is an explicit deletion, not a
+    "set to null". Non-``None`` merge behavior — add or replace — is unchanged.
     """
     for section, values in updates.items():
         if not isinstance(values, dict):
@@ -890,14 +939,7 @@ def apply_updates_to_yaml(doc: Any, updates: dict[str, Any]) -> Any:
             continue
         if section not in doc or not isinstance(doc.get(section), dict):
             doc[section] = {}
-        for key, val in values.items():
-            if isinstance(val, dict):
-                if key not in doc[section] or not isinstance(doc[section].get(key), dict):
-                    doc[section][key] = {}
-                for inner_key, inner_val in val.items():
-                    doc[section][key][inner_key] = inner_val
-            else:
-                doc[section][key] = val
+        _merge_update_mapping(doc[section], values)
     return doc
 
 

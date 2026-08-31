@@ -110,6 +110,148 @@ def test_apply_updates_nested_researcher(tmp_path: Path) -> None:
     assert list(doc["subagents"]["researcher"]["tools"]) == ["current_time", "calculator"]
 
 
+# ── apply_updates_to_yaml: the None deletion sentinel (#3275) ────────────────
+# Merge-only updates cannot express "remove this map member", so a map-valued
+# section (project_board.projects, a plugin config map, delegates) kept a deleted
+# key forever. An update value of None now DELETES that nested key rather than
+# writing `null` — the third lifecycle op (removal) alongside add/replace.
+
+
+def test_apply_updates_deletes_nested_map_key_via_none(tmp_path: Path) -> None:
+    """r2: submitting the surviving map with a removed member set to None drops ONLY
+    that member; sibling projects, surrounding unknown keys, comments and order all
+    survive the save/reload round-trip."""
+    from graph import config_io
+
+    yaml_path = tmp_path / "c.yaml"
+    yaml_path.write_text(
+        "# operator's own note\n"
+        "project_board:\n"
+        "  # which repos the board drives\n"
+        "  projects:\n"
+        "    keep:\n"
+        "      repo: org/keep\n"
+        "    gone:\n"
+        "      repo: org/gone\n"
+        "  poll_seconds: 30\n"  # unknown sibling under the same section
+        "fork_only_section:\n"
+        "  keep: me\n"
+    )
+
+    doc = config_io.load_yaml_doc(yaml_path)
+    config_io.apply_updates_to_yaml(doc, {"project_board": {"projects": {"gone": None}}})
+    config_io.save_yaml_doc(doc, yaml_path)
+
+    reloaded = config_io.load_yaml_doc(yaml_path)
+    projects = reloaded["project_board"]["projects"]
+    assert "gone" not in projects  # removed
+    assert dict(projects["keep"]) == {"repo": "org/keep"}  # sibling untouched
+    assert list(projects.keys()) == ["keep"]  # order preserved
+    assert reloaded["project_board"]["poll_seconds"] == 30  # unknown sibling kept
+    assert reloaded["fork_only_section"]["keep"] == "me"  # unknown top-level section kept
+    if config_io._HAS_RUAMEL:  # comment preservation is ruamel-only, as elsewhere
+        assert "operator's own note" in yaml_path.read_text()
+
+
+def test_apply_updates_deletes_from_an_independent_map_section(tmp_path: Path) -> None:
+    """r4: the behavior is generic, not project_board-specific. plugins.update_policy
+    is a genuine map ({plugin_id: policy}); a None drops one plugin's entry and leaves
+    the rest of the map — and unrelated plugins.* keys — intact."""
+    from graph import config_io
+
+    yaml_path = tmp_path / "c.yaml"
+    yaml_path.write_text(
+        "plugins:\n"
+        "  enabled:\n"
+        "    - alpha\n"
+        "    - beta\n"
+        "  update_policy:\n"
+        "    alpha: auto\n"
+        "    beta: manual\n"
+    )
+
+    doc = config_io.load_yaml_doc(yaml_path)
+    config_io.apply_updates_to_yaml(doc, {"plugins": {"update_policy": {"beta": None}}})
+
+    assert "beta" not in doc["plugins"]["update_policy"]
+    assert doc["plugins"]["update_policy"]["alpha"] == "auto"  # sibling map member kept
+    assert list(doc["plugins"]["enabled"]) == ["alpha", "beta"]  # unrelated key untouched
+
+
+def test_apply_updates_deletes_at_more_than_one_nesting_depth(tmp_path: Path) -> None:
+    """r1: the sentinel works at every depth — here a three-levels-deep key
+    (delegates.acme.routes.slow) is removed while its own siblings survive."""
+    from graph import config_io
+
+    yaml_path = tmp_path / "c.yaml"
+    yaml_path.write_text(
+        "delegates:\n"
+        "  acme:\n"
+        "    routes:\n"
+        "      fast: http://fast\n"
+        "      slow: http://slow\n"
+    )
+
+    doc = config_io.load_yaml_doc(yaml_path)
+    config_io.apply_updates_to_yaml(doc, {"delegates": {"acme": {"routes": {"slow": None}}}})
+
+    routes = doc["delegates"]["acme"]["routes"]
+    assert "slow" not in routes
+    assert routes["fast"] == "http://fast"
+
+
+def test_apply_updates_delete_of_absent_key_is_idempotent(tmp_path: Path) -> None:
+    """Removing a key that isn't there is a no-op, not an error — reset is idempotent."""
+    from graph import config_io
+
+    yaml_path = tmp_path / "c.yaml"
+    yaml_path.write_text("project_board:\n  projects:\n    keep:\n      repo: org/keep\n")
+
+    doc = config_io.load_yaml_doc(yaml_path)
+    config_io.apply_updates_to_yaml(doc, {"project_board": {"projects": {"never_existed": None}}})
+
+    assert dict(doc["project_board"]["projects"]["keep"]) == {"repo": "org/keep"}
+    assert "never_existed" not in doc["project_board"]["projects"]
+
+
+def test_apply_updates_none_does_not_delete_falsy_scalars(tmp_path: Path) -> None:
+    """r5: None is the ONLY deletion sentinel. Nested falsy REAL values (False / 0 /
+    "") are written, never mistaken for a removal — so a documented nullable/falsy
+    scalar setting can never be accidentally converted into a deletion."""
+    from graph import config_io
+
+    yaml_path = tmp_path / "c.yaml"
+    yaml_path.write_text("middleware:\n  audit: true\n  memory: true\n")
+
+    doc = config_io.load_yaml_doc(yaml_path)
+    config_io.apply_updates_to_yaml(
+        doc,
+        {"middleware": {"audit": False, "retries": 0, "label": ""}},
+    )
+
+    assert doc["middleware"]["audit"] is False  # falsy value written, not deleted
+    assert doc["middleware"]["retries"] == 0
+    assert doc["middleware"]["label"] == ""
+    assert doc["middleware"]["memory"] is True  # sibling untouched
+
+
+def test_apply_updates_top_level_none_writes_null_not_delete(tmp_path: Path) -> None:
+    """r5: deletion is confined to NESTED map entries. A documented nullable TOP-LEVEL
+    scalar setting sent as None is written through as `null`, not silently dropped —
+    the constraint that keeps the contract from redefining nullable scalars."""
+    from graph import config_io
+
+    yaml_path = tmp_path / "c.yaml"
+    yaml_path.write_text("agent_runtime: acp:proto\nmodel:\n  name: m\n")
+
+    doc = config_io.load_yaml_doc(yaml_path)
+    config_io.apply_updates_to_yaml(doc, {"agent_runtime": None})
+
+    assert "agent_runtime" in doc  # key kept, not deleted
+    assert doc["agent_runtime"] is None  # written as an explicit null
+    assert doc["model"]["name"] == "m"
+
+
 # ── config_to_dict ───────────────────────────────────────────────────────────
 
 
