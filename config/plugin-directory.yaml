@@ -179,6 +179,15 @@ plugins:
     tagline: "The deterministic half of the PR-review QA tier — budgeted protoPatch structural reviews as a fifth review-panel member (ADR 0078)."
     adds: [tool]
 
+  - id: design-system
+    name: Design System
+    category: Engineering
+    repo: https://github.com/protoLabsAI/design-system-plugin
+    tagline: "A live window into your design system — browse tokens and components in the console (gallery backed by your own published Storybook), play with a component's props, and give the agent the real vocabulary to design against."
+    enable: design-system
+    adds: [tool, view, subagent, settings, config]
+    docs: /docs/guides/plugins
+
   # ── Bundled built-ins (ship in-tree under plugins/<id>) ───────────────────────────
   #    These are LISTED in in-app Discover (#2249): Discover is where an operator finds
   #    out what a plugin does, and a bundled plugin has no other surface that says so.

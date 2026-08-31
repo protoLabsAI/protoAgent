@@ -350,6 +350,27 @@
     }
   },
   {
+    "id": "design-system",
+    "name": "Design System",
+    "category": "Engineering",
+    "official": true,
+    "tagline": "A live window into your design system — browse tokens and components in the console (gallery backed by your own published Storybook), play with a component's props, and give the agent the real vocabulary to design against.",
+    "adds": [
+      "tool",
+      "view",
+      "subagent",
+      "settings",
+      "config"
+    ],
+    "bundled": false,
+    "install": "https://github.com/protoLabsAI/design-system-plugin",
+    "enable": "design-system",
+    "links": {
+      "source": "https://github.com/protoLabsAI/design-system-plugin",
+      "docs": "/docs/guides/plugins"
+    }
+  },
+  {
     "id": "plugin-devkit",
     "name": "Plugin Devkit",
     "category": "Authoring",
