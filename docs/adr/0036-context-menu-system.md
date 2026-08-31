@@ -109,9 +109,9 @@ The `rail-surface` menu grew two management actions beyond move/reorder:
   `reconcilePluginViews` prunes a hidden id only when its plugin is uninstalled. **Chat is never
   hidden** (it mounts unconditionally on its dock — a hidden chat would render with no rail icon).
   Restore is via the command palette (ADR 0057) **or the new `rail-background` menu**: `openView()`
-  un-hides before routing, so the command palette — or right-clicking empty rail space — brings a hidden view back to
-  a dock (its core default dock, else the left rail). Persist migration **v13** adds the empty bucket
-  to older layouts.
+  un-hides before routing, so the palette — or right-clicking empty rail space — brings a hidden
+  view back to a dock (its core default dock, else the left rail). Persist migration **v13** adds
+  the empty bucket to older layouts.
 - **Hidden-views menu on the rail background** (`rail-background` ContextType) — right-clicking empty
   rail space (not an icon) lists the hidden surfaces; selecting one restores it **onto the dock whose
   background was clicked** (`showSurface(id, side)`) and opens it there — so it lands where you asked,

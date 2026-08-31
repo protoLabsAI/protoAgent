@@ -166,8 +166,8 @@ Separate planes by **what you're doing**, and collapse redundant doors:
 
 - **Operate** — the rail, unchanged: `Chat · Work · Knowledge` + plugin views.
 - **Configure** — **one** Settings door (the utility-bar pill; the AppDrawer entry
-  points at the same dialog; the command palette deep-links to a group/section; `⌘,` opens it). The
-  surface is §2.1's three groups.
+  points at the same dialog; the command palette deep-links to a group/section;
+  `⌘,` opens it). The surface is §2.1's three groups.
 - Remove the **redundant AppDrawer "Telemetry" shortcut** — Telemetry is the Box
   group; Settings is the single door.
 - Activity stays a utility widget; Notes stays a utility widget (they're not config).

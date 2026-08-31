@@ -7,6 +7,13 @@ act without hunting through rails and menus ([ADR 0057](/adr/0057-command-palett
 Note the shift: **plain ⌘K is _Clear conversation_** in chat, not the palette. Both chords
 are rebindable in Settings ▸ Keyboard ([ADR 0063](/adr/0063-keybinding-system)).
 
+**On the desktop app the palette also has its own window.** The quick launcher —
+**⌥Space** (macOS) / **Ctrl+Alt+Space** — is this same palette, frameless and
+always-on-top, summoned with the console hidden or another app focused; a "go to" hands
+off to the main window, and it dismisses on Escape or blur. That one is an *OS-global*
+hotkey owned by the desktop shell, so it is rebound in its own section of
+Settings ▸ Keyboard, not with the in-app chords above.
+
 ## What's in it
 
 - **Go to any surface** — every resolvable view (Chat, Activity, Inbox, Plugins,
@@ -22,8 +29,8 @@ are rebindable in Settings ▸ Keyboard ([ADR 0063](/adr/0063-keybinding-system)
   with the focused agent (its own thread, persisted locally) — handy for a one-off ask
   without leaving what you're doing.
 - **Plugin views** — a plugin view can opt to render *inside* the palette by declaring
-  `palette: "inline"` on its view (so a lightweight tool can live behind the palette instead of
-  taking a rail slot).
+  `palette: "inline"` on its view (so a lightweight tool can live behind a keystroke
+  instead of taking a rail slot).
 
 Commands are ranked in a fixed order — surfaces, then deep links, then chat — so
 navigation always stays at the top.
