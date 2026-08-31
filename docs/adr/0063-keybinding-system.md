@@ -4,7 +4,8 @@
 
 ## Context
 
-Keyboard handling in the console was ad-hoc: ⌘K (the DS `usePaletteHotkey`), an Escape on the
+Keyboard handling in the console was ad-hoc: the palette chord of the day (the DS
+`usePaletteHotkey`, ⌘K at the time — it is ⌘⇧K now), an Escape on the
 AppDrawer, composer keys in `ChatSurface`, and a couple of Enter-to-submit handlers — all
 hand-rolled, none discoverable, none rebindable. There was no registry, no persistence, no way
 for a user to remap a shortcut or for a fork/plugin to add one. We also want shortcuts that
@@ -33,9 +34,9 @@ registries — ADR 0061, the contextMenu store+host — ADR 0036, per-key persis
 - **Settings ▸ Keyboard** (`KeybindingsPanel`) lists every registered binding by group; click to
   record a new combo (the host is muted via a `capturing` intent while recording), with
   conflict detection (same combo in an overlapping scope is blocked), per-row + reset-all.
-- **Core defaults dogfood the seam** (`coreKeybindings.ts`): `⌘K` palette (adopted off the DS
+- **Core defaults dogfood the seam** (`coreKeybindings.ts`): `⌘⇧K` palette (adopted off the DS
   `usePaletteHotkey` — palette open-state moved to an intents store), `⌘,` Settings, `/` focus
-  composer (global); `⌘T` new, `⌘⇧K` clear, `⌃Tab`/`⌃⇧Tab` prev/next, `⌘1–9` jump (scope `"chat"`);
+  composer (global); `⌘T` new, `⌘K` clear, `⌃Tab`/`⌃⇧Tab` prev/next, `⌘1–9` jump (scope `"chat"`);
   global VS Code-style panel toggles `⌘B` left rail / `⌘⌥B` right panel / `⌘J` bottom dock; and
   panel-**focus** binds `⌃1` chat composer / `⌃2` left / `⌃3` right / `⌃4` bottom — these move
   keyboard focus *into* a dock (so its scoped binds activate), and use the **literal `⌃`** (the
@@ -65,5 +66,5 @@ registries — ADR 0061, the contextMenu store+host — ADR 0036, per-key persis
 ## References
 
 - ADR 0061 (`src/ext/` fork registries — the seam pattern), ADR 0036 (context-menu store+host),
-  ADR 0042 (persisted client state), ADR 0057 (command palette — ⌘K now a regular binding).
+  ADR 0042 (persisted client state), ADR 0057 (command palette — ⌘⇧K now a regular binding).
   Module: `apps/web/src/keybindings/` + `apps/web/src/ext/keybindingRegistry.ts`.

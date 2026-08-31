@@ -1,8 +1,11 @@
-# Command palette (⌘K)
+# Command palette (⌘⇧K)
 
-The console has a command palette — press **⌘K** (macOS) / **Ctrl-K** (Linux/Windows)
-to open it from anywhere. It's the fast path to jump between surfaces and act without
-hunting through rails and menus ([ADR 0057](/adr/0057-command-palette)).
+The console has a command palette — press **⌘⇧K** (macOS) / **Ctrl-Shift-K**
+(Linux/Windows) to open it from anywhere. It's the fast path to jump between surfaces and
+act without hunting through rails and menus ([ADR 0057](/adr/0057-command-palette)).
+
+Note the shift: **plain ⌘K is _Clear conversation_** in chat, not the palette. Both chords
+are rebindable in Settings ▸ Keyboard ([ADR 0063](/adr/0063-keybinding-system)).
 
 ## What's in it
 
@@ -19,7 +22,7 @@ hunting through rails and menus ([ADR 0057](/adr/0057-command-palette)).
   with the focused agent (its own thread, persisted locally) — handy for a one-off ask
   without leaving what you're doing.
 - **Plugin views** — a plugin view can opt to render *inside* the palette by declaring
-  `palette: "inline"` on its view (so a lightweight tool can live behind ⌘K instead of
+  `palette: "inline"` on its view (so a lightweight tool can live behind the palette instead of
   taking a rail slot).
 
 Commands are ranked in a fixed order — surfaces, then deep links, then chat — so
@@ -29,7 +32,7 @@ navigation always stays at the top.
 
 A plugin's view opts into the palette by setting `palette: "inline"` on its view entry
 in `protoagent.plugin.yaml` (the same view that would otherwise mount in a rail/tab).
-When opened from ⌘K, the palette renders the view's body in place.
+When opened from the palette, it renders the view's body in place.
 
 > Plugin-declared *commands* (a manifest `commands:` list that contributes arbitrary
 > actions, beyond views) are the next slice of ADR 0057 and not shipped yet — today a

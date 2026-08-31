@@ -242,7 +242,7 @@ network and won't announce itself over LAN Bonjour unless you enable `fleet.disc
 (Settings → Host → Discovery), a privacy/security-first default. Local-box and tailnet discovery
 and manual register are unaffected, and the fleet console still lists your own members (it reads
 them from disk, not mDNS). To flip a local member
-on or off without opening Settings, press **⌘K → Toggle Fleet Agent** and pick it from the
+on or off without opening Settings, press **⌘⇧K → Toggle Fleet Agent** and pick it from the
 picker (the host and remote members are never listed) — see
 [command palette](./command-palette.md).
 
