@@ -19,12 +19,14 @@ export {
   registerPaletteSource,
   registeredPaletteCommands,
   visiblePaletteCommands,
+  hasPaletteSources,
   subscribePaletteCommands,
   paletteCommandsVersion,
 } from "./paletteRegistry";
 export type {
   PaletteCommand,
   PaletteCommandContext,
+  PaletteCommandOrigin,
   PaletteCommandSource,
 } from "./paletteRegistry";
 export { registerKeybinding, registeredKeybindings } from "./keybindingRegistry";

@@ -78,7 +78,7 @@ registerPaletteCommand({
 Gates are **read** at render (`visiblePaletteCommands`), never at registration — developer flags
 fail closed while `/api/flags` is in flight, so a row filtered at registration would stay hidden
 forever. For rows that track live data (or a condition `flag`/`hostOnly` can't express), register a
-**source** instead — it's re-read on every palette read, and a throw inside it is contained:
+**source** instead:
 
 ```tsx
 registerPaletteSource(() => openTabs().map((t) => ({
@@ -87,5 +87,16 @@ registerPaletteSource(() => openTabs().map((t) => ({
   run: (ctx) => { focusTab(t.id); ctx.close(); },
 })));
 ```
+
+A source is called **every time the palette is read** — once when ⌘K opens and again on each
+keystroke — so its rows follow your data with no notification of any kind on your side. (It is not
+called *when your data changes*: nothing watches it. A row that changes while the palette is open
+and untouched appears on the next keystroke.) That is why a source has to be **cheap and
+synchronous**: no fetches, no store writes, no `async`. Keep it to mapping state you already have.
+
+A broken source is contained: it is skipped, the sources registered after it still run, and the
+palette keeps every other row. That covers a `throw` **and** a return that isn't an array — an
+`async` source (which returns a Promise), an id-keyed object, `false` for "nothing to show" — since
+the seam is a build-time edge where a fork's own mistake typechecks.
 
 Both return an unregister fn, so a feature can withdraw its commands.

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  hasPaletteSources,
   paletteCommandsVersion,
   registerPaletteCommand,
   registerPaletteSource,
@@ -21,8 +22,11 @@ const source = (fn: PaletteCommandSource) => {
   return off;
 };
 afterEach(() => sourceOffs.splice(0).forEach((off) => off()));
-const visibleIds = (flagOn: (id: string) => boolean, onHost?: boolean) =>
-  visiblePaletteCommands(flagOn, onHost).map((c) => c.id);
+const visibleIds = (
+  flagOn: (id: string) => boolean,
+  onHost?: boolean,
+  from?: "all" | "static" | "dynamic",
+) => visiblePaletteCommands(flagOn, onHost, from).map((c) => c.id);
 const allOn = () => true;
 
 describe("palette-command registry (ADR 0061)", () => {
@@ -159,6 +163,89 @@ describe("palette-command registry (ADR 0061)", () => {
     expect(byId("p8:src")).toBeDefined(); // …and so does the source registered AFTER the thrower
     offBad();
     offGood();
+  });
+
+  it("a source that returns something other than an array is skipped, not thrown out of", () => {
+    registerPaletteCommand({ id: "p8b", label: "Static", run: () => {} });
+    // Every one of these TYPES as `() => PaletteCommand[]` at the fork's call site (the cast is
+    // what a fork's own mistake looks like from here) and every one used to throw
+    // `rows is not iterable` STRAIGHT OUT of this read — through the host's effect and onto the
+    // console's root ErrorBoundary, replacing the whole app with the crash card.
+    const offAsync = source((async () => []) as never); // `async` source → a Promise, not an array
+    const offObject = source((() => ({ a: { id: "obj", label: "Obj", run: () => {} } })) as never);
+    const offFalse = source((() => false) as never); // "nothing to show", the falsy way
+    const offNull = source((() => null) as never);
+    const offGood = source(() => [{ id: "p8b:src", label: "From a source", run: () => {} }]);
+
+    expect(() => registeredPaletteCommands()).not.toThrow();
+    expect(byId("p8b")).toBeDefined(); // statics survive
+    expect(byId("p8b:src")).toBeDefined(); // …and the source registered AFTER the broken ones
+    expect(byId("obj")).toBeUndefined(); // an object's VALUES are not harvested as rows
+    // Gated reads sit on the same call, so they must not throw either.
+    expect(() => visiblePaletteCommands(allOn, false)).not.toThrow();
+
+    offGood();
+    offNull();
+    offFalse();
+    offObject();
+    offAsync();
+  });
+
+  it("keeps the rows a source produced before it threw part way through", () => {
+    const off = source(() => {
+      const rows = [{ id: "half:one", label: "One", run: () => {} }];
+      // A getter that throws on the SECOND row — a generated list hitting a bad record.
+      Object.defineProperty(rows, "1", {
+        get() {
+          throw new Error("bad record");
+        },
+        enumerable: true,
+      });
+      rows.length = 2;
+      return rows;
+    });
+    expect(() => registeredPaletteCommands()).not.toThrow();
+    expect(byId("half:one")).toBeDefined(); // half a list beats none
+    off();
+  });
+
+  it("reads the two halves apart, because the host feeds them to the palette differently", () => {
+    const off = registerPaletteCommand({ id: "half:static", label: "Static", run: () => {} });
+    const calls = vi.fn();
+    const offSource = source(() => {
+      calls();
+      return [
+        { id: "half:dynamic", label: "Dynamic", run: () => {} },
+        { id: "half:static", label: "Source shadow", run: () => {} }, // loses to the static
+      ];
+    });
+
+    const staticIds = registeredPaletteCommands("static").map((c) => c.id);
+    expect(staticIds).toContain("half:static");
+    expect(staticIds).not.toContain("half:dynamic");
+    expect(calls).not.toHaveBeenCalled(); // a statics-only read never CALLS a source
+
+    const dynamicIds = registeredPaletteCommands("dynamic").map((c) => c.id);
+    expect(dynamicIds).toEqual(["half:dynamic"]);
+    // Static-beats-source holds in the narrowed read too — otherwise the shadow row would
+    // reappear through the provider path the host serves "dynamic" on.
+    expect(dynamicIds).not.toContain("half:static");
+    // Gating applies to a narrowed read exactly as it does to the whole one.
+    expect(visibleIds(allOn, true, "dynamic")).toEqual(["half:dynamic"]);
+    expect(registeredPaletteCommands().map((c) => c.id)).toEqual(
+      expect.arrayContaining(["half:static", "half:dynamic"]),
+    );
+
+    offSource();
+    off();
+  });
+
+  it("reports whether any source is registered, so the host wires the provider only then", () => {
+    expect(hasPaletteSources()).toBe(false); // core registers none
+    const off = source(() => []);
+    expect(hasPaletteSources()).toBe(true); // …even though the source yields no rows
+    off();
+    expect(hasPaletteSources()).toBe(false);
   });
 
   it("resolves id collisions: a static beats a source, and the first source beats the rest", () => {

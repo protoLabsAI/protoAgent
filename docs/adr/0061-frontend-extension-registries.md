@@ -118,18 +118,40 @@ menu from `registeredSlashCommands()` + the server list, and `runClientSlash` di
   - **`registerPaletteSource(fn: () => PaletteCommand[])`** contributes commands computed at
     **read** time rather than registration time, for rows that track live data (open chat
     tabs, a roster) — and, since a source picks its rows per read, it is also the escape
-    hatch for a condition the two gate axes can't express, with the throw contained in the
-    registry instead of in the root render. Same guarded-unregister contract; a source that
-    throws is skipped (as are its rows, not the sources after it) rather than blanking the
-    palette. Statics win an id collision over sources; the first source to claim an id wins
-    over later ones.
+    hatch for a condition the two gate axes can't express, with the failure contained in the
+    registry instead of in the root render. Same guarded-unregister contract; a broken source
+    is skipped (its rows, not the sources after it) rather than blanking the palette, and
+    "broken" means a `throw` **or** a return that isn't an array — the seam is a build-time
+    edge, so an `async` source (a Promise), an id-keyed object or a `false` all typecheck at
+    the fork's call site and would otherwise throw `rows is not iterable` past the host's
+    effect and onto the console's ROOT error boundary, trading one bad row for the whole app.
+    Statics win an id collision over sources; the first source to claim an id wins over later
+    ones, in the narrowed reads as well as the whole one.
+
+    **Read time is the HOST's read, and the two halves therefore reach the palette by
+    different paths.** Nothing observes a source's underlying data — `paletteCommandsVersion()`
+    moves only on register/unregister — so the host cannot key an effect on it, and the DS's
+    static path stores the array it is handed verbatim (`getStaticCommands()` flattens the
+    registered groups). Snapshot a source's rows into `registerCommands` and they freeze at
+    whichever effect run registered them: ⌘K keeps listing the tab the operator closed and
+    never lists the one they just opened, until some unrelated change (a plugin toggle, a
+    roster edit, a rebind) happens to re-run the effect. So `visiblePaletteCommands(flagOn,
+    onHost, from)` reads the halves apart: `"static"` rows are snapshotted (a fixed list is
+    correct to freeze, and it keeps them in their registered display position), while
+    `"dynamic"` rows are served by a DS **`CommandProvider`** the commands view re-invokes on
+    every open and every keystroke. The provider is wired only while a source exists — the DS
+    shows its "Searching…" affordance whenever any provider declares `getCommands`, and core
+    ships none — and it applies the query itself, because the DS client-filters only statics
+    (a provider is normally a remote search that already applied it). The honest contract is
+    therefore "re-read on every palette read", not "re-rendered when your data changes": a
+    row that changes while the palette sits open and untouched appears at the next keystroke.
 
   Consumers observe the registry the way they observe the DS one: **`subscribePaletteCommands(fn)`**
   plus a monotonic **`paletteCommandsVersion()`** (bumped on every register/unregister) is exactly
   the `useSyncExternalStore` pair, so a command registered *after* the root view's first render
   still appears — the pre-existing read-once-in-an-effect shape could never show it.
-  `usePaletteRegistry` consumes all of it (gate, presentation, sources, version), so no part
-  of the seam ships as API nothing reads.
+  `usePaletteRegistry` consumes all of it (gate, presentation, both halves of the read, version),
+  so no part of the seam ships as API nothing reads.
 - **`registerKeybinding`** (`apps/web/src/ext/keybindingRegistry.ts`, ADR 0063) — binds a
   default keyboard shortcut (optionally focus-scoped to a `data-kb-scope` panel). Every
   registered binding auto-appears in **Settings ▸ Keyboard** (user-rebindable, with conflict

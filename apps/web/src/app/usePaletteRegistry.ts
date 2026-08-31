@@ -11,10 +11,16 @@
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { commandsView, createPaletteRegistry, pluginView } from "@protolabsai/ui/command-palette";
-import type { Command, PaletteRegistry, PaletteView } from "@protolabsai/ui/command-palette";
+import type {
+  Command,
+  CommandProvider,
+  PaletteRegistry,
+  PaletteView,
+} from "@protolabsai/ui/command-palette";
 import { useUI } from "../state/uiStore";
 import type { View } from "../lib/viewRegistry";
 import {
+  hasPaletteSources,
   paletteCommandsVersion,
   registerPaletteCommand,
   subscribePaletteCommands,
@@ -196,6 +202,67 @@ function toDsCommand(pc: PaletteCommand): Command {
   };
 }
 
+/** Does this row match what the operator typed? A deliberate mirror of the DS commands
+ *  view's own `matchCommand` (module-private in @protolabsai/ui): every whitespace-separated
+ *  term must appear somewhere in the row's label / hint / group / keywords, case-insensitively.
+ *  (The DS also searches a row's `source` chip label; the seam stamps none, so there is
+ *  nothing to search there.)
+ *
+ *  The seam's provider has to apply it ITSELF because the DS client-filters only its STATIC
+ *  commands — a provider is normally a remote search that already applied the query, so its
+ *  results are appended verbatim (`command-palette.views.tsx`: `[...baseCommands.filter(…),
+ *  ...dynamic]`). Skip this and a source's rows would ignore the search box entirely and sit
+ *  under every query. Keep it in step with the DS if that matcher changes; the seam's own
+ *  tests pin the behavior it must have (all terms, any field, case-insensitive). */
+function matchesQuery(c: Command, q: string): boolean {
+  const query = q.trim().toLowerCase();
+  if (!query) return true;
+  const hay = [c.label, c.hint, c.group, ...(c.keywords ?? [])]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return query.split(/\s+/).every((term) => hay.includes(term));
+}
+
+/** The DS `CommandProvider` that serves `registerPaletteSource` rows — the seam's READ-TIME
+ *  half (ADR 0061).
+ *
+ *  A source's rows exist to track live data (open chat tabs, a roster), and the DS's static
+ *  path cannot carry them: `registerCommands` stores the array it is handed VERBATIM
+ *  (`getStaticCommands: () => groups.flatMap(g => g.commands)`), so rows snapshotted in an
+ *  effect freeze until something unrelated re-runs it. Nothing observes a source's data —
+ *  `paletteCommandsVersion()` moves only on register/unregister — so a snapshot would go
+ *  stale silently and stay stale: the fork's new tab missing from ⌘K, its closed tab still
+ *  listed and still runnable. A provider is the DS's actual read-time path: the commands
+ *  view re-invokes `getCommands(query)` every time the palette opens and on every keystroke
+ *  (debounced 120ms), which is exactly the promise the seam makes.
+ *
+ *  Statics stay on the snapshot path — a fixed list is correct to freeze, and it keeps them
+ *  in their registered display position instead of trailing the list. `from: "dynamic"`
+ *  already excludes any id a static claimed, so the two halves never double up.
+ *
+ *  Everything is inside the try: a sync throw out of `getCommands` escapes into the DS's
+ *  `Promise.allSettled` callback as an unhandled rejection and leaves the palette spinning
+ *  "Searching…" forever. `visiblePaletteCommands` contains a broken SOURCE already; this
+ *  contains the mapping around it (a fork's exotic `icon`, a keybinding lookup). */
+export function paletteSourceProvider(
+  flagOn: (id: string) => boolean,
+  onHost: boolean,
+): CommandProvider {
+  return {
+    id: "ext-palette-sources",
+    getCommands: (query) => {
+      try {
+        return visiblePaletteCommands(flagOn, onHost, "dynamic")
+          .map(toDsCommand)
+          .filter((c) => matchesQuery(c, query));
+      } catch {
+        return [];
+      }
+    },
+  };
+}
+
 /** Build the palette registry from the resolved view list + the inline plugin views.
  *  Stable across renders; nav commands + inline views re-register only when their set
  *  changes (plugins enable/disable) — matching the DS registry's add/withdraw model. */
@@ -207,12 +274,15 @@ export function usePaletteRegistry(
   const registry = useMemo(() => createPaletteRegistry(), []);
   const inlineIds = useMemo(() => new Set(inlineViews.map((v) => v.id)), [inlineViews]);
 
-  // Seam commands (ADR 0061) are RE-READ, not read once at mount, because all three of their
-  // inputs land late: `useFlagPredicate` fails closed until /api/flags answers (a flag-gated
-  // row would otherwise stay hidden forever), a dynamic source's rows change with the live
-  // data behind them, and a fork module can register (or withdraw) after the first render —
-  // which is what the registry's version counter reports. A keybinding override re-labels the
-  // row that advertises it. Each feeds the effect below as a dependency.
+  // Seam commands (ADR 0061) are RE-READ, not read once at mount, because their inputs land
+  // late: `useFlagPredicate` fails closed until /api/flags answers (a flag-gated row would
+  // otherwise stay hidden forever), and a fork module can register (or withdraw) after the
+  // first render — which is what the registry's version counter reports. A keybinding
+  // override re-labels the row that advertises it. Each feeds the effect below as a
+  // dependency. The fourth input — a dynamic source's rows changing with the live data
+  // behind them — deliberately does NOT: nothing observes that data, so no dependency could
+  // track it. Those rows go through `paletteSourceProvider` instead, which the DS palette
+  // re-invokes per read; the effect only decides WHETHER to wire it.
   const seamVersion = useSyncExternalStore(
     subscribePaletteCommands,
     paletteCommandsVersion,
@@ -379,13 +449,24 @@ export function usePaletteRegistry(
       // The GATED read: a `flag`-off or (off-host) `hostOnly` command is omitted, exactly as
       // a gated Settings section is (`visibleSections`). Gating here rather than at
       // registration is what lets a late `/api/flags` answer reveal the row.
-      ...visiblePaletteCommands(flagOn, isHostConsole()).map(toDsCommand),
+      // STATICS ONLY — a fixed list is safe to snapshot. Source rows would freeze here; they
+      // take the read-time provider path below instead.
+      ...visiblePaletteCommands(flagOn, isHostConsole(), "static").map(toDsCommand),
     ]);
+    // Dynamic sources, served per palette read. Wired only when a fork registered one: the DS
+    // shows its "Searching…" spinner whenever ANY provider declares `getCommands`, and core
+    // ships zero sources — so an unconditional provider would put a 120ms spinner in front of
+    // every keystroke in the default console. Registering a source bumps `seamVersion`, which
+    // re-runs this effect and wires the provider then.
+    const offSources = hasPaletteSources()
+      ? registry.registerProvider(paletteSourceProvider(flagOn, isHostConsole()))
+      : undefined;
     return () => {
       offChat?.();
       offFleetRoom();
       offPlugins?.();
       offCommands();
+      offSources?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navSig, inlineSig, fleetSig, chat, registry, seamVersion, flagOn, kbOverrides]);
