@@ -833,11 +833,15 @@ _COMMANDS_PLUGIN = (
     "    group: Files\n"
     "    keywords: [file, find]\n"
     "    action: {type: open_view, view: browser, inline: true}\n"
+    "  - id: quick\n"
+    "    title: Quick browse\n"
+    "    action: {type: open_view, view: browser}\n"
     "  - id: reindex\n"
     "    title: Reindex workspace\n"
     "    action: {type: tool, route: reindex}\n"
     "  - id: announce\n"
     "    title: Announce\n"
+    "    keywords: broadcast\n"
     "    action: {type: emit, topic: reindexed}\n"
     "  - id: files-search\n"
     "    title: Files\n"
@@ -861,9 +865,15 @@ def test_manifest_parses_palette_commands(tmp_path) -> None:
             "keywords": ["file", "find"],
             "action": {"type": "open_view", "view": "browser", "inline": True},
         },
+        # `open_view` IS the inline morph, so `inline` is normalized ON even when the
+        # manifest omits it — an `open_view` the adapter's inline filter skipped would
+        # `enter()` a palette view nobody registered, and the DS palette renders nothing
+        # at all for an unknown view id. `navigate` is the non-inline spelling.
+        {"id": "quick", "title": "Quick browse", "action": {"type": "open_view", "view": "browser", "inline": True}},
         # `method` defaults to POST rather than being guessed per call site.
         {"id": "reindex", "title": "Reindex workspace", "action": {"type": "tool", "route": "reindex", "method": "POST"}},
-        # A bare emit topic is forced into the plugin's own event namespace.
+        # A bare emit topic is forced into the plugin's own event namespace; the bare-string
+        # `keywords` is left off rather than iterated into ["b", "r", "o", "a", …].
         {"id": "announce", "title": "Announce", "action": {"type": "emit", "topic": "cmdy.reindexed"}},
         {
             "id": "files-search",
@@ -887,6 +897,9 @@ def test_command_routes_that_escape_the_plugin_namespace_are_dropped(tmp_path, c
         "encoded_dotdot": "%2e%2e/%2e%2e/config",
         "double_encoded": "%252e%252e/config",
         "port": "localhost:7870/x",
+        # Reaches the normpath re-assert: no `..` segment, but it composes to the
+        # namespace root itself rather than to a route inside it.
+        "bare_dot": ".",
     }
     lines = "".join(
         f"  - {{id: {cid.replace('_', '-')}, title: T, action: {{type: tool, route: '{route}'}}}}\n"
@@ -897,8 +910,15 @@ def test_command_routes_that_escape_the_plugin_namespace_are_dropped(tmp_path, c
         m = load_manifest(tmp_path / "esc")
     assert m is not None
     assert m.commands == []  # every one dropped
+    # Each escape is named in its own warning — a drop the author can't see in the log is
+    # a plugin that "just doesn't work", so silence would be its own bug.
+    for route in escapes.values():
+        assert repr(route) in caplog.text, route
     assert caplog.text.count("dropped") >= len(escapes)
     assert "operator bearer" in caplog.text
+    # `.` is caught by the compose-and-re-assert step, not by any of the cheap textual
+    # checks before it — so this pins that belt-and-braces branch as live, not dead code.
+    assert "normalizes outside the plugin namespace" in caplog.text
 
 
 def test_command_routes_are_not_auto_public(tmp_path) -> None:
@@ -969,6 +989,7 @@ def test_commands_reject_shapes_the_console_cannot_dispatch(tmp_path, caplog) ->
             "  - {id: unknown, title: Unknown, action: {type: eval, code: 'x'}}\n"
             "  - {id: verb, title: Bad verb, action: {type: tool, route: r, method: TRACE}}\n"
             "  - {id: chain, title: Chain, action: {type: command, command: nope}}\n"
+            "  - {id: inert-search, title: Inert, provider: {route: search}}\n"
         ),
     )
     with caplog.at_level(_logging.WARNING, logger="protoagent.plugins"):
@@ -983,6 +1004,11 @@ def test_commands_reject_shapes_the_console_cannot_dispatch(tmp_path, caplog) ->
         "method 'TRACE'",
         "chain does not end — it names nope, which this manifest does not declare",
         "neither an action nor a provider",
+        "provider declares no result_action",
+        # The id/title warning fires before there is a valid id, so it has to name the
+        # entry itself — otherwise it is unfindable in a manifest of a dozen commands.
+        "entry (id 'not safe', title 'Unsafe')",
+        "entry (id 'untitled', title '')",
     ):
         assert expected in caplog.text, expected
 
@@ -1070,8 +1096,10 @@ def test_loader_meta_exposes_commands_only_for_enabled_plugins(monkeypatch, tmp_
     assert on["enabled"] is True
     assert on["commands"] == [{"id": "reindex", "title": "Reindex", "action": {"type": "tool", "route": "reindex", "method": "POST"}}]
     # `commands` is the palette contribution; `chat_commands` (a loaded plugin's
-    # register_chat_command tokens) is a different thing entirely — don't conflate them.
-    assert on.get("chat_commands") != on["commands"]
+    # register_chat_command tokens) is a different thing entirely — this plugin registers
+    # none, so a palette entry leaking into that key would show up here as a phantom
+    # slash-command in the composer.
+    assert on["chat_commands"] == []
 
     off = load_plugins(_cfg(plugins_disabled=["cmdy"])).meta[0]
     assert off["enabled"] is False and off["commands"] == []

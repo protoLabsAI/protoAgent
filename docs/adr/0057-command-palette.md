@@ -131,8 +131,15 @@ commands:
 
 views:
   - { id: browser, label: Files, icon: Folder, path: /plugins/files/browser,
-      palette: true }                # opt a view into auto-nav-command generation
+      palette: inline }              # opt this view into the palette's INLINE morph
 ```
+
+> **As shipped (#3282).** Auto-nav went default-on (§8), so a view is a palette entry
+> without opting in and `views[].palette` is *only* the inline-morph switch: the honored
+> spellings are the literal `inline` and a `{ path: … }` mapping naming a different page
+> to morph. `palette: true` warns and is dropped. The parser ships the whole §4 action
+> set, normalizes `open_view` to `inline: true` (there is no non-inline `open_view` —
+> `navigate` is that), and requires a `provider`'s `result_action`.
 
 Backend: add `_parse_commands` next to `_parse_views` (`manifest.py:89`), store on
 `PluginManifest.commands`, and expose it on the runtime status the way views are
@@ -238,8 +245,13 @@ independently shippable.
 
 - **Action set v1** — `navigate` / `open_view(inline)` / `tool` / `emit` / `command`
   / deep-link: which ship first? (rec: `navigate` + `tool` + `open_view`.)
+  **Settled (#3282):** all five. `command` is in *because* it is a namespace boundary
+  like the others — left unvalidated, a manifest could name a core command id the
+  adapter registered — so it is confined to the plugin's own declared commands, with the
+  chain resolved to a fixed point so a loop or a dangling hop drops.
 - **Auto-nav for every view, or opt-in** via `palette: true` / `surfaces:[palette]`?
   (rec: default-on, let noisy views opt *out*.)
+  **Settled:** default-on; `palette` means the inline morph only (see §3).
 - **Provider budget** — per-query timeout/cancel + per-plugin result caps so a slow
   plugin can't stall the palette.
 - **Desktop** — reuse the `main` window overlay (v1) vs a dedicated frameless

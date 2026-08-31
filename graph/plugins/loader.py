@@ -398,7 +398,7 @@ def _warn_unserved_commands(manifest: PluginManifest, routers: list[dict]) -> No
     placeholder is rare enough to be worth a false warning over a missed one.
     """
     routes: list[tuple[str, str]] = []
-    for command in getattr(manifest, "commands", []) or []:
+    for command in manifest.commands:
         action = command.get("action") or {}
         if action.get("type") == "tool":
             routes.append((command.get("id", "?"), action.get("route", "")))
@@ -409,7 +409,7 @@ def _warn_unserved_commands(manifest: PluginManifest, routers: list[dict]) -> No
         return
     served = _served_paths(routers)
     for command_id, route in routes:
-        full = f"/api/plugins/{manifest.id}/{route}".rstrip("/") or "/"
+        full = f"/api/plugins/{manifest.id}/{route}"
         if full not in served:
             log.warning(
                 "[plugins] %s: command %r declares route %r but no registered router serves "

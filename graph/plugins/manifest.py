@@ -111,17 +111,25 @@ class PluginManifest:
     # the operator types. The console compiles both into behavior inside its own
     # trusted adapter — plugin code never enters the bundle — so the vocabulary is
     # closed and every field is validated at parse time: `navigate` and `open_view`
-    # take a `view` naming a view THIS manifest declares (`open_view` adds
-    # `inline: true` to morph it into the palette body); `tool` takes a `route` plus
-    # an optional `method` and calls /api/plugins/<id>/<route>; `emit` takes a
-    # `topic` published on the ADR 0039 bus; `command` takes a `command` naming
-    # another entry in this same list. A `provider` takes the `route` its live
-    # search queries and an optional `result_action` for the rows it returns.
+    # take a `view` naming a view THIS manifest declares — `navigate` opens it on its
+    # rail/dock, `open_view` morphs it into the palette body and always ships
+    # `inline: true` (there is no non-inline `open_view`; `navigate` is that); `tool`
+    # takes a `route` under /api/plugins/<id>/ plus an optional `method` (absent ⇒
+    # POST — a verb is never guessed); `emit` takes a `topic` published on the ADR
+    # 0039 bus and an optional `data` mapping (the payload
+    # `POST /api/events/publish` carries); `command` takes a `command` naming another
+    # entry in this same list. A `provider` makes the entry a live search: it takes
+    # the `route` the console queries as the operator types plus the `result_action`
+    # that running one of its result rows performs — required, because the rows are
+    # data and that declared action is the only thing the palette can run.
     # Unlike a bad view path (which only blanks an iframe) a bad route becomes an
     # AUTHENTICATED call carrying the operator bearer, so anything reaching outside
     # the plugin's own namespace — an absolute or cross-origin route, a ../ escape,
     # a topic in another plugin's namespace, a view or command this manifest never
     # declared — is DROPPED with a warning rather than kept. See `_parse_commands`.
+    # The console adapter that compiles these is the other half of ADR 0057 §5 step 3
+    # and is not wired yet: a declared command is parsed, validated, and surfaced on
+    # /api/runtime/status today, but does not put a row in ⌘K until that lands.
     commands: list[dict] = field(default_factory=list)
     # Auth-exempt paths — prefixes under THIS plugin's own /plugins/<id>/ (or
     # /api/plugins/<id>/) namespace that the default-deny auth middleware lets
@@ -353,7 +361,8 @@ def _parse_views(views, plugin_id: str) -> list[dict]:
                 log.warning(
                     "[plugins] %s: view %r palette %r is neither the literal 'inline' nor a "
                     "{path: …} mapping — the console reads only those two, so the inline morph "
-                    "is dropped (the view itself still loads)",
+                    "is dropped (the view itself still loads, and is already a palette entry "
+                    "without opting in — `palette` only ever selects the inline morph)",
                     plugin_id,
                     v.get("id"),
                     palette,
@@ -499,7 +508,14 @@ def _parse_command_action(raw, plugin_id: str, *, command_id: str, view_ids: set
             )
             return None
         action = {"type": kind, "view": view}
-        if kind == "open_view" and raw.get("inline"):
+        # `open_view` IS the inline morph (ADR 0057 §2C/§4 spell it
+        # `{type: open_view, view, inline: true}`, and `navigate` is the non-inline half),
+        # so `inline` is normalized ON rather than read. A manifest that merely omitted it
+        # would otherwise compile to an action the adapter's `isInlineView` filter skips,
+        # leaving its `ctx.enter(<view id>)` pointing at a palette view nobody registered —
+        # and the DS palette renders `null` for an unknown view id, so the whole palette
+        # blanks (until Escape pops the frame) instead of the command doing nothing.
+        if kind == "open_view":
             action["inline"] = True
         return action
     if kind == "tool":
@@ -548,12 +564,18 @@ def _parse_command_action(raw, plugin_id: str, *, command_id: str, view_ids: set
 
 
 def _parse_command_provider(raw, plugin_id: str, *, command_id: str, view_ids: set[str]) -> dict | None:
-    """A ``provider`` block → ``{route, result_action?}``, or ``None`` (warned).
+    """A ``provider`` block → ``{route, result_action}``, or ``None`` (warned).
 
     A provider is a live-search row: the console queries ``route`` as the operator
     types and turns each result into a command running ``result_action``. Both halves
     go through the same validation as a fixed command — the query is an authenticated
     call, and a result row is a dispatched action.
+
+    ``result_action`` is REQUIRED. A result row is inert data — a label the plugin's
+    route returned — and the DS ``Command`` each row becomes has no *optional* ``run``,
+    so the manifest's declared action is the only thing that can fire when the operator
+    picks one. A provider without it is the "half a command" state ``_parse_commands``
+    exists to keep out of the palette: a search that answers and then does nothing.
     """
     if not isinstance(raw, dict):
         log.warning("[plugins] %s: command %r provider must be a mapping — dropped", plugin_id, command_id)
@@ -561,19 +583,24 @@ def _parse_command_provider(raw, plugin_id: str, *, command_id: str, view_ids: s
     route = _parse_command_route(raw.get("route"), plugin_id, command_id=command_id, label="provider route")
     if route is None:
         return None
-    provider = {"route": route}
-    if "result_action" in raw:
-        result = _parse_command_action(
-            raw["result_action"],
+    if "result_action" not in raw:
+        log.warning(
+            "[plugins] %s: command %r provider declares no result_action — its result rows "
+            "would have nothing to run when they are picked; dropped",
             plugin_id,
-            command_id=command_id,
-            view_ids=view_ids,
-            label="provider result_action",
+            command_id,
         )
-        if result is None:
-            return None
-        provider["result_action"] = result
-    return provider
+        return None
+    result = _parse_command_action(
+        raw["result_action"],
+        plugin_id,
+        command_id=command_id,
+        view_ids=view_ids,
+        label="provider result_action",
+    )
+    if result is None:
+        return None
+    return {"route": route, "result_action": result}
 
 
 def _chained_command_ids(command: dict) -> list[str]:
@@ -612,9 +639,15 @@ def _parse_commands(entries, plugin_id: str, views: list[dict]) -> list[dict]:
         command_id = str(raw.get("id", "") or "").strip()
         title = str(raw.get("title", "") or "").strip()
         if not _VALID_COMMAND_ID.fullmatch(command_id) or not title:
+            # Name both halves: this is the one command warning that fires BEFORE there
+            # is a valid id to identify the entry by, and an author staring at a manifest
+            # of a dozen commands needs something to grep for.
             log.warning(
-                "[plugins] %s: commands entry needs a safe id (%s) and a non-empty title — ignored",
+                "[plugins] %s: commands entry (id %r, title %r) needs a safe id (%s) and a "
+                "non-empty title — ignored",
                 plugin_id,
+                command_id,
+                title,
                 _VALID_COMMAND_ID.pattern,
             )
             continue
@@ -646,9 +679,17 @@ def _parse_commands(entries, plugin_id: str, views: list[dict]) -> list[dict]:
             value = str(raw.get(key, "") or "").strip()
             if value:
                 entry[key] = value
-        keywords = raw.get("keywords")
-        if isinstance(keywords, (list, tuple)):
-            entry["keywords"] = [k for k in (str(x).strip() for x in keywords) if k]
+        # A bare string is NOT a keyword list — it is a Sequence, so iterating `find`
+        # would ship ["f", "i", "n", "d"] — and an empty list stays off the entry
+        # entirely, like every other optional field above.
+        raw_keywords = raw.get("keywords")
+        keywords = (
+            [k for k in (str(x).strip() for x in raw_keywords) if k]
+            if isinstance(raw_keywords, (list, tuple))
+            else []
+        )
+        if keywords:
+            entry["keywords"] = keywords
         if action is not None:
             entry["action"] = action
         if provider is not None:
@@ -660,7 +701,6 @@ def _parse_commands(entries, plugin_id: str, views: list[dict]) -> list[dict]:
     # that chain nowhere, and whatever never joins it either points at a command this
     # manifest doesn't declare (an escape out of the plugin's own namespace) or loops
     # (a --> b --> a the console would run until the tab froze).
-    declared = {c["id"] for c in kept}
     terminating = {c["id"] for c in kept if not _chained_command_ids(c)}
     while True:
         grown = {c["id"] for c in kept if all(t in terminating for t in _chained_command_ids(c))}
@@ -670,7 +710,7 @@ def _parse_commands(entries, plugin_id: str, views: list[dict]) -> list[dict]:
     for c in kept:
         if c["id"] in terminating:
             continue
-        unknown = sorted(set(_chained_command_ids(c)) - declared)
+        unknown = sorted(set(_chained_command_ids(c)) - seen)  # `seen` = everything that parsed
         log.warning(
             "[plugins] %s: command %r chain does not end — %s; a command may only run another "
             "command this manifest declares, and the chain has to terminate; dropped",
@@ -1000,10 +1040,11 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
             ]
         )
     )
-    # `commands` are deliberately absent from both lists above. A view PAGE is public
-    # chrome (a plain iframe navigation that cannot carry the bearer); a command ROUTE
-    # is an authenticated API call the console makes WITH the bearer, so auto-exempting
-    # it would turn a palette entry into an unauthenticated write.
+    # `commands` are deliberately absent from the list above AND from federation_paths
+    # below. A view PAGE is public chrome (a plain iframe navigation that cannot carry
+    # the bearer); a command ROUTE is an authenticated API call the console makes WITH
+    # the bearer, so auto-exempting one would turn a palette entry into an
+    # unauthenticated write.
     #
     # federation_paths (#2747): same namespace validator, separate list — these
     # lower the tier ceiling, they never exempt auth, so a view page is NOT
