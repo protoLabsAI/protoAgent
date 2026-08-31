@@ -10,7 +10,7 @@ target Diátaxis section, and target domain (from the 9-domain taxonomy).
 |---|---|
 | Ingestion pipeline | `docs/guides/ingestion.md` |
 | Knowledge & memory how-to (RAG tuning) | `docs/guides/knowledge.md` |
-| Command palette (⌘K) — was shipped, not just proposed | `docs/guides/command-palette.md` |
+| Command palette (⌘⇧K) — was shipped, not just proposed | `docs/guides/command-palette.md` |
 | Mid-turn steering | `docs/explanation/steering.md` |
 | Operator REST API reference | `docs/reference/operator-api.md` |
 | Skill progressive disclosure (`<available_skills>` index + `load_skill`, ADR 0060) | `docs/guides/skills.md` |

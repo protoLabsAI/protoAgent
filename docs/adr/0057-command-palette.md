@@ -1,4 +1,4 @@
-# ADR 0057 — Command palette (⌘K): plugin-extensible quick command
+# ADR 0057 — Command palette (⌘⇧K): plugin-extensible quick command
 
 - **Status:** Accepted (proposed 2026-06-18; shipped v0.48.0)
 - **Date:** 2026-06-18
@@ -17,21 +17,21 @@
   `state/uiStore.ts`, `app/PluginView.tsx`), `graph/plugins/manifest.py`, and
   `apps/desktop` (Tauri global shortcut).
 
-> The DS already ships the hard part: a morphing ⌘K palette built on a reactive
+> The DS already ships the hard part: a morphing command palette built on a reactive
 > contribution **registry**, async command **providers** (live search), an iframe
 > **`pluginView()`** that runs the `protoagent:init`/`theme` handshake (the *sender*
 > half; `plugin-kit.js` is the receiver), and three **presentation** modes
 > (overlay / inline / fullscreen). This ADR is the protoAgent wiring: a thin web
 > **adapter** that feeds the registry from the existing surface registry + each
 > enabled plugin's manifest, a **new declarative `commands:` manifest contribution
-> type**, and a **⌘K trigger** (web hotkey + Tauri global shortcut). The crux: every
+> type**, and a **palette trigger** (web hotkey + Tauri global shortcut). The crux: every
 > existing surface already opens via `useUI().setSurface(id)`, so it
 > **auto-becomes a palette command** — plugins get palette presence for free, and
 > `commands:` only adds the actions *beyond* navigation.
 
 ## 1. Context & problem
 
-There is **no ⌘K / quick-command in the console today** (greenfield — no `cmdk`
+There is **no command palette / quick-command in the console today** (greenfield — no `cmdk`
 dependency, no global hotkey, only a `Palette` lucide icon in the theme button).
 
 The console already has everything a palette needs to *navigate*:
@@ -54,7 +54,7 @@ The DS shipped a **plugin-extensible palette substrate** (protoContent ADR 0006)
 registry, providers, `pluginView()`, presentation modes — host-agnostic, no
 protoAgent knowledge. The problem this ADR solves: **how do sandboxed plugins
 (manifest + Python `register()` + iframe pages) contribute palette commands and
-views, and how does the same component serve in-app ⌘K *and* a desktop
+views, and how does the same component serve the in-app palette *and* a desktop
 quick-command — without editing core per plugin and without importing plugin code.**
 
 ## 2. Decision
@@ -97,15 +97,24 @@ dispatch authority; **plugin code never enters the bundle**.
 (`apiFetch("/api/plugins/<id>/<route>?q=…")`, bearer + slug-aware) and maps result
 rows to commands. Debounced + cancellable (DS-side).
 
-**E. ⌘K trigger, two surfaces, one component:**
+**E. Palette trigger, two surfaces, one component:**
 
-- **In-app:** `usePaletteHotkey()` (⌘K) toggles `<CommandPalette presentation="overlay">`
-  mounted over the AppShell in `App.tsx`.
-- **Desktop:** a Tauri global shortcut (⌘K is **free**; ⌘⇧P already toggles the
-  window, `apps/desktop/src-tauri/src/lib.rs:379`) → show the window + emit a Tauri
-  event the web listens for to open the palette. **v1 reuses the single `main`
-  window** (overlay); a dedicated frameless `presentation="fullscreen"` palette
-  window is **v2**.
+- **In-app:** `<CommandPalette presentation="overlay">` mounted over the AppShell in
+  `App.tsx`, toggled at ⌘⇧K. *(This proposed the DS's own `usePaletteHotkey()` on ⌘K, and
+  neither half shipped: ⌘K became chat **Clear conversation** in #2949, and the trigger is
+  an ordinary rebindable keybinding — `palette.toggle` / `mod+shift+k` in
+  `apps/web/src/keybindings/coreKeybindings.ts`, ADR 0063 — driving the open-state the
+  palette reads from the intents store, not a DS-internal hook. `usePaletteHotkey` has no
+  callers in `apps/web/src`.)*
+- **Desktop:** a Tauri global shortcut → show the window + emit a Tauri event the web
+  listens for to open the palette. **v1 reuses the single `main` window** (overlay); a
+  dedicated frameless `presentation="fullscreen"` palette window is **v2**.
+  *(This bullet originally argued the shortcut was free to take because ⌘K was unclaimed.
+  That premise no longer holds — ⌘K is chat **Clear conversation** in-app — and the shipped
+  desktop chords are neither ⌘K nor ⌘⇧K anyway: the quick launcher is **⌥Space** on macOS /
+  **Ctrl+Alt+Space** elsewhere, and **⌘⇧P** toggles the console window. See
+  `default_hotkeys()` in `apps/desktop/src-tauri/src/lib.rs`, operator-overridable from
+  Settings ▸ Keyboard.)*
 
 ## 3. The `commands:` manifest (new)
 
@@ -141,9 +150,9 @@ views:
 > set, normalizes `open_view` to `inline: true` (there is no non-inline `open_view` —
 > `navigate` is that), and requires a `provider`'s `result_action`.
 
-Backend: add `_parse_commands` next to `_parse_views` (`manifest.py:89`), store on
+Backend: add `_parse_commands` next to `_parse_views` (`graph/plugins/manifest.py:325`), store on
 `PluginManifest.commands`, and expose it on the runtime status the way views are
-(`installer.py:151` / status payload). The web reads `plugins[].commands` beside
+(`installer.py:287` / status payload). The web reads `plugins[].commands` beside
 `plugins[].views` (`apps/web/src/lib/types.ts`).
 
 ## 4. Adapter & the `viewFor(id)` façade
@@ -203,13 +212,13 @@ Backend: add `_parse_commands` next to `_parse_views` (`manifest.py:89`), store 
 
 1. **Bump `@protolabsai/ui`** to the release carrying `/command-palette`
    (≥ the protoContent #266 publish; currently on `^0.43.0`).
-2. **`viewFor(id)` + nav-command auto-derivation + core commands + ⌘K overlay**
+2. **`viewFor(id)` + nav-command auto-derivation + core commands + palette overlay**
    (no plugins yet). Ships a **useful palette immediately** — quick-jump to every
    surface + core actions.
 3. **Backend `_parse_commands` + runtime `commands` + the adapter's plugin
    command / provider / inline-view wiring** + manifest doc + `plugin-devkit`
    `building-plugins` update.
-4. **Desktop ⌘K** — Tauri global shortcut + window-open event.
+4. **Desktop palette** — Tauri global shortcut + window-open event.
 
 Step 2 ships value alone; 3 adds plugin extensibility; 4 adds desktop. Each is
 independently shippable.
@@ -230,7 +239,7 @@ independently shippable.
 
 ## 7. Consequences
 
-- **Pro:** ⌘K across every surface immediately (step 2); plugins extend it with
+- **Pro:** the palette across every surface immediately (step 2); plugins extend it with
   **zero core edits** (register on enable, unregister on disable — mirrors
   `reconcilePluginViews`); one DS component serves in-app + desktop; **advances ADR
   0056** by forcing `viewFor(id)`.

@@ -141,7 +141,7 @@ export type PluginView = {
   // does not get its own rail entry. First enabled claimant wins.
   slot?: "chat";
   // ADR 0057 — opt this view into the command palette as an INLINE morph target: its
-  // ⌘K command expands the plugin's iframe in the palette body (themed/authed via the
+  // palette command expands the plugin's iframe in the palette body (themed/authed via the
   // same handshake) instead of navigating to its rail. `"inline"` reuses this view's
   // `path`; `{ path }` ships a DISTINCT page for the palette (e.g. a tighter quick
   // editor) vs the full rail panel — so a plugin can ship separate panel/palette views.
