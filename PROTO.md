@@ -271,13 +271,20 @@ These are the failures that actually recur — read them before you edit.
   The same applies to `docs/reference/plugin-view-bridge.md` when the console
   grows a `protoagent:*` bridge message (`tests/test_plugin_view_bridge_docs.py`).
 
-- **Rebinding a core chord reddens a docs test.** Changing a `defaultKeys` in
-  `apps/web/src/keybindings/coreKeybindings.ts` makes every page that advertises that
-  chord wrong, so `tests/test_keybinding_docs.py` re-derives the glyph from the source
-  and fails with the exact `file:line` of each stale claim. It reads the constructions
-  that carry a claim — "Command palette (⌘⇧K)", "⌘K clear" — so a *historical* mention
-  is fine as long as the glyph doesn't sit next to the name it no longer opens. #2949
-  swapped ⌘K/⌘⇧K with nothing watching, and the docs stayed inverted until #3281.
+- **Rebinding a core chord — or folding away a palette command — reddens a docs test.**
+  `tests/test_keybinding_docs.py` re-derives both from the console source. Change a
+  `defaultKeys` in `apps/web/src/keybindings/coreKeybindings.ts` and it fails with the
+  exact `file:line` of every stale claim, *plus* the pages in `_MUST_STATE_THE_CHORD`
+  (the guides a user learns the chord from) that would otherwise just go quiet. A claim
+  is a glyph joined to the name it opens — adjacent ("⌘K clear") or across a short
+  connective ("⌘⇧K / Ctrl-Shift-K **for** the command palette") — so a *historical*
+  mention stays legal. Chords the desktop shell owns are read from
+  `apps/desktop/src-tauri/src/lib.rs` and never judged against the in-app binding: the
+  ⌥Space launcher *is* the palette, and CI must not "correct" that sentence. The third
+  check reads command **names**: `press ⌘⇧K → <command>` has to name something
+  `usePaletteRegistry.ts` still registers — #1769 folded **Toggle Fleet Agent** into the
+  Fleet Room and the fleet guide went on telling operators to type it. #2949 swapped
+  ⌘K/⌘⇧K with nothing watching, and the docs stayed inverted until #3281.
 
 - **Import layering (enforced by `lint-imports`).** `graph/` and the infra
   packages (`a2a_impl/ observability/ security/ infra/ tools/ knowledge/

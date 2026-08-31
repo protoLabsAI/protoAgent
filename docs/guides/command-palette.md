@@ -16,24 +16,34 @@ Settings ▸ Keyboard, not with the in-app chords above.
 
 ## What's in it
 
-- **Go to any surface** — every resolvable view (Chat, Activity, Inbox, Plugins,
-  Settings, plugin rail views) is a "go to" command, listed first.
-- **Deep links** — jump straight to Activity/Inbox, Plugins → Discover/Install, or a
-  specific Settings tab.
-- **Toggle a fleet agent** — **Toggle Fleet Agent** opens a picker of the local,
-  non-host fleet members with their live on/off state; picking one brings it online (or
-  takes it offline) and confirms with a toast — no Settings dive. The host is never
-  listed (stopping it would kill the session), and the agent this window is proxied to is
-  disabled ("current") so you can't stop your own console out from under yourself.
-- **Inline chat** — start typing a question and the palette morphs into a quick chat
-  with the focused agent (its own thread, persisted locally) — handy for a one-off ask
-  without leaving what you're doing.
-- **Plugin views** — a plugin view can opt to render *inside* the palette by declaring
-  `palette: "inline"` on its view (so a lightweight tool can live behind a keystroke
-  instead of taking a rail slot).
+- **Chat with _‹agent›_** — morphs the palette into a quick chat with this window's
+  agent: one preserved thread, full streaming and tool cards, `/clear` to wipe it — handy
+  for a one-off ask without leaving what you're doing.
+- **Fleet Room** — the fleet as a room, opened inside the palette: a presence-aware
+  roster of members (*this instance* · online · stopped · remote), the live fleet
+  activity feed beside it, and a send bar below (Enter goes to the `@name` you addressed,
+  or to everyone online when you addressed no one; ⌘↵ always broadcasts). A roster row
+  carries that member's controls: click the name to **DM** it (the same quick chat,
+  retargeted through the hub proxy), **open its full console**, or **start/stop** it —
+  which is why every member's name is a keyword on this one command, so typing `ava`
+  surfaces the room.
+  Start/stop is offered only for a **local** member you aren't already looking at (never
+  the host, a remote member, or the agent serving this window), and the command itself is
+  disabled in the one place a fleet is a fleet-of-one: a spawned member reached directly
+  on its own port, where it points you at the host instead.
+  *(Per-member root commands — the old **Toggle Fleet Agent** picker and per-member
+  quick-chat — folded into this room; they are one hop in now, not gone.)*
+- **Plugin views** — each enabled plugin's views are their own group. A view can also opt
+  to render *inside* the palette by declaring `palette: "inline"` on it (so a lightweight
+  tool can live behind a keystroke instead of taking a rail slot).
+- **Open…** — the built-in surfaces (Chat, Activity, Knowledge, Studio, Agent, Plugins,
+  Settings, plus whatever a fork adds) live one hop in, behind **Open…**, so the root list
+  stays short.
+- **Deep links** — the jumps worth their own command: **Settings**, **Settings: Fleet**,
+  **Settings: Telemetry**, **Plugins: Discover**, **Plugins: Install from URL**.
 
-Commands are ranked in a fixed order — surfaces, then deep links, then chat — so
-navigation always stays at the top.
+Groups render in registration order — **Agents**, then **Plugins**, then **Commands** —
+so the agent and its fleet stay at the top.
 
 ## For plugin authors
 
@@ -45,6 +55,11 @@ When opened from the palette, it renders the view's body in place.
 > actions, beyond views) are the next slice of ADR 0057 and not shipped yet — today a
 > plugin reaches the palette via an inline **view**.
 
-The palette is wired in `apps/web/src/app/App.tsx` (the `@protolabsai/ui/command-palette`
-substrate + `usePaletteHotkey`); the registry is built in
-`apps/web/src/app/usePaletteRegistry.ts`.
+The palette is mounted in `apps/web/src/app/App.tsx` — the
+`@protolabsai/ui/command-palette` substrate, opened from the keybinding intents store
+(`useKbIntents().paletteOpen`) rather than a DS-internal hotkey hook: the chord is the
+ordinary, rebindable `palette.toggle` binding in
+`apps/web/src/keybindings/coreKeybindings.ts` ([ADR 0063](/adr/0063-keybinding-system)).
+The command + view registry is built in `apps/web/src/app/usePaletteRegistry.ts`, where
+core's own commands go through the same public `registerPaletteCommand` seam a fork uses
+([ADR 0061](/adr/0061-frontend-extension-registries)).

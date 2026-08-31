@@ -99,10 +99,13 @@ rows to commands. Debounced + cancellable (DS-side).
 
 **E. Palette trigger, two surfaces, one component:**
 
-- **In-app:** `usePaletteHotkey()` (⌘⇧K) toggles `<CommandPalette presentation="overlay">`
-  mounted over the AppShell in `App.tsx`. *(Proposed as ⌘K; reassigned to ⌘⇧K when ⌘K
-  became chat **Clear conversation** in #2949. The binding is `palette.toggle` /
-  `mod+shift+k` in `apps/web/src/keybindings/coreKeybindings.ts`, rebindable per ADR 0063.)*
+- **In-app:** `<CommandPalette presentation="overlay">` mounted over the AppShell in
+  `App.tsx`, toggled at ⌘⇧K. *(This proposed the DS's own `usePaletteHotkey()` on ⌘K, and
+  neither half shipped: ⌘K became chat **Clear conversation** in #2949, and the trigger is
+  an ordinary rebindable keybinding — `palette.toggle` / `mod+shift+k` in
+  `apps/web/src/keybindings/coreKeybindings.ts`, ADR 0063 — driving the open-state the
+  palette reads from the intents store, not a DS-internal hook. `usePaletteHotkey` has no
+  callers in `apps/web/src`.)*
 - **Desktop:** a Tauri global shortcut → show the window + emit a Tauri event the web
   listens for to open the palette. **v1 reuses the single `main` window** (overlay); a
   dedicated frameless `presentation="fullscreen"` palette window is **v2**.
