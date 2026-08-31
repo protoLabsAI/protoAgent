@@ -15,6 +15,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **orgChart rebuilt as a first-class plugin (v0.2.0).** The fleet diagram was a one-shot demo:
+  every 8-second poll re-crawled the whole fleet with no caching, a dead peer stalled each load
+  by up to 12s of sequential timeouts, it read the raw `langgraph-config.yaml` roster (missing
+  every fleet-shared `scope: host` delegate — ADR 0105 — and every token in the
+  `delegate_secrets` overlay), and it carried the repo's only `verify=False`. Now: the effective
+  roster via the delegates store, liveness/latency reused from the delegates health prober
+  instead of duplicate probes, per-peer TTL caches (with a negative TTL so unreachable peers
+  can't stall reloads), concurrent per-layer crawling, and a stale-while-revalidate topology
+  snapshot so the view paints instantly. On a hub, supervised fleet remotes join the graph
+  (dashed edges) and their stored bearers widen the crawl. The view gains a node detail panel
+  (URL/version/latency/degree), latency badges, crawl freshness, a force-refresh button, and
+  stops polling in hidden tabs; tunables (cache TTL, poll interval, probe timeout, max nodes,
+  fleet members) land in Settings → Org Chart. Tested in `tests/test_orgchart_plugin.py`.
+
 ## [0.155.3] - 2026-08-29
 
 ### Changed

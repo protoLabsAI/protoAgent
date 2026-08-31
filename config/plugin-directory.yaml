@@ -294,8 +294,8 @@ plugins:
     name: Org Chart
     category: Orchestration
     bundled: true
-    tagline: "Live diagram of the agent fleet — every agent a node, a directed edge wherever one agent can delegate to another. Crawls outward from this agent's delegates. Off by default."
-    adds: [view]
+    tagline: "Live diagram of the agent fleet — every agent a node, a directed edge wherever one agent can delegate to another (dashed where the hub supervises a member). Crawls the effective roster with cached, concurrent probes; the view paints instantly from a stale-while-revalidate snapshot. Off by default."
+    adds: [view, settings]
 
   - id: friction
     name: Friction Log

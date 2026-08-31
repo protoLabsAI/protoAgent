@@ -1,12 +1,29 @@
 id: orgchart
 name: Org Chart
-version: 0.1.0
+version: 0.2.0
 description: >-
   Live diagram of the agent fleet — every agent a node, a directed edge wherever one
-  agent can delegate to another. Crawls outward from this agent's delegates (using the
-  peer tokens it already holds), enriched with each peer's public card + health.
+  agent can delegate to another (dashed where the hub merely supervises a member).
+  Crawls outward from this agent's EFFECTIVE roster (own + fleet-shared delegates,
+  ADR 0105) using the peer tokens it already holds, reusing the delegates plugin's
+  cached health, TTL-caching every peer read, and serving the assembled topology
+  stale-while-revalidate so the view paints instantly.
 # Off by default; enable per-instance via plugins.enabled: [orgchart] (or set true here).
 enabled: false
+
+config_section: orgchart
+config:
+  cache_ttl_s: 15
+  poll_interval_s: 8
+  probe_timeout_s: 3.0
+  max_nodes: 80
+  include_fleet_members: true
+settings:
+  - { key: cache_ttl_s, label: "Topology cache TTL (s)", type: number, description: "How long an assembled topology stays fresh. A stale one is still served instantly while a re-crawl runs in the background." }
+  - { key: poll_interval_s, label: "View poll interval (s)", type: number, description: "How often the open view re-fetches. A hidden tab doesn't poll at all." }
+  - { key: probe_timeout_s, label: "Peer probe timeout (s)", type: number, description: "Per-request timeout when probing a peer's card/health/delegates. Unreachable peers are remembered for 30s so they can't stall every reload." }
+  - { key: max_nodes, label: "Max agents drawn", type: number, description: "Crawl stops past this many nodes." }
+  - { key: include_fleet_members, label: "Include supervised fleet members", type: bool, description: "On a hub, also draw remote members it supervises (dashed edge), even when no delegate points at them — and use their stored tokens to read their delegate lists." }
 
 # One console rail item → an iframe of the self-contained view page. `Network` is a
 # lucide icon in the curated instant-render set. `path` is the PUBLIC page route the
@@ -15,7 +32,8 @@ views:
   - { id: orgchart, label: "Org Chart", icon: Network, path: /plugins/orgchart/view }
 
 # Declarative transparency only (not enforced): the crawl reaches peer agents over the
-# fleet/tailnet to read their cards, health, and delegate lists.
+# fleet/tailnet to read their cards, health, and delegate lists; the roster comes from
+# this instance's config plus the box's fleet-shared host layer.
 capabilities:
   network: ["fleet peers (A2A cards, /healthz, /api/delegates)"]
-  filesystem: none
+  filesystem: ["reads the delegate roster (langgraph-config.yaml + host-config.yaml, via the delegates store)"]
