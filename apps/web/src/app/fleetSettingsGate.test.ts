@@ -1,8 +1,8 @@
-// The fleet-surface gate (#1708/#1999 → sister agents). "New agent", "Fleet settings" and the
-// ⌘K Fleet Room are live in every window that drives a REAL fleet — the host, a standalone
-// instance, and a sister agent's slug window (its fleet calls are hub paths, so they manage the
-// hub's fleet). Only a spawned member reached DIRECTLY on its own port is held back, since
-// there the fleet genuinely is a fleet-of-one and creating would nest.
+// The fleet-surface gate (#1708/#1999 → sister agents). "New agent", "Fleet settings" and
+// the palette's Fleet Room are live in every window that drives a REAL fleet — the host, a
+// standalone instance, and a sister agent's slug window (its fleet calls are hub paths, so
+// they manage the hub's fleet). Only a spawned member reached DIRECTLY on its own port is
+// held back, since there the fleet genuinely is a fleet-of-one and creating would nest.
 import { describe, expect, it } from "vitest";
 
 import type { FleetAgent } from "../lib/types";

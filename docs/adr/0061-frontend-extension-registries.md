@@ -76,7 +76,7 @@ menu from `registeredSlashCommands()` + the server list, and `runClientSlash` di
   (attach, model select, send) are DS `PromptInput` built-ins, not migrated; the registry is
   purely for fork-added actions (e.g. a templates or voice button). Handler context:
   `{ sessionId, setDraft, focusComposer, noteToThread }`.
-- **`registerPaletteCommand`** (`apps/web/src/ext/paletteRegistry.ts`) — adds a root ⌘K
+- **`registerPaletteCommand`** (`apps/web/src/ext/paletteRegistry.ts`) — adds a root command-palette
   command in the "Commands" group; `usePaletteRegistry` maps these onto DS palette `Command`s.
   **Dogfooded:** core's deep-links (Plugins: Discover, Settings, Settings: Fleet/Telemetry)
   register through this seam, so the registry is the only path (no `deepLinkCommands()`

@@ -68,13 +68,13 @@ export type InlinePluginView = {
 /** Open any view by id, routed to the dock it actually lives on (and uncollapsed).
  *  Reads live state via the store's `getState()` so it isn't a render subscription.
  *  A HIDDEN surface (railOrder.hidden — enabled but not shown) is un-hidden first: the
- *  palette is the restore point, so ⌘K → a hidden view's name brings it back onto a dock. */
+ *  palette is the restore point, so ⌘⇧K → a hidden view's name brings it back onto a dock. */
 export function openView(id: string) {
   const ui = useUI.getState();
   if ((ui.railOrder.hidden ?? []).includes(id)) ui.showSurface(id); // restore onto its dock, then route
   const ro = useUI.getState().railOrder; // re-read: showSurface mutated it
   // The mobile shell reads `mobileActive`, NOT the per-dock ids — so without this every
-  // programmatic navigation (⌘K "go to", the rail context menu, a plugin's `ui.navigate`,
+  // programmatic navigation (a palette "go to", the rail context menu, a plugin's `ui.navigate`,
   // a launcher intent) silently did nothing on a phone: it moved a dock the mobile shell
   // never renders. Set both; `mobileActive` is inert on desktop.
   ui.setMobileActive(id);
@@ -173,7 +173,7 @@ _link("plug:download", "Plugins: Install from URL", ["plugins", "install", "url"
   tab: "local",
 });
 // Settings is the consolidated dialog now (2026-06) — opened from the utility-bar pill,
-// the drawer, or these ⌘K commands. A bare "Settings" command + Box-section deep-links.
+// the drawer, or these palette commands. A bare "Settings" command + Box-section deep-links.
 _link("settings", "Settings", ["settings", "config", "preferences", "options"], { kind: "global" });
 _link("box:fleet", "Settings: Fleet", ["fleet", "agents", "box"], { kind: "global", section: "fleet" });
 _link("box:telemetry", "Settings: Telemetry", ["telemetry", "metrics", "box", "global"], {
@@ -335,7 +335,7 @@ export function usePaletteRegistry(
       }),
     );
     if (chat) vs.push(chat.view);
-    // The ⌘K Fleet Room morph-view (sibling of the chat view). Opening a member routes
+    // The Fleet Room morph-view (sibling of the chat view). Opening a member routes
     // through the shared nav chokepoint so it forwards from the launcher window too.
     vs.push(
       fleetRoomView({
@@ -372,7 +372,7 @@ export function usePaletteRegistry(
           },
         ])
       : undefined;
-    // Fleet Room (⌘K palette overhaul) — the co-present roster + address/broadcast, opened
+    // Fleet Room (the palette-UX overhaul) — the co-present roster + address/broadcast, opened
     // as a morph-view. Top of the Agents group, right under "Chat with <this agent>".
     // Quick-chat (#1733) and Toggle Fleet Agent (#1769) are FOLDED INTO the room: the
     // roster row carries DM / open-console / start / stop, and every member's name rides
