@@ -32,10 +32,16 @@ export type SectionMeta = GatedSection & {
   /** Nav label. Stable — the persisted `settingsSection` in uiStore keys off `id`, not this. */
   label: string;
   /**
-   * The lucide icon's NAME, never the component: a component here would drag lucide-react
-   * into every consumer of this table. SettingsSurface maps the name to a statically-imported
-   * component (the rail must not flicker); a consumer that can tolerate a lazy glyph can feed
-   * the same name to lib/lucideIcon.
+   * The lucide icon's CANONICAL name, never the component: a component here would drag
+   * lucide-react into every consumer of this table. It must be a key of lucide's `icons` map,
+   * because the table has two consumers and only one of them resolves names the lax way —
+   * SettingsSurface maps the name to a statically-imported component (the rail must not
+   * flicker through a Suspense fallback), while a consumer that can tolerate a lazy glyph
+   * feeds the same name to lib/lucideIcon, which looks it up in `icons` and falls back to
+   * Package on a miss. lucide keeps DEPRECATED aliases (`BarChart3`) as top-level named
+   * exports but drops them from `icons`, so an alias here type-checks, renders correctly in
+   * the rail, and silently degrades to the Package box in ⌘K / the Launcher. sections.test.ts
+   * pins every name against `icons` so that gap can't reopen.
    */
   icon: string;
 };
@@ -104,7 +110,7 @@ export const CAPABILITY_SECTIONS = [
 export const BOX_SECTIONS = [
   { id: "overview", label: "Overview", icon: "Gauge", hostOnly: true },
   { id: "fleet", label: "Fleet", icon: "Server" },
-  { id: "telemetry", label: "Telemetry", icon: "BarChart3", hostOnly: true },
+  { id: "telemetry", label: "Telemetry", icon: "ChartColumn", hostOnly: true },
 ] as const satisfies readonly SectionMeta[];
 
 // THIS CONSOLE — device-local preferences. These don't cascade and use their own backends

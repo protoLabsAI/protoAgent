@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import ts from "typescript";
+import { icons } from "lucide-react";
 
 import {
   ALL_SECTIONS,
@@ -18,37 +20,135 @@ import sectionsSrc from "./sections.ts?raw";
 // ToolsPanel, TelemetrySurface, 20-odd panels and 26 lucide components) onto that path, and CI
 // has NO bundle-size gate, so the regression would ship silently. Hence a SOURCE guard: the
 // only thing that can be checked is what the module is allowed to import.
+//
+// That guard PARSES rather than greps, and the distinction is the whole ballgame. It began as a
+// pair of regexes that required the `from` clause to sit on the same line as its `import`
+// keyword — so the prettier-wrapped shape (`import {\n  Sparkles,\n} from "lucide-react";`,
+// i.e. what any formatter emits past printWidth, and exactly the shape SettingsSurface's own
+// 25-name lucide import would take) matched NOTHING, as did a bare `import "./x.css"` and a
+// `() => import("./SettingsSurface")`. Every assertion below stayed green with the heavy tree
+// back in the leaf. A guard that is the sole protection for an invariant cannot be
+// shape-sensitive, so this one asks the TypeScript parser instead of a regex.
 
-/** Every module specifier the file imports (value or type), in source order. */
-function importSpecifiers(src: string): string[] {
-  return [...src.matchAll(/(?:^|\n)\s*(?:import|export)\b[^\n;]*?from\s*["']([^"']+)["']/g)].map((m) => m[1]);
+type ImportRef = { spec: string; typeOnly: boolean };
+
+/**
+ * Every module specifier `src` imports, in source order and in EVERY shape TypeScript
+ * understands: single-line and wrapped static imports, `import type`, bare side-effect
+ * `import "x"` (no clause at all, so no `from`), `export … from`, `import x = require("x")`,
+ * and dynamic `import("x")` — a lazy chunk is still a chunk this module owns. A dynamic import
+ * whose specifier isn't a literal is reported as "<computed>" so it fails the equality
+ * assertions rather than vanishing.
+ */
+function scanImports(src: string, fileName = "sections.ts"): ImportRef[] {
+  const sf = ts.createSourceFile(fileName, src, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
+  const found: ImportRef[] = [];
+  const text = (n: ts.Node | undefined): string | undefined =>
+    n && ts.isStringLiteralLike(n) ? n.text : undefined;
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node)) {
+      // No import clause at all is a side-effect import: it EXECUTES the module, so it is the
+      // most expensive shape there is, never a type-only one.
+      const spec = text(node.moduleSpecifier);
+      if (spec !== undefined) found.push({ spec, typeOnly: node.importClause?.isTypeOnly ?? false });
+    } else if (ts.isExportDeclaration(node) && node.moduleSpecifier) {
+      const spec = text(node.moduleSpecifier);
+      if (spec !== undefined) found.push({ spec, typeOnly: node.isTypeOnly });
+    } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
+      const spec = text(node.moduleReference.expression);
+      if (spec !== undefined) found.push({ spec, typeOnly: node.isTypeOnly });
+    } else if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      const dynamic =
+        callee.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(callee) && callee.text === "require");
+      if (dynamic) found.push({ spec: text(node.arguments[0]) ?? "<computed>", typeOnly: false });
+    }
+    ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(sf, visit);
+  return found;
 }
 
-/** Specifiers imported for their VALUES — `import type …` / `export type …` excluded. */
-function valueImportSpecifiers(src: string): string[] {
-  return [...src.matchAll(/(?:^|\n)\s*(?:import|export)\s+(?!type\b)[^\n;]*?from\s*["']([^"']+)["']/g)].map(
-    (m) => m[1],
-  );
-}
+const specifiersOf = (src: string): string[] => scanImports(src).map((i) => i.spec);
+const valueSpecifiersOf = (src: string): string[] =>
+  scanImports(src)
+    .filter((i) => !i.typeOnly)
+    .map((i) => i.spec);
+
+describe("the leaf guard itself", () => {
+  // The guard is the only thing keeping sections.ts import-light, so it gets its own test: a
+  // net with a hole in it reads exactly like a net. Each mutation below is a real regression
+  // this file must catch, and each was INVISIBLE to the line-anchored regexes this replaced
+  // (they returned just the two "./sectionGate" entries for the whole block).
+  it("sees an import in every shape a future edit could take", () => {
+    const mutated = [
+      'import {\n  Sparkles,\n  KeyRound,\n} from "lucide-react";',
+      'import "./sections.css";',
+      'import {\n  useFlagPredicate,\n} from "../flags/flags";',
+      'import type {\n  LucideIcon,\n} from "lucide-react";',
+      'export * from "./SettingsSurface";',
+      sectionsSrc,
+      'const lazyPanel = () => import("./TelemetrySurface");',
+    ].join("\n");
+    expect(specifiersOf(mutated)).toEqual([
+      "lucide-react",
+      "./sections.css",
+      "../flags/flags",
+      "lucide-react",
+      "./SettingsSurface",
+      "./sectionGate",
+      "./sectionGate",
+      "./TelemetrySurface",
+    ]);
+    // …and the type/value split survives wrapping too: only the `import type` is erased.
+    expect(valueSpecifiersOf(mutated)).toEqual([
+      "lucide-react",
+      "./sections.css",
+      "../flags/flags",
+      "./SettingsSurface",
+      "./sectionGate",
+      "./TelemetrySurface",
+    ]);
+  });
+});
 
 describe("settings/sections.ts is a leaf", () => {
   it("imports nothing but ./sectionGate", () => {
-    expect(importSpecifiers(sectionsSrc)).toEqual(["./sectionGate", "./sectionGate"]);
-    expect(valueImportSpecifiers(sectionsSrc)).toEqual(["./sectionGate"]);
+    expect(specifiersOf(sectionsSrc)).toEqual(["./sectionGate", "./sectionGate"]);
+    expect(valueSpecifiersOf(sectionsSrc)).toEqual(["./sectionGate"]);
   });
 
   it("…and ./sectionGate is itself import-free, so the leaf's cost is its own text", () => {
-    expect(importSpecifiers(gateSrc)).toEqual([]);
+    // sectionGate is the leaf's only edge, so this pair of assertions IS the transitive
+    // closure: {sections.ts, sectionGate.ts} and nothing else.
+    expect(scanImports(gateSrc, "sectionGate.ts")).toEqual([]);
   });
 
   it("pulls in no React, no lucide components and no panels", () => {
     for (const banned of ["react", "lucide-react", "@protolabsai/ui", "@tanstack/react-query"]) {
-      expect(importSpecifiers(sectionsSrc)).not.toContain(banned);
+      expect(specifiersOf(sectionsSrc)).not.toContain(banned);
     }
     // `icon:` must be the lucide NAME. A component reference (bare `icon: Sparkles`) is what
     // would drag lucide-react back in; every entry must quote its glyph.
     expect(sectionsSrc).not.toMatch(/icon: [A-Z]/);
     for (const s of ALL_SECTIONS) expect(typeof s.icon).toBe("string");
+  });
+
+  it("every icon name resolves through lucide's `icons` map — the LAZY consumer's path", () => {
+    // The table names glyphs as strings precisely so a consumer that never mounts Settings can
+    // render them, and that consumer (⌘K / the desktop Launcher) resolves via lib/lucideIcon:
+    // `icons[name] || Package`. SettingsSurface's static map does NOT exercise that path — it
+    // imports top-level named exports, where lucide KEEPS deprecated aliases it has already
+    // dropped from `icons`. `icon: "BarChart3"` shipped exactly that way: type-checked, correct
+    // in the rail, silently the Package box in ⌘K — the same glyph as Agent ▸ Snapshot, so it
+    // read as intentional. Assert against `icons`, which is the map the resolver actually reads.
+    for (const s of ALL_SECTIONS) {
+      expect(
+        icons[s.icon as keyof typeof icons],
+        `${s.id}: icon "${s.icon}" is not a key of lucide's \`icons\` map (a deprecated alias?)`,
+      ).toBeDefined();
+    }
   });
 });
 

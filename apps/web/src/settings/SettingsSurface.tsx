@@ -1,4 +1,4 @@
-import { Activity, BarChart3, Bot, BookMarked, Boxes, Brain, Cpu, Database, FlaskConical, Gauge, Keyboard, KeyRound, Lock, MessageSquare, Network, Package, Palette, Plug, Puzzle, Server, Share2, Smartphone, Sparkles, Store, Wrench } from "lucide-react";
+import { Activity, Bot, BookMarked, Boxes, Brain, ChartColumn, Cpu, Database, FlaskConical, Gauge, Keyboard, KeyRound, Lock, MessageSquare, Network, Package, Palette, Plug, Puzzle, Server, Share2, Smartphone, Sparkles, Store, Wrench } from "lucide-react";
 import { useFlagPredicate } from "../flags/flags";
 import { settingsSectionGroups } from "./sections";
 import type { LucideIcon } from "lucide-react";
@@ -66,7 +66,7 @@ const ICONS: Record<SettingsSectionIcon, LucideIcon> = {
   Network,
   Gauge,
   Server,
-  BarChart3,
+  ChartColumn,
   Palette,
   MessageSquare,
   Keyboard,
