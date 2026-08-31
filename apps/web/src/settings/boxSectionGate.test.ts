@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
+import { settingsSectionGroups } from "./sections";
 import { visibleSections } from "./sectionGate";
-import src from "./SettingsSurface.tsx?raw";
+// The section table lives in ./sections (a leaf) — the object literals this file greps are
+// there, not in SettingsSurface.tsx, which now only holds the render functions.
+import src from "./sections.ts?raw";
 
 // Settings ▸ Box on a sister agent's console. Overview + Telemetry read the FOCUSED agent's
 // endpoints (/api/runtime, /api/telemetry), so they'd mean something different in a member
@@ -50,6 +53,21 @@ describe("Settings ▸ Box narrows (not disappears) off the host console", () =>
   });
 
   it("the Box group renders whenever it has sections, not only on the host", () => {
-    expect(src).toMatch(/boxSections\.length \? \[\{ label: "Box"/);
+    // Behaviour now that group assembly is a pure function: off the host the group must still
+    // be there, narrowed to Fleet, rather than vanishing from the nav.
+    const labels = (onHost: boolean) =>
+      settingsSectionGroups({ flagOn: on, onHost }).map((g) => g.label);
+    expect(labels(true)).toContain("Box");
+    expect(labels(false)).toContain("Box");
+    const box = settingsSectionGroups({ flagOn: on, onHost: false }).find((g) => g.label === "Box");
+    expect(box?.sections.map((s) => s.id)).toEqual(["fleet"]);
+  });
+
+  it("…because the group is dropped on EMPTINESS, never on the host axis", () => {
+    // The other half of the same rule, and the one behaviour the real table can't demonstrate:
+    // Fleet carries neither gate, so BOX_SECTIONS is never actually empty. Source guard, so the
+    // edit that swaps the condition back to `onHost ? …` (the original bug) is caught.
+    expect(src).toMatch(/\.\.\.\(boxSections\.length \? \[\{ label: GROUP_LABELS\.box/);
+    expect(src).not.toMatch(/onHost \? \[\{ label: GROUP_LABELS\.box/);
   });
 });

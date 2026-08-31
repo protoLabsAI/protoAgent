@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { visibleSections } from "./sectionGate";
-import src from "./SettingsSurface.tsx?raw";
+// The section table lives in ./sections (a leaf); SettingsSurface.tsx now holds only renderers.
+import src from "./sections.ts?raw";
 import flags from "../../../../runtime/flags.py?raw";
 
 // Settings ▸ Secrets is gated to the dev channel (ADR 0068). The external secrets manager's
@@ -41,11 +42,11 @@ describe("Settings ▸ Secrets is flag-gated (#2120)", () => {
     expect(obj).toContain('flag: "secrets-panel"');
   });
 
-  it("SettingsSurface routes every section list through the pure gate", () => {
-    // The component must call the SAME visibleSections this test exercises — and the
+  it("the section table routes every gated list through the pure gate", () => {
+    // The surface must call the SAME visibleSections this test exercises — and the
     // agent group (where secrets lives) must go through shown().
     expect(src).toContain('import { visibleSections } from "./sectionGate"');
-    expect(src).toMatch(/const shown = \(list: Section\[\]\) => visibleSections\(list, flagOn, onHost\)/);
+    expect(src).toMatch(/const shown = \(list: readonly SectionMeta\[\]\) => visibleSections\(list, flagOn, onHost\)/);
     expect(src).toMatch(/shown\(AGENT_SECTIONS\)/);
   });
 
