@@ -52,3 +52,40 @@ registerKeybinding({
 
 A user can rebind it in Settings; if the combo collides with another binding in an overlapping
 scope, the rebind UI blocks it and names the conflict.
+
+## Example — add a ⌘K command (ADR 0061)
+
+`registerPaletteCommand` adds a row to the root command palette's **Commands** group. Core's own
+deep-links (Plugins: Discover, Settings…) register through this same call — there is no core-only
+path.
+
+```tsx
+import { BarChart3 } from "lucide-react";
+import { registerPaletteCommand, registerPaletteSource } from "./index";
+
+registerPaletteCommand({
+  id: "my-dashboard.open",       // stable id — dedup key, LAST registration of an id wins
+  label: "Open Dashboard",
+  icon: <BarChart3 size={16} />,
+  hint: "go to",                 // muted trailing text; a `disabled: true` row says WHY here
+  keybinding: "my-dashboard.toggle", // a registerKeybinding id — the row shows its LIVE combo
+  flag: "my-fork-beta",          // optional: listed only while this developer flag is ON
+  hostOnly: false,               // optional: drop the row in a workspace/sister-agent window
+  run: (ctx) => { /* … navigate … */ ctx.close(); },
+});
+```
+
+Gates are **read** at render (`visiblePaletteCommands`), never at registration — developer flags
+fail closed while `/api/flags` is in flight, so a row filtered at registration would stay hidden
+forever. For rows that track live data (or a condition `flag`/`hostOnly` can't express), register a
+**source** instead — it's re-read on every palette read, and a throw inside it is contained:
+
+```tsx
+registerPaletteSource(() => openTabs().map((t) => ({
+  id: `my-fork:tab:${t.id}`,
+  label: `Go to ${t.title}`,
+  run: (ctx) => { focusTab(t.id); ctx.close(); },
+})));
+```
+
+Both return an unregister fn, so a feature can withdraw its commands.

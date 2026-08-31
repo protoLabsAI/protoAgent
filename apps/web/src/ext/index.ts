@@ -18,6 +18,7 @@ export {
   registerPaletteCommand,
   registerPaletteSource,
   registeredPaletteCommands,
+  visiblePaletteCommands,
   subscribePaletteCommands,
   paletteCommandsVersion,
 } from "./paletteRegistry";
@@ -25,7 +26,6 @@ export type {
   PaletteCommand,
   PaletteCommandContext,
   PaletteCommandSource,
-  PaletteGateContext,
 } from "./paletteRegistry";
 export { registerKeybinding, registeredKeybindings } from "./keybindingRegistry";
 export type { Keybinding } from "./keybindingRegistry";

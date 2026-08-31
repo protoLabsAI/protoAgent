@@ -9,15 +9,24 @@
 // registered as DS `pluginView()`s — their command morphs the palette body into the
 // plugin's own iframe (themed/authed via the handshake) instead of navigating to its rail.
 import type { ReactNode } from "react";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { commandsView, createPaletteRegistry, pluginView } from "@protolabsai/ui/command-palette";
 import type { Command, PaletteRegistry, PaletteView } from "@protolabsai/ui/command-palette";
 import { useUI } from "../state/uiStore";
 import type { View } from "../lib/viewRegistry";
-import { registerPaletteCommand, registeredPaletteCommands } from "../ext/paletteRegistry";
+import {
+  paletteCommandsVersion,
+  registerPaletteCommand,
+  subscribePaletteCommands,
+  visiblePaletteCommands,
+} from "../ext/paletteRegistry";
 import type { PaletteCommand } from "../ext/paletteRegistry";
+import { registeredKeybindings } from "../ext/keybindingRegistry";
+import { formatCombo } from "../keybindings/combo";
+import { effectiveCombo, useKeybindingOverrides } from "../keybindings/overrides";
+import { useFlagPredicate } from "../flags/flags";
 import { useQuery } from "@tanstack/react-query";
-import { agentHref } from "../lib/api";
+import { agentHref, isHostConsole } from "../lib/api";
 import { fleetQuery } from "../lib/queries";
 import { markAgentOpened } from "./fleetPalette";
 import { fleetRoomView } from "./FleetRoom";
@@ -166,13 +175,23 @@ _link("box:telemetry", "Settings: Telemetry", ["telemetry", "metrics", "box", "g
   section: "telemetry",
 });
 
-/** Map a registered (core or fork) PaletteCommand onto a DS palette `Command`. */
+/** Map a registered (core or fork) PaletteCommand onto a DS palette `Command`. The DS row
+ *  has no shortcut slot, so a command that ADVERTISES a keybinding (ADR 0061 `keybinding` =
+ *  a `registerKeybinding` id) renders its combo as the row's trailing hint — resolved
+ *  through `effectiveCombo`, so the row shows the combo the operator REBOUND it to rather
+ *  than a stale default. An explicit `hint` wins (a disabled row explains itself there). */
 function toDsCommand(pc: PaletteCommand): Command {
+  const bound = pc.keybinding
+    ? registeredKeybindings().find((b) => b.id === pc.keybinding)
+    : undefined;
   return {
     id: pc.id,
     label: pc.label,
     group: pc.group ?? "Commands",
     keywords: pc.keywords ?? [],
+    icon: pc.icon,
+    hint: pc.hint ?? (bound ? formatCombo(effectiveCombo(bound)) : undefined),
+    disabled: pc.disabled,
     run: (c) => pc.run({ close: () => c.close() }),
   };
 }
@@ -187,6 +206,20 @@ export function usePaletteRegistry(
 ): PaletteRegistry {
   const registry = useMemo(() => createPaletteRegistry(), []);
   const inlineIds = useMemo(() => new Set(inlineViews.map((v) => v.id)), [inlineViews]);
+
+  // Seam commands (ADR 0061) are RE-READ, not read once at mount, because all three of their
+  // inputs land late: `useFlagPredicate` fails closed until /api/flags answers (a flag-gated
+  // row would otherwise stay hidden forever), a dynamic source's rows change with the live
+  // data behind them, and a fork module can register (or withdraw) after the first render —
+  // which is what the registry's version counter reports. A keybinding override re-labels the
+  // row that advertises it. Each feeds the effect below as a dependency.
+  const seamVersion = useSyncExternalStore(
+    subscribePaletteCommands,
+    paletteCommandsVersion,
+    paletteCommandsVersion,
+  );
+  const flagOn = useFlagPredicate();
+  const kbOverrides = useKeybindingOverrides((s) => s.overrides);
 
   // The live fleet roster (polled) → member names on the Fleet Room command's keywords. Works
   // in both the console window and the desktop launcher (both sit under QueryClientProvider).
@@ -343,7 +376,10 @@ export function usePaletteRegistry(
     };
     const offCommands = registry.registerCommands([
       openCommand,
-      ...registeredPaletteCommands().map(toDsCommand),
+      // The GATED read: a `flag`-off or (off-host) `hostOnly` command is omitted, exactly as
+      // a gated Settings section is (`visibleSections`). Gating here rather than at
+      // registration is what lets a late `/api/flags` answer reveal the row.
+      ...visiblePaletteCommands(flagOn, isHostConsole()).map(toDsCommand),
     ]);
     return () => {
       offChat?.();
@@ -352,7 +388,7 @@ export function usePaletteRegistry(
       offCommands();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navSig, inlineSig, fleetSig, chat, registry]);
+  }, [navSig, inlineSig, fleetSig, chat, registry, seamVersion, flagOn, kbOverrides]);
 
   return registry;
 }

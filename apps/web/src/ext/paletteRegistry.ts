@@ -12,17 +12,25 @@
 //
 // Three things make the seam usable for more than a static deep-link:
 //
-//   • `when` is a RENDER-TIME gate, not a registration-time filter. Registration happens
-//     once at module load, when async state (`/api/flags`) has not landed — and
-//     `useFlagPredicate` fails CLOSED while that request is in flight, so a filter applied
-//     at registration would hide a flag-gated row FOREVER. Evaluating `when` on every root
-//     render lets the late-arriving flag flip the row on.
-//   • `registerPaletteSource` contributes commands computed at read time, for rows that
-//     track live data (open chat tabs, a roster) rather than a fixed list.
+//   • Visibility is DECLARATIVE (`flag` / `hostOnly`) and applied at READ time by the host —
+//     `visiblePaletteCommands(flagOn, onHost)`, the same two axes and the same shape settings
+//     sections gate on (`visibleSections`, settings/sectionGate.ts), and the same `flag?: string`
+//     contract as `registerSlashCommand`. Registration stays UNCONDITIONAL, and that is
+//     load-bearing: it runs once at module load, before `/api/flags` has answered, and
+//     `useFlagPredicate` fails CLOSED while that request is in flight (ADR 0068) — so a gate
+//     resolved AT registration would hide a flag-gated row FOREVER. Re-filtering per render is
+//     what lets the late-arriving flag flip the row on. Gates are DATA, not a predicate the
+//     registry hands out: they can't throw inside the root render, can't get expensive, and
+//     anyone holding the two axes can answer them (including a "why is this row hidden?" UI).
+//   • `registerPaletteSource` contributes commands computed at READ time, for rows that track
+//     live data (open chat tabs, a roster) rather than a fixed list. Because a source decides
+//     per read WHICH rows to return, it is also the escape hatch for a condition the two gate
+//     axes can't express — and a throwing source is contained here, where a fork-supplied
+//     predicate running inside the root render would not be.
 //   • `subscribePaletteCommands` + `paletteCommandsVersion` mirror the DS registry's
 //     bump/subscribe shape (`createPaletteRegistry` in @protolabsai/ui), so the root view
-//     can `useSyncExternalStore(subscribePaletteCommands, paletteCommandsVersion)` and
-//     pick up a command registered AFTER its first render.
+//     `useSyncExternalStore(subscribePaletteCommands, paletteCommandsVersion)`s and picks up a
+//     command registered AFTER its first render (a lazily-imported fork module, a withdrawal).
 //
 // Distinct from plugin manifest `palette` views (ADR 0057), which morph the palette body
 // into a plugin iframe; these are trusted in-process action commands that RUN code.
@@ -32,18 +40,6 @@ import type { ReactNode } from "react";
 export type PaletteCommandContext = {
   /** Close the palette (call after navigating / running). */
   close: () => void;
-};
-
-/** What a command's `when` gate is measured against. Deliberately small and
- *  serializable-ish — a gate answers "should this row exist for this window right now?",
- *  it does not reach into stores. */
-export type PaletteGateContext = {
-  /** Is a developer flag ON for this session (ADR 0068)? Fail-closed while `/api/flags`
-   *  is in flight — which is exactly why `when` is re-evaluated per render. */
-  flagOn: (id: string) => boolean;
-  /** Is this the HOST console window (`isHostConsole()`, the un-suffixed root or the
-   *  reserved `host` slug)? Host-only rows (box-shared Global settings) gate on it. */
-  isHost: boolean;
 };
 
 export type PaletteCommand = {
@@ -57,27 +53,36 @@ export type PaletteCommand = {
   keywords?: string[];
   /** Leading icon (any React node — a DS icon, an emoji, an <img>). */
   icon?: ReactNode;
-  /** Secondary text beside the label ("go to", "host instance only"). */
+  /** Muted trailing text on the row ("go to", "host instance only"). A `disabled` row says
+   *  WHY here — that's what core's Fleet Room command does, so the seam needs no second
+   *  "reason" field. Defaults to `keybinding`'s combo when one is named. */
   hint?: string;
-  /** DISPLAY-ONLY shortcut string, rendered right-aligned by the root view (e.g. "⌘⇧K").
-   *  It does not bind anything — a real binding goes through `registerKeybinding`
-   *  (ADR 0063); this is the label that advertises it. */
-  shortcut?: string;
-  /** Render the row unrunnable (still listed, so it stays discoverable). */
+  /** Id of a `registerKeybinding` binding (ADR 0063) whose shortcut this row ADVERTISES —
+   *  it binds nothing; the combo still fires through the keybinding host. An id rather than
+   *  a literal "⌘⇧K" because bindings are user-rebindable (Settings ▸ Keyboard persists an
+   *  override), so a literal starts lying the moment the operator rebinds it: the host
+   *  renders `formatCombo(effectiveCombo(binding))`, always the live combo. */
+  keybinding?: string;
+  /** Render the row unrunnable but still LISTED, so it stays discoverable — say why in
+   *  `hint` (a mute dead row is worse than none). Contrast the gates below, which omit it. */
   disabled?: boolean;
-  /** Why it's disabled — shown to explain the dead row rather than leaving it mute. */
-  disabledReason?: string;
-  /** RENDER-TIME visibility gate. Returning false omits the row for this render only;
-   *  a later render with different state (a flag that finally loaded) can bring it back.
-   *  Runs on EVERY root render for EVERY registered command, so it must be CHEAP and
-   *  PURE — no fetches, no store writes, no allocation-heavy work. Omitted ⇒ always shown. */
-  when?: (ctx: PaletteGateContext) => boolean;
+  /** Developer-flag id (ADR 0068): listed only while the flag resolves ON — the same
+   *  contract as `ClientSlashCommand.flag`. Resolved per render by the host, NEVER at
+   *  registration (see the header: the fail-closed window would hide it permanently). */
+  flag?: string;
+  /** Host-console-only (`isHostConsole()` — the un-suffixed root or the `host` slug), the
+   *  way a `hostOnly` settings section is: for rows whose target only means something there
+   *  (the box-shared Global defaults). This is the URL-slug axis, NOT the fleet-nesting one
+   *  (`fleetSettingsDisabledReason`) — a sister agent's slug window drives the hub's fleet
+   *  and must keep fleet rows. Prefer `disabled` + `hint` when the row should stay visible
+   *  and explain itself instead of vanishing. */
+  hostOnly?: boolean;
   /** Invoked when the command is run. */
   run: (ctx: PaletteCommandContext) => void;
 };
 
 /** A DYNAMIC command source: called at READ time, never cached, so its rows track live
- *  data. Must be cheap and pure for the same reason `when` must be. */
+ *  data. Runs inside the host's render, so it must be CHEAP — no fetches, no store writes. */
 export type PaletteCommandSource = () => PaletteCommand[];
 
 const _commands = new Map<string, PaletteCommand>();
@@ -93,7 +98,6 @@ export function paletteCommandsVersion(): number {
 
 /** Subscribe to registry changes; returns an unsubscribe fn. */
 export function subscribePaletteCommands(fn: () => void): () => void {
-  if (typeof fn !== "function") return () => {};
   _listeners.add(fn);
   return () => {
     _listeners.delete(fn);
@@ -106,21 +110,28 @@ function bump() {
   for (const l of [..._listeners]) l();
 }
 
-const _valid = (cmd: PaletteCommand | undefined) =>
-  !!(cmd?.id || "").trim() && typeof cmd?.run === "function";
+/** Normalize + validate one entry, or undefined if it can't be shown. Applied to statics at
+ *  registration and to a source's rows on every read (a source is re-read, so it never gets
+ *  a registration-time check). Returns the entry to STORE — id-trimmed, so the dedup key and
+ *  the id the palette renders can't disagree. */
+function _entry(cmd: PaletteCommand | undefined): PaletteCommand | undefined {
+  const id = (cmd?.id || "").trim();
+  if (!cmd || !id || typeof cmd.run !== "function") return undefined;
+  return cmd.id === id ? cmd : { ...cmd, id };
+}
 
 /** Register a root ⌘K command. LAST registration of an id wins (HMR-safe: a re-evaluated
  *  module replaces its own entry, and keeps its original display position). Returns an
  *  unregister fn that only removes the command if it's still the registered one — so a
  *  stale closure can't evict a newer registration of the same id. */
 export function registerPaletteCommand(cmd: PaletteCommand): () => void {
-  if (!_valid(cmd)) return () => {};
-  const id = cmd.id.trim();
-  _commands.set(id, cmd);
+  const entry = _entry(cmd);
+  if (!entry) return () => {};
+  _commands.set(entry.id, entry);
   bump();
   return () => {
-    if (_commands.get(id) !== cmd) return; // superseded (or already removed) — not ours
-    _commands.delete(id);
+    if (_commands.get(entry.id) !== entry) return; // superseded (or already removed) — not ours
+    _commands.delete(entry.id);
     bump();
   };
 }
@@ -136,10 +147,11 @@ export function registerPaletteSource(fn: PaletteCommandSource): () => void {
   };
 }
 
-/** Every registered command: the statics in registration order, then each dynamic
- *  source's rows (re-read now). A statically-registered id wins over a source's row with
- *  the same id, and the first source to claim an id wins over later ones. `when` is NOT
- *  applied here — it's the caller's per-render gate (see `PaletteGateContext`). */
+/** Every registered command, UNGATED: the statics in registration order, then each dynamic
+ *  source's rows (re-read now). A statically-registered id wins an id collision over a
+ *  source's row, and the first source to claim an id wins over later ones — so a fork can
+ *  pin one row of an otherwise generated list by registering it statically. `flag`/`hostOnly`
+ *  are NOT applied — `visiblePaletteCommands` is the gated read a view wants. */
 export function registeredPaletteCommands(): PaletteCommand[] {
   const out = [..._commands.values()];
   const seen = new Set(_commands.keys());
@@ -148,15 +160,29 @@ export function registeredPaletteCommands(): PaletteCommand[] {
     try {
       rows = source() ?? [];
     } catch {
-      rows = []; // a broken fork source must not blank the palette
+      rows = []; // a broken fork source must not blank the palette (or the ones after it)
     }
-    for (const cmd of rows) {
-      if (!_valid(cmd)) continue;
-      const id = cmd.id.trim();
-      if (seen.has(id)) continue;
-      seen.add(id);
+    for (const row of rows) {
+      const cmd = _entry(row);
+      if (!cmd || seen.has(cmd.id)) continue;
+      seen.add(cmd.id);
       out.push(cmd);
     }
   }
   return out;
+}
+
+/** The commands THIS window should show, in display order: every registered command minus
+ *  the ones a developer flag or the host axis gates out. `flagOn` is the host's
+ *  `useFlagPredicate()`; `onHost` its `isHostConsole()`. Mirrors `visibleSections`
+ *  (settings/sectionGate.ts) so the console has ONE gating vocabulary. Call it per render,
+ *  not once: the flag predicate fails closed until `/api/flags` lands, and re-asking is
+ *  exactly what lets a row appear when it does. */
+export function visiblePaletteCommands(
+  flagOn: (id: string) => boolean,
+  onHost = true,
+): PaletteCommand[] {
+  return registeredPaletteCommands().filter(
+    (c) => (!c.flag || flagOn(c.flag)) && (onHost || !c.hostOnly),
+  );
 }

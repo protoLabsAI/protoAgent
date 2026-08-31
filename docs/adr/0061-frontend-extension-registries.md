@@ -84,33 +84,52 @@ menu from `registeredSlashCommands()` + the server list, and `runClientSlash` di
   ADR 0057, which morph the palette body into a plugin iframe — these RUN trusted in-process
   code.)
 
-  A command carries presentation alongside behavior — `icon`, `hint`, a **display-only**
-  `shortcut` string (the real binding is `registerKeybinding`; this just advertises it),
-  and `disabled` + `disabledReason` so a row that can't run stays discoverable and explains
-  itself instead of vanishing. Unlike the other registries this one is **last-write-wins by
-  id** (matching `registerKeybinding`) and returns a **guarded unregister** — it removes the
-  command only while that command is still the registered one, so a stale closure can't evict
-  a newer registration. A re-registered id keeps its original display position.
+  A command carries presentation alongside behavior — `icon`, `hint`, `disabled`, and a
+  `keybinding` id. The presentation fields are the DS `Command` fields (`toDsCommand` passes
+  them straight through); the seam adds no rendering vocabulary of its own. Two deliberate
+  non-fields: a `disabledReason`, because a disabled row's reason belongs in the `hint` it
+  already has (core's Fleet Room command does exactly that), and a display-only `shortcut`
+  *string*, because bindings are user-rebindable — Settings ▸ Keyboard persists an override,
+  so a literal `"⌘⇧K"` starts lying the moment the operator rebinds it. `keybinding` names a
+  `registerKeybinding` id instead (it binds nothing — the combo still fires through the
+  keybinding host) and the adapter renders `formatCombo(effectiveCombo(binding))`, i.e. the
+  live combo, into the row's hint slot. Unlike the other registries this one is
+  **last-write-wins by id** (matching `registerKeybinding`) and returns a **guarded
+  unregister** — it removes the command only while that command is still the registered one,
+  so a stale closure can't evict a newer registration. A re-registered id keeps its original
+  display position.
 
   Two additions make it usable beyond a fixed deep-link:
 
-  - **`when?: (ctx: PaletteGateContext) => boolean`** is a **render-time** gate, not a
-    registration-time filter, and that distinction is load-bearing. Registration happens once
-    at module load, before `/api/flags` has answered — and `useFlagPredicate` fails **closed**
-    while that request is in flight (ADR 0068), so a filter evaluated at registration would
-    hide a flag-gated row *permanently*. Evaluating `when` on every root render lets the
-    late-arriving flag flip the row on. `PaletteGateContext` is deliberately tiny and
-    serializable-ish — `{ flagOn(id), isHost }` — and because the gate runs for every command
-    on every root render it must be **cheap and pure**.
+  - **Declarative gating — `flag?: string` + `hostOnly?: boolean`, read through
+    `visiblePaletteCommands(flagOn, onHost)`.** Same two axes, same shape as the settings
+    sections' `visibleSections` (`settings/sectionGate.ts`), and the same `flag` contract as
+    `registerSlashCommand` — one gating vocabulary for the console. Registration stays
+    **unconditional** and the filter runs at **read** time, which is the load-bearing part:
+    registration happens once at module load, before `/api/flags` has answered, and
+    `useFlagPredicate` fails **closed** while that request is in flight (ADR 0068), so a gate
+    resolved at registration would hide a flag-gated row *permanently*. Re-filtering per
+    render lets the late-arriving flag flip the row on. Gates are **data, not a predicate**:
+    they cannot throw inside the root render, cannot get expensive, and anything holding the
+    two axes can answer them (a "why is this hidden?" affordance included). `hostOnly` is the
+    URL-slug axis (`isHostConsole()`), *not* the fleet-nesting one — a sister agent's slug
+    window drives the hub's fleet and keeps fleet rows. A row that should stay visible but
+    dead uses `disabled` + `hint` instead.
   - **`registerPaletteSource(fn: () => PaletteCommand[])`** contributes commands computed at
     **read** time rather than registration time, for rows that track live data (open chat
-    tabs, a roster). Same guarded-unregister contract; a source that throws is skipped rather
-    than blanking the palette. Statics win an id collision over sources.
+    tabs, a roster) — and, since a source picks its rows per read, it is also the escape
+    hatch for a condition the two gate axes can't express, with the throw contained in the
+    registry instead of in the root render. Same guarded-unregister contract; a source that
+    throws is skipped (as are its rows, not the sources after it) rather than blanking the
+    palette. Statics win an id collision over sources; the first source to claim an id wins
+    over later ones.
 
   Consumers observe the registry the way they observe the DS one: **`subscribePaletteCommands(fn)`**
   plus a monotonic **`paletteCommandsVersion()`** (bumped on every register/unregister) is exactly
   the `useSyncExternalStore` pair, so a command registered *after* the root view's first render
   still appears — the pre-existing read-once-in-an-effect shape could never show it.
+  `usePaletteRegistry` consumes all of it (gate, presentation, sources, version), so no part
+  of the seam ships as API nothing reads.
 - **`registerKeybinding`** (`apps/web/src/ext/keybindingRegistry.ts`, ADR 0063) — binds a
   default keyboard shortcut (optionally focus-scoped to a `data-kb-scope` panel). Every
   registered binding auto-appears in **Settings ▸ Keyboard** (user-rebindable, with conflict

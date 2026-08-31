@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   paletteCommandsVersion,
@@ -6,11 +6,24 @@ import {
   registerPaletteSource,
   registeredPaletteCommands,
   subscribePaletteCommands,
+  visiblePaletteCommands,
 } from "./paletteRegistry";
-import type { PaletteCommand, PaletteGateContext } from "./paletteRegistry";
+import type { PaletteCommand, PaletteCommandSource } from "./paletteRegistry";
 
 const byId = (id: string) => registeredPaletteCommands().find((c) => c.id === id);
-const gate: PaletteGateContext = { flagOn: () => true, isHost: true };
+// The registry is a module singleton and a source contributes to EVERY read, so one left
+// behind by a failed assertion poisons every later test (a throwing one most of all). Statics
+// are keyed by unique ids and harmless; sources get torn down after each test.
+const sourceOffs: (() => void)[] = [];
+const source = (fn: PaletteCommandSource) => {
+  const off = registerPaletteSource(fn);
+  sourceOffs.push(off);
+  return off;
+};
+afterEach(() => sourceOffs.splice(0).forEach((off) => off()));
+const visibleIds = (flagOn: (id: string) => boolean, onHost?: boolean) =>
+  visiblePaletteCommands(flagOn, onHost).map((c) => c.id);
+const allOn = () => true;
 
 describe("palette-command registry (ADR 0061)", () => {
   it("registers, LAST-wins, and ignores invalid", () => {
@@ -23,6 +36,12 @@ describe("palette-command registry (ADR 0061)", () => {
     registerPaletteCommand({ id: "p1", label: "Three", run: () => {} });
     const ids = registeredPaletteCommands().map((c) => c.id);
     expect(ids.indexOf("p1")).toBeLessThan(ids.indexOf("p1-after"));
+
+    // A padded id is stored TRIMMED, so the dedup key and the id the palette renders agree
+    // (` p1 ` replaces `p1` rather than shadowing it with a second row).
+    registerPaletteCommand({ id: " p1 ", label: "Trimmed", run: () => {} });
+    expect(registeredPaletteCommands().filter((c) => c.id.trim() === "p1")).toHaveLength(1);
+    expect(byId("p1")?.label).toBe("Trimmed");
 
     registerPaletteCommand({ id: "", label: "x", run: () => {} });
     // @ts-expect-error — missing run
@@ -47,19 +66,17 @@ describe("palette-command registry (ADR 0061)", () => {
       keywords: ["ship"],
       icon,
       hint: "to the web",
-      shortcut: "⌘⇧K",
+      keybinding: "publish.run",
       disabled: true,
-      disabledReason: "host instance only",
-      when: () => true,
       run: () => {},
     });
     const cmd = byId("p3")!;
     expect(cmd.icon).toBe(icon);
     expect(cmd.hint).toBe("to the web");
-    expect(cmd.shortcut).toBe("⌘⇧K");
+    expect(cmd.keybinding).toBe("publish.run");
     expect(cmd.disabled).toBe(true);
-    expect(cmd.disabledReason).toBe("host instance only");
-    expect(cmd.when?.(gate)).toBe(true);
+    // A disabled row is still LISTED — that's the difference between `disabled` and a gate.
+    expect(visibleIds(allOn)).toContain("p3");
     off();
   });
 
@@ -96,26 +113,33 @@ describe("palette-command registry (ADR 0061)", () => {
     expect(seen).toHaveBeenCalledTimes(2);
     expect(paletteCommandsVersion()).toBeGreaterThan(v1);
 
+    // A source moves the version too — adding one changes what the next read returns, and
+    // the root view only re-reads when the snapshot changes.
+    const offSource = source(() => []);
+    expect(seen).toHaveBeenCalledTimes(3);
+    offSource();
+    expect(seen).toHaveBeenCalledTimes(4);
+
     unsub();
+    const vLast = paletteCommandsVersion();
     registerPaletteCommand({ id: "p7", label: "Seven", run: () => {} });
-    expect(seen).toHaveBeenCalledTimes(2); // unsubscribed
-    expect(paletteCommandsVersion()).toBeGreaterThan(v1 + 1); // version still moves
+    expect(seen).toHaveBeenCalledTimes(4); // unsubscribed
+    expect(paletteCommandsVersion()).toBeGreaterThan(vLast); // version still moves
   });
 
   it("re-reads a dynamic source on every read (never cached)", () => {
     let tabs = ["alpha"];
-    const source = vi.fn(
-      (): PaletteCommand[] =>
-        tabs.map((t) => ({ id: `tab:${t}`, label: t, run: () => {} })),
+    const makeRows = vi.fn((): PaletteCommand[] =>
+      tabs.map((t) => ({ id: `tab:${t}`, label: t, run: () => {} })),
     );
-    const off = registerPaletteSource(source);
+    const off = source(makeRows);
 
     expect(byId("tab:alpha")).toBeDefined();
     expect(byId("tab:beta")).toBeUndefined();
 
     tabs = ["alpha", "beta"]; // live data changed, with NO re-registration
     expect(byId("tab:beta")).toBeDefined();
-    expect(source.mock.calls.length).toBeGreaterThan(1);
+    expect(makeRows.mock.calls.length).toBeGreaterThan(1);
 
     off();
     expect(byId("tab:alpha")).toBeUndefined();
@@ -123,33 +147,91 @@ describe("palette-command registry (ADR 0061)", () => {
     expect(byId("tab:alpha")).toBeUndefined();
   });
 
-  it("a throwing source does not blank the palette", () => {
+  it("a throwing source is skipped without blanking the palette or the sources after it", () => {
     registerPaletteCommand({ id: "p8", label: "Eight", run: () => {} });
-    const off = registerPaletteSource(() => {
+    const offBad = source(() => {
       throw new Error("fork bug");
     });
-    expect(byId("p8")).toBeDefined();
-    off();
+    const offGood = source(() => [
+      { id: "p8:src", label: "From a source", run: () => {} },
+    ]);
+    expect(byId("p8")).toBeDefined(); // statics survive
+    expect(byId("p8:src")).toBeDefined(); // …and so does the source registered AFTER the thrower
+    offBad();
+    offGood();
   });
 
-  it("does NOT evaluate `when` at registration time", () => {
-    const when = vi.fn(() => true);
-    const off = registerPaletteCommand({ id: "p9", label: "Gated", when, run: () => {} });
-    expect(when).not.toHaveBeenCalled();
-    // Reading the registry doesn't evaluate it either — the gate is the ROOT VIEW's, run
-    // per render, so a flag that lands after registration can still flip the row on.
-    registeredPaletteCommands();
-    expect(when).not.toHaveBeenCalled();
-    expect(byId("p9")!.when!(gate)).toBe(true);
-    expect(when).toHaveBeenCalledTimes(1);
-    off();
-  });
-
-  it("core deep-links are dogfooded through the same seam", async () => {
-    // Importing usePaletteRegistry runs its module-load registrations (the core deep-links).
-    await import("../app/usePaletteRegistry");
+  it("resolves id collisions: a static beats a source, and the first source beats the rest", () => {
+    const off = registerPaletteCommand({ id: "dup", label: "Static", run: () => {} });
+    const offFirst = source(() => [
+      { id: "dup", label: "First source", run: () => {} },
+      { id: "dup:only-first", label: "Only first", run: () => {} },
+    ]);
+    const offSecond = source(() => [
+      { id: "dup", label: "Second source", run: () => {} },
+      { id: "dup:only-first", label: "Also second", run: () => {} },
+    ]);
+    expect(byId("dup")?.label).toBe("Static");
+    expect(byId("dup:only-first")?.label).toBe("Only first");
+    // Source rows land AFTER the statics, in source-registration order.
     const ids = registeredPaletteCommands().map((c) => c.id);
-    expect(ids).toContain("settings");
-    expect(ids).toContain("plug:market");
+    expect(ids.indexOf("dup")).toBeLessThan(ids.indexOf("dup:only-first"));
+    // An invalid row from a source is dropped, not rendered as a blank line.
+    const offJunk = source(() => [{ id: "  ", label: "junk", run: () => {} }]);
+    expect(registeredPaletteCommands().some((c) => !c.id.trim())).toBe(false);
+    offJunk();
+    offSecond();
+    offFirst();
+    off();
   });
+
+  it("gates a flagged command at READ time, so a flag that lands later reveals it", () => {
+    const flags = new Set<string>();
+    const flagOn = (id: string) => flags.has(id); // fail-closed, like useFlagPredicate in flight
+    const off = registerPaletteCommand({ id: "p9", label: "Gated", flag: "beta", run: () => {} });
+
+    // Hidden while the flag is off — but still REGISTERED. That distinction is the whole
+    // design: gating at registration (when /api/flags has not answered) would hide it forever.
+    expect(visibleIds(flagOn)).not.toContain("p9");
+    expect(byId("p9")).toBeDefined();
+
+    flags.add("beta"); // /api/flags answered — no re-registration happens
+    expect(visibleIds(flagOn)).toContain("p9");
+    off();
+  });
+
+  it("gates hostOnly commands on the host axis, sources included", () => {
+    const off = registerPaletteCommand({ id: "p10", label: "Host thing", hostOnly: true, run: () => {} });
+    const offSource = source(() => [
+      { id: "p10:src", label: "Host row", hostOnly: true, run: () => {} },
+      { id: "p10:src-flag", label: "Flagged row", flag: "beta", run: () => {} },
+    ]);
+
+    expect(visibleIds(allOn, true)).toEqual(expect.arrayContaining(["p10", "p10:src"]));
+    const offHost = visibleIds(allOn, false);
+    expect(offHost).not.toContain("p10");
+    expect(offHost).not.toContain("p10:src"); // a source's rows gate the same way statics do
+    expect(visibleIds(() => false, false)).not.toContain("p10:src-flag"); // …flags too
+    expect(visibleIds(allOn, false)).toContain("p10:src-flag");
+
+    offSource();
+    off();
+  });
+
+  it(
+    "core deep-links are dogfooded through the same seam",
+    async () => {
+      // Importing usePaletteRegistry runs its module-load registrations (the core deep-links).
+      // Kept LAST and dynamic: the import registers into this module's global state, so every
+      // test above sees the registry without core's rows in it. The generous timeout is for
+      // the transform, not the assertion — the adapter pulls in the DS palette, the UI store,
+      // react-query, the flags query and the keybinding store, and under a full-suite run
+      // that cold import blows past vitest's 5s default.
+      await import("../app/usePaletteRegistry");
+      const ids = registeredPaletteCommands().map((c) => c.id);
+      expect(ids).toContain("settings");
+      expect(ids).toContain("plug:market");
+    },
+    30_000,
+  );
 });
