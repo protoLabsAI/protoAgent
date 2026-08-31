@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import posixpath
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -83,14 +84,45 @@ class PluginManifest:
     # Console surfaces (ADR 0026) — each entry adds a left-rail icon opening a
     # full view (an iframe of a page the plugin serves at `path`). Declared as
     # data so it's known without importing the plugin, and surfaced to the
-    # frontend via /api/runtime/status. Each: {id, label, icon, path, tabs?, slot?}.
+    # frontend via /api/runtime/status. Each: {id, label, icon, path, tabs?,
+    # slot?, palette?}.
     # `path` must (1) be a path a registered router actually serves — the console
     # iframes it verbatim, so a path no router answers is a blank surface — and
     # (2) be a same-origin RELATIVE path (no scheme/host/port): an absolute URL
     # escapes the ADR 0042 fleet proxy origin and breaks the same-origin
     # postMessage token handshake. See `_parse_views` (warns on non-same-origin)
     # and docs/guides/building-react-plugin-views.md.
+    # `palette` (ADR 0057) opts the view into the command palette's INLINE morph,
+    # where picking its entry expands the view's iframe inside the palette body
+    # instead of navigating to its rail panel. Exactly two spellings are honored:
+    # the literal string `inline` (morph the same page `path` already renders), or
+    # a mapping {path: ...} naming a DIFFERENT page to morph — a tighter
+    # palette-sized editor beside the full rail panel. That mapping's page is
+    # auto-exempted from the auth gate like any other view page. Every view is
+    # already a "Go to …" palette entry without opting in, so `palette` is only
+    # ever about the inline morph. Any other value — `true` being the tempting
+    # wrong guess — is dropped with a warning and the view itself still loads,
+    # because the console ignores an unrecognized shape silently.
     views: list[dict] = field(default_factory=list)
+    # Palette commands (ADR 0057) — declarative command-palette entries, parsed and
+    # never imported, exactly like `views`. Each: {id, title, hint?, keywords?,
+    # icon?, group?, action?, provider?}, where `action` is what the entry DOES and
+    # `provider` makes it a live-search row that queries the plugin for results as
+    # the operator types. The console compiles both into behavior inside its own
+    # trusted adapter — plugin code never enters the bundle — so the vocabulary is
+    # closed and every field is validated at parse time: `navigate` and `open_view`
+    # take a `view` naming a view THIS manifest declares (`open_view` adds
+    # `inline: true` to morph it into the palette body); `tool` takes a `route` plus
+    # an optional `method` and calls /api/plugins/<id>/<route>; `emit` takes a
+    # `topic` published on the ADR 0039 bus; `command` takes a `command` naming
+    # another entry in this same list. A `provider` takes the `route` its live
+    # search queries and an optional `result_action` for the rows it returns.
+    # Unlike a bad view path (which only blanks an iframe) a bad route becomes an
+    # AUTHENTICATED call carrying the operator bearer, so anything reaching outside
+    # the plugin's own namespace — an absolute or cross-origin route, a ../ escape,
+    # a topic in another plugin's namespace, a view or command this manifest never
+    # declared — is DROPPED with a warning rather than kept. See `_parse_commands`.
+    commands: list[dict] = field(default_factory=list)
     # Auth-exempt paths — prefixes under THIS plugin's own /plugins/<id>/ (or
     # /api/plugins/<id>/) namespace that the default-deny auth middleware lets
     # through WITHOUT a bearer. The escape hatch for an inbound webhook (no bearer
@@ -161,6 +193,21 @@ _NON_SAME_ORIGIN_PATH = re.compile(r"https?://|^//|localhost|:\d", re.IGNORECASE
 _VALID_SETTINGS_TAB_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 
+def _percent_decoded(value: str) -> str:
+    """``value`` with every layer of percent-encoding removed.
+
+    Nested on purpose: a single ``unquote`` turns ``%252e%252e`` into ``%2e%2e``,
+    which a browser then decodes again into ``..``. A validator that stops after one
+    pass is looking at a different string than the one the request path will be
+    matched on.
+    """
+    while True:
+        decoded = unquote(value)
+        if decoded == value:
+            return value
+        value = decoded
+
+
 def _iframe_page_route(path: object) -> str:
     """Canonical route portion of a manifest iframe URL.
 
@@ -170,13 +217,7 @@ def _iframe_page_route(path: object) -> str:
     diagnostics cannot disagree. Query/fragment remain on the iframe URL but never
     participate in either boundary.
     """
-    route = str(path or "").strip().split("?", 1)[0].split("#", 1)[0]
-    while True:
-        decoded = unquote(route)
-        if decoded == route:
-            break
-        route = decoded
-    return route
+    return _percent_decoded(str(path or "").strip().split("?", 1)[0].split("#", 1)[0])
 
 
 def _parse_settings_tabs(tabs, plugin_id: str) -> list[dict]:
@@ -271,13 +312,23 @@ def _parse_settings(settings, tabs: list[dict], plugin_id: str) -> list[dict]:
 
 
 def _parse_views(views, plugin_id: str) -> list[dict]:
-    """Keep view entries with an ``id`` + ``path``; warn on non-same-origin paths.
+    """Keep view entries with an ``id`` + ``path``; warn on non-same-origin paths and
+    on a ``palette`` value the console cannot read.
 
     Views must point at a same-origin **relative** path. A path that carries a
     scheme or host (``http(s)://``, protocol-relative ``//host``, ``localhost``, or
     a ``:PORT``) breaks the ADR 0042 fleet proxy and the same-origin postMessage
     token handshake — we log a warning but still keep the view so the author sees
     the mistake rather than a silently-missing rail icon.
+
+    ``palette`` (ADR 0057) opts a view into the palette's inline morph and is honored
+    in exactly two spellings — the literal ``"inline"``, or a ``{path: …}`` mapping
+    naming a different page to morph. The console tests for precisely those, so every
+    other value (``palette: true`` above all, the shape an author guesses first) is
+    ignored there with no rail change and no log line — the one view mistake that
+    fails silently. Drop the bad value, keep the view, and say so: ``palette: []``
+    would otherwise reach a ``typeof … === "object"`` test as a truthy morph opt-in
+    the author never asked for.
     """
     if not isinstance(views, (list, tuple)):
         return []
@@ -294,8 +345,342 @@ def _parse_views(views, plugin_id: str) -> list[dict]:
                 v.get("id"),
                 path,
             )
-        kept.append(v)
+        view = dict(v)
+        if "palette" in view:
+            palette = view["palette"]
+            morph = str(palette.get("path") or "").strip() if isinstance(palette, dict) else ""
+            if palette != "inline" and not morph:
+                log.warning(
+                    "[plugins] %s: view %r palette %r is neither the literal 'inline' nor a "
+                    "{path: …} mapping — the console reads only those two, so the inline morph "
+                    "is dropped (the view itself still loads)",
+                    plugin_id,
+                    v.get("id"),
+                    palette,
+                )
+                view.pop("palette", None)
+            elif morph and _NON_SAME_ORIGIN_PATH.search(morph):
+                log.warning(
+                    "[plugins] %s: view %r palette path %r is not same-origin relative — a "
+                    "scheme/host breaks the fleet proxy + the postMessage token handshake; "
+                    "use a relative path",
+                    plugin_id,
+                    v.get("id"),
+                    morph,
+                )
+        kept.append(view)
     return kept
+
+
+# The action vocabulary the console adapter can compile into a run() (ADR 0057 §4).
+# Closed on purpose: an action type the trusted adapter cannot dispatch is a palette
+# row that does nothing, so an unrecognized one is dropped rather than surfaced.
+_COMMAND_ACTIONS = ("navigate", "open_view", "tool", "emit", "command")
+# HTTP verbs a `tool` action may use. A typo is dropped, never coerced — guessing a
+# verb for an authenticated call is how a read becomes a write.
+_COMMAND_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
+_VALID_COMMAND_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+
+def _parse_command_route(raw, plugin_id: str, *, command_id: str, label: str) -> str | None:
+    """A command/provider ``route`` → its relative form under this plugin's own
+    ``/api/plugins/<id>/`` namespace, or ``None`` (warned) when it escapes it.
+
+    **This drops instead of warning-and-keeping, and that difference is the point.**
+    A bad view path only blanks an iframe; a command route is compiled into an
+    authenticated ``fetch`` that carries the operator bearer, an absolute URL is
+    passed through unchanged by the console's ``apiUrl``, and the browser collapses
+    ``/api/plugins/<id>/../../config`` to ``/api/config`` before the request is ever
+    sent. Keeping a broken route would therefore publish a manifest-declared write
+    against a core endpoint. The precedent to mirror is ``_parse_public_paths``:
+    namespace-scoping IS the security boundary, and its trailing slash is load-bearing.
+
+    Percent-encoding is unwrapped first (``%2e%2e`` is ``..`` by the time a browser
+    normalizes the path), and the composed path is re-checked against the namespace
+    root with ``posixpath.normpath`` — ``posixpath`` and not ``os.path``, because URL
+    routes stay ``/``-separated on the Windows leg where ``os.path`` would treat a
+    backslash as a separator and normalize a different string than the browser does.
+    """
+    declared = str(raw or "").strip()
+    route = _percent_decoded(declared)
+    root = f"/api/plugins/{plugin_id}/"
+    reason = ""
+    if not route:
+        reason = "is empty"
+    elif _NON_SAME_ORIGIN_PATH.search(route):
+        reason = "carries a scheme, host or port"
+    elif route.startswith("/"):
+        reason = "is absolute"
+    elif "\\" in route or "?" in route or "#" in route:
+        reason = "carries a backslash, query or fragment"
+    elif ".." in route.split("/"):
+        reason = "contains a '..' segment"
+    else:
+        composed = posixpath.normpath(root + route)
+        if composed.startswith(root):
+            return composed[len(root) :]
+        reason = "normalizes outside the plugin namespace"
+    log.warning(
+        "[plugins] %s: command %r %s %r %s — it must be a relative route inside "
+        "/api/plugins/%s/… (the console calls it with the operator bearer attached); dropped",
+        plugin_id,
+        command_id,
+        label,
+        declared,
+        reason,
+        plugin_id,
+    )
+    return None
+
+
+def _parse_command_topic(raw, plugin_id: str, *, command_id: str) -> str | None:
+    """An ``emit`` action ``topic`` forced into THIS plugin's namespace, or ``None``.
+
+    A bare name is prefixed with the plugin id; a dotted topic must already start with
+    it. Forcing the namespace here is the whole guard: the bus check on
+    ``POST /api/events/publish`` (ADR 0039) only asks that a topic be dotted and
+    wildcard-free — it never asks *who* is publishing — so a manifest free to name any
+    namespace could forge another plugin's events, e.g. ``otherplugin.wipe``.
+    """
+    topic = str(raw or "").strip()
+    segments = topic.split(".")
+    if (
+        topic
+        and not any(c.isspace() for c in topic)
+        and "*" not in topic
+        and "#" not in topic
+        and all(segments)
+        and (len(segments) == 1 or segments[0] == plugin_id)
+    ):
+        return topic if len(segments) > 1 else f"{plugin_id}.{topic}"
+    log.warning(
+        "[plugins] %s: command %r emit topic %r is outside the plugin's own namespace "
+        "(use a bare name, or prefix it with %r) — dropped",
+        plugin_id,
+        command_id,
+        topic,
+        f"{plugin_id}.",
+    )
+    return None
+
+
+def _parse_command_action(raw, plugin_id: str, *, command_id: str, view_ids: set[str], label: str) -> dict | None:
+    """One declarative ``action`` → the normalized mapping the console dispatches on.
+
+    Returns ``None`` (warned) for anything the adapter could not run safely. The result
+    is rebuilt from validated pieces rather than passed through, so what ships is
+    exactly the closed vocabulary — a normalized route, a namespaced topic, a view id
+    this manifest actually declares.
+    """
+    if not isinstance(raw, dict):
+        log.warning("[plugins] %s: command %r %s must be a mapping — dropped", plugin_id, command_id, label)
+        return None
+    kind = str(raw.get("type", "") or "").strip()
+    if kind not in _COMMAND_ACTIONS:
+        log.warning(
+            "[plugins] %s: command %r %s type %r is not one of %s — dropped",
+            plugin_id,
+            command_id,
+            label,
+            kind,
+            ", ".join(_COMMAND_ACTIONS),
+        )
+        return None
+    if kind in ("navigate", "open_view"):
+        view = str(raw.get("view", "") or "").strip()
+        if view not in view_ids:
+            log.warning(
+                "[plugins] %s: command %r %s targets view %r, which this manifest does not "
+                "declare — a command may only open its own plugin's views; dropped",
+                plugin_id,
+                command_id,
+                label,
+                view,
+            )
+            return None
+        action = {"type": kind, "view": view}
+        if kind == "open_view" and raw.get("inline"):
+            action["inline"] = True
+        return action
+    if kind == "tool":
+        route = _parse_command_route(raw.get("route"), plugin_id, command_id=command_id, label=f"{label} route")
+        if route is None:
+            return None
+        method = str(raw.get("method", "") or "POST").strip().upper()
+        if method not in _COMMAND_METHODS:
+            log.warning(
+                "[plugins] %s: command %r %s method %r is not one of %s — dropped",
+                plugin_id,
+                command_id,
+                label,
+                method,
+                ", ".join(_COMMAND_METHODS),
+            )
+            return None
+        return {"type": "tool", "route": route, "method": method}
+    if kind == "emit":
+        topic = _parse_command_topic(raw.get("topic"), plugin_id, command_id=command_id)
+        if topic is None:
+            return None
+        action = {"type": "emit", "topic": topic}
+        data = raw.get("data")
+        if data is not None:
+            if not isinstance(data, dict):
+                log.warning(
+                    "[plugins] %s: command %r %s data must be a mapping — dropped",
+                    plugin_id,
+                    command_id,
+                    label,
+                )
+                return None
+            action["data"] = data
+        return action
+    target = str(raw.get("command", "") or "").strip()
+    if not target:
+        log.warning(
+            "[plugins] %s: command %r %s needs the id of the command to run — dropped",
+            plugin_id,
+            command_id,
+            label,
+        )
+        return None
+    return {"type": "command", "command": target}
+
+
+def _parse_command_provider(raw, plugin_id: str, *, command_id: str, view_ids: set[str]) -> dict | None:
+    """A ``provider`` block → ``{route, result_action?}``, or ``None`` (warned).
+
+    A provider is a live-search row: the console queries ``route`` as the operator
+    types and turns each result into a command running ``result_action``. Both halves
+    go through the same validation as a fixed command — the query is an authenticated
+    call, and a result row is a dispatched action.
+    """
+    if not isinstance(raw, dict):
+        log.warning("[plugins] %s: command %r provider must be a mapping — dropped", plugin_id, command_id)
+        return None
+    route = _parse_command_route(raw.get("route"), plugin_id, command_id=command_id, label="provider route")
+    if route is None:
+        return None
+    provider = {"route": route}
+    if "result_action" in raw:
+        result = _parse_command_action(
+            raw["result_action"],
+            plugin_id,
+            command_id=command_id,
+            view_ids=view_ids,
+            label="provider result_action",
+        )
+        if result is None:
+            return None
+        provider["result_action"] = result
+    return provider
+
+
+def _chained_command_ids(command: dict) -> list[str]:
+    """Ids a command's ``command``-type actions hand control to."""
+    actions = [command.get("action"), (command.get("provider") or {}).get("result_action")]
+    return [a["command"] for a in actions if isinstance(a, dict) and a.get("type") == "command"]
+
+
+def _parse_commands(entries, plugin_id: str, views: list[dict]) -> list[dict]:
+    """Parse ``commands:`` → validated palette entries (ADR 0057 §3).
+
+    Strict by design, and deliberately unlike ``_parse_views``: a view is chrome, so a
+    malformed one is kept with a warning; a command is a *dispatch* — the console
+    compiles its action into an authenticated request, an event publish, or another
+    command — so anything that fails validation is DROPPED. Half a command is worse
+    than none: it puts a row in the palette that fires something the author didn't
+    write. An entry needs a safe ``id``, a ``title``, and at least one of ``action`` /
+    ``provider``; if a declared half fails, the whole entry goes, so what survives is
+    fully dispatchable.
+
+    Every escape hatch is closed here rather than in the console: routes are confined
+    to /api/plugins/<id>/… (``_parse_command_route``), emit topics to the plugin's own
+    event namespace (``_parse_command_topic``), ``navigate`` / ``open_view`` to views
+    this manifest declares, and ``command`` chaining to entries in this same list —
+    resolved to a fixed point, so a chain into a dropped command is dropped too.
+    """
+    if not isinstance(entries, (list, tuple)):
+        return []
+    view_ids = {str(v.get("id")) for v in views}
+    kept: list[dict] = []
+    seen: set[str] = set()
+    for raw in entries:
+        if not isinstance(raw, dict):
+            log.warning("[plugins] %s: commands entry must be a mapping — ignored", plugin_id)
+            continue
+        command_id = str(raw.get("id", "") or "").strip()
+        title = str(raw.get("title", "") or "").strip()
+        if not _VALID_COMMAND_ID.fullmatch(command_id) or not title:
+            log.warning(
+                "[plugins] %s: commands entry needs a safe id (%s) and a non-empty title — ignored",
+                plugin_id,
+                _VALID_COMMAND_ID.pattern,
+            )
+            continue
+        if command_id in seen:
+            log.warning("[plugins] %s: duplicate command id %r — keeping first", plugin_id, command_id)
+            continue
+        has_action, has_provider = "action" in raw, "provider" in raw
+        if not (has_action or has_provider):
+            log.warning(
+                "[plugins] %s: command %r declares neither an action nor a provider — "
+                "there is nothing for the palette to run; ignored",
+                plugin_id,
+                command_id,
+            )
+            continue
+        action = provider = None
+        if has_action:
+            action = _parse_command_action(
+                raw["action"], plugin_id, command_id=command_id, view_ids=view_ids, label="action"
+            )
+            if action is None:
+                continue
+        if has_provider:
+            provider = _parse_command_provider(raw["provider"], plugin_id, command_id=command_id, view_ids=view_ids)
+            if provider is None:
+                continue
+        entry: dict = {"id": command_id, "title": title}
+        for key in ("hint", "icon", "group"):
+            value = str(raw.get(key, "") or "").strip()
+            if value:
+                entry[key] = value
+        keywords = raw.get("keywords")
+        if isinstance(keywords, (list, tuple)):
+            entry["keywords"] = [k for k in (str(x).strip() for x in keywords) if k]
+        if action is not None:
+            entry["action"] = action
+        if provider is not None:
+            entry["provider"] = provider
+        seen.add(command_id)
+        kept.append(entry)
+    # Resolve `command` chaining last, once every id that survived is known. A chain
+    # is kept only if it provably ENDS: grow the terminating set from the commands
+    # that chain nowhere, and whatever never joins it either points at a command this
+    # manifest doesn't declare (an escape out of the plugin's own namespace) or loops
+    # (a --> b --> a the console would run until the tab froze).
+    declared = {c["id"] for c in kept}
+    terminating = {c["id"] for c in kept if not _chained_command_ids(c)}
+    while True:
+        grown = {c["id"] for c in kept if all(t in terminating for t in _chained_command_ids(c))}
+        if grown == terminating:
+            break
+        terminating = grown
+    for c in kept:
+        if c["id"] in terminating:
+            continue
+        unknown = sorted(set(_chained_command_ids(c)) - declared)
+        log.warning(
+            "[plugins] %s: command %r chain does not end — %s; a command may only run another "
+            "command this manifest declares, and the chain has to terminate; dropped",
+            plugin_id,
+            c["id"],
+            f"it names {', '.join(unknown)}, which this manifest does not declare"
+            if unknown
+            else "it loops, or leads only into commands that were themselves dropped",
+        )
+    return [c for c in kept if c["id"] in terminating]
 
 
 # A plugin id namespaces its routes (``/plugins/<id>/``, ``/api/plugins/<id>/``)
@@ -599,6 +984,9 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
     settings_tabs = _parse_settings_tabs(data.get("settings_tabs"), pid)
     settings = _parse_settings(data.get("settings"), settings_tabs, pid)
     views = _parse_views(data.get("views"), pid)
+    # Palette commands (ADR 0057) are parsed AFTER views because navigate/open_view
+    # actions may only target a view this same manifest declares.
+    commands = _parse_commands(data.get("commands"), pid, views)
     # public_paths = explicitly-declared exempt paths PLUS every iframe page's
     # path (rail views and Configure tabs are public chrome). All run
     # through the namespace validator; dict.fromkeys dedupes while preserving order
@@ -612,6 +1000,11 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
             ]
         )
     )
+    # `commands` are deliberately absent from both lists above. A view PAGE is public
+    # chrome (a plain iframe navigation that cannot carry the bearer); a command ROUTE
+    # is an authenticated API call the console makes WITH the bearer, so auto-exempting
+    # it would turn a palette entry into an unauthenticated write.
+    #
     # federation_paths (#2747): same namespace validator, separate list — these
     # lower the tier ceiling, they never exempt auth, so a view page is NOT
     # auto-added here the way it is for public_paths.
@@ -638,6 +1031,7 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
         test=bool(data.get("test", False)),
         guide_url=str(data.get("guide_url", "") or "").strip(),
         views=views,
+        commands=commands,
         public_paths=public_paths,
         federation_paths=federation_paths,
         emits=emits,

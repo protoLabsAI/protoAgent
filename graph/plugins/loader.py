@@ -384,6 +384,44 @@ def _warn_unserved_views(manifest: PluginManifest, routers: list[dict]) -> None:
             )
 
 
+def _warn_unserved_commands(manifest: PluginManifest, routers: list[dict]) -> None:
+    """Warn for each palette command (ADR 0057) whose API route no router serves.
+
+    The view check above catches a blank iframe; this catches its palette equivalent —
+    a command row that 404s the instant an operator picks it, which reads as a broken
+    feature rather than a missing ``register_router``. ``_parse_commands`` has already
+    confined every route to this plugin's ``/api/plugins/<id>/`` namespace, so the only
+    question left is whether the plugin registered the router that answers it.
+
+    Exact-match, like the view check: a declarative command route carries no arguments,
+    so it is a fixed path, and a router that serves it only through a ``{param}``
+    placeholder is rare enough to be worth a false warning over a missed one.
+    """
+    routes: list[tuple[str, str]] = []
+    for command in getattr(manifest, "commands", []) or []:
+        action = command.get("action") or {}
+        if action.get("type") == "tool":
+            routes.append((command.get("id", "?"), action.get("route", "")))
+        provider = command.get("provider") or {}
+        if provider.get("route"):
+            routes.append((command.get("id", "?"), provider["route"]))
+    if not routes:
+        return
+    served = _served_paths(routers)
+    for command_id, route in routes:
+        full = f"/api/plugins/{manifest.id}/{route}".rstrip("/") or "/"
+        if full not in served:
+            log.warning(
+                "[plugins] %s: command %r declares route %r but no registered router serves "
+                "%s — the palette entry will 404 when it is picked (did you forget "
+                "register_router, or is the route a typo?)",
+                manifest.id,
+                command_id,
+                route,
+                full,
+            )
+
+
 def _sweep_plugin_jobs(plugin_id: str) -> None:
     """Cancel a not-enabled plugin's ``plugin:<id>:*`` scheduler jobs (#1642) —
     best-effort, never breaks a load. See ``sdk.cancel_plugin_jobs``."""
@@ -501,6 +539,12 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
             # Console surfaces (ADR 0026) — the rail reads these from /api/runtime/status. Views
             # are sandboxed iframes (ADR 0038); the plugin serves its own page at `path`.
             "views": list(manifest.views) if enabled else [],
+            # Declarative command-palette entries (ADR 0057). Enable-gated like every
+            # other runnable contribution: a palette row is a dispatch, and an installed
+            # -but-not-enabled plugin must not be able to fire one (install != enable !=
+            # trust). NOT to be confused with `chat_commands` below, which counts the
+            # register_chat_command tokens a loaded plugin registered in Python.
+            "commands": list(manifest.commands) if enabled else [],
             # Ordered per-plugin Configure tabs (#3179/#3180). Schema-backed tabs
             # carry id/label; path-backed tabs add a sandboxed plugin-owned page.
             # Disabled plugins expose no runnable page contribution.
@@ -654,6 +698,7 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
         # routers, else the iframe renders blank/404. Catches "declared a view but
         # forgot register_router" / a path typo that fails silently today.
         _warn_unserved_views(manifest, registry.routers)
+        _warn_unserved_commands(manifest, registry.routers)
         for s in registry.surfaces:
             result.surfaces.append({"plugin_id": manifest.id, **s})
         result.subagents.extend(registry.subagents)
