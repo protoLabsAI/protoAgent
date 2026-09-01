@@ -691,3 +691,32 @@ def test_every_seam_this_plugin_claims_is_actually_registered(wired):
     assert "friction" in wired.chat_commands      # operator control
     assert wired.subagents                        # triage delegate
     assert wired.a2a_skills                       # agent card
+
+
+def test_distinct_errors_from_one_tool_are_distinct_signals(ledger):
+    """Groups are keyed on (kind, summary), so a bare "tool 'task' raised" collapsed every
+    failure of that tool into one row — a count spanning unrelated bugs argues for a fix
+    nobody can scope."""
+    mw = FrictionMiddleware()
+    for exc in (RuntimeError("bad provider"), TimeoutError("gateway timeout"), RuntimeError("bad provider again")):
+        mw._note_error(_Req("task"), exc)
+
+    groups = {g["summary"]: g["count"] for g in grouped_entries()}
+
+    assert groups == {"tool 'task' raised RuntimeError": 2, "tool 'task' raised TimeoutError": 1}
+
+
+def test_an_over_long_report_is_marked_as_clipped_not_cut_mid_word(ledger):
+    asyncio.run(record_friction.ainvoke({
+        "kind": "harness", "summary": "s" * 400, "detail": "d" * 900,
+    }))
+
+    rec = _recs(ledger)[0]
+
+    assert len(rec["summary"]) == 200 and rec["summary"].endswith("…")
+    assert len(rec["detail"]) == 600 and rec["detail"].endswith("…")
+
+
+def test_a_report_within_the_cap_is_untouched(ledger):
+    asyncio.run(record_friction.ainvoke({"kind": "harness", "summary": "short and complete."}))
+    assert _recs(ledger)[0]["summary"] == "short and complete."

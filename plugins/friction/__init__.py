@@ -98,12 +98,22 @@ _MAX_ENTRIES = 2000
 _TRIM_SLACK = 200
 
 
+def _clip(text: str, limit: int) -> str:
+    """Truncate to ``limit`` characters, saying so. A silent clip reads as a thought the
+    agent failed to finish; an explicit one reads as a cap that was hit."""
+    text = text or ""
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "\u2026"
+
+
 def _log(kind: str, summary: str, detail: str, severity: str, source: str, tool_name: str = "") -> None:
     path = _ledger_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     rec = {
         "ts": datetime.now(timezone.utc).isoformat(),
-        "kind": kind, "summary": summary[:200], "detail": detail[:600],
+        # Mark a clip instead of stopping mid-word. Four of protoEngineer's 27 entries
+        # ended mid-sentence with no indication anything was missing, so the report read
+        # as a half-finished thought rather than a truncated one.
+        "kind": kind, "summary": _clip(summary, 200), "detail": _clip(detail, 600),
         "severity": severity, "source": source,
     }
     if tool_name:
@@ -445,7 +455,13 @@ class FrictionMiddleware(AgentMiddleware):
     def _note_error(self, request, e: Exception) -> None:
         if type(e).__name__ in _CONTROL_FLOW:
             return  # HITL pause / delegation / cancel — not friction
-        _log("harness", f"tool '{request.tool_call.get('name', '?')}' raised",
+        # The exception type belongs in the SUMMARY, not only the detail. Groups are keyed
+        # on (kind, summary), so a bare "tool 'task' raised" collapsed every distinct
+        # failure of that tool into ONE row — a RuntimeError and a TimeoutError counted
+        # together, showing "x5" against whichever detail happened to be logged first. The
+        # count is the triage signal, so a count that spans unrelated bugs is worse than no
+        # count: it argues for a fix nobody can scope.
+        _log("harness", f"tool '{request.tool_call.get('name', '?')}' raised {type(e).__name__}",
              detail=f"{type(e).__name__}: {e}", severity="major", source="auto",
              tool_name=request.tool_call.get("name", ""))
 
