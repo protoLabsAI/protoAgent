@@ -275,4 +275,4 @@ async def test_secrets_are_redacted_at_the_tool_boundary(monkeypatch):
     out = await _logs("Alpha")
     dumped = json.dumps(out)
     assert "sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" not in dumped
-    assert "[REDACTED]" in dumped
+    assert out["logs"]["lines"][0]["message"] == "token [REDACTED]"
