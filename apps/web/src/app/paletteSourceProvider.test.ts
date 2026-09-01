@@ -48,6 +48,13 @@ async function mountRegistry(): Promise<PaletteRegistry> {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   root.render(h(QueryClientProvider, { client }, h(Probe)));
   await vi.waitFor(() => expect(registry).not.toBeNull());
+  // The hook returns the registry during RENDER; the effects that register into it run after
+  // the commit. Wait for one of the unconditional registrations rather than for the PROVIDER
+  // — waiting for the provider would make the "no source ⇒ no provider" arm below
+  // unobservable (it would hang instead of asserting), and waiting for nothing at all lets a
+  // read land in the gap and see an empty registry that reads like "the source returned
+  // nothing".
+  await vi.waitFor(() => expect(registry!.getStaticCommands().length).toBeGreaterThan(0));
   return registry!;
 }
 
@@ -109,9 +116,13 @@ describe("registerPaletteSource → the DS read-time provider", () => {
   });
 
   it("wires the provider only once a source exists, and withdraws it again", async () => {
+    // The arm that pins the host's CONDITIONAL, not just the registry's boolean. Core ships
+    // no sources — an always-on provider would put the palette's "Searching…" spinner and its
+    // 120ms debounce in front of every keystroke in the default console, and in the desktop
+    // launcher, which can serve no source rows at all. (#3292's chat rows were nearly a
+    // source; they are statics precisely so this stays true.) Delete the `hasPaletteSources()`
+    // check in usePaletteRegistry and this test is what reddens.
     const registry = await mountRegistry();
-    // Core ships no sources: an always-on provider would put the palette's "Searching…"
-    // spinner in front of every keystroke in the default console.
     expect(registry.getProviders().map((p) => p.id)).not.toContain(SOURCE_PROVIDER);
 
     const off = source(() => [{ id: "probe:late", label: "Late", run: () => {} }]);

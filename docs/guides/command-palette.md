@@ -34,6 +34,23 @@ Settings ▸ Keyboard, not with the in-app chords above.
   on its own port, where it points you at the host instead.
   *(Per-member root commands — the old **Toggle Fleet Agent** picker and per-member
   quick-chat — folded into this room; they are one hop in now, not gone.)*
+- **Chat** — the chat's own slash commands, the ones that used to exist only inside the
+  composer's `/` menu: `/clear`, `/export`, `/model`, `/compact`, `/incognito`, `/perf` and
+  the rest, each listed as `/token · what it does` and searchable by the words you'd
+  actually reach for ("wipe" finds `/clear`, "llm" finds `/model`). A command that acts on
+  the chat in front of you stays listed with no chat open but is visibly disabled and says
+  why; one that just needs somewhere to work opens or focuses a chat first. They stay listed
+  when the chat panel is hidden, too — running one brings the panel back first.
+  The two per-tab **modes**, `/bypass` and `/incognito`, are the exception to "picking a row
+  runs it": their row shows the current setting (`… — now off`) and then hands you the
+  composer with `/bypass ` typed, so you say which way and press Enter yourself. Nothing in
+  the palette can turn off tool-approval prompts on its own.
+- **Skills** — every *user-facing* skill you or a plugin has installed. A skill isn't
+  something the console runs: the server folds its procedure into your **next message**, so
+  picking one takes you to the chat with `/‹skill› ` typed and leaves the send to you (the
+  row says so). The token lands in *front* of anything already in the composer rather than
+  replacing it, so you can reach for a skill mid-message. `/btw` behaves the same way, since
+  it needs the question you were going to ask.
 - **Plugin views** — each enabled plugin's views are their own group. A view can also opt
   to render *inside* the palette by declaring `palette: "inline"` on it (so a lightweight
   tool can live behind a keystroke instead of taking a rail slot).

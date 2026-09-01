@@ -37,7 +37,7 @@ import { ActivityWidget } from "../activity/ActivityWidget";
 import { ConfirmDialog, Tooltip } from "@protolabsai/ui/overlays";
 import { AgentDownBanner } from "./AgentDownBanner";
 import { SignedOutBanner } from "./SignedOutBanner";
-import { ChatSlot } from "./ChatSlot";
+import { ChatSlot, chatSlotProvider } from "./ChatSlot";
 import { chatStore, useAnyChatStreaming } from "../chat/chat-store";
 import { KnowledgeStore } from "../knowledge/KnowledgeStore";
 import { MemorySurface } from "../memory/MemorySurface";
@@ -584,7 +584,15 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
     }),
     [chatAgentName],
   );
-  const paletteRegistry = usePaletteRegistry(paletteFacade, inlinePaletteViews, paletteChat);
+  // Does THIS window have the built-in chat? The palette needs it for the chat's slash-command
+  // rows, which dispatch into the built-in surface's live React closure and so mean nothing
+  // when a fork surface or a `slot:"chat"` plugin iframe owns the slot. Resolved from the same
+  // table `ChatSlot` renders with, and — unlike "is a chat slot mounted right now?" — it does
+  // not flip when the operator collapses the dock chat lives on.
+  const builtInChat = chatSlotProvider(enabledPluginIds, chatSlotView) === "builtin";
+  const paletteRegistry = usePaletteRegistry(paletteFacade, inlinePaletteViews, paletteChat, {
+    builtInChat,
+  });
   // Palette open-state lives in the keybinding intents store now: ⌘⇧K is a regular,
   // rebindable keybinding (ADR 0063) that toggles it — no DS-internal hotkey hook.
   const paletteOpen = useKbIntents((s) => s.paletteOpen);

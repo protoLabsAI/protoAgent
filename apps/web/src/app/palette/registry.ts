@@ -45,7 +45,9 @@ import { formatCombo } from "../../keybindings/combo";
 import { effectiveCombo, useKeybindingOverrides } from "../../keybindings/overrides";
 import { useFlagPredicate } from "../../flags/flags";
 import { isHostConsole } from "../../lib/api";
-import { fleetQuery } from "../../lib/queries";
+import { chatCommandsQuery, fleetQuery } from "../../lib/queries";
+import { chatStore } from "../../chat/chat-store";
+import { chatPaletteSignature, chatSlashPaletteRows } from "../chatSlashPalette";
 import { markAgentOpened } from "../fleetPalette";
 import { fleetRoomView } from "../FleetRoom";
 import { fleetSettingsDisabledReason } from "../fleetSettingsGate";
@@ -326,6 +328,21 @@ export function createRankedPaletteRegistry(
   return reg;
 }
 
+/** What only the HOST window can answer about itself.
+ *
+ *  `builtInChat` is "this window's chat slot is the BUILT-IN ChatSurface" — App computes it
+ *  with `chatSlotProvider` (the same resolution `ChatSlot` renders with); the launcher leaves
+ *  it false because it mounts no chat at all. It gates the chat's slash-command rows, which
+ *  dispatch through a seam only the built-in surface publishes.
+ *
+ *  Deliberately a fact about the WINDOW, not about what is mounted: the DS AppShell unmounts
+ *  a collapsed dock, so "is a chat slot registered right now?" flips every time the operator
+ *  hides the panel — and gating rows on that emptied the Chat and Skills groups out of ⌘⇧K
+ *  in exactly the state the palette is most useful in. */
+export type PaletteHostOptions = {
+  builtInChat?: boolean;
+};
+
 /** Build the palette registry from the resolved view façade + the inline plugin views.
  *  Stable across renders; nav commands + inline views re-register only when their set
  *  changes (plugins enable/disable) — matching the DS registry's add/withdraw model. */
@@ -333,6 +350,7 @@ export function usePaletteRegistry(
   built: ViewsFacade,
   inlineViews: InlinePluginView[] = [],
   chat?: PaletteChatConfig,
+  opts: PaletteHostOptions = {},
 ): PaletteRegistry {
   const { views, viewFor } = built;
   const inlineIds = useMemo(() => new Set(inlineViews.map((v) => v.id)), [inlineViews]);
@@ -401,6 +419,39 @@ export function usePaletteRegistry(
   const { data: fleet } = useQuery(fleetQuery());
   const agents = fleet?.agents ?? [];
   const pluginViewsList = views.filter((v) => v.kind === "plugin");
+
+  // ── The chat's own verbs (#3292), and what keeps them live ──────────────────────────
+  // These rows go through the STATIC path (`registerCommands`), not `registerPaletteSource`,
+  // for reasons about the PATH rather than about how live the data is: a provider's rows are
+  // ORDERED but never RANKED against the corpus (`orderCommands` after `rankCommands` in
+  // rootView), so `/clear` under the query "clear" would sit below every surface; declaring
+  // `getCommands` at all costs a 120ms debounce and a spinner in every window that mounts the
+  // palette, the chat-less launcher included; and a provider's results outlive the query they
+  // answered (rootView stamps and drops them now, the DS's own view still doesn't —
+  // protoContent#504). Statics are filtered and ranked against what is on screen,
+  // synchronously.
+  //
+  // The cost of a snapshot is that something has to re-take it, so both live inputs are
+  // subscriptions and both feed the effect below as dependencies:
+  //   • the chat store, through `chatPaletteSignature()` — a STRING projection of everything
+  //     a row renders from (the current session, whether it is the reusable blank, the two
+  //     per-tab modes), so the store's per-streamed-token notifications don't re-register the
+  //     whole group every frame;
+  //   • `/api/chat/commands`, the same shared query the composer's `/` menu uses — so
+  //     enabling a plugin or authoring a skill adds its row with no restart. Off in a window
+  //     with no built-in chat (the launcher), which can't serve these rows anyway.
+  const chatSig = useSyncExternalStore(
+    chatStore.subscribe,
+    chatPaletteSignature,
+    chatPaletteSignature,
+  );
+  const builtInChat = !!opts.builtInChat;
+  const { data: chatCommands } = useQuery({ ...chatCommandsQuery(), enabled: builtInChat });
+  const skills = useMemo(
+    () => (chatCommands?.commands ?? []).filter((c) => c.kind === "skill"),
+    [chatCommands],
+  );
+  const skillSig = skills.map((c) => `${c.name} ${c.description}`).join("|");
 
   // Re-register the fleet section only when the roster's identity/status/name actually changes
   // (React Query's structural sharing keeps `agents` stable when the 3s poll returns equal data).
@@ -554,6 +605,17 @@ export function usePaletteRegistry(
       // take the read-time provider path below instead.
       ...visiblePaletteCommands(flagOn, isHostConsole(), "static").map(toDsCommand),
     ]);
+    // The chat's own verbs — the client slash commands and the server's user-facing skills
+    // (#3292). Registered LAST so the Chat and Skills groups sit after the fixed ones in the
+    // untyped list, and registered STATICALLY so a row is client-filtered against the query
+    // on screen (see the note where `chatSig` is read). Flag-gated here rather than in the
+    // row builder, exactly as the seam's statics are: a row gated on a flag still in flight
+    // (`/publish`) appears when `/api/flags` lands instead of being hidden for the life of
+    // the window.
+    const chatRows = chatSlashPaletteRows(navigate, { reachable: builtInChat, skills });
+    const offChatRows = chatRows.length
+      ? registry.registerCommands(chatRows.filter((c) => !c.flag || flagOn(c.flag)).map(toDsCommand))
+      : undefined;
     // Dynamic sources, served per palette read. Wired only when a fork registered one: the
     // root view shows its "Searching…" spinner whenever ANY provider declares
     // `getCommands`, and core ships zero sources — so an unconditional provider would put a
@@ -567,10 +629,23 @@ export function usePaletteRegistry(
       offFleetRoom();
       offPlugins?.();
       offCommands();
+      offChatRows?.();
       offSources?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navSig, inlineSig, fleetSig, chat, registry, seamVersion, flagOn, kbOverrides]);
+  }, [
+    navSig,
+    inlineSig,
+    fleetSig,
+    chat,
+    registry,
+    seamVersion,
+    flagOn,
+    kbOverrides,
+    builtInChat,
+    chatSig,
+    skillSig,
+  ]);
 
   return registry;
 }

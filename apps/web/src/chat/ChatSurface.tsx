@@ -956,6 +956,19 @@ function ChatSessionSlot({
       run: runClientSlash,
       sessionId: session?.id ?? null,
       surfaceActive,
+      // The skill path (#3292): a user-facing skill is a server-side message REWRITE, so
+      // the only honest outside action is to hand the operator the draft.
+      // PREFIXED, never replacing. A skill directive has to LEAD the message, so prepending
+      // is both the correct placement and the non-destructive one — a half-written question
+      // picked into `/triage ` becomes "/triage <that question>", which is what the operator
+      // meant, instead of silently vanishing. It is also what the other two draft-writers in
+      // this file already do: `completeCommand` swaps only the `/name` token under the caret
+      // and keeps the surrounding text, and the participant prefill (#3049) fills only an
+      // empty composer. Idempotent, so picking the same row twice doesn't stutter the token.
+      prefillDraft: (text: string) => {
+        setDraft((d) => (d.startsWith(text) ? d : text + d));
+        textareaRef.current?.focus();
+      },
     });
   });
 

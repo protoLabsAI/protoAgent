@@ -608,6 +608,44 @@ describe("a provider's rows are its own — ordered, never re-filtered", () => {
     expect(labels()).toContain("Sprint board");
   });
 
+  it("drops them the moment the query moves — a stale row is never listed or runnable", async () => {
+    // THE REGRESSION (#3292, found by review): the loop only overwrites `dynamic` when a read
+    // RESOLVES, and its cleanup aborts the request without clearing what is on screen. So a
+    // provider's rows used to survive a query change untouched — listed, highlighted, and run
+    // by Enter — for the whole 120ms debounce, while the input already read something else.
+    // Invisible with a read-only "go to tab X" source; not invisible with an action one, and
+    // no fork can opt out of it from the seam side.
+    vi.useFakeTimers();
+    const registry = createRankedPaletteRegistry();
+    const ran: string[] = [];
+    registry.registerProvider({
+      id: "remote",
+      getCommands: (q: string) =>
+        q === "wipe" ? [cmd({ id: "danger", label: "Danger", run: () => ran.push("danger") })] : [],
+    });
+    mountPalette(registry);
+
+    type("wipe");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(labels()).toContain("Danger"); // settled on A
+
+    // …now retype, and read the list INSIDE the debounce — the window the operator types
+    // through. Nothing from query A may still be on screen, let alone selected.
+    type("zzqqxx");
+    expect(labels()).not.toContain("Danger");
+    expect(selected() ?? "").not.toContain("Danger");
+    press("Enter");
+    expect(ran).toEqual([]);
+
+    // …and the provider still gets to answer the new query when its read lands.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(labels()).not.toContain("Danger");
+  });
+
   it("does not let a provider that throws SYNCHRONOUSLY strand the spinner", async () => {
     vi.useFakeTimers();
     const registry = createRankedPaletteRegistry();

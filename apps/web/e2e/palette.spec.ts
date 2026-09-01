@@ -161,6 +161,12 @@ test("the empty list keeps every group, even once recents have taken most of it"
     "Agents",
     "Plugins",
     "Commands",
+    // Chat + Skills (#3292) — the chat's slash commands and the server's user-facing skills.
+    // They are what the guarantee is FOR: ~80 commands land across the sibling command PRs,
+    // each in its own group, and a per-group ceiling would have let the newest ones push the
+    // oldest off the bottom. Every group here contributes exactly one row.
+    "Chat",
+    "Skills",
   ]);
   // What the guarantee is worth is ONE row per group, not a named row: with four recents the
   // Commands group is down to its first member. `Open…` is that member and it is the row the
