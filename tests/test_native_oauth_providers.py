@@ -1599,6 +1599,31 @@ def test_anthropic_store_follows_the_same_scope_rule(monkeypatch, tmp_path):
     assert oauth_mod._anthropic_store_path(paths) == inst / "anthropic-oauth.json"
 
 
+def test_legacy_oauth_promotion_reports_deferred_stores_without_touching_them(monkeypatch, tmp_path):
+    """The seam's own contract, independent of workspace creation: a store it declines
+    to merge is named in ``deferred`` and left byte-for-byte alone on both sides. Callers
+    read that as "say so and carry on", which is why a mismatched credential no longer
+    takes the whole create down with it."""
+    box, inst = tmp_path / "box", tmp_path / "inst"
+    inst.mkdir()
+    monkeypatch.setattr(oauth_mod, "box_root", lambda: box)
+    box.mkdir()
+    (box / "anthropic-oauth.json").write_text('{"access_token":"sk-ant-oat01-box"}')
+    (inst / "anthropic-oauth.json").write_text('{"access_token":"sk-ant-oat01-inst"}')
+    (inst / "codex-oauth.json").write_text('{"tokens":{"account_id":"acct-1","refresh_token":"rt"}}')
+
+    result = oauth_mod.promote_instance_oauth_to_box(inst)
+
+    # The codex store had no box counterpart, so it simply moved; the anthropic pair
+    # could not be matched to one account, so neither copy changed.
+    assert result.promoted == ["codex-oauth.json"]
+    assert [d for d in result.deferred if d.startswith("anthropic-oauth.json")]
+    assert not (inst / "codex-oauth.json").exists()
+    assert (box / "codex-oauth.json").read_text() == '{"tokens":{"account_id":"acct-1","refresh_token":"rt"}}'
+    assert (inst / "anthropic-oauth.json").read_text() == '{"access_token":"sk-ant-oat01-inst"}'
+    assert (box / "anthropic-oauth.json").read_text() == '{"access_token":"sk-ant-oat01-box"}'
+
+
 def test_legacy_oauth_promotion_rolls_back_if_second_box_write_fails(monkeypatch, tmp_path):
     """The two-provider compatibility transfer cannot strand only one credential at
     box scope when the second durable write fails."""

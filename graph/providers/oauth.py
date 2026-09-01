@@ -479,7 +479,78 @@ class OAuthStoreTransferError(RuntimeError):
     """A legacy instance OAuth store could not safely join the shared box tier."""
 
 
-def promote_instance_oauth_to_box(config_dir: Path) -> list[str]:
+@dataclass(frozen=True)
+class OAuthPromotion:
+    """Outcome of the legacy-store transfer: the filenames that joined the box tier,
+    and the ones deliberately left alone with the reason the operator needs to hear."""
+
+    promoted: list[str]
+    deferred: list[str]
+
+
+def _oauth_store_account(provider: str, payload: str) -> str | None:
+    """The account a store belongs to, or ``None`` when its format carries no identity.
+
+    Bytes answer "is this the same FILE"; the promotion guard has to ask "is this the
+    same ACCOUNT", and those are not the same question. Every refresh rewrites both
+    tokens, so two copies of ONE login stop matching byte-for-byte the first time
+    either side refreshes — minutes, not months. Codex tokens carry the ChatGPT account
+    id (an explicit field, else the ``chatgpt_account_id`` JWT claim); Anthropic's
+    opaque ``sk-ant-…`` pair carries none, so that provider answers ``None`` and the
+    caller must treat it as unknown rather than as distinct.
+    """
+    try:
+        doc = json.loads(payload)
+    except (ValueError, json.JSONDecodeError):
+        return None
+    if provider != "openai-codex" or not isinstance(doc, dict):
+        return None
+    tokens = doc.get("tokens")
+    return _codex_account_id(tokens) if isinstance(tokens, dict) else None
+
+
+def _oauth_store_freshness(provider: str, payload: str, path: Path) -> tuple[int, float]:
+    """How recent a store is, for picking the survivor when two copies of one account
+    disagree. A Codex refresh token is single-use, so keeping the older copy can strand
+    the account outright — the newest write holds the only refresh token that is
+    certainly unburned.
+
+    Ranked so the two halves are never compared across kinds: a store whose own token
+    carries a timestamp (rank 1) always outranks one we can only date by file mtime
+    (rank 0), which a copy or a restore can carry over from somewhere else entirely.
+    """
+    try:
+        doc = json.loads(payload)
+    except (ValueError, json.JSONDecodeError):
+        doc = None
+    if isinstance(doc, dict):
+        if provider == "openai-codex":
+            tokens = doc.get("tokens")
+            access = tokens.get("access_token") if isinstance(tokens, dict) else None
+            if isinstance(access, str) and access.count(".") == 2:
+                exp = _b64url_json(access.split(".")[1]).get("exp")
+                if isinstance(exp, (int, float)):
+                    return (1, float(exp))
+        elif isinstance(doc.get("expires_at"), (int, float)):
+            return (1, float(doc["expires_at"]))
+    try:
+        return (0, path.stat().st_mtime)
+    except OSError:
+        return (0, 0.0)
+
+
+def _restore_oauth_destinations(changed: list[tuple[Path, str | None]]) -> None:
+    """Put every box store this transaction touched back exactly as it was — removing
+    the ones it created, rewriting the ones it replaced. A half-replaced machine-wide
+    login is worse than either outcome, so rollback is never partial."""
+    for destination, prior in changed:
+        if prior is None:
+            destination.unlink(missing_ok=True)
+        else:
+            atomic_write(destination, prior, mode=0o600)
+
+
+def promote_instance_oauth_to_box(config_dir: Path) -> OAuthPromotion:
     """Transfer legacy instance stores while holding both stable scope locks."""
     with ExitStack() as scopes:
         for provider in ("anthropic-oauth", "openai-codex"):
@@ -487,7 +558,7 @@ def promote_instance_oauth_to_box(config_dir: Path) -> list[str]:
         return _promote_instance_oauth_to_box_locked(config_dir)
 
 
-def _promote_instance_oauth_to_box_locked(config_dir: Path) -> list[str]:
+def _promote_instance_oauth_to_box_locked(config_dir: Path) -> OAuthPromotion:
     """Move legacy instance-local OAuth stores into the shared box tier.
 
     Fleet sisters must resolve one credential store, not receive independent copies:
@@ -497,10 +568,21 @@ def _promote_instance_oauth_to_box_locked(config_dir: Path) -> list[str]:
     helper is only the upgrade bridge for an older instance override encountered while
     creating a sister.
 
-    A distinct existing box credential is a refusal: silently replacing a machine-wide
-    login or giving the new sister a different account would both violate the operator's
-    intent.  Byte-identical overrides are deduplicated so the source instance rejoins the
-    shared store.  Returns the filenames promoted or deduplicated.
+    Sameness is decided on the ACCOUNT, never on the bytes.  Every refresh rewrites both
+    tokens, so two copies of one login diverge byte-for-byte within minutes of being
+    made — the old byte comparison therefore reported "a different login" for very
+    nearly every override it exists to serve, and killed the create outright.  Two
+    stores for one account are deduplicated onto the FRESHER of the two, because a
+    single-use Codex refresh token means the older copy may already be burned.
+
+    A genuinely different account — or one that cannot be identified at all, as with
+    Anthropic's opaque token pair — is DEFERRED rather than fatal.  The override stays
+    exactly where it is, nothing at box scope is overwritten, and the new sister simply
+    resolves the machine-wide login it would have used anyway; the caller surfaces the
+    reason.  Refusing the whole create was a dead end, because the remedy it named
+    (delete a hidden override, then re-run a device login) is not reachable from the
+    console.  An explicit disconnect stays a refusal: that one is a statement the
+    operator actually made, not an inference, and Settings can undo it.
     """
     candidates = [
         (Path(config_dir) / filename, destination, filename, provider)
@@ -511,9 +593,10 @@ def _promote_instance_oauth_to_box_locked(config_dir: Path) -> list[str]:
         if (Path(config_dir) / filename).exists() and (Path(config_dir) / filename) != destination
     ]
     if not candidates:
-        return []
+        return OAuthPromotion(promoted=[], deferred=[])
 
     promoted: list[str] = []
+    deferred: list[str] = []
     try:
         # Lock every candidate before the conflict preflight, then mutate.  No other
         # runtime path takes two stores, so this stable order cannot deadlock with a
@@ -525,8 +608,9 @@ def _promote_instance_oauth_to_box_locked(config_dir: Path) -> list[str]:
                 locks.enter_context(_store_lock(destination))
                 locks.enter_context(_file_lock(destination))
 
-            payloads: list[tuple[Path, Path, str, str, bool]] = []
-            conflicts: list[str] = []
+            # (source, destination, filename, source payload, payload to install at
+            # box scope or None to keep what is there, the destination's prior payload)
+            payloads: list[tuple[Path, Path, str, str, str | None, str | None]] = []
             try:
                 marker_doc = json.loads((Path(config_dir) / _DISCONNECT_MARKER).read_text(encoding="utf-8"))
             except (OSError, ValueError, json.JSONDecodeError):
@@ -540,33 +624,49 @@ def _promote_instance_oauth_to_box_locked(config_dir: Path) -> list[str]:
                     + ": this instance explicitly disconnected it. Reconnect first, then create the sister again."
                 )
 
-            for source, destination, filename, _provider in candidates:
+            for source, destination, filename, provider in candidates:
                 if not source.exists():
                     continue
                 payload = source.read_text(encoding="utf-8")
-                if destination.exists() and destination.read_text(encoding="utf-8") != payload:
-                    conflicts.append(filename)
-                payloads.append((source, destination, filename, payload, destination.exists()))
-            if conflicts:
-                names = ", ".join(conflicts)
-                raise OAuthStoreTransferError(
-                    f"cannot share legacy instance OAuth ({names}): the box already has a different login. "
-                    "Reconnect this instance after removing its local OAuth override, then create the sister again."
-                )
+                prior = destination.read_text(encoding="utf-8") if destination.exists() else None
+                # Absent destination: install the override.  Identical: nothing to write,
+                # just drop the duplicate.  Divergent: decide on the account below.
+                write: str | None = payload if prior is None else None
+                if prior is not None and prior != payload:
+                    mine = _oauth_store_account(provider, payload)
+                    box = _oauth_store_account(provider, prior)
+                    if mine is None or box is None or mine != box:
+                        deferred.append(
+                            f"{filename}: left this agent's own {provider} login in place — "
+                            + (
+                                "the machine-wide store holds a different account"
+                                if mine and box
+                                else "the two stores carry no account id to match on"
+                            )
+                            + ". The new agent uses the machine-wide login; neither store was changed."
+                        )
+                        continue
+                    if _oauth_store_freshness(provider, payload, source) > _oauth_store_freshness(
+                        provider, prior, destination
+                    ):
+                        write = payload
+                payloads.append((source, destination, filename, payload, write, prior))
+            if not payloads:
+                return OAuthPromotion(promoted=[], deferred=deferred)
 
-            # Phase 1 copies every absent destination while every source remains the
-            # authoritative store.  If any write fails, remove only destinations this
-            # transaction created; no source ownership has changed.
-            created: list[Path] = []
+            # Phase 1 installs every winning payload at box scope while every source
+            # remains the authoritative store.  If any write fails, put each destination
+            # back exactly as it was; no source ownership has changed.
+            changed: list[tuple[Path, str | None]] = []
             try:
-                for _source, destination, _filename, payload, existed in payloads:
-                    if not existed:
-                        destination.parent.mkdir(parents=True, exist_ok=True)
-                        atomic_write(destination, payload, mode=0o600)
-                        created.append(destination)
+                for _source, destination, _filename, _payload, write, prior in payloads:
+                    if write is None:
+                        continue
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    atomic_write(destination, write, mode=0o600)
+                    changed.append((destination, prior))
             except OSError:
-                for destination in created:
-                    destination.unlink(missing_ok=True)
+                _restore_oauth_destinations(changed)
                 raise
 
             # Phase 2 commits ownership by removing the overrides only after every box
@@ -574,7 +674,7 @@ def _promote_instance_oauth_to_box_locked(config_dir: Path) -> list[str]:
             # if a later removal fails, so a two-provider transfer cannot half-complete.
             removed: list[tuple[Path, str]] = []
             try:
-                for source, _destination, filename, payload, _existed in payloads:
+                for source, _destination, filename, payload, _write, _prior in payloads:
                     source.unlink()
                     removed.append((source, payload))
                     promoted.append(filename)
@@ -582,8 +682,7 @@ def _promote_instance_oauth_to_box_locked(config_dir: Path) -> list[str]:
                 for source, payload in removed:
                     source.parent.mkdir(parents=True, exist_ok=True)
                     atomic_write(source, payload, mode=0o600)
-                for destination in created:
-                    destination.unlink(missing_ok=True)
+                _restore_oauth_destinations(changed)
                 raise
     except OAuthStoreTransferError:
         raise
@@ -591,7 +690,7 @@ def _promote_instance_oauth_to_box_locked(config_dir: Path) -> list[str]:
         raise OAuthStoreTransferError(
             "could not transfer the legacy instance OAuth login into the shared box store"
         ) from exc
-    return promoted
+    return OAuthPromotion(promoted=promoted, deferred=deferred)
 
 
 def _b64url_json(segment: str) -> dict[str, Any]:

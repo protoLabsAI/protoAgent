@@ -249,7 +249,14 @@ def register_fleet_routes(app) -> None:
                 if start
                 else {"name": name, "id": ws["id"], "port": ws["port"], "running": False}
             )
-            return {"ok": True, "agent": agent, "installed": ws.get("installed", [])}
+            # A credential store that could not join the shared box tier is a note on a
+            # SUCCESSFUL create, not a 400 — the agent runs on the machine-wide login.
+            return {
+                "ok": True,
+                "agent": agent,
+                "installed": ws.get("installed", []),
+                **({"warnings": ws["warnings"]} if ws.get("warnings") else {}),
+            }
         except (manager.WorkspaceError, supervisor.FleetError) as exc:
             raise HTTPException(400, str(exc))
 
