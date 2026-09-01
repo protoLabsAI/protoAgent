@@ -46,8 +46,20 @@ _PROVIDERS: dict = {}
 # value of _PROVIDERS stays THE callable, matching every other registry in this codebase.
 _PROVIDER_META: dict[str, dict] = {}
 
-# Names already warned about (slow or malformed), so a recurring problem logs once.
-_WARNED: set[str] = set()
+# (name, kind) already warned about, so a recurring problem logs once per PROBLEM rather
+# than once per provider. Keying on the name alone silently swallowed later, different
+# failures: a provider warned once for being SLOW was thereafter permanently mute about
+# RAISING, because both branches consulted the same set — and an exception is the one thing
+# you most need to hear about.
+_WARNED: set[tuple[str, str]] = set()
+
+
+def _warn_once(name: str, kind: str, msg: str, *args) -> None:
+    """Log this provider's problem the first time THIS KIND of problem is seen for it."""
+    if (name, kind) in _WARNED:
+        return
+    _WARNED.add((name, kind))
+    log.warning(msg, *args)
 
 
 def set_plugin_work_providers(mapping: dict | None, meta: dict | None = None) -> None:
@@ -128,22 +140,26 @@ def collect_work_sections(cap: int) -> list[tuple[str, list[str]]]:
             items = fn()
             elapsed = time.monotonic() - started
         except Exception as exc:  # noqa: BLE001 — a bad provider must never break the turn
-            if name not in _WARNED:
-                _WARNED.add(name)
-                log.warning("[work_providers] %s raised (skipped, once per name): %s", name, exc)
+            _warn_once(name, "raised", "[work_providers] %s raised (skipped, once per name): %s", name, exc)
             continue
-        if elapsed > SLOW_PROVIDER_S and name not in _WARNED:
-            _WARNED.add(name)
-            log.warning(
+        if elapsed > SLOW_PROVIDER_S:
+            _warn_once(
+                name,
+                "slow",
                 "[work_providers] %s took %.2fs — it runs on EVERY turn and drags each one. "
                 "A provider must return an in-memory snapshot, not do I/O.",
                 name,
                 elapsed,
             )
         if not isinstance(items, (list, tuple)):
-            if items and name not in _WARNED:
-                _WARNED.add(name)
-                log.warning("[work_providers] %s returned %s, expected a list — skipped", name, type(items).__name__)
+            if items:
+                _warn_once(
+                    name,
+                    "not-a-list",
+                    "[work_providers] %s returned %s, expected a list — skipped",
+                    name,
+                    type(items).__name__,
+                )
             continue
         lines = [rendered for rendered in (_render(i, name) for i in items[:cap]) if rendered]
         if lines:

@@ -11,6 +11,7 @@ down with it, since this code runs inline on EVERY turn.
 from __future__ import annotations
 
 import logging
+import time
 
 import pytest
 
@@ -137,6 +138,44 @@ def test_a_raising_provider_warns_only_once():
     finally:
         log.removeHandler(handler)
     assert len([r for r in records if r.levelno >= _logging.WARNING]) == 1
+
+
+def test_a_slow_provider_does_not_mute_a_later_exception(caplog):
+    """The dedup must be per PROBLEM, not per provider.
+
+    Keying it on the name alone meant a provider warned once for being slow was thereafter
+    permanently mute about RAISING — the two branches shared one set, and an exception is
+    the thing you most need to hear about. This provider is slow on the first call and
+    throws on the second; both must be reported."""
+    calls = {"n": 0}
+
+    def slow_then_broken():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            time.sleep(work_providers.SLOW_PROVIDER_S + 0.05)
+            return [{"id": "bd-1"}]
+        raise RuntimeError("board unreachable")
+
+    set_plugin_work_providers({"p:q": slow_then_broken})
+    with caplog.at_level(logging.WARNING):
+        collect_work_sections(8)  # slow
+        collect_work_sections(8)  # raises
+    assert "took" in caplog.text  # the slow warning
+    assert "raised" in caplog.text  # and the exception was NOT swallowed
+
+
+def test_each_problem_kind_still_warns_only_once(caplog):
+    """Per-problem dedup must not turn into per-call spam: the same failure repeated is
+    still logged once."""
+
+    def boom():
+        raise RuntimeError("nope")
+
+    set_plugin_work_providers({"p:q": boom})
+    with caplog.at_level(logging.WARNING):
+        for _ in range(4):
+            collect_work_sections(8)
+    assert caplog.text.count("raised") == 1
 
 
 def test_a_non_list_return_is_skipped(caplog):
