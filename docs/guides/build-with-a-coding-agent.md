@@ -414,8 +414,9 @@ the same board — real examples:
 [half-applied cancel](https://github.com/protoLabsAI/projectBoard-plugin/issues/106),
 [the retro's own asks](https://github.com/protoLabsAI/projectBoard-plugin/issues/107).
 Two mechanisms keep findings from evaporating: the `friction` plugin's
-`record_friction` tool (enable with `plugins: { enabled: [friction] }`) logs the
-moment-of-pain signal, and the board's read-only `board_retro` tool mines the
+`record_friction` tool (on by default) logs the moment-of-pain signal — and open
+friction is projected into the agent's own working state, so it acts on the backlog
+instead of re-reporting it, and the board's read-only `board_retro` tool mines the
 attempt/outcome history into recurring failure classes, which the `loop-retro`
 skill distills into durable grounding. A friction point that isn't filed is a
 lesson the next run pays for again.

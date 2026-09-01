@@ -466,6 +466,50 @@ class FrictionMiddleware(AgentMiddleware):
             raise
 
 
+def _build_subagent():
+    """A read-only triage delegate the lead agent can dispatch with ``task``.
+
+    Triage is a genuinely different job from recording: it reads the WHOLE backlog at
+    once, looks for the pattern across entries, and decides what is worth filing. Doing
+    that inline costs the lead agent a long context of raw ledger rows mid-task, which is
+    exactly what delegation is for.
+
+    Read-only by construction — it gets `friction_review` and nothing that writes. A
+    triage pass must not be able to resolve what it just decided to file; that is the
+    operator's call (`/friction`) or a deliberate `resolve_friction` after the fix lands.
+    """
+    from graph.subagents.config import SubagentConfig
+
+    return SubagentConfig(
+        name="friction_triage",
+        description=(
+            "Read the friction backlog and turn it into a filing plan: group related "
+            "entries, name the root cause, and draft issue titles/bodies for the ones "
+            "worth tracking. Read-only — it never resolves or records."
+        ),
+        system_prompt=(
+            "You triage this agent's own friction backlog.\n\n"
+            "Call `friction_review` (both channels) and read the whole list before "
+            "judging any single entry — the value is in the pattern. Then:\n"
+            "1. GROUP entries that share a root cause, even when the summaries differ. "
+            "Five 'reached for escape hatch' entries and one 'no tool to do X' are "
+            "usually one missing tool.\n"
+            "2. RANK by cost: how often it recurs x how much it blocked. A major seen "
+            "once can outrank a minor seen ten times, or not — say which and why.\n"
+            "3. For each group worth tracking, draft a title and a body: what happens, "
+            "how to reproduce it, and what would have helped. The last part is the "
+            "actionable half and the half that gets dropped.\n"
+            "4. Say explicitly which entries are NOT worth filing, and why — a triage "
+            "pass that files everything has not triaged anything.\n\n"
+            "You cannot resolve anything and should not ask to. Report the plan and stop."
+        ),
+        # Explicitly listed: a subagent gets only the tools named here, so an empty list
+        # would leave it unable to read the very backlog it exists to triage.
+        tools=["friction_review"],
+        default_prompt="Triage the current friction backlog and propose what to file.",
+    )
+
+
 async def _friction_command(rest: str, _session_id: str):
     """``/friction`` — the operator's read of the backlog, without spending a turn.
 
@@ -625,6 +669,19 @@ def register(registry):
     # User-only (never an agent tool) so resolving stays an operator action — the model
     # must not be able to clear its own backlog by deciding it is clear.
     registry.register_chat_command("friction", _friction_command)
+    registry.register_subagent(_build_subagent())
+    # Advertised on the agent card so a PEER can ask this agent what has been getting in
+    # its way — the fleet-level version of the same question the console view answers.
+    registry.register_a2a_skill({
+        "id": "friction-review",
+        "name": "Friction review",
+        "description": (
+            "Report this agent's recorded friction — the tools that were missing or "
+            "awkward, the errors that misled it, and how often each recurred."
+        ),
+        "tags": ["diagnostics", "self-report", "observability"],
+        "examples": ["What has been getting in your way lately?"],
+    })
     registry.register_router(_build_router(), prefix="")
     # Default prefix (None) resolves to /plugins/friction — the canonical public
     # view prefix (ADR 0026) — so the manifest's views[].path matches exactly.

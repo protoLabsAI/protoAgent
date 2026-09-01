@@ -982,7 +982,8 @@ not this registry. First-party plugins that ship **in-tree**:
 | `craft` | *(no tools — ships engineering slash-command skills)* | **on** |
 | `delegates` | `delegate_to(target, query)` — route a sub-task to another agent or endpoint over **a2a / openai / acp**, managed and hot-swappable from the console ([ADR 0025](/adr/0025-unified-delegate-registry-and-panel)). An `acp` delegate drives a CLI coding agent over ACP ([ADR 0024](/adr/0024-spawn-cli-coding-agents-acp)). Replaced the retired `peer_consult` / `peer_list` / `code_with`. See [Delegates](/guides/delegates) + [CLI coding agents](/guides/coding-agents) | built-in |
 | `workflows` | `run_workflow` + Workflow Studio | off — `plugins.enabled: [workflows]` |
-| `execute_code`, `coder`, `orgchart`, `telegram`, `friction`, `hello` | — | off |
+| `friction` | `record_friction` / `friction_review` / `resolve_friction`, the Friction console view, and the `/friction` operator command. Open friction is projected into `<working_state>` ([ADR 0079](/adr/0079-autonomous-operating-model)) so the agent observes its own backlog | **on** |
+| `execute_code`, `coder`, `orgchart`, `telegram`, `hello` | — | off |
 
 Others — including the **GitHub** plugin (`github_get_pr`, `github_get_issue`,
 `github_list_issues`, `github_get_commit_diff` and the Review API tools) — live in their own

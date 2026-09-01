@@ -654,3 +654,40 @@ def test_resolving_is_operator_only_never_an_agent_tool(wired):
     fixed — that is a different claim."""
     assert "friction" in wired.chat_commands
     assert "friction" not in {getattr(t, "name", "") for t in wired.tools}
+
+
+# ── delegation + federation seams ───────────────────────────────────────────
+
+
+def test_the_triage_subagent_is_read_only(wired):
+    """Triage decides what to FILE. It must not be able to resolve what it just decided
+    to file — that claim belongs to the operator, or to a fix that actually landed."""
+    sub = next(s for s in wired.subagents if s.name == "friction_triage")
+
+    assert sub.tools == ["friction_review"]
+    assert "resolve_friction" not in sub.tools and "record_friction" not in sub.tools
+    assert sub.default_prompt  # dispatchable bare, via /task with no prompt
+
+
+def test_the_agent_card_advertises_friction_review(wired):
+    """A peer should be able to ask this agent what has been getting in its way."""
+    skill = next(s for s in wired.a2a_skills if s["id"] == "friction-review")
+
+    assert skill["name"] and skill["description"]
+    assert "diagnostics" in skill["tags"]
+
+
+def test_every_seam_this_plugin_claims_is_actually_registered(wired):
+    """The point of the 0.2 rebuild: friction reaches the agent through the seams the
+    plugin system provides, not through a tool list alone. If one is dropped, say so
+    here rather than discovering it as a silently missing surface."""
+    assert {getattr(t, "name", "") for t in wired.tools} == {
+        "record_friction", "friction_review", "resolve_friction",
+    }
+    assert wired.middlewares                      # auto-capture
+    assert wired.routers                          # read API + resolve + the view page
+    assert wired.work_providers                   # ADR 0079 working state
+    assert wired.skill_dirs == ["skills"]         # when to record
+    assert "friction" in wired.chat_commands      # operator control
+    assert wired.subagents                        # triage delegate
+    assert wired.a2a_skills                       # agent card
