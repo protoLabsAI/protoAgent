@@ -489,6 +489,14 @@ export function usePaletteRegistry(
     // `chatTabPalette.ts`, imported by App and Launcher), so the default console does arm it.
     // Registering a source bumps `seamVersion`, which re-runs this effect and wires the
     // provider then.
+    //
+    // The known cost of core shipping a source: the default console now pays that affordance.
+    // Source rows answer SYNCHRONOUSLY here, but the DS arms `loading` for any provider that
+    // declares `getCommands` and debounces the call 120ms, so ⌘K flashes the spinner and lands
+    // the chat rows a beat after the statics on every keystroke. Skipping the debounce+spinner
+    // for a provider that returns an array rather than a Promise is a `@protolabsai/ui` change
+    // (command-palette.views.tsx), not one this adapter can make — until then the freshness the
+    // seam exists for is only reachable through the path that costs it.
     const offSources = hasPaletteSources()
       ? registry.registerProvider(paletteSourceProvider(flagOn, isHostConsole()))
       : undefined;

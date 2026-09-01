@@ -1,26 +1,44 @@
-// The ⌘K chat-tab source (ADR 0061's headline dynamic use case): a row per OPEN CHAT TAB,
-// so a chat is reachable by NAME rather than only by the ⌘1–9 ordinal.
+// The chat-tab palette source (ADR 0061's headline dynamic use case): a row per OPEN CHAT
+// TAB, so a chat is reachable by NAME rather than only by the ⌘1–9 ordinal.
 //
-// Two things carry the weight here. The rows must track the LIVE store — a snapshot would
-// list a closed tab and miss a new one — and running a row must never be able to leave the
-// chat surface pointing at a session that no longer exists: `chatStore.switchSession` does
-// not validate its argument, so a stale id sets `currentSessionId` to nothing, pushes a
-// phantom into `activeSessions`, and ChatSurface's `useSession` mounts a DEAD SLOT. Rows are
-// built when the palette is read and run a keystroke later, so that window is real.
+// Three things carry the weight here. The rows must track the LIVE store — a snapshot would
+// list a closed tab and miss a new one. Running a row must never be able to leave the chat
+// surface pointing at a session that no longer exists: `chatStore.switchSession` does not
+// validate its argument, so a stale id sets `currentSessionId` to nothing, pushes a phantom
+// into `activeSessions`, and ChatSurface's `useSession` mounts a DEAD SLOT — and rows are
+// built when the palette is read and run a keystroke later, so that window is real. And the
+// rows must be FINDABLE by what an operator actually types, which is asserted through the
+// provider the palette reads (`paletteSourceProvider`) rather than against a keywords array:
+// a correct row nobody can search for is a feature nobody has.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { chatStore, DEFAULT_SESSION_TITLE } from "../chat/chat-store";
 import { registeredPaletteCommands } from "../ext/paletteRegistry";
+import { registeredKeybindings } from "../ext/keybindingRegistry";
+import "../keybindings/coreKeybindings"; // registers ⌘1–9 (side effect), exactly as App does
 import {
   CHAT_TAB_GROUP,
   CHAT_TAB_ID_PREFIX,
   chatTabPaletteRows,
 } from "./chatTabPalette"; // importing also self-registers the source (side effect)
-import { applyNavIntent, navigate, setPaletteNavigator } from "./usePaletteRegistry";
+import { applyNavIntent, paletteSourceProvider, setPaletteNavigator } from "./usePaletteRegistry";
 import { useUI } from "../state/uiStore";
 import type { PaletteCommand } from "../ext/paletteRegistry";
 
 const ctx = { close: vi.fn() };
+
+/** Every source row the palette would show for `query`, by label — the same call the DS
+ *  commands view makes on open and on each keystroke (it hands `getCommands` an AbortSignal
+ *  the synchronous seam provider ignores). Only this file's source is registered, so what
+ *  comes back is the chat rows and nothing else. */
+function search(query: string): string[] {
+  const rows =
+    paletteSourceProvider(
+      () => true,
+      true,
+    ).getCommands?.(query, { signal: new AbortController().signal }) ?? [];
+  return (rows as { label: string }[]).map((c) => c.label);
+}
 
 /** One fresh, single-session store, so each test starts from a known tab strip. */
 function resetSessions(): string {
@@ -50,17 +68,15 @@ afterEach(() => {
 });
 
 describe("chat-tab palette rows", () => {
-  it("lists one row per open tab, titled, grouped, and keyworded", () => {
+  it("lists one row per open tab, titled and grouped", () => {
     const a = openTab("Release notes for v0.156");
     const b = openTab("Fleet smoke test");
 
-    const rows = chatTabPaletteRows(vi.fn());
+    const rows = chatTabPaletteRows();
     const ra = rowFor(rows, a)!;
     expect(ra.label).toBe("Release notes for v0.156");
     // Their own group, so they read as CHATS rather than as more commands.
     expect(ra.group).toBe(CHAT_TAB_GROUP);
-    // Title words plus what the row IS — the label can't supply "chat"/"switch".
-    expect(ra.keywords).toEqual(expect.arrayContaining(["release", "notes", "chat", "switch"]));
     expect(rowFor(rows, b)!.label).toBe("Fleet smoke test");
     // Tab order (left→right), the same order ⌘1–9 counts in.
     expect(rows.map((r) => r.label).slice(-2)).toEqual([
@@ -81,7 +97,7 @@ describe("chat-tab palette rows", () => {
         updatedAt: 2,
       },
     ]);
-    const row = rowFor(chatTabPaletteRows(vi.fn()), "recovered-blank");
+    const row = rowFor(chatTabPaletteRows(), "recovered-blank");
     expect(row?.label).toBe(DEFAULT_SESSION_TITLE);
     expect(row?.label.trim()).not.toBe("");
   });
@@ -91,7 +107,7 @@ describe("chat-tab palette rows", () => {
     const current = openTab("Current");
     expect(chatStore.getSnapshot().currentSessionId).toBe(current);
 
-    const rows = chatTabPaletteRows(vi.fn());
+    const rows = chatTabPaletteRows();
     expect(rowFor(rows, current)!.hint).toBe("current");
     // NOT disabled: from another surface the row is a real navigation back to chat, so
     // disabling it would kill the action exactly where it earns its place.
@@ -104,31 +120,48 @@ describe("chat-tab palette rows", () => {
     const second = openTab("Second");
     chatStore.switchSession(first); // so `second` isn't the current row (a hint would win)
 
-    const rows = chatTabPaletteRows(vi.fn());
+    const rows = chatTabPaletteRows();
     // A binding id: the host renders the LIVE combo, so the row can't lie after a rebind.
     expect(rowFor(rows, second)!.keybinding).toBe("chat.tab.2");
     expect(rowFor(rows, second)!.hint).toBeUndefined();
 
     // Only the nine positions that HAVE a binding advertise one.
     for (let i = 0; i < 9; i++) openTab(`Tab ${i}`);
-    const many = chatTabPaletteRows(vi.fn());
+    const many = chatTabPaletteRows();
     expect(many.length).toBeGreaterThan(9);
     expect(many[8].keybinding).toBe("chat.tab.9");
     expect(many[9].keybinding).toBeUndefined();
   });
 
+  it("advertises binding ids that REALLY exist, and every ordinal binding there is", () => {
+    // The row names a binding by id and the host silently renders no combo when the lookup
+    // misses, so a typo (`chat.tabs.1`) would ship as a row that just never shows a shortcut.
+    // Pinned in both directions against the registry `coreKeybindings` filled: if that file's
+    // ⌘1–9 loop ever grows a tenth jump, "the first nine" stops being the whole story here.
+    for (let i = 0; i < 12; i++) openTab(`Tab ${i}`);
+    const advertised = chatTabPaletteRows()
+      .map((r) => r.keybinding)
+      .filter((id): id is string => !!id);
+    const ordinals = registeredKeybindings()
+      .map((b) => b.id)
+      .filter((id) => /^chat\.tab\.\d+$/.test(id));
+
+    expect(ordinals.length).toBeGreaterThan(0); // the import above really did register them
+    expect([...advertised].sort()).toEqual([...ordinals].sort());
+  });
+
   it("re-reads the live store on every call — a closed tab stops being listed", () => {
     const gone = openTab("Scratch");
-    expect(rowFor(chatTabPaletteRows(vi.fn()), gone)).toBeTruthy();
+    expect(rowFor(chatTabPaletteRows(), gone)).toBeTruthy();
 
     chatStore.deleteSession(gone);
     // Nothing bumped the seam's version and nothing re-rendered: the rows are recomputed
     // because they are recomputed, which is the whole reason this is a source.
-    expect(rowFor(chatTabPaletteRows(vi.fn()), gone)).toBeUndefined();
+    expect(rowFor(chatTabPaletteRows(), gone)).toBeUndefined();
 
     const renamed = openTab("Before");
     chatStore.renameSession(renamed, "After");
-    expect(rowFor(chatTabPaletteRows(vi.fn()), renamed)!.label).toBe("After");
+    expect(rowFor(chatTabPaletteRows(), renamed)!.label).toBe("After");
   });
 
   it("is registered as a palette SOURCE, so the palette re-reads it per keystroke", () => {
@@ -140,6 +173,49 @@ describe("chat-tab palette rows", () => {
     expect(registeredPaletteCommands("static").map((c) => c.id)).not.toContain(
       `${CHAT_TAB_ID_PREFIX}${titled}`,
     );
+  });
+});
+
+describe("finding a chat by typing", () => {
+  // The rows go through the palette's real search here, not a keywords assertion: every term
+  // has to land somewhere in label/hint/group/keywords, so this is what actually decides
+  // whether the words we chose reach the chat the operator meant.
+  it("finds a chat by any word of its title", () => {
+    openTab("Release notes for v0.156");
+    openTab("Fleet smoke test");
+
+    expect(search("release")).toEqual(["Release notes for v0.156"]);
+    expect(search("v0.156")).toEqual(["Release notes for v0.156"]); // punctuation and all
+    expect(search("SMOKE")).toEqual(["Fleet smoke test"]); // case-insensitive
+    // Terms may span fields and arrive in any order — the title plus what the row IS.
+    expect(search("smoke chat")).toEqual(["Fleet smoke test"]);
+  });
+
+  it("lists every chat for the words an operator types when hunting one", () => {
+    openTab("Release notes for v0.156");
+    openTab("Fleet smoke test");
+    // Said out loud: "switch chat", "go to tab", "that other session/conversation/thread".
+    for (const q of ["chat", "tab", "session", "conversation", "thread", "switch", "go to"]) {
+      expect(search(q), q).toHaveLength(2);
+    }
+  });
+
+  it("finds the memory-free tabs by the name of the mode", () => {
+    // Incognito (ADR 0069 D3b) has no room in the row's one text slot — the ⌘N combo and
+    // "current" own it — so the keywords are how you pick those tabs out of the list.
+    const secret = chatStore.createSession({ incognito: true }).id;
+    chatStore.renameSession(secret, "Comp review");
+    openTab("Release notes");
+
+    expect(search("incognito")).toEqual(["Comp review"]);
+    expect(search("private")).toEqual(["Comp review"]);
+    expect(search("chat")).toHaveLength(2); // still an ordinary chat row otherwise
+  });
+
+  it("returns nothing rather than everything when no chat matches", () => {
+    openTab("Release notes");
+    expect(search("kubernetes")).toEqual([]);
+    expect(search("release notes kubernetes")).toEqual([]); // EVERY term must hit
   });
 });
 
@@ -168,7 +244,7 @@ describe("running a chat-tab row", () => {
     const sink = vi.fn();
     setPaletteNavigator(sink);
 
-    rowFor(chatTabPaletteRows(navigate), target)!.run(ctx);
+    rowFor(chatTabPaletteRows(), target)!.run(ctx);
 
     expect(sink).toHaveBeenCalledWith({ kind: "chat", sessionId: target });
     // Nothing local moved — the intent went to the sink, which is the point.
@@ -215,5 +291,29 @@ describe("running a chat-tab row", () => {
     expect(broken.activeSessions).toContain("chat-never-existed");
     chatStore.deleteSession("chat-never-existed");
     expect(chatStore.getSnapshot().activeSessions).not.toContain("chat-never-existed");
+  });
+});
+
+describe("the palette hosts wire the source", () => {
+  // A palette host that forgets `import "./chatTabPalette"` fails SILENTLY: the palette simply
+  // has no chats in it, with no error anywhere. The hosts own that wiring (the adapter
+  // deliberately doesn't import the module — see the note at the foot of chatTabPalette.ts),
+  // so the guard belongs on the hosts. Vite `?raw` globs rather than node:fs — same reason as
+  // statusTokenGuard.test.ts: this tsconfig has no node types, and under jsdom
+  // `import.meta.url` is an http: URL, so URL-relative filesystem access is a trap.
+  const APP_SOURCES = import.meta.glob("./*.tsx", {
+    query: "?raw",
+    import: "default",
+    eager: true,
+  }) as Record<string, string>;
+
+  it("every palette host imports it for the side effect", () => {
+    const hosts = Object.entries(APP_SOURCES).filter(([, src]) => /usePaletteRegistry\(/.test(src));
+    // Pinned, so the glob can't silently go empty — and so a THIRD palette host has to answer
+    // this question rather than quietly shipping a palette with no chats in it.
+    expect(hosts.map(([file]) => file).sort()).toEqual(["./App.tsx", "./Launcher.tsx"]);
+    for (const [file, src] of hosts) {
+      expect(src, file).toContain('import "./chatTabPalette"');
+    }
   });
 });

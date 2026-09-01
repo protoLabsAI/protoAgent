@@ -88,11 +88,20 @@ registerPaletteSource(() => openTabs().map((t) => ({
 })));
 ```
 
+Core ships exactly this shape and no other path: `app/chatTabPalette.ts` is a row per open chat
+tab (label = the session title, id-namespaced, run → the console's nav chokepoint), so read it
+when yours needs one to copy.
+
 A source is called **every time the palette is read** — once when ⌘K opens and again on each
 keystroke — so its rows follow your data with no notification of any kind on your side. (It is not
 called *when your data changes*: nothing watches it. A row that changes while the palette is open
 and untouched appears on the next keystroke.) That is why a source has to be **cheap and
 synchronous**: no fetches, no store writes, no `async`. Keep it to mapping state you already have.
+
+It also means a row is **built at read time and run a keystroke later**, so whatever it points at
+can be gone by the time the operator hits Enter. Re-check it where you act on it, not where you
+build the row — core's chat rows re-validate the session id before switching tabs, because the
+store they hand it to does not.
 
 A broken source is contained: it is skipped, the sources registered after it still run, and the
 palette keeps every other row. That covers a `throw` **and** a return that isn't an array — an
