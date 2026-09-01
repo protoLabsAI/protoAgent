@@ -12,21 +12,30 @@
 // a silently unfindable row.
 //
 // ── What this module may import, and why the list is short ──────────────────────────
-// Both edges are places ⌘K can quietly become expensive, and CI has no bundle-size gate
-// that would say so — hence a SOURCE guard: `settingsPalette.test.ts` parses this file's
-// own import list and pins it exactly.
+// CI has no bundle-size gate, so both edges are pinned by a SOURCE guard instead:
+// `settingsPalette.test.ts` parses this file's own import list and asserts it exactly.
 //
-//   • NOT `settings/SettingsSurface`. `settings/sections.ts` is import-light on purpose (no
-//     React, no lucide components, no panels); taking the same ids off the surface instead
-//     would weld ~69 modules / ~470 KB of eager panel code onto the ⌘K path AND onto the
-//     desktop Launcher window, which mounts the palette registry but never mounts App.
-//   • NOT `lib/lucideIcon`, which is the OBVIOUS way to turn the leaf's icon name into a
-//     glyph and is a lazy `import("lucide-react")` of the whole icon set — a 738 KB chunk
-//     nothing else eagerly loads, so ⌘K would go from free to the heaviest thing the
-//     Launcher downloads, every row flashing a Package box while it arrives. That resolver
-//     is right for a name chosen at runtime; these 23 are a closed set, so
-//     `settings/sectionIcons` maps them statically, from glyphs the Settings rail already
-//     put in the main chunk.
+//   • NOT `lib/lucideIcon`. This is the one with a MEASURED cost. It is the obvious way to
+//     turn the leaf's icon name into a glyph, and it is a lazy `import("lucide-react")` of
+//     the whole icon set — which this build emits as its own chunk (737.8 kB, and nothing
+//     else eagerly loads it). Using it here would make ⌘K the heaviest thing the desktop
+//     Launcher window downloads, with every row flashing a Package box through its Suspense
+//     fallback while the chunk arrives. That resolver is right where the name is chosen at
+//     RUNTIME (a fleet archetype, a plugin's icon); these 23 are a closed set, so
+//     `settings/sectionIcons` maps them statically — from glyphs already tree-shaken into
+//     the entry chunk for the Settings rail, so the second consumer really is free.
+//   • NOT `settings/SettingsSurface`. This one is about the module GRAPH, and it is worth
+//     being precise, because the obvious justification is FALSE in today's build: main.tsx
+//     imports App and Launcher statically and vite declares no `manualChunks`, so there is
+//     exactly ONE entry chunk and the Launcher window already downloads (and evaluates) the
+//     whole settings tree. Importing the surface here would cost zero extra bytes today —
+//     measured, not assumed. What the guard buys is that `settings/sections.ts` (2 modules,
+//     no React, no lucide, no panels) stays the only thing between a consumer that merely
+//     NAMES a section and the ~105-module panel tree behind SettingsSurface. That is what
+//     keeps this file's dependency list short enough to assert at all, and it is the
+//     precondition for the split that WOULD pay bytes — lazy-loading App so the Launcher
+//     stops shipping the console. `main.tsx` still importing both is pinned below, so the
+//     day that changes, this comment is the thing that fails.
 //
 // ── Gating is DECLARATIVE — this module filters nothing ─────────────────────────────
 // A row for a flag-gated section carries the leaf's `flag` verbatim; a host-only section
@@ -37,21 +46,23 @@
 // Publish forever, on every channel, in a way no test that stubs the flags would reproduce.
 //
 // That per-render gate is also what keeps a gated row from POISONING state. A deep-link
-// applies its section id through `openGlobalSettings` → `SettingsSurface`'s
-// `initialSection` effect, which writes the id into the PERSISTED `settingsSection`
-// (uiStore is not partialized) BEFORE the section gate runs, and only then falls back to
-// the first visible section. A row that could be RUN while its section is gated off would
-// therefore leave a dead id in localStorage — a settings dialog that opens on Identity
-// forever after, for no visible reason. Because `flag`/`hostOnly` ride the row, the window
-// that RENDERS it has already answered both axes, so within a console window the run can't
-// happen. The desktop Launcher is the one window that answers them for a DIFFERENT one: it
-// loads `/app/`, so it gates with `isHostConsole() === true` and the host's `/api/flags`,
-// then forwards the intent to whichever slug the main window sits on. Running `Settings:
-// Telemetry` there, with the main window on a member slug, still lands the dead id. That
-// hole predates these rows and is narrower with them (the `box:telemetry` row they replace
-// carried no gate at all, so it was listed in every member window's OWN palette too);
-// closing it means resolving the intent where it LANDS — `applyNavIntent`, or the surface's
-// deep-link effect — not by pre-filtering here, which is the fail-closed trap above.
+// applies its section id through `openGlobalSettings`, which writes it into the PERSISTED
+// `settingsSection` (uiStore does not partialize that key) — the store is the intent's
+// landing site, and it has to be authoritative or a repeat deep-link onto the section the
+// dialog already holds is a no-op set that moves nothing. The section GATE runs later, in
+// SettingsSurface, which falls back to the first visible section for an id it cannot
+// resolve. So a row RUN while its section is gated off would leave a dead id in
+// localStorage — a settings dialog that opens on Identity forever after, for no visible
+// reason. Because `flag`/`hostOnly` ride the row, the window that RENDERS it has already
+// answered both axes, so within a console window the run can't happen. The desktop Launcher
+// is the one window that answers them for a DIFFERENT one: it loads `/app/`, so it gates
+// with `isHostConsole() === true` and the host's `/api/flags`, then forwards the intent to
+// whichever slug the main window sits on. Running `Settings: Telemetry` there, with the main
+// window on a member slug, still lands the dead id. That hole predates these rows and is
+// narrower with them (the `box:telemetry` row they replace carried no gate at all, so it was
+// listed in every member window's OWN palette too); closing it means resolving the intent
+// against the RECEIVING window's gates — in `applyNavIntent`, before it reaches the store —
+// not by pre-filtering here, which is the fail-closed trap above.
 import { sectionIcon } from "../settings/sectionIcons";
 import { settingsSectionGroups } from "../settings/sections";
 import type { PaletteCommand } from "../ext/paletteRegistry";

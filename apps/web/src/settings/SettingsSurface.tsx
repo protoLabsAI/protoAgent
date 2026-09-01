@@ -113,6 +113,13 @@ export function SettingsSurface({ initialSection }: { initialSection?: string } 
   const setSection = useUI((s) => s.setSettingsSection);
 
   // Deep-link: select the requested section once when opened on one (overlay / palette).
+  // BELT-AND-BRACES only. `openGlobalSettings(section)` already writes the active
+  // `settingsSection`, precisely because this effect cannot be the authority: it is keyed on
+  // the VALUE of `initialSection`, so re-running a deep-link for the section the dialog is
+  // already pointed at never re-fires it (and the overlay's `key={section}` never remounts),
+  // which used to leave the operator on whatever pane they had wandered to. This keeps a
+  // mount with an `initialSection` the store didn't set — a fork embedding the surface
+  // directly — landing on the right pane.
   useEffect(() => {
     if (initialSection) setSection(initialSection);
   }, [initialSection, setSection]);

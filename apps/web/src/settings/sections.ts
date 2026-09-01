@@ -7,9 +7,18 @@ import type { GatedSection } from "./sectionGate";
 // nothing; it pulls in no React, no lucide components and no panels. That is what lets a
 // consumer that merely needs to NAME a settings section (⌘K, a deep link, the desktop
 // Launcher window, which mounts the palette registry but never mounts App) read the table
-// without welding the whole settings tree onto its path: importing anything at all from
-// SettingsSurface.tsx eagerly drags ~90 modules / ~800 KB of panel source with it, and CI has
-// no bundle-size gate that would catch the regression. sections.test.ts pins the rule.
+// without depending on the whole settings tree: importing anything at all from
+// SettingsSurface.tsx drags ~105 first-party modules of panel source in with it.
+//
+// Be precise about what that buys, because the tempting claim is FALSE today: main.tsx
+// imports App and Launcher statically and vite declares no `manualChunks`, so both desktop
+// windows load ONE entry chunk and the panel tree is already in the Launcher's bytes. The
+// leaf saves no bytes right now. It keeps the module GRAPH honest, which is (a) what makes a
+// by-name consumer's import list short enough to assert at all — CI has no bundle-size gate,
+// so a source guard is the only kind available, and sections.test.ts is it — and (b) the
+// precondition for the split that WOULD save bytes: lazy-loading App so the Launcher window
+// stops shipping the console. app/settingsPalette.test.ts pins the one-entry-chunk fact, so
+// this paragraph fails the day it stops being true.
 //
 // SettingsSurface.tsx COMPOSES this table with the halves that genuinely need React: the
 // `render: () => …` per id and the name → lucide component map.

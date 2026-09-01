@@ -147,3 +147,46 @@ def test_two_prs_adding_fragments_do_not_touch_the_same_file(tmp_path):
     assert a != b  # distinct paths => nothing for git to 3-way merge
     buckets, used = cl.read_fragments(tmp_path)
     assert buckets["fixed"] == ["- PR A", "- PR B"] and len(used) == 2
+
+
+# ── the lint gate: what a fragment must have to still say something at release ─
+def test_lint_accepts_a_well_formed_fragment(tmp_path):
+    p = _frag(tmp_path, "3291.added.md", "- **Every Settings section is a ⌘K deep-link (#3291).** Details…")
+
+    assert cl.lint_fragments([p]) == []
+
+
+def test_lint_rejects_a_ref_that_sits_outside_the_bold_lead(tmp_path):
+    """#3291: `scaffold` keeps only the bold lead, so a trailing ref is silently dropped.
+
+    The fragment parses, collates and rolls perfectly — and then the marketing /changelog
+    bullet is the only one of eleven with nothing to look up. Nothing downstream can
+    recover the number, because the filename is gone by then. So catch it at the PR.
+    """
+    p = _frag(
+        tmp_path,
+        "3291.added.md",
+        "- **Every Settings section is a ⌘K deep-link.** Details… (#3291)\n",
+    )
+
+    (problem,) = cl.lint_fragments([p])
+
+    assert "no '#N' reference" in problem
+    assert "(#3291)" in problem  # the message names the fix, using the filename's number
+    # …and it really is dropped, which is WHY the lint exists.
+    assert "#3291" not in cl._titles(p.read_text())[0]
+
+
+def test_lint_accepts_a_ref_spelled_alongside_other_parenthetical_text(tmp_path):
+    """`(v0.2.0, #3286)` is a real, fine spelling — the rule is "names a number", not one form."""
+    p = _frag(tmp_path, "3286.changed.md", "- **orgChart rebuilt as a plugin (v0.2.0, #3286).** Details…")
+
+    assert cl.lint_fragments([p]) == []
+
+
+def test_lint_still_rejects_a_fragment_with_no_top_level_bullet(tmp_path):
+    p = _frag(tmp_path, "3291.added.md", "Every Settings section is a deep-link (#3291).")
+
+    (problem,) = cl.lint_fragments([p])
+
+    assert "no top-level" in problem  # the older check, unchanged — and reported ALONE

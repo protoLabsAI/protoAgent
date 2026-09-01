@@ -12,11 +12,12 @@
 //   3. The WIRING hands both of those to the seam. A perfect row factory nothing registers,
 //      or one registered through a filter, looks identical from the factory's own tests — so
 //      the last block reads the registry back after the module-load registration.
-//   4. The module stays a LEAF, and CHEAP. Importing `settings/SettingsSurface` for the same
-//      ids would weld the whole panel tree onto ⌘K and onto the desktop Launcher window;
-//      reaching for `lib/lucideIcon` to draw the same glyphs would pull the 738 KB lucide
-//      barrel onto both. CI has no bundle-size gate, so neither costs a test a single
-//      assertion — only a source guard can catch them.
+//   4. The module stays a LEAF. Reaching for `lib/lucideIcon` to draw the same glyphs would
+//      pull the 737.8 kB lucide barrel — its own chunk, which nothing else eagerly loads —
+//      onto ⌘K and onto the desktop Launcher window. Importing `settings/SettingsSurface`
+//      for the same ids costs no bytes TODAY (see the last block: one entry chunk), but it
+//      is what would make the leaf pointless and the split unrecoverable. CI has no
+//      bundle-size gate, so only a source guard catches either.
 import ts from "typescript";
 import { Suspense, type ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -32,6 +33,10 @@ import { sectionIcon } from "../settings/sectionIcons";
 import { registeredPaletteCommands, visiblePaletteCommands } from "../ext/paletteRegistry";
 import { registeredKeybindings } from "../ext/keybindingRegistry";
 import paletteSrc from "./settingsPalette.ts?raw";
+// For the entry-chunk assertion at the bottom: the two files that decide whether the desktop
+// Launcher window downloads App's tree. Read as SOURCE — importing main.tsx would boot React.
+import mainSrc from "../main.tsx?raw";
+import viteConfigSrc from "../../vite.config.ts?raw";
 // Imported for their MODULE-LOAD side effects: `usePaletteRegistry` is where core registers
 // these rows through the public seam, and coreKeybindings is where `settings.open` is
 // declared. The wiring block below reads both registries back.
@@ -396,8 +401,10 @@ describe("wired into the registry, the HOST applies the gates", () => {
 // because the regex version of this guard was blind to exactly the shapes that matter — a
 // prettier-wrapped multi-line import, a bare side-effect `import "./x.css"`, and a lazy
 // `() => import("./SettingsSurface")` (still a chunk this module owns).
-function specifiersOf(src: string): string[] {
-  const sf = ts.createSourceFile("settingsPalette.ts", src, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
+function specifiersOf(src: string, kind: ts.ScriptKind = ts.ScriptKind.TS): string[] {
+  // `kind` matters: main.tsx is parsed too (the entry-chunk assertion at the bottom), and
+  // JSX read as plain TS produces a mangled tree rather than an error.
+  const sf = ts.createSourceFile("settingsPalette.ts", src, ts.ScriptTarget.Latest, false, kind);
   const found: string[] = [];
   const text = (n: ts.Node | undefined) => (n && ts.isStringLiteralLike(n) ? n.text : undefined);
   const visit = (node: ts.Node): void => {
@@ -475,5 +482,23 @@ describe("settingsPalette.ts stays off the settings panel tree", () => {
     }
     // Not even by substring — a re-export barrel or a deeper path would still pull it in.
     for (const s of specs) expect(s).not.toMatch(/SettingsSurface/);
+  });
+
+  // The guard above is worth having, but the reason usually given for it is WRONG, and a
+  // wrong reason in a comment is how a claim reaches release notes. Today `main.tsx`
+  // statically imports BOTH App and Launcher and vite declares no `manualChunks`, so the
+  // build emits ONE entry chunk that both desktop windows load: App's settings tree is
+  // already in the Launcher's bytes, and importing SettingsSurface here would add none.
+  // (Measured against the branch point: 1,481.61 kB → 1,485.15 kB, i.e. +3.5 kB for the
+  // feature — not the ~470/~800 kB "saving" the guard was once described as making.)
+  //
+  // Pin that, so the prose and the build cannot drift apart in either direction: if someone
+  // makes App lazy — the change that WOULD make the byte argument true — this fails, and
+  // the comments in settingsPalette.ts / sections.ts / sectionIcons.tsx get their upgrade.
+  it("App and Launcher share one entry chunk — so the guard is graph hygiene, not bytes", () => {
+    const specs = specifiersOf(mainSrc, ts.ScriptKind.TSX);
+    expect(specs).toContain("./app/App"); // static — a lazy() would read as import("./app/App")
+    expect(specs).toContain("./app/Launcher");
+    expect(viteConfigSrc).not.toMatch(/manualChunks|rollupOptions/);
   });
 });

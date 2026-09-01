@@ -16,10 +16,15 @@ import sectionsSrc from "./sections.ts?raw";
 // sections.ts exists so a consumer that only needs to NAME a settings section — ⌘K, a deep
 // link, the desktop Launcher window (which mounts the palette registry but never mounts App) —
 // can read the table without importing the settings tree. `import … from "./SettingsSurface"`
-// eagerly welds ~90 modules / ~800 KB of panel source (FleetManagerPanel, PluginsSurface,
-// ToolsPanel, TelemetrySurface, 20-odd panels and 26 lucide components) onto that path, and CI
-// has NO bundle-size gate, so the regression would ship silently. Hence a SOURCE guard: the
-// only thing that can be checked is what the module is allowed to import.
+// pulls ~105 first-party modules of panel source (FleetManagerPanel, PluginsSurface,
+// ToolsPanel, TelemetrySurface, 20-odd panels and 26 lucide components) onto that path.
+//
+// What that is worth is a graph property, NOT a byte one — today both desktop windows load a
+// single entry chunk that already contains the panel tree (pinned in
+// app/settingsPalette.test.ts). It is worth a guard anyway, for two reasons: a short,
+// assertable import list is the only enforceable form the invariant HAS, since CI has no
+// bundle-size gate; and the leaf is the precondition for ever splitting the settings tree out
+// of that chunk. So: a SOURCE guard on what the module is allowed to import.
 //
 // That guard PARSES rather than greps, and the distinction is the whole ballgame. It began as a
 // pair of regexes that required the `from` clause to sit on the same line as its `import`

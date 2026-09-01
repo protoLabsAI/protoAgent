@@ -9,14 +9,16 @@ import type { SettingsSectionIcon } from "./sections";
 // section's glyph but not its panels (⌘K, the desktop Launcher) can have it without the tree.
 //
 // STATIC named imports, deliberately, and NOT lib/lucideIcon's by-name resolver. That one is
-// `lazy(() => import("lucide-react"))` reading the full `icons` map, which in this build is a
-// 738 KB chunk nothing else eagerly loads, plus a Suspense tick per glyph. Paying that is right
-// where the name is chosen at RUNTIME and nobody can enumerate the set — a fleet archetype, a
-// plugin's icon (NewAgentPanel, SetupWizard). It is wrong here: these 23 names are a closed set
-// known at build time, tree-shaken into the main chunk for the Settings rail already, so the
-// second consumer costs no bytes at all. It also means the palette paints its glyphs on the
-// first frame instead of flashing 22 identical Package boxes while the barrel downloads — and
-// keeps the barrel off the Launcher window, which is most of what #3285 bought.
+// `lazy(() => import("lucide-react"))` reading the full `icons` map, which this build emits as
+// its own 737.8 kB chunk that nothing else eagerly loads, plus a Suspense tick per glyph.
+// Paying that is right where the name is chosen at RUNTIME and nobody can enumerate the set —
+// a fleet archetype, a plugin's icon (NewAgentPanel, SetupWizard). It is wrong here: these 23
+// names are a closed set known at build time, already tree-shaken into the entry chunk for the
+// Settings rail, so the second consumer really does cost no bytes. That is the MEASURABLE half
+// of the ./sections split — unlike the panel tree, which the desktop Launcher window already
+// downloads either way (one entry chunk; see app/settingsPalette.test.ts). It also means the
+// palette paints its glyphs on the first frame instead of flashing 22 identical Package boxes
+// while the barrel arrives.
 //
 // `Record<SettingsSectionIcon, …>` makes the map exhaustive: a section whose icon name has no
 // component here is a type error, not a missing glyph.
