@@ -22,6 +22,7 @@ const LINUX_DEB = /^protoAgent-.+-x86_64-unknown-linux-gnu\.deb$/;
 interface ReleaseAsset {
   name: string;
   browser_download_url: string;
+  size: number; // bytes, straight from the GitHub API
 }
 
 interface Release {
@@ -40,7 +41,21 @@ export interface DesktopRelease {
   setupExeUrl: string;
   appImageUrl: string;
   debUrl: string;
+  // Installer sizes, pre-formatted for display ("91 MB"). Derived from the same
+  // asset the URL points at, so the number on the page can never drift from the
+  // file it labels — the whole reason these aren't hardcoded.
+  dmgSize: string;
+  setupExeSize: string;
+  appImageSize: string;
+  debSize: string;
   assets: ReleaseAsset[];
+}
+
+// Finder and Explorer both report decimal megabytes, so divide by 1e6 — using
+// 1024**2 here would print a number smaller than what the user sees after the
+// download lands, which reads as a bait-and-switch on a size claim.
+function formatMB(bytes: number): string {
+  return `${Math.round(bytes / 1_000_000)} MB`;
 }
 
 export async function fetchLatestDesktopRelease(): Promise<DesktopRelease> {
@@ -79,6 +94,10 @@ export async function fetchLatestDesktopRelease(): Promise<DesktopRelease> {
       setupExeUrl: setupExe.browser_download_url,
       appImageUrl: appImage.browser_download_url,
       debUrl: deb.browser_download_url,
+      dmgSize: formatMB(dmg.size),
+      setupExeSize: formatMB(setupExe.size),
+      appImageSize: formatMB(appImage.size),
+      debSize: formatMB(deb.size),
       assets: release.assets,
     };
   }
