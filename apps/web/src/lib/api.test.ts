@@ -158,6 +158,66 @@ describe("hub-forced fleet settings", () => {
   });
 });
 
+describe("member diagnostics API (#3168/#3169)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    window.history.replaceState({}, "", "/app/");
+  });
+
+  it("reads logs through the explicitly selected member, independent of the focused window", async () => {
+    window.history.replaceState({}, "", "/app/agent/roxy/");
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        calls.push(url);
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ enabled: true, capacity: 2000, returned: 1, lines: ["ava log"] }),
+          text: async () => "",
+        };
+      }),
+    );
+
+    await api.memberDiagnosticsLogs("ava", 25);
+
+    expect(calls).toEqual(["/agents/ava/api/diagnostics/logs?lines=25"]);
+  });
+
+  it("reads host diagnostics without a proxy prefix and encodes exact task ids", async () => {
+    window.history.replaceState({}, "", "/app/agent/ava/");
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        calls.push(url);
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            task_id: "task/a b",
+            context_id: null,
+            state: "TASK_STATE_COMPLETED",
+            status_message: "",
+            last_updated: null,
+            history: [],
+            artifacts: [],
+            accumulated_text: "",
+            truncated: [],
+            malformed: [],
+          }),
+          text: async () => "",
+        };
+      }),
+    );
+
+    await api.memberDiagnosticsTask("host", "task/a b");
+
+    expect(calls).toEqual(["/api/diagnostics/tasks/task%2Fa%20b"]);
+  });
+});
+
 describe("finishSetup carries the archetype's capability contract (ADR 0100)", () => {
   // The wizard's host path is the twin of POST /api/fleet's `requires_tools`: the
   // server records it in the host's archetype-contract.yaml so a wizard-installed archetype

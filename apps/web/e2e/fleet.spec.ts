@@ -604,3 +604,128 @@ test("a sister agent's window: the fleet panel won't stop or remove the agent se
   // A sibling keeps its controls — the guard is about SELF, not about being a member window.
   await expect(page.locator(".fleet-row", { hasText: "roxy" }).getByRole("button", { name: "Start" })).toBeVisible();
 });
+
+// ── Fleet Room member diagnostics drawer (#3169, consuming #3168) ───────────────────────
+// The diagnostics reads are served on EVERY member under /api/diagnostics/*, reached for an
+// arbitrary member through the hub's /agents/<slug>/* proxy. Stub them per-slug at the network
+// edge (the mock backend doesn't model them) so the drawer's snapshot rendering, member
+// binding, and failure states are exercised deterministically. `host` reaches /api/diagnostics/*
+// with no /agents prefix (memberPath(host) is un-prefixed), so the glob matches both shapes.
+async function stubDiagnostics(page) {
+  await page.route("**/api/diagnostics/logs**", async (route) => {
+    const slug = (new URL(route.request().url()).pathname.match(/\/agents\/([^/]+)\//) || [])[1] || "host";
+    // A stopped local member is the hub proxy's 409 — the drawer must render it as "stopped".
+    if (slug === "roxy") {
+      return route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: "agent 'roxy' is not running" }) });
+    }
+    return route.fulfill({ json: { enabled: true, capacity: 2000, returned: 2, lines: [`[${slug}] boot ok`, `[${slug}] ready`] } });
+  });
+  // Per-id fetch counter — a "live" task evolves between snapshots so a re-inspect of the SAME
+  // id observes an updated state, proving Inspect refetches rather than pinning the first read.
+  const taskHits = new Map();
+  await page.route("**/api/diagnostics/tasks/**", async (route) => {
+    const taskId = decodeURIComponent(new URL(route.request().url()).pathname.split("/").pop());
+    if (taskId.includes("missing")) {
+      return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ detail: "no such task on this member", task_id: taskId }) });
+    }
+    const n = (taskHits.get(taskId) ?? 0) + 1;
+    taskHits.set(taskId, n);
+    const settling = taskId.includes("live") && n < 2;
+    const body = settling ? "still working…" : "diagnostics summary body";
+    return route.fulfill({
+      json: {
+        task_id: taskId,
+        context_id: "s-diag",
+        state: settling ? "TASK_STATE_WORKING" : "TASK_STATE_COMPLETED",
+        status_message: "",
+        last_updated: "2026-08-30T10:00:00Z",
+        history: [{ role: "ROLE_USER", message_id: "m1", text: "diagnose me" }],
+        artifacts: [{ artifact_id: "a1", name: "answer", text: body }],
+        accumulated_text: body,
+        truncated: taskId.includes("live") ? [] : ["history"],
+        malformed: [],
+      },
+    });
+  });
+}
+
+test("Fleet Room diagnostics: view a member's bounded logs and inspect an exact task (#3169)", async ({ page }) => {
+  await stubDiagnostics(page);
+  await page.goto("/app/", { waitUntil: "load" });
+  await openFleetRoom(page);
+  const room = page.locator(".flr");
+
+  // Open diagnostics on ava straight from her roster row — the drawer replaces the activity
+  // feed and names the inspected member.
+  await room.locator(".flr__member", { hasText: "ava" }).getByRole("button", { name: "Diagnostics for ava" }).click();
+  const drawer = page.getByTestId("fleet-diagnostics");
+  await expect(drawer).toBeVisible();
+  await expect(page.getByTestId("diag-member")).toHaveText("ava");
+
+  // Bounded logs land as a snapshot — a reachable member's log tail is viewable in-console.
+  await expect(page.getByTestId("diag-logs")).toContainText("[ava] boot ok");
+
+  // Inspect an exact task id → the #3168 summary, with the server's truncation note surfaced.
+  await page.getByLabel("Task id").fill("t-42");
+  await page.getByRole("button", { name: "Inspect" }).click();
+  await expect(page.getByTestId("diag-task")).toContainText("TASK_STATE_COMPLETED");
+  await expect(page.getByTestId("diag-task")).toContainText("diagnostics summary body");
+  await expect(page.getByTestId("diag-task-notes")).toContainText("history");
+
+  // Re-inspecting the SAME id refetches: a task still settling on the first read shows its updated
+  // state on a second Inspect (snapshot refresh — the pane never pins a stale first snapshot).
+  await page.getByLabel("Task id").fill("t-live");
+  await page.getByRole("button", { name: "Inspect" }).click();
+  await expect(page.getByTestId("diag-task")).toContainText("TASK_STATE_WORKING");
+  await page.getByRole("button", { name: "Inspect" }).click();
+  await expect(page.getByTestId("diag-task")).toContainText("TASK_STATE_COMPLETED");
+
+  // Returning from task B to a previously inspected task A also refetches A instead of reviving
+  // its cached first snapshot.
+  await page.getByLabel("Task id").fill("a-live");
+  await page.getByRole("button", { name: "Inspect" }).click();
+  await expect(page.getByTestId("diag-task")).toContainText("TASK_STATE_WORKING");
+  await page.getByLabel("Task id").fill("b-42");
+  await page.getByRole("button", { name: "Inspect" }).click();
+  await expect(page.getByTestId("diag-task")).toContainText("TASK_STATE_COMPLETED");
+  await page.getByLabel("Task id").fill("a-live");
+  await page.getByRole("button", { name: "Inspect" }).click();
+  await expect(page.getByTestId("diag-task")).toContainText("TASK_STATE_COMPLETED");
+  await expect(page.getByTestId("diag-task")).toContainText("diagnostics summary body");
+
+  // A missing task id is an actionable inline state, not a blank panel.
+  await page.getByLabel("Task id").fill("missing-999");
+  await page.getByRole("button", { name: "Inspect" }).click();
+  await expect(page.getByTestId("diag-error-missing")).toBeVisible();
+});
+
+test("Fleet Room diagnostics: switching members retargets the drawer; a fleet-selection change does not (#3169)", async ({ page }) => {
+  await stubDiagnostics(page);
+  await page.goto("/app/", { waitUntil: "load" });
+  await openFleetRoom(page);
+  const room = page.locator(".flr");
+
+  // Inspect ava.
+  await room.locator(".flr__member", { hasText: "ava" }).getByRole("button", { name: "Diagnostics for ava" }).click();
+  await expect(page.getByTestId("diag-member")).toHaveText("ava");
+  await expect(page.getByTestId("diag-logs")).toContainText("[ava]");
+
+  // Change the ACTIVE FLEET SELECTION (the composer address) to a different member — the drawer
+  // is drawer-local and authoritative (ADR 0042), so it must NOT retarget to follow it.
+  await room.locator(".flr__input").fill("@ro");
+  await room.locator(".flr__mention", { hasText: "roxy" }).click();
+  await expect(room.locator(".flr__target")).toContainText("@roxy");
+  await expect(page.getByTestId("diag-member")).toHaveText("ava");
+  await expect(page.getByTestId("diag-logs")).toContainText("[ava]");
+
+  // Explicitly picking a DIFFERENT member's Diagnostics DOES retarget — and diagnostics works
+  // on the host member too (reached without the /agents proxy prefix).
+  await room.locator(".flr__member", { hasText: "main" }).getByRole("button", { name: "Diagnostics for main" }).click();
+  await expect(page.getByTestId("diag-member")).toHaveText("main");
+  await expect(page.getByTestId("diag-logs")).toContainText("[host]");
+
+  // And a stopped member surfaces the actionable stopped state rather than empty logs.
+  await room.locator(".flr__member", { hasText: "roxy" }).getByRole("button", { name: "Diagnostics for roxy" }).click();
+  await expect(page.getByTestId("diag-member")).toHaveText("roxy");
+  await expect(page.getByTestId("diag-error-stopped")).toBeVisible();
+});

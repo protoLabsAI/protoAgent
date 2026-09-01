@@ -13,14 +13,14 @@
 // fleet really is a fleet-of-one — see fleetSettingsGate.
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
-import { ExternalLink, Play, Radio, Send, Square } from "lucide-react";
+import { Activity, AlertTriangle, ChevronLeft, ExternalLink, FileText, Play, RefreshCw, Radio, ScrollText, Send, Square } from "lucide-react";
 import { useToast } from "@protolabsai/ui/overlays";
 import type { PaletteContext, PaletteView } from "@protolabsai/ui/command-palette";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, currentSlug } from "../lib/api";
+import { ApiError, api, currentSlug } from "../lib/api";
 import { fleetQuery, queryKeys } from "../lib/queries";
 import { errMsg } from "../lib/format";
-import type { FleetAgent } from "../lib/types";
+import type { DiagnosticsLogs, DiagnosticsTask, FleetAgent } from "../lib/types";
 import {
   FleetActivityFeed,
   markMemberDone,
@@ -52,6 +52,11 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
   const toast = useToast();
   const [draft, setDraft] = useState("");
   const [target, setTarget] = useState<"broadcast" | string>("broadcast");
+  // The member the diagnostics drawer is inspecting — the operator's EXPLICIT pick (ADR 0042
+  // §authoritative-drawer-state, #3169). Held here, independent of the composer `target` and
+  // the focused-window slug, so a fleet-selection change never retargets an open drawer; only
+  // a fresh Diagnostics click does. Null = the drawer is closed (the activity feed shows).
+  const [diag, setDiag] = useState<{ slug: string; name: string } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const here = currentSlug();
 
@@ -89,6 +94,13 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
     ctx.close();
     onOpenAgent(slugOf(a)); // routed through the palette nav chokepoint (launcher-safe)
   };
+
+  // Inspect a member's diagnostics IN the room (no navigation, ADR 0042). Available for every
+  // member — including a stopped/unreachable one, which is exactly when an operator reaches for
+  // it (the drawer then renders the actionable failure state). Captures the id+name at click
+  // time so the drawer stays bound to THIS member even as the roster re-polls or a fleet
+  // selection changes; `slug` is the immutable id, never the editable display name.
+  const openDiag = (a: FleetAgent) => setDiag({ slug: slugOf(a), name: a.name });
 
   const toggle = (a: FleetAgent) => {
     const on = a.running;
@@ -236,7 +248,10 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
               // excluded on the host console; `here` is what covers a member's window.
               const local = !a.host && !a.remote && slug !== here;
               return (
-                <div key={slug} className={`flr__member${a.running ? "" : " is-down"}`}>
+                <div
+                  key={slug}
+                  className={`flr__member${a.running ? "" : " is-down"}${diag?.slug === slug ? " is-diag" : ""}`}
+                >
                   <span className={`flr__dot flr__dot--${p.key}`} aria-hidden />
                   <button
                     type="button"
@@ -277,6 +292,16 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
                     )}
                     <button
                       type="button"
+                      className={`flr__icon${diag?.slug === slug ? " is-active" : ""}`}
+                      onClick={() => openDiag(a)}
+                      title="Diagnostics — bounded logs & task inspector"
+                      aria-label={`Diagnostics for ${a.name}`}
+                      aria-pressed={diag?.slug === slug}
+                    >
+                      <Activity size={14} />
+                    </button>
+                    <button
+                      type="button"
                       className="flr__icon"
                       onClick={() => open(a)}
                       disabled={!a.running}
@@ -293,7 +318,17 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
         </div>
 
         <div className="flr__col flr__activity">
-          <FleetActivityFeed />
+          {diag ? (
+            <MemberDiagnostics
+              key={diag.slug}
+              slug={diag.slug}
+              name={diag.name}
+              agent={roster.find((a) => slugOf(a) === diag.slug)}
+              onClose={() => setDiag(null)}
+            />
+          ) : (
+            <FleetActivityFeed />
+          )}
         </div>
       </div>
 
@@ -363,6 +398,344 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
           <Send size={15} />
         </button>
       </div>
+    </div>
+  );
+}
+
+/** An inspected member's diagnostics failure, mapped to an actionable inline state (#3169).
+ *
+ *  Failure containment is server-owned: a member that's stopped / unreachable / slow is the
+ *  hub proxy's case (409 / 502 / 504 — never a 500, ADR 0042), and the member's OWN local
+ *  failure modes (a missing task, no task store) return a structured non-500 with their own
+ *  status. Both surface on the thrown `ApiError.status`, so this maps each to a titled,
+ *  next-step hint rather than a raw error string. `subject` disambiguates the two reads (a 404
+ *  from the task inspector is a missing task; from logs it's a plain not-found). */
+export type DiagErrorKind =
+  | "stopped"
+  | "unreachable"
+  | "timeout"
+  | "unauthorized"
+  | "unconfigured"
+  | "missing"
+  | "error";
+export function diagnosticErrorState(
+  error: unknown,
+  subject: "logs" | "task",
+): { kind: DiagErrorKind; title: string; hint: string } {
+  const status = error instanceof ApiError ? error.status : 0;
+  switch (status) {
+    case 401:
+      return {
+        kind: "unauthorized",
+        title: "Not authorized",
+        hint: "This member needs a valid operator token before its diagnostics can be read.",
+      };
+    case 409:
+      return {
+        kind: "stopped",
+        title: "Member is stopped",
+        hint: "The agent isn’t running, so it can’t answer. Start it from the roster, then retry.",
+      };
+    case 502:
+      return {
+        kind: "unreachable",
+        title: "Member unreachable",
+        hint: "The hub couldn’t reach this member — a remote box offline, or its URL is wrong.",
+      };
+    case 504:
+      return {
+        kind: "timeout",
+        title: "Timed out",
+        hint: "The member didn’t respond in time. Retry, or check whether it’s overloaded.",
+      };
+    case 503:
+      return {
+        kind: "unconfigured",
+        title: "No task store",
+        hint: "This member has no A2A task store configured, so its tasks can’t be inspected.",
+      };
+    case 404:
+      return subject === "task"
+        ? {
+            kind: "missing",
+            title: "No such task",
+            hint: "No task with that id exists on this member. Check the id and try again.",
+          }
+        : { kind: "error", title: "Not found", hint: errMsg(error) };
+    default:
+      return {
+        kind: "error",
+        title: subject === "task" ? "Couldn’t inspect the task" : "Couldn’t load logs",
+        hint: errMsg(error),
+      };
+  }
+}
+
+function DiagError({
+  state,
+  onRetry,
+}: {
+  state: { kind: DiagErrorKind; title: string; hint: string };
+  onRetry: () => void;
+}) {
+  return (
+    <div className={`flr__diag-error flr__diag-error--${state.kind}`} role="alert" data-testid={`diag-error-${state.kind}`}>
+      <AlertTriangle size={15} className="flr__diag-erricon" aria-hidden />
+      <div className="flr__diag-errbody">
+        <strong>{state.title}</strong>
+        <span>{state.hint}</span>
+      </div>
+      <button type="button" className="flr__diag-retry" onClick={onRetry}>
+        Retry
+      </button>
+    </div>
+  );
+}
+
+/** The member diagnostics drawer (#3169) — bounded logs + exact A2A task inspection for the
+ *  member the operator explicitly picked, consuming ONLY #3168's operator-authenticated,
+ *  slug-scoped proxy reads. Snapshot refresh only (a Refresh button; no live SSE following).
+ *  Bounds + redaction are server-owned — this only presents the returned snapshot and its
+ *  `note` / `truncated` / `malformed` metadata. `agent` is the LIVE roster row (for presence);
+ *  it may be undefined if the member has since left the fleet, in which case the drawer still
+ *  identifies it by the captured `name` and lets its reads fail into an actionable state. */
+export function MemberDiagnostics({
+  slug,
+  name,
+  agent,
+  onClose,
+}: {
+  slug: string;
+  name: string;
+  agent?: FleetAgent;
+  onClose: () => void;
+}) {
+  const [taskDraft, setTaskDraft] = useState("");
+  const [taskId, setTaskId] = useState<string | null>(null);
+  const qc = useQueryClient();
+  const presence = agent ? presenceOf(agent) : { key: "unreachable" as const, label: "left the fleet" };
+
+  const logs = useQuery({
+    queryKey: ["diagnostics", "logs", slug],
+    queryFn: () => api.memberDiagnosticsLogs(slug),
+    // A 409/502/504/401 is an actionable state, not a transient to ride out — don't let the
+    // shared cold-start retry mask it behind a spinner. Snapshot read: the only re-fetch is
+    // the Refresh button; there is deliberately no poll and no SSE follow.
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: Infinity,
+  });
+
+  const task = useQuery({
+    queryKey: ["diagnostics", "task", slug, taskId],
+    queryFn: () => api.memberDiagnosticsTask(slug, taskId as string),
+    enabled: taskId !== null,
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: Infinity,
+  });
+
+  const inspect = () => {
+    const id = taskDraft.trim();
+    if (!id) return;
+    // Re-inspecting a cached id (same-id or A->B->A) must be a fresh snapshot. With
+    // staleTime:Infinity, selecting a previously inspected id would otherwise revive its cached
+    // query result instead of observing the task's current state.
+    if (id === taskId) task.refetch();
+    else {
+      qc.removeQueries({ queryKey: ["diagnostics", "task", slug, id], exact: true });
+      setTaskId(id);
+    }
+  };
+  const onTaskKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      inspect();
+    }
+  };
+
+  return (
+    <div className="flr__diag" data-testid="fleet-diagnostics">
+      <div className="flr__diag-head">
+        <button
+          type="button"
+          className="flr__diag-back"
+          onClick={onClose}
+          title="Back to activity"
+          aria-label="Close diagnostics"
+        >
+          <ChevronLeft size={16} />
+        </button>
+        <span className={`flr__dot flr__dot--${presence.key}`} aria-hidden />
+        <span className="flr__diag-name" data-testid="diag-member">
+          {name}
+        </span>
+        <span className="flr__diag-sub">diagnostics · {presence.label}</span>
+      </div>
+
+      <div className="flr__diag-body">
+        <section className="flr__diag-section">
+          <header className="flr__diag-sechead">
+            <span className="flr__diag-sectitle">
+              <ScrollText size={13} aria-hidden /> Logs
+            </span>
+            <button
+              type="button"
+              className="flr__diag-refresh"
+              onClick={() => logs.refetch()}
+              disabled={logs.isFetching}
+              aria-label="Refresh logs"
+              title="Refresh logs (snapshot)"
+            >
+              <RefreshCw size={13} aria-hidden /> Refresh
+            </button>
+          </header>
+          {logs.isError ? (
+            <DiagError state={diagnosticErrorState(logs.error, "logs")} onRetry={() => logs.refetch()} />
+          ) : logs.data ? (
+            <LogsView data={logs.data} />
+          ) : (
+            <div className="flr__diag-state">Loading logs…</div>
+          )}
+        </section>
+
+        <section className="flr__diag-section">
+          <header className="flr__diag-sechead">
+            <span className="flr__diag-sectitle">
+              <FileText size={13} aria-hidden /> Task inspector
+            </span>
+          </header>
+          <div className="flr__diag-taskbar">
+            <input
+              className="flr__diag-taskinput"
+              value={taskDraft}
+              onChange={(e) => setTaskDraft(e.target.value)}
+              onKeyDown={onTaskKeyDown}
+              placeholder="Exact task id…"
+              aria-label="Task id"
+              spellCheck={false}
+            />
+            <button
+              type="button"
+              className="flr__diag-inspect"
+              onClick={inspect}
+              disabled={!taskDraft.trim()}
+            >
+              Inspect
+            </button>
+          </div>
+          {taskId === null ? (
+            <div className="flr__diag-state flr__diag-idle">
+              Enter an exact task id to inspect a turn on {name}.
+            </div>
+          ) : task.isError ? (
+            <DiagError state={diagnosticErrorState(task.error, "task")} onRetry={() => task.refetch()} />
+          ) : task.data ? (
+            <TaskView t={task.data} />
+          ) : (
+            <div className="flr__diag-state">Inspecting {taskId}…</div>
+          )}
+        </section>
+      </div>
+    </div>
+  );
+}
+
+/** Render a bounded log snapshot. `enabled:false` is a first-class state (an unconfigured or
+ *  opted-out buffer — `note` says which), distinct from an enabled-but-empty buffer; neither
+ *  is an error. A clamped `lines=` request also arrives on `note`. */
+function LogsView({ data }: { data: DiagnosticsLogs }) {
+  return (
+    <>
+      {data.note && (
+        <div className="flr__diag-note" role="note">
+          {data.note}
+        </div>
+      )}
+      {!data.enabled ? (
+        <div className="flr__diag-state" data-testid="diag-logs-disabled">
+          Log buffer unavailable — this member retains nothing in memory to show.
+        </div>
+      ) : data.returned === 0 ? (
+        <div className="flr__diag-state" data-testid="diag-logs-empty">
+          No log lines retained yet.
+        </div>
+      ) : (
+        <>
+          <div className="flr__diag-meta">
+            snapshot · {data.returned} of up to {data.capacity} retained lines
+          </div>
+          <ol className="flr__diag-logs" data-testid="diag-logs">
+            {data.lines.map((line, i) => (
+              <li key={i} className="flr__diag-logline">
+                {line}
+              </li>
+            ))}
+          </ol>
+        </>
+      )}
+    </>
+  );
+}
+
+/** Render one inspected task's #3168 summary. `truncated` / `malformed` are surfaced as an
+ *  explicit banner — a silently trimmed history reads as "that's everything", and a swallowed
+ *  parse failure lets an operator draw a conclusion from a partial answer without knowing it. */
+function TaskView({ t }: { t: DiagnosticsTask }) {
+  const bounded = t.truncated.length > 0 || t.malformed.length > 0;
+  return (
+    <div className="flr__diag-task" data-testid="diag-task">
+      <div className="flr__diag-taskhead">
+        <span className="flr__diag-pill">{t.state ?? "unknown state"}</span>
+        {t.last_updated && <span className="flr__diag-taskmeta">updated {t.last_updated}</span>}
+      </div>
+      {t.context_id && <div className="flr__diag-taskmeta">context {t.context_id}</div>}
+      {bounded && (
+        <div className="flr__diag-note flr__diag-note--warn" role="note" data-testid="diag-task-notes">
+          {t.truncated.length > 0 && <div>Truncated (server-bounded): {t.truncated.join(", ")}.</div>}
+          {t.malformed.length > 0 && (
+            <div>Malformed — couldn’t parse: {t.malformed.join(", ")}. Shown partially.</div>
+          )}
+        </div>
+      )}
+      {t.status_message && (
+        <div className="flr__diag-block">
+          <span className="flr__diag-blocklabel">status message</span>
+          <div className="flr__diag-blocktext">{t.status_message}</div>
+        </div>
+      )}
+      {t.accumulated_text && (
+        <div className="flr__diag-block">
+          <span className="flr__diag-blocklabel">accumulated output</span>
+          <pre className="flr__diag-pre">{t.accumulated_text}</pre>
+        </div>
+      )}
+      {t.history.length > 0 && (
+        <div className="flr__diag-block">
+          <span className="flr__diag-blocklabel">history · {t.history.length}</span>
+          <ol className="flr__diag-msgs">
+            {t.history.map((m, i) => (
+              <li key={m.message_id ?? i} className="flr__diag-msg">
+                <span className="flr__diag-role">{m.role ?? "?"}</span>
+                <span className="flr__diag-msgtext">{m.text || "—"}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+      {t.artifacts.length > 0 && (
+        <div className="flr__diag-block">
+          <span className="flr__diag-blocklabel">artifacts · {t.artifacts.length}</span>
+          <ol className="flr__diag-msgs">
+            {t.artifacts.map((a, i) => (
+              <li key={a.artifact_id ?? i} className="flr__diag-msg">
+                <span className="flr__diag-role">{a.name ?? "artifact"}</span>
+                <span className="flr__diag-msgtext">{a.text || "—"}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
     </div>
   );
 }

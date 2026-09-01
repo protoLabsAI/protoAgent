@@ -69,6 +69,11 @@ test("closing Settings and re-opening it plainly resumes the SELECTED section, n
   await runFirstMatch(page, "shortcuts"); // Keyboard
   await expect(activeSection(page)).toHaveText("Keyboard");
   await page.locator(".settings-overlay .pl-sidenav").getByRole("tab", { name: "Behavior", exact: true }).click();
+  // Wait for the selection to actually commit before closing: clicking the tab writes the
+  // persisted section, but that store write drives an async re-render — Escaping before the
+  // DOM reflects it (as its siblings above assert after every click) races the close against
+  // the write and reopens on the stale deep-link section under CI load.
+  await expect(activeSection(page)).toHaveText("Behavior");
   await page.keyboard.press("Escape");
   await expect(page.locator(".settings-overlay")).toHaveCount(0);
 
