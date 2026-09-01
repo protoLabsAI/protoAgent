@@ -269,10 +269,18 @@ async def test_long_line_message_is_capped_at_the_tool_boundary(monkeypatch):
 
 
 async def test_secrets_are_redacted_at_the_tool_boundary(monkeypatch):
+    # Defense in depth: even if a member echoes a raw credential into a log line, the tool
+    # re-redacts (graph.middleware.redaction.redact) before returning. ``[REDACTED]`` is the
+    # replacement MARKER — its presence in the output is the whole point, so we assert the RAW
+    # credential is gone and the marker took its place; we never assert the marker is absent.
     _install_roster(monkeypatch, [_LOCAL])
-    leak = "token sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-    _install_http(monkeypatch, body={"enabled": True, "lines": [{"message": leak}], "returned": 1, "capacity": 2})
+    secret = "sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"  # an OpenAI-shaped key redact() scrubs
+    _install_http(
+        monkeypatch,
+        body={"enabled": True, "lines": [{"message": f"token {secret}"}], "returned": 1, "capacity": 2},
+    )
     out = await _logs("Alpha")
     dumped = json.dumps(out)
-    assert "sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" not in dumped
-    assert out["logs"]["lines"][0]["message"] == "token [REDACTED]"
+    assert secret not in dumped  # the raw credential never leaves the tool
+    assert "[REDACTED]" in dumped  # ...it left replaced by the marker
+    assert out["logs"]["lines"][0]["message"] == "token [REDACTED]"  # redacted in place
