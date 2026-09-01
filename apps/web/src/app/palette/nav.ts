@@ -1,4 +1,4 @@
-// Palette navigation — the ONE chokepoint every ⌘K navigation funnels through.
+// Palette navigation — the ONE chokepoint every palette navigation funnels through.
 //
 // Split out of the old monolithic `usePaletteRegistry.ts` (ADR 0057) so the ranked root
 // view, the adapter, and the desktop launcher can each import just what they need. The
@@ -10,13 +10,13 @@ import { agentHref } from "../../lib/api";
 /** Open any view by id, routed to the dock it actually lives on (and uncollapsed).
  *  Reads live state via the store's `getState()` so it isn't a render subscription.
  *  A HIDDEN surface (railOrder.hidden — enabled but not shown) is un-hidden first: the
- *  palette is the restore point, so ⌘K → a hidden view's name brings it back onto a dock. */
+ *  palette is the restore point, so ⌘⇧K → a hidden view's name brings it back onto a dock. */
 export function openView(id: string) {
   const ui = useUI.getState();
   if ((ui.railOrder.hidden ?? []).includes(id)) ui.showSurface(id); // restore onto its dock, then route
   const ro = useUI.getState().railOrder; // re-read: showSurface mutated it
   // The mobile shell reads `mobileActive`, NOT the per-dock ids — so without this every
-  // programmatic navigation (⌘K "go to", the rail context menu, a plugin's `ui.navigate`,
+  // programmatic navigation (a palette "go to", the rail context menu, a plugin's `ui.navigate`,
   // a launcher intent) silently did nothing on a phone: it moved a dock the mobile shell
   // never renders. Set both; `mobileActive` is inert on desktop.
   ui.setMobileActive(id);

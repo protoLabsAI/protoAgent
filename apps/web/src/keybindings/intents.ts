@@ -2,7 +2,7 @@ import { create } from "zustand";
 
 // Ephemeral bridge (ADR 0063) for keybindings whose action needs app/React context rather
 // than a store call. A binding pokes an intent here; the owning component reacts:
-//   • paletteOpen        — App drives <CommandPalette open=…> from this (⌘K adopted off the DS hook)
+//   • paletteOpen        — App drives <CommandPalette open=…> from this (adopted off the DS hook)
 //   • composerFocusNonce — the visible chat session slot focuses its composer when this bumps
 // NOT persisted.
 type KbIntents = {

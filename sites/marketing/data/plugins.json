@@ -350,6 +350,27 @@
     }
   },
   {
+    "id": "design-system",
+    "name": "Design System",
+    "category": "Engineering",
+    "official": true,
+    "tagline": "A live window into your design system — browse tokens and components in the console (gallery backed by your own published Storybook), play with a component's props, and give the agent the real vocabulary to design against.",
+    "adds": [
+      "tool",
+      "view",
+      "subagent",
+      "settings",
+      "config"
+    ],
+    "bundled": false,
+    "install": "https://github.com/protoLabsAI/design-system-plugin",
+    "enable": "design-system",
+    "links": {
+      "source": "https://github.com/protoLabsAI/design-system-plugin",
+      "docs": "/docs/guides/plugins"
+    }
+  },
+  {
     "id": "plugin-devkit",
     "name": "Plugin Devkit",
     "category": "Authoring",
@@ -546,9 +567,10 @@
     "name": "Org Chart",
     "category": "Orchestration",
     "official": true,
-    "tagline": "Live diagram of the agent fleet — every agent a node, a directed edge wherever one agent can delegate to another. Crawls outward from this agent's delegates. Off by default.",
+    "tagline": "Live diagram of the agent fleet — every agent a node, a directed edge wherever one agent can delegate to another (dashed where the hub supervises a member). Crawls the effective roster with cached, concurrent probes; the view paints instantly from a stale-while-revalidate snapshot. Off by default.",
     "adds": [
-      "view"
+      "view",
+      "settings"
     ],
     "bundled": true,
     "enable": "orgchart",

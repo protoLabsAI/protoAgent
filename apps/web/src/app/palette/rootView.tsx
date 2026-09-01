@@ -1,4 +1,4 @@
-// The HOST-OWNED palette root view (ADR 0057) — the ranked ⌘K list.
+// The HOST-OWNED palette root view (ADR 0057) — the ranked command-palette list.
 //
 // UPSTREAM: protoLabsAI/protoContent#503. This module exists ONLY because
 // @protolabsai/ui has no ranking seam: `commandsView` renders commands in registration

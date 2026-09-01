@@ -170,8 +170,9 @@ const CONSOLE_SECTIONS: Section[] = [
   { id: "keybindings", label: "Keyboard", icon: Keyboard, render: () => <KeybindingsPanel /> },
 ];
 
-// One consolidated settings surface. `initialSection` deep-links a section (the overlay / a ⌘K
-// command). The Box group's agent-scoped sections are gated to the host console; Fleet is not.
+// One consolidated settings surface. `initialSection` deep-links a section (the overlay / a
+// palette command). The Box group's agent-scoped sections are gated to the host console;
+// Fleet is not.
 export function SettingsSurface({ initialSection }: { only?: "host" | "workspace"; initialSection?: string } = {}) {
   const onHost = isHostConsole();
   // On phones the two-column shell can't fit a 200px rail + readable content, so collapse
@@ -193,7 +194,7 @@ export function SettingsSurface({ initialSection }: { only?: "host" | "workspace
     : CONSOLE_SECTIONS;
 
   // Drop flag-off sections everywhere they'd be reachable — nav, active-id resolution, and
-  // the ⌘K/deep-link path that reads the same persisted id — and the same for `hostOnly`
+  // the palette/deep-link path that reads the same persisted id — and the same for `hostOnly`
   // sections off the host console. A sister agent's window keeps
   // the Box group, narrowed to what still names the box from there (Fleet). Narrowing the group
   // — rather than dropping it — is what makes the header's "Fleet settings" deep-link resolve

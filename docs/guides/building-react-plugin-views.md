@@ -399,7 +399,7 @@ tab, the host inserts `.settings.<tab-id>` before your local id so opening the d
 replace a shortcut owned by your still-mounted rail/background view. The id posted back to
 the page remains your original local id in both contexts.
 
-**Let host chords through.** Forward anything you didn't handle yourself, so ⌘K still
+**Let host chords through.** Forward anything you didn't handle yourself, so ⌘⇧K still
 opens the palette while your view has focus:
 
 ```js

@@ -1,7 +1,7 @@
-// The Fleet Room (⌘K, ADR 0042 + the palette-UX overhaul). A native palette morph-view
+// The Fleet Room (ADR 0042 + the palette-UX overhaul). A native palette morph-view
 // that makes the fleet feel like a Discord room: a roster of presence-aware MEMBERS on the
 // left, the live fleet activity feed on the right, a broadcast bar below. Click a member
-// to DM it — that's the wired ⌘K chat (PaletteChat) pointed at the member
+// to DM it — that's the wired palette chat (PaletteChat) pointed at the member
 // (`ctx.enter("member-dm", …)`), streaming through the hub proxy, with Back to the roster.
 // The bottom bar broadcasts to everyone online (the @everyone announce — the only
 // fire-and-forget path, since you can't stream N replies into one pane).

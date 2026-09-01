@@ -24,7 +24,7 @@ export function escapeCloseAllowed(doc: Document = document): boolean {
 
 // The settings dialog (2026-06 consolidation) — the ONE settings surface (the focused
 // agent's settings; the Box group on the host), opened from the utility-bar Settings pill,
-// the header drawer, or a ⌘K deep-link. `section` deep-links a section; `key` re-seeds the
+// the header drawer, or a palette deep-link. `section` deep-links a section; `key` re-seeds the
 // surface per open. (Replaces the rail "Settings" surface + the Global-only overlay.)
 export function SettingsOverlay({
   open,

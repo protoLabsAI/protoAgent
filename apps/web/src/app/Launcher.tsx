@@ -3,7 +3,7 @@
 // component instead of the full console. It hosts ONLY the command palette, summoned by
 // the ⌥Space global shortcut from anywhere and dismissed on blur / Escape.
 //
-// It reuses the EXACT registry the in-app ⌘K palette uses (usePaletteRegistry), so the
+// It reuses the EXACT registry the in-app palette uses (usePaletteRegistry), so the
 // command list stays in lock-step. The difference is navigation: this window has no
 // shell, so its nav commands forward a serializable NavIntent to the main console
 // window (setPaletteNavigator) and then hide the launcher; quick-chat and inline plugin
@@ -27,8 +27,8 @@ import { emit, invoke, listen } from "../lib/desktop";
 import "./launcher.css";
 
 // The launcher keeps its glyphs lightweight: core surfaces carry their own icons; plugin
-// views fall back to the generic plugin mark (the rail/⌘K palette resolve the full lucide
-// set — not worth pulling that chunk into the launcher window for a secondary surface).
+// views fall back to the generic plugin mark (the rail and the in-app palette resolve the
+// full lucide set — not worth pulling that chunk into the launcher for a secondary surface).
 function pluginIcon(): ReactNode {
   return <Puzzle size={18} />;
 }
