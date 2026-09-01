@@ -44,6 +44,10 @@ let container: HTMLElement;
 let root: Root;
 let client: QueryClient;
 let registry: PaletteRegistry | null = null;
+/** Does the instance under test HAVE a knowledge store? The provider is gated on this
+ *  (`/api/runtime/status` → `knowledge.enabled`), so it is the switch that decides whether
+ *  the palette has any provider at all — and therefore whether the DS spins "Searching…". */
+let knowledgeEnabled = true;
 
 const ctx: PaletteContext = {
   enter: () => {},
@@ -78,15 +82,35 @@ const rowLabels = () =>
   [...container.querySelectorAll('[role="option"]')].map((el) => el.textContent ?? "");
 
 beforeEach(() => {
-  // The fleet roster poll would otherwise hit the network on every mount; hanging it leaves
-  // the hook in a state it already handles (`fleet?.agents ?? []`).
-  vi.spyOn(globalThis, "fetch").mockImplementation(() => new Promise<Response>(() => {}));
+  // Every request hangs — the fleet roster poll would otherwise hit the network on every
+  // mount, and the hook already handles that state (`fleet?.agents ?? []`) — EXCEPT the
+  // runtime status, which has to answer because the knowledge provider is gated on it.
+  knowledgeEnabled = true;
+  vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url.includes("/api/runtime/status")) {
+      return Promise.resolve(
+        new Response(JSON.stringify({ knowledge: { enabled: knowledgeEnabled } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }
+    return new Promise<Response>(() => {});
+  });
+  mount();
+});
+
+/** Mount the console's palette on a FRESH query cache. Remounting matters when a case
+ *  changes what `/api/runtime/status` answers: the capability is fetched once per client
+ *  and cached, so flipping the flag against a warm cache changes nothing. */
+function mount() {
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   act(() => root.render(h(QueryClientProvider, { client }, h(Palette))));
-});
+}
 
 afterEach(() => {
   act(() => root.unmount());
@@ -96,8 +120,60 @@ afterEach(() => {
 });
 
 describe("live knowledge search in ⌘K", () => {
-  it("registers the knowledge provider on the registry the console actually builds", () => {
-    expect(registry!.getProviders().map((p) => p.id)).toContain(KNOWLEDGE_PROVIDER_ID);
+  it("registers the knowledge provider on the registry the console actually builds", async () => {
+    await vi.waitFor(() =>
+      expect(registry!.getProviders().map((p) => p.id)).toContain(KNOWLEDGE_PROVIDER_ID),
+    );
+  });
+
+  it("registers NOTHING on an instance with no knowledge store", async () => {
+    // The capability gate, and why it is not cosmetic. The DS raises its "Searching…"
+    // affordance the moment ANY provider declares `getCommands` — `command-palette.views.tsx`
+    // early-returns only on `providers.length === 0`, and sets the flag before the 120ms
+    // debounce, for every query including the empty root. So a provider wired where
+    // `/api/knowledge/search` can only ever answer `{enabled: false, results: []}` is a
+    // busy indicator in front of a search that does not exist. Zero providers is the only
+    // state that keeps the spinner off, which is why this asserts the whole list.
+    act(() => root.unmount());
+    container.remove();
+    knowledgeEnabled = false;
+    mount();
+    const search = vi.spyOn(api, "knowledgeSearch");
+    await type("postgres");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    });
+    expect(registry!.getProviders()).toEqual([]);
+    expect(search).not.toHaveBeenCalled();
+    expect(container.querySelector(".pl-cmdk-commands__spinner")).toBeNull();
+  });
+
+  it("keeps every match reachable when two of them share a chunk id", async () => {
+    // A chunk id is a per-BACKEND rowid. On a layered store (ADR 0041) the private and
+    // commons DBs each autoincrement from 1 and `LayeredKnowledgeStore.search` fuses them
+    // de-duping on CONTENT — so one response routinely carries two DIFFERENT chunks under
+    // the same number, and the low ids that collide are exactly the ones both tiers have.
+    // The DS then dedups the rendered list FIRST-WINS on `Command.id`, so a row keyed on the
+    // raw id disappears: no header, no count, no error — the silent swallow the whole
+    // namespacing scheme exists to prevent, reintroduced inside our own result set.
+    vi.spyOn(api, "knowledgeSearch").mockResolvedValue({
+      enabled: true,
+      query: "release",
+      results: [
+        chunk({ id: 5, heading: "Private release note", tier: "private" }),
+        chunk({ id: 5, heading: "Commons release note", tier: "commons" }),
+        chunk({ id: 9, heading: "Third release note" }),
+      ],
+      stats: {},
+    });
+
+    await type("release");
+    await vi.waitFor(() => {
+      const labels = rowLabels();
+      expect(labels.some((l) => l.includes("Private release note"))).toBe(true);
+      expect(labels.some((l) => l.includes("Commons release note"))).toBe(true);
+      expect(labels.some((l) => l.includes("Third release note"))).toBe(true);
+    });
   });
 
   it("invokes the provider on a typed query and renders its rows in the palette", async () => {

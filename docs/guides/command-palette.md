@@ -50,17 +50,25 @@ Settings ▸ Keyboard, not with the in-app chords above.
   any *pending review* filter it was left on — so the entry you chose is in the list you
   land on. (The palette can't scroll the surface to one entry: the surface has no
   per-entry anchor, so the search is what puts your pick in front of you.)
-  Three things are deliberate here. It searches only once you have typed something: an
-  empty box would otherwise list the most recent entries in the store, burying the
-  commands. It shows a handful of matches rather than everything that matched, and when
-  there are more it adds a last **All matches in Knowledge** row that takes you to the
-  surface on the same search — so the shortlist is never a dead end. And when the palette
-  cannot complete the search — the store unreachable, the bearer rejected, the request past
-  its deadline — it says **Knowledge search unavailable** with the reason, rather than
-  quietly showing nothing, which would be indistinguishable from "no matches". (A search
-  the store itself errors on is the exception: that route answers `200` with an empty list,
-  so it does read as "no matches" — check the agent log if a term you know is there
-  returns nothing.)
+  Matching is **by word, and by the start of the word you are still typing** — `postg`
+  finds *Postgres tuning*, and once you finish a word the next one you start is the one
+  being completed. That is not free: the store's keyword index matches whole words, so the
+  palette asks it for a prefix term on the last word specifically because a type-ahead that
+  went whole-word only would show you nothing for every character before the end of each
+  word — a blank list that reads as "no matches" when it means "keep typing".
+  Four things are deliberate here. The rows appear only on an instance that **has** a
+  knowledge store (`knowledge.enabled` in **Settings ▸ System ▸ Runtime**); where there is
+  no store there is no search and the palette does not offer one. It searches only once you
+  have typed something: an empty box would otherwise list the most recent entries in the
+  store, burying the commands. It shows a handful of matches rather than everything that
+  matched, and when there are more it adds a last **All matches in Knowledge** row that
+  takes you to the surface on the same search — so the shortlist is never a dead end. And
+  when the palette cannot complete the search — the store unreachable, the bearer rejected,
+  the request past its deadline — it says **Knowledge search unavailable** with the reason,
+  rather than quietly showing nothing, which would be indistinguishable from "no matches".
+  (A search the store itself errors on is the exception: that route answers `200` with an
+  empty list, so it does read as "no matches" — check the agent log if a term you know is
+  there returns nothing.)
 
 Groups render in registration order — **Agents**, then **Plugins**, then **Commands** —
 so the agent and its fleet stay at the top. Live search results (Knowledge) arrive after

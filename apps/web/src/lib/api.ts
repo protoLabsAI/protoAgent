@@ -1151,13 +1151,21 @@ export const api = {
   // `signal` because the DS palette aborts a superseded keystroke, and a request that
   // ignores that signal runs to completion against the FTS index anyway. Both are omitted
   // by the Knowledge surface, which keeps the server default and no cancellation.
+  //
+  // `prefix` is the third: it widens the query's LAST token to an FTS5 prefix term. The
+  // store's index is whole-token (`knowledge/store.py` quotes each token as a phrase), so
+  // without it a type-ahead matches nothing until the operator finishes the word they are
+  // typing — an empty shortlist mid-word that reads exactly like "no matches". Off by
+  // default, and NOT sent by the Knowledge surface: its box searches a query the operator
+  // has finished, where a prefix term would only broaden the result silently.
   knowledgeSearch(
     q: string,
-    opts: { reviewState?: ReviewState; k?: number; signal?: AbortSignal } = {},
+    opts: { reviewState?: ReviewState; k?: number; prefix?: boolean; signal?: AbortSignal } = {},
   ) {
     const params = new URLSearchParams({ q });
     if (opts.reviewState) params.set("review_state", opts.reviewState);
     if (opts.k != null) params.set("k", String(opts.k));
+    if (opts.prefix) params.set("prefix", "1");
     return request<{
       enabled: boolean;
       query: string;

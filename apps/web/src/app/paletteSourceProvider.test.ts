@@ -108,7 +108,16 @@ describe("registerPaletteSource → the DS read-time provider", () => {
     const registry = await mountRegistry();
     // Core ships no sources: an always-on provider would put the palette's "Searching…"
     // spinner in front of every keystroke in the default console.
-    expect(registry.getProviders().map((p) => p.id)).not.toContain(SOURCE_PROVIDER);
+    //
+    // Asserted on the WHOLE provider list, not just this id. The rule the comment states is
+    // about provider COUNT — the DS raises `loading` when ANY provider declares
+    // `getCommands` (`command-palette.views.tsx` early-returns only on `providers.length
+    // === 0`) — so an id-specific assertion stays green while some other always-on provider
+    // reintroduces the exact spinner this guards against. That is not hypothetical: the live
+    // knowledge provider was added unconditionally and this test did not notice. Nothing
+    // whose capability is unproven may be registered here (this mount's `fetch` hangs, so
+    // `/api/runtime/status` never answers and every capability gate must read as "no").
+    expect(registry.getProviders().map((p) => p.id)).toEqual([]);
 
     const off = source(() => [{ id: "probe:late", label: "Late", run: () => {} }]);
     // Registering bumps the seam version, which re-runs the effect that wires the provider.

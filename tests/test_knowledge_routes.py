@@ -46,6 +46,63 @@ def test_knowledge_search_and_browse(monkeypatch):
     assert browse["results"][0]["id"] == 2
 
 
+# ── prefix (type-ahead) search, #3293 ─────────────────────────────────────────
+
+
+def test_prefix_is_opt_in_and_forwarded(monkeypatch):
+    """The ⌘K palette asks for a prefix term; everyone else gets the settled query they
+    always got. The kwarg must reach the store ONLY when the request asked for it."""
+    seen: list[dict] = []
+
+    class _KS:
+        def search(self, q, k=30, domain=None, **kw):
+            seen.append(kw)
+            return []
+
+        def stats(self):
+            return {}
+
+    c = _client(monkeypatch, knowledge=_KS())
+    c.get("/api/knowledge/search?q=postg")
+    assert seen[-1] == {}, "an ordinary search must not be silently broadened"
+    c.get("/api/knowledge/search?q=postg&prefix=1")
+    assert seen[-1] == {"prefix": True}
+
+
+def test_prefix_degrades_on_a_backend_that_predates_it(monkeypatch):
+    """A custom ``KnowledgeBackend`` only has to accept query/k/domain. The route wraps
+    search in a bare ``except Exception`` that returns NOTHING, so an un-retried TypeError
+    would make every palette keystroke report an EMPTY store rather than an old one."""
+
+    class _Legacy:
+        def search(self, q, k=30, domain=None):  # no **kwargs: the Protocol's minimum
+            return [{"id": 7, "heading": "Postgres tuning", "content": "C"}]
+
+        def stats(self):
+            return {}
+
+    c = _client(monkeypatch, knowledge=_Legacy())
+    body = c.get("/api/knowledge/search?q=postgres&prefix=1").json()
+    assert [r["id"] for r in body["results"]] == [7]
+
+
+def test_a_narrowing_filter_is_never_dropped_to_get_rows(monkeypatch):
+    """Only ``prefix`` degrades. ``review_state`` is the inspector's "pending" queue —
+    re-running without it would hand back rows the operator excluded and present them as
+    the filtered set, which is worse than the empty list the caller already handles."""
+
+    class _NoFilters:
+        def search(self, q, k=30, domain=None):
+            raise AssertionError("must not be retried without review_state")
+
+        def stats(self):
+            return {}
+
+    c = _client(monkeypatch, knowledge=_NoFilters())
+    body = c.get("/api/knowledge/search?q=x&review_state=pending").json()
+    assert body["enabled"] and body["results"] == []
+
+
 # ── chunk CRUD (operator curation) ────────────────────────────────────────────
 class _CrudKS:
     """Backend double tracking add/delete calls (the ADR 0031 protocol surface)."""

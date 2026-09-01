@@ -29,7 +29,7 @@ const overflowing = () =>
     chunk({ id: i + 1, heading: `row ${i}` }),
   );
 
-type SearchOpts = { k?: number; signal?: AbortSignal };
+type SearchOpts = { k?: number; prefix?: boolean; signal?: AbortSignal };
 
 function chunk(over: Partial<KnowledgeChunk> = {}): KnowledgeChunk {
   return {
@@ -85,7 +85,7 @@ describe("knowledgeSearchProvider — the browse-default guard", () => {
     const rows = await read(provider(), "  postgres  ");
     expect(search).toHaveBeenCalledTimes(1);
     expect(search.mock.calls[0][0]).toBe("postgres"); // trimmed, not the raw box contents
-    expect(rows.map((r) => r.id)).toEqual(["knowledge:7"]);
+    expect(rows.map((r) => r.id)).toEqual(["knowledge:0::7"]);
   });
 });
 
@@ -96,6 +96,17 @@ describe("knowledgeSearchProvider — the request it makes", () => {
     // Small because the caller is the only ceiling on that route; `+ 1` because the spare
     // row never renders — it is the probe that says whether the shortlist hid anything.
     expect((search.mock.calls[0][1] as SearchOpts).k).toBe(KNOWLEDGE_RESULT_CAP + 1);
+  });
+
+  it("asks for a PREFIX term, because a type-ahead has to match a half-typed word", async () => {
+    const search = vi.spyOn(api, "knowledgeSearch").mockResolvedValue(ok([]));
+    await read(provider(), "postg");
+    // The store's FTS5 index matches whole tokens — each one is quoted as a phrase
+    // (`knowledge/store.py::_fts_quote`) — and semantic recall is `embeddings: false` by
+    // default, so without this the shipped backend answers "postg" with nothing and
+    // "postgres" with the chunk. Every character on the way to a word would render an empty
+    // shortlist that reads exactly like "no matches".
+    expect((search.mock.calls[0][1] as SearchOpts).prefix).toBe(true);
   });
 
   it("threads the palette's abort signal into the in-flight request", async () => {
@@ -132,7 +143,7 @@ describe("knowledgeSearchProvider — the rows", () => {
     const [row] = await read(provider(), "postgres");
     // The DS dedups FIRST-WINS with statics listed ahead of provider rows: a bare "12" (or
     // "settings", or "open") would be silently dropped by whatever claimed it first.
-    expect(row.id).toBe("knowledge:12");
+    expect(row.id).toBe("knowledge:0::12");
     expect(row.group).toBe(KNOWLEDGE_GROUP);
     expect(row.label).toBe("Postgres tuning");
     // WHERE the chunk came from, which is what tells six rows of one search apart. Never
@@ -143,6 +154,41 @@ describe("knowledgeSearchProvider — the rows", () => {
     // every knowledge row answer to a query about none of them.
     expect(row.keywords).toEqual(["infra", "runbook.md", "document"]);
     expect(row.disabled).toBeFalsy();
+  });
+
+  it("keeps two tiers' rows distinct when they share one rowid", async () => {
+    // A chunk id is a per-BACKEND rowid, not a global one. A layered store (ADR 0041) fuses
+    // a private and a commons DB that each autoincrement from 1 and de-dup on CONTENT
+    // (`LayeredKnowledgeStore.search`: "key on content (ids differ across tiers)"), so one
+    // response routinely carries two DIFFERENT chunks numbered the same — and the low ids
+    // that collide are exactly the ones both tiers have. The DS renders provider rows
+    // through a FIRST-WINS dedup on `Command.id`, so a row keyed on the raw id is dropped
+    // with no header, no count and no error: the silent swallow this module's namespacing
+    // exists to prevent, reintroduced inside its own result set.
+    vi.spyOn(api, "knowledgeSearch").mockResolvedValue(
+      ok([
+        chunk({ id: 5, heading: "Private release note", tier: "private" }),
+        chunk({ id: 5, heading: "Commons release note", tier: "commons" }),
+      ]),
+    );
+    const rows = await read(provider(), "release");
+    expect(rows.map((r) => r.label)).toEqual(["Private release note", "Commons release note"]);
+    expect(new Set(rows.map((r) => r.id)).size).toBe(2);
+  });
+
+  it("keeps rows distinct when the backend sends no id at all", async () => {
+    // `operator_api/knowledge_routes.py` serializes `"id": d.get("id")` — a custom
+    // `KnowledgeBackend` that does not set one yields null for every row, which under an
+    // id-keyed command collapses the WHOLE result set to a single `knowledge:null`.
+    const idless = [
+      chunk({ id: undefined as unknown as number, heading: "First" }),
+      chunk({ id: undefined as unknown as number, heading: "Second" }),
+      chunk({ id: undefined as unknown as number, heading: "Third" }),
+    ];
+    vi.spyOn(api, "knowledgeSearch").mockResolvedValue(ok(idless));
+    const rows = await read(provider(), "release");
+    expect(rows.map((r) => r.label)).toEqual(["First", "Second", "Third"]);
+    expect(new Set(rows.map((r) => r.id)).size).toBe(3);
   });
 
   it("hints the source's tail, falling back to the domain bucket", async () => {
@@ -194,6 +240,10 @@ describe("knowledgeSearchProvider — the way past the shortlist", () => {
   it("adds a LAST row that opens the surface on the same search once matches overflow", async () => {
     vi.spyOn(api, "knowledgeSearch").mockResolvedValue(ok(overflowing()));
     const rows = await read(provider(), "postgres");
+    // The footer says "showing top 6", so six chunk rows have to SURVIVE to the screen.
+    // They only do if their ids are distinct — the DS drops a duplicate before rendering,
+    // which would leave five rows under a footer still claiming six.
+    expect(new Set(rows.map((r) => r.id)).size).toBe(KNOWLEDGE_RESULT_CAP + 1);
     const more = rows[rows.length - 1];
     // Last, and only after the chunks — it is the footer on the shortlist, not a result.
     expect(more.id).toBe("knowledge:more");

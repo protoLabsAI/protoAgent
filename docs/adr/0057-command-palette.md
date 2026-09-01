@@ -263,6 +263,20 @@ independently shippable.
   **Settled:** default-on; `palette` means the inline morph only (see §3).
 - **Provider budget** — per-query timeout/cancel + per-plugin result caps so a slow
   plugin can't stall the palette.
+  **Partly settled (#3293),** by the first remote provider core ships (live knowledge
+  search). Four rules came out of it, and they generalise past that one provider:
+  a provider owns its own **deadline** (the DS's abort covers a superseded keystroke,
+  not a hung backend) and its own **row cap** (the palette root is a shortlist, with an
+  explicit overflow row so the cap is never a dead end); it **never rejects**, because
+  `Promise.allSettled` turns a rejection into zero rows, which on screen is
+  indistinguishable from "nothing matched"; every row id is **namespaced *and* unique
+  within the provider's own result set**, because the view dedups first-wins on
+  `Command.id` and a row that loses that race vanishes with no header, no count and no
+  error; and a provider is **registered only where it can actually answer**, since the
+  view raises "Searching…" for any query the moment a provider with `getCommands`
+  exists — so one wired against an absent capability is a busy indicator in front of a
+  search that never runs. Still open: caps and deadlines for a *plugin's* provider,
+  which core cannot write on its behalf.
 - **Desktop** — reuse the `main` window overlay (v1) vs a dedicated frameless
   palette window (v2); global-shortcut conflict policy alongside ⌘⇧P.
 - **`when` context predicates** (gate a command by app state) — defer to v2; the DS

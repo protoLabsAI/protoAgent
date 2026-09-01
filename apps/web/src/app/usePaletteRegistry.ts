@@ -33,7 +33,7 @@ import { effectiveCombo, useKeybindingOverrides } from "../keybindings/overrides
 import { useFlagPredicate } from "../flags/flags";
 import { useQuery } from "@tanstack/react-query";
 import { agentHref, isHostConsole } from "../lib/api";
-import { fleetQuery } from "../lib/queries";
+import { fleetQuery, runtimeStatusQuery } from "../lib/queries";
 import { markAgentOpened } from "./fleetPalette";
 import { fleetRoomView } from "./FleetRoom";
 import { fleetSettingsDisabledReason } from "./fleetSettingsGate";
@@ -315,6 +315,17 @@ export function usePaletteRegistry(
   const { data: fleet } = useQuery(fleetQuery());
   const agents = fleet?.agents ?? [];
 
+  // Does this instance HAVE a knowledge store? The gate on the live-search provider below.
+  // A CACHE READ, not a fetch: both mounts of this hook already sit under a component that
+  // asks for this exact query key on boot (`App.tsx` for the console window, `Launcher.tsx`
+  // for the frameless launcher), so react-query dedups it and the palette costs no request
+  // of its own. Fails CLOSED — `undefined` until the status lands, then re-runs the effect —
+  // for the same reason `useFlagPredicate` does: an unanswered capability is not a yes, and
+  // a provider wired on a storeless instance is a "Searching…" spinner in front of a search
+  // that can never return a row.
+  const { data: runtime } = useQuery(runtimeStatusQuery());
+  const knowledgeOn = runtime?.knowledge?.enabled === true;
+
   // Built-in surfaces (core + fork/ext) live behind `Open ▸`; plugin views are their own
   // root section. A `session` view (none today) would ride with the built-ins.
   const surfaceViews = views.filter((v) => v.kind !== "plugin");
@@ -499,26 +510,38 @@ export function usePaletteRegistry(
     // re-fires the open palette's debounced search — one more registration in the same batch
     // adds no re-fire that wasn't already happening.
     //
-    // Registered UNCONDITIONALLY, unlike the source provider. Whether this instance even has
-    // a knowledge store is a server answer, and pre-fetching it would trade a silent request
-    // on every console boot for a capability the provider already reports on its own
-    // (`enabled: false` → no rows, no error row). The cost is the one `hasPaletteSources()`
-    // declined to pay: the DS shows its "Searching…" affordance whenever ANY provider
-    // declares `getCommands`, so the default console now spins it for the debounce window on
-    // every keystroke — including the empty root, where this provider deliberately searches
-    // nothing. That last part is the root view's call, not the provider's: the host-owned
-    // ranked root view gates its provider loop on a typed query and drops the empty-root flash.
-    const offKnowledge = registry.registerProvider(knowledgeSearchProvider(navigate));
+    // GATED, on the same rule the source provider is gated on and for the same reason: a
+    // provider that declares `getCommands` is what switches the DS's "Searching…" affordance
+    // on (`command-palette.views.tsx` early-returns only when NO provider has one), so a
+    // provider registered where it can never return a row is a spinner in front of a search
+    // that does not exist. An instance with `knowledge.enabled: false` has no store at all —
+    // every query would 200 with `{enabled: false, results: []}` — so the honest number of
+    // providers there is zero, exactly as `hasPaletteSources()` keeps it zero for sources.
+    // The capability is a server answer, but reading it is FREE here: `/api/runtime/status`
+    // is already fetched on boot by both hosts that mount this hook, so `knowledgeOn` is a
+    // react-query cache read and the earlier objection to gating (a silent extra request per
+    // boot) does not hold. It fails closed and re-runs this effect when the status lands.
+    //
+    // What this gate does NOT claim to fix: on an instance that DOES have a store, the DS
+    // still raises `loading` for the 120ms debounce on queries this provider will not search
+    // (the empty root, and anything under `KNOWLEDGE_MIN_QUERY`). That is the ROOT VIEW's
+    // call, not a provider's — the view is the only thing that knows the query — and the
+    // host-owned ranked root (#3289, which lands before this) skips the debounce and the
+    // spinner entirely on an untyped query. Nothing a `CommandProvider` can return fixes it
+    // from here; the DS seam has no `minQuery` and no way to see the box.
+    const offKnowledge = knowledgeOn
+      ? registry.registerProvider(knowledgeSearchProvider(navigate))
+      : undefined;
     return () => {
       offChat?.();
       offFleetRoom();
       offPlugins?.();
       offCommands();
       offSources?.();
-      offKnowledge();
+      offKnowledge?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navSig, inlineSig, fleetSig, chat, registry, seamVersion, flagOn, kbOverrides]);
+  }, [navSig, inlineSig, fleetSig, chat, registry, seamVersion, flagOn, kbOverrides, knowledgeOn]);
 
   return registry;
 }

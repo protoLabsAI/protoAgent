@@ -38,9 +38,18 @@
 //     An ABORT is not a failure — it is the operator typing another character — so an
 //     aborted read resolves empty and silently.
 //
-// Every id is namespaced `knowledge:*` (`knowledge:<chunk id>`, `:more`, `:unavailable`).
-// The DS dedups FIRST-WINS with statics ahead of provider rows, so a bare numeric id could
-// be swallowed whole by an unrelated static command that happened to claim it.
+// Every id is namespaced `knowledge:*` (`knowledge:<i>:<tier>:<chunk id>`, `:more`,
+// `:unavailable`). The DS dedups FIRST-WINS on `Command.id` — statics ahead of provider rows
+// — so the namespace is what stops an unrelated static command that happened to claim a bare
+// numeric id from swallowing a result whole. The POSITION leads the id for the other half of
+// the same problem: the dedup is blind to which provider a row came from, so two of OUR OWN
+// rows sharing an id lose one of themselves the same silent way. A chunk id is a per-BACKEND
+// rowid, not a global one — a layered store (ADR 0041) fuses a private and a commons DB that
+// each autoincrement from 1 and de-dup on CONTENT, so one response routinely carries two
+// different chunks under the same number, and a custom `KnowledgeBackend` may not set `id` at
+// all (`operator_api/knowledge_routes.py` serializes `d.get("id")` — null and all). The index
+// is unique by construction; `tier` rides along only to keep the id readable in a devtools
+// dump. See `knowledgeSearch.test.ts` — "two tiers, one rowid".
 import { createElement } from "react";
 import { BookMarked } from "lucide-react";
 
@@ -117,11 +126,16 @@ function knowledgeRowHint(chunk: KnowledgeChunk): string | undefined {
  *  navigator forwards the (serializable) intent to the real console window instead. */
 function toCommand(
   chunk: KnowledgeChunk,
+  index: number,
   query: string,
   navigate: (intent: NavIntent) => void,
 ): Command {
   return {
-    id: `knowledge:${chunk.id}`,
+    // Keyed on the row's POSITION in this response, not on `chunk.id` alone — see the
+    // module header. A chunk id is per-backend, so it is neither unique across a layered
+    // store's tiers nor guaranteed present at all, and the DS's first-wins dedup turns
+    // either into a row that vanishes with no header, no count and no error.
+    id: `knowledge:${index}:${chunk.tier ?? ""}:${chunk.id ?? ""}`,
     label: knowledgeRowLabel(chunk),
     group: KNOWLEDGE_GROUP,
     icon: KNOWLEDGE_ICON,
@@ -233,6 +247,14 @@ async function search(query: string, signal: AbortSignal): Promise<SearchOutcome
       // One MORE than we render: the extra row never reaches the palette, it is purely the
       // probe that tells `getCommands` whether the shortlist is hiding anything.
       k: KNOWLEDGE_RESULT_CAP + 1,
+      // What makes this a TYPE-AHEAD rather than a search box that happens to fire per
+      // keystroke. The store's FTS5 index matches whole tokens (each one is quoted as a
+      // phrase — `knowledge/store.py`), and semantic recall is off by default
+      // (`embeddings: false`), so without this the default backend answers every partial
+      // word with zero rows: "postg" finds nothing, "postgres" finds the chunk. Six empty
+      // shortlists on the way to one full one, each indistinguishable from "no matches".
+      // The flag widens only the LAST token, which is the one still being typed.
+      prefix: true,
       signal: ac.signal,
     });
     // `enabled: false` is an instance with no knowledge store at all — nothing to search
@@ -264,7 +286,7 @@ export function knowledgeSearchProvider(
       if (outcome.kind === "aborted") return [];
       if (outcome.kind === "failed") return [knowledgeErrorRow(outcome.reason)];
       const found = outcome.rows;
-      const out = found.slice(0, KNOWLEDGE_RESULT_CAP).map((c) => toCommand(c, q, navigate));
+      const out = found.slice(0, KNOWLEDGE_RESULT_CAP).map((c, i) => toCommand(c, i, q, navigate));
       // The probe asked for `CAP + 1`. Getting it back is the ONLY signal available that
       // matches exist past the shortlist — the route returns no total — so it is what
       // decides whether the operator is offered a way to see them.
