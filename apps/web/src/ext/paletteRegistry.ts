@@ -35,6 +35,14 @@
 //     into `registerCommands`, while source rows are served by a DS `CommandProvider` whose
 //     `getCommands(query)` the palette re-invokes on every open and every keystroke. Snapshot
 //     BOTH and a source's rows freeze at whichever effect run happened to register them.
+//     Reach for a source only when your rows come from something you CANNOT observe. If you
+//     can be notified when your data moves, register a BLOCK of statics and re-register it —
+//     `registerPaletteCommands`, which is what core's live chat-tab rows do
+//     (`app/chatTabPalette.ts`). Statics are the better half whenever it is available: the DS
+//     client-filters them per keystroke with nothing retained between queries, while its
+//     provider path debounces `getCommands` 120ms and keeps the PREVIOUS query's rows on
+//     screen for that window — rows the new query excludes, with the selection re-pointed at
+//     the first of them, which is a row that runs on Enter.
 //   • `subscribePaletteCommands` + `paletteCommandsVersion` mirror the DS registry's
 //     bump/subscribe shape (`createPaletteRegistry` in @protolabsai/ui), so the root view
 //     `useSyncExternalStore(subscribePaletteCommands, paletteCommandsVersion)`s and picks up a
@@ -115,13 +123,14 @@ export function paletteCommandsVersion(): number {
   return _version;
 }
 
-/** Whether any dynamic source is registered. The host wires the DS provider path (a
- *  debounced re-read plus the palette's "Searching…" affordance on every keystroke) only
- *  when a source actually exists — paying for an always-empty provider would put a spinner
- *  in front of every keystroke in a console with nothing dynamic to serve. Core registers
- *  one (the open-chat-tab rows, `app/chatTabPalette.ts`), so the default console arms it;
- *  the gate still decides in a fork that drops that import, and in any host mounted without
- *  it (the seam's own tests).
+/** Whether any dynamic source is registered. The host wires the DS provider path only when
+ *  a source actually exists, because that path is not free: the commands view arms its
+ *  "Searching…" affordance for any provider declaring `getCommands`, debounces the call
+ *  120ms, and — until `@protolabsai/ui` drops both for a provider that answers with an array
+ *  — holds the previous query's rows on screen for that window while re-pointing the
+ *  selection at the first of them. Core registers NO source: its one live list (the open
+ *  chat tabs) is observable, so it re-registers as a block of statics instead
+ *  (`app/chatTabPalette.ts`) and the default console keeps the no-provider fast path.
  *  Registering/unregistering a source bumps the version, so a consumer keyed on
  *  `paletteCommandsVersion()` re-asks at the right moment. */
 export function hasPaletteSources(): boolean {
@@ -165,6 +174,48 @@ export function registerPaletteCommand(cmd: PaletteCommand): () => void {
     if (_commands.get(entry.id) !== entry) return; // superseded (or already removed) — not ours
     _commands.delete(entry.id);
     bump();
+  };
+}
+
+/** Register a BLOCK of commands that belong together and change together — a live list
+ *  (the open chat tabs, a roster) whose owner re-registers the whole block whenever its data
+ *  moves. Three things the singular call can't give such a list:
+ *
+ *   • ONE version bump for the whole block, so a consumer keyed on `paletteCommandsVersion()`
+ *     re-reads once per change instead of once per row.
+ *   • The block is (re)inserted as a UNIT, in the order given, after everything registered
+ *     before it — so it renders contiguously under one group header, and its ORDER is
+ *     re-expressed on every write. That is the difference from `registerPaletteCommand`,
+ *     which deliberately keeps a re-registered id in the position it first took: a single
+ *     command's position is incidental, a list's order is data (chat rows are in tab order,
+ *     and the tab strip can be dragged into a new one).
+ *   • ONE unregister for the block, and it removes only the entries it still owns — so the
+ *     idiomatic refresh is "register the new block, then withdraw the old handle", which
+ *     replaces every surviving row in place and deletes exactly the rows that went away,
+ *     with no window in which the block is missing from the registry.
+ *
+ *  Invalid entries are skipped, as they are singly. An empty (or all-invalid) block registers
+ *  nothing and bumps nothing — there is no change to report. */
+export function registerPaletteCommands(cmds: PaletteCommand[]): () => void {
+  const entries = (Array.isArray(cmds) ? cmds : [])
+    .map(_entry)
+    .filter((e): e is PaletteCommand => !!e);
+  if (!entries.length) return () => {};
+  for (const entry of entries) {
+    // delete BEFORE set: a Map keeps a re-set key in its original position, and this block's
+    // order has to survive a reorder of the data behind it.
+    _commands.delete(entry.id);
+    _commands.set(entry.id, entry);
+  }
+  bump();
+  return () => {
+    let removed = false;
+    for (const entry of entries) {
+      if (_commands.get(entry.id) !== entry) continue; // superseded (or already gone) — not ours
+      _commands.delete(entry.id);
+      removed = true;
+    }
+    if (removed) bump(); // nothing left of this block to withdraw ⇒ nothing changed
   };
 }
 

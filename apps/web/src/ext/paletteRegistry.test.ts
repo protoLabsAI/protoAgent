@@ -4,6 +4,7 @@ import {
   hasPaletteSources,
   paletteCommandsVersion,
   registerPaletteCommand,
+  registerPaletteCommands,
   registerPaletteSource,
   registeredPaletteCommands,
   subscribePaletteCommands,
@@ -52,6 +53,70 @@ describe("palette-command registry (ADR 0061)", () => {
     registerPaletteCommand({ id: "norun", label: "x" });
     expect(registeredPaletteCommands().some((c) => c.id === "")).toBe(false);
     expect(byId("norun")).toBeUndefined();
+  });
+
+  it("registers a BLOCK as one change, in the order given, re-ordered on every write", () => {
+    // A live list (core's open chat tabs) re-registers its whole block whenever its data
+    // moves, so three properties matter that the singular call deliberately does not have.
+    registerPaletteCommand({ id: "blk-before", label: "Registered earlier", run: () => {} });
+    const v0 = paletteCommandsVersion();
+    const off = registerPaletteCommands([
+      { id: "blk:a", label: "A", run: () => {} },
+      { id: "blk:b", label: "B", run: () => {} },
+      { id: "blk:c", label: "C", run: () => {} },
+    ]);
+    // ONE bump for three rows: a consumer keyed on the version re-reads once per change, not
+    // once per row.
+    expect(paletteCommandsVersion()).toBe(v0 + 1);
+    const ids = () => registeredPaletteCommands().map((c) => c.id);
+    expect(ids().filter((id) => id.startsWith("blk:"))).toEqual(["blk:a", "blk:b", "blk:c"]);
+    // Contiguous, and after everything registered before it — so it renders under one group
+    // header rather than as two.
+    expect(ids().indexOf("blk:a")).toBe(ids().indexOf("blk-before") + 1);
+
+    // Re-registering the block in a NEW order re-expresses that order. This is the difference
+    // from `registerPaletteCommand`, which keeps a re-registered id where it first landed: a
+    // list's order is data (chat rows are in tab order, and tabs can be dragged).
+    const off2 = registerPaletteCommands([
+      { id: "blk:c", label: "C", run: () => {} },
+      { id: "blk:a", label: "A", run: () => {} },
+      { id: "blk:b", label: "B2", run: () => {} },
+    ]);
+    expect(ids().filter((id) => id.startsWith("blk:"))).toEqual(["blk:c", "blk:a", "blk:b"]);
+    expect(byId("blk:b")?.label).toBe("B2");
+
+    // The idiomatic refresh: register the new block, THEN withdraw the old handle. Every row
+    // it still owns was superseded, so the withdrawal removes nothing and reports no change —
+    // which is what keeps a re-registration from blinking the block out of the palette.
+    const v1 = paletteCommandsVersion();
+    off();
+    expect(ids().filter((id) => id.startsWith("blk:"))).toEqual(["blk:c", "blk:a", "blk:b"]);
+    expect(paletteCommandsVersion()).toBe(v1);
+
+    // A real withdrawal removes the whole block, once.
+    off2();
+    expect(ids().some((id) => id.startsWith("blk:"))).toBe(false);
+    expect(paletteCommandsVersion()).toBe(v1 + 1);
+    off2(); // idempotent
+    expect(paletteCommandsVersion()).toBe(v1 + 1);
+  });
+
+  it("skips invalid rows in a block, and reports nothing for an empty one", () => {
+    const v0 = paletteCommandsVersion();
+    // @ts-expect-error — one row with no run(), which a fork's generated list can produce
+    const off = registerPaletteCommands([{ id: "blk2:ok", label: "Ok", run: () => {} }, { id: "blk2:bad", label: "Bad" }]);
+    expect(byId("blk2:ok")).toBeDefined();
+    expect(byId("blk2:bad")).toBeUndefined();
+    expect(paletteCommandsVersion()).toBe(v0 + 1);
+    off();
+
+    // Nothing registered ⇒ nothing changed ⇒ no bump. A live list that empties out withdraws
+    // through its previous handle, not through an empty registration.
+    const v1 = paletteCommandsVersion();
+    const noop = registerPaletteCommands([]);
+    expect(paletteCommandsVersion()).toBe(v1);
+    noop();
+    expect(paletteCommandsVersion()).toBe(v1);
   });
 
   it("run gets a close() context", () => {

@@ -42,13 +42,14 @@ Settings ▸ Keyboard, not with the in-app chords above.
 - **Deep links** — the jumps worth their own command: **Settings**, **Settings: Fleet**,
   **Settings: Telemetry**, **Plugins: Discover**, **Plugins: Install from URL**.
 - **Chats** — every open chat tab, by title, so you land on the conversation about the
-  release notes by typing "release" instead of counting tab positions. The list follows the
-  tab strip as it moves: a chat you close drops out, a new one appears, and a chat renames
-  itself once its first message gives it a title. The one you're on is marked *current* (and
-  still runs — that's how you get back to chat from Knowledge or Studio), and the first nine
-  carry their `⌘1`–`⌘9` jump shortcut, rendered live so it keeps up with a rebind. Typing
-  what a chat *is* finds them too — "switch", "jump", "tabs", "sessions", "threads", or
-  "incognito" for the memory-free ones.
+  release notes by typing "release" instead of counting tab positions. Type the name and press
+  Enter; there is nothing to wait for, and the rows narrow with every keystroke like the rest
+  of the list. The list follows the tab strip as it moves: a chat you close drops out, a new
+  one appears, and a chat renames itself once its first message gives it a title. The one
+  you're on is marked *current* (and still runs — that's how you get back to chat from
+  Knowledge or Studio), and the first nine carry their `⌘1`–`⌘9` jump shortcut, rendered live
+  so it keeps up with a rebind. Typing what a chat *is* finds them too — "switch", "jump",
+  "tabs", "sessions", "threads", or "incognito" for the memory-free ones.
 
 Groups render in registration order — **Agents**, then **Plugins**, then **Commands** — so
 the agent and its fleet stay at the top, with the live **Chats** rows after them.

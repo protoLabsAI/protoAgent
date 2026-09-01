@@ -219,8 +219,11 @@ _link("box:telemetry", "Settings: Telemetry", ["telemetry", "metrics", "box", "g
  *  has no shortcut slot, so a command that ADVERTISES a keybinding (ADR 0061 `keybinding` =
  *  a `registerKeybinding` id) renders its combo as the row's trailing hint — resolved
  *  through `effectiveCombo`, so the row shows the combo the operator REBOUND it to rather
- *  than a stale default. An explicit `hint` wins (a disabled row explains itself there). */
-function toDsCommand(pc: PaletteCommand): Command {
+ *  than a stale default. An explicit `hint` wins (a disabled row explains itself there).
+ *  Exported so a test can search the rows the palette really renders — the combo lands in the
+ *  searchable `hint`, so mapping first is the difference between testing the row and testing
+ *  the registration. */
+export function toDsCommand(pc: PaletteCommand): Command {
   const bound = pc.keybinding
     ? registeredKeybindings().find((b) => b.id === pc.keybinding)
     : undefined;
@@ -247,8 +250,13 @@ function toDsCommand(pc: PaletteCommand): Command {
  *  results are appended verbatim (`command-palette.views.tsx`: `[...baseCommands.filter(…),
  *  ...dynamic]`). Skip this and a source's rows would ignore the search box entirely and sit
  *  under every query. Keep it in step with the DS if that matcher changes; the seam's own
- *  tests pin the behavior it must have (all terms, any field, case-insensitive). */
-function matchesQuery(c: Command, q: string): boolean {
+ *  tests pin the behavior it must have (all terms, any field, case-insensitive).
+ *
+ *  Exported for the same reason it exists: it is this repo's copy of a matcher it does not
+ *  own, so "can the operator find this row by typing X?" is answerable in a unit test —
+ *  `visiblePaletteCommands(…, "static").map(toDsCommand).filter(matchesPaletteQuery)` is
+ *  exactly the DS's own `baseCommands.filter(matchCommand)`. */
+export function matchesPaletteQuery(c: Command, q: string): boolean {
   const query = q.trim().toLowerCase();
   if (!query) return true;
   const hay = [c.label, c.hint, c.group, ...(c.keywords ?? [])]
@@ -289,7 +297,7 @@ export function paletteSourceProvider(
       try {
         return visiblePaletteCommands(flagOn, onHost, "dynamic")
           .map(toDsCommand)
-          .filter((c) => matchesQuery(c, query));
+          .filter((c) => matchesPaletteQuery(c, query));
       } catch {
         return [];
       }
@@ -313,10 +321,11 @@ export function usePaletteRegistry(
   // otherwise stay hidden forever), and a fork module can register (or withdraw) after the
   // first render — which is what the registry's version counter reports. A keybinding
   // override re-labels the row that advertises it. Each feeds the effect below as a
-  // dependency. The fourth input — a dynamic source's rows changing with the live data
-  // behind them — deliberately does NOT: nothing observes that data, so no dependency could
-  // track it. Those rows go through `paletteSourceProvider` instead, which the DS palette
-  // re-invokes per read; the effect only decides WHETHER to wire it.
+  // dependency. A live BLOCK of statics rides the same counter: its owner re-registers it
+  // when its data moves (core's chat rows subscribe to the chat store), so the bump that
+  // re-runs this effect is the data change itself. Only a SOURCE's rows are outside that —
+  // nothing observes their data, which is why they go through `paletteSourceProvider`, which
+  // the DS palette re-invokes per read; the effect only decides WHETHER to wire it.
   const seamVersion = useSyncExternalStore(
     subscribePaletteCommands,
     paletteCommandsVersion,
@@ -483,25 +492,25 @@ export function usePaletteRegistry(
       // The GATED read: a `flag`-off or (off-host) `hostOnly` command is omitted, exactly as
       // a gated Settings section is (`visibleSections`). Gating here rather than at
       // registration is what lets a late `/api/flags` answer reveal the row.
-      // STATICS ONLY — a fixed list is safe to snapshot. Source rows would freeze here; they
-      // take the read-time provider path below instead.
+      // STATICS ONLY — safe to snapshot BECAUSE this effect re-runs on `seamVersion`, so a
+      // live block (core's chat rows) re-registering is itself the signal to re-snapshot.
+      // Source rows have no such signal and would freeze here; they take the read-time
+      // provider path below instead.
       ...visiblePaletteCommands(flagOn, isHostConsole(), "static").map(toDsCommand),
     ]);
-    // Dynamic sources, served per palette read. Wired only when a source exists: the DS shows
-    // its "Searching…" spinner whenever ANY provider declares `getCommands`, so wiring one
-    // unconditionally would put a 120ms spinner in front of every keystroke in a console with
-    // nothing dynamic to serve. Core registers one (the open-chat-tab rows,
-    // `chatTabPalette.ts`, imported by App and Launcher), so the default console does arm it.
-    // Registering a source bumps `seamVersion`, which re-runs this effect and wires the
-    // provider then.
-    //
-    // The known cost of core shipping a source: the default console now pays that affordance.
-    // Source rows answer SYNCHRONOUSLY here, but the DS arms `loading` for any provider that
-    // declares `getCommands` and debounces the call 120ms, so ⌘K flashes the spinner and lands
-    // the chat rows a beat after the statics on every keystroke. Skipping the debounce+spinner
-    // for a provider that returns an array rather than a Promise is a `@protolabsai/ui` change
-    // (command-palette.views.tsx), not one this adapter can make — until then the freshness the
-    // seam exists for is only reachable through the path that costs it.
+    // Dynamic sources, served per palette read. Wired only when a source exists, and core
+    // registers none — its one live list re-registers as a block of statics off a store
+    // subscription instead (`chatTabPalette.ts`), which is the better half of the seam
+    // whenever the data can be observed at all. What the gate is protecting the default
+    // console from is the DS provider path itself: the commands view arms `loading` for any
+    // provider that declares `getCommands` and debounces the call 120ms, and for that window
+    // it keeps the PREVIOUS query's rows on screen and re-points the selection at the first of
+    // them (`setSel(0)` on a `filtered.length` change) — so the palette lists and pre-selects
+    // rows the query excludes, and Enter runs one. A fork with genuinely unobservable rows
+    // still gets the path, and a rebuild of `@protolabsai/ui` that answers a synchronous
+    // provider synchronously would remove the cost; neither is something this adapter can
+    // decide. Registering a source bumps `seamVersion`, which re-runs this effect and wires
+    // the provider then.
     const offSources = hasPaletteSources()
       ? registry.registerProvider(paletteSourceProvider(flagOn, isHostConsole()))
       : undefined;

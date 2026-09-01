@@ -1,34 +1,50 @@
-// Core's first DYNAMIC command-palette source (ADR 0061): one row per OPEN CHAT TAB, so the
-// operator switches to a chat BY NAME instead of by ordinal.
+// Core's ⌘K rows for the OPEN CHAT TABS (ADR 0061): one row per tab, so the operator
+// switches to a chat BY NAME instead of by ordinal.
 //
 // The gap this closes: ⌘1–9 (`chat.tab.N`, coreKeybindings.ts) jumps to a tab by POSITION,
 // and nothing in the console surfaces a session's title outside the tab strip itself — so
 // with more than a handful of chats open, "go back to the one about the release notes"
 // means reading the strip and counting. The palette is where you type a name.
 //
-// Why `registerPaletteSource` and not `registerPaletteCommand`: sessions are live. Up to
-// MAX_SESSIONS (50) of them, created and deleted while the console runs, and a title is
-// DERIVED from the first user message (`titleFromMessages`) — so it changes after a chat's
-// first turn. A static registration is a snapshot: it would list the tab the operator just
-// closed, miss the one they just opened, and label a titled chat "New chat" forever.
-// Nothing observes the chat store on the seam's behalf (`paletteCommandsVersion()` moves
-// only on register/unregister), so a snapshot would go stale silently and STAY stale. A
-// source is re-invoked on every palette read — on open and on every keystroke — which is
-// exactly the freshness these rows need.
+// WHY A BLOCK OF STATICS AND NOT `registerPaletteSource`. These rows have to be live —
+// sessions are created and deleted while the console runs, up to MAX_SESSIONS (50) of them,
+// the tab strip can be dragged into a new order, and a title is DERIVED from the first user
+// message (`titleFromMessages`), so it changes after a chat's first turn. A registration
+// made once at import would list the tab the operator just closed, miss the one they just
+// opened, and label a titled chat "New chat" forever.
 //
-// A source is therefore on the hot path of typing, so this one is CHEAP and SYNCHRONOUS:
-// one `chatStore.getSnapshot()` read and a map over ≤50 sessions. It never subscribes and
-// never writes — a store write from inside a palette read would re-enter the render that is
-// reading it.
+// The seam's other half, `registerPaletteSource`, exists for exactly that freshness — but it
+// buys it on the DS's PROVIDER path, and that path is the wrong trade for rows that are
+// merely observable. The commands view debounces `getCommands` by 120ms and, until
+// `@protolabsai/ui` learns to skip that for a provider answering with a plain array, it keeps
+// the previous query's rows on screen for the whole window and re-runs
+// `useEffect(() => setSel(0), [filtered.length])` when the new batch lands. Shipped through a
+// source, this feature's own headline gesture broke: type a chat's name and press Enter
+// without pausing, and you land in whichever chat was first under the PREVIOUS query; arrow
+// down to a command and the highlight jumps back to row 0 under your fingers a beat later;
+// and before any rows have arrived at all — a chat title matches no other command — that
+// Enter does nothing whatsoever (e2e/palette-chat-tabs.spec.ts pins all three).
+//
+// Nothing about these rows needs that path, because a source's premise — "nothing can tell
+// you when the data moved" — is false here: `chatStore.subscribe` is exactly that
+// notification. So this module takes it and re-registers the rows as a block of STATICS
+// (`registerPaletteCommands`) whenever the tab strip actually changes. The DS client-filters
+// statics on every keystroke with nothing retained between queries, so the rows are as live
+// as a source's AND every row on screen matches what was typed. It also leaves
+// `hasPaletteSources()` false in the default console, which keeps ⌘K on the DS's no-provider
+// fast path — no "Searching…" spinner in front of every keystroke.
+//
+// Building the rows stays CHEAP and SYNCHRONOUS regardless: one `chatStore.getSnapshot()`
+// read and a map over ≤50 sessions, run from a store notification, never from a render.
 import { chatStore, DEFAULT_SESSION_TITLE } from "../chat/chat-store";
-import { registerPaletteSource } from "../ext/paletteRegistry";
+import { registerPaletteCommands } from "../ext/paletteRegistry";
 import type { PaletteCommand } from "../ext/paletteRegistry";
 import { navigate } from "./usePaletteRegistry";
 
 /** Palette group for the chat rows. Its own group so they read as CHATS — a list of the
  *  operator's conversations — rather than as more commands in the Commands group. The DS
- *  commands view renders a header wherever the group changes, and provider rows are
- *  appended after the statics, so these land as one labelled block at the end. */
+ *  commands view renders a header wherever the group changes, and the block is re-inserted
+ *  after everything registered before it, so these land as one labelled block at the end. */
 export const CHAT_TAB_GROUP = "Chats";
 
 /** Row id prefix — namespaced so a session id can never collide with a static command's
@@ -42,9 +58,9 @@ export const CHAT_TAB_ID_PREFIX = "chat.tab:";
 const ORDINAL_BINDINGS = 9;
 
 /** Keywords every chat row carries. The row's LABEL is already the full title, and both
- *  matchers that see these rows — the DS's `matchCommand` and the seam provider's mirror of
- *  it (`matchesQuery`, usePaletteRegistry.ts) — are substring-over-the-joined-haystack with
- *  the label in it, so the title needs no per-word keywords to be searchable. These carry
+ *  matchers that see these rows — the DS's `matchCommand` and this repo's mirror of it
+ *  (`matchesPaletteQuery`, usePaletteRegistry.ts) — are substring-over-the-joined-haystack
+ *  with the label in it, so the title needs no per-word keywords to be searchable. These carry
  *  only what a title CANNOT say: the words an operator types when they are hunting for a
  *  conversation rather than spelling one ("switch chats", "jump to tab").
  *
@@ -65,7 +81,8 @@ const CHAT_KEYWORDS = [
 const INCOGNITO_KEYWORDS = [...CHAT_KEYWORDS, "incognito", "private"];
 
 /** The rows for the CURRENT chat-store snapshot, in tab order (left→right, the same order
- *  ⌘1–9 counts in). Exported for tests; it IS the registered source.
+ *  ⌘1–9 counts in). Pure: it reads the store and returns rows, and `syncChatTabPalette` below
+ *  is the only thing that registers them. Exported for tests.
  *
  *  No cap. MAX_SESSIONS already bounds this at 50, the mapping is trivial, and any cap
  *  would need an order to cap BY — capping in tab order silently drops the newest tabs
@@ -104,6 +121,10 @@ export function chatTabPaletteRows(): PaletteCommand[] {
       // so the current row shows "current" instead — where the shortcut is moot anyway.
       keybinding: !isCurrent && i < ORDINAL_BINDINGS ? `chat.tab.${i + 1}` : undefined,
       run: (ctx) => {
+        // A row is built when the strip last changed and run whenever the operator reaches
+        // for ⌘K, so the id it closes over can be dead by then — `applyNavIntent` re-checks
+        // it, because `chatStore.switchSession` does not.
+        //
         // Through the NavIntent chokepoint, NOT `chatStore.switchSession` directly: the
         // frameless desktop launcher mounts this same registry in a shell-less context and
         // forwards intents to the main window, where the store that owns the tabs lives.
@@ -117,25 +138,72 @@ export function chatTabPaletteRows(): PaletteCommand[] {
   });
 }
 
-// Self-register on import, the way core keybindings do (`keybindings/index.ts`). BOTH palette
-// hosts pull this module in for the side effect — App (the console window) and Launcher (the
-// frameless desktop window), which is why the rows navigate by intent rather than by touching
-// the store. A missing side-effect import would fail SILENTLY (no chats in the palette and no
-// error anywhere), so chatTabPalette.test.ts guards that every palette host keeps it.
+// ── Freshness ────────────────────────────────────────────────────────────────────────
+// The rows are registered, not read on demand, so something has to notice when the tab strip
+// moves. `chatStore.subscribe` fires on EVERY store write — including every streamed token,
+// dozens a second — and re-registering on each one would re-run the palette adapter's whole
+// command effect at that rate. So the sync is keyed on a signature of what a row is actually
+// derived from; everything else the store does (a message landing, a status flipping) leaves
+// the palette alone.
+
+/** Everything `chatTabPaletteRows` reads, in the order it reads it: which tab is current (it
+ *  decides the "current" hint and whether a ⌘N combo is advertised), then each tab's id,
+ *  title and incognito flag, in tab order (position picks the ⌘N, so a drag-reorder has to
+ *  count as a change). Fields are joined with control characters no title can contain, so no
+ *  title can forge a boundary and make two different strips compare equal. */
+function tabSignature(): string {
+  const { sessions, currentSessionId } = chatStore.getSnapshot();
+  let sig = currentSessionId ?? "";
+  for (const s of sessions) {
+    sig += `\u0001${s.id}\u0000${s.title?.trim() ?? ""}\u0000${s.incognito ? "1" : ""}`;
+  }
+  return sig;
+}
+
+let _registered: (() => void) | undefined;
+let _signature: string | undefined;
+
+/** Re-register the chat rows iff the tab strip actually changed. Idempotent — calling it on
+ *  an unchanged store registers nothing and bumps nothing, which is what makes it safe to
+ *  hang off a store that notifies on every token. Exported for tests; the module wires it to
+ *  the store below. */
+export function syncChatTabPalette(): void {
+  const signature = tabSignature();
+  if (signature === _signature) return;
+  _signature = signature;
+  // New block FIRST, old handle withdrawn after. The seam's unregister only removes entries
+  // it still OWNS, so every surviving row is replaced in place by the new block and the
+  // withdrawal deletes exactly the tabs that closed. The other order would leave a reader
+  // that ran between the two calls looking at a palette with no chats in it.
+  const stale = _registered;
+  _registered = registerPaletteCommands(chatTabPaletteRows());
+  stale?.();
+}
+
+// Register on import and follow the store from there, the way core keybindings self-register
+// (`keybindings/index.ts`). BOTH palette hosts pull this module in for the side effect — App
+// (the console window) and Launcher (the frameless desktop window), which is why the rows
+// navigate by intent rather than by touching the store. A missing side-effect import would
+// fail SILENTLY (no chats in the palette and no error anywhere), so chatTabPalette.test.ts
+// guards that every palette host keeps it.
 //
 // The launcher lists real chats because its store is a SECOND instance hydrated from the same
 // `localStorage` key the console window persists to, kept roughly in step by chat-store's
 // cross-window `storage` merge — which is what makes a session id meaningful once forwarded
-// across the window boundary. "Roughly" is why the id is re-checked on arrival: the two
-// windows can key off different agents entirely (see the `chat` arm of `applyNavIntent`).
+// across the window boundary, and which notifies subscribers exactly like a local write, so
+// the launcher's rows track the other window's tabs. "Roughly" is why the id is re-checked on
+// arrival: the two windows can key off different agents entirely (see the `chat` arm of
+// `applyNavIntent`).
 //
 // The HOSTS wire this, never the adapter: `usePaletteRegistry` maps whatever is registered
 // onto DS commands and knows nothing about chat tabs — importing a feature module there would
 // invert that layering (and would cost the seam's "no source ⇒ no provider wired" assertion
 // its last unwired reader, paletteSourceProvider.test.ts).
 //
-// Registration is unconditional, permanent, and needs no unregister handle: the chat store
-// always holds at least one session (`loadPersisted` creates one when storage is empty), so
-// there is never a "no rows" state worth withdrawing for, and an HMR re-eval that registers a
-// second copy of this function is harmless — its rows lose the registry's id dedup.
-registerPaletteSource(chatTabPaletteRows);
+// Neither the registration nor the subscription is ever withdrawn: the chat store always
+// holds at least one session (`loadPersisted` creates one when storage is empty), so there is
+// never a "no rows" state worth withdrawing for. An HMR re-eval subscribes a second copy —
+// harmless, because both copies register the same ids and the seam's unregister refuses to
+// evict an entry it no longer owns, so the newest registration always wins.
+syncChatTabPalette();
+chatStore.subscribe(syncChatTabPalette);

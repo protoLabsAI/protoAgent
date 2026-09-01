@@ -1,44 +1,64 @@
-// The chat-tab palette source (ADR 0061's headline dynamic use case): a row per OPEN CHAT
-// TAB, so a chat is reachable by NAME rather than only by the ⌘1–9 ordinal.
+// The chat-tab palette rows (#3290): a row per OPEN CHAT TAB, so a chat is reachable by NAME
+// rather than only by the ⌘1–9 ordinal.
 //
-// Three things carry the weight here. The rows must track the LIVE store — a snapshot would
-// list a closed tab and miss a new one. Running a row must never be able to leave the chat
-// surface pointing at a session that no longer exists: `chatStore.switchSession` does not
-// validate its argument, so a stale id sets `currentSessionId` to nothing, pushes a phantom
-// into `activeSessions`, and ChatSurface's `useSession` mounts a DEAD SLOT — and rows are
-// built when the palette is read and run a keystroke later, so that window is real. And the
-// rows must be FINDABLE by what an operator actually types, which is asserted through the
-// provider the palette reads (`paletteSourceProvider`) rather than against a keywords array:
-// a correct row nobody can search for is a feature nobody has.
+// Four things carry the weight here. The rows must track the LIVE store — a snapshot would
+// list a closed tab and miss a new one — which they do by SUBSCRIBING to it, not by being
+// re-read per keystroke: that difference is the first `describe` below, because serving these
+// through the seam's read-time source path made ⌘K run rows the query excluded (see the
+// module header, and e2e/palette-chat-tabs.spec.ts). Running a row must never be able to
+// leave the chat surface pointing at a session that no longer exists: `chatStore.switchSession`
+// does not validate its argument, so a stale id sets `currentSessionId` to nothing, pushes a
+// phantom into `activeSessions`, and ChatSurface's `useSession` mounts a DEAD SLOT — and rows
+// are built before the operator hits Enter, so that window is real. The rows must be FINDABLE
+// by what an operator actually types, asserted through the palette's own matcher rather than
+// against a keywords array: a correct row nobody can search for is a feature nobody has. And
+// following a store that notifies on every streamed token must not re-register anything.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { chatStore, DEFAULT_SESSION_TITLE } from "../chat/chat-store";
-import { registeredPaletteCommands } from "../ext/paletteRegistry";
+import {
+  hasPaletteSources,
+  paletteCommandsVersion,
+  registeredPaletteCommands,
+  subscribePaletteCommands,
+  visiblePaletteCommands,
+} from "../ext/paletteRegistry";
 import { registeredKeybindings } from "../ext/keybindingRegistry";
 import "../keybindings/coreKeybindings"; // registers ⌘1–9 (side effect), exactly as App does
 import {
   CHAT_TAB_GROUP,
   CHAT_TAB_ID_PREFIX,
   chatTabPaletteRows,
-} from "./chatTabPalette"; // importing also self-registers the source (side effect)
-import { applyNavIntent, paletteSourceProvider, setPaletteNavigator } from "./usePaletteRegistry";
+  syncChatTabPalette,
+} from "./chatTabPalette"; // importing also registers the rows + subscribes (side effect)
+import {
+  applyNavIntent,
+  matchesPaletteQuery,
+  setPaletteNavigator,
+  toDsCommand,
+} from "./usePaletteRegistry";
 import { useUI } from "../state/uiStore";
 import type { PaletteCommand } from "../ext/paletteRegistry";
 
 const ctx = { close: vi.fn() };
 
-/** Every source row the palette would show for `query`, by label — the same call the DS
- *  commands view makes on open and on each keystroke (it hands `getCommands` an AbortSignal
- *  the synchronous seam provider ignores). Only this file's source is registered, so what
- *  comes back is the chat rows and nothing else. */
+/** Every registered row the palette would show for `query`, by label — literally the DS
+ *  commands view's own `baseCommands.filter(matchCommand)`, over the rows it really renders
+ *  (mapped through `toDsCommand`, so an advertised ⌘N lands in the searchable hint the way it
+ *  does on screen). Core's deep-links are registered here too, so a query that pulls one in
+ *  alongside the chats fails these assertions — which is the right answer: the operator would
+ *  see it too. */
 function search(query: string): string[] {
-  const rows =
-    paletteSourceProvider(
-      () => true,
-      true,
-    ).getCommands?.(query, { signal: new AbortController().signal }) ?? [];
-  return (rows as { label: string }[]).map((c) => c.label);
+  return visiblePaletteCommands(() => true, true, "static")
+    .map(toDsCommand)
+    .filter((c) => matchesPaletteQuery(c, query))
+    .map((c) => c.label);
 }
+
+/** The chat rows as the registry holds them right now — what the palette would render
+ *  without anyone asking this module for anything. */
+const registeredChatRows = () =>
+  registeredPaletteCommands("static").filter((c) => c.id.startsWith(CHAT_TAB_ID_PREFIX));
 
 /** One fresh, single-session store, so each test starts from a known tab strip. */
 function resetSessions(): string {
@@ -164,15 +184,106 @@ describe("chat-tab palette rows", () => {
     expect(rowFor(chatTabPaletteRows(), renamed)!.label).toBe("After");
   });
 
-  it("is registered as a palette SOURCE, so the palette re-reads it per keystroke", () => {
+});
+
+describe("how the rows reach the palette", () => {
+  // This block is the regression guard for the whole feature, because WHICH HALF of the seam
+  // these rows ride decides whether ⌘K tells the truth. On the read-time source path the DS
+  // serves them through a debounced `CommandProvider` that keeps the previous query's rows on
+  // screen and re-points the selection at row 0 when the new batch lands — so the palette
+  // listed, pre-selected and ran chats the query excluded (e2e/palette-chat-tabs.spec.ts).
+  // Statics are client-filtered per keystroke with nothing retained, and only stay live
+  // because this module subscribes to the store.
+  it("registers the rows as STATICS and arms no dynamic source", () => {
     const titled = openTab("Registered through the seam");
-    const dynamic = registeredPaletteCommands("dynamic").map((c) => c.id);
-    expect(dynamic).toContain(`${CHAT_TAB_ID_PREFIX}${titled}`);
-    // Never snapshotted into the static half — a frozen copy there wins the dedup and
-    // shadows the live row forever.
-    expect(registeredPaletteCommands("static").map((c) => c.id)).not.toContain(
+    expect(registeredPaletteCommands("static").map((c) => c.id)).toContain(
       `${CHAT_TAB_ID_PREFIX}${titled}`,
     );
+    expect(registeredPaletteCommands("dynamic")).toEqual([]);
+    // The gate the adapter reads: false here means ⌘K keeps the DS's no-provider fast path —
+    // no debounce, no "Searching…", no rows held over from the last query.
+    expect(hasPaletteSources()).toBe(false);
+  });
+
+  it("follows the tab strip with nobody reading it — opened, renamed, closed, reordered", () => {
+    // Nothing in this test calls `chatTabPaletteRows()`. Every assertion is against what the
+    // registry already holds, which is the freshness a snapshot could not have given.
+    const first = openTab("Kept");
+    const second = openTab("Renamed later");
+    expect(registeredChatRows().map((c) => c.label)).toEqual(["Kept", "Renamed later"]);
+
+    chatStore.renameSession(second, "Renamed now");
+    expect(registeredChatRows().map((c) => c.label)).toEqual(["Kept", "Renamed now"]);
+
+    // Order is DATA here (position picks the ⌘N), so a drag-reorder has to move the rows —
+    // this is what a block of statics re-registered in place would have got wrong.
+    chatStore.reorderSessions([second, first]);
+    expect(registeredChatRows().map((c) => c.label)).toEqual(["Renamed now", "Kept"]);
+
+    chatStore.deleteSession(second);
+    expect(registeredChatRows().map((c) => c.label)).toEqual(["Kept"]);
+    expect(registeredChatRows().map((c) => c.id)).not.toContain(
+      `${CHAT_TAB_ID_PREFIX}${second}`,
+    );
+  });
+
+  it("re-registers only when the STRIP moves, not on every store write", () => {
+    // `chatStore.subscribe` fires on every streamed token. A sync per notification would
+    // re-run the adapter's whole command effect dozens of times a second, so the version —
+    // which is exactly that effect's dependency — must not move for a message landing.
+    const id = openTab("Busy chat");
+    openTab("Somewhere else"); // so closing `id` below is an ordinary close, not the last tab
+    const before = paletteCommandsVersion();
+    chatStore.updateMessages(id, [{ role: "user", content: "hello" }]);
+    chatStore.updateMessages(id, [
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "hi" },
+    ]);
+    chatStore.setSessionStatus(id, "streaming");
+    expect(paletteCommandsVersion()).toBe(before);
+    // And a redundant sync is a no-op, which is what makes hanging it off that store safe.
+    syncChatTabPalette();
+    expect(paletteCommandsVersion()).toBe(before);
+
+    // A real change is ONE bump: the block is re-registered whole, and every row of the old
+    // block was superseded in place, so its withdrawal has nothing left to remove.
+    chatStore.renameSession(id, "Renamed");
+    expect(paletteCommandsVersion()).toBe(before + 1);
+    // Closing a tab is two: the new block, then the withdrawal that actually deletes the row
+    // the new block no longer contains.
+    chatStore.deleteSession(id);
+    expect(paletteCommandsVersion()).toBe(before + 3);
+  });
+
+  it("costs the same whether one tab is open or fifty", () => {
+    // The block is re-registered whole, so the bumps per change must not scale with the rows
+    // — otherwise every new tab makes the next tab change more expensive than the last.
+    for (let i = 0; i < 40; i++) openTab(`Tab ${i}`);
+    const before = paletteCommandsVersion();
+    const extra = chatStore.createSession().id; // ONE store write, so one sync
+    expect(paletteCommandsVersion()).toBe(before + 1);
+    chatStore.deleteSession(extra);
+    expect(paletteCommandsVersion()).toBe(before + 3);
+  });
+
+  it("never blinks a chat out of the palette mid-refresh", () => {
+    // The refresh is two registry writes (register the new block, withdraw the old handle).
+    // A subscriber that reads between them must never find an existing chat missing — hence
+    // that order and not the other, which would empty the block first. This listener is the
+    // only place that intermediate state is observable at all.
+    openTab("First");
+    openTab("Second");
+    const seen: number[] = [];
+    const off = subscribePaletteCommands(() => seen.push(registeredChatRows().length));
+    try {
+      openTab("Third");
+      chatStore.renameSession(chatStore.getSnapshot().sessions[0].id, "First, renamed");
+    } finally {
+      off();
+    }
+    expect(seen.length).toBeGreaterThan(0);
+    // Two tabs existed throughout; nothing anyone could see ever dropped below that.
+    expect(Math.min(...seen)).toBeGreaterThanOrEqual(2);
   });
 });
 
@@ -257,10 +368,13 @@ describe("running a chat-tab row", () => {
   });
 
   it("no-ops the switch when the session died between the read and the run", () => {
-    // THE hazard: a source's rows are built at query time and run a keystroke later. In
-    // that window another browser tab's cross-tab merge (or a background job) can delete
-    // the session. `switchSession` does not validate, so an unguarded run would point
-    // `currentSessionId` at nothing and ChatSurface would mount a dead slot.
+    // THE hazard, and registering the rows widens it rather than closing it: a row is built
+    // when the strip last changed and run whenever the operator gets around to ⌘K. In that
+    // window another browser tab's cross-tab merge (or a background job) can delete the
+    // session. `switchSession` does not validate, so an unguarded run would point
+    // `currentSessionId` at nothing and ChatSurface would mount a dead slot. (The block is
+    // re-registered on every strip change, so the row is as fresh as the store — but nothing
+    // re-registers it between the operator reading the list and pressing Enter.)
     const survivor = openTab("Survivor");
     const doomed = openTab("Doomed");
     const row = rowFor(chatTabPaletteRows(), doomed)!; // read…

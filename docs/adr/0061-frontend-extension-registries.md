@@ -143,17 +143,32 @@ menu from `registeredSlashCommands()` + the server list, and `runClientSlash` di
     shows its "Searching…" affordance whenever any provider declares `getCommands`, so wiring
     one unconditionally would put that spinner in front of every keystroke in a console with
     nothing dynamic to serve — and it applies the query itself, because the DS client-filters
-    only statics (a provider is normally a remote search that already applied it).
-    **Dogfooded:** core's one source is the open-chat-tab list (`app/chatTabPalette.ts`) —
-    a palette row per open chat, so a chat is reachable by NAME and not only by the ⌘1–9 ordinal —
-    which is what arms the provider in the default console, and therefore what makes it pay
-    that affordance: the seam's rows answer synchronously, but the DS arms `loading` for any
-    provider declaring `getCommands` and debounces it 120ms, so the chat rows land a beat
-    after the statics on every keystroke. Skipping the debounce and the spinner for a provider
-    that returns an array rather than a Promise is a `@protolabsai/ui` change; until it lands,
-    freshness is only reachable through the path that costs it. The honest contract is
-    therefore "re-read on every palette read", not "re-rendered when your data changes": a
-    row that changes while the palette sits open and untouched appears at the next keystroke.
+    only statics (a provider is normally a remote search that already applied it). The honest
+    contract is therefore "re-read on every palette read", not "re-rendered when your data
+    changes": a row that changes while the palette sits open and untouched appears at the next
+    keystroke.
+
+    **A source is the LAST resort, not the default for live rows.** Its path costs more than a
+    spinner in `@protolabsai/ui` 0.60.x: the commands view debounces `getCommands` by 120ms and
+    does not drop the previous query's results when the query changes, and it re-runs
+    `setSel(0)` whenever the row count moves. For that window ⌘K therefore lists — and
+    pre-selects, and on Enter *runs* — rows the current query excludes, and the highlight jumps
+    off whatever the operator had arrowed to. That is the right trade for what a provider is
+    for (a remote search nobody can subscribe to) and the wrong one for rows that merely change.
+    So: **if you can be notified when your data moves, register a BLOCK of statics and
+    re-register it** — `registerPaletteCommands(cmds)`, one version bump, re-inserted as a unit
+    in the order given, withdrawn with one handle that removes only the rows it still owns.
+    Statics are client-filtered per keystroke with nothing retained between queries, so the
+    rows are as live as a source's and every row on screen matches what was typed.
+
+    **Dogfooded:** core's live list is the open chat tabs (`app/chatTabPalette.ts`) — a palette
+    row per open chat, so a chat is reachable by NAME and not only by the ⌘1–9 ordinal. It
+    takes the block path, subscribing to `chatStore` and re-registering on a signature of what
+    a row is derived from (tab order, ids, titles, incognito, which tab is current), because
+    that store notifies on every streamed token. Core therefore registers no source and the
+    default console keeps the DS's no-provider fast path. Shipping those rows through a source
+    first is what taught us the paragraph above; `e2e/palette-chat-tabs.spec.ts` keeps it
+    learned.
 
   Consumers observe the registry the way they observe the DS one: **`subscribePaletteCommands(fn)`**
   plus a monotonic **`paletteCommandsVersion()`** (bumped on every register/unregister) is exactly
