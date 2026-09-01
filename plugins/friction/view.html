@@ -4,8 +4,9 @@
 
   Follows the four plugin-view rules (docs/guides/building-react-plugin-views):
     1. Serves exactly the manifest's views[].path (/plugins/friction/view).
-    2. Data goes to the bearer-gated GET/POST /api/friction* — this page is public
-       chrome; the ledger is not.
+    2. Data goes to the bearer-gated /api/plugins/friction/* (Rule 2's namespace) —
+       this page is public chrome; the ledger is not. The top-level /api/friction that
+       #2607 shipped still serves, as an alias.
     3. Same-origin, slug-aware: kit.apiFetch derives the base itself.
     4. Built from the console's own DS kit (/_ds/plugin-kit.{css,js}) — .pl-card,
        .pl-badge, .pl-input, .pl-segmented, .pl-scroll, .pl-code-block, .pl-alert.
@@ -187,6 +188,13 @@
   const start = () => { if (started) return; started = true; void load(); };
   kit.initPluginView(start);
   setTimeout(start, 1500);
+
+  // ADR 0057 — the manifest's `palette.path` opens this page with `?mode=search`, so ⌘K
+  // lands the operator in the field instead of at the top of a list they then have to
+  // reach for. Same page, same data; only the initial focus differs.
+  if (new URLSearchParams(location.search).get("mode") === "search") {
+    requestAnimationFrame(() => document.getElementById("q")?.focus());
+  }
 
   const listEl = document.getElementById("list");
   const tallyEl = document.getElementById("tally");
@@ -503,7 +511,7 @@
       const q = new URLSearchParams({ grouped: "true", limit: "200" });
       if (state.kind) q.set("kind", state.kind);
       if (state.showResolved) q.set("resolved", "true");
-      const res = await kit.apiFetch("/api/friction?" + q.toString());
+      const res = await kit.apiFetch("/api/plugins/friction/?" + q.toString());
       if (!res.ok) throw new Error(res.status + " " + res.statusText);
       const data = await res.json();
       state.items = Array.isArray(data.items) ? data.items : [];
@@ -522,7 +530,7 @@
     state.busy.add(key);
     render();
     try {
-      const res = await kit.apiFetch("/api/friction/resolve", {
+      const res = await kit.apiFetch("/api/plugins/friction/resolve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ summary: item.summary, kind: item.kind, resolved }),

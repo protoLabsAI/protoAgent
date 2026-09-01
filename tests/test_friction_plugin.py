@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
-from plugins.friction import FrictionMiddleware, friction_review, record_friction, resolve_friction
+from plugins.friction import (
+    FrictionMiddleware,
+    friction_review,
+    grouped_entries,
+    record_friction,
+    resolve_friction,
+)
 
 
 @pytest.fixture
@@ -218,7 +225,8 @@ def test_read_api_returns_grouped_items(monkeypatch, tmp_path):
 
     _seed(monkeypatch, tmp_path, [("harness", "repeated", "minor")] * 3 + [("model", "once", "minor")])
     app = FastAPI()
-    app.include_router(friction._build_router())
+    app.include_router(friction._build_router(), prefix="/api/plugins/friction")
+    app.include_router(friction._build_router(legacy=True))  # as register() mounts them
     client = TestClient(app)
 
     body = client.get("/api/friction").json()
@@ -324,7 +332,8 @@ def test_read_api_filters_resolved(ledger):
     _record("harness", "still broken")
     asyncio.run(resolve_friction.ainvoke({"summary": "fixed thing"}))
     app = FastAPI()
-    app.include_router(friction._build_router())
+    app.include_router(friction._build_router(), prefix="/api/plugins/friction")
+    app.include_router(friction._build_router(legacy=True))  # as register() mounts them
     client = TestClient(app)
 
     body = client.get("/api/friction").json()
@@ -350,7 +359,8 @@ def _client(monkeypatch, tmp_path):
 
     monkeypatch.setenv("FRICTION_LOG", str(tmp_path / "friction.jsonl"))
     app = FastAPI()
-    app.include_router(friction._build_router())
+    app.include_router(friction._build_router(), prefix="/api/plugins/friction")
+    app.include_router(friction._build_router(legacy=True))  # as register() mounts them
     return TestClient(app)
 
 
@@ -462,3 +472,419 @@ def test_auto_capture_detail_is_json_the_view_can_render(ledger):
 
     detail = _recs(ledger)[0]["detail"]
     assert json.loads(detail) == {"command": "git diff", "cwd": "/repo"}
+
+
+# ── ADR 0079 seam: the backlog reaches the agent's working state ─────────────
+
+
+@pytest.fixture
+def wired(tmp_path, monkeypatch):
+    """The plugin with a registry attached, as the host wires it at boot.
+
+    ``FakeRegistry`` is the shipped testkit, not a hand-rolled stub, on purpose: it mirrors
+    the real ``PluginRegistry`` surface under a parity test, and it RAISES where the live
+    registry warns-and-skips — so a registration the host would silently drop fails here
+    instead of shipping green."""
+    from graph.plugins.testkit import FakeRegistry
+
+    from plugins import friction
+
+    monkeypatch.setenv("FRICTION_LOG", str(tmp_path / "friction.jsonl"))
+    friction._WORK_CACHE["stamp"] = None  # module-level cache, per-test
+
+    reg = FakeRegistry(plugin_id="friction", plugin_dir=Path(friction.__file__).parent)
+    friction.register(reg)
+    monkeypatch.setattr(friction, "_REGISTRY", reg)
+    yield reg
+    friction._REGISTRY = None
+
+
+def test_a_quiet_ledger_contributes_nothing_to_working_state(wired):
+    """The property that makes this safe on by default: `<working_state>` is a shared,
+    bounded budget, so an instance with no real friction must add no lines at all."""
+    from plugins.friction import open_friction_work
+
+    assert open_friction_work() == []
+    _record("harness", "a one-off minor annoyance")
+    assert open_friction_work() == []  # minor, seen once — not worth a turn's attention
+
+
+def test_major_and_repeated_friction_reach_the_working_state(wired):
+    from plugins.friction import open_friction_work
+
+    asyncio.run(record_friction.ainvoke({"kind": "harness", "summary": "blocked hard", "severity": "major"}))
+    for _ in range(3):
+        _record("harness", "keeps happening")
+    _record("harness", "seen once")
+
+    items = open_friction_work()
+
+    assert [i["title"] for i in items] == ["blocked hard", "keeps happening"]
+    assert items[0]["state"] == "major"
+    assert items[1]["state"] == "minor x3"  # the count IS the argument for looking
+    assert "seen once" not in [i["title"] for i in items]
+
+
+def test_working_state_is_bounded_and_configurable(wired):
+    from plugins.friction import open_friction_work
+
+    for i in range(10):
+        asyncio.run(record_friction.ainvoke({"kind": "harness", "summary": f"major {i}", "severity": "major"}))
+
+    assert len(open_friction_work()) == 3  # default cap
+
+    wired.config = {"working_state_limit": 5}
+    assert len(open_friction_work()) == 5
+    wired.config = {"working_state": False}
+    assert open_friction_work() == []  # an operator can turn the injection off entirely
+
+
+def test_resolved_friction_leaves_the_working_state(wired):
+    from plugins.friction import open_friction_work
+
+    asyncio.run(record_friction.ainvoke({"kind": "harness", "summary": "fix me", "severity": "major"}))
+    assert [i["title"] for i in open_friction_work()] == ["fix me"]
+
+    asyncio.run(resolve_friction.ainvoke({"summary": "fix me"}))
+
+    assert open_friction_work() == []
+
+
+def test_the_work_snapshot_does_not_reparse_an_unchanged_ledger(wired, monkeypatch):
+    """It runs inline on EVERY turn, so an unchanged ledger must cost a stat, not a parse."""
+    from plugins import friction
+
+    _record("harness", "something")
+    friction.open_friction_work()
+
+    calls = []
+    monkeypatch.setattr(friction, "grouped_entries", lambda *a, **k: calls.append(1) or [])
+    friction.open_friction_work()
+    friction.open_friction_work()
+    assert calls == []  # cache hit — the file never changed
+
+    _record("harness", "a new one")  # mutates the ledger → cache must invalidate
+    friction.open_friction_work()
+    assert len(calls) == 1
+
+
+def test_the_plugin_registers_its_seams(wired):
+    """A core plugin should reach the agent through more than a tool list."""
+    assert "backlog" in wired.work_providers
+    assert wired.work_provider_meta["backlog"]["label"] == "OPEN FRICTION"
+    assert wired.skill_dirs == ["skills"]
+
+
+# ── ADR 0039 seam: friction is broadcast, so other plugins can act on it ─────
+
+
+def test_recording_and_resolving_emit_on_the_bus(wired):
+    asyncio.run(record_friction.ainvoke({"kind": "harness", "summary": "worth hearing", "severity": "major"}))
+
+    topic, data = wired.emitted[-1]
+    assert topic == "friction.recorded"  # auto-namespaced by the bus
+    assert data["summary"] == "worth hearing" and data["severity"] == "major" and data["kind"] == "harness"
+
+    asyncio.run(resolve_friction.ainvoke({"summary": "worth hearing", "reason": "shipped"}))
+    assert wired.emitted[-1][0] == "friction.resolved"
+    assert wired.emitted[-1][1]["count"] == 1 and wired.emitted[-1][1]["reason"] == "shipped"
+
+
+def test_a_bus_failure_never_breaks_a_tool_call(wired):
+    """Friction recording is the system's self-improvement path; it must not be the thing
+    that fails a turn."""
+    def _boom(topic, data=None):
+        raise RuntimeError("bus down")
+
+    monkeypatch_target = wired
+    monkeypatch_target.emit = _boom
+    out = asyncio.run(record_friction.ainvoke({"kind": "harness", "summary": "still logged"}))
+
+    assert "logged" in out
+    assert _recs(_ledger_for(wired))[0]["summary"] == "still logged"
+
+
+def _ledger_for(_registry):
+    from plugins.friction import _ledger_path
+
+    return _ledger_path()
+
+
+# ── the operator's control command — user-only by design ────────────────────
+
+
+def _slash(wired, rest=""):
+    return asyncio.run(wired.chat_commands["friction"](rest, "session-1"))
+
+
+def test_friction_slash_summarises_worst_first(wired):
+    asyncio.run(record_friction.ainvoke({"kind": "harness", "summary": "blocks everything", "severity": "major"}))
+    for _ in range(2):
+        _record("harness", "nags twice")
+
+    out = _slash(wired)
+
+    assert "3 occurrences" in out and "2 open signals" in out and "1 major" in out
+    # worst-first, the same ranking the working-state projection uses
+    assert out.index("blocks everything") < out.index("nags twice")
+    assert "×2" in out
+
+
+def test_friction_slash_resolves_and_says_how_many(wired):
+    _record("harness", "board priority is immutable")
+    _record("harness", "board priority is immutable")
+    _record("harness", "unrelated")
+
+    assert "Resolved **2** entries" in _slash(wired, "board priority")
+    assert [g["summary"] for g in grouped_entries()] == ["unrelated"]
+
+
+def test_friction_slash_reports_a_miss_instead_of_claiming_success(wired):
+    _record("harness", "real")
+    out = _slash(wired, "never recorded")
+    assert "No open friction matching" in out
+    assert not [g for g in grouped_entries() if g.get("resolved_at")]
+
+
+def test_friction_slash_on_an_empty_backlog(wired):
+    assert "backlog is empty" in _slash(wired)
+
+
+def test_resolving_is_operator_only_never_an_agent_tool(wired):
+    """`/friction <text>` resolves, and it is registered as a chat command rather than a
+    tool ON PURPOSE: the model must not be able to clear its own backlog by deciding it is
+    clear. The agent's `resolve_friction` tool still exists for a rough edge it actually
+    fixed — that is a different claim."""
+    assert "friction" in wired.chat_commands
+    assert "friction" not in {getattr(t, "name", "") for t in wired.tools}
+
+
+# ── delegation + federation seams ───────────────────────────────────────────
+
+
+def test_the_triage_subagent_is_read_only(wired):
+    """Triage decides what to FILE. It must not be able to resolve what it just decided
+    to file — that claim belongs to the operator, or to a fix that actually landed."""
+    sub = next(s for s in wired.subagents if s.name == "friction_triage")
+
+    assert sub.tools == ["friction_review"]
+    assert "resolve_friction" not in sub.tools and "record_friction" not in sub.tools
+    assert sub.default_prompt  # dispatchable bare, via /task with no prompt
+
+
+def test_the_agent_card_advertises_friction_review(wired):
+    """A peer should be able to ask this agent what has been getting in its way."""
+    skill = next(s for s in wired.a2a_skills if s["id"] == "friction-review")
+
+    assert skill["name"] and skill["description"]
+    assert "diagnostics" in skill["tags"]
+
+
+def test_every_seam_this_plugin_claims_is_actually_registered(wired):
+    """The point of the 0.2 rebuild: friction reaches the agent through the seams the
+    plugin system provides, not through a tool list alone. If one is dropped, say so
+    here rather than discovering it as a silently missing surface."""
+    assert {getattr(t, "name", "") for t in wired.tools} == {
+        "record_friction", "friction_review", "resolve_friction",
+    }
+    assert wired.middlewares                      # auto-capture
+    assert wired.routers                          # read API + resolve + the view page
+    assert wired.work_providers                   # ADR 0079 working state
+    assert wired.skill_dirs == ["skills"]         # when to record
+    assert "friction" in wired.chat_commands      # operator control
+    assert wired.subagents                        # triage delegate
+    assert wired.a2a_skills                       # agent card
+
+
+def test_distinct_errors_from_one_tool_are_distinct_signals(ledger):
+    """Groups are keyed on (kind, summary), so a bare "tool 'task' raised" collapsed every
+    failure of that tool into one row — a count spanning unrelated bugs argues for a fix
+    nobody can scope."""
+    mw = FrictionMiddleware()
+    for exc in (RuntimeError("bad provider"), TimeoutError("gateway timeout"), RuntimeError("bad provider again")):
+        mw._note_error(_Req("task"), exc)
+
+    groups = {g["summary"]: g["count"] for g in grouped_entries()}
+
+    assert groups == {"tool 'task' raised RuntimeError": 2, "tool 'task' raised TimeoutError": 1}
+
+
+def test_an_over_long_report_is_marked_as_clipped_not_cut_mid_word(ledger):
+    asyncio.run(record_friction.ainvoke({
+        "kind": "harness", "summary": "s" * 400, "detail": "d" * 900,
+    }))
+
+    rec = _recs(ledger)[0]
+
+    assert len(rec["summary"]) == 200 and rec["summary"].endswith("…")
+    assert len(rec["detail"]) == 600 and rec["detail"].endswith("…")
+
+
+def test_a_report_within_the_cap_is_untouched(ledger):
+    asyncio.run(record_friction.ainvoke({"kind": "harness", "summary": "short and complete."}))
+    assert _recs(ledger)[0]["summary"] == "short and complete."
+
+
+# ── ADR 0004: the ledger is instance-scoped ─────────────────────────────────
+
+
+def test_the_ledger_lives_inside_the_instance_tree(tmp_path, monkeypatch):
+    """It used to be derived from PROTOAGENT_HOME directly, which is only correct on the
+    desktop (where that env var IS the instance root). Everywhere else the ledger landed
+    one level ABOVE the instance tree — shared by every instance on the box and missed by
+    scripts/dev-reset.sh. On by default makes that collision everyone's problem."""
+    from infra.paths import instance_paths
+
+    from plugins.friction import _ledger_path
+
+    monkeypatch.delenv("FRICTION_LOG", raising=False)
+    expected = Path(instance_paths().store("friction")) / "friction.jsonl"
+
+    assert _ledger_path() == expected
+    assert Path(instance_paths().explain()["instance_root"]) in expected.parents
+
+
+def test_an_existing_pre_instance_ledger_is_adopted_not_orphaned(tmp_path, monkeypatch):
+    """Upgrading must not look like losing your history."""
+    from plugins import friction
+
+    monkeypatch.delenv("FRICTION_LOG", raising=False)
+    legacy = tmp_path / "legacy" / "friction" / "friction.jsonl"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text('{"ts":"2026-07-22T00:00:00+00:00","kind":"harness","summary":"old signal"}\n',
+                      encoding="utf-8")
+    new_home = tmp_path / "instance"
+    monkeypatch.setattr(friction, "_legacy_ledger_path", lambda: legacy)
+    monkeypatch.setattr("infra.paths.instance_paths", lambda: _FakePaths(new_home))
+
+    resolved = friction._ledger_path()
+
+    assert resolved == new_home / "friction" / "friction.jsonl"
+    assert resolved.is_file() and not legacy.exists()   # moved, not copied or dropped
+    assert "old signal" in resolved.read_text(encoding="utf-8")
+
+
+class _FakePaths:
+    def __init__(self, root):
+        self._root = Path(root)
+
+    def store(self, name):
+        return self._root / name
+
+
+# ── review follow-ups ───────────────────────────────────────────────────────
+
+
+def test_bulk_resolve_names_what_it_resolved(wired):
+    """`/friction <text>` matches a SUBSTRING, like the tool — an operator clearing
+    "board_cancel" means every phrasing of it. A bulk action whose blast radius is
+    invisible is how you resolve six signals meaning to resolve one, so it has to say."""
+    _record("harness", "board_cancel refuses with open deps")
+    _record("harness", "board_cancel cannot cancel bd-uwj")
+    _record("harness", "something else entirely")
+
+    out = asyncio.run(wired.chat_commands["friction"]("board_cancel", "s"))
+
+    assert "board_cancel refuses with open deps" in out
+    assert "board_cancel cannot cancel bd-uwj" in out
+    assert "something else entirely" not in out
+    assert "Reopen" in out  # and it says the action is recoverable
+    assert [g["summary"] for g in grouped_entries()] == ["something else entirely"]
+
+
+def test_the_operator_and_the_agent_rank_the_backlog_identically(wired):
+    """Three copies of this ordering existed, one of them mislabelled as matching the
+    others. If they disagree, the operator and the agent read different lists off the
+    same ledger."""
+    from plugins.friction import _triage_rank, open_friction_work
+
+    for n in range(4):
+        asyncio.run(record_friction.ainvoke(
+            {"kind": "harness", "summary": f"repeated {n}", "severity": "minor"}))
+    for _ in range(5):
+        _record("harness", "repeated 0")
+    asyncio.run(record_friction.ainvoke({"kind": "harness", "summary": "one major", "severity": "major"}))
+
+    wired.config = {"working_state_limit": 10, "working_state_repeat_threshold": 1}
+    agent_order = [i["title"] for i in open_friction_work()]
+    operator_order = [g["summary"] for g in sorted(grouped_entries(), key=_triage_rank, reverse=True)]
+
+    assert agent_order == operator_order[: len(agent_order)]
+    assert agent_order[0] == "one major"
+
+
+def test_auto_captured_payloads_are_clipped_with_a_marker_too(ledger):
+    """The clip marker was added to `record_friction` but the auto-capture path kept a
+    bare 300-char slice, so the payload an operator actually reads still stopped
+    mid-word — and the view's "capped on write" notice never fired for it."""
+    mw = FrictionMiddleware()
+    mw._note_escape_hatch(_Req("shell", {"command": "x" * 500}))
+
+    detail = _recs(ledger)[0]["detail"]
+    assert len(detail) == 300 and detail.endswith("…")
+
+
+def test_the_working_state_provider_stays_far_inside_its_inline_budget(wired):
+    """It runs inline on EVERY turn. `graph.work_providers.SLOW_PROVIDER_S` is the line;
+    measured ~6.5ms cold at the ledger's 2000-entry cap, so this asserts an order of
+    magnitude of headroom rather than the exact number."""
+    import time
+
+    from graph.work_providers import SLOW_PROVIDER_S
+    from plugins.friction import _WORK_CACHE, open_friction_work
+
+    path = _ledger_for(wired)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as fh:
+        for i in range(2000):
+            fh.write(json.dumps({
+                "ts": f"2026-08-{(i % 28) + 1:02d}T00:00:00+00:00", "kind": "harness",
+                "summary": f"signal {i % 97}", "severity": "major", "source": "auto",
+                "detail": "d" * 400,
+            }) + "\n")
+
+    _WORK_CACHE["stamp"] = None
+    started = time.perf_counter()
+    open_friction_work()
+    cold = time.perf_counter() - started
+
+    assert cold < SLOW_PROVIDER_S / 5, f"cold projection took {cold * 1000:.0f}ms"
+
+
+def test_the_api_serves_its_own_namespace_and_keeps_the_documented_alias(monkeypatch, tmp_path):
+    """Plugin-view Rule 2 wants the data API under /api/plugins/<id>/. #2607 shipped it at
+    the top-level /api/friction and that path is documented and in use, so the namespaced
+    mount is ADDED and the old one kept — rather than breaking a published API to satisfy
+    a convention."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from plugins import friction
+
+    monkeypatch.setenv("FRICTION_LOG", str(tmp_path / "friction.jsonl"))
+    app = FastAPI()
+    app.include_router(friction._build_router(), prefix="/api/plugins/friction")
+    app.include_router(friction._build_router(legacy=True))
+    client = TestClient(app)
+    _record("harness", "reachable both ways")
+
+    canonical = client.get("/api/plugins/friction/").json()
+    legacy = client.get("/api/friction").json()
+
+    assert canonical == legacy
+    assert [i["summary"] for i in canonical["items"]] == ["reachable both ways"]
+    assert client.post("/api/plugins/friction/resolve", json={"summary": "reachable both ways"}).json()["changed"] == 1
+    assert client.post("/api/friction/resolve", json={"summary": "reachable both ways", "resolved": False}).json()["changed"] == 1
+
+
+def test_the_view_calls_the_namespaced_api(monkeypatch):
+    """The page is the one caller we control; it should use the canonical path so the
+    alias only ever serves external callers."""
+    from pathlib import Path as _P
+
+    from plugins import friction
+
+    page = (_P(friction.__file__).parent / "view.html").read_text(encoding="utf-8")
+
+    assert 'apiFetch("/api/plugins/friction/?' in page
+    assert 'apiFetch("/api/plugins/friction/resolve"' in page

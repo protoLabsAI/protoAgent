@@ -1,0 +1,74 @@
+# The --pl-* custom properties @protolabsai/ui's plugin-kit.css defines.
+# Snapshot, because the kit is an npm artifact and is NOT committed — without it
+# tests/test_plugin_view_ds_tokens.py can only run where `npm ci` has been run, i.e.
+# never in the Python CI job, and an invented token name ships unnoticed.
+# Kept honest by test_the_token_snapshot_matches_the_real_kit, which runs wherever
+# the real kit DOES resolve. Refresh: python scripts/gen_ds_token_snapshot.py
+--pl-border-width
+--pl-color-accent
+--pl-color-accent-fg
+--pl-color-accent-hover
+--pl-color-bg
+--pl-color-bg-hover
+--pl-color-bg-inset
+--pl-color-bg-raised
+--pl-color-bg-subtle
+--pl-color-border
+--pl-color-border-strong
+--pl-color-brand-indigo
+--pl-color-brand-indigo-bright
+--pl-color-brand-indigo-deep
+--pl-color-brand-lavender
+--pl-color-brand-lavender-deep
+--pl-color-brand-lavender-light
+--pl-color-chart-axis
+--pl-color-chart-grid
+--pl-color-chart-series1
+--pl-color-chart-series2
+--pl-color-chart-series3
+--pl-color-chart-series4
+--pl-color-chart-series5
+--pl-color-chart-series6
+--pl-color-chart-series7
+--pl-color-chart-series8
+--pl-color-fg
+--pl-color-fg-muted
+--pl-color-fg-on-accent
+--pl-color-fg-subtle
+--pl-color-focus
+--pl-color-overlay
+--pl-color-reasoning-bg
+--pl-color-status-error
+--pl-color-status-info
+--pl-color-status-success
+--pl-color-status-warning
+--pl-font-base-size
+--pl-font-line-height-body
+--pl-font-line-height-heading
+--pl-font-mono
+--pl-font-sans
+--pl-font-weight-body
+--pl-font-weight-medium
+--pl-font-weight-semibold
+--pl-gradient-brand
+--pl-gradient-brand-light
+--pl-motion-base
+--pl-motion-ease
+--pl-motion-ease-in-out
+--pl-motion-fast
+--pl-motion-linear
+--pl-motion-loading
+--pl-motion-status
+--pl-motion-theme
+--pl-radius
+--pl-shadow-card
+--pl-shadow-glow
+--pl-shadow-popover
+--pl-space-1
+--pl-space-12
+--pl-space-2
+--pl-space-3
+--pl-space-4
+--pl-space-5
+--pl-space-6
+--pl-space-8
