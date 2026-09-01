@@ -69,37 +69,24 @@ describe("the knowledge NavIntent arm", () => {
     expect(useUI.getState().mobileActive).toBe("knowledge");
   });
 
-  it("routes with an empty term when the intent carries none", () => {
-    applyNavIntent({ kind: "knowledge" });
-    expect(takeKnowledgeSearchSeed()).toBe("");
-    expect(useUI.getState().surface).toBe("knowledge");
-  });
 });
 
 describe("the Knowledge surface adopts a seeded term", () => {
   let container: HTMLElement;
   let root: Root;
+  let search: ReturnType<typeof vi.spyOn>;
 
-  afterEach(() => {
-    act(() => root.unmount());
-    container.remove();
-    vi.restoreAllMocks();
-  });
-
-  it("lands already showing the seeded search, not the recent-chunks listing", async () => {
-    const search = vi.spyOn(api, "knowledgeSearch").mockResolvedValue({
+  /** Mount the real surface the way the palette does. */
+  async function mount() {
+    search = vi.spyOn(api, "knowledgeSearch").mockResolvedValue({
       enabled: true,
       query: "postgres",
       results: [],
       stats: {},
     });
     // Whatever else the surface reaches for on mount (recall settings) must not reach the
-    // network; hanging it leaves those panels in a loading state this assertion ignores.
+    // network; hanging it leaves those panels in a loading state these assertions ignore.
     vi.spyOn(globalThis, "fetch").mockImplementation(() => new Promise<Response>(() => {}));
-
-    // Seeded BEFORE the mount — the ordering the palette actually produces, since routing to
-    // the surface is what mounts it.
-    seedKnowledgeSearch("postgres");
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -113,11 +100,43 @@ describe("the Knowledge surface adopts a seeded term", () => {
         ),
       );
     });
+  }
+
+  const click = async (label: string) =>
+    act(async () => {
+      container.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!.click();
+    });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    vi.restoreAllMocks();
+  });
+
+  it("lands already showing the seeded search, not the recent-chunks listing", async () => {
+    // Seeded BEFORE the mount — the ordering the palette actually produces, since routing to
+    // the surface is what mounts it.
+    seedKnowledgeSearch("postgres");
+    await mount();
 
     const input = container.querySelector<HTMLInputElement>('input[type="search"]');
     expect(input?.value).toBe("postgres");
     // `debouncedQuery` is seeded alongside `query`, so the FIRST fetch is already the seeded
     // search — no 250ms window in which the surface shows an unrelated list.
     await vi.waitFor(() => expect(search).toHaveBeenCalledWith("postgres", { reviewState: undefined }));
+  });
+
+  it("clears the review filter, so an already-open surface can still show the picked row", async () => {
+    await mount();
+    await click("pending review filter");
+    await vi.waitFor(() => expect(search).toHaveBeenCalledWith("", { reviewState: "pending" }));
+
+    // The surface was already open and narrowed to the review queue. Honouring the term
+    // while keeping that filter is the one way this handoff can land the operator on a list
+    // that does NOT contain the row they just picked.
+    await act(async () => seedKnowledgeSearch("postgres"));
+    await vi.waitFor(() => expect(search).toHaveBeenCalledWith("postgres", { reviewState: undefined }));
+    expect(container.querySelector<HTMLButtonElement>('[aria-label="pending review filter"]')
+      ?.getAttribute("aria-pressed")).toBe("false");
   });
 });

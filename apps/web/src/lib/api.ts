@@ -1145,10 +1145,12 @@ export const api = {
   // `k` and `signal` exist for the ⌘K knowledge provider (app/palette/knowledgeSearch.ts),
   // which needs both and cannot fake either. `k` because the route does NOT clamp it the
   // way its siblings do (`chat_routes.py`: `max(1, min(int(limit), 200))`) — the caller is
-  // the only ceiling on how many rows come back, and a palette shortlist wants six, not the
-  // server's thirty. `signal` because the DS palette aborts a superseded keystroke, and a
-  // request that ignores that signal runs to completion against the FTS index anyway. Both
-  // are omitted by the Knowledge surface, which keeps the server default and no cancellation.
+  // the only ceiling on how many rows come back, and a palette shortlist wants a handful,
+  // not the server's thirty (the provider asks for one over its own cap, since an
+  // over-full page is the only signal that route gives that there are more matches).
+  // `signal` because the DS palette aborts a superseded keystroke, and a request that
+  // ignores that signal runs to completion against the FTS index anyway. Both are omitted
+  // by the Knowledge surface, which keeps the server default and no cancellation.
   knowledgeSearch(
     q: string,
     opts: { reviewState?: ReviewState; k?: number; signal?: AbortSignal } = {},

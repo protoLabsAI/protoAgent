@@ -21,10 +21,13 @@
 //     surface wants and the palette very much does not. Unguarded, merely OPENING ⌘K would
 //     flood the root with knowledge rows. Below `KNOWLEDGE_MIN_QUERY` characters we do not
 //     call the endpoint at all.
-//   • THE ROW CAP. That route does NOT clamp `k` (contrast `chat_routes.py`'s
-//     `max(1, min(int(limit), 200))`), so the caller is the only clamp there is. We send an
-//     explicit small `k` AND slice the response, so a backend that ignores the parameter
-//     still can't paste 500 rows into the palette.
+//   • THE ROW CAP, AND THE WAY PAST IT. That route does NOT clamp `k` (contrast
+//     `chat_routes.py`'s `max(1, min(int(limit), 200))`), so the caller is the only clamp
+//     there is. We ask for one row MORE than we show and slice the response, so a backend
+//     that ignores the parameter still can't paste 500 rows into the palette — and that
+//     spare row is also the only signal that the shortlist is hiding matches, which is what
+//     the `All matches in Knowledge` footer row is for. Without it the cap is a dead end:
+//     the operator's only route to the rest is to close ⌘K and retype the query by hand.
 //   • THE DEADLINE. A hybrid store embeds the query over HTTP before it can search. Without
 //     a ceiling, one slow embedding call leaves the palette showing "Searching…" until the
 //     operator gives up. We derive a child signal (upstream abort OR deadline) so the
@@ -35,9 +38,9 @@
 //     An ABORT is not a failure — it is the operator typing another character — so an
 //     aborted read resolves empty and silently.
 //
-// Ids are namespaced `knowledge:<chunk id>`. The DS dedups FIRST-WINS with statics ahead
-// of provider rows, so a bare numeric id could be swallowed whole by an unrelated static
-// command that happened to claim it.
+// Every id is namespaced `knowledge:*` (`knowledge:<chunk id>`, `:more`, `:unavailable`).
+// The DS dedups FIRST-WINS with statics ahead of provider rows, so a bare numeric id could
+// be swallowed whole by an unrelated static command that happened to claim it.
 import { createElement } from "react";
 import { Library } from "lucide-react";
 
@@ -58,8 +61,9 @@ export const KNOWLEDGE_GROUP = "Knowledge";
  *  empty string means "list recent chunks" server-side, so anything below this is noise. */
 export const KNOWLEDGE_MIN_QUERY = 2;
 
-/** Rows we ask for, and the hard client-side cap. The palette root is a shortlist, not a
- *  browser — the Knowledge surface is where you page through the store. */
+/** Chunk rows we render, and the hard client-side cap. The palette root is a shortlist, not
+ *  a browser — the Knowledge surface is where you page through the store, and `knowledgeMoreRow`
+ *  is how you get there. (The request asks for `CAP + 1`; the spare is the overflow probe.) */
 export const KNOWLEDGE_RESULT_CAP = 6;
 
 /** How long one search may take before the row becomes "unavailable · timed out". */
@@ -68,12 +72,16 @@ export const KNOWLEDGE_TIMEOUT_MS = 4000;
 /** Longest row label before ellipsis — a knowledge chunk's content is a paragraph. */
 const LABEL_MAX = 72;
 
+/** Longest trailing hint. Far shorter than a label: the hint shares the row with it, so an
+ *  ingest filed under a long URL would otherwise squeeze out the thing it annotates. */
+const HINT_MAX = 28;
+
 function oneLine(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
-function clip(text: string): string {
-  return text.length > LABEL_MAX ? `${text.slice(0, LABEL_MAX - 1)}…` : text;
+function clip(text: string, max = LABEL_MAX): string {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
 /** What the operator reads on the row: the chunk's heading when it has one, else the first
@@ -82,6 +90,16 @@ export function knowledgeRowLabel(chunk: KnowledgeChunk): string {
   const heading = oneLine(chunk.heading ?? "");
   const body = oneLine(chunk.preview || chunk.content || "");
   return clip(heading || body || `Chunk ${chunk.id}`);
+}
+
+/** The row's trailing text: where this chunk came from. The last segment of `source` (an
+ *  ingest is filed under a path or a URL, and the tail is the part that names it), else the
+ *  store's `domain` bucket, which the server always fills in ("general" when nothing else).
+ *  NOT the word "knowledge" — the group heading sits directly above every one of these rows
+ *  and already says it, so a hint repeating it spends the row's one metadata slot on nothing. */
+function knowledgeRowHint(chunk: KnowledgeChunk): string | undefined {
+  const tail = oneLine(chunk.source ?? "").split("/").filter(Boolean).pop() ?? "";
+  return clip(tail || oneLine(chunk.domain ?? ""), HINT_MAX) || undefined;
 }
 
 /** One result → one DS command. `run` goes through the caller's navigator, never through
@@ -93,23 +111,23 @@ function toCommand(
   query: string,
   navigate: (intent: NavIntent) => void,
 ): Command {
-  const domain = oneLine(chunk.domain ?? "");
   return {
     id: `knowledge:${chunk.id}`,
     label: knowledgeRowLabel(chunk),
     group: KNOWLEDGE_GROUP,
     icon: createElement(Library, { size: 14 }),
-    hint: domain || "knowledge",
+    hint: knowledgeRowHint(chunk),
+    // Thin, and only FACTS ABOUT THIS ROW, because a remote-search row's keywords do not
+    // decide whether it is shown: the server already applied the query and the palette
+    // appends a provider's rows verbatim (`command-palette.views.tsx`, and #3289's ranked
+    // root keeps that contract). All they can do is TIER the row when a ranked root orders
+    // the results — which the row's own metadata can do and a generic word cannot: filler
+    // like "memory" or "recall", identical on every chunk, sorts nothing and would only
+    // make every knowledge row answer to a query about none of them.
     keywords: [
-      "knowledge",
-      "memory",
-      "store",
-      "note",
-      "finding",
-      "recall",
-      domain,
-      oneLine(chunk.heading ?? ""),
+      oneLine(chunk.domain ?? ""),
       oneLine(chunk.source ?? ""),
+      oneLine(chunk.source_type ?? ""),
       oneLine(chunk.finding_type ?? ""),
     ].filter(Boolean),
     run: (ctx) => {
@@ -133,9 +151,38 @@ export function knowledgeErrorRow(reason: string): Command {
     // Clipped: `reason` is a server `detail` or an exception message, and an unbounded one
     // would push the row's own label off the line it is trying to explain.
     hint: clip(oneLine(reason)) || "search failed",
-    keywords: ["knowledge", "memory", "error", "unavailable"],
+    // No keywords, like the footer row: this is the ONLY row a failed search returns, so
+    // there is nothing for them to order and provider rows are never re-filtered.
     disabled: true,
     run: () => {},
+  };
+}
+
+/** The footer row on a search with more matches than the shortlist shows — the only way
+ *  out of the cap. `KNOWLEDGE_RESULT_CAP` exists because the palette root is a shortlist,
+ *  but a cap with no overflow affordance is a dead end: the operator sees six rows, has no
+ *  way to know a seventh existed, and reaches the rest only by closing ⌘K, opening the
+ *  Knowledge surface and typing the query a second time. This row carries the same intent
+ *  a chunk row does, so it lands them on the surface with the search already run.
+ *
+ *  Shown only when the probe came back FULL (see `getCommands`) — a standing "see all" row
+ *  under every query would be a row of noise on every search that already showed everything.
+ *
+ *  Deliberately keyword-less. Provider rows are never re-filtered, so keywords cannot make
+ *  this row findable; all they could do is tier it under a ranked root (#3289), where a
+ *  keyword matching the operator's query would lift the footer above the chunks it is a
+ *  footer for. With nothing to match it ties with them and the stable sort leaves it last. */
+export function knowledgeMoreRow(query: string, navigate: (intent: NavIntent) => void): Command {
+  return {
+    id: "knowledge:more",
+    label: "All matches in Knowledge",
+    group: KNOWLEDGE_GROUP,
+    icon: createElement(Library, { size: 14 }),
+    hint: `more than ${KNOWLEDGE_RESULT_CAP}`,
+    run: (ctx) => {
+      navigate({ kind: "knowledge", query });
+      ctx.close();
+    },
   };
 }
 
@@ -160,7 +207,9 @@ async function search(
   }, KNOWLEDGE_TIMEOUT_MS);
   try {
     const data = await api.knowledgeSearch(query, {
-      k: KNOWLEDGE_RESULT_CAP,
+      // One MORE than we render: the extra row never reaches the palette, it is purely the
+      // probe that tells `getCommands` whether the shortlist is hiding anything.
+      k: KNOWLEDGE_RESULT_CAP + 1,
       signal: ac.signal,
     });
     // `enabled: false` is an instance with no knowledge store at all — nothing to search
@@ -191,7 +240,13 @@ export function knowledgeSearchProvider(
       const { rows, aborted, reason } = await search(q, signal);
       if (aborted) return [];
       if (reason !== undefined) return [knowledgeErrorRow(reason)];
-      return (rows ?? []).slice(0, KNOWLEDGE_RESULT_CAP).map((c) => toCommand(c, q, navigate));
+      const found = rows ?? [];
+      const out = found.slice(0, KNOWLEDGE_RESULT_CAP).map((c) => toCommand(c, q, navigate));
+      // The probe asked for `CAP + 1`. Getting it back is the ONLY signal available that
+      // matches exist past the shortlist — the route returns no total — so it is what
+      // decides whether the operator is offered a way to see them.
+      if (found.length > KNOWLEDGE_RESULT_CAP) out.push(knowledgeMoreRow(q, navigate));
+      return out;
     },
   };
 }

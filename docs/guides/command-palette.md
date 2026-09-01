@@ -44,15 +44,19 @@ Settings ▸ Keyboard, not with the in-app chords above.
 - **Knowledge** — type two or more characters and the palette searches the agent's
   knowledge store live ([ADR 0021](/adr/0021-agent-memory-architecture)) — findings,
   notes, the daily log, harvested sessions — and lists the top matches under a
-  **Knowledge** heading.
-  Picking one opens **Knowledge ▸ Store** with that same search already run, so the entry
-  you chose is in the list you land on.
+  **Knowledge** heading. Each row is trailed by where that entry came from (its source
+  file, or failing that its domain).
+  Picking one opens the **Knowledge** surface with that same search already run — clearing
+  any *pending review* filter it was left on — so the entry you chose is in the list you
+  land on. (The palette can't scroll the surface to one entry: the surface has no
+  per-entry anchor, so the search is what puts your pick in front of you.)
   Three things are deliberate here. It searches only once you have typed something: an
   empty box would otherwise list the most recent entries in the store, burying the
-  commands. It shows a handful of matches, not everything that matched — the Store surface
-  is where you page through results. And when the search itself fails or takes too long it
-  says **Knowledge search unavailable** with the reason, rather than quietly showing
-  nothing, which would be indistinguishable from "no matches".
+  commands. It shows a handful of matches rather than everything that matched, and when
+  there are more it adds a last **All matches in Knowledge** row that takes you to the
+  surface on the same search — so the shortlist is never a dead end. And when the search
+  itself fails or takes too long it says **Knowledge search unavailable** with the reason,
+  rather than quietly showing nothing, which would be indistinguishable from "no matches".
 
 Groups render in registration order — **Agents**, then **Plugins**, then **Commands** —
 so the agent and its fleet stay at the top. Live search results (Knowledge) arrive after

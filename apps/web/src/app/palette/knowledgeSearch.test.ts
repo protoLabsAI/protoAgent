@@ -24,6 +24,12 @@ import {
   knowledgeSearchProvider,
 } from "./knowledgeSearch";
 
+/** Enough distinct results to overflow the shortlist, so the probe row comes back. */
+const overflowing = () =>
+  Array.from({ length: KNOWLEDGE_RESULT_CAP + 1 }, (_, i) =>
+    chunk({ id: i + 1, heading: `row ${i}` }),
+  );
+
 type SearchOpts = { k?: number; signal?: AbortSignal };
 
 function chunk(over: Partial<KnowledgeChunk> = {}): KnowledgeChunk {
@@ -85,10 +91,12 @@ describe("knowledgeSearchProvider — the browse-default guard", () => {
 });
 
 describe("knowledgeSearchProvider — the request it makes", () => {
-  it("sends an explicit small k, because the route does not clamp it", async () => {
+  it("asks for ONE more row than it shows, because the route does not clamp k", async () => {
     const search = vi.spyOn(api, "knowledgeSearch").mockResolvedValue(ok([]));
     await read(provider(), "postgres");
-    expect((search.mock.calls[0][1] as SearchOpts).k).toBe(KNOWLEDGE_RESULT_CAP);
+    // Small because the caller is the only ceiling on that route; `+ 1` because the spare
+    // row never renders — it is the probe that says whether the shortlist hid anything.
+    expect((search.mock.calls[0][1] as SearchOpts).k).toBe(KNOWLEDGE_RESULT_CAP + 1);
   });
 
   it("threads the palette's abort signal into the in-flight request", async () => {
@@ -111,11 +119,11 @@ describe("knowledgeSearchProvider — the request it makes", () => {
     await pending;
   });
 
-  it("caps the rows even when the backend ignores k", async () => {
+  it("caps the chunk rows even when the backend ignores k", async () => {
     const many = Array.from({ length: 40 }, (_, i) => chunk({ id: i + 1, heading: `row ${i}` }));
     vi.spyOn(api, "knowledgeSearch").mockResolvedValue(ok(many));
     const rows = await read(provider(), "postgres");
-    expect(rows).toHaveLength(KNOWLEDGE_RESULT_CAP);
+    expect(rows.filter((r) => r.id !== "knowledge:more")).toHaveLength(KNOWLEDGE_RESULT_CAP);
   });
 });
 
@@ -128,10 +136,26 @@ describe("knowledgeSearchProvider — the rows", () => {
     expect(row.id).toBe("knowledge:12");
     expect(row.group).toBe(KNOWLEDGE_GROUP);
     expect(row.label).toBe("Postgres tuning");
-    expect(row.hint).toBe("infra");
-    expect(row.keywords).toContain("knowledge");
-    expect(row.keywords).toContain("infra");
+    // WHERE the chunk came from, which is what tells six rows of one search apart. Never
+    // the word "knowledge": the group heading above the rows already says that.
+    expect(row.hint).toBe("runbook.md");
+    // Facts about THIS row only. A provider's rows are appended unfiltered, so generic
+    // filler ("memory", "recall") could never make a row findable — it could only make
+    // every knowledge row answer to a query about none of them.
+    expect(row.keywords).toEqual(["infra", "runbook.md", "document"]);
     expect(row.disabled).toBeFalsy();
+  });
+
+  it("hints the source's tail, falling back to the domain bucket", async () => {
+    vi.spyOn(api, "knowledgeSearch").mockResolvedValue(
+      ok([
+        chunk({ id: 1, source: "https://example.com/ops/runbooks/postgres.md" }),
+        chunk({ id: 2, source: null }),
+      ]),
+    );
+    const rows = await read(provider(), "postgres");
+    expect(rows[0].hint).toBe("postgres.md"); // the tail names it; the URL would not fit
+    expect(rows[1].hint).toBe("infra"); // the server always fills a domain ("general" at worst)
   });
 
   it("labels an untitled chunk from its text, and never renders an empty row", () => {
@@ -156,6 +180,41 @@ describe("knowledgeSearchProvider — the rows", () => {
     // serializable intent to the real console window instead.
     expect(intents).toEqual([{ kind: "knowledge", query: "postgres" }]);
     expect(closed).toBe(true);
+  });
+});
+
+describe("knowledgeSearchProvider — the way past the shortlist", () => {
+  it("offers no footer row when every match already fits", async () => {
+    const exactly = Array.from({ length: KNOWLEDGE_RESULT_CAP }, (_, i) => chunk({ id: i + 1 }));
+    vi.spyOn(api, "knowledgeSearch").mockResolvedValue(ok(exactly));
+    const rows = await read(provider(), "postgres");
+    // A standing "see all" row would be noise on every search that already showed everything.
+    expect(rows.map((r) => r.id)).not.toContain("knowledge:more");
+  });
+
+  it("adds a LAST row that opens the surface on the same search once matches overflow", async () => {
+    vi.spyOn(api, "knowledgeSearch").mockResolvedValue(ok(overflowing()));
+    const rows = await read(provider(), "postgres");
+    const more = rows[rows.length - 1];
+    // Last, and only after the chunks — it is the footer on the shortlist, not a result.
+    expect(more.id).toBe("knowledge:more");
+    expect(more.label).toBe("All matches in Knowledge");
+    expect(more.hint).toBe(`more than ${KNOWLEDGE_RESULT_CAP}`);
+    expect(more.disabled).toBeFalsy();
+    // Keyword-LESS on purpose: provider rows are never re-filtered, so keywords can't make
+    // this findable — under a ranked root they could only lift the footer above the chunks
+    // it is a footer for.
+    expect(more.keywords ?? []).toEqual([]);
+    let closed = false;
+    more.run({ enter: () => {}, back: () => {}, close: () => (closed = true), props: undefined });
+    expect(intents).toEqual([{ kind: "knowledge", query: "postgres" }]);
+    expect(closed).toBe(true);
+  });
+
+  it("never offers the footer for a search that failed", async () => {
+    vi.spyOn(api, "knowledgeSearch").mockRejectedValue(new Error("store offline"));
+    const rows = await read(provider(), "postgres");
+    expect(rows.map((r) => r.id)).toEqual(["knowledge:unavailable"]);
   });
 });
 

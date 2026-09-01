@@ -106,12 +106,16 @@ export type NavIntent =
   | { kind: "plugins"; tab: "local" | "market" }
   | { kind: "global"; section?: string }
   | { kind: "agent"; slug: string }
-  // Open the Knowledge store surface on a search term (the ⌘K knowledge rows). A separate
-  // arm rather than `{ kind: "view", id: "knowledge" }` because the term is the point: the
+  // Open the Knowledge surface ON A SEARCH TERM (the ⌘K knowledge rows). A separate arm
+  // rather than `{ kind: "view", id: "knowledge" }` because the term is the point: the
   // surface has no per-chunk anchor, so re-running the operator's own search is what puts
   // the row they picked in front of them. Stays a plain serializable payload, so it crosses
   // the launcher → main-window event boundary like every other intent.
-  | { kind: "knowledge"; query?: string };
+  // `query` is REQUIRED, so this arm has exactly one meaning. A query-less "just open
+  // Knowledge" is already `{ kind: "view", id: "knowledge" }`, and letting it in here would
+  // add a second reading — does an absent term leave the surface alone, or clear it? — for
+  // a caller that has no reason to exist.
+  | { kind: "knowledge"; query: string };
 
 /** Apply an intent to THIS window's UI store. The default navigator, and what the main
  *  window calls when it receives a forwarded intent from the launcher. */
@@ -134,7 +138,7 @@ export function applyNavIntent(intent: NavIntent) {
       // Seed BEFORE routing: the surface is usually not mounted yet, and adopting the term
       // in its first effect is what keeps the landing paint from flashing the unrelated
       // recent-chunks listing. Already-open is covered too — the seed store is subscribed.
-      seedKnowledgeSearch(intent.query ?? "");
+      seedKnowledgeSearch(intent.query);
       openView("knowledge");
       break;
     case "agent":
