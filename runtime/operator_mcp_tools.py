@@ -35,6 +35,15 @@ _STAR_EXCLUDE = {"execute_code"}
 # runner to resume them, so they HANG the client (ADR 0075 D3 — a real bug, not a gate).
 _MCP_INCOMPATIBLE = {"ask_human", "request_user_input"}
 
+# Deliberately withheld from the operator MCP in THIS slice (ADR 0071 / #3170): the guarded
+# read-only fleet diagnostics tool reads a registered member's logs / A2A tasks, and putting
+# that on a foreign MCP bus — the curated ``read-only`` profile included — is a distinct trust
+# decision that gets its own security review. It is doubly gated: ``_exposed_tools`` never
+# passes ``fleet_diagnostics_enabled`` to ``get_all_tools``, so the tool isn't even built here;
+# this name-level guard is the belt that keeps it off the bus even if a future change (or a
+# plugin shadowing the name) starts building it. Remove this only WITH that review.
+_SLICE_EXCLUDED = {"fleet_diagnostics"}
+
 # Curated profile presets over the allowlist (ADR 0075 D3). A profile is just a preset set
 # of names layered on ``operator_mcp_tools`` — unset keeps deny-by-default (a foreign client
 # gets only what you name). ``read-only`` is a stable, principled set (reads/queries, no state
@@ -136,6 +145,8 @@ def _exposed_tools(config, allow: set[str], *, knowledge_store, scheduler, inbox
         if not name or name in seen:
             continue
         if name in _MCP_INCOMPATIBLE:  # HANGS a foreign client — never expose, even by name
+            continue
+        if name in _SLICE_EXCLUDED:  # ADR 0071 / #3170 — off the bus until its own security review
             continue
         if (name in allow) or (star and name not in _STAR_EXCLUDE):
             seen.add(name)

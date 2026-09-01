@@ -1558,6 +1558,13 @@ class LangGraphConfig:
     # (privacy/security). Local-fleet enumeration is disk-based, so the console is
     # unaffected; set fleet.discovery.mdns: true to restore LAN auto-discovery.
     discovery_mdns: bool = False  # advertise + browse the _protoagent._tcp mDNS channel
+    # Guarded read-only fleet diagnostics tool (ADR 0071, #3170). Default OFF: binds the
+    # ``fleet_diagnostics`` tool onto the managing agent so it can read a registered member's
+    # bounded logs / one exact A2A task through the existing #3168 endpoints. Model exposure
+    # is opt-in per the ADR 0071 trust boundary — an ordinary agent never sees the tool, so
+    # this never widens the default toolset. Roster-only addressing + read-only are enforced
+    # in the tool itself (``tools/fleet_diagnostics.py``), not by this flag.
+    fleet_diagnostics_enabled: bool = False
     fleet_max_warm: int = 0  # warm-agent cap (0 = unlimited); env: PROTOAGENT_FLEET_MAX_WARM
     fleet_warm_grace_seconds: int = (
         # Spare agents touched within N s from LRU eviction; env: PROTOAGENT_FLEET_WARM_GRACE.
@@ -1933,6 +1940,7 @@ class LangGraphConfig:
         network = data.get("network", {}) or {}
         fleet = data.get("fleet", {}) or {}
         discovery = fleet.get("discovery", {}) or {}
+        diagnostics = fleet.get("diagnostics", {}) or {}
         warm = fleet.get("warm", {}) or {}
 
         # Secret overlay wins when present; otherwise the (now secret-free)
@@ -2222,6 +2230,7 @@ class LangGraphConfig:
             discovery_port_min=discovery.get("port_min", cls.discovery_port_min),
             discovery_port_max=discovery.get("port_max", cls.discovery_port_max),
             discovery_mdns=discovery.get("mdns", cls.discovery_mdns),
+            fleet_diagnostics_enabled=diagnostics.get("enabled", cls.fleet_diagnostics_enabled),
             fleet_max_warm=warm.get("max", _env_default("PROTOAGENT_FLEET_MAX_WARM", cls.fleet_max_warm, int)),
             fleet_warm_grace_seconds=warm.get(
                 "grace_seconds", _env_default("PROTOAGENT_FLEET_WARM_GRACE", cls.fleet_warm_grace_seconds, int)

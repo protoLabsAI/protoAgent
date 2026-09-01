@@ -1414,6 +1414,10 @@ def create_agent_graph(
         # writers are bound only in run_manual_subagent's bounded self-improve path.
         soul_edit_enabled=getattr(config, "soul_self_edit_enabled", False),
         self_config_enabled=getattr(config, "tools_self_config_enabled", False),
+        # Guarded read-only fleet diagnostics (ADR 0071, #3170), gated by
+        # `fleet.diagnostics.enabled` (default off). Lead-only, like edit_soul/set_config —
+        # subagent builds omit it, so the peer-inspection surface never binds on a subagent.
+        fleet_diagnostics_enabled=getattr(config, "fleet_diagnostics_enabled", False),
         reload_callback=reload_callback,
     )
 

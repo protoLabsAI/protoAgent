@@ -1237,6 +1237,18 @@ FIELDS: list[Field] = [
         scope="host",
     ),
     Field(
+        "fleet.diagnostics.enabled",
+        "fleet_diagnostics_enabled",
+        "Fleet diagnostics tool",
+        "bool",
+        "Discovery",
+        "Bind the read-only `fleet_diagnostics` tool onto this agent so it can inspect a "
+        "registered member's bounded log tail or one exact A2A task through the existing "
+        "member diagnostics API (#3168). Off by default (ADR 0071) — model exposure is "
+        "opt-in. The tool addresses members through the fleet roster only (never an "
+        "arbitrary host/URL) and cannot start, resume, answer, or reconfigure anything.",
+    ),
+    Field(
         "fleet.warm.max",
         "fleet_max_warm",
         "Warm-agent cap",

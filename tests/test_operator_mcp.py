@@ -189,6 +189,35 @@ def test_unknown_profile_falls_back_to_allowlist():
     assert names == {"calculator"}  # unknown profile ignored, explicit names honored
 
 
+# ── fleet diagnostics is NOT on the operator-MCP bus in this slice (ADR 0071 / #3170) ──
+
+
+def test_fleet_diagnostics_absent_from_read_only_profile():
+    """The guarded read-only fleet-diagnostics tool must NOT ride the curated read-only
+    profile — exposing a member-log/task reader on a foreign MCP bus is its own security
+    review (kept explicitly out of scope for #3170)."""
+    from runtime.operator_mcp_tools import _READ_ONLY_TOOLS
+
+    assert "fleet_diagnostics" not in _READ_ONLY_TOOLS
+
+
+def test_fleet_diagnostics_withheld_from_operator_mcp_even_when_built(monkeypatch):
+    """Belt over the double-gate: even if something builds a tool named ``fleet_diagnostics``
+    (a plugin shadowing the name, or a future change wiring the flag into the bus), the
+    name-level ``_SLICE_EXCLUDED`` guard keeps it off the operator MCP under both ``*`` and an
+    explicit allowlist."""
+    from langchain_core.tools import tool
+
+    @tool
+    def fleet_diagnostics(member: str) -> str:
+        """stand-in for the real guarded tool"""
+        return member
+
+    monkeypatch.setattr(STATE, "plugin_tools", [fleet_diagnostics], raising=False)
+    assert "fleet_diagnostics" not in {t.name for t in operator_tools(_cfg(["*"]))}
+    assert "fleet_diagnostics" not in {t.name for t in operator_tools(_cfg(["fleet_diagnostics"]))}
+
+
 def test_env_trust_full_overrides_deny_default(monkeypatch):
     monkeypatch.setenv("PROTOAGENT_MCP_TRUST", "full")
     names = {t.name for t in operator_tools(_cfg([]))}  # empty allowlist would be deny-all

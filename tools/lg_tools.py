@@ -2675,6 +2675,7 @@ def get_all_tools(
     soul_edit_enabled=False,
     self_config_enabled=False,
     skill_edit_enabled=False,
+    fleet_diagnostics_enabled=False,
     self_improvement_provenance_required=False,
     reload_callback=None,
 ):
@@ -2788,6 +2789,16 @@ def get_all_tools(
         )
     if skill_edit_enabled:
         tools.extend(_build_skill_editor_tools(provenance_required=self_improvement_provenance_required))
+    if fleet_diagnostics_enabled:
+        # Guarded read-only fleet diagnostics (ADR 0071, #3170), gated by
+        # `fleet.diagnostics.enabled` (default off). Lead-agent only: no subagent build
+        # passes the flag, so a bounded subagent never gets the peer-inspection surface.
+        # Roster-only addressing + read-only are enforced inside the tool itself. NOT added
+        # to the operator-MCP read-only profile in this slice — that needs its own security
+        # review (runtime/operator_mcp_tools.py never passes this flag, so it can't leak there).
+        from tools.fleet_diagnostics import fleet_diagnostics
+
+        tools.append(fleet_diagnostics)
     # ADR 0054 — curation tools for the dream/distill subagents (read-only activity
     # + skill inventory + additive-only skill creation). Self-gate on STATE at call
     # time; present in the full set so the subagent allowlists can pick them up.
