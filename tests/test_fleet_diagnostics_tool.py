@@ -114,6 +114,21 @@ def test_resolve_member_refuses_unknown_and_resolves_registered(monkeypatch):
     assert target.slug == "alpha" and target.member == "Alpha"
 
 
+async def test_a_duplicated_display_name_is_refused_not_silently_picked(monkeypatch):
+    # Display names are operator-editable and NOT unique. Taking the first match would hand back
+    # the OTHER agent's logs under the name the caller asked for, with nothing in the answer
+    # revealing the substitution — so ambiguity is refused, with the unique ids to re-ask by.
+    twin = {"id": "alpha-2", "name": "Alpha", "running": True, "port": 7872}
+    _install_roster(monkeypatch, [_LOCAL, twin])
+    _forbid_http(monkeypatch)
+    out = await _logs("Alpha")
+    assert out["ok"] is False and out["error"] == "ambiguous_member"
+    assert sorted(out["candidates"]) == ["alpha", "alpha-2"]
+    # ...and the id remains unambiguous, so the caller has a way through.
+    _install_http(monkeypatch, body={"enabled": True, "lines": [], "returned": 0, "capacity": 10})
+    assert (await _logs("alpha-2"))["slug"] == "alpha-2"
+
+
 # ── r1 + auth: read through the proxy on loopback with the fleet service token ──
 
 
@@ -284,3 +299,30 @@ async def test_secrets_are_redacted_at_the_tool_boundary(monkeypatch):
     assert secret not in dumped  # the raw credential never leaves the tool
     assert "[REDACTED]" in dumped  # ...it left replaced by the marker
     assert out["logs"]["lines"][0]["message"] == "token [REDACTED]"  # redacted in place
+
+
+async def test_secrets_are_redacted_on_the_ERROR_path_too(monkeypatch):
+    # The failure path returns the member's own ``detail`` string, which never passes through
+    # the success-side redact(). An auth rejection is exactly where a member echoes back the
+    # credential it just refused, so the same boundary has to hold here.
+    _install_roster(monkeypatch, [_LOCAL])
+    secret = "sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"  # an OpenAI-shaped key redact() scrubs
+    _install_http(monkeypatch, status=401, body={"detail": f"rejected token {secret}"})
+    out = await _logs("Alpha")
+    assert out["ok"] is False and out["error"] == "unauthorized"
+    assert secret not in json.dumps(out)  # the raw credential never leaves the tool
+    assert out["detail"] == "rejected token [REDACTED]"  # ...replaced, and the reason survives
+
+
+async def test_more_rows_than_requested_are_capped_at_the_tool_boundary(monkeypatch):
+    # #3168 clamps the row count on the member's side; this holds when the member does NOT —
+    # an older member predating that clamp, or a buggy one. The endpoint returns oldest-first,
+    # so the recent END is what a diagnostics read keeps.
+    _install_roster(monkeypatch, [_LOCAL])
+    rows = [{"message": f"line-{i}"} for i in range(50)]
+    _install_http(monkeypatch, body={"enabled": True, "lines": rows, "returned": 50, "capacity": 100})
+    out = await _logs("Alpha", lines=5)
+    assert len(out["logs"]["lines"]) == 5
+    assert [r["message"] for r in out["logs"]["lines"]] == [f"line-{i}" for i in range(45, 50)]
+    assert out["logs"]["tool_truncated"] is True
+    assert out["logs"]["returned"] == 50  # the member's own count is NOT rewritten

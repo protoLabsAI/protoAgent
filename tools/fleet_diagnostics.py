@@ -139,34 +139,52 @@ def _slug_for(entry: dict[str, Any]) -> str:
     return str(entry.get("id") or "").strip()
 
 
-def _match(roster: list[dict[str, Any]], member: str) -> dict[str, Any] | None:
-    """The roster entry a caller's ``member`` names, or None. Exact id first, then a
-    case-insensitive name/label match — the model addresses members by display name."""
+def _match(roster: list[dict[str, Any]], member: str) -> list[dict[str, Any]]:
+    """The roster entries a caller's ``member`` names. Exact id first — an id is unique, so a hit
+    there is always a single answer — then EVERY case-insensitive name/label match, because the
+    model addresses members by display name and display names are not unique
+    (see [[fleet-display-name-two-sources]]: the name has two sources and is operator-editable).
+
+    Returns a list so the caller can tell "no such member" from "which one?" — silently taking
+    the first of two same-named members would hand back another agent's logs under the name the
+    caller asked for, and nothing in the answer would reveal the substitution.
+    """
     want = (member or "").strip()
     if not want:
-        return None
+        return []
     for e in roster:
         if str(e.get("id") or "") == want:
-            return e
+            return [e]
     wl = want.lower()
-    for e in roster:
-        if str(e.get("name") or "").strip().lower() == wl or str(e.get("label") or "").strip().lower() == wl:
-            return e
-    return None
+    return [
+        e
+        for e in roster
+        if str(e.get("name") or "").strip().lower() == wl or str(e.get("label") or "").strip().lower() == wl
+    ]
 
 
 def resolve_member(member: str) -> _Target | dict[str, Any]:
     """Resolve ``member`` to a ``_Target``, or a compact failure dict. Roster-exclusive: an
     unknown member never yields a target, and no host/URL ever comes from the caller."""
     roster = _roster()
-    entry = _match(roster, member)
-    if entry is None:
+    entries = _match(roster, member)
+    if not entries:
         names = [n for n in (_display(e) for e in roster) if n][:_MAX_SUGGESTIONS]
         return _fail(
             "unknown_member",
             f"{(member or '').strip()!r} is not a registered fleet member",
             {"available": names},
         )
+    if len(entries) > 1:
+        # Two members share this display name. Refuse and name the ids rather than picking one:
+        # the caller can re-ask by id, which is unique by construction.
+        ids = [s for s in (_slug_for(e) for e in entries) if s][:_MAX_SUGGESTIONS]
+        return _fail(
+            "ambiguous_member",
+            f"{(member or '').strip()!r} names {len(entries)} fleet members — re-ask by id",
+            {"candidates": ids},
+        )
+    entry = entries[0]
     slug = _slug_for(entry)
     if not slug:
         # A roster row with neither ``host`` nor an id — unaddressable. Refuse rather than
@@ -205,13 +223,21 @@ def _make_client():
 
 def _server_detail(resp) -> str | None:
     """The proxy/member's own ``detail`` string on an error response, if any — more actionable
-    than a generic message. Read defensively (a non-JSON error body is fine)."""
+    than a generic message. Read defensively (a non-JSON error body is fine).
+
+    REDACTED before it is capped: this is member-authored content on a path the success-side
+    ``redact()`` never sees, and an auth or upstream error is exactly where a member echoes the
+    credential it just rejected. Redacting here keeps the module's boundary claim true for the
+    failure path too, not only the happy one.
+    """
+    from graph.middleware.redaction import redact
+
     try:
         body = resp.json()
     except Exception:  # noqa: BLE001
         return None
     if isinstance(body, dict) and isinstance(body.get("detail"), str):
-        return body["detail"][:_TOOL_TEXT_CAP]
+        return str(redact(body["detail"]))[:_TOOL_TEXT_CAP]
     return None
 
 
@@ -277,15 +303,32 @@ def _clamp_lines(lines: Any) -> tuple[int, str | None]:
     return value, None
 
 
-def _bound_lines(body: Any) -> Any:
+def _bound_lines(body: Any, limit: int) -> Any:
     """Re-cap the member's already-redacted log body for compactness WITHOUT disturbing its own
     ``enabled`` / ``note`` / ``returned`` / ``capacity`` / ``truncated`` / ``malformed`` signals.
-    Marks ``tool_truncated`` only when the tool itself trims a line."""
+    Marks ``tool_truncated`` only when the tool itself trims something.
+
+    Two independent bounds, because #3168 caps the SET and the FIELD on the member's side and
+    this tool must hold even when the member does not — an older member predating #3168's clamp,
+    or simply a buggy one, does not get to set this turn's context budget:
+
+    * the ROW COUNT, to the ``limit`` the caller actually asked for (already clamped to
+      1–``_MAX_LINES``). The endpoint returns oldest-first, so the TAIL is the recent end —
+      keep that, which is what a diagnostics read is for.
+    * each row's ``message``, to ``_TOOL_TEXT_CAP``.
+
+    ``returned`` is the member's own count and stays verbatim; a mismatch against ``len(lines)``
+    alongside ``tool_truncated`` is the honest signal that this side dropped rows.
+    """
     if not isinstance(body, dict):
         return body
     trimmed = False
     lines = body.get("lines")
     if isinstance(lines, list):
+        if len(lines) > limit:
+            lines = lines[-limit:]
+            body["lines"] = lines
+            trimmed = True
         for row in lines:
             if isinstance(row, dict) and isinstance(row.get("message"), str) and len(row["message"]) > _TOOL_TEXT_CAP:
                 row["message"] = row["message"][:_TOOL_TEXT_CAP]
@@ -325,7 +368,7 @@ async def read_member_logs(member: str, lines: Any = _DEFAULT_LINES) -> dict[str
         from graph.middleware.redaction import redact
 
         payload["ok"] = True
-        payload["logs"] = _bound_lines(redact(result.get("body")))
+        payload["logs"] = _bound_lines(redact(result.get("body")), clamped)
     else:
         payload["ok"] = False
         payload["error"] = result.get("error")
