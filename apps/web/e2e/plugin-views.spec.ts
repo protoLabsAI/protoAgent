@@ -402,3 +402,42 @@ test("clicking back inside the frame dismisses the plugin menu", async ({ page }
   await frame.locator("#p").click();
   await expect(menu).toHaveCount(0);
 });
+
+// ── Manifest-declared palette commands (ADR 0057 §3, #3294) ──────────────────────
+// The `boardy` fixture declares two `navigate` commands: one at a rail view, one at its
+// utility WIDGET. Both are shipped raw on the status payload, so this is the console
+// adapter's own mirror under test, not the backend parser's.
+
+test("a declared navigate command opens the plugin's view", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await expect(page.locator(".app-shell-main")).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+Shift+k");
+  await expect(page.locator(".pl-cmdk__panel")).toBeVisible();
+  await page.locator(".pl-cmdk__panel .pl-cmdk-commands__input").fill("Boardy Board");
+  await page.getByRole("option", { name: "Boardy Board" }).click();
+  await expect(page.locator(".plugin-view-frame")).toHaveAttribute("src", /\/plugins\/boardy\/board/);
+});
+
+test("a declared navigate at a view with NO console surface makes no row at all", async ({ page }) => {
+  // The regression: `snap` is a utility widget, so it is never reconciled onto a dock and
+  // has no `plugin:boardy:snap` surface. The row used to compile anyway, hint "go to", set
+  // that surface id, render nothing — and App's stale-surface fallback then dropped the
+  // operator on Chat, off whatever they were looking at. Park on a real surface first so
+  // "went to chat" is distinguishable from "did nothing".
+  await page.goto("/app/", { waitUntil: "load" });
+  await expect(page.locator(".app-shell-main")).toBeVisible();
+  await page.locator(".pl-rail").getByRole("button", { name: "Stats", exact: true }).click();
+  await expect(page.locator(".plugin-view-frame")).toHaveAttribute("src", /\/plugins\/boardy\/stats/);
+
+  await page.keyboard.press("ControlOrMeta+Shift+k");
+  await expect(page.locator(".pl-cmdk__panel")).toBeVisible();
+  await page.locator(".pl-cmdk__panel .pl-cmdk-commands__input").fill("Boardy Snapshot Go");
+  await expect(page.getByRole("option")).toHaveCount(0);
+
+  // The widget itself is still reachable where it actually lives — the utility bar…
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".pl-cmdk__panel")).toHaveCount(0);
+  await expect(page.locator('[data-testid="util-widget-snap"]')).toBeVisible();
+  // …and the operator never left Stats.
+  await expect(page.locator(".plugin-view-frame")).toHaveAttribute("src", /\/plugins\/boardy\/stats/);
+});

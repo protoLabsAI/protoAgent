@@ -16,6 +16,7 @@ import { QuickSetting } from "../settings/QuickSetting";
 import type { KnowledgeChunk } from "../lib/types";
 
 import { ReviewActions, ReviewChip } from "./ReviewVerdict";
+import { takeKnowledgeSearchSeed, useKnowledgeSearchSeedVersion } from "./searchSeed";
 
 // The shape every knowledge list/search query caches — reused for optimistic
 // bulk-delete cache surgery (#1770) without re-declaring the response fields.
@@ -319,6 +320,23 @@ export function KnowledgeStore() {
   // verdict. Its own cache entry (the query key carries the filter), so toggling never
   // relabels the unfiltered list.
   const [pendingOnly, setPendingOnly] = useState(false);
+
+  // A term handed over from elsewhere (a ⌘K knowledge row routing here, ADR 0057) — adopt
+  // it as the search. `debouncedQuery` is set alongside `query` so the results are already
+  // the seeded search on the first paint instead of 250ms of the recent-chunks listing.
+  // Keyed on the seed VERSION, not the value: re-seeding the same term has to re-apply, and
+  // the seed is consumed on read so a later remount doesn't replay it over live typing.
+  // The review filter is cleared with it: the handoff's whole promise is that the row the
+  // operator picked in the palette is in the list they land on, and an already-open surface
+  // left on "pending review" would honour the term and still not show it.
+  const seedVersion = useKnowledgeSearchSeedVersion();
+  useEffect(() => {
+    const seeded = takeKnowledgeSearchSeed();
+    if (seeded === null) return;
+    setQuery(seeded);
+    setDebouncedQuery(seeded);
+    setPendingOnly(false);
+  }, [seedVersion]);
 
   const { data, isFetching, error, refetch } = useQuery({
     ...knowledgeQuery(debouncedQuery, pendingOnly ? "pending" : undefined),

@@ -484,6 +484,7 @@ class HybridKnowledgeStore(KnowledgeStore):
         review_state: str | None = None,
         delivery_policy: str | None = None,
         deliverable: bool = False,
+        prefix: bool = False,
     ) -> list[dict]:
         """RRF-fuse the FTS5 ranking with a vector ranking.
 
@@ -498,6 +499,11 @@ class HybridKnowledgeStore(KnowledgeStore):
         ``memory_kind`` / ``review_state`` (#3072) and ``delivery_policy``
         (ADR 0108 D4) likewise filter BOTH rankings, as does ``deliverable``
         (ADR 0108 D6 — rejected/expired rows never surface as a vector-only hit).
+
+        ``prefix`` (#3293) reaches the KEYWORD half only — a type-ahead's trailing
+        partial word is exactly what FTS5 cannot match and embeddings can, so the
+        vector half already covers the case the flag exists for and needs no
+        equivalent. The fused rank is over the two lists as usual.
         """
         if not query or not query.strip():
             return []
@@ -514,6 +520,7 @@ class HybridKnowledgeStore(KnowledgeStore):
                 review_state=review_state,
                 delivery_policy=delivery_policy,
                 deliverable=deliverable,
+                prefix=prefix,
             )
             query_vec = self._embed(query)
             if query_vec is None:

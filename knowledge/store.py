@@ -1057,6 +1057,7 @@ class KnowledgeStore:
         review_state: str | None = None,
         delivery_policy: str | None = None,
         deliverable: bool = False,
+        prefix: bool = False,
     ) -> list[dict[str, Any]]:
         """Top-k chunks matching ``query``. Shape matches what the
         ``KnowledgeMiddleware`` consumes: each result has ``table``,
@@ -1086,6 +1087,19 @@ class KnowledgeStore:
         with exactly that typed-memory classification. ``None`` = unfiltered.
         ``delivery_policy`` (ADR 0108 D4) likewise; ``"retrieved"`` also matches
         NULL rows, since NULL *means* retrieved (``_delivery_policy_clause``).
+
+        ``prefix`` (#3293) makes the LAST token a prefix term, for TYPE-AHEAD
+        callers only — the command palette, which re-searches on every
+        keystroke. FTS5
+        phrase matching is whole-token: ``"postg"`` does not match *Postgres*, so
+        a type-ahead over the default (FTS5, ``embeddings: false``) store shows
+        nothing at all until the operator finishes each word, which reads as "no
+        matches" rather than "still typing". Only the trailing token is widened —
+        the earlier ones are words the operator has already finished, and widening
+        a complete word only adds noise. Default OFF: recall paths
+        (``memory_recall``, the per-turn injection, the Knowledge browser) search
+        a settled query, where a prefix term would silently broaden it.
+        No-op on the LIKE fallback, which is substring-matching already.
         """
         if not query or not query.strip():
             return []
@@ -1098,6 +1112,7 @@ class KnowledgeStore:
                     db, query, k, domain, namespace, include_invalidated, epoch,
                     memory_kind=memory_kind, review_state=review_state,
                     delivery_policy=delivery_policy, deliverable=deliverable,
+                    prefix=prefix,
                 )
                 if self._fts_available
                 else self._search_like(
@@ -1138,6 +1153,7 @@ class KnowledgeStore:
         review_state: str | None = None,
         delivery_policy: str | None = None,
         deliverable: bool = False,
+        prefix: bool = False,
     ) -> list[sqlite3.Row]:
         # Sanitize to FTS5-safe tokens; OR them so a multi-word query
         # matches any of the keywords (closer to LIKE behaviour).
@@ -1148,7 +1164,14 @@ class KnowledgeStore:
         tokens = [t for t in re.findall(r"[\w']+", query) if t]
         if not tokens:
             return []
-        match = " OR ".join(_fts_quote(t) for t in tokens)
+        terms = [_fts_quote(t) for t in tokens]
+        # ``prefix`` (#3293, type-ahead callers only): the trailing token is the word the
+        # operator is still typing, so widen THAT one to a prefix term. The ``*`` sits
+        # OUTSIDE the quotes, which is what keeps this safe — the token is still a quoted
+        # phrase, so nothing inside it is parsed as syntax; the star is ours, not theirs.
+        if prefix:
+            terms[-1] += "*"
+        match = " OR ".join(terms)
         where = ["chunks_fts MATCH ?"]
         params: list[Any] = [match]
         if not include_invalidated:

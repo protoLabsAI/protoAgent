@@ -28,6 +28,7 @@ import { dedupeRailById } from "./rail";
 import { AuthGate } from "./AuthGate";
 import { authRequired, subscribeAuth } from "../lib/auth";
 import { pluginViewIcon } from "../lib/pluginIcon";
+import { isNavigablePluginView } from "../lib/pluginViews";
 import { TenantGuard } from "./TenantGuard";
 import { SessionHistoryHydrator } from "./SessionHistoryHydrator";
 import { Splash, BootGate } from "@protolabsai/ui/splash";
@@ -88,8 +89,11 @@ import { invalidateAllAfterSetup } from "../setup/finish";
 import { SetupWizard } from "../setup/SetupWizard";
 import { hostRuntimeStatusQuery, installedPluginsQuery, pluginUpdatesQuery, runtimeStatusQuery } from "../lib/queries";
 import { buildViews } from "../lib/viewRegistry";
-import { applyNavIntent, openView, usePaletteRegistry } from "./usePaletteRegistry";
+import { applyNavIntent, openView, useForwardedPaletteNotices, usePaletteRegistry } from "./usePaletteRegistry";
 import type { NavIntent } from "./usePaletteRegistry";
+import { pluginCommandSources } from "./pluginPaletteCommands";
+import "./chatTabPalette"; // core's live ⌘K rows: one per open chat tab (side effect)
+import { PaletteButton } from "./PaletteButton";
 import { PaletteChat } from "./PaletteChat";
 import { CORE_SURFACES } from "./coreSurfaces";
 import { listen } from "../lib/desktop";
@@ -367,7 +371,9 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   // A view with `utility` is a bottom-left utility-bar widget (a pill → dialog), NOT a rail
   // surface — so it's excluded from the rail list, like the chat-slot claimant.
   const utilityWidgetViews = allDeclaredViews.filter((v) => v.utility);
-  const allPluginViews = allDeclaredViews.filter((v) => v.slot !== "chat" && !v.utility);
+  // The navigable surfaces — through the SHARED predicate, because the launcher and the
+  // palette-command adapter have to answer this question identically (#3294 review).
+  const allPluginViews = allDeclaredViews.filter(isNavigablePluginView);
   // Enabled plugin ids — gates ext surfaces that declare requiresPlugin (e.g. Studio → workflows).
   const enabledPluginIds = new Set((runtime?.plugins ?? []).filter((p) => p.enabled).map((p) => p.id));
 
@@ -539,8 +545,8 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
 
   // ── Command palette (⌘⇧K, ADR 0057) ───────────────────────────────────────────
   // Every resolvable View becomes a "go to" command (via openView → setSurface);
-  // deep-link actions ride alongside. Plugin-declared `commands:` + inline plugin
-  // views are step 3. The registry re-resolves as plugin views appear/disappear.
+  // deep-link actions, plugin-declared `commands:` and inline plugin views ride
+  // alongside. The registry re-resolves as plugin views appear/disappear.
   // The WHOLE facade, not just `.views`: the palette resolves each surface by id through
   // `viewFor` (ADR 0056), so this is the first real consumer of the resolver half.
   const paletteFacade = buildViews({
@@ -590,8 +596,15 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   // table `ChatSlot` renders with, and — unlike "is a chat slot mounted right now?" — it does
   // not flip when the operator collapses the dock chat lives on.
   const builtInChat = chatSlotProvider(enabledPluginIds, chatSlotView) === "builtin";
+  // Plugin-DECLARED palette commands (ADR 0057 §3) — the manifest `commands:` block each
+  // enabled plugin ships on runtime status, compiled into `run(ctx)` by the trusted adapter
+  // (`pluginPaletteCommands.ts`). Same derivation the launcher window uses, so both palettes
+  // list the same rows.
+  const pluginPaletteCommands = pluginCommandSources(runtime?.plugins, pluginViewIcon);
   const paletteRegistry = usePaletteRegistry(paletteFacade, inlinePaletteViews, paletteChat, {
     builtInChat,
+    sources: pluginPaletteCommands,
+    notify: toast,
   });
   // Palette open-state lives in the keybinding intents store now: ⌘⇧K is a regular,
   // rebindable keybinding (ADR 0063) that toggles it — no DS-internal hotkey hook.
@@ -610,6 +623,11 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
     });
     return () => off();
   }, []);
+  // …and the same handoff for what a launcher row's `tool`/`emit` call came BACK with. The
+  // launcher hides itself the moment a row fires, so a toast raised there would land in a
+  // hidden webview; it forwards the outcome here instead (and has already raised this window
+  // via `focus_main`).
+  useForwardedPaletteNotices(toast);
 
   function renderSurface(id: string): ReactNode {
     switch (id) {
@@ -1086,6 +1104,9 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
                     <Settings2 size={14} />
                   </button>
                 </Tooltip>
+                {/* The palette's only visible way in (ADR 0057) — an icon pill, AFTER Settings:
+                    that one keeps the far-left slot operators already reach for by position. */}
+                <PaletteButton />
                 {/* Widgets (bottom-left): background subagents (ADR 0050 Phase 3) and the
                     unified feed (#3029) — one pill merging the former inbox + read-only
                     Activity feeds. Each is a pill with a hover info popover + a click dialog. */}

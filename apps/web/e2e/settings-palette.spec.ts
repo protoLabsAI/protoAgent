@@ -66,7 +66,11 @@ test("a DIFFERENT section's row still lands (the control for the case above)", a
 });
 
 test("closing Settings and re-opening it plainly resumes the SELECTED section, not the deep-link", async ({ page }) => {
-  await runFirstMatch(page, "shortcuts"); // Keyboard
+  // "rebind", not "shortcuts": #3292's `/help` row is labelled "…commands & shortcuts", so
+  // that word is in its LABEL and lands it in WORD_PREFIX, which correctly outranks this
+  // row's keyword-only META match — Enter ran /help and no dialog ever opened. The ranking
+  // is right; the query was ambiguous. "rebind" is Keyboard's alone.
+  await runFirstMatch(page, "rebind"); // Keyboard
   await expect(activeSection(page)).toHaveText("Keyboard");
   await page.locator(".settings-overlay .pl-sidenav").getByRole("tab", { name: "Behavior", exact: true }).click();
   // Wait for the selection to actually commit before closing: clicking the tab writes the

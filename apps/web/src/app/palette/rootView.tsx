@@ -70,6 +70,9 @@ export const EMPTY_CAP = 9;
 /** Recents on the empty query, at most. Under half the list: recents lead it, they do not
  *  BECOME it — a palette that only ever shows what you already ran can't teach you anything. */
 export const RECENT_CAP = 4;
+/** Recents never fall below this, however many groups want a slot. Below two the block stops
+ *  reading as "what you reach for" and becomes a single stray row above the real list. */
+export const RECENT_MIN = 2;
 /** Rows any ONE group may contribute to the empty list once every group has had its first.
  *  Load-bearing, not cosmetic: the root corpus is Agents(2) → Plugins(N) → Commands(6) in
  *  REGISTRATION order, so a plain `slice(0, EMPTY_CAP)` hands the whole list to whoever is
@@ -201,20 +204,70 @@ export function emptyQueryList(
   // most likely (a provider row shadowing the static it was modelled on).
   const byId = new Map<string, Command>();
   for (const c of pool) if (!byId.has(c.id)) byId.set(c.id, c);
-  const recents = Object.entries(recency)
+  const recentsRanked = Object.entries(recency)
     .filter(([k]) => k.startsWith("cmd:"))
     .map(([k, e]) => ({ cmd: byId.get(k.slice(4)), f: frecency(e, now), t: e.t }))
     .filter((x): x is { cmd: Command; f: number; t: number } => !!x.cmd && !x.cmd.disabled)
     // Last-used breaks the tie — `frecency` underflows to 0 for anything old enough, and
     // an arbitrary order among "everything is stale" reads as a broken list.
     .sort((a, b) => b.f - a.f || b.t - a.t)
-    .slice(0, recentCap)
     // A recent row is the SAME command under a different header — cloned so the header
     // swap can't leak into the corpus the search path ranks.
     .map((x) => ({ ...x.cmd, group: RECENT_GROUP }));
+  // RECENTS YIELD TO GROUP REPRESENTATION, down to `RECENT_MIN`.
+  //
+  // `pickRootFill`'s one-row-per-group sweep is the guarantee that every feature area is
+  // visible on an empty query, but it can only seat as many groups as it has slots — and the
+  // slot count is whatever recents left behind. That held while the root had three groups. It
+  // stopped holding the moment the command sources landed: Agents, Plugins, Commands, Chat,
+  // Skills and Chats is SIX, against `EMPTY_CAP - RECENT_CAP` = five. The sixth group fell off
+  // silently, and which one it was depended on registration order.
+  //
+  // Dropping a whole group is strictly worse than dropping a recent: a group you cannot see is
+  // a feature you do not know exists, while a missing recent is something you already know how
+  // to find. So the reservation runs the other way now — count the groups, leave them a slot
+  // each, and let recents take what remains (never fewer than `RECENT_MIN`, or the block stops
+  // being a block). A lean console is unaffected: with three groups there are six slots spare
+  // and recents still take their full four.
+  //
+  // `cap` clamps first, and `recentSlots` is clamped BY it: the floor is a floor against
+  // GROUPS competing for slots, never a licence to exceed the caller's cap. Without that,
+  // `{ emptyCap: 1 }` reserved two recents and returned two rows for a cap of one — the floor
+  // out-arguing the budget. A caller asking for one row gets one row.
+  const cap = Math.max(0, emptyCap);
+  const groupCount = new Set(root.map((c) => c.group ?? "")).size;
+  const recentSlots = Math.min(recentCap, cap, Math.max(RECENT_MIN, cap - groupCount));
+  const recents = recentsRanked.slice(0, recentSlots);
   const shown = new Set(recents.map((c) => c.id));
   const rest = root.filter((c) => !shown.has(c.id));
-  return [...recents, ...pickRootFill(rest, emptyCap - recents.length, groupCap)];
+  return [...recents, ...pickRootFill(rest, cap - recents.length, groupCap)];
+}
+
+/** Longest a single provider may hold the palette's "Searching…" state.
+ *
+ *  The containment below turns a synchronous throw and a non-array result into settled
+ *  results, but neither covers a promise that simply NEVER settles — a fetch with no
+ *  timeout, a dropped socket. `ac.abort()` does not help: aborting only ends the read if the
+ *  provider observes the signal, and a fork's provider is under no obligation to. Without a
+ *  bound the spinner stays up until the operator types again or closes the palette.
+ *
+ *  Resolves to an empty result rather than rejecting, so a slow provider degrades to "no
+ *  rows from that source" instead of poisoning the round for the others.
+ *
+ *  EXPORTED because it is a ceiling other modules have to stay under, not a private tuning
+ *  knob. A provider that wants to report its own timeout (the knowledge search names it on a
+ *  disabled row, and cancels the request, which this cannot do from out here) has to fire
+ *  strictly first — at equal values the two race and the operator sees one of two unrelated
+ *  screens. An unexported constant makes that a comment; an exported one makes it a test. */
+export const PROVIDER_DEADLINE_MS = 4_000;
+
+function withDeadline<T>(p: Promise<T>, ms = PROVIDER_DEADLINE_MS): Promise<T | never[]> {
+  let timer: ReturnType<typeof setTimeout>;
+  const bound = new Promise<never[]>((resolve) => {
+    timer = setTimeout(() => resolve([]), ms);
+  });
+  // Clear on settle so a resolved read does not hold a timer for the full deadline.
+  return Promise.race([p, bound]).finally(() => clearTimeout(timer));
 }
 
 function RootBody({ ctx, config }: { ctx: PaletteContext; config: RootViewConfig }) {
@@ -261,27 +314,6 @@ function RootBody({ ctx, config }: { ctx: PaletteContext; config: RootViewConfig
     return [...registry.getStaticCommands(), ...providerStatics];
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [registry, regVersion]);
-
-/** Longest a single provider may hold the palette's "Searching…" state.
- *
- *  The containment below turns a synchronous throw and a non-array result into settled
- *  results, but neither covers a promise that simply NEVER settles — a fetch with no
- *  timeout, a dropped socket. `ac.abort()` does not help: aborting only ends the read if the
- *  provider observes the signal, and a fork's provider is under no obligation to. Without a
- *  bound the spinner stays up until the operator types again or closes the palette.
- *
- *  Resolves to an empty result rather than rejecting, so a slow provider degrades to "no
- *  rows from that source" instead of poisoning the round for the others. */
-const PROVIDER_DEADLINE_MS = 4_000;
-
-function withDeadline<T>(p: Promise<T>, ms = PROVIDER_DEADLINE_MS): Promise<T | never[]> {
-  let timer: ReturnType<typeof setTimeout>;
-  const bound = new Promise<never[]>((resolve) => {
-    timer = setTimeout(() => resolve([]), ms);
-  });
-  // Clear on settle so a resolved read does not hold a timer for the full deadline.
-  return Promise.race([p, bound]).finally(() => clearTimeout(timer));
-}
 
   // Async provider results (debounced + cancellable) — the DS's loop, with the one timing
   // split the DS never had to make.

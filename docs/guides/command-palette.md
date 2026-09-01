@@ -7,6 +7,15 @@ act without hunting through rails and menus ([ADR 0057](/adr/0057-command-palett
 Note the shift: **plain ⌘K is _Clear conversation_** in chat, not the palette. Both chords
 are rebindable in Settings ▸ Keyboard ([ADR 0063](/adr/0063-keybinding-system)).
 
+**You don't have to know the chord.** There's a search icon on the utility bar, bottom-left,
+just after Settings — click it and the palette opens. Hover it and the tooltip names the chord,
+read live from the binding, so a rebind re-words it rather than teaching a chord that no longer
+works.
+
+**On a phone**, where there is no chord to press, the same search sits in the header beside
+**+**. Without it the palette would be unreachable on mobile — and with it, so would every
+Settings section, the chat's own verbs, and knowledge search.
+
 **On the desktop app the palette also has its own window.** The quick launcher —
 **⌥Space** (macOS) / **Ctrl+Alt+Space** — is this same palette, frameless and
 always-on-top, summoned with the console hidden or another app focused; a "go to" hands
@@ -54,15 +63,34 @@ Settings ▸ Keyboard, not with the in-app chords above.
 - **Plugin views** — each enabled plugin's views are their own group. A view can also opt
   to render *inside* the palette by declaring `palette: "inline"` on it (so a lightweight
   tool can live behind a keystroke instead of taking a rail slot).
+- **Plugin commands** — a plugin can also declare rows that aren't views at all, in its
+  manifest's `commands:` block: go to one of its views, run one of its routes, or publish
+  an event. They sit with that plugin's view rows and carry its name as a chip, so it is
+  clear which plugin a row belongs to. A plugin that is enabled but failed to load shows
+  its route-backed rows greyed out saying so, rather than offering a call that could only
+  fail.
 - **Open…** — the built-in surfaces (Chat, Activity, Knowledge, Studio, Agent, Plugins,
   Settings, plus whatever a fork adds) live one hop in, behind **Open…**, so the root list
   stays short. They are also **searchable from the root**: type a surface's name and it is
   there, without the hop. (It used not to be — `memory` and `knowledge` answered *No
   matches*, because those surfaces existed only inside **Open…**.)
+- **Keyboard actions** — the console's own shortcuts, as ordinary rows you can run by
+  name: **New chat**, **Clear conversation**, **Focus chat composer**, **Next chat tab** /
+  **Previous chat tab**, **Toggle latest tool block**, and the **left rail** / **right
+  panel** / **bottom dock** toggles. Each row shows the chord it is bound to *right now* —
+  rebind one in Settings ▸ Keyboard and the row re-labels itself — so the palette doubles as
+  the shortcut cheat-sheet: type `shortcuts` to list the whole set. A chat action navigates
+  to chat before it runs — re-opening the dock chat lives on if you had it collapsed — so
+  picking one from Knowledge, Settings, or a folded-away rail does what you meant.
+  (Not every binding gets a row. A shortcut whose row would open the thing you are already
+  looking at, duplicate another row's action, or land somewhere it can't act is deliberately
+  left to the keyboard — the full triage is in
+  `apps/web/src/app/palette/keybindingCommands.ts`.)
 - **Deep links** — **Settings** (opens the dialog wherever you left it, and shows its **⌘,**
-  chord on the row — read live from the binding, so it follows a rebind), **Plugins:
-  Discover**, **Plugins: Install from URL**, and a **Settings: `<Section>`** row for *every*
-  section of the Settings dialog — Theme, Keyboard, Model, Tools, MCP, Skills, Subagents,
+  chord on the row — read live from the binding, so it follows a rebind), **Plugins: Discover**,
+  **Plugins: Install from URL**, and a **Settings: `<Section>`** row for *every*
+  section of the Settings dialog — including **Settings: Keyboard**, where every chord above is
+  rebound. Theme, Model, Tools, MCP, Skills, Subagents,
   Delegates, Snapshot and the rest. Those rows are GENERATED from the section table
   (`apps/web/src/settings/sections.ts`) by `apps/web/src/app/settingsPalette.ts`, so a new
   section is deep-linkable the moment it is declared rather than when somebody remembers to
@@ -80,21 +108,58 @@ Settings ▸ Keyboard, not with the in-app chords above.
   never at registration. The one section with no row is **Developer**: its visibility is a
   channel decision (`developerPanelVisible`), which is neither of the two axes the seam can
   gate on — see the comment in `settingsPalette.ts`.
+- **Knowledge** — type two or more characters and the palette searches the agent's
+  knowledge store live ([ADR 0021](/adr/0021-agent-memory-architecture)) — findings,
+  notes, the daily log, harvested sessions — and lists the top matches among your results,
+  each tagged with a **Knowledge** chip. Each row is trailed by where that entry came from
+  (its source file, or failing that its domain).
+  Picking one opens the **Knowledge** surface with that same search already run — clearing
+  any *pending review* filter it was left on — so the entry you chose is in the list you
+  land on. (The palette can't scroll the surface to one entry: the surface has no
+  per-entry anchor, so the search is what puts your pick in front of you.)
+  Matching is **by word, and by the start of the word you are still typing** — `postg`
+  finds *Postgres tuning*, and once you finish a word the next one you start is the one
+  being completed. That is not free: the store's keyword index matches whole words, so the
+  palette asks it for a prefix term on the last word specifically because a type-ahead that
+  went whole-word only would show you nothing for every character before the end of each
+  word — a blank list that reads as "no matches" when it means "keep typing".
+  Four things are deliberate here. The rows appear only on an instance that **has** a
+  knowledge store (`knowledge.enabled` in **Settings ▸ System ▸ Runtime**); where there is
+  no store there is no search and the palette does not offer one. It searches only once you
+  have typed something: an empty box would otherwise list the most recent entries in the
+  store, burying the commands. It shows a handful of matches rather than everything that
+  matched, and when there are more it adds a last **All matches in Knowledge** row that
+  takes you to the surface on the same search — so the shortlist is never a dead end. And
+  when the palette cannot complete the search — the store unreachable, the bearer rejected,
+  the request past its deadline — it says **Knowledge search unavailable** with the reason,
+  rather than quietly showing nothing, which would be indistinguishable from "no matches".
+  (A search the store itself errors on is the exception: that route answers `200` with an
+  empty list, so it does read as "no matches" — check the agent log if a term you know is
+  there returns nothing.)
+- **Chats** — every open chat tab, by title, so you land on the conversation about the
+  release notes by typing "release" instead of counting tab positions. Type the name and press
+  Enter; there is nothing to wait for, and the rows narrow with every keystroke like the rest
+  of the list. The list follows the tab strip as it moves: a chat you close drops out, a new
+  one appears, and a chat renames itself once its first message gives it a title. The one
+  you're on is marked *current* (and still runs — that's how you get back to chat from
+  Knowledge or Studio), and the first nine carry their `⌘1`–`⌘9` jump shortcut, rendered live
+  so it keeps up with a rebind. Typing what a chat *is* finds them too — "switch", "jump",
+  "tabs", "sessions", "threads", or "incognito" for the memory-free ones.
 
 ## Two lists, not one
 
 The palette shows a **short** list when you haven't typed anything: what you ran recently
-first, then a curated root (agents, plugin views, commands). Every rail surface is
+first, then a curated root (agents, plugin views, commands, chats). Every rail surface is
 deliberately *not* in that list — there are too many of them to be useful before you've
 said what you want.
 
 Every group is guaranteed a row before any one of them takes a second, so neither a stack of
-plugin views nor a full block of recents can drop a whole *section* off the list. On a first
-run there's no history competing for the space and you get all of **Open…**, **Settings** and
-the deep links; once your recents have taken half the list, the commands section is down to
-**Open…** — one row rather than none, which is the part that matters, since **Open…** is where
-browsing starts. Everything else is a keystroke away. Any slots left over are filled in
-registration order.
+plugin views, a wall of open chats, nor a full block of recents can drop a whole *section* off
+the list. On a first run there's no history competing for the space and you get all of
+**Open…**, **Settings** and the deep links; once your recents have taken half the list, the
+commands section is down to **Open…** — one row rather than none, which is the part that
+matters, since **Open…** is where browsing starts. Everything else is a keystroke away. Any
+slots left over are filled in registration order.
 
 The moment you type, the list becomes the **whole** corpus — every surface included, no
 cap — ordered by how well each row matches:
@@ -126,15 +191,33 @@ you got there, whether you typed the surface's name or picked it out of **Open�
 itself is unchanged from the design system's rule — every whitespace-separated term must
 appear somewhere in the row — so a row that used to be findable still is.
 
+Live **Knowledge** results are a source in exactly that sense — the first one the console
+ships itself. They are fetched per keystroke rather than registered up front, so they land a
+moment after the rest of the list and are ordered into it rather than appended below it: a
+chunk whose heading is what you typed sorts above a command that merely mentions it. Because
+the typed list has no headers, each one carries a **Knowledge** chip instead, which is what
+marks it as an entry from the store rather than another console command.
+
 ## For plugin authors
 
 A plugin's view opts into the palette by setting `palette: "inline"` on its view entry
 in `protoagent.plugin.yaml` (the same view that would otherwise mount in a rail/tab).
 When opened from the palette, it renders the view's body in place.
 
-> Plugin-declared *commands* (a manifest `commands:` list that contributes arbitrary
-> actions, beyond views) are the next slice of ADR 0057 and not shipped yet — today a
-> plugin reaches the palette via an inline **view**.
+Beyond views, a plugin contributes rows through its manifest's `commands:` block — see
+[`commands`](/reference/plugin-manifest#field-commands) for the field itself. Each entry
+declares what it *does* (`navigate`, `open_view`, `tool`, `emit`, or `command`, chaining to
+another entry) and the console compiles that declaration into the row's behaviour inside its
+own trusted adapter, `apps/web/src/app/pluginPaletteCommands.ts`. That indirection is the
+point: plugin code never enters the console bundle, so the manifest is data and this adapter
+is the single place data becomes behaviour. It re-checks every route and event topic against
+the plugin's own namespace instead of trusting the status payload, and anything that fails —
+along with any action it does not implement — contributes no row at all rather than a row
+that fires something its author did not write.
+
+> A `provider` entry (a live search that queries the plugin as you type) is parsed and
+> shipped on the status payload but not compiled yet, so an entry declaring only a provider
+> still contributes nothing.
 
 The palette is mounted in `apps/web/src/app/App.tsx` — the
 `@protolabsai/ui/command-palette` substrate, opened from the keybinding intents store

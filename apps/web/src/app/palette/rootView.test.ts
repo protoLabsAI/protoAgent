@@ -17,7 +17,7 @@ import type { Command, PaletteRegistry } from "@protolabsai/ui/command-palette";
 
 import { matchCommand, rankCommands } from "./rank";
 import { createRankedPaletteRegistry, recordPaletteRun, withRecency } from "./registry";
-import { EMPTY_CAP, GROUP_CAP, RECENT_CAP, RECENT_GROUP, emptyQueryList, paletteRootView, pickRootFill } from "./rootView";
+import { EMPTY_CAP, GROUP_CAP, RECENT_CAP, RECENT_MIN, RECENT_GROUP, emptyQueryList, paletteRootView, pickRootFill } from "./rootView";
 import type { RecentMap } from "./recents";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -477,6 +477,41 @@ describe("selection follows the COMMAND, not the index", () => {
     expect(selected()).toContain("B");
   });
 
+  it("RUNS the row the operator selected after provider rows land, not row 0", async () => {
+    // The claim three palette reviews raised, in the operator's terms: "arming a provider
+    // makes ⌘K reset the selection, so Enter runs the wrong command." It was a DS
+    // `commandsView` defect — `useEffect(() => setSel(0), [filtered.length])` — and this view
+    // replaced it, so the guarantee is asserted HERE, at the root, rather than worked around
+    // by each feature that arms a provider (#3290's chat rows were the first to hit it).
+    //
+    // Separate from the test above on purpose: that one pins the HIGHLIGHT, and a highlight
+    // is only a picture. This pins the thing the operator actually loses — which command
+    // runs — and it lands the rows in a batch that changes the row COUNT, which is the exact
+    // input the old reset keyed on.
+    const ran: string[] = [];
+    let resolveRows: (c: Command[]) => void = () => {};
+    const registry = createRankedPaletteRegistry();
+    registry.registerCommands(
+      ["A", "B", "C"].map((l) => cmd({ id: l, label: l, run: () => ran.push(l) })),
+    );
+    registry.registerProvider({
+      id: "late",
+      getCommands: () => new Promise<Command[]>((res) => { resolveRows = res; }),
+    });
+    mountPalette(registry);
+
+    press("ArrowDown"); // the operator picks B while the provider is still in flight
+    expect(selected()).toContain("B");
+
+    await act(async () => {
+      resolveRows(["L1", "L2", "L3"].map((l) => cmd({ id: l, label: l, run: () => ran.push(l) })));
+      await Promise.resolve();
+    });
+
+    press("Enter");
+    expect(ran).toEqual(["B"]); // not "A" — where a count-keyed reset would have left it
+  });
+
   it("falls back to the first row when the selected command LEAVES the list", () => {
     // The other half of the same rule: preserving the selection must not strand the highlight
     // on a row that no longer exists, or `sel` derives to 0 while `selId` points at nothing.
@@ -487,6 +522,69 @@ describe("selection follows the COMMAND, not the index", () => {
     expect(selected()).toContain("Beta");
     type("Alp"); // Beta is filtered out
     expect(selected()).toContain("Alpha");
+  });
+});
+
+describe("the empty list keeps every group as sources are added", () => {
+  const group = (g: string, n: number) =>
+    Array.from({ length: n }, (_, i) => cmd({ id: `${g}${i}`, label: `${g} ${i}`, group: g }));
+
+  it("gives every group a slot even when that costs recents", () => {
+    // SIX groups against EMPTY_CAP(9) - RECENT_CAP(4) = five slots. Before recents yielded,
+    // the sixth group fell off silently and which one depended on registration order — the
+    // regression the integration of the six command sources actually produced.
+    const root = ["Agents", "Plugins", "Commands", "Chat", "Skills", "Chats"].flatMap((g) =>
+      group(g, 3),
+    );
+    const recency = Object.fromEntries(
+      ["Agents0", "Plugins0", "Commands0", "Chat0"].map((id, i) => [
+        `cmd:${id}`,
+        { n: 9 - i, t: 1_000 - i },
+      ]),
+    );
+    const out = emptyQueryList(root, root, recency, { now: 1_000 });
+    const groups = [...new Set(out.map((c) => c.group))];
+    expect(groups).toContain(RECENT_GROUP);
+    for (const g of ["Agents", "Plugins", "Commands", "Chat", "Skills", "Chats"]) {
+      expect(groups, `${g} must survive`).toContain(g);
+    }
+    expect(out).toHaveLength(EMPTY_CAP);
+  });
+
+  it("never shrinks recents below the floor, however many groups want a slot", () => {
+    const root = Array.from({ length: 12 }, (_, i) =>
+      cmd({ id: `g${i}`, label: `G ${i}`, group: `G${i}` }),
+    );
+    const recency = Object.fromEntries(
+      ["g0", "g1", "g2"].map((id, i) => [`cmd:${id}`, { n: 9 - i, t: 1_000 - i }]),
+    );
+    const out = emptyQueryList(root, root, recency, { now: 1_000 });
+    expect(out.filter((c) => c.group === RECENT_GROUP).length).toBeGreaterThanOrEqual(RECENT_MIN);
+  });
+
+  it("never exceeds the caller's cap, even below the recents floor", () => {
+    // The floor argues against GROUPS for slots; it must not out-argue the BUDGET. Before the
+    // clamp, `Math.max(RECENT_MIN, cap - groupCount)` returned 2 for a cap of 1 and the list
+    // came back with two rows.
+    const root = ["Agents", "Plugins"].flatMap((g) => group(g, 2));
+    const recency = Object.fromEntries(
+      ["Agents0", "Plugins0"].map((id, i) => [`cmd:${id}`, { n: 9 - i, t: 1_000 - i }]),
+    );
+    expect(emptyQueryList(root, root, recency, { emptyCap: 1, now: 1_000 })).toHaveLength(1);
+    expect(emptyQueryList(root, root, recency, { emptyCap: 0, now: 1_000 })).toHaveLength(0);
+  });
+
+  it("leaves a lean console's recents untouched", () => {
+    // Three groups, six slots spare: the reservation must not fire at all.
+    const root = ["Agents", "Plugins", "Commands"].flatMap((g) => group(g, 3));
+    const recency = Object.fromEntries(
+      ["Agents0", "Agents1", "Plugins0", "Commands0"].map((id, i) => [
+        `cmd:${id}`,
+        { n: 9 - i, t: 1_000 - i },
+      ]),
+    );
+    const out = emptyQueryList(root, root, recency, { now: 1_000 });
+    expect(out.filter((c) => c.group === RECENT_GROUP)).toHaveLength(RECENT_CAP);
   });
 });
 

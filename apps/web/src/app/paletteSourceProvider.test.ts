@@ -48,13 +48,24 @@ async function mountRegistry(): Promise<PaletteRegistry> {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   root.render(h(QueryClientProvider, { client }, h(Probe)));
   await vi.waitFor(() => expect(registry).not.toBeNull());
-  // The hook returns the registry during RENDER; the effects that register into it run after
-  // the commit. Wait for one of the unconditional registrations rather than for the PROVIDER
-  // — waiting for the provider would make the "no source ⇒ no provider" arm below
-  // unobservable (it would hang instead of asserting), and waiting for nothing at all lets a
-  // read land in the gap and see an empty registry that reads like "the source returned
-  // nothing".
-  await vi.waitFor(() => expect(registry!.getStaticCommands().length).toBeGreaterThan(0));
+  // …and then for the adapter's registration EFFECT to have flushed, which is a separate
+  // moment: `registry` is assigned during RENDER, while everything the adapter contributes —
+  // the commands AND the source provider — is registered in effects, in the commit after.
+  // Returning on the render alone hands back a registry that is briefly empty, so a case that
+  // reads it synchronously passes or fails on how long the commit took: green in isolation,
+  // red under a loaded parallel run, and an empty read looks like "the source returned
+  // nothing" rather than like a race. Both effects run in the SAME commit, so the arrival of
+  // the static commands is also the signal that the provider effect has run.
+  //
+  // Wait on one of the UNCONDITIONAL registrations, never on the PROVIDER: waiting for the
+  // provider would make the "no source ⇒ no provider" arm below unobservable — it would hang
+  // instead of asserting. `fleet-room` is registered unconditionally, so it marks the flush
+  // without presupposing any provider (the case below asserts there are NONE at this point),
+  // and naming an id rather than `length > 0` keeps the wait from being satisfied by whatever
+  // happens to register first.
+  await vi.waitFor(() =>
+    expect(registry!.getStaticCommands().map((c) => c.id)).toContain("fleet-room"),
+  );
   return registry!;
 }
 
@@ -86,7 +97,11 @@ describe("registerPaletteSource → the DS read-time provider", () => {
     );
     const registry = await mountRegistry();
 
-    expect(read(registry)).toContain("probe:tab:alpha");
+    // `mountRegistry` resolves as soon as the hook has RENDERED; the effect that wires the
+    // DS provider is a passive one, so the first read has to wait for it (the withdraw test
+    // below already does). Without this the very first assertion races the commit and the
+    // file fails on a slower box while passing in CI.
+    await vi.waitFor(() => expect(read(registry)).toContain("probe:tab:alpha"));
     // The snapshot path must NOT also carry the row: a frozen copy there would win the DS's
     // id dedup (statics are listed first) and shadow the fresh one forever.
     expect(registry.getStaticCommands().map((c) => c.id)).not.toContain("probe:tab:alpha");
@@ -123,7 +138,16 @@ describe("registerPaletteSource → the DS read-time provider", () => {
     // source; they are statics precisely so this stays true.) Delete the `hasPaletteSources()`
     // check in usePaletteRegistry and this test is what reddens.
     const registry = await mountRegistry();
-    expect(registry.getProviders().map((p) => p.id)).not.toContain(SOURCE_PROVIDER);
+    // Asserted on the WHOLE provider list, not just this id. The rule the comment above
+    // states is about provider COUNT — the root view raises `loading` when ANY provider
+    // declares `getCommands` (`palette/rootView.tsx` early-returns only on
+    // `providers.length === 0`) — so an id-specific assertion stays green while some other
+    // always-on provider reintroduces the exact spinner this guards against. That is not
+    // hypothetical: the live knowledge provider was added unconditionally and this test did
+    // not notice. Nothing whose capability is unproven may be registered here (this mount's
+    // `fetch` hangs, so `/api/runtime/status` never answers and every capability gate must
+    // read as "no").
+    expect(registry.getProviders().map((p) => p.id)).toEqual([]);
 
     const off = source(() => [{ id: "probe:late", label: "Late", run: () => {} }]);
     // Registering bumps the seam version, which re-runs the effect that wires the provider.
@@ -139,8 +163,10 @@ describe("registerPaletteSource → the DS read-time provider", () => {
   });
 
   it("contains a broken source instead of wedging the palette on 'Searching…'", () => {
-    // A sync throw out of `getCommands` escapes into the DS's `Promise.allSettled` callback
-    // as an unhandled rejection, and the commands view never clears its loading state.
+    // A sync throw out of `getCommands` escapes into the root view's `Promise.allSettled`
+    // callback as an unhandled rejection, and the view never clears its loading state. The
+    // view contains that too now (rootView.tsx), but core's own provider still guards itself:
+    // this is the seam's half of the contract, not a second copy of the view's.
     const provider = paletteSourceProvider(() => {
       throw new Error("flags blew up");
     }, true);

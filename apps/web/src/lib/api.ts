@@ -1171,15 +1171,37 @@ export const api = {
 
   // `reviewState` (ADR 0108 D7) narrows a LISTING (empty q) or a search to rows with
   // that operator verdict — the console's "pending review" queue. Omitted = all rows.
-  knowledgeSearch(q: string, opts: { reviewState?: ReviewState } = {}) {
+  //
+  // `k` and `signal` exist for the ⌘K knowledge provider (app/palette/knowledgeSearch.ts),
+  // which needs both and cannot fake either. `k` because the route does NOT clamp it the
+  // way its siblings do (`chat_routes.py`: `max(1, min(int(limit), 200))`) — the caller is
+  // the only ceiling on how many rows come back, and a palette shortlist wants a handful,
+  // not the server's thirty (the provider asks for one over its own cap, since an
+  // over-full page is the only signal that route gives that there are more matches).
+  // `signal` because the DS palette aborts a superseded keystroke, and a request that
+  // ignores that signal runs to completion against the FTS index anyway. Both are omitted
+  // by the Knowledge surface, which keeps the server default and no cancellation.
+  //
+  // `prefix` is the third: it widens the query's LAST token to an FTS5 prefix term. The
+  // store's index is whole-token (`knowledge/store.py` quotes each token as a phrase), so
+  // without it a type-ahead matches nothing until the operator finishes the word they are
+  // typing — an empty shortlist mid-word that reads exactly like "no matches". Off by
+  // default, and NOT sent by the Knowledge surface: its box searches a query the operator
+  // has finished, where a prefix term would only broaden the result silently.
+  knowledgeSearch(
+    q: string,
+    opts: { reviewState?: ReviewState; k?: number; prefix?: boolean; signal?: AbortSignal } = {},
+  ) {
     const params = new URLSearchParams({ q });
     if (opts.reviewState) params.set("review_state", opts.reviewState);
+    if (opts.k != null) params.set("k", String(opts.k));
+    if (opts.prefix) params.set("prefix", "1");
     return request<{
       enabled: boolean;
       query: string;
       results: KnowledgeChunk[];
       stats: Record<string, number>;
-    }>(`/api/knowledge/search?${params.toString()}`);
+    }>(`/api/knowledge/search?${params.toString()}`, { signal: opts.signal });
   },
 
   // #1701 Slice 2: redeem a plugin composer-form — POST the field values back to the

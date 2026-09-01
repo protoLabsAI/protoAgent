@@ -35,6 +35,15 @@
 //     into `registerCommands`, while source rows are served by a DS `CommandProvider` whose
 //     `getCommands(query)` the palette re-invokes on every open and every keystroke. Snapshot
 //     BOTH and a source's rows freeze at whichever effect run happened to register them.
+//     Reach for a source only when your rows come from something you CANNOT observe. If you
+//     can be notified when your data moves, register a BLOCK of statics and re-register it —
+//     `registerPaletteCommands`, which is what core's live chat-tab rows do
+//     (`app/chatTabPalette.ts`). Statics are the better half whenever it is available: they
+//     are client-filtered per keystroke with nothing retained between queries and ranked in
+//     the same pass as every other row, while the provider path costs a 120ms debounce plus
+//     the "Searching…" affordance on every keystroke and, for that window, still lists the
+//     PREVIOUS query's rows — provider rows being ordered and never re-filtered, so a remote
+//     source's hits survive (`app/palette/rank.ts`).
 //   • `subscribePaletteCommands` + `paletteCommandsVersion` mirror the DS registry's
 //     bump/subscribe shape (`createPaletteRegistry` in @protolabsai/ui), so the root view
 //     `useSyncExternalStore(subscribePaletteCommands, paletteCommandsVersion)`s and picks up a
@@ -115,19 +124,23 @@ export function paletteCommandsVersion(): number {
   return _version;
 }
 
-/** Whether any dynamic source is registered. The host wires the DS provider path (a
- *  debounced re-read plus the palette's "Searching…" affordance on every keystroke) only
- *  when one exists, because paying for an always-empty provider would put that spinner in
- *  front of every keystroke for nothing — in every window that mounts the palette, the
- *  frameless desktop launcher included.
+/** Whether any dynamic source is registered. The host wires the provider path only when one
+ *  exists, because that path is not free: the root view (`app/palette/rootView.tsx`) arms its
+ *  "Searching…" affordance for ANY provider declaring `getCommands`, debounces the call 120ms,
+ *  and for that window still lists the PREVIOUS query's provider rows — those being ordered and
+ *  never re-filtered, deliberately, so a remote or fuzzy source's hits are not silently deleted.
+ *  Paying that in every window that mounts the palette, the frameless desktop launcher included,
+ *  to serve an always-empty provider would be a spinner in front of every keystroke for nothing.
  *
- *  Core ships ZERO sources, and that is a decision rather than an accident of nobody having
- *  needed one: #3292 (the chat's slash commands and the server's user-facing skills) was
- *  written as a source first and moved to the static path, because the DS keeps a provider's
- *  PREVIOUS results on screen — and runnable — for the 120ms it debounces the new query.
- *  A read-time source is right for a fork's live navigation list; it is not right for rows
- *  that RUN something. Registering/unregistering a source bumps the version, so a consumer
- *  keyed on `paletteCommandsVersion()` re-asks at the right moment. */
+ *  Core ships ZERO sources, and that is a decision rather than nobody having needed one. Twice
+ *  now the static path won: #3292 (the chat's slash commands and the server's user-facing
+ *  skills) was written as a source and moved, because a row that RUNS something must not be
+ *  listed-and-runnable for a query it no longer matches; and core's one genuinely live list —
+ *  the open chat tabs — is OBSERVABLE, so it re-registers as a block of statics off a store
+ *  subscription instead (`app/chatTabPalette.ts`). A read-time source is right for a fork's
+ *  unobservable rows; it is not right for rows you can watch change.
+ *  Registering/unregistering a source bumps the version, so a consumer keyed on
+ *  `paletteCommandsVersion()` re-asks at the right moment. */
 export function hasPaletteSources(): boolean {
   return _sources.size > 0;
 }
@@ -169,6 +182,48 @@ export function registerPaletteCommand(cmd: PaletteCommand): () => void {
     if (_commands.get(entry.id) !== entry) return; // superseded (or already removed) — not ours
     _commands.delete(entry.id);
     bump();
+  };
+}
+
+/** Register a BLOCK of commands that belong together and change together — a live list
+ *  (the open chat tabs, a roster) whose owner re-registers the whole block whenever its data
+ *  moves. Three things the singular call can't give such a list:
+ *
+ *   • ONE version bump for the whole block, so a consumer keyed on `paletteCommandsVersion()`
+ *     re-reads once per change instead of once per row.
+ *   • The block is (re)inserted as a UNIT, in the order given, after everything registered
+ *     before it — so it renders contiguously under one group header, and its ORDER is
+ *     re-expressed on every write. That is the difference from `registerPaletteCommand`,
+ *     which deliberately keeps a re-registered id in the position it first took: a single
+ *     command's position is incidental, a list's order is data (chat rows are in tab order,
+ *     and the tab strip can be dragged into a new one).
+ *   • ONE unregister for the block, and it removes only the entries it still owns — so the
+ *     idiomatic refresh is "register the new block, then withdraw the old handle", which
+ *     replaces every surviving row in place and deletes exactly the rows that went away,
+ *     with no window in which the block is missing from the registry.
+ *
+ *  Invalid entries are skipped, as they are singly. An empty (or all-invalid) block registers
+ *  nothing and bumps nothing — there is no change to report. */
+export function registerPaletteCommands(cmds: PaletteCommand[]): () => void {
+  const entries = (Array.isArray(cmds) ? cmds : [])
+    .map(_entry)
+    .filter((e): e is PaletteCommand => !!e);
+  if (!entries.length) return () => {};
+  for (const entry of entries) {
+    // delete BEFORE set: a Map keeps a re-set key in its original position, and this block's
+    // order has to survive a reorder of the data behind it.
+    _commands.delete(entry.id);
+    _commands.set(entry.id, entry);
+  }
+  bump();
+  return () => {
+    let removed = false;
+    for (const entry of entries) {
+      if (_commands.get(entry.id) !== entry) continue; // superseded (or already gone) — not ours
+      _commands.delete(entry.id);
+      removed = true;
+    }
+    if (removed) bump(); // nothing left of this block to withdraw ⇒ nothing changed
   };
 }
 

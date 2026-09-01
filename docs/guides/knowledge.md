@@ -99,6 +99,15 @@ When a knowledge store is wired, the agent gets these (operator-curatable under
 `GET /api/runtime/status` reports the store status; `GET /api/knowledge/search`
 backs the console browser.
 
+Search matches **whole words**: the FTS5 index quotes each token as a phrase, so `postg`
+does not find *Postgres*. That is right for recall — the agent searches a settled query —
+and wrong for a type-ahead, so `GET /api/knowledge/search?prefix=1` widens the **last**
+token to a prefix term. It is opt-in per request (the command palette is the only caller)
+and never changes what `memory_recall`, the per-turn injection or the console browser
+return.
+On a hybrid store the flag reaches the keyword half only; the vector half already matches
+a partial word by meaning.
+
 ## Memory delivery controls (ADR 0069)
 
 What the store *holds* and what gets *pushed into the prompt each turn* are separate

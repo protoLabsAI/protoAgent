@@ -85,6 +85,32 @@ def _skill_response(idx, name: str, root):
     return None
 
 
+def _search_chunks(q: str, k: int, domain: str | None, filters: dict) -> list:
+    """``knowledge_store.search``, degrading once if the backend predates ``prefix``.
+
+    A custom ``KnowledgeBackend`` only has to accept ``query``/``k``/``domain``
+    (knowledge/backend.py), so an optional kwarg can raise ``TypeError``. That matters more
+    than it looks here: the caller wraps this in a bare ``except Exception`` that logs and
+    returns NOTHING, so without a retry a backend one release behind would answer every
+    palette keystroke with an empty result set — a store that looks EMPTY rather than one
+    that looks old.
+
+    Only ``prefix`` is dropped. It is the one kwarg whose loss costs recall and nothing
+    else — the query still runs, just whole-word. Every other entry in ``filters`` NARROWS
+    (``review_state`` is the inspector's "pending" queue); re-running without one of those
+    would hand back rows the operator explicitly excluded and label them as the filtered
+    set, which is worse than the empty list the caller already handles.
+    """
+    store = STATE.knowledge_store
+    try:
+        return list(store.search(q, k=k, domain=domain, **filters))
+    except TypeError:
+        if "prefix" not in filters:
+            raise
+        log.debug("[knowledge] backend has no prefix search; retrying whole-word")
+        return list(store.search(q, k=k, domain=domain, **{f: v for f, v in filters.items() if f != "prefix"}))
+
+
 def _knowledge_row(d: dict) -> dict:
     """Normalize a search()/list_chunks() row to the console's shape."""
     heading = d.get("heading") or ""
@@ -386,7 +412,11 @@ def register_knowledge_routes(app) -> None:
     # search. Read-only; never 500s the console.
     @app.get("/api/knowledge/search")
     async def _api_knowledge_search(
-        q: str = "", k: int = 30, domain: str | None = None, review_state: str | None = None
+        q: str = "",
+        k: int = 30,
+        domain: str | None = None,
+        review_state: str | None = None,
+        prefix: bool = False,
     ):
         if STATE.knowledge_store is None:
             return {"enabled": False, "query": q, "results": [], "stats": {}}
@@ -403,14 +433,28 @@ def register_knowledge_routes(app) -> None:
                     {"detail": f"review_state must be one of {', '.join(sorted(REVIEW_STATES))}"}, status_code=400
                 )
             filters["review_state"] = state
+        # ``prefix`` (#3293) widens the LAST token to an FTS5 prefix term, for a TYPE-AHEAD
+        # caller — the ⌘K palette, which re-searches on every keystroke. Opt-in per request,
+        # never the route default: the Knowledge browser and the recall paths search a
+        # settled query, and broadening one silently is a behaviour change they did not ask
+        # for. Forwarded only when asked, so a plugin backend whose ``search`` predates the
+        # kwarg keeps serving the same results it always did (``_search_chunks`` re-runs
+        # without it on the ``TypeError`` that proves the backend is one of those).
+        #
+        # Gated on a NON-EMPTY query as well as the flag: the empty-``q`` arm below calls
+        # ``list_chunks``, which takes no ``prefix`` kwarg at all. Passing it there raised a
+        # ``TypeError`` that this route's own blanket ``except`` then swallowed into an empty
+        # list — so the palette's browse path answered ``200`` with no rows instead of the
+        # recent entries, and read as "your store is empty". A type-ahead flag only means
+        # anything when there is a term to widen.
+        if prefix and q and q.strip():
+            filters["prefix"] = True
         results: list[dict] = []
         try:
             if q and q.strip():
                 # search() embeds the query over HTTP on hybrid stores — run it
                 # off the event loop (same pattern as graph/checkpointer.py).
-                rows = await asyncio.to_thread(
-                    STATE.knowledge_store.search, q, k=k, domain=domain or None, **filters
-                )
+                rows = await asyncio.to_thread(_search_chunks, q, k, domain or None, filters)
                 results = [_knowledge_row(r) for r in rows]
             else:
                 # list_chunks yields Chunk objects (plain + layered stores; the layered

@@ -45,16 +45,30 @@ test("empty query: a short root list that does NOT dump every surface into it", 
   // …including the LAST-registered group. This is a fresh context, so there is no recency at
   // all — the list is pure registration order, Agents → Plugins → Commands. A plain
   // `slice(0, cap)` hands it to whoever registered first, and every plugin view installed
-  // pushes one more Commands row off the bottom. The per-group quota is what keeps Settings
-  // here, and this is the run where losing it would hurt most. It is also what absorbed the
-  // 22 generated `Settings: <Section>` rows (#3291) without moving anything above.
+  // pushes one more Commands row off the bottom. The per-group quota is what keeps the
+  // Commands group here at all, and this is the run where losing it would hurt most — it is
+  // what absorbed the 22 generated `Settings: <Section>` rows (#3291) without moving anything
+  // above it.
   //
-  // Matched on the LABEL span, not the option's accessible name: the bare Settings row
-  // advertises its `settings.open` chord as a trailing hint, which rides the accessible name
-  // ("Settings ⌘,") and made an `exact: true` role match fail. The label is the assertion
-  // that was meant — and it still has to be exact, or the 22 `Settings: …` rows satisfy it.
-  const labels = await rows.locator(".pl-cmdk-commands__label").allInnerTexts();
-  expect(labels).toContain("Settings");
+  // Asserted on `Open…` rather than `Settings`: with SEVEN groups the quota guarantees each
+  // exactly one row, and Commands registers `Open…` first. That is the right row to guarantee
+  // — it is the doorway to every surface, where `Settings` is one destination among the 22
+  // that follow it, and both are one keystroke away once you type. What must never regress is
+  // that the group is REPRESENTED; which member leads it is registration order, asserted in
+  // the group-header case below.
+  //
+  // Matched on the row's LABEL span, not on the option's accessible name: the Settings row
+  // advertises its shortcut now (#3295 gave it `keybinding: "settings.open"`), and an
+  // advertised combo renders as a trailing hint INSIDE the same button — so the accessible
+  // name is "Settings ⌘," and `{ name: "Settings", exact: true }` finds nothing. The span
+  // still holds the bare label, which is what has to stay exact: a loose "Settings" match
+  // would be satisfied by any of the 22 `Settings: …` rows and stop testing the quota at all.
+  // It is also the platform-independent half — `formatCombo` renders ⌘ on macOS, Ctrl on CI.
+  // A retrying locator assertion rather than a one-shot `allInnerTexts()` read, because the
+  // empty-query list is settled by an async provider read.
+  await expect(
+    page.locator(`${PANEL} ${ROW} .pl-cmdk-commands__label`, { hasText: /^Open…$/ }),
+  ).toBeVisible();
 });
 
 test("the active row is announced — aria-activedescendant, not just a highlight", async ({ page }) => {
@@ -153,18 +167,29 @@ test("the empty list keeps every group, even once recents have taken most of it"
     await expect(page.locator(PANEL)).toHaveCount(0);
   }
   await openPalette(page);
-  // Recents lead, and EVERY group still contributes — Commands last, and Commands is the one
-  // that vanished. Asserting the whole header list, not just the first: "recents are on top"
-  // was already true when the bug was live.
+  // Recents lead, and EVERY group still contributes — Commands, and Commands is the one that
+  // vanished. Asserting the whole header list, not just the first: "recents are on top" was
+  // already true when the bug was live.
+  //
+  // Chats is the fifth group and it is the reason this list is worth re-asserting rather than
+  // relaxing: #3290 registers a row per open chat tab, so a group joined the root AFTER the
+  // guarantee was written. Five groups against five post-recents slots is the tightest the
+  // quota has ever been squeezed — every group is down to exactly its guaranteed first row
+  // plus one — which makes this the strongest form of the assertion, not a weakened one.
   await expect(page.locator(`${PANEL} .pl-cmdk-commands__group`)).toHaveText([
     "Recent",
     "Agents",
     "Plugins",
     "Commands",
+    // Chats (#3290) registers from a module side-effect import, so it lands BEFORE the chat
+    // verbs, which register inside the adapter's effect — group order is registration order.
+    "Chats",
     // Chat + Skills (#3292) — the chat's slash commands and the server's user-facing skills.
     // They are what the guarantee is FOR: ~80 commands land across the sibling command PRs,
     // each in its own group, and a per-group ceiling would have let the newest ones push the
-    // oldest off the bottom. Every group here contributes exactly one row.
+    // oldest off the bottom. SEVEN groups against nine slots is the tightest the quota has
+    // ever been squeezed — every group is down to exactly its guaranteed first row, and the
+    // recents block gave up two of its four to make that possible (see RECENT_MIN).
     "Chat",
     "Skills",
   ]);
@@ -226,4 +251,49 @@ test("the query path is UNCAPPED — the cap belongs to the empty list alone", a
   // than the empty-list cap, so a cap on the query path would be visible right here.
   await input.fill("e");
   expect(await rows.count()).toBeGreaterThan(rootCount);
+});
+
+// ── The visible way in (ADR 0057 findings 03/04) ──────────────────────────────────────
+// Everything above is reachable ONLY by a chord until these exist. The pair of cases is the
+// pair of shells: the desktop utility bar, and the chat-first mobile header (the mobile half
+// lives in mobile.spec.ts — the `mobile` project is the only one that runs a device profile).
+
+test("the utility bar offers the palette, after Settings, as a bare icon", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  const btn = page.getByTestId("palette-widget");
+  await expect(btn).toBeVisible();
+
+  // NO visible text. The bar is a row of glyphs and this is a peer of them, not the one
+  // control that carries a label — a chord rendered on the face made it read as a different
+  // class of thing. Asserted rather than left to styling, because "add the combo back, it's
+  // more discoverable" is a reasonable-sounding change that would quietly undo the decision.
+  await expect(btn).toHaveText("");
+
+  // The chord still travels for assistive tech, in the WAI-ARIA token grammar rather than the
+  // display glyphs — and read from the BINDING, so it follows a rebind. Matched on shape, not
+  // a literal: the serializer emits Meta on macOS and Control elsewhere, so a fixed string
+  // would be green on one CI runner and red on another.
+  await expect(btn).toHaveAttribute("aria-keyshortcuts", /\+K$/);
+
+  // Settings keeps the far-left slot; the palette follows it.
+  const order = await page
+    .locator('[data-testid="settings-widget"], [data-testid="palette-widget"]')
+    .evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")));
+  expect(order).toEqual(["settings-widget", "palette-widget"]);
+
+  await expect(page.locator(PANEL)).toHaveCount(0);
+  await btn.click();
+  await expect(page.locator(PANEL)).toBeVisible();
+});
+
+test("the button's label never collides with the Settings ▸ Keyboard row", async ({ page }) => {
+  // A REGRESSION PIN, not a style check. "Command palette" is the `palette.toggle` binding's
+  // label, which Settings ▸ Keyboard renders; the dialog PORTALS over the shell rather than
+  // unmounting it, and Playwright visibility ignores occlusion. So a button that put those
+  // words on screen would make `getByText("Command palette", { exact: true })` resolve to two
+  // nodes and break `keybindings.spec.ts` — a spec with nothing to do with this button. The
+  // words live in `aria-label`, which getByText does not match.
+  await page.goto("/app/", { waitUntil: "load" });
+  await expect(page.getByText("Command palette", { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("palette-widget")).toHaveAttribute("aria-label", "Search commands");
 });

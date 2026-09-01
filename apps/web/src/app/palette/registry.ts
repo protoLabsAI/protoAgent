@@ -20,7 +20,7 @@
 // own iframe (themed/authed via the handshake) instead of navigating to its rail.
 import type { ReactNode } from "react";
 import { createElement, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
-import { Download, PanelsTopLeft, Settings2, Store, Users } from "lucide-react";
+import { Download, Keyboard, PanelsTopLeft, Settings2, Store, Users } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { commandsView, createPaletteRegistry, pluginView } from "@protolabsai/ui/command-palette";
 import type {
@@ -44,8 +44,8 @@ import { registeredKeybindings } from "../../ext/keybindingRegistry";
 import { formatCombo } from "../../keybindings/combo";
 import { effectiveCombo, useKeybindingOverrides } from "../../keybindings/overrides";
 import { useFlagPredicate } from "../../flags/flags";
-import { isHostConsole } from "../../lib/api";
-import { chatCommandsQuery, fleetQuery } from "../../lib/queries";
+import { apiUrl, authToken, isHostConsole } from "../../lib/api";
+import { chatCommandsQuery, fleetQuery, runtimeStatusQuery } from "../../lib/queries";
 import { chatStore } from "../../chat/chat-store";
 import { chatPaletteSignature, chatSlashPaletteRows } from "../chatSlashPalette";
 import { markAgentOpened } from "../fleetPalette";
@@ -53,12 +53,16 @@ import { fleetRoomView } from "../FleetRoom";
 import { fleetSettingsDisabledReason } from "../fleetSettingsGate";
 import { memberDmView } from "../PaletteChat";
 import { settingsPaletteCommands } from "../settingsPalette";
+import { pluginCommandGroups } from "../pluginPaletteCommands";
+import type { PluginCommandDeps, PluginCommandSource } from "../pluginPaletteCommands";
+import { registerKeybindingCommands, SHORTCUT_KEYWORDS } from "./keybindingCommands";
 import { navigate } from "./nav";
 import type { NavIntent } from "./nav";
 import { matchCommand } from "./rank";
 import { markAgentUsed, markCommandUsed } from "./recents";
 import { paletteRootView } from "./rootView";
 import type { RootViewConfig } from "./rootView";
+import { knowledgeSearchProvider } from "./knowledgeSearch";
 
 /** Optional inline chat with the focused agent (ADR 0057). App builds the native chat
  *  PaletteView (it needs JSX + the focused agent name); the adapter registers it + an
@@ -187,6 +191,7 @@ _link(
 // ordering is the point — resolving a flag HERE, at module load, would read the fail-closed
 // answer `/api/flags` hasn't returned yet and hide Secrets/Devices/Publish permanently.
 for (const cmd of settingsPaletteCommands(navigate)) registerPaletteCommand(cmd);
+registerKeybindingCommands(navigate);
 
 /** Map a registered (core or fork) PaletteCommand onto a DS palette `Command`. The DS row
  *  has no shortcut slot, so a command that ADVERTISES a keybinding (ADR 0061 `keybinding` =
@@ -307,6 +312,46 @@ function resolveSurfaces(ids: string[], viewFor: (id: string) => View | undefine
     .filter((v): v is View => !!v && v.kind !== "plugin");
 }
 
+/** Plugin-declared `commands:` (ADR 0057 §3) plus the window-level capabilities their
+ *  compiled `run(ctx)` bodies need. Optional: a host that passes none (a test probe, a
+ *  surface with no plugin presence) simply contributes no plugin command rows. */
+export type PluginCommandsOptions = {
+  /** Per-plugin contributions from runtime status — build with `pluginCommandSources`,
+   *  the derivation the console App and the desktop launcher SHARE. */
+  sources: PluginCommandSource[];
+  /** Transient feedback for a `tool`/`emit` result — the window's `useToast()`. Passed in
+   *  rather than called here because this hook is mounted in tests (and could be mounted
+   *  in a fork surface) outside the DS `ToastProvider`, where `useToast()` throws. */
+  notify: PluginCommandDeps["notify"];
+};
+
+/** An authenticated, same-origin JSON call for a compiled `tool`/`emit` action. Resolves
+ *  on 2xx and rejects otherwise, so the row can toast the real outcome instead of claiming
+ *  success on a 404. `apiUrl` slug-routes it to the focused fleet agent — the plugin whose
+ *  route this is runs THERE — and the bearer is attached exactly as `lib/api`'s `request`
+ *  does. The path itself was already asserted to sit under `/api/plugins/<id>/`
+ *  (`pluginRoutePath`) before any row that reaches this line was created. */
+/** Longest a plugin `tool`/`emit` row may run without an answer. The row calls `ctx.close()`
+ *  BEFORE this fetch, so the palette is already gone: a route that accepts the connection and
+ *  never responds settles neither the success toast nor the error one, and the operator gets no
+ *  outcome at all for something they ran. A timeout turns silence into a reported failure —
+ *  the same trade the root view's provider deadline makes one layer up. */
+const PLUGIN_REQUEST_TIMEOUT_MS = 30_000;
+
+async function pluginRequest(path: string, init: { method: string; body?: unknown }): Promise<void> {
+  const token = authToken();
+  const res = await fetch(apiUrl(path), {
+    method: init.method,
+    signal: AbortSignal.timeout(PLUGIN_REQUEST_TIMEOUT_MS),
+    headers: {
+      ...(init.body !== undefined ? { "Content-Type": "application/json" } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+  });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim());
+}
+
 /** A DS palette registry whose ROOT VIEW IS OURS, seeded at CONSTRUCTION.
  *
  *  Construction, not an effect, and that is the load-bearing part: `CommandPalette`'s
@@ -341,6 +386,14 @@ export function createRankedPaletteRegistry(
  *  in exactly the state the palette is most useful in. */
 export type PaletteHostOptions = {
   builtInChat?: boolean;
+  /** Plugin-declared `commands:` (ADR 0057 §3). Folded into this one bag rather than a fifth
+   *  positional parameter — two option objects on one hook is the shape that invites a caller
+   *  to pass the wrong one. A host that passes none contributes no plugin command rows. */
+  sources?: PluginCommandSource[];
+  /** Transient feedback for a `tool`/`emit` result — the window's `useToast()`. Passed in
+   *  rather than called here because this hook is mounted in tests (and could be mounted in a
+   *  fork surface) outside the DS `ToastProvider`, where `useToast()` throws. */
+  notify?: PluginCommandDeps["notify"];
 };
 
 /** Build the palette registry from the resolved view façade + the inline plugin views.
@@ -402,10 +455,12 @@ export function usePaletteRegistry(
   // otherwise stay hidden forever), and a fork module can register (or withdraw) after the
   // first render — which is what the registry's version counter reports. A keybinding
   // override re-labels the row that advertises it. Each feeds the effect below as a
-  // dependency. The fourth input — a dynamic source's rows changing with the live data
-  // behind them — deliberately does NOT: nothing observes that data, so no dependency could
-  // track it. Those rows go through `paletteSourceProvider` instead, which the root view
-  // re-invokes per read; the effect only decides WHETHER to wire it.
+  // dependency. A live BLOCK of statics rides the same counter: its owner re-registers the
+  // block when its data moves (core's chat rows subscribe to the chat store), so the bump
+  // that re-runs this effect IS the data change. Only a SOURCE's rows are outside that —
+  // nothing observes their data, so no dependency could track it. Those rows go through
+  // `paletteSourceProvider` instead, which the root view re-invokes per read; the effect only
+  // decides WHETHER to wire it.
   const seamVersion = useSyncExternalStore(
     subscribePaletteCommands,
     paletteCommandsVersion,
@@ -419,6 +474,17 @@ export function usePaletteRegistry(
   const { data: fleet } = useQuery(fleetQuery());
   const agents = fleet?.agents ?? [];
   const pluginViewsList = views.filter((v) => v.kind === "plugin");
+
+  // Does this instance HAVE a knowledge store? The gate on the live-search provider below.
+  // A CACHE READ, not a fetch: both mounts of this hook already sit under a component that
+  // asks for this exact query key on boot (`App.tsx` for the console window, `Launcher.tsx`
+  // for the frameless launcher), so react-query dedups it and the palette costs no request
+  // of its own. Fails CLOSED — `undefined` until the status lands, then re-runs the effect —
+  // for the same reason `useFlagPredicate` does: an unanswered capability is not a yes, and
+  // a provider wired on a storeless instance is a "Searching…" spinner in front of a search
+  // that can never return a row.
+  const { data: runtime } = useQuery(runtimeStatusQuery());
+  const knowledgeOn = runtime?.knowledge?.enabled === true;
 
   // ── The chat's own verbs (#3292), and what keeps them live ──────────────────────────
   // These rows go through the STATIC path (`registerCommands`), not `registerPaletteSource`,
@@ -456,6 +522,18 @@ export function usePaletteRegistry(
   // Re-register the fleet section only when the roster's identity/status/name actually changes
   // (React Query's structural sharing keeps `agents` stable when the 3s poll returns equal data).
   const fleetSig = agents.map((a) => `${a.host ? "host" : a.id}:${a.running}:${a.name}`).join("|");
+  // Plugin-declared commands (ADR 0057 §3) — keyed on the CONTENT the compile step reads,
+  // so the rows re-register when a plugin is enabled/disabled, finishes loading, is renamed
+  // or edits its manifest, but not on every status poll (the array identity churns each
+  // time; this string doesn't). EVERY compile input is in it, not just the visible fields:
+  // a route or topic edit rewrites what the row fires, `loaded` flips a `tool` row between
+  // runnable and disabled, the name is the attribution chip, and the view ids decide
+  // whether a `navigate` compiles at all. The icon resolver is the one input left out —
+  // it is a per-window constant.
+  const cmdSources = opts.sources ?? [];
+  const cmdSig = cmdSources
+    .map((p) => JSON.stringify([p.id, p.name, p.loaded, [...p.viewIds], p.commands]))
+    .join("|");
 
   // Views the palette can morph into: inline plugin iframes, the chat view, and the
   // `Open` submorph — the same surface list the search corpus uses, so browsing and
@@ -585,6 +663,19 @@ export function usePaletteRegistry(
       };
     });
     const offPlugins = pluginCommands.length ? registry.registerCommands(pluginCommands) : undefined;
+    // Each enabled plugin's DECLARED commands (ADR 0057 §3/§4), compiled by the trusted
+    // adapter — the only place manifest data becomes behavior. Registered right after the
+    // plugin VIEW rows above and split per (section, plugin) by `pluginCommandGroups`, for
+    // two reasons: the DS stamps `source` per registration (so every row carries its own
+    // plugin's attribution chip), and the root view opens a group heading only when the
+    // group CHANGES, so a default-grouped row landing next to the "Plugins" nav rows
+    // continues that section instead of opening a second one under the same name.
+    const offDeclared = pluginCommandGroups(cmdSources, {
+      inlineViewIds: inlineIds,
+      navigate,
+      request: pluginRequest,
+      notify: opts.notify ?? (() => {}),
+    }).map((g) => registry.registerCommands(g.commands, { source: g.source }));
     // Commands group: `Open` (morphs to the built-in surfaces) and the deep-link actions.
     // (Fleet start/stop lives on the Fleet Room roster now — #1769 folded in.)
     const openCommand: Command = {
@@ -601,8 +692,10 @@ export function usePaletteRegistry(
       // The GATED read: a `flag`-off or (off-host) `hostOnly` command is omitted, exactly as
       // a gated Settings section is (`visibleSections`). Gating here rather than at
       // registration is what lets a late `/api/flags` answer reveal the row.
-      // STATICS ONLY — a fixed list is safe to snapshot. Source rows would freeze here; they
-      // take the read-time provider path below instead.
+      // STATICS ONLY — safe to snapshot BECAUSE this effect re-runs on `seamVersion`, so a
+      // live block re-registering (core's chat rows) is itself the signal to re-snapshot.
+      // Source rows have no such signal and would freeze here; they take the read-time
+      // provider path below instead.
       ...visiblePaletteCommands(flagOn, isHostConsole(), "static").map(toDsCommand),
     ]);
     // The chat's own verbs — the client slash commands and the server's user-facing skills
@@ -616,27 +709,82 @@ export function usePaletteRegistry(
     const offChatRows = chatRows.length
       ? registry.registerCommands(chatRows.filter((c) => !c.flag || flagOn(c.flag)).map(toDsCommand))
       : undefined;
-    // Dynamic sources, served per palette read. Wired only when a fork registered one: the
-    // root view shows its "Searching…" spinner whenever ANY provider declares
-    // `getCommands`, and core ships zero sources — so an unconditional provider would put a
-    // 120ms spinner in front of every keystroke in the default console. Registering a source
-    // bumps `seamVersion`, which re-runs this effect and wires the provider then.
+    // Dynamic sources, served per palette read. Wired only when a source actually exists,
+    // and core registers none — its one live list (the open chat tabs) is observable, so it
+    // re-registers as a block of statics off a store subscription instead
+    // (`app/chatTabPalette.ts`), which is the better half of the seam whenever the data can
+    // be observed at all.
+    //
+    // What the gate spares the default console is the PROVIDER PATH's two remaining costs,
+    // both of which are contracts rather than bugs — the root view is ours now, so the DS
+    // `commandsView` defects that used to be listed here (a selection reset on a row-count
+    // change, an Enter aimed at row 0) are gone at the root; see `rootView.tsx`. What is
+    // left: the root view arms `loading` and debounces `getCommands` 120ms for any provider
+    // declaring it, and for that window the PREVIOUS query's provider rows are still on
+    // screen — provider rows are ordered, never re-filtered, deliberately, so a remote or
+    // fuzzy source's hits are not silently deleted. A row whose match is plain substring
+    // pays that price for nothing. A fork with genuinely unobservable rows still gets the
+    // path. Registering a source bumps `seamVersion`, which re-runs this effect and wires the
+    // provider then.
     const offSources = hasPaletteSources()
       ? registry.registerProvider(paletteSourceProvider(flagOn, isHostConsole()))
+      : undefined;
+    // Live knowledge search — the console's first REMOTE provider (the source provider above
+    // is a synchronous read of in-process registrations). See the module header of
+    // `./knowledgeSearch.ts` for why the row cap, the failure row and the empty-query browse
+    // guard live where they do, and `rootView.tsx` for the debounce and cancellation this
+    // provider therefore does NOT own. `navigate` is handed in so the launcher window's
+    // forwarding sink is the same chokepoint here as for every other palette navigation.
+    //
+    // Registered LAST, and in THIS effect rather than one of its own, so provider order is
+    // deterministic. Under the host-owned root, provider order is the STABLE TIEBREAK inside
+    // a match tier (`orderCommands` sorts tier → frecency → the row's index in the flattened
+    // provider read, which is registration order) — so a fork's dynamic row and a knowledge
+    // row of equal tier come out in a fixed order rather than one that flips whenever an
+    // unrelated effect re-runs. A separate effect registers once and then never moves, so
+    // the first re-run of THIS one would re-append the source provider behind it and quietly
+    // invert that pair. Riding along costs nothing: this effect already bumps the registry
+    // version on each of its deps, which is what re-fires the open palette's read.
+    // (The older reason — a second **Commands** header printing under the **Knowledge** one
+    // — is gone: the host root drops group headers entirely on the typed path, because
+    // contiguity only means "grouping" while the list is in registration order.)
+    //
+    // GATED, on the same rule the source provider is gated on and for the same reason: a
+    // provider that declares `getCommands` is what raises the root view's "Searching…"
+    // affordance (`rootView.tsx` early-returns only when NO provider has one), so a provider
+    // registered where it can never return a row is a spinner in front of a search that does
+    // not exist. An instance with `knowledge.enabled: false` has no store at all — every
+    // query would 200 with `{enabled: false, results: []}` — so the honest number of
+    // providers there is zero, exactly as `hasPaletteSources()` keeps it zero for sources.
+    // The capability is a server answer, but reading it is FREE here: `/api/runtime/status`
+    // is already fetched on boot by both hosts that mount this hook, so `knowledgeOn` is a
+    // react-query cache read and the earlier objection to gating (a silent extra request per
+    // boot) does not hold. It fails closed and re-runs this effect when the status lands.
+    //
+    // What the gate does NOT reach: on an instance that DOES have a store, a TYPED query
+    // shorter than `KNOWLEDGE_MIN_QUERY` still raises the spinner for the 120ms debounce,
+    // because the root cannot know a provider will decline the query until it has asked.
+    // The empty root no longer does — `rootView.tsx` skips both the debounce and the
+    // spinner on an untyped query, which is the half of this that #3289 fixed at the root.
+    const offKnowledge = knowledgeOn
+      ? registry.registerProvider(knowledgeSearchProvider(navigate))
       : undefined;
     return () => {
       offChat?.();
       offFleetRoom();
       offPlugins?.();
+      offDeclared.forEach((off) => off());
       offCommands();
       offChatRows?.();
       offSources?.();
+      offKnowledge?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     navSig,
     inlineSig,
     fleetSig,
+    cmdSig,
     chat,
     registry,
     seamVersion,
@@ -645,6 +793,7 @@ export function usePaletteRegistry(
     builtInChat,
     chatSig,
     skillSig,
+    knowledgeOn,
   ]);
 
   return registry;

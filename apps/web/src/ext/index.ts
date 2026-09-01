@@ -16,6 +16,7 @@ export { registerChatComponent, registeredChatComponents } from "./componentRegi
 export type { ChatComponentRenderer } from "./componentRegistry";
 export {
   registerPaletteCommand,
+  registerPaletteCommands,
   registerPaletteSource,
   registeredPaletteCommands,
   visiblePaletteCommands,

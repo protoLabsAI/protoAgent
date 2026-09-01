@@ -41,3 +41,15 @@
   white-space: nowrap;
   border: 0;
 }
+
+/* ── The utility-bar affordance (PaletteButton.tsx) ────────────────────────────────────
+   Deliberately almost nothing, and scoped to its own class so it cannot restyle the shared
+   `.util-btn` widgets beside it. An earlier cut gave it a border and rendered the live chord
+   as text so it read as the search field it opens — which made it the one pill on the bar
+   carrying text, a different class of control rather than a peer. It is a plain icon pill
+   now; the chord travels on the tooltip and in `aria-keyshortcuts`. */
+.palette-btn {
+  /* lucide's Search sits high in its box, so a flush pill reads a hair tall next to the
+     other glyphs. Nudge its optical centre onto their baseline. */
+  padding-left: 7px;
+}
