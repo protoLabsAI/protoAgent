@@ -60,15 +60,20 @@ export const TIER = {
 // ["plugin", "notes", "x"], so a word-boundary prefix works on our id-ish labels too.
 const WORD_SPLIT = /[^\p{L}\p{N}]+/u;
 
-/** Are `needle`'s characters present in `hay`, in order? (Case-folded by the caller.) */
+/** Are `needle`'s characters present in `hay`, in order? (Case-folded by the caller.)
+ *  Both sides are walked as CODE POINTS, not UTF-16 code units: `for…of` over `hay` already
+ *  yields whole code points, so comparing them against `needle[i]` (a code UNIT) would never
+ *  match an astral character and would leave a label with an emoji in it un-fuzzy-matchable
+ *  for the rest of the string. Plugin titles carry emoji routinely. */
 export function isSubsequence(needle: string, hay: string): boolean {
-  if (!needle) return true;
+  const chars = [...needle];
+  if (!chars.length) return true;
   let i = 0;
   for (const ch of hay) {
-    if (ch === needle[i]) i += 1;
-    if (i === needle.length) return true;
+    if (ch === chars[i]) i += 1;
+    if (i === chars.length) return true;
   }
-  return i === needle.length;
+  return i === chars.length;
 }
 
 /** The tier a row lands in for `q`. Exported for the unit tests, which pin the ORDER of
@@ -100,20 +105,38 @@ export type RankOptions = {
   score?: (id: string) => number;
 };
 
-/** Order the rows `matchCommand` admits: tier, then frecency, then a stable tiebreak on
- *  the caller's order (which is registration order — the DS's own, so an unranked corpus
- *  comes out exactly as the DS would have rendered it). Returns a NEW array; the input is
- *  never mutated, and the result is never shorter than the matching subset. */
+/** SORT ONLY — every row handed in comes back, reordered: tier, then frecency, then a
+ *  stable tiebreak on the caller's order (which is registration order — the DS's own, so an
+ *  unranked corpus comes out exactly as the DS would have rendered it). Returns a NEW array;
+ *  the input is never mutated.
+ *
+ *  This half is separate from `rankCommands` because PROVIDER rows must be ordered without
+ *  being filtered. A `CommandProvider` is normally a REMOTE search that already applied the
+ *  query its own way (fuzzy, semantic, server-side), so the DS appends its results verbatim
+ *  — `[...baseCommands.filter(matchCommand), ...dynamic]` — and a row whose text does not
+ *  literally contain the query is legitimate. Running those rows through `matchCommand`
+ *  would silently delete a fork's remote hits, and nothing would say so. */
+export function orderCommands(commands: Command[], q: string, opts: RankOptions = {}): Command[] {
+  const query = q.trim();
+  if (!query) return [...commands];
+  const score = opts.score ?? (() => 0);
+  return commands
+    .map((c, i) => ({ c, i, tier: tierFor(c, query), f: score(c.id) }))
+    .sort((a, b) => a.tier - b.tier || b.f - a.f || a.i - b.i)
+    .map((x) => x.c);
+}
+
+/** Filter to what `matchCommand` admits, then order it. For the CLIENT-FILTERED corpus
+ *  (registry statics + the surface list) — the rows the DS itself client-filters. It never
+ *  drops a row `matchCommand` kept, and it never caps. */
 export function rankCommands(commands: Command[], q: string, opts: RankOptions = {}): Command[] {
   const query = q.trim();
   // The empty query is a DIFFERENT list (recents + a curated root, built by the view), so
   // there is nothing to rank — hand the corpus back untouched rather than inventing an order.
   if (!query) return [...commands];
-  const score = opts.score ?? (() => 0);
-  return commands
-    .map((c, i) => ({ c, i }))
-    .filter(({ c }) => matchCommand(c, query))
-    .map((x) => ({ ...x, tier: tierFor(x.c, query), f: score(x.c.id) }))
-    .sort((a, b) => a.tier - b.tier || b.f - a.f || a.i - b.i)
-    .map((x) => x.c);
+  return orderCommands(
+    commands.filter((c) => matchCommand(c, query)),
+    query,
+    opts,
+  );
 }

@@ -15,8 +15,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CommandPalette, createPaletteRegistry } from "@protolabsai/ui/command-palette";
 import type { Command, PaletteRegistry } from "@protolabsai/ui/command-palette";
 
+import { matchCommand } from "./rank";
 import { createRankedPaletteRegistry } from "./registry";
-import { RECENT_GROUP, emptyQueryList, paletteRootView } from "./rootView";
+import { EMPTY_CAP, GROUP_CAP, RECENT_CAP, RECENT_GROUP, emptyQueryList, paletteRootView, pickRootFill } from "./rootView";
 import type { RecentMap } from "./recents";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -382,6 +383,230 @@ describe("frecency is written where every command runs", () => {
     mountPalette(registry); // …and reopens, re-reading the store
     expect(labels()[0]).toBe("Second");
     expect(document.querySelector(".pl-cmdk-commands__group")?.textContent).toBe(RECENT_GROUP);
+  });
+});
+
+describe("matchCommand parity — the DRIFT ALARM for a copied matcher", () => {
+  // `rank.ts`'s `matchCommand` is a verbatim copy of a module-private DS function. Pinning
+  // its four properties (rank.test.ts) proves OUR copy still behaves as described — it would
+  // pass unchanged if @protolabsai/ui rewrote its matcher tomorrow, which is the drift that
+  // actually costs something: rows the seam's provider admits and the root view then hides,
+  // or the reverse.
+  //
+  // The DS matcher is not exported, but `commandsView` is the only thing that calls it, and
+  // an unclaimed root id makes the palette synthesize one. So drive the REAL DS view and
+  // compare the rows it renders against `matchCommand`'s own verdict. A DS bump that changes
+  // the matcher reds this, here, instead of in an e2e spec minutes later.
+  const corpus: Command[] = [
+    cmd({ id: "settings", label: "Settings", keywords: ["config", "preferences"] }),
+    cmd({ id: "knowledge", label: "Knowledge", hint: "go to", group: "Go to" }),
+    cmd({ id: "board", label: "Zed", group: "Plugins", source: { id: "p", label: "boardy" } }),
+    cmd({ id: "fleet", label: "Fleet Room", keywords: ["Ava", "broadcast"] }),
+    cmd({ id: "memory", label: "Memory inspector" }),
+  ];
+
+  // Each of these separates the DS's rule from a plausible near-miss: prefix-only matching,
+  // OR instead of AND, case sensitivity, label-only fields, an unsearched `source` chip,
+  // whitespace handling, and the empty query admitting everything.
+  const QUERIES = ["", "   ", "set", "SET", "nowled", "go to", "boardy", "AVA",
+                   "settings config", "settings nope", "fleet  room", "zz"];
+
+  it.each(QUERIES)("agrees with the DS's own commands view for %o", (q) => {
+    const bare = createPaletteRegistry();
+    bare.registerCommands(corpus);
+    mountPalette(bare);
+    expect(document.querySelector(".pa-cmdk")).toBeNull(); // proves it IS the DS's view
+    if (q) type(q);
+    expect(labels()).toEqual(corpus.filter((c) => matchCommand(c, q)).map((c) => c.label));
+  });
+});
+
+describe("a provider's rows are its own — ordered, never re-filtered", () => {
+  it("keeps a remote hit whose text does NOT contain the query", async () => {
+    vi.useFakeTimers();
+    const registry = createRankedPaletteRegistry();
+    // What a real source returns: a server-side/fuzzy search resolved "kanban" to a card
+    // whose title shares no substring with it. The DS appends provider results verbatim
+    // (`[...baseCommands.filter(matchCommand), ...dynamic]`); running them back through the
+    // client matcher would delete exactly the rows a source exists to contribute — silently,
+    // and only for forks, which is why nothing else here would have caught it.
+    registry.registerProvider({
+      id: "remote",
+      getCommands: () => [cmd({ id: "card:7", label: "Sprint board" })],
+    });
+    mountPalette(registry);
+    type("kanban");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(labels()).toContain("Sprint board");
+  });
+
+  it("does not let a provider that throws SYNCHRONOUSLY strand the spinner", async () => {
+    vi.useFakeTimers();
+    const registry = createRankedPaletteRegistry();
+    registry.registerProvider({
+      id: "broken",
+      getCommands: () => {
+        throw new Error("fork bug");
+      },
+    });
+    registry.registerCommands([cmd({ id: "a", label: "Alpha" })]);
+    mountPalette(registry);
+    type("alpha");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    // Before the containment this threw out of the `.map` BEFORE allSettled existed to catch
+    // it: the callback rejected, `setLoading(false)` never ran, and the palette showed
+    // "Searching…" forever with no row and no error.
+    expect(document.querySelector(".pl-cmdk-commands__spinner")).toBeNull();
+    expect(labels()).toEqual(["Alpha"]);
+  });
+
+  it("survives a provider that resolves to something that is not an array", async () => {
+    vi.useFakeTimers();
+    const registry = createRankedPaletteRegistry();
+    registry.registerProvider({
+      id: "sloppy",
+      // A forgotten `return` is the common shape of this.
+      getCommands: (() => undefined) as unknown as () => Command[],
+    });
+    registry.registerCommands([cmd({ id: "a", label: "Alpha" })]);
+    mountPalette(registry);
+    type("alpha");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(document.querySelector(".pl-cmdk-commands__spinner")).toBeNull();
+    expect(labels()).toEqual(["Alpha"]);
+  });
+});
+
+describe("the empty list gives every group a turn — the FIRST-RUN case", () => {
+  const group = (g: string, n: number, from = 0) =>
+    Array.from({ length: n }, (_, i) => cmd({ id: `${g}${i + from}`, label: `${g} ${i + from}`, group: g }));
+
+  it("does not let one group crowd the others off a list with no recency at all", () => {
+    // The shipping shape: Agents(2) → Plugins(N) → Commands(6), in registration order, on a
+    // first run where recency is empty. A plain `slice(0, EMPTY_CAP)` returns 2 agents and 7
+    // plugins — no Settings, no `Open…`, on the one run where the operator most needs them.
+    const root = [...group("Agents", 2), ...group("Plugins", 7), ...group("Commands", 6)];
+    const groups = emptyQueryList(root, root, {}).map((c) => c.group);
+    expect(groups).toContain("Commands");
+    expect(groups.filter((g) => g === "Plugins").length).toBeLessThanOrEqual(GROUP_CAP);
+  });
+
+  it("still fills the whole list when there is only one group to fill it with", () => {
+    // The quota is a first PASS, not a budget: a console with no plugins must not show a
+    // three-row palette because "Commands" hit its turn limit and nobody else wanted the slots.
+    const root = group("Commands", 12);
+    expect(emptyQueryList(root, root, {})).toHaveLength(EMPTY_CAP);
+  });
+
+  it("renders the survivors in REGISTRATION order, not quota order", () => {
+    // Two passes select the rows; the output order is still the order the adapter registered,
+    // so "what will the empty palette look like?" stays answerable by reading registry.ts.
+    const root = [...group("A", 6), ...group("B", 2)];
+    const picked = pickRootFill(root, 8, 2).map((c) => c.id);
+    expect(picked).toEqual([...picked].sort((x, y) => root.findIndex((c) => c.id === x) - root.findIndex((c) => c.id === y)));
+    expect(picked).toContain("B0"); // the quota got B a turn…
+    expect(picked).toHaveLength(8); // …and the leftovers still filled the list
+  });
+
+  it("spends the slots recents took, rather than shortening the list", () => {
+    const root = group("Commands", 12);
+    const recency: RecentMap = { "cmd:Commands11": { n: 3, t: Date.now() } };
+    const list = emptyQueryList(root, root, recency);
+    expect(list).toHaveLength(EMPTY_CAP);
+    expect(list[0].group).toBe(RECENT_GROUP);
+    expect(list.filter((c) => c.id === "Commands11")).toHaveLength(1);
+  });
+
+  it("caps recents well under the list — they lead it, they do not become it", () => {
+    const root = group("Commands", 12);
+    const now = Date.now();
+    const recency: RecentMap = Object.fromEntries(
+      root.map((c, i) => [`cmd:${c.id}`, { n: 12 - i, t: now }]),
+    );
+    const list = emptyQueryList(root, root, recency);
+    expect(list.filter((c) => c.group === RECENT_GROUP)).toHaveLength(RECENT_CAP);
+  });
+});
+
+describe("duplicate ids", () => {
+  it("collapses a provider static that shadows a registry static, on the EMPTY query too", () => {
+    // `key={c.id}` means React reconciles two rows sharing an id as ONE: a duplicate-key
+    // warning and a highlight that lands on the wrong row. The dedupe used to run on the
+    // typed path only, so the empty list — the first thing anyone sees — was the exposed one.
+    const registry = createRankedPaletteRegistry();
+    registry.registerCommands([cmd({ id: "settings", label: "Settings" })]);
+    registry.registerProvider({ id: "p", commands: [cmd({ id: "settings", label: "Settings (dupe)" })] });
+    mountPalette(registry);
+    expect(labels()).toEqual(["Settings"]); // first write wins, exactly once
+  });
+});
+
+describe("accessibility — the combobox contract, which the DS left half-wired", () => {
+  const three = () => {
+    const registry = createRankedPaletteRegistry();
+    registry.registerCommands(
+      ["Alpha", "Beta", "Gamma"].map((l) => cmd({ id: l, label: l, group: "Commands" })),
+    );
+    return registry;
+  };
+
+  it("points aria-activedescendant at the active row, and moves it with the arrows", () => {
+    mountPalette(three());
+    const active = () => input().getAttribute("aria-activedescendant");
+    const sel = () => document.querySelector<HTMLElement>('[data-sel="true"]')!.id;
+    // Focus never leaves the input, so this pointer is the ONLY thing that announces which
+    // row is live. Without it a screen reader says nothing at all as you arrow down.
+    expect(active()).toBe(sel());
+    press("ArrowDown");
+    expect(active()).toBe(sel());
+    expect(document.getElementById(active()!)?.textContent).toContain("Beta");
+  });
+
+  it("drops the pointer rather than dangling it when nothing matches", () => {
+    mountPalette(three());
+    type("zzzz");
+    expect(input().getAttribute("aria-activedescendant")).toBeNull();
+  });
+
+  it("announces the empty state through a live region", () => {
+    mountPalette(three());
+    type("zzzz");
+    const empty = document.querySelector(".pl-cmdk-commands__empty")!;
+    expect(empty.getAttribute("role")).toBe("status");
+  });
+
+  it("announces the result count, which no other affordance carries", () => {
+    mountPalette(three());
+    const sr = () => document.querySelector(".pa-cmdk__sr")!;
+    expect(sr().getAttribute("role")).toBe("status");
+    expect(sr().textContent).toBe(""); // silent while the list is the untyped root
+    type("a");
+    expect(sr().textContent).toBe(`${rows().length} results`);
+  });
+
+  it("lets the listbox own its options directly — headers and wrappers are presentational", () => {
+    mountPalette(three());
+    const list = document.querySelector('[role="listbox"]')!;
+    expect(list.getAttribute("aria-label")).toBe("Results");
+    // A generic element between listbox and option breaks the owns relationship; some AT
+    // then reports an empty list. Every element on the path has to be transparent.
+    for (const opt of rows()) {
+      expect(opt.parentElement!.getAttribute("role")).toBe("presentation");
+    }
+    expect(document.querySelector(".pl-cmdk-commands__group")!.getAttribute("role")).toBe("presentation");
+  });
+
+  it("marks a disabled row aria-disabled, not just visually", () => {
+    const registry = createRankedPaletteRegistry();
+    registry.registerCommands([cmd({ id: "a", label: "Fleet Room", disabled: true })]);
+    mountPalette(registry);
+    expect(rows()[0].getAttribute("aria-disabled")).toBe("true");
   });
 });
 

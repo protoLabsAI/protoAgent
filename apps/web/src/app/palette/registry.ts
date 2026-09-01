@@ -105,6 +105,14 @@ const _link = (id: string, label: string, keywords: string[], intent: NavIntent)
       ctx.close();
     },
   });
+// REGISTRATION ORDER IS DISPLAY ORDER on the empty query (recents, then this list under a
+// per-group quota), so the most-wanted deep-link goes FIRST. `Settings` leads: it is the
+// only row here that is a destination in its own right rather than a shortcut into one, and
+// on a first run — no recency, nothing to promote it — whichever rows are registered last
+// are the rows an operator never sees. It used to sit third, behind both plugin deep-links.
+// Settings is the consolidated dialog now (2026-06) — opened from the utility-bar pill,
+// the drawer, or these palette commands. A bare "Settings" command + Box-section deep-links.
+_link("settings", "Settings", ["settings", "config", "preferences", "options"], { kind: "global" });
 _link("plug:market", "Plugins: Discover", ["plugins", "discover", "market", "directory", "browse"], {
   kind: "plugins",
   tab: "market",
@@ -114,9 +122,6 @@ _link("plug:download", "Plugins: Install from URL", ["plugins", "install", "url"
   kind: "plugins",
   tab: "local",
 });
-// Settings is the consolidated dialog now (2026-06) — opened from the utility-bar pill,
-// the drawer, or these palette commands. A bare "Settings" command + Box-section deep-links.
-_link("settings", "Settings", ["settings", "config", "preferences", "options"], { kind: "global" });
 _link("box:fleet", "Settings: Fleet", ["fleet", "agents", "box"], { kind: "global", section: "fleet" });
 _link("box:telemetry", "Settings: Telemetry", ["telemetry", "metrics", "box", "global"], {
   kind: "global",

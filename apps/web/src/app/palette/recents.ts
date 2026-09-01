@@ -57,7 +57,15 @@ function coerce(raw: unknown): RecentMap {
 }
 
 /** Seed the new store from `protoagent.fleet.recent` (slug → timestamp), one time. Every
- *  legacy timestamp becomes a single use of `agent:<slug>`. Exported for the test. */
+ *  legacy timestamp becomes a single use of `agent:<slug>`. Exported for the test.
+ *
+ *  NOTHING READS `agent:*` YET, and this comment says so rather than implying otherwise: the
+ *  Fleet Room roster sorts host → running → alphabetical on purpose (`FleetRoom.tsx`, so the
+ *  3s poll can't reorder rows under the cursor), and the empty-query list only reads `cmd:`.
+ *  The migration still runs NOW because the new key's EXISTENCE is the one-shot marker —
+ *  seeding on the day a reader lands would need a second, separate migration flag to avoid
+ *  re-importing timestamps the operator has since moved past. Write half now, read half when
+ *  there is a surface that wants it. */
 export function migrateFleetRecency(): RecentMap {
   try {
     const raw = localStorage.getItem(LEGACY_FLEET_KEY);

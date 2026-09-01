@@ -6,9 +6,14 @@
 // host cannot reach. The one mechanism the DS does offer is view REPLACEMENT —
 // `command-palette.tsx:348-356` builds its view map from `registry.getViews()` and only
 // synthesizes a `commandsView` when nothing claims the root id — so registering a view with
-// `id: "commands"` takes over filtering, ranking and rendering wholesale. When the DS ships
-// `commandsView({ rank })`, this file collapses to a `score` callback and the adoption
-// sweep can retire it; keep the issue number attached until then.
+// `id: "commands"` takes over filtering, ranking and rendering wholesale.
+//
+// RETIREMENT IS NOT AUTOMATIC. `commandsView({ rank })` would let `rank.ts` move upstream,
+// but three things below are FIXES to the DS view rather than additions on top of it, and
+// handing the root back would silently undo them: the `aria-activedescendant` half of the
+// combobox contract, the live regions, and the containment around a provider that throws.
+// Take the `rank` seam when it ships — and either land those upstream first or keep this
+// file. The issue number stays attached until one of the two happens.
 //
 // Owning the view means owning EVERYTHING `commandsView` did, because it is the only place
 // in the DS that calls `CommandProvider.getCommands`. Reimplemented below, in order: the
@@ -28,6 +33,14 @@
 //     `[filtered.length]` and scrolls on `[sel]`, which is safe only while order is stable;
 //     the instant order depends on the query, a re-rank that preserves the row count leaves
 //     the highlight on a different command, off-screen, and Enter runs the wrong thing.
+//   • Every group gets a TURN on the empty list (`pickRootFill`). Registration order alone
+//     hands the whole list to whoever registered first, which on a first run — no recency to
+//     rescue anything — drops Settings and `Open…` off a plugin-heavy console entirely.
+//   • Provider rows are ORDERED, never re-filtered, and a broken provider is CONTAINED.
+//     Both are contracts the DS states and then leaves to chance; see the two sites below.
+//   • The combobox is finished: `aria-activedescendant`, a named listbox, presentational
+//     wrappers, and live regions for "No matches" and the result count. Under the DS's
+//     markup a screen reader is told a listbox exists and then never told what is in it.
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type {
@@ -37,7 +50,7 @@ import type {
   PaletteView,
 } from "@protolabsai/ui/command-palette";
 
-import { rankCommands } from "./rank";
+import { orderCommands, rankCommands } from "./rank";
 import { frecency, markCommandUsed, readPaletteRecency } from "./recents";
 import type { RecentMap } from "./recents";
 import "../palette.css";
@@ -46,20 +59,50 @@ import "../palette.css";
  *  contiguity-header path every other section uses rather than a second renderer. */
 export const RECENT_GROUP = "Recent";
 
+// ── The four numbers this view is tuned by. Named, exported and asserted in the tests so
+// they can be argued about in one place instead of being read out of an expression. ──
+/** Rows on the EMPTY query, at most — the only cap in the view. Roughly a screenful at the
+ *  340px list height `palette.css` pins, so the list never scrolls before you've typed. */
+export const EMPTY_CAP = 9;
+/** Recents on the empty query, at most. Under half the list: recents lead it, they do not
+ *  BECOME it — a palette that only ever shows what you already ran can't teach you anything. */
+export const RECENT_CAP = 4;
+/** Rows any ONE group may contribute to the empty list before the others get a turn.
+ *  Load-bearing, not cosmetic: the root corpus is Agents(2) → Plugins(N) → Commands(6) in
+ *  REGISTRATION order, so a plain `slice(0, EMPTY_CAP)` hands the whole list to whoever is
+ *  registered first. Install seven plugin views and the first-run palette becomes two agent
+ *  rows and seven plugins, with Settings and `Open…` pushed off the bottom — on the ONE run
+ *  where there is no recency to rescue them. The quota is a first PASS, not a hard ceiling:
+ *  leftover slots are filled in registration order, so a console with no plugins still gets
+ *  a full list. */
+export const GROUP_CAP = 4;
+/** Debounce before the async provider loop fires, in ms. The DS's own figure
+ *  (`command-palette.views.tsx`) — kept identical so a provider written against the DS
+ *  behaves the same under the host-owned root. */
+export const PROVIDER_DEBOUNCE_MS = 120;
+
 export type RootViewConfig = {
   /** The registry this view reads. A GETTER because the view is constructed BEFORE the
    *  registry it belongs to — see `createRankedPaletteRegistry`. */
   getRegistry: () => PaletteRegistry;
-  /** Rows admitted ONLY once the operator types: the full surface corpus. Re-read per
-   *  render, so plugin views appearing/disappearing are picked up without re-registering. */
+  /** Rows admitted ONLY once the operator types: the full surface corpus. A GETTER, read
+   *  on every render, because the view object is constructed ONCE (at registry construction)
+   *  while the surface set keeps changing as plugins load — a captured array would freeze the
+   *  corpus at whatever was resolvable on the first render. The ids it returns feed the memo
+   *  key below, so a changed surface set re-ranks even if nothing touched the registry. */
   searchOnly?: () => Command[];
-  /** Rows on the EMPTY query, at most. The only cap in the view. */
+  /** Rows on the EMPTY query, at most. The only cap in the view. Default `EMPTY_CAP`. */
   emptyCap?: number;
-  /** Recents on the empty query, at most. */
+  /** Recents on the empty query, at most. Default `RECENT_CAP`. */
   recentCap?: number;
+  /** Rows one group may take on the empty query before the rest get a turn. Default
+   *  `GROUP_CAP` — see the constant for why a plain prefix of registration order is wrong. */
+  groupCap?: number;
   placeholder?: string;
   emptyLabel?: string;
   loadingLabel?: string;
+  /** Accessible name for the listbox region. */
+  listLabel?: string;
   width?: number;
   footerHint?: ReactNode;
   /** Injectable for tests. */
@@ -88,17 +131,55 @@ function dedupe(commands: Command[]): Command[] {
   return out;
 }
 
+/** Pick at most `cap` rows out of the curated root, giving each GROUP a first turn.
+ *
+ *  Two passes, both in registration order, and the result is emitted in registration order
+ *  too — so the rule a reader has to hold is "at most `groupCap` per group first, then
+ *  whatever still fits", and the list they see is still the order the adapter registered.
+ *  A single pass with a per-group ceiling would starve a console with no plugins (six of
+ *  nine slots left empty); a plain prefix starves the LAST group, which is where Settings
+ *  and `Open…` live. Exported for the test, which pins both failure modes. */
+export function pickRootFill(root: Command[], cap: number, groupCap = GROUP_CAP): Command[] {
+  if (cap <= 0) return [];
+  const taken = new Set<number>();
+  const perGroup = new Map<string, number>();
+  root.forEach((c, i) => {
+    if (taken.size >= cap) return;
+    const g = c.group ?? "";
+    const n = perGroup.get(g) ?? 0;
+    if (n >= groupCap) return;
+    perGroup.set(g, n + 1);
+    taken.add(i);
+  });
+  // Second pass: the quota was a turn-taking device, not a budget. Spend what's left.
+  root.forEach((_, i) => {
+    if (taken.size >= cap) return;
+    taken.add(i);
+  });
+  return root.filter((_, i) => taken.has(i));
+}
+
 /** The empty-query list: what you reach for, then the curated root. `pool` is everything
  *  addressable (root commands AND search-only surfaces) so a surface you opened yesterday
- *  can be a recent; `root` alone fills the rest, so surfaces never flood it. */
+ *  can be a recent; `root` alone fills the rest, so surfaces never flood it.
+ *
+ *  FIRST RUN is the case this has to be judged on. There is no recency at all then, so the
+ *  whole list is `pickRootFill` — which is why the group quota lives there and not in some
+ *  later polish PR: the one run where the list is pure registration order is the run where
+ *  a plugin-heavy console would show no Settings and no `Open…`. */
 export function emptyQueryList(
   root: Command[],
   pool: Command[],
   recency: RecentMap,
-  opts: { emptyCap?: number; recentCap?: number; now?: number } = {},
+  opts: { emptyCap?: number; recentCap?: number; groupCap?: number; now?: number } = {},
 ): Command[] {
-  const { emptyCap = 9, recentCap = 4, now = Date.now() } = opts;
-  const byId = new Map(pool.map((c) => [c.id, c] as const));
+  const { emptyCap = EMPTY_CAP, recentCap = RECENT_CAP, groupCap = GROUP_CAP, now = Date.now() } =
+    opts;
+  // FIRST id wins, matching `dedupe` and the DS's own precedence. `new Map(pool.map(…))`
+  // would quietly give the LAST one — the opposite rule, in the one place a duplicate id is
+  // most likely (a provider row shadowing the static it was modelled on).
+  const byId = new Map<string, Command>();
+  for (const c of pool) if (!byId.has(c.id)) byId.set(c.id, c);
   const recents = Object.entries(recency)
     .filter(([k]) => k.startsWith("cmd:"))
     .map(([k, e]) => ({ cmd: byId.get(k.slice(4)), f: frecency(e, now), t: e.t }))
@@ -111,7 +192,8 @@ export function emptyQueryList(
     // swap can't leak into the corpus the search path ranks.
     .map((x) => ({ ...x.cmd, group: RECENT_GROUP }));
   const shown = new Set(recents.map((c) => c.id));
-  return [...recents, ...root.filter((c) => !shown.has(c.id))].slice(0, emptyCap);
+  const rest = root.filter((c) => !shown.has(c.id));
+  return [...recents, ...pickRootFill(rest, emptyCap - recents.length, groupCap)];
 }
 
 function RootBody({ ctx, config }: { ctx: PaletteContext; config: RootViewConfig }) {
@@ -120,6 +202,9 @@ function RootBody({ ctx, config }: { ctx: PaletteContext; config: RootViewConfig
     placeholder = "Search commands, surfaces, agents…",
     emptyLabel = "No matches",
     loadingLabel = "Searching…",
+    // Distinct from the input's own label. A listbox that borrows the combobox's name is
+    // read back as the same thing twice; "Results" is what the region actually is.
+    listLabel = "Results",
   } = config;
 
   const [q, setQ] = useState("");
@@ -174,17 +259,33 @@ function RootBody({ ctx, config }: { ctx: PaletteContext; config: RootViewConfig
     setLoading(true);
     const t = setTimeout(async () => {
       const settled = await Promise.allSettled(
-        providers.map((p) => Promise.resolve(p.getCommands!(q, { signal: ac.signal }))),
+        providers.map((p) => {
+          // CONTAINMENT, and the reason owning the view is worth it. A provider that throws
+          // SYNCHRONOUSLY throws out of this `.map` — before `allSettled` exists to catch
+          // it — so the whole callback rejects: `setLoading(false)` never runs and the
+          // palette spins "Searching…" forever, with no row and no error, until the operator
+          // closes it. Core's own provider guards itself (`paletteSourceProvider`), but a
+          // fork's `registry.registerProvider` is a public DS seam and cannot be made to.
+          // Turning the throw into a rejection makes it one more settled result.
+          try {
+            return Promise.resolve(p.getCommands!(q, { signal: ac.signal }));
+          } catch (err) {
+            return Promise.reject(err);
+          }
+        }),
       );
       if (!alive || ac.signal.aborted) return;
       const cmds = settled.flatMap((r, i) =>
-        r.status === "fulfilled"
+        // `Array.isArray` for the same reason: a provider that resolves to a non-array (an
+        // object, a bare `undefined` from a forgotten `return`) would throw on `.map` here
+        // — inside an async callback nothing awaits — and strand the spinner identically.
+        r.status === "fulfilled" && Array.isArray(r.value)
           ? r.value.map((c) => (providers[i].source ? { source: providers[i].source, ...c } : c))
           : [],
       );
       setDynamic(cmds);
       setLoading(false);
-    }, 120);
+    }, PROVIDER_DEBOUNCE_MS);
     return () => {
       alive = false;
       ac.abort();
@@ -193,26 +294,58 @@ function RootBody({ ctx, config }: { ctx: PaletteContext; config: RootViewConfig
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [registry, regVersion, q, typed]);
 
+  // Read the surface corpus every render (it is a ref read behind the getter, not work) and
+  // key the memo on its ids. Before this the memo's only surface-shaped dependency was
+  // `regVersion`, which happens to bump when the adapter re-registers its views — true today,
+  // and an invisible coupling to another module's effect ordering the day it isn't.
+  const searchOnly = config.searchOnly?.() ?? [];
+  // id AND label — the adapter's own `navSig` keys on both, because a surface can be RENAMED
+  // without its id moving and a sig that ignored the label would leave the old title ranked
+  // and rendered until something unrelated invalidated the memo.
+  const searchOnlySig = searchOnly.map((c) => `${c.id}\u0000${c.label}`).join("|");
+
   const filtered = useMemo(() => {
-    const searchOnly = config.searchOnly?.() ?? [];
+    // ONE dedupe, both paths. It used to run on the typed path only, which left the empty
+    // list free to render two rows with the same `c.id` — and `key={c.id}` on the row means
+    // React reconciles them as one: a duplicate-key warning, and a highlight that jumps.
+    //
+    // Two corpora, and keeping them apart IS the feature: `root` is what the empty list may
+    // FILL from (registered commands only), `local` is everything addressable and is only
+    // ever the recents lookup pool / the search corpus. Fold the surfaces into `root` and the
+    // empty palette dumps every rail surface — the flood the whole split exists to prevent.
+    const root = dedupe(baseCommands);
+    const local = dedupe([...baseCommands, ...searchOnly]);
     if (!typed) {
-      return emptyQueryList(baseCommands, [...baseCommands, ...searchOnly], recency, {
+      return emptyQueryList(root, local, recency, {
         emptyCap: config.emptyCap,
         recentCap: config.recentCap,
+        groupCap: config.groupCap,
         now,
       });
     }
+    const score = (id: string) => frecency(recency[`cmd:${id}`], now);
     // Statics first, then the surfaces, then provider rows — the id-dedup precedence the
     // DS uses. Ranking reorders what survives `matchCommand`; it never shrinks it and
     // never caps, so a keyword-only hit (the Fleet Room under a member's name) still lands.
-    return rankCommands(dedupe([...baseCommands, ...searchOnly, ...dynamic]), q, {
-      score: (id) => frecency(recency[`cmd:${id}`], now),
-    });
+    //
+    // The two halves take DIFFERENT paths on purpose. `rankCommands` filters+orders the rows
+    // the DS itself client-filters. Provider rows are only ORDERED: a provider is a remote
+    // search that already applied the query its own way, so the DS appends its results
+    // verbatim, and re-filtering them here would silently delete a fork's fuzzy/semantic
+    // hits — the exact rows a source exists to contribute. See `orderCommands`.
+    return dedupe([
+      ...rankCommands(local, q, { score }),
+      ...orderCommands(dynamic, q, { score }),
+    ]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseCommands, dynamic, q, typed, recency, regVersion]);
+  }, [baseCommands, dynamic, q, typed, recency, regVersion, searchOnlySig]);
 
   // Selection is by COMMAND ID; the index is derived. A re-rank that keeps the row count
   // (every keystroke that narrows nothing) would otherwise strand the highlight.
+  //
+  // The DOM id is by INDEX, not by command id: it is only ever `aria-activedescendant`'s
+  // pointer, a command id can be anything a plugin author typed, and one root view is
+  // mounted at a time so the ids cannot collide.
   const signature = filtered.map((c) => c.id).join(" ");
   const found = filtered.findIndex((c) => c.id === selId);
   const sel = found >= 0 ? found : 0;
@@ -252,6 +385,7 @@ function RootBody({ ctx, config }: { ctx: PaletteContext; config: RootViewConfig
   };
 
   let lastGroup: string | undefined;
+  const optionId = (i: number) => `pl-cmdk-opt-${i}`;
 
   return (
     <div className="pl-cmdk-commands pa-cmdk">
@@ -270,6 +404,11 @@ function RootBody({ ctx, config }: { ctx: PaletteContext; config: RootViewConfig
           role="combobox"
           aria-expanded
           aria-controls="pl-cmdk-commands-list"
+          // The half of the combobox contract the DS never wired. Focus never leaves the
+          // input — arrows move a `data-sel` class — so WITHOUT this a screen reader
+          // announces the field once and then says NOTHING as the operator arrows down a
+          // list they cannot see. `aria-selected` alone is not announced; the pointer is.
+          aria-activedescendant={filtered.length ? optionId(sel) : undefined}
           autoComplete="off"
           spellCheck={false}
         />
@@ -277,21 +416,43 @@ function RootBody({ ctx, config }: { ctx: PaletteContext; config: RootViewConfig
           <span className="pl-cmdk-commands__spinner" aria-label={loadingLabel} title={loadingLabel} />
         )}
       </div>
-      <div className="pl-cmdk-commands__list" id="pl-cmdk-commands-list" role="listbox" ref={listRef}>
+      <div
+        className="pl-cmdk-commands__list"
+        id="pl-cmdk-commands-list"
+        role="listbox"
+        aria-label={listLabel}
+        ref={listRef}
+      >
         {filtered.length === 0 ? (
-          <div className="pl-cmdk-commands__empty">{loading ? loadingLabel : emptyLabel}</div>
+          // `role="status"` so the swap to "No matches" is ANNOUNCED. It is the one state
+          // with nothing to point `aria-activedescendant` at, so without a live region a
+          // screen-reader operator gets silence and has no way to tell an empty result from
+          // a palette that stopped responding.
+          <div className="pl-cmdk-commands__empty" role="status">
+            {loading ? loadingLabel : emptyLabel}
+          </div>
         ) : (
           filtered.map((c, i) => {
             const selected = i === sel;
             const showHeader = c.group != null && c.group !== lastGroup;
             lastGroup = c.group;
             return (
-              <div key={c.id}>
-                {showHeader && <div className="pl-cmdk-commands__group">{c.group}</div>}
+              // `presentation` on the wrapper and the header: a listbox may only own
+              // options, and an unlabelled generic between the two breaks the owns
+              // relationship — some AT then reports "0 items". The header text survives; it
+              // is just no longer a node in the listbox's own tree.
+              <div key={c.id} role="presentation">
+                {showHeader && (
+                  <div className="pl-cmdk-commands__group" role="presentation">
+                    {c.group}
+                  </div>
+                )}
                 <button
                   type="button"
                   role="option"
+                  id={optionId(i)}
                   aria-selected={selected}
+                  aria-disabled={c.disabled || undefined}
                   data-sel={selected || undefined}
                   className={[
                     "pl-cmdk-commands__item",
@@ -319,6 +480,14 @@ function RootBody({ ctx, config }: { ctx: PaletteContext; config: RootViewConfig
             );
           })
         )}
+      </div>
+      {/* The result COUNT, announced politely on every settled query. `aria-activedescendant`
+          reports the row you are on; nothing reports how many there are, and "did that
+          narrow anything?" is the question a sighted operator answers at a glance. Rendered
+          empty while the list is empty so the `role="status"` above owns that message
+          instead of both firing at once. */}
+      <div className="pa-cmdk__sr" role="status">
+        {typed && filtered.length > 0 ? `${filtered.length} results` : ""}
       </div>
     </div>
   );

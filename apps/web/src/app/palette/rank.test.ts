@@ -1,15 +1,18 @@
 import { describe, expect, it } from "vitest";
 import type { Command } from "@protolabsai/ui/command-palette";
 
-import { TIER, isSubsequence, matchCommand, rankCommands, tierFor } from "./rank";
+import { TIER, isSubsequence, matchCommand, orderCommands, rankCommands, tierFor } from "./rank";
 
 // Two contracts live here and they pull in opposite directions, which is exactly why they
 // are tested apart:
 //
 //   1. INCLUSION is a verbatim copy of the DS's module-private `matchCommand`
-//      (@protolabsai/ui/src/command-palette.views.tsx:48-56). It is a COPY, so nothing but
-//      this file would notice it drifting from the DS on the next bump — the parity block
-//      below pins the four properties that define it.
+//      (@protolabsai/ui/src/command-palette.views.tsx:48-56). The parity block below pins
+//      the four properties that define it — but note what that block CANNOT do: it describes
+//      our copy, so it would pass unchanged if the DS rewrote its matcher tomorrow. The
+//      alarm for THAT is in `rootView.test.ts` ("matchCommand parity — the DRIFT ALARM"),
+//      which drives the DS's real commands view and compares the rows it renders against
+//      this function's verdict. Both are needed; neither substitutes for the other.
 //   2. ORDER is ours. It may reorder anything; it may never DROP anything, and it may never
 //      cap. `fleet.spec.ts:421-436` is the live proof: it types "ava" and expects the Fleet
 //      Room row, which matches only because every member name is pushed onto that command's
@@ -143,5 +146,30 @@ describe("rankCommands", () => {
     const input = [...corpus];
     rankCommands(input, "memory");
     expect(input.map((c) => c.id)).toEqual(corpus.map((c) => c.id));
+  });
+});
+
+describe("orderCommands — sort without filter (the provider path)", () => {
+  const remote: Command[] = [
+    cmd({ id: "card:7", label: "Sprint board" }),
+    cmd({ id: "card:2", label: "Kanban cleanup" }),
+  ];
+
+  it("keeps a row that does NOT match the query at all", () => {
+    // A provider is a REMOTE search that already applied the query its own way, so the DS
+    // appends its rows verbatim and a row sharing no substring with the query is legitimate.
+    // `rankCommands` would drop "Sprint board" here; the split exists so it can't.
+    expect(matchCommand(remote[0], "kanban")).toBe(false);
+    expect(orderCommands(remote, "kanban").map((c) => c.id)).toHaveLength(2);
+  });
+
+  it("still ORDERS what it keeps — the matching row leads", () => {
+    expect(orderCommands(remote, "kanban")[0].id).toBe("card:2");
+  });
+
+  it("is what rankCommands is built from, so the two can never grade differently", () => {
+    const corpus = [...remote, cmd({ id: "x", label: "Kanban board" })];
+    const matching = corpus.filter((c) => matchCommand(c, "kanban"));
+    expect(rankCommands(corpus, "kanban")).toEqual(orderCommands(matching, "kanban"));
   });
 });

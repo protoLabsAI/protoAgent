@@ -28,6 +28,10 @@ first, then a curated root (agents, plugin views, commands). Every rail surface 
 deliberately *not* in that list — there are too many of them to be useful before you've
 said what you want.
 
+Each group gets a turn before any one of them fills the list, so installing a pile of
+plugins can't push **Settings** or **Open…** off the bottom — which matters most on a first
+run, when there's no history yet to promote them. Any slots left over are filled in order.
+
 The moment you type, the list becomes the **whole** corpus — every surface included, no
 cap — ordered by how well each row matches:
 
@@ -37,6 +41,15 @@ cap — ordered by how well each row matches:
 4. the label contains it
 5. a keyword / hint / group / source contains it
 6. the label matches loosely (fuzzy)
+7. it matched only by spreading your terms across the label *and* its metadata
+
+Tier 7 is a residual, not a design goal: matching joins every field into one haystack, so a
+query like `bra goals` can be admitted with `bra` in the label and `goals` in a keyword —
+no single-field tier describes that, and it sorts last rather than being dropped.
+
+Results from a plugin **source** are a separate case: a source runs its own search
+(server-side, fuzzy, whatever it likes), so its rows are ordered alongside the rest but
+never re-filtered — a hit whose text doesn't literally contain what you typed still shows.
 
 Ties break on how often and how recently you've run the command, then on registration
 order, so the list is stable and the thing you actually use rises. Matching itself is

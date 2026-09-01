@@ -42,6 +42,25 @@ test("empty query: a short root list that does NOT dump every surface into it", 
   // What IS at the root: the command-driven list.
   await expect(page.getByRole("option", { name: "Fleet Room" })).toBeVisible();
   await expect(page.getByRole("option", { name: "Open…" })).toBeVisible();
+  // …including the LAST-registered group. This is a fresh context, so there is no recency at
+  // all — the list is pure registration order, Agents → Plugins → Commands. A plain
+  // `slice(0, cap)` hands it to whoever registered first, and every plugin view installed
+  // pushes one more Commands row off the bottom. The per-group quota is what keeps Settings
+  // here, and this is the run where losing it would hurt most.
+  await expect(page.getByRole("option", { name: "Settings", exact: true })).toBeVisible();
+});
+
+test("the active row is announced — aria-activedescendant, not just a highlight", async ({ page }) => {
+  const input = await openPalette(page);
+  // Focus never leaves the input (arrows move a class, not focus), so this pointer is the
+  // ONLY thing that tells a screen reader which row is live. The DS's own view ships the
+  // combobox role without it, which is silence from the first ArrowDown onward.
+  const active = () => input.getAttribute("aria-activedescendant");
+  const selectedId = () => page.locator(`${PANEL} [data-sel="true"]`).getAttribute("id");
+  expect(await active()).toBe(await selectedId());
+  await input.press("ArrowDown");
+  expect(await active()).toBe(await selectedId());
+  expect(await active()).not.toBeNull();
 });
 
 test("typing 'memory' finds the Memory surface — the defect this view exists to fix", async ({ page }) => {
