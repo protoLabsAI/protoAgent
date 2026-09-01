@@ -19,7 +19,9 @@
 // registered as DS `pluginView()`s — their command morphs the palette body into the plugin's
 // own iframe (themed/authed via the handshake) instead of navigating to its rail.
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { createElement, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { Download, PanelsTopLeft, Settings2, Store, Users } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { commandsView, createPaletteRegistry, pluginView } from "@protolabsai/ui/command-palette";
 import type {
   Command,
@@ -48,6 +50,7 @@ import { markAgentOpened } from "../fleetPalette";
 import { fleetRoomView } from "../FleetRoom";
 import { fleetSettingsDisabledReason } from "../fleetSettingsGate";
 import { memberDmView } from "../PaletteChat";
+import { settingsPaletteCommands } from "../settingsPalette";
 import { navigate } from "./nav";
 import type { NavIntent } from "./nav";
 import { matchCommand } from "./rank";
@@ -94,12 +97,25 @@ export type ViewsFacade = ReturnType<typeof buildViews>;
 // ids are the uiStore union types (source of truth), so they can't drift into a 404.
 // (Inbox moved to a utility-bar widget; Schedule is a top-level rail surface that
 // is searchable as a "go to" surface — so no Activity deep-links here.)
-const _link = (id: string, label: string, keywords: string[], intent: NavIntent) =>
+
+// The row is a flex line — `[icon] label … hint` with NO icon gutter — so an icon-less row's
+// label sits flush left while an icon'd row's is indented past the glyph. That cost nothing
+// while every core row went without one; the generated Settings rows below carry the Settings
+// rail's glyphs, which would otherwise leave a visible step mid-group. So the hand-written
+// rows take the glyph their DESTINATION already wears: the utility-bar Settings pill
+// (Settings2), the Plugins tabs (Store), the Install-from-URL button (Download), and the two
+// morph commands. `createElement` because this module is a .ts, not a .tsx.
+const glyph = (Icon: LucideIcon) => createElement(Icon, { size: 18 });
+
+/** One core deep-link row: registered through the public seam, its `run` a NavIntent. The
+ *  row is spelled as FIELDS rather than positionals — it has grown an icon and now a
+ *  keybinding, and five positional arguments of which two are a ReactNode and a string[]
+ *  is a miscall a reader can't see and the types won't catch. `group` is fixed here: every
+ *  core deep-link lands in Commands, beside the generated Settings rows. */
+const _link = (cmd: Omit<PaletteCommand, "run" | "group">, intent: NavIntent) =>
   registerPaletteCommand({
-    id,
-    label,
+    ...cmd,
     group: "Commands",
-    keywords,
     run: (ctx) => {
       navigate(intent);
       ctx.close();
@@ -110,23 +126,65 @@ const _link = (id: string, label: string, keywords: string[], intent: NavIntent)
 // only row here that is a destination in its own right rather than a shortcut into one, and
 // on a first run — no recency, nothing to promote it — whichever rows are registered last
 // are the rows an operator never sees. It used to sit third, behind both plugin deep-links.
-// Settings is the consolidated dialog now (2026-06) — opened from the utility-bar pill,
-// the drawer, or these palette commands. A bare "Settings" command + Box-section deep-links.
-_link("settings", "Settings", ["settings", "config", "preferences", "options"], { kind: "global" });
-_link("plug:market", "Plugins: Discover", ["plugins", "discover", "market", "directory", "browse"], {
-  kind: "plugins",
-  tab: "market",
-});
+//
+// Settings is the consolidated dialog now (2026-06) — opened from the utility-bar pill, the
+// drawer, or these palette commands. This one opens it wherever it was left; the generated
+// per-section rows below open a named pane, and they are registered LAST on purpose: 22 rows
+// must not crowd the empty-query root out from under the three that lead it. They cost the
+// root nothing (the per-group quota caps it) and everything they add lands on SEARCH.
+//
+// The bare row ADVERTISES the `settings.open` binding (ADR 0063) instead of leaving its hint
+// empty or hard-coding "⌘,": the chord is rebindable in Settings ▸ Keyboard, and the seam
+// renders `formatCombo(effectiveCombo(binding))`, so a literal would start lying the moment
+// an operator rebound it. It also stops this row being the one blank right edge in a group
+// where the generated rows all carry one — and teaches the shortcut at the moment someone is
+// reaching for Settings the slow way. In the desktop Launcher window the hint is simply
+// absent: only App.tsx pulls the keybindings barrel, so nothing has registered
+// `settings.open` there and `toDsCommand` finds no binding. That degradation is the right one
+// — the chord isn't live in that window either, and importing the binding host for a cosmetic
+// hint is most of what keeping the Launcher lean bought.
+_link(
+  {
+    id: "settings",
+    label: "Settings",
+    icon: glyph(Settings2),
+    keybinding: "settings.open",
+    keywords: ["settings", "config", "preferences", "options"],
+  },
+  { kind: "global" },
+);
+_link(
+  {
+    id: "plug:market",
+    label: "Plugins: Discover",
+    icon: glyph(Store),
+    keywords: ["plugins", "discover", "market", "directory", "browse"],
+  },
+  { kind: "plugins", tab: "market" },
+);
 // Install-from-URL is the advanced action under Installed now (ADR 0059 D4) — land there.
-_link("plug:download", "Plugins: Install from URL", ["plugins", "install", "url", "git"], {
-  kind: "plugins",
-  tab: "local",
-});
-_link("box:fleet", "Settings: Fleet", ["fleet", "agents", "box"], { kind: "global", section: "fleet" });
-_link("box:telemetry", "Settings: Telemetry", ["telemetry", "metrics", "box", "global"], {
-  kind: "global",
-  section: "telemetry",
-});
+_link(
+  {
+    id: "plug:download",
+    label: "Plugins: Install from URL",
+    icon: glyph(Download),
+    keywords: ["plugins", "install", "url", "git"],
+  },
+  { kind: "plugins", tab: "local" },
+);
+// …and one row per Settings SECTION, generated from the section table rather than hand-listed
+// here. Three sections used to be reachable from ⌘K (the bare "Settings" above, plus
+// hand-written `box:fleet` / `box:telemetry` rows these supersede) and the other twenty were
+// not — a list nobody remembered to extend, failing silently when they didn't.
+// `settingsPaletteCommands` derives them from settings/sections.ts, so coverage follows the
+// table. (`settings:telemetry` also picks up the `hostOnly` gate the hand-written row never
+// had, so a member window stops listing a pane it cannot open.)
+//
+// Registered UNCONDITIONALLY, gates and all: each row carries the section's own
+// `flag`/`hostOnly` as DATA, and `visiblePaletteCommands` applies them per render below. That
+// ordering is the point — resolving a flag HERE, at module load, would read the fail-closed
+// answer `/api/flags` hasn't returned yet and hide Secrets/Devices/Publish permanently.
+for (const cmd of settingsPaletteCommands(navigate)) registerPaletteCommand(cmd);
 
 /** Map a registered (core or fork) PaletteCommand onto a DS palette `Command`. The DS row
  *  has no shortcut slot, so a command that ADVERTISES a keybinding (ADR 0061 `keybinding` =
@@ -429,6 +487,7 @@ export function usePaletteRegistry(
       {
         id: "fleet-room",
         label: "Fleet Room",
+        icon: glyph(Users),
         hint: fleetGate ? "host instance only" : "members · DM · broadcast",
         disabled: !!fleetGate,
         group: "Agents",
@@ -481,6 +540,7 @@ export function usePaletteRegistry(
       id: "open",
       label: "Open…",
       hint: "surface",
+      icon: glyph(PanelsTopLeft),
       group: "Commands",
       keywords: ["open", "go to", "surface", "view", "navigate", "switch", "panel"],
       run: (c) => c.enter("open"),

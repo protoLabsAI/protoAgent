@@ -345,6 +345,68 @@ describe("migrateUiState — v13 hidden bucket", () => {
   });
 });
 
+// openGlobalSettings (#3291): the store is where a Settings deep-link LANDS — the ⌘K rows,
+// the header's "Fleet settings", the signed-out banner's "model", the rail context menus and
+// ⌘, all funnel here — so it has to be authoritative about the section, not merely a seed for
+// SettingsOverlay's remount `key`.
+//
+// The bug this pins: `set({ globalSettingsOpen: true, globalSettingsSection: section })` alone
+// reached SettingsSurface only through that `key` and its `initialSection` effect, both keyed
+// on the VALUE. Re-running the SAME deep-link while the dialog was open on that section was a
+// no-change set — no remount, no effect — so an operator who deep-linked Theme, clicked Model
+// in the rail, then ran the Theme row again watched the palette close and nothing move. (No
+// unit test of the palette could see it: the row factory and the registry both stop at the
+// emitted intent. e2e/settings.spec.ts drives the whole path.)
+describe("openGlobalSettings", () => {
+  beforeEach(() => {
+    useUI.setState({
+      settingsSection: "identity",
+      globalSettingsOpen: false,
+      globalSettingsSection: undefined,
+    });
+  });
+
+  it("writes the ACTIVE section, not just the overlay seed", () => {
+    useUI.getState().openGlobalSettings("theme");
+    const s = useUI.getState();
+    expect(s.globalSettingsOpen).toBe(true);
+    expect(s.globalSettingsSection).toBe("theme");
+    expect(s.settingsSection).toBe("theme"); // ← the landing site
+  });
+
+  it("re-lands a REPEAT deep-link after the operator navigated away in the rail", () => {
+    useUI.getState().openGlobalSettings("theme");
+    // The operator clicks another section in the open dialog's rail.
+    useUI.getState().setSettingsSection("model");
+    expect(useUI.getState().settingsSection).toBe("model");
+    // …and runs the very same ⌘K row again. `globalSettingsSection` is unchanged, so nothing
+    // downstream re-renders; only this write can move the surface.
+    useUI.getState().openGlobalSettings("theme");
+    expect(useUI.getState().settingsSection).toBe("theme");
+  });
+
+  it("a section-less open resumes where the operator left off", () => {
+    useUI.getState().openGlobalSettings("theme");
+    useUI.getState().setSettingsSection("model");
+    useUI.getState().closeGlobalSettings();
+    // ⌘, / the utility pill — no section. It must NOT re-seed the stale deep-link.
+    useUI.getState().openGlobalSettings();
+    const s = useUI.getState();
+    expect(s.globalSettingsOpen).toBe(true);
+    expect(s.globalSettingsSection).toBeUndefined();
+    expect(s.settingsSection).toBe("model");
+  });
+
+  it("closing drops the deep-link seed so it can't outlive its dialog", () => {
+    useUI.getState().openGlobalSettings("fleet");
+    useUI.getState().closeGlobalSettings();
+    const s = useUI.getState();
+    expect(s.globalSettingsOpen).toBe(false);
+    expect(s.globalSettingsSection).toBeUndefined();
+    expect(s.settingsSection).toBe("fleet"); // the SELECTED section persists; the seed does not
+  });
+});
+
 // openToolSettings (#1803): a chat tool card's "Manage" deep-links to Capabilities ▸ Tools,
 // focused on the tool. One atomic action sets the one-shot target AND opens the settings
 // overlay on the Tools section — the Tools panel consumes `toolsTarget` on mount.
@@ -356,6 +418,7 @@ describe("openToolSettings", () => {
     expect(s.toolsTarget).toBe("run_command");
     expect(s.globalSettingsOpen).toBe(true);
     expect(s.globalSettingsSection).toBe("tools");
+    expect(s.settingsSection).toBe("tools"); // same landing-site rule as openGlobalSettings
   });
 
   it("setToolsTarget clears the one-shot after the panel consumes it", () => {

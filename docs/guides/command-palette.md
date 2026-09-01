@@ -42,8 +42,27 @@ Settings ▸ Keyboard, not with the in-app chords above.
   stays short. They are also **searchable from the root**: type a surface's name and it is
   there, without the hop. (It used not to be — `memory` and `knowledge` answered *No
   matches*, because those surfaces existed only inside **Open…**.)
-- **Deep links** — the jumps worth their own command: **Settings**, **Settings: Fleet**,
-  **Settings: Telemetry**, **Plugins: Discover**, **Plugins: Install from URL**.
+- **Deep links** — **Settings** (opens the dialog wherever you left it, and shows its **⌘,**
+  chord on the row — read live from the binding, so it follows a rebind), **Plugins:
+  Discover**, **Plugins: Install from URL**, and a **Settings: `<Section>`** row for *every*
+  section of the Settings dialog — Theme, Keyboard, Model, Tools, MCP, Skills, Subagents,
+  Delegates, Snapshot and the rest. Those rows are GENERATED from the section table
+  (`apps/web/src/settings/sections.ts`) by `apps/web/src/app/settingsPalette.ts`, so a new
+  section is deep-linkable the moment it is declared rather than when somebody remembers to
+  add a command. Each row wears its Settings-rail glyph and a trailing hint naming its nav
+  heading (Agent · Capabilities · Box · This console) — the hint is searchable too, so typing
+  `capabilities` lists exactly those five.
+  Search by what you'd *say*, not by the label: `shortcuts` finds Keyboard, `dark mode`
+  Theme, `api key` Model, `rag` Knowledge, `a2a` Delegates, `backup` Snapshot, and `port` or
+  `network` the box-runtime knobs that live behind a chip on Fleet. (Keywords are synonyms
+  only — the matcher already searches each row's label, hint and group.)
+  The per-section rows are registered after the three above, so the **root** list is
+  unchanged — they earn their place on search, and through recency once you've used one.
+  A section behind a developer flag (Secrets, Devices, Publish) or restricted to the host
+  console (Overview, Telemetry) carries that gate on the row and is resolved *per render*,
+  never at registration. The one section with no row is **Developer**: its visibility is a
+  channel decision (`developerPanelVisible`), which is neither of the two axes the seam can
+  gate on — see the comment in `settingsPalette.ts`.
 
 ## Two lists, not one
 

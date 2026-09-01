@@ -339,7 +339,14 @@ def lint_fragments(paths: list[Path]) -> list[str]:
     cuts the release, nowhere near the PR that caused it.
 
     Checks the same three things the collator does — name shape, known kind, non-empty —
-    plus the one it doesn't: that the body yields at least one title.
+    plus the two it doesn't: that the body yields at least one title, and that the title
+    still NAMES the change (``(#N)``).
+
+    That second one is the same failure a size smaller (#3291). ``_titles`` keeps only the
+    leading ``**bold**`` of a bullet, so a fragment that closes with "… blah blah. (#3291)"
+    outside the bold parses fine, collates fine, and then ships a ``/changelog`` bullet with
+    no reference to anything — no issue to read, no PR to blame — while every neighbour has
+    one. Nothing downstream can recover it, because by then the filename is gone.
     """
     problems: list[str] = []
     for path in paths:
@@ -361,10 +368,25 @@ def lint_fragments(paths: list[Path]) -> list[str]:
         if not body.strip():
             problems.append(f"{path.name}: empty")
             continue
-        if not _titles(body):
+        titles = _titles(body)
+        if not titles:
             problems.append(
                 f"{path.name}: no top-level '- ' bullet, so this text would be dropped from the "
                 f"release notes. Start each entry with '- ' (see changelog.d/README.md)."
+            )
+            continue
+        # The ref must sit INSIDE the bold lead — that is the only part `_titles` keeps, and
+        # the marketing changelog is built from `_titles` alone. Only "#<digits>" is required,
+        # not one exact spelling: fragments legitimately write `(#3285)`, `(v0.2.0, #3286)` or
+        # cite the ISSUE where the filename is the PR. The filename's own number is what the
+        # message suggests, since that is right nearly always.
+        ref = m.group("stem")
+        if not any(re.search(r"#\d+", t) for t in titles):
+            problems.append(
+                f"{path.name}: the bold lead-in carries no '#N' reference, so the /changelog "
+                f"bullet would ship with nothing to look up — only the '**…**' lead survives "
+                f"into the release notes. Move it inside — '**Short summary (#{ref}).** "
+                f"Details…' — rather than the end of the paragraph (see changelog.d/README.md)."
             )
     return problems
 

@@ -118,6 +118,11 @@ _REVERSE_CLAIMS = (
 # "press ⌘⇧K → Fleet Room" — a chord plus the command it lands on.
 _INVOKES = re.compile(rf"{_GLYPH}\s*(?:→|->|▸)\s*([A-Z][\w’'-]*(?:\s+[A-Z][\w’'-]*)*)")
 _LABEL_RE = re.compile(r'label:\s*"([^"]+)"')
+# `_link` used to take positionals (`_link("settings", "Settings", …)`), whose label _LABEL_RE
+# could not see; #3291 respelled it as a fields object, so `label: "Settings"` is now an ordinary
+# _LABEL_RE hit and this pattern matches nothing. Kept, not deleted: a fork (or a revert) can
+# still carry the positional form, and a scan that silently stops finding labels is exactly how
+# this gate goes vacuum-green — which is why the shapes are asserted below rather than assumed.
 _LINK_RE = re.compile(r'_link\(\s*"[^"]*",\s*"([^"]+)"')
 _TEMPLATE_LABEL_RE = re.compile(r"label:\s*`([^`]*)`")
 

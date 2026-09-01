@@ -49,8 +49,8 @@ export type RightPanel = "tasks" | "goals" | (string & {}); // + plugin:<id>:<vi
 export type PluginsTab = "local" | "market";
 // Settings IA (ADR 0048, ratified 2026-06-28): ONE surface organized by DOMAIN; scope is a
 // per-field badge, NOT a nav axis. `settingsSection` is the active sidenav section (a free
-// string — the section ids live in SettingsSurface). The old `settingsScope` "two homes"
-// axis is gone (it was never read by any view — see the v14 migration).
+// string — the section ids live in settings/sections.ts, the import-light leaf). The old
+// `settingsScope` "two homes" axis is gone (never read by any view — see the v14 migration).
 
 type UIState = {
   surface: Surface;
@@ -326,8 +326,29 @@ export const useUI = create<UIState>()(
       toolsTarget: null,
       globalSettingsOpen: false,
       globalSettingsSection: undefined,
-      openGlobalSettings: (section) => set({ globalSettingsOpen: true, globalSettingsSection: section }),
-      closeGlobalSettings: () => set({ globalSettingsOpen: false }),
+      // A section deep-link writes the ACTIVE section (`settingsSection`) as well as the
+      // overlay's seed, because the store is where the intent LANDS and the landing site has
+      // to be authoritative. `globalSettingsSection` alone only reaches the surface through
+      // SettingsOverlay's remount `key` + SettingsSurface's `initialSection` effect, and both
+      // are keyed on the VALUE: re-running a deep-link for the section the dialog already
+      // holds (open Settings on Theme, click Model in the rail, hit ⌘⇧K → "dark mode" again)
+      // was a no-change `set` → no remount → no effect → the operator stayed on Model while
+      // the palette closed as if it had worked. Worse from the desktop Launcher, which hides
+      // itself and focuses the main console, so nothing at all reports the miss. Writing the
+      // section here fixes every caller at once — the palette's 22 generated rows, the header
+      // "Fleet settings" jump, the signed-out banner's "model", the rail context menus — and
+      // leaves `initialSection` as belt-and-braces for the mount case.
+      openGlobalSettings: (section) =>
+        set(
+          section
+            ? { globalSettingsOpen: true, globalSettingsSection: section, settingsSection: section }
+            : { globalSettingsOpen: true, globalSettingsSection: undefined },
+        ),
+      // Clear the deep-link seed on close: it is ephemeral overlay state (partialized out of
+      // persistence for the same reason), and a stale one outliving its dialog is the shape
+      // the bug above wore. The section the operator last SELECTED lives in `settingsSection`,
+      // which is what a later plain open (⌘, / the utility pill) correctly resumes on.
+      closeGlobalSettings: () => set({ globalSettingsOpen: false, globalSettingsSection: undefined }),
       configurePlugin: undefined,
       openPluginConfig: (id, name) => set({ configurePlugin: { id, name } }),
       closePluginConfig: () => set({ configurePlugin: undefined }),
@@ -463,9 +484,15 @@ export const useUI = create<UIState>()(
       setToolsTarget: (toolsTarget) => set({ toolsTarget }),
       // Land on Capabilities ▸ Tools with the panel focused on this tool (#1803): set the
       // one-shot target AND open the settings overlay on the Tools section in one atomic set
-      // (mirrors openGlobalSettings's body — the store creator exposes only `set`).
+      // (mirrors openGlobalSettings's body — the store creator exposes only `set`, so this
+      // writes the active `settingsSection` too, for the same reason it does).
       openToolSettings: (name) =>
-        set({ toolsTarget: name, globalSettingsOpen: true, globalSettingsSection: "tools" }),
+        set({
+          toolsTarget: name,
+          globalSettingsOpen: true,
+          globalSettingsSection: "tools",
+          settingsSection: "tools",
+        }),
       setRightCollapsed: (rightCollapsed) => set({ rightCollapsed }),
       setLeftCollapsed: (leftCollapsed) => set({ leftCollapsed }),
       // The DS AppShell is a CONTROLLED width: during a divider drag it streams transient

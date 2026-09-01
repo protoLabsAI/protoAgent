@@ -46,8 +46,15 @@ test("empty query: a short root list that does NOT dump every surface into it", 
   // all — the list is pure registration order, Agents → Plugins → Commands. A plain
   // `slice(0, cap)` hands it to whoever registered first, and every plugin view installed
   // pushes one more Commands row off the bottom. The per-group quota is what keeps Settings
-  // here, and this is the run where losing it would hurt most.
-  await expect(page.getByRole("option", { name: "Settings", exact: true })).toBeVisible();
+  // here, and this is the run where losing it would hurt most. It is also what absorbed the
+  // 22 generated `Settings: <Section>` rows (#3291) without moving anything above.
+  //
+  // Matched on the LABEL span, not the option's accessible name: the bare Settings row
+  // advertises its `settings.open` chord as a trailing hint, which rides the accessible name
+  // ("Settings ⌘,") and made an `exact: true` role match fail. The label is the assertion
+  // that was meant — and it still has to be exact, or the 22 `Settings: …` rows satisfy it.
+  const labels = await rows.locator(".pl-cmdk-commands__label").allInnerTexts();
+  expect(labels).toContain("Settings");
 });
 
 test("the active row is announced — aria-activedescendant, not just a highlight", async ({ page }) => {
