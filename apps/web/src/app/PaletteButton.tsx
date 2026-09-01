@@ -6,9 +6,12 @@
 // the binding itself. An operator who never read the guide never learned the palette existed,
 // and none of it was discoverable from the console it lives in.
 //
-// So the affordance's job is not "another button". It is to TEACH the chord: it looks like the
-// search field it opens, and its only text is the combo, so the thing you click is also the
-// thing that tells you how to stop clicking it.
+// The affordance is a plain icon pill, sitting AFTER Settings on the utility bar. An earlier cut
+// made it look like the search field it opens — bordered, with the live chord as visible text —
+// and led the bar with it. Both were wrong: the bar is a row of glyphs, so the one pill carrying
+// text reads as a different class of control rather than a peer, and Settings keeps the far-left
+// slot operators already reach for by position. The chord still travels, on the tooltip and in
+// `aria-keyshortcuts`; it just isn't standing chrome.
 //
 // ── Two details that are load-bearing ──────────────────────────────────────────────────
 //
@@ -56,15 +59,22 @@ export function paletteCombo(overrides: Record<string, string>): { text: string;
   return { text: formatCombo(combo), aria: ariaKeyshortcuts(combo) };
 }
 
-/** The utility-bar affordance. Shaped like the search field it opens rather than like the
- *  icon pills beside it, because a magnifier that reads "⌘⇧K" says what it does before you
- *  click it — which is the entire point of adding it. */
+/** The utility-bar affordance: an icon pill, peer to the widgets beside it. The chord rides
+ *  the tooltip rather than the button face — hover teaches it, the bar stays a row of glyphs. */
 export function PaletteButton() {
   const overrides = useKeybindingOverrides((s) => s.overrides);
   const toggle = useKbIntents((s) => s.togglePalette);
   const { text: combo, aria } = paletteCombo(overrides);
   return (
-    <Tooltip label="Search commands, surfaces and agents — the command palette">
+    <Tooltip
+      label={
+        // The chord lives here now. Still read from the binding, so a rebind re-words the
+        // tooltip — a literal would start lying the moment someone remaps it.
+        combo
+          ? `Search commands, surfaces and agents  (${combo})`
+          : "Search commands, surfaces and agents"
+      }
+    >
       <button
         type="button"
         className="util-btn palette-btn"
@@ -74,14 +84,6 @@ export function PaletteButton() {
         onClick={toggle}
       >
         <Search size={14} />
-        {/* The chord is the label. `aria-hidden` because `aria-keyshortcuts` above already
-            carries it for assistive tech in a form they announce properly — a screen reader
-            reading the glyph string "⌘⇧K" character by character is noise, not help. */}
-        {combo ? (
-          <span className="palette-btn__combo" aria-hidden>
-            {combo}
-          </span>
-        ) : null}
       </button>
     </Tooltip>
   );

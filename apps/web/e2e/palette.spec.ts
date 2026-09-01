@@ -258,17 +258,28 @@ test("the query path is UNCAPPED — the cap belongs to the empty list alone", a
 // pair of shells: the desktop utility bar, and the chat-first mobile header (the mobile half
 // lives in mobile.spec.ts — the `mobile` project is the only one that runs a device profile).
 
-test("the utility bar offers the palette, and teaches its chord", async ({ page }) => {
+test("the utility bar offers the palette, after Settings, as a bare icon", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   const btn = page.getByTestId("palette-widget");
   await expect(btn).toBeVisible();
 
-  // The chord is READ FROM THE BINDING, so this asserts the rendered text against the same
-  // source Settings ▸ Keyboard renders from rather than against a literal. `formatCombo`
-  // emits ⌘ on macOS and Ctrl elsewhere, so match the SHAPE (a shift-modified K) instead of
-  // a platform string — a literal here would be green on one CI runner and red on another.
-  await expect(btn).toHaveText(/K$/);
-  await expect(btn).toHaveAttribute("aria-keyshortcuts", /K$/);
+  // NO visible text. The bar is a row of glyphs and this is a peer of them, not the one
+  // control that carries a label — a chord rendered on the face made it read as a different
+  // class of thing. Asserted rather than left to styling, because "add the combo back, it's
+  // more discoverable" is a reasonable-sounding change that would quietly undo the decision.
+  await expect(btn).toHaveText("");
+
+  // The chord still travels for assistive tech, in the WAI-ARIA token grammar rather than the
+  // display glyphs — and read from the BINDING, so it follows a rebind. Matched on shape, not
+  // a literal: the serializer emits Meta on macOS and Control elsewhere, so a fixed string
+  // would be green on one CI runner and red on another.
+  await expect(btn).toHaveAttribute("aria-keyshortcuts", /\+K$/);
+
+  // Settings keeps the far-left slot; the palette follows it.
+  const order = await page
+    .locator('[data-testid="settings-widget"], [data-testid="palette-widget"]')
+    .evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")));
+  expect(order).toEqual(["settings-widget", "palette-widget"]);
 
   await expect(page.locator(PANEL)).toHaveCount(0);
   await btn.click();

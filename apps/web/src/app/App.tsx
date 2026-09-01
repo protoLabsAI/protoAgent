@@ -1090,10 +1090,6 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
             // GitHub moved into the header drawer.
             start={
               <>
-                {/* The palette's only visible way in (ADR 0057). FIRST on the bar: it is the
-                    entry point to every surface, command and search in the console, and the
-                    one pill whose job is to teach the chord that replaces it. */}
-                <PaletteButton />
                 {/* Settings (far left, 2026-06 consolidation) — opens the one settings dialog
                     (SettingsOverlay). A plain pill, not a UtilityWidget, so the drawer +
                     palette deep-links can open it too via the store flag (openGlobalSettings). */}
@@ -1108,6 +1104,9 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
                     <Settings2 size={14} />
                   </button>
                 </Tooltip>
+                {/* The palette's only visible way in (ADR 0057) — an icon pill, AFTER Settings:
+                    that one keeps the far-left slot operators already reach for by position. */}
+                <PaletteButton />
                 {/* Widgets (bottom-left): background subagents (ADR 0050 Phase 3) and the
                     unified feed (#3029) — one pill merging the former inbox + read-only
                     Activity feeds. Each is a pill with a hover info popover + a click dialog. */}

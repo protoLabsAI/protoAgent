@@ -43,37 +43,13 @@
 }
 
 /* ── The utility-bar affordance (PaletteButton.tsx) ────────────────────────────────────
-   Scoped to `.palette-btn`, its own class, for the same reason as everything above: it sits
-   on a shared `.util-btn` pill and must not restyle the widgets beside it.
-
-   Shaped like the field it opens rather than like its icon-only neighbours — a bordered box
-   with a magnifier and the live chord — because the button's job is to TEACH the chord, and
-   a bare glyph teaches nothing. It is the one pill on the bar that carries text, which is
-   what makes it read as a search box at a glance. */
+   Deliberately almost nothing, and scoped to its own class so it cannot restyle the shared
+   `.util-btn` widgets beside it. An earlier cut gave it a border and rendered the live chord
+   as text so it read as the search field it opens — which made it the one pill on the bar
+   carrying text, a different class of control rather than a peer. It is a plain icon pill
+   now; the chord travels on the tooltip and in `aria-keyshortcuts`. */
 .palette-btn {
-  border: 1px solid var(--pl-color-border, #2c2c34);
-  padding-right: 6px;
-}
-
-.palette-btn__combo {
-  /* Tabular so a rebind between a wide and narrow chord doesn't reflow the bar, and the
-     system mono stack so the glyphs match what Settings ▸ Keyboard renders. */
-  font-family: var(--pl-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-variant-numeric: tabular-nums;
-  font-size: 10px;
-  letter-spacing: 0.02em;
-  opacity: 0.75;
-}
-
-.palette-btn:not(:disabled):hover .palette-btn__combo {
-  opacity: 1;
-}
-
-/* Below the AppShell's mobile breakpoint the utility bar is gone entirely (the chat-first
-   shell, ADR 0086), so this rule is for the narrow-DESKTOP case: keep the magnifier, drop
-   the chord, rather than letting the bar wrap. The tooltip and aria-label still carry it. */
-@media (max-width: 900px) {
-  .palette-btn__combo {
-    display: none;
-  }
+  /* lucide's Search sits high in its box, so a flush pill reads a hair tall next to the
+     other glyphs. Nudge its optical centre onto their baseline. */
+  padding-left: 7px;
 }
