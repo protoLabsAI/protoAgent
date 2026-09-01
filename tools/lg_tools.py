@@ -2744,6 +2744,17 @@ def get_all_tools(
         from tools.onboard_tools import build_onboard_tools
 
         tools.extend(build_onboard_tools(graph_config))
+        # Guarded read-only fleet diagnostics (#3170, ADR 0071). Default OFF
+        # (``fleet.diagnostics.enabled``): an ordinary agent never sees this tool. When an
+        # operator opts a managing agent in, it can inspect a rostered member's bounded
+        # logs / one exact A2A task through the existing #3168 operator-authenticated
+        # ``/agents/<slug>/api/diagnostics/*`` API — roster-only addressing, read-only, no
+        # mutation. Deliberately NOT swept into the operator-MCP profile (that trust surface
+        # needs its own security review — runtime/operator_mcp_tools._STAR_EXCLUDE).
+        if getattr(graph_config, "fleet_diagnostics_enabled", False):
+            from tools.fleet_diagnostics import fleet_diagnostics
+
+            tools.append(fleet_diagnostics)
     if knowledge_store is not None:
         tools.extend(_build_memory_tools(knowledge_store, graph_config, background_mgr))
     if scheduler is not None:

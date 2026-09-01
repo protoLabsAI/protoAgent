@@ -429,6 +429,22 @@ FIELDS: list[Field] = [
         "and reversible, and applies on the next turn.",
         ui_hidden=True,
     ),
+    # Guarded read-only fleet diagnostics tool (#3170, ADR 0071). Same disposition as the two
+    # above: it crosses a trust boundary (cross-member log/task inspection), so it ships off
+    # and stays out of the generic Settings UI (ui_hidden keeps it in FIELDS for round-trip).
+    Field(
+        "fleet.diagnostics.enabled",
+        "fleet_diagnostics_enabled",
+        "Let a managing agent read fleet members' diagnostics",
+        "bool",
+        "Tools",
+        "When on, the agent gets the read-only `fleet_diagnostics` tool: it inspects a "
+        "rostered member's bounded logs or one exact A2A task via the operator-authenticated "
+        "/agents/<slug>/api/diagnostics API (#3168). Roster-only addressing, redacted, and "
+        "strictly read-only — it cannot start members, resume/answer tasks, or change config. "
+        "Off by default; not exposed over the operator MCP profile (separate security review).",
+        ui_hidden=True,
+    ),
     Field(
         "self_improvement.enabled",
         "self_improvement_enabled",

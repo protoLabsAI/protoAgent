@@ -184,6 +184,37 @@ def test_profile_unions_with_explicit_names():
     assert "current_time" in names and "show_component" in names
 
 
+# ── fleet_diagnostics stays OUT of the curated profiles (#3170, ADR 0071) ─────────────
+# Cross-member log/task inspection over a FOREIGN MCP client is a trust surface that needs
+# its own security review before ANY operator-MCP exposure, so neither the read-only nor the
+# full/"*" profile reaches it; only a deliberate by-name allowlist entry does.
+
+
+def test_fleet_diagnostics_not_in_read_only_profile():
+    names = {t.name for t in operator_tools(_cfg_profile("read-only"))}
+    assert "fleet_diagnostics" not in names
+
+
+def test_fleet_diagnostics_excluded_from_wildcard(monkeypatch):
+    from tools.fleet_diagnostics import fleet_diagnostics
+
+    # Inject it as a candidate (the operator-MCP path builds get_all_tools without a
+    # graph_config, so the real tool is never built there — plugin_tools is how it could
+    # otherwise reach the wildcard).
+    monkeypatch.setattr(STATE, "plugin_tools", [fleet_diagnostics], raising=False)
+    names = {t.name for t in operator_tools(_cfg(["*"]))}
+    assert "calculator" in names  # the wildcard still works generally
+    assert "fleet_diagnostics" not in names  # …but not for this tool
+
+
+def test_fleet_diagnostics_still_allowable_by_explicit_name(monkeypatch):
+    from tools.fleet_diagnostics import fleet_diagnostics
+
+    monkeypatch.setattr(STATE, "plugin_tools", [fleet_diagnostics], raising=False)
+    names = {t.name for t in operator_tools(_cfg(["*", "fleet_diagnostics"]))}
+    assert "fleet_diagnostics" in names  # naming it overrides the wildcard exclusion
+
+
 def test_unknown_profile_falls_back_to_allowlist():
     names = {t.name for t in operator_tools(_cfg_profile("bogus", tools=["calculator"]))}
     assert names == {"calculator"}  # unknown profile ignored, explicit names honored

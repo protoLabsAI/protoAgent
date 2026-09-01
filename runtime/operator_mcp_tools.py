@@ -27,7 +27,14 @@ log = logging.getLogger(__name__)
 # Tools "*" skips — a coding-agent brain already has its own code execution / file tools,
 # so exposing protoAgent's execute_code over the bus is redundant. Not a security gate
 # (you can still allowlist it by name); just avoids handing it a tool it already has.
-_STAR_EXCLUDE = {"execute_code"}
+#
+# ``fleet_diagnostics`` (#3170, ADR 0071) is kept out of the wildcard too, but for a
+# different reason: cross-member log/task inspection over a FOREIGN MCP client is a trust
+# surface that needs its own security review before ANY operator-MCP exposure. Keeping it
+# out of ``*`` (and out of the ``read-only`` profile below) means neither curated profile
+# reaches it by default; a deliberate by-name allowlist entry remains the only way in,
+# pending that review.
+_STAR_EXCLUDE = {"execute_code", "fleet_diagnostics"}
 
 # NEVER exposed over MCP, even when named explicitly — ask_human / request_user_input are
 # HITL tools that pause the turn via a LangGraph ``interrupt`` only the lead-turn runner
