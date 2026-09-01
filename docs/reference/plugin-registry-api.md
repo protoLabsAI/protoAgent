@@ -74,6 +74,7 @@ Host services (agent invoke + event bus) a surface/route can use — the server 
 | [`register_tool()`](#registry-register-tool) | Expose a LangChain tool to the agent |
 | [`register_tools()`](#registry-register-tools) | Convenience: register an iterable of tools |
 | [`register_watch_hook()`](#registry-register-watch-hook) | React when a watch trips ([ADR 0067](/adr/0067-standalone-watch-primitive)) — `on_met` (verifier passed), `on_expired` (deadline passed), `on_stalled` (evidence unchanged for `stall_after` checks… |
+| [`register_work_provider()`](#registry-register-work-provider) | Contribute this plugin's own open work to the agent's `<working_state>` block ([ADR 0079](/adr/0079-autonomous-operating-model), the *Observe* step) |
 | [`register_workflow_dir()`](#registry-register-workflow-dir) | Add a directory of `*.yaml` workflow recipes bundled with the plugin ([ADR 0027](/adr/0027-install-plugins-from-git-url)) |
 | [`report_setup_gap()`](#registry-report-setup-gap) | Tell the operator this plugin can't do its job until something is fixed (a missing binary, no coder delegate, an unauthenticated CLI) — or clear that notice with `message=None` |
 | [`save_media()`](#registry-save-media) | Persist a generated binary artifact (image/audio/video/…) into the CORE media store and get back a `MediaRef {id, url, path, mime}` ([#1929](https://github.com/protoLabsAI/protoAgent/issues/1929)) |
@@ -400,6 +401,31 @@ React when a watch trips ([ADR 0067](/adr/0067-standalone-watch-primitive)) — 
 watch stays active), `on_changed` (a `trigger: "change"` watch observed a new value —
 NOT the same as met: the value moved, the condition may still be false). Each takes the
 `Watch` (sync or async). Provide ANY of them. A raising hook is logged + swallowed.
+
+### `registry.register_work_provider` {#registry-register-work-provider}
+
+```python
+registry.register_work_provider(name: str, fn, label: str = '') -> None
+```
+
+Contribute this plugin's own open work to the agent's `<working_state>` block
+([ADR 0079](/adr/0079-autonomous-operating-model), the *Observe* step).
+
+`fn` is `() -> list[dict]`; each item is `{"id", "title", "state", "hint"}`
+with every field optional (a plain string is accepted and rendered verbatim). The
+host renders them under a heading — `label` if you set one, else
+`OPEN WORK (<name>)` — in the SAME block and the same line shape as OPEN TASKS,
+so the agent reads one vocabulary for its commitments rather than two.
+
+This is projection, not replication: your store stays the system of record and the
+host reads a bounded snapshot per turn, so there is no copy to keep in sync. Use it
+when your plugin owns a queue the agent is *responsible for* — a board, a review
+lane — not for reference data the agent merely consults (that is knowledge/RAG).
+
+**Your provider must be cheap and non-blocking**: it runs inline on EVERY turn.
+Return an in-memory snapshot — never shell out, hit the network, or take a lock. A
+provider slower than `graph.work_providers.SLOW_PROVIDER_S` is logged once, and
+one that raises is skipped without disturbing the turn.
 
 ### `registry.register_workflow_dir` {#registry-register-workflow-dir}
 
