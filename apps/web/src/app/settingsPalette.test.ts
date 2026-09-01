@@ -1,14 +1,18 @@
-// The generated Settings deep-links (audit finding 06). Three claims are load-bearing and
-// each has cost somebody an afternoon somewhere in this console before:
+// The generated Settings deep-links (audit finding 06). Four claims are load-bearing, and
+// each is a failure this console can produce SILENTLY — which is why each gets a test rather
+// than a code comment:
 //
 //   1. COVERAGE follows the section table. The bug being fixed is a hand-written list of
 //      three rows that nobody extended when twenty more sections landed. If these tests only
 //      checked "some rows exist" they would have passed before the fix too, so they pin the
 //      row set against `settings/sections.ts` itself.
-//   2. GATES ride the row, they are not applied here. `useFlagPredicate` fails CLOSED while
-//      /api/flags is in flight, so a `flag` resolved at registration hides its row forever —
-//      on every channel, in a way no flags stub reproduces.
-//   3. The module stays a LEAF. Importing `settings/SettingsSurface` for the same ids would
+//   2. GATES ride the row; they are not applied when the row is built. `useFlagPredicate`
+//      fails CLOSED while /api/flags is in flight, so a `flag` resolved at registration hides
+//      its row forever — on every channel, in a way no flags stub reproduces.
+//   3. The WIRING hands both of those to the seam. A perfect row factory nothing registers,
+//      or one registered through a filter, looks identical from the factory's own tests — so
+//      the last block reads the registry back after the module-load registration.
+//   4. The module stays a LEAF. Importing `settings/SettingsSurface` for the same ids would
 //      weld the whole panel tree onto ⌘K and onto the desktop Launcher window, and CI has no
 //      bundle-size gate to notice. Only a source guard can catch that.
 import ts from "typescript";
@@ -21,7 +25,11 @@ import {
 } from "./settingsPalette";
 import { ALL_SECTIONS, settingsSections } from "../settings/sections";
 import type { SectionMeta } from "../settings/sections";
+import { visiblePaletteCommands } from "../ext/paletteRegistry";
 import paletteSrc from "./settingsPalette.ts?raw";
+// Imported for its MODULE-LOAD side effect: `usePaletteRegistry` is where core registers
+// these rows through the public seam. The block at the bottom reads the registry back.
+import "./usePaletteRegistry";
 
 const nav: SettingsNavigate = () => {};
 const rows = () => settingsPaletteCommands(nav);
@@ -195,6 +203,59 @@ describe("running a row goes through the NavIntent chokepoint", () => {
         section: c.id.slice("settings:".length),
       });
     }
+  });
+});
+
+describe("wired into the registry, the HOST applies the gates", () => {
+  // The factory tests above prove the rows CARRY their gates; this one proves the wiring
+  // actually hands them to the seam, and that the seam's read is what decides visibility.
+  // Together they cover the regression neither half sees alone: rows that are correct but
+  // never registered, or registered but gated at the wrong moment.
+  const ids = (flagsOn: boolean, onHost: boolean) =>
+    visiblePaletteCommands(() => flagsOn, onHost, "static").map((c) => c.id);
+  const settingsIds = (flagsOn: boolean, onHost: boolean) =>
+    ids(flagsOn, onHost).filter((id) => id.startsWith("settings:"));
+
+  it("registers every row STATICALLY — core must not ship a dynamic source", () => {
+    // `usePaletteRegistry` wires the DS CommandProvider the moment ANY source exists, and the
+    // DS shows its "Searching…" spinner whenever a provider does — so one source here would
+    // put a 120ms spinner in front of every keystroke in every console.
+    expect(settingsIds(true, true)).toHaveLength(
+      ALL_SECTIONS.length - SETTINGS_PALETTE_EXCLUDED.length,
+    );
+    expect(visiblePaletteCommands(() => true, true, "dynamic")).toEqual([]);
+  });
+
+  it("a flag-gated row is hidden while /api/flags is in flight and REVEALED when it lands", () => {
+    // THE regression. Registration ran at module load — before this file could stub anything —
+    // and the fail-closed predicate is applied here, at read time. A row filtered at
+    // registration would be absent from BOTH reads, identically and permanently.
+    expect(settingsIds(false, true)).not.toContain("settings:secrets");
+    expect(settingsIds(true, true)).toContain("settings:secrets");
+    expect(settingsIds(false, true)).toContain("settings:theme"); // ungated, listed either way
+  });
+
+  it("host-only rows drop in a member window; Fleet stays", () => {
+    expect(settingsIds(true, false)).not.toContain("settings:telemetry");
+    expect(settingsIds(true, false)).not.toContain("settings:overview");
+    expect(settingsIds(true, false)).toContain("settings:fleet");
+  });
+
+  it("supersedes the hand-written rows instead of doubling up with them", () => {
+    // The old ids are gone; nothing renders "Settings: Fleet" twice. The bare `Settings`
+    // command (open wherever you left it) is deliberately kept.
+    expect(ids(true, true)).not.toContain("box:fleet");
+    expect(ids(true, true)).not.toContain("box:telemetry");
+    expect(ids(true, true)).toContain("settings");
+    const labels = visiblePaletteCommands(() => true, true, "static").map((c) => c.label);
+    expect(labels.filter((l) => l === "Settings: Fleet")).toHaveLength(1);
+  });
+
+  it("Developer is registered nowhere — not statically, not dynamically", () => {
+    expect(ids(true, true)).not.toContain("settings:developer");
+    expect(visiblePaletteCommands(() => true, true).map((c) => c.id)).not.toContain(
+      "settings:developer",
+    );
   });
 });
 
