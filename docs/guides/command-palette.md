@@ -54,9 +54,13 @@ Settings ▸ Keyboard, not with the in-app chords above.
   empty box would otherwise list the most recent entries in the store, burying the
   commands. It shows a handful of matches rather than everything that matched, and when
   there are more it adds a last **All matches in Knowledge** row that takes you to the
-  surface on the same search — so the shortlist is never a dead end. And when the search
-  itself fails or takes too long it says **Knowledge search unavailable** with the reason,
-  rather than quietly showing nothing, which would be indistinguishable from "no matches".
+  surface on the same search — so the shortlist is never a dead end. And when the palette
+  cannot complete the search — the store unreachable, the bearer rejected, the request past
+  its deadline — it says **Knowledge search unavailable** with the reason, rather than
+  quietly showing nothing, which would be indistinguishable from "no matches". (A search
+  the store itself errors on is the exception: that route answers `200` with an empty list,
+  so it does read as "no matches" — check the agent log if a term you know is there
+  returns nothing.)
 
 Groups render in registration order — **Agents**, then **Plugins**, then **Commands** —
 so the agent and its fleet stay at the top. Live search results (Knowledge) arrive after
