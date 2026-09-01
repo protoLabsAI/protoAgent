@@ -118,15 +118,16 @@ export function paletteCommandsVersion(): number {
 /** Whether any dynamic source is registered. The host wires the DS provider path (a
  *  debounced re-read plus the palette's "Searching…" affordance on every keystroke) only
  *  when one exists, because paying for an always-empty provider would put that spinner in
- *  front of every keystroke for nothing.
+ *  front of every keystroke for nothing — in every window that mounts the palette, the
+ *  frameless desktop launcher included.
  *
- *  Core stopped shipping zero at #3292 (`app/chatSlashPalette` — the chat's slash commands
- *  and the server's user-facing skills), so in the default console this now answers TRUE and
- *  the debounce IS paid. The check stays anyway, and not as a formality: it is what keeps the
- *  cost opt-in at the SEAM rather than baked into it, so a fork that withdraws or replaces
- *  that source gets its instant keystrokes back — delete the check and the cost becomes
- *  unremovable. Registering/unregistering a source bumps the version, so a consumer keyed on
- *  `paletteCommandsVersion()` re-asks at the right moment. */
+ *  Core ships ZERO sources, and that is a decision rather than an accident of nobody having
+ *  needed one: #3292 (the chat's slash commands and the server's user-facing skills) was
+ *  written as a source first and moved to the static path, because the DS keeps a provider's
+ *  PREVIOUS results on screen — and runnable — for the 120ms it debounces the new query.
+ *  A read-time source is right for a fork's live navigation list; it is not right for rows
+ *  that RUN something. Registering/unregistering a source bumps the version, so a consumer
+ *  keyed on `paletteCommandsVersion()` re-asks at the right moment. */
 export function hasPaletteSources(): boolean {
   return _sources.size > 0;
 }
@@ -176,7 +177,19 @@ export function registerPaletteCommand(cmd: PaletteCommand): () => void {
  *  typed into it, because the host serves source rows through a DS `CommandProvider` rather
  *  than a snapshot. It does NOT mean "whenever your data changes": nothing here observes a
  *  source's data, so a row that changed between two reads appears at the next read, not the
- *  instant it changed. Returns an unregister fn (idempotent). */
+ *  instant it changed. Returns an unregister fn (idempotent).
+ *
+ *  KNOW WHAT THE PROVIDER PATH COSTS before putting an ACTION on it. The DS commands view
+ *  debounces a provider 120ms and does not clear the previous query's results while it waits:
+ *  it renders `[...statics.filter(match(q)), ...dynamic]` — statics re-filtered against what
+ *  you typed, provider rows appended VERBATIM — and Enter runs the selected row. So for 120ms
+ *  after every keystroke a source's rows are listed, and runnable, against a query they do
+ *  not match. For "go to tab X" that is a mis-navigation; for a row that deletes, publishes or
+ *  arms something it is worse than that. Rows that RUN something belong on
+ *  `registerPaletteCommand` (client-filtered synchronously), re-registered when their inputs
+ *  move — which is what core's own chat rows do (`app/chatSlashPalette`, #3292). Fixing the DS
+ *  is the real answer and is filed as protoContent#504; until that lands and we take the bump,
+ *  choose the path by what the row DOES, not by how live its data is. */
 export function registerPaletteSource(fn: PaletteCommandSource): () => void {
   if (typeof fn !== "function") return () => {};
   _sources.add(fn);

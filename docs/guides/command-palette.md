@@ -37,8 +37,13 @@ Settings ▸ Keyboard, not with the in-app chords above.
   composer's `/` menu: `/clear`, `/export`, `/model`, `/compact`, `/incognito`, `/perf` and
   the rest, each listed as `/token · what it does` and searchable by the words you'd
   actually reach for ("wipe" finds `/clear`, "llm" finds `/model`). A command that acts on
-  the conversation in front of you stays listed with no chat open but is visibly disabled
-  and says why; one that just needs somewhere to work opens or focuses a chat first.
+  the chat in front of you stays listed with no chat open but is visibly disabled and says
+  why; one that just needs somewhere to work opens or focuses a chat first. They stay listed
+  when the chat panel is hidden, too — running one brings the panel back first.
+  The two per-tab **modes**, `/bypass` and `/incognito`, are the exception to "picking a row
+  runs it": their row shows the current setting (`… — now off`) and then hands you the
+  composer with `/bypass ` typed, so you say which way and press Enter yourself. Nothing in
+  the palette can turn off tool-approval prompts on its own.
 - **Skills** — every *user-facing* skill you or a plugin has installed. A skill isn't
   something the console runs: the server folds its procedure into your **next message**, so
   picking one takes you to the chat with `/‹skill› ` typed and leaves the send to you (the
@@ -55,10 +60,10 @@ Settings ▸ Keyboard, not with the in-app chords above.
   **Settings: Telemetry**, **Plugins: Discover**, **Plugins: Install from URL**.
 
 Groups render in registration order — **Agents**, then **Plugins**, then **Commands** —
-so the agent and its fleet stay at the top. **Chat** and **Skills** come after them: they
-are read live on every keystroke rather than registered up front (that is what lets a
-disabled row track whether you have a chat open, and a freshly enabled plugin's skills show
-up without a restart), so they arrive a beat behind the fixed rows.
+so the agent and its fleet stay at the top, with **Chat** and **Skills** after them. Those
+two are re-read as the console changes — a disabled row tracks whether you have a chat open,
+and a freshly enabled plugin's skills show up without a restart — but they filter with
+everything else, instantly, on the keystroke you type.
 
 ## For plugin authors
 

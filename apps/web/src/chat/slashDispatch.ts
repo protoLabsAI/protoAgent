@@ -14,14 +14,16 @@
 // the operator would be looking at — whether the chat SURFACE holding it is itself on
 // screen is a separate question, and a separate field (see "visibility semantics").
 //
-// WHAT `null` MEANS — not "the operator navigated away". The built-in chat surface is
-// mounted for the app's LIFETIME and `active` only toggles visibility (ChatSlot, #613), so
-// in a normal console window a slot stays registered while the operator is on Settings or
-// a plugin rail. That is deliberate: it is what lets ⌘K dispatch a chat command from any
-// surface — but it is ALSO why the target reports `surfaceActive` (see below), because a
-// registered slot is not the same as a slot the operator can see.
-// `slashDispatchTarget()` returns null in the two cases where there is genuinely
-// nothing to dispatch INTO:
+// WHAT `null` MEANS — and, more importantly, WHAT IT DOES NOT. Switching rail surfaces does
+// not clear it: the built-in chat surface keeps its mount while another surface swaps in on
+// the same dock and `active` only toggles visibility (ChatSlot, #613), so a slot stays
+// registered while the operator is on Settings or a plugin rail. That is deliberate — it is
+// what lets ⌘⇧K dispatch a chat command from any surface — and it is why the target reports
+// `surfaceActive` (see below), because a registered slot is not the same as a slot the
+// operator can see.
+//
+// `slashDispatchTarget()` returns null in THREE cases, and they are not the same kind of
+// fact — the third is the one that has already caused a bug:
 //   1. the frameless desktop LAUNCHER window (ADR 0057) — a separate webview that boots
 //      straight into the palette and mounts no ChatSurface at all. Its nav commands already
 //      forward a serializable NavIntent to the main window; a client slash command cannot
@@ -29,6 +31,19 @@
 //   2. a fork surface (`registerSurface({id:"chat"})`) or a plugin iframe (`slot:"chat"`)
 //      holding the chat slot — ChatSlot resolves those BEFORE the built-in surface, so the
 //      built-in one never renders and nothing registers here.
+//   3. a COLLAPSED DOCK. The DS AppShell renders a dock's content only while the dock is
+//      open (`{showLeft && <main>{leftContent}</main>}`), and chat lives on a dock — so the
+//      one-click "Hide left panel" gesture UNMOUNTS the slot and this goes null, while chat
+//      is still entirely this window's chat.
+//
+// So null is "there is nothing to dispatch into RIGHT NOW", never "this window has no chat".
+// A caller deciding whether to OFFER a chat action must not read it as the latter: that is
+// exactly how the command palette lost its whole Chat group the moment the panel was hidden
+// (#3292). Ask the surface/plugin registries instead — `chatSlotProvider` (app/ChatSlot)
+// answers "who provides the chat slot in this window", which a collapse does not change —
+// and keep this seam for the two questions it really answers: where a dispatch would land,
+// and whether it would be seen. A caller that RUNS one can recover from case 3 on its own:
+// raise chat (which un-collapses its dock) and wait for the remount to re-register.
 //
 // SESSION SEMANTICS — the reason this seam exposes more than a run() function. With
 // `sessionId: null` there is a mounted slot but no thread, and dispatching from outside is

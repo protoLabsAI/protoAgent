@@ -141,9 +141,9 @@ menu from `registeredSlashCommands()` + the server list, and `runClientSlash` di
     `"dynamic"` rows are served by a DS **`CommandProvider`** the commands view re-invokes on
     every open and every keystroke. The provider is wired only while a source exists — the DS
     shows its "Searching…" affordance whenever any provider declares `getCommands`, so an
-    always-empty one would charge every keystroke for nothing (core shipped no source until
-    #3292 registered the chat's; the check now keeps that cost opt-in rather than baked in)
-    — and it applies the query itself, because the DS client-filters only statics
+    always-empty one would charge every keystroke for nothing, in every window that mounts the
+    palette (the desktop launcher included) — and it applies the query itself, because the DS
+    client-filters only statics
     (a provider is normally a remote search that already applied it). The honest contract is
     therefore "re-read on every palette read", not "re-rendered when your data changes": a
     row that changes while the palette sits open and untouched appears at the next keystroke.
@@ -222,7 +222,8 @@ row prefills `/<skill> ` into the composer, raises chat, and stops.
 Generalised: **a row either RUNS or DRAFTS, and every drafting row says the same thing**
 ("drafts in chat — you send it"), so one phrase means one behaviour. Every skill drafts;
 `/btw` does too, because it takes a question the palette has no way to ask for and running it
-bare only prints its own usage note. And a row dispatches the token it actually *claims* —
+bare only prints its own usage note; and so do the two per-tab modes, for a safety reason
+spelled out below. And a row dispatches the token it actually *claims* —
 `/goal`'s row runs `goal new`, the one branch the client command owns (bare `/goal` falls
 through to the server control command and would return `false`), and is labelled
 `/goal new · Open the guided goal form`: the registry description ("Set or check goals — …")
@@ -238,36 +239,73 @@ reason, and a skill row's is always its draft promise — leaving a column of ba
 from. Leaving `hint` unset is also what lets `toDsCommand` render the row's live keybinding
 combo, so a row that advertises one says nothing else.
 
-**Session semantics are decided per command, on one question: does it need THIS
-conversation's content, or merely A thread?** Outside the composer a `return false` is a
+**Session semantics are decided per command, on one question: does it need THIS chat — its
+content or its per-tab mode — or merely A thread?** Outside the composer a `return false` is a
 silent no-op — there is no draft for the token to fall into — so a row that would decline
 must not look runnable:
 
-- **Needs this conversation** (`/clear /export /publish /btw /trajectory /prompt /perf
-  /compact`) — the row is `disabled` with the reason in `hint`. Auto-creating a blank tab to
-  export an empty transcript or compact nothing would "succeed" and tell the operator
-  nothing. Disabled-and-explaining keeps it discoverable.
-- **Needs only a thread** (`/help /effort /model /incognito /bypass /goal /watch`) — a place
-  to print, or a tab to configure before typing into it. The row creates or focuses one
-  first (`chatStore.createSession` reuses a pristine blank), then dispatches.
-- **Needs nothing** — `/new`.
+- **Needs this chat** (`/clear /export /publish /btw /trajectory /prompt /perf /compact
+  /bypass /incognito`) — the row is `disabled` with the reason in `hint`. The first eight read
+  or rewrite accumulated history, and auto-creating a blank tab to export an empty transcript
+  or compact nothing would "succeed" and tell the operator nothing; the last two are per-tab
+  modes whose row exists to name the current one. Disabled-and-explaining keeps it
+  discoverable.
+- **Needs only a thread** (`/help /effort /model /goal /watch`) — a place to print, or a tab
+  to configure before typing into it. The row creates or focuses one first
+  (`chatStore.createSession` reuses a pristine blank), then dispatches.
+- **Needs nothing** — `/new`, with one gate: `createSession` *reuses* a pristine blank rather
+  than making a second one, so when that blank **is** the current tab the dispatch is a
+  genuine no-op. The row disables itself on exactly the condition every other "new chat"
+  affordance already does (`unusedSession`, MobileShell/SessionSheet).
 
 The gate is "is there a session", never "does it have messages": the palette must not invent
 a stricter rule than the composer, where `/export` on an empty tab is allowed.
 
-**Both halves are a `registerPaletteSource`, not static rows.** The skill list is live server
-state (`/api/chat/commands` re-resolves the registries per request, so enabling a plugin
-changes it with no restart) and the client rows' `disabled` flags track the chat slot's
-session, which moves as tabs open and close. A snapshot would freeze each. The source reads
-the shared React-Query **cache** (`queryKeys.chatCommands`) rather than fetching, because it
-runs on every keystroke into the palette. Consequence to own: core now ships a source, so the
-DS commands view wires its provider unconditionally — these rows arrive after its 120ms
-debounce, behind a small "Searching…" spinner, while the static rows still render instantly.
+**A per-tab MODE (`/bypass`, `/incognito`) is never a one-Enter row.** Dispatched bare, both
+*toggle* (`next = arg === "on" ? true : arg === "off" ? false : !cur`). In the composer that
+is fine — the operator typed the whole token, at a tab whose current mode is on screen. From a
+fuzzy search it is not: the palette preselects the first match and Enter runs it, so "yolo" +
+Enter would arm `run_command` auto-approval — **a trust boundary** — in a direction the row's
+label never named. A directional *pair* (`/bypass on` + `/bypass off`) does not fix it either,
+because the DS matcher is a case-insensitive **substring** test over the row's whole
+label/hint/keywords, and "on" is a substring of half the English in them — which of the pair a
+query preselects is not something the row builder can guarantee. So a mode row **drafts**: it
+raises chat, types `/bypass ` into the composer, and stops. The operator supplies the
+direction and the send, on the tab it applies to, and reads the command's own system note
+afterwards. The row still earns its place, because its **label carries the mode's current
+value** (`… — now off`) — the thing an operator opens ⌘⇧K to find out, and the reason both
+modes are `needsThisChat`.
+
+**Rows go through the STATIC path, not `registerPaletteSource`.** They were a source first,
+for two real reasons — the skill list is live server state, and a client row's `disabled`
+tracks the session — and that was wrong, because of what the DS does with a read-time
+provider: the commands view debounces it 120ms and never clears the previous query's results
+(`filtered` is `[...statics.filter(match(q)), ...dynamic]` — statics re-filtered, provider
+rows appended *verbatim* — and Enter runs `filtered[sel]`). So for 120ms after every keystroke
+a source's rows are listed, and runnable, against a query they do not match. A mis-navigation
+for a fork's read-only "go to tab X" list; something else entirely for `/clear`. (Filed
+upstream as protoContent#504 — the seam's doc points at it, so the choice stays informed until
+we take the bump.) Statics are client-filtered
+synchronously instead, and the host keeps them live by **re-registering**: it subscribes to
+the chat store through a string projection of everything a row renders from
+(`chatPaletteSignature()` — so a streamed token doesn't churn the group) and to the shared
+`/api/chat/commands` query for the skills. Same liveness, no stale window, and no "Searching…"
+spinner in front of every keystroke. **Core therefore still ships zero sources**, which is
+what keeps `hasPaletteSources()` meaningful.
+
+**Which windows get the rows is a fact about the WINDOW, not about what is mounted.** The gate
+is `chatSlotProvider(...) === "builtin"` (app/ChatSlot — the same resolution `ChatSlot`
+renders with), passed in by App. It is *not* `slashDispatchTarget() !== null`: the DS AppShell
+unmounts a collapsed dock, so that seam goes `null` on the one-click "Hide left panel"
+gesture, and gating on it emptied the whole Chat + Skills group out of ⌘⇧K in exactly the
+state the palette is most useful in. Running a row from there still works unchanged — the
+raise (`navigate({kind:"view",id:"chat"})` → `openView`) un-collapses the dock, and the
+handoff poll waits for the remounted slot to re-register.
 
 Every navigation goes through the palette's serializable `NavIntent` chokepoint, injected
 rather than imported: a direct `useUI.getState()` call is an inert no-op in the frameless
-launcher's shell-less context. (The launcher gets no rows at all — it mounts no chat slot, so
-`slashDispatchTarget()` is `null` and the source returns nothing.)
+launcher's shell-less context. (The launcher gets no rows at all — it mounts no ChatSurface,
+so its `builtInChat` is false and it also never pays for a source it could not serve.)
 
 ### UI-state slices (shipped, `createUISlice`)
 

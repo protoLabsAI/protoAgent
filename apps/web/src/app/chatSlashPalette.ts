@@ -1,4 +1,4 @@
-// The chat's own verbs in ⌘⇧K (#3292) — the 16 client slash commands (ADR 0061) and every
+// The chat's own verbs in ⌘⇧K (#3292) — the client slash commands (ADR 0061) and every
 // server user-facing SKILL (ADR 0052), which until now existed ONLY inside the composer's
 // `/` menu. They are the console's real actions ("clear this chat", "switch model",
 // "export"), and the palette — the console's one "how do I do X?" surface — did not know
@@ -18,8 +18,26 @@
 //
 // So a row either RUNS or DRAFTS, and a drafting row always says the same thing
 // ("drafts in chat — you send it"), because one phrase should mean one behaviour. Every
-// skill drafts; one client command does too (`/btw`, which needs a question the palette has
-// no way to ask for — running it bare would only print its own usage note).
+// skill drafts; three client commands do too — `/btw` (which needs a question the palette
+// has no way to ask for) and the two per-tab MODES, `/bypass` and `/incognito`.
+//
+// ── WHY A MODE MUST NOT BE A ONE-ENTER ROW ───────────────────────────────────────────
+// `/bypass` and `/incognito` TOGGLE when dispatched bare (coreSlashCommands: `next = arg ===
+// "on" ? true : arg === "off" ? false : !cur`). In the composer that is fine — the operator
+// typed the whole token deliberately, at a tab whose current mode is on screen as a chip.
+// From a FUZZY SEARCH it is not: the palette preselects the first match and Enter runs it,
+// so "yolo" + Enter would arm `run_command` auto-approval — a trust boundary — in a
+// direction the row's label never named. Nor is a directional PAIR (`/bypass on` +
+// `/bypass off`) safe here: the DS matcher is a case-insensitive SUBSTRING test over the
+// row's whole label/hint/keywords, and "on" is a substring of half the English in them, so
+// which of the pair a query preselects is not something this file can guarantee.
+//
+// So a mode row DRAFTS: it raises chat, types `/bypass ` into the composer, and stops. The
+// operator supplies the direction and the send, lands on the tab whose mode is changing, and
+// reads the command's own system note afterwards. Nothing in the palette can arm a
+// permission. The row still earns its place, because it answers the question an operator
+// actually opens ⌘⇧K with — the label carries the mode's CURRENT VALUE (`… — now off`), which
+// nothing else outside the chat tab tells them.
 //
 // ── The row's two slots ──────────────────────────────────────────────────────────────
 // LABEL = `/token · what it does`, the composer `/` menu's own shape and the reason this
@@ -30,47 +48,55 @@
 // hint is a reason; a skill row's is always its draft promise), and a column of bare tokens
 // — `/perf`, `/btw`, `/postmortem` — is a list you cannot shop from.
 //
-// ── Why a dynamic SOURCE and not static registration ────────────────────────────────
-// Both halves are live, for different reasons, and a snapshot would freeze each:
-//   • the skill list is LIVE server state — `/api/chat/commands` re-resolves the registries
-//     per request (`_operator_chat_commands`), so enabling a plugin or authoring a skill
-//     changes it with NO restart. We read it from the shared React-Query CACHE
-//     (`queryKeys.chatCommands`, populated by the chat surface's own `chatCommandsQuery`)
-//     rather than fetching: a source runs on EVERY keystroke into the palette, so it must
-//     be cheap and synchronous — see `chatSlashPaletteRows`.
-//   • the client command list is fixed at module load, but the rows' DISABLED state is not:
-//     it depends on whether the visible chat slot currently has a session, which changes as
-//     the operator opens and closes tabs. A static row snapshotted `disabled: true` at boot
-//     would stay dead for the life of the window.
-// Core shipping a source is a real (small) cost: the DS commands view shows its "Searching…"
-// spinner and debounces 120ms whenever ANY provider declares `getCommands`, so these rows
-// land a beat after the statics on each keystroke. That is the price of rows that can't lie.
+// ── Why the rows are STATIC, and what makes them live ────────────────────────────────
+// They were a `registerPaletteSource` at first, for two good reasons — the skill list is
+// live server state, and a client row's `disabled` state tracks the chat slot's session —
+// and that was wrong, because of what the DS does with a read-time provider. The commands
+// view debounces a provider 120ms and NEVER clears the previous query's results: `filtered`
+// is `[...statics.filter(match(q)), ...dynamic]`, statics re-filtered, provider rows
+// appended VERBATIM, and Enter runs `filtered[sel]`. So for 120ms after every keystroke the
+// palette lists — and will run — rows that do not match what is on screen. With core
+// shipping zero sources that path was unreachable; filling it with the chat's ACTION rows
+// would have made "type a new query, hit Enter" run the OLD query's command. (Filed upstream
+// as protoContent#504; this file does not wait for it.)
+//
+// So the rows take the DS's synchronous, client-filtered STATIC path instead, and the host
+// (`usePaletteRegistry`) keeps them live by RE-REGISTERING them: it subscribes to the chat
+// store through `chatPaletteSignature()` — everything a row renders from, as one string, so
+// a streamed token doesn't churn the palette — and to the shared `/api/chat/commands` query
+// for the skills. Same liveness, no stale window, and no "Searching…" spinner in front of
+// every keystroke in every window (the desktop launcher included, which can serve none of
+// these rows at all).
 //
 // ── SESSION SEMANTICS — decided per command, not guessed ─────────────────────────────
-// 13 of the 16 client commands `return false` without a session and two more answer through
-// a `noteToThread` that is itself a no-op without one (slashDispatch.ts spells out the
+// Most client commands `return false` without a session, and two more answer through a
+// `noteToThread` that is itself a no-op without one (slashDispatch.ts spells out the
 // inventory; coreSlashCommands.test.ts pins it). In the COMPOSER false means "fall through
 // to the draft" — a visible outcome. From the palette there is no draft to fall through to,
 // so the same false is a row that visibly does NOTHING. Every command therefore lands in
-// one of three buckets, on ONE question: does it need THIS conversation's content, or
-// merely A thread?
+// one of three buckets, on ONE question: does it need THIS chat, or merely A thread?
 //
-//   NEEDS THIS CONVERSATION → the row is DISABLED with the reason in `hint`.
-//     /clear /export /publish /btw /trajectory /prompt /perf /compact
-//     Each reads or rewrites accumulated history. Auto-creating a blank tab to run them
-//     would be theater: exporting an empty transcript or compacting nothing "succeeds" and
-//     tells the operator nothing. Disabled-and-explaining beats hidden (the row stays
-//     discoverable) and beats a dead-looking runnable row.
+//   NEEDS THIS CHAT → the row is DISABLED with the reason in `hint`.
+//     /clear /export /publish /btw /trajectory /prompt /perf /compact /bypass /incognito
+//     The first eight read or rewrite accumulated history; auto-creating a blank tab to run
+//     them would be theater (exporting an empty transcript "succeeds" and tells the operator
+//     nothing). The last two are per-TAB modes: their row's whole value is naming the current
+//     one, and there is no current one without a tab. Disabled-and-explaining beats hidden
+//     (the row stays discoverable) and beats a dead-looking runnable row.
 //
 //   NEEDS ONLY A THREAD → the row CREATES OR SWITCHES to one first, then dispatches.
-//     /help /effort /model /incognito /bypass /goal /watch
+//     /help /effort /model /goal /watch
 //     Two shapes, same requirement: a place to print (`/help`, `/watch`, `/goal`'s form) or
-//     a tab to configure before you type into it (`/effort`, `/model`, `/incognito`,
-//     `/bypass`). A fresh tab is a perfectly good answer to both — and `chatStore.createSession`
-//     hands back a pristine blank instead of piling one up, so this is "focus the empty tab
-//     you already have" far more often than it is "make a new one".
+//     a tab to configure before you type into it (`/effort`, `/model`). A fresh tab is a
+//     perfectly good answer to both — and `chatStore.createSession` hands back a pristine
+//     blank instead of piling one up, so this is "focus the empty tab you already have" far
+//     more often than it is "make a new one".
 //
-//   NEEDS NOTHING → `/new`, which never reads `sessionId`.
+//   NEEDS NOTHING → `/new` — with one gate, because `createSession` REUSES a pristine blank
+//     rather than making a second one (chat-store.ts). When that blank IS the tab you are
+//     looking at, `/new` is a genuine no-op, which is why every other "new chat" affordance
+//     (MobileShell, SessionSheet) disables itself on `unusedSession`. The palette row does
+//     the same rather than being the one affordance that quietly does nothing.
 //
 // Note the gate is "is there a session", NOT "does it have messages". That is deliberate:
 // the palette must not invent a stricter rule than the composer, where `/export` on an
@@ -81,16 +107,17 @@
 // writes that only take effect on React's next commit: the slot re-registers its dispatcher
 // per render, so reading the seam back synchronously would still see the OLD target — the
 // session-less one we just fixed, or a composer that is still `display: none` and cannot
-// take focus. So both defer, and the create case additionally polls until the new slot has
-// published a session. Bounded, so a chat slot that never produces one (a fork surface
-// holding the slot) cannot leave a timer looping.
-import { chatStore } from "../chat/chat-store";
+// take focus. So both defer, and the poll additionally covers the case where the slot is not
+// mounted AT ALL — a collapsed dock (the DS AppShell renders a dock's content only while it
+// is open), which `navigate({kind:"view",id:"chat"})` un-collapses via `openView`. Bounded,
+// so a chat slot that never produces a session (a fork surface holding the slot) cannot
+// leave a timer looping.
+import { chatStore, unusedSession } from "../chat/chat-store";
+import type { ChatSession } from "../chat/chat-store";
 import { prefillChatDraft, runSlashFromOutside, slashDispatchTarget } from "../chat/slashDispatch";
-import { registerPaletteSource } from "../ext/paletteRegistry";
 import type { PaletteCommand } from "../ext/paletteRegistry";
 import { findSlashCommand, registeredSlashCommands } from "../ext/slashRegistry";
-import { queryClient } from "../lib/queryClient";
-import { chatCommandsQuery } from "../lib/queries";
+import type { SlashCommand } from "../lib/types";
 import type { NavIntent } from "./usePaletteRegistry";
 
 /** The palette's serializable navigation chokepoint (`navigate` in usePaletteRegistry).
@@ -102,18 +129,24 @@ export type Navigate = (intent: NavIntent) => void;
  *  is a decision made HERE, about a ROW — none of it belongs on `registerSlashCommand`,
  *  whose commands answer a different question ("did I claim this token?") than a row does
  *  ("would picking me visibly do what I say?"). It is one table rather than five keyed by
- *  the same sixteen names, so "why is `/btw` special?" is one line to read instead of five
- *  to cross-reference. A command with NO entry still gets a row — a fork's command lands on
+ *  the same names, so "why is `/btw` special?" is one line to read instead of five to
+ *  cross-reference. A command with NO entry still gets a row — a fork's command lands on
  *  the optimistic defaults: runnable, needing at most A thread, searchable by its own
  *  description and usage. */
 type RowSpec = {
-  /** Acts on THIS conversation's accumulated content, so with no session the row is DISABLED
-   *  with the reason in `hint` rather than making a blank tab to run against — see the
-   *  session-semantics note above. */
+  /** Acts on THIS chat — its accumulated content, or its per-tab mode — so with no session
+   *  the row is DISABLED with the reason in `hint` rather than making a blank tab to run
+   *  against. See the session-semantics note above. */
   needsThisChat?: true;
   /** The row PREFILLS `/<token> ` instead of dispatching, because the operator still has to
    *  supply something. Identical contract to a skill row, and it says the identical hint. */
   drafts?: true;
+  /** A per-tab MODE this command toggles when dispatched bare — so the row DRAFTS (implied,
+   *  no need to also set `drafts`) and its label states the mode's CURRENT value. Read the
+   *  "why a mode must not be a one-Enter row" note above before removing either half: the
+   *  draft is what keeps a permission off the one-Enter path, and the current value is what
+   *  the row is actually worth opening the palette for. */
+  mode?: (session: ChatSession) => "on" | "off";
   /** Dispatch THIS instead of the bare command name, where the row is NARROWER than the
    *  command it comes from. */
   token?: string;
@@ -168,9 +201,21 @@ const ROWS: Record<string, RowSpec> = {
   },
   effort: { find: ["reasoning", "thinking", "low", "medium", "high", "max"] },
   model: { find: ["llm", "switch", "change", "provider", "favorites"] },
-  incognito: { find: ["private", "no memory", "forget", "ephemeral", "off the record"] },
+  // The two per-tab MODES. Both are `needsThisChat` because the row's job is to report the
+  // current value, and both DRAFT because dispatching them bare would toggle — see the note
+  // at the top of the file. `/bypass` is the one that matters: it arms `run_command`
+  // auto-approval, and no fuzzy-matched palette row is allowed to do that in one keystroke.
+  incognito: {
+    needsThisChat: true,
+    mode: (s) => (s.incognito ? "on" : "off"),
+    find: ["private", "no memory", "forget", "ephemeral", "off the record"],
+  },
+  bypass: {
+    needsThisChat: true,
+    mode: (s) => (s.bypassPermissions ? "on" : "off"),
+    find: ["permissions", "auto-approve", "approve", "yolo", "dangerous", "run_command"],
+  },
   help: { find: ["shortcuts", "keyboard", "reference", "keys", "cheat sheet"] },
-  bypass: { find: ["permissions", "auto-approve", "approve", "yolo", "dangerous", "run_command"] },
   // The only row NARROWER than its command, and the reason both overrides exist. The client
   // `/goal` claims ONLY the `new` subcommand (the guided form) and returns false for
   // everything else, so bare `/goal`, `/goal <text>` and `/goal clear` fall through to the
@@ -191,12 +236,13 @@ const ROWS: Record<string, RowSpec> = {
   },
 };
 
-const HANDOFF_TRIES = 30;
+const HANDOFF_TRIES = 40;
 const HANDOFF_MS = 16;
 
-/** Wait out React's commit, then act. Covers BOTH deferred cases: a raised chat surface
- *  (one tick, so the composer is on screen before we focus it) and a freshly created
- *  session (poll until the new slot has published its dispatcher). Bounded at
+/** Wait out React's commit, then act. Covers all three deferred cases: a raised chat surface
+ *  (one tick, so the composer is on screen before we focus it), a freshly created session,
+ *  and a slot that is not mounted at all because its dock was collapsed — the raise
+ *  un-collapses it and this poll waits for the remount. Bounded at
  *  ~`HANDOFF_TRIES * HANDOFF_MS`; a slot that never yields a session (a fork surface owning
  *  the chat slot) drops the action rather than looping forever. */
 function whenSlotSettles(act: () => void, tries = HANDOFF_TRIES): void {
@@ -213,26 +259,38 @@ function whenSlotSettles(act: () => void, tries = HANDOFF_TRIES): void {
  *  The shared body of both row families — a client command's dispatch and a skill's draft
  *  prefill differ only in `act`, and need the identical staging.
  *
+ *  There is deliberately NO early return on a null target. A null seam does NOT mean "this
+ *  window has no chat": the DS AppShell UNMOUNTS a collapsed dock, so the ordinary "Hide left
+ *  panel" gesture takes the slot — and its registration — away while chat is still very much
+ *  this window's chat. That is also the state the palette is most useful in, so the row runs
+ *  the same path it always did: raise (which `openView` un-collapses the dock for), make sure
+ *  the store has a session, and poll until the remounted slot publishes its dispatcher.
+ *  Whether this window has a chat to raise at all is decided ONCE, by the host, from
+ *  `chatSlotProvider` — not per-run from a registration that comes and goes.
+ *
  *  Raising goes through the injected `navigate`, never `useUI.getState()`: the frameless
  *  desktop launcher mounts this same registry in a shell-less JS context where a direct
  *  store mutation is an inert no-op, and only a serializable NavIntent crosses to the real
- *  window. (The launcher never gets these rows at all — no chat slot is mounted there, so
- *  `slashDispatchTarget()` is null and the source returns nothing — but the rule is the
- *  rule, and a row that quietly bypassed it would be the next launcher bug.) */
+ *  window. (The launcher never gets these rows at all, but the rule is the rule, and a row
+ *  that quietly bypassed it would be the next launcher bug.) */
 function onChatReady(act: () => void, navigate: Navigate): void {
   const target = slashDispatchTarget();
-  if (!target) return; // no chat slot in this window — the source offered no rows anyway
-  if (!target.surfaceActive) navigate({ kind: "view", id: "chat" });
-  if (target.sessionId && target.surfaceActive) {
+  if (target?.sessionId && target.surfaceActive) {
     act(); // already looking at a live thread — nothing to wait for
     return;
   }
-  if (!target.sessionId) chatStore.createSession(); // reuses a pristine blank when there is one
+  // Hidden behind another surface, or unmounted with its dock — `openView` handles both
+  // (it un-hides the surface, un-collapses its dock and makes it the active one).
+  if (!target?.surfaceActive) navigate({ kind: "view", id: "chat" });
+  // The STORE, not the seam, is the authority on whether a thread exists: with the dock
+  // collapsed there is no seam to ask, and the remounted slot will adopt whatever the store
+  // says is current. `createSession` reuses a pristine blank when there is one.
+  if (!chatStore.getSnapshot().currentSessionId) chatStore.createSession();
   whenSlotSettles(act);
 }
 
-/** The one phrase for "this row leaves the send to you" — shared by every skill row and by
- *  every `drafts` client command, so the operator learns it once. */
+/** The one phrase for "this row leaves the send to you" — shared by every skill row, by
+ *  every `drafts` client command and by both mode rows, so the operator learns it once. */
 const DRAFT_HINT = "drafts in chat — you send it";
 
 /** `/token · what it does` — the shape of the composer's own `/` menu, which is where the
@@ -254,39 +312,65 @@ function rowLabel(token: string, blurb: string | undefined): string {
  *  live keybinding combo where a row advertises one. */
 function hintFor(
   spec: RowSpec,
-  opts: { disabled: boolean; willOpenChat: boolean },
+  opts: { disabledReason?: string; willOpenChat: boolean },
 ): string | undefined {
-  if (opts.disabled) return "needs an open chat";
-  if (spec.drafts) return DRAFT_HINT;
+  if (opts.disabledReason) return opts.disabledReason;
+  if (spec.drafts || spec.mode) return DRAFT_HINT;
   if (opts.willOpenChat) return "opens a chat first";
   return undefined;
 }
 
+/** Why this row can't act right now, or undefined if it can. Two reasons, both of which
+ *  would otherwise be a row that looks live and does nothing:
+ *    • it needs THIS chat and there isn't one;
+ *    • it is `/new` and the pristine blank `createSession` would hand back IS the current
+ *      tab, so the dispatch is a genuine no-op (chat-store.ts says so in as many words, and
+ *      MobileShell/SessionSheet already disable their "+" on exactly this). */
+function disabledReason(
+  spec: RowSpec,
+  name: string,
+  state: { session: ChatSession | null; blankIsCurrent: boolean },
+): string | undefined {
+  if (spec.needsThisChat && !state.session) return "needs an open chat";
+  if (name === "new" && state.blankIsCurrent) return "already on a blank chat";
+  return undefined;
+}
+
 /** The rows for the client slash commands registered through `registerSlashCommand`. */
-function clientRows(sessionId: string | null, navigate: Navigate): PaletteCommand[] {
+function clientRows(
+  state: { session: ChatSession | null; blankIsCurrent: boolean },
+  navigate: Navigate,
+): PaletteCommand[] {
   return registeredSlashCommands().map((cmd) => {
     const spec: RowSpec = ROWS[cmd.name] ?? {};
     const token = spec.token ?? cmd.name;
-    const disabled = !sessionId && !!spec.needsThisChat;
+    const reason = disabledReason(spec, cmd.name, state);
     // `/new` never promises to open a chat first — opening one IS the action. (It still
     // routes through `onChatReady`, which may have to raise a hidden surface; the create it
     // does on the way is harmless because `createSession` hands back the pristine blank the
     // dispatched `/new` would then ask for, rather than a second empty tab.)
-    const willOpenChat = !sessionId && !disabled && cmd.name !== "new";
+    const willOpenChat = !state.session && !reason && cmd.name !== "new";
+    // A mode row states the CURRENT value, which is the whole reason to list it — the label
+    // is the only place outside the tab itself that says whether this chat is in incognito
+    // or has approvals bypassed. Only computable with a session, which is why every mode is
+    // `needsThisChat`.
+    const mode = spec.mode && state.session ? spec.mode(state.session) : undefined;
+    const blurb = spec.blurb ?? cmd.description;
+    const drafts = !!spec.drafts || !!spec.mode;
     return {
       id: `chat-slash:${cmd.name}`,
       // The token LEADS the label: it is the name the operator already knows from the
       // composer and the one this audit found missing from ⌘⇧K. `usage` joins the keywords
       // so the argument words are searchable too ("incognito off", "effort max") — they are
       // what an operator types, and no other field carries them.
-      label: rowLabel(token, spec.blurb ?? cmd.description),
+      label: rowLabel(token, mode ? `${blurb} — now ${mode}` : blurb),
       group: "Chat",
       keywords: ["slash", cmd.description, cmd.usage, ...(spec.find ?? [])].filter(
         Boolean,
       ) as string[],
-      hint: hintFor(spec, { disabled, willOpenChat }),
+      hint: hintFor(spec, { disabledReason: reason, willOpenChat }),
       keybinding: spec.keybinding,
-      disabled,
+      disabled: !!reason,
       // Carried, never evaluated here: the host resolves it per render, so a row gated on a
       // flag still in flight appears when `/api/flags` lands instead of being hidden for the
       // life of the window (ADR 0068's fail-closed window). `/publish` is the live case.
@@ -298,7 +382,7 @@ function clientRows(sessionId: string | null, navigate: Navigate): PaletteComman
         // host has already gated the row on its `flag` — so there is no fallback left to
         // take. Every OTHER caller of these must check.
         onChatReady(
-          () => void (spec.drafts ? prefillChatDraft(`/${token} `) : runSlashFromOutside(token)),
+          () => void (drafts ? prefillChatDraft(`/${token} `) : runSlashFromOutside(token)),
           navigate,
         );
       },
@@ -309,14 +393,9 @@ function clientRows(sessionId: string | null, navigate: Navigate): PaletteComman
 /** The rows for server user-facing SKILLS. Never an action row: a skill is applied by the
  *  server on the next send, so the row's whole promise is "you'll be in chat with this
  *  typed, ready to send". */
-function skillRows(navigate: Navigate): PaletteCommand[] {
-  // Read through the SHARED query's own key (`chatCommandsQuery`, the one the chat surface
-  // fetches with) rather than naming the key here: the key and the row type then can't drift
-  // apart, and `getQueryData` infers the response shape from it. A cache read, never a
-  // fetch — see `chatSlashPaletteRows`.
-  const cached = queryClient.getQueryData(chatCommandsQuery().queryKey);
-  const skills = (cached?.commands ?? []).filter((c) => c.kind === "skill");
+function skillRows(skills: SlashCommand[], navigate: Navigate): PaletteCommand[] {
   return skills
+    .filter((c) => c.kind === "skill")
     // A client command owns the token if both exist — the composer's `/` menu dedups
     // client-first, so listing both here would offer a row that types a token something
     // else intercepts.
@@ -342,23 +421,50 @@ function skillRows(navigate: Navigate): PaletteCommand[] {
     }));
 }
 
-/** Every chat row this window should offer, computed fresh. Called on palette open and on
- *  EVERY keystroke, so it stays cheap and synchronous: three module reads (the client
- *  registry array, the seam's projection, one React-Query CACHE lookup) and a map. It must
- *  never fetch — `chatCommandsQuery` is owned by the chat surface, and a fetch here would
- *  fire one per character typed. */
-export function chatSlashPaletteRows(navigate: Navigate): PaletteCommand[] {
-  const target = slashDispatchTarget();
-  // No chat slot in this window: the frameless desktop launcher (which mounts no
-  // ChatSurface) or a fork surface / plugin iframe holding the chat slot. Nothing here can
-  // reach a composer, so offer nothing rather than a wall of dead rows.
-  if (!target) return [];
-  return [...clientRows(target.sessionId, navigate), ...skillRows(navigate)];
+/** Everything a chat row RENDERS from, as one string.
+ *
+ *  The host `useSyncExternalStore`s this over `chatStore.subscribe` so the rows re-register
+ *  when — and only when — one of them would look different. It has to be a projection rather
+ *  than the snapshot itself: the chat store notifies on every streamed token, and
+ *  re-registering the whole Chat group per frame would be a real cost for a list that
+ *  changed in none of the ways it shows. */
+export function chatPaletteSignature(): string {
+  const state = chatStore.getSnapshot();
+  const session = state.sessions.find((s) => s.id === state.currentSessionId) ?? null;
+  const blank = unusedSession(state);
+  return [
+    session?.id ?? "",
+    blank && blank.id === state.currentSessionId ? "blank" : "",
+    session?.bypassPermissions ? "bypass" : "",
+    session?.incognito ? "incognito" : "",
+  ].join("|");
 }
 
-/** Register the source. Called once at module load by usePaletteRegistry, which owns
- *  `navigate`; returns an unregister so a test (or a fork replacing the rows) can withdraw
- *  it. */
-export function registerChatSlashPalette(navigate: Navigate): () => void {
-  return registerPaletteSource(() => chatSlashPaletteRows(navigate));
+/** Every chat row this window should offer.
+ *
+ *  `reachable` is the host's answer to "can this window reach the BUILT-IN composer?" —
+ *  `chatSlotProvider(...) === "builtin"`, decided from the surface/plugin registries rather
+ *  than from whether a slot happens to be mounted. That distinction is the bug this
+ *  parameter exists for: gating on `slashDispatchTarget()` looked equivalent and was not,
+ *  because collapsing the dock chat lives on unmounts the slot and would have emptied the
+ *  whole Chat + Skills group out of ⌘⇧K — in the state where the palette is most useful.
+ *
+ *  Everything else is read here: the chat store (session + per-tab modes) and the skill list
+ *  the host holds from the shared `/api/chat/commands` query. */
+export function chatSlashPaletteRows(
+  navigate: Navigate,
+  opts: { reachable: boolean; skills?: SlashCommand[] },
+): PaletteCommand[] {
+  // No built-in chat in this window: the frameless desktop launcher (which mounts no
+  // ChatSurface at all) or a fork surface / plugin iframe holding the chat slot. Nothing
+  // here could reach a composer, so offer nothing rather than a wall of dead rows.
+  if (!opts.reachable) return [];
+  const state = chatStore.getSnapshot();
+  const session = state.sessions.find((s) => s.id === state.currentSessionId) ?? null;
+  const blank = unusedSession(state);
+  const rowState = {
+    session,
+    blankIsCurrent: !!blank && blank.id === state.currentSessionId,
+  };
+  return [...clientRows(rowState, navigate), ...skillRows(opts.skills ?? [], navigate)];
 }

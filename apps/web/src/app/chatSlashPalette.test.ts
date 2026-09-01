@@ -1,30 +1,33 @@
-// The chat's verbs in ⌘⇧K (#3292). Three things can go wrong here and all three are quiet,
-// so all three are pinned:
+// The chat's verbs in ⌘⇧K (#3292). Five things can go wrong here and all five are quiet,
+// so all five are pinned:
 //
 //   1. a row that VISIBLY DOES NOTHING. Most client slash commands `return false` without a
 //      session; in the composer that falls through to the draft, from the palette it is a
 //      dead row. Every command is bucketed (disabled-with-a-reason vs make-a-thread-first)
-//      and both buckets are asserted, including the create → dispatch handoff.
+//      and both buckets are asserted, including the create → dispatch handoff. `/new` gets
+//      its own arm: `createSession` REUSES a pristine blank, so on a blank tab the row is a
+//      no-op and must say so.
 //   2. a SKILL row that lies. A user-facing skill is a server-side message rewrite applied
 //      on the next SEND — there is nothing to run — so its row must prefill the composer and
 //      never dispatch.
-//   3. a source that is EXPENSIVE. It runs on every keystroke into the palette, so it must
-//      read the React-Query cache rather than fetch, and track it.
-//   4. a row that is CORRECT and unfindable — or worse, findable UNDER another row. This is a
+//   3. rows that VANISH. The gate is "does this WINDOW have the built-in chat", never "is a
+//      slot registered right now": the DS AppShell unmounts a collapsed dock, so the latter
+//      goes false on a one-click gesture and used to empty the whole Chat + Skills group.
+//   4. a MODE row that arms something in a direction its label never named. `/bypass` turns
+//      off tool-permission approval; from a fuzzy search, one Enter must never do that.
+//   5. a row that is CORRECT and unfindable — or worse, findable UNDER another row. This is a
 //      search surface: the operator types words, the palette preselects the first match, and
 //      Enter runs it. So the words are pinned as words ("wipe" → /clear), first-match and all.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { chatStore } from "../chat/chat-store";
-import "../chat/coreSlashCommands"; // side-effect: registers the 16 client commands
+import "../chat/coreSlashCommands"; // side-effect: registers the client commands
 import { registerSlashDispatcher } from "../chat/slashDispatch";
 import type { SlashDispatchTarget } from "../chat/slashDispatch";
-import { registeredPaletteCommands } from "../ext/paletteRegistry";
 import { registeredSlashCommands } from "../ext/slashRegistry";
-import { queryKeys } from "../lib/queries";
-import { queryClient } from "../lib/queryClient";
 import type { PaletteCommand } from "../ext/paletteRegistry";
-import { chatSlashPaletteRows, registerChatSlashPalette } from "./chatSlashPalette";
+import type { SlashCommand } from "../lib/types";
+import { chatPaletteSignature, chatSlashPaletteRows } from "./chatSlashPalette";
 import type { NavIntent } from "./usePaletteRegistry";
 
 const offs: (() => void)[] = [];
@@ -44,7 +47,38 @@ function slot(over: Partial<SlashDispatchTarget> = {}) {
   offs.push(off);
 }
 
-const rows = () => chatSlashPaletteRows(nav);
+/** The chat store's answer, which is what the ROWS read — independent of any slot. `over`
+ *  patches the current session (`null` sessions = no chat at all). */
+function store(over: { session?: Record<string, unknown> | null; blank?: boolean } = {}) {
+  const session =
+    over.session === null
+      ? null
+      : {
+          id: "sess-1",
+          title: over.blank ? "New chat" : "Deploy triage",
+          messages: over.blank ? [] : [{ role: "user", content: "hi" }],
+          createdAt: 0,
+          updatedAt: 0,
+          ...(over.session ?? {}),
+        };
+  vi.spyOn(chatStore, "getSnapshot").mockReturnValue({
+    ...chatStore.getSnapshot(),
+    sessions: session ? [session] : [],
+    currentSessionId: session ? (session.id as string) : null,
+  } as ReturnType<typeof chatStore.getSnapshot>);
+}
+
+let currentSkills: SlashCommand[] = [];
+const skills = (...names: string[]) => {
+  currentSkills = names.map((name) => ({
+    name,
+    description: `The ${name} skill.`,
+    kind: "skill",
+  }));
+};
+
+const rows = (opts: { reachable?: boolean } = {}) =>
+  chatSlashPaletteRows(nav, { reachable: opts.reachable ?? true, skills: currentSkills });
 const row = (id: string): PaletteCommand => {
   const found = rows().find((r) => r.id === id);
   if (!found) throw new Error(`no palette row ${id} — got ${rows().map((r) => r.id).join(", ")}`);
@@ -56,30 +90,63 @@ const run = (r: PaletteCommand) => {
   r.run({ close: () => {} });
 };
 
-const skills = (...names: string[]) =>
-  queryClient.setQueryData(queryKeys.chatCommands, {
-    commands: names.map((name) => ({ name, description: `The ${name} skill.`, kind: "skill" })),
-  });
-
 beforeEach(() => {
   nav.mockClear();
   dispatch.mockClear();
   prefill.mockClear();
+  currentSkills = [];
+  store(); // a live, non-blank chat unless a test says otherwise
 });
 
 afterEach(() => {
   while (offs.length) offs.pop()?.();
-  queryClient.clear();
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
-describe("no chat slot in this window", () => {
-  it("offers NOTHING rather than a wall of dead rows (the desktop launcher)", () => {
-    // The frameless launcher mounts no ChatSurface at all, so nothing here could reach a
-    // composer — and a client slash command cannot cross to the main window the way a
-    // serializable NavIntent can.
-    expect(rows()).toEqual([]);
+describe("which WINDOW gets the rows", () => {
+  it("offers NOTHING where no built-in chat exists (the launcher, a fork surface, a plugin slot)", () => {
+    // The frameless launcher mounts no ChatSurface at all, and a fork surface or a
+    // `slot:"chat"` plugin iframe is resolved BEFORE the built-in one — so nothing here
+    // could reach a composer, and a client slash command cannot cross to another window the
+    // way a serializable NavIntent can.
+    slot();
+    expect(rows({ reachable: false })).toEqual([]);
+  });
+
+  it("keeps every row while the chat DOCK is collapsed — the seam is unregistered, chat isn't gone", () => {
+    // THE REGRESSION THIS FILE EXISTS FOR (blocker, 2026-08): the DS AppShell renders a dock's
+    // content only while the dock is open, so "Hide left panel" unmounts ChatSessionSlot and
+    // `slashDispatchTarget()` goes null. Gating the rows on that emptied the whole Chat +
+    // Skills group out of ⌘⇧K in exactly the state the palette is most useful in — chat out of
+    // the way, operator wanting a chat verb without reopening it.
+    skills("triage");
+    // …no `slot()` call: nothing is registered, exactly as after the collapse.
+    const ids = rows().map((r) => r.id);
+    expect(ids).toContain("chat-slash:clear");
+    expect(ids).toContain("chat-slash:new");
+    expect(ids).toContain("chat-skill:triage");
+    // …and the rows are LIVE, not a wall of dead ones: the store still has the session.
+    expect(row("chat-slash:clear").disabled).toBeFalsy();
+  });
+
+  it("RUNS a row picked while the dock is collapsed — raise (which un-collapses), then dispatch", () => {
+    vi.useFakeTimers();
+    run(row("chat-slash:clear")); // still no slot registered
+    // `openView` un-hides the surface AND un-collapses the dock it lives on, so the raise is
+    // what brings the slot back; nothing is dispatched into the dark meanwhile.
+    expect(nav).toHaveBeenCalledWith({ kind: "view", id: "chat" });
+    expect(dispatch).not.toHaveBeenCalled();
+    slot(); // React commits, the dock re-renders, the slot re-registers
+    vi.advanceTimersByTime(50);
+    expect(dispatch).toHaveBeenCalledWith("clear");
+  });
+
+  it("does NOT invent a session when the store already has one", () => {
+    vi.useFakeTimers();
+    const created = vi.spyOn(chatStore, "createSession");
+    run(row("chat-slash:help")); // collapsed: no slot to ask
+    expect(created).not.toHaveBeenCalled(); // the STORE is the authority, not the seam
   });
 });
 
@@ -95,7 +162,7 @@ describe("client slash command rows", () => {
   it("still says what the row DOES when the hint is spent on a reason", () => {
     // The regression this guards: put the description in the hint and it vanishes in exactly
     // the state an operator opens the palette in — no chat yet, so every hint is a caveat.
-    slot({ sessionId: null });
+    store({ session: null });
     const clear = row("chat-slash:clear");
     expect(clear.hint).toBe("needs an open chat"); // the hint slot is the REASON here…
     expect(clear.label).toContain("Clear this chat's history"); // …and the label still explains
@@ -103,7 +170,6 @@ describe("client slash command rows", () => {
   });
 
   it("searches the ARGUMENT words too — they are what an operator types", () => {
-    slot();
     // `usage` is the only field carrying "on|off", "low|medium|high"; a row found by
     // "incognito off" is a row the operator can pick without knowing the syntax first.
     expect(row("chat-slash:incognito").keywords?.join(" ")).toContain("off");
@@ -114,13 +180,11 @@ describe("client slash command rows", () => {
     // Evaluating a flag here would run during the fail-closed window while /api/flags is in
     // flight (ADR 0068) and hide the row for the life of the window. The host resolves it
     // per render, so a late answer reveals it.
-    slot();
     expect(row("chat-slash:publish").flag).toBe("chat.publish");
     expect(row("chat-slash:new").flag).toBeUndefined();
   });
 
   it("advertises a keybinding by ID, and leaves the hint free so the LIVE combo renders", () => {
-    slot();
     expect(row("chat-slash:new").keybinding).toBe("chat.new");
     expect(row("chat-slash:new").hint).toBeUndefined();
     expect(row("chat-slash:clear").keybinding).toBe("chat.clear");
@@ -130,13 +194,52 @@ describe("client slash command rows", () => {
   });
 });
 
-describe("session semantics — the decision, per command", () => {
-  const CONVERSATION_SCOPED = ["clear", "export", "publish", "btw", "trajectory", "prompt", "perf", "compact"];
-  const THREAD_ONLY = ["help", "effort", "model", "incognito", "bypass", "goal", "watch"];
+describe("a per-tab MODE is never a one-Enter row", () => {
+  // `/bypass` arms `run_command` auto-approval; `/incognito` decides whether the turn is
+  // remembered. Dispatched bare, both TOGGLE — so a fuzzy-matched palette row that dispatched
+  // one would flip a trust boundary in a direction its label never named. Both DRAFT instead,
+  // and both state the mode's current value, which is the thing worth opening ⌘⇧K for.
+  it("DRAFTS rather than dispatching, so nothing in the palette can arm auto-approval", () => {
+    slot();
+    for (const name of ["bypass", "incognito"]) {
+      const r = row(`chat-slash:${name}`);
+      expect(r.hint).toBe("drafts in chat — you send it");
+      run(r);
+      expect(prefill).toHaveBeenCalledWith(`/${name} `);
+    }
+    expect(dispatch).not.toHaveBeenCalled(); // …not once, in either direction
+  });
 
-  it("disables the commands that act on THIS conversation, and says why", () => {
-    slot({ sessionId: null });
-    for (const name of CONVERSATION_SCOPED) {
+  it("states the CURRENT value in the label, in both directions", () => {
+    store({ session: { bypassPermissions: true, incognito: false } });
+    expect(row("chat-slash:bypass").label).toContain("— now on");
+    expect(row("chat-slash:incognito").label).toContain("— now off");
+    store({ session: { bypassPermissions: false, incognito: true } });
+    expect(row("chat-slash:bypass").label).toContain("— now off");
+    expect(row("chat-slash:incognito").label).toContain("— now on");
+  });
+
+  it("needs a real tab: a mode has no current value without one", () => {
+    store({ session: null });
+    for (const name of ["bypass", "incognito"]) {
+      const r = row(`chat-slash:${name}`);
+      expect(r.disabled).toBe(true);
+      expect(r.hint).toBe("needs an open chat");
+      expect(r.label).not.toContain("now"); // …and doesn't claim a state it can't read
+    }
+  });
+});
+
+describe("session semantics — the decision, per command", () => {
+  const THIS_CHAT = [
+    "clear", "export", "publish", "btw", "trajectory", "prompt", "perf", "compact",
+    "bypass", "incognito",
+  ];
+  const THREAD_ONLY = ["help", "effort", "model", "goal", "watch"];
+
+  it("disables the commands that need THIS chat, and says why", () => {
+    store({ session: null });
+    for (const name of THIS_CHAT) {
       const r = row(`chat-slash:${name}`);
       expect(r.disabled, `/${name} must not look runnable with no chat`).toBe(true);
       // The reason OUTRANKS every other hint, /btw's draft promise included: a dead row that
@@ -146,7 +249,7 @@ describe("session semantics — the decision, per command", () => {
   });
 
   it("keeps the commands that need only A thread runnable, promising the tab in the hint", () => {
-    slot({ sessionId: null });
+    store({ session: null });
     for (const name of THREAD_ONLY) {
       const r = row(`chat-slash:${name}`);
       expect(r.disabled, `/${name} needs a thread, not this one — it can make one`).toBeFalsy();
@@ -156,16 +259,28 @@ describe("session semantics — the decision, per command", () => {
     expect(row("chat-slash:new").hint).toBeUndefined(); // …and promises no tab it isn't making
   });
 
+  it("disables /new on a blank tab, where createSession hands the SAME tab back", () => {
+    // The store deliberately reuses a pristine blank rather than piling empties up, so on a
+    // blank tab `/new` is a genuine no-op — which every other "new chat" affordance
+    // (MobileShell, SessionSheet) already disables itself for. The palette row was the one
+    // that didn't, and it fails in the state a fresh console BOOTS into.
+    store({ blank: true });
+    expect(row("chat-slash:new").disabled).toBe(true);
+    expect(row("chat-slash:new").hint).toBe("already on a blank chat");
+    // A blank on ANOTHER tab still switches you there — visible feedback, so it stays live.
+    store();
+    expect(row("chat-slash:new").disabled).toBeFalsy();
+  });
+
   it("re-enables every row the moment a session exists — the state is LIVE, never snapshotted", () => {
-    slot({ sessionId: null });
-    expect(rows().filter((r) => r.disabled)).toHaveLength(CONVERSATION_SCOPED.length);
-    offs.pop()?.();
-    slot({ sessionId: "sess-9" });
+    store({ session: null });
+    expect(rows().filter((r) => r.disabled)).toHaveLength(THIS_CHAT.length);
+    store();
     expect(rows().filter((r) => r.disabled)).toEqual([]);
   });
 
   it("accounts for EVERY registered command — no row falls between the buckets", () => {
-    expect(new Set([...CONVERSATION_SCOPED, ...THREAD_ONLY, "new"])).toEqual(
+    expect(new Set([...THIS_CHAT, ...THREAD_ONLY, "new"])).toEqual(
       new Set(registeredSlashCommands().map((c) => c.name)),
     );
   });
@@ -181,7 +296,7 @@ describe("running a row", () => {
 
   it("dispatches `/goal new` — the only branch the CLIENT command claims", () => {
     // Bare `/goal` returns false (it falls through to the SERVER control command), so a row
-    // that dispatched "goal" would be the exact silent no-op this source exists to avoid.
+    // that dispatched "goal" would be the exact silent no-op this module exists to avoid.
     slot();
     // …and the label can't over-promise: the registry description LEADS with the two
     // branches (`/goal <text>`, `/goal clear`) this row does NOT run, so the row restates it.
@@ -216,6 +331,7 @@ describe("running a row", () => {
 
   it("creates a thread, WAITS for the new slot, then dispatches", () => {
     vi.useFakeTimers();
+    store({ session: null });
     slot({ sessionId: null });
     // The store write only lands on React's next commit, so the seam still reports the old
     // session-less target until the new slot re-registers — model exactly that.
@@ -233,6 +349,7 @@ describe("running a row", () => {
 
   it("gives up rather than looping when a slot never produces a session", () => {
     vi.useFakeTimers();
+    store({ session: null });
     slot({ sessionId: null });
     vi.spyOn(chatStore, "createSession").mockImplementation(
       () => ({ id: "x" }) as ReturnType<typeof chatStore.createSession>,
@@ -245,14 +362,15 @@ describe("running a row", () => {
 });
 
 describe("what an operator types finds the row they mean", () => {
-  // A deliberate mirror of the host's `matchesQuery` (usePaletteRegistry): every
-  // whitespace-separated term must appear somewhere in label / hint / group / keywords,
-  // case-insensitively. Restated rather than imported because importing the host drags the DS
-  // palette, the UI store and the flags query in for a two-line predicate — and because the
-  // fact worth pinning is not the predicate but the ORDER it produces. The palette preselects
-  // the FIRST match and Enter runs it, so a keyword that lets one command outrank another's
-  // own name is the "typing /model runs /trajectory" trap coreSlashCommands warns about, one
-  // surface over: `/goal`'s usage string legitimately contains the word "clear".
+  // A deliberate mirror of the host's `matchesQuery` (usePaletteRegistry) — which is itself a
+  // mirror of the DS commands view's own matcher: every whitespace-separated term must appear
+  // somewhere in label / hint / group / keywords, case-insensitively, as a SUBSTRING.
+  // Restated rather than imported because importing the host drags the DS palette, the UI
+  // store and the flags query in for a two-line predicate — and because the fact worth
+  // pinning is not the predicate but the ORDER it produces. The palette preselects the FIRST
+  // match and Enter runs it, so a keyword that lets one command outrank another's own name is
+  // the "typing /model runs /trajectory" trap coreSlashCommands warns about, one surface
+  // over: `/goal`'s usage string legitimately contains the word "clear".
   const first = (query: string) => {
     const terms = query.trim().toLowerCase().split(/\s+/);
     return rows().find((r) => {
@@ -298,6 +416,19 @@ describe("what an operator types finds the row they mean", () => {
   ])("typing %j lands on %s", (query, id) => {
     expect(first(query)).toBe(id);
   });
+
+  it("cannot land Enter on a row that ARMS anything, however it is spelled", () => {
+    // The trust-boundary arm. Whatever the fuzzy match resolves to for the words an operator
+    // reaches for when they mean bypass, the row it preselects must be a DRAFTING one — the
+    // direction and the send stay theirs.
+    for (const q of ["yolo", "bypass", "bypass on", "auto-approve", "dangerous", "run_command"]) {
+      const id = first(q);
+      const r = id ? rows().find((x) => x.id === id) : undefined;
+      if (!r) continue;
+      run(r);
+    }
+    expect(dispatch).not.toHaveBeenCalledWith(expect.stringContaining("bypass"));
+  });
 });
 
 describe("user-facing skill rows", () => {
@@ -317,6 +448,7 @@ describe("user-facing skill rows", () => {
 
   it("opens a chat first when there is no thread to type into", () => {
     vi.useFakeTimers();
+    store({ session: null });
     slot({ sessionId: null });
     skills("triage");
     vi.spyOn(chatStore, "createSession").mockImplementation(() => {
@@ -331,14 +463,12 @@ describe("user-facing skill rows", () => {
 
   it("lists only skills — a workflow or subagent runs server-side and is a different row", () => {
     slot();
-    queryClient.setQueryData(queryKeys.chatCommands, {
-      commands: [
-        { name: "triage", description: "A skill.", kind: "skill" },
-        { name: "research-and-brief", description: "A workflow.", kind: "workflow" },
-        { name: "dream", description: "A subagent.", kind: "subagent" },
-        { name: "lifecycle", description: "A control command.", kind: "control" },
-      ],
-    });
+    currentSkills = [
+      { name: "triage", description: "A skill.", kind: "skill" },
+      { name: "research-and-brief", description: "A workflow.", kind: "workflow" },
+      { name: "dream", description: "A subagent.", kind: "subagent" },
+      { name: "lifecycle", description: "A control command.", kind: "control" },
+    ];
     const ids = rows().map((r) => r.id);
     expect(ids).toContain("chat-skill:triage");
     expect(ids.filter((id) => id.startsWith("chat-skill:"))).toEqual(["chat-skill:triage"]);
@@ -354,35 +484,38 @@ describe("user-facing skill rows", () => {
   });
 });
 
-describe("the source is cheap, and tracks the LIVE list", () => {
-  it("never fetches — it runs on every keystroke into the palette", () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(() => new Promise<Response>(() => {}));
-    slot();
-    skills("triage");
-    for (let i = 0; i < 5; i++) rows(); // five keystrokes
-    expect(fetchSpy).not.toHaveBeenCalled();
+describe("the signature the host re-registers on", () => {
+  // The rows are STATIC (see the module header: a DS provider keeps the PREVIOUS query's rows
+  // listed and runnable through its 120ms debounce, which is not a thing to do with rows that
+  // run `/clear`). So something has to re-take the snapshot, and that something is this
+  // string. It must move when a row would look different — and stay put otherwise, because
+  // the chat store notifies on every streamed token and re-registering the whole group per
+  // frame is a real cost.
+  it("moves when the current session changes", () => {
+    store();
+    const before = chatPaletteSignature();
+    store({ session: { id: "sess-2" } });
+    expect(chatPaletteSignature()).not.toBe(before);
   });
 
-  it("follows the query CACHE, so enabling a plugin changes ⌘⇧K with no restart", () => {
-    // /api/chat/commands is re-resolved per request, so the answer moves under a live
-    // console. A snapshot taken at registration would list yesterday's skills forever.
-    slot();
-    skills("triage");
-    expect(rows().map((r) => r.id)).toContain("chat-skill:triage");
-    skills("triage", "postmortem");
-    expect(rows().map((r) => r.id)).toContain("chat-skill:postmortem");
-    skills();
-    expect(rows().map((r) => r.id).filter((id) => id.startsWith("chat-skill:"))).toEqual([]);
+  it("moves when a per-tab MODE flips — the label states it, so the row must be re-taken", () => {
+    store({ session: { bypassPermissions: false } });
+    const before = chatPaletteSignature();
+    store({ session: { bypassPermissions: true } });
+    expect(chatPaletteSignature()).not.toBe(before);
   });
 
-  it("registers as a DYNAMIC source, and withdraws cleanly", () => {
-    slot();
-    const off = registerChatSlashPalette(nav);
-    expect(registeredPaletteCommands("dynamic").map((r) => r.id)).toContain("chat-slash:new");
-    // Static registration would freeze both halves: the skill list is live server state and
-    // the disabled flags track the chat slot's session.
-    expect(registeredPaletteCommands("static").map((r) => r.id)).not.toContain("chat-slash:new");
-    off();
-    expect(registeredPaletteCommands("dynamic")).toEqual([]);
+  it("moves when the current tab becomes the reusable blank — /new's disabled state", () => {
+    store();
+    const before = chatPaletteSignature();
+    store({ blank: true });
+    expect(chatPaletteSignature()).not.toBe(before);
+  });
+
+  it("stays PUT for a change no row shows — a streamed token must not churn the palette", () => {
+    store({ session: { messages: [{ role: "user", content: "hi" }] } });
+    const before = chatPaletteSignature();
+    store({ session: { messages: [{ role: "user", content: "hi" }, { role: "assistant", content: "the" }] } });
+    expect(chatPaletteSignature()).toBe(before);
   });
 });

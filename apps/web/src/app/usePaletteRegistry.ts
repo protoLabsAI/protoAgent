@@ -33,8 +33,9 @@ import { effectiveCombo, useKeybindingOverrides } from "../keybindings/overrides
 import { useFlagPredicate } from "../flags/flags";
 import { useQuery } from "@tanstack/react-query";
 import { agentHref, isHostConsole } from "../lib/api";
-import { fleetQuery } from "../lib/queries";
-import { registerChatSlashPalette } from "./chatSlashPalette";
+import { chatCommandsQuery, fleetQuery } from "../lib/queries";
+import { chatStore } from "../chat/chat-store";
+import { chatPaletteSignature, chatSlashPaletteRows } from "./chatSlashPalette";
 import { markAgentOpened } from "./fleetPalette";
 import { fleetRoomView } from "./FleetRoom";
 import { fleetSettingsDisabledReason } from "./fleetSettingsGate";
@@ -145,14 +146,6 @@ export function setPaletteNavigator(fn: ((intent: NavIntent) => void) | null) {
 function navigate(intent: NavIntent) {
   navigator(intent);
 }
-
-// The chat's own verbs — the client slash commands and the server's user-facing skills
-// (#3292) — as a DYNAMIC source, because both halves are live: the skill list is
-// re-resolved server-side per request, and a client row's disabled state tracks whether the
-// visible chat slot has a session. `navigate` is INJECTED rather than imported so the module
-// keeps no runtime edge back here (its only import from this file is the `NavIntent` type,
-// which erases), and so its rows are testable without a UI store.
-registerChatSlashPalette(navigate);
 
 // Core deep-link palette commands — DOGFOODED through the public `registerPaletteCommand`
 // seam (ADR 0061), so core uses the same path a fork does (no bypass). Each deep-link is a
@@ -272,6 +265,21 @@ export function paletteSourceProvider(
   };
 }
 
+/** What only the HOST window can answer about itself.
+ *
+ *  `builtInChat` is "this window's chat slot is the BUILT-IN ChatSurface" — App computes it
+ *  with `chatSlotProvider` (the same resolution `ChatSlot` renders with), the launcher leaves
+ *  it false because it mounts no chat at all. It gates the chat's slash-command rows, which
+ *  dispatch through a seam only the built-in surface publishes.
+ *
+ *  Deliberately a fact about the WINDOW, not about what is mounted: the DS AppShell unmounts
+ *  a collapsed dock, so "is a chat slot registered right now?" flips every time the operator
+ *  hides the panel — and gating rows on that emptied the Chat and Skills groups out of ⌘⇧K
+ *  in exactly the state the palette is most useful in. */
+export type PaletteHostOptions = {
+  builtInChat?: boolean;
+};
+
 /** Build the palette registry from the resolved view list + the inline plugin views.
  *  Stable across renders; nav commands + inline views re-register only when their set
  *  changes (plugins enable/disable) — matching the DS registry's add/withdraw model. */
@@ -279,6 +287,7 @@ export function usePaletteRegistry(
   views: View[],
   inlineViews: InlinePluginView[] = [],
   chat?: PaletteChatConfig,
+  opts: PaletteHostOptions = {},
 ): PaletteRegistry {
   const registry = useMemo(() => createPaletteRegistry(), []);
   const inlineIds = useMemo(() => new Set(inlineViews.map((v) => v.id)), [inlineViews]);
@@ -304,6 +313,35 @@ export function usePaletteRegistry(
   // in both the console window and the desktop launcher (both sit under QueryClientProvider).
   const { data: fleet } = useQuery(fleetQuery());
   const agents = fleet?.agents ?? [];
+
+  // ── The chat's own verbs (#3292), and what keeps them live ──────────────────────────
+  // These rows go through the STATIC path (`registerCommands`), not `registerPaletteSource`:
+  // the DS serves a source through a debounced provider that never clears the PREVIOUS
+  // query's results, so a stale row stays listed — and runnable by Enter — for 120ms after
+  // every keystroke. Fine for a fork's read-only "open tab X" list; not fine for the chat's
+  // ACTION rows. Statics are client-filtered synchronously against what is on screen.
+  //
+  // The cost of a snapshot is that something has to re-take it, so both live inputs are
+  // subscriptions and both feed the effect below as dependencies:
+  //   • the chat store, through `chatPaletteSignature()` — a STRING projection of everything
+  //     a row renders from (the current session, whether it is the reusable blank, the two
+  //     per-tab modes), so the store's per-streamed-token notifications don't re-register the
+  //     whole group every frame;
+  //   • `/api/chat/commands`, the same shared query the composer's `/` menu uses — so
+  //     enabling a plugin or authoring a skill adds its row with no restart. Off in a window
+  //     with no built-in chat (the launcher), which can't serve these rows anyway.
+  const chatSig = useSyncExternalStore(
+    chatStore.subscribe,
+    chatPaletteSignature,
+    chatPaletteSignature,
+  );
+  const builtInChat = !!opts.builtInChat;
+  const { data: chatCommands } = useQuery({ ...chatCommandsQuery(), enabled: builtInChat });
+  const skills = useMemo(
+    () => (chatCommands?.commands ?? []).filter((c) => c.kind === "skill"),
+    [chatCommands],
+  );
+  const skillSig = skills.map((c) => `${c.name} ${c.description}`).join("|");
 
   // Built-in surfaces (core + fork/ext) live behind `Open ▸`; plugin views are their own
   // root section. A `session` view (none today) would ride with the built-ins.
@@ -462,15 +500,25 @@ export function usePaletteRegistry(
       // take the read-time provider path below instead.
       ...visiblePaletteCommands(flagOn, isHostConsole(), "static").map(toDsCommand),
     ]);
+    // The chat's own verbs — the client slash commands and the server's user-facing skills
+    // (#3292). Registered LAST so the Chat and Skills groups render after the fixed ones, and
+    // registered STATICALLY so the DS client-filters them synchronously against the live
+    // query (see the note where `chatSig` is read). Flag-gated here rather than in the row
+    // builder, exactly as the seam's statics are: a row gated on a flag still in flight
+    // (`/publish`) appears when `/api/flags` lands instead of being hidden for the life of
+    // the window.
+    const chatRows = chatSlashPaletteRows(navigate, { reachable: builtInChat, skills });
+    const offChatRows = chatRows.length
+      ? registry.registerCommands(chatRows.filter((c) => !c.flag || flagOn(c.flag)).map(toDsCommand))
+      : undefined;
     // Dynamic sources, served per palette read. Wired only when a source exists: the DS shows
     // its "Searching…" spinner (and debounces 120ms) whenever ANY provider declares
-    // `getCommands`, so an unconditional provider would charge every keystroke for nothing.
-    // Since #3292 core registers one itself (`registerChatSlashPalette`, above), so in the
-    // default console this IS wired and the chat/skill rows land a beat behind the statics —
-    // the price of rows that track a live session and a live skill list instead of lying. The
-    // check still earns its keep: it keeps that cost opt-in for a fork that withdraws or
-    // replaces the source. Registering one bumps `seamVersion`, which re-runs this effect and
-    // wires the provider then.
+    // `getCommands`, so an unconditional provider would charge every keystroke for nothing —
+    // in EVERY window that mounts this hook, the desktop launcher included. Core ships no
+    // source (#3292 nearly did; its rows are statics above, for the staleness reason spelled
+    // out there), so in the default console this stays unwired and keystrokes stay instant.
+    // Registering one bumps `seamVersion`, which re-runs this effect and wires the provider
+    // then.
     const offSources = hasPaletteSources()
       ? registry.registerProvider(paletteSourceProvider(flagOn, isHostConsole()))
       : undefined;
@@ -479,10 +527,23 @@ export function usePaletteRegistry(
       offFleetRoom();
       offPlugins?.();
       offCommands();
+      offChatRows?.();
       offSources?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navSig, inlineSig, fleetSig, chat, registry, seamVersion, flagOn, kbOverrides]);
+  }, [
+    navSig,
+    inlineSig,
+    fleetSig,
+    chat,
+    registry,
+    seamVersion,
+    flagOn,
+    kbOverrides,
+    builtInChat,
+    chatSig,
+    skillSig,
+  ]);
 
   return registry;
 }
