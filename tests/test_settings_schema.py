@@ -326,6 +326,10 @@ def test_filesystem_and_tools_sections_surfaced_under_capabilities():
     assert dis["type"] == "string_list" and dis["section"] == "Tools"
     assert dis["default"] == [] and dis["restart"] is False
 
+    fleet_diag = by_key["tools.fleet_diagnostics.enabled"]
+    assert fleet_diag["type"] == "bool" and fleet_diag["section"] == "Tools"
+    assert fleet_diag["default"] is False and fleet_diag["restart"] is False
+
 
 def test_every_core_section_is_mapped_to_a_category():
     """No core section may fall through to the "Plugins" default (D5).

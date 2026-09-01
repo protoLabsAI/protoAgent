@@ -295,6 +295,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "thinking": "",
     "tools_deferred_enabled": False,
     "tools_deferred_keep": [],
+    "tools_fleet_diagnostics_enabled": False,
     "tools_memoize_reads_enabled": False,
     "tools_disabled": [],
     "tools_self_config_enabled": False,
@@ -526,6 +527,40 @@ def test_case3_list_coercion_empty_section_is_empty_list(tmp_path):
     cfg = LangGraphConfig.from_yaml(path)
     assert cfg.mcp_servers == []
     assert cfg.tools_disabled == []
+
+
+def test_fleet_diagnostics_model_exposure_gate_defaults_off_and_parses(tmp_path):
+    """#3170 / ADR 0071: the model-facing fleet diagnostics tool is explicitly opt-in."""
+    assert LangGraphConfig.from_yaml(_write_yaml(tmp_path, "tools: {}\n")).tools_fleet_diagnostics_enabled is False
+
+    enabled_dir = tmp_path / "enabled"
+    enabled_dir.mkdir()
+    cfg = LangGraphConfig.from_yaml(
+        _write_yaml(
+            enabled_dir,
+            """
+            tools:
+              fleet_diagnostics:
+                enabled: true
+            """,
+        )
+    )
+    assert cfg.tools_fleet_diagnostics_enabled is True
+
+
+def test_fleet_diagnostics_enabled_survives_the_settings_save_round_trip(tmp_path):
+    """The Settings-save path (config_to_dict -> apply_updates_to_yaml -> from_yaml)
+    must persist the toggle when it is flipped ON.
+
+    The example-config golden only exercises the default (``false``), which a broken
+    field would also read back — so pin the NON-default value through the real file
+    write path to prove an operator's opt-in actually round-trips (#3170)."""
+    on = LangGraphConfig.from_dict({"tools": {"fleet_diagnostics": {"enabled": True}}})
+    doc: dict = {}
+    apply_updates_to_yaml(doc, config_to_dict(on))
+    out = tmp_path / "langgraph-config.yaml"
+    save_yaml_doc(doc, out)
+    assert LangGraphConfig.from_yaml(str(out)).tools_fleet_diagnostics_enabled is True
 
 
 def test_case4_agent_runtime_none_coerces_to_native(tmp_path):
