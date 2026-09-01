@@ -90,7 +90,7 @@ export function runForwardedCombo(combo: string, editable = false): boolean {
 //     binding whose action still needs a surface mounted, one it names itself — and
 //     `applyNavIntent` opens that surface first, FLUSHING the render so the surface is in the
 //     DOM and not merely in the store, which is what an action that walks the DOM needs
-//     (usePaletteRegistry.ts, NavIntent kind "keybinding"). A caller that can't do that must
+//     (app/palette/nav.ts, NavIntent kind "keybinding"). A caller that can't do that must
 //     not call this for a scoped binding.
 //   • `allowInInput` — not a hazard. It exists so a plain key (`/`) doesn't fire while the
 //     operator is typing it into a field; choosing a row off a list is not a stray keystroke.

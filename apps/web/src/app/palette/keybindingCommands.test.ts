@@ -17,23 +17,29 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Command, PaletteRegistry } from "@protolabsai/ui/command-palette";
 
-import { chatStore } from "../chat/chat-store";
-import { __resetToolCollapseWalk } from "../chat/toolCollapse";
-import { registerKeybinding, registeredKeybindings } from "../ext/keybindingRegistry";
-import type { Keybinding } from "../ext/keybindingRegistry";
-import { registeredPaletteCommands } from "../ext/paletteRegistry";
-import type { PaletteCommand } from "../ext/paletteRegistry";
-import { formatCombo } from "../keybindings/combo";
-import { useKbIntents } from "../keybindings/intents";
-import { effectiveCombo, useKeybindingOverrides } from "../keybindings/overrides";
-import { runBindingById } from "../keybindings/useKeybindings";
-import { useUI } from "../state/uiStore";
+import { chatStore } from "../../chat/chat-store";
+import { __resetToolCollapseWalk } from "../../chat/toolCollapse";
+import { registerKeybinding, registeredKeybindings } from "../../ext/keybindingRegistry";
+import type { Keybinding } from "../../ext/keybindingRegistry";
+import { registeredPaletteCommands } from "../../ext/paletteRegistry";
+import type { PaletteCommand } from "../../ext/paletteRegistry";
+import { formatCombo } from "../../keybindings/combo";
+import { useKbIntents } from "../../keybindings/intents";
+import { effectiveCombo, useKeybindingOverrides } from "../../keybindings/overrides";
+import { runBindingById } from "../../keybindings/useKeybindings";
+import { buildViews } from "../../lib/viewRegistry";
+import { useUI } from "../../state/uiStore";
 import { KEYBINDING_ROWS, keybindingCommandId, registerKeybindingCommands } from "./keybindingCommands";
-import type { NavIntent } from "./usePaletteRegistry";
+import type { NavIntent } from "./nav";
 // Importing the adapter (for its exports, below) also RUNS its module-load registrations —
-// the core deep-links and the keybinding rows, wired to the real, module-private `navigate`.
+// the core deep-links and the keybinding rows, wired to the real `navigate` chokepoint.
 // That is what every assertion here reads, so the import is load-bearing beyond its bindings.
-import { applyNavIntent, usePaletteRegistry } from "./usePaletteRegistry";
+// Through the barrel, deliberately: it is the entry point App.tsx and Launcher.tsx use, so
+// the rows are exercised on the same import path that ships.
+import { applyNavIntent, usePaletteRegistry } from "../usePaletteRegistry";
+
+// The hook takes ADR 0056's whole View facade now (`{ views, viewFor }`), not a bare array.
+const EMPTY_VIEWS = buildViews({ core: [], plugins: [], ext: [] });
 
 // The live-combo case mounts the adapter and drives a store update through `act`.
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -386,7 +392,7 @@ describe("the advertised combo is the LIVE one, not defaultKeys", () => {
   async function mountRegistry(): Promise<PaletteRegistry> {
     let registry: PaletteRegistry | null = null;
     const Probe = () => {
-      registry = usePaletteRegistry([], []);
+      registry = usePaletteRegistry(EMPTY_VIEWS, []);
       return null;
     };
     const host = document.createElement("div");

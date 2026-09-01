@@ -10,7 +10,7 @@
 // makes (KeybindingsPanel.tsx:199). Bindings are user-rebindable, so a literal "⌘K" in `hint`
 // would start lying the moment the operator rebinds; going through the id keeps ⌘K and
 // Settings ▸ Keyboard showing the same thing, always. (The other half of that loop is the
-// `Settings: Keyboard` deep-link in usePaletteRegistry.ts: a palette that teaches you the
+// `Settings: Keyboard` deep-link in registry.ts: a palette that teaches you the
 // chord has to offer the one screen that changes it.)
 //
 // ── Which bindings get a row ──────────────────────────────────────────────────────────
@@ -30,7 +30,7 @@
 //     should not be two rows.
 //   • `settings.open` — the palette already has a "Settings" row doing the same thing; that
 //     row now carries `keybinding: "settings.open"` instead, so it advertises ⌘, without a
-//     twin (usePaletteRegistry.ts).
+//     twin (registry.ts).
 //
 // ── Scope, and the surface an action actually needs ───────────────────────────────────
 // `resolveBinding` (keybindings/resolve.ts) is the ONLY enforcement of `scope`, and a row
@@ -64,14 +64,14 @@
 // of every keystroke in the default console to gate two rows. Both no-ops are also SELF-
 // EVIDENT where the dropped `focus.*` rows' were not — there is visibly no other tab, and no
 // tool block — so the row does nothing surprising by doing nothing.
-import { registeredKeybindings } from "../ext/keybindingRegistry";
-import { registerPaletteCommand } from "../ext/paletteRegistry";
-import type { NavIntent } from "./usePaletteRegistry";
+import { registeredKeybindings } from "../../ext/keybindingRegistry";
+import { registerPaletteCommand } from "../../ext/paletteRegistry";
+import type { NavIntent } from "./nav";
 // Side effect: register the core defaults. This module reads each binding's `label` and
 // `scope` at registration time, and nothing else on the palette's import path pulls
-// coreKeybindings in (usePaletteRegistry takes only the registry + the combo/override
+// coreKeybindings in (registry.ts takes only the palette registry + the combo/override
 // helpers), so without this the rows would depend on which module happened to load first.
-import "../keybindings/coreKeybindings";
+import "../../keybindings/coreKeybindings";
 
 /** A `data-kb-scope` id → the view id that owns it. The only way a scoped binding earns a
  *  palette row: opening that view is what makes its scope real. Core declares one scope
@@ -89,11 +89,12 @@ const SCOPE_SURFACE: Record<string, string> = { chat: "chat" };
  *  Keyboard" carries them too so the way to REBIND lands in the same list.
  *
  *  PLURAL on purpose, and it is the rule for every keyword in this file. The matcher is
- *  `haystack.includes(term)` (the DS's `matchCommand`, mirrored by `matchesQuery` in
- *  usePaletteRegistry), so a keyword answers every query it CONTAINS: "shortcuts" answers
- *  both "shortcut" and "shortcuts", while the singular answers only itself — and "keyboard
- *  shortcuts" is what an operator actually types. Same reason "keys" is here next to
- *  "keyboard", and "keybindings" covers bind/binding/keybinding. */
+ *  `haystack.includes(term)` — `matchCommand` in rank.ts, the single matcher the seam's
+ *  provider and the host-owned root view now share — so a keyword answers every query it
+ *  CONTAINS: "shortcuts" answers both "shortcut" and "shortcuts", while the singular
+ *  answers only itself — and "keyboard shortcuts" is what an operator actually types. Same
+ *  reason "keys" is here next to "keyboard", and "keybindings" covers
+ *  bind/binding/keybinding. */
 export const SHORTCUT_KEYWORDS = ["keyboard", "shortcuts", "keys", "hotkeys", "keybindings"];
 
 type KeybindingRow = {
@@ -187,9 +188,9 @@ export function keybindingCommandId(bindingId: string): string {
 
 /**
  * Register the allow-list as ⌘K commands. `navigate` is the palette's NavIntent chokepoint
- * (usePaletteRegistry's module-private `navigate`), passed IN rather than imported so this
- * module has no runtime edge back to it — and so a test can watch the exact intent a row
- * emits. Every row goes through it: the frameless desktop launcher mounts this same registry
+ * (`nav.ts`), passed IN rather than imported so this module has no runtime edge back to
+ * `registry.ts` — the module that calls this — and so a test can watch the exact intent a
+ * row emits. Every row goes through it: the frameless desktop launcher mounts this same registry
  * in a shell-less JS context where a direct store call is a silent no-op, so the intent has
  * to be able to cross to the main window.
  *
