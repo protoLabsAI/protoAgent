@@ -115,7 +115,13 @@ describe("which keybindings became palette rows", () => {
   });
 
   it("offers the screen that REBINDS them, deep-linked to the Keyboard section", () => {
-    const cmd = registeredPaletteCommands("static").find((c) => c.id === "box:keybindings");
+    // `settings:keybindings`, not a hand-written `box:` twin. This file's PR shipped one to
+    // carry the shortcut vocabulary, and it turned out to be a DUPLICATE of the row the
+    // Settings generator already emits for that section (#3291) — two identical
+    // "Settings: Keyboard" rows in one list. The generator is the systematic source, so the
+    // twin is gone and the vocabulary moved onto the generated row; this case now asserts the
+    // row an operator actually sees.
+    const cmd = registeredPaletteCommands("static").find((c) => c.id === "settings:keybindings");
     expect(cmd, "Settings: Keyboard row").toBeTruthy();
     cmd!.run({ close: () => {} });
     // The id of the settings section table's Keyboard entry (`id: "keybindings"`, under
@@ -199,7 +205,7 @@ describe("an operator can actually find these rows", () => {
     for (const r of KEYBINDING_ROWS) {
       expect(finds("keyboard shortcuts", row(r.binding)), `row for ${r.binding}`).toBe(true);
     }
-    const rebind = registeredPaletteCommands("static").find((c) => c.id === "box:keybindings");
+    const rebind = registeredPaletteCommands("static").find((c) => c.id === "settings:keybindings");
     expect(finds("keyboard shortcuts", rebind)).toBe(true);
     expect(finds("rebind shortcut", rebind)).toBe(true);
   });

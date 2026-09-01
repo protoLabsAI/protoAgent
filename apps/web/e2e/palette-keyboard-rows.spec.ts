@@ -24,6 +24,11 @@ async function runPaletteRow(page: Page, label: string): Promise<void> {
   await page.keyboard.press("ControlOrMeta+Shift+k");
   await expect(page.locator(".pl-cmdk__panel")).toBeVisible();
   await page.locator(".pl-cmdk__panel .pl-cmdk-commands__input").fill(label);
+  // A unique match on the label span. It IS unique again: an untitled chat tab used to render
+  // "New chat" too (the tab strip's own fallback), which collided byte-for-byte with this
+  // action — both under different headers, both advertising a combo, indistinguishable at the
+  // row. The palette labels those "Untitled chat" now (`chatTabPalette.ts`), so a unique match
+  // is once more the right assertion, and it fails loudly if that collision ever comes back.
   const row = page.locator(".pl-cmdk__panel .pl-cmdk-commands__label", {
     hasText: new RegExp(`^${label}$`),
   });

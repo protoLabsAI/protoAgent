@@ -191,21 +191,7 @@ _link(
 // ordering is the point — resolving a flag HERE, at module load, would read the fail-closed
 // answer `/api/flags` hasn't returned yet and hide Secrets/Devices/Publish permanently.
 for (const cmd of settingsPaletteCommands(navigate)) registerPaletteCommand(cmd);
-// The screen that REBINDS a chord. The keyboard rows teach an operator which chord runs what —
-// the first half of a question whose second half ("that one's wrong, change it") had no palette
-// row at all: Settings ▸ Keyboard was reachable only by opening Settings and finding the
-// section. It carries `SHORTCUT_KEYWORDS`, the same tail as the rows it explains, so ONE
-// `shortcuts` query returns the whole keyboard surface AND the way to rebind it. Neither flag-
-// nor host-gated, so it resolves in a sister agent's window too.
-_link(
-  {
-    id: "box:keybindings",
-    label: "Settings: Keyboard",
-    icon: glyph(Keyboard),
-    keywords: ["settings", "rebind", "remap", "chord", "combo", ...SHORTCUT_KEYWORDS],
-  },
-  { kind: "global", section: "keybindings" },
-);
+registerKeybindingCommands(navigate);
 
 /** Map a registered (core or fork) PaletteCommand onto a DS palette `Command`. The DS row
  *  has no shortcut slot, so a command that ADVERTISES a keybinding (ADR 0061 `keybinding` =

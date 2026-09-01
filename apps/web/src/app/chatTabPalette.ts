@@ -80,6 +80,10 @@ const ORDINAL_BINDINGS = 9;
  *  as the other. "jump" is the verb the ⌘1–9 bindings already use on themselves ("Jump to
  *  chat tab 3", coreKeybindings.ts), so it is the word Settings ▸ Keyboard has already taught
  *  for this exact move. */
+/** Palette label for a chat with no title yet. Deliberately NOT `DEFAULT_SESSION_TITLE`
+ *  ("New chat") — that collides with the keyboard row that creates one; see the row builder. */
+export const UNTITLED_CHAT_LABEL = "Untitled chat";
+
 const CHAT_KEYWORDS = [
   "chats", "tabs", "sessions", "conversations", "threads", "switch", "jump", "go to",
 ];
@@ -102,13 +106,26 @@ const INCOGNITO_KEYWORDS = [...CHAT_KEYWORDS, "incognito", "private"];
 export function chatTabPaletteRows(): PaletteCommand[] {
   const { sessions, currentSessionId } = chatStore.getSnapshot();
   return sessions.map((session, i) => {
-    // A blank title would render an unreadable empty row. `DEFAULT_SESSION_TITLE` is the
-    // honest fallback — it is what the tab strip shows for a chat that has not been named
-    // by its first message yet, so the row matches what the operator is looking at. Several
-    // unnamed chats therefore share one label, deliberately: the strip says the same thing,
-    // the ⌘N hint below tells the first nine apart, and past that an untitled chat is not
-    // what someone typing a name is looking for.
-    const title = session.title?.trim() || DEFAULT_SESSION_TITLE;
+    // A blank title would render an unreadable empty row, so an unnamed chat needs a
+    // fallback — but NOT `DEFAULT_SESSION_TITLE`. That string is "New chat", which is also
+    // the label of the keyboard row that CREATES one, so mirroring the tab strip here puts
+    // two byte-identical rows in one list doing opposite things: one opens the chat you
+    // already have, the other makes another. Both advertise a combo, so even the trailing
+    // hint doesn't tell them apart — only the group header does, and a header is not what
+    // someone reads when they are aiming at a row.
+    //
+    // The strip can say "New chat" because nothing next to it offers to create one. A command
+    // list cannot. "Untitled" is what the row actually means here, and it sorts and reads
+    // correctly beside the named chats. Several unnamed chats still share one label,
+    // deliberately: the ⌘N hint tells the first nine apart, and past that an untitled chat is
+    // not what someone typing a name is looking for.
+    // Treat the STORED default as unnamed too, not just a blank. `createSession` writes
+    // `DEFAULT_SESSION_TITLE` verbatim (chat-store.ts), so an unnamed chat is far more often
+    // the literal string "New chat" than it is empty — and chat-store itself uses exactly this
+    // "title === DEFAULT_SESSION_TITLE means nobody named it" test in three places when it
+    // decides whether a first message may rename a chat.
+    const named = session.title?.trim();
+    const title = !named || named === DEFAULT_SESSION_TITLE ? UNTITLED_CHAT_LABEL : named;
     const isCurrent = session.id === currentSessionId;
     return {
       id: `${CHAT_TAB_ID_PREFIX}${session.id}`,

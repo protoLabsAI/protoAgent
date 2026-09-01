@@ -45,9 +45,17 @@ test("empty query: a short root list that does NOT dump every surface into it", 
   // …including the LAST-registered group. This is a fresh context, so there is no recency at
   // all — the list is pure registration order, Agents → Plugins → Commands. A plain
   // `slice(0, cap)` hands it to whoever registered first, and every plugin view installed
-  // pushes one more Commands row off the bottom. The per-group quota is what keeps Settings
-  // here, and this is the run where losing it would hurt most. It is also what absorbed the
-  // 22 generated `Settings: <Section>` rows (#3291) without moving anything above it.
+  // pushes one more Commands row off the bottom. The per-group quota is what keeps the
+  // Commands group here at all, and this is the run where losing it would hurt most — it is
+  // what absorbed the 22 generated `Settings: <Section>` rows (#3291) without moving anything
+  // above it.
+  //
+  // Asserted on `Open…` rather than `Settings`: with SEVEN groups the quota guarantees each
+  // exactly one row, and Commands registers `Open…` first. That is the right row to guarantee
+  // — it is the doorway to every surface, where `Settings` is one destination among the 22
+  // that follow it, and both are one keystroke away once you type. What must never regress is
+  // that the group is REPRESENTED; which member leads it is registration order, asserted in
+  // the group-header case below.
   //
   // Matched on the row's LABEL span, not on the option's accessible name: the Settings row
   // advertises its shortcut now (#3295 gave it `keybinding: "settings.open"`), and an
@@ -59,7 +67,7 @@ test("empty query: a short root list that does NOT dump every surface into it", 
   // A retrying locator assertion rather than a one-shot `allInnerTexts()` read, because the
   // empty-query list is settled by an async provider read.
   await expect(
-    page.locator(`${PANEL} ${ROW} .pl-cmdk-commands__label`, { hasText: /^Settings$/ }),
+    page.locator(`${PANEL} ${ROW} .pl-cmdk-commands__label`, { hasText: /^Open…$/ }),
   ).toBeVisible();
 });
 
@@ -173,13 +181,17 @@ test("the empty list keeps every group, even once recents have taken most of it"
     "Agents",
     "Plugins",
     "Commands",
+    // Chats (#3290) registers from a module side-effect import, so it lands BEFORE the chat
+    // verbs, which register inside the adapter's effect — group order is registration order.
+    "Chats",
     // Chat + Skills (#3292) — the chat's slash commands and the server's user-facing skills.
     // They are what the guarantee is FOR: ~80 commands land across the sibling command PRs,
     // each in its own group, and a per-group ceiling would have let the newest ones push the
-    // oldest off the bottom. Every group here contributes exactly one row.
+    // oldest off the bottom. SEVEN groups against nine slots is the tightest the quota has
+    // ever been squeezed — every group is down to exactly its guaranteed first row, and the
+    // recents block gave up two of its four to make that possible (see RECENT_MIN).
     "Chat",
     "Skills",
-    "Chats",
   ]);
   // What the guarantee is worth is ONE row per group, not a named row: with four recents the
   // Commands group is down to its first member. `Open…` is that member and it is the row the

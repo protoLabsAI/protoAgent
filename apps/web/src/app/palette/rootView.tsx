@@ -70,6 +70,9 @@ export const EMPTY_CAP = 9;
 /** Recents on the empty query, at most. Under half the list: recents lead it, they do not
  *  BECOME it — a palette that only ever shows what you already ran can't teach you anything. */
 export const RECENT_CAP = 4;
+/** Recents never fall below this, however many groups want a slot. Below two the block stops
+ *  reading as "what you reach for" and becomes a single stray row above the real list. */
+export const RECENT_MIN = 2;
 /** Rows any ONE group may contribute to the empty list once every group has had its first.
  *  Load-bearing, not cosmetic: the root corpus is Agents(2) → Plugins(N) → Commands(6) in
  *  REGISTRATION order, so a plain `slice(0, EMPTY_CAP)` hands the whole list to whoever is
@@ -201,17 +204,34 @@ export function emptyQueryList(
   // most likely (a provider row shadowing the static it was modelled on).
   const byId = new Map<string, Command>();
   for (const c of pool) if (!byId.has(c.id)) byId.set(c.id, c);
-  const recents = Object.entries(recency)
+  const recentsRanked = Object.entries(recency)
     .filter(([k]) => k.startsWith("cmd:"))
     .map(([k, e]) => ({ cmd: byId.get(k.slice(4)), f: frecency(e, now), t: e.t }))
     .filter((x): x is { cmd: Command; f: number; t: number } => !!x.cmd && !x.cmd.disabled)
     // Last-used breaks the tie — `frecency` underflows to 0 for anything old enough, and
     // an arbitrary order among "everything is stale" reads as a broken list.
     .sort((a, b) => b.f - a.f || b.t - a.t)
-    .slice(0, recentCap)
     // A recent row is the SAME command under a different header — cloned so the header
     // swap can't leak into the corpus the search path ranks.
     .map((x) => ({ ...x.cmd, group: RECENT_GROUP }));
+  // RECENTS YIELD TO GROUP REPRESENTATION, down to `RECENT_MIN`.
+  //
+  // `pickRootFill`'s one-row-per-group sweep is the guarantee that every feature area is
+  // visible on an empty query, but it can only seat as many groups as it has slots — and the
+  // slot count is whatever recents left behind. That held while the root had three groups. It
+  // stopped holding the moment the command sources landed: Agents, Plugins, Commands, Chat,
+  // Skills and Chats is SIX, against `EMPTY_CAP - RECENT_CAP` = five. The sixth group fell off
+  // silently, and which one it was depended on registration order.
+  //
+  // Dropping a whole group is strictly worse than dropping a recent: a group you cannot see is
+  // a feature you do not know exists, while a missing recent is something you already know how
+  // to find. So the reservation runs the other way now — count the groups, leave them a slot
+  // each, and let recents take what remains (never fewer than `RECENT_MIN`, or the block stops
+  // being a block). A lean console is unaffected: with three groups there are six slots spare
+  // and recents still take their full four.
+  const groupCount = new Set(root.map((c) => c.group ?? "")).size;
+  const recentSlots = Math.min(recentCap, Math.max(RECENT_MIN, emptyCap - groupCount));
+  const recents = recentsRanked.slice(0, recentSlots);
   const shown = new Set(recents.map((c) => c.id));
   const rest = root.filter((c) => !shown.has(c.id));
   return [...recents, ...pickRootFill(rest, emptyCap - recents.length, groupCap)];

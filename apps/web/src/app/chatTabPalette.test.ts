@@ -30,6 +30,7 @@ import {
   CHAT_TAB_ID_PREFIX,
   chatTabPaletteRows,
   syncChatTabPalette,
+  UNTITLED_CHAT_LABEL,
 } from "./chatTabPalette"; // importing also registers the rows + subscribes (side effect)
 import {
   applyNavIntent,
@@ -51,9 +52,20 @@ const ctx = { close: vi.fn() };
  *  pulls one in alongside the chats fails these assertions — which is the right answer: the
  *  operator would see it too. */
 function search(query: string): string[] {
+  // Filtered through the palette's REAL matcher over the REAL registry — the point of the
+  // helper — and then narrowed to this module's own rows.
+  //
+  // The narrowing is not cosmetic. The corpus is every static the console registers, and the
+  // sibling command sources land in it: `Settings: Chat` (the generated Settings deep-links),
+  // `New chat` and `Clear conversation` (the keyboard rows), `/incognito` (the chat verbs).
+  // So "chat" legitimately matches nine rows, and an assertion that it matches exactly the two
+  // open tabs was only ever true while this module was the sole source — it asserted the
+  // absence of features that had not shipped yet. What these cases are actually about is
+  // whether an operator hunting a CHAT finds every chat, so that is what they now measure.
   return visiblePaletteCommands(() => true, true, "static")
     .map(toDsCommand)
     .filter((c) => matchCommand(c, query))
+    .filter((c) => c.id.startsWith(CHAT_TAB_ID_PREFIX))
     .map((c) => c.label);
 }
 
@@ -120,8 +132,13 @@ describe("chat-tab palette rows", () => {
       },
     ]);
     const row = rowFor(chatTabPaletteRows(), "recovered-blank");
-    expect(row?.label).toBe(DEFAULT_SESSION_TITLE);
+    expect(row?.label).toBe(UNTITLED_CHAT_LABEL);
     expect(row?.label.trim()).not.toBe("");
+    // And specifically NOT the tab strip's own fallback: `DEFAULT_SESSION_TITLE` is
+    // "New chat", which is also the label of the keyboard row that CREATES a chat. Two
+    // byte-identical rows doing opposite things is the collision this label avoids, and it
+    // only shows up once both sources are registered — so pin it here rather than trusting it.
+    expect(row?.label).not.toBe(DEFAULT_SESSION_TITLE);
   });
 
   it("marks the current chat with a hint and keeps it runnable", () => {

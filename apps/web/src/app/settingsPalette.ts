@@ -134,7 +134,17 @@ const SECTION_KEYWORDS: Record<SettingsSectionId, string[]> = {
   telemetry: ["metrics", "usage", "cost", "spend", "tokens", "analytics", "rollup"],
   theme: ["appearance", "colors", "dark mode", "light mode", "accent", "brand", "palette", "contrast", "preset"],
   chat: ["transcript", "usage", "tokens", "cost", "context window", "footer", "meter"],
-  keybindings: ["shortcuts", "keybinding", "chord", "hotkey", "rebind", "keys"],
+  // Deliberately overlaps `SHORTCUT_KEYWORDS` (palette/keybindingCommands.ts) so ONE
+  // `shortcuts` query returns the whole keyboard surface AND the way to rebind it. Written out
+  // rather than imported: this module is import-light on purpose — a guard test below asserts
+  // its import list — and the two entries that module carries which this row does not need
+  // ("keyboard", "keybindings") are already said by the row's own label, which the synonym
+  // guard forbids repeating.
+  //
+  // This is also why there is no hand-written `box:keybindings` deep-link: #3295 added one to
+  // carry exactly this vocabulary, and it shipped as a DUPLICATE "Settings: Keyboard" the
+  // moment the generator landed beside it. The vocabulary belongs on the generated row.
+  keybindings: ["shortcuts", "hotkeys", "keybinding", "chord", "hotkey", "rebind", "keys"],
   // Never reached: `developer` is filtered out below (see SETTINGS_PALETTE_EXCLUDED), but the
   // map is exhaustive over the id union, so it still needs an entry.
   developer: ["flags", "channel", "experimental", "internal", "debug"],

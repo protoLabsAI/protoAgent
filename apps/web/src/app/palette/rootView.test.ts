@@ -17,7 +17,7 @@ import type { Command, PaletteRegistry } from "@protolabsai/ui/command-palette";
 
 import { matchCommand, rankCommands } from "./rank";
 import { createRankedPaletteRegistry, recordPaletteRun, withRecency } from "./registry";
-import { EMPTY_CAP, GROUP_CAP, RECENT_CAP, RECENT_GROUP, emptyQueryList, paletteRootView, pickRootFill } from "./rootView";
+import { EMPTY_CAP, GROUP_CAP, RECENT_CAP, RECENT_MIN, RECENT_GROUP, emptyQueryList, paletteRootView, pickRootFill } from "./rootView";
 import type { RecentMap } from "./recents";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -522,6 +522,57 @@ describe("selection follows the COMMAND, not the index", () => {
     expect(selected()).toContain("Beta");
     type("Alp"); // Beta is filtered out
     expect(selected()).toContain("Alpha");
+  });
+});
+
+describe("the empty list keeps every group as sources are added", () => {
+  const group = (g: string, n: number) =>
+    Array.from({ length: n }, (_, i) => cmd({ id: `${g}${i}`, label: `${g} ${i}`, group: g }));
+
+  it("gives every group a slot even when that costs recents", () => {
+    // SIX groups against EMPTY_CAP(9) - RECENT_CAP(4) = five slots. Before recents yielded,
+    // the sixth group fell off silently and which one depended on registration order — the
+    // regression the integration of the six command sources actually produced.
+    const root = ["Agents", "Plugins", "Commands", "Chat", "Skills", "Chats"].flatMap((g) =>
+      group(g, 3),
+    );
+    const recency = Object.fromEntries(
+      ["Agents0", "Plugins0", "Commands0", "Chat0"].map((id, i) => [
+        `cmd:${id}`,
+        { n: 9 - i, t: 1_000 - i },
+      ]),
+    );
+    const out = emptyQueryList(root, root, recency, { now: 1_000 });
+    const groups = [...new Set(out.map((c) => c.group))];
+    expect(groups).toContain(RECENT_GROUP);
+    for (const g of ["Agents", "Plugins", "Commands", "Chat", "Skills", "Chats"]) {
+      expect(groups, `${g} must survive`).toContain(g);
+    }
+    expect(out).toHaveLength(EMPTY_CAP);
+  });
+
+  it("never shrinks recents below the floor, however many groups want a slot", () => {
+    const root = Array.from({ length: 12 }, (_, i) =>
+      cmd({ id: `g${i}`, label: `G ${i}`, group: `G${i}` }),
+    );
+    const recency = Object.fromEntries(
+      ["g0", "g1", "g2"].map((id, i) => [`cmd:${id}`, { n: 9 - i, t: 1_000 - i }]),
+    );
+    const out = emptyQueryList(root, root, recency, { now: 1_000 });
+    expect(out.filter((c) => c.group === RECENT_GROUP).length).toBeGreaterThanOrEqual(RECENT_MIN);
+  });
+
+  it("leaves a lean console's recents untouched", () => {
+    // Three groups, six slots spare: the reservation must not fire at all.
+    const root = ["Agents", "Plugins", "Commands"].flatMap((g) => group(g, 3));
+    const recency = Object.fromEntries(
+      ["Agents0", "Agents1", "Plugins0", "Commands0"].map((id, i) => [
+        `cmd:${id}`,
+        { n: 9 - i, t: 1_000 - i },
+      ]),
+    );
+    const out = emptyQueryList(root, root, recency, { now: 1_000 });
+    expect(out.filter((c) => c.group === RECENT_GROUP)).toHaveLength(RECENT_CAP);
   });
 });
 
