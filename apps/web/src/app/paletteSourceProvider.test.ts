@@ -75,7 +75,11 @@ describe("registerPaletteSource → the DS read-time provider", () => {
     );
     const registry = await mountRegistry();
 
-    expect(read(registry)).toContain("probe:tab:alpha");
+    // `mountRegistry` resolves as soon as the hook has RENDERED; the effect that wires the
+    // DS provider is a passive one, so the first read has to wait for it (the withdraw test
+    // below already does). Without this the very first assertion races the commit and the
+    // file fails on a slower box while passing in CI.
+    await vi.waitFor(() => expect(read(registry)).toContain("probe:tab:alpha"));
     // The snapshot path must NOT also carry the row: a frozen copy there would win the DS's
     // id dedup (statics are listed first) and shadow the fresh one forever.
     expect(registry.getStaticCommands().map((c) => c.id)).not.toContain("probe:tab:alpha");

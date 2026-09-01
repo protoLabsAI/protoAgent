@@ -32,12 +32,14 @@ import { formatCombo } from "../keybindings/combo";
 import { effectiveCombo, useKeybindingOverrides } from "../keybindings/overrides";
 import { useFlagPredicate } from "../flags/flags";
 import { useQuery } from "@tanstack/react-query";
-import { agentHref, isHostConsole } from "../lib/api";
+import { agentHref, apiUrl, authToken, isHostConsole } from "../lib/api";
 import { fleetQuery } from "../lib/queries";
 import { markAgentOpened } from "./fleetPalette";
 import { fleetRoomView } from "./FleetRoom";
 import { fleetSettingsDisabledReason } from "./fleetSettingsGate";
 import { memberDmView } from "./PaletteChat";
+import { pluginCommandGroups } from "./pluginPaletteCommands";
+import type { PluginCommandDeps, PluginCommandSource } from "./pluginPaletteCommands";
 
 /** Optional inline chat with the focused agent (ADR 0057). App builds the native chat
  *  PaletteView (it needs JSX + the focused agent name); the adapter registers it + a
@@ -263,6 +265,38 @@ export function paletteSourceProvider(
   };
 }
 
+/** Plugin-declared `commands:` (ADR 0057 §3) plus the window-level capabilities their
+ *  compiled `run(ctx)` bodies need. Optional: a host that passes none (a test probe, a
+ *  surface with no plugin presence) simply contributes no plugin command rows. */
+export type PluginCommandsOptions = {
+  /** Per-plugin contributions from runtime status — build with `pluginCommandSources`,
+   *  the derivation the console App and the desktop launcher SHARE. */
+  sources: PluginCommandSource[];
+  /** Transient feedback for a `tool`/`emit` result — the window's `useToast()`. Passed in
+   *  rather than called here because this hook is mounted in tests (and could be mounted
+   *  in a fork surface) outside the DS `ToastProvider`, where `useToast()` throws. */
+  notify: PluginCommandDeps["notify"];
+};
+
+/** An authenticated, same-origin JSON call for a compiled `tool`/`emit` action. Resolves
+ *  on 2xx and rejects otherwise, so the row can toast the real outcome instead of claiming
+ *  success on a 404. `apiUrl` slug-routes it to the focused fleet agent — the plugin whose
+ *  route this is runs THERE — and the bearer is attached exactly as `lib/api`'s `request`
+ *  does. The path itself was already asserted to sit under `/api/plugins/<id>/`
+ *  (`pluginRoutePath`) before any row that reaches this line was created. */
+async function pluginRequest(path: string, init: { method: string; body?: unknown }): Promise<void> {
+  const token = authToken();
+  const res = await fetch(apiUrl(path), {
+    method: init.method,
+    headers: {
+      ...(init.body !== undefined ? { "Content-Type": "application/json" } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+  });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim());
+}
+
 /** Build the palette registry from the resolved view list + the inline plugin views.
  *  Stable across renders; nav commands + inline views re-register only when their set
  *  changes (plugins enable/disable) — matching the DS registry's add/withdraw model. */
@@ -270,6 +304,7 @@ export function usePaletteRegistry(
   views: View[],
   inlineViews: InlinePluginView[] = [],
   chat?: PaletteChatConfig,
+  plugins?: PluginCommandsOptions,
 ): PaletteRegistry {
   const registry = useMemo(() => createPaletteRegistry(), []);
   const inlineIds = useMemo(() => new Set(inlineViews.map((v) => v.id)), [inlineViews]);
@@ -308,6 +343,13 @@ export function usePaletteRegistry(
   // Re-register the fleet section only when the roster's identity/status/name actually changes
   // (React Query's structural sharing keeps `agents` stable when the 3s poll returns equal data).
   const fleetSig = agents.map((a) => `${a.host ? "host" : a.id}:${a.running}:${a.name}`).join("|");
+  // Plugin-declared commands (ADR 0057 §3) — keyed on the CONTENT the compile step reads,
+  // so the rows re-register when a plugin is enabled/disabled or its manifest changes but
+  // not on every status poll (the array identity churns; this string doesn't).
+  const cmdSources = plugins?.sources ?? [];
+  const cmdSig = cmdSources
+    .map((p) => `${p.id}:${p.commands.map((c) => `${c.id} ${c.title} ${c.action?.type ?? ""}`).join(",")}`)
+    .join("|");
 
   // Views the palette can morph into: inline plugin iframes, the chat view, and the
   // `Open ▸` submorph (a self-contained command list of the built-in surfaces, so the root
@@ -434,6 +476,18 @@ export function usePaletteRegistry(
       };
     });
     const offPlugins = pluginCommands.length ? registry.registerCommands(pluginCommands) : undefined;
+    // Each enabled plugin's DECLARED commands (ADR 0057 §3/§4), compiled by the trusted
+    // adapter — the only place manifest data becomes behavior. Registered per plugin and
+    // right after that plugin's view rows, for two reasons: the DS stamps `source` per
+    // registration (so every row carries its own plugin's attribution chip), and it renders
+    // a group heading only when the group CHANGES, so a default-grouped row sitting next to
+    // the "Plugins" nav rows joins that section instead of opening a second one.
+    const offDeclared = pluginCommandGroups(cmdSources, {
+      inlineViewIds: inlineIds,
+      navigate,
+      request: pluginRequest,
+      notify: plugins?.notify ?? (() => {}),
+    }).map((g) => registry.registerCommands(g.commands, { source: g.source }));
     // Commands group: `Open ▸` (morphs to the built-in surfaces) and the deep-link actions.
     // (Fleet start/stop lives on the Fleet Room roster now — #1769 folded in.)
     const openCommand: Command = {
@@ -465,11 +519,12 @@ export function usePaletteRegistry(
       offChat?.();
       offFleetRoom();
       offPlugins?.();
+      offDeclared.forEach((off) => off());
       offCommands();
       offSources?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navSig, inlineSig, fleetSig, chat, registry, seamVersion, flagOn, kbOverrides]);
+  }, [navSig, inlineSig, fleetSig, cmdSig, chat, registry, seamVersion, flagOn, kbOverrides]);
 
   return registry;
 }

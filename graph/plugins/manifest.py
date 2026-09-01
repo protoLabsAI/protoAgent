@@ -130,9 +130,17 @@ class PluginManifest:
     # segments, so `.<TAB>./.<TAB>./config` validates clean and requests /api/config),
     # a topic in another plugin's namespace, a view or command this manifest never
     # declared — is DROPPED with a warning rather than kept. See `_parse_commands`.
-    # The console adapter that compiles these is the other half of ADR 0057 §5 step 3
-    # and is not wired yet: a declared command is parsed, validated, and surfaced on
-    # /api/runtime/status today, but does not put a row in ⌘K until that lands.
+    # The console's trusted adapter (apps/web/src/app/pluginPaletteCommands.ts) is what
+    # turns a surviving entry into a ⌘K row — grouped with the plugin's view rows and
+    # chipped with its name, in the console palette and the desktop launcher alike. It
+    # MIRRORS the route and topic namespace checks above rather than trusting the status
+    # payload, so an entry that fails the mirror is simply absent. Two console-side
+    # limits worth knowing while writing a manifest: `open_view` needs its target view to
+    # have opted into the inline morph via `views[].palette` — something this parser
+    # cannot see, so a command naming a view that did not opt in opens it on its rail
+    # instead of morphing — and a `provider` is parsed and shipped but not compiled yet
+    # (ADR 0057 §8 leaves its per-query timeout/cancel + result-cap budget open), so an
+    # entry declaring only a provider contributes no row.
     commands: list[dict] = field(default_factory=list)
     # Auth-exempt paths — prefixes under THIS plugin's own /plugins/<id>/ (or
     # /api/plugins/<id>/) namespace that the default-deny auth middleware lets

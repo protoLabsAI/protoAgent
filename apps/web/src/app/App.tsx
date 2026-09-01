@@ -90,6 +90,7 @@ import { hostRuntimeStatusQuery, installedPluginsQuery, pluginUpdatesQuery, runt
 import { buildViews } from "../lib/viewRegistry";
 import { applyNavIntent, openView, usePaletteRegistry } from "./usePaletteRegistry";
 import type { NavIntent } from "./usePaletteRegistry";
+import { pluginCommandSources } from "./pluginPaletteCommands";
 import { PaletteChat } from "./PaletteChat";
 import { CORE_SURFACES } from "./coreSurfaces";
 import { listen } from "../lib/desktop";
@@ -582,7 +583,15 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
     }),
     [chatAgentName],
   );
-  const paletteRegistry = usePaletteRegistry(paletteViews, inlinePaletteViews, paletteChat);
+  // Plugin-DECLARED palette commands (ADR 0057 §3) — the manifest `commands:` block each
+  // enabled plugin ships on runtime status, compiled into `run(ctx)` by the trusted adapter
+  // (`pluginPaletteCommands.ts`). Same derivation the launcher window uses, so both palettes
+  // list the same rows.
+  const pluginPaletteCommands = pluginCommandSources(runtime?.plugins, pluginViewIcon);
+  const paletteRegistry = usePaletteRegistry(paletteViews, inlinePaletteViews, paletteChat, {
+    sources: pluginPaletteCommands,
+    notify: toast,
+  });
   // Palette open-state lives in the keybinding intents store now: ⌘⇧K is a regular,
   // rebindable keybinding (ADR 0063) that toggles it — no DS-internal hotkey hook.
   const paletteOpen = useKbIntents((s) => s.paletteOpen);

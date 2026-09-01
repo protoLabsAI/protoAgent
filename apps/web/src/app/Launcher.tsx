@@ -14,8 +14,10 @@ import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { CommandPalette } from "@protolabsai/ui/command-palette";
 import type { PaletteView } from "@protolabsai/ui/command-palette";
+import { useToast } from "@protolabsai/ui/overlays";
 import { setPaletteNavigator, usePaletteRegistry } from "./usePaletteRegistry";
 import type { InlinePluginView } from "./usePaletteRegistry";
+import { pluginCommandSources } from "./pluginPaletteCommands";
 import { PaletteChat } from "./PaletteChat";
 import { CORE_SURFACES } from "./coreSurfaces";
 import { buildViews } from "../lib/viewRegistry";
@@ -83,7 +85,18 @@ export function Launcher() {
     [chatAgentName],
   );
 
-  const registry = usePaletteRegistry(paletteViews, inlinePaletteViews, paletteChat);
+  // Plugin-DECLARED palette commands (ADR 0057 §3), through the SAME derivation App uses —
+  // the launcher must list what the in-app palette lists. Its glyph resolver stays the
+  // generic mark, for the reason `pluginIcon` above gives.
+  const pluginPaletteCommands = pluginCommandSources(runtime?.plugins, () => pluginIcon());
+  // main.tsx wraps the launcher window in the same ToastProvider the console gets, so a
+  // `tool`/`emit` row reports its outcome here too instead of failing silently.
+  const toast = useToast();
+
+  const registry = usePaletteRegistry(paletteViews, inlinePaletteViews, paletteChat, {
+    sources: pluginPaletteCommands,
+    notify: toast,
+  });
 
   // Swap the palette's navigation sink: forward the intent to the main console window,
   // bring it to the front, and dismiss the launcher. Restore the default on unmount.
