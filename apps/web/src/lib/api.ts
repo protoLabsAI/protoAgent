@@ -21,6 +21,8 @@ import type {
   DelegateProbe,
   DelegateTypeSpec,
   DelegateView,
+  DiagnosticsLogs,
+  DiagnosticsTask,
   DiscoveredAgent,
   FleetAgent,
   FleetStatus,
@@ -472,6 +474,34 @@ async function requestForm<T>(path: string, form: FormData, opts: { host?: boole
       detail = raw || detail;
     }
     if (response.status === 401 && !isMemberScoped(path, opts.host)) notifyAuthRequired();
+    throw new ApiError(response.status, detail || "request failed");
+  }
+  return (await response.json()) as T;
+}
+
+// GET a read for an EXPLICITLY chosen fleet member, via the hub's per-agent proxy
+// (`memberPath`) — independent of which window is focused. `request()` slug-routes to the
+// CURRENT window; this targets an arbitrary member, which is what the Fleet Room diagnostics
+// drawer (#3169) needs: it stays bound to the member the operator picked, not the focused
+// agent. The HTTP status is preserved on the thrown `ApiError` so the drawer can map the
+// proxy's reachability codes (409 stopped / 502 unreachable / 504 timeout) and the member's
+// own 401/404/503 onto actionable inline states.
+//
+// A member-scoped 401 is that member's credential problem, not the hub's, so — like
+// `isMemberScoped` in `request()` — it deliberately does NOT trip the global AuthGate
+// (which would prompt for, and overwrite, the HUB token). The drawer surfaces it inline.
+async function memberRequest<T>(slug: string, rel: string): Promise<T> {
+  const response = await fetch(memberPath(slug, rel), { headers: applyAuth(new Headers()) });
+  if (!response.ok) {
+    // Read the body ONCE (a Response stream can't be read twice), best-effort parsing a
+    // JSON {detail} — mirrors `request`/`requestForm`.
+    const raw = await response.text().catch(() => "");
+    let detail = `${response.status} ${response.statusText}`;
+    try {
+      detail = (JSON.parse(raw) as { detail?: string }).detail || raw || detail;
+    } catch {
+      detail = raw || detail;
+    }
     throw new ApiError(response.status, detail || "request failed");
   }
   return (await response.json()) as T;
@@ -2112,6 +2142,21 @@ export const api = {
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
       void res.body?.cancel().catch(() => {}); // durable task runs on + emits turn.usage
     });
+  },
+
+  // Member diagnostics (#3168) — bounded, redacted, read-only reads for an EXPLICITLY chosen
+  // member (`slug` = its id, or "host" for this instance), reached through the hub's
+  // /agents/<slug>/* proxy regardless of the focused window. The Fleet Room drawer (#3169)
+  // drives these; the server owns the caps + redaction, so the client only presents the
+  // returned snapshot. Snapshot reads — no live SSE following of the log stream.
+  memberDiagnosticsLogs(slug: string, lines?: number): Promise<DiagnosticsLogs> {
+    // `lines` is left to the server default when omitted; an out-of-range value is CLAMPED
+    // (never a 422) and reported back on `note`, so the drawer can always render an answer.
+    const q = typeof lines === "number" ? `?lines=${encodeURIComponent(String(lines))}` : "";
+    return memberRequest<DiagnosticsLogs>(slug, `/api/diagnostics/logs${q}`);
+  },
+  memberDiagnosticsTask(slug: string, taskId: string): Promise<DiagnosticsTask> {
+    return memberRequest<DiagnosticsTask>(slug, `/api/diagnostics/tasks/${encodeURIComponent(taskId)}`);
   },
 
   // Per-agent theme (ADR 0042). The blob is opaque — the DS ThemePanel owns its schema; the
