@@ -1,5 +1,36 @@
 [
   {
+    "version": "v0.156.0",
+    "date": "2026-09-01",
+    "changes": [
+      "Fleet diagnostics API — inspect any member's logs and A2A tasks without SSH (#3168).",
+      "Fleet Room member diagnostics drawer — read any member's logs and inspect a task from the console (#3169).",
+      "A failed desktop platform no longer has to withhold the whole release (#3274).",
+      "The Design System plugin is now listed in Discover (#3280).",
+      "Plugin manifests can now declare command-palette entries in a commands: block (#3282).",
+      "A client slash command can now be dispatched from outside the chat composer (#3283).",
+      "A fork can now add a ⌘K command that looks and behaves like a built-in one (#3284).",
+      "The command palette switches to any open chat by name (#3290).",
+      "Every Settings section is now a ⌘K deep-link (#3291).",
+      "The chat's slash commands and your user-facing skills are now in the command palette (#3292).",
+      "The command palette now searches the agent's knowledge store while you type (#3293).",
+      "A plugin's manifest commands: block now puts real rows in the command palette (#3294).",
+      "The console's keyboard actions are ⌘K commands now, each showing the chord it is bound to (#3295).",
+      "A plugin can now put its own work queue in the agent's working state (#3297).",
+      "The command palette has a visible way in, on desktop and on mobile (#3300).",
+      "The Settings section table moved into an import-light leaf module, so naming a settings section no longer means depending on the entire settings UI (#3285).",
+      "orgChart rebuilt as a first-class plugin (v0.2.0, #3286).",
+      "A bundle's member pin is now a bounded floor rather than an unbounded chase (#3288).",
+      "The command palette finds your surfaces, and puts what you use first (#3289).",
+      "Config updates can now delete a map member, not just add or replace one (#3275).",
+      "The docs said the command palette opens on ⌘K; it is ⌘⇧K, and now a test says so (#3281).",
+      "orgChart resolves delegate tokens the way dispatch does (#3287).",
+      "Creating a sister agent no longer dead-ends on \"the box already has a different login\" (#3296).",
+      "A slow work provider no longer silences its own later errors (#3299).",
+      "Typing \"shortcuts\" in the command palette opens Keyboard settings again (#3302)."
+    ]
+  },
+  {
     "version": "v0.155.3",
     "date": "2026-08-29",
     "changes": [

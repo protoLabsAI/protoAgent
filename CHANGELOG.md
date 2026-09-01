@@ -15,6 +15,458 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.156.0] - 2026-09-01
+
+### Added
+- **Fleet diagnostics API — inspect any member's logs and A2A tasks without SSH (#3168).**
+  Every member now serves two read-only, operator-tier endpoints:
+  `GET /api/diagnostics/logs?lines=N` returns a bounded tail of the agent's log, and
+  `GET /api/diagnostics/tasks/{task_id}` returns one exact A2A task — state, status
+  message, history, artifacts, accumulated output, context id, and last-updated time.
+  Because they are served on every member, the hub reaches a local peer and a registered
+  remote member alike through the existing `/agents/{slug}/*` proxy, so diagnosing a
+  sister agent no longer means shell access and knowing which workspace log to open.
+
+  The log source is a new bounded in-process ring buffer (`LOG_BUFFER_LINES`, default
+  2000 records; set `0` to retain nothing). It deliberately is **not** `agent.log` —
+  that file is a raw stdout/stderr redirect the fleet supervisor sets up only for
+  hub-spawned local children, so remote, foreground, and desktop-run members have no
+  such file at all. An in-process ring is the one source that exists on every member
+  whatever its deployment shape.
+
+  Diagnostics output is **sensitive operator data**: it can carry prompts, user content,
+  and tool arguments. Both endpoints are read-only, mounted under `/api` (so the default-deny
+  auth middleware gates them at the operator tier and the ADR 0066 federation credential is
+  denied them outright), bounded in history, artifact, and text size, and passed through the
+  shared credential redactor before they return.
+
+- **Fleet Room member diagnostics drawer — read any member's logs and inspect a task from the console (#3169).**
+  Every member roster row in the Fleet Room (⌘⇧K ▸ Fleet Room) now has a Diagnostics action that
+  opens a drawer bound to the member you explicitly picked — not the active fleet selection, and it
+  does not retarget when that selection changes. The drawer consumes only #3168's operator-authenticated,
+  slug-scoped proxy reads: a bounded, redacted snapshot of the member's log ring
+  (`GET /agents/{slug}/api/diagnostics/logs`) with a Refresh button, and an exact-A2A-task inspector
+  (`GET /agents/{slug}/api/diagnostics/tasks/{task_id}`) showing state, status message, history,
+  artifacts, and accumulated output. It renders actionable inline states for stopped (409), unreachable
+  (502), timeout (504), unauthorized (401), and missing-task (404) cases, and surfaces the API's own
+  `note`, `truncated`, and `malformed` metadata rather than hiding it. Snapshot refresh only — no live
+  SSE log following, and no browser handling of member credentials.
+
+- **A failed desktop platform no longer has to withhold the whole release (#3274).** The updater
+  fan-in requires every platform leg, so one packaging failure kept macOS and Windows binaries
+  that had built and signed from reaching anyone — twice in one night. Dispatching the desktop
+  build with `allow_partial=true` now publishes the manifest for the platforms that succeeded and
+  promotes the release, so their users update; anyone on the failed platform keeps their current
+  version and installs from the previous release until a follow-up ships. The default is unchanged
+  — all-or-nothing — because a partial publish leaves one platform's download a version behind.
+
+- **The Design System plugin is now listed in Discover (#3280).**
+  Public and first-party since v0.1.0, it was previously reachable only by installing the design-system archetype bundle; it gives an agent a live window into a design system's tokens, components and rules, and ships a console view for browsing them.
+
+- **Plugin manifests can now declare command-palette entries in a `commands:` block (#3282).**
+  The backend half of ADR 0057's plugin palette. An entry is data, never imported code: `navigate`
+  opens one of the plugin's own views on its dock and `open_view` morphs it into the palette body,
+  `tool` calls a route under the plugin's own `/api/plugins/<id>/` namespace, `emit` publishes on
+  the event bus, and a `provider` turns the entry into a live search whose result rows run a
+  declared action. Validated entries ride on `/api/runtime/status` next to `views`, for ENABLED
+  plugins only. The console adapter that turns them into palette rows is the other half of ADR 0057
+  §5 step 3 and is not wired yet, so declaring a command does not put a row in ⌘K today — the
+  manifest contract, its validation and its generated docs land first, so plugin authors write
+  against a shape that is already settled.
+
+  Because the console compiles these into authenticated calls that carry the operator bearer, the
+  parser DROPS — rather than keeps with a warning, the way it treats a bad view path — any route
+  that leaves the plugin's namespace (absolute, cross-origin, `..`, percent-encoded `..`, or a `..`
+  smuggled past the check with a tab/newline — the URL parser deletes those before it resolves the
+  dot-segments, so `.<TAB>./.<TAB>./config` reads clean and requests `/api/config`), any
+  event topic in another plugin's namespace, any action naming a view or command the manifest never
+  declared, and any `command` chain that loops or dangles. Half a command is worse than none: it
+  puts a row in the palette that fires something the author didn't write. Command routes are also
+  deliberately *not* auto-exempted from the auth gate the way view pages are — a view page is public
+  chrome, a command route is an authenticated call — and a route no registered router serves now
+  warns at load, the palette twin of the blank-iframe view warning.
+
+  Alongside it, `views[].palette` is finally validated. `palette: true` — the spelling ADR 0057's
+  own example showed — was ignored by the console with no log line, and `palette: []` was worse: it
+  passed the console's `typeof … === "object"` test and inline-morphed a view nobody opted in. Both
+  now warn, the bad value is dropped, and the view itself still loads.
+
+- **A client slash command can now be dispatched from outside the chat composer (#3283).** The
+  16 client commands (`/clear`, `/effort`, `/model`, `/help`…) only ever ran from the composer:
+  the dispatcher is a closure inside the chat slot over that slot's draft, form panel, flag
+  predicate and thread-note function, so no other surface could reach it — and no other surface
+  should fake it, because a stand-in that can't post a system note swallows the output of every
+  command that answers with one. The visible chat slot now publishes its own dispatcher on a
+  module-level seam (`chat/slashDispatch.ts`), the same last-write-wins, guarded-unregister shape
+  the Escape-to-stop keybinding already uses, so a command always runs against the session the
+  operator is looking at. Nothing user-visible changes yet — this is what lets ⌘K offer the
+  client commands alongside the server's skills.
+
+  The seam reports enough to be used honestly rather than blindly, because outside the composer
+  a command that declines is *silent* — there is no draft for the token to fall through into.
+  `runSlashFromOutside` returns false when nothing handled it, and a caller can ask whether a
+  chat slot is mounted at all (the desktop launcher window and a plugin-provided chat slot both
+  have none), whether it has a session, and whether the chat surface is on screen. With no
+  session there is nothing worth offering but `/new`: 13 of the 16 commands decline outright,
+  and the two that return `true` answer through a thread note that a session-less slot drops on
+  the floor. The visibility half matters for the same reason: the slot stays registered while
+  the operator is on another rail — that is what lets a palette reach chat from anywhere — but
+  the surface is hidden there, so a command that answers with a note would run, report success,
+  and show nothing. A caller raises the chat surface first instead of guessing.
+
+  **A newly created `/` command now shows up in the composer's autocomplete without a page
+  reload.** The server resolves that list live from four registries — plugin chat commands,
+  workflows, subagents and user-facing skills — but the console fetched it once per chat tab
+  under no key anything could invalidate, so a plugin you had just enabled, a workflow you had
+  just saved, or a playbook you had just written stayed missing until you reloaded. It is now
+  one shared query, refreshed by the plugin install/enable/update/uninstall path (the same one
+  that refreshes the rail and the settings schema) and by Workflow Studio and the Playbooks
+  editor when they save. Opening a new chat tab still picks up anything none of those covers,
+  exactly as it did before.
+
+- **A fork can now add a ⌘K command that looks and behaves like a built-in one (#3284).** The
+  console's `registerPaletteCommand` seam (ADR 0061) carried only an id, a label and a handler, so
+  anything richer than a deep link meant editing core. A command can now carry an `icon`, a `hint`,
+  `disabled` (the row stays listed and explains itself in the hint instead of silently vanishing),
+  and the id of a `registerKeybinding` binding whose shortcut it advertises — resolved live, so the
+  row shows the combo the operator rebound it to rather than a stale default. `flag` and `hostOnly`
+  hide a row the same way they hide a Settings section, and they are applied when the palette is
+  read rather than when the command registers: developer flags fail closed while `/api/flags` is in
+  flight, so a gate resolved at registration would have hidden a flag-gated command permanently.
+  `registerPaletteSource` contributes rows computed at read time, for lists that track live data —
+  the palette asks a source again every time it opens and on every keystroke, so a fork's list of
+  open tabs stays current without telling the console anything, and a source that throws or hands
+  back something that isn't a list is skipped instead of taking the console down with it. Core's
+  own deep-links go through the same seam, and the palette now re-reads it as things change, so a
+  command registered after the first render appears.
+
+- **The command palette switches to any open chat by name (#3290).** ⌘⇧K now lists every open
+  chat tab by its title, so you reach the conversation about the release notes by typing
+  "release" instead of counting tab positions — until now `⌘1`–`⌘9` jumped by ordinal and
+  nothing outside the tab strip surfaced a session's title at all. Type the name and press
+  Enter: the rows are there with the rest of the list, narrowing on every keystroke, with
+  nothing to wait for and nothing left over from what you typed a moment ago. Your chats also
+  keep a row on the short untyped list, alongside agents, plugin views and commands. They track the
+  live tab strip rather than a snapshot — a chat you just closed disappears, one you just
+  opened appears, a dragged tab moves with the strip, and a chat renames itself in the palette
+  the moment its first message gives it a title. The chat you are already on is marked
+  "current" and still takes you back to the chat surface from anywhere else in the console,
+  and non-current chats in the first nine positions show the ⌘1–⌘9 shortcut that jumps to
+  them — the real one, so it
+  keeps up if you rebind it in Settings ▸ Keyboard. Typing what a chat *is* works as well as
+  typing its name: "switch", "jump", "tabs", "sessions" and "threads" all list them, and
+  "incognito" narrows to the memory-free ones.
+
+- **Every Settings section is now a ⌘K deep-link (#3291).** The palette hand-listed three of them — `Settings`, `Settings: Fleet`, `Settings: Telemetry` — leaving Theme, Keyboard, Model, Tools, MCP, Skills, Subagents, Delegates, Secrets, Snapshot and the rest reachable only by opening Settings and hunting the rail. The rows are **generated** from the section table now, so a new section is deep-linkable the moment it is declared. Each carries its Settings-rail glyph, a trailing hint naming its nav heading — searchable too, so `capabilities` lists exactly Tools · MCP · Skills · Subagents · Delegates — and the words an operator actually types rather than the nav label: `shortcuts` finds Keyboard, `dark mode` Theme, `api key` Model, `rag` Knowledge, `a2a` Delegates, `backup` Snapshot, and `port` or `network` the box-runtime knobs that only ever lived behind a chip on Fleet. A section behind a developer flag or restricted to the host console carries that gate on the row and is resolved per render, so it can never be listed — or leave a dead section id behind — where its panel would not open. Running a row now lands even when the dialog is already open on some other pane: the section is applied where the deep-link terminates, so deep-linking Theme, clicking around the rail and running the Theme row again comes back to Theme instead of silently closing the palette and leaving you where you were — which also fixes the same miss on the header's Fleet jump, the signed-out banner's Model button and a tool card's Manage. The plain `Settings` row now shows its **⌘,** shortcut, read live from the keybinding registry so it follows a rebind, and the other hand-written rows (Open…, Fleet Room, the two Plugins jumps) picked up the glyphs their destinations already wear, so the list still lines up.
+
+- **The chat's slash commands and your user-facing skills are now in the command palette
+  (#3292).** The 16 client commands (`/clear`, `/export`, `/effort`, `/model`, `/compact`,
+  `/incognito`…) and every user-facing skill you or a plugin has installed lived only inside
+  the composer's `/` menu — you had to already be in a chat, and already know the token, to
+  find any of them. They are the console's real verbs, so they now list in ⌘⇧K too — each row
+  reading `/token · what it does`, the way the composer's menu shows them, and searchable by
+  the words you would actually reach for ("wipe" finds `/clear`, "llm" finds `/model`,
+  "latency" finds `/perf`, "incognito off" finds the switch *and* its argument). Enabling a
+  plugin or authoring a skill adds its row immediately — the list is read live, not snapshotted
+  at startup — and `/new` and `/clear` show the keyboard shortcut you have them bound to rather
+  than a hardcoded one.
+
+  **A row never quietly does nothing, which is most of the work here.** Picking a command from
+  the palette is not the same as typing it in the composer: in the composer a command that
+  can't run leaves the text in your draft, but from the palette that same outcome is a row that
+  looks like it did something and didn't. So each command is treated on its own terms. The ones
+  that act on the chat in front of you — clear, export, publish, compact, the
+  trajectory/prompt/perf readouts, `/btw` — stay listed with no chat open but are visibly
+  disabled and say why, instead of exporting an empty transcript or compacting nothing. The
+  ones that just need somewhere to work — `/help`, `/effort`, `/model`, `/goal`, `/watch` —
+  open or focus a chat first and then run, and their row says so before you pick it. `/new` is
+  greyed out when you are already sitting on a blank chat, because that is the one case where
+  it would hand you back the tab you are on. If the chat panel is hidden — behind another
+  surface, or collapsed away entirely — it comes back first, so a command that answers with a
+  note or a picker can't draw it somewhere you aren't looking, and the chat's rows stay in the
+  palette the whole time the panel is hidden rather than disappearing with it.
+
+  **`/bypass` and `/incognito` show you the setting and let you change it — they never flip it
+  for you.** Both are per-tab switches, and typed bare in the composer they toggle. A palette
+  is a fuzzy search where the first match is one Enter away, so a row that toggled would be a
+  row that could turn *off* tool-permission approval from a half-typed query, in a direction
+  its label never named. Instead each row tells you where the tab stands right now
+  (`/bypass · … — now off`) and, when picked, drops you in the chat with `/bypass ` typed: you
+  say `on` or `off` and send it yourself, on the tab it applies to. Nothing in the command
+  palette can arm auto-approval.
+
+  **A skill row hands you a draft rather than pretending to run.** A user-facing skill isn't
+  something the console can execute — the server folds the skill's procedure into your *next
+  message*, so a send is always part of it. Picking one takes you to the chat with `/<skill> `
+  typed and the cursor after it, and the row says "drafts in chat — you send it" so it can't be
+  mistaken for a fire-and-forget action. It goes in *front* of whatever you had already typed
+  rather than replacing it, so reaching for a skill mid-message gives you
+  `/triage <the thing you were writing>` instead of losing it. `/btw` behaves the same way,
+  since it needs the question you were going to ask.
+
+  Under the hood the palette also stopped trusting a stale search result: a plugin-contributed
+  command source is asked again on every keystroke, and until now the answer to the *previous*
+  keystroke stayed on the list — visible, selectable, and one Enter away — for the moment it
+  took the new one to arrive. Results now carry the query they answered and are dropped the
+  instant it changes.
+
+- **The command palette now searches the agent's knowledge store while you type (#3293).**
+  Press **⌘⇧K**, type two or more characters, and the palette lists the top matches from
+  the knowledge base — findings, notes, the daily log, harvested sessions — ranked in
+  among your other results, each carrying a **Knowledge** chip and trailed by where it
+  came from. Picking one opens the Knowledge surface with that same search already run,
+  so the entry you chose is in the list you land on.
+  Matching follows the word you are still typing: `postg` finds *Postgres tuning*. The
+  keyword index behind the store matches whole words, so the palette asks it for a prefix
+  term on the last word specifically — a type-ahead that did not would show nothing for
+  every character before the end of every word, which reads as "no matches" when it means
+  "keep typing". Only the palette asks for this; recall, the per-turn memory injection and
+  the Knowledge browser search the settled query they always did.
+  The rows appear only on an instance that has a knowledge store. It stays quiet until you
+  type, because an empty search box asks that endpoint for the store's most recent entries
+  and would bury the commands under them on every open. It shows a handful of matches
+  rather than everything that matched, and when there are more it offers a last **All
+  matches in Knowledge** row that carries your search to the surface — a shortlist you
+  can't get past is worse than a long one. And a search the palette cannot complete — an
+  unreachable store, a rejected bearer, a request past its deadline — says **Knowledge
+  search unavailable** with the reason instead of showing nothing, which would be
+  indistinguishable from "nothing matched".
+
+- **A plugin's manifest `commands:` block now puts real rows in the command palette (#3294).**
+  #3282 taught the backend to parse and validate the block; this is the console adapter that
+  compiles each declared action into something the palette can run, in the console window and
+  the desktop launcher alike. `navigate` opens one of the plugin's own rail/dock views,
+  `open_view` morphs it into the palette body (falling back to the dock when the view never
+  opted into the inline morph, which the parser cannot see), `tool` calls a route inside the
+  plugin's own `/api/plugins/<id>/` namespace and reports what actually came back, `emit`
+  publishes on the plugin's own event namespace, and `command` runs another entry the same
+  manifest declares. Rows sit with the plugin's other palette entries, carry its name as an
+  attribution chip, and answer to its id, its name and what the row does — a declared
+  `navigate` says "go to" exactly as the plugin's view rows do, so the words that already find
+  one find the other. A plugin that is enabled but failed to load has nothing serving its own
+  routes, so its `tool` rows show greyed out saying so rather than firing a call that could
+  only fail.
+
+  A view action may only name a view the console actually mounts as a surface. A view that
+  claims the chat slot renders under the built-in chat panel and a `utility` view is a
+  bottom-left pill that opens a dialog — neither has a rail or dock of its own, so a command
+  pointed at one has nowhere to go and contributes no row, rather than a row reading "go to"
+  that would leave the operator on chat. The manifest parser says the same thing with a
+  warning naming the view, since only it can reach the plugin's author.
+
+  In the desktop launcher, what a `tool`/`emit` row came back with is reported in the console
+  window rather than the launcher: firing a row dismisses the launcher, so a message raised
+  there would land on a window that is already gone. The console is brought forward for it,
+  the same way a navigation row already brings it forward.
+
+  Plugin code still never enters the console bundle: the manifest is data and this adapter is
+  the single place that turns data into behavior, which is what keeps a sandboxed plugin
+  sandboxed. It re-checks each route and event topic against the plugin's namespace rather than
+  trusting what the status response said — the console attaches the operator bearer and passes
+  an absolute URL through untouched, so a route that escaped would be an authenticated write
+  rather than a broken row. Anything that fails the check, an action the adapter does not
+  implement, and a `command` chain that loops or leads nowhere all produce no row at all: a row
+  that fires something its author did not write is worse than a missing one. A live-search
+  `provider` is not compiled yet, so declaring only a provider still contributes nothing.
+
+- **The console's keyboard actions are ⌘K commands now, each showing the chord it is bound to
+  (#3295).** The palette could not run the console's own shortcuts, and the shortcuts themselves
+  were discoverable only by opening Settings ▸ Keyboard and reading a table. Nine of them are
+  rows now — **New chat**, **Clear conversation**, **Focus chat composer**, **Next chat tab** /
+  **Previous chat tab**, **Toggle latest tool block**, and the left rail / right panel / bottom
+  dock toggles — so you can run one by name instead of remembering a chord, and typing
+  `shortcuts` lists the whole set. A row names its *binding* rather than a chord, so it shows
+  what that binding answers to right now: rebind one in Settings ▸ Keyboard and the row
+  re-labels itself instead of leaving a stale hint. The existing **Settings** command advertises
+  its shortcut the same way, and a new **Settings: Keyboard** row lands on the screen that does
+  the rebinding — so discovering a shortcut and changing it are one search apart.
+
+  The other sixteen bindings are deliberately not rows, and the triage is recorded in
+  `apps/web/src/app/palette/keybindingCommands.ts`: a row that opens the palette you are
+  already
+  looking at, nine ordinal "jump to tab 7" chords, a duplicate of the composer-focus action,
+  and the focus-a-dock shortcuts — which do nothing while that dock is closed, which is exactly
+  when an operator would reach for them. A chat action navigates to chat *before* it runs —
+  re-opening the dock chat lives on if you had collapsed it, and waiting for that to render —
+  so choosing **Clear conversation** or **Toggle latest tool block** from Knowledge, or from a
+  folded-away rail, does what you meant rather than firing at a surface nobody is on.
+
+- **A plugin can now put its own work queue in the agent's working state (#3297).**
+  The agent is shown its live commitments every turn — active goal and plan, open tasks,
+  live watches, pending schedules — so it can act on them without going looking. That view
+  read four built-in sources, so a plugin that owns a queue of its own (a project board, a
+  review lane) was missing from it entirely. An agent whose whole job is such a board could
+  report itself idle while one of its own items sat stuck, because the list it treats as
+  "what I'm on the hook for" had nothing about the board in it. Plugins can now contribute
+  to that same list via `register_work_provider`, so their items appear beside the built-in
+  ones instead of in a competing block of their own. The plugin remains the source of
+  truth — nothing is copied or kept in sync — and the view stays bounded, so a large queue
+  can't crowd out everything else.
+
+- **The command palette has a visible way in, on desktop and on mobile (#3300).**
+  Until now the only route to it was the ⌘⇧K chord, so everything the palette had grown —
+  ranked search, recents, every Settings section, the chat's own verbs, the keyboard actions,
+  live knowledge search — was invisible to anyone who hadn't read the guide. There's now a
+  search icon on the utility bar, just after Settings; hover it and the tooltip names the chord,
+  read live from the binding so a rebind re-words it rather than teaching a shortcut that no
+  longer works. On a phone, where there is no chord to press and the palette was therefore
+  unreachable at all, the same search sits in the header beside **+**.
+
+### Changed
+- **The Settings section table moved into an import-light leaf module, so naming a settings
+  section no longer means depending on the entire settings UI (#3285).** The ids, labels,
+  icon names, flag/`hostOnly` gates and group order now live in
+  `apps/web/src/settings/sections.ts`; `SettingsSurface.tsx` keeps the panels, and a sibling
+  module maps each icon name to a statically imported component. Importing anything at all
+  from `SettingsSurface` pulls in ~105 modules of panel source — every settings panel plus 26
+  lucide icons — which is what the ⌘K palette and the desktop Launcher window would otherwise
+  have had to depend on just to name a section; the leaf is 2 modules, and a test pins it that
+  way, since CI has no bundle-size gate that would notice the regression. To be clear about the
+  size of the win: the console still builds as a single entry chunk that both desktop windows
+  load, so this saves no download today — it is what makes that split *possible*, and it does
+  avoid a real one now, because drawing the section glyphs by NAME would have pulled lucide's
+  738 KB barrel chunk onto the palette and the Launcher. Nothing renders differently: no section
+  was added, removed, renamed, reordered or re-gated, and the id→panel and name→icon maps are
+  exhaustive over the table, so a section with no panel or an unmapped glyph fails the build
+  instead of blanking a pane. Telemetry's glyph is spelled with lucide's canonical `ChartColumn`
+  rather than the deprecated `BarChart3` alias (the same component, so the rail is unchanged):
+  the alias survives as a top-level export but was dropped from lucide's `icons` map, which is
+  what the lazy resolver a name-only consumer uses looks in, so it would have rendered a
+  fallback box in ⌘K while looking correct everywhere else.
+
+- **orgChart rebuilt as a first-class plugin (v0.2.0, #3286).** The fleet diagram was a
+  one-shot demo: every 8-second poll re-crawled the whole fleet with no caching, a dead peer
+  stalled each load by up to 12s of sequential timeouts, it read the raw
+  `langgraph-config.yaml` roster (missing every fleet-shared `scope: host` delegate —
+  ADR 0105 — and every token in the `delegate_secrets` overlay), and it carried the repo's
+  only `verify=False`. Now: the effective roster via the delegates store, liveness/latency
+  reused from the delegates health prober instead of duplicate probes, per-peer TTL caches
+  (with a negative TTL so unreachable peers can't stall reloads), concurrent per-layer
+  crawling, and a stale-while-revalidate topology snapshot so the view paints instantly. On a
+  hub, supervised fleet remotes join the graph (dashed edges) and their stored bearers widen
+  the crawl. The view gains a node detail panel (URL/version/latency/degree), latency badges,
+  crawl freshness, a force-refresh button, and stops polling in hidden tabs; tunables (cache
+  TTL, poll interval, probe timeout, max nodes, fleet members) land in Settings → Org Chart.
+  Tested in `tests/test_orgchart_plugin.py`.
+
+- **A bundle's member pin is now a bounded floor rather than an unbounded chase (#3288).**
+  The installer already adopted a member's newest release tag over the manifest pin; it now only adopts *compatible* ones (caret semantics on the leftmost non-zero component, so a `0.x` minor is treated as breaking), logging and skipping anything outside the range so a member's first breaking release can no longer propagate to every archetype spawn on its own. ADR 0049 is amended to record the floor semantics it had never documented.
+
+- **The command palette finds your surfaces, and puts what you use first (#3289).** Its root is
+  now owned by the console instead of the design system: typing a surface's name (`memory`,
+  `knowledge`) finds it — it used to say *No matches*, because those surfaces lived only inside
+  the `Open ▸` submorph — and results are ranked, with an exact or prefix label match above an
+  incidental keyword hit and your recent commands breaking the ties. Group headers belong to the
+  untyped list, which is grouped; a ranked result is ordered by relevance, so it renders without
+  them. Opening the palette without typing shows a short list led by what you actually run —
+  recorded whether you got there by typing or by browsing through `Open ▸` — and every group is
+  guaranteed a row in it, so neither a stack of plugin views nor a full recents block can drop a
+  whole section off it: **Open…** stays reachable however crowded the list gets. The moment you
+  type, it searches everything,
+  uncapped, and results contributed by a plugin **source** are ordered alongside the rest without
+  being re-filtered. "Chat with `<agent>`" is now "Ask `<agent>`", so it stops competing with the
+  Chat surface. Screen readers now follow the palette: the active row is announced as you arrow
+  through it, and the result count and *No matches* are spoken.
+
+### Fixed
+- **Config updates can now delete a map member, not just add or replace one (#3275).** A
+  settings save merged updates recursively and had no way to express removal, so dropping a
+  key from a map-valued section — a `project_board.projects` entry, a plugin config map, a
+  delegates map — left it in `langgraph-config.yaml` forever (the surviving map was merged
+  back over the old one). `apply_updates_to_yaml` now treats a nested update value of `None`
+  as a deletion sentinel: `apply_settings({'project_board': {'projects': {'gone': None}}})`
+  removes only `gone` and persists that through the normal save/readback path, with sibling
+  entries, unknown keys, comments and order intact. The merge stays fixed-depth — a
+  non-`None` map at the innermost level still replaces the stored mapping wholesale rather
+  than deep-merging, so omitted members are dropped, not stranded. Deletion is confined to
+  nested map entries — a top-level section sent as `None` is still written as an explicit
+  `null`, and a falsy scalar (`False`/`0`/`""`) is a real value, never a removal — so
+  documented nullable scalar settings are never silently dropped.
+
+- **The docs said the command palette opens on ⌘K; it is ⌘⇧K, and now a test says so (#3281).**
+  Plain ⌘K has been chat **Clear conversation** since #2949 and the published docs never
+  followed — ADR 0063's defaults table was not merely stale but inverted, listing the two chords
+  the wrong way round, so a reader learned that ⌘⇧K wipes their conversation. Every chord claim
+  across the ADRs, guides, reference and README now reads ⌘⇧K / Ctrl-Shift-K, the console's own
+  source comments with them, and the places that used "⌘K" as a nickname for the palette now
+  name the palette instead.
+
+  The rot was possible because nothing was watching: the console pins its defaults in
+  `coreDefaults.test.ts`, but the prose that advertises them was pinned by nothing at all.
+  `tests/test_keybinding_docs.py` now re-derives the chord from `coreKeybindings.ts` and fails
+  with the `file:line` of every page naming the wrong one — reading the instructional forms,
+  not just adjacency, so "**⌘⇧K** / **Ctrl-Shift-K** for the command palette" and "⌘⇧K still
+  opens the palette" are covered — and it pins the pages that *teach* the chord so a rebind
+  can't quietly delete it instead. Chords the desktop shell owns (the ⌥Space launcher, ⌘⇧P)
+  are read out of the Tauri source and left alone, since the launcher genuinely is this
+  palette. The next rebind has to take its documentation with it.
+
+  **The palette guide also documented a command that no longer exists.** #1769 folded
+  **Toggle Fleet Agent** (and the per-member quick-chat) into the **Fleet Room** — the roster
+  row carries DM / open console / start / stop — but the guide still described the old picker
+  and `docs/guides/fleet.md` still told operators to press the chord and type it, an
+  instruction that returns nothing. Both now point at the Fleet Room, the guide's "What's in
+  it" matches what `usePaletteRegistry.ts` registers (Agents → Plugins → Commands, surfaces
+  behind **Open…**), and the same test re-derives command *names* from the registry so a
+  folded-away command can't keep its instructions. The guide's "how it's wired" pointer named
+  `usePaletteHotkey`, a DS hook with no callers in `apps/web/src`; it now names the real seam
+  (`App.tsx` + the `palette.toggle` binding + the intents store), and ADR 0057 records the hook
+  as the proposal that didn't ship.
+
+  Also corrected in the sweep: ADR 0057's dead "⌘K is free" premise for the desktop shortcut
+  (the quick launcher is ⌥Space / Ctrl+Alt+Space and ⌘⇧P toggles the window), three stale source
+  line references, and the claim — in the plugin-view-bridge reference and in
+  `pluginKeybindings.ts` itself — that a view setting `editable: true` keeps the palette from
+  firing under someone typing. It does not: the binding opts into `allowInInput`, by design. The
+  command-palette guide also gains the desktop quick launcher — the same palette in its own
+  window, on its own OS-global chord — which it had never mentioned.
+
+- **orgChart resolves delegate tokens the way dispatch does (#3287).** `_token_for` now
+  mirrors `adapters._secret`'s order exactly — stored/overlaid token first, env var
+  fallback — so the chart authenticates a peer with the same credential `delegate_to`
+  would use. The v0.2 crawl (#3286) resolved the two in a subtly different order, so an
+  entry carrying both `auth.credentialsEnv` and a stored token could paint an edge green
+  (or red) that dispatch would disagree with; crawl and dispatch now agree by
+  construction, and the divergence case is covered in tests.
+
+- **Creating a sister agent no longer dead-ends on "the box already has a different login" (#3296).**
+  When a new agent inherits the host's model connections, a legacy per-instance OAuth credential
+  store is merged into the machine-wide one — and the guard deciding whether that was safe compared
+  the two files byte-for-byte. OAuth stores rotate: every refresh rewrites both tokens and the
+  timestamps, so two copies of the *same* account stop matching within minutes of being made. The
+  guard therefore reported a different login for very nearly every override it exists to serve, and
+  the create failed outright pointing at a remedy the console cannot perform (delete a hidden
+  override, then re-run a device sign-in).
+
+  Sameness is now decided on the account rather than the bytes. The same account deduplicates onto
+  the fresher of the two stores — a Codex refresh token is single-use, so keeping the older copy can
+  strand the account — and a genuinely different account, or one that cannot be identified at all,
+  is reported as a warning on a *successful* create instead of killing it: both stores are left
+  untouched and the new agent uses the machine-wide login it would have resolved anyway. Nothing is
+  overwritten and no single-use token is copied into a race, so the protection the refusal provided
+  is kept without the dead end. An explicit disconnect remains a refusal, since that is a decision
+  the operator actually made and Settings can undo it.
+
+  Claude's credential store now also records the account id its token response names (carried across
+  refreshes, which need not repeat it), so two copies of a Claude login can be matched rather than
+  always deferred. Stores written before this still answer "unknown", which stays deliberately
+  distinct from "different" — both copies are left alone.
+
+- **A slow work provider no longer silences its own later errors (#3299).**
+  Plugins can contribute their open work to the agent's working state, and the host warns
+  when one of those contributions misbehaves — it's slow, it fails, it returns the wrong
+  shape. Those warnings were de-duplicated per plugin rather than per problem, so whichever
+  complaint came first suppressed the rest: a contribution that was once slow would never
+  report that it had started failing outright. Each kind of problem is now reported on its
+  own, still only once, so a failure can't hide behind an earlier warning.
+
+- **Typing "shortcuts" in the command palette opens Keyboard settings again (#3302).**
+  Running chat commands from the palette put `/help` beside the Settings rows, and `/help`
+  described itself as "Show available commands & shortcuts" — so it matched the word
+  "shortcuts" in its own visible title and won it from the Keyboard settings row that had
+  claimed it. The palette row now reads "Show the command reference"; `/help` is unchanged
+  everywhere else, and "keyboard shortcuts" still finds it.
+
 ## [0.155.3] - 2026-08-29
 
 ### Changed
