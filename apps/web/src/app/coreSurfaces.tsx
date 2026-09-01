@@ -1,6 +1,6 @@
 // The fixed core console surfaces (ADR 0035 S3). Shared so the main shell AND the
 // desktop quick-launcher (ADR 0057) build their command lists from the SAME source —
-// add a core surface here and it shows up in both the rail and ⌘K / the launcher.
+// add a core surface here and it shows up in both the rail and the palette / launcher.
 import type { ReactNode } from "react";
 import { BookMarked, Brain, LayoutDashboard, MessageSquare } from "lucide-react";
 
@@ -19,5 +19,5 @@ export const CORE_SURFACES: CoreSurface[] = [
   // digest sources, hot memory, and the per-turn injection record.
   { id: "memory", label: "Memory", icon: <Brain size={18} /> },
   // Settings moved off the rail into a utility-bar pill (2026-06 consolidation) → the
-  // settings dialog. It's still a valid ⌘K "go to" via the global deep-links.
+  // settings dialog. It's still a valid palette "go to" via the global deep-links.
 ];

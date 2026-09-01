@@ -52,3 +52,51 @@ registerKeybinding({
 
 A user can rebind it in Settings; if the combo collides with another binding in an overlapping
 scope, the rebind UI blocks it and names the conflict.
+
+## Example — add a ⌘K command (ADR 0061)
+
+`registerPaletteCommand` adds a row to the root command palette's **Commands** group. Core's own
+deep-links (Plugins: Discover, Settings…) register through this same call — there is no core-only
+path.
+
+```tsx
+import { BarChart3 } from "lucide-react";
+import { registerPaletteCommand, registerPaletteSource } from "./index";
+
+registerPaletteCommand({
+  id: "my-dashboard.open",       // stable id — dedup key, LAST registration of an id wins
+  label: "Open Dashboard",
+  icon: <BarChart3 size={16} />,
+  hint: "go to",                 // muted trailing text; a `disabled: true` row says WHY here
+  keybinding: "my-dashboard.toggle", // a registerKeybinding id — the row shows its LIVE combo
+  flag: "my-fork-beta",          // optional: listed only while this developer flag is ON
+  hostOnly: false,               // optional: drop the row in a workspace/sister-agent window
+  run: (ctx) => { /* … navigate … */ ctx.close(); },
+});
+```
+
+Gates are **read** at render (`visiblePaletteCommands`), never at registration — developer flags
+fail closed while `/api/flags` is in flight, so a row filtered at registration would stay hidden
+forever. For rows that track live data (or a condition `flag`/`hostOnly` can't express), register a
+**source** instead:
+
+```tsx
+registerPaletteSource(() => openTabs().map((t) => ({
+  id: `my-fork:tab:${t.id}`,
+  label: `Go to ${t.title}`,
+  run: (ctx) => { focusTab(t.id); ctx.close(); },
+})));
+```
+
+A source is called **every time the palette is read** — once when ⌘K opens and again on each
+keystroke — so its rows follow your data with no notification of any kind on your side. (It is not
+called *when your data changes*: nothing watches it. A row that changes while the palette is open
+and untouched appears on the next keystroke.) That is why a source has to be **cheap and
+synchronous**: no fetches, no store writes, no `async`. Keep it to mapping state you already have.
+
+A broken source is contained: it is skipped, the sources registered after it still run, and the
+palette keeps every other row. That covers a `throw` **and** a return that isn't an array — an
+`async` source (which returns a Promise), an id-keyed object, `false` for "nothing to show" — since
+the seam is a build-time edge where a fork's own mistake typechecks.
+
+Both return an unregister fn, so a feature can withdraw its commands.

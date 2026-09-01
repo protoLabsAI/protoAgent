@@ -1,4 +1,4 @@
-// Fleet ⌘K recency store. The old per-member root palette entries — quick-chat (#1733)
+// Fleet palette recency store. The old per-member root palette entries — quick-chat (#1733)
 // and Toggle Fleet Agent (#1769) — are folded into the Fleet Room: the roster row carries
 // DM / open-console / start / stop, and member names ride the room command's keywords
 // (usePaletteRegistry). What remains here is the recency store the room's "Open" action

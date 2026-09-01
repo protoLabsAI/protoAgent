@@ -76,13 +76,82 @@ menu from `registeredSlashCommands()` + the server list, and `runClientSlash` di
   (attach, model select, send) are DS `PromptInput` built-ins, not migrated; the registry is
   purely for fork-added actions (e.g. a templates or voice button). Handler context:
   `{ sessionId, setDraft, focusComposer, noteToThread }`.
-- **`registerPaletteCommand`** (`apps/web/src/ext/paletteRegistry.ts`) — adds a root ⌘K
+- **`registerPaletteCommand`** (`apps/web/src/ext/paletteRegistry.ts`) — adds a root command-palette
   command in the "Commands" group; `usePaletteRegistry` maps these onto DS palette `Command`s.
   **Dogfooded:** core's deep-links (Plugins: Discover, Settings, Settings: Fleet/Telemetry)
   register through this seam, so the registry is the only path (no `deepLinkCommands()`
   bypass). Handler context: `{ close }`. (Distinct from plugin manifest `palette` views,
   ADR 0057, which morph the palette body into a plugin iframe — these RUN trusted in-process
   code.)
+
+  A command carries presentation alongside behavior — `icon`, `hint`, `disabled`, and a
+  `keybinding` id. The presentation fields are the DS `Command` fields (`toDsCommand` passes
+  them straight through); the seam adds no rendering vocabulary of its own. Two deliberate
+  non-fields: a `disabledReason`, because a disabled row's reason belongs in the `hint` it
+  already has (core's Fleet Room command does exactly that), and a display-only `shortcut`
+  *string*, because bindings are user-rebindable — Settings ▸ Keyboard persists an override,
+  so a literal `"⌘⇧K"` starts lying the moment the operator rebinds it. `keybinding` names a
+  `registerKeybinding` id instead (it binds nothing — the combo still fires through the
+  keybinding host) and the adapter renders `formatCombo(effectiveCombo(binding))`, i.e. the
+  live combo, into the row's hint slot. Unlike the other registries this one is
+  **last-write-wins by id** (matching `registerKeybinding`) and returns a **guarded
+  unregister** — it removes the command only while that command is still the registered one,
+  so a stale closure can't evict a newer registration. A re-registered id keeps its original
+  display position.
+
+  Two additions make it usable beyond a fixed deep-link:
+
+  - **Declarative gating — `flag?: string` + `hostOnly?: boolean`, read through
+    `visiblePaletteCommands(flagOn, onHost)`.** Same two axes, same shape as the settings
+    sections' `visibleSections` (`settings/sectionGate.ts`), and the same `flag` contract as
+    `registerSlashCommand` — one gating vocabulary for the console. Registration stays
+    **unconditional** and the filter runs at **read** time, which is the load-bearing part:
+    registration happens once at module load, before `/api/flags` has answered, and
+    `useFlagPredicate` fails **closed** while that request is in flight (ADR 0068), so a gate
+    resolved at registration would hide a flag-gated row *permanently*. Re-filtering per
+    render lets the late-arriving flag flip the row on. Gates are **data, not a predicate**:
+    they cannot throw inside the root render, cannot get expensive, and anything holding the
+    two axes can answer them (a "why is this hidden?" affordance included). `hostOnly` is the
+    URL-slug axis (`isHostConsole()`), *not* the fleet-nesting one — a sister agent's slug
+    window drives the hub's fleet and keeps fleet rows. A row that should stay visible but
+    dead uses `disabled` + `hint` instead.
+  - **`registerPaletteSource(fn: () => PaletteCommand[])`** contributes commands computed at
+    **read** time rather than registration time, for rows that track live data (open chat
+    tabs, a roster) — and, since a source picks its rows per read, it is also the escape
+    hatch for a condition the two gate axes can't express, with the failure contained in the
+    registry instead of in the root render. Same guarded-unregister contract; a broken source
+    is skipped (its rows, not the sources after it) rather than blanking the palette, and
+    "broken" means a `throw` **or** a return that isn't an array — the seam is a build-time
+    edge, so an `async` source (a Promise), an id-keyed object or a `false` all typecheck at
+    the fork's call site and would otherwise throw `rows is not iterable` past the host's
+    effect and onto the console's ROOT error boundary, trading one bad row for the whole app.
+    Statics win an id collision over sources; the first source to claim an id wins over later
+    ones, in the narrowed reads as well as the whole one.
+
+    **Read time is the HOST's read, and the two halves therefore reach the palette by
+    different paths.** Nothing observes a source's underlying data — `paletteCommandsVersion()`
+    moves only on register/unregister — so the host cannot key an effect on it, and the DS's
+    static path stores the array it is handed verbatim (`getStaticCommands()` flattens the
+    registered groups). Snapshot a source's rows into `registerCommands` and they freeze at
+    whichever effect run registered them: ⌘K keeps listing the tab the operator closed and
+    never lists the one they just opened, until some unrelated change (a plugin toggle, a
+    roster edit, a rebind) happens to re-run the effect. So `visiblePaletteCommands(flagOn,
+    onHost, from)` reads the halves apart: `"static"` rows are snapshotted (a fixed list is
+    correct to freeze, and it keeps them in their registered display position), while
+    `"dynamic"` rows are served by a DS **`CommandProvider`** the commands view re-invokes on
+    every open and every keystroke. The provider is wired only while a source exists — the DS
+    shows its "Searching…" affordance whenever any provider declares `getCommands`, and core
+    ships none — and it applies the query itself, because the DS client-filters only statics
+    (a provider is normally a remote search that already applied it). The honest contract is
+    therefore "re-read on every palette read", not "re-rendered when your data changes": a
+    row that changes while the palette sits open and untouched appears at the next keystroke.
+
+  Consumers observe the registry the way they observe the DS one: **`subscribePaletteCommands(fn)`**
+  plus a monotonic **`paletteCommandsVersion()`** (bumped on every register/unregister) is exactly
+  the `useSyncExternalStore` pair, so a command registered *after* the root view's first render
+  still appears — the pre-existing read-once-in-an-effect shape could never show it.
+  `usePaletteRegistry` consumes all of it (gate, presentation, both halves of the read, version),
+  so no part of the seam ships as API nothing reads.
 - **`registerKeybinding`** (`apps/web/src/ext/keybindingRegistry.ts`, ADR 0063) — binds a
   default keyboard shortcut (optionally focus-scoped to a `data-kb-scope` panel). Every
   registered binding auto-appears in **Settings ▸ Keyboard** (user-rebindable, with conflict

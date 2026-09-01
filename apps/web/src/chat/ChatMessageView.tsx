@@ -30,7 +30,7 @@ import { WorkBlock } from "./WorkBlock";
 import { foldPlan, toolsForGroup } from "./parts";
 import { serverResultLabel, serverResultPreview } from "./server-turn-store";
 
-// Optional per-message action row (copy / fork / regenerate). Omit it (e.g. the ⌘K palette
+// Optional per-message action row (copy / fork / regenerate). Omit it (e.g. the palette
 // chat) and no actions render. Each callback is independently optional.
 export type ChatMessageActions = {
   copiedId?: string | null;
@@ -56,7 +56,7 @@ export type ChatMessageActions = {
 };
 
 // The single chat message renderer (ADR 0035) — shared by the main chat (ChatSurface) and the
-// ⌘K palette chat (PaletteChat) so they never drift. Renders one user/assistant/system message:
+// palette chat (PaletteChat) so they never drift. Renders one user/assistant/system message:
 // live ordered `parts` (text↔tool interleave, WorkBlock fold) or the history-loaded grouped
 // fallback, plus the streaming loader, inline components, the background-report chip, and the
 // optional action row. Streaming state is read from `message.status`.
