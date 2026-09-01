@@ -48,6 +48,7 @@ test("a recalled message is editable and resends the edited text", async ({ page
   await composer.type(" edited");
   await composer.press("Enter");
   await expect(page.locator(".pl-message--user").filter({ hasText: "draft one edited" })).toBeVisible();
+  await expect(composer).toHaveValue("");
 
   await composer.press("ArrowUp");
   await expect(composer).toHaveValue("draft one edited");

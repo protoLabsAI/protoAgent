@@ -650,8 +650,8 @@ async function stubDiagnostics(page) {
 }
 
 test("Fleet Room diagnostics: view a member's bounded logs and inspect an exact task (#3169)", async ({ page }) => {
-  await page.goto("/app/", { waitUntil: "load" });
   await stubDiagnostics(page);
+  await page.goto("/app/", { waitUntil: "load" });
   await openFleetRoom(page);
   const room = page.locator(".flr");
 
@@ -700,8 +700,8 @@ test("Fleet Room diagnostics: view a member's bounded logs and inspect an exact 
 });
 
 test("Fleet Room diagnostics: switching members retargets the drawer; a fleet-selection change does not (#3169)", async ({ page }) => {
-  await page.goto("/app/", { waitUntil: "load" });
   await stubDiagnostics(page);
+  await page.goto("/app/", { waitUntil: "load" });
   await openFleetRoom(page);
   const room = page.locator(".flr");
 
