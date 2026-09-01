@@ -182,6 +182,27 @@ proposed-direction / acceptance (enhancements). Intentional free-form → add th
 
 These are the failures that actually recur — read them before you edit.
 
+- **A console feature can be green in every browser and dead in the desktop app — the
+  Tauri shell is an untested seam.** Tauri's drag-drop handler is **on by default**, and on
+  macOS `wry` implements it by overriding the webview's `NSDraggingDestination` methods and
+  returning early **without calling `super`** when the handler accepts — which Tauri's default
+  handler always does. WKWebView's own drop handling therefore never runs and the page sees no
+  `dragover` and no `drop` (Tauri's own docs say the same for Windows). This silently killed
+  **every** HTML5 drop surface in the packaged app at once — fleet roster reorder, the chat
+  composer's drag-a-file-to-attach, the knowledge store's — while all three worked in Chrome,
+  Safari and the whole Playwright suite. Every `WebviewWindowBuilder` must keep
+  `.disable_drag_drop_handler()` (`apps/desktop/src-tauri/src/lib.rs`); nothing in the console
+  consumes the native `tauri://drag-*` events. When a UI bug report contradicts a green suite,
+  **ask which surface it was tested on before you re-read the diff** — the desktop app is
+  WKWebView inside Tauri, not the engine CI runs.
+
+  Two testing corollaries: `locator.dragTo()` routes through Playwright's own drag helper, so it
+  can pass over an interaction a real mouse would never start — probe with raw
+  `page.mouse.down/move(steps)/up`. And the default drag image is the **dragged element**, so a
+  small handle produces a ghost nobody sees and a working drag reads as broken:
+  `setDragImage(<the row>, …)`, and populate `dataTransfer` (Firefox refuses to start a drag on
+  an empty one).
+
 - **A message's `content` already contains its `tool_use` blocks — never sum
   `content` + `tool_calls`.** LangChain's `tool_calls` is a parsed *mirror* of the same
   blocks, so any walk that counts/renders/redacts both double-processes the arguments
