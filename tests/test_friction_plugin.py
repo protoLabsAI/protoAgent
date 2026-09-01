@@ -720,3 +720,50 @@ def test_an_over_long_report_is_marked_as_clipped_not_cut_mid_word(ledger):
 def test_a_report_within_the_cap_is_untouched(ledger):
     asyncio.run(record_friction.ainvoke({"kind": "harness", "summary": "short and complete."}))
     assert _recs(ledger)[0]["summary"] == "short and complete."
+
+
+# ── ADR 0004: the ledger is instance-scoped ─────────────────────────────────
+
+
+def test_the_ledger_lives_inside_the_instance_tree(tmp_path, monkeypatch):
+    """It used to be derived from PROTOAGENT_HOME directly, which is only correct on the
+    desktop (where that env var IS the instance root). Everywhere else the ledger landed
+    one level ABOVE the instance tree — shared by every instance on the box and missed by
+    scripts/dev-reset.sh. On by default makes that collision everyone's problem."""
+    from infra.paths import instance_paths
+
+    from plugins.friction import _ledger_path
+
+    monkeypatch.delenv("FRICTION_LOG", raising=False)
+    expected = Path(instance_paths().store("friction")) / "friction.jsonl"
+
+    assert _ledger_path() == expected
+    assert Path(instance_paths().explain()["instance_root"]) in expected.parents
+
+
+def test_an_existing_pre_instance_ledger_is_adopted_not_orphaned(tmp_path, monkeypatch):
+    """Upgrading must not look like losing your history."""
+    from plugins import friction
+
+    monkeypatch.delenv("FRICTION_LOG", raising=False)
+    legacy = tmp_path / "legacy" / "friction" / "friction.jsonl"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text('{"ts":"2026-07-22T00:00:00+00:00","kind":"harness","summary":"old signal"}\n',
+                      encoding="utf-8")
+    new_home = tmp_path / "instance"
+    monkeypatch.setattr(friction, "_legacy_ledger_path", lambda: legacy)
+    monkeypatch.setattr("infra.paths.instance_paths", lambda: _FakePaths(new_home))
+
+    resolved = friction._ledger_path()
+
+    assert resolved == new_home / "friction" / "friction.jsonl"
+    assert resolved.is_file() and not legacy.exists()   # moved, not copied or dropped
+    assert "old signal" in resolved.read_text(encoding="utf-8")
+
+
+class _FakePaths:
+    def __init__(self, root):
+        self._root = Path(root)
+
+    def store(self, name):
+        return self._root / name

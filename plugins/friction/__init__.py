@@ -81,13 +81,46 @@ _CONTROL_FLOW = {"GraphInterrupt", "Interrupt", "NodeInterrupt", "GraphBubbleUp"
                  "ParentCommand", "GraphDelegate", "CancelledError"}
 
 
+def _legacy_ledger_path() -> Path:
+    """Where the ledger lived before it was instance-scoped. Read-only, for migration."""
+    base = os.environ.get("PROTOAGENT_HOME") or (Path.home() / ".protoagent")
+    return Path(base) / "friction" / "friction.jsonl"
+
+
 def _ledger_path() -> Path:
-    """Resolve at call time so $FRICTION_LOG and the instance dir are honored live."""
+    """Resolve at call time so $FRICTION_LOG and the instance dir are honored live.
+
+    Via ``instance_paths()`` (ADR 0004), NOT by re-deriving a path from
+    ``PROTOAGENT_HOME``. The old guess was ``<PROTOAGENT_HOME or ~/.protoagent>/friction/``,
+    which is only correct on the desktop — there ``PROTOAGENT_HOME`` points at one
+    workspace, so ``instance_root`` IS that directory and the two agree. On every other
+    install the instance root is ``~/.protoagent/default`` (or ``…/dev``), so the ledger
+    landed one level ABOVE it: outside the instance tree, shared by every instance on the
+    box, and untouched by ``scripts/dev-reset.sh``, which wipes only the sandbox.
+
+    It went unnoticed because the agent that uses this most is a desktop workspace. It
+    starts mattering now that the plugin is on by default and every instance writes."""
     override = os.environ.get("FRICTION_LOG")
     if override:
         return Path(override)
-    base = os.environ.get("PROTOAGENT_HOME") or (Path.home() / ".protoagent")
-    return Path(base) / "friction" / "friction.jsonl"
+    try:
+        from infra.paths import instance_paths
+
+        path = Path(instance_paths().store("friction")) / "friction.jsonl"
+    except Exception:  # noqa: BLE001 — a path-resolution failure must not disable recording
+        return _legacy_ledger_path()
+    # Adopt an existing pre-instance-scoping ledger rather than silently starting a second
+    # one: an operator who upgrades should keep their history, not appear to have none.
+    if not path.exists():
+        legacy = _legacy_ledger_path()
+        if legacy.is_file() and legacy != path:
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                legacy.replace(path)
+                log.info("[friction] migrated ledger %s -> %s", legacy, path)
+            except OSError:
+                return legacy  # can't move it — keep using it where it is
+    return path
 
 
 # The ledger is append-only and was unbounded (#2595). Trimmed to the newest N on write,
