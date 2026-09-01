@@ -13,26 +13,37 @@
 // CONSUMED on read (`takeKnowledgeSearchSeed`) for the same reason — replaying it on every
 // remount would fight whatever the operator typed since.
 //
-// Shaped like the ext registries (`subscribe` + a monotonic version) so the surface can
-// `useSyncExternalStore` it: the seed is usually set BEFORE the surface mounts (the palette
-// routes to it), but it can also arrive while it is already open, and only a subscription
-// covers both.
+// A tiny external store, the shape `chat/publishDialogStore.ts` already uses for the same
+// job (a trigger with no reference into the component it has to reach). The subscription is
+// what covers BOTH arrival orders: the seed is usually set before the surface mounts (the
+// palette routes to it), but it can also land while the surface is already open. The
+// `useSyncExternalStore` wiring stays in here — the surface takes a hook, not three exports
+// it has to re-assemble at the call site.
+
+import { useSyncExternalStore } from "react";
 
 let _seed: string | null = null;
 let _version = 0;
 const _listeners = new Set<() => void>();
 
-/** Monotonic counter, bumped on every seed — the `useSyncExternalStore` snapshot. */
+/** Monotonic counter, bumped on every seed. Plain (non-hook) read, for tests and any
+ *  non-React caller; `useKnowledgeSearchSeedVersion` is the subscribed one. */
 export function knowledgeSearchSeedVersion(): number {
   return _version;
 }
 
-/** Subscribe to seeds; returns an unsubscribe fn. */
-export function subscribeKnowledgeSearchSeed(fn: () => void): () => void {
+function subscribe(fn: () => void): () => void {
   _listeners.add(fn);
   return () => {
     _listeners.delete(fn);
   };
+}
+
+/** The seed version, subscribed — key an effect on it and `takeKnowledgeSearchSeed()` inside.
+ *  The VERSION, not the value: re-seeding the same term has to re-apply (the operator picked
+ *  that ⌘K row again after typing something else), and a value-keyed effect would not fire. */
+export function useKnowledgeSearchSeedVersion(): number {
+  return useSyncExternalStore(subscribe, knowledgeSearchSeedVersion, knowledgeSearchSeedVersion);
 }
 
 /** Queue a search term for the Knowledge surface's next render. */

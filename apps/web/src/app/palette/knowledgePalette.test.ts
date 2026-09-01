@@ -19,8 +19,10 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../../lib/api";
+import { registerPaletteSource } from "../../ext/paletteRegistry";
 import type { KnowledgeChunk } from "../../lib/types";
-import { KNOWLEDGE_PROVIDER_ID } from "./knowledgeSearch";
+import type { View } from "../../lib/viewRegistry";
+import { KNOWLEDGE_GROUP, KNOWLEDGE_PROVIDER_ID } from "./knowledgeSearch";
 import { usePaletteRegistry } from "../usePaletteRegistry";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -40,6 +42,7 @@ const chunk = (over: Partial<KnowledgeChunk> = {}): KnowledgeChunk => ({
 
 let container: HTMLElement;
 let root: Root;
+let client: QueryClient;
 let registry: PaletteRegistry | null = null;
 
 const ctx: PaletteContext = {
@@ -49,9 +52,11 @@ const ctx: PaletteContext = {
   props: undefined,
 };
 
-/** The console's adapter feeding the DS's own commands view — the exact pair that ships. */
-function Palette() {
-  const built = usePaletteRegistry([], []);
+/** The console's adapter feeding the DS's own commands view — the exact pair that ships.
+ *  `views` is a prop so a case can change the adapter's `navSig` and make its registration
+ *  effect re-run, the way enabling a plugin does in the console. */
+function Palette({ views = [] }: { views?: View[] }) {
+  const built = usePaletteRegistry(views, []);
   registry = built;
   const view = useMemo(() => commandsView({ registry: built }), [built]);
   return view.render(ctx);
@@ -79,7 +84,7 @@ beforeEach(() => {
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   act(() => root.render(h(QueryClientProvider, { client }, h(Palette))));
 });
 
@@ -134,6 +139,38 @@ describe("live knowledge search in ⌘K", () => {
     });
     expect(search).not.toHaveBeenCalled();
     expect(rowLabels().some((l) => l.includes("Postgres tuning"))).toBe(false);
+  });
+
+  it("stays LAST in provider order, so a fork's rows can't land under its heading", async () => {
+    // Provider order is render order (the DS appends each provider's rows in registration
+    // order) and a group header prints only when a row's group differs from the row above.
+    // So a knowledge provider registered once, in an effect of its own, ends up AHEAD of the
+    // source provider the moment the adapter re-registers — pushing a fork's dynamic
+    // **Commands** rows below the **Knowledge** heading and printing a second **Commands**
+    // header under them. Both providers ride the same effect precisely so this holds.
+    const off = registerPaletteSource(() => [
+      { id: "fork:row", label: "Fork row", group: "Commands", run: () => {} },
+    ]);
+    try {
+      const last = () => registry!.getProviders().map((p) => p.id).slice(-1)[0];
+      await act(async () => {}); // let the seam-version bump re-run the registration effect
+      expect(registry!.getProviders().length).toBeGreaterThan(1);
+      expect(last()).toBe(KNOWLEDGE_PROVIDER_ID);
+      // Re-register the way enabling a plugin does — a changed view list, not a contrived poke.
+      await act(async () => {
+        root.render(
+          h(
+            QueryClientProvider,
+            { client },
+            h(Palette, { views: [{ id: "notes", kind: "plugin", title: "Notes" }] }),
+          ),
+        );
+      });
+      expect(last()).toBe(KNOWLEDGE_PROVIDER_ID);
+      expect(KNOWLEDGE_GROUP).not.toBe("Commands"); // the heading the ordering protects
+    } finally {
+      off();
+    }
   });
 
   it("shows a named failure row rather than looking like an empty result set", async () => {

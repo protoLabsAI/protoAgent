@@ -17,18 +17,17 @@ import { KnowledgeStore } from "./KnowledgeStore";
 import {
   knowledgeSearchSeedVersion,
   seedKnowledgeSearch,
-  subscribeKnowledgeSearchSeed,
   takeKnowledgeSearchSeed,
+  useKnowledgeSearchSeedVersion,
 } from "./searchSeed";
 
-const offs: (() => void)[] = [];
+(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 beforeEach(() => {
   takeKnowledgeSearchSeed(); // drain anything a previous case left pending
 });
 
 afterEach(() => {
-  offs.splice(0).forEach((off) => off());
   takeKnowledgeSearchSeed();
 });
 
@@ -49,11 +48,23 @@ describe("knowledge search seed", () => {
     expect(knowledgeSearchSeedVersion()).toBe(before + 2);
   });
 
-  it("notifies subscribers so an already-open surface adopts the term too", () => {
-    let seen = 0;
-    offs.push(subscribeKnowledgeSearchSeed(() => (seen += 1)));
-    seedKnowledgeSearch("postgres");
-    expect(seen).toBe(1);
+  it("re-renders a mounted reader, so an already-open surface adopts the term too", () => {
+    // Through the exported HOOK, not the raw listener set: the subscribe/getSnapshot wiring
+    // is the module's own business, and a reader that never re-rendered is the failure this
+    // guards — a seed arriving at an open surface with nothing watching for it.
+    const seen: number[] = [];
+    const Probe = () => {
+      seen.push(useKnowledgeSearchSeedVersion());
+      return null;
+    };
+    const el = document.createElement("div");
+    const r = createRoot(el);
+    act(() => r.render(h(Probe)));
+    const rendersBefore = seen.length;
+    act(() => seedKnowledgeSearch("postgres"));
+    expect(seen.length).toBeGreaterThan(rendersBefore);
+    expect(seen[seen.length - 1]).toBe(knowledgeSearchSeedVersion());
+    act(() => r.unmount());
   });
 });
 
@@ -68,7 +79,6 @@ describe("the knowledge NavIntent arm", () => {
     // programmatic navigation is a silent no-op on a phone.
     expect(useUI.getState().mobileActive).toBe("knowledge");
   });
-
 });
 
 describe("the Knowledge surface adopts a seeded term", () => {

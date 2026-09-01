@@ -480,39 +480,45 @@ export function usePaletteRegistry(
     const offSources = hasPaletteSources()
       ? registry.registerProvider(paletteSourceProvider(flagOn, isHostConsole()))
       : undefined;
+    // Live knowledge search — the console's first REMOTE provider (the source provider above
+    // is a synchronous read of in-process registrations). See the module header of
+    // `palette/knowledgeSearch.ts` for why the debounce, the cancellation, the row cap and
+    // the empty-query browse default all live where they do. `navigate` is handed in so the
+    // launcher window's forwarding sink is the same chokepoint here as for every other
+    // palette navigation.
+    //
+    // Registered LAST, and in THIS effect rather than one of its own, because provider order
+    // is render order: the DS appends each provider's rows in registration order, and a
+    // header renders only when a row's group differs from the row above it
+    // (`command-palette.views.tsx`). A separate effect registers once and then never moves,
+    // so the first re-run of this one re-appends the source provider BEHIND it — putting a
+    // fork's dynamic **Commands** rows under the **Knowledge** heading and printing a second
+    // **Commands** header below it. Riding along keeps the order the guide promises (Agents →
+    // Plugins → Commands, then live results) whatever re-registers. It costs nothing extra:
+    // this effect already bumps the registry version on each of its deps, which is what
+    // re-fires the open palette's debounced search — one more registration in the same batch
+    // adds no re-fire that wasn't already happening.
+    //
+    // Registered UNCONDITIONALLY, unlike the source provider. Whether this instance even has
+    // a knowledge store is a server answer, and pre-fetching it would trade a silent request
+    // on every console boot for a capability the provider already reports on its own
+    // (`enabled: false` → no rows, no error row). The cost is the one `hasPaletteSources()`
+    // declined to pay: the DS shows its "Searching…" affordance whenever ANY provider
+    // declares `getCommands`, so the default console now spins it for the debounce window on
+    // every keystroke — including the empty root, where this provider deliberately searches
+    // nothing. That last part is the root view's call, not the provider's: the host-owned
+    // ranked root view gates its provider loop on a typed query and drops the empty-root flash.
+    const offKnowledge = registry.registerProvider(knowledgeSearchProvider(navigate));
     return () => {
       offChat?.();
       offFleetRoom();
       offPlugins?.();
       offCommands();
       offSources?.();
+      offKnowledge();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navSig, inlineSig, fleetSig, chat, registry, seamVersion, flagOn, kbOverrides]);
-
-  // Live knowledge search — the console's first REMOTE palette provider (the seam's provider
-  // above is a synchronous read of in-process registrations). See the module header of
-  // `palette/knowledgeSearch.ts` for why the debounce, the cancellation, the row cap, and the
-  // empty-query browse default all live where they do. `navigate` is handed in so the
-  // launcher window's forwarding sink is the same chokepoint here as for every other palette
-  // navigation.
-  //
-  // Its OWN effect, keyed only on the registry, deliberately: it takes no live input — the
-  // query arrives as an argument at read time — so folding it into the block above would
-  // withdraw and re-add it every time the fleet roster or a keybinding changed, and each
-  // register bumps the DS registry version, which re-fires the open palette's debounced
-  // search. One registration for the life of the registry is the whole requirement.
-  //
-  // Registered UNCONDITIONALLY, unlike the seam provider above. Whether this instance even
-  // has a knowledge store is a server answer, and pre-fetching it would trade a silent
-  // request on every console boot for a capability the provider already reports on its own
-  // (`enabled: false` → no rows, no error row). The cost is the one the seam provider
-  // declined to pay: the DS shows its "Searching…" affordance whenever ANY provider declares
-  // `getCommands`, so the default console now spins it for the debounce window on every
-  // keystroke — including the empty root, where this provider deliberately searches nothing.
-  // That last part is the root view's call, not the provider's: the host-owned ranked root
-  // view gates its provider loop on a typed query and drops the empty-root flash.
-  useEffect(() => registry.registerProvider(knowledgeSearchProvider(navigate)), [registry]);
 
   return registry;
 }

@@ -17,7 +17,6 @@ import type { KnowledgeChunk } from "../../lib/types";
 import type { NavIntent } from "../usePaletteRegistry";
 import {
   KNOWLEDGE_GROUP,
-  KNOWLEDGE_PROVIDER_ID,
   KNOWLEDGE_RESULT_CAP,
   KNOWLEDGE_TIMEOUT_MS,
   knowledgeRowLabel,
@@ -199,7 +198,7 @@ describe("knowledgeSearchProvider — the way past the shortlist", () => {
     // Last, and only after the chunks — it is the footer on the shortlist, not a result.
     expect(more.id).toBe("knowledge:more");
     expect(more.label).toBe("All matches in Knowledge");
-    expect(more.hint).toBe(`more than ${KNOWLEDGE_RESULT_CAP}`);
+    expect(more.hint).toBe(`showing top ${KNOWLEDGE_RESULT_CAP}`);
     expect(more.disabled).toBeFalsy();
     // Keyword-LESS on purpose: provider rows are never re-filtered, so keywords can't make
     // this findable — under a ranked root they could only lift the footer above the chunks
@@ -317,13 +316,5 @@ describe("api.knowledgeSearch — the wire the provider needs", () => {
     // The Knowledge surface is the other caller; adding a k it never asked for would silently
     // shrink its listing from thirty rows to the palette's shortlist.
     expect(url).not.toContain("k=");
-  });
-});
-
-describe("knowledgeSearchProvider — shape", () => {
-  it("declares getCommands under a stable id", () => {
-    const p = provider();
-    expect(p.id).toBe(KNOWLEDGE_PROVIDER_ID);
-    expect(typeof p.getCommands).toBe("function");
   });
 });

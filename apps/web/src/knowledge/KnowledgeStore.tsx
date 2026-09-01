@@ -5,7 +5,7 @@ import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowDownFromLine, ArrowUpToLine, ChevronRight, ChevronsDownUp, ChevronsUpDown, ClipboardCheck, Database, FileUp, Library, Pencil, Plus, Trash2 } from "lucide-react";
 
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useState } from "react";
 
 import { RefreshButton } from "../app/ui-kit";
 import { api } from "../lib/api";
@@ -16,11 +16,7 @@ import { QuickSetting } from "../settings/QuickSetting";
 import type { KnowledgeChunk } from "../lib/types";
 
 import { ReviewActions, ReviewChip } from "./ReviewVerdict";
-import {
-  knowledgeSearchSeedVersion,
-  subscribeKnowledgeSearchSeed,
-  takeKnowledgeSearchSeed,
-} from "./searchSeed";
+import { takeKnowledgeSearchSeed, useKnowledgeSearchSeedVersion } from "./searchSeed";
 
 // The shape every knowledge list/search query caches — reused for optimistic
 // bulk-delete cache surgery (#1770) without re-declaring the response fields.
@@ -333,11 +329,7 @@ export function KnowledgeStore() {
   // The review filter is cleared with it: the handoff's whole promise is that the row the
   // operator picked in the palette is in the list they land on, and an already-open surface
   // left on "pending review" would honour the term and still not show it.
-  const seedVersion = useSyncExternalStore(
-    subscribeKnowledgeSearchSeed,
-    knowledgeSearchSeedVersion,
-    knowledgeSearchSeedVersion,
-  );
+  const seedVersion = useKnowledgeSearchSeedVersion();
   useEffect(() => {
     const seeded = takeKnowledgeSearchSeed();
     if (seeded === null) return;

@@ -42,7 +42,7 @@
 // The DS dedups FIRST-WINS with statics ahead of provider rows, so a bare numeric id could
 // be swallowed whole by an unrelated static command that happened to claim it.
 import { createElement } from "react";
-import { Library } from "lucide-react";
+import { BookMarked } from "lucide-react";
 
 import type { Command, CommandProvider } from "@protolabsai/ui/command-palette";
 
@@ -68,6 +68,15 @@ export const KNOWLEDGE_RESULT_CAP = 6;
 
 /** How long one search may take before the row becomes "unavailable · timed out". */
 export const KNOWLEDGE_TIMEOUT_MS = 4000;
+
+/** The console's mark for the Knowledge surface — the SAME icon `coreSurfaces.tsx` gives it
+ *  on the rail and under `Open ▸`, so a knowledge row in ⌘K carries the mark of the place it
+ *  lands you. Deliberately not `Library`, which is already spoken for one level down: the
+ *  Knowledge surface uses it to flag a COMMONS chunk (`KnowledgeStore.tsx`), so wearing it
+ *  here would put a "commons" badge on every result, most of which are not.
+ *  One element, shared by all three row builders — a React element is an immutable descriptor,
+ *  so reusing it across rows is not shared state. */
+const KNOWLEDGE_ICON = createElement(BookMarked, { size: 14 });
 
 /** Longest row label before ellipsis — a knowledge chunk's content is a paragraph. */
 const LABEL_MAX = 72;
@@ -115,7 +124,7 @@ function toCommand(
     id: `knowledge:${chunk.id}`,
     label: knowledgeRowLabel(chunk),
     group: KNOWLEDGE_GROUP,
-    icon: createElement(Library, { size: 14 }),
+    icon: KNOWLEDGE_ICON,
     hint: knowledgeRowHint(chunk),
     // Thin, and only FACTS ABOUT THIS ROW, because a remote-search row's keywords do not
     // decide whether it is shown: the server already applied the query and the palette
@@ -147,9 +156,12 @@ export function knowledgeErrorRow(reason: string): Command {
     id: "knowledge:unavailable",
     label: "Knowledge search unavailable",
     group: KNOWLEDGE_GROUP,
-    icon: createElement(Library, { size: 14 }),
-    // Clipped: `reason` is a server `detail` or an exception message, and an unbounded one
-    // would push the row's own label off the line it is trying to explain.
+    icon: KNOWLEDGE_ICON,
+    // Clipped at the LABEL bound, not `HINT_MAX`: `reason` is a server `detail` or an
+    // exception message, so an unbounded one would push the row's own label off the line it
+    // is trying to explain — but this row's reason IS its content (it is the only row a
+    // failed search returns, and it competes with no sibling for the line), so it gets the
+    // long bound rather than the 28 characters a chunk row's provenance hint has to fit in.
     hint: clip(oneLine(reason)) || "search failed",
     // No keywords, like the footer row: this is the ONLY row a failed search returns, so
     // there is nothing for them to order and provider rows are never re-filtered.
@@ -177,8 +189,11 @@ export function knowledgeMoreRow(query: string, navigate: (intent: NavIntent) =>
     id: "knowledge:more",
     label: "All matches in Knowledge",
     group: KNOWLEDGE_GROUP,
-    icon: createElement(Library, { size: 14 }),
-    hint: `more than ${KNOWLEDGE_RESULT_CAP}`,
+    icon: KNOWLEDGE_ICON,
+    // Says what the operator is looking at, not how many exist: "more than 6" leaves it
+    // ambiguous whether 6 is the shown count or the total, and the row's mere PRESENCE is
+    // already the "there are more" signal.
+    hint: `showing top ${KNOWLEDGE_RESULT_CAP}`,
     run: (ctx) => {
       navigate({ kind: "knowledge", query });
       ctx.close();
@@ -186,21 +201,29 @@ export function knowledgeMoreRow(query: string, navigate: (intent: NavIntent) =>
   };
 }
 
-/** Run one search under BOTH the palette's abort signal and our own deadline.
- *  Resolves `{ rows }` on success, `{ aborted: true }` when the palette superseded us, and
- *  `{ reason }` when it failed or ran out of time. Never rejects. */
-async function search(
-  query: string,
-  signal: AbortSignal,
-): Promise<{ rows?: KnowledgeChunk[]; aborted?: boolean; reason?: string }> {
+/** How one search attempt ended. A CLOSED union rather than a bag of optionals: exactly one
+ *  of the three is true, so the caller has to say which it handled and there is no fourth
+ *  state ("rows and a reason", "neither") for a later edit to leak through. */
+type SearchOutcome =
+  | { kind: "rows"; rows: KnowledgeChunk[] }
+  | { kind: "aborted" }
+  | { kind: "failed"; reason: string };
+
+/** Run one search under BOTH the palette's abort signal and our own deadline. Never rejects
+ *  — `getCommands` turns each outcome into rows, and rejecting would be swallowed (see the
+ *  module header). */
+async function search(query: string, signal: AbortSignal): Promise<SearchOutcome> {
+  // Already superseded before we started (the palette aborts on the next keystroke, and a
+  // provider read can be scheduled behind one). Nothing downstream would use the answer, so
+  // don't spend an FTS query on it.
+  if (signal.aborted) return { kind: "aborted" };
   // A CHILD controller, not a competing one: it exists solely so the deadline can cancel
   // the in-flight request. It aborts when the palette's signal does (relayed) or when the
   // timer fires — so nothing survives the keystroke that superseded it.
   const ac = new AbortController();
   const relay = () => ac.abort();
   let deadlineHit = false;
-  if (signal.aborted) ac.abort();
-  else signal.addEventListener("abort", relay);
+  signal.addEventListener("abort", relay);
   const timer = setTimeout(() => {
     deadlineHit = true;
     ac.abort();
@@ -214,13 +237,13 @@ async function search(
     });
     // `enabled: false` is an instance with no knowledge store at all — nothing to search
     // and nothing broken. Stay quiet rather than parking an error row under every query.
-    if (data.enabled === false) return { rows: [] };
-    return { rows: data.results ?? [] };
+    if (data.enabled === false) return { kind: "rows", rows: [] };
+    return { kind: "rows", rows: data.results ?? [] };
   } catch (err) {
     // The palette moved on (another keystroke, or the palette closed). It discards this
     // result either way; resolving empty keeps the abort out of the failure path.
-    if (signal.aborted) return { aborted: true };
-    return { reason: deadlineHit ? "timed out" : errMsg(err) };
+    if (signal.aborted) return { kind: "aborted" };
+    return { kind: "failed", reason: deadlineHit ? "timed out" : errMsg(err) };
   } finally {
     clearTimeout(timer);
     signal.removeEventListener("abort", relay);
@@ -237,10 +260,10 @@ export function knowledgeSearchProvider(
     getCommands: async (query, { signal }) => {
       const q = (query ?? "").trim();
       if (q.length < KNOWLEDGE_MIN_QUERY) return [];
-      const { rows, aborted, reason } = await search(q, signal);
-      if (aborted) return [];
-      if (reason !== undefined) return [knowledgeErrorRow(reason)];
-      const found = rows ?? [];
+      const outcome = await search(q, signal);
+      if (outcome.kind === "aborted") return [];
+      if (outcome.kind === "failed") return [knowledgeErrorRow(outcome.reason)];
+      const found = outcome.rows;
       const out = found.slice(0, KNOWLEDGE_RESULT_CAP).map((c) => toCommand(c, q, navigate));
       // The probe asked for `CAP + 1`. Getting it back is the ONLY signal available that
       // matches exist past the shortlist — the route returns no total — so it is what
