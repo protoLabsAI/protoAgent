@@ -10,7 +10,7 @@
   try { kit = await import(window.__base + "/_ds/plugin-kit.js"); }
   catch (e) {
     var kerr = document.createElement("div");
-    kerr.style.cssText = "padding:14px 16px;color:var(--pl-color-danger,#f85149);font:13px/1.5 var(--pl-font-sans,system-ui)";
+    kerr.style.cssText = "padding:14px 16px;color:var(--pl-color-status-error,#f85149);font:13px/1.5 var(--pl-font-sans,system-ui)";
     kerr.textContent = "The DS plugin kit failed to load — the console bundle (/_ds) is missing or stale " +
       "(a source install without a web build, or a packaging regression). Artifacts cannot authenticate without it.";
     document.body.prepend(kerr);
@@ -463,7 +463,7 @@
     var el=document.getElementById("pollerr");
     if(!el){ el=document.createElement("div"); el.id="pollerr";
       el.style.cssText="position:absolute;left:0;right:0;top:0;z-index:3;padding:8px 12px;font-size:12px;"
-        + "color:var(--pl-color-danger,#f85149);background:var(--pl-color-bg-inset,rgba(127,127,127,.12));"
+        + "color:var(--pl-color-status-error,#f85149);background:var(--pl-color-bg-inset,rgba(127,127,127,.12));"
         + "border-bottom:var(--pl-border-width,1px) solid var(--pl-color-border,rgba(255,255,255,.12))";
       document.getElementById("stage").appendChild(el); }
     el.textContent="Couldn't load artifacts: "+(status||"network error")+" — retrying.";
