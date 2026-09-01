@@ -30,6 +30,8 @@ import type { PaletteCommand } from "../ext/paletteRegistry";
 import { registeredKeybindings } from "../ext/keybindingRegistry";
 import { formatCombo } from "../keybindings/combo";
 import { effectiveCombo, useKeybindingOverrides } from "../keybindings/overrides";
+import { runBindingById } from "../keybindings/useKeybindings";
+import { registerKeybindingCommands } from "./keybindingCommands";
 import { useFlagPredicate } from "../flags/flags";
 import { useQuery } from "@tanstack/react-query";
 import { agentHref, isHostConsole } from "../lib/api";
@@ -103,7 +105,14 @@ export type NavIntent =
   | { kind: "view"; id: string }
   | { kind: "plugins"; tab: "local" | "market" }
   | { kind: "global"; section?: string }
-  | { kind: "agent"; slug: string };
+  | { kind: "agent"; slug: string }
+  // Run a registered keybinding's action (ADR 0063) — what a ⌘K row that advertises a
+  // shortcut does. An INTENT rather than a direct `binding.run()` at the row for the usual
+  // launcher reason: these actions mutate the console's stores and walk its DOM, both of
+  // which are absent in the frameless launcher window, so the work has to be able to cross
+  // to the main window as a plain payload. `surface` is the view that makes a SCOPED
+  // binding's scope real — see the case in `applyNavIntent`.
+  | { kind: "keybinding"; id: string; surface?: string };
 
 /** Apply an intent to THIS window's UI store. The default navigator, and what the main
  *  window calls when it receives a forwarded intent from the launcher. */
@@ -129,6 +138,21 @@ export function applyNavIntent(intent: NavIntent) {
       // `window.location` targets the window the operator is actually looking at.
       window.location.href = agentHref(intent.slug);
       break;
+    case "keybinding":
+      // Make the binding's SCOPE real before running it, rather than bypassing it.
+      // `resolveBinding` is the only place `scope` is enforced and a palette row calls
+      // `run()` directly, so a chat-scoped action would otherwise fire from an overlay that
+      // is never inside `[data-kb-scope="chat"]`. Navigating first is also what the operator
+      // asked for — "Clear conversation" chosen from Knowledge means "go to chat and clear
+      // it". A row for a scope with no surface is never built (keybindingCommands.ts).
+      //
+      // Synchronous run right after is safe for the DOM-walking action (`chat.tool.toggle`):
+      // the chat slot is mounted for the app's LIFETIME and `active` only toggles visibility
+      // (ChatSlot.tsx, #613), so `openView` never has to mount anything for the walk to find
+      // it — no waiting on a render.
+      if (intent.surface) openView(intent.surface);
+      runBindingById(intent.id);
+      break;
   }
 }
 
@@ -152,12 +176,22 @@ function navigate(intent: NavIntent) {
 // ids are the uiStore union types (source of truth), so they can't drift into a 404.
 // (Inbox moved to a utility-bar widget; Schedule is a top-level rail surface that
 // auto-registers as a "go to" nav command — so no Activity deep-links here.)
-const _link = (id: string, label: string, keywords: string[], intent: NavIntent) =>
+const _link = (
+  id: string,
+  label: string,
+  keywords: string[],
+  intent: NavIntent,
+  /** A `registerKeybinding` id whose live combo the row advertises (ADR 0061) — for a
+   *  deep-link that a keyboard shortcut ALSO reaches, so the row and Settings ▸ Keyboard
+   *  never disagree and the deep-link doesn't need a twin row from `keybindingCommands`. */
+  keybinding?: string,
+) =>
   registerPaletteCommand({
     id,
     label,
     group: "Commands",
     keywords,
+    keybinding,
     run: (ctx) => {
       navigate(intent);
       ctx.close();
@@ -174,12 +208,25 @@ _link("plug:download", "Plugins: Install from URL", ["plugins", "install", "url"
 });
 // Settings is the consolidated dialog now (2026-06) — opened from the utility-bar pill,
 // the drawer, or these palette commands. A bare "Settings" command + Box-section deep-links.
-_link("settings", "Settings", ["settings", "config", "preferences", "options"], { kind: "global" });
+// ⌘, opens the same dialog (the `settings.open` binding), so this row advertises it rather
+// than `keybindingCommands` shipping a second "Open Settings" row beside it.
+_link(
+  "settings",
+  "Settings",
+  ["settings", "config", "preferences", "options"],
+  { kind: "global" },
+  "settings.open",
+);
 _link("box:fleet", "Settings: Fleet", ["fleet", "agents", "box"], { kind: "global", section: "fleet" });
 _link("box:telemetry", "Settings: Telemetry", ["telemetry", "metrics", "box", "global"], {
   kind: "global",
   section: "telemetry",
 });
+// Keyboard actions as commands (ADR 0063 × ADR 0061): the triaged allow-list of registered
+// bindings, each row RUNNING its binding's action and ADVERTISING that binding's live combo.
+// `navigate` is handed in rather than imported so `keybindingCommands` has no runtime edge
+// back to this module — and so a test can assert the exact intent a row emits.
+registerKeybindingCommands(navigate);
 
 /** Map a registered (core or fork) PaletteCommand onto a DS palette `Command`. The DS row
  *  has no shortcut slot, so a command that ADVERTISES a keybinding (ADR 0061 `keybinding` =

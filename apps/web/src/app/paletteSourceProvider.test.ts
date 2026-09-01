@@ -44,6 +44,14 @@ async function mountRegistry(): Promise<PaletteRegistry> {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   root.render(h(QueryClientProvider, { client }, h(Probe)));
   await vi.waitFor(() => expect(registry).not.toBeNull());
+  // `registry` is assigned during RENDER, but everything on it — the commands AND the
+  // source provider — is wired by the hook's EFFECTS, in the commit after. Returning on the
+  // render alone hands back an empty registry whenever the effect flush lands a tick later,
+  // which is a coin-flip on a loaded machine (and got measurably likelier once the adapter's
+  // import graph grew). The static commands are never empty (Fleet Room, `Open…`, the core
+  // deep-links) and both effects run in the same commit, so their arrival is the signal that
+  // the provider effect has run too.
+  await vi.waitFor(() => expect(registry!.getStaticCommands().length).toBeGreaterThan(0));
   return registry!;
 }
 

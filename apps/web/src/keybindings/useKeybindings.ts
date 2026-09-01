@@ -74,3 +74,39 @@ export function runForwardedCombo(combo: string, editable = false): boolean {
   }
   return true;
 }
+
+// Run ONE binding's action by id — the command palette's path (ADR 0061): a ⌘K row that
+// advertises a shortcut has to run the action that shortcut runs, or the row is a lie.
+//
+// By id and not through `resolveBinding`, because the palette names an ACTION, not a chord:
+// two bindings can share a combo, and which one a chord resolves to depends on focus. That
+// makes the two things `resolveBinding` enforces the caller's problem, and only one of them
+// is a real hazard:
+//   • `scope` — resolve.ts is its ONLY enforcement point, and this bypasses it. The palette
+//     overlay is never inside `[data-kb-scope="chat"]` (ChatSurface.tsx is the one element
+//     that declares it), so a chat-scoped action invoked from a ⌘K row would fire with the
+//     chat surface possibly not even on screen. The palette does not bypass the check, it
+//     satisfies it: the row carries the surface its binding's scope names and
+//     `applyNavIntent` opens that surface first, so the precondition is true when the action
+//     lands (usePaletteRegistry.ts, NavIntent kind "keybinding"). A caller that can't do
+//     that must not call this for a scoped binding.
+//   • `allowInInput` — not a hazard. It exists so a plain key (`/`) doesn't fire while the
+//     operator is typing it into a field; choosing a row off a list is not a stray keystroke.
+//
+// The synthetic event mirrors `runForwardedCombo` above, for the same reason: `run` is typed
+// `(e: KeyboardEvent) => void`, no core binding reads the event, and inventing a plausible
+// "real" event would pretend a key was pressed. The try/catch mirrors the keydown host — a
+// throwing binding must not take the palette down with it.
+//
+// Returns false when nothing is registered under `id` (a stale row is then a no-op, not a
+// crash), true when a binding was found and invoked.
+export function runBindingById(id: string): boolean {
+  const binding = registeredKeybindings().find((b) => b.id === id);
+  if (!binding) return false;
+  try {
+    binding.run(new KeyboardEvent("keydown"));
+  } catch {
+    /* a binding action must never break its caller */
+  }
+  return true;
+}
