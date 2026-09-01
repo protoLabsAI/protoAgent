@@ -242,6 +242,23 @@ async def test_non_json_2xx_is_a_malformed_answer_not_a_crash(monkeypatch):
     assert out["logs"]["malformed"] == ["response_not_json"]
 
 
+async def test_non_json_log_preview_is_redacted_before_it_is_bounded(monkeypatch):
+    _install_roster(monkeypatch, [_LOCAL])
+    monkeypatch.setattr(fd, "_TOOL_TEXT_CAP", 18)
+    secret = "sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+    def handler(request):
+        text = f"tok {secret} " + "Z" * 100
+        return httpx.Response(200, content=text.encode(), headers={"content-type": "text/plain"})
+
+    monkeypatch.setattr(fd, "_make_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    out = await _logs("Alpha")
+    dumped = json.dumps(out)
+    assert secret not in dumped
+    assert "sk-ABC" not in dumped
+    assert out["logs"]["text"] == "tok [REDACTED] ZZZ"
+
+
 async def test_no_active_port_is_a_compact_unavailable(monkeypatch):
     _install_roster(monkeypatch, [_LOCAL])
     from runtime.state import STATE
@@ -334,6 +351,20 @@ async def test_secrets_are_redacted_on_the_ERROR_path_too(monkeypatch):
     assert out["ok"] is False and out["error"] == "unauthorized"
     assert secret not in json.dumps(out)  # the raw credential never leaves the tool
     assert out["detail"] == "rejected token [REDACTED]"  # ...replaced, and the reason survives
+
+
+async def test_log_secret_straddling_the_bound_is_redacted_before_truncation(monkeypatch):
+    _install_roster(monkeypatch, [_LOCAL])
+    monkeypatch.setattr(fd, "_TOOL_TEXT_CAP", 20)
+    secret = "sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    message = f"tok {secret} " + "Z" * 100
+    _install_http(monkeypatch, body={"enabled": True, "lines": [{"message": message}], "returned": 1, "capacity": 2})
+    out = await _logs("Alpha")
+    dumped = json.dumps(out)
+    assert secret not in dumped
+    assert "sk-ABC" not in dumped
+    assert out["logs"]["lines"][0]["message"] == "tok [REDACTED] ZZZZZ"
+    assert out["logs"]["tool_truncated"] is True
 
 
 async def test_more_rows_than_requested_are_capped_at_the_tool_boundary(monkeypatch):
@@ -542,6 +573,23 @@ async def test_non_json_2xx_task_is_a_malformed_answer_not_a_crash(monkeypatch):
     out = await _task("Alpha")
     assert out["ok"] is True
     assert out["task"]["malformed"] == ["response_not_json"]
+
+
+async def test_non_json_task_preview_is_redacted_before_it_is_bounded(monkeypatch):
+    _install_roster(monkeypatch, [_LOCAL])
+    monkeypatch.setattr(fd, "_TOOL_TEXT_CAP", 18)
+    secret = "sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+    def handler(request):
+        text = f"tok {secret} " + "Z" * 100
+        return httpx.Response(200, content=text.encode(), headers={"content-type": "text/plain"})
+
+    monkeypatch.setattr(fd, "_make_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    out = await _task("Alpha")
+    dumped = json.dumps(out)
+    assert secret not in dumped
+    assert "sk-ABC" not in dumped
+    assert out["task"]["text"] == "tok [REDACTED] ZZZ"
 
 
 def test_task_public_surface_takes_only_member_and_task_id():

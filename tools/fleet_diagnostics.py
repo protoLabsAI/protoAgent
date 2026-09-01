@@ -258,6 +258,19 @@ def _server_detail(resp) -> str | None:
     return None
 
 
+def _redacted_preview(text: str, cap: int | None = None) -> str:
+    """Redact a free-form member-authored text blob BEFORE capping it.
+
+    Used for compact malformed-body previews, which do not pass through the structured log/task
+    field cappers. Keeping the order here preserves the module's boundary invariant even when a
+    secret straddles the preview cap.
+    """
+    from graph.middleware.redaction import redact
+
+    limit = _TOOL_TEXT_CAP if cap is None else cap
+    return str(redact(text))[:limit]
+
+
 def _shape(resp) -> dict[str, Any]:
     """A member HTTP response → a normalized result: ``{"ok": True, "body": ...}`` or a compact
     failure. Every non-2xx status is a structured answer, never an exception."""
@@ -269,7 +282,7 @@ def _shape(resp) -> dict[str, Any]:
     try:
         body = resp.json()
     except Exception:  # noqa: BLE001 — a non-JSON 200 is a malformed member, not a crash
-        return {"ok": True, "body": {"malformed": ["response_not_json"], "text": (resp.text or "")[:_TOOL_TEXT_CAP]}}
+        return {"ok": True, "body": {"malformed": ["response_not_json"], "text": _redacted_preview(resp.text or "")}}
     return {"ok": True, "body": body}
 
 
