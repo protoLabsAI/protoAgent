@@ -116,7 +116,7 @@ Memory is **enabled by default** (`middleware.memory: true` in `langgraph-config
 
 **Disabling memory:** set `middleware.memory: false` in your fork's config, or set `PROTOAGENT_DISABLE_MEMORY=1` in the environment to suppress disk writes without changing the config.
 
-**Persistence across container restarts:** mount a volume at `/sandbox/memory/`. Without a volume the directory is ephemeral and summaries are lost on container stop.
+**Persistence across container restarts:** in the container `/sandbox` *is* the instance root (`PROTOAGENT_HOME=/sandbox`), so summaries land in `/sandbox/memory` and the bundled `protoagent-sandbox` volume — which covers all of `/sandbox` — already persists them. Without that volume the directory is ephemeral and summaries are lost on container stop. `MEMORY_PATH` overrides the location anywhere.
 
 ## Security
 

@@ -890,9 +890,11 @@ const server = createServer(async (req, res) => {
         // `relevant` re-chooses per turn (so it sends no flag at all).
         if (memoryMode.policy === "off") rows = rows.map((r) => ({ ...r, in_digest: false }));
         if (memoryMode.policy === "relevant") rows = stripFields(rows, ["in_digest"]);
-        // The viewed chat is never a "prior" session of itself.
+        // The viewed chat is never a "prior" session of itself. Not in legacy mode:
+        // a backend predating these fields must keep its pre-badge response shape,
+        // and re-adding in_digest here would put one of them back.
         const viewing = new URL(req.url, "http://x").searchParams.get("session_id") || "";
-        if (viewing) {
+        if (viewing && !memoryMode.legacy) {
           rows = rows.map((r) =>
             r.session_id === viewing ? { ...r, in_digest: false, is_active_session: true } : r,
           );
