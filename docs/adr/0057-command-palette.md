@@ -208,6 +208,52 @@ Backend: add `_parse_commands` next to `_parse_views` (`graph/plugins/manifest.p
   | `emit`       | `POST /api/events/publish` (ADR 0039, the bus `PluginView` already relays) |
   | `command`    | look up + run another command |
 
+> **As shipped (#3294).** The adapter is `apps/web/src/app/pluginPaletteCommands.ts`, wired by
+> `usePaletteRegistry` for BOTH the console window and the frameless desktop launcher off one
+> shared derivation (`pluginCommandSources`) rather than the two hand-synced copies the
+> plugin-*view* derivation still carries. Rows register per plugin, adjacent to that plugin's
+> view rows, stamped with `{source}` so the palette root renders the attribution chip and its
+> contiguous-group rendering keeps a single "Plugins" heading — a manifest `group` naming a
+> heading the console already owns ("Agents", "Commands") falls back to that plugin section
+> rather than opening a second one mid-list. Five deltas from the sketch above:
+>
+> - **Navigation goes through the serializable `NavIntent` chokepoint**, not `ui.setSurface`.
+>   The launcher mounts this same registry in a shell-less JS context where store mutations are
+>   inert, so a direct store call is a silent no-op there.
+> - **The adapter re-validates every route and topic namespace** instead of trusting
+>   `/api/runtime/status`. `apiUrl()` forwards an absolute URL unchanged and the operator bearer
+>   is attached, so an escaped route is an authenticated write, not a blank iframe — and the
+>   payload it reads never has to have passed through `_parse_commands` (a stale cache, a parser
+>   regression, a hand-edited response). Failing the mirror produces no row.
+> - **`open_view` falls back to `navigate`** when the target view never opted into the inline
+>   morph through `views[].palette` — something `_parse_commands` cannot see, and `ctx.enter` on
+>   an unregistered view id blanks the whole palette.
+> - **A view action may only name a NAVIGABLE view.** Declared is not navigable: a `slot: "chat"`
+>   claimant renders under the core chat id and a `utility` widget is a bottom-left pill, so
+>   neither joins `railOrder` and neither has a `plugin:<id>:<view>` surface. The allow-set is
+>   built through the one predicate all three hosts share (`lib/pluginViews.ts`
+>   `isNavigablePluginView`), so a command at one of those produces no row — rather than a live
+>   "go to" that sets a surface nothing renders, which App's stale-surface fallback answers by
+>   dropping the operator on chat. `_parse_commands` mirrors it, because only the parse side can
+>   warn the plugin author.
+> - **A launcher row's `tool`/`emit` OUTCOME is forwarded to the console window.** Firing one
+>   closes the palette, and on the launcher closing the palette hides the window — a toast
+>   raised there renders into a webview nobody can see. It rides `palette:notify` to the main
+>   window, which is raised the same way a `navigate` row raises it.
+> - **A `tool` row on an enabled plugin that failed to LOAD ships disabled**, with the reason
+>   where its hint goes. That route is served by the plugin's own router, so there is nothing to
+>   call; `emit` (the core bus route) and the view actions (the view host shows the loader's real
+>   error) stay live. Disabling rather than hiding follows the Fleet Room command's convention —
+>   a row that explains itself is discoverable, a row that vanishes reads as never shipped.
+> - **A row with no manifest `hint` says what it DOES** — "go to" for a `navigate`, "run" for a
+>   `tool`/`emit` — and carries that word in its keywords either way. `rank.ts` matches on
+>   `label + hint + group + source.label + keywords`, and the plugin's own view rows already hint
+>   "go to", so without it a plugin-declared navigation row is the one navigation row in the
+>   palette that typing "go to" misses. "open" is deliberately not used: `Open…` owns it.
+>
+> `provider` rows are **not** compiled: the §8 provider budget (per-query timeout/cancel,
+> per-plugin result cap) is still open, so a provider-only entry contributes no row.
+
 ## 5. Sequencing
 
 1. **Bump `@protolabsai/ui`** to the release carrying `/command-palette`

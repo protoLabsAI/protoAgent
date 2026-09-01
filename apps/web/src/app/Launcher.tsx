@@ -14,8 +14,10 @@ import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { CommandPalette } from "@protolabsai/ui/command-palette";
 import type { PaletteView } from "@protolabsai/ui/command-palette";
-import { setPaletteNavigator, usePaletteRegistry } from "./usePaletteRegistry";
+import { useToast } from "@protolabsai/ui/overlays";
+import { forwardPaletteNotice, setPaletteNavigator, usePaletteRegistry } from "./usePaletteRegistry";
 import type { InlinePluginView } from "./usePaletteRegistry";
+import { pluginCommandSources } from "./pluginPaletteCommands";
 import { PaletteChat } from "./PaletteChat";
 import { CORE_SURFACES } from "./coreSurfaces";
 import { buildViews } from "../lib/viewRegistry";
@@ -23,6 +25,7 @@ import { runtimeStatusQuery } from "../lib/queries";
 import { apiUrl, authToken } from "../lib/api";
 import { consoleTheme } from "./PluginView";
 import { brandName } from "../lib/brand";
+import { isNavigablePluginView } from "../lib/pluginViews";
 import { emit, invoke, listen } from "../lib/desktop";
 import "./launcher.css";
 
@@ -44,7 +47,7 @@ export function Launcher() {
   const allPluginViews = (runtime?.plugins ?? [])
     .filter((p) => p.enabled && p.views?.length)
     .flatMap((p) => (p.views ?? []).map((v) => ({ ...v, key: `plugin:${p.id}:${v.id}` })))
-    .filter((v) => v.slot !== "chat" && !v.utility);
+    .filter(isNavigablePluginView);
 
   // The same three command sources the in-app palette feeds usePaletteRegistry — handed
   // over as the WHOLE ADR 0056 facade, `viewFor` included (the palette resolves surfaces by
@@ -85,7 +88,23 @@ export function Launcher() {
     [chatAgentName],
   );
 
-  const registry = usePaletteRegistry(paletteFacade, inlinePaletteViews, paletteChat);
+  // Plugin-DECLARED palette commands (ADR 0057 §3), through the SAME derivation App uses —
+  // the launcher must list what the in-app palette lists. Its glyph resolver stays the
+  // generic mark, for the reason `pluginIcon` above gives.
+  const pluginPaletteCommands = pluginCommandSources(runtime?.plugins, () => pluginIcon());
+  // A `tool`/`emit` row's outcome CANNOT be toasted here: firing one closes the palette, and
+  // closing the palette hides this window (`onOpenChange` below → `hide_launcher` →
+  // `window.hide()`), so the toast would render into a hidden webview. Forward it to the
+  // console window and raise that window — the same handoff a `navigate` row already makes,
+  // for the same reason. `useToast()` stays the fallback for a launcher mounted outside the
+  // desktop shell (tests, a fork surface), where there is no other window to hand it to.
+  const toast = useToast();
+  const notify = useMemo(() => forwardPaletteNotice(toast), [toast]);
+
+  const registry = usePaletteRegistry(paletteFacade, inlinePaletteViews, paletteChat, {
+    sources: pluginPaletteCommands,
+    notify,
+  });
 
   // Swap the palette's navigation sink: forward the intent to the main console window,
   // bring it to the front, and dismiss the launcher. Restore the default on unmount.

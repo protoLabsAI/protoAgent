@@ -2,6 +2,7 @@
 // `app/usePaletteRegistry.ts` when the host took ownership of the root view.
 //
 //   nav.ts       the ONE navigation chokepoint (openView / applyNavIntent / the launcher sink)
+//   notices.ts   the launcher's other cross-window sink: what a row that RAN something returned
 //   rank.ts      inclusion (a verbatim port of the DS matcher) + ordering
 //   recents.ts   the namespaced frecency store, and its migration off the fleet key
 //   rootView.tsx the host-owned root view registered as DS view id "commands"
@@ -11,6 +12,7 @@
 // existing importer (App.tsx, Launcher.tsx, contextMenu/registrations.tsx, the seam tests)
 // is untouched by the move.
 export * from "./nav";
+export * from "./notices";
 export * from "./rank";
 export * from "./recents";
 export * from "./registry";

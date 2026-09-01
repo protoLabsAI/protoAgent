@@ -54,6 +54,12 @@ Settings ▸ Keyboard, not with the in-app chords above.
 - **Plugin views** — each enabled plugin's views are their own group. A view can also opt
   to render *inside* the palette by declaring `palette: "inline"` on it (so a lightweight
   tool can live behind a keystroke instead of taking a rail slot).
+- **Plugin commands** — a plugin can also declare rows that aren't views at all, in its
+  manifest's `commands:` block: go to one of its views, run one of its routes, or publish
+  an event. They sit with that plugin's view rows and carry its name as a chip, so it is
+  clear which plugin a row belongs to. A plugin that is enabled but failed to load shows
+  its route-backed rows greyed out saying so, rather than offering a call that could only
+  fail.
 - **Open…** — the built-in surfaces (Chat, Activity, Knowledge, Studio, Agent, Plugins,
   Settings, plus whatever a fork adds) live one hop in, behind **Open…**, so the root list
   stays short. They are also **searchable from the root**: type a surface's name and it is
@@ -167,9 +173,20 @@ A plugin's view opts into the palette by setting `palette: "inline"` on its view
 in `protoagent.plugin.yaml` (the same view that would otherwise mount in a rail/tab).
 When opened from the palette, it renders the view's body in place.
 
-> Plugin-declared *commands* (a manifest `commands:` list that contributes arbitrary
-> actions, beyond views) are the next slice of ADR 0057 and not shipped yet — today a
-> plugin reaches the palette via an inline **view**.
+Beyond views, a plugin contributes rows through its manifest's `commands:` block — see
+[`commands`](/reference/plugin-manifest#field-commands) for the field itself. Each entry
+declares what it *does* (`navigate`, `open_view`, `tool`, `emit`, or `command`, chaining to
+another entry) and the console compiles that declaration into the row's behaviour inside its
+own trusted adapter, `apps/web/src/app/pluginPaletteCommands.ts`. That indirection is the
+point: plugin code never enters the console bundle, so the manifest is data and this adapter
+is the single place data becomes behaviour. It re-checks every route and event topic against
+the plugin's own namespace instead of trusting the status payload, and anything that fails —
+along with any action it does not implement — contributes no row at all rather than a row
+that fires something its author did not write.
+
+> A `provider` entry (a live search that queries the plugin as you type) is parsed and
+> shipped on the status payload but not compiled yet, so an entry declaring only a provider
+> still contributes nothing.
 
 The palette is mounted in `apps/web/src/app/App.tsx` — the
 `@protolabsai/ui/command-palette` substrate, opened from the keybinding intents store

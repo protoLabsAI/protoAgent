@@ -110,6 +110,10 @@ export type RuntimeStatus = {
     settings_tabs?: PluginSettingsTabDescriptor[];
     // Console surfaces (ADR 0026): rail views the plugin contributes.
     views?: PluginView[];
+    // Declarative command-palette entries (ADR 0057 §3). Already enable-gated
+    // server-side: `loader.py` emits `[]` for a plugin that isn't enabled, so a
+    // disabled plugin contributes no rows at all.
+    commands?: PluginCommand[];
   }[];
 };
 
@@ -159,6 +163,55 @@ export type PluginView = {
   pluginLoaded?: boolean;
   pluginError?: string;
 };
+
+// A plugin-declared command-palette entry (ADR 0057 §3) — DATA, never code. The plugin
+// bundle never enters the console; `pluginPaletteCommands.ts` is the single trusted
+// adapter that compiles one of these into a `run(ctx)`, which is the whole trust model.
+//
+// Every field arrives ALREADY validated by `_parse_commands` (graph/plugins/manifest.py):
+// a safe id, a non-empty title, a route confined to `/api/plugins/<id>/…`, an emit topic
+// forced into the plugin's own event namespace, a `view` this manifest declares, and a
+// `command` chain proven to terminate inside this same list. The console mirrors those
+// checks anyway rather than trusting the payload — a stale runtime status, a parser
+// regression or a hand-edited response must not become an authenticated write.
+export type PluginCommand = {
+  // Namespaced by the adapter into the palette row id `plugin:<pluginId>:<id>`.
+  id: string;
+  // The palette row's label.
+  title: string;
+  // Muted trailing text on the row.
+  hint?: string;
+  // A lucide-react icon name, exactly like `PluginView.icon`.
+  icon?: string;
+  // Palette section header. Defaults to "Plugins" — the plugin's other palette presence
+  // (its view rows) — rather than the generic "Commands" bucket.
+  group?: string;
+  keywords?: string[];
+  // What running the row does. Absent when the entry declared only a `provider`.
+  action?: PluginCommandAction;
+  // Live-search rows: the console would query `route` as the operator types and turn each
+  // result into a command running `result_action`. Parsed + shipped by the backend; the
+  // console adapter does NOT compile providers yet (ADR 0057 §8 leaves the per-query
+  // timeout/cancel + result-cap budget open), so a provider-only entry contributes no row.
+  provider?: { route: string; result_action: PluginCommandAction };
+};
+
+// The closed action vocabulary `_parse_commands` emits — ADR 0057 §4's dispatch table.
+// Kept in lock-step with `_COMMAND_ACTIONS` (graph/plugins/manifest.py): implementing an
+// action the parser rejects would be dead code, and accepting one it never emits would be
+// a second, unvalidated dispatch path.
+export type PluginCommandAction =
+  // Navigate to one of this plugin's own rail views (`plugin:<pluginId>:<view>`).
+  | { type: "navigate"; view: string }
+  // Morph the palette body into that view's iframe. The backend normalizes `inline` ON —
+  // there is no non-inline `open_view` (`navigate` is that half).
+  | { type: "open_view"; view: string; inline?: boolean }
+  // An authenticated call to `/api/plugins/<pluginId>/<route>`.
+  | { type: "tool"; route: string; method: string }
+  // Publish on the plugin's own event namespace (ADR 0039).
+  | { type: "emit"; topic: string; data?: Record<string, unknown> }
+  // Run another command THIS manifest declares.
+  | { type: "command"; command: string };
 
 // A git-installed plugin (ADR 0027) — a plugins.lock entry enriched with its
 // manifest + enabled state for the console Plugins panel.
