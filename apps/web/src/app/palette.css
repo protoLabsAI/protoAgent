@@ -1,0 +1,43 @@
+/* Command-palette root view (ADR 0057) — co-located with the view that imports it, the
+   FleetRoom.tsx / fleet-room.css precedent, NOT theme.css.
+
+   SCOPED ON PURPOSE. Everything in here hangs off `.pa-cmdk`, the host-owned root view's
+   own class, because a bare `.pl-cmdk-*` rule is plain global CSS from @protolabsai/ui-css
+   and would leak into BOTH palette windows (the in-app overlay AND the frameless desktop
+   launcher) and into every DS-provided view the palette morphs into — the plugin iframe
+   shell, the chat view, the Fleet Room. Restyle the ROOT list here; leave the shared
+   chrome to the DS. */
+
+.pa-cmdk {
+  /* The DS ships this max-height on `.pl-cmdk-commands__list`; pinning it here as a token
+     makes it OURS. It is load-bearing, not cosmetic: framer-motion animates the panel's
+     width AND height inline from `view.width` with `layout`, so a body free to grow per
+     keystroke re-animates the whole panel on every character typed — and this view's row
+     count now changes on every keystroke, where the DS's barely did. */
+  --pa-cmdk-list-max: 340px;
+}
+
+.pa-cmdk .pl-cmdk-commands__list {
+  max-height: var(--pa-cmdk-list-max);
+  overflow-y: auto;
+  /* Keeps a one-row result from collapsing the panel to a sliver and back — the same
+     animation argument as the max-height, at the other end. */
+  min-height: 96px;
+}
+
+/* The screen-reader-only result announcer. The console ships no `sr-only` utility and the
+   DS none either, so it is defined here, scoped like everything else in this file.
+   `clip-path` + a 1px box rather than `display:none` / `visibility:hidden`, both of which
+   remove the node from the accessibility tree and would make the live region silent — the
+   one failure mode a visual review can never catch. */
+.pa-cmdk .pa-cmdk__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}

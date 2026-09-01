@@ -70,7 +70,7 @@ import type { SectionMeta, SettingsSectionId } from "../settings/sections";
 
 /**
  * How a row navigates. Deliberately the narrow `{ kind: "global" }` arm rather than the
- * whole `NavIntent` union: it keeps this module off `usePaletteRegistry` (and so off the
+ * whole `NavIntent` union: it keeps this module off `palette/registry` (and so off the
  * palette's whole import graph), while staying structurally assignable FROM the real
  * `navigate` — a function that accepts every NavIntent accepts this one.
  *
@@ -90,7 +90,7 @@ export type SettingsNavigate = (intent: { kind: "global"; section?: string }) =>
  *
  *  • SYNONYMS ONLY. The DS matcher searches label · hint · group · keywords as one lowercased
  *    haystack, substring per whitespace-separated term (`matchCommand`, mirrored in
- *    usePaletteRegistry). Every label here already begins "Settings: ", so a "settings"
+ *    palette/rank's `matchCommand`). Every label here already begins "Settings: ", so a "settings"
  *    keyword — and the section's own label word — buys nothing.
  *  • TRUE of the PANE, not of the word. A keyword that sends an operator somewhere plausible
  *    but wrong is worse than no keyword: they stop searching. Behavior is Goal mode ·
@@ -154,11 +154,11 @@ const SECTION_KEYWORDS: Record<SettingsSectionId, string[]> = {
  *     "developer" into the persisted `settingsSection` before the surface's own gate drops
  *     it, leaving a dead id behind (see the header).
  *   • A `registerPaletteSource` could resolve the channel per read, but core ships ZERO
- *     dynamic sources on purpose: `usePaletteRegistry` wires the DS `CommandProvider` only
+ *     dynamic sources on purpose: `palette/registry` wires the `CommandProvider` only
  *     when `hasPaletteSources()`, and the DS shows its "Searching…" spinner whenever any
  *     provider exists. One row is not worth putting a 120ms spinner in front of every
  *     keystroke in every console.
- *   • `usePaletteRegistry` could register/unregister the row from an EFFECT keyed on the
+ *   • `palette/registry` could register/unregister the row from an EFFECT keyed on the
  *     channel — it works, and it costs no provider. It also makes core's first stateful
  *     palette registration, which is a pattern the next five special cases would copy, to
  *     reach a panel that is off-prod only and already one click away in the Settings rail.
@@ -186,7 +186,7 @@ export const SETTINGS_PALETTE_EXCLUDED: readonly SettingsSectionId[] = ["develop
  * "capabilities" lists exactly the five capability panes. Each row wears the same glyph its
  * section wears in the Settings rail, so ⌘K reads like the rail it deep-links into. (The
  * four hand-written Commands rows took glyphs of their own at the same time — see
- * usePaletteRegistry: the DS row has no icon gutter, so a half-glyphed group steps.)
+ * palette/registry: the row has no icon gutter, so a half-glyphed group steps.)
  */
 export function settingsPaletteCommands(navigate: SettingsNavigate): PaletteCommand[] {
   const excluded = new Set<string>(SETTINGS_PALETTE_EXCLUDED);

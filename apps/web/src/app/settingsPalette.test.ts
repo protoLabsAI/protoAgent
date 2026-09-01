@@ -37,7 +37,8 @@ import paletteSrc from "./settingsPalette.ts?raw";
 // Launcher window downloads App's tree. Read as SOURCE — importing main.tsx would boot React.
 import mainSrc from "../main.tsx?raw";
 import viteConfigSrc from "../../vite.config.ts?raw";
-// Imported for their MODULE-LOAD side effects: `usePaletteRegistry` is where core registers
+// Imported for their MODULE-LOAD side effects: `app/palette/registry` (reached through the
+// `usePaletteRegistry` barrel it kept) is where core registers
 // these rows through the public seam, and coreKeybindings is where `settings.open` is
 // declared. The wiring block below reads both registries back.
 import "./usePaletteRegistry";
@@ -149,7 +150,7 @@ describe("the row shape is the one the docs and the ranking claim", () => {
 // run real queries — the words you say out loud reaching for the pane — over the real rows.
 //
 // The matcher is the DS's `matchCommand` (command-palette.views.tsx), reproduced here for the
-// same reason usePaletteRegistry reproduces it: it is module-private. All whitespace-separated
+// same reason palette/rank reproduces it: it is module-private. All whitespace-separated
 // terms must appear as SUBSTRINGS of one lowercased haystack of label · hint · group ·
 // keywords. Substring, note — "rag" is inside "sto-rag-e" — so the assertions below say
 // "lands" (contains) except where a query really is unambiguous.
@@ -336,7 +337,7 @@ describe("wired into the registry, the HOST applies the gates", () => {
     ids(flagsOn, onHost).filter((id) => id.startsWith("settings:"));
 
   it("registers every row STATICALLY — core must not ship a dynamic source", () => {
-    // `usePaletteRegistry` wires the DS CommandProvider the moment ANY source exists, and the
+    // `palette/registry` wires the CommandProvider the moment ANY source exists, and the
     // DS shows its "Searching…" spinner whenever a provider does — so one source here would
     // put a 120ms spinner in front of every keystroke in every console.
     expect(settingsIds(true, true)).toHaveLength(
