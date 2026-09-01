@@ -2030,6 +2030,7 @@ def _apply_plugin_registries(plugins) -> None:
     from graph.goals import hooks as _goal_hooks
     from graph.goals import verifiers as _goal_verifiers
     from graph.lifecycle import hooks as _lifecycle_hooks
+    from graph import work_providers as _work_providers
     from graph.watches import hooks as _watch_hooks
 
     # getattr: a duck-typed bundle (tests) or one built before this field existed still
@@ -2037,6 +2038,11 @@ def _apply_plugin_registries(plugins) -> None:
     _goal_verifiers.set_plugin_verifiers(
         plugins.goal_verifiers, getattr(plugins, "goal_verifier_meta", None)
     )  # ADR 0028
+    # getattr for the same reason as above: a bundle built before this field existed still
+    # loads, it just contributes no work providers.
+    _work_providers.set_plugin_work_providers(
+        getattr(plugins, "work_providers", None), getattr(plugins, "work_provider_meta", None)
+    )  # ADR 0079
     _goal_hooks.set_goal_hooks(plugins.goal_hooks)
     _watch_hooks.set_watch_hooks(plugins.watch_hooks)  # ADR 0067
     _lifecycle_hooks.set_lifecycle_hooks(plugins.lifecycle_hooks)  # ADR 0074

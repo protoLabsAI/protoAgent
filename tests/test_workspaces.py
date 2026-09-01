@@ -1150,25 +1150,107 @@ def test_overlay_model_save_failure_cleans_partial_workspace(root, tmp_path, mon
     assert not root.exists() or list(root.iterdir()) == []
 
 
-def test_overlay_model_refuses_conflicting_box_oauth_without_partial_workspace(root, tmp_path, monkeypatch):
-    """A legacy instance login cannot overwrite a different box login just to create
-    a sister; both credentials and the fleet stay unchanged on the refusal."""
+def _codex_store_doc(account: str, exp: float, refresh: str) -> str:
+    """A Codex store shaped like the real one: an account id + expiry the promotion
+    guard can read out of the access-token JWT, and a distinct refresh token so two
+    docs for the SAME account still differ byte-for-byte the way real ones do."""
+    import base64
+    import json
+
+    def seg(obj: dict) -> str:
+        return base64.urlsafe_b64encode(json.dumps(obj).encode()).decode().rstrip("=")
+
+    claims = {"exp": exp, "https://api.openai.com/auth": {"chatgpt_account_id": account}}
+    jwt = ".".join([seg({"alg": "none"}), seg(claims), "sig"])
+    return json.dumps({"tokens": {"access_token": jwt, "refresh_token": refresh}})
+
+
+def test_overlay_model_dedupes_same_account_oauth_onto_the_fresher_store(root, tmp_path, monkeypatch):
+    """Two rotations of ONE login are not a conflict. Every refresh rewrites the tokens,
+    so a legacy override stops matching the box store byte-for-byte within minutes —
+    comparing bytes made the sister uncreatable for exactly the operators this bridge
+    exists to serve. The fresher store survives: a Codex refresh token is single-use, so
+    keeping the older copy can strand the account."""
     box = tmp_path / "box"
     box.mkdir()
     monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(box))
-    (box / "codex-oauth.json").write_text('{"tokens":{"refresh_token":"box"}}')
+    stale = _codex_store_doc("acct-1", 2_000_000_000, "rt-old")
+    fresh = _codex_store_doc("acct-1", 2_000_009_999, "rt-new")
+    (box / "codex-oauth.json").write_text(stale)
     host = tmp_path / "host"
     host.mkdir()
     (host / "langgraph-config.yaml").write_text("model:\n  name: chatgpt:gpt-5-codex\n")
-    (host / "codex-oauth.json").write_text('{"tokens":{"refresh_token":"instance"}}')
+    (host / "codex-oauth.json").write_text(fresh)
 
-    with pytest.raises(manager.WorkspaceError, match="box already has a different login"):
-        manager.create("sister", inherit_model=str(host))
+    rec = manager.create("sister", inherit_model=str(host))
 
-    assert manager.list_workspaces() == []
-    assert not root.exists() or list(root.iterdir()) == []
-    assert (box / "codex-oauth.json").read_text() == '{"tokens":{"refresh_token":"box"}}'
-    assert (host / "codex-oauth.json").read_text() == '{"tokens":{"refresh_token":"instance"}}'
+    assert not rec.get("warnings")
+    assert not (host / "codex-oauth.json").exists()  # the override rejoined the shared store
+    assert (box / "codex-oauth.json").read_text() == fresh
+
+
+def test_overlay_model_keeps_the_box_store_when_it_is_the_fresher_copy(root, tmp_path, monkeypatch):
+    """The same dedupe in the other direction — a stale override never rolls the
+    machine-wide login back to an older, possibly already-burned refresh token."""
+    box = tmp_path / "box"
+    box.mkdir()
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(box))
+    fresh = _codex_store_doc("acct-1", 2_000_009_999, "rt-new")
+    (box / "codex-oauth.json").write_text(fresh)
+    host = tmp_path / "host"
+    host.mkdir()
+    (host / "langgraph-config.yaml").write_text("model:\n  name: chatgpt:gpt-5-codex\n")
+    (host / "codex-oauth.json").write_text(_codex_store_doc("acct-1", 2_000_000_000, "rt-old"))
+
+    manager.create("sister", inherit_model=str(host))
+
+    assert not (host / "codex-oauth.json").exists()
+    assert (box / "codex-oauth.json").read_text() == fresh
+
+
+def test_overlay_model_defers_conflicting_box_oauth_instead_of_killing_the_create(root, tmp_path, monkeypatch):
+    """A genuinely different account is reported, not fatal. Neither store is touched —
+    so no machine-wide login is replaced and no single-use token is copied into a race —
+    and the sister boots on the box login it would have resolved anyway. The old hard
+    refusal was a dead end: its stated remedy (delete a hidden override, then re-run a
+    device login) is not reachable from the console."""
+    box = tmp_path / "box"
+    box.mkdir()
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(box))
+    theirs = _codex_store_doc("acct-2", 2_000_000_000, "rt-box")
+    mine = _codex_store_doc("acct-1", 2_000_009_999, "rt-instance")
+    (box / "codex-oauth.json").write_text(theirs)
+    host = tmp_path / "host"
+    host.mkdir()
+    (host / "langgraph-config.yaml").write_text("model:\n  name: chatgpt:gpt-5-codex\n")
+    (host / "codex-oauth.json").write_text(mine)
+
+    rec = manager.create("sister", inherit_model=str(host))
+
+    assert [w for w in rec["warnings"] if "different account" in w]
+    assert (box / "codex-oauth.json").read_text() == theirs
+    assert (host / "codex-oauth.json").read_text() == mine
+    assert [w["name"] for w in manager.list_workspaces()] == ["sister"]
+
+
+def test_overlay_model_defers_unidentifiable_oauth_stores(root, tmp_path, monkeypatch):
+    """Anthropic's opaque ``sk-ant-…`` pair carries no account id, so two divergent
+    stores cannot be matched OR distinguished. Unknown is not the same as different:
+    leave both alone and say so, rather than refusing to create the agent."""
+    box = tmp_path / "box"
+    box.mkdir()
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(box))
+    (box / "anthropic-oauth.json").write_text('{"access_token":"sk-ant-oat01-box"}')
+    host = tmp_path / "host"
+    host.mkdir()
+    (host / "langgraph-config.yaml").write_text("model:\n  name: claude:sonnet\n")
+    (host / "anthropic-oauth.json").write_text('{"access_token":"sk-ant-oat01-instance"}')
+
+    rec = manager.create("sister", inherit_model=str(host))
+
+    assert [w for w in rec["warnings"] if "no account id" in w]
+    assert (box / "anthropic-oauth.json").read_text() == '{"access_token":"sk-ant-oat01-box"}'
+    assert (host / "anthropic-oauth.json").read_text() == '{"access_token":"sk-ant-oat01-instance"}'
 
 
 def test_overlay_model_preserves_explicit_oauth_disconnect(root, tmp_path, monkeypatch):

@@ -177,7 +177,7 @@ mounted at all, whether it has a session, and whether the chat surface is actual
 All three facts are load-bearing, because outside the composer a decline is *silent* — there
 is no draft for the token to fall through into. `null` does **not** mean "the operator
 navigated away": the built-in chat slot is mounted for the app's lifetime (#613) and stays
-registered across rail switches, which is what lets ⌘K reach chat from any surface. It means
+registered across rail switches, which is what lets the palette reach chat from any surface. It means
 there is no built-in chat slot in this window at all — the frameless desktop launcher (ADR
 0057), or a fork surface / plugin iframe holding the `chat` slot ahead of the built-in one.
 And a `sessionId` of `null` disqualifies the whole set, not just part of it: 13 of the 16

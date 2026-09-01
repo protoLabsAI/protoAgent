@@ -37,6 +37,7 @@ Every one of these is a `register_*` call in your plugin's `register(registry)`
 | **Middleware** around the model call | `register_middleware` · [middleware](/guides/middleware) |
 | **Chat commands** (`/yours`) | `register_chat_command` · [slash commands](/guides/skills) |
 | **Goal & watch verifiers** | `register_goal_verifier` · [goal mode](/guides/goal-mode) · [watches](/guides/watches) |
+| **Your queue in the agent's own work list** | `register_work_provider` · [autonomous operating model](/adr/0079-autonomous-operating-model) |
 | **Knowledge backends & embedders** | `register_knowledge_store` · `register_embedder` · [knowledge](/guides/knowledge) |
 | **Managed MCP servers** | `register_mcp_server` · [MCP](/guides/mcp) |
 | **A chat bot on a messaging platform** | [communication plugins](/guides/communication-plugins) |

@@ -90,6 +90,8 @@ class PluginRegistry:
         # into it so every existing reader — which expects the value to BE the callable —
         # keeps working untouched.
         self.goal_verifier_meta: dict = {}
+        self.work_providers: dict = {}  # name -> () -> list[dict], the agent's own queue (ADR 0079)
+        self.work_provider_meta: dict = {}  # name -> {"plugin_id", "label"}; parallel, see goal_verifier_meta
         self.goal_hooks: list = []  # {on_achieved, on_failed, on_stalled} reactions (ADR 0028 + 0030 D5)
         self.watch_hooks: list = []  # {on_met, on_expired, on_stalled, on_changed} (ADR 0067)
         self.lifecycle_hooks: list = []  # {on_app_loaded, on_agent_active, on_system_wake} (ADR 0074)
@@ -272,6 +274,37 @@ class PluginRegistry:
         self.goal_verifier_meta[key] = {
             "plugin_id": self.plugin_id,
             "description": (description or "").strip(),
+        }
+
+    def register_work_provider(self, name: str, fn, label: str = "") -> None:
+        """Contribute this plugin's own open work to the agent's ``<working_state>`` block
+        (ADR 0079, the *Observe* step).
+
+        ``fn`` is ``() -> list[dict]``; each item is ``{"id", "title", "state", "hint"}``
+        with every field optional (a plain string is accepted and rendered verbatim). The
+        host renders them under a heading — ``label`` if you set one, else
+        ``OPEN WORK (<name>)`` — in the SAME block and the same line shape as OPEN TASKS,
+        so the agent reads one vocabulary for its commitments rather than two.
+
+        This is projection, not replication: your store stays the system of record and the
+        host reads a bounded snapshot per turn, so there is no copy to keep in sync. Use it
+        when your plugin owns a queue the agent is *responsible for* — a board, a review
+        lane — not for reference data the agent merely consults (that is knowledge/RAG).
+
+        **Your provider must be cheap and non-blocking**: it runs inline on EVERY turn.
+        Return an in-memory snapshot — never shell out, hit the network, or take a lock. A
+        provider slower than ``graph.work_providers.SLOW_PROVIDER_S`` is logged once, and
+        one that raises is skipped without disturbing the turn."""
+        if not name or not callable(fn):
+            log.warning(
+                "[plugins] %s: register_work_provider needs a name + callable: %r / %r", self.plugin_id, name, fn
+            )
+            return
+        key = name if ":" in name else f"{self.plugin_id}:{name}"
+        self.work_providers[key] = fn
+        self.work_provider_meta[key] = {
+            "plugin_id": self.plugin_id,
+            "label": (label or "").strip(),
         }
 
     def register_goal_hook(self, *, on_achieved=None, on_failed=None) -> None:

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import { visibleSections } from "./sectionGate";
+// The section table moved to ./sections (a leaf); SettingsSurface.tsx keeps the renderers,
+// so the `category=` assertion below still reads it.
+import sectionsSrc from "./sections.ts?raw";
 import settingsSrc from "./SettingsSurface.tsx?raw";
 import telemetrySrc from "../telemetry/TelemetrySurface.tsx?raw";
 
@@ -15,19 +18,19 @@ import telemetrySrc from "../telemetry/TelemetrySurface.tsx?raw";
 // `hostOnly` (boxSectionGate.test.ts pins it), so it is dropped off the host console. Hence the
 // Agent-group "Tracing" section, which carries no gate at all.
 
-const objOf = (id: string) => settingsSrc.match(new RegExp(`\\{[^{}]*id: "${id}"[^{}]*\\}`))?.[0] ?? "";
+const objOf = (id: string) => sectionsSrc.match(new RegExp(`\\{[^{}]*id: "${id}"[^{}]*\\}`))?.[0] ?? "";
 
 describe("Settings ▸ Tracing is reachable from a fleet member's console (#3017)", () => {
   it("the section is declared, and in the Agent group", () => {
     expect(objOf("tracing")).not.toBe("");
-    const agentGroup = settingsSrc.split("const CAPABILITY_SECTIONS")[0];
+    const agentGroup = sectionsSrc.split("const CAPABILITY_SECTIONS")[0];
     expect(agentGroup).toContain('id: "tracing"');
   });
 
   it("it renders the schema category the tracing fields carry", () => {
     // graph/settings_schema.py maps section "Tracing" → category "Observability"; a
     // SettingsCategoryPanel naming any other category renders an empty panel.
-    expect(objOf("tracing")).toContain('category="Observability"');
+    expect(settingsSrc).toMatch(/tracing: \(\) => <SettingsCategoryPanel category="Observability"/);
   });
 
   it("it carries no hostOnly gate — the whole point (contrast Box ▸ Telemetry)", () => {
