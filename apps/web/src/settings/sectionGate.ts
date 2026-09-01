@@ -14,8 +14,10 @@
 // pointing at a gated section falls back to the first visible one instead of a blank pane.
 export type GatedSection = { id: string; flag?: string; hostOnly?: boolean };
 
+// `list` is `readonly` so the section table (sections.ts, frozen `as const` literals) can be
+// passed straight in without a defensive copy.
 export function visibleSections<T extends GatedSection>(
-  list: T[],
+  list: readonly T[],
   flagOn: (id: string) => boolean,
   onHost = true,
 ): T[] {
