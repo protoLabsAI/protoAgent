@@ -420,6 +420,7 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
   // / process state / immutable id is ever touched.
   const [dragId, setDragId] = useState<string | null>(null); // the id being dragged (pointer path)
   const [announcement, setAnnouncement] = useState(""); // the keyboard path's polite live region
+  const [overId, setOverId] = useState<string | null>(null); // the row a drag is hovering (the drop marker)
   const reorder = useMutation({
     mutationFn: (order: string[]) => api.reorderFleet(order),
     onMutate: async (order) => {
@@ -462,6 +463,7 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
       submitOrder(reorderByDrag(orderIds, orderIds.indexOf(dragId), orderIds.indexOf(targetId)));
     }
     setDragId(null);
+    setOverId(null);
   };
 
   return (
@@ -531,11 +533,18 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
               return (
                 <li
                   key={a.id}
-                  className={`fleet-row${isActive ? " active" : ""}${dragId === a.id ? " dragging" : ""}`}
+                  className={`fleet-row${isActive ? " active" : ""}${dragId === a.id ? " dragging" : ""}${
+                    overId === a.id && dragId && dragId !== a.id ? " drop-target" : ""
+                  }`}
                   // Every roster row is a drop slot (the pinned host included, so a member can be
                   // dropped above it); only non-host rows carry a drag handle to START a drag.
                   onDragOver={(e) => {
-                    if (dragId && dragId !== a.id) e.preventDefault(); // preventDefault marks a valid drop target
+                    if (!dragId || dragId === a.id) return;
+                    e.preventDefault(); // preventDefault marks a valid drop target
+                    e.dataTransfer.dropEffect = "move"; // a move cursor, not the default copy "+"
+                    // Mark the slot the drop would land in. Without it a drag is invisible past the
+                    // ghost: nothing on the page says WHERE releasing the mouse puts the row.
+                    if (overId !== a.id) setOverId(a.id);
                   }}
                   onDrop={() => dropOnRow(a.id)}
                 >
@@ -571,9 +580,27 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
                             e.preventDefault(); // belt-and-suspenders: draggable={false} already blocks it
                             return;
                           }
+                          // Drag the ROW, not the handle. Every engine defaults the drag image to
+                          // the dragged element, and the dragged element here is an 18px grip — a
+                          // ghost that small reads as "nothing is happening" even when the drag is
+                          // working, which is exactly how this landed as "DnD is broken".
+                          const row = e.currentTarget.closest("li");
+                          if (row) {
+                            const box = row.getBoundingClientRect();
+                            e.dataTransfer.setDragImage(row, e.clientX - box.left, e.clientY - box.top);
+                          }
+                          // Firefox refuses to START a drag whose dataTransfer carries no data, and
+                          // every engine wants a declared effect for the right cursor. The payload
+                          // is the immutable id; the drop reads React state, not this, but a
+                          // well-formed transfer is what makes the gesture work off-Chromium.
+                          e.dataTransfer.setData("text/plain", a.id);
+                          e.dataTransfer.effectAllowed = "move";
                           setDragId(a.id);
                         }}
-                        onDragEnd={() => setDragId(null)}
+                        onDragEnd={() => {
+                          setDragId(null);
+                          setOverId(null); // a drag abandoned outside any row still clears the marker
+                        }}
                         onKeyDown={(e) => {
                           if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
                           e.preventDefault(); // otherwise the settings dialog scrolls under the row

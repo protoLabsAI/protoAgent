@@ -18,6 +18,12 @@
 .fleet-row.dragging {
   opacity: 0.5;
 }
+/* …and the row the pointer is over marks the slot the drop lands in. Without this the only
+   feedback a drag has is the ghost, and a drag that IS working reads as one that is not. */
+.fleet-row.drop-target {
+  background: var(--pl-color-bg-hover);
+  box-shadow: inset 2px 0 0 0 var(--pl-color-accent);
+}
 /* Manual roster reordering (#3197) — a leading reorder cell holding ONE control: the grip, which
    is both the pointer drag handle (native HTML5 DnD) and the keyboard path. The move-up /
    move-down button pair that used to sit beside it is retired: two 30px DS icon buttons on every
@@ -52,7 +58,7 @@
 /* The keyboard path is invisible unless the handle shows focus — this ring IS the affordance
    that replaced the two chevrons. */
 .fleet-drag-handle:focus-visible {
-  outline: 1px solid var(--pl-color-fg);
+  outline: 2px solid var(--pl-color-focus);
   outline-offset: 2px;
   border-radius: 3px;
   color: var(--pl-color-fg);

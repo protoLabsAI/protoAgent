@@ -102,10 +102,30 @@ test("Fleet Config: dragging a member's handle onto another row reorders the ros
   await openAgents(page);
   await expect(rosterNames(page)).toHaveText([/main/, /ava/, /roxy/]);
 
-  // Drag roxy's handle onto the host row — the pinned host carries no handle of its own but is
-  // still a valid drop slot, which is the only way to land a member above it.
-  await reorderHandle(page, "roxy").dragTo(page.locator(".fleet-row", { hasText: "this instance" }));
+  // Drive the pointer directly rather than locator.dragTo(): dragTo goes through Playwright's own
+  // drag helper, so it can pass over an interaction a real mouse would not start. These are plain
+  // mouse events — the browser's native HTML5 drag machinery does the rest, or nothing does.
+  const host = page.locator(".fleet-row", { hasText: "this instance" });
+  const from = (await reorderHandle(page, "roxy").boundingBox())!;
+  const to = (await host.boundingBox())!;
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2 - 12, { steps: 5 });
+  await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 15 });
+
+  // Mid-drag: the row under the pointer marks the slot the drop lands in, and the dragged row
+  // dims. This is the ONLY feedback a drag has besides the ghost — a drag with neither reads as
+  // broken even when it works, which is how this arrived as a bug report.
+  await expect(host).toHaveClass(/drop-target/);
+  await expect(page.locator(".fleet-row", { hasText: "roxy" })).toHaveClass(/dragging/);
+
+  // One more move before releasing. Asserting mid-drag idles the pointer, and a drag session that
+  // idles then gets a bare mouseup does not deliver a drop in WebKit — a test artefact, not a
+  // product bug (the no-pause path drops fine there), but it makes the release deterministic.
+  await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2 + 3, { steps: 3 });
+  await page.mouse.up();
   await expect(rosterNames(page)).toHaveText([/roxy/, /main/, /ava/]);
+  await expect(page.locator(".fleet-row.drop-target")).toHaveCount(0); // the marker clears on drop
 
   await page.reload({ waitUntil: "load" });
   await openFleet(page);
