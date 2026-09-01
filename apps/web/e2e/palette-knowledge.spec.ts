@@ -4,14 +4,15 @@ import { expect, test } from "@playwright/test";
 // dist — the layer the unit tripwire cannot reach.
 //
 // Two of these guard failures that a green unit suite reported anyway, because both live in
-// the DS view that RENDERS a provider's rows rather than in the provider:
+// the root view that RENDERS a provider's rows rather than in the provider (the host's own
+// since #3289, the DS's `commandsView` before it — the defects are the same either way):
 //
 //   * a row whose `Command.id` collides with another row's is dropped by the view's
-//     first-wins dedup, with no header, no count and no error — so the operator sees a
+//     first-wins dedup, with no chip, no count and no error — so the operator sees a
 //     shortlist that is quietly missing a match it should contain;
-//   * a provider that declares `getCommands` switches the view's "Searching…" affordance on
-//     for EVERY query including the empty root, so registering one where it cannot search
-//     puts a busy indicator in front of a search that never happens.
+//   * a provider that declares `getCommands` switches the view's "Searching…" affordance on,
+//     so registering one where it cannot search puts a busy indicator in front of a search
+//     that never happens.
 
 const PALETTE = ".pl-cmdk__panel";
 const OPTION = '[role="option"]';
@@ -50,7 +51,7 @@ const chunk = (over: Record<string, unknown>) => ({
   ...over,
 });
 
-test("a typed query lists knowledge rows under their own heading", async ({ page }) => {
+test("a typed query lists knowledge rows, chipped as store entries", async ({ page }) => {
   await stubSearch(page, [
     chunk({ id: 11, heading: "Postgres tuning", source: "runbook.md" }),
     chunk({ id: 12, heading: "Postgres backups", source: "ops/backups.md" }),
@@ -59,8 +60,12 @@ test("a typed query lists knowledge rows under their own heading", async ({ page
   await page.locator(`${PALETTE} input`).fill("postgres");
   await expect(page.locator(OPTION).filter({ hasText: "Postgres tuning" })).toBeVisible();
   await expect(page.locator(OPTION).filter({ hasText: "Postgres backups" })).toBeVisible();
-  // The heading is what tells the operator these are store entries, not more commands.
-  await expect(page.locator(".pl-cmdk-commands__group").filter({ hasText: "Knowledge" })).toBeVisible();
+  // The CHIP is what tells the operator these are store entries, not more commands. Not a
+  // group header: the ranked root (#3289) prints none on a typed query, because ranking
+  // sorts across groups and a header would re-emit every few rows.
+  await expect(
+    page.locator(`${OPTION} .pl-cmdk-commands__chip`).filter({ hasText: "Knowledge" }).first(),
+  ).toBeVisible();
   // …and the trailing hint is where the entry came from, which is what tells them apart.
   await expect(page.locator(OPTION).filter({ hasText: "runbook.md" })).toBeVisible();
 });
@@ -70,7 +75,7 @@ test("two results that share a chunk id both stay reachable", async ({ page }) =
   // DBs each autoincrement from 1 and the fused search de-dups on CONTENT, so one response
   // routinely carries two DIFFERENT chunks numbered the same — and the low ids that collide
   // are exactly the ones both tiers have. A row keyed on that number loses one of the two to
-  // the view's dedup, silently.
+  // the root's dedup, silently.
   await stubSearch(page, [
     chunk({ id: 5, heading: "Private release note", tier: "private" }),
     chunk({ id: 5, heading: "Commons release note", tier: "commons" }),
@@ -87,8 +92,8 @@ test("two results that share a chunk id both stay reachable", async ({ page }) =
 test("an instance with no knowledge store neither searches nor spins", async ({ page }) => {
   // The capability gate. `/api/runtime/status` says whether a store exists at all, and the
   // console already fetches it on boot — so the palette can decline to register a provider
-  // that could only ever answer `{enabled: false, results: []}`. Without the gate the view
-  // raises "Searching…" the moment ANY provider exists, for the empty root included.
+  // that could only ever answer `{enabled: false, results: []}`. Without the gate the root
+  // raises "Searching…" on every typed query the moment ANY provider exists.
   await page.route("**/api/runtime/status**", async (route) => {
     const res = await route.fetch();
     const body = await res.json();

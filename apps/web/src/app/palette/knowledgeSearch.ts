@@ -2,19 +2,25 @@
 // ADR 0020). Everything else in the palette is a fixed list of PLACES; this is the first
 // row that answers "where is the thing I'm looking for?" from the instance's own data.
 //
-// The DS's provider path (`command-palette.views.tsx`) already owns the hard parts, and
-// this module deliberately owns NONE of them:
+// The ROOT VIEW owns the provider loop (`rootView.tsx`, #3289 — the host took the DS root
+// over wholesale), and this module deliberately owns none of what lives there:
 //
-//   • DEBOUNCE. The commands view waits 120ms after the last keystroke before calling
-//     `getCommands`. A second debounce here would stack onto that one — a quarter second
-//     of dead air per keystroke, for no gain.
+//   • DEBOUNCE. The root waits 120ms after the last keystroke before calling `getCommands`
+//     (`PROVIDER_DEBOUNCE_MS`, the DS's own figure). A second debounce here would stack onto
+//     that one — a quarter second of dead air per keystroke, for no gain.
 //   • CANCELLATION. It hands us an `AbortSignal` and aborts it when the query changes or
 //     the palette closes. We THREAD that signal into `fetch` (`api.knowledgeSearch` now
 //     forwards it) rather than opening a controller of our own: a private controller the
 //     view can't reach would leave every superseded keystroke's request running to
 //     completion against the FTS index.
+//   • CONTAINMENT and SELECTION. A provider that throws synchronously, resolves to a
+//     non-array, or never settles cannot strand the spinner, and provider rows landing
+//     asynchronously cannot move the highlight out from under an operator who has already
+//     arrowed down — the root keys selection to the COMMAND ID, not the row index. Both
+//     were `commandsView` defects; neither is worked around here, because there is nothing
+//     left to work around.
 //
-// What is genuinely ours, because the DS cannot know it:
+// What is genuinely ours, because the root cannot know it:
 //
 //   • THE EMPTY-QUERY GUARD. `/api/knowledge/search` treats an empty `q` as "list the most
 //     recent chunks" (operator_api/knowledge_routes.py) — a browse default the Knowledge
@@ -28,19 +34,26 @@
 //     spare row is also the only signal that the shortlist is hiding matches, which is what
 //     the `All matches in Knowledge` footer row is for. Without it the cap is a dead end:
 //     the operator's only route to the rest is to close ⌘K and retype the query by hand.
-//   • THE DEADLINE. A hybrid store embeds the query over HTTP before it can search. Without
-//     a ceiling, one slow embedding call leaves the palette showing "Searching…" until the
-//     operator gives up. We derive a child signal (upstream abort OR deadline) so the
-//     timeout cancels the request rather than merely ignoring it.
-//   • THE FAILURE ROW. `Promise.allSettled` in the DS loop turns a REJECTED provider into
-//     zero rows, which is pixel-identical to "nothing matched". So we never reject: a
+//   • THE DEADLINE, AND THE FACT THAT IT IS THE INNER ONE. A hybrid store embeds the query
+//     over HTTP before it can search, so one slow embedding call would otherwise hold the
+//     palette on "Searching…" until the operator gives up. The root has its own ceiling
+//     (`PROVIDER_DEADLINE_MS`), but it can only RESOLVE the read to zero rows — it cannot
+//     cancel a request a provider never wired to a signal, and zero rows reads as "nothing
+//     matched". Ours does both jobs the root's cannot: it derives a child signal (upstream
+//     abort OR deadline) so the timeout CANCELS the in-flight request, and it names the
+//     failure on a row. It must therefore fire FIRST — `KNOWLEDGE_TIMEOUT_MS` is strictly
+//     below the root's deadline, and `knowledgeSearch.test.ts` pins that ordering, because
+//     equal values are a race whose two outcomes ("timed out" vs. silence) look nothing
+//     alike to the operator.
+//   • THE FAILURE ROW. `Promise.allSettled` in the root's loop turns a REJECTED provider
+//     into zero rows, which is pixel-identical to "nothing matched". So we never reject: a
 //     failure resolves to one disabled row that says the search is unavailable and why.
 //     An ABORT is not a failure — it is the operator typing another character — so an
 //     aborted read resolves empty and silently.
 //
 // Every id is namespaced `knowledge:*` (`knowledge:<i>:<tier>:<chunk id>`, `:more`,
-// `:unavailable`). The DS dedups FIRST-WINS on `Command.id` — statics ahead of provider rows
-// — so the namespace is what stops an unrelated static command that happened to claim a bare
+// `:unavailable`). The root dedups FIRST-WINS on `Command.id` — statics ahead of provider
+// rows — so the namespace is what stops an unrelated static command that happened to claim a bare
 // numeric id from swallowing a result whole. The POSITION leads the id for the other half of
 // the same problem: the dedup is blind to which provider a row came from, so two of OUR OWN
 // rows sharing an id lose one of themselves the same silent way. A chunk id is a per-BACKEND
@@ -58,13 +71,30 @@ import type { Command, CommandProvider } from "@protolabsai/ui/command-palette";
 import { api } from "../../lib/api";
 import { errMsg } from "../../lib/format";
 import type { KnowledgeChunk } from "../../lib/types";
-import type { NavIntent } from "../usePaletteRegistry";
+// From `./nav` DIRECTLY, not the `../usePaletteRegistry` barrel: `registry.ts` imports this
+// module and the barrel re-exports `registry.ts`, so the barrel path is an import cycle.
+import type { NavIntent } from "./nav";
 
 /** Provider id — also the handle a test (or a diagnostics view) finds it by. */
 export const KNOWLEDGE_PROVIDER_ID = "knowledge-search";
 
-/** Group heading the rows render under. */
+/** Group heading the rows render under — on the UNTYPED list, which is the only one the
+ *  ranked root prints headers on (a relevance-ordered list has no sections). Still carried
+ *  on every row regardless: `group` is part of the match haystack and part of what tiers a
+ *  row, so it earns its place even where nothing renders it. */
 export const KNOWLEDGE_GROUP = "Knowledge";
+
+/** Attribution stamped on every row this provider returns, which the root renders as the
+ *  row's SOURCE CHIP.
+ *
+ *  It is what tells the operator these rows came from the knowledge store rather than being
+ *  more console commands, and the typed list has nothing else that says so: since #3289 the
+ *  ranked root drops group headers on a typed query (they mark sections, and ranking sorts
+ *  across groups), so a chunk row is a sentence of prose with a filename after it, sitting
+ *  between **Settings** and a plugin view. The chip is the affordance the root offers in the
+ *  header's place — `rootView.tsx` stamps `{ source, ...c }` per provider — and no core
+ *  provider used it before this one. */
+export const KNOWLEDGE_SOURCE = { id: "knowledge", label: KNOWLEDGE_GROUP };
 
 /** Shortest query we will search on. One character matches most of an FTS index and the
  *  empty string means "list recent chunks" server-side, so anything below this is noise. */
@@ -75,8 +105,15 @@ export const KNOWLEDGE_MIN_QUERY = 2;
  *  is how you get there. (The request asks for `CAP + 1`; the spare is the overflow probe.) */
 export const KNOWLEDGE_RESULT_CAP = 6;
 
-/** How long one search may take before the row becomes "unavailable · timed out". */
-export const KNOWLEDGE_TIMEOUT_MS = 4000;
+/** How long one search may take before the row becomes "unavailable · timed out".
+ *
+ *  STRICTLY BELOW the root view's own `PROVIDER_DEADLINE_MS`, and that is the whole point of
+ *  the number rather than a coincidence of it. The root's ceiling resolves a hung provider to
+ *  an empty array; ours cancels the request and returns a row that says what happened. At
+ *  equal values the two race and the operator gets one of two completely different screens
+ *  depending on timer order. `knowledgeSearch.test.ts` asserts the inequality, so a bump to
+ *  either constant reds a test instead of silently re-opening the race. */
+export const KNOWLEDGE_TIMEOUT_MS = 3000;
 
 /** The console's mark for the Knowledge surface — the SAME icon `coreSurfaces.tsx` gives it
  *  on the rail and under `Open ▸`, so a knowledge row in ⌘K carries the mark of the place it
@@ -133,7 +170,7 @@ function toCommand(
   return {
     // Keyed on the row's POSITION in this response, not on `chunk.id` alone — see the
     // module header. A chunk id is per-backend, so it is neither unique across a layered
-    // store's tiers nor guaranteed present at all, and the DS's first-wins dedup turns
+    // store's tiers nor guaranteed present at all, and the root's first-wins dedup turns
     // either into a row that vanishes with no header, no count and no error.
     id: `knowledge:${index}:${chunk.tier ?? ""}:${chunk.id ?? ""}`,
     label: knowledgeRowLabel(chunk),
@@ -141,9 +178,9 @@ function toCommand(
     icon: KNOWLEDGE_ICON,
     hint: knowledgeRowHint(chunk),
     // Thin, and only FACTS ABOUT THIS ROW, because a remote-search row's keywords do not
-    // decide whether it is shown: the server already applied the query and the palette
-    // appends a provider's rows verbatim (`command-palette.views.tsx`, and #3289's ranked
-    // root keeps that contract). All they can do is TIER the row when a ranked root orders
+    // decide whether it is shown: the server already applied the query and the root appends
+    // a provider's rows verbatim (`orderCommands` sorts them, `rankCommands` never sees
+    // them). All they can do is TIER the row when the ranked root orders
     // the results — which the row's own metadata can do and a generic word cannot: filler
     // like "memory" or "recall", identical on every chunk, sorts nothing and would only
     // make every knowledge row answer to a query about none of them.
@@ -161,7 +198,7 @@ function toCommand(
 }
 
 /** The row a FAILED search resolves to. It exists because the alternative is silence: the
- *  DS drops a rejected provider's results on the floor, so a knowledge store that is down,
+ *  root drops a rejected provider's results on the floor, so a knowledge store that is down,
  *  slow, or 401ing would look exactly like a store with no match for the query. Listed but
  *  `disabled`, with the reason in `hint` — the seam's own convention for a row that should
  *  stay discoverable and explain itself. */
@@ -195,9 +232,10 @@ export function knowledgeErrorRow(reason: string): Command {
  *  under every query would be a row of noise on every search that already showed everything.
  *
  *  Deliberately keyword-less. Provider rows are never re-filtered, so keywords cannot make
- *  this row findable; all they could do is tier it under a ranked root (#3289), where a
- *  keyword matching the operator's query would lift the footer above the chunks it is a
- *  footer for. With nothing to match it ties with them and the stable sort leaves it last. */
+ *  this row findable; all they could do is TIER it under the ranked root, where a keyword
+ *  matching the operator's query would lift the footer above the chunks it is a footer for.
+ *  With nothing to match it lands in the residual tier and `orderCommands`' stable tiebreak
+ *  (the row's index in the provider read) leaves it exactly where it was appended: last. */
 export function knowledgeMoreRow(query: string, navigate: (intent: NavIntent) => void): Command {
   return {
     id: "knowledge:more",
@@ -279,6 +317,7 @@ export function knowledgeSearchProvider(
 ): CommandProvider {
   return {
     id: KNOWLEDGE_PROVIDER_ID,
+    source: KNOWLEDGE_SOURCE,
     getCommands: async (query, { signal }) => {
       const q = (query ?? "").trim();
       if (q.length < KNOWLEDGE_MIN_QUERY) return [];

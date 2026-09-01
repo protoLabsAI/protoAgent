@@ -16,7 +16,11 @@ import type { PaletteRegistry } from "@protolabsai/ui/command-palette";
 
 import { registerPaletteSource } from "../ext/paletteRegistry";
 import type { PaletteCommand } from "../ext/paletteRegistry";
+import { buildViews } from "../lib/viewRegistry";
 import { paletteSourceProvider, usePaletteRegistry } from "./usePaletteRegistry";
+
+// The hook takes ADR 0056's whole View facade now (`{ views, viewFor }`), not a bare array.
+const EMPTY_VIEWS = buildViews({ core: [], plugins: [], ext: [] });
 
 const SOURCE_PROVIDER = "ext-palette-sources";
 const allOn = () => true;
@@ -35,7 +39,7 @@ const offs: (() => void)[] = [];
 async function mountRegistry(): Promise<PaletteRegistry> {
   let registry: PaletteRegistry | null = null;
   const Probe = () => {
-    registry = usePaletteRegistry([], []);
+    registry = usePaletteRegistry(EMPTY_VIEWS, []);
     return null;
   };
   const host = document.createElement("div");
@@ -44,6 +48,16 @@ async function mountRegistry(): Promise<PaletteRegistry> {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   root.render(h(QueryClientProvider, { client }, h(Probe)));
   await vi.waitFor(() => expect(registry).not.toBeNull());
+  // …and then for the adapter's registration EFFECT to have flushed, which is a separate
+  // moment: `registry` is assigned during RENDER, while everything the adapter contributes
+  // is registered in an effect afterwards. Waiting only for the object hands back a registry
+  // that is briefly empty, so a case that reads it synchronously passes or fails on how long
+  // the commit took — green in isolation, red under a loaded parallel run. `fleet-room` is
+  // registered unconditionally, so it marks the flush without presupposing any provider (the
+  // case below asserts there are NONE at this point).
+  await vi.waitFor(() =>
+    expect(registry!.getStaticCommands().map((c) => c.id)).toContain("fleet-room"),
+  );
   return registry!;
 }
 
@@ -110,9 +124,9 @@ describe("registerPaletteSource → the DS read-time provider", () => {
     // spinner in front of every keystroke in the default console.
     //
     // Asserted on the WHOLE provider list, not just this id. The rule the comment states is
-    // about provider COUNT — the DS raises `loading` when ANY provider declares
-    // `getCommands` (`command-palette.views.tsx` early-returns only on `providers.length
-    // === 0`) — so an id-specific assertion stays green while some other always-on provider
+    // about provider COUNT — the root view raises `loading` when ANY provider declares
+    // `getCommands` (`palette/rootView.tsx` early-returns only on `providers.length === 0`)
+    // — so an id-specific assertion stays green while some other always-on provider
     // reintroduces the exact spinner this guards against. That is not hypothetical: the live
     // knowledge provider was added unconditionally and this test did not notice. Nothing
     // whose capability is unproven may be registered here (this mount's `fetch` hangs, so

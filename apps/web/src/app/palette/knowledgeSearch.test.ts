@@ -1,20 +1,21 @@
-// The ⌘K knowledge provider, tested against the DS `CommandProvider` contract it is written
-// to (`getCommands(query, { signal })` — debounced and aborted by the commands view, its
-// results appended to the palette VERBATIM, its rejections swallowed by `Promise.allSettled`).
+// The ⌘K knowledge provider, tested against the `CommandProvider` contract it is written to
+// (`getCommands(query, { signal })` — debounced and aborted by the host-owned root view, its
+// results ordered but never re-filtered, its rejections swallowed by `Promise.allSettled`).
 //
 // Four of these are guards on facts about the ENDPOINT that a naive provider gets wrong, and
 // each one fails as a UX bug rather than an exception:
 //   * an empty/short `q` is a BROWSE default server-side (the most recent chunks), so an
 //     unguarded provider floods the palette root the moment ⌘K opens;
 //   * `k` is unclamped on that route, so the caller is the only ceiling;
-//   * a rejected provider is indistinguishable from "no matches" in the DS loop, so a failure
-//     that resolves to zero rows is a silent lie;
+//   * a rejected provider is indistinguishable from "no matches" in the root's loop, so a
+//     failure that resolves to zero rows is a silent lie;
 //   * an ABORT is not a failure — it is the next keystroke — so it must not surface that row.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../../lib/api";
 import type { KnowledgeChunk } from "../../lib/types";
-import type { NavIntent } from "../usePaletteRegistry";
+import type { NavIntent } from "./nav";
+import { PROVIDER_DEADLINE_MS } from "./rootView";
 import {
   KNOWLEDGE_GROUP,
   KNOWLEDGE_RESULT_CAP,
@@ -323,6 +324,18 @@ describe("knowledgeSearchProvider — failure is named, not silent", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].hint).toBe("timed out");
     expect(rows[0].disabled).toBe(true);
+  });
+
+  it("times out STRICTLY BEFORE the root view gives up on it", () => {
+    // Two deadlines cover the same hang and they resolve to different screens. The root's
+    // (`PROVIDER_DEADLINE_MS`) resolves the read to zero rows — indistinguishable from "no
+    // matches" — and cannot cancel the request, because aborting only ends a read a provider
+    // chose to wire to the signal. Ours cancels the fetch and names the failure on a row.
+    // Ours therefore has to fire first, and at EQUAL values (both were 4000 before #3289
+    // landed the root) which one wins is timer order, so the operator gets one of two
+    // unrelated screens at random. This is the alarm on that: bump either constant toward
+    // the other and it reds here rather than re-opening the race in production.
+    expect(KNOWLEDGE_TIMEOUT_MS).toBeLessThan(PROVIDER_DEADLINE_MS);
   });
 });
 

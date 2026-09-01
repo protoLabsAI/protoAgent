@@ -264,16 +264,20 @@ independently shippable.
 - **Provider budget** — per-query timeout/cancel + per-plugin result caps so a slow
   plugin can't stall the palette.
   **Partly settled (#3293),** by the first remote provider core ships (live knowledge
-  search). Four rules came out of it, and they generalise past that one provider:
-  a provider owns its own **deadline** (the DS's abort covers a superseded keystroke,
-  not a hung backend) and its own **row cap** (the palette root is a shortlist, with an
-  explicit overflow row so the cap is never a dead end); it **never rejects**, because
+  search). Five rules came out of it, and they generalise past that one provider:
+  a provider owns its own **deadline** — the root view's abort covers a superseded
+  keystroke, not a hung backend, and the root's own ceiling can only resolve the read to
+  zero rows, since aborting ends a request only if the provider wired itself to the
+  signal; a provider's deadline must therefore **fire strictly before** the root's, or
+  the two race and the operator gets either a named failure or silence depending on timer
+  order. It owns its own **row cap** (the palette root is a shortlist, with an explicit
+  overflow row so the cap is never a dead end). It **never rejects**, because
   `Promise.allSettled` turns a rejection into zero rows, which on screen is
-  indistinguishable from "nothing matched"; every row id is **namespaced *and* unique
-  within the provider's own result set**, because the view dedups first-wins on
-  `Command.id` and a row that loses that race vanishes with no header, no count and no
-  error; and a provider is **registered only where it can actually answer**, since the
-  view raises "Searching…" for any query the moment a provider with `getCommands`
+  indistinguishable from "nothing matched". Every row id is **namespaced *and* unique
+  within the provider's own result set**, because the root dedups first-wins on
+  `Command.id` and a row that loses that race vanishes with no chip, no count and no
+  error. And a provider is **registered only where it can actually answer**, since the
+  root raises "Searching…" for any typed query the moment a provider with `getCommands`
   exists — so one wired against an absent capability is a busy indicator in front of a
   search that never runs. Still open: caps and deadlines for a *plugin's* provider,
   which core cannot write on its behalf.
