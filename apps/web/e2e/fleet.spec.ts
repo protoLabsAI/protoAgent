@@ -604,3 +604,72 @@ test("a sister agent's window: the fleet panel won't stop or remove the agent se
   // A sibling keeps its controls — the guard is about SELF, not about being a member window.
   await expect(page.locator(".fleet-row", { hasText: "roxy" }).getByRole("button", { name: "Start" })).toBeVisible();
 });
+
+// ── Fleet Room diagnostics drawer (#3169, over the #3168 contract) ─────────────────────
+// The #3168 diagnostics endpoints aren't in the e2e mock control-plane, so intercept them
+// here. This exercises the acceptance's E2E: switching the EXPLICITLY selected member and
+// inspecting diagnostics (bounded logs + an exact task), plus the actionable stopped state.
+test("Fleet Room diagnostics: inspect a member's logs + task, then switch selected members (#3169)", async ({
+  page,
+}) => {
+  await page.route(/\/api\/diagnostics\/logs/, async (route) => {
+    // A stopped member's slug-scoped read is a proxy 409 — its actionable "stopped" state.
+    if (route.request().url().includes("/agents/roxy/")) {
+      return route.fulfill({ status: 409, json: { detail: "agent roxy is not running" } });
+    }
+    return route.fulfill({
+      json: {
+        enabled: true,
+        capacity: 200,
+        returned: 2,
+        lines: [
+          { ts: "2026-08-31T00:00:00+00:00", level: "INFO", logger: "graph.agent", message: "boot ok" },
+          { ts: "2026-08-31T00:00:01+00:00", level: "ERROR", logger: "graph.agent", message: "tool failed: boom" },
+        ],
+      },
+    });
+  });
+  await page.route(/\/api\/diagnostics\/tasks\//, async (route) =>
+    route.fulfill({
+      json: {
+        task_id: "task-xyz",
+        context_id: "ctx-1",
+        state: "completed",
+        status_message: "done",
+        last_updated: "2026-08-31T00:00:02+00:00",
+        history: [{ role: "user", message_id: "m1", text: "do the thing" }],
+        artifacts: [{ artifact_id: "a1", name: "answer", text: "the thing is done" }],
+        accumulated_text: "the thing is done",
+        truncated: ["history"],
+        malformed: [],
+      },
+    }),
+  );
+
+  await page.goto("/app/", { waitUntil: "load" });
+  await openFleetRoom(page);
+  const room = page.locator(".flr");
+
+  // Open diagnostics on ava (running): the drawer names her and shows bounded logs.
+  await room.locator(".flr__member", { hasText: "ava" }).getByRole("button", { name: "Diagnostics for ava" }).click();
+  const drawer = room.locator(".flr__diag");
+  await expect(drawer).toBeVisible();
+  await expect(drawer.locator(".flr__diag-name")).toContainText("ava");
+  await expect(drawer.locator(".flr__diag-log", { hasText: "boot ok" })).toBeVisible();
+  await expect(drawer.locator(".flr__diag-log", { hasText: "tool failed: boom" })).toBeVisible();
+
+  // Inspect an exact task id → the #3168 summary for THIS member, truncation surfaced.
+  await drawer.getByLabel("Task id for ava").fill("task-xyz");
+  await drawer.getByRole("button", { name: "Inspect", exact: true }).click();
+  await expect(drawer.locator(".flr__diag-task")).toContainText("completed");
+  await expect(drawer.locator(".flr__diag-task")).toContainText("the thing is done");
+  await expect(drawer.locator(".flr__diag-badge", { hasText: "truncated: history" })).toBeVisible();
+
+  // Switch the explicitly selected member to roxy (stopped) — the drawer retargets only on the
+  // explicit pick, identifies roxy, and renders the actionable stopped state.
+  await drawer.getByRole("button", { name: "Close diagnostics" }).click();
+  await expect(room.locator(".flr__diag")).toHaveCount(0);
+  await room.locator(".flr__member", { hasText: "roxy" }).getByRole("button", { name: "Diagnostics for roxy" }).click();
+  await expect(room.locator(".flr__diag .flr__diag-name")).toContainText("roxy");
+  await expect(room.locator(".flr__diag")).toContainText("roxy is stopped");
+});

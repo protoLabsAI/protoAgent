@@ -7,6 +7,7 @@
   flex-direction: column;
   height: 480px;
   min-height: 0;
+  position: relative; /* anchor for the diagnostics drawer overlay */
 }
 
 /* two-column body: roster (left) + live activity feed (right) */
@@ -76,6 +77,9 @@
 }
 .flr__member.is-down {
   opacity: 0.6;
+}
+.flr__member.is-diag {
+  background: color-mix(in srgb, var(--pl-color-accent) 9%, transparent);
 }
 
 /* presence dot — color from the DS status palette */
@@ -365,4 +369,306 @@
     animation: none;
     display: none;
   }
+}
+
+/* Diagnostics drawer (#3169) — a drawer-local, read-only snapshot of ONE explicitly selected
+ * member's bounded logs and exact A2A task, overlaid on the room so the activity feed stays
+ * mounted underneath. Same DS tokens; the member it names is authoritative. */
+.flr__diag {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--pl-color-bg-raised, var(--pl-color-bg));
+}
+.flr__diag-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--pl-color-border);
+}
+.flr__diag-id {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.flr__diag-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--pl-color-fg);
+}
+.flr__diag-slug {
+  font-family: var(--pl-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 11.5px;
+  color: var(--pl-color-fg-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.flr__diag-headactions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+
+.flr__diag-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.flr__diag-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.flr__diag-sechead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.flr__diag-sechead h3 {
+  margin: 0;
+  font: 600 10.5px inherit;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--pl-color-fg-muted);
+}
+.flr__diag-cap {
+  font: 500 11px var(--pl-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  color: var(--pl-color-fg-subtle);
+}
+
+/* inline states — loading, empty/disabled, errors */
+.flr__diag-state {
+  padding: 16px 12px;
+  border: 1px dashed var(--pl-color-border);
+  border-radius: 9px;
+  color: var(--pl-color-fg-muted);
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+.flr__diag-state strong {
+  color: var(--pl-color-fg);
+  font-weight: 600;
+}
+.flr__diag-state--error {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--pl-color-status-error) 40%, var(--pl-color-border));
+}
+.flr__diag-retry {
+  align-self: flex-start;
+  padding: 4px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--pl-color-border);
+  background: var(--pl-color-bg-inset);
+  color: var(--pl-color-fg);
+  font: 600 12px inherit;
+  cursor: pointer;
+}
+.flr__diag-retry:hover {
+  background: var(--pl-color-bg-hover);
+}
+
+/* clamp / advisory note from the server */
+.flr__diag-note {
+  font-size: 12px;
+  color: var(--pl-color-status-warning);
+  background: color-mix(in srgb, var(--pl-color-status-warning) 12%, transparent);
+  border-radius: 7px;
+  padding: 5px 9px;
+}
+
+/* truncation / malformed badges on the task view */
+.flr__diag-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.flr__diag-badge {
+  font: 600 10px inherit;
+  letter-spacing: 0.03em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: var(--pl-color-status-warning);
+  background: color-mix(in srgb, var(--pl-color-status-warning) 15%, transparent);
+}
+.flr__diag-badge--malformed {
+  color: var(--pl-color-status-error);
+  background: color-mix(in srgb, var(--pl-color-status-error) 15%, transparent);
+}
+
+/* bounded log snapshot */
+.flr__diag-logs {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--pl-color-border);
+  border-radius: 9px;
+  overflow: hidden;
+}
+.flr__diag-log {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: 8px;
+  padding: 5px 9px;
+  font-family: var(--pl-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 11.5px;
+  border-top: 1px solid var(--pl-color-border);
+}
+.flr__diag-log:first-child {
+  border-top: 0;
+}
+.flr__diag-log-ts {
+  color: var(--pl-color-fg-subtle);
+  white-space: nowrap;
+}
+.flr__diag-log-lvl {
+  font-weight: 700;
+  color: var(--pl-color-fg-muted);
+  white-space: nowrap;
+}
+.flr__diag-log-lvl--error,
+.flr__diag-log-lvl--critical {
+  color: var(--pl-color-status-error);
+}
+.flr__diag-log-lvl--warning {
+  color: var(--pl-color-status-warning);
+}
+.flr__diag-log-logger {
+  color: var(--pl-color-fg-subtle);
+}
+.flr__diag-log-msg {
+  color: var(--pl-color-fg);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* task inspect form */
+.flr__diag-taskform {
+  display: flex;
+  gap: 8px;
+}
+.flr__diag-taskinput {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--pl-color-border);
+  border-radius: 8px;
+  background: var(--pl-color-bg-inset);
+  color: var(--pl-color-fg);
+  font-family: var(--pl-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 12.5px;
+  padding: 7px 10px;
+  outline: none;
+}
+.flr__diag-taskinput:focus-visible {
+  outline: 2px solid var(--pl-color-focus, var(--pl-color-accent));
+  outline-offset: 1px;
+}
+.flr__diag-inspect {
+  flex: none;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: 0;
+  background: var(--pl-color-accent);
+  color: var(--pl-color-fg-on-accent, var(--pl-color-accent-fg));
+  font: 600 12.5px inherit;
+  cursor: pointer;
+}
+.flr__diag-inspect:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* task summary card */
+.flr__diag-task {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid var(--pl-color-border);
+  border-radius: 9px;
+  padding: 11px 12px;
+}
+.flr__diag-taskmeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: 12px;
+  color: var(--pl-color-fg-muted);
+}
+.flr__diag-taskmeta b {
+  color: var(--pl-color-fg-subtle);
+  font-weight: 600;
+  margin-right: 4px;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+.flr__diag-subhead {
+  font: 600 10px inherit;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--pl-color-fg-subtle);
+  margin-bottom: 4px;
+}
+.flr__diag-pre {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: var(--pl-color-bg-inset);
+  color: var(--pl-color-fg);
+  font-family: var(--pl-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.flr__diag-turns {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.flr__diag-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border-left: 2px solid var(--pl-color-border);
+  padding-left: 8px;
+}
+.flr__diag-turnrole {
+  font: 600 10px inherit;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--pl-color-fg-subtle);
+}
+.flr__diag-turntext {
+  font-size: 12px;
+  color: var(--pl-color-fg);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.flr__diag-retry:focus-visible,
+.flr__diag-inspect:focus-visible {
+  outline: 2px solid var(--pl-color-focus, var(--pl-color-accent));
+  outline-offset: 1px;
 }

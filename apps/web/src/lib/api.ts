@@ -12,6 +12,8 @@ import type {
   ChatBundleManifest,
   FsProject,
   ManagedProjects,
+  MemberDiagnosticsLogs,
+  MemberDiagnosticsTask,
   Task,
   ChatMessage,
   ComponentSpec,
@@ -404,6 +406,13 @@ export function isAgentUnreachable(error: unknown): boolean {
   return error instanceof ApiError && error.status === 502;
 }
 
+/** The fleet proxy's "member is too slow" signal (ADR 0042 §I): a 504 from a slug-routed call
+ *  (graph/fleet/proxy.py). Distinct from unreachable (502) — the member's box is up but it did
+ *  not answer within the proxy's window. Surfaced by the diagnostics drawer as its own state. */
+export function isAgentTimeout(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 504;
+}
+
 /** A request is MEMBER-scoped when it's slug-routed to the focused agent (not the hub). A 401
  *  from one is that member's credential problem — a wrong/missing stored token for a REMOTE —
  *  NOT the hub's, so it must not trip the global AuthGate (which prompts for, and would
@@ -472,6 +481,29 @@ async function requestForm<T>(path: string, form: FormData, opts: { host?: boole
       detail = raw || detail;
     }
     if (response.status === 401 && !isMemberScoped(path, opts.host)) notifyAuthRequired();
+    throw new ApiError(response.status, detail || "request failed");
+  }
+  return (await response.json()) as T;
+}
+
+/** GET a member-scoped path on an EXPLICIT fleet member — not the focused window's slug —
+ *  through the hub's per-agent proxy (ADR 0042). `request` routes to `currentSlug()` (the URL
+ *  slug); this targets an arbitrary `slug` via `memberPath`, so a Fleet Room drawer can read a
+ *  member the window isn't focused on. Auth + ApiError shaping mirror `request`, and every
+ *  status the caller cares about is preserved on `ApiError.status`: the proxy's 409 (stopped) /
+ *  502 (unreachable) / 504 (timeout), and the member's own 401 / 404 / 503. A member-scoped 401
+ *  is that member's credential problem — deliberately NOT routed through `notifyAuthRequired`,
+ *  so it never hijacks the hub AuthGate (the drawer renders its own unauthorized state). */
+async function requestMember<T>(slug: string, rel: string): Promise<T> {
+  const response = await fetch(memberPath(slug, rel), { headers: applyAuth(new Headers()) });
+  if (!response.ok) {
+    const raw = await response.text().catch(() => "");
+    let detail = `${response.status} ${response.statusText}`;
+    try {
+      detail = (JSON.parse(raw) as { detail?: string }).detail || raw || detail;
+    } catch {
+      detail = raw || detail;
+    }
     throw new ApiError(response.status, detail || "request failed");
   }
   return (await response.json()) as T;
@@ -2112,6 +2144,19 @@ export const api = {
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
       void res.body?.cancel().catch(() => {}); // durable task runs on + emits turn.usage
     });
+  },
+
+  // Member diagnostics (#3168 contract → the #3169 Fleet Room drawer). Operator-authenticated,
+  // read-only, slug-scoped reads of a SPECIFIC member — the drawer inspects an explicitly
+  // selected member, which is NOT necessarily the window's focused agent, so both go through
+  // `requestMember(slug, …)` rather than the currentSlug-routed `request`. Server owns the
+  // bounds + redaction; the console only renders `note` / `truncated` / `malformed`.
+  memberDiagnosticsLogs(slug: string, lines?: number): Promise<MemberDiagnosticsLogs> {
+    const q = typeof lines === "number" ? `?lines=${encodeURIComponent(String(lines))}` : "";
+    return requestMember<MemberDiagnosticsLogs>(slug, `/api/diagnostics/logs${q}`);
+  },
+  memberDiagnosticsTask(slug: string, taskId: string): Promise<MemberDiagnosticsTask> {
+    return requestMember<MemberDiagnosticsTask>(slug, `/api/diagnostics/tasks/${encodeURIComponent(taskId)}`);
   },
 
   // Per-agent theme (ADR 0042). The blob is opaque — the DS ThemePanel owns its schema; the

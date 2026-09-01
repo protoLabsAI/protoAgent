@@ -1599,6 +1599,67 @@ export type FleetAgent = {
 // The focused agent is the URL slug now (ADR 0042 slug routing) — no server-side 'active'.
 export type FleetStatus = { agents: FleetAgent[] };
 
+// ── Member diagnostics (#3168) — the operator-authenticated, read-only, slug-scoped
+// contract the Fleet Room diagnostics drawer (#3169) consumes. Bounds + redaction are
+// SERVER-owned (operator_api/diagnostics_routes.py); the console renders them verbatim and
+// never re-derives them. No credentials cross this boundary and there is no write path.
+
+/** One retained record from a member's in-process log ring (#3168,
+ *  observability.logging_config.RingBufferHandler). Structured (not a pre-rendered line) so
+ *  the drawer can show level/logger; `message` is server-redacted at read time. */
+export type MemberDiagnosticsLogLine = {
+  ts: string;
+  level: string;
+  logger: string;
+  message: string;
+};
+
+/** GET /agents/{slug}/api/diagnostics/logs (#3168) — the bounded tail of a member's log ring.
+ *  `enabled: false` is the buffer-disabled / not-configured opt-out (its `note` says which),
+ *  which is DISTINCT from an enabled-but-empty buffer (`enabled: true, returned: 0`) — an
+ *  empty enabled buffer must not read as a broken agent. `note` also carries a clamp message
+ *  when the caller's `lines` was out of range. */
+export type MemberDiagnosticsLogs = {
+  enabled: boolean;
+  capacity: number;
+  returned: number;
+  lines: MemberDiagnosticsLogLine[];
+  note?: string;
+};
+
+/** One history message on a diagnostics task view (#3168). */
+export type MemberDiagnosticsTaskMessage = {
+  role?: string | null;
+  message_id?: string | null;
+  text: string;
+};
+
+/** One artifact on a diagnostics task view (#3168). */
+export type MemberDiagnosticsTaskArtifact = {
+  artifact_id?: string | null;
+  name?: string | null;
+  text: string;
+};
+
+/** GET /agents/{slug}/api/diagnostics/tasks/{task_id} (#3168) — the bounded summary of one
+ *  EXACT A2A task. `truncated` names the fields the reader capped (history / artifacts /
+ *  accumulated_text / status_message); `malformed` names columns it could not parse. Both are
+ *  surfaced, never swallowed, so a partial view can't read as complete. A missing task answers
+ *  404 and a member with no task store answers 503 — handled as inline drawer states, not this
+ *  shape. */
+export type MemberDiagnosticsTask = {
+  task_id: string | null;
+  context_id: string | null;
+  state: string | null;
+  status_message: string;
+  last_updated: string | null;
+  history: MemberDiagnosticsTaskMessage[];
+  artifacts: MemberDiagnosticsTaskArtifact[];
+  accumulated_text: string;
+  truncated: string[];
+  malformed: string[];
+};
+
 // Another protoAgent found on the box / LAN (ADR 0042 §I) — a candidate remote delegate.
 export type DiscoveredAgent = { name: string; url: string; host: string; port: number };
 

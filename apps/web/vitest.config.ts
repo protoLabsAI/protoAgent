@@ -10,7 +10,10 @@ export default defineConfig({
     // Repairs the Web Storage globals on Nodes that pre-define them (25+), where jsdom's
     // would otherwise never be installed. See the file for the full failure mode (#3213).
     setupFiles: ["./vitest.setup.ts"],
-    include: ["src/**/*.test.ts"],
+    // `.tsx` is included alongside `.ts` so component tests that mount React through
+    // react-dom/client (e.g. app/FleetRoom.test.tsx, the #3169 diagnostics drawer) run in the
+    // same suite. esbuild transforms the TSX per this workspace's tsconfig `jsx` setting.
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     globals: false,
     // By default Vitest stubs every CSS import to an empty module (so a `?raw` import yields
     // ""). The source-guard tests read stylesheets as raw text — mobileBottomInset.test.ts
