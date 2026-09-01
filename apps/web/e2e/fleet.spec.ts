@@ -680,6 +680,19 @@ test("Fleet Room diagnostics: view a member's bounded logs and inspect an exact 
   await page.getByRole("button", { name: "Inspect" }).click();
   await expect(page.getByTestId("diag-task")).toContainText("TASK_STATE_COMPLETED");
 
+  // Returning from task B to a previously inspected task A also refetches A instead of reviving
+  // its cached first snapshot.
+  await page.getByLabel("Task id").fill("a-live");
+  await page.getByRole("button", { name: "Inspect" }).click();
+  await expect(page.getByTestId("diag-task")).toContainText("TASK_STATE_WORKING");
+  await page.getByLabel("Task id").fill("b-42");
+  await page.getByRole("button", { name: "Inspect" }).click();
+  await expect(page.getByTestId("diag-task")).toContainText("TASK_STATE_COMPLETED");
+  await page.getByLabel("Task id").fill("a-live");
+  await page.getByRole("button", { name: "Inspect" }).click();
+  await expect(page.getByTestId("diag-task")).toContainText("TASK_STATE_COMPLETED");
+  await expect(page.getByTestId("diag-task")).toContainText("diagnostics summary body");
+
   // A missing task id is an actionable inline state, not a blank panel.
   await page.getByLabel("Task id").fill("missing-999");
   await page.getByRole("button", { name: "Inspect" }).click();

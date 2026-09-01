@@ -233,6 +233,51 @@ describe("MemberDiagnostics — exact task inspection", () => {
     expect(text()).not.toContain("partial…");
   });
 
+  it("returning from task B to task A refetches A instead of showing A's cached snapshot", async () => {
+    vi.spyOn(api, "memberDiagnosticsLogs").mockResolvedValue(LOGS_OK);
+    const inspect = vi
+      .spyOn(api, "memberDiagnosticsTask")
+      .mockResolvedValueOnce(
+        taskFixture({ task_id: "task-a", state: "TASK_STATE_WORKING", accumulated_text: "a is still running" }),
+      )
+      .mockResolvedValueOnce(
+        taskFixture({ task_id: "task-b", state: "TASK_STATE_COMPLETED", accumulated_text: "b is done" }),
+      )
+      .mockResolvedValueOnce(
+        taskFixture({ task_id: "task-a", state: "TASK_STATE_COMPLETED", accumulated_text: "a is done now" }),
+      );
+    mount({ slug: "ava", name: "ava", agent: AVA, onClose: () => {} });
+    await flush();
+
+    const input = container.querySelector<HTMLInputElement>(".flr__diag-taskinput")!;
+    const inspectBtn = () => container.querySelector<HTMLButtonElement>(".flr__diag-inspect")!;
+
+    setValue(input, "task-a");
+    await flush();
+    act(() => inspectBtn().click());
+    await flush();
+    await flush();
+    expect(text()).toContain("a is still running");
+
+    setValue(input, "task-b");
+    await flush();
+    act(() => inspectBtn().click());
+    await flush();
+    await flush();
+    expect(text()).toContain("b is done");
+
+    setValue(input, "task-a");
+    await flush();
+    act(() => inspectBtn().click());
+    await flush();
+    await flush();
+
+    expect(inspect).toHaveBeenCalledTimes(3);
+    expect(inspect).toHaveBeenNthCalledWith(3, "ava", "task-a");
+    expect(text()).toContain("a is done now");
+    expect(text()).not.toContain("a is still running");
+  });
+
   it("surfaces a missing task id (404) as the missing-task state", async () => {
     vi.spyOn(api, "memberDiagnosticsLogs").mockResolvedValue(LOGS_OK);
     vi.spyOn(api, "memberDiagnosticsTask").mockRejectedValue(new ApiError(404, "no such task on this member"));

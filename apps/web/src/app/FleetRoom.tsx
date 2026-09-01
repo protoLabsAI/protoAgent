@@ -512,6 +512,7 @@ export function MemberDiagnostics({
 }) {
   const [taskDraft, setTaskDraft] = useState("");
   const [taskId, setTaskId] = useState<string | null>(null);
+  const qc = useQueryClient();
   const presence = agent ? presenceOf(agent) : { key: "unreachable" as const, label: "left the fleet" };
 
   const logs = useQuery({
@@ -537,12 +538,14 @@ export function MemberDiagnostics({
   const inspect = () => {
     const id = taskDraft.trim();
     if (!id) return;
-    // Re-inspecting the SAME id would leave the query key unchanged, so setTaskId is a no-op and
-    // (with staleTime:Infinity) no refetch fires — the first snapshot stays pinned even after the
-    // task's state/output has moved on. Inspect IS the task pane's Refresh: force a refetch on an
-    // unchanged id, mirroring the logs Refresh button. A new id changes the key and fetches.
+    // Re-inspecting a cached id (same-id or A->B->A) must be a fresh snapshot. With
+    // staleTime:Infinity, selecting a previously inspected id would otherwise revive its cached
+    // query result instead of observing the task's current state.
     if (id === taskId) task.refetch();
-    else setTaskId(id);
+    else {
+      qc.removeQueries({ queryKey: ["diagnostics", "task", slug, id], exact: true });
+      setTaskId(id);
+    }
   };
   const onTaskKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
