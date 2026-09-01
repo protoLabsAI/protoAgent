@@ -1036,6 +1036,15 @@ fn open_chat_window<R: Runtime>(app: &AppHandle<R>, path: Option<String>) -> Res
         // Offset rather than centered: a second window landing exactly on the first looks
         // like nothing happened — the same "did that work?" the no-op menu item produced.
         .position(60.0 + f64::from(id % 5) * 28.0, 60.0 + f64::from(id % 5) * 28.0)
+        // Hand drag-and-drop to the WEB CONTENT (#3197). Tauri's drag-drop handler is on by
+        // default, and on macOS wry implements it by overriding the webview's
+        // NSDraggingDestination methods and returning "accepted" WITHOUT calling super — so
+        // WKWebView's own drop handling never runs and the page receives no dragover/drop at
+        // all. Tauri's own docs say the same for Windows. Nothing in the console listens for
+        // the native `tauri://drag-*` events; three surfaces DO use HTML5 drop — the fleet
+        // roster reorder, the chat composer's file attach, and the knowledge store's — and all
+        // three were dead in the desktop build while working in every browser.
+        .disable_drag_drop_handler()
         .initialization_script(&init);
     #[cfg(target_os = "macos")]
     {
@@ -1332,6 +1341,9 @@ pub fn run() {
                 .min_inner_size(980.0, 640.0)
                 .resizable(true)
                 .center()
+                // Same reason as open_chat_window above (#3197) — the console's HTML5 drop
+                // surfaces are dead while Tauri's native handler owns the drop.
+                .disable_drag_drop_handler()
                 .initialization_script(&init)
                 .on_new_window(move |url, _features| {
                     let target = url.as_str();
@@ -1389,6 +1401,9 @@ pub fn run() {
                 .resizable(false)
                 .center()
                 .visible(false)
+                // Kept consistent with the other two windows (#3197): the launcher hosts the
+                // same web bundle, so it must not behave differently if a surface lands there.
+                .disable_drag_drop_handler()
                 .initialization_script(&launcher_init)
                 .build()?;
 

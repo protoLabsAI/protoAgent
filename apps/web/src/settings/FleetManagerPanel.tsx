@@ -1,7 +1,7 @@
 import "../fleet/fleet.css";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronUp, GripVertical, Link2, Pencil, Play, Plus, Radar, Server, Square, Trash2, Unlink2 } from "lucide-react";
+import { GripVertical, Link2, Pencil, Play, Plus, Radar, Server, Square, Trash2, Unlink2 } from "lucide-react";
 import { useState } from "react";
 
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
@@ -112,19 +112,36 @@ export function reorderByDrag(ids: string[], from: number, to: number): string[]
   return next;
 }
 
-/** Can the row at `index` still move in `dir`? False at the matching list boundary. */
+/** Can the row at `index` still move in `dir`? False at the matching list boundary — the
+ *  keyboard path announces the boundary rather than moving silently (`moveAnnouncement`). */
 export function canMove(index: number, dir: "up" | "down", length: number): boolean {
   return dir === "up" ? index > 0 : index < length - 1;
 }
 
-/** A move control is disabled at its boundary OR while a reorder save is in flight (busy). */
-export function moveDisabled(index: number, dir: "up" | "down", length: number, pending: boolean): boolean {
-  return pending || !canMove(index, dir, length);
+/** The reorder handle's accessible name. It is the ONE reorder control on a row now — the pair
+ *  of always-rendered move-up / move-down buttons was retired (#3197 follow-up) because a fixed
+ *  80px control column on every row bought two clicks' worth of affordance and cost the roster's
+ *  breathing room. The keys therefore travel IN the name (plus `aria-keyshortcuts` and the visible
+ *  tooltip): with no buttons on screen, nothing else tells a keyboard user the path exists. Uses
+ *  the DISPLAY name (label ?? name), never the id. */
+export function reorderLabel(agent: Pick<FleetAgent, "name" | "label">): string {
+  return `Reorder ${agent.label ?? agent.name} — drag, or press the up and down arrow keys`;
 }
 
-/** The move control's accessible name — the DISPLAY name (label ?? name), never the id. */
-export function moveLabel(agent: Pick<FleetAgent, "name" | "label">, dir: "up" | "down"): string {
-  return `Move ${agent.label ?? agent.name} ${dir}`;
+/** What the polite live region says after an arrow-key press. A keyboard reorder moves a row the
+ *  user cannot see move, and a press at a list boundary is a no-op — both are silent without this,
+ *  which is the one failure a visual review never catches. `index`/`dir` are the move as REQUESTED
+ *  (pre-move), so the target slot is derived here. */
+export function moveAnnouncement(
+  agent: Pick<FleetAgent, "name" | "label">,
+  index: number,
+  dir: "up" | "down",
+  length: number,
+): string {
+  const display = agent.label ?? agent.name;
+  if (!canMove(index, dir, length)) return `${display} is already ${dir === "up" ? "first" : "last"}.`;
+  const to = dir === "up" ? index - 1 : index + 1;
+  return `Moved ${display} to position ${to + 1} of ${length}.`;
 }
 
 /** Reconcile a target id order against the live roster WITHOUT losing a row: rank the agents to
@@ -402,6 +419,8 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
   // accepted one is refetched and reconciled. Only the ordering changes: no name / URL / token
   // / process state / immutable id is ever touched.
   const [dragId, setDragId] = useState<string | null>(null); // the id being dragged (pointer path)
+  const [announcement, setAnnouncement] = useState(""); // the keyboard path's polite live region
+  const [overId, setOverId] = useState<string | null>(null); // the row a drag is hovering (the drop marker)
   const reorder = useMutation({
     mutationFn: (order: string[]) => api.reorderFleet(order),
     onMutate: async (order) => {
@@ -425,13 +444,26 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
     // a no-op PUT (self-drop / boundary move) too.
     if (shouldSubmitOrder(order, orderIds, reorder.isPending)) reorder.mutate(order);
   };
-  const moveRow = (id: string, dir: "up" | "down") =>
-    submitOrder(moveInList(orderIds, orderIds.indexOf(id), dir));
+  // The keyboard reorder path (#3197 follow-up): ↑ / ↓ on a focused handle move the row one slot —
+  // exactly what the retired move-up / move-down buttons did, one PUT per press through the same
+  // `shouldSubmitOrder` guard. The move is ANNOUNCED because nothing else reports it: with the
+  // buttons gone there is no control whose disabled state marks a boundary, and a reordered list
+  // is silent to a screen reader.
+  const moveRow = (agent: FleetAgent, dir: "up" | "down") => {
+    // A save already in flight: `shouldSubmitOrder` would drop this press, so return before
+    // announcing — otherwise the live region narrates a move that never happens. This is the
+    // key path's half of the handle's `aria-disabled`.
+    if (reorder.isPending) return;
+    const index = orderIds.indexOf(agent.id);
+    setAnnouncement(moveAnnouncement(agent, index, dir, orderIds.length));
+    submitOrder(moveInList(orderIds, index, dir));
+  };
   const dropOnRow = (targetId: string) => {
     if (dragId && dragId !== targetId) {
       submitOrder(reorderByDrag(orderIds, orderIds.indexOf(dragId), orderIds.indexOf(targetId)));
     }
     setDragId(null);
+    setOverId(null);
   };
 
   return (
@@ -475,6 +507,13 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
             This agent can't hold delegates yet — the delegates plugin isn't enabled on it.
           </Alert>
         ) : null}
+        {/* The keyboard reorder path's announcer (#3197). Visually hidden, but clipped rather than
+            display:none — the latter drops the node from the accessibility tree and silences the
+            live region, the one failure a visual review can never catch (same argument as the
+            palette's `.pa-cmdk__sr`). */}
+        <p className="fleet-reorder-status" role="status" aria-live="polite">
+          {announcement}
+        </p>
         {fleet.isLoading ? (
           <Empty>Loading the fleet…</Empty>
         ) : agents.length === 0 ? (
@@ -491,72 +530,85 @@ export function FleetManagerPanel({ onNew }: { onNew?: () => void }) {
           <ul className="fleet-list">
             {agents.map((a) => {
               const isActive = slugOf(a) === slug; // slug = stable id, not name
-              const index = orderIds.indexOf(a.id);
               return (
                 <li
                   key={a.id}
-                  className={`fleet-row${isActive ? " active" : ""}${dragId === a.id ? " dragging" : ""}`}
+                  className={`fleet-row${isActive ? " active" : ""}${dragId === a.id ? " dragging" : ""}${
+                    overId === a.id && dragId && dragId !== a.id ? " drop-target" : ""
+                  }`}
                   // Every roster row is a drop slot (the pinned host included, so a member can be
                   // dropped above it); only non-host rows carry a drag handle to START a drag.
                   onDragOver={(e) => {
-                    if (dragId && dragId !== a.id) e.preventDefault(); // preventDefault marks a valid drop target
+                    if (!dragId || dragId === a.id) return;
+                    e.preventDefault(); // preventDefault marks a valid drop target
+                    e.dataTransfer.dropEffect = "move"; // a move cursor, not the default copy "+"
+                    // Mark the slot the drop would land in. Without it a drag is invisible past the
+                    // ghost: nothing on the page says WHERE releasing the mouse puts the row.
+                    if (overId !== a.id) setOverId(a.id);
                   }}
                   onDrop={() => dropOnRow(a.id)}
                 >
-                  {/* Manual roster reordering (#3197): a pointer drag handle + explicit move-up /
-                      move-down controls (the accessible, non-pointer equivalent). Rendered on
-                      every MEMBER row; the host ("this instance") is pinned — it carries neither
-                      handle nor controls, so it stays a zero-button row, but is still a valid drop
-                      slot. The DS bundles dnd-kit but exposes it only as AppShell-rail + TabBar
-                      reorder (tab/rail-shaped, and its keyboard path is explicitly unwired) — no
-                      generic sortable-list primitive fits a rich fleet row, so this stays inline
-                      (native HTML5 DnD, no new dependency, no reusable component). */}
+                  {/* Manual roster reordering (#3197): ONE control per member row — a grip that
+                      is both the pointer drag handle (native HTML5 DnD; the row is the drop target)
+                      and the keyboard path (focus it, press ↑ / ↓). It is a real <button>, not the
+                      aria-hidden span it started as, because the always-visible move-up / move-down
+                      button pair it replaced was the row's only non-pointer affordance and cost a
+                      fixed 80px column on every row. The host ("this instance") is pinned — it
+                      carries no handle, but stays a valid drop slot. The DS bundles dnd-kit yet
+                      exposes it only as AppShell-rail + TabBar reorder (rail/tab-shaped; TabBar's
+                      keyboard path is unwired) — no generic sortable-list primitive fits a rich
+                      fleet row, so this stays inline: native DnD, no new dependency, no bespoke
+                      REUSABLE component. Gap logged in docs/design/ui-component-audit.md. */}
                   <div className="fleet-reorder">
                     {a.host ? null : (
-                      <>
-                        <span
-                          className={`fleet-drag-handle${reorder.isPending ? " disabled" : ""}`}
-                          // A reorder save already in flight disables the drag path exactly as the
-                          // move buttons disable (moveDisabled(..., reorder.isPending)): otherwise a
-                          // second drag's drop would fire a concurrent full-order PUT that could
-                          // complete out of order or roll back over this drag's intended order.
-                          draggable={!reorder.isPending}
-                          aria-hidden="true"
-                          title={reorder.isPending ? "Saving the new order…" : "Drag to reorder"}
-                          onDragStart={(e) => {
-                            if (reorder.isPending) {
-                              e.preventDefault(); // belt-and-suspenders: draggable={false} already blocks it
-                              return;
-                            }
-                            setDragId(a.id);
-                          }}
-                          onDragEnd={() => setDragId(null)}
-                        >
-                          <GripVertical size={14} />
-                        </span>
-                        <span className="fleet-move-controls">
-                          <Button
-                            icon
-                            variant="ghost"
-                            title={moveLabel(a, "up")}
-                            aria-label={moveLabel(a, "up")}
-                            disabled={moveDisabled(index, "up", orderIds.length, reorder.isPending)}
-                            onClick={() => moveRow(a.id, "up")}
-                          >
-                            <ChevronUp size={14} />
-                          </Button>
-                          <Button
-                            icon
-                            variant="ghost"
-                            title={moveLabel(a, "down")}
-                            aria-label={moveLabel(a, "down")}
-                            disabled={moveDisabled(index, "down", orderIds.length, reorder.isPending)}
-                            onClick={() => moveRow(a.id, "down")}
-                          >
-                            <ChevronDown size={14} />
-                          </Button>
-                        </span>
-                      </>
+                      <button
+                        type="button"
+                        className="fleet-drag-handle"
+                        // A reorder save already in flight blocks the drag path (and, via
+                        // `shouldSubmitOrder`, the key path): a second concurrent full-order PUT
+                        // could complete out of order, or an earlier failure's roll-back could
+                        // clobber this drag's intended order. `aria-disabled`, NOT `disabled` — a
+                        // disabled button drops focus, which would strand a keyboard user mid-
+                        // reorder on the one control the row still has.
+                        draggable={!reorder.isPending}
+                        aria-disabled={reorder.isPending || undefined}
+                        aria-label={reorderLabel(a)}
+                        aria-keyshortcuts="ArrowUp ArrowDown"
+                        title={reorder.isPending ? "Saving the new order…" : "Drag to reorder — or focus and press ↑ / ↓"}
+                        onDragStart={(e) => {
+                          if (reorder.isPending) {
+                            e.preventDefault(); // belt-and-suspenders: draggable={false} already blocks it
+                            return;
+                          }
+                          // Drag the ROW, not the handle. Every engine defaults the drag image to
+                          // the dragged element, and the dragged element here is an 18px grip — a
+                          // ghost that small reads as "nothing is happening" even when the drag is
+                          // working, which is exactly how this landed as "DnD is broken".
+                          const row = e.currentTarget.closest("li");
+                          if (row) {
+                            const box = row.getBoundingClientRect();
+                            e.dataTransfer.setDragImage(row, e.clientX - box.left, e.clientY - box.top);
+                          }
+                          // Firefox refuses to START a drag whose dataTransfer carries no data, and
+                          // every engine wants a declared effect for the right cursor. The payload
+                          // is the immutable id; the drop reads React state, not this, but a
+                          // well-formed transfer is what makes the gesture work off-Chromium.
+                          e.dataTransfer.setData("text/plain", a.id);
+                          e.dataTransfer.effectAllowed = "move";
+                          setDragId(a.id);
+                        }}
+                        onDragEnd={() => {
+                          setDragId(null);
+                          setOverId(null); // a drag abandoned outside any row still clears the marker
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+                          e.preventDefault(); // otherwise the settings dialog scrolls under the row
+                          moveRow(a, e.key === "ArrowUp" ? "up" : "down");
+                        }}
+                      >
+                        <GripVertical size={14} />
+                      </button>
                     )}
                   </div>
                   {/* A remote's `running` IS its reachability probe (it has no local process),

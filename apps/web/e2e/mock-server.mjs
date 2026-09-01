@@ -1267,6 +1267,23 @@ const server = createServer(async (req, res) => {
       return sendJson(res, { deleted: true });
     }
     // Fleet (ADR 0042) — mutate this scope's fleet so create/start/stop/activate/remove round-trip.
+    // Roster display order (#3197): the body is a COMPLETE permutation of the live member ids, by
+    // immutable id. Mirrors the real supervisor — a duplicate / unknown / missing / malformed list
+    // is a 400 that leaves the saved order untouched, so the console's roll-back path is real —
+    // and the accepted order is what subsequent GET /api/fleet reads return, which is what makes
+    // the "survives a reload" assertion meaningful rather than a client-side illusion.
+    if (pathname === "/api/fleet/order" && req.method === "PUT") {
+      const order = Array.isArray(body?.order) ? body.order.map(String) : null;
+      const ids = fleet.agents.map((a) => a.id);
+      const ok =
+        order &&
+        order.length === ids.length &&
+        new Set(order).size === order.length &&
+        order.every((id) => ids.includes(id));
+      if (!ok) return sendJson(res, { detail: "order must be a complete permutation of the roster" }, 400);
+      fleet.agents = order.map((id) => fleet.agents.find((a) => a.id === id));
+      return sendJson(res, { ok: true, order });
+    }
     if (pathname === "/api/fleet" && req.method === "POST") {
       const name = String(body.name || "").trim();
       if (!/^[A-Za-z0-9-_]+$/.test(name)) return sendJson(res, { detail: "invalid name" }, 400);

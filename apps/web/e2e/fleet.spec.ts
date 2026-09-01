@@ -55,6 +55,83 @@ test("Agents tab lists the host (this instance) + peers, host active by default"
   await expect(page.locator(".fleet-row", { hasText: "main" }).getByRole("button")).toHaveCount(0);
 });
 
+// ── Manual roster reordering (#3197) ─────────────────────────────────────────────────────
+// The ordering math is unit-tested pure (FleetManagerPanel.test.ts); what only a rendered
+// browser can prove is that the wiring holds end to end — a real drag, a real key press, the
+// PUT the server accepts, and the order surviving a reload rather than living in a React cache.
+const rosterNames = (page) => page.locator(".fleet-row .fleet-name");
+const reorderHandle = (page, name) =>
+  page.locator(".fleet-row", { hasText: name }).getByRole("button", { name: new RegExp(`^Reorder ${name}\\b`) });
+
+test("Fleet Config: the arrow keys reorder from the handle, and the order survives a reload (#3197)", async ({ page }) => {
+  await openAgents(page);
+  await expect(rosterNames(page)).toHaveText([/main/, /ava/, /roxy/]);
+
+  // A member row carries exactly ONE reorder control now — the grip. The always-visible
+  // move-up / move-down button pair is retired; the row's width went back to the roster, and
+  // the keys travel on the handle (its accessible name, aria-keyshortcuts, and its tooltip).
+  const roxy = page.locator(".fleet-row", { hasText: "roxy" });
+  await expect(roxy.getByRole("button", { name: /^Move roxy/ })).toHaveCount(0);
+  const handle = reorderHandle(page, "roxy");
+  await expect(handle).toHaveAttribute("aria-keyshortcuts", "ArrowUp ArrowDown");
+  await expect(handle).toHaveAttribute("draggable", "true");
+
+  // ↑ on the focused handle moves the row one slot — the accessible, non-pointer path.
+  await handle.focus();
+  await page.keyboard.press("ArrowUp");
+  await expect(rosterNames(page)).toHaveText([/main/, /roxy/, /ava/]);
+  // …and it is ANNOUNCED. With no move buttons on screen there is no other feedback that the
+  // press did anything: a silent live region is the one failure a visual review never catches.
+  await expect(page.locator(".fleet-reorder-status")).toHaveText("Moved roxy to position 2 of 3.");
+  // Focus rides the moved row, so a second press keeps reordering the same member.
+  await expect(handle).toBeFocused();
+
+  // A press at the boundary is a no-op that SAYS so rather than going quiet.
+  await reorderHandle(page, "ava").focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.locator(".fleet-reorder-status")).toHaveText("ava is already last.");
+  await expect(rosterNames(page)).toHaveText([/main/, /roxy/, /ava/]);
+
+  // The order is the SERVER's now: a reload re-reads GET /api/fleet and gets it back.
+  await page.reload({ waitUntil: "load" });
+  await openFleet(page);
+  await expect(rosterNames(page)).toHaveText([/main/, /roxy/, /ava/]);
+});
+
+test("Fleet Config: dragging a member's handle onto another row reorders the roster (#3197)", async ({ page }) => {
+  await openAgents(page);
+  await expect(rosterNames(page)).toHaveText([/main/, /ava/, /roxy/]);
+
+  // Drive the pointer directly rather than locator.dragTo(): dragTo goes through Playwright's own
+  // drag helper, so it can pass over an interaction a real mouse would not start. These are plain
+  // mouse events — the browser's native HTML5 drag machinery does the rest, or nothing does.
+  const host = page.locator(".fleet-row", { hasText: "this instance" });
+  const from = (await reorderHandle(page, "roxy").boundingBox())!;
+  const to = (await host.boundingBox())!;
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2 - 12, { steps: 5 });
+  await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 15 });
+
+  // Mid-drag: the row under the pointer marks the slot the drop lands in, and the dragged row
+  // dims. This is the ONLY feedback a drag has besides the ghost — a drag with neither reads as
+  // broken even when it works, which is how this arrived as a bug report.
+  await expect(host).toHaveClass(/drop-target/);
+  await expect(page.locator(".fleet-row", { hasText: "roxy" })).toHaveClass(/dragging/);
+
+  // One more move before releasing. Asserting mid-drag idles the pointer, and a drag session that
+  // idles then gets a bare mouseup does not deliver a drop in WebKit — a test artefact, not a
+  // product bug (the no-pause path drops fine there), but it makes the release deterministic.
+  await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2 + 3, { steps: 3 });
+  await page.mouse.up();
+  await expect(rosterNames(page)).toHaveText([/roxy/, /main/, /ava/]);
+  await expect(page.locator(".fleet-row.drop-target")).toHaveCount(0); // the marker clears on drop
+
+  await page.reload({ waitUntil: "load" });
+  await openFleet(page);
+  await expect(rosterNames(page)).toHaveText([/roxy/, /main/, /ava/]);
+});
+
 test("New agent → archetype picker → create navigates into the new agent", async ({ page }) => {
   await openAgents(page);
   await page.getByRole("button", { name: "New agent" }).click();
