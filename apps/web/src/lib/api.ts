@@ -1141,15 +1141,27 @@ export const api = {
 
   // `reviewState` (ADR 0108 D7) narrows a LISTING (empty q) or a search to rows with
   // that operator verdict — the console's "pending review" queue. Omitted = all rows.
-  knowledgeSearch(q: string, opts: { reviewState?: ReviewState } = {}) {
+  //
+  // `k` and `signal` exist for the ⌘K knowledge provider (app/palette/knowledgeSearch.ts),
+  // which needs both and cannot fake either. `k` because the route does NOT clamp it the
+  // way its siblings do (`chat_routes.py`: `max(1, min(int(limit), 200))`) — the caller is
+  // the only ceiling on how many rows come back, and a palette shortlist wants six, not the
+  // server's thirty. `signal` because the DS palette aborts a superseded keystroke, and a
+  // request that ignores that signal runs to completion against the FTS index anyway. Both
+  // are omitted by the Knowledge surface, which keeps the server default and no cancellation.
+  knowledgeSearch(
+    q: string,
+    opts: { reviewState?: ReviewState; k?: number; signal?: AbortSignal } = {},
+  ) {
     const params = new URLSearchParams({ q });
     if (opts.reviewState) params.set("review_state", opts.reviewState);
+    if (opts.k != null) params.set("k", String(opts.k));
     return request<{
       enabled: boolean;
       query: string;
       results: KnowledgeChunk[];
       stats: Record<string, number>;
-    }>(`/api/knowledge/search?${params.toString()}`);
+    }>(`/api/knowledge/search?${params.toString()}`, { signal: opts.signal });
   },
 
   // #1701 Slice 2: redeem a plugin composer-form — POST the field values back to the

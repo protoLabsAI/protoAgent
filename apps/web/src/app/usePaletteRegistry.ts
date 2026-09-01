@@ -38,6 +38,8 @@ import { markAgentOpened } from "./fleetPalette";
 import { fleetRoomView } from "./FleetRoom";
 import { fleetSettingsDisabledReason } from "./fleetSettingsGate";
 import { memberDmView } from "./PaletteChat";
+import { seedKnowledgeSearch } from "../knowledge/searchSeed";
+import { knowledgeSearchProvider } from "./palette/knowledgeSearch";
 
 /** Optional inline chat with the focused agent (ADR 0057). App builds the native chat
  *  PaletteView (it needs JSX + the focused agent name); the adapter registers it + a
@@ -103,7 +105,13 @@ export type NavIntent =
   | { kind: "view"; id: string }
   | { kind: "plugins"; tab: "local" | "market" }
   | { kind: "global"; section?: string }
-  | { kind: "agent"; slug: string };
+  | { kind: "agent"; slug: string }
+  // Open the Knowledge store surface on a search term (the ⌘K knowledge rows). A separate
+  // arm rather than `{ kind: "view", id: "knowledge" }` because the term is the point: the
+  // surface has no per-chunk anchor, so re-running the operator's own search is what puts
+  // the row they picked in front of them. Stays a plain serializable payload, so it crosses
+  // the launcher → main-window event boundary like every other intent.
+  | { kind: "knowledge"; query?: string };
 
 /** Apply an intent to THIS window's UI store. The default navigator, and what the main
  *  window calls when it receives a forwarded intent from the launcher. */
@@ -121,6 +129,13 @@ export function applyNavIntent(intent: NavIntent) {
       break;
     case "global":
       ui.openGlobalSettings(intent.section);
+      break;
+    case "knowledge":
+      // Seed BEFORE routing: the surface is usually not mounted yet, and adopting the term
+      // in its first effect is what keeps the landing paint from flashing the unrelated
+      // recent-chunks listing. Already-open is covered too — the seed store is subscribed.
+      seedKnowledgeSearch(intent.query ?? "");
+      openView("knowledge");
       break;
     case "agent":
       // Switch the console to another fleet agent (slug-routed, ADR 0042) — a full navigation,
@@ -470,6 +485,30 @@ export function usePaletteRegistry(
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navSig, inlineSig, fleetSig, chat, registry, seamVersion, flagOn, kbOverrides]);
+
+  // Live knowledge search — the console's first REMOTE palette provider (the seam's provider
+  // above is a synchronous read of in-process registrations). See the module header of
+  // `palette/knowledgeSearch.ts` for why the debounce, the cancellation, the row cap, and the
+  // empty-query browse default all live where they do. `navigate` is handed in so the
+  // launcher window's forwarding sink is the same chokepoint here as for every other palette
+  // navigation.
+  //
+  // Its OWN effect, keyed only on the registry, deliberately: it takes no live input — the
+  // query arrives as an argument at read time — so folding it into the block above would
+  // withdraw and re-add it every time the fleet roster or a keybinding changed, and each
+  // register bumps the DS registry version, which re-fires the open palette's debounced
+  // search. One registration for the life of the registry is the whole requirement.
+  //
+  // Registered UNCONDITIONALLY, unlike the seam provider above. Whether this instance even
+  // has a knowledge store is a server answer, and pre-fetching it would trade a silent
+  // request on every console boot for a capability the provider already reports on its own
+  // (`enabled: false` → no rows, no error row). The cost is the one the seam provider
+  // declined to pay: the DS shows its "Searching…" affordance whenever ANY provider declares
+  // `getCommands`, so the default console now spins it for the debounce window on every
+  // keystroke — including the empty root, where this provider deliberately searches nothing.
+  // That last part is the root view's call, not the provider's: the host-owned ranked root
+  // view gates its provider loop on a typed query and drops the empty-root flash.
+  useEffect(() => registry.registerProvider(knowledgeSearchProvider(navigate)), [registry]);
 
   return registry;
 }

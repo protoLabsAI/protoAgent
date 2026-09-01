@@ -5,7 +5,7 @@ import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowDownFromLine, ArrowUpToLine, ChevronRight, ChevronsDownUp, ChevronsUpDown, ClipboardCheck, Database, FileUp, Library, Pencil, Plus, Trash2 } from "lucide-react";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { RefreshButton } from "../app/ui-kit";
 import { api } from "../lib/api";
@@ -16,6 +16,11 @@ import { QuickSetting } from "../settings/QuickSetting";
 import type { KnowledgeChunk } from "../lib/types";
 
 import { ReviewActions, ReviewChip } from "./ReviewVerdict";
+import {
+  knowledgeSearchSeedVersion,
+  subscribeKnowledgeSearchSeed,
+  takeKnowledgeSearchSeed,
+} from "./searchSeed";
 
 // The shape every knowledge list/search query caches — reused for optimistic
 // bulk-delete cache surgery (#1770) without re-declaring the response fields.
@@ -314,6 +319,23 @@ export function KnowledgeStore() {
     const t = window.setTimeout(() => setDebouncedQuery(query), 250);
     return () => window.clearTimeout(t);
   }, [query]);
+
+  // A term handed over from elsewhere (a ⌘K knowledge row routing here, ADR 0057) — adopt
+  // it as the search. `debouncedQuery` is set alongside `query` so the results are already
+  // the seeded search on the first paint instead of 250ms of the recent-chunks listing.
+  // Keyed on the seed VERSION, not the value: re-seeding the same term has to re-apply, and
+  // the seed is consumed on read so a later remount doesn't replay it over live typing.
+  const seedVersion = useSyncExternalStore(
+    subscribeKnowledgeSearchSeed,
+    knowledgeSearchSeedVersion,
+    knowledgeSearchSeedVersion,
+  );
+  useEffect(() => {
+    const seeded = takeKnowledgeSearchSeed();
+    if (seeded === null) return;
+    setQuery(seeded);
+    setDebouncedQuery(seeded);
+  }, [seedVersion]);
 
   // "Pending review" queue (ADR 0108 D7): narrow the list to rows awaiting an operator
   // verdict. Its own cache entry (the query key carries the filter), so toggling never
