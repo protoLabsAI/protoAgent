@@ -604,3 +604,52 @@ test("a sister agent's window: the fleet panel won't stop or remove the agent se
   // A sibling keeps its controls — the guard is about SELF, not about being a member window.
   await expect(page.locator(".fleet-row", { hasText: "roxy" }).getByRole("button", { name: "Start" })).toBeVisible();
 });
+
+// ── Member diagnostics drawer (#3169, over the #3168 contract) ─────────────────────────
+// A Diagnostics action on each roster row opens a drawer bound to the EXPLICITLY selected
+// member: bounded logs + exact task inspection, snapshot-refresh only (no live SSE). The mock
+// serves slug-stamped logs + a task summary, and 409s a stopped member like the real proxy.
+
+test("Fleet Room: open a member's diagnostics drawer, view bounded logs, inspect a task (#3169)", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await openFleetRoom(page);
+  const room = page.locator(".flr");
+
+  await room.locator(".flr__member", { hasText: "ava" }).getByRole("button", { name: "Diagnostics for ava" }).click();
+
+  const drawer = page.locator(".flr-diag");
+  await expect(drawer).toBeVisible();
+  // The drawer names the inspected member (#3169 r3).
+  await expect(drawer.locator(".flr-diag__name")).toHaveText("ava");
+  // A bounded, redacted log snapshot — slug-stamped by the mock, with the retained-count meta.
+  await expect(drawer.locator(".flr-diag__logmsg", { hasText: "ava log line 0" })).toBeVisible();
+  await expect(drawer.locator(".flr-diag__meta")).toContainText("retained");
+
+  // Inspect an exact task id → the #3168 summary for THIS member.
+  await drawer.locator(".flr-diag__taskinput").fill("task-42");
+  await drawer.getByRole("button", { name: "Inspect" }).click();
+  await expect(drawer.locator(".flr-diag__pill")).toHaveText("completed");
+  await expect(drawer.locator(".flr-diag__code")).toHaveText("task-42");
+  await expect(drawer.locator(".flr-diag__pre")).toContainText("answer from ava");
+});
+
+test("Fleet Room diagnostics: the drawer retargets to the explicitly clicked member, incl. a stopped one (#3169)", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await openFleetRoom(page);
+  const room = page.locator(".flr");
+
+  // Open ava's diagnostics (running) → her slug-stamped logs.
+  await room.locator(".flr__member", { hasText: "ava" }).getByRole("button", { name: "Diagnostics for ava" }).click();
+  const drawer = page.locator(".flr-diag");
+  await expect(drawer.locator(".flr-diag__name")).toHaveText("ava");
+  await expect(drawer.locator(".flr-diag__logmsg", { hasText: "ava log line 0" })).toBeVisible();
+
+  // Back to the roster, then open a DIFFERENT member (roxy, stopped in baseline): the drawer
+  // follows the explicit click, and a stopped member renders the actionable 409 state inline
+  // rather than a blank panel or a retarget to the previous member.
+  await drawer.getByRole("button", { name: "Back to the roster" }).click();
+  await expect(page.locator(".flr-diag")).toHaveCount(0);
+  await room.locator(".flr__member", { hasText: "roxy" }).getByRole("button", { name: "Diagnostics for roxy" }).click();
+  await expect(drawer.locator(".flr-diag__name")).toHaveText("roxy");
+  await expect(drawer.locator(".flr-diag__state--error")).toContainText("roxy is stopped");
+});

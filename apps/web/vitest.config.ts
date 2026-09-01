@@ -10,7 +10,10 @@ export default defineConfig({
     // Repairs the Web Storage globals on Nodes that pre-define them (25+), where jsdom's
     // would otherwise never be installed. See the file for the full failure mode (#3213).
     setupFiles: ["./vitest.setup.ts"],
-    include: ["src/**/*.test.ts"],
+    // `.tsx` too: a component-shaped test (FleetRoom.test.tsx, #3169) renders presentational
+    // pieces via react-dom/server, so it needs the JSX extension the pure-logic `.test.ts`
+    // suite never did.
+    include: ["src/**/*.test.{ts,tsx}"],
     globals: false,
     // By default Vitest stubs every CSS import to an empty module (so a `?raw` import yields
     // ""). The source-guard tests read stylesheets as raw text — mobileBottomInset.test.ts

@@ -21,6 +21,8 @@ import type {
   DelegateProbe,
   DelegateTypeSpec,
   DelegateView,
+  DiagnosticsLogs,
+  DiagnosticsTask,
   DiscoveredAgent,
   FleetAgent,
   FleetStatus,
@@ -472,6 +474,30 @@ async function requestForm<T>(path: string, form: FormData, opts: { host?: boole
       detail = raw || detail;
     }
     if (response.status === 401 && !isMemberScoped(path, opts.host)) notifyAuthRequired();
+    throw new ApiError(response.status, detail || "request failed");
+  }
+  return (await response.json()) as T;
+}
+
+/** GET a read-only endpoint on a SPECIFIC fleet member via the hub's per-agent proxy
+ *  (`memberPath`), independent of which window is focused — the counterpart to `request`
+ *  for a member the caller names explicitly (the Fleet Room diagnostics drawer, #3169).
+ *
+ *  Unlike `request`, a 401 here NEVER calls `notifyAuthRequired`: a member-scoped 401 is
+ *  the target's own credential problem, not the hub's, and the drawer surfaces it inline as
+ *  an "unauthorized" state rather than hijacking the hub AuthGate (which would prompt for —
+ *  and overwrite — the HUB token). The status is preserved on the thrown `ApiError` so the
+ *  caller can tell 401/404/409/502/503/504 apart and render the right actionable state. */
+async function memberRequestGet<T>(slug: string, rel: string): Promise<T> {
+  const response = await fetch(memberPath(slug, rel), { headers: applyAuth(new Headers()) });
+  if (!response.ok) {
+    const raw = await response.text().catch(() => "");
+    let detail = `${response.status} ${response.statusText}`;
+    try {
+      detail = (JSON.parse(raw) as { detail?: string }).detail || raw || detail;
+    } catch {
+      detail = raw || detail;
+    }
     throw new ApiError(response.status, detail || "request failed");
   }
   return (await response.json()) as T;
@@ -2112,6 +2138,20 @@ export const api = {
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
       void res.body?.cancel().catch(() => {}); // durable task runs on + emits turn.usage
     });
+  },
+
+  // Member diagnostics (#3168) — read-only, operator-authenticated reads on a SPECIFIC
+  // member via the hub proxy (`memberPath`), so they target the drawer's explicitly-selected
+  // member (#3169), NOT the focused window slug. Bounds + redaction are server-owned; the
+  // console renders `note`/`truncated`/`malformed` as-is. `slug` is the member id, "host" for
+  // this instance. A stopped/unreachable/slow member is the proxy's case (409/502/504); a bad
+  // task id is a 404, a missing store a 503 — all preserved on the thrown ApiError.
+  memberDiagnosticsLogs(slug: string, lines?: number): Promise<DiagnosticsLogs> {
+    const q = lines != null ? `?lines=${encodeURIComponent(String(lines))}` : "";
+    return memberRequestGet<DiagnosticsLogs>(slug, `/api/diagnostics/logs${q}`);
+  },
+  memberDiagnosticsTask(slug: string, taskId: string): Promise<DiagnosticsTask> {
+    return memberRequestGet<DiagnosticsTask>(slug, `/api/diagnostics/tasks/${encodeURIComponent(taskId)}`);
   },
 
   // Per-agent theme (ADR 0042). The blob is opaque — the DS ThemePanel owns its schema; the

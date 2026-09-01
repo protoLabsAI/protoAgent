@@ -655,6 +655,55 @@ const server = createServer(async (req, res) => {
     }
   }
 
+  // Member diagnostics (#3168) proxied to a SPECIFIC member (the Fleet Room drawer, #3169).
+  // The proxy owns member liveness — a stopped local member is a 409, mirroring
+  // graph/fleet/proxy.py, never a 500 or a route reached on the member. A reachable member
+  // (or the host, reached hub-direct with no /agents prefix) serves a slug-stamped bounded log
+  // snapshot + an exact task summary; an unknown task id is a 404. Read-only.
+  if (
+    (pathname === "/api/diagnostics/logs" || pathname.startsWith("/api/diagnostics/tasks/")) &&
+    req.method === "GET"
+  ) {
+    const memberSlug = (url.pathname.match(/^\/agents\/([^/]+)/) || [])[1] || "host";
+    const fleet = fleetFor(req);
+    const member =
+      memberSlug === "host" ? fleet.agents.find((a) => a.host) : fleet.agents.find((a) => a.id === memberSlug);
+    // A stopped local member never reaches its own route — the hub proxy answers 409.
+    if (member && !member.host && !member.running) {
+      return sendJson(res, { detail: `agent ${memberSlug} is not running` }, 409);
+    }
+    if (pathname === "/api/diagnostics/logs") {
+      return sendJson(res, {
+        enabled: true,
+        capacity: 500,
+        returned: 3,
+        // Slug-stamped so a spec can tell members apart across a drawer switch.
+        lines: [0, 1, 2].map((i) => ({
+          ts: `2026-08-28T12:00:0${i}+00:00`,
+          level: i === 2 ? "ERROR" : "INFO",
+          logger: "graph.agent",
+          message: `${memberSlug} log line ${i}`,
+        })),
+      });
+    }
+    const taskId = decodeURIComponent(pathname.slice("/api/diagnostics/tasks/".length));
+    if (taskId === "nope" || taskId.includes("missing")) {
+      return sendJson(res, { detail: "no such task on this member", task_id: taskId }, 404);
+    }
+    return sendJson(res, {
+      task_id: taskId,
+      context_id: `ctx-${memberSlug}`,
+      state: "completed",
+      status_message: "all done",
+      last_updated: "2026-08-28T12:00:00+00:00",
+      history: [{ role: "user", message_id: "m1", text: "the question" }],
+      artifacts: [{ artifact_id: "a1", name: "answer", text: `answer from ${memberSlug}` }],
+      accumulated_text: `answer from ${memberSlug}`,
+      truncated: [],
+      malformed: [],
+    });
+  }
+
   // Non-streaming chat send — the Fleet Room address/broadcast (/api/chat) and the desktop
   // streaming fallback. A member send arrives here too: the /agents/<slug> prefix was already
   // stripped above, so /agents/ava/api/chat proxies to this same handler.

@@ -7,6 +7,7 @@
   flex-direction: column;
   height: 480px;
   min-height: 0;
+  position: relative; /* positioning context for the diagnostics drawer overlay */
 }
 
 /* two-column body: roster (left) + live activity feed (right) */
@@ -359,10 +360,354 @@
   text-align: center;
 }
 
+/* ── Member diagnostics drawer (#3169) ───────────────────────────────────────── */
+/* An overlay pinned over the whole room, so the roster/feed underneath is undisturbed.
+ * Bound to the EXPLICITLY selected member; snapshot-refresh only (no live SSE). */
+.flr-diag {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--pl-color-bg-raised, var(--pl-color-bg));
+}
+
+.flr-diag__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--pl-color-border);
+}
+.flr-diag__id {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.flr-diag__name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--pl-color-fg);
+}
+.flr-diag__slug {
+  font-family: var(--pl-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 11px;
+  color: var(--pl-color-fg-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.flr-diag__tag {
+  margin-left: auto;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 5px;
+  color: var(--pl-color-fg-muted);
+  background: var(--pl-color-bg-inset);
+}
+
+.flr-diag__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.flr-diag__section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.flr-diag__sechead {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--pl-color-fg-muted);
+}
+.flr-diag__sechead h3 {
+  margin: 0;
+  font: 600 10.5px inherit;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.flr-diag__sechead .flr__icon {
+  margin-left: auto;
+  width: 26px;
+  height: 26px;
+}
+.flr-diag__spin {
+  animation: flr-spin 0.9s linear infinite;
+}
+@keyframes flr-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* actionable inline states (loading / stopped / unreachable / timeout / unauthorized /
+ * missing task / disabled / empty) */
+.flr-diag__state {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 12px 14px;
+  border-radius: 9px;
+  border: 1px solid var(--pl-color-border);
+  background: var(--pl-color-bg-inset);
+}
+.flr-diag__state--error {
+  border-color: color-mix(in srgb, var(--pl-color-status-error) 45%, transparent);
+  background: color-mix(in srgb, var(--pl-color-status-error) 10%, transparent);
+}
+.flr-diag__state--muted {
+  color: var(--pl-color-fg-muted);
+}
+.flr-diag__state-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--pl-color-fg);
+}
+.flr-diag__state-hint {
+  font-size: 12px;
+  color: var(--pl-color-fg-muted);
+}
+
+.flr-diag__note {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--pl-color-status-warning);
+}
+.flr-diag__meta {
+  font-family: var(--pl-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 10.5px;
+  color: var(--pl-color-fg-subtle);
+}
+
+/* the bounded log tail */
+.flr-diag__log {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border: 1px solid var(--pl-color-border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--pl-color-bg-inset);
+}
+.flr-diag__logline {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: 8px;
+  align-items: baseline;
+  padding: 4px 9px;
+  font-family: var(--pl-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 11.5px;
+  color: var(--pl-color-fg);
+}
+.flr-diag__logline:nth-child(even) {
+  background: color-mix(in srgb, var(--pl-color-fg) 3%, transparent);
+}
+.flr-diag__logts {
+  color: var(--pl-color-fg-subtle);
+  white-space: nowrap;
+}
+.flr-diag__loglvl {
+  font-weight: 600;
+  color: var(--pl-color-fg-muted);
+  text-transform: uppercase;
+  font-size: 10px;
+}
+.flr-diag__loglvl--error,
+.flr-diag__loglvl--critical {
+  color: var(--pl-color-status-error);
+}
+.flr-diag__loglvl--warning {
+  color: var(--pl-color-status-warning);
+}
+.flr-diag__logmsg {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* the task-inspect form */
+.flr-diag__taskform {
+  display: flex;
+  gap: 8px;
+}
+.flr-diag__taskinput {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--pl-color-border);
+  background: var(--pl-color-bg);
+  color: var(--pl-color-fg);
+  font-family: var(--pl-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 12.5px;
+  outline: none;
+}
+.flr-diag__taskinput:focus-visible {
+  outline: 2px solid var(--pl-color-focus, var(--pl-color-accent));
+  outline-offset: 1px;
+}
+.flr-diag__inspect {
+  flex: none;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 0;
+  background: var(--pl-color-accent);
+  color: var(--pl-color-fg-on-accent, var(--pl-color-accent-fg));
+  font: 600 12.5px inherit;
+  cursor: pointer;
+}
+.flr-diag__inspect:hover:not(:disabled) {
+  background: var(--pl-color-accent-hover);
+}
+.flr-diag__inspect:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.flr-diag__idle {
+  margin: 0;
+  font-size: 12px;
+  color: var(--pl-color-fg-subtle);
+}
+
+/* the task summary */
+.flr-diag__task {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.flr-diag__taskmeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.flr-diag__pill {
+  font: 600 10px inherit;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: var(--pl-color-accent);
+  background: color-mix(in srgb, var(--pl-color-accent) 15%, transparent);
+}
+.flr-diag__code {
+  font-family: var(--pl-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 11.5px;
+  color: var(--pl-color-fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.flr-diag__ago {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--pl-color-fg-subtle);
+}
+.flr-diag__flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.flr-diag__flag {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 6px;
+}
+.flr-diag__flag--trunc {
+  color: var(--pl-color-status-warning);
+  background: color-mix(in srgb, var(--pl-color-status-warning) 16%, transparent);
+}
+.flr-diag__flag--bad {
+  color: var(--pl-color-status-error);
+  background: color-mix(in srgb, var(--pl-color-status-error) 16%, transparent);
+}
+.flr-diag__statusmsg {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--pl-color-fg);
+}
+.flr-diag__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.flr-diag__field h4 {
+  margin: 0;
+  font: 600 10px inherit;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--pl-color-fg-muted);
+}
+.flr-diag__pre {
+  margin: 0;
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: var(--pl-color-bg-inset);
+  border: 1px solid var(--pl-color-border);
+  font-family: var(--pl-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 11.5px;
+  color: var(--pl-color-fg);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.flr-diag__rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.flr-diag__row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  padding: 5px 9px;
+  border-radius: 7px;
+  background: var(--pl-color-bg-inset);
+  font-size: 12px;
+}
+.flr-diag__role {
+  font-family: var(--pl-font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--pl-color-fg-muted);
+  text-transform: lowercase;
+}
+.flr-diag__rowtext {
+  color: var(--pl-color-fg);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.flr-diag__inspect:focus-visible,
+.flr-diag__taskinput:focus-visible {
+  outline: 2px solid var(--pl-color-focus, var(--pl-color-accent));
+  outline-offset: 1px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .flr__dot--online::after,
   .flr__dot--host::after {
     animation: none;
     display: none;
+  }
+  .flr-diag__spin {
+    animation: none;
   }
 }

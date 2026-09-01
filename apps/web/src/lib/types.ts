@@ -1602,6 +1602,64 @@ export type FleetStatus = { agents: FleetAgent[] };
 // Another protoAgent found on the box / LAN (ADR 0042 §I) — a candidate remote delegate.
 export type DiscoveredAgent = { name: string; url: string; host: string; port: number };
 
+// Member diagnostics (#3168 contract, consumed by the Fleet Room drawer #3169). Read-only,
+// operator-authenticated, server-bounded + server-redacted — the browser never re-bounds or
+// re-scrubs these; it renders the metadata (`note`, `truncated`, `malformed`) verbatim.
+
+// One line of a member's in-process log ring (observability/logging_config RingBufferHandler).
+// `message` is always present; the others are the stable record keys. Extra `extra=` fields a
+// caller attached ride as additional top-level keys, so this is deliberately open.
+export type DiagnosticsLogLine = {
+  ts?: string;
+  level?: string;
+  logger?: string;
+  message: string;
+  [key: string]: unknown;
+};
+
+// GET /agents/{slug}/api/diagnostics/logs — the bounded tail of the member's log ring.
+// `enabled: false` is the DELIBERATE opt-out / unconfigured buffer (with `note` explaining
+// which), NOT an error: an empty-but-enabled buffer and a disabled one are different states.
+export type DiagnosticsLogs = {
+  enabled: boolean;
+  capacity: number;
+  returned: number;
+  lines: DiagnosticsLogLine[];
+  // Present when the reader adjusted the request (a clamped `lines=`) or explains a disabled
+  // buffer. Surface it so a UI can say the answer was adjusted rather than silently trimmed.
+  note?: string;
+};
+
+// One trimmed message from an inspected task's history.
+export type DiagnosticsTaskMessage = {
+  role?: string | null;
+  message_id?: string | null;
+  text: string;
+};
+
+// One trimmed artifact from an inspected task.
+export type DiagnosticsTaskArtifact = {
+  artifact_id?: string | null;
+  name?: string | null;
+  text: string;
+};
+
+// GET /agents/{slug}/api/diagnostics/tasks/{task_id} — one exact A2A task, bounded. A missing
+// task is a 404 (not this shape); a malformed store row still returns this shape and NAMES the
+// columns it couldn't parse in `malformed`, and every bound it hit in `truncated`.
+export type DiagnosticsTask = {
+  task_id: string | null;
+  context_id: string | null;
+  state: string | null;
+  status_message: string;
+  last_updated: string | null;
+  history: DiagnosticsTaskMessage[];
+  artifacts: DiagnosticsTaskArtifact[];
+  accumulated_text: string;
+  truncated: string[];
+  malformed: string[];
+};
+
 export type Archetype = {
   id: string; // "basic"/"custom", or a bundle id e.g. "project-manager-archetype"
   label: string;
