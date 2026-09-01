@@ -165,6 +165,63 @@ External contributors: base your branch on current `main`, and please tick
 changelog fragment, a review nit) force a maintainer to supersede the PR with a
 new one instead of pushing to your branch.
 
+## Landing a PR
+
+**Nothing merges your PR but you.** No bot, no schedule, and no reviewer presses
+the button — so a PR that is green and approved still sits there until a human or
+a live agent session merges it. When the session driving a PR ends, the PR stops.
+That is how #3270 sat green + approved for **60 hours** with three blocked
+children behind it, and it is the single most common way work here stalls.
+
+**So enable auto-merge when you OPEN the PR, not when you remember:**
+
+```
+gh pr create ... && gh pr merge --auto --squash --delete-branch
+```
+
+This works — `main` is governed by a **repository ruleset** (not legacy branch
+protection) that requires 8 status checks and zero approvals, and auto-merge is
+enabled on the repo. Two things about that ruleset are worth knowing before you
+conclude otherwise:
+
+- **`gh api repos/:owner/:repo/branches/main/protection` returns 404 "Branch not
+  protected".** That is what the *legacy* API says about a repo governed by a
+  ruleset; it does not mean `main` is unprotected. Read
+  `gh api repos/:owner/:repo/rulesets` instead. Concluding "no protection, so
+  auto-merge cannot work" from that 404 is exactly how the habit never formed.
+- **`QA panel` is NOT one of the required checks.** The required set is CI only:
+  `Verify workspace config`, `Python tests`, `Web E2E smoke`,
+  `Lint (ruff + import contracts)`, `gitleaks (tree)`, `A2A live smoke (lean tier)`,
+  `build`, `Windows tests (native)`.
+
+**Which is why auto-merge does not excuse you from checking the review.** Confirm
+the panel reviewed **the head you are actually merging** before you land it:
+
+```
+gh pr view <N> --json headRefOid -q .headRefOid
+gh api repos/:owner/:repo/pulls/<N>/reviews \
+  -q '.[]|select(.user.login=="protoreview[bot]")|.body' | grep -o 'head=[0-9a-f]\{12\}'
+```
+
+A missing verdict is **silent** — no status, nothing red, `mergeStateStatus` still
+`CLEAN`. An advanced head is supposed to get a delta review (ADR 0078 D5), but if
+you merge before it re-runs, the code that landed was never reviewed and nothing
+in the PR says so. ADR 0078 D3 names this failure directly; it has happened here
+(#3298 merged at a head the panel had never seen, and an integration-branch merge
+put 65 files on `main` with no panel verdict at all).
+
+Also, when reading a red gate: **"QA panel: N finding(s) persist" is usually not
+the panel's own finding.** That gate counts *unresolved review threads* — Vera can
+return PASS with zero findings while the check is red because a CodeRabbit thread
+is still open. Read the threads, not the check description.
+
+**Slices: only the LAST one says `Fixes #N`.** A closing keyword on slice 1 closes
+the issue the moment that PR merges, and every remaining acceptance criterion
+loses its tracker while the closed issue reads as "delivered". Earlier slices say
+`Refs #N`. The tell that it already happened is a shipped config knob that nothing
+reads — see #3170 (its gate landed in #3304, the tool in #3306, and the binding
+had no issue at all until #3313).
+
 ## Filing issues
 
 Issues are gated too — but only **flagged**, never blocked. The silent
