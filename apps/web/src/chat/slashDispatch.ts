@@ -92,9 +92,12 @@ export type SlashDispatchTarget = {
    *  command draws (a system note, the /effort picker) would actually be on screen. False
    *  while the operator is on another rail; the slot stays registered anyway (#613). */
   surfaceActive: boolean;
-  /** Replace this slot's composer draft with `text` and focus the textarea — the "hand the
-   *  operator a half-written message" verb, for a token that CANNOT be run from outside
-   *  (a user-facing skill) and for anything else that wants the send left to the operator.
+  /** Put `text` at the FRONT of this slot's composer draft and focus the textarea — the
+   *  "hand the operator a half-written message" verb, for a token that CANNOT be run from
+   *  outside (a user-facing skill) and for anything else that wants the send left to the
+   *  operator. Prefix rather than replace: a `/token` has to lead the message anyway, and a
+   *  draft the operator already typed must survive being handed one (idempotent, so the same
+   *  prefill twice doesn't stutter).
    *  Required, not optional: a host that owns the chat slot owns a composer by definition,
    *  and an optional setter would invite a caller to skip the check and silently drop the
    *  prefill — exactly the failure mode this seam exists to prevent. */
@@ -145,9 +148,10 @@ export function runSlashFromOutside(raw: string): boolean {
   return dispatcher.run(command);
 }
 
-/** Put `text` in the visible slot's composer draft and focus it, leaving the SEND to the
- *  operator. The action for a user-facing skill, which is a server-side message rewrite
- *  rather than anything a caller can invoke (see the note above `SlashDispatchTarget`).
+/** Put `text` at the front of the visible slot's composer draft and focus it, leaving the
+ *  SEND to the operator (and leaving anything already typed there in place, after it). The
+ *  action for a user-facing skill, which is a server-side message rewrite rather than
+ *  anything a caller can invoke (see the note above `SlashDispatchTarget`).
  *
  *  Returns false when no slot is registered — the same real signal `runSlashFromOutside`
  *  returns, and the caller must treat it the same way (fall back, don't assume it landed).

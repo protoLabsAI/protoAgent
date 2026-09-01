@@ -462,11 +462,15 @@ export function usePaletteRegistry(
       // take the read-time provider path below instead.
       ...visiblePaletteCommands(flagOn, isHostConsole(), "static").map(toDsCommand),
     ]);
-    // Dynamic sources, served per palette read. Wired only when a fork registered one: the DS
-    // shows its "Searching…" spinner whenever ANY provider declares `getCommands`, and core
-    // ships zero sources — so an unconditional provider would put a 120ms spinner in front of
-    // every keystroke in the default console. Registering a source bumps `seamVersion`, which
-    // re-runs this effect and wires the provider then.
+    // Dynamic sources, served per palette read. Wired only when a source exists: the DS shows
+    // its "Searching…" spinner (and debounces 120ms) whenever ANY provider declares
+    // `getCommands`, so an unconditional provider would charge every keystroke for nothing.
+    // Since #3292 core registers one itself (`registerChatSlashPalette`, above), so in the
+    // default console this IS wired and the chat/skill rows land a beat behind the statics —
+    // the price of rows that track a live session and a live skill list instead of lying. The
+    // check still earns its keep: it keeps that cost opt-in for a fork that withdraws or
+    // replaces the source. Registering one bumps `seamVersion`, which re-runs this effect and
+    // wires the provider then.
     const offSources = hasPaletteSources()
       ? registry.registerProvider(paletteSourceProvider(flagOn, isHostConsole()))
       : undefined;

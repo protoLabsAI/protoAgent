@@ -140,8 +140,10 @@ menu from `registeredSlashCommands()` + the server list, and `runClientSlash` di
     correct to freeze, and it keeps them in their registered display position), while
     `"dynamic"` rows are served by a DS **`CommandProvider`** the commands view re-invokes on
     every open and every keystroke. The provider is wired only while a source exists — the DS
-    shows its "Searching…" affordance whenever any provider declares `getCommands`, and core
-    ships none — and it applies the query itself, because the DS client-filters only statics
+    shows its "Searching…" affordance whenever any provider declares `getCommands`, so an
+    always-empty one would charge every keystroke for nothing (core shipped no source until
+    #3292 registered the chat's; the check now keeps that cost opt-in rather than baked in)
+    — and it applies the query itself, because the DS client-filters only statics
     (a provider is normally a remote search that already applied it). The honest contract is
     therefore "re-read on every palette read", not "re-rendered when your data changes": a
     row that changes while the palette sits open and untouched appears at the next keystroke.
@@ -196,11 +198,14 @@ host-internal bridge between two core surfaces (the command palette and the chat
 an extension point: a fork adds a command with `registerSlashCommand` and gets palette
 dispatch for free. `escapeStop` sets that precedent — same shape, same non-export.
 
-The seam also carries **`prefillDraft` / `prefillChatDraft(text)`** — "put this in the
-composer and hand the operator the caret", the action for a token that *cannot* be run from
-outside. It rides the same registration rather than a parallel seam because it needs the
+The seam also carries **`prefillDraft` / `prefillChatDraft(text)`** — "put this at the front
+of the composer and hand the operator the caret", the action for a token that *cannot* be run
+from outside. It rides the same registration rather than a parallel seam because it needs the
 same live closure: the draft is `useState` inside `ChatSessionSlot` (seeded from
-sessionStorage on mount), so a write from outside React is swallowed by the mounted slot.
+sessionStorage on mount), so a write from outside React is swallowed by the mounted slot. It
+**prefixes rather than replaces**: a `/token` leads the message anyway, so prepending is both
+the correct placement and the non-destructive one — the same rule the composer's own
+`/`-menu completion follows (it swaps only the token under the caret and keeps the rest).
 
 ### The chat's verbs in the command palette (`app/chatSlashPalette.ts`)
 

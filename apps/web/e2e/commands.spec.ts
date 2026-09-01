@@ -130,4 +130,14 @@ test("the palette lists the chat's slash commands, and a skill row DRAFTS rather
   await page.getByRole("option", { name: "/triage" }).click();
   await expect(palette).toBeHidden();
   await expect(composer).toHaveValue("/triage ");
+
+  // …and picking one must not EAT a message already in progress. A skill directive leads the
+  // message, so the token goes in FRONT of the draft: the operator gets "/triage <what they
+  // were writing>", which is what they meant, rather than watching it disappear.
+  await composer.fill("the deploy is flapping");
+  await page.keyboard.press("ControlOrMeta+Shift+k");
+  await expect(palette).toBeVisible();
+  await input.fill("/triage");
+  await page.getByRole("option", { name: "/triage" }).click();
+  await expect(composer).toHaveValue("/triage the deploy is flapping");
 });

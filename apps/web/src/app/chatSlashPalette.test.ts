@@ -10,6 +10,9 @@
 //      never dispatch.
 //   3. a source that is EXPENSIVE. It runs on every keystroke into the palette, so it must
 //      read the React-Query cache rather than fetch, and track it.
+//   4. a row that is CORRECT and unfindable — or worse, findable UNDER another row. This is a
+//      search surface: the operator types words, the palette preselects the first match, and
+//      Enter runs it. So the words are pinned as words ("wipe" → /clear), first-match and all.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { chatStore } from "../chat/chat-store";
@@ -238,6 +241,62 @@ describe("running a row", () => {
     vi.advanceTimersByTime(60_000);
     expect(dispatch).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0); // bounded — no timer left spinning
+  });
+});
+
+describe("what an operator types finds the row they mean", () => {
+  // A deliberate mirror of the host's `matchesQuery` (usePaletteRegistry): every
+  // whitespace-separated term must appear somewhere in label / hint / group / keywords,
+  // case-insensitively. Restated rather than imported because importing the host drags the DS
+  // palette, the UI store and the flags query in for a two-line predicate — and because the
+  // fact worth pinning is not the predicate but the ORDER it produces. The palette preselects
+  // the FIRST match and Enter runs it, so a keyword that lets one command outrank another's
+  // own name is the "typing /model runs /trajectory" trap coreSlashCommands warns about, one
+  // surface over: `/goal`'s usage string legitimately contains the word "clear".
+  const first = (query: string) => {
+    const terms = query.trim().toLowerCase().split(/\s+/);
+    return rows().find((r) => {
+      const hay = [r.label, r.hint, r.group, ...(r.keywords ?? [])]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return terms.every((t) => hay.includes(t));
+    })?.id;
+  };
+
+  beforeEach(() => {
+    slot();
+    skills("triage");
+  });
+
+  it.each([
+    // The command's own name never loses to a neighbour that merely mentions it.
+    ["clear", "chat-slash:clear"], // …though `/goal`'s usage reads "/goal new · /goal <text> · /goal clear"
+    ["model", "chat-slash:model"],
+    ["prompt", "chat-slash:prompt"],
+    // The words you reach for when you DON'T know the token — the reason a synonym list exists.
+    ["wipe", "chat-slash:clear"],
+    ["start over", "chat-slash:clear"],
+    ["download transcript", "chat-slash:export"],
+    ["share link", "chat-slash:publish"],
+    ["what the agent saw", "chat-slash:trajectory"],
+    ["system prompt", "chat-slash:prompt"],
+    ["latency", "chat-slash:perf"],
+    ["context window", "chat-slash:compact"],
+    ["thinking", "chat-slash:effort"],
+    ["llm", "chat-slash:model"],
+    ["forget", "chat-slash:incognito"],
+    ["keyboard shortcuts", "chat-slash:help"],
+    ["yolo", "chat-slash:bypass"],
+    ["notify", "chat-slash:watch"],
+    // The argument words, which live only in `usage` — a row you can pick without knowing
+    // the syntax first.
+    ["incognito off", "chat-slash:incognito"],
+    ["effort max", "chat-slash:effort"],
+    // A skill is findable by what it DOES, not only by whatever its author named it.
+    ["triage skill", "chat-skill:triage"],
+  ])("typing %j lands on %s", (query, id) => {
+    expect(first(query)).toBe(id);
   });
 });
 

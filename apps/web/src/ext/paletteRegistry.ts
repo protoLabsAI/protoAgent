@@ -117,9 +117,15 @@ export function paletteCommandsVersion(): number {
 
 /** Whether any dynamic source is registered. The host wires the DS provider path (a
  *  debounced re-read plus the palette's "Searching…" affordance on every keystroke) only
- *  when a fork actually registered one — core ships none, and paying for an always-empty
- *  provider would put a spinner in front of every keystroke in the default console.
- *  Registering/unregistering a source bumps the version, so a consumer keyed on
+ *  when one exists, because paying for an always-empty provider would put that spinner in
+ *  front of every keystroke for nothing.
+ *
+ *  Core stopped shipping zero at #3292 (`app/chatSlashPalette` — the chat's slash commands
+ *  and the server's user-facing skills), so in the default console this now answers TRUE and
+ *  the debounce IS paid. The check stays anyway, and not as a formality: it is what keeps the
+ *  cost opt-in at the SEAM rather than baked into it, so a fork that withdraws or replaces
+ *  that source gets its instant keystrokes back — delete the check and the cost becomes
+ *  unremovable. Registering/unregistering a source bumps the version, so a consumer keyed on
  *  `paletteCommandsVersion()` re-asks at the right moment. */
 export function hasPaletteSources(): boolean {
   return _sources.size > 0;

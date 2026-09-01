@@ -98,72 +98,98 @@ import type { NavIntent } from "./usePaletteRegistry";
  *  watch what the rows ask for instead of mutating a real UI store. */
 export type Navigate = (intent: NavIntent) => void;
 
-/** Client commands that act on THIS conversation's accumulated content — disabled, with the
- *  reason, when there is no session (see the session-semantics note above). Everything else
- *  registered through `registerSlashCommand` needs at most A thread, which we can make. */
-const CONVERSATION_SCOPED = new Set([
-  "clear",
-  "export",
-  "publish",
-  "btw",
-  "trajectory",
-  "prompt",
-  "perf",
-  "compact",
-]);
-
-/** Client commands whose row DRAFTS instead of running, for the same reason a skill's does:
- *  the operator still has to supply something. `/btw` takes a question — dispatched bare it
- *  posts its own "ask a side question after /btw" note and nothing else, which is a dead end
- *  from a palette row. Prefilling lands the operator in the composer with the token typed,
- *  exactly as picking it from the `/` menu does. */
-const DRAFTS = new Set(["btw"]);
-
-/** Rows that restate the registered command, because the row is NARROWER than it. `/goal`
- *  is the only live case: the client command claims ONLY the `new` subcommand (the guided
- *  form) and returns false for everything else, so bare `/goal`, `/goal <text>` and
- *  `/goal clear` fall through to the SERVER control command. Dispatching bare "goal" from
- *  here would hit that false and do nothing at all — the exact silent no-op this whole file
- *  is about. So the row dispatches `goal new`, is labelled `/goal new`, and takes a `blurb`
- *  of its own: the registry description ("Set or check goals — /goal new opens a guided
- *  form") LEADS with the two branches this row does not run, and a row must not lead with a
- *  verb it can't deliver. */
-const RESTATED: Record<string, { token: string; blurb: string }> = {
-  goal: { token: "goal new", blurb: "Open the guided goal form" },
+/** What the palette does differently from the composer, for ONE client command. Every field
+ *  is a decision made HERE, about a ROW — none of it belongs on `registerSlashCommand`,
+ *  whose commands answer a different question ("did I claim this token?") than a row does
+ *  ("would picking me visibly do what I say?"). It is one table rather than five keyed by
+ *  the same sixteen names, so "why is `/btw` special?" is one line to read instead of five
+ *  to cross-reference. A command with NO entry still gets a row — a fork's command lands on
+ *  the optimistic defaults: runnable, needing at most A thread, searchable by its own
+ *  description and usage. */
+type RowSpec = {
+  /** Acts on THIS conversation's accumulated content, so with no session the row is DISABLED
+   *  with the reason in `hint` rather than making a blank tab to run against — see the
+   *  session-semantics note above. */
+  needsThisChat?: true;
+  /** The row PREFILLS `/<token> ` instead of dispatching, because the operator still has to
+   *  supply something. Identical contract to a skill row, and it says the identical hint. */
+  drafts?: true;
+  /** Dispatch THIS instead of the bare command name, where the row is NARROWER than the
+   *  command it comes from. */
+  token?: string;
+  /** Use THIS in the label instead of the registry description, where that description LEADS
+   *  with a branch this row does not run — a row must not lead with a verb it can't deliver. */
+  blurb?: string;
+  /** `registerKeybinding` id (ADR 0063) this row ADVERTISES — the host renders the LIVE combo
+   *  through `effectiveCombo`, so a rebind can't leave the row lying. Only where the binding
+   *  does the same thing as the command: `chat.new` is `chatStore.createSession`, `chat.clear`
+   *  the same `requestClearSession` confirm `/clear` raises. `toDsCommand` renders
+   *  `hint ?? combo`, so the combo shows only while the row has nothing more urgent to say —
+   *  which is why the description rides the LABEL and `hintFor` returns undefined by default
+   *  rather than filling that slot with prose. */
+  keybinding?: string;
+  /** Extra search terms: words an operator would reach for that the description doesn't
+   *  contain ("wipe" for /clear, "llm" for /model, "yolo" for /bypass). Purely additive — the
+   *  label (token AND description) and the `usage` string are searched already — so this
+   *  never needs the drift guard a replacement-label table would. */
+  find?: string[];
 };
 
-/** Extra search terms per command, for words an operator would reach for that the
- *  description doesn't contain ("wipe" for /clear, "llm" for /model, "yolo" for /bypass).
- *  Purely additive: a command missing an entry still matches on its label (token AND
- *  description) and its usage, so this never needs a drift guard the way a replacement-label
- *  table would. */
-const SYNONYMS: Record<string, string[]> = {
-  new: ["start", "another", "conversation", "tab"],
-  clear: ["wipe", "reset", "erase", "empty", "delete history"],
-  export: ["download", "save", "transcript", "file", "markdown"],
-  publish: ["share", "link", "public", "read-only"],
-  btw: ["aside", "side question", "by the way", "off the record"],
-  trajectory: ["timeline", "trace", "tool calls", "steps", "what the agent saw", "debug"],
-  prompt: ["system prompt", "instructions", "soul", "context"],
-  perf: ["performance", "latency", "cost", "tokens", "usage", "cache", "speed", "spend"],
-  compact: ["summarize", "condense", "shrink", "trim", "context", "history"],
-  effort: ["reasoning", "thinking", "low", "medium", "high", "max"],
-  model: ["llm", "switch", "change", "provider", "favorites"],
-  incognito: ["private", "no memory", "ephemeral", "off the record"],
-  help: ["shortcuts", "reference", "keys", "cheat sheet"],
-  bypass: ["permissions", "auto-approve", "approve", "yolo", "dangerous", "run_command"],
-  goal: ["objective", "target", "self-driving", "form"],
-  watch: ["watches", "monitor", "alert", "condition", "trigger"],
+const ROWS: Record<string, RowSpec> = {
+  new: { keybinding: "chat.new", find: ["start", "another", "conversation", "tab"] },
+  clear: {
+    needsThisChat: true,
+    keybinding: "chat.clear",
+    find: ["wipe", "reset", "erase", "empty", "delete history", "start over"],
+  },
+  export: { needsThisChat: true, find: ["download", "save", "transcript", "file", "markdown"] },
+  publish: { needsThisChat: true, find: ["share", "link", "public", "read-only"] },
+  // Dispatched bare, `/btw` posts its own "ask a side question after /btw" note and stops: it
+  // needs a question, and a palette row has no way to ask for one. So it DRAFTS, landing the
+  // operator in the composer with the token typed — exactly what picking it from the `/` menu
+  // does.
+  btw: {
+    needsThisChat: true,
+    drafts: true,
+    find: ["aside", "side question", "by the way", "off the record"],
+  },
+  trajectory: {
+    needsThisChat: true,
+    find: ["timeline", "trace", "tool calls", "steps", "what the agent saw", "debug"],
+  },
+  prompt: { needsThisChat: true, find: ["system prompt", "instructions", "soul", "context"] },
+  perf: {
+    needsThisChat: true,
+    find: ["performance", "latency", "cost", "tokens", "usage", "cache", "speed", "spend"],
+  },
+  compact: {
+    needsThisChat: true,
+    find: ["summarize", "condense", "shrink", "trim", "context window", "history"],
+  },
+  effort: { find: ["reasoning", "thinking", "low", "medium", "high", "max"] },
+  model: { find: ["llm", "switch", "change", "provider", "favorites"] },
+  incognito: { find: ["private", "no memory", "forget", "ephemeral", "off the record"] },
+  help: { find: ["shortcuts", "keyboard", "reference", "keys", "cheat sheet"] },
+  bypass: { find: ["permissions", "auto-approve", "approve", "yolo", "dangerous", "run_command"] },
+  // The only row NARROWER than its command, and the reason both overrides exist. The client
+  // `/goal` claims ONLY the `new` subcommand (the guided form) and returns false for
+  // everything else, so bare `/goal`, `/goal <text>` and `/goal clear` fall through to the
+  // SERVER control command — dispatching bare "goal" from here would hit that false and do
+  // nothing at all, the exact silent no-op this file is about. And the row can't wear the
+  // registry description ("Set or check goals — /goal new opens a guided form"), which LEADS
+  // with the two branches it does not run.
+  goal: {
+    token: "goal new",
+    blurb: "Open the guided goal form",
+    find: ["objective", "target", "self-driving", "form"],
+  },
+  // `/watch` keeps its description whole even though it names two branches, because the one
+  // it LEADS with ("List watches") is the one the row runs — and the trailing clause teaches
+  // the `/watch new` syntax the operator would otherwise have to already know.
+  watch: {
+    find: ["watches", "monitor", "notify", "remind", "alert", "condition", "trigger"],
+  },
 };
-
-/** `registerKeybinding` ids these rows ADVERTISE (ADR 0063) — the host renders the LIVE
- *  combo through `effectiveCombo`, so a rebind can't leave the row lying. Only where the
- *  binding does the same thing as the command: `chat.new` is `chatStore.createSession`,
- *  `chat.clear` is the same `requestClearSession` confirm `/clear` raises. `toDsCommand`
- *  renders `hint ?? combo`, so the combo shows only while the row has nothing more urgent
- *  to say — which is why the description rides the LABEL here and `hintFor` returns
- *  undefined by default rather than filling that slot with prose. */
-const KEYBINDING: Record<string, string> = { new: "chat.new", clear: "chat.clear" };
 
 const HANDOFF_TRIES = 30;
 const HANDOFF_MS = 16;
@@ -206,7 +232,7 @@ function onChatReady(act: () => void, navigate: Navigate): void {
 }
 
 /** The one phrase for "this row leaves the send to you" — shared by every skill row and by
- *  the client commands in `DRAFTS`, so the operator learns it once. */
+ *  every `drafts` client command, so the operator learns it once. */
 const DRAFT_HINT = "drafts in chat — you send it";
 
 /** `/token · what it does` — the shape of the composer's own `/` menu, which is where the
@@ -227,11 +253,11 @@ function rowLabel(token: string, blurb: string | undefined): string {
  *  already carries the description, so the slot is free for `toDsCommand` to render the
  *  live keybinding combo where a row advertises one. */
 function hintFor(
-  name: string,
+  spec: RowSpec,
   opts: { disabled: boolean; willOpenChat: boolean },
 ): string | undefined {
   if (opts.disabled) return "needs an open chat";
-  if (DRAFTS.has(name)) return DRAFT_HINT;
+  if (spec.drafts) return DRAFT_HINT;
   if (opts.willOpenChat) return "opens a chat first";
   return undefined;
 }
@@ -239,10 +265,13 @@ function hintFor(
 /** The rows for the client slash commands registered through `registerSlashCommand`. */
 function clientRows(sessionId: string | null, navigate: Navigate): PaletteCommand[] {
   return registeredSlashCommands().map((cmd) => {
-    const restated = RESTATED[cmd.name];
-    const token = restated?.token ?? cmd.name;
-    const disabled = !sessionId && CONVERSATION_SCOPED.has(cmd.name);
-    // `/new` never promises to open a chat first — opening one IS the action.
+    const spec: RowSpec = ROWS[cmd.name] ?? {};
+    const token = spec.token ?? cmd.name;
+    const disabled = !sessionId && !!spec.needsThisChat;
+    // `/new` never promises to open a chat first — opening one IS the action. (It still
+    // routes through `onChatReady`, which may have to raise a hidden surface; the create it
+    // does on the way is harmless because `createSession` hands back the pristine blank the
+    // dispatched `/new` would then ask for, rather than a second empty tab.)
     const willOpenChat = !sessionId && !disabled && cmd.name !== "new";
     return {
       id: `chat-slash:${cmd.name}`,
@@ -250,13 +279,13 @@ function clientRows(sessionId: string | null, navigate: Navigate): PaletteComman
       // composer and the one this audit found missing from ⌘⇧K. `usage` joins the keywords
       // so the argument words are searchable too ("incognito off", "effort max") — they are
       // what an operator types, and no other field carries them.
-      label: rowLabel(token, restated?.blurb ?? cmd.description),
+      label: rowLabel(token, spec.blurb ?? cmd.description),
       group: "Chat",
-      keywords: ["slash", cmd.description, cmd.usage, ...(SYNONYMS[cmd.name] ?? [])].filter(
+      keywords: ["slash", cmd.description, cmd.usage, ...(spec.find ?? [])].filter(
         Boolean,
       ) as string[],
-      hint: hintFor(cmd.name, { disabled, willOpenChat }),
-      keybinding: KEYBINDING[cmd.name],
+      hint: hintFor(spec, { disabled, willOpenChat }),
+      keybinding: spec.keybinding,
       disabled,
       // Carried, never evaluated here: the host resolves it per render, so a row gated on a
       // flag still in flight appears when `/api/flags` lands instead of being hidden for the
@@ -269,9 +298,7 @@ function clientRows(sessionId: string | null, navigate: Navigate): PaletteComman
         // host has already gated the row on its `flag` — so there is no fallback left to
         // take. Every OTHER caller of these must check.
         onChatReady(
-          () => void (DRAFTS.has(cmd.name)
-            ? prefillChatDraft(`/${token} `)
-            : runSlashFromOutside(token)),
+          () => void (spec.drafts ? prefillChatDraft(`/${token} `) : runSlashFromOutside(token)),
           navigate,
         );
       },
@@ -307,8 +334,9 @@ function skillRows(navigate: Navigate): PaletteCommand[] {
       hint: DRAFT_HINT,
       run: (ctx) => {
         ctx.close();
-        // The trailing space is the caret affordance a picked `/`-menu row leaves too:
-        // most skills take arguments, and the operator is one keystroke from typing them.
+        // The trailing space is the caret affordance a picked `/`-menu row leaves too: most
+        // skills take arguments, and the operator is one keystroke from typing them — or has
+        // already typed them, since the seam prefixes rather than replacing the draft.
         onChatReady(() => prefillChatDraft(`/${skill.name} `), navigate);
       },
     }));
