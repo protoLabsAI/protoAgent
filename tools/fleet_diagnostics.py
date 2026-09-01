@@ -1,10 +1,12 @@
-"""Roster-only fleet-member resolution and the bounded log read (ADR 0071, #3170 · slice 2).
+"""Roster-only fleet-member resolution with a bounded log read and an exact task-by-id read
+(ADR 0071, #3170 · slices 2–3).
 
 Half of ADR 0071's trust boundary is *addressing*: an operator-authorized managing agent may
-inspect a fleet member's recent logs, but ONLY a member the configured fleet roster already
-knows — NEVER an arbitrary host or URL the model names. This module owns that boundary and the
-log read, and nothing else: it does not (yet) bind an agent tool; the config-gated binding
-(``tools.fleet_diagnostics.enabled``, landed default-off in #3304) lands in a later slice.
+inspect a fleet member's recent logs or one exact task, but ONLY a member the configured fleet
+roster already knows — NEVER an arbitrary host or URL the model names. This module owns that
+boundary and the two reads, and nothing else: it does not (yet) bind an agent tool; the
+config-gated binding (``tools.fleet_diagnostics.enabled``, landed default-off in #3304) lands in
+a later slice.
 
 Two seams, deliberately NOT reimplemented here:
 
@@ -15,27 +17,32 @@ Two seams, deliberately NOT reimplemented here:
   port, or URL. So the model cannot point this at anything the hub does not already own; the
   only address that ever leaves is the member's immutable roster slug.
 
-* **The log read (r1).** Logs come from the member's EXISTING authenticated
-  ``/api/diagnostics/logs`` endpoint (#3168), addressed through the hub's own
-  ``/agents/<slug>/*`` reverse proxy (``operator_api.fleet_routes`` → ``graph.fleet.proxy``).
-  The proxy already owns per-slug target resolution (local loopback port / registered remote
-  URL + its bearer), the operator→fleet-service-token swap (ADR 0089 D3), and reachability
-  containment (409 not-running / 502 unreachable / 504 timeout) — this tool reimplements none
-  of it. It reaches the proxy over loopback presenting the fleet service token (accepted as the
-  operator tier, ADR 0089), because the import-layering contract forbids ``tools`` importing
-  ``operator_api`` — so HTTP is the sanctioned seam, and it is also what makes "read through the
-  real endpoint" literally true.
+* **The reads (r1).** Both the recent-log tail and the exact task-by-id view come from the
+  member's EXISTING authenticated #3168 endpoints — ``/api/diagnostics/logs`` and
+  ``/api/diagnostics/tasks/<task_id>`` — addressed through the hub's own ``/agents/<slug>/*``
+  reverse proxy (``operator_api.fleet_routes`` → ``graph.fleet.proxy``). The proxy already owns
+  per-slug target resolution (local loopback port / registered remote URL + its bearer), the
+  operator→fleet-service-token swap (ADR 0089 D3), and reachability containment (409 not-running
+  / 502 unreachable / 504 timeout) — this tool reimplements none of it. It reaches the proxy over
+  loopback presenting the fleet service token (accepted as the operator tier, ADR 0089), because
+  the import-layering contract forbids ``tools`` importing ``operator_api`` — so HTTP is the
+  sanctioned seam, and it is also what makes "read through the real endpoint" literally true.
 
-Containment (r3). A stopped / unreachable / slow member, an unauthorized response, or an unknown
-member each becomes a COMPACT structured failure (``{"ok": False, "error": ...}``) rather than an
-uncaught exception, so the caller gets an actionable answer, never a stack trace.
+Containment (r2/r3). A stopped / unreachable / slow member, an unauthorized response, an unknown
+member, or a task id the member does not have each becomes a COMPACT structured failure
+(``{"ok": False, "error": ...}``) rather than an uncaught exception, so the caller gets an
+actionable answer, never a stack trace.
 
-Boundedness + preserved signals (r1/r4). The line selector is caller-bounded and clamped before
-it leaves; the member already bounds and redacts its response (#3168), and this tool re-redacts
-at its own boundary (defense in depth against an older member that predates #3168 redaction) and
-re-caps a pathologically wide line — while PRESERVING the server's own ``enabled`` / ``note`` /
-``returned`` / ``capacity`` / ``truncated`` / ``malformed`` signals verbatim rather than
-swallowing them.
+Boundedness + redaction at the DESTINATION (r3/r4). Both reads cross into a model's context, so
+each is bounded and secret-redacted at THIS tool's own boundary — the destination — rather than
+trusting the member (the source) to have done it. Redaction runs on the full text BEFORE the
+tool's own bounding, so truncation can never split a known secret form into the output. The
+member already bounds and redacts its response (#3168); this tool re-redacts and re-caps as
+defense in depth against an older member that predates #3168 — the log path re-caps the row count
+and each line's ``message``; the task path re-caps the history/artifact counts and every text
+field — while PRESERVING the server's own ``enabled`` / ``note`` / ``returned`` / ``capacity`` /
+``truncated`` / ``malformed`` signals verbatim rather than swallowing them, and signalling any
+tool-side trim via ``tool_truncated`` rather than dropping content silently.
 """
 
 from __future__ import annotations
@@ -46,10 +53,11 @@ from urllib.parse import quote
 
 log = logging.getLogger(__name__)
 
-# The member's #3168 log endpoint, as the sub-path the hub proxy forwards
-# (``/agents/<slug>/<path>`` — see graph.fleet.proxy). No leading slash: it is joined after
-# ``/agents/<slug>/``.
+# The member's #3168 endpoints, as the sub-paths the hub proxy forwards
+# (``/agents/<slug>/<path>`` — see graph.fleet.proxy). No leading slash: each is joined after
+# ``/agents/<slug>/``. The task id is appended (quoted) as the final segment.
 _LOGS_SUBPATH = "api/diagnostics/logs"
+_TASKS_SUBPATH = "api/diagnostics/tasks"
 
 # Caller-bounded line selector. The member's ring buffer + #3168 endpoint clamp independently
 # (operator_api.diagnostics_routes._MAX_LINES); this is the tool-side floor/ceiling so an
@@ -65,6 +73,15 @@ _READ_TIMEOUT = 25.0
 # Tool-side compactness: re-cap one line's ``message`` so a pathologically wide log record can't
 # blow the model's context. #3168 bounds the SET (line count); this bounds a single field.
 _TOOL_TEXT_CAP = 4000
+
+# Task-path bounds. A task's history/artifacts are unbounded in the store and its text fields
+# are caller-supplied, so #3168 caps each on the member side — these mirror those caps so the
+# tool holds the SAME ceiling even against a member that does not (an older member predating the
+# #3168 clamp, or a buggy one, does not get to set this turn's context budget). Same belt as the
+# log path's row + field caps, applied to the task shape.
+_MAX_TASK_HISTORY = 50
+_MAX_TASK_ARTIFACTS = 20
+_TASK_TEXT_CAP = 20_000
 
 # How many roster names to name back on an unknown-member miss, so the caller can correct.
 _MAX_SUGGESTIONS = 25
@@ -241,6 +258,19 @@ def _server_detail(resp) -> str | None:
     return None
 
 
+def _redacted_preview(text: str, cap: int | None = None) -> str:
+    """Redact a free-form member-authored text blob BEFORE capping it.
+
+    Used for compact malformed-body previews, which do not pass through the structured log/task
+    field cappers. Keeping the order here preserves the module's boundary invariant even when a
+    secret straddles the preview cap.
+    """
+    from graph.middleware.redaction import redact
+
+    limit = _TOOL_TEXT_CAP if cap is None else cap
+    return str(redact(text))[:limit]
+
+
 def _shape(resp) -> dict[str, Any]:
     """A member HTTP response → a normalized result: ``{"ok": True, "body": ...}`` or a compact
     failure. Every non-2xx status is a structured answer, never an exception."""
@@ -252,13 +282,22 @@ def _shape(resp) -> dict[str, Any]:
     try:
         body = resp.json()
     except Exception:  # noqa: BLE001 — a non-JSON 200 is a malformed member, not a crash
-        return {"ok": True, "body": {"malformed": ["response_not_json"], "text": (resp.text or "")[:_TOOL_TEXT_CAP]}}
+        return {"ok": True, "body": {"malformed": ["response_not_json"], "text": _redacted_preview(resp.text or "")}}
     return {"ok": True, "body": body}
 
 
-async def _get(slug: str, params: dict[str, str]) -> dict[str, Any]:
-    """GET the member's log endpoint through the hub proxy, returning a normalized result. Every
-    network failure mode becomes a compact ``{"ok": False, "error": ...}`` — never an exception."""
+def _task_subpath(task_id: str) -> str:
+    """The task endpoint sub-path for one id. The id is quoted to a single path segment for the
+    SAME containment as the slug quote — a hand-edited or odd id can't escape ``/agents/`` to
+    another route."""
+    return f"{_TASKS_SUBPATH}/{quote(task_id, safe='')}"
+
+
+async def _get(slug: str, subpath: str, params: dict[str, str] | None = None) -> dict[str, Any]:
+    """GET one of the member's diagnostics endpoints through the hub proxy, returning a normalized
+    result. ``subpath`` is the member-side path under ``/agents/<slug>/`` (the log or task
+    subpath, already a safe path). Every network failure mode becomes a compact
+    ``{"ok": False, "error": ...}`` — never an exception."""
     import httpx
 
     base = _own_base()
@@ -266,10 +305,10 @@ async def _get(slug: str, params: dict[str, str]) -> dict[str, Any]:
         return _fail("unavailable", "diagnostics is unavailable — this instance has no active port")
     # Quote the slug to a single path segment: the slug is a system-owned roster id, but a
     # defensive quote means even a hand-edited id can't escape ``/agents/`` to another route.
-    url = f"{base}/agents/{quote(slug, safe='')}/{_LOGS_SUBPATH}"
+    url = f"{base}/agents/{quote(slug, safe='')}/{subpath}"
     client = _make_client()
     try:
-        resp = await client.get(url, headers=_auth_headers(), params=params)
+        resp = await client.get(url, headers=_auth_headers(), params=params or {})
     except (httpx.ConnectError, httpx.ConnectTimeout):
         return _fail("unreachable", "member is not reachable")
     except httpx.TimeoutException:
@@ -338,6 +377,65 @@ def _bound_lines(body: Any, limit: int) -> Any:
     return body
 
 
+def _bound_task(body: Any) -> Any:
+    """Re-cap the member's already-redacted task view for compactness WITHOUT disturbing its own
+    ``state`` / ``truncated`` / ``malformed`` / ``last_updated`` signals. Marks ``tool_truncated``
+    only when the tool itself trims something.
+
+    The same belt as ``_bound_lines``, applied to the task shape, because #3168 bounds the
+    history/artifact COUNTS and every text FIELD on the member's side and this tool must hold even
+    when the member does not:
+
+    * ``history`` to ``_MAX_TASK_HISTORY`` rows, keeping the recent TAIL — the endpoint returns
+      history oldest-first, so the tail is the recent end a diagnostics read is for;
+    * ``artifacts`` to ``_MAX_TASK_ARTIFACTS`` rows, keeping the HEAD (the member returns
+      ``artifacts[:_MAX_ARTIFACTS]``, so the head is what it advertises);
+    * every text field — top-level ``status_message`` / ``accumulated_text`` and each history /
+      artifact entry's ``text`` — to ``_TASK_TEXT_CAP``.
+
+    The member's own ``truncated`` list stays verbatim; a fresh ``tool_truncated`` alongside it is
+    the honest signal that THIS side dropped something rather than the member.
+    """
+    if not isinstance(body, dict):
+        return body
+    trimmed = False
+
+    def _cap(value: Any) -> Any:
+        nonlocal trimmed
+        if isinstance(value, str) and len(value) > _TASK_TEXT_CAP:
+            trimmed = True
+            return value[:_TASK_TEXT_CAP]
+        return value
+
+    for field in ("status_message", "accumulated_text"):
+        if field in body:
+            body[field] = _cap(body.get(field))
+
+    history = body.get("history")
+    if isinstance(history, list):
+        if len(history) > _MAX_TASK_HISTORY:
+            history = history[-_MAX_TASK_HISTORY:]
+            body["history"] = history
+            trimmed = True
+        for entry in history:
+            if isinstance(entry, dict) and isinstance(entry.get("text"), str):
+                entry["text"] = _cap(entry["text"])
+
+    artifacts = body.get("artifacts")
+    if isinstance(artifacts, list):
+        if len(artifacts) > _MAX_TASK_ARTIFACTS:
+            artifacts = artifacts[:_MAX_TASK_ARTIFACTS]
+            body["artifacts"] = artifacts
+            trimmed = True
+        for entry in artifacts:
+            if isinstance(entry, dict) and isinstance(entry.get("text"), str):
+                entry["text"] = _cap(entry["text"])
+
+    if trimmed:
+        body["tool_truncated"] = True
+    return body
+
+
 async def read_member_logs(member: str, lines: Any = _DEFAULT_LINES) -> dict[str, Any]:
     """Read a registered fleet member's bounded recent logs through the #3168 endpoint.
 
@@ -357,7 +455,7 @@ async def read_member_logs(member: str, lines: Any = _DEFAULT_LINES) -> dict[str
         return target
 
     clamped, note = _clamp_lines(lines)
-    result = await _get(target.slug, {"lines": str(clamped)})
+    result = await _get(target.slug, _LOGS_SUBPATH, {"lines": str(clamped)})
 
     payload: dict[str, Any] = {"member": target.member, "slug": target.slug}
     if note:
@@ -369,6 +467,54 @@ async def read_member_logs(member: str, lines: Any = _DEFAULT_LINES) -> dict[str
 
         payload["ok"] = True
         payload["logs"] = _bound_lines(redact(result.get("body")), clamped)
+    else:
+        payload["ok"] = False
+        payload["error"] = result.get("error")
+        payload["detail"] = result.get("detail")
+        for key in ("status", "available"):
+            if key in result:
+                payload[key] = result[key]
+    return payload
+
+
+async def read_member_task(member: str, task_id: str) -> dict[str, Any]:
+    """Read one exact A2A task by id from a registered fleet member through the #3168
+    ``/agents/<slug>/api/diagnostics/tasks/<task_id>`` endpoint.
+
+    Roster-only, exactly like :func:`read_member_logs`: ``member`` is a display name or id that
+    MUST be in the fleet roster; anything else is refused with no HTTP call made, and there is no
+    host/URL parameter. ``task_id`` addresses ONE exact task — a task the member does not have is
+    a compact ``{"error": "not_found"}`` failure, never an exception. Returns a compact dict —
+    ``{"member", "slug", "task_id", "ok": True, "task"}`` on success (bounded + secret-redacted at
+    this tool's boundary, preserving the member's own ``truncated`` / ``malformed`` signals), else
+    ``{"member", "task_id", "ok": False, "error", "detail", ...}`` describing the failure.
+
+    Read-only, and not yet exposed to the model — the config-gated tool binding lands in a later
+    slice; this is the resolution + exact-task-read core it will wrap.
+    """
+    tid = (task_id or "").strip()
+    if not tid:
+        # No id at all — a resolution-level refusal; no HTTP made and no member needed.
+        return _fail("invalid_task_id", "a task id is required", {"member": (member or "").strip(), "task_id": ""})
+
+    target = resolve_member(member)
+    if not isinstance(target, _Target):
+        # A resolution failure (unknown member) — attach the inputs for context; no HTTP made.
+        target["member"] = (member or "").strip()
+        target["task_id"] = tid
+        return target
+
+    result = await _get(target.slug, _task_subpath(tid))
+
+    payload: dict[str, Any] = {"member": target.member, "slug": target.slug, "task_id": tid}
+    if result.get("ok"):
+        # Redact at the tool boundary (the DESTINATION) BEFORE bounding, so truncation can never
+        # split a known secret form into the output; then re-bound. The member's own
+        # truncated/malformed/state signals pass through untouched.
+        from graph.middleware.redaction import redact
+
+        payload["ok"] = True
+        payload["task"] = _bound_task(redact(result.get("body")))
     else:
         payload["ok"] = False
         payload["error"] = result.get("error")

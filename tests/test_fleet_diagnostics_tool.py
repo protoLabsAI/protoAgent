@@ -68,6 +68,28 @@ async def _logs(member, *, lines=fd._DEFAULT_LINES):
     return await fd.read_member_logs(member, lines)
 
 
+async def _task(member, *, task_id="t-1"):
+    return await fd.read_member_task(member, task_id)
+
+
+def _task_body(**overrides):
+    """A minimal well-formed #3168 task view; overrides replace individual fields."""
+    body = {
+        "task_id": "t-1",
+        "context_id": "c-1",
+        "state": "completed",
+        "status_message": "done",
+        "last_updated": "2026-09-01T00:00:00+00:00",
+        "history": [{"role": "user", "message_id": "m1", "text": "hello"}],
+        "artifacts": [{"artifact_id": "a1", "name": "out", "text": "world"}],
+        "accumulated_text": "world",
+        "truncated": [],
+        "malformed": [],
+    }
+    body.update(overrides)
+    return body
+
+
 # ── r2: roster-only addressing (no host/URL path) ─────────────────────────────
 
 
@@ -220,6 +242,23 @@ async def test_non_json_2xx_is_a_malformed_answer_not_a_crash(monkeypatch):
     assert out["logs"]["malformed"] == ["response_not_json"]
 
 
+async def test_non_json_log_preview_is_redacted_before_it_is_bounded(monkeypatch):
+    _install_roster(monkeypatch, [_LOCAL])
+    monkeypatch.setattr(fd, "_TOOL_TEXT_CAP", 18)
+    secret = "sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+    def handler(request):
+        text = f"tok {secret} " + "Z" * 100
+        return httpx.Response(200, content=text.encode(), headers={"content-type": "text/plain"})
+
+    monkeypatch.setattr(fd, "_make_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    out = await _logs("Alpha")
+    dumped = json.dumps(out)
+    assert secret not in dumped
+    assert "sk-ABC" not in dumped
+    assert out["logs"]["text"] == "tok [REDACTED] ZZZ"
+
+
 async def test_no_active_port_is_a_compact_unavailable(monkeypatch):
     _install_roster(monkeypatch, [_LOCAL])
     from runtime.state import STATE
@@ -314,6 +353,20 @@ async def test_secrets_are_redacted_on_the_ERROR_path_too(monkeypatch):
     assert out["detail"] == "rejected token [REDACTED]"  # ...replaced, and the reason survives
 
 
+async def test_log_secret_straddling_the_bound_is_redacted_before_truncation(monkeypatch):
+    _install_roster(monkeypatch, [_LOCAL])
+    monkeypatch.setattr(fd, "_TOOL_TEXT_CAP", 20)
+    secret = "sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    message = f"tok {secret} " + "Z" * 100
+    _install_http(monkeypatch, body={"enabled": True, "lines": [{"message": message}], "returned": 1, "capacity": 2})
+    out = await _logs("Alpha")
+    dumped = json.dumps(out)
+    assert secret not in dumped
+    assert "sk-ABC" not in dumped
+    assert out["logs"]["lines"][0]["message"] == "tok [REDACTED] ZZZZZ"
+    assert out["logs"]["tool_truncated"] is True
+
+
 async def test_more_rows_than_requested_are_capped_at_the_tool_boundary(monkeypatch):
     # #3168 clamps the row count on the member's side; this holds when the member does NOT —
     # an older member predating that clamp, or a buggy one. The endpoint returns oldest-first,
@@ -326,3 +379,219 @@ async def test_more_rows_than_requested_are_capped_at_the_tool_boundary(monkeypa
     assert [r["message"] for r in out["logs"]["lines"]] == [f"line-{i}" for i in range(45, 50)]
     assert out["logs"]["tool_truncated"] is True
     assert out["logs"]["returned"] == 50  # the member's own count is NOT rewritten
+
+
+# ── r1: one exact task by id, read through the proxy on loopback ────────────────
+
+
+async def test_exact_task_by_id_is_returned_for_a_registered_member(monkeypatch):
+    _install_roster(monkeypatch, [_LOCAL])
+    cap: list[httpx.Request] = []
+    _install_http(monkeypatch, body=_task_body(), capture=cap)
+    out = await _task("Alpha", task_id="t-1")
+    assert out["ok"] is True
+    assert out["member"] == "Alpha" and out["slug"] == "alpha" and out["task_id"] == "t-1"
+    task = out["task"]
+    assert task["state"] == "completed"
+    assert task["history"] == [{"role": "user", "message_id": "m1", "text": "hello"}]
+    assert task["artifacts"][0]["text"] == "world"
+    assert task["accumulated_text"] == "world"
+    assert "tool_truncated" not in task  # nothing over-bound, so no tool-side trim signalled
+    (req,) = cap
+    assert req.method == "GET"
+    # The exact task id is the final path segment; reaches THIS instance's /agents/<slug>/* proxy.
+    assert str(req.url).startswith("http://127.0.0.1:7870/agents/alpha/api/diagnostics/tasks/t-1")
+    assert req.headers["authorization"] == "Bearer svc-tok-abc"
+
+
+async def test_task_id_is_quoted_to_a_single_path_segment(monkeypatch):
+    # A slash-bearing id can't escape the tasks route — it is percent-encoded to one segment.
+    _install_roster(monkeypatch, [_LOCAL])
+    cap: list[httpx.Request] = []
+    _install_http(monkeypatch, body=_task_body(), capture=cap)
+    await _task("Alpha", task_id="ns/../secret")
+    assert "/agents/alpha/api/diagnostics/tasks/ns%2F..%2Fsecret" in str(cap[0].url)
+
+
+async def test_host_task_is_reached_through_the_reserved_host_slug(monkeypatch):
+    _install_roster(monkeypatch, [_HOST])
+    cap: list[httpx.Request] = []
+    _install_http(monkeypatch, body=_task_body(), capture=cap)
+    out = await _task("main", task_id="t-9")
+    assert out["ok"] is True and out["slug"] == "host"
+    assert str(cap[0].url).startswith("http://127.0.0.1:7870/agents/host/api/diagnostics/tasks/t-9")
+
+
+# ── r2: a missing task / bad input is a compact actionable failure ─────────────
+
+
+async def test_missing_task_is_a_compact_not_found(monkeypatch):
+    _install_roster(monkeypatch, [_LOCAL])
+    _install_http(monkeypatch, status=404, body={"detail": "no such task on this member", "task_id": "t-x"})
+    out = await _task("Alpha", task_id="t-x")
+    assert out["ok"] is False
+    assert out["error"] == "not_found"
+    assert out["detail"] == "no such task on this member"  # the member's own reason is surfaced
+    assert out["status"] == 404
+    assert out["task_id"] == "t-x"  # ...and the id it was about, so the caller can correct
+
+
+async def test_task_store_unconfigured_is_a_compact_unavailable(monkeypatch):
+    _install_roster(monkeypatch, [_LOCAL])
+    _install_http(monkeypatch, status=503, body={"detail": "task store is not configured on this member"})
+    out = await _task("Alpha")
+    assert out["ok"] is False and out["error"] == "unavailable"
+    assert out["status"] == 503
+
+
+async def test_empty_task_id_is_refused_and_makes_no_call(monkeypatch):
+    _install_roster(monkeypatch, [_LOCAL])
+    _forbid_http(monkeypatch)
+    out = await _task("Alpha", task_id="   ")
+    assert out["ok"] is False and out["error"] == "invalid_task_id"
+    assert out["member"] == "Alpha" and out["task_id"] == ""  # input context is preserved
+
+
+async def test_unknown_member_on_task_path_is_refused_and_makes_no_call(monkeypatch):
+    _install_roster(monkeypatch, [_LOCAL])
+    _forbid_http(monkeypatch)
+    out = await _task("ghost", task_id="t-1")
+    assert out["ok"] is False and out["error"] == "unknown_member"
+    assert out["member"] == "ghost" and out["task_id"] == "t-1"
+
+
+# ── r3: redaction at the DESTINATION on both the success and error task paths ───
+
+
+async def test_task_secrets_are_redacted_at_the_tool_boundary(monkeypatch):
+    # Defense in depth: even if the member echoes a raw credential into task history / output, the
+    # tool re-redacts at its own boundary (the DESTINATION) — it does not trust the source.
+    _install_roster(monkeypatch, [_LOCAL])
+    secret = "sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"  # an OpenAI-shaped key redact() scrubs
+    body = _task_body(
+        history=[{"role": "assistant", "message_id": "m1", "text": f"key {secret}"}],
+        artifacts=[{"artifact_id": "a1", "name": "out", "text": f"leaked {secret}"}],
+        accumulated_text=f"result {secret}",
+    )
+    _install_http(monkeypatch, body=body)
+    out = await _task("Alpha")
+    dumped = json.dumps(out)
+    assert secret not in dumped  # the raw credential never leaves the tool, on any field
+    assert out["task"]["history"][0]["text"] == "key [REDACTED]"
+    assert out["task"]["artifacts"][0]["text"] == "leaked [REDACTED]"
+    assert out["task"]["accumulated_text"] == "result [REDACTED]"
+
+
+async def test_task_secrets_are_redacted_on_the_ERROR_path_too(monkeypatch):
+    # A 401's ``detail`` never passes through the success-side redact(); an auth rejection is
+    # exactly where a member echoes back the credential it just refused, so it is redacted here.
+    _install_roster(monkeypatch, [_LOCAL])
+    secret = "sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    _install_http(monkeypatch, status=401, body={"detail": f"rejected token {secret}"})
+    out = await _task("Alpha")
+    assert out["ok"] is False and out["error"] == "unauthorized"
+    assert secret not in json.dumps(out)
+    assert out["detail"] == "rejected token [REDACTED]"
+
+
+async def test_secret_straddling_the_bound_is_redacted_before_truncation(monkeypatch):
+    # "Redaction matches the DESTINATION, not the source": redaction runs on the FULL text BEFORE
+    # the tool's own truncation, so a secret sitting across the truncation boundary is scrubbed
+    # whole — never left as a recognizable fragment. Here the cap (20) falls mid-secret, leaving
+    # only a "sk-ABCDEFGHIJK" prefix if one truncated FIRST — too short for redact()'s pattern to
+    # match, so it would leak. Redacting the full text first replaces the whole token, so it can't.
+    _install_roster(monkeypatch, [_LOCAL])
+    monkeypatch.setattr(fd, "_TASK_TEXT_CAP", 20)
+    secret = "sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    accumulated = f"tok {secret} " + "Z" * 100  # the secret straddles the 20-char cap
+    _install_http(monkeypatch, body=_task_body(accumulated_text=accumulated))
+    out = await _task("Alpha")
+    dumped = json.dumps(out)
+    assert secret not in dumped  # the full credential never leaves
+    assert "sk-ABC" not in dumped  # ...nor the prefix fragment a naive truncate-first would keep
+    assert "[REDACTED]" in dumped  # it left replaced by the marker
+    assert len(out["task"]["accumulated_text"]) == 20
+    assert out["task"]["tool_truncated"] is True
+
+
+# ── r4: bounded task output, preserved server signals ──────────────────────────
+
+
+async def test_task_history_is_capped_at_the_tool_boundary_keeping_the_recent_tail(monkeypatch):
+    # #3168 clamps history on the member's side; this holds when the member does NOT. The endpoint
+    # returns history oldest-first, so the recent TAIL is what a diagnostics read keeps.
+    _install_roster(monkeypatch, [_LOCAL])
+    history = [{"role": "user", "message_id": f"m{i}", "text": f"h-{i}"} for i in range(fd._MAX_TASK_HISTORY + 10)]
+    _install_http(monkeypatch, body=_task_body(history=history, truncated=["history"]))
+    out = await _task("Alpha")
+    kept = out["task"]["history"]
+    assert len(kept) == fd._MAX_TASK_HISTORY
+    assert kept[-1]["message_id"] == f"m{fd._MAX_TASK_HISTORY + 9}"  # the recent end is retained
+    assert out["task"]["tool_truncated"] is True
+    assert out["task"]["truncated"] == ["history"]  # the member's own signal is NOT rewritten
+
+
+async def test_task_artifacts_are_capped_at_the_tool_boundary_keeping_the_head(monkeypatch):
+    _install_roster(monkeypatch, [_LOCAL])
+    artifacts = [{"artifact_id": f"a{i}", "name": "out", "text": f"x{i}"} for i in range(fd._MAX_TASK_ARTIFACTS + 5)]
+    _install_http(monkeypatch, body=_task_body(artifacts=artifacts))
+    out = await _task("Alpha")
+    kept = out["task"]["artifacts"]
+    assert len(kept) == fd._MAX_TASK_ARTIFACTS
+    assert kept[0]["artifact_id"] == "a0"  # the member returns artifacts head-first; the head is kept
+    assert out["task"]["tool_truncated"] is True
+
+
+async def test_task_text_field_is_capped_at_the_tool_boundary(monkeypatch):
+    _install_roster(monkeypatch, [_LOCAL])
+    monkeypatch.setattr(fd, "_TASK_TEXT_CAP", 10)
+    _install_http(monkeypatch, body=_task_body(accumulated_text="Z" * 50))
+    out = await _task("Alpha")
+    assert out["task"]["accumulated_text"] == "Z" * 10
+    assert out["task"]["tool_truncated"] is True
+
+
+async def test_task_malformed_and_state_signals_are_preserved(monkeypatch):
+    # Forward-compatible: whatever signal fields the member sets ride through untouched, and a
+    # task fully within bounds carries no tool_truncated marker.
+    _install_roster(monkeypatch, [_LOCAL])
+    _install_http(monkeypatch, body=_task_body(state="failed", malformed=["history_entry"]))
+    out = await _task("Alpha")
+    assert out["ok"] is True
+    assert out["task"]["state"] == "failed"
+    assert out["task"]["malformed"] == ["history_entry"]
+    assert "tool_truncated" not in out["task"]
+
+
+async def test_non_json_2xx_task_is_a_malformed_answer_not_a_crash(monkeypatch):
+    _install_roster(monkeypatch, [_LOCAL])
+
+    def handler(request):
+        return httpx.Response(200, content=b"<html>", headers={"content-type": "text/html"})
+
+    monkeypatch.setattr(fd, "_make_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    out = await _task("Alpha")
+    assert out["ok"] is True
+    assert out["task"]["malformed"] == ["response_not_json"]
+
+
+async def test_non_json_task_preview_is_redacted_before_it_is_bounded(monkeypatch):
+    _install_roster(monkeypatch, [_LOCAL])
+    monkeypatch.setattr(fd, "_TOOL_TEXT_CAP", 18)
+    secret = "sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+    def handler(request):
+        text = f"tok {secret} " + "Z" * 100
+        return httpx.Response(200, content=text.encode(), headers={"content-type": "text/plain"})
+
+    monkeypatch.setattr(fd, "_make_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    out = await _task("Alpha")
+    dumped = json.dumps(out)
+    assert secret not in dumped
+    assert "sk-ABC" not in dumped
+    assert out["task"]["text"] == "tok [REDACTED] ZZZ"
+
+
+def test_task_public_surface_takes_only_member_and_task_id():
+    # No host/URL path on the task read either — a member NAME and a task id, nothing else.
+    assert set(inspect.signature(fd.read_member_task).parameters) == {"member", "task_id"}
