@@ -14,15 +14,15 @@
   .chip.stale::before{content:"⟳ ";animation:spin 1.2s linear infinite;display:inline-block}
   @keyframes spin{to{transform:rotate(360deg)}}
   button.refresh{background:none;border:1px solid var(--pl-color-border,#272b33);color:var(--pl-color-fg,#e6e6e6);
-    border-radius:var(--pl-radius-sm,6px);padding:3px 10px;font-size:12px;cursor:pointer}
+    border-radius:var(--pl-radius,6px);padding:3px 10px;font-size:12px;cursor:pointer}
   button.refresh:hover{background:var(--pl-color-bg-subtle,#15181d)}
   button.refresh:disabled{opacity:.5;cursor:default}
-  .err{color:var(--pl-color-danger,#f85149);font-size:12px;margin:8px 0}
+  .err{color:var(--pl-color-status-error,#f85149);font-size:12px;margin:8px 0}
   .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:var(--pl-color-fg-muted,#8a8f98);margin:6px 2px 12px}
   .legend i{display:inline-block;width:9px;height:9px;border-radius:50%;vertical-align:middle;margin-right:5px}
   .legend .dash{display:inline-block;width:18px;border-top:1.6px dashed var(--pl-color-fg-muted,#8a8f98);vertical-align:middle;margin-right:5px}
   .cols{display:flex;gap:12px;align-items:flex-start}
-  .gwrap{flex:1;overflow:auto;border:1px solid var(--pl-color-border,#272b33);border-radius:var(--pl-radius-md,8px);
+  .gwrap{flex:1;overflow:auto;border:1px solid var(--pl-color-border,#272b33);border-radius:var(--pl-radius,8px);
     background:var(--pl-color-bg-subtle,#15181d);padding:10px;min-height:140px}
   .empty{color:var(--pl-color-fg-muted,#8a8f98);padding:48px 0;text-align:center}
   .empty code{font-family:var(--pl-font-mono,ui-monospace,monospace);color:var(--pl-color-fg,#e6e6e6)}
@@ -30,7 +30,7 @@
   svg g.node.sel rect{stroke-width:2.4}
   text{user-select:none}
   /* detail panel */
-  .panel{width:280px;flex:none;border:1px solid var(--pl-color-border,#272b33);border-radius:var(--pl-radius-md,8px);
+  .panel{width:280px;flex:none;border:1px solid var(--pl-color-border,#272b33);border-radius:var(--pl-radius,8px);
     background:var(--pl-color-bg-subtle,#15181d);padding:14px;font-size:12px}
   .panel[hidden]{display:none}
   .panel h2{margin:0 0 2px;font-size:14px;font-weight:600;overflow-wrap:anywhere}
@@ -57,8 +57,8 @@
   </header>
   <div class="legend">
     <span><i style="background:var(--pl-color-accent,#6cb6ff)"></i>this agent</span>
-    <span><i style="background:var(--pl-color-success,#3fb950)"></i>up</span>
-    <span><i style="background:var(--pl-color-danger,#f85149)"></i>down / unreachable</span>
+    <span><i style="background:var(--pl-color-status-success,#3fb950)"></i>up</span>
+    <span><i style="background:var(--pl-color-status-error,#f85149)"></i>down / unreachable</span>
     <span>arrow = can delegate to</span>
     <span><span class="dash"></span>supervised fleet member</span>
   </div>
@@ -141,8 +141,8 @@ function draw(topo){
   }).join("");
   const rects = nodes.map(n => {
     const up = !!n.up, self0 = n.id === self, sel = n.id === SELECTED;
-    const stroke = self0 ? "var(--pl-color-accent,#6cb6ff)" : (up ? "var(--pl-color-border,#272b33)" : "var(--pl-color-danger,#f85149)");
-    const dot = self0 ? "var(--pl-color-accent,#6cb6ff)" : (up ? "var(--pl-color-success,#3fb950)" : "var(--pl-color-danger,#f85149)");
+    const stroke = self0 ? "var(--pl-color-accent,#6cb6ff)" : (up ? "var(--pl-color-border,#272b33)" : "var(--pl-color-status-error,#f85149)");
+    const dot = self0 ? "var(--pl-color-accent,#6cb6ff)" : (up ? "var(--pl-color-status-success,#3fb950)" : "var(--pl-color-status-error,#f85149)");
     const op = up || self0 ? 1 : 0.6;
     const ver = n.version ? ` v${esc(n.version)}` : "";
     const lat = Number.isFinite(n.latency_ms)

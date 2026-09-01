@@ -1393,12 +1393,12 @@ def _build_guide_router():
           .badge{margin-left:auto;font-size:11px;padding:2px 8px;border-radius:999px;
             background:var(--pl-color-bg);color:var(--pl-color-fg-muted)}
           .badge.ok{color:var(--pl-color-accent)}
-          .badge.err{color:var(--pl-color-danger, var(--pl-color-fg))}
+          .badge.err{color:var(--pl-color-status-error, var(--pl-color-fg))}
           .sum{color:var(--pl-color-fg-muted);font-size:13px;margin:6px 0 0}
           .chips{margin:8px 0 0;display:flex;flex-wrap:wrap;gap:6px}
           .chip{background:var(--pl-color-bg);color:var(--pl-color-accent);
             padding:2px 8px;border-radius:var(--pl-radius,5px);font-size:12px}
-          .errline{color:var(--pl-color-danger, var(--pl-color-fg));font-size:13px;margin:8px 0 0}
+          .errline{color:var(--pl-color-status-error, var(--pl-color-fg));font-size:13px;margin:8px 0 0}
           .tb{background:var(--pl-color-bg);color:var(--pl-color-fg-muted);font-size:11px;
             padding:10px;border-radius:var(--pl-radius,6px);overflow-x:auto;white-space:pre;margin:8px 0 0}
           .path{color:var(--pl-color-fg-muted);font-size:11px;margin:8px 0 0;word-break:break-all}

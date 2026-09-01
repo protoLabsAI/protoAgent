@@ -1,20 +1,21 @@
 <!doctype html>
 <!--
-  friction/view.html — the console surface for #2595 ("friction reports are
-  write-only — nothing surfaces or triages what agents record").
+  friction/view.html — the console surface for the friction ledger (#2595).
 
-  Follows the four plugin-view rules (docs/guides/plugin-views.md), modeled on
-  the chat_example gold-standard:
+  Follows the four plugin-view rules (docs/guides/building-react-plugin-views):
     1. Serves exactly the manifest's views[].path (/plugins/friction/view).
-    2. Its one data call goes to the bearer-gated GET /api/friction (#2607) —
-       this page is public chrome; the ledger is not.
+    2. Data goes to the bearer-gated GET/POST /api/friction* — this page is public
+       chrome; the ledger is not.
     3. Same-origin, slug-aware: kit.apiFetch derives the base itself.
-    4. Links the console's own DS kit (/_ds/plugin-kit.{css,js}) for theme parity.
+    4. Built from the console's own DS kit (/_ds/plugin-kit.{css,js}) — .pl-card,
+       .pl-badge, .pl-input, .pl-segmented, .pl-scroll, .pl-code-block, .pl-alert.
+       The local CSS below only composes those; it does not restyle them.
 
-  "Triage" here is intentionally thin (per #2595's scope): a client-local
-  dismiss/restore marker (localStorage), NOT a server-side ack. Multiple
-  operators/devices each keep their own dismiss state — a real shared triage
-  marker is a natural follow-up, not this issue's core unblock (visibility).
+  Triage is SERVER-SIDE. A row's Resolve writes the ledger's own `resolved_at`
+  (POST /api/friction/resolve) — the same stamp `resolve_friction` writes — so the
+  console and the agent's `friction_review` read one backlog. The previous version
+  kept a per-browser localStorage marker, which meant an operator could clear the
+  list on screen while the agent kept reporting every item as live.
 -->
 <html>
 <head>
@@ -29,134 +30,179 @@
   );
 </script>
 <style>
+  /* Local styles COMPOSE the DS kit; every colour, radius and space is a --pl-* token.
+     A token that the kit does not define renders the declaration invalid at
+     computed-value time and silently falls back to the property default — that is how
+     `--pl-color-danger` (a name the DS has never had) shipped a black-on-black "major"
+     badge. tests/test_plugin_view_ds_tokens.py guards the names now. */
   html, body { margin: 0; height: 100%; background: var(--pl-color-bg); color: var(--pl-color-fg);
-    font-family: var(--pl-font-sans, sans-serif); }
-  .wrap { display: flex; flex-direction: column; height: 100%; box-sizing: border-box; }
+    font-family: var(--pl-font-sans, system-ui, sans-serif); font-size: 14px; }
+  .wrap { display: flex; flex-direction: column; height: 100%; box-sizing: border-box; min-height: 0; }
 
-  header { display: flex; align-items: baseline; gap: 10px; padding: 14px 18px;
-    border-bottom: var(--pl-border-width) solid var(--pl-color-border); flex-wrap: wrap; }
-  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
-  header .kicker { font-size: 12px; color: var(--pl-color-fg-muted); }
-  header .spacer { flex: 1; }
-  header .counts { font-size: 12px; color: var(--pl-color-fg-muted); white-space: nowrap; }
-  header .counts b { color: var(--pl-color-fg); font-weight: 600; }
+  /* ── header ─────────────────────────────────────────────────────────────── */
+  .hdr-actions { display: flex; align-items: center; gap: var(--pl-space-3); flex-wrap: wrap;
+    justify-content: flex-end; }
+  .tally { display: flex; align-items: baseline; gap: 5px; font-size: 12px;
+    color: var(--pl-color-fg-muted); white-space: nowrap; }
+  .tally b { font-family: var(--pl-font-mono, monospace); font-size: 13px;
+    color: var(--pl-color-fg); font-weight: var(--pl-font-weight-medium, 500); }
+  .tally-sep { color: var(--pl-color-border-strong); }
 
-  .toolbar { display: flex; align-items: center; gap: 8px; padding: 10px 18px;
-    border-bottom: var(--pl-border-width) solid var(--pl-color-border); flex-wrap: wrap; }
-  .tabs { display: flex; gap: 6px; }
-  .tab { font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 999px;
-    border: var(--pl-border-width) solid var(--pl-color-border-strong); background: transparent;
-    color: var(--pl-color-fg-muted); cursor: pointer; }
-  .tab.is-active { background: var(--pl-color-accent); color: var(--pl-color-fg-on-accent);
-    border-color: var(--pl-color-accent); }
-  .toolbar .spacer { flex: 1; }
+  /* ── filter bar ─────────────────────────────────────────────────────────── */
+  .filters { display: flex; align-items: center; gap: var(--pl-space-2); flex-wrap: wrap;
+    padding: var(--pl-space-3) var(--pl-space-4);
+    border-bottom: var(--pl-border-width) solid var(--pl-color-border); }
+  .search { flex: 1 1 220px; min-width: 180px; max-width: 420px; }
+  .filters .spacer { flex: 1 1 0; }
+  .sortsel { padding: 5px 8px; font-size: 12px; font-family: var(--pl-font-sans, sans-serif);
+    color: var(--pl-color-fg); background: var(--pl-color-bg-raised);
+    border: var(--pl-border-width) solid var(--pl-color-border);
+    border-radius: var(--pl-radius); cursor: pointer; }
 
-  #status { font-size: 12px; color: var(--pl-color-fg-subtle); padding: 0 18px; }
+  /* ── the list ───────────────────────────────────────────────────────────── */
+  /* .pl-scroll carries the DS's own min-height:0 fix for a scroll region inside a flex
+     parent. `flex: none` on the cards is the other half and is NOT optional: flex
+     children default to flex-shrink:1, so a column flex list crushes every card below
+     its content height to make the set fit — the container then never overflows, the
+     scrollbar never appears, and each card's text spills over the one beneath it. That
+     is what "cramped" was: 23 cards squeezed from 47px to 24px, all 22 pairs
+     overlapping, getting worse with every entry recorded. */
+  .list { flex: 1; padding: var(--pl-space-3) var(--pl-space-4) var(--pl-space-6);
+    display: flex; flex-direction: column; gap: var(--pl-space-2); }
+  .entry { flex: none; padding: var(--pl-space-3); border-left-width: 2px;
+    border-left-color: var(--pl-color-border-strong); }
+  .entry.sev-major { border-left-color: var(--pl-color-status-error); }
+  .entry.is-resolved { opacity: 0.55; }
 
-  .list { flex: 1; overflow-y: auto; padding: 14px 18px; display: flex; flex-direction: column; gap: 8px; }
+  .row { display: flex; align-items: flex-start; gap: var(--pl-space-2); }
+  .disclose { flex: none; margin-top: 1px; padding: 2px; transition: transform var(--pl-motion-fast, 120ms)
+    var(--pl-motion-ease, ease); }
+  .disclose svg { width: 14px; height: 14px; display: block; }
+  .entry.is-open .disclose { transform: rotate(90deg); }
+  /* The summary is the thing an operator is here to read, so it gets its own line at
+     body size with real leading — not a flex cell fighting five badges for width. */
+  .summary { flex: 1 1 auto; min-width: 0; font-size: 14px; line-height: 1.5;
+    color: var(--pl-color-fg); overflow-wrap: anywhere; text-align: left;
+    background: none; border: 0; padding: 0; font-family: inherit; cursor: pointer; }
+  .entry.is-resolved .summary { text-decoration: line-through;
+    text-decoration-color: var(--pl-color-fg-subtle); }
 
-  .entry { border: var(--pl-border-width) solid var(--pl-color-border); border-radius: var(--pl-radius);
-    background: var(--pl-color-bg-raised); overflow: hidden; }
-  .entry.sev-major { border-color: var(--pl-color-danger); }
-  .entry.is-dismissed { opacity: 0.55; }
+  .meta { display: flex; align-items: center; gap: var(--pl-space-2); flex-wrap: wrap;
+    margin: var(--pl-space-2) 0 0 22px; }
+  .meta .spacer { flex: 1 1 0; min-width: var(--pl-space-2); }
+  .when { font-size: 11px; color: var(--pl-color-fg-subtle); white-space: nowrap;
+    font-family: var(--pl-font-mono, monospace); }
+  .acts { display: flex; align-items: center; gap: 6px; }
+  .acts .pl-btn { padding: 3px 9px; font-size: 12px; }
 
-  .entry-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; cursor: pointer;
-    flex-wrap: wrap; }
-  .badge { font-size: 10px; padding: 2px 7px; border-radius: 999px; font-weight: 700;
-    text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
-  .badge.kind-harness { background: var(--pl-color-bg-inset); color: var(--pl-color-fg-muted);
-    border: var(--pl-border-width) solid var(--pl-color-border-strong); }
-  .badge.kind-model { background: var(--pl-color-bg-inset); color: var(--pl-color-accent);
-    border: var(--pl-border-width) solid var(--pl-color-accent); }
-  .badge.sev-major { background: var(--pl-color-danger); color: var(--pl-color-fg-on-accent); }
-  .badge.sev-minor { background: var(--pl-color-bg-inset); color: var(--pl-color-fg-subtle);
-    border: var(--pl-border-width) solid var(--pl-color-border); }
-  .badge.src-auto { background: var(--pl-color-bg-inset); color: var(--pl-color-fg-subtle);
-    border: var(--pl-border-width) solid var(--pl-color-border); }
-  .badge.src-agent { background: var(--pl-color-bg-inset); color: var(--pl-color-fg-muted);
-    border: var(--pl-border-width) solid var(--pl-color-border); }
+  .detail { margin: var(--pl-space-3) 0 0 22px; }
+  .detail[hidden] { display: none; }
+  .detail .pl-code-block__pre { max-height: 340px; overflow: auto; }
+  .detail .pl-code-block__code { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .truncated { margin-top: 6px; font-size: 11px; color: var(--pl-color-fg-subtle); }
 
-  .tool-chip { font-family: var(--pl-font-mono, monospace); font-size: 11px; color: var(--pl-color-fg-muted);
-    background: var(--pl-color-bg-inset); padding: 2px 6px; border-radius: 4px; }
+  /* ── states ─────────────────────────────────────────────────────────────── */
+  .state { padding: var(--pl-space-6) var(--pl-space-4); }
+  .state .pl-empty--slotted { max-width: 52ch; margin: 0 auto; line-height: 1.7; }
+  .state b { color: var(--pl-color-fg); }
+  .skel-card { padding: var(--pl-space-3); }
+  .skel-line { height: 10px; border-radius: var(--pl-radius);
+    background: var(--pl-color-bg-subtle); }
+  .skel-line + .skel-line { margin-top: 8px; }
+  @media (prefers-reduced-motion: no-preference) {
+    .skel-line { animation: pulse 1.4s var(--pl-motion-ease-in-out, ease-in-out) infinite; }
+  }
+  @keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.45 } }
 
-  .summary { flex: 1; min-width: 20ch; font-size: 13px; }
-  .count { font-size: 11px; color: var(--pl-color-fg-muted); white-space: nowrap; }
-  .when { font-size: 11px; color: var(--pl-color-fg-subtle); white-space: nowrap; }
-
-  .entry-detail { padding: 10px 12px 12px; margin-top: -2px; font-family: var(--pl-font-mono, monospace);
-    font-size: 12px; color: var(--pl-color-fg-muted); white-space: pre-wrap; word-break: break-word;
-    border-top: var(--pl-border-width) dashed var(--pl-color-border); }
-  .entry-detail[hidden] { display: none; }
-
-  .dismiss-btn { margin-left: auto; }
-
-  .empty { margin: auto; text-align: center; color: var(--pl-color-fg-muted); font-size: 13px;
-    max-width: 48ch; line-height: 1.7; padding: 40px 20px; }
-  .empty b { color: var(--pl-color-fg); }
-  .empty.error { color: var(--pl-color-danger); }
+  .toast-slot { position: fixed; right: var(--pl-space-4); bottom: var(--pl-space-4);
+    max-width: 320px; z-index: 10; }
+  .toast-slot:empty { display: none; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <header>
-    <h1>Friction log</h1>
-    <span class="kicker">what agents flagged as friction, grouped and de-duplicated</span>
-    <span class="spacer"></span>
-    <span id="counts" class="counts"></span>
-    <button id="refresh" class="pl-btn pl-btn--sm" type="button" title="Refresh">Refresh</button>
-  </header>
-  <div class="toolbar">
-    <div class="tabs" id="kind-tabs">
-      <button class="tab is-active" data-kind="" type="button">All</button>
-      <button class="tab" data-kind="harness" type="button">Harness</button>
-      <button class="tab" data-kind="model" type="button">Model</button>
+  <div class="pl-panel-header">
+    <div>
+      <div class="pl-panel-header__kicker">Self-report</div>
+      <h1 class="pl-panel-header__title">Friction log</h1>
     </div>
+    <div class="pl-panel-header__actions hdr-actions">
+      <span id="tally" class="tally"></span>
+      <button id="refresh" class="pl-btn pl-btn--sm" type="button">Refresh</button>
+    </div>
+  </div>
+
+  <div class="filters">
+    <div class="pl-input-affix search">
+      <span class="pl-input-affix__icon" aria-hidden="true">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      </span>
+      <input id="q" class="pl-input pl-input--with-icon" type="search" autocomplete="off"
+             placeholder="Search summary, detail, tool…" aria-label="Search friction" />
+    </div>
+
+    <div class="pl-segmented" id="kind-tabs" role="group" aria-label="Channel">
+      <button class="pl-seg pl-seg--active" data-kind="" type="button">All</button>
+      <button class="pl-seg" data-kind="harness" type="button">Harness</button>
+      <button class="pl-seg" data-kind="model" type="button">Model</button>
+    </div>
+
+    <div class="pl-segmented" id="sev-tabs" role="group" aria-label="Severity">
+      <button class="pl-seg pl-seg--active" data-sev="" type="button">Any</button>
+      <button class="pl-seg" data-sev="major" type="button">Major</button>
+    </div>
+
+    <div class="pl-segmented" id="src-tabs" role="group" aria-label="Source">
+      <button class="pl-seg pl-seg--active" data-src="" type="button">Any</button>
+      <button class="pl-seg" data-src="agent" type="button">Agent</button>
+      <button class="pl-seg" data-src="auto" type="button">Auto</button>
+    </div>
+
     <span class="spacer"></span>
-    <button id="toggle-dismissed" class="pl-btn pl-btn--sm" type="button">Show dismissed (0)</button>
+
+    <select id="sort" class="sortsel" aria-label="Sort by">
+      <option value="recent">Most recent</option>
+      <option value="frequent">Most frequent</option>
+      <option value="severe">Most severe</option>
+    </select>
+    <button id="toggle-resolved" class="pl-btn pl-btn--sm" type="button">Show resolved</button>
   </div>
-  <div id="status"></div>
-  <div class="list" id="list">
-    <div class="empty">Loading…</div>
-  </div>
+
+  <div class="list pl-scroll" id="list"></div>
 </div>
+<div class="toast-slot" id="toast-slot"></div>
+
 <script type="module">
   "use strict";
-  const base = window.__base;
   const kit = await import(window.__base + "/_ds/plugin-kit.js");
+
   // Load on the console's handshake, never before it. The bearer reaches this page by
   // postMessage (`protoagent:init`) AFTER this script has run, so a fetch fired from
   // module scope goes out with no Authorization header and 401s on every token-gated
-  // instance — "Couldn't load the friction ledger: 401 Unauthorized" (2026-08-20). The
-  // init callback fires on the bearer AND on every live re-theme, hence the guard; the
-  // fallback timer covers a page opened top-level / on an open-mode host that never
-  // receives a handshake, so it still renders instead of sitting on "Loading…".
+  // instance (2026-08-20). The init callback fires on the bearer AND on every live
+  // re-theme, hence the guard; the fallback timer covers a page opened top-level / on an
+  // open-mode host that never receives a handshake, so it still renders.
   let started = false;
   const start = () => { if (started) return; started = true; void load(); };
   kit.initPluginView(start);
   setTimeout(start, 1500);
 
-  // ── client-local dismiss/restore (the "triage" half of #2595, kept minimal:
-  // per-browser, not shared across operators/devices — see the file header). ──
-  const DKEY = "friction-view.dismissed";
-  function loadDismissed() {
-    try { return new Set(JSON.parse(localStorage.getItem(DKEY) || "[]")); }
-    catch { return new Set(); }
-  }
-  function saveDismissed(set) {
-    localStorage.setItem(DKEY, JSON.stringify(Array.from(set)));
-  }
-  let dismissed = loadDismissed();
-  let showDismissed = false;
-
-  function keyFor(item) { return item.kind + "\x00" + item.summary; }
-
-  let currentKind = "";
-  let lastItems = [];
-
   const listEl = document.getElementById("list");
-  const statusEl = document.getElementById("status");
-  const countsEl = document.getElementById("counts");
-  const toggleBtn = document.getElementById("toggle-dismissed");
+  const tallyEl = document.getElementById("tally");
+  const toastSlot = document.getElementById("toast-slot");
+  const resolvedBtn = document.getElementById("toggle-resolved");
+  const searchEl = document.getElementById("q");
+  const sortEl = document.getElementById("sort");
+
+  const state = {
+    kind: "", severity: "", source: "", sort: "recent",
+    query: "", showResolved: false,
+    items: [], counts: {}, occurrences: 0, open: new Set(), busy: new Set(),
+  };
+
+  // ── helpers ───────────────────────────────────────────────────────────────
+  const SEV_RANK = { major: 2, minor: 1 };
 
   function fmtWhen(iso) {
     if (!iso) return "";
@@ -167,112 +213,372 @@
     if (mins < 60) return mins + "m ago";
     const hrs = Math.round(mins / 60);
     if (hrs < 24) return hrs + "h ago";
-    return Math.round(hrs / 24) + "d ago";
+    const days = Math.round(hrs / 24);
+    if (days < 30) return days + "d ago";
+    return Math.round(days / 30) + "mo ago";
   }
 
-  function escapeHtml(s) {
-    const d = document.createElement("div");
-    d.textContent = String(s == null ? "" : s);
-    return d.innerHTML;
+  function fmtWindow(item) {
+    const last = fmtWhen(item.last_seen);
+    if (!item.first_seen || item.first_seen === item.last_seen) return last;
+    return fmtWhen(item.first_seen) + " → " + last;   // a repeat's real lifespan
   }
 
-  function renderEmpty(cls, html) {
-    listEl.innerHTML = '<div class="empty ' + cls + '">' + html + "</div>";
+  function keyFor(item) { return (item.kind || "") + "\x00" + (item.summary || ""); }
+
+  /** The auto-capture channel stores the tool's args; newer entries are JSON, older ones
+   *  are a Python dict repr. Pretty-print what parses and leave the rest verbatim —
+   *  guessing at a repr's structure would misrender it more confidently than not
+   *  trying. */
+  function prettyDetail(raw) {
+    const text = String(raw == null ? "" : raw);
+    const t = text.trim();
+    if (!t || (t[0] !== "{" && t[0] !== "[")) return text;
+    try { return JSON.stringify(JSON.parse(t), null, 2); } catch { return text; }
+  }
+
+  function el(tag, cls, text) {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  }
+
+  function badge(text, variant) {
+    return el("span", "pl-badge" + (variant ? " pl-badge--" + variant : ""), text);
+  }
+
+  function toast(msg, variant) {
+    toastSlot.innerHTML = "";
+    const box = el("div", "pl-toast pl-alert--" + (variant || "neutral"));
+    const body = el("div", "pl-toast__body");
+    body.appendChild(el("div", "pl-toast__msg", msg));
+    box.appendChild(body);
+    toastSlot.appendChild(box);
+    setTimeout(() => { if (box.parentNode === toastSlot) toastSlot.removeChild(box); }, 4000);
+  }
+
+  /** A ready-to-paste GitHub issue. The ledger holds everything an issue needs — what
+   *  broke, how often, over what window, and the failing payload — so filing should be a
+   *  paste, not a re-type. (A prefilled github.com deep link needs a repo to target,
+   *  which this plugin does not know yet; that's a follow-up.) */
+  function issueMarkdown(item) {
+    const lines = [
+      "**Friction:** " + (item.summary || ""),
+      "",
+      "| | |",
+      "|---|---|",
+      "| Channel | `" + (item.kind || "?") + "` |",
+      "| Severity | `" + (item.severity || "minor") + "` |",
+      "| Source | `" + (item.source || "auto") + "` |",
+    ];
+    if (item.tool) lines.push("| Tool | `" + item.tool + "` |");
+    lines.push("| Occurrences | " + (item.count || 1) + " |");
+    lines.push("| First seen | " + (item.first_seen || "—") + " |");
+    lines.push("| Last seen | " + (item.last_seen || "—") + " |");
+    if (item.detail) {
+      lines.push("", "### Detail", "", "```", prettyDetail(item.detail), "```");
+    }
+    lines.push("", "_Recorded by the protoAgent friction log._");
+    return lines.join("\n");
+  }
+
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Clipboard API needs a secure context / permission; fall back so the button is
+      // never a dead end on an http:// instance.
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.cssText = "position:fixed;opacity:0";
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand("copy");
+        document.body.removeChild(ta);
+        return ok;
+      } catch { return false; }
+    }
+  }
+
+  // ── filtering / sorting (client-side over the fetched page) ────────────────
+  function visibleItems() {
+    const q = state.query.trim().toLowerCase();
+    let out = state.items.filter((it) => {
+      if (state.severity && (it.severity || "minor") !== state.severity) return false;
+      if (state.source && (it.source || "auto") !== state.source) return false;
+      if (!q) return true;
+      return ((it.summary || "") + " " + (it.detail || "") + " " + (it.tool || ""))
+        .toLowerCase().includes(q);
+    });
+    const bySeen = (a, b) => String(b.last_seen || "").localeCompare(String(a.last_seen || ""));
+    if (state.sort === "frequent") {
+      out = out.slice().sort((a, b) => (b.count || 1) - (a.count || 1) || bySeen(a, b));
+    } else if (state.sort === "severe") {
+      out = out.slice().sort((a, b) =>
+        (SEV_RANK[b.severity] || 1) - (SEV_RANK[a.severity] || 1) ||
+        (b.count || 1) - (a.count || 1) || bySeen(a, b));
+    }
+    return out;   // "recent" is the API's own order
+  }
+
+  // ── render ────────────────────────────────────────────────────────────────
+  function renderState(node) {
+    listEl.innerHTML = "";
+    const box = el("div", "state");
+    box.appendChild(node);
+    listEl.appendChild(box);
+  }
+
+  function renderSkeleton() {
+    listEl.innerHTML = "";
+    for (let i = 0; i < 5; i++) {
+      const card = el("div", "pl-card entry skel-card");
+      const a = el("div", "skel-line");
+      a.style.width = (55 + Math.random() * 35) + "%";
+      const b = el("div", "skel-line");
+      b.style.width = "30%";
+      card.append(a, b);
+      listEl.appendChild(card);
+    }
+  }
+
+  function renderEmpty() {
+    const box = el("div", "pl-empty pl-empty--slotted");
+    const has = state.items.length > 0;
+    box.appendChild(el("div", null, has
+      ? "No friction matches these filters."
+      : (state.showResolved
+        ? "Nothing recorded yet — the ledger is empty."
+        : "No open friction. Everything recorded has been resolved.")));
+    if (has || !state.showResolved) {
+      const btn = el("button", "pl-btn pl-btn--sm", has ? "Clear filters" : "Show resolved");
+      btn.type = "button";
+      btn.addEventListener("click", () => {
+        if (has) {
+          state.query = ""; searchEl.value = "";
+          state.severity = ""; state.source = "";
+          syncSegmented("sev-tabs", "sev", ""); syncSegmented("src-tabs", "src", "");
+          render();
+        } else { toggleResolved(); }
+      });
+      box.appendChild(btn);
+    }
+    renderState(box);
+  }
+
+  function renderError(message) {
+    const box = el("div", "pl-alert pl-alert--error");
+    const body = el("div", "pl-alert__body");
+    body.appendChild(el("div", "pl-alert__title", "Couldn't load the friction ledger"));
+    const text = el("div", "pl-alert__text");
+    text.textContent = message + ". If the friction plugin isn't enabled on this "
+      + "instance, there's nothing to read yet.";
+    body.appendChild(text);
+    box.appendChild(body);
+    renderState(box);
+  }
+
+  function renderCard(item) {
+    const key = keyFor(item);
+    const isResolved = Boolean(item.resolved_at);
+    const isOpen = state.open.has(key);
+    const card = el("div", "pl-card entry sev-" + (item.severity || "minor")
+      + (isResolved ? " is-resolved" : "") + (isOpen ? " is-open" : ""));
+
+    // — head: disclosure + the summary, on its own line, full width —
+    const head = el("div", "row");
+    const chevron = el("span", "pl-iconbtn disclose");
+    chevron.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+      + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>';
+    const summary = el("button", "summary", item.summary || "(no summary)");
+    summary.type = "button";
+    summary.setAttribute("aria-expanded", String(isOpen));
+    const toggle = () => {
+      if (state.open.has(key)) state.open.delete(key); else state.open.add(key);
+      render();
+    };
+    summary.addEventListener("click", toggle);
+    chevron.addEventListener("click", toggle);
+    head.append(chevron, summary);
+    if ((item.count || 1) > 1) {
+      const n = el("span", "pl-count", "×" + item.count);
+      n.title = item.count + " occurrences";
+      head.appendChild(n);
+    }
+    card.appendChild(head);
+
+    // — meta: badges + window + actions, wrapping cleanly instead of crushing —
+    const meta = el("div", "meta");
+    meta.appendChild(badge(item.severity || "minor",
+      (item.severity === "major") ? "error" : null));
+    meta.appendChild(badge(item.kind || "harness", item.kind === "model" ? "info" : null));
+    meta.appendChild(badge(item.source || "auto"));
+    if (item.tool) meta.appendChild(el("span", "pl-tag", item.tool));
+    if (isResolved) meta.appendChild(badge("resolved", "success"));
+    const when = el("span", "when", fmtWindow(item));
+    when.title = "first seen " + (item.first_seen || "?") + "\nlast seen " + (item.last_seen || "?");
+    meta.appendChild(when);
+    meta.appendChild(el("span", "spacer"));
+
+    const acts = el("div", "acts");
+    const copyBtn = el("button", "pl-btn pl-btn--sm", "Copy as issue");
+    copyBtn.type = "button";
+    copyBtn.addEventListener("click", async () => {
+      const ok = await copyText(issueMarkdown(item));
+      toast(ok ? "Issue markdown copied to the clipboard."
+               : "Couldn't reach the clipboard — copy the detail by hand.",
+            ok ? "success" : "warning");
+    });
+    acts.appendChild(copyBtn);
+
+    const resolveBtn = el("button", "pl-btn pl-btn--sm",
+      state.busy.has(key) ? "Saving…" : (isResolved ? "Reopen" : "Resolve"));
+    resolveBtn.type = "button";
+    resolveBtn.disabled = state.busy.has(key);
+    resolveBtn.title = isResolved
+      ? "Clear the ledger's resolved_at stamp — the agent sees it as backlog again"
+      : "Stamp resolved_at in the ledger — drops out of the agent's friction_review too";
+    resolveBtn.addEventListener("click", () => void setResolved(item, !isResolved));
+    acts.appendChild(resolveBtn);
+    meta.appendChild(acts);
+    card.appendChild(meta);
+
+    // — detail —
+    const detail = el("div", "detail");
+    detail.hidden = !isOpen;
+    const block = el("div", "pl-code-block");
+    const bhead = el("div", "pl-code-block__header");
+    bhead.appendChild(el("span", "pl-code-block__lang",
+      item.source === "auto" ? "captured payload" : "detail"));
+    const bcopy = el("button", "pl-code-block__copy", "Copy");
+    bcopy.type = "button";
+    bcopy.addEventListener("click", async () => {
+      const ok = await copyText(prettyDetail(item.detail || ""));
+      toast(ok ? "Detail copied." : "Couldn't reach the clipboard.", ok ? "success" : "warning");
+    });
+    bhead.appendChild(bcopy);
+    const pre = el("pre", "pl-code-block__pre");
+    pre.appendChild(el("code", "pl-code-block__code",
+      item.detail ? prettyDetail(item.detail) : "(no detail recorded)"));
+    block.append(bhead, pre);
+    detail.appendChild(block);
+    // The ledger caps a detail at 600 chars and a summary at 200 on write, mid-word and
+    // with no marker — so say so rather than letting a sentence just stop.
+    if ((item.detail || "").length >= 600) {
+      detail.appendChild(el("div", "truncated",
+        "Detail is capped at 600 characters on write — this entry is cut off."));
+    }
+    card.appendChild(detail);
+    return card;
   }
 
   function render() {
-    const visible = lastItems.filter((it) => showDismissed || !dismissed.has(keyFor(it)));
-    const dismissedCount = lastItems.filter((it) => dismissed.has(keyFor(it))).length;
-    toggleBtn.textContent = (showDismissed ? "Hide dismissed" : "Show dismissed") + " (" + dismissedCount + ")";
+    // The tally counts BOTH shapes, because they differ and the mismatch used to read as
+    // a bug: the list shows de-duplicated signals, the ledger holds every occurrence.
+    const signals = state.items.length;
+    tallyEl.innerHTML = "";
+    const add = (n, label) => {
+      const b = el("b", null, String(n));
+      tallyEl.append(b, el("span", null, " " + label));
+    };
+    add(signals, signals === 1 ? "signal" : "signals");
+    tallyEl.appendChild(el("span", "tally-sep", "·"));
+    add(state.occurrences, "occurrences");
 
-    if (!visible.length) {
-      renderEmpty(
-        "",
-        lastItems.length
-          ? "Everything in this channel is dismissed. <b>Show dismissed</b> to bring items back."
-          : "No friction recorded yet — nothing has been flagged (or the ledger is empty)."
-      );
-      return;
-    }
+    resolvedBtn.textContent = state.showResolved ? "Hide resolved" : "Show resolved";
 
+    const items = visibleItems();
+    if (!items.length) { renderEmpty(); return; }
     listEl.innerHTML = "";
-    for (const item of visible) {
-      const key = keyFor(item);
-      const isDismissed = dismissed.has(key);
-      const entry = document.createElement("div");
-      entry.className = "entry sev-" + (item.severity || "minor") + (isDismissed ? " is-dismissed" : "");
-
-      const head = document.createElement("div");
-      head.className = "entry-head";
-      head.innerHTML =
-        '<span class="badge kind-' + escapeHtml(item.kind) + '">' + escapeHtml(item.kind) + "</span>" +
-        '<span class="badge sev-' + escapeHtml(item.severity || "minor") + '">' + escapeHtml(item.severity || "minor") + "</span>" +
-        '<span class="badge src-' + escapeHtml(item.source || "auto") + '">' + escapeHtml(item.source || "auto") + "</span>" +
-        (item.tool ? '<span class="tool-chip">' + escapeHtml(item.tool) + "</span>" : "") +
-        '<span class="summary">' + escapeHtml(item.summary) + "</span>" +
-        (item.count > 1 ? '<span class="count">×' + item.count + "</span>" : "") +
-        '<span class="when" title="first seen ' + escapeHtml(item.first_seen || "") + " → last seen " +
-          escapeHtml(item.last_seen || "") + '">' + escapeHtml(fmtWhen(item.last_seen)) + "</span>";
-
-      const dismissBtn = document.createElement("button");
-      dismissBtn.type = "button";
-      dismissBtn.className = "pl-btn pl-btn--sm dismiss-btn";
-      dismissBtn.textContent = isDismissed ? "Restore" : "Dismiss";
-      dismissBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        if (isDismissed) dismissed.delete(key); else dismissed.add(key);
-        saveDismissed(dismissed);
-        render();
-      });
-      head.appendChild(dismissBtn);
-
-      const detail = document.createElement("div");
-      detail.className = "entry-detail";
-      detail.hidden = true;
-      detail.textContent = item.detail || "(no detail recorded)";
-
-      head.addEventListener("click", () => { detail.hidden = !detail.hidden; });
-
-      entry.appendChild(head);
-      entry.appendChild(detail);
-      listEl.appendChild(entry);
-    }
+    for (const item of items) listEl.appendChild(renderCard(item));
   }
 
+  // ── data ──────────────────────────────────────────────────────────────────
   async function load() {
-    statusEl.textContent = "Loading…";
+    if (!state.items.length) renderSkeleton();
     try {
-      const q = new URLSearchParams({ grouped: "true", limit: "100" });
-      if (currentKind) q.set("kind", currentKind);
+      const q = new URLSearchParams({ grouped: "true", limit: "200" });
+      if (state.kind) q.set("kind", state.kind);
+      if (state.showResolved) q.set("resolved", "true");
       const res = await kit.apiFetch("/api/friction?" + q.toString());
       if (!res.ok) throw new Error(res.status + " " + res.statusText);
       const data = await res.json();
-      lastItems = Array.isArray(data.items) ? data.items : [];
-      const counts = data.counts || {};
-      countsEl.innerHTML = "harness <b>" + (counts.harness || 0) + "</b> · model <b>" + (counts.model || 0) + "</b>";
-      statusEl.textContent = "";
+      state.items = Array.isArray(data.items) ? data.items : [];
+      state.counts = data.counts || {};
+      state.occurrences = Object.values(state.counts).reduce((a, b) => a + (b || 0), 0);
       render();
     } catch (err) {
-      lastItems = [];
-      countsEl.textContent = "";
-      statusEl.textContent = "";
-      renderEmpty(
-        "error",
-        "Couldn't load the friction ledger: " + escapeHtml(err && err.message ? err.message : err) +
-          ". If the <b>friction</b> plugin isn't enabled on this instance, there's nothing to read yet."
-      );
+      state.items = [];
+      tallyEl.textContent = "";
+      renderError(err && err.message ? err.message : String(err));
     }
   }
 
-  document.getElementById("kind-tabs").addEventListener("click", (e) => {
-    const btn = e.target.closest(".tab");
-    if (!btn) return;
-    currentKind = btn.dataset.kind || "";
-    for (const t of document.querySelectorAll(".tab")) t.classList.toggle("is-active", t === btn);
-    void load();
+  async function setResolved(item, resolved) {
+    const key = keyFor(item);
+    state.busy.add(key);
+    render();
+    try {
+      const res = await kit.apiFetch("/api/friction/resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ summary: item.summary, kind: item.kind, resolved }),
+      });
+      if (!res.ok) throw new Error(res.status + " " + res.statusText);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      toast(resolved
+        ? "Resolved — dropped from the agent's backlog too."
+        : "Reopened — back in the agent's backlog.", "success");
+    } catch (err) {
+      toast("Couldn't update the ledger: " + (err && err.message ? err.message : err), "error");
+    } finally {
+      state.busy.delete(key);
+      await load();   // re-read rather than patch in place: the ledger is the truth
+    }
+  }
+
+  // ── wiring ────────────────────────────────────────────────────────────────
+  function syncSegmented(id, attr, value) {
+    for (const b of document.querySelectorAll("#" + id + " .pl-seg")) {
+      b.classList.toggle("pl-seg--active", (b.dataset[attr] || "") === value);
+    }
+  }
+
+  function segmented(id, attr, onPick) {
+    document.getElementById(id).addEventListener("click", (e) => {
+      const btn = e.target.closest(".pl-seg");
+      if (!btn) return;
+      const value = btn.dataset[attr] || "";
+      syncSegmented(id, attr, value);
+      onPick(value);
+    });
+  }
+
+  segmented("kind-tabs", "kind", (v) => { state.kind = v; void load(); });
+  segmented("sev-tabs", "sev", (v) => { state.severity = v; render(); });
+  segmented("src-tabs", "src", (v) => { state.source = v; render(); });
+
+  let debounce;
+  searchEl.addEventListener("input", () => {
+    clearTimeout(debounce);
+    debounce = setTimeout(() => { state.query = searchEl.value; render(); }, 120);
   });
-  toggleBtn.addEventListener("click", () => { showDismissed = !showDismissed; render(); });
+  sortEl.addEventListener("change", () => { state.sort = sortEl.value; render(); });
+
+  function toggleResolved() {
+    state.showResolved = !state.showResolved;
+    void load();
+  }
+  resolvedBtn.addEventListener("click", toggleResolved);
   document.getElementById("refresh").addEventListener("click", () => void load());
+
+  // Relative stamps ("12m ago") go stale on a view left open on a wall display; re-render
+  // the labels on a slow tick without refetching.
+  setInterval(() => { if (state.items.length) render(); }, 60000);
 </script>
 </body>
 </html>

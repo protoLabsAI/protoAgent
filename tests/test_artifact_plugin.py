@@ -439,7 +439,7 @@ def test_shell_surfaces_persistent_poll_failures(monkeypatch, tmp_path):
     assert "catch (e) { /* transient */ }" not in js
     # the strip is DS-tokened (danger text on a muted inset ground), not hardcoded chrome.
     assert 'el.id="pollerr"' in js
-    assert "color:var(--pl-color-danger" in js
+    assert "color:var(--pl-color-status-error" in js
     assert "background:var(--pl-color-bg-inset" in js
 
 

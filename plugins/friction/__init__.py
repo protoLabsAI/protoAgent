@@ -201,23 +201,44 @@ async def record_friction(kind: str, summary: str, detail: str = "", severity: s
     return f"logged {severity} {kind} friction: “{summary}”."
 
 
-@tool
-async def resolve_friction(summary: str, reason: str = "") -> str:
-    """Mark friction entries as resolved so they drop out of the review backlog — call this
-    once the underlying rough edge is actually fixed, not to silence a live signal.
+def _rewrite_ledger(path: Path, lines: list[str]) -> None:
+    """Replace the ledger atomically.
 
-    ``summary`` is a substring match: EVERY unresolved entry whose summary contains it is
-    stamped with a ``resolved_at`` timestamp (and ``reason``, if given) in place. Nothing
-    is deleted — the ledger stays append-only and the audit trail survives."""
-    if not summary.strip():
-        return "summary is required (a substring of the entries to resolve)"
+    ``resolve_friction`` used ``path.write_text``, which truncates before it writes:
+    an interrupted rewrite left a half-empty ledger with no way back. The whole point
+    of stamping ``resolved_at`` in place (rather than deleting) is that the audit trail
+    survives, so the write that does it must not be the thing that loses it. Write a
+    sibling temp file, then ``os.replace`` it over the original — atomic on POSIX and
+    Windows alike."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def set_resolved(
+    summary: str, *, resolved: bool = True, reason: str = "", kind: str = "", exact: bool = False
+) -> int:
+    """Stamp (or clear) ``resolved_at`` on matching entries in place; returns the count.
+
+    ``exact`` is the difference between the two callers, and it matters. The agent's
+    ``resolve_friction`` tool matches a SUBSTRING — it is fixing a rough edge it just
+    described and wants every phrasing of it to drop out of the backlog. The console
+    acts on one grouped row, keyed by ``(kind, summary)``; a substring match from there
+    would silently resolve every OTHER row whose summary happens to contain this one's
+    text (``"tool 'task' raised"`` is a substring of nothing, but
+    ``"reached for escape hatch 'shell'"`` sits inside a longer agent-written summary
+    the operator never looked at). The console therefore matches the full summary and
+    the kind, and touches exactly the row that was clicked.
+
+    Nothing is ever deleted — un-resolving clears the stamp, so a row reopened by
+    mistake is recoverable and the ledger stays append-only in shape."""
     path = _ledger_path()
     if not path.exists():
-        return "no matching entries found — the friction backlog is empty."
+        return 0
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return "no matching entries found — the ledger could not be read."
+        return 0
     needle = summary.strip()
     stamp = datetime.now(timezone.utc).isoformat()
     out_lines: list[str] = []
@@ -228,18 +249,49 @@ async def resolve_friction(summary: str, reason: str = "") -> str:
         except json.JSONDecodeError:
             out_lines.append(line)  # foreign lines pass through untouched
             continue
-        if isinstance(rec, dict) and not rec.get("resolved_at") and needle in str(rec.get("summary", "")):
-            rec["resolved_at"] = stamp
-            if reason.strip():
-                rec["resolved_reason"] = reason.strip()[:300]
+        if not isinstance(rec, dict):
+            out_lines.append(line)
+            continue
+        rec_summary = str(rec.get("summary", ""))
+        hit = rec_summary == needle if exact else needle in rec_summary
+        if hit and kind and str(rec.get("kind", "")) != kind:
+            hit = False
+        # Only flip entries that are not already in the requested state, so the count
+        # reports real changes rather than rows that were already there.
+        if hit and bool(rec.get("resolved_at")) != resolved:
+            if resolved:
+                rec["resolved_at"] = stamp
+                if reason.strip():
+                    rec["resolved_reason"] = reason.strip()[:300]
+            else:
+                rec.pop("resolved_at", None)
+                rec.pop("resolved_reason", None)
             out_lines.append(json.dumps(rec, default=str))
             matched += 1
         else:
             out_lines.append(line)
+    if matched:
+        _rewrite_ledger(path, out_lines)
+    return matched
+
+
+@tool
+async def resolve_friction(summary: str, reason: str = "") -> str:
+    """Mark friction entries as resolved so they drop out of the review backlog — call this
+    once the underlying rough edge is actually fixed, not to silence a live signal.
+
+    ``summary`` is a substring match: EVERY unresolved entry whose summary contains it is
+    stamped with a ``resolved_at`` timestamp (and ``reason``, if given) in place. Nothing
+    is deleted — the ledger stays append-only and the audit trail survives."""
+    if not summary.strip():
+        return "summary is required (a substring of the entries to resolve)"
+    if not _ledger_path().exists():
+        return "no matching entries found — the friction backlog is empty."
+    needle = summary.strip()
+    matched = set_resolved(needle, resolved=True, reason=reason)
     if not matched:
-        return f"no matching entries found for “{needle}”."
-    path.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
-    return f"resolved {matched} {'entry' if matched == 1 else 'entries'} matching “{needle}”."
+        return f"no matching entries found for \u201c{needle}\u201d."
+    return f"resolved {matched} {'entry' if matched == 1 else 'entries'} matching \u201c{needle}\u201d."
 
 
 @tool
@@ -271,9 +323,16 @@ class FrictionMiddleware(AgentMiddleware):
     def _note_escape_hatch(self, request) -> None:
         name = request.tool_call.get("name", "?")
         if name in _ESCAPE_HATCHES:
+            # json.dumps, not str(): a Python dict repr ({'command': 'git diff'}) is not
+            # parseable by anything downstream, and the console rendered it verbatim —
+            # single quotes, u-prefixes and all — as the "detail" an operator is meant to
+            # read. JSON is the same information the view can pretty-print.
+            try:
+                args = json.dumps(request.tool_call.get("args", {}), default=str)
+            except (TypeError, ValueError):
+                args = str(request.tool_call.get("args", {}))
             _log("harness", f"reached for escape hatch '{name}' — candidate for a first-class tool",
-                 detail=str(request.tool_call.get("args", {}))[:300], severity="minor",
-                 source="auto", tool_name=name)
+                 detail=args[:300], severity="minor", source="auto", tool_name=name)
 
     def _note_error(self, request, e: Exception) -> None:
         if type(e).__name__ in _CONTROL_FLOW:
@@ -333,6 +392,36 @@ def _build_router():
             "counts": {k: sum(1 for r in read_entries(include_resolved=resolved) if r.get("kind") == k)
                        for k in _KINDS},
         }
+
+    @router.post("/api/friction/resolve")
+    async def _resolve(payload: dict) -> dict:
+        """Resolve (or reopen) one grouped row — the console's half of the triage state.
+
+        The view used to "dismiss" into ``localStorage``: per-browser, invisible to the
+        agent, and contradicted by the ledger the moment ``friction_review`` ran. An
+        operator would clear the backlog on screen and the agent would keep reporting
+        every item as live. There is one backlog, so there is one place to record that a
+        row is done — the ledger, the same ``resolved_at`` stamp the ``resolve_friction``
+        tool writes.
+
+        Matches the full ``summary`` and ``kind`` exactly (see ``set_resolved``): the
+        console is acting on the row it rendered, not on a search.
+        """
+        summary = str(payload.get("summary") or "").strip()
+        if not summary:
+            return {"error": "summary is required", "changed": 0}
+        kind = str(payload.get("kind") or "").strip()
+        if kind and kind not in _KINDS:
+            return {"error": f"kind must be one of {_KINDS}", "changed": 0}
+        resolved = bool(payload.get("resolved", True))
+        changed = set_resolved(
+            summary,
+            resolved=resolved,
+            reason=str(payload.get("reason") or ""),
+            kind=kind,
+            exact=True,
+        )
+        return {"changed": changed, "resolved": resolved, "summary": summary, "kind": kind}
 
     return router
 

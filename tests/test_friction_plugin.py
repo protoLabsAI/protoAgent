@@ -337,3 +337,128 @@ def test_read_api_filters_resolved(ledger):
     raw = client.get("/api/friction", params={"resolved": True, "grouped": False}).json()
     assert next(i for i in raw["items"] if i["summary"] == "fixed thing")["resolved_at"]
     assert not next(i for i in raw["items"] if i["summary"] == "still broken").get("resolved_at")
+
+
+# ── the console's triage write path — POST /api/friction/resolve ─────────────
+
+
+def _client(monkeypatch, tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from plugins import friction
+
+    monkeypatch.setenv("FRICTION_LOG", str(tmp_path / "friction.jsonl"))
+    app = FastAPI()
+    app.include_router(friction._build_router())
+    return TestClient(app)
+
+
+def test_console_resolve_stamps_the_ledger_the_agent_reads(monkeypatch, tmp_path):
+    """The point of the endpoint: one backlog. A row resolved in the console must drop
+    out of the agent's own friction_review, not just out of one operator's browser."""
+    client = _client(monkeypatch, tmp_path)
+    _record("harness", "board priority is immutable")
+    _record("harness", "still broken")
+
+    body = client.post(
+        "/api/friction/resolve",
+        json={"summary": "board priority is immutable", "kind": "harness"},
+    ).json()
+
+    assert body == {
+        "changed": 1,
+        "resolved": True,
+        "summary": "board priority is immutable",
+        "kind": "harness",
+    }
+    review = asyncio.run(friction_review.ainvoke({}))
+    assert "board priority is immutable" not in review
+    assert "still broken" in review
+    assert [i["summary"] for i in client.get("/api/friction").json()["items"]] == ["still broken"]
+
+
+def test_console_resolve_matches_the_row_exactly_not_a_substring(monkeypatch, tmp_path):
+    """The tool matches a substring on purpose; the console must NOT. It acts on one
+    grouped row, and a substring match would silently resolve every other row whose
+    summary happens to contain this one's text."""
+    client = _client(monkeypatch, tmp_path)
+    _record("harness", "read_file truncates")
+    _record("harness", "read_file truncates at 50k chars on a 167KB file")
+
+    assert client.post("/api/friction/resolve", json={"summary": "read_file truncates"}).json()["changed"] == 1
+
+    still_open = [i["summary"] for i in client.get("/api/friction").json()["items"]]
+    assert still_open == ["read_file truncates at 50k chars on a 167KB file"]
+
+
+def test_console_resolve_is_scoped_to_the_rows_kind(monkeypatch, tmp_path):
+    """Groups are keyed on (kind, summary) — the same summary in both channels is two
+    rows, and resolving one must not take the other with it."""
+    client = _client(monkeypatch, tmp_path)
+    _record("harness", "same words")
+    _record("model", "same words")
+
+    assert client.post("/api/friction/resolve", json={"summary": "same words", "kind": "model"}).json()["changed"] == 1
+
+    open_rows = {(i["kind"], i["summary"]) for i in client.get("/api/friction").json()["items"]}
+    assert open_rows == {("harness", "same words")}
+
+
+def test_console_can_reopen_a_resolved_row(monkeypatch, tmp_path):
+    """Reopening clears the stamp, so a row resolved by mistake comes back — and the
+    entry itself is still there, never deleted."""
+    client = _client(monkeypatch, tmp_path)
+    _record("harness", "premature")
+    client.post("/api/friction/resolve", json={"summary": "premature", "reason": "thought it was fixed"})
+
+    body = client.post("/api/friction/resolve", json={"summary": "premature", "resolved": False}).json()
+
+    assert body["changed"] == 1 and body["resolved"] is False
+    assert [i["summary"] for i in client.get("/api/friction").json()["items"]] == ["premature"]
+    rec = _recs(tmp_path / "friction.jsonl")[0]
+    assert "resolved_at" not in rec and "resolved_reason" not in rec
+
+
+def test_console_resolve_is_idempotent_and_reports_no_change(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    _record("harness", "once")
+    assert client.post("/api/friction/resolve", json={"summary": "once"}).json()["changed"] == 1
+    assert client.post("/api/friction/resolve", json={"summary": "once"}).json()["changed"] == 0
+
+
+def test_console_resolve_rejects_an_empty_summary_and_a_bogus_kind(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    _record("harness", "untouched")
+
+    assert client.post("/api/friction/resolve", json={"summary": "  "}).json()["changed"] == 0
+    assert "summary is required" in client.post("/api/friction/resolve", json={}).json()["error"]
+    assert "kind must be one of" in client.post(
+        "/api/friction/resolve", json={"summary": "untouched", "kind": "bogus"}
+    ).json()["error"]
+    assert not _recs(tmp_path / "friction.jsonl")[0].get("resolved_at")
+
+
+def test_a_resolve_never_truncates_the_ledger(monkeypatch, tmp_path):
+    """The rewrite is atomic (temp + os.replace). The audit trail is the reason resolve
+    stamps in place instead of deleting, so the write that does it must not be able to
+    lose it — and it must leave no .tmp litter behind."""
+    client = _client(monkeypatch, tmp_path)
+    for i in range(20):
+        _record("harness", f"entry {i}")
+
+    client.post("/api/friction/resolve", json={"summary": "entry 7"})
+
+    ledger = tmp_path / "friction.jsonl"
+    assert len(_recs(ledger)) == 20  # every record survived
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_auto_capture_detail_is_json_the_view_can_render(ledger):
+    """The captured args are stored as JSON, not a Python dict repr — the console shows
+    this string to an operator, and `{'command': 'git diff'}` parses as nothing."""
+    mw = FrictionMiddleware()
+    mw._note_escape_hatch(_Req("shell", {"command": "git diff", "cwd": "/repo"}))
+
+    detail = _recs(ledger)[0]["detail"]
+    assert json.loads(detail) == {"command": "git diff", "cwd": "/repo"}

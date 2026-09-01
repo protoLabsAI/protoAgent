@@ -396,7 +396,10 @@ def test_view_page_subresources_are_declared_public():
         pid = manifest.get("id") or entry.name
         for page in sorted(entry.glob("*.html")):
             html = page.read_text(encoding="utf-8")
-            for ref in re.findall(r'(?:src|href)="([^"]+)"', html):
+            # The lookbehind matters: a bare `(?:src|href)=` also matches the tail of
+            # `data-src="agent"` (a filter button's value, not a URL), and reported the
+            # friction view as loading a gated subresource called `/plugins/friction/agent`.
+            for ref in re.findall(r'(?<![\w-])(?:src|href)="([^"]+)"', html):
                 if ref.startswith(("http://", "https://", "data:", "#")):
                     continue
                 if "'" in ref or "+" in ref or "{" in ref:
