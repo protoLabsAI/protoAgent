@@ -88,9 +88,9 @@ registerPaletteSource(() => openTabs().map((t) => ({
 })));
 ```
 
-Core ships exactly this shape and no other path: `app/chatTabPalette.ts` is a row per open chat
-tab (label = the session title, id-namespaced, run → the console's nav chokepoint), so read it
-when yours needs one to copy.
+Core's own source is exactly this shape: `app/chatTabPalette.ts` is a row per open chat tab
+(label = the session title, id-namespaced, keywords plural because the match is a substring,
+run → the console's nav chokepoint). Read it when yours needs one to copy.
 
 A source is called **every time the palette is read** — once when ⌘K opens and again on each
 keystroke — so its rows follow your data with no notification of any kind on your side. (It is not
