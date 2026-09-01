@@ -170,8 +170,10 @@ class KnowledgeMiddleware(AgentMiddleware):
     def load_memory(
         self,
         memory_path: str | None = None,
-        max_sessions: int = 10,
-        max_tokens: int = 2000,
+        max_sessions: int | None = None,
+        max_tokens: int | None = None,
+        *,
+        exclude_session_id: str | None = None,
     ) -> str:
         """Format the most-recent persisted sessions as a ``<prior_sessions>``
         block for injection.
@@ -183,23 +185,48 @@ class KnowledgeMiddleware(AgentMiddleware):
         same can't-drift reasoning). Also stashes the digest's session ids on
         ``self._prior_sessions_ids`` so the per-turn injection record (ADR 0069
         D6) can attribute what was injected. Never raises.
+
+        ``max_sessions``/``max_tokens`` default to the configured ceilings
+        (`memory.max_sessions` / `memory.max_tokens`, #3308) — explicit values
+        still win, which is what the caps-changed reload in ``_cached_digest``
+        relies on.
+
+        ``exclude_session_id`` keeps the caller's own summary out of the RENDERED
+        block (ADR 0108 D9). It DEFAULTS to the ambient tracing session — the same
+        chain the summary writer keys on — so this public seam is safe by default:
+        a fork or plugin calling it mid-turn gets the guarantee the composer has,
+        instead of the leak #3252 fixed. Pass ``""`` for a deliberately neutral
+        digest; that is what the shared cache primer does, since a block cached
+        with one session's exclusion baked in would hide that session from every
+        other thread. (The stashed POOL is unfiltered for the same reason.)
         """
         from graph.middleware.memory import finish_digest, load_digest_pool
         from graph.middleware.memory import memory_path as _memory_path
 
+        opts = self._options()
+        max_sessions = opts.prior_sessions_max if max_sessions is None else max_sessions
+        max_tokens = opts.prior_sessions_max_tokens if max_tokens is None else max_tokens
+        if exclude_session_id is None:
+            try:
+                from observability import tracing
+
+                exclude_session_id = tracing.current_session_id() or ""
+            except Exception:  # noqa: BLE001 — no tracing context → no exclusion
+                exclude_session_id = ""
         # One MORE than the digest shows (ADR 0108 D9): the cache is shared across
         # sessions, so the active-session exclusion can only run per call — the
         # spare entry is what refills the digest when the caller's own summary is
         # dropped from the pool. Trimmed back to max_sessions in _cached_digest,
         # AFTER that filter, so the refill happens on the path production uses.
         pool, exists = load_digest_pool(memory_path or _memory_path(), max_sessions + 1)
-        # Stash the PRE-TRIM pool: _cached_digest re-filters and re-renders per
-        # call while the disk read stays TTL-cached.
+        # Stash the PRE-TRIM, UNFILTERED pool: _cached_digest re-filters and
+        # re-renders per call while the disk read stays TTL-cached.
         self._prior_sessions_pool = list(pool)
         self._prior_sessions_dir_exists = exists
         self._prior_sessions_max_tokens = max_tokens
         self._prior_sessions_max = max_sessions
-        res = finish_digest(pool[:max_sessions], max_tokens, dir_exists=exists)
+        shown = [e for e in pool if e.session_id != exclude_session_id] if exclude_session_id else pool
+        res = finish_digest(shown[:max_sessions], max_tokens, dir_exists=exists)
         self._prior_sessions_ids = [e.session_id for e in res.entries]
         return res.block
 
@@ -217,18 +244,35 @@ class KnowledgeMiddleware(AgentMiddleware):
         one unit)."""
         import time
 
-        policy = self._options().prior_sessions_policy
+        opts = self._options()
+        policy = opts.prior_sessions_policy
         if policy == "off":  # defensive — the composer gates before calling
             return "", []
         if policy == "relevant":
             from graph.middleware.memory import load_digest
 
-            return load_digest("relevant", query=query, exclude_session_id=exclude_session_id)
+            return load_digest(
+                "relevant",
+                query=query,
+                exclude_session_id=exclude_session_id,
+                max_sessions=opts.prior_sessions_max,
+                max_tokens=opts.prior_sessions_max_tokens,
+            )
         now = time.monotonic()
+        # A caps change (settings save) also invalidates: the pool is READ at
+        # max_sessions + 1, so a raised ceiling can't be served by trimming what
+        # is already in hand — it needs the wider disk read.
         if (
-            self._prior_sessions_cache is None and self._prior_sessions_pool is None
-        ) or (now - self._prior_sessions_loaded_at) > _PRIOR_SESSIONS_TTL_S:
-            self._prior_sessions_cache = self.load_memory()
+            (self._prior_sessions_cache is None and self._prior_sessions_pool is None)
+            or (now - self._prior_sessions_loaded_at) > _PRIOR_SESSIONS_TTL_S
+            or (self._prior_sessions_pool is not None and self._prior_sessions_max != opts.prior_sessions_max)
+        ):
+            self._prior_sessions_cache = self.load_memory(
+                max_sessions=opts.prior_sessions_max,
+                max_tokens=opts.prior_sessions_max_tokens,
+                # Neutral on purpose: this block is SHARED across sessions.
+                exclude_session_id="",
+            )
             self._prior_sessions_loaded_at = now
         if self._prior_sessions_pool is None:
             # Legacy primed-block path (tests): serve the block verbatim.
@@ -241,8 +285,8 @@ class KnowledgeMiddleware(AgentMiddleware):
         # Trim AFTER the exclusion (the pool holds one spare) so dropping the
         # caller's own summary refills from disk instead of shortening the digest.
         res = finish_digest(
-            pool[: self._prior_sessions_max],
-            self._prior_sessions_max_tokens,
+            pool[: opts.prior_sessions_max],
+            opts.prior_sessions_max_tokens,
             dir_exists=self._prior_sessions_dir_exists,
         )
         self._prior_sessions_ids = [e.session_id for e in res.entries]

@@ -6,8 +6,9 @@ exist on disk (the ``memory_path()`` files — named via the shared
 which hot-memory chunks ride every turn — view/delete for summaries,
 view/edit/delete for hot chunks. A security control first (SpAIware-class
 memory poisoning gets *detected* here), UX second. List rows carry the
-injection truth: ``in_digest`` (session is in the current digest window) and
-``injecting`` (hot chunk is in the current per-turn window).
+injection truth: ``in_digest`` (the agent is being told about this session,
+under the configured ``context.prior_sessions`` policy) and ``injecting`` (hot
+chunk is in the current per-turn window).
 
 Generic chunk CRUD already lives in ``knowledge_routes``; these routes add the
 policy-scoped view the inspector needs: a hot edit is pinned to
@@ -68,16 +69,53 @@ def _read_summary(paths: list[str]) -> dict:
     raise FileNotFoundError(paths[0])
 
 
-def _list_sessions() -> list[dict]:
-    """The sessions listing, newest first — sync (dir walk + a ``json.load``
-    per summary + the digest re-derivation); callers run it off the loop."""
+def _digest_policy() -> tuple[str, int, int]:
+    """The LIVE digest policy and its ceilings — ``context.prior_sessions`` plus
+    ``memory.max_sessions`` / ``memory.max_tokens``, read through the one shape
+    the composer reads (``ProjectionOptions.from_config``) so the inspector can't
+    describe a policy the turn isn't running. Falls back to the defaults when the
+    graph is down (a graphless server still serves this listing)."""
+    from graph.projection import ProjectionOptions
+
+    try:
+        opts = ProjectionOptions.from_config(getattr(STATE, "graph_config", None))
+    except Exception:  # noqa: BLE001 — a partial config must not 500 the inspector
+        log.debug("[memory] digest policy unreadable — assuming defaults", exc_info=True)
+        opts = ProjectionOptions()
+    return opts.prior_sessions_policy, opts.prior_sessions_max, opts.prior_sessions_max_tokens
+
+
+def _list_sessions(active_session_id: str = "") -> tuple[list[dict], str]:
+    """The sessions listing (newest first) and the digest policy it was derived
+    under — sync (dir walk + a ``json.load`` per summary + the digest
+    re-derivation); callers run it off the loop.
+
+    ``in_digest`` has to answer the question the operator is actually asking —
+    "is the agent being told about this session?" — which depends on the policy
+    (ADR 0108 D9, #3308):
+
+    - ``newest``: the digest window, computed with the CONFIGURED ceilings and
+      with ``active_session_id`` excluded, because a session is never a "prior"
+      session in its own thread;
+    - ``relevant``: chosen per turn from that turn's query, so no window exists
+      to badge — the key is OMITTED (the console reads absent as unknown and
+      draws no badge) and the policy explains it instead;
+    - ``off``: nothing is injected, so every row is ``False``. The old listing
+      badged the newest ten as in-digest here, which was exactly backwards.
+    """
     from graph.middleware.memory import digest_entry, load_prior_sessions_digest, memory_path
 
     base = memory_path()
-    # The ids the CURRENT digest injection carries — default args match the
-    # middleware's (10 newest, 2000-token cap, background:* excluded), so the
-    # console's "in digest" badge reflects what the model actually sees.
-    digest_ids = set(load_prior_sessions_digest()[1])
+    policy, max_sessions, max_tokens = _digest_policy()
+    digest_ids: set[str] = set()
+    if policy == "newest":
+        digest_ids = set(
+            load_prior_sessions_digest(
+                max_sessions=max_sessions,
+                max_tokens=max_tokens,
+                exclude_session_id=active_session_id,
+            )[1]
+        )
     sessions: list[tuple[float, dict]] = []
     if os.path.isdir(base):
         for fname in os.listdir(base):
@@ -94,10 +132,16 @@ def _list_sessions() -> list[dict]:
                 continue
             entry = digest_entry(summary)
             entry["size_bytes"] = size
-            entry["in_digest"] = entry["session_id"] in digest_ids
+            if policy == "off":
+                entry["in_digest"] = False
+            elif policy == "newest":
+                entry["in_digest"] = entry["session_id"] in digest_ids
+            # "relevant": no key — the digest is re-chosen per turn.
+            if active_session_id and entry["session_id"] == active_session_id:
+                entry["is_active_session"] = True
             sessions.append((mtime, entry))
     sessions.sort(key=lambda t: t[0], reverse=True)  # newest first, like the digest
-    return [e for _, e in sessions]
+    return [e for _, e in sessions], policy
 
 
 def _hot_chunks(store) -> list[dict]:
@@ -136,8 +180,12 @@ def register_memory_routes(app) -> None:
     # digest_entry) so the inspector shows exactly what the agent is told.
 
     @app.get("/api/memory/sessions")
-    async def _api_memory_sessions():
-        return {"sessions": await asyncio.to_thread(_list_sessions)}
+    async def _api_memory_sessions(session_id: str = ""):
+        # ``session_id`` = the chat the operator is looking at, so its own summary
+        # is reported the way the agent sees it (never a "prior" session of itself).
+        # Optional: an older console omits it and gets the whole-box view.
+        sessions, policy = await asyncio.to_thread(_list_sessions, session_id)
+        return {"sessions": sessions, "digest_policy": policy}
 
     @app.get("/api/memory/sessions/{session_id}")
     async def _api_memory_session_get(session_id: str):

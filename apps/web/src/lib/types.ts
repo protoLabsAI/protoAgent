@@ -1420,6 +1420,10 @@ export type MemoryHotChunk = KnowledgeChunk & { injecting?: boolean };
 // One session-summary digest row (GET /api/memory/sessions) — the same
 // derivation the <prior_sessions> digest injects, so the list can't drift
 // from what the agent is actually told.
+// How the <prior_sessions> digest is chosen each turn (`context.prior_sessions`,
+// ADR 0108 D9). Absent on an older backend → treat as "newest".
+export type MemoryDigestPolicy = "newest" | "relevant" | "off";
+
 export type MemorySessionDigest = {
   session_id: string;
   timestamp: string;
@@ -1427,10 +1431,17 @@ export type MemorySessionDigest = {
   topic: string;
   message_count: number;
   size_bytes?: number;
-  // Whether this session is in the CURRENT <prior_sessions> digest window (the
-  // ~10 newest under the token cap, background:* excluded). Absent on older
-  // backends → unknown; only an explicit `false` draws the "not in digest" badge.
+  // Whether the agent is currently told about this session. Under `newest` that
+  // is the digest window (the configured count, under the token cap, background:*
+  // and the viewed chat's own summary excluded); under `off` it is false for
+  // every row; under `relevant` the digest is re-chosen from each turn's query,
+  // so the field is ABSENT. Absent on older backends too → unknown; only an
+  // explicit `false` draws the "not in digest" badge.
   in_digest?: boolean;
+  // True for the chat the operator is viewing: a session's own summary is never
+  // a "prior" session in its own thread, so its `in_digest: false` means
+  // "excluded by design", not "aged out of the window".
+  is_active_session?: boolean;
   // Detail-only fields (GET /api/memory/sessions/{id}):
   trace_id?: string | null;
   rendered?: string; // the full render recall_session returns

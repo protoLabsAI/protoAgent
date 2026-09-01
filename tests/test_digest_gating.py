@@ -461,3 +461,119 @@ def test_off_policy_holds_when_constructed_uppercase(monkeypatch):
         options=ProjectionOptions(prior_sessions_policy="OFF"), prior_sessions=loader,
     )
     assert calls["n"] == 0
+
+
+# ---------------------------------------------------------------------------
+# The digest ceilings (`memory.max_sessions` / `memory.max_tokens`, #3308)
+# ---------------------------------------------------------------------------
+
+
+def test_yaml_ceilings_reach_the_projection():
+    """The two knobs were documented in the example config and read by NOTHING
+    for their whole life — an operator shrinking the digest got a silent no-op."""
+    from graph.config import LangGraphConfig
+
+    cfg = LangGraphConfig.from_dict({"memory": {"max_sessions": 3, "max_tokens": 900}})
+    assert (cfg.memory_max_sessions, cfg.memory_max_tokens) == (3, 900)
+    opts = ProjectionOptions.from_config(cfg)
+    assert (opts.prior_sessions_max, opts.prior_sessions_max_tokens) == (3, 900)
+
+
+@pytest.mark.parametrize("bad", [0, -5, "", "many", None])
+def test_non_positive_ceilings_fall_back_to_the_default(bad, caplog):
+    """A ceiling is not a switch: 0 would be an undocumented second spelling of
+    `context.prior_sessions: off`, and it must not arrive there silently."""
+    from graph.config import LangGraphConfig
+
+    with caplog.at_level("WARNING"):
+        cfg = LangGraphConfig.from_dict({"memory": {"max_sessions": bad}})
+    assert cfg.memory_max_sessions == 10
+    assert any("memory.max_sessions" in r.getMessage() for r in caplog.records)
+    # Directly-constructed options agree with what from_config makes of it.
+    assert ProjectionOptions(prior_sessions_max=0).prior_sessions_max == 10
+    assert ProjectionOptions(prior_sessions_max_tokens=-1).prior_sessions_max_tokens == 2000
+
+
+def test_middleware_digest_lists_only_the_configured_count(tmp_path):
+    from graph.middleware.knowledge import KnowledgeMiddleware
+
+    now = time.time()
+    for i in range(5):
+        _write(tmp_path, f"s{i}", f"topic {i}", mtime=now - i)
+    mw = KnowledgeMiddleware(None, options=ProjectionOptions(prior_sessions_max=2))
+    block = mw.load_memory(memory_path=str(tmp_path))
+    assert "s0" in block and "s1" in block
+    assert "s2" not in block and "s4" not in block
+
+
+def test_token_ceiling_trims_the_block(tmp_path):
+    now = time.time()
+    for i in range(5):
+        _write(tmp_path, f"s{i}", f"topic {i}", mtime=now - i)
+    from graph.middleware.knowledge import KnowledgeMiddleware
+
+    full = KnowledgeMiddleware(None).load_memory(memory_path=str(tmp_path))
+    # Room for the framing header plus about one entry line.
+    cap = max(1, (len(_DIGEST_HEADER) + 80) // 4)
+    trimmed = KnowledgeMiddleware(None, options=ProjectionOptions(prior_sessions_max_tokens=cap)).load_memory(
+        memory_path=str(tmp_path)
+    )
+    # finish_digest measures the header + entry lines (not the wrapper tags) — the
+    # same char/4 estimate the cap has always been expressed in.
+    assert len("\n".join(trimmed.splitlines()[1:-1])) // 4 <= cap
+    assert trimmed.count("\n") < full.count("\n")  # entries were shed
+    assert "s0" in trimmed and "s4" not in trimmed  # newest kept, oldest shed first
+
+
+def test_load_memory_excludes_the_caller_on_the_public_seam(tmp_path):
+    """`load_memory` is public — a fork or plugin calling it directly must get the
+    same guarantee the composer has, not the leak #3252 fixed."""
+    from graph.middleware.knowledge import KnowledgeMiddleware
+
+    now = time.time()
+    _write(tmp_path, "mine", "what I am doing now", mtime=now)
+    _write(tmp_path, "theirs", "release prep", mtime=now - 60)
+    mw = KnowledgeMiddleware(None)
+    block = mw.load_memory(memory_path=str(tmp_path), exclude_session_id="mine")
+    assert "theirs" in block and "mine" not in block
+    assert mw._prior_sessions_ids == ["theirs"]
+    # The stashed POOL stays unfiltered: it is shared across sessions, so baking
+    # one caller's exclusion into it would hide "mine" from every other thread.
+    assert {e.session_id for e in mw._prior_sessions_pool} == {"mine", "theirs"}
+
+
+def test_raising_the_ceiling_reloads_the_pool_inside_the_ttl(tmp_path, monkeypatch):
+    """The pool is READ at max_sessions + 1, so a widened ceiling cannot be served
+    by trimming what is already cached — it needs the wider disk read."""
+    from graph.middleware.knowledge import KnowledgeMiddleware
+
+    now = time.time()
+    for i in range(5):
+        _write(tmp_path, f"s{i}", f"topic {i}", mtime=now - i)
+    monkeypatch.setenv("MEMORY_PATH", str(tmp_path))  # memory_path() resolves per call
+
+    mw = KnowledgeMiddleware(None, options=ProjectionOptions(prior_sessions_max=2))
+    first = mw._cached_digest()
+    assert [e.session_id for e in first.entries] == ["s0", "s1"]
+
+    mw._options_override = ProjectionOptions(prior_sessions_max=4)
+    second = mw._cached_digest()  # same TTL window, wider ceiling
+    assert [e.session_id for e in second.entries] == ["s0", "s1", "s2", "s3"]
+
+
+def test_load_memory_defaults_the_exclusion_to_the_ambient_session(tmp_path, monkeypatch):
+    """Bare `load_memory()` mid-turn must not hand back the caller's own summary:
+    the default reads the tracing session id, the same chain the summary WRITER
+    keys on. `""` is the explicit opt-out the shared cache primer uses."""
+    from observability import tracing
+
+    from graph.middleware.knowledge import KnowledgeMiddleware
+
+    now = time.time()
+    _write(tmp_path, "mine", "what I am doing now", mtime=now)
+    _write(tmp_path, "theirs", "release prep", mtime=now - 60)
+    mw = KnowledgeMiddleware(None)
+
+    monkeypatch.setattr(tracing, "current_session_id", lambda: "mine")
+    assert "mine" not in mw.load_memory(memory_path=str(tmp_path))
+    assert "mine" in mw.load_memory(memory_path=str(tmp_path), exclude_session_id="")

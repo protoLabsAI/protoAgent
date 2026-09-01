@@ -612,6 +612,19 @@ The per-turn injected context — working state, always-on memory, the skill ind
 | `budget_pct` | `8` | Ceiling for the injected context as a percentage of the model's context window (chars//4), never below 16 000 chars (room for always-on memory + the digest — on a ≤32k window the floor applies). Over budget the lowest-priority parts shed first — RAG hits, then prior-session digest entries, then skill descriptions (skill names never drop); working state and always-on memory are never shed. `0` = unbounded; unbounded too when the gateway reports no window for the model (logged once). The priority order is fixed. The prompt preview API reports the budget and what was shed. |
 | `prior_sessions` | `newest` | Prior-session digest policy ([ADR 0108 D9](../adr/0108-context-architecture-v2.md)): `newest` injects the newest-N attributed digest exactly as before; `relevant` injects only sessions matching the turn's query (session-search FTS, bm25 then newest — falls back to `newest` on an empty query, a build without FTS5, or zero matches); `off` injects no automatic digest (`session_search` / `recall_session` stay the on-demand path). The active session's own summary is never injected as a "prior" session, whatever the policy. Under the D6 budget the digest sheds entry by entry (oldest / lowest-rank first). `off` may be written bare or quoted — YAML reads a bare `off` (like `no`/`false`) as the boolean false, which is restored to the policy rather than read as unset. |
 
+## `memory`
+
+The `<prior_sessions>` digest itself — the ceilings on the block `context.prior_sessions` chooses the contents of. Summaries are written by `SessionSummaryMiddleware` on the terminal turn and read back each turn by `KnowledgeMiddleware` ([ADR 0021](../adr/0021-agent-memory-architecture.md)).
+
+| Key | Default | What |
+|---|---|---|
+| `max_sessions` | `10` | How many past sessions the digest may list — one attributed line each (id, timestamp, surface, topic, message count), roughly 30 tokens per entry. Lower it to keep continuity while spending less of the turn on unrelated history. |
+| `max_tokens` | `2000` | Ceiling for the rendered block (chars ÷ 4). Entries past it drop from the end — oldest first under `newest`, lowest-ranked first under `relevant`. At the default session count the block lands well under this, so `max_sessions` is usually the binding limit. |
+
+Both are **ceilings, not switches**: a non-positive value falls back to the default with a warning, because `0` would be an undocumented second spelling of `context.prior_sessions: off` — which is how you actually remove the digest. Before #3308 neither key was read by anything, so an operator who set them got a silent no-op.
+
+There is no `path` key. Summaries live in the instance store (`~/.protoagent/<instance>/memory`), overridable only with the `MEMORY_PATH` environment variable — the old `path: /sandbox/memory/` was a container-era default that is unwritable on an ordinary host, which is why the location moved to the instance store.
+
 ## `skills`
 
 Human-authored skills in the AgentSkills [`SKILL.md`](../guides/skills.md) format — a folder with YAML frontmatter (`name` + `description`) and a markdown body. Loaded from disk into an FTS5 index on boot; `KnowledgeMiddleware` lists the index (name + summary) as an always-on `<available_skills>` block and the agent loads a skill's full body on demand via `load_skill` ([progressive disclosure, ADR 0060](../adr/0060-skill-progressive-disclosure.md)).

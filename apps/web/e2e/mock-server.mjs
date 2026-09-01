@@ -214,7 +214,16 @@ let memory = cloneMemory();
 //   legacy: true                        → rows are served WITHOUT the delivery-truth
 //                                         fields (in_digest/injecting/size_bytes), like
 //                                         a backend predating them
-const defaultMemoryMode = () => ({ fail: "", enabled: true, empty: false, replaced: true, legacy: false });
+// `policy` = the live `context.prior_sessions` the sessions listing is derived
+// under (#3308); "" serves no digest_policy at all — the legacy backend shape.
+const defaultMemoryMode = () => ({
+  fail: "",
+  enabled: true,
+  empty: false,
+  replaced: true,
+  legacy: false,
+  policy: "newest",
+});
 let memoryMode = defaultMemoryMode();
 const stripFields = (rows, keys) =>
   rows.map((r) => {
@@ -877,7 +886,20 @@ const server = createServer(async (req, res) => {
         if (memoryMode.fail === "sessions") return sendJson(res, { detail: "kaboom (mock)" }, 500);
         let rows = memoryMode.empty ? [] : memory.sessions;
         if (memoryMode.legacy) rows = stripFields(rows, ["in_digest", "size_bytes"]);
-        return sendJson(res, { sessions: rows });
+        // The real route derives in_digest UNDER the policy: `off` injects nothing,
+        // `relevant` re-chooses per turn (so it sends no flag at all).
+        if (memoryMode.policy === "off") rows = rows.map((r) => ({ ...r, in_digest: false }));
+        if (memoryMode.policy === "relevant") rows = stripFields(rows, ["in_digest"]);
+        // The viewed chat is never a "prior" session of itself.
+        const viewing = new URL(req.url, "http://x").searchParams.get("session_id") || "";
+        if (viewing) {
+          rows = rows.map((r) =>
+            r.session_id === viewing ? { ...r, in_digest: false, is_active_session: true } : r,
+          );
+        }
+        // A legacy backend sends neither the flags nor the policy.
+        const policy = memoryMode.legacy ? "" : memoryMode.policy;
+        return sendJson(res, policy ? { sessions: rows, digest_policy: policy } : { sessions: rows });
       }
       {
         const m = pathname.match(/^\/api\/memory\/sessions\/([^/]+)$/);

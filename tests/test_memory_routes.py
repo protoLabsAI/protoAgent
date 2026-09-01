@@ -66,7 +66,7 @@ def test_sessions_list_newest_first_and_skips_non_json(tmp_path, monkeypatch):
 
 def test_sessions_list_empty_dir(tmp_path, monkeypatch):
     c = _client(monkeypatch, tmp_path)
-    assert c.get("/api/memory/sessions").json() == {"sessions": []}
+    assert c.get("/api/memory/sessions").json() == {"sessions": [], "digest_policy": "newest"}
 
 
 def test_sessions_list_skips_corrupt_file(tmp_path, monkeypatch):
@@ -559,3 +559,74 @@ def test_review_route_rejects_bad_state_unknown_id_commons_and_no_store(tmp_path
         "id": None,
         "review_state": None,
     }
+
+
+# ── the digest policy the badge is derived under (#3308) ──────────────────────
+
+
+def _config(**kw):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(**kw)
+
+
+def test_sessions_list_reports_the_digest_policy(tmp_path, monkeypatch):
+    import runtime.state as rs
+
+    _write(tmp_path, "chat-a", [{"role": "user", "content": "hi"}])
+    monkeypatch.setattr(rs.STATE, "graph_config", _config(context_prior_sessions="relevant"), raising=False)
+    c = _client(monkeypatch, tmp_path)
+    body = c.get("/api/memory/sessions").json()
+    assert body["digest_policy"] == "relevant"
+    # `relevant` re-chooses the digest from each turn's query, so there is no
+    # window to badge — the key is absent rather than a guess the console draws.
+    assert "in_digest" not in body["sessions"][0]
+
+
+def test_sessions_list_under_off_badges_nothing_as_injected(tmp_path, monkeypatch):
+    """The old listing badged the newest ten as "in digest" under `off`, which is
+    exactly backwards: nothing is injected at all."""
+    import runtime.state as rs
+
+    _write(tmp_path, "chat-a", [{"role": "user", "content": "hi"}])
+    _write(tmp_path, "chat-b", [{"role": "user", "content": "yo"}])
+    monkeypatch.setattr(rs.STATE, "graph_config", _config(context_prior_sessions="off"), raising=False)
+    c = _client(monkeypatch, tmp_path)
+    body = c.get("/api/memory/sessions").json()
+    assert body["digest_policy"] == "off"
+    assert all(r["in_digest"] is False for r in body["sessions"])
+
+
+def test_sessions_list_excludes_the_viewed_chat_from_its_own_digest(tmp_path, monkeypatch):
+    import os
+
+    # 11 sessions: without the exclusion the newest 10 are "in digest". Viewing
+    # the newest chat must drop it (a session is never its own prior session) AND
+    # refill the window from the next-newest, rather than shortening it.
+    for i in range(11):
+        sid = f"s-{i:02d}"
+        _write(tmp_path, sid, [{"role": "user", "content": sid}])
+        p = tmp_path / f"{sid}.json"
+        os.utime(p, (p.stat().st_atime, p.stat().st_mtime - (11 - i) * 100))
+    c = _client(monkeypatch, tmp_path)
+    rows = {r["session_id"]: r for r in c.get("/api/memory/sessions?session_id=s-10").json()["sessions"]}
+    assert rows["s-10"]["in_digest"] is False
+    assert rows["s-10"]["is_active_session"] is True
+    assert rows["s-00"]["in_digest"] is True  # refilled by the spare, not left short
+    assert "is_active_session" not in rows["s-00"]
+
+
+def test_sessions_list_honors_the_configured_digest_size(tmp_path, monkeypatch):
+    import os
+
+    import runtime.state as rs
+
+    for i in range(4):
+        sid = f"s-{i}"
+        _write(tmp_path, sid, [{"role": "user", "content": sid}])
+        p = tmp_path / f"{sid}.json"
+        os.utime(p, (p.stat().st_atime, p.stat().st_mtime - (4 - i) * 100))
+    monkeypatch.setattr(rs.STATE, "graph_config", _config(memory_max_sessions=2), raising=False)
+    c = _client(monkeypatch, tmp_path)
+    flags = {r["session_id"]: r["in_digest"] for r in c.get("/api/memory/sessions").json()["sessions"]}
+    assert flags == {"s-3": True, "s-2": True, "s-1": False, "s-0": False}
