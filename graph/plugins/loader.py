@@ -37,6 +37,8 @@ class PluginLoadResult:
     workflow_dirs: list = field(default_factory=list)  # *.yaml recipe dirs (ADR 0027)
     goal_verifiers: dict = field(default_factory=dict)  # name -> verifier fn (ADR 0028)
     goal_verifier_meta: dict = field(default_factory=dict)  # name -> {plugin_id, description}
+    work_providers: dict = field(default_factory=dict)  # name -> () -> list[dict] (ADR 0079)
+    work_provider_meta: dict = field(default_factory=dict)  # name -> {plugin_id, label}
     goal_hooks: list = field(default_factory=list)  # {on_achieved, on_failed} (ADR 0028)
     watch_hooks: list = field(default_factory=list)  # {on_met, on_expired, on_stalled} (ADR 0067)
     lifecycle_hooks: list = field(default_factory=list)  # {on_app_loaded, on_agent_active, on_system_wake} (ADR 0074)
@@ -714,6 +716,14 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
             meta = registry.goal_verifier_meta.get(name)
             if meta:
                 result.goal_verifier_meta[name] = meta
+        for name, fn in registry.work_providers.items():  # ADR 0079 (Observe)
+            if name in result.work_providers:
+                log.warning("[plugins] %s: work provider %s collides — skipped", manifest.id, name)
+                continue
+            result.work_providers[name] = fn
+            meta = registry.work_provider_meta.get(name)
+            if meta:
+                result.work_provider_meta[name] = meta
         result.goal_hooks.extend(registry.goal_hooks)  # ADR 0028 D4
         result.watch_hooks.extend(registry.watch_hooks)  # ADR 0067
         result.lifecycle_hooks.extend(registry.lifecycle_hooks)  # ADR 0074

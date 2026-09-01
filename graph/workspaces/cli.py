@@ -93,6 +93,8 @@ def run_workspace_cli(argv: list[str]) -> int:
             print(f"  {s['path']}")
             if s.get("installed"):
                 print(f"  installed: {', '.join(s['installed'])}")
+            for warning in s.get("warnings") or []:
+                print(f"  ! {warning}")
             print(f"  edit langgraph-config.yaml (model + secrets), then: python -m server workspace run {s['name']}")
             return 0
         if args.cmd == "ls":

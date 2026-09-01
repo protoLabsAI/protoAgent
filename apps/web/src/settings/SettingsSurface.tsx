@@ -1,7 +1,8 @@
-import { Activity, BarChart3, Bot, BookMarked, Boxes, Brain, Cpu, Database, FlaskConical, Gauge, Keyboard, KeyRound, Lock, MessageSquare, Network, Package, Palette, Plug, Puzzle, Server, Share2, Smartphone, Sparkles, Store, Wrench } from "lucide-react";
+import { Activity, Bot, BookMarked, Boxes, Brain, ChartColumn, Cpu, Database, FlaskConical, Gauge, Keyboard, KeyRound, Lock, MessageSquare, Network, Package, Palette, Plug, Puzzle, Server, Share2, Smartphone, Sparkles, Store, Wrench } from "lucide-react";
 import { useFlagPredicate } from "../flags/flags";
-import { visibleSections } from "./sectionGate";
+import { settingsSectionGroups } from "./sections";
 import type { LucideIcon } from "lucide-react";
+import type { SettingsSection, SettingsSectionIcon, SettingsSectionId } from "./sections";
 import { useEffect, type ReactNode } from "react";
 
 import { SideNav, Tabs } from "@protolabsai/ui/navigation";
@@ -35,33 +36,41 @@ import { ProvidersPanel } from "./ProvidersPanel";
 import { SettingsCategoryPanel } from "./SettingsCategory";
 import { ThemeSurface } from "./ThemeSurface";
 
-// Settings IA (ADR 0048, ratified 2026-06-28). ONE surface, organized by DOMAIN — what a
-// setting *does* — not by scope. Scope (host vs agent) is a per-field inheritance badge
-// (ADR 0047), never a nav axis. The sidenav splits into labeled groups:
-//
-//   Agent        — what defines the focused agent: Identity · Model · Behavior · Knowledge ·
-//                  Tracing · Plugins. Schema-driven domains carry the ADR 0047 badge.
-//   Capabilities — what the agent is wired to: Tools · MCP · Skills · Subagents · Delegates.
-//                  Each manager owns its sharing/tier knob via a contextual chip (no extra panel).
-//   Box          — box-wide ops: Overview · Fleet · Telemetry. Overview + Telemetry are host
-//                  console only; Fleet renders in every sister agent's window too (it names
-//                  the hub's fleet from anywhere). Box-runtime + telemetry knobs are chips on
-//                  Fleet / Telemetry, not a separate empty panel.
-//   This console — device-local prefs (NOT agent config, no cascade): Theme · Chat · Keyboard.
+// The Settings IA and the section TABLE (ids · labels · icon names · flag/hostOnly gates ·
+// group order) live in ./sections — a leaf that imports neither React nor lucide, so ⌘K and
+// the desktop Launcher can name a section without dragging this whole panel tree along.
+// This file supplies the two halves that genuinely need React: what each id RENDERS, and the
+// name → lucide component map.
 
-type Section = {
-  id: string;
-  label: string;
-  icon: LucideIcon;
-  render: () => ReactNode;
-  /** Developer flag gating this section (ADR 0068). Absent = always shown. A flag-off
-   *  section is filtered from BOTH the nav and the resolvable set, so a persisted id
-   *  pointing at it falls back to the first visible section rather than a blank pane. */
-  flag?: string;
-  /** Box sections only: this one reads the FOCUSED agent's endpoints, so it renders on the
-   *  host console alone. Absent on a Box section = it names the whole box from any window
-   *  (Fleet — `/api/fleet` is a hub path), so a sister agent's console gets it too. */
-  hostOnly?: boolean;
+// Explicit, statically-imported icon components rather than lib/lucideIcon's lazy resolver:
+// the rail is on screen the instant Settings opens and must not flicker through a Suspense
+// fallback, and a static map keeps the 23 glyphs tree-shakeable instead of pulling the whole
+// lucide set. `Record<SettingsSectionIcon, …>` makes the map exhaustive — a new section with
+// an unmapped icon name is a type error, not a missing glyph.
+const ICONS: Record<SettingsSectionIcon, LucideIcon> = {
+  Sparkles,
+  KeyRound,
+  Smartphone,
+  Cpu,
+  Brain,
+  Database,
+  Activity,
+  Lock,
+  Share2,
+  Puzzle,
+  Package,
+  Wrench,
+  Plug,
+  BookMarked,
+  Bot,
+  Network,
+  Gauge,
+  Server,
+  ChartColumn,
+  Palette,
+  MessageSquare,
+  Keyboard,
+  FlaskConical,
 };
 
 // The Plugins manager (install · enable · configure, plus the Discover directory) — the
@@ -85,95 +94,48 @@ function PluginSettingsHome() {
   );
 }
 
-// AGENT — what defines the focused agent (schema domains + the bespoke Identity panel).
-const AGENT_SECTIONS: Section[] = [
-  // Identity is the bespoke panel ONLY (name + persona/SOUL via /api/config) so the SOUL editor
-  // fills the panel. The operator/org/access schema fields are their own one-click section (a
-  // chip-in-a-dialog was unnecessary extra clicking).
-  { id: "identity", label: "Identity", icon: Sparkles, render: () => <IdentityPanel /> },
-  { id: "access", label: "Operator & access", icon: KeyRound, render: () => <SettingsCategoryPanel category="Identity" title="Operator & access" /> },
-  // Paired devices (ADR 0087) — sits next to access because it IS access: each device holds
-  // its own revocable token rather than sharing the operator bearer.
-  // Behind `settings.devices` (ADR 0068), default OFF — see the flag's description in
-  // runtime/flags.py. The pairing flow stopped the desktop app from starting four times; it
-  // stays hidden until the whole path is exercised in the desktop app itself.
-  { id: "devices", label: "Devices", icon: Smartphone, flag: "settings.devices", render: () => <DevicesPanel /> },
-  // id stays "model" (the former "settings"/"Model & Routing"). It now renders ONLY the Model
-  // domain (model · routing · caching) instead of the whole Agent category (ADR 0048 C4).
-  // Connections is the first, default-open accordion group. The OAuth account lifecycle
-  // (#2460) lives there beside gateway connections instead of outside the accordion.
-  { id: "model", label: "Model", icon: Cpu, render: () => (
+// What each section id RENDERS. Keyed by id and typed `Record<SettingsSectionId, …>`, so
+// adding a row to the table without a panel here fails the build rather than blanking a pane.
+const RENDERERS: Record<SettingsSectionId, () => ReactNode> = {
+  identity: () => <IdentityPanel />,
+  access: () => <SettingsCategoryPanel category="Identity" title="Operator & access" />,
+  devices: () => <DevicesPanel />,
+  // Connections is the first, default-open accordion group (the OAuth account lifecycle, #2460).
+  model: () => (
     <SettingsCategoryPanel
       category="Model"
       title="Model & routing"
       leadTitle="Connections"
       lead={<ProvidersPanel />}
     />
-  ) },
-  { id: "behavior", label: "Behavior", icon: Brain, render: () => <SettingsCategoryPanel category="Behavior" title="Behavior" /> },
-  { id: "knowledge", label: "Knowledge", icon: Database, render: () => <SettingsCategoryPanel category="Knowledge" title="Knowledge" /> },
-  // Langfuse tracing (#3017) — ADR 0006's deep-trace half. It sits in the AGENT group rather
-  // than beside Box ▸ Telemetry because its four fields are AGENT-scoped credentials and Box ▸
-  // Telemetry is `hostOnly`: a fleet member launched by the desktop app (`--ui none`) serves no
-  // console of its own and is only ever seen through a member window, which is precisely where
-  // tracing had no reachable switch. Telemetry keeps a QuickSetting chip on the same four keys
-  // for the host console, so both halves of ADR 0006 still meet in one place there.
-  { id: "tracing", label: "Tracing", icon: Activity, render: () => <SettingsCategoryPanel category="Observability" title="Tracing" /> },
-  // External secrets manager (ADR 0080) — schema fields + the status/test/sync card.
-  // Behind `secrets-panel` (ADR 0068), dev channel only — see the flag in runtime/flags.py.
-  // Flag-off: `shown()` drops it from the nav AND from id resolution, so a persisted "secrets"
-  // id falls back to the first visible section instead of a blank pane.
-  { id: "secrets", label: "Secrets", icon: Lock, flag: "secrets-panel", render: () => <SecretsPanel /> },
-  // Publishing a chat thread to the hosted viewer (#2179 P2, #2682-#2684) — schema fields
-  // (endpoint URLs) + the published-links list/revoke card, same footer-seam pattern as
-  // Secrets above. Behind `chat.publish` (ADR 0068), off by default: the hosted service
-  // (#2685) doesn't exist yet, so there's nothing for this panel to manage until an
-  // operator has a real endpoint to configure.
-  { id: "publish", label: "Publish", icon: Share2, flag: "chat.publish", render: () => (
-    <SettingsCategoryPanel category="Publish" title="Publish" footer={<PublishedLinksSection />} />
-  ) },
-  { id: "plugins", label: "Plugins", icon: Puzzle, render: () => <PluginSettingsHome /> },
-  // Last in the group on purpose: a snapshot exports what every section above configures
-  // (identity, model, behavior, plugins) — it IS this agent's definition (ADR 0091).
-  { id: "snapshot", label: "Snapshot", icon: Package, render: () => <SnapshotPanel /> },
-];
-
-// CAPABILITIES — what the agent is wired to (rich bespoke managers). Each manager owns its own
-// sharing/tier knob via a contextual "…sharing" chip in its header (Skills/MCP) — not a separate
-// schema-only panel (ADR 0048 §2.2: a chip is a shortcut to the canonical field, same save path).
-const CAPABILITY_SECTIONS: Section[] = [
-  { id: "tools", label: "Tools", icon: Wrench, render: () => <ToolsPanel /> },
-  { id: "mcp", label: "MCP", icon: Plug, render: () => <McpPanel /> },
-  { id: "skills", label: "Skills", icon: BookMarked, render: () => <PlaybooksSurface /> },
-  { id: "subagents", label: "Subagents", icon: Bot, render: () => <SubagentsPanel /> },
-  { id: "delegates", label: "Delegates", icon: Network, render: () => <DelegatesSection /> },
-];
-
-// BOX — box-wide operations. Overview + Telemetry read the FOCUSED agent's endpoints
-// (/api/runtime, /api/telemetry), so they'd mean something different in a sister agent's
-// window and stay host-console-only. Fleet is the exception: `/api/fleet` is a hub path
-// (never slug-scoped), so it names the SAME fleet from every window — every sister agent
-// manages the roster its hub does. The host box-runtime + telemetry knobs are reached via
-// chips on Fleet ("Box runtime") and Telemetry, not a separate empty schema panel.
-const BOX_SECTIONS: Section[] = [
-  { id: "overview", label: "Overview", icon: Gauge, hostOnly: true, render: () => <OverviewPanel /> },
-  { id: "fleet", label: "Fleet", icon: Server, render: () => <FleetSurface /> },
-  { id: "telemetry", label: "Telemetry", icon: BarChart3, hostOnly: true, render: () => <TelemetrySurface /> },
-];
-
-// THIS CONSOLE — device-local preferences. These don't cascade and use their own backends
-// (Theme → /api/theme; Chat/Keyboard → the persisted UI store). Kept visibly separate from
-// agent config so the "this device vs this agent" line is obvious (ADR 0048 §2.4).
-const CONSOLE_SECTIONS: Section[] = [
-  { id: "theme", label: "Theme", icon: Palette, render: () => <ThemeSurface /> },
-  { id: "chat", label: "Chat", icon: MessageSquare, render: () => <ChatSettingsPanel /> },
-  { id: "keybindings", label: "Keyboard", icon: Keyboard, render: () => <KeybindingsPanel /> },
-];
+  ),
+  behavior: () => <SettingsCategoryPanel category="Behavior" title="Behavior" />,
+  knowledge: () => <SettingsCategoryPanel category="Knowledge" title="Knowledge" />,
+  // graph/settings_schema.py maps section "Tracing" → category "Observability"; naming any
+  // other category here renders an empty panel (#3017).
+  tracing: () => <SettingsCategoryPanel category="Observability" title="Tracing" />,
+  secrets: () => <SecretsPanel />,
+  publish: () => <SettingsCategoryPanel category="Publish" title="Publish" footer={<PublishedLinksSection />} />,
+  plugins: () => <PluginSettingsHome />,
+  snapshot: () => <SnapshotPanel />,
+  tools: () => <ToolsPanel />,
+  mcp: () => <McpPanel />,
+  skills: () => <PlaybooksSurface />,
+  subagents: () => <SubagentsPanel />,
+  delegates: () => <DelegatesSection />,
+  overview: () => <OverviewPanel />,
+  fleet: () => <FleetSurface />,
+  telemetry: () => <TelemetrySurface />,
+  theme: () => <ThemeSurface />,
+  chat: () => <ChatSettingsPanel />,
+  keybindings: () => <KeybindingsPanel />,
+  developer: () => <DeveloperPanel />,
+};
 
 // One consolidated settings surface. `initialSection` deep-links a section (the overlay / a
 // palette command). The Box group's agent-scoped sections are gated to the host console;
 // Fleet is not.
-export function SettingsSurface({ initialSection }: { only?: "host" | "workspace"; initialSection?: string } = {}) {
+export function SettingsSurface({ initialSection }: { initialSection?: string } = {}) {
   const onHost = isHostConsole();
   // On phones the two-column shell can't fit a 200px rail + readable content, so collapse
   // the SideNav to its DS <select> (mobile only — the desktop rail is deliberately a tablist).
@@ -189,28 +151,17 @@ export function SettingsSurface({ initialSection }: { only?: "host" | "workspace
   // The Developer panel (ADR 0068) joins "This console" only off prod — a dev build, a
   // non-prod channel, or an explicit ?dev/?flag: reveal — so production operators never see it.
   const channel = useDeveloperChannel();
-  const consoleSections: Section[] = developerPanelVisible(channel)
-    ? [...CONSOLE_SECTIONS, { id: "developer", label: "Developer", icon: FlaskConical, render: () => <DeveloperPanel /> }]
-    : CONSOLE_SECTIONS;
-
-  // Drop flag-off sections everywhere they'd be reachable — nav, active-id resolution, and
-  // the palette/deep-link path that reads the same persisted id — and the same for `hostOnly`
-  // sections off the host console. A sister agent's window keeps
-  // the Box group, narrowed to what still names the box from there (Fleet). Narrowing the group
-  // — rather than dropping it — is what makes the header's "Fleet settings" deep-link resolve
-  // in a member window instead of silently falling back to the first section.
+  // settingsSectionGroups drops flag-off sections everywhere they'd be reachable — nav,
+  // active-id resolution, and the palette/deep-link path that reads the same persisted id — and
+  // the same for `hostOnly` sections off the host console. A sister agent's window keeps the
+  // Box group, narrowed to what still names the box from there (Fleet). Narrowing the group —
+  // rather than dropping it — is what makes the header's "Fleet settings" deep-link resolve in
+  // a member window instead of silently falling back to the first section.
   const flagOn = useFlagPredicate();
-  const shown = (list: Section[]) => visibleSections(list, flagOn, onHost);
-  const agentSections = shown(AGENT_SECTIONS);
-  const capabilitySections = shown(CAPABILITY_SECTIONS);
-  const boxSections = shown(BOX_SECTIONS);
+  const groups = settingsSectionGroups({ flagOn, onHost, developerVisible: developerPanelVisible(channel) });
 
-  const sections = [
-    ...agentSections,
-    ...capabilitySections,
-    ...boxSections,
-    ...consoleSections,
-  ];
+  // The resolvable set IS the flattened nav, so nothing can be reachable that isn't listed.
+  const sections = groups.flatMap((g) => g.sections);
   const active = sections.find((s) => s.id === persistedSection) ?? sections[0];
 
   // #2186 — the managed Python runtime's state was computed for the Tools panel's
@@ -237,24 +188,25 @@ export function SettingsSurface({ initialSection }: { only?: "host" | "workspace
       </span>
     ) : undefined;
 
-  const toItem = (s: Section) => ({
-    id: s.id,
-    label: s.label,
-    icon: <s.icon size={15} />,
-    badge: s.id === "tools" ? toolsBadge : undefined,
-  });
-  const groups = [
-    { label: "Agent", items: agentSections.map(toItem) },
-    { label: "Capabilities", items: capabilitySections.map(toItem) },
-    ...(boxSections.length ? [{ label: "Box", items: boxSections.map(toItem) }] : []),
-    { label: "This console", items: consoleSections.map(toItem) },
-  ];
+  // No cast on either lookup: settingsSectionGroups hands back rows with literal ids/icons,
+  // so an entry these maps don't cover is a type error here rather than `undefined` — a
+  // crashed <Icon /> or a blank content pane at runtime.
+  const toItem = (s: SettingsSection) => {
+    const Icon = ICONS[s.icon];
+    return {
+      id: s.id,
+      label: s.label,
+      icon: <Icon size={15} />,
+      badge: s.id === "tools" ? toolsBadge : undefined,
+    };
+  };
+  const navGroups = groups.map((g) => ({ label: g.label, items: g.sections.map(toItem) }));
 
   return (
     <div className="settings-shell">
-      <SideNav responsive={isMobile} ariaLabel="Settings sections" groups={groups} active={active.id} onSelect={(id) => setSection(id)} />
+      <SideNav responsive={isMobile} ariaLabel="Settings sections" groups={navGroups} active={active.id} onSelect={(id) => setSection(id)} />
       <div className="settings-content">
-        {active.render()}
+        {RENDERERS[active.id]()}
       </div>
     </div>
   );
