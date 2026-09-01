@@ -179,17 +179,21 @@ export function registerPaletteCommand(cmd: PaletteCommand): () => void {
  *  source's data, so a row that changed between two reads appears at the next read, not the
  *  instant it changed. Returns an unregister fn (idempotent).
  *
- *  KNOW WHAT THE PROVIDER PATH COSTS before putting an ACTION on it. The DS commands view
- *  debounces a provider 120ms and does not clear the previous query's results while it waits:
- *  it renders `[...statics.filter(match(q)), ...dynamic]` — statics re-filtered against what
- *  you typed, provider rows appended VERBATIM — and Enter runs the selected row. So for 120ms
- *  after every keystroke a source's rows are listed, and runnable, against a query they do
- *  not match. For "go to tab X" that is a mis-navigation; for a row that deletes, publishes or
- *  arms something it is worse than that. Rows that RUN something belong on
- *  `registerPaletteCommand` (client-filtered synchronously), re-registered when their inputs
- *  move — which is what core's own chat rows do (`app/chatSlashPalette`, #3292). Fixing the DS
- *  is the real answer and is filed as protoContent#504; until that lands and we take the bump,
- *  choose the path by what the row DOES, not by how live its data is. */
+ *  KNOW WHAT THE PROVIDER PATH COSTS before putting an ACTION on it — none of it is about how
+ *  live your data is:
+ *    • the rows are ORDERED, never ranked against the corpus (`orderCommands` runs after
+ *      `rankCommands` in palette/rootView.tsx), so they sit below every static and every
+ *      surface no matter how well they match what was typed;
+ *    • declaring `getCommands` at all puts a 120ms debounce and a "Searching…" spinner in
+ *      front of every keystroke, in every window that mounts the palette;
+ *    • and the results outlive the query they answered — the loop only overwrites them when a
+ *      read RESOLVES. Our root view stamps them with their query and drops a stale stamp; the
+ *      DS's own `CommandsBody` does not (protoContent#504), so a fork rendering through it
+ *      gets rows that are listed, selected and runnable against a query they do not match.
+ *  A source is right for a live list you BROWSE (a fork's open tabs, a roster) and for a
+ *  remote search that applies the query its own way. Rows that RUN something belong on
+ *  `registerPaletteCommand`, re-registered when their inputs move — which is what core's own
+ *  chat rows do (`app/chatSlashPalette`, #3292). */
 export function registerPaletteSource(fn: PaletteCommandSource): () => void {
   if (typeof fn !== "function") return () => {};
   _sources.add(fn);

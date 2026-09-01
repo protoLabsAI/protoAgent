@@ -51,22 +51,30 @@
 // ── Why the rows are STATIC, and what makes them live ────────────────────────────────
 // They were a `registerPaletteSource` at first, for two good reasons — the skill list is
 // live server state, and a client row's `disabled` state tracks the chat slot's session —
-// and that was wrong, because of what the DS does with a read-time provider. The commands
-// view debounces a provider 120ms and NEVER clears the previous query's results: `filtered`
-// is `[...statics.filter(match(q)), ...dynamic]`, statics re-filtered, provider rows
-// appended VERBATIM, and Enter runs `filtered[sel]`. So for 120ms after every keystroke the
-// palette lists — and will run — rows that do not match what is on screen. With core
-// shipping zero sources that path was unreachable; filling it with the chat's ACTION rows
-// would have made "type a new query, hit Enter" run the OLD query's command. (Filed upstream
-// as protoContent#504; this file does not wait for it.)
+// and a source was still the wrong path, on three counts that have nothing to do with how
+// live the data is:
 //
-// So the rows take the DS's synchronous, client-filtered STATIC path instead, and the host
-// (`usePaletteRegistry`) keeps them live by RE-REGISTERING them: it subscribes to the chat
+//   • RANKING. A source's rows are ORDERED, never re-filtered or scored against the corpus
+//     (palette/rootView.tsx: `orderCommands(live, …)` after `rankCommands(local, …)`), so
+//     they land after every static and every surface however well they match. `/clear` under
+//     the query "clear" belongs at the top, not below the whole "Go to" list — and with ~80
+//     commands arriving across the sibling PRs, ranking is what keeps any of them findable.
+//   • COST, in windows that get nothing for it. The root view shows "Searching…" and
+//     debounces 120ms whenever ANY provider declares `getCommands` — including the frameless
+//     desktop launcher, which mounts no chat and could never be served a row here. Core
+//     shipping a source put that spinner in front of every keystroke everywhere.
+//   • STALENESS, which is what made it urgent. A provider's results outlive the query they
+//     answered: the loop only overwrites them when a read RESOLVES. Our own root view now
+//     stamps and drops them (rootView.tsx), but the DS's `CommandsBody` still does not
+//     (protoContent#504) — and a row that RUNS something should not depend on that being
+//     fixed everywhere it might be rendered.
+//
+// So the rows take the synchronous, client-filtered, RANKED static path, and the host
+// (`palette/registry.ts`) keeps them live by RE-REGISTERING them: it subscribes to the chat
 // store through `chatPaletteSignature()` — everything a row renders from, as one string, so
 // a streamed token doesn't churn the palette — and to the shared `/api/chat/commands` query
-// for the skills. Same liveness, no stale window, and no "Searching…" spinner in front of
-// every keystroke in every window (the desktop launcher included, which can serve none of
-// these rows at all).
+// for the skills. Same liveness, ranked with everything else, nothing paid by a window that
+// cannot use it.
 //
 // ── SESSION SEMANTICS — decided per command, not guessed ─────────────────────────────
 // Most client commands `return false` without a session, and two more answer through a
@@ -118,7 +126,7 @@ import { prefillChatDraft, runSlashFromOutside, slashDispatchTarget } from "../c
 import type { PaletteCommand } from "../ext/paletteRegistry";
 import { findSlashCommand, registeredSlashCommands } from "../ext/slashRegistry";
 import type { SlashCommand } from "../lib/types";
-import type { NavIntent } from "./usePaletteRegistry";
+import type { NavIntent } from "./palette/nav";
 
 /** The palette's serializable navigation chokepoint (`navigate` in usePaletteRegistry).
  *  Injected rather than imported so this module stays free of the cycle — and so a test can

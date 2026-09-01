@@ -25,10 +25,12 @@ import "../chat/coreSlashCommands"; // side-effect: registers the client command
 import { registerSlashDispatcher } from "../chat/slashDispatch";
 import type { SlashDispatchTarget } from "../chat/slashDispatch";
 import { registeredSlashCommands } from "../ext/slashRegistry";
+import type { Command } from "@protolabsai/ui/command-palette";
 import type { PaletteCommand } from "../ext/paletteRegistry";
 import type { SlashCommand } from "../lib/types";
 import { chatPaletteSignature, chatSlashPaletteRows } from "./chatSlashPalette";
-import type { NavIntent } from "./usePaletteRegistry";
+import type { NavIntent } from "./palette/nav";
+import { matchCommand } from "./palette/rank";
 
 const offs: (() => void)[] = [];
 const nav = vi.fn<(intent: NavIntent) => void>();
@@ -362,25 +364,17 @@ describe("running a row", () => {
 });
 
 describe("what an operator types finds the row they mean", () => {
-  // A deliberate mirror of the host's `matchesQuery` (usePaletteRegistry) — which is itself a
-  // mirror of the DS commands view's own matcher: every whitespace-separated term must appear
-  // somewhere in label / hint / group / keywords, case-insensitively, as a SUBSTRING.
-  // Restated rather than imported because importing the host drags the DS palette, the UI
-  // store and the flags query in for a two-line predicate — and because the fact worth
-  // pinning is not the predicate but the ORDER it produces. The palette preselects the FIRST
-  // match and Enter runs it, so a keyword that lets one command outrank another's own name is
-  // the "typing /model runs /trajectory" trap coreSlashCommands warns about, one surface
-  // over: `/goal`'s usage string legitimately contains the word "clear".
-  const first = (query: string) => {
-    const terms = query.trim().toLowerCase().split(/\s+/);
-    return rows().find((r) => {
-      const hay = [r.label, r.hint, r.group, ...(r.keywords ?? [])]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return terms.every((t) => hay.includes(t));
-    })?.id;
-  };
+  // The host's REAL inclusion filter (`palette/rank.ts`, itself a verbatim port of the DS
+  // matcher), not a restatement of it — a mirror here would be a third copy free to drift
+  // from the two that decide what the operator actually sees. `rank.ts` imports only a type
+  // from the DS, so this costs nothing.
+  //
+  // What is pinned is the ORDER it produces, in registration order — which is what the
+  // untyped list renders, and the pool the typed list ranks. A keyword that lets one command
+  // outrank another's own name is the "typing /model runs /trajectory" trap coreSlashCommands
+  // warns about, one surface over: `/goal`'s usage string legitimately contains "clear".
+  const first = (query: string) =>
+    rows().find((r) => matchCommand(r as unknown as Command, query))?.id;
 
   beforeEach(() => {
     slot();

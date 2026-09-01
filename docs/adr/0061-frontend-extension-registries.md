@@ -278,20 +278,30 @@ modes are `needsThisChat`.
 
 **Rows go through the STATIC path, not `registerPaletteSource`.** They were a source first,
 for two real reasons — the skill list is live server state, and a client row's `disabled`
-tracks the session — and that was wrong, because of what the DS does with a read-time
-provider: the commands view debounces it 120ms and never clears the previous query's results
-(`filtered` is `[...statics.filter(match(q)), ...dynamic]` — statics re-filtered, provider
-rows appended *verbatim* — and Enter runs `filtered[sel]`). So for 120ms after every keystroke
-a source's rows are listed, and runnable, against a query they do not match. A mis-navigation
-for a fork's read-only "go to tab X" list; something else entirely for `/clear`. (Filed
-upstream as protoContent#504 — the seam's doc points at it, so the choice stays informed until
-we take the bump.) Statics are client-filtered
-synchronously instead, and the host keeps them live by **re-registering**: it subscribes to
-the chat store through a string projection of everything a row renders from
-(`chatPaletteSignature()` — so a streamed token doesn't churn the group) and to the shared
-`/api/chat/commands` query for the skills. Same liveness, no stale window, and no "Searching…"
-spinner in front of every keystroke. **Core therefore still ships zero sources**, which is
-what keeps `hasPaletteSources()` meaningful.
+tracks the session — and a source was still wrong, on three counts that are all about the
+PATH rather than the data:
+
+- **Ranking.** A provider's rows are *ordered*, never ranked against the corpus
+  (`orderCommands` after `rankCommands`, palette/rootView.tsx), because a source is a remote
+  search that applied the query its own way. So `/clear` under the query "clear" would sit
+  below every static and every surface. With ~80 commands arriving across the sibling
+  command PRs, ranking is what keeps any of them findable.
+- **Cost, in windows that get nothing back.** Declaring `getCommands` puts a 120ms debounce
+  and a "Searching…" spinner in front of every keystroke in *every* window that mounts the
+  palette — the frameless launcher included, which mounts no chat and can never be served one
+  of these rows.
+- **Staleness**, which is what made it urgent. A provider's results outlive the query they
+  answered: the loop only overwrites them when a read *resolves*. Our root view now stamps
+  them with their query and drops a stale stamp (`rootView.tsx`), but the DS's own
+  `CommandsBody` still does not (protoContent#504) — and a row that RUNS something should not
+  depend on that being fixed wherever it might be rendered.
+
+Statics are client-filtered and ranked synchronously instead, and the host keeps them live by
+**re-registering**: it subscribes to the chat store through a string projection of everything
+a row renders from (`chatPaletteSignature()` — so a streamed token doesn't churn the group)
+and to the shared `/api/chat/commands` query for the skills. Same liveness, ranked with
+everything else. **Core therefore still ships zero sources**, which is what keeps
+`hasPaletteSources()` meaningful.
 
 **Which windows get the rows is a fact about the WINDOW, not about what is mounted.** The gate
 is `chatSlotProvider(...) === "builtin"` (app/ChatSlot — the same resolution `ChatSlot`
