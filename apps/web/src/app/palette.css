@@ -41,3 +41,39 @@
   white-space: nowrap;
   border: 0;
 }
+
+/* ── The utility-bar affordance (PaletteButton.tsx) ────────────────────────────────────
+   Scoped to `.palette-btn`, its own class, for the same reason as everything above: it sits
+   on a shared `.util-btn` pill and must not restyle the widgets beside it.
+
+   Shaped like the field it opens rather than like its icon-only neighbours — a bordered box
+   with a magnifier and the live chord — because the button's job is to TEACH the chord, and
+   a bare glyph teaches nothing. It is the one pill on the bar that carries text, which is
+   what makes it read as a search box at a glance. */
+.palette-btn {
+  border: 1px solid var(--pl-color-border, #2c2c34);
+  padding-right: 6px;
+}
+
+.palette-btn__combo {
+  /* Tabular so a rebind between a wide and narrow chord doesn't reflow the bar, and the
+     system mono stack so the glyphs match what Settings ▸ Keyboard renders. */
+  font-family: var(--pl-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  opacity: 0.75;
+}
+
+.palette-btn:not(:disabled):hover .palette-btn__combo {
+  opacity: 1;
+}
+
+/* Below the AppShell's mobile breakpoint the utility bar is gone entirely (the chat-first
+   shell, ADR 0086), so this rule is for the narrow-DESKTOP case: keep the magnifier, drop
+   the chord, rather than letting the bar wrap. The tooltip and aria-label still carry it. */
+@media (max-width: 900px) {
+  .palette-btn__combo {
+    display: none;
+  }
+}

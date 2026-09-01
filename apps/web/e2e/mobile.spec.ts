@@ -153,3 +153,30 @@ test("mobile shell: no input zooms iOS, no touch target under 44px", async ({ pa
   });
   expect(small).toEqual([]);
 });
+
+// ── The palette on the shell that needs it most (ADR 0057 finding 04) ─────────────────
+// A phone has no keyboard to press `palette.toggle` with, so before this button the palette
+// — and with it every Settings section, the chat's verbs, live knowledge search, and every
+// surface behind the drawer — was simply unreachable on mobile. The shortcut was the only
+// door, and this is the shell with no shortcuts.
+test("mobile shell: the palette is reachable without a keyboard", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await expect(page.locator(".mshell")).toBeVisible();
+
+  const btn = page.getByRole("button", { name: "Search commands" });
+  await expect(btn).toBeVisible();
+  // No chord rendered here — there is nothing to teach on a device that cannot press one.
+  await expect(btn).toHaveText("");
+
+  await expect(page.locator(".pl-cmdk__panel")).toHaveCount(0);
+  await btn.tap();
+  await expect(page.locator(".pl-cmdk__panel")).toBeVisible();
+
+  // And it is a REAL palette, not just a panel: the root list renders and is searchable.
+  // `memory` is the query the whole arc exists to answer — it returned "No matches" before.
+  const input = page.locator(".pl-cmdk__panel .pl-cmdk-commands__input");
+  await input.fill("memory");
+  await expect(
+    page.locator(".pl-cmdk__panel .pl-cmdk-commands__label", { hasText: /^Memory$/ }),
+  ).toBeVisible();
+});

@@ -252,3 +252,37 @@ test("the query path is UNCAPPED — the cap belongs to the empty list alone", a
   await input.fill("e");
   expect(await rows.count()).toBeGreaterThan(rootCount);
 });
+
+// ── The visible way in (ADR 0057 findings 03/04) ──────────────────────────────────────
+// Everything above is reachable ONLY by a chord until these exist. The pair of cases is the
+// pair of shells: the desktop utility bar, and the chat-first mobile header (the mobile half
+// lives in mobile.spec.ts — the `mobile` project is the only one that runs a device profile).
+
+test("the utility bar offers the palette, and teaches its chord", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  const btn = page.getByTestId("palette-widget");
+  await expect(btn).toBeVisible();
+
+  // The chord is READ FROM THE BINDING, so this asserts the rendered text against the same
+  // source Settings ▸ Keyboard renders from rather than against a literal. `formatCombo`
+  // emits ⌘ on macOS and Ctrl elsewhere, so match the SHAPE (a shift-modified K) instead of
+  // a platform string — a literal here would be green on one CI runner and red on another.
+  await expect(btn).toHaveText(/K$/);
+  await expect(btn).toHaveAttribute("aria-keyshortcuts", /K$/);
+
+  await expect(page.locator(PANEL)).toHaveCount(0);
+  await btn.click();
+  await expect(page.locator(PANEL)).toBeVisible();
+});
+
+test("the button's label never collides with the Settings ▸ Keyboard row", async ({ page }) => {
+  // A REGRESSION PIN, not a style check. "Command palette" is the `palette.toggle` binding's
+  // label, which Settings ▸ Keyboard renders; the dialog PORTALS over the shell rather than
+  // unmounting it, and Playwright visibility ignores occlusion. So a button that put those
+  // words on screen would make `getByText("Command palette", { exact: true })` resolve to two
+  // nodes and break `keybindings.spec.ts` — a spec with nothing to do with this button. The
+  // words live in `aria-label`, which getByText does not match.
+  await page.goto("/app/", { waitUntil: "load" });
+  await expect(page.getByText("Command palette", { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("palette-widget")).toHaveAttribute("aria-label", "Search commands");
+});
