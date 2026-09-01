@@ -32,7 +32,7 @@
 //     row now carries `keybinding: "settings.open"` instead, so it advertises ⌘, without a
 //     twin (usePaletteRegistry.ts).
 //
-// ── Scope ─────────────────────────────────────────────────────────────────────────────
+// ── Scope, and the surface an action actually needs ───────────────────────────────────
 // `resolveBinding` (keybindings/resolve.ts) is the ONLY enforcement of `scope`, and a row
 // runs `binding.run()` directly — so a chat-scoped action fired from the palette would run
 // with focus in the overlay, which is never inside `[data-kb-scope="chat"]`. The answer is
@@ -40,6 +40,16 @@
 // binding's scope names, and `applyNavIntent` opens that surface before running the action.
 // "Clear conversation" invoked from Knowledge means "go to chat and clear it" anyway. A
 // binding whose scope this map can't resolve gets NO row — there is no honest way to run it.
+//
+// `scope` is not the whole answer, though, because it answers a different question: "where
+// may this chord fire from", not "what has to be on screen for the action to do anything".
+// `composer.focus` is GLOBAL (`/` works from Knowledge) yet the composer it focuses lives
+// inside chat's dock, and a COLLAPSED dock is not in the DOM at all — the DS AppShell renders
+// `{showLeft && <main …>}`. So a row may also name a `surface` outright; a resolvable scope
+// still wins over it. Without that, "Focus chat composer" was the very dead row the drops
+// below reject: its binding's own `setSurface("chat")` picks the active surface but never
+// un-collapses the dock, never routes to the dock chat was MOVED to, and never sets
+// `mobileActive` — all three of which `openView` does.
 //
 // ── Why no row is `disabled` ──────────────────────────────────────────────────────────
 // The seam offers `disabled` + `hint` for a row that should stay listed and explain itself,
@@ -98,6 +108,23 @@ type KeybindingRow = {
    *  of goes in plural per the rule above ("conversations" answers "conversation" too); the
    *  one-per-side furniture stays singular, because nobody types "hide sidebars". */
   keywords: string[];
+  /** The view this row's action needs ON SCREEN, for an action whose target lives on a
+   *  surface its binding does not declare a `scope` for.
+   *
+   *  `scope` answers "where may this chord fire from", and a GLOBAL binding answers
+   *  "anywhere" — correct for a chord, and not the same question as "what has to be mounted
+   *  for the action to do anything". `composer.focus` is the case: global (`/` from any
+   *  surface), but the composer it focuses exists only inside chat's dock, and a collapsed
+   *  dock is not in the DOM at all. Its own body calls `setSurface("chat")`, which picks the
+   *  active surface but does NOT un-collapse the dock, route to the dock chat was MOVED to,
+   *  or set `mobileActive` — the three things `openView` does. Without this the row was a
+   *  silent no-op from a collapsed dock: exactly the "dead in the state you'd reach for it
+   *  from" failure that dropped `focus.left`/`focus.right`/`focus.bottom` above.
+   *
+   *  A resolvable `scope` still WINS over this (see `registerKeybindingCommands`): scope is a
+   *  precondition the palette has to satisfy, this is only a hint about where the action's
+   *  target lives. */
+  surface?: string;
 };
 
 /** The allow-list, in display order. `chat.new` is also ADR 0057's never-built "New chat"
@@ -119,6 +146,9 @@ export const KEYBINDING_ROWS: KeybindingRow[] = [
     binding: "composer.focus", // "Focus chat composer"
     // "reply" stays singular — "replies" doesn't contain it, so the plural rule can't apply.
     keywords: ["focus", "type", "write", "input", "messages", "prompts", "reply", "textbox", "chats"],
+    // GLOBAL binding, chat-surface target — see `KeybindingRow.surface`. "I want to type a
+    // message" is the intent an operator has precisely when chat is collapsed away.
+    surface: "chat",
   },
   {
     binding: "chat.tab.next", // "Next chat tab"
@@ -171,8 +201,13 @@ export function registerKeybindingCommands(navigate: (intent: NavIntent) => void
   for (const row of KEYBINDING_ROWS) {
     const binding = bindings.find((b) => b.id === row.binding);
     if (!binding) continue; // a fork dropped it — never ship a row whose action doesn't exist
-    const surface = binding.scope ? SCOPE_SURFACE[binding.scope] : undefined;
-    if (binding.scope && !surface) continue; // unresolvable scope — see the header
+    // Scope first: it is a PRECONDITION `applyNavIntent` has to make true, and a scope this
+    // map can't resolve still gets no row (the fork contract in the header). A row's own
+    // `surface` only fills in for a binding that declares no scope — a global chord whose
+    // action nevertheless needs a surface mounted.
+    const scoped = binding.scope ? SCOPE_SURFACE[binding.scope] : undefined;
+    if (binding.scope && !scoped) continue; // unresolvable scope — see the header
+    const surface = scoped ?? row.surface;
     offs.push(
       registerPaletteCommand({
         id: keybindingCommandId(binding.id),

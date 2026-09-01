@@ -45,7 +45,8 @@ Settings ▸ Keyboard, not with the in-app chords above.
   panel** / **bottom dock** toggles. Each row shows the chord it is bound to *right now* —
   rebind one in Settings ▸ Keyboard and the row re-labels itself — so the palette doubles as
   the shortcut cheat-sheet: type `shortcuts` to list the whole set. A chat action navigates
-  to chat before it runs, so picking one from Knowledge or Settings does what you meant.
+  to chat before it runs — re-opening the dock chat lives on if you had it collapsed — so
+  picking one from Knowledge, Settings, or a folded-away rail does what you meant.
   (Not every binding gets a row. A shortcut whose row would open the thing you are already
   looking at, duplicate another row's action, or land somewhere it can't act is deliberately
   left to the keyboard — the full triage is in `apps/web/src/app/keybindingCommands.ts`.)

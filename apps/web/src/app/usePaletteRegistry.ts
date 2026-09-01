@@ -10,6 +10,7 @@
 // plugin's own iframe (themed/authed via the handshake) instead of navigating to its rail.
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { flushSync } from "react-dom";
 import { commandsView, createPaletteRegistry, pluginView } from "@protolabsai/ui/command-palette";
 import type {
   Command,
@@ -138,7 +139,7 @@ export function applyNavIntent(intent: NavIntent) {
       // `window.location` targets the window the operator is actually looking at.
       window.location.href = agentHref(intent.slug);
       break;
-    case "keybinding":
+    case "keybinding": {
       // Make the binding's SCOPE real before running it, rather than bypassing it.
       // `resolveBinding` is the only place `scope` is enforced and a palette row calls
       // `run()` directly, so a chat-scoped action would otherwise fire from an overlay that
@@ -146,13 +147,26 @@ export function applyNavIntent(intent: NavIntent) {
       // asked for — "Clear conversation" chosen from Knowledge means "go to chat and clear
       // it". A row for a scope with no surface is never built (keybindingCommands.ts).
       //
-      // Synchronous run right after is safe for the DOM-walking action (`chat.tool.toggle`):
-      // the chat slot is mounted for the app's LIFETIME and `active` only toggles visibility
-      // (ChatSlot.tsx, #613), so `openView` never has to mount anything for the walk to find
-      // it — no waiting on a render.
-      if (intent.surface) openView(intent.surface);
+      // …and `flushSync`, because "navigating first" has to mean the DOM, not the store.
+      // `openView` only writes zustand state; the row runs from a React event handler, so
+      // React commits AFTER the handler returns — the next line would otherwise read a DOM
+      // the navigation had not produced yet. That matters because the chat slot's #613
+      // "mounted for the app's LIFETIME" contract is about the slot within its DOCK, and the
+      // DS AppShell renders each column conditionally (`const showLeft = !leftCollapsed`;
+      // `{showLeft && <main className="pl-appshell__col--left">…</main>}`, app-shell.tsx). A
+      // collapsed dock takes `.chat-session-slot` and `[data-kb-scope="chat"]` out of the
+      // document entirely, so `chat.tool.toggle` — the one action here that WALKS the DOM
+      // (toolCollapse.ts `chatRoot()`) — found nothing and returned silently, re-opening the
+      // panel and doing nothing else. Flushing keeps every store-only action in this switch
+      // synchronous and observable (a deferred run would make `chat.clear` / `chat.new`
+      // land a frame later, in the launcher hand-off too), while giving the DOM-walking one
+      // a committed tree. Cheap: one navigation, only when a row names a surface.
+      // (Braced: `const` in a bare case clause leaks into the whole switch.)
+      const surface = intent.surface;
+      if (surface) flushSync(() => openView(surface));
       runBindingById(intent.id);
       break;
+    }
   }
 }
 

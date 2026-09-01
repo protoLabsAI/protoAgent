@@ -12,12 +12,13 @@
 //      can't resolve to a surface gets no row at all.
 //   5. A throwing binding leaves the palette working (and still closes it).
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, createElement as h } from "react";
+import { act, createElement as h, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Command, PaletteRegistry } from "@protolabsai/ui/command-palette";
 
 import { chatStore } from "../chat/chat-store";
+import { __resetToolCollapseWalk } from "../chat/toolCollapse";
 import { registerKeybinding, registeredKeybindings } from "../ext/keybindingRegistry";
 import type { Keybinding } from "../ext/keybindingRegistry";
 import { registeredPaletteCommands } from "../ext/paletteRegistry";
@@ -231,11 +232,24 @@ describe("every row routes through the NavIntent chokepoint", () => {
     expect(intents).toEqual([{ kind: "keybinding", id: "panel.toggle.left", surface: undefined }]);
   });
 
-  it("carries the surface a SCOPED binding's scope names, and none for a global one", () => {
+  it("carries the surface a SCOPED binding's scope names", () => {
     run("chat.clear");
-    run("composer.focus");
     expect(intents[0]).toEqual({ kind: "keybinding", id: "chat.clear", surface: "chat" });
-    expect(intents[1]).toEqual({ kind: "keybinding", id: "composer.focus", surface: undefined });
+  });
+
+  it("carries a row's OWN surface for a global binding whose action needs one", () => {
+    // `composer.focus` is global — no `scope` — so the scope map has nothing to say about it,
+    // and without the row's own declaration the intent carried `surface: undefined`,
+    // `applyNavIntent` skipped `openView`, and the row did nothing at all from a collapsed
+    // dock. (The end of that story is under "a row invoked while chat's dock is collapsed".)
+    expect(registeredKeybindings().find((b) => b.id === "composer.focus")?.scope).toBeUndefined();
+    run("composer.focus");
+    expect(intents[0]).toEqual({ kind: "keybinding", id: "composer.focus", surface: "chat" });
+  });
+
+  it("carries NO surface for a global binding that needs none", () => {
+    run("panel.toggle.right");
+    expect(intents[0]).toEqual({ kind: "keybinding", id: "panel.toggle.right", surface: undefined });
   });
 
   it("closes the palette after dispatching", () => {
@@ -263,6 +277,26 @@ describe("a scope with no surface gets no row at all", () => {
       off();
       registerKeybinding(original);
       registerKeybindingCommands(applyNavIntent); // restore the shipped rows for what follows
+    }
+  });
+
+  it("a row's own `surface` does not smuggle an unresolvable scope past that rule", () => {
+    // `composer.focus` is the row that declares `surface: "chat"` itself. If a fork RE-SCOPES
+    // it to a scope nothing maps, the row must still be dropped: the declared surface is a
+    // hint about where the action's target lives, not a substitute for satisfying `scope` —
+    // which `resolveBinding` is the only enforcement of, and which a row bypasses by calling
+    // `run()` directly.
+    const original = registeredKeybindings().find((b) => b.id === "composer.focus")!;
+    registerKeybindingCommands(() => {})();
+    registerKeybinding({ ...original, scope: "a-fork-scope-nobody-mapped" });
+    const off = registerKeybindingCommands(() => {});
+    try {
+      expect(kbRowIds()).not.toContain(keybindingCommandId("composer.focus"));
+      expect(kbRowIds()).toHaveLength(8);
+    } finally {
+      off();
+      registerKeybinding(original);
+      registerKeybindingCommands(applyNavIntent);
     }
   });
 });
@@ -386,5 +420,141 @@ describe("the advertised combo is the LIVE one, not defaultKeys", () => {
     expect(rebound).toBe(formatCombo("mod+shift+x"));
     expect(rebound).toBe(formatCombo(effectiveCombo(binding))); // …i.e. what Settings shows
     expect(rebound).not.toBe(formatCombo(binding.defaultKeys)); // the literal would lie here
+  });
+});
+
+// ── A COLLAPSED dock ─────────────────────────────────────────────────────────────────
+// The failure two of these rows shared, and the one no other case in this file could see.
+// The DS AppShell renders each column CONDITIONALLY — `const showLeft = !leftCollapsed`
+// and `{showLeft && <main className="pl-appshell__col--left">{leftContent}</main>}`
+// (@protolabsai/ui app-shell.tsx) — and `ChatSlot` only ever renders inside
+// `leftContent`/`rightContent`/`bottomContent` (App.tsx). So a collapsed dock takes the
+// WHOLE chat subtree out of the DOM: `.chat-session-slot`, `[data-kb-scope="chat"]`, the
+// composer. #613's "mounted for the app's lifetime" is a contract about the SLOT within its
+// dock, not about the dock.
+//
+// That state is one ⌘K row away, because "Toggle left rail" is one of the nine rows here.
+// Two consequences, both pinned below:
+//   • a DOM-walking action (`chat.tool.toggle`) must not run before React has COMMITTED the
+//     re-render `openView` scheduled — a zustand `set` is not a mounted column;
+//   • an action whose target lives on the chat surface needs `openView` even when its
+//     binding is GLOBAL — `composer.focus`'s own `setSurface("chat")` picks the active
+//     surface but never un-collapses the dock, so the row was a total no-op from here.
+//
+// The shell miniature is deliberately shaped like the real one: the column is CONDITIONAL on
+// the live `leftCollapsed`, and the chat subtree is inside it.
+describe("a row invoked while chat's dock is collapsed", () => {
+  let root: Root | null = null;
+  let uiSnapshot: ReturnType<typeof useUI.getState>;
+
+  const head = () => document.querySelector<HTMLButtonElement>(".pl-toolcard__head");
+
+  const Shell = () => {
+    const leftCollapsed = useUI((s) => s.leftCollapsed);
+    const surface = useUI((s) => s.surface);
+    const [expanded, setExpanded] = useState(false);
+    if (leftCollapsed) return null; // ← `{showLeft && <main …>}`
+    return h(
+      "main",
+      { className: "pl-appshell__col pl-appshell__col--left" },
+      h(
+        "section",
+        { "data-kb-scope": "chat" },
+        h(
+          "div",
+          { className: "chat-session-slot", hidden: surface !== "chat" },
+          h(
+            "div",
+            { className: "pl-message" },
+            h("button", {
+              className: "pl-toolcard__head",
+              "aria-expanded": String(expanded),
+              onClick: () => setExpanded((v) => !v),
+            }),
+          ),
+        ),
+      ),
+    );
+  };
+
+  beforeEach(async () => {
+    uiSnapshot = useUI.getState();
+    __resetToolCollapseWalk();
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () => {
+      root!.render(h(Shell));
+    });
+  });
+  afterEach(() => {
+    if (root) act(() => root!.unmount());
+    root = null;
+    document.body.innerHTML = "";
+    useUI.setState(uiSnapshot);
+    __resetToolCollapseWalk();
+  });
+
+  it("baseline — with the dock OPEN the tool-block row toggles the latest block", async () => {
+    await act(async () => useUI.setState({ leftCollapsed: false, surface: "chat" }));
+    expect(head()?.getAttribute("aria-expanded")).toBe("false");
+
+    await act(async () => {
+      applyNavIntent({ kind: "keybinding", id: "chat.tool.toggle", surface: "chat" });
+    });
+
+    expect(head()?.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("toggles the latest tool block after re-opening the dock, not just re-opening it", async () => {
+    await act(async () => useUI.setState({ leftCollapsed: true, surface: "knowledge" }));
+    // The premise: the whole chat subtree really is GONE, not hidden.
+    expect(document.querySelectorAll(".chat-session-slot")).toHaveLength(0);
+    expect(document.querySelectorAll('[data-kb-scope="chat"]')).toHaveLength(0);
+
+    await act(async () => {
+      applyNavIntent({ kind: "keybinding", id: "chat.tool.toggle", surface: "chat" });
+    });
+
+    expect(useUI.getState().leftCollapsed).toBe(false); // the column came back…
+    expect(head(), "chat subtree remounted").toBeTruthy();
+    // …and the action landed on it. Before the commit was forced, this stayed "false": the
+    // walk ran against a DOM the store write had not produced yet and silently found nothing.
+    expect(head()?.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("opens the dock for 'Focus chat composer', whose binding is GLOBAL", async () => {
+    await act(async () => useUI.setState({ leftCollapsed: true, surface: "knowledge", mobileActive: "knowledge" }));
+    const nonce = useKbIntents.getState().composerFocusNonce;
+
+    // Through the registered ROW, not a hand-built intent: the surface plumbing (a row that
+    // names its surface even though its binding declares no scope) is exactly what's on trial.
+    await act(async () => {
+      row("composer.focus")!.run({ close: () => {} });
+    });
+
+    expect(useUI.getState().leftCollapsed).toBe(false);
+    expect(useUI.getState().surface).toBe("chat");
+    expect(useUI.getState().mobileActive).toBe("chat"); // the phone shell reads this one
+    expect(useKbIntents.getState().composerFocusNonce).toBe(nonce + 1);
+  });
+
+  it("opens the dock chat was MOVED to — bottom, collapsed — for that same row", async () => {
+    const ro = useUI.getState().railOrder;
+    await act(async () =>
+      useUI.setState({
+        railOrder: { ...ro, left: ro.left.filter((x) => x !== "chat"), bottom: [...ro.bottom, "chat"] },
+        bottomCollapsed: true,
+        bottomPanel: "tasks",
+        surface: "knowledge",
+      }),
+    );
+
+    await act(async () => {
+      row("composer.focus")!.run({ close: () => {} });
+    });
+
+    expect(useUI.getState().bottomCollapsed).toBe(false);
+    expect(useUI.getState().bottomPanel).toBe("chat");
   });
 });

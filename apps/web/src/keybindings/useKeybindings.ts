@@ -86,10 +86,12 @@ export function runForwardedCombo(combo: string, editable = false): boolean {
 //     overlay is never inside `[data-kb-scope="chat"]` (ChatSurface.tsx is the one element
 //     that declares it), so a chat-scoped action invoked from a ⌘K row would fire with the
 //     chat surface possibly not even on screen. The palette does not bypass the check, it
-//     satisfies it: the row carries the surface its binding's scope names and
-//     `applyNavIntent` opens that surface first, so the precondition is true when the action
-//     lands (usePaletteRegistry.ts, NavIntent kind "keybinding"). A caller that can't do
-//     that must not call this for a scoped binding.
+//     satisfies it: the row carries the surface its binding's scope names — or, for a GLOBAL
+//     binding whose action still needs a surface mounted, one it names itself — and
+//     `applyNavIntent` opens that surface first, FLUSHING the render so the surface is in the
+//     DOM and not merely in the store, which is what an action that walks the DOM needs
+//     (usePaletteRegistry.ts, NavIntent kind "keybinding"). A caller that can't do that must
+//     not call this for a scoped binding.
 //   • `allowInInput` — not a hazard. It exists so a plain key (`/`) doesn't fire while the
 //     operator is typing it into a field; choosing a row off a list is not a stray keystroke.
 //
