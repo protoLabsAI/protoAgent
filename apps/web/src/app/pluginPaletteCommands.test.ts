@@ -431,8 +431,57 @@ describe("compilePluginCommands", () => {
       makeDeps(),
     );
     expect(rows.map((r) => r.id)).toEqual(["plugin:files:ok"]);
-    expect(rows[0].hint).toBeUndefined();
+    expect(rows[0].hint).toBe("go to"); // the action's own word, not the `{evil: true}` object
     expect(rows[0].group).toBe("Plugins"); // not `7`, which would open a junk heading
+  });
+
+  it("says what the row DOES when the manifest wrote no hint, in the words a search uses", () => {
+    // The DS matches on `label + hint + group + source.label + keywords`, so the verb has to
+    // be ON the row to be typeable at all.
+    const deps = makeDeps({ inlineViewIds: new Set(["plugin:files:browser"]) });
+    const rows = compilePluginCommands(
+      makeSource([
+        { id: "go", title: "Browse", action: { type: "navigate", view: "browser" } },
+        { id: "morph", title: "Quick browse", action: { type: "open_view", view: "browser", inline: true } },
+        { id: "reindex", title: "Reindex", action: { type: "tool", route: "reindex", method: "POST" } },
+        { id: "own", title: "Own words", hint: "the whole tree", action: { type: "tool", route: "reindex", method: "POST" } },
+      ]),
+      deps,
+    );
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    // The word the plugin's VIEW rows already hint — otherwise a plugin-declared navigation
+    // row is the one navigation row in the palette that typing "go to" misses.
+    expect(byId["plugin:files:go"].hint).toBe("go to");
+    // An inline morph happens in place: nowhere to "go", exactly like its sibling view row.
+    expect(byId["plugin:files:morph"].hint).toBeUndefined();
+    expect(byId["plugin:files:morph"].keywords).not.toContain("go to");
+    expect(byId["plugin:files:reindex"].hint).toBe("run");
+    // A manifest's own hint always wins the visible slot…
+    expect(byId["plugin:files:own"].hint).toBe("the whole tree");
+    // …and the verb still rides the keywords, or that row is the one "run" cannot find.
+    expect(byId["plugin:files:own"].keywords).toContain("run");
+  });
+
+  it("sends a manifest group that claims a console heading back to the plugin section", () => {
+    // These rows register between the plugin nav rows and the Commands group, so a manifest
+    // naming "Agents" or "Commands" would open a SECOND heading by that name mid-list — the
+    // duplicate-heading failure the registration order exists to prevent. The row is fine;
+    // only its placement was, so it lands in the plugin's own section rather than dropping.
+    const rows = compilePluginCommands(
+      makeSource([
+        { id: "a", title: "A", group: "Commands", action: { type: "navigate", view: "browser" } },
+        { id: "b", title: "B", group: "Agents", action: { type: "navigate", view: "browser" } },
+        { id: "c", title: "C", group: "Bookmarks", action: { type: "navigate", view: "browser" } },
+      ]),
+      makeDeps(),
+    );
+    expect(rows.map((r) => r.group)).toEqual(["Plugins", "Plugins", "Bookmarks"]);
+  });
+
+  it("compiles nothing from a `commands` that is not a list, rather than throwing", () => {
+    // Same premise as the route mirror: this is JSON off a status response, and it is read
+    // inside a render — a throw here replaces the whole console with the crash card.
+    expect(compilePluginCommands(makeSource("reindex" as unknown as PluginCommand[]), makeDeps())).toEqual([]);
   });
 
   it("groups a row with the plugin's other palette presence and keeps it findable", () => {
@@ -498,6 +547,17 @@ describe("pluginCommandSources", () => {
         () => null,
       ),
     ).toEqual([]);
+  });
+
+  it("survives a status payload that is not shaped like one", () => {
+    // This runs inside App's render, so a `.filter`/`.map` on a truthy non-list would land on
+    // the console's ROOT error boundary — the whole app replaced by the crash card because one
+    // plugin's status field was the wrong type.
+    expect(pluginCommandSources("nope" as unknown as RuntimeStatus["plugins"], () => null)).toEqual([]);
+    expect(pluginCommandSources([enabledPlugin({ commands: "reindex" })], () => null)).toEqual([]);
+    // A malformed `views` costs the plugin its navigate rows, not the console.
+    const sources = pluginCommandSources([enabledPlugin({ views: "browser" })], () => null);
+    expect([...sources[0].viewIds]).toEqual([]);
   });
 
   it("ignores a plugin with no commands, an unsafe id, or a missing list", () => {
@@ -575,24 +635,41 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function mountRegistry(sources: PluginCommandSource[]): Promise<PaletteRegistry> {
+// Sources arrive as a PROP, and the component identity stays fixed, so `rerender` is a real
+// re-render of the same mounted hook — the only way to see the effect's re-register/withdraw
+// path, which a fresh mount would hide.
+function Probe({
+  sources,
+  onRegistry,
+}: {
+  sources: PluginCommandSource[];
+  onRegistry: (r: PaletteRegistry) => void;
+}) {
+  onRegistry(usePaletteRegistry([], [], undefined, { sources, notify: () => {} }));
+  return null;
+}
+
+type Mounted = { registry: PaletteRegistry; rerender: (sources: PluginCommandSource[]) => void };
+
+async function mountRegistry(sources: PluginCommandSource[]): Promise<Mounted> {
   let registry: PaletteRegistry | null = null;
-  const Probe = () => {
-    registry = usePaletteRegistry([], [], undefined, { sources, notify: () => {} });
-    return null;
-  };
   const host = document.createElement("div");
   document.body.appendChild(host);
-  root = createRoot(host);
+  const mounted = createRoot(host);
+  root = mounted;
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  root.render(h(QueryClientProvider, { client }, h(Probe)));
+  const rerender = (next: PluginCommandSource[]) =>
+    mounted.render(
+      h(QueryClientProvider, { client }, h(Probe, { sources: next, onRegistry: (r) => (registry = r) })),
+    );
+  rerender(sources);
   await vi.waitFor(() => expect(registry).not.toBeNull());
-  return registry!;
+  return { registry: registry!, rerender };
 }
 
 describe("usePaletteRegistry — plugin-declared commands", () => {
   it("registers the compiled rows with their plugin as the DS source chip", async () => {
-    const registry = await mountRegistry([
+    const { registry } = await mountRegistry([
       makeSource([{ id: "reindex", title: "Reindex", action: { type: "tool", route: "reindex", method: "POST" } }]),
     ]);
     await vi.waitFor(() => {
@@ -604,8 +681,31 @@ describe("usePaletteRegistry — plugin-declared commands", () => {
   });
 
   it("contributes nothing when the host passes no plugin commands", async () => {
-    const registry = await mountRegistry([]);
+    const { registry } = await mountRegistry([]);
     await vi.waitFor(() => expect(registry.getStaticCommands().length).toBeGreaterThan(0));
     expect(registry.getStaticCommands().filter((c) => c.id.startsWith("plugin:"))).toEqual([]);
+  });
+
+  it("re-registers when a plugin's manifest changes and withdraws rows it stops declaring", async () => {
+    // The effect keys on a HAND-BUILT signature of the compile inputs (`cmdSig`) — the status
+    // array's identity churns on every 3s poll, so it cannot be the dependency. Nothing else in
+    // this file would notice a field missing from that string: every compile test would still
+    // pass while the live palette showed rows from a manifest ago.
+    const source = makeSource(
+      [{ id: "reindex", title: "Reindex", action: { type: "tool", route: "reindex", method: "POST" } }],
+      { loaded: false },
+    );
+    const { registry, rerender } = await mountRegistry([source]);
+    const row = (id: string) => registry.getStaticCommands().find((c) => c.id === id);
+    await vi.waitFor(() => expect(row("plugin:files:reindex")).toMatchObject({ disabled: true }));
+    // The plugin finishes loading — same id, same title, only `loaded` moved. Drop it from the
+    // signature and the row stays greyed out until something unrelated re-registers.
+    rerender([{ ...source, loaded: true }]);
+    await vi.waitFor(() => expect(row("plugin:files:reindex")).toMatchObject({ disabled: false }));
+    // A manifest that stops declaring a command withdraws its row (the effect's cleanup runs on
+    // every re-register), rather than leaving a stale one that still fires the old route.
+    rerender([{ ...source, loaded: true, commands: [{ id: "other", title: "Other", action: { type: "emit", topic: "ping" } }] }]);
+    await vi.waitFor(() => expect(row("plugin:files:other")).toBeTruthy());
+    expect(row("plugin:files:reindex")).toBeUndefined();
   });
 });

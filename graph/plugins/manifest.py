@@ -131,7 +131,7 @@ class PluginManifest:
     # a topic in another plugin's namespace, a view or command this manifest never
     # declared — is DROPPED with a warning rather than kept. See `_parse_commands`.
     # The console's trusted adapter (apps/web/src/app/pluginPaletteCommands.ts) is what
-    # turns a surviving entry into a ⌘K row — grouped with the plugin's view rows and
+    # turns a surviving entry into a palette row — grouped with the plugin's view rows and
     # chipped with its name, in the console palette and the desktop launcher alike. It
     # MIRRORS the route and topic namespace checks above rather than trusting the status
     # payload, so an entry that fails the mirror is simply absent. Two console-side

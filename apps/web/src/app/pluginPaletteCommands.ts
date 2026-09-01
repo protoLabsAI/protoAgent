@@ -187,14 +187,20 @@ export function pluginCommandSources(
   plugins: RuntimeStatus["plugins"],
   icon: (name?: string) => ReactNode,
 ): PluginCommandSource[] {
-  return (plugins ?? [])
-    .filter((p) => p.enabled && p.commands?.length && SAFE_SLUG.test(p.id))
+  // `Array.isArray`, not `?? []`: this runs during App's render, so a `commands` that is
+  // truthy-but-not-a-list (a stale status, a hand-edited response — the same payload this
+  // module refuses to trust with a route) would throw on `.map` and land on the console's
+  // ROOT error boundary. A malformed list contributes no rows; it does not replace the
+  // whole console with the crash card.
+  const list = Array.isArray(plugins) ? plugins : [];
+  return list
+    .filter((p) => p.enabled && Array.isArray(p.commands) && p.commands.length && SAFE_SLUG.test(p.id))
     .map((p) => ({
       id: p.id,
       name: p.name || p.id,
       commands: p.commands ?? [],
       loaded: !!p.loaded,
-      viewIds: new Set((p.views ?? []).map((v) => String(v.id))),
+      viewIds: new Set((Array.isArray(p.views) ? p.views : []).map((v) => String(v?.id))),
       icon,
     }));
 }
@@ -222,6 +228,15 @@ export type PluginCommandDeps = {
  *  section instead of opening a generic "Commands" bucket underneath it. */
 const DEFAULT_GROUP = "Plugins";
 
+/** Headings the CONSOLE already renders, which a manifest may not claim. Plugin rows
+ *  register between the plugin nav rows and the Commands group (`usePaletteRegistry`), so a
+ *  manifest naming one of these would put a SECOND "Agents"/"Commands" heading in the middle
+ *  of the list — the exact duplicate-heading failure `pluginCommandGroups` orders its
+ *  registrations to avoid. A collision falls back to the plugin's own section rather than
+ *  being dropped: the row is fine, only its placement was. ("Plugins" is absent on purpose —
+ *  a manifest naming it is asking for the default, which is where it already goes.) */
+const CORE_SECTIONS = new Set(["Agents", "Commands"]);
+
 /** Why a compiled row is present but not runnable, said out loud on the row.
  *
  *  Only `tool` needs it: that route is served by the PLUGIN's own router, so an enabled
@@ -241,11 +256,30 @@ function rowId(pluginId: string, commandId: string): string {
   return `plugin:${pluginId}:${commandId}`;
 }
 
-/** A compiled action: the `run(ctx)` plus, when the row is present but not runnable, the
- *  reason it says out loud. A record rather than a flag baked into `run` so that a chain
- *  INHERITS its target's reason — an alias for a tool on a plugin that never loaded is
- *  exactly as unrunnable as the tool it points at. */
-type Compiled = { run: (ctx: PaletteContext) => void; unavailable?: string };
+/** The section a row renders under: the manifest's own, unless it named nothing or named a
+ *  heading the console already owns (see `CORE_SECTIONS`). */
+function sectionFor(declared: string): string {
+  return !declared || CORE_SECTIONS.has(declared) ? DEFAULT_GROUP : declared;
+}
+
+/** A compiled action: the `run(ctx)`, the plain word for what it DOES, and — when the row
+ *  is present but not runnable — the reason it says out loud. A record rather than flags
+ *  baked into `run` so that a chain INHERITS both: an alias for a tool on a plugin that
+ *  never loaded is exactly as unrunnable as the tool it points at, and it navigates or
+ *  fires for the same reason its target does. */
+type Compiled = { run: (ctx: PaletteContext) => void; verb?: string; unavailable?: string };
+
+/** The words an operator types for the two things a row can do. They have to be ON the row
+ *  to be typeable at all — the DS matches a query against `label + hint + group +
+ *  source.label + keywords` and nothing else. "go to" is this console's existing word for a
+ *  row that opens a surface: the plugin VIEW rows beside these already hint it and `Open…`
+ *  keywords it, so a plugin-declared `navigate` that didn't would be the one navigation row
+ *  in the palette that "go to" misses. "open" is deliberately NOT used — `Open…` owns that
+ *  term, and every plugin row matching it would bury the command the operator meant. An
+ *  inline morph gets no word at all, matching its sibling view row: it happens in place, so
+ *  there is nowhere to "go". */
+const GO_TO = "go to";
+const RUN = "run";
 
 /** Compile ONE action, or `null` when it cannot be dispatched safely. `null` drops the row:
  *  an action type this adapter does not implement, a route that escapes the namespace, a
@@ -267,6 +301,7 @@ function compileAction(
       if (!src.viewIds.has(action.view)) return null;
       const viewKey = `plugin:${src.id}:${action.view}`;
       return {
+        verb: GO_TO,
         run: (ctx) => {
           deps.navigate({ kind: "view", id: viewKey });
           ctx.close();
@@ -276,15 +311,19 @@ function compileAction(
     case "open_view": {
       if (!src.viewIds.has(action.view)) return null;
       const viewKey = `plugin:${src.id}:${action.view}`;
+      // `ctx.enter` on a view id nobody registered renders `null` — the whole palette BLANKS
+      // until Escape pops the frame. A view only becomes an inline morph target by opting in
+      // through `views[].palette`, which `_parse_commands` cannot see, so a manifest can
+      // legitimately declare `open_view` against a view that never opted in. Route those to
+      // the rail instead: the operator still gets the view, just not inside the palette.
+      // Decided HERE and not inside `run`, so the word the row SHOWS and the thing it DOES
+      // cannot disagree — the host re-registers on the inline set anyway (`inlineSig`), and
+      // the sibling plugin view row resolves `inline` at build time for the same reason.
+      const inline = deps.inlineViewIds.has(viewKey);
       return {
+        verb: inline ? undefined : GO_TO,
         run: (ctx) => {
-          // `ctx.enter` on a view id nobody registered renders `null` — the whole palette
-          // BLANKS until Escape pops the frame. A view only becomes an inline morph target
-          // by opting in through `views[].palette`, which `_parse_commands` cannot see, so a
-          // manifest can legitimately declare `open_view` against a view that never opted
-          // in. Route those to the rail instead: the operator still gets the view, just not
-          // inside the palette.
-          if (deps.inlineViewIds.has(viewKey)) {
+          if (inline) {
             ctx.enter(viewKey);
             return;
           }
@@ -302,11 +341,15 @@ function compileAction(
       const path = pluginRoutePath(src.id, action.route);
       if (!path) return null;
       return {
+        verb: RUN,
         run: (ctx) => {
           ctx.close();
           deps
             .request(path, { method })
-            .then(() => deps.notify({ tone: "success", title, message: `${src.name} ran the command.` }))
+            // "accepted", not "finished": a 2xx says the plugin's route TOOK the call, and a
+            // route that kicks off a long job answers 202 the moment it starts. Claiming the
+            // work is done would be the one thing this toast can't know.
+            .then(() => deps.notify({ tone: "success", title, message: `${src.name} accepted the request.` }))
             .catch(fail);
         },
         // The plugin serves this route itself; if it never loaded, nothing does.
@@ -318,6 +361,7 @@ function compileAction(
       if (!topic) return null;
       const data = action.data && typeof action.data === "object" ? action.data : {};
       return {
+        verb: RUN,
         run: (ctx) => {
           ctx.close();
           deps
@@ -361,7 +405,7 @@ export function compilePluginCommands(src: PluginCommandSource, deps: PluginComm
   // than at the end is what keeps a repeated id honest: a later entry that overwrote the
   // compiled run would ship a row LABELLED by the first and WIRED to the second.
   const seenIds = new Set<string>();
-  const entries: Entry[] = (src.commands ?? []).flatMap((c) => {
+  const entries: Entry[] = (Array.isArray(src.commands) ? src.commands : []).flatMap((c) => {
     if (!c || typeof c !== "object") return [];
     const id = text(c.id);
     const title = text(c.title);
@@ -373,7 +417,7 @@ export function compilePluginCommands(src: PluginCommandSource, deps: PluginComm
         title,
         hint: text(c.hint),
         icon: text(c.icon),
-        group: text(c.group) || DEFAULT_GROUP,
+        group: sectionFor(text(c.group)),
         keywords: (Array.isArray(c.keywords) ? c.keywords.map(text) : []).filter(Boolean),
         action: c.action,
       },
@@ -418,16 +462,20 @@ export function compilePluginCommands(src: PluginCommandSource, deps: PluginComm
       label: c.title,
       // A row that cannot run explains itself and greys out instead of firing into a 404.
       // The reason WINS over the manifest's own hint: on a disabled row, why is the only
-      // trailing text worth the space.
-      hint: compiled.unavailable || c.hint || undefined,
+      // trailing text worth the space. Failing both, the row says what it does — the same
+      // "go to" the plugin's view rows carry, so a nav row still reads as one when its
+      // author wrote no hint.
+      hint: compiled.unavailable || c.hint || compiled.verb,
       disabled: !!compiled.unavailable,
       icon: src.icon(c.icon || undefined),
       // Grouped with the plugin's OTHER palette presence (its view rows) rather than
       // dumped in the generic "Commands" bucket; a manifest may name its own section.
       group: c.group,
       // The plugin's id and name join the manifest's own keywords, so "projectboard" or
-      // the chip text finds the row even when the title says neither.
-      keywords: [...c.keywords, src.id, src.name, "plugin"],
+      // the chip text finds the row even when the title says neither. The verb rides here
+      // too, not only in `hint`: a manifest that wrote its own hint would otherwise be the
+      // one row "go to" or "run" can't reach.
+      keywords: [...c.keywords, src.id, src.name, "plugin", ...(compiled.verb ? [compiled.verb] : [])],
       run: compiled.run,
     });
   }

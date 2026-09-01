@@ -213,8 +213,9 @@ Backend: add `_parse_commands` next to `_parse_views` (`graph/plugins/manifest.p
 > shared derivation (`pluginCommandSources`) rather than the two hand-synced copies the
 > plugin-*view* derivation still carries. Rows register per plugin, adjacent to that plugin's
 > view rows, stamped with `{source}` so the DS renders the attribution chip and its
-> contiguous-group rendering keeps a single "Plugins" heading. Three deltas from the sketch
-> above:
+> contiguous-group rendering keeps a single "Plugins" heading — a manifest `group` naming a
+> heading the console already owns ("Agents", "Commands") falls back to that plugin section
+> rather than opening a second one mid-list. Five deltas from the sketch above:
 >
 > - **Navigation goes through the serializable `NavIntent` chokepoint**, not `ui.setSurface`.
 >   The launcher mounts this same registry in a shell-less JS context where store mutations are
@@ -232,6 +233,11 @@ Backend: add `_parse_commands` next to `_parse_views` (`graph/plugins/manifest.p
 >   call; `emit` (the core bus route) and the view actions (the view host shows the loader's real
 >   error) stay live. Disabling rather than hiding follows the Fleet Room command's convention —
 >   a row that explains itself is discoverable, a row that vanishes reads as never shipped.
+> - **A row with no manifest `hint` says what it DOES** — "go to" for a `navigate`, "run" for a
+>   `tool`/`emit` — and carries that word in its keywords either way. The DS matches on
+>   `label + hint + group + source.label + keywords`, and the plugin's own view rows already hint
+>   "go to", so without it a plugin-declared navigation row is the one navigation row in the
+>   palette that typing "go to" misses. "open" is deliberately not used: `Open…` owns it.
 >
 > `provider` rows are **not** compiled: the §8 provider budget (per-query timeout/cancel,
 > per-plugin result cap) is still open, so a provider-only entry contributes no row.
