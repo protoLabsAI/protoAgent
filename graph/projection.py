@@ -48,6 +48,9 @@ _WS_PLAN_CAP = 1500
 _WS_TASK_CAP = 12
 _WS_WATCH_CAP = 10
 _WS_SCHED_CAP = 10
+# Per-provider cap for plugin-contributed work (ADR 0079 Observe seam). Per PROVIDER,
+# not total: two plugins each with a queue should not starve one another.
+_WS_WORK_CAP = 8
 
 # Untrusted-reference framing for every auto-injected memory part (ADR 0069
 # D2): the prior-sessions digest, hot memory, and RAG hits can be stale or
@@ -1016,6 +1019,19 @@ def working_state_block(state: dict | None) -> str:
                 sections.append(f"OPEN TASKS:\n{lines}")
     except Exception as exc:  # noqa: BLE001
         log.debug("[working_state] task read failed: %s", exc)
+
+    # Plugin-contributed work — a plugin that owns its own queue (a project board, a review
+    # lane) projects a bounded snapshot into THIS block rather than a rival one, so the agent
+    # reads ONE list of commitments in one vocabulary. Sits beside OPEN TASKS because it is
+    # the same kind of thing: a backlog the agent owes work to. Projection only — the plugin
+    # stays the system of record, so there is no copy to keep in sync (ADR 0079, Observe).
+    try:
+        from graph.work_providers import collect_work_sections
+
+        for heading, work_lines in collect_work_sections(_WS_WORK_CAP):
+            sections.append(f"{heading}:\n" + "\n".join(work_lines))
+    except Exception as exc:  # noqa: BLE001
+        log.debug("[working_state] work provider read failed: %s", exc)
 
     # Active watches — external conditions you're supervising out-of-band.
     try:
