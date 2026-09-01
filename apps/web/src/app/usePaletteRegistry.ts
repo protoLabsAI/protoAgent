@@ -146,6 +146,11 @@ export function applyNavIntent(intent: NavIntent) {
       // The check belongs HERE and not in the row's `run()`: in the desktop launcher `run()`
       // executes in a different JS context from the store that is about to be mutated, so a
       // check there would validate against the wrong snapshot. This is the window that owns it.
+      // Not a theoretical mismatch: chat sessions are keyed PER AGENT in localStorage
+      // (chat-store.ts, ADR 0042 slug routing) and the launcher always loads the un-slugged
+      // app URL, so while the main window sits on `/app/agent/<slug>/` the launcher is
+      // listing the HOST's chats and forwarding ids that window has never seen. They land
+      // here, on the chat surface, rather than on a dead slot.
       //
       // A vanished chat still routes to the chat surface — the operator lands where their
       // chats are and can see the tab is gone, which beats a click that does nothing at all.

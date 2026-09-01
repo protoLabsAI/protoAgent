@@ -194,8 +194,13 @@ describe("finding a chat by typing", () => {
   it("lists every chat for the words an operator types when hunting one", () => {
     openTab("Release notes for v0.156");
     openTab("Fleet smoke test");
-    // Said out loud: "switch chat", "go to tab", "that other session/conversation/thread".
-    for (const q of ["chat", "tab", "session", "conversation", "thread", "switch", "go to"]) {
+    // Said out loud: "switch chats", "jump to tab", "that other session/conversation/thread".
+    // BOTH spellings of every noun. The keywords are stored PLURAL because the match is a
+    // substring of the joined haystack, which makes the plural the one spelling that answers
+    // the singular query too — asserted rather than trusted, since a well-meaning edit back to
+    // the singular reads harmless and silently loses everyone who types "tabs".
+    const nouns = ["chat", "tab", "session", "conversation", "thread"];
+    for (const q of [...nouns, ...nouns.map((n) => `${n}s`), "switch", "jump", "go to"]) {
       expect(search(q), q).toHaveLength(2);
     }
   });

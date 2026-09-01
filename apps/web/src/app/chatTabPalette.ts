@@ -46,8 +46,17 @@ const ORDINAL_BINDINGS = 9;
  *  it (`matchesQuery`, usePaletteRegistry.ts) — are substring-over-the-joined-haystack with
  *  the label in it, so the title needs no per-word keywords to be searchable. These carry
  *  only what a title CANNOT say: the words an operator types when they are hunting for a
- *  conversation rather than spelling one ("switch chat", "go to tab"). */
-const CHAT_KEYWORDS = ["chat", "tab", "session", "conversation", "thread", "switch", "go to"];
+ *  conversation rather than spelling one ("switch chats", "jump to tab").
+ *
+ *  Spelled PLURAL on purpose. Both matchers ask `haystack.includes(term)`, so the plural is
+ *  the strictly wider spelling — "tabs" answers `tab` AND `tabs`, while "tab" answers only
+ *  the singular — and an operator reaching for a LIST of their chats is as likely to type one
+ *  as the other. "jump" is the verb the ⌘1–9 bindings already use on themselves ("Jump to
+ *  chat tab 3", coreKeybindings.ts), so it is the word Settings ▸ Keyboard has already taught
+ *  for this exact move. */
+const CHAT_KEYWORDS = [
+  "chats", "tabs", "sessions", "conversations", "threads", "switch", "jump", "go to",
+];
 
 /** Same list plus the word for the mode, for a memory-free tab (ADR 0069 D3b) — so typing
  *  "incognito" lists exactly those. It rides the keywords rather than the row's one text
@@ -68,7 +77,10 @@ export function chatTabPaletteRows(): PaletteCommand[] {
   return sessions.map((session, i) => {
     // A blank title would render an unreadable empty row. `DEFAULT_SESSION_TITLE` is the
     // honest fallback — it is what the tab strip shows for a chat that has not been named
-    // by its first message yet, so the row matches what the operator is looking at.
+    // by its first message yet, so the row matches what the operator is looking at. Several
+    // unnamed chats therefore share one label, deliberately: the strip says the same thing,
+    // the ⌘N hint below tells the first nine apart, and past that an untitled chat is not
+    // what someone typing a name is looking for.
     const title = session.title?.trim() || DEFAULT_SESSION_TITLE;
     const isCurrent = session.id === currentSessionId;
     return {
@@ -110,6 +122,12 @@ export function chatTabPaletteRows(): PaletteCommand[] {
 // frameless desktop window), which is why the rows navigate by intent rather than by touching
 // the store. A missing side-effect import would fail SILENTLY (no chats in the palette and no
 // error anywhere), so chatTabPalette.test.ts guards that every palette host keeps it.
+//
+// The launcher lists real chats because its store is a SECOND instance hydrated from the same
+// `localStorage` key the console window persists to, kept roughly in step by chat-store's
+// cross-window `storage` merge — which is what makes a session id meaningful once forwarded
+// across the window boundary. "Roughly" is why the id is re-checked on arrival: the two
+// windows can key off different agents entirely (see the `chat` arm of `applyNavIntent`).
 //
 // The HOSTS wire this, never the adapter: `usePaletteRegistry` maps whatever is registered
 // onto DS commands and knows nothing about chat tabs — importing a feature module there would
