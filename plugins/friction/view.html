@@ -94,6 +94,8 @@
   .when { font-size: 11px; color: var(--pl-color-fg-subtle); white-space: nowrap;
     font-family: var(--pl-font-mono, monospace); }
   .acts { display: flex; align-items: center; gap: 6px; }
+  .agents { color: var(--pl-color-status-info); border-color: color-mix(in oklch,
+    var(--pl-color-status-info) 35%, transparent); }
   .acts .pl-btn { padding: 3px 9px; font-size: 12px; }
 
   .detail { margin: var(--pl-space-3) 0 0 22px; }
@@ -143,6 +145,11 @@
              placeholder="Search summary, detail, tool…" aria-label="Search friction" />
     </div>
 
+    <div class="pl-segmented" id="scope-tabs" role="group" aria-label="Scope" hidden>
+      <button class="pl-seg pl-seg--active" data-scope="" type="button">This agent</button>
+      <button class="pl-seg" data-scope="fleet" type="button">Fleet</button>
+    </div>
+
     <div class="pl-segmented" id="kind-tabs" role="group" aria-label="Channel">
       <button class="pl-seg pl-seg--active" data-kind="" type="button">All</button>
       <button class="pl-seg" data-kind="harness" type="button">Harness</button>
@@ -189,6 +196,19 @@
   kit.initPluginView(start);
   setTimeout(start, 1500);
 
+  /** The Fleet scope only means anything on a hub with members, so ask once and reveal the
+   *  toggle only if there is a fleet to roll up. A dead tab is worse than no tab. */
+  async function revealFleetToggleIfHub() {
+    try {
+      const res = await kit.apiFetch("/api/plugins/friction/fleet");
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.is_hub && ((data.members || []).length || (data.unreachable || []).length)) {
+        document.getElementById("scope-tabs").hidden = false;
+      }
+    } catch { /* not a hub, or the roster is unavailable — leave it hidden */ }
+  }
+
   // ADR 0057 — the manifest's `palette.path` opens this page with `?mode=search`, so ⌘K
   // lands the operator in the field instead of at the top of a list they then have to
   // reach for. Same page, same data; only the initial focus differs.
@@ -204,9 +224,9 @@
   const sortEl = document.getElementById("sort");
 
   const state = {
-    kind: "", severity: "", source: "", sort: "recent",
+    kind: "", severity: "", source: "", sort: "recent", scope: "",
     query: "", showResolved: false,
-    items: [], counts: {}, occurrences: 0, issueRepo: "", open: new Set(), busy: new Set(),
+    items: [], counts: {}, occurrences: 0, issueRepo: "", members: [], unreachable: [], open: new Set(), busy: new Set(),
   };
 
   // ── helpers ───────────────────────────────────────────────────────────────
@@ -445,6 +465,17 @@
     meta.appendChild(badge(item.kind || "harness", item.kind === "model" ? "info" : null));
     meta.appendChild(badge(item.source || "auto"));
     if (item.tool) meta.appendChild(el("span", "pl-tag", item.tool));
+    // On a fleet row, WHICH agents hit this is the whole added signal — one agent seeing
+    // something 12 times and four agents seeing it three times each are different problems.
+    if (Array.isArray(item.agents) && item.agents.length) {
+      // .pl-tag, not .pl-badge: the DS badge lowercases its text, which is right for a
+      // status word and wrong for a name — it rendered "protoEngineer" as "protoengineer".
+      const chip = el("span", "pl-tag agents", item.agents.length === 1
+        ? item.agents[0].name
+        : item.agents.length + " agents");
+      chip.title = item.agents.map((a) => a.name + " ×" + a.count).join("\n");
+      meta.appendChild(chip);
+    }
     if (isResolved) meta.appendChild(badge("resolved", "success"));
     const when = el("span", "when", fmtWindow(item));
     when.title = "first seen " + (item.first_seen || "?") + "\nlast seen " + (item.last_seen || "?");
@@ -479,6 +510,7 @@
       acts.appendChild(copyBtn);
     }
 
+    if (state.scope !== "fleet") {
     const resolveBtn = el("button", "pl-btn pl-btn--sm",
       state.busy.has(key) ? "Saving…" : (isResolved ? "Reopen" : "Resolve"));
     resolveBtn.type = "button";
@@ -488,6 +520,7 @@
       : "Stamp resolved_at in the ledger — drops out of the agent's friction_review too";
     resolveBtn.addEventListener("click", () => void setResolved(item, !isResolved));
     acts.appendChild(resolveBtn);
+    }
     meta.appendChild(acts);
     card.appendChild(meta);
 
@@ -534,6 +567,18 @@
     add(state.occurrences, "occurrences");
 
     resolvedBtn.textContent = state.showResolved ? "Hide resolved" : "Show resolved";
+    // Resolving is per-ledger; from the hub there is no single ledger to stamp.
+    resolvedBtn.disabled = state.scope === "fleet";
+    if (state.scope === "fleet" && state.members.length) {
+      tallyEl.appendChild(el("span", "tally-sep", "·"));
+      const n = el("b", null, String(state.members.length));
+      tallyEl.append(n, el("span", null, state.members.length === 1 ? " agent" : " agents"));
+      if (state.unreachable.length) {
+        const warn = el("span", "when", " (" + state.unreachable.length + " unreachable)");
+        warn.title = "Not reached: " + state.unreachable.join(", ");
+        tallyEl.appendChild(warn);
+      }
+    }
 
     const items = visibleItems();
     if (!items.length) { renderEmpty(); return; }
@@ -545,6 +590,17 @@
   async function load() {
     if (!state.items.length) renderSkeleton();
     try {
+      if (state.scope === "fleet") {
+        const res = await kit.apiFetch("/api/plugins/friction/fleet");
+        if (!res.ok) throw new Error(res.status + " " + res.statusText);
+        const data = await res.json();
+        state.items = Array.isArray(data.items) ? data.items : [];
+        state.members = data.members || [];
+        state.unreachable = data.unreachable || [];
+        state.occurrences = state.items.reduce((a, i) => a + (i.count || 1), 0);
+        render();
+        return;
+      }
       const q = new URLSearchParams({ grouped: "true", limit: "200" });
       if (state.kind) q.set("kind", state.kind);
       if (state.showResolved) q.set("resolved", "true");
@@ -556,6 +612,7 @@
       state.issueRepo = String(data.issue_repo || "");
       state.occurrences = Object.values(state.counts).reduce((a, b) => a + (b || 0), 0);
       render();
+      void revealFleetToggleIfHub();
     } catch (err) {
       state.items = [];
       tallyEl.textContent = "";
@@ -604,6 +661,7 @@
     });
   }
 
+  segmented("scope-tabs", "scope", (v) => { state.scope = v; state.items = []; void load(); });
   segmented("kind-tabs", "kind", (v) => { state.kind = v; void load(); });
   segmented("sev-tabs", "sev", (v) => { state.severity = v; render(); });
   segmented("src-tabs", "src", (v) => { state.source = v; render(); });

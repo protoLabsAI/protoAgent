@@ -953,3 +953,138 @@ def test_the_view_links_a_prefilled_issue_and_degrades_to_the_clipboard(monkeypa
     assert 'if (!state.issueRepo) return "";' in page          # no repo → no link
     assert 'target = "_blank"' in page and 'noopener noreferrer' in page
     assert "Copy as issue" in page                              # the fallback survives
+
+
+# ── #2595 acceptance 2: friction per member, without opening files on disk ───
+
+
+def _remote(name, url, token="t"):
+    return {"name": name, "url": url, "token": token}
+
+
+def test_fleet_rollup_merges_by_summary_and_keeps_attribution(monkeypatch, tmp_path):
+    """The systemic signal is the cross-agent one: "12 times" and "across 4 agents" are
+    different problems and the rollup has to answer both."""
+    from plugins import friction
+
+    monkeypatch.setenv("FRICTION_LOG", str(tmp_path / "friction.jsonl"))
+    monkeypatch.setattr("graph.fleet.supervisor.list_remotes",
+                        lambda: [_remote("alpha", "http://a"), _remote("beta", "http://b")])
+
+    payloads = {
+        "http://a": [{"kind": "harness", "summary": "read_file truncates", "severity": "minor",
+                      "count": 3, "first_seen": "2026-08-01", "last_seen": "2026-08-20", "tool": ""}],
+        "http://b": [{"kind": "harness", "summary": "read_file truncates", "severity": "major",
+                      "count": 1, "first_seen": "2026-08-10", "last_seen": "2026-08-25", "tool": ""},
+                     {"kind": "harness", "summary": "beta only", "severity": "minor", "count": 1,
+                      "first_seen": "2026-08-05", "last_seen": "2026-08-05", "tool": ""}],
+    }
+
+    async def _fake(client, member):
+        return {"name": member["name"], "items": payloads[member["url"]]}
+
+    monkeypatch.setattr(friction, "_member_friction", _fake)
+    out = asyncio.run(friction.fleet_rollup())
+
+    shared = next(i for i in out["items"] if i["summary"] == "read_file truncates")
+    assert shared["count"] == 4                                   # summed across members
+    assert shared["severity"] == "major"                          # worst experience wins
+    assert {a["name"] for a in shared["agents"]} == {"alpha", "beta"}
+    assert shared["first_seen"] == "2026-08-01" and shared["last_seen"] == "2026-08-25"
+    assert out["members"] == ["alpha", "beta"] and out["unreachable"] == []
+    assert out["items"][0]["summary"] == "read_file truncates"    # worst-first, as elsewhere
+
+
+def test_an_unreachable_member_is_named_not_silently_dropped(monkeypatch, tmp_path):
+    """A rollup that quietly omits a member reads as 'that agent is fine'."""
+    from plugins import friction
+
+    monkeypatch.setenv("FRICTION_LOG", str(tmp_path / "friction.jsonl"))
+    monkeypatch.setattr("graph.fleet.supervisor.list_remotes",
+                        lambda: [_remote("up", "http://a"), _remote("down", "http://b")])
+
+    async def _fake(client, member):
+        return {"name": "up", "items": []} if member["url"] == "http://a" else None
+
+    monkeypatch.setattr(friction, "_member_friction", _fake)
+    out = asyncio.run(friction.fleet_rollup())
+
+    assert out["members"] == ["up"] and out["unreachable"] == ["down"]
+
+
+def test_a_non_hub_reports_itself_as_one_so_the_view_hides_the_toggle(monkeypatch, tmp_path):
+    from plugins import friction
+
+    monkeypatch.setenv("FRICTION_LOG", str(tmp_path / "friction.jsonl"))
+    monkeypatch.setattr("graph.fleet.supervisor.list_remotes", lambda: [])
+
+    out = asyncio.run(friction.fleet_rollup())
+
+    assert out == {"items": [], "members": [], "unreachable": [], "is_hub": False}
+
+
+def test_the_rollup_asks_members_for_the_LEGACY_path(monkeypatch):
+    """A hub is routinely newer than its members. Asking for the namespaced path would
+    silently skip every member that hasn't been rolled yet — the exact fleet a rollup is
+    for."""
+    from pathlib import Path as _P
+
+    from plugins import friction
+
+    src = _P(friction.__file__).read_text(encoding="utf-8")
+    body = src[src.index("async def _member_friction"): src.index("async def fleet_rollup")]
+
+    assert 'f"{base}/api/friction"' in body
+    assert "/api/plugins/friction" not in body
+
+
+def test_the_fleet_route_is_ttl_cached(monkeypatch, tmp_path):
+    """The view refetches on every filter change; a fan-out across the roster is not
+    something to repeat on a keystroke."""
+    from plugins import friction
+
+    client = _client(monkeypatch, tmp_path)
+    friction._FLEET_CACHE.update(at=0.0, data=None)
+    calls = []
+
+    async def _fake_rollup(**_kw):
+        calls.append(1)
+        return {"items": [], "members": ["a"], "unreachable": [], "is_hub": True}
+
+    monkeypatch.setattr(friction, "fleet_rollup", _fake_rollup)
+
+    assert client.get("/api/friction/fleet").json()["cached"] is False
+    assert client.get("/api/friction/fleet").json()["cached"] is True
+    assert len(calls) == 1
+    assert client.get("/api/friction/fleet", params={"force": "true"}).json()["cached"] is False
+    assert len(calls) == 2
+
+
+def test_the_view_hides_fleet_until_it_knows_it_is_a_hub_and_cannot_resolve_there(monkeypatch):
+    from pathlib import Path as _P
+
+    from plugins import friction
+
+    page = (_P(friction.__file__).parent / "view.html").read_text(encoding="utf-8")
+
+    assert 'id="scope-tabs" role="group" aria-label="Scope" hidden' in page  # hidden by default
+    assert "if (data.is_hub &&" in page
+    assert 'resolvedBtn.disabled = state.scope === "fleet";' in page  # no single ledger to stamp
+    assert 'if (state.scope !== "fleet") {' in page
+
+
+def test_agent_names_are_not_lowercased_by_the_badge_style(monkeypatch):
+    """`.pl-badge` applies `text-transform: lowercase` — correct for a status word, wrong
+    for a name: it rendered "protoEngineer" as "protoengineer"."""
+    from pathlib import Path as _P
+
+    from plugins import friction
+
+    page = (_P(friction.__file__).parent / "view.html").read_text(encoding="utf-8")
+    chip = page[page.index("if (Array.isArray(item.agents)"):]
+    chip = chip[: chip.index("meta.appendChild(chip)")]
+    # Ignore the comment that explains the choice — it names the class it rejects.
+    code = "\n".join(ln for ln in chip.splitlines() if not ln.strip().startswith("//"))
+
+    assert '"pl-tag agents"' in code
+    assert "badge(" not in code and "pl-badge" not in code

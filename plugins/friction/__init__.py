@@ -704,6 +704,21 @@ def _build_router(*, legacy: bool = False):
                        for k in _KINDS},
         }
 
+    @router.get("/api/friction/fleet" if legacy else "/fleet")
+    async def _fleet(force: bool = False) -> dict:
+        """Friction across the hub's members (#2595 acceptance 2).
+
+        TTL-cached: the view refetches on every filter change, and a fan-out across the
+        roster is not something to repeat on a keystroke."""
+        import time
+
+        now = time.monotonic()
+        if not force and _FLEET_CACHE["data"] is not None and (now - _FLEET_CACHE["at"]) < _FLEET_TTL_S:
+            return {**_FLEET_CACHE["data"], "cached": True}
+        data = await fleet_rollup()
+        _FLEET_CACHE.update(at=now, data=data)
+        return {**data, "cached": False}
+
     @router.post(resolve_path)
     async def _resolve(payload: dict) -> dict:
         """Resolve (or reopen) one grouped row — the console's half of the triage state.
@@ -735,6 +750,111 @@ def _build_router(*, legacy: bool = False):
         return {"changed": changed, "resolved": resolved, "summary": summary, "kind": kind}
 
     return router
+
+
+# ── #2595 acceptance 2: friction per member, without opening files on disk ──
+#
+# Every member records its own friction into its own ledger, so the systemic signal — the
+# rough edge that is costing the WHOLE fleet, not one agent — was only visible by opening
+# each member's view in turn and holding the comparison in your head. This fans out to the
+# hub-supervised roster (ADR 0042) and merges by (kind, summary), keeping per-member
+# attribution so "12 times" and "across 4 agents" are both answerable.
+
+_FLEET_TTL_S = 30.0
+_FLEET_CACHE: dict = {"at": 0.0, "data": None}
+
+
+async def _member_friction(client, member: dict) -> dict | None:
+    """One member's grouped backlog, or None if it can't be reached.
+
+    Calls the LEGACY top-level ``/api/friction``, not the namespaced path this plugin now
+    prefers: a hub is routinely newer than its members, and the old path is the one that
+    exists in both. Asking for the new one would make the rollup silently skip every member
+    that has not been rolled yet — which is exactly the fleet a rollup is for."""
+    base = str(member.get("url") or "").rstrip("/")
+    if not base:
+        return None
+    headers = {}
+    token = str(member.get("token") or "")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        resp = await client.get(f"{base}/api/friction",
+                                params={"grouped": "true", "limit": 200}, headers=headers)
+        if resp.status_code != 200:
+            return None
+        body = resp.json()
+    except Exception:  # noqa: BLE001 — one unreachable member must not fail the rollup
+        return None
+    if not isinstance(body, dict):
+        return None
+    return {
+        "name": str(member.get("name") or member.get("id") or base),
+        "items": [i for i in (body.get("items") or []) if isinstance(i, dict)],
+    }
+
+
+async def fleet_rollup(*, timeout_s: float = 4.0) -> dict:
+    """Friction across the fleet, merged by (kind, summary) with per-member attribution."""
+    try:
+        from graph.fleet.supervisor import list_remotes
+
+        members = [m for m in list_remotes() if isinstance(m, dict) and m.get("url")]
+    except Exception:  # noqa: BLE001 — not a hub, or the fleet module isn't available
+        members = []
+    if not members:
+        return {"items": [], "members": [], "unreachable": [], "is_hub": False}
+
+    import asyncio
+
+    import httpx
+
+    # An explicit read timeout is not optional here: the fleet proxy has none of its own,
+    # and a member parked on a slow read would otherwise hold this request open forever.
+    limits = httpx.Timeout(timeout_s, connect=2.0)
+    async with httpx.AsyncClient(timeout=limits, follow_redirects=False) as client:
+        results = await asyncio.gather(
+            *[_member_friction(client, m) for m in members], return_exceptions=True
+        )
+
+    merged: dict[tuple[str, str], dict] = {}
+    reached, unreachable = [], []
+    for member, result in zip(members, results):
+        name = str(member.get("name") or member.get("id") or "")
+        if not isinstance(result, dict):
+            unreachable.append(name)
+            continue
+        reached.append(result["name"])
+        for item in result["items"]:
+            key = (str(item.get("kind", "")), str(item.get("summary", "")))
+            row = merged.get(key)
+            if row is None:
+                row = merged[key] = {
+                    "kind": key[0], "summary": key[1],
+                    "severity": item.get("severity", "minor"),
+                    "source": item.get("source", ""), "tool": item.get("tool", ""),
+                    "detail": item.get("detail", ""), "count": 0,
+                    "first_seen": str(item.get("first_seen") or ""),
+                    "last_seen": str(item.get("last_seen") or ""),
+                    "resolved_at": "", "agents": [],
+                }
+            row["count"] += int(item.get("count") or 1)
+            row["agents"].append({"name": result["name"], "count": int(item.get("count") or 1)})
+            # One member calling it major makes the whole row major — the fleet's worst
+            # experience of a rough edge is the one worth acting on.
+            if _SEVERITY_RANK.get(str(item.get("severity")), 0) > _SEVERITY_RANK.get(str(row["severity"]), 0):
+                row["severity"] = item.get("severity")
+            last, first = str(item.get("last_seen") or ""), str(item.get("first_seen") or "")
+            row["last_seen"] = max(row["last_seen"], last)
+            row["first_seen"] = min(row["first_seen"], first) if row["first_seen"] and first else (row["first_seen"] or first)
+            if not row["detail"]:
+                row["detail"] = item.get("detail", "")
+    return {
+        "items": sorted(merged.values(), key=_triage_rank, reverse=True),
+        "members": reached,
+        "unreachable": unreachable,
+        "is_hub": True,
+    }
 
 
 _VIEW_PAGE = Path(__file__).parent / "view.html"
