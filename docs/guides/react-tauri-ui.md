@@ -39,8 +39,8 @@ the agent's live state, a **utility bar**, and an optional **bottom panel**. The
 surfaces — **Chat**, **Activity** (thread + inbox), **Knowledge** (a searchable store),
 **Studio** (workflows), **Agent**, **Plugins**, **Settings** — each fan out to sub-views
 via an in-surface segmented control. Enabled plugins add their own views (ADR 0026), each
-declaring a placement: `rail`, `right` (right-sidebar panel), or `bottom`. Press **⌘K** /
-**Ctrl-K** for the [command palette](/guides/command-palette) to jump anywhere.
+declaring a placement: `rail`, `right` (right-sidebar panel), or `bottom`. Press **⌘⇧K** /
+**Ctrl-Shift-K** for the [command palette](/guides/command-palette) to jump anywhere.
 
 The **Agent** surface is the agent's own makeup, tabbed: **Identity** (edit its name +
 `SOUL.md` inline — saving merge-applies config + hot-reloads the graph) · **Tools** (live

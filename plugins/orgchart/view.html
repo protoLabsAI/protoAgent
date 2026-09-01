@@ -1,0 +1,242 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Org Chart</title>
+<style>
+  html,body{margin:0;height:100%;background:var(--pl-color-bg,#0b0d10);color:var(--pl-color-fg,#e6e6e6);
+    font-family:var(--pl-font-sans,system-ui,sans-serif);font-size:13px}
+  .wrap{max-width:1400px;margin:0 auto;padding:var(--pl-space-4,16px) var(--pl-space-6,24px)}
+  header{display:flex;align-items:baseline;gap:var(--pl-space-4,16px);margin-bottom:10px}
+  header h1{font-size:18px;margin:0;font-weight:600}
+  .sub{color:var(--pl-color-fg-muted,#8a8f98);font-size:12px}
+  .sub b{color:var(--pl-color-fg,#e6e6e6);font-weight:600}
+  .spacer{flex:1}
+  .chip{font-size:11px;color:var(--pl-color-fg-muted,#8a8f98)}
+  .chip.stale::before{content:"⟳ ";animation:spin 1.2s linear infinite;display:inline-block}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  button.refresh{background:none;border:1px solid var(--pl-color-border,#272b33);color:var(--pl-color-fg,#e6e6e6);
+    border-radius:var(--pl-radius-sm,6px);padding:3px 10px;font-size:12px;cursor:pointer}
+  button.refresh:hover{background:var(--pl-color-bg-subtle,#15181d)}
+  button.refresh:disabled{opacity:.5;cursor:default}
+  .err{color:var(--pl-color-danger,#f85149);font-size:12px;margin:8px 0}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:var(--pl-color-fg-muted,#8a8f98);margin:6px 2px 12px}
+  .legend i{display:inline-block;width:9px;height:9px;border-radius:50%;vertical-align:middle;margin-right:5px}
+  .legend .dash{display:inline-block;width:18px;border-top:1.6px dashed var(--pl-color-fg-muted,#8a8f98);vertical-align:middle;margin-right:5px}
+  .cols{display:flex;gap:12px;align-items:flex-start}
+  .gwrap{flex:1;overflow:auto;border:1px solid var(--pl-color-border,#272b33);border-radius:var(--pl-radius-md,8px);
+    background:var(--pl-color-bg-subtle,#15181d);padding:10px;min-height:140px}
+  .empty{color:var(--pl-color-fg-muted,#8a8f98);padding:48px 0;text-align:center}
+  .empty code{font-family:var(--pl-font-mono,ui-monospace,monospace);color:var(--pl-color-fg,#e6e6e6)}
+  svg g.node{cursor:pointer}
+  svg g.node.sel rect{stroke-width:2.4}
+  text{user-select:none}
+  /* detail panel */
+  .panel{width:280px;flex:none;border:1px solid var(--pl-color-border,#272b33);border-radius:var(--pl-radius-md,8px);
+    background:var(--pl-color-bg-subtle,#15181d);padding:14px;font-size:12px}
+  .panel[hidden]{display:none}
+  .panel h2{margin:0 0 2px;font-size:14px;font-weight:600;overflow-wrap:anywhere}
+  .panel .role{color:var(--pl-color-fg-muted,#8a8f98);margin-bottom:10px}
+  .panel dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:4px 10px}
+  .panel dt{color:var(--pl-color-fg-muted,#8a8f98)}
+  .panel dd{margin:0;overflow-wrap:anywhere}
+  .panel a{color:var(--pl-color-accent,#6cb6ff);text-decoration:none}
+  .panel a:hover{text-decoration:underline}
+  .panel .close{float:right;background:none;border:none;color:var(--pl-color-fg-muted,#8a8f98);cursor:pointer;font-size:14px;padding:0}
+</style>
+<script>
+  var BASE = location.pathname.split("/plugins/")[0];   // slug-aware (fleet proxy)
+  (function(){ var l=document.createElement("link"); l.rel="stylesheet";
+    l.href=BASE+"/_ds/plugin-kit.css"; document.head.appendChild(l); })();
+</script>
+</head><body>
+<div class="wrap">
+  <header>
+    <h1>Org Chart</h1><div class="sub" id="summary"></div>
+    <div class="spacer"></div>
+    <span class="chip" id="freshness"></span>
+    <button class="refresh" id="refresh" title="Drop caches and re-crawl the fleet">⟳ Refresh</button>
+  </header>
+  <div class="legend">
+    <span><i style="background:var(--pl-color-accent,#6cb6ff)"></i>this agent</span>
+    <span><i style="background:var(--pl-color-success,#3fb950)"></i>up</span>
+    <span><i style="background:var(--pl-color-danger,#f85149)"></i>down / unreachable</span>
+    <span>arrow = can delegate to</span>
+    <span><span class="dash"></span>supervised fleet member</span>
+  </div>
+  <div id="err" class="err" hidden></div>
+  <div class="cols">
+    <div id="graph" class="gwrap"></div>
+    <aside class="panel" id="panel" hidden>
+      <button class="close" id="panel-close" title="Close">✕</button>
+      <h2 id="p-name"></h2>
+      <div class="role" id="p-role"></div>
+      <dl>
+        <dt>Status</dt><dd id="p-status"></dd>
+        <dt>URL</dt><dd id="p-url"></dd>
+        <dt>Version</dt><dd id="p-version"></dd>
+        <dt>Latency</dt><dd id="p-latency"></dd>
+        <dt>Delegates</dt><dd id="p-out"></dd>
+        <dt>Delegated by</dt><dd id="p-in"></dd>
+      </dl>
+    </aside>
+  </div>
+</div>
+<script type="module">
+let kit;
+try { kit = await import(BASE + "/_ds/plugin-kit.js"); }
+catch (e) {
+  // Fail LOUDLY and name the real cause (#2392): the old bearer-less fetch substitute
+  // turned "kit missing" into an HTTP 401 that sent operators auditing tokens.
+  const err = document.getElementById("err");
+  err.hidden = false;
+  err.textContent = "The DS plugin kit failed to load — the console bundle (/_ds) is missing or stale " +
+    "(a source install without a web build, or a packaging regression). This view cannot authenticate without it.";
+  throw e;
+}
+const api = async (p, init) => {
+  const r = await kit.apiFetch(p, init);
+  const d = await r.json().catch(() => { throw new Error("HTTP " + r.status + " (non-JSON response)"); });
+  if (!r.ok) throw new Error((d && (d.detail || d.error)) || "HTTP " + r.status);
+  return d;
+};
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const $ = (id) => document.getElementById(id);
+
+let TOPO = null, SELECTED = null, POLL_S = 8, timer = null;
+
+// ── layered SVG graph (BFS distance from self → cycle-safe) ─────────────────────────
+function draw(topo){
+  const nodes = topo.nodes || [], edges = topo.edges || [], self = topo.self;
+  if (nodes.length <= 1) return `<div class="empty">No delegates or fleet members found.<br>
+    Add A2A delegates (Settings → Delegates) and they'll appear here.</div>`;
+  const byId = new Map(nodes.map(n => [n.id, n]));
+  const layer = new Map(); if (byId.has(self)) layer.set(self, 0);
+  let frontier = byId.has(self) ? [self] : [];
+  while (frontier.length){
+    const next = [];
+    for (const u of frontier) for (const e of edges)
+      if (e.from === u && byId.has(e.to) && !layer.has(e.to)){ layer.set(e.to, layer.get(u)+1); next.push(e.to); }
+    frontier = next;
+  }
+  let maxL = 0; layer.forEach(v => { if (v > maxL) maxL = v; });
+  nodes.forEach(n => { if (!layer.has(n.id)) layer.set(n.id, maxL+1); });
+  maxL = 0; layer.forEach(v => { if (v > maxL) maxL = v; });
+  const cols = {};
+  nodes.forEach(n => { const L = layer.get(n.id); (cols[L] = cols[L] || []).push(n); });
+  const NW=190, NH=48, COLW=258, RH=70, PX=18, PY=18;
+  let maxRows = 0;
+  Object.keys(cols).forEach(L => {
+    maxRows = Math.max(maxRows, cols[L].length);
+    cols[L].forEach((n,i) => { n._x = PX + Number(L)*COLW; n._y = PY + i*RH; });
+  });
+  const pos = new Map(nodes.map(n => [n.id, n]));
+  const W = PX*2 + maxL*COLW + NW, H = Math.max(PY*2 + maxRows*RH, 120);
+  const paths = edges.map(e => {
+    const a = pos.get(e.from), b = pos.get(e.to); if (!a || !b) return "";
+    const x1=a._x+NW, y1=a._y+NH/2, x2=b._x-3, y2=b._y+NH/2, mx=(x1+x2)/2;
+    const back = b._x <= a._x;   // cycle / same-column edge → dim it
+    const dash = e.kind === "member" ? ` stroke-dasharray="5 4"` : "";
+    return `<path d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}" fill="none"
+      stroke="var(--pl-color-fg-muted,#8a8f98)" stroke-width="1.4" stroke-opacity="${back?0.35:0.8}"${dash}
+      marker-end="url(#arw)"/>`;
+  }).join("");
+  const rects = nodes.map(n => {
+    const up = !!n.up, self0 = n.id === self, sel = n.id === SELECTED;
+    const stroke = self0 ? "var(--pl-color-accent,#6cb6ff)" : (up ? "var(--pl-color-border,#272b33)" : "var(--pl-color-danger,#f85149)");
+    const dot = self0 ? "var(--pl-color-accent,#6cb6ff)" : (up ? "var(--pl-color-success,#3fb950)" : "var(--pl-color-danger,#f85149)");
+    const op = up || self0 ? 1 : 0.6;
+    const ver = n.version ? ` v${esc(n.version)}` : "";
+    const lat = Number.isFinite(n.latency_ms)
+      ? `<text x="${n._x+NW-8}" y="${n._y+16}" font-size="9.5" text-anchor="end" fill="var(--pl-color-fg-muted,#8a8f98)">${n.latency_ms}ms</text>` : "";
+    return `<g class="node${sel?" sel":""}" data-id="${esc(n.id)}" opacity="${op}">
+      <rect x="${n._x}" y="${n._y}" width="${NW}" height="${NH}" rx="8"
+        fill="var(--pl-color-bg,#0b0d10)" stroke="${stroke}" stroke-width="${self0||sel?2:1}"/>
+      <circle cx="${n._x+13}" cy="${n._y+16}" r="4" fill="${dot}"/>
+      <text x="${n._x+24}" y="${n._y+19}" font-size="12.5" font-weight="600" fill="var(--pl-color-fg,#e6e6e6)">${esc(clip(n.name,19))}</text>
+      ${lat}
+      <text x="${n._x+11}" y="${n._y+37}" font-size="10" fill="var(--pl-color-fg-muted,#8a8f98)">${esc(clip(n.role,30))}${ver}</text>
+    </g>`;
+  }).join("");
+  return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
+    <defs><marker id="arw" markerWidth="9" markerHeight="9" refX="6.5" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="var(--pl-color-fg-muted,#8a8f98)"/></marker></defs>
+    ${paths}${rects}</svg>`;
+}
+function clip(s, n){ s = String(s || ""); return s.length > n ? s.slice(0, n-1) + "…" : s; }
+
+// ── detail panel (textContent everywhere — node names come from remote cards) ───────
+function showPanel(id){
+  const n = (TOPO?.nodes || []).find(n => n.id === id);
+  if (!n){ hidePanel(); return; }
+  SELECTED = id;
+  $("p-name").textContent = n.name || n.id;
+  $("p-role").textContent = n.role || "";
+  $("p-status").textContent = n.kind === "self" ? "this agent" : (n.up ? "up" : "down / unreachable");
+  const u = $("p-url"); u.textContent = "";
+  if (/^https?:\/\//.test(n.url || "")){
+    const a = document.createElement("a"); a.href = n.url; a.target = "_blank"; a.rel = "noreferrer";
+    a.textContent = n.url; u.appendChild(a);
+  } else u.textContent = n.url || "—";
+  $("p-version").textContent = n.version || "—";
+  $("p-latency").textContent = Number.isFinite(n.latency_ms) ? n.latency_ms + " ms" : "—";
+  const out = (TOPO.edges || []).filter(e => e.from === id).length;
+  const ins = (TOPO.edges || []).filter(e => e.to === id).length;
+  $("p-out").textContent = out ? String(out) + " outbound" : (n.kind === "self" ? "0" : "unknown (no token)");
+  $("p-in").textContent = String(ins) + (ins === 1 ? " agent" : " agents");
+  $("panel").hidden = false;
+  render();
+}
+function hidePanel(){ SELECTED = null; $("panel").hidden = true; render(); }
+$("panel-close").addEventListener("click", hidePanel);
+$("graph").addEventListener("click", (ev) => {
+  const g = ev.target.closest("g.node");
+  if (g) showPanel(g.dataset.id);
+});
+
+function render(){
+  if (!TOPO) return;
+  $("graph").innerHTML = draw(TOPO);
+}
+
+function fmtAge(ts){
+  const s = Math.max(0, Math.round(Date.now()/1000 - ts));
+  return s < 5 ? "just now" : s < 90 ? s + "s ago" : Math.round(s/60) + "m ago";
+}
+
+async function load(force){
+  try {
+    $("err").hidden = true;
+    const topo = await api("/api/plugins/orgchart/topology" + (force ? "?refresh=1" : ""));
+    TOPO = topo;
+    POLL_S = Number(topo.poll_s) > 0 ? Number(topo.poll_s) : POLL_S;
+    const nodes = topo.nodes || [], edges = topo.edges || [];
+    const up = nodes.filter(n => n.up).length;
+    $("summary").innerHTML =
+      `<b>${nodes.length}</b> agent${nodes.length===1?"":"s"} · <b>${up}</b> up · <b>${edges.length}</b> edge${edges.length===1?"":"s"}`;
+    const fresh = $("freshness");
+    fresh.className = "chip" + (topo.stale ? " stale" : "");
+    fresh.textContent = (topo.stale ? "refreshing · " : "") + (topo.generated_at ? "crawled " + fmtAge(topo.generated_at) : "");
+    render();
+    if (topo.stale) setTimeout(() => { if (!document.hidden) load(); }, 2500);  // pick up the background rebuild
+  } catch(e){
+    $("err").hidden = false;
+    $("err").textContent = "Could not load topology: " + e;
+  }
+}
+
+$("refresh").addEventListener("click", async () => {
+  const b = $("refresh"); b.disabled = true;
+  try { await load(true); } finally { b.disabled = false; }
+});
+
+// Poll while visible; a hidden tab crawls nothing (the server cache goes cold on its own).
+function schedule(){
+  clearInterval(timer);
+  timer = setInterval(() => { if (!document.hidden) load(); }, POLL_S * 1000);
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { load(); schedule(); } });
+
+let booted = false;
+function boot(){ if (booted) return; booted = true; load().then(schedule); }
+kit.initPluginView(boot);
+setTimeout(boot, 800);
+</script></body></html>

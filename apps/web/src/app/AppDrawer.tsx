@@ -87,7 +87,7 @@ export function AppDrawer({
           <section className="app-drawer-group">
             <p className="app-drawer-label">Settings</p>
             {/* One Settings door (ADR 0048 §2.4) — Telemetry is a section inside it (Box group),
-                reachable via the sidenav or a ⌘K deep-link, not a second drawer shortcut. */}
+                reachable via the sidenav or a palette deep-link, not a second drawer shortcut. */}
             <button type="button" className="app-drawer-item" onClick={act(() => onOpenGlobal())}>
               <span className="app-drawer-ico"><Settings2 size={16} /></span>
               Settings
