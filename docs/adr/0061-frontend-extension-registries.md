@@ -192,7 +192,7 @@ and shows the operator nothing. The seam reports rather than vetoes (firing `/cl
 dispatches something with visible output raises the surface first via `openView("chat")`.
 
 **Deliberately NOT a fork registry, and NOT re-exported from `src/ext/index.ts`.** It is a
-host-internal bridge between two core surfaces (the ⌘K palette and the chat composer), not
+host-internal bridge between two core surfaces (the command palette and the chat composer), not
 an extension point: a fork adds a command with `registerSlashCommand` and gets palette
 dispatch for free. `escapeStop` sets that precedent — same shape, same non-export.
 
@@ -202,7 +202,7 @@ outside. It rides the same registration rather than a parallel seam because it n
 same live closure: the draft is `useState` inside `ChatSessionSlot` (seeded from
 sessionStorage on mount), so a write from outside React is swallowed by the mounted slot.
 
-### The chat's verbs in ⌘K (`app/chatSlashPalette.ts`)
+### The chat's verbs in the command palette (`app/chatSlashPalette.ts`)
 
 The palette's first consumer of both seams (#3285): every client slash command and every
 server **user-facing skill** as palette rows, so the console's real verbs are reachable from
