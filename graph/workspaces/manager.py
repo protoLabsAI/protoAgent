@@ -496,6 +496,7 @@ def create(
     # workspace that's invisible in the list (no workspace.yaml).
     atomic_write(ws / "workspace.yaml", yaml.safe_dump(rec, sort_keys=False))
     installed: list[str] = []
+    oauth_warnings: list[str] = []
     try:
         if bundle:
             installed = _install_bundle_into(ws, bundle)
@@ -554,13 +555,19 @@ def create(
 
             try:
                 oauth_source = Path(inherit_model).expanduser()
-                promote_instance_oauth_to_box(oauth_source if oauth_source.is_dir() else oauth_source.parent)
+                transfer = promote_instance_oauth_to_box(
+                    oauth_source if oauth_source.is_dir() else oauth_source.parent
+                )
+                # A store that could not join the shared tier is reported, not fatal: the
+                # sister still boots on the machine-wide login. Killing the create here
+                # left the operator with no reachable remedy (#3112 follow-up).
+                oauth_warnings = list(transfer.deferred)
             except OAuthStoreTransferError as exc:
                 raise WorkspaceError(str(exc)) from exc
     except Exception:
         shutil.rmtree(ws, ignore_errors=True)
         raise
-    return {**rec, "path": str(ws), "installed": installed}
+    return {**rec, "path": str(ws), "installed": installed, **({"warnings": oauth_warnings} if oauth_warnings else {})}
 
 
 def _enable_installed_in_config(cfg: Path, lock: Path) -> list[str]:

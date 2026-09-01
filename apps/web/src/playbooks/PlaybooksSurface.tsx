@@ -11,7 +11,7 @@ import { RefreshButton } from "../app/ui-kit";
 import { StagePanel } from "../app/ErrorBoundary";
 import { api } from "../lib/api";
 import { ago, errMsg } from "../lib/format";
-import { playbooksQuery, queryKeys } from "../lib/queries";
+import { invalidateChatCommands, playbooksQuery, queryKeys } from "../lib/queries";
 import { QuickSetting } from "../settings/QuickSetting";
 import type { Playbook } from "../lib/types";
 
@@ -191,7 +191,15 @@ function PlaybooksBody() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
 
-  const invalidate = () => void qc.invalidateQueries({ queryKey: queryKeys.playbooks });
+  // A playbook saved with `user_facing` + a `slash:` token IS a chat slash command — the
+  // server resolves user-facing skills into `/api/chat/commands` (graph/slash_commands.py),
+  // so create/edit/delete/promote all change the composer's `/` menu as well as this list.
+  // Both invalidations ride in the one helper so a new mutation here can't refresh the
+  // surface and silently leave the `/` menu stale (#3283).
+  const invalidate = () => {
+    void qc.invalidateQueries({ queryKey: queryKeys.playbooks });
+    void invalidateChatCommands(qc);
+  };
 
   function cancelForm() {
     setAdding(false);
@@ -295,6 +303,13 @@ function PlaybooksBody() {
       qc.setQueryData<{ enabled: boolean; playbooks: Playbook[] }>(queryKeys.playbooks, (old) =>
         old ? { ...old, playbooks: old.playbooks.filter((x) => x.id !== p.id) } : old,
       );
+      // A `user_facing` playbook IS a /slash command, so deleting one has to retire the row
+      // as well as the list — the save path above already does this at :201, and the delete
+      // path skipping it is the asymmetry. It matters more since the command list became a
+      // SHARED query: it used to self-heal because every ChatSessionSlot refetched on mount,
+      // and now an already-open composer would keep offering a command the server no longer
+      // resolves until the staleTime lapsed.
+      void invalidateChatCommands(qc);
     },
     onError: (e) => onError(errMsg(e)),
   });

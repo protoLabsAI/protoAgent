@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
+import { settingsSectionGroups } from "./sections";
 import { visibleSections } from "./sectionGate";
-import src from "./SettingsSurface.tsx?raw";
+// The section table lives in ./sections (a leaf) — the object literals this file greps are
+// there, not in SettingsSurface.tsx, which now only holds the render functions.
+import src from "./sections.ts?raw";
 
 // Settings ▸ Box on a sister agent's console. Overview + Telemetry read the FOCUSED agent's
 // endpoints (/api/runtime, /api/telemetry), so they'd mean something different in a member
@@ -50,6 +53,23 @@ describe("Settings ▸ Box narrows (not disappears) off the host console", () =>
   });
 
   it("the Box group renders whenever it has sections, not only on the host", () => {
-    expect(src).toMatch(/boxSections\.length \? \[\{ label: "Box"/);
+    // Behaviour now that group assembly is a pure function: off the host the group must still
+    // be there, narrowed to Fleet, rather than vanishing from the nav.
+    const labels = (onHost: boolean) =>
+      settingsSectionGroups({ flagOn: on, onHost }).map((g) => g.label);
+    expect(labels(true)).toContain("Box");
+    expect(labels(false)).toContain("Box");
+    const box = settingsSectionGroups({ flagOn: on, onHost: false }).find((g) => g.label === "Box");
+    expect(box?.sections.map((s) => s.id)).toEqual(["fleet"]);
+  });
+
+  it("…because the group is dropped on EMPTINESS, never on the host axis", () => {
+    // The half no input can exercise: Fleet carries neither gate, so BOX_SECTIONS is never
+    // empty and the false branch is unreachable from outside. What this adds over the
+    // behaviour above is the REASON Box survived off the host — pin the condition itself, so
+    // `onHost ? …` (the original bug) can't come back on the day Fleet grows a gate, which is
+    // precisely when the two readings would start to disagree again.
+    const cond = src.match(/\.\.\.\(([^?]*)\?\s*\[\{\s*label: GROUP_LABELS\.box/)?.[1] ?? "";
+    expect(cond.trim()).toBe("boxSections.length");
   });
 });

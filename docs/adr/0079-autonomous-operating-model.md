@@ -127,6 +127,42 @@ open (covered by a legacy-board migration test). `task_create` stamps the sessio
 graph state; `list(session_id=…)` scopes to a goal's backlog; `<working_state>` marks a goal's
 own tasks with "← this goal".
 
+### Amendment (2026-08-31) — plugin work providers
+
+The working-state block reads four **core** stores, and there was no way in. A plugin that
+owns a work queue of its own — a project board, a review lane — was therefore invisible to
+the Observe step no matter how central that queue is to what the agent actually does.
+
+This is not hypothetical. A PM agent whose entire job lives on a plugin-owned board
+reported itself idle for hours while one of its own cards sat stalled in that board's
+`in_progress` lane: the block it is taught to treat as "your live commitments" could not
+see the board, so *observing* could not surface the stall. The board was, in effect, a
+fifth work surface the operating model did not know about.
+
+**`registry.register_work_provider(name, fn, label=…)`** closes it. `fn() -> list[dict]`
+returns a bounded snapshot of the plugin's open work, rendered into the SAME
+`<working_state>` block, in the same line shape as OPEN TASKS, under its own heading.
+
+Two properties are deliberate:
+
+- **Projection, not replication.** The plugin stays the system of record; the host reads a
+  snapshot at turn-composition time. Nothing is copied into `tasks_store`, so there is no
+  second source of truth and no sync to drift. (Mirroring was considered and rejected: a
+  board's state machine — `ready → in_progress → in_review`, plus `blocked`/`dag_blocked` —
+  has no faithful image in tasks' `open/closed + priority`, and P3c's `session_id`
+  attribution is meaningless for a card no goal motivated.)
+- **One block, one vocabulary.** A plugin could already inject a rival context block via
+  `register_middleware` (ADR 0032). That yields two lists of commitments in two formats and
+  is what this seam exists to avoid — the agent should read its work in one place.
+
+Providers are called inline on **every** turn, so the contract is that they return an
+in-memory snapshot; a provider slower than `SLOW_PROVIDER_S` is logged once, one that
+raises is skipped, and the per-provider cap keeps two queues from starving each other.
+
+Making a plugin's card the contract of a real **goal** stays a separate, opt-in path
+(`register_goal_verifier`, ADR 0028) — a plugin that already drives its own queue must not
+also hand it to the goal controller, or two drivers act on one item.
+
 ### Validation (prod, 2026-07-08)
 
 Shipped in two PRs (`#1915` P0–P3b + nav; `#1917` P3c) and rolled to the four-agent fleet, then

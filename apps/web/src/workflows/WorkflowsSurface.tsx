@@ -28,6 +28,7 @@ import { PanelHeader } from "@protolabsai/ui/navigation";
 import { api } from "../lib/api";
 import { ago, errMsg } from "../lib/format";
 import {
+  invalidateChatCommands,
   queryKeys,
   subagentsQuery,
   workflowRunHistoryQuery,
@@ -277,7 +278,18 @@ function WorkflowsBody() {
     [workflows, selectedName],
   );
 
-  const invalidateWorkflows = () => queryClient.invalidateQueries({ queryKey: queryKeys.workflows });
+  // Saving/deleting a recipe changes TWO lists: this surface's, and the chat composer's
+  // `/` menu — the server folds workflow names into `/api/chat/commands` (ADR 0061,
+  // graph/slash_commands.py), so a new recipe is a new `/<name>`. Both invalidations live
+  // in this one helper because the second is the easy one to forget (#3283): missing it
+  // doesn't break Workflow Studio, it just leaves the command out of the autocomplete.
+  // Returns the combined promise the single invalidation used to: `remove`'s `onSettled`
+  // keeps the mutation pending until BOTH lists have refreshed.
+  const invalidateWorkflows = () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.workflows }),
+      invalidateChatCommands(queryClient),
+    ]);
 
   const start = useMutation({
     mutationFn: (v: { name: string; inputs: Record<string, unknown> }) =>
@@ -386,7 +398,7 @@ function WorkflowsBody() {
             onCancel={closeBuilder}
             onSaved={(name) => {
               closeBuilder();
-              void queryClient.invalidateQueries({ queryKey: queryKeys.workflows });
+              invalidateWorkflows();
               setSelected(name);
             }}
             onTest={(name) => {
@@ -394,7 +406,7 @@ function WorkflowsBody() {
               // carries the recipe, seed its run-form defaults too.
               closeBuilder();
               setTestIntent(name);
-              void queryClient.invalidateQueries({ queryKey: queryKeys.workflows });
+              invalidateWorkflows();
               setSelected(name);
             }}
           />
