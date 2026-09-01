@@ -25,12 +25,48 @@ default, `<instance data dir>/friction/friction.jsonl`.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.tools import tool
+
+log = logging.getLogger(__name__)
+
+# The live registry, captured in ``register()``. Held so the tools (which the agent calls
+# far from any registry reference) can emit on the plugin's own event-bus namespace and read
+# live config after a hot-reload. Module-level because a LangChain @tool is a free function.
+_REGISTRY = None
+
+
+def _emit(topic: str, data: dict) -> None:
+    """Publish on the plugin's namespaced bus (ADR 0039), never fatally.
+
+    Friction is the one signal in the system that says "this got in the way". Other
+    plugins — a board that opens a card, a digest that rolls it up — should be able to
+    hear it without importing this module, which is exactly what the bus is for."""
+    if _REGISTRY is None:
+        return
+    try:
+        _REGISTRY.emit(topic, data)
+    except Exception:  # noqa: BLE001 — a bus problem must never break a tool call
+        log.debug("[friction] emit(%s) failed", topic, exc_info=True)
+
+
+def _cfg(key: str, default):
+    """One live config read (ADR 0019), tolerant of every context this module runs in —
+    tests and headless boots have no registry at all."""
+    if _REGISTRY is None:
+        return default
+    try:
+        live = _REGISTRY.live_config() if hasattr(_REGISTRY, "live_config") else _REGISTRY.config
+        value = (live or {}).get(key)
+        return default if value is None else value
+    except Exception:  # noqa: BLE001
+        return default
+
 
 _KINDS = ("harness", "model")
 _SEVERITIES = ("minor", "major")
@@ -79,6 +115,7 @@ def _log(kind: str, summary: str, detail: str, severity: str, source: str, tool_
     with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(rec, default=str) + "\n")
     _trim(path)
+    _emit("recorded", dict(rec))
 
 
 def _trim(path: Path) -> None:
@@ -272,6 +309,8 @@ def set_resolved(
             out_lines.append(line)
     if matched:
         _rewrite_ledger(path, out_lines)
+        _emit("resolved" if resolved else "reopened",
+              {"summary": needle, "kind": kind, "count": matched, "reason": reason.strip()[:300]})
     return matched
 
 
@@ -314,6 +353,75 @@ async def friction_review(kind: str = "", include_resolved: bool = False) -> str
         lines.append(f"  [{r.get('kind', '?'):<7} {r.get('severity', '?'):<5} {r.get('source', '?'):<5}] "
                      f"{r.get('summary', '')}{' [resolved]' if r.get('resolved_at') else ''}")
     return "\n".join(lines)
+
+
+# ── ADR 0079 seam: the agent's own backlog, in its own working state ─────────
+#
+# #2595 called the ledger "write-only". A read API (#2607) and a console view (#2621)
+# both landed, and it stayed write-only IN THE WAY THAT MATTERED: every consumer was
+# something a HUMAN had to open. The agent recorded friction and then never saw it again,
+# so the same rough edge got re-reported for weeks. `register_work_provider` is the seam
+# that closes it — open friction is rendered into `<working_state>` beside OPEN TASKS, so
+# the agent observes its own backlog on every turn instead of polling for it.
+
+# The provider runs INLINE ON EVERY TURN, so it must never re-read the ledger just because
+# it was asked. Cache the projection and invalidate on the file's (mtime, size) — a stat is
+# cheap, parsing 2000 JSONL rows is not.
+_WORK_CACHE: dict = {"stamp": None, "items": []}
+
+
+def _work_snapshot() -> list[dict]:
+    """The grouped, unresolved ledger — recomputed only when the file actually changed."""
+    path = _ledger_path()
+    try:
+        st = path.stat()
+        stamp = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        _WORK_CACHE["stamp"], _WORK_CACHE["items"] = None, []
+        return []
+    if _WORK_CACHE["stamp"] != stamp:
+        _WORK_CACHE["items"] = grouped_entries()
+        _WORK_CACHE["stamp"] = stamp
+    return _WORK_CACHE["items"]
+
+
+def open_friction_work() -> list[dict]:
+    """The friction worth interrupting the agent's turn for.
+
+    Deliberately NOT the whole backlog. `<working_state>` is a shared, bounded budget —
+    four core sections live in it — so a 23-row ledger dumped in every turn would crowd
+    out the agent's actual commitments and train it to skim the block. The filter is the
+    same one a person triaging would apply: something is worth carrying if it is `major`,
+    or if it has happened enough times to be a pattern rather than an incident.
+
+    A quiet instance therefore contributes NOTHING, which is the property that makes this
+    safe to ship on by default: the block only grows when there is real, repeated friction.
+    """
+    if not bool(_cfg("working_state", True)):
+        return []
+    threshold = max(1, int(_cfg("working_state_repeat_threshold", 3) or 3))
+    limit = max(1, int(_cfg("working_state_limit", 3) or 3))
+    ranked = sorted(
+        (g for g in _work_snapshot()
+         if g.get("severity") == "major" or int(g.get("count") or 1) >= threshold),
+        key=lambda g: (_SEVERITY_RANK.get(str(g.get("severity")), 0), int(g.get("count") or 1),
+                       str(g.get("last_seen") or "")),
+        reverse=True,
+    )
+    out: list[dict] = []
+    for g in ranked[:limit]:
+        count = int(g.get("count") or 1)
+        state = str(g.get("severity") or "minor")
+        if count > 1:
+            state += f" x{count}"
+        out.append({
+            "state": state,
+            "title": str(g.get("summary") or ""),
+            # The hint names the escape hatch, because "what would have helped" is the
+            # actionable half and it is the half the agent is being asked to fix.
+            "hint": f"tool: {g['tool']}" if g.get("tool") else "resolve_friction when fixed",
+        })
+    return out
 
 
 class FrictionMiddleware(AgentMiddleware):
@@ -459,8 +567,17 @@ def _build_view_router():
 
 def register(registry):
     """protoAgent plugin entrypoint."""
+    global _REGISTRY
+    _REGISTRY = registry
     registry.register_tools([record_friction, friction_review, resolve_friction])
     registry.register_middleware(lambda config: FrictionMiddleware())
+    # ADR 0079 — the agent observes its own backlog instead of re-reporting it (see
+    # ``open_friction_work``). Bounded and self-limiting: a quiet ledger adds no lines.
+    registry.register_work_provider("backlog", open_friction_work, label="OPEN FRICTION")
+    # The tools were always here; what was missing was the judgement for USING them. The
+    # module docstring said as much ("the model has to reach for it") and then shipped no
+    # skill, leaving every operator to paste the same guidance into their own persona.
+    registry.register_skill_dir("skills")
     registry.register_router(_build_router(), prefix="")
     # Default prefix (None) resolves to /plugins/friction — the canonical public
     # view prefix (ADR 0026) — so the manifest's views[].path matches exactly.

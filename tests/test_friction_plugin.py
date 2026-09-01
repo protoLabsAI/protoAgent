@@ -462,3 +462,161 @@ def test_auto_capture_detail_is_json_the_view_can_render(ledger):
 
     detail = _recs(ledger)[0]["detail"]
     assert json.loads(detail) == {"command": "git diff", "cwd": "/repo"}
+
+
+# ── ADR 0079 seam: the backlog reaches the agent's working state ─────────────
+
+
+@pytest.fixture
+def wired(tmp_path, monkeypatch):
+    """The plugin with a registry attached, as the host wires it at boot."""
+    from plugins import friction
+
+    monkeypatch.setenv("FRICTION_LOG", str(tmp_path / "friction.jsonl"))
+    friction._WORK_CACHE["stamp"] = None  # module-level cache, per-test
+
+    class _Registry:
+        plugin_id = "friction"
+
+        def __init__(self):
+            self.events: list[tuple[str, dict]] = []
+            self.work_providers: dict = {}
+            self.skill_dirs: list = []
+            self.cfg: dict = {}
+
+        def emit(self, topic, data=None):
+            self.events.append((topic, data or {}))
+
+        def live_config(self):
+            return self.cfg
+
+        def register_work_provider(self, name, fn, label=""):
+            self.work_providers[name] = (fn, label)
+
+        def register_skill_dir(self, path):
+            self.skill_dirs.append(path)
+
+        def register_tools(self, tools):
+            pass
+
+        def register_middleware(self, factory):
+            pass
+
+        def register_router(self, router, prefix=None):
+            pass
+
+    reg = _Registry()
+    friction.register(reg)
+    monkeypatch.setattr(friction, "_REGISTRY", reg)
+    yield reg
+    friction._REGISTRY = None
+
+
+def test_a_quiet_ledger_contributes_nothing_to_working_state(wired):
+    """The property that makes this safe on by default: `<working_state>` is a shared,
+    bounded budget, so an instance with no real friction must add no lines at all."""
+    from plugins.friction import open_friction_work
+
+    assert open_friction_work() == []
+    _record("harness", "a one-off minor annoyance")
+    assert open_friction_work() == []  # minor, seen once — not worth a turn's attention
+
+
+def test_major_and_repeated_friction_reach_the_working_state(wired):
+    from plugins.friction import open_friction_work
+
+    asyncio.run(record_friction.ainvoke({"kind": "harness", "summary": "blocked hard", "severity": "major"}))
+    for _ in range(3):
+        _record("harness", "keeps happening")
+    _record("harness", "seen once")
+
+    items = open_friction_work()
+
+    assert [i["title"] for i in items] == ["blocked hard", "keeps happening"]
+    assert items[0]["state"] == "major"
+    assert items[1]["state"] == "minor x3"  # the count IS the argument for looking
+    assert "seen once" not in [i["title"] for i in items]
+
+
+def test_working_state_is_bounded_and_configurable(wired):
+    from plugins.friction import open_friction_work
+
+    for i in range(10):
+        asyncio.run(record_friction.ainvoke({"kind": "harness", "summary": f"major {i}", "severity": "major"}))
+
+    assert len(open_friction_work()) == 3  # default cap
+
+    wired.cfg = {"working_state_limit": 5}
+    assert len(open_friction_work()) == 5
+    wired.cfg = {"working_state": False}
+    assert open_friction_work() == []  # an operator can turn the injection off entirely
+
+
+def test_resolved_friction_leaves_the_working_state(wired):
+    from plugins.friction import open_friction_work
+
+    asyncio.run(record_friction.ainvoke({"kind": "harness", "summary": "fix me", "severity": "major"}))
+    assert [i["title"] for i in open_friction_work()] == ["fix me"]
+
+    asyncio.run(resolve_friction.ainvoke({"summary": "fix me"}))
+
+    assert open_friction_work() == []
+
+
+def test_the_work_snapshot_does_not_reparse_an_unchanged_ledger(wired, monkeypatch):
+    """It runs inline on EVERY turn, so an unchanged ledger must cost a stat, not a parse."""
+    from plugins import friction
+
+    _record("harness", "something")
+    friction.open_friction_work()
+
+    calls = []
+    monkeypatch.setattr(friction, "grouped_entries", lambda *a, **k: calls.append(1) or [])
+    friction.open_friction_work()
+    friction.open_friction_work()
+    assert calls == []  # cache hit — the file never changed
+
+    _record("harness", "a new one")  # mutates the ledger → cache must invalidate
+    friction.open_friction_work()
+    assert len(calls) == 1
+
+
+def test_the_plugin_registers_its_seams(wired):
+    """A core plugin should reach the agent through more than a tool list."""
+    assert "backlog" in wired.work_providers
+    assert wired.work_providers["backlog"][1] == "OPEN FRICTION"
+    assert wired.skill_dirs == ["skills"]
+
+
+# ── ADR 0039 seam: friction is broadcast, so other plugins can act on it ─────
+
+
+def test_recording_and_resolving_emit_on_the_bus(wired):
+    asyncio.run(record_friction.ainvoke({"kind": "harness", "summary": "worth hearing", "severity": "major"}))
+
+    topic, data = wired.events[-1]
+    assert topic == "recorded"
+    assert data["summary"] == "worth hearing" and data["severity"] == "major" and data["kind"] == "harness"
+
+    asyncio.run(resolve_friction.ainvoke({"summary": "worth hearing", "reason": "shipped"}))
+    assert wired.events[-1][0] == "resolved"
+    assert wired.events[-1][1]["count"] == 1 and wired.events[-1][1]["reason"] == "shipped"
+
+
+def test_a_bus_failure_never_breaks_a_tool_call(wired):
+    """Friction recording is the system's self-improvement path; it must not be the thing
+    that fails a turn."""
+    def _boom(topic, data=None):
+        raise RuntimeError("bus down")
+
+    wired.emit = _boom
+    out = asyncio.run(record_friction.ainvoke({"kind": "harness", "summary": "still logged"}))
+
+    assert "logged" in out
+    assert _recs(_ledger_for(wired))[0]["summary"] == "still logged"
+
+
+def _ledger_for(_registry):
+    from plugins.friction import _ledger_path
+
+    return _ledger_path()
