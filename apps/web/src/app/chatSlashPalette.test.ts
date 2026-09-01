@@ -21,6 +21,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { chatStore } from "../chat/chat-store";
+import { rankCommands } from "./palette/rank";
+import { settingsPaletteCommands } from "./settingsPalette";
 import "../chat/coreSlashCommands"; // side-effect: registers the client commands
 import { registerSlashDispatcher } from "../chat/slashDispatch";
 import type { SlashDispatchTarget } from "../chat/slashDispatch";
@@ -379,6 +381,30 @@ describe("what an operator types finds the row they mean", () => {
   beforeEach(() => {
     slot();
     skills("triage");
+  });
+
+  it.each([
+    ["shortcuts", "settings:keybindings"],
+    ["rebind", "settings:keybindings"],
+    ["dark mode", "settings:theme"],
+    ["rag", "settings:knowledge"],
+    ["backup", "settings:snapshot"],
+  ])("Settings still wins %j in the MERGED palette (#3292 regression)", (q, expected) => {
+    // THE GAP THIS CLOSES. settingsPalette.test.ts pins these queries against settings rows
+    // ALONE, with a local substring helper — so it cannot see what happens once the chat
+    // source is merged in and the REAL ranker orders both. #3292 gave /help the words
+    // "shortcuts" and "keys", already owned by Settings' Keyboard row (#3291); /help won the
+    // merged ranking, typing "shortcuts" stopped opening the Keyboard pane, and the only
+    // thing that noticed was settings-palette.spec.ts — an E2E, on branches that had touched
+    // no console code at all.
+    //
+    // Cross-source keyword OVERLAP is fine and common here (~19 pairs: "cost", "llm",
+    // "trace"…); the vocabularies are meant to overlap and the ranker arbitrates. What must
+    // not change silently is which row WINS. So this pins winners, not disjointness.
+    slot();
+    skills("triage");
+    const merged = [...settingsPaletteCommands(() => {}), ...chatSlashPaletteRows(nav, { reachable: true })];
+    expect(rankCommands(merged, q)[0]?.id).toBe(expected);
   });
 
   it.each([
