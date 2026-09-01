@@ -14,25 +14,32 @@
 // opened, and label a titled chat "New chat" forever.
 //
 // The seam's other half, `registerPaletteSource`, exists for exactly that freshness — but it
-// buys it on the DS's PROVIDER path, and that path is the wrong trade for rows that are
-// merely observable. The commands view debounces `getCommands` by 120ms and, until
-// `@protolabsai/ui` learns to skip that for a provider answering with a plain array, it keeps
-// the previous query's rows on screen for the whole window and re-runs
-// `useEffect(() => setSel(0), [filtered.length])` when the new batch lands. Shipped through a
-// source, this feature's own headline gesture broke: type a chat's name and press Enter
-// without pausing, and you land in whichever chat was first under the PREVIOUS query; arrow
-// down to a command and the highlight jumps back to row 0 under your fingers a beat later;
-// and before any rows have arrived at all — a chat title matches no other command — that
-// Enter does nothing whatsoever (e2e/palette-chat-tabs.spec.ts pins all three).
+// buys it on the PROVIDER path, and that path is the wrong trade for rows that are merely
+// observable. A source's premise is "nothing can tell you when the data moved", and here it
+// is simply false: `chatStore.subscribe` is that notification. So this module takes it and
+// re-registers the rows as a block of STATICS (`registerPaletteCommands`) whenever the tab
+// strip actually changes — as live as a source's rows, on the cheaper path.
 //
-// Nothing about these rows needs that path, because a source's premise — "nothing can tell
-// you when the data moved" — is false here: `chatStore.subscribe` is exactly that
-// notification. So this module takes it and re-registers the rows as a block of STATICS
-// (`registerPaletteCommands`) whenever the tab strip actually changes. The DS client-filters
-// statics on every keystroke with nothing retained between queries, so the rows are as live
-// as a source's AND every row on screen matches what was typed. It also leaves
-// `hasPaletteSources()` false in the default console, which keeps ⌘K on the DS's no-provider
-// fast path — no "Searching…" spinner in front of every keystroke.
+// WHAT THE PROVIDER PATH WOULD STILL COST, on the host-owned root view (#3289,
+// `palette/rootView.tsx` — the earlier revision of this comment argued against DS
+// `commandsView` defects that view REPLACED, so read it there rather than trusting a
+// second-hand account here). Two things survive, and both are contracts rather than bugs:
+//
+//   • The root view arms `loading` and debounces `getCommands` 120ms for ANY provider that
+//     declares it, so a source would put a "Searching…" spinner and a 120ms wait in front of
+//     every keystroke in the default console. `hasPaletteSources()` staying false is what
+//     keeps ⌘K on the no-provider path.
+//   • For that window the PREVIOUS query's provider rows are still listed, because provider
+//     rows are ordered and never re-filtered — deliberately, so a remote or fuzzy source's
+//     hits are not silently deleted (`rank.ts`, `orderCommands`). A chat title matches no
+//     other command, so during the debounce the ranked local corpus is empty and the whole
+//     list is stale chat rows — which is what a selection reset to `filtered[0]` then aims
+//     Enter at. Type a name, hit Enter without pausing, land in the previous query's chat.
+//     Statics are client-filtered per keystroke with nothing retained, so every row on screen
+//     matches what was typed. (`e2e/palette-chat-tabs.spec.ts` pins the gesture end to end.)
+//
+// Neither is a reason for a fork with genuinely unobservable rows to avoid a source; they are
+// the reason THESE rows, whose matching is plain substring over a title, do not need one.
 //
 // Building the rows stays CHEAP and SYNCHRONOUS regardless: one `chatStore.getSnapshot()`
 // read and a map over ≤50 sessions, run from a store notification, never from a render.
@@ -42,9 +49,12 @@ import type { PaletteCommand } from "../ext/paletteRegistry";
 import { navigate } from "./usePaletteRegistry";
 
 /** Palette group for the chat rows. Its own group so they read as CHATS — a list of the
- *  operator's conversations — rather than as more commands in the Commands group. The DS
- *  commands view renders a header wherever the group changes, and the block is re-inserted
- *  after everything registered before it, so these land as one labelled block at the end. */
+ *  operator's conversations — rather than as more commands in the Commands group, and so the
+ *  empty-query list owes them a row: `pickRootFill` gives every group a turn before any group
+ *  takes a second, which is the only thing standing between fifty open tabs and a root list
+ *  made of nothing else. The block is re-inserted after everything registered before it, so on
+ *  that list — the one the root view renders headers on (a ranked list has no sections) — they
+ *  land as one labelled block at the end. */
 export const CHAT_TAB_GROUP = "Chats";
 
 /** Row id prefix — namespaced so a session id can never collide with a static command's
@@ -58,13 +68,13 @@ export const CHAT_TAB_ID_PREFIX = "chat.tab:";
 const ORDINAL_BINDINGS = 9;
 
 /** Keywords every chat row carries. The row's LABEL is already the full title, and both
- *  matchers that see these rows — the DS's `matchCommand` and this repo's mirror of it
- *  (`matchesPaletteQuery`, usePaletteRegistry.ts) — are substring-over-the-joined-haystack
- *  with the label in it, so the title needs no per-word keywords to be searchable. These carry
- *  only what a title CANNOT say: the words an operator types when they are hunting for a
- *  conversation rather than spelling one ("switch chats", "jump to tab").
+ *  matcher that sees these rows — `matchCommand` (palette/rank.ts), which the root view and
+ *  the seam's provider both go through — is substring-over-the-joined-haystack with the label
+ *  in it, so the title needs no per-word keywords to be searchable. These carry only what a
+ *  title CANNOT say: the words an operator types when they are hunting for a conversation
+ *  rather than spelling one ("switch chats", "jump to tab").
  *
- *  Spelled PLURAL on purpose. Both matchers ask `haystack.includes(term)`, so the plural is
+ *  Spelled PLURAL on purpose. The matcher asks `haystack.includes(term)`, so the plural is
  *  the strictly wider spelling — "tabs" answers `tab` AND `tabs`, while "tab" answers only
  *  the singular — and an operator reaching for a LIST of their chats is as likely to type one
  *  as the other. "jump" is the verb the ⌘1–9 bindings already use on themselves ("Jump to

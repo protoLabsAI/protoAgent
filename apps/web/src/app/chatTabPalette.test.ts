@@ -4,7 +4,7 @@
 // Four things carry the weight here. The rows must track the LIVE store — a snapshot would
 // list a closed tab and miss a new one — which they do by SUBSCRIBING to it, not by being
 // re-read per keystroke: that difference is the first `describe` below, because serving these
-// through the seam's read-time source path made ⌘K run rows the query excluded (see the
+// through the seam's read-time source path makes ⌘K run rows the query excluded (see the
 // module header, and e2e/palette-chat-tabs.spec.ts). Running a row must never be able to
 // leave the chat surface pointing at a session that no longer exists: `chatStore.switchSession`
 // does not validate its argument, so a stale id sets `currentSessionId` to nothing, pushes a
@@ -33,7 +33,7 @@ import {
 } from "./chatTabPalette"; // importing also registers the rows + subscribes (side effect)
 import {
   applyNavIntent,
-  matchesPaletteQuery,
+  matchCommand,
   setPaletteNavigator,
   toDsCommand,
 } from "./usePaletteRegistry";
@@ -42,16 +42,18 @@ import type { PaletteCommand } from "../ext/paletteRegistry";
 
 const ctx = { close: vi.fn() };
 
-/** Every registered row the palette would show for `query`, by label — literally the DS
- *  commands view's own `baseCommands.filter(matchCommand)`, over the rows it really renders
- *  (mapped through `toDsCommand`, so an advertised ⌘N lands in the searchable hint the way it
- *  does on screen). Core's deep-links are registered here too, so a query that pulls one in
- *  alongside the chats fails these assertions — which is the right answer: the operator would
- *  see it too. */
+/** Every registered row the palette would show for `query`, by label — literally the root
+ *  view's own inclusion pass (`matchCommand`, palette/rank.ts, which `rankCommands` filters
+ *  with), over the rows it really renders (mapped through `toDsCommand`, so an advertised ⌘N
+ *  lands in the searchable hint the way it does on screen). Ordering is the root view's and is
+ *  pinned in rootView.test.ts; this asks only the question these rows own — can the operator
+ *  FIND the chat by typing that? Core's deep-links are registered here too, so a query that
+ *  pulls one in alongside the chats fails these assertions — which is the right answer: the
+ *  operator would see it too. */
 function search(query: string): string[] {
   return visiblePaletteCommands(() => true, true, "static")
     .map(toDsCommand)
-    .filter((c) => matchesPaletteQuery(c, query))
+    .filter((c) => matchCommand(c, query))
     .map((c) => c.label);
 }
 
@@ -188,20 +190,22 @@ describe("chat-tab palette rows", () => {
 
 describe("how the rows reach the palette", () => {
   // This block is the regression guard for the whole feature, because WHICH HALF of the seam
-  // these rows ride decides whether ⌘K tells the truth. On the read-time source path the DS
-  // serves them through a debounced `CommandProvider` that keeps the previous query's rows on
-  // screen and re-points the selection at row 0 when the new batch lands — so the palette
-  // listed, pre-selected and ran chats the query excluded (e2e/palette-chat-tabs.spec.ts).
-  // Statics are client-filtered per keystroke with nothing retained, and only stay live
-  // because this module subscribes to the store.
+  // these rows ride decides whether ⌘K tells the truth. On the read-time source path the root
+  // view serves them through a `CommandProvider` it debounces 120ms, and for that window the
+  // PREVIOUS query's rows are still listed — provider rows are ordered, never re-filtered, so
+  // a remote source's hits survive. A chat title matches no other command, so during the
+  // debounce the whole list is stale chat rows and the selection reset to `filtered[0]` aims
+  // Enter at one of them (e2e/palette-chat-tabs.spec.ts). Statics are client-filtered per
+  // keystroke with nothing retained, and only stay live because this module subscribes to the
+  // store.
   it("registers the rows as STATICS and arms no dynamic source", () => {
     const titled = openTab("Registered through the seam");
     expect(registeredPaletteCommands("static").map((c) => c.id)).toContain(
       `${CHAT_TAB_ID_PREFIX}${titled}`,
     );
     expect(registeredPaletteCommands("dynamic")).toEqual([]);
-    // The gate the adapter reads: false here means ⌘K keeps the DS's no-provider fast path —
-    // no debounce, no "Searching…", no rows held over from the last query.
+    // The gate the adapter reads: false here means ⌘K keeps the root view's no-provider fast
+    // path — no debounce, no "Searching…", no rows held over from the last query.
     expect(hasPaletteSources()).toBe(false);
   });
 

@@ -16,7 +16,7 @@ import { CommandPalette } from "@protolabsai/ui/command-palette";
 import type { PaletteView } from "@protolabsai/ui/command-palette";
 import { setPaletteNavigator, usePaletteRegistry } from "./usePaletteRegistry";
 import type { InlinePluginView } from "./usePaletteRegistry";
-import "./chatTabPalette"; // core's dynamic ⌘K source: a row per open chat tab (side effect)
+import "./chatTabPalette"; // core's live ⌘K rows: one per open chat tab (side effect)
 import { PaletteChat } from "./PaletteChat";
 import { CORE_SURFACES } from "./coreSurfaces";
 import { buildViews } from "../lib/viewRegistry";
@@ -47,8 +47,10 @@ export function Launcher() {
     .flatMap((p) => (p.views ?? []).map((v) => ({ ...v, key: `plugin:${p.id}:${v.id}` })))
     .filter((v) => v.slot !== "chat" && !v.utility);
 
-  // The same three command sources the in-app palette feeds usePaletteRegistry.
-  const { views: paletteViews } = buildViews({
+  // The same three command sources the in-app palette feeds usePaletteRegistry — handed
+  // over as the WHOLE ADR 0056 facade, `viewFor` included (the palette resolves surfaces by
+  // id through it), rather than destructured down to the id list.
+  const paletteFacade = buildViews({
     core: CORE_SURFACES,
     plugins: allPluginViews.map((v) => ({ key: v.key, label: v.label, icon: pluginIcon() })),
     ext: [], // fork/ext surfaces are build-time host concerns — not surfaced from the launcher
@@ -84,7 +86,7 @@ export function Launcher() {
     [chatAgentName],
   );
 
-  const registry = usePaletteRegistry(paletteViews, inlinePaletteViews, paletteChat);
+  const registry = usePaletteRegistry(paletteFacade, inlinePaletteViews, paletteChat);
 
   // Swap the palette's navigation sink: forward the intent to the main console window,
   // bring it to the front, and dismiss the launcher. Restore the default on unmount.

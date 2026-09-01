@@ -52,6 +52,10 @@ test("↑ on a steer the agent already read restores the bubble, says so, and ke
   // the failure mode this avoids), and the pulled text left in the composer — destroying an
   // operator's in-hand edit to undo our own optimism would be worse than the duplicate.
   await expect(page.locator(".pl-message--queued")).toHaveCount(1);
-  await expect(page.locator(".pl-toast")).toContainText(/already read that message/i);
+  // `.pl-toast--error`, not `.pl-toast`: the mock fires `goal.achieved` twice on every SSE
+  // connect and that success toast lives for 4s, so on a loaded machine it is still stacked
+  // when this one lands and the bare class resolves to TWO nodes — a strict-mode violation
+  // that reads as "the notice never appeared". The tone is the thing under test anyway.
+  await expect(page.locator(".pl-toast--error")).toContainText(/already read that message/i);
   await expect(composer).toHaveValue("too late to edit this");
 });

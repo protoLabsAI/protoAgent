@@ -138,37 +138,41 @@ menu from `registeredSlashCommands()` + the server list, and `runClientSlash` di
     roster edit, a rebind) happens to re-run the effect. So `visiblePaletteCommands(flagOn,
     onHost, from)` reads the halves apart: `"static"` rows are snapshotted (a fixed list is
     correct to freeze, and it keeps them in their registered display position), while
-    `"dynamic"` rows are served by a DS **`CommandProvider`** the commands view re-invokes on
-    every open and every keystroke. The provider is wired only while a source exists — the DS
-    shows its "Searching…" affordance whenever any provider declares `getCommands`, so wiring
-    one unconditionally would put that spinner in front of every keystroke in a console with
-    nothing dynamic to serve — and it applies the query itself, because the DS client-filters
-    only statics (a provider is normally a remote search that already applied it). The honest
+    `"dynamic"` rows are served by a **`CommandProvider`** the palette's root view re-invokes
+    on every open and every keystroke. The provider is wired only while a source exists — the
+    view shows its "Searching…" affordance whenever any provider declares `getCommands`, so
+    wiring one unconditionally would put that spinner in front of every keystroke in a console
+    with nothing dynamic to serve — and it applies the query itself, because only statics are
+    client-filtered (a provider is normally a remote search that already applied it). The honest
     contract is therefore "re-read on every palette read", not "re-rendered when your data
     changes": a row that changes while the palette sits open and untouched appears at the next
     keystroke.
 
     **A source is the LAST resort, not the default for live rows.** Its path costs more than a
-    spinner in `@protolabsai/ui` 0.60.x: the commands view debounces `getCommands` by 120ms and
-    does not drop the previous query's results when the query changes, and it re-runs
-    `setSel(0)` whenever the row count moves. For that window ⌘K therefore lists — and
-    pre-selects, and on Enter *runs* — rows the current query excludes, and the highlight jumps
-    off whatever the operator had arrowed to. That is the right trade for what a provider is
-    for (a remote search nobody can subscribe to) and the wrong one for rows that merely change.
-    So: **if you can be notified when your data moves, register a BLOCK of statics and
-    re-register it** — `registerPaletteCommands(cmds)`, one version bump, re-inserted as a unit
-    in the order given, withdrawn with one handle that removes only the rows it still owns.
-    Statics are client-filtered per keystroke with nothing retained between queries, so the
-    rows are as live as a source's and every row on screen matches what was typed.
+    spinner: the root view debounces `getCommands` by 120ms, and for that window the previous
+    query's provider rows are still on screen — provider rows are ordered and never
+    re-filtered, deliberately, so a remote or fuzzy source's hits are not silently deleted. ⌘K
+    therefore lists, pre-selects, and on Enter *runs* a row the current query excludes, and it
+    does so for every keystroke rather than only the first. (The selection half of this used to
+    be worse and is not a source's fault any more: the DS `commandsView` reset the highlight on
+    a row-count change, which moved it off whatever the operator had arrowed to. ADR 0057's
+    host-owned root view fixed that at the root — selection follows the command id — so what
+    remains is the debounce and the un-refiltered carry-over.) That is the right trade for what
+    a provider is for (a remote search nobody can subscribe to) and the wrong one for rows that
+    merely change. So: **if you can be notified when your data moves, register a BLOCK of
+    statics and re-register it** — `registerPaletteCommands(cmds)`, one version bump,
+    re-inserted as a unit in the order given, withdrawn with one handle that removes only the
+    rows it still owns. Statics are client-filtered per keystroke with nothing retained between
+    queries and ranked in the same pass as every other row, so the rows are as live as a
+    source's and every row on screen matches what was typed.
 
     **Dogfooded:** core's live list is the open chat tabs (`app/chatTabPalette.ts`) — a palette
     row per open chat, so a chat is reachable by NAME and not only by the ⌘1–9 ordinal. It
     takes the block path, subscribing to `chatStore` and re-registering on a signature of what
     a row is derived from (tab order, ids, titles, incognito, which tab is current), because
     that store notifies on every streamed token. Core therefore registers no source and the
-    default console keeps the DS's no-provider fast path. Shipping those rows through a source
-    first is what taught us the paragraph above; `e2e/palette-chat-tabs.spec.ts` keeps it
-    learned.
+    default console keeps the no-provider fast path. Shipping those rows through a source first
+    is what taught us the paragraph above; `e2e/palette-chat-tabs.spec.ts` keeps it learned.
 
   Consumers observe the registry the way they observe the DS one: **`subscribePaletteCommands(fn)`**
   plus a monotonic **`paletteCommandsVersion()`** (bumped on every register/unregister) is exactly

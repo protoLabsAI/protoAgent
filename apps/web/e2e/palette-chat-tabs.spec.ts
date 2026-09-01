@@ -11,15 +11,22 @@ import { seedCurrentChat } from "./chat-helpers";
 //
 // The last three specs are the ones that matter most, because the first shipped version of
 // this feature passed the first spec and was still broken. Serving the rows through the
-// seam's read-time SOURCE path armed the DS's `CommandProvider`, which debounces
-// `getCommands` 120ms, keeps the previous query's rows on screen for that window, and re-runs
-// `setSel(0)` when the new batch lands. In that window ⌘K listed rows the query excluded,
-// moved the highlight off the row the operator had arrowed to, and ran the wrong chat on
-// Enter — or, when nothing matched yet, swallowed the keypress entirely. Note the shape of
-// each: they act on the palette IMMEDIATELY (`press("Enter")`, read the rows in the same
-// tick) and never `click()` a row, because Playwright's auto-wait for a row to exist is
-// exactly the wait a real operator does not do — it is what let the original spec go green
-// over all three bugs.
+// seam's read-time SOURCE path arms a `CommandProvider`, which the palette debounces 120ms,
+// and for that window the previous query's provider rows are still listed — provider rows are
+// ordered but never re-filtered, deliberately, so a remote source's hits are not deleted. A
+// chat title matches no other command, so during the debounce the ranked corpus is empty and
+// the list is nothing BUT stale chat rows: ⌘K lists rows the query excludes, the selection
+// resets onto one, and Enter runs the wrong chat — or, before any rows have arrived at all,
+// falls on an empty list and does nothing. Note the shape of each: they act on the palette
+// IMMEDIATELY (`press("Enter")`, read the rows in the same tick) and never `click()` a row,
+// because Playwright's auto-wait for a row to exist is exactly the wait a real operator does
+// not do — it is what let the original spec go green over all of it.
+//
+// One of the four is no longer discriminating and is kept anyway: "the highlighted row stays
+// where the operator put it" was a DS `commandsView` defect (a `setSel(0)` on every row-count
+// change), and #3289's host-owned root view fixed it at the root for every path — provider
+// rows included, pinned in `src/app/palette/rootView.test.ts`. It stays here as the end-to-end
+// half of that guarantee, because nothing else asserts it against a real palette.
 
 const PANEL = ".pl-cmdk__panel";
 const OPTION = `${PANEL} [role="option"]`;
@@ -43,13 +50,20 @@ test("the palette switches to a chat by its title (#3290)", async ({ page }) => 
 
   await page.keyboard.press("ControlOrMeta+Shift+k");
   await expect(page.locator(PANEL)).toBeVisible();
-  await page.locator(INPUT).fill("release");
 
-  // One row, under its own "Chats" header — this is the assertion that the rows really
-  // reached the palette; an unregistered or frozen list shows "No matches" here.
+  // The rows carry their own "Chats" header, asserted on the UNTYPED list because that is the
+  // only list that has headers: the root view drops them once the list is ranked (#3289 — a
+  // relevance order has no sections, so a contiguity header would re-emit every few rows).
+  // The untyped list is also where the group has to EARN its place: it is capped at nine with
+  // a per-group quota, so a "Chats" header here means the chats really are a group of the
+  // root and not just something you can search for.
+  await expect(page.locator(`${PANEL} .pl-cmdk-commands__group`)).toContainText(["Chats"]);
+
+  await page.locator(INPUT).fill("release");
+  // One row — this is the assertion that the rows really reached the palette; an unregistered
+  // or frozen list shows "No matches" here.
   const row = page.locator(OPTION).filter({ hasText: "release notes" });
   await expect(row).toHaveCount(1);
-  await expect(page.locator(`${PANEL} .pl-cmdk-commands__group`)).toHaveText("Chats");
   await row.click();
 
   // The palette closes and the strip is on the chat we named — reached by NAME, from a tab
@@ -90,10 +104,12 @@ test("Enter runs the chat you typed, with no wait between the two (#3290)", asyn
   const tabs = await twoChats(page);
   await openPalette(page);
   // Let the empty-query list settle FIRST, so a row left over from it is visibly the previous
-  // query's row and not a list that simply hasn't arrived yet. Then type the name of the tab
-  // that is NOT first in that list: if anything from before the keystroke is still on screen,
-  // Enter lands on "release notes" and this fails.
-  await expect(page.locator(OPTION).filter({ hasText: "smoke rehearsal" })).toBeVisible();
+  // query's row and not a list that simply hasn't arrived yet. "release notes" is the chat the
+  // capped root list holds (one row per group, and it is the current tab); "smoke rehearsal"
+  // is NOT on it. So typing "smoke" next is the sharpest form of the question: if anything
+  // from before the keystroke survives, the only row on screen is "release notes", Enter lands
+  // there, and this fails.
+  await expect(page.locator(OPTION).filter({ hasText: "release notes" })).toBeVisible();
   const input = page.locator(INPUT);
   await input.fill("smoke");
   await input.press("Enter"); // the gesture: type a name, hit Enter, don't pause
@@ -121,7 +137,9 @@ test("Enter is never swallowed, even on the first keystroke (#3290)", async ({ p
 test("no row survives a query that excludes it (#3290)", async ({ page }) => {
   await twoChats(page);
   await openPalette(page);
-  await expect(page.locator(OPTION).filter({ hasText: "smoke rehearsal" })).toBeVisible();
+  // Settle the empty list, then type a query that EXCLUDES rows it was holding — the capped
+  // root list carries agents, plugin views and commands as well as the chat row.
+  await expect(page.locator(OPTION).filter({ hasText: "release notes" })).toBeVisible();
   await page.locator(INPUT).fill("release");
   // Read in the same tick as the keystroke — no auto-wait, no retry. Every row on screen has
   // to match what was typed, including the row Enter is aimed at.
@@ -132,6 +150,9 @@ test("no row survives a query that excludes it (#3290)", async ({ page }) => {
   expect(selected.toLowerCase()).toContain("release");
 });
 
+// Selection stability is the ROOT VIEW's now (#3289), not this feature's — see the note at
+// the top. This is the end-to-end check that it holds in a real palette with live chat rows in
+// it, which no unit test covers.
 test("the highlighted row stays where the operator put it (#3290)", async ({ page }) => {
   await twoChats(page);
   await openPalette(page);

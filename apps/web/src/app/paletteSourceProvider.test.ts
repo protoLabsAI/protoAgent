@@ -16,7 +16,11 @@ import type { PaletteRegistry } from "@protolabsai/ui/command-palette";
 
 import { registerPaletteSource } from "../ext/paletteRegistry";
 import type { PaletteCommand } from "../ext/paletteRegistry";
+import { buildViews } from "../lib/viewRegistry";
 import { paletteSourceProvider, usePaletteRegistry } from "./usePaletteRegistry";
+
+// The hook takes ADR 0056's whole View facade now (`{ views, viewFor }`), not a bare array.
+const EMPTY_VIEWS = buildViews({ core: [], plugins: [], ext: [] });
 
 const SOURCE_PROVIDER = "ext-palette-sources";
 const allOn = () => true;
@@ -35,7 +39,7 @@ const offs: (() => void)[] = [];
 async function mountRegistry(): Promise<PaletteRegistry> {
   let registry: PaletteRegistry | null = null;
   const Probe = () => {
-    registry = usePaletteRegistry([], []);
+    registry = usePaletteRegistry(EMPTY_VIEWS, []);
     return null;
   };
   const host = document.createElement("div");
@@ -109,8 +113,8 @@ describe("registerPaletteSource → the DS read-time provider", () => {
     // Core registers no source — its one live list (the open chat tabs) is observable, so it
     // re-registers as a block of statics instead. An always-on provider would put the
     // palette's "Searching…" spinner in front of every keystroke in the default console, and
-    // with it the DS's 120ms debounce, which holds the previous query's rows on screen and
-    // re-points the selection at the first of them (see chatTabPalette.ts).
+    // with it the root view's 120ms debounce, for which window the previous query's provider
+    // rows are still listed — they are ordered, never re-filtered (see chatTabPalette.ts).
     expect(registry.getProviders().map((p) => p.id)).not.toContain(SOURCE_PROVIDER);
 
     const off = source(() => [{ id: "probe:late", label: "Late", run: () => {} }]);
@@ -127,8 +131,10 @@ describe("registerPaletteSource → the DS read-time provider", () => {
   });
 
   it("contains a broken source instead of wedging the palette on 'Searching…'", () => {
-    // A sync throw out of `getCommands` escapes into the DS's `Promise.allSettled` callback
-    // as an unhandled rejection, and the commands view never clears its loading state.
+    // A sync throw out of `getCommands` escapes into the root view's `Promise.allSettled`
+    // callback as an unhandled rejection, and the view never clears its loading state. The
+    // view contains that too now (rootView.tsx), but core's own provider still guards itself:
+    // this is the seam's half of the contract, not a second copy of the view's.
     const provider = paletteSourceProvider(() => {
       throw new Error("flags blew up");
     }, true);

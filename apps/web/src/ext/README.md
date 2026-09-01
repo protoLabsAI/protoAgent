@@ -125,12 +125,15 @@ called *when your data changes*: nothing watches it. A row that changes while th
 and untouched appears on the next keystroke.) That is why a source has to be **cheap and
 synchronous**: no fetches, no store writes, no `async`. Keep it to mapping state you already have.
 
-**Prefer the block whenever you have the choice.** A source is served through the DS's
-`CommandProvider`, which in `@protolabsai/ui` 0.60.x debounces your rows by 120ms, keeps the
-*previous* query's rows on screen for that window, and re-selects the first row whenever the count
-changes — so for a beat after every keystroke the palette lists and pre-selects rows the query
-excludes, and Enter runs one. Statics have none of that: they are client-filtered per keystroke
-with nothing retained. Core moved its chat rows off the source path for exactly this reason.
+**Prefer the block whenever you have the choice.** A source is served through a
+`CommandProvider`, which the palette debounces by 120ms — and for that window the *previous*
+query's rows are still on screen, because provider rows are ordered but never re-filtered (that is
+on purpose: a source is usually a remote or fuzzy search, and re-filtering would delete the hits it
+exists to contribute). So for a beat after every keystroke the palette lists rows the query
+excludes, and if nothing else matches, Enter runs one. Statics have none of that: they are
+client-filtered per keystroke with nothing retained, and ranked in the same pass as every other row
+rather than appended after it. Core moved its chat rows off the source path for exactly this
+reason.
 
 A source's row is also **built at read time and run a keystroke later**, so whatever it points at
 can be gone by the time the operator hits Enter. Re-check it where you act on it, not where you

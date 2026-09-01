@@ -38,11 +38,12 @@
 //     Reach for a source only when your rows come from something you CANNOT observe. If you
 //     can be notified when your data moves, register a BLOCK of statics and re-register it —
 //     `registerPaletteCommands`, which is what core's live chat-tab rows do
-//     (`app/chatTabPalette.ts`). Statics are the better half whenever it is available: the DS
-//     client-filters them per keystroke with nothing retained between queries, while its
-//     provider path debounces `getCommands` 120ms and keeps the PREVIOUS query's rows on
-//     screen for that window — rows the new query excludes, with the selection re-pointed at
-//     the first of them, which is a row that runs on Enter.
+//     (`app/chatTabPalette.ts`). Statics are the better half whenever it is available: they
+//     are client-filtered per keystroke with nothing retained between queries and ranked in
+//     the same pass as every other row, while the provider path costs a 120ms debounce plus
+//     the "Searching…" affordance on every keystroke and, for that window, still lists the
+//     PREVIOUS query's rows — provider rows being ordered and never re-filtered, so a remote
+//     source's hits survive (`app/palette/rank.ts`).
 //   • `subscribePaletteCommands` + `paletteCommandsVersion` mirror the DS registry's
 //     bump/subscribe shape (`createPaletteRegistry` in @protolabsai/ui), so the root view
 //     `useSyncExternalStore(subscribePaletteCommands, paletteCommandsVersion)`s and picks up a
@@ -123,14 +124,14 @@ export function paletteCommandsVersion(): number {
   return _version;
 }
 
-/** Whether any dynamic source is registered. The host wires the DS provider path only when
- *  a source actually exists, because that path is not free: the commands view arms its
- *  "Searching…" affordance for any provider declaring `getCommands`, debounces the call
- *  120ms, and — until `@protolabsai/ui` drops both for a provider that answers with an array
- *  — holds the previous query's rows on screen for that window while re-pointing the
- *  selection at the first of them. Core registers NO source: its one live list (the open
- *  chat tabs) is observable, so it re-registers as a block of statics instead
- *  (`app/chatTabPalette.ts`) and the default console keeps the no-provider fast path.
+/** Whether any dynamic source is registered. The host wires the provider path only when a
+ *  source actually exists, because that path is not free: the root view
+ *  (`app/palette/rootView.tsx`) arms its "Searching…" affordance for any provider declaring
+ *  `getCommands`, debounces the call 120ms, and for that window still lists the previous
+ *  query's provider rows — those being ordered and never re-filtered by design. Core
+ *  registers NO source: its one live list (the open chat tabs) is observable, so it
+ *  re-registers as a block of statics instead (`app/chatTabPalette.ts`) and the default
+ *  console keeps the no-provider fast path.
  *  Registering/unregistering a source bumps the version, so a consumer keyed on
  *  `paletteCommandsVersion()` re-asks at the right moment. */
 export function hasPaletteSources(): boolean {
