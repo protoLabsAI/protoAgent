@@ -223,7 +223,15 @@ const ROWS: Record<string, RowSpec> = {
     mode: (s) => (s.bypassPermissions ? "on" : "off"),
     find: ["permissions", "auto-approve", "approve", "yolo", "dangerous", "run_command"],
   },
-  help: { find: ["shortcuts", "keyboard", "reference", "keys", "cheat sheet"] },
+  // `blurb` overrides the command's own description for the PALETTE row only, because the
+  // description ("Show available commands & shortcuts") puts the word "shortcuts" into this
+  // row's LABEL — and a label substring outranks a keyword, correctly. Settings' Keyboard
+  // row claims "shortcuts" as a keyword (SECTION_KEYWORDS, #3291), so once #3292 put chat
+  // rows in the same palette, /help won the word and typing "shortcuts" stopped opening the
+  // Keyboard pane. The composer's /help description is unchanged; only this row reads
+  // differently. `find` drops "shortcuts"/"keys" for the same reason — both are already
+  // claimed — while "keyboard shortcuts" still lands here via "keyboard".
+  help: { blurb: "Show the command reference", find: ["keyboard", "reference", "cheat sheet"] },
   // The only row NARROWER than its command, and the reason both overrides exist. The client
   // `/goal` claims ONLY the `new` subcommand (the guided form) and returns false for
   // everything else, so bare `/goal`, `/goal <text>` and `/goal clear` fall through to the
