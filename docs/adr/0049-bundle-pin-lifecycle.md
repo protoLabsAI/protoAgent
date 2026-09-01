@@ -1,6 +1,6 @@
 # 0049 — Bundle pin lifecycle (a pin means "last verified working")
 
-- Status: Accepted
+- Status: Accepted (amended 2026-08-31 — member pins are a bounded floor; see Amendment)
 - Date: 2026-06-12
 - Builds on: ADR 0040 (plugin bundles — reference manifest over standalone plugin repos),
   ADR 0027 (git-installable plugins + `plugins.lock`).
@@ -66,6 +66,44 @@ which is strictly worse than a stale-but-functional pin. Instead:
    *propagates* a bumped bundle to already-spawned agents remain on the version-coherence
    P1 queue (`docs/dev/version-coherence.md`) — this ADR defines the contract they
    implement, not the implementation.
+
+## Amendment (2026-08-31) — a member pin is a bounded FLOOR, not an exact pin
+
+The "pins stay exact" decision above stopped being true in the code and was never recorded
+here, so this ADR has been describing behaviour protoAgent doesn't have.
+
+**#2960 made a release-tag member pin a FLOOR.** `install_bundle` ls-remotes every
+release-tag-pinned member and installs the *newest* tag it finds, because an operator may have
+force-installed a member ahead of the archetype's pin and re-pinning to the manifest would
+silently DOWNGRADE it. (SHA pins and branch refs still pass through untouched — exactness is
+still available, just not through a release tag.)
+
+Two consequences followed, both of which this amendment settles:
+
+1. **The scheduled pin-bump loop was writing down a value the installer already computes.**
+   `check_bundle_updates.py` rewrites `ref:` to the newest tag; the installer chases to that
+   same tag on its own. So every patch release of every member produced a bump PR, an approval
+   click and a merge across every bundle that named it — for **no change in what gets
+   installed**. That churn is retired: a bundle pin is now bumped when its floor genuinely
+   rises (the bundle needs something newer), not on every member patch.
+
+2. **The chase was unbounded, which is a worse version of the risk this ADR set out to
+   prevent.** A member's first breaking release propagated to every archetype spawn
+   automatically, over a pin that read as though it prevented exactly that. The chase is now
+   bounded by **caret semantics** (`is_compatible_upgrade`): the boundary is the leftmost
+   non-zero component, so `0.7.0 → 0.7.9` is adopted and `0.7.0 → 0.8.0` is not. The 0.x
+   detail is load-bearing — every plugin in this fleet is 0.x, where the MINOR is where
+   breaking changes land, so bounding on the major alone would be no bound at all. A member
+   release outside the range is logged and skipped; adopting it is a deliberate manifest bump,
+   which is the moment the verify job is actually worth running.
+
+So the pin now means what a reader already assumed it meant: **"this version, or a compatible
+newer one."** The original fear — "a floating ref would let any plugin's HEAD break every
+archetype spawn overnight" — is still answered: the chase only ever considers published release
+tags, never HEAD, and now only compatible ones.
+
+Unchanged: the lock remains the reproducibility truth (`resolved_sha`), `verified_against`
+remains metadata, and the verify-and-bump loop still gates any pin that does move.
 
 ## Consequences
 

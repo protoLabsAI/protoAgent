@@ -651,6 +651,25 @@ def _make_bundle_repo(root: Path, members: list[Path]) -> Path:
     return repo
 
 
+def _tag(repo: Path, *tags: str) -> None:
+    """Give a fixture plugin repo real release tags so a ref-pinned clone can resolve."""
+    for t in tags:
+        _git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "tag", t)
+
+
+def _set_bundle_member_refs(repo: Path, ref: str) -> None:
+    """Pin every url-member in a fixture bundle to ``ref`` and re-commit."""
+    f = repo / "protoagent.bundle.yaml"
+    out = []
+    for line in f.read_text().splitlines():
+        if line.strip().startswith("- { id: x, url:") and "ref:" not in line:
+            line = line.rstrip().rstrip("}").rstrip() + f", ref: {ref} }}"
+        out.append(line)
+    f.write_text("\n".join(out) + "\n")
+    _git(repo, "add", "-A")
+    _git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "pin members")
+
+
 def test_install_bundle_fans_out_and_records_provenance(env):
     a = _make_plugin_repo(env, pid="demo_a")
     b = _make_plugin_repo(env, pid="demo_b")
@@ -1290,3 +1309,84 @@ def test_uninstall_removes_via_rename_aside_and_leaves_no_backup(env):
     installer.uninstall("demo_ext")
     assert not (installer.live_plugins_dir() / "demo_ext").exists()
     assert not (installer.live_plugins_dir() / "demo_ext.bak").exists()
+
+
+# ── bundle member pins are a bounded FLOOR (ADR 0049 amendment) ────────────────
+
+
+@pytest.mark.parametrize(
+    "pinned,candidate,ok",
+    [
+        # 0.x — the MINOR is the breaking boundary, which is what matters here: every
+        # plugin in the fleet is 0.x, so bounding on the major alone would be no bound.
+        ("v0.7.0", "v0.7.1", True),
+        ("v0.7.0", "v0.7.99", True),
+        ("v0.7.0", "v0.8.0", False),
+        ("v0.7.0", "v1.0.0", False),
+        # 1.x+ — the major is the boundary.
+        ("v1.2.0", "v1.9.9", True),
+        ("v1.2.0", "v2.0.0", False),
+        # 0.0.x — every release is its own boundary.
+        ("v0.0.3", "v0.0.9", True),
+        ("v0.0.3", "v0.1.0", False),
+        # Never downgrade, and never treat a non-tag as compatible.
+        ("v0.7.1", "v0.7.0", False),
+        ("v0.7.0", "main", False),
+        ("main", "v0.7.0", False),
+        ("v0.7.0", "v0.7.0", True),
+    ],
+)
+def test_is_compatible_upgrade_uses_caret_semantics(pinned, candidate, ok):
+    assert installer.is_compatible_upgrade(pinned, candidate) is ok
+
+
+def test_bundle_member_adopts_a_compatible_newer_release(env, monkeypatch):
+    """A release-tag pin is a FLOOR — a compatible newer member release is picked up without
+    a manifest bump, which is why patch-bumping bundle pins was pure ceremony."""
+    a = _make_plugin_repo(env, pid="demo_a")
+    b = _make_plugin_repo(env, pid="demo_b")
+    for m in (a, b):
+        _tag(m, "v0.1.0", "v0.1.7")
+    bundle = _make_bundle_repo(env, [a, b])
+
+    seen: list[str] = []
+    real_install = installer.install
+
+    def spy(url, ref=None, **kw):
+        seen.append(str(ref or ""))
+        return real_install(url, ref, **kw)
+
+    monkeypatch.setattr(installer, "install", spy)
+    monkeypatch.setattr(installer, "check_plugin_update", lambda lock: {"latest_ref": "v0.1.7"})
+
+    _set_bundle_member_refs(bundle, "v0.1.0")
+    # install() dispatches to the bundle path, which calls the module-global install() per
+    # member — so the spy sees each member's resolved ref.
+    installer.install(str(bundle))
+    assert "v0.1.7" in seen, f"compatible upgrade not adopted: {seen}"
+
+
+def test_bundle_member_refuses_a_breaking_release(env, monkeypatch):
+    """REGRESSION: the chase was unbounded, so a member's first breaking release propagated to
+    every archetype spawn automatically — over a pin that looked like it prevented exactly
+    that. Adopting it must now be a deliberate manifest bump."""
+    a = _make_plugin_repo(env, pid="demo_a")
+    b = _make_plugin_repo(env, pid="demo_b")
+    for m in (a, b):
+        _tag(m, "v0.1.0", "v0.2.0")
+    bundle = _make_bundle_repo(env, [a, b])
+
+    seen: list[str] = []
+    real_install = installer.install
+
+    def spy(url, ref=None, **kw):
+        seen.append(str(ref or ""))
+        return real_install(url, ref, **kw)
+
+    monkeypatch.setattr(installer, "install", spy)
+    monkeypatch.setattr(installer, "check_plugin_update", lambda lock: {"latest_ref": "v0.2.0"})
+
+    _set_bundle_member_refs(bundle, "v0.1.0")
+    installer.install(str(bundle))
+    assert "v0.2.0" not in seen, "a breaking release was adopted automatically"
+    assert "v0.1.0" in seen, f"did not fall back to the pinned floor: {seen}"

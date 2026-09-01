@@ -976,6 +976,11 @@ def _install_bundle(
         # check_plugin_update, the same newest-semver-tag logic the single-plugin
         # update route rides) and install the newest tag when one exists. SHA pins
         # and branch refs pass through untouched.
+        #
+        # BOUNDED by caret semantics (ADR 0049 amendment): the chase was unbounded, so a
+        # member's first breaking release propagated to every archetype spawn automatically,
+        # over a pin that looked like it was preventing exactly that. The floor now means
+        # "this version or a compatible newer one", which is what a pin was always read as.
         if member_ref and is_release_tag(member_ref):
             try:
                 member_lock = {
@@ -985,8 +990,15 @@ def _install_bundle(
                     "resolved_sha": "",
                 }
                 status = check_plugin_update(member_lock)
-                if status.get("latest_ref"):
-                    member_ref = status["latest_ref"]
+                latest = status.get("latest_ref")
+                if latest and is_compatible_upgrade(member_ref, latest):
+                    member_ref = latest
+                elif latest:
+                    log.info(
+                        "[plugins] bundle %s: member %s stays at %s — %s is outside the "
+                        "compatible range; bump the manifest pin deliberately to adopt it",
+                        bid, entry.get("id", "?"), member_ref, latest,
+                    )
             except Exception:  # noqa: BLE001 — best-effort; fall back to the manifest pin
                 pass
 
@@ -1471,6 +1483,31 @@ def _semver_key(tag: str) -> tuple[int, int, int] | None:
     """``(major, minor, patch)`` for a release tag, or ``None`` if not one."""
     m = _SEMVER_TAG_RE.match((tag or "").strip())
     return (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None
+
+
+def is_compatible_upgrade(pinned: str, candidate: str) -> bool:
+    """True when moving ``pinned`` → ``candidate`` stays inside the compatible range.
+
+    Caret semantics, as npm/cargo define them: the boundary is the **leftmost non-zero**
+    version component, not the major. That distinction is the whole point here — every plugin
+    in this fleet is ``0.x``, where a MINOR bump is where breaking changes land
+    (``0.7.0 → 0.7.9`` compatible, ``0.7.0 → 0.8.0`` not). Bounding on the major alone would
+    treat every 0.x release as compatible, which is the same unbounded chase with extra steps.
+
+    A bundle's release-tag pin is a FLOOR (see ``install_bundle``): the installer adopts newer
+    member releases automatically, so this is the guard that keeps "automatically" from
+    including a deliberately breaking one.
+    """
+    a, b = _semver_key(pinned), _semver_key(candidate)
+    if a is None or b is None:
+        return False
+    if b < a:
+        return False  # never downgrade
+    if a[0] != 0:
+        return a[0] == b[0]                     # 1.x → same major
+    if a[1] != 0:
+        return b[0] == 0 and a[1] == b[1]       # 0.x → same minor
+    return b[0] == 0 and b[1] == 0              # 0.0.x → same patch series
 
 
 def is_release_tag(ref: str) -> bool:

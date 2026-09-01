@@ -242,8 +242,9 @@ network and won't announce itself over LAN Bonjour unless you enable `fleet.disc
 (Settings → Host → Discovery), a privacy/security-first default. Local-box and tailnet discovery
 and manual register are unaffected, and the fleet console still lists your own members (it reads
 them from disk, not mDNS). To flip a local member
-on or off without opening Settings, press **⌘K → Toggle Fleet Agent** and pick it from the
-picker (the host and remote members are never listed) — see
+on or off without opening Settings, press **⌘⇧K → Fleet Room** and use the start/stop
+control on that member's roster row (only local members get one — never the host, a remote
+member, or the agent serving the window you're in) — see
 [command palette](./command-palette.md).
 
 **Fleet settings are hub-only.** The topbar dropdown's **Fleet settings** item is enabled

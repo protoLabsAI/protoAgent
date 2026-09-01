@@ -36,7 +36,7 @@ Three live defects in the D6 shell itself:
 
 1. The default quick-bar (`uiStore.quickBar`) still listed `plugins`, a surface folded into
    Settings — `MobileNav` filters unresolvable ids, so **fresh installs got a 2-tab bar**.
-2. `openView` (⌘K, the rail context menu, plugin `ui.navigate`, launcher intents) wrote the
+2. `openView` (the command palette, the rail context menu, plugin `ui.navigate`, launcher intents) wrote the
    per-dock surface id, but the mobile stage renders from `mobileActive` — so **every
    programmatic navigation silently did nothing on a phone**.
 3. `toggleQuickBar` had **zero callers**: D6's promised user-configurable quick-bar was

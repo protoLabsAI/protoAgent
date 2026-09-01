@@ -14,8 +14,21 @@ export { registerComposerAction, registeredComposerActions } from "./composerReg
 export type { ComposerAction, ComposerActionContext } from "./composerRegistry";
 export { registerChatComponent, registeredChatComponents } from "./componentRegistry";
 export type { ChatComponentRenderer } from "./componentRegistry";
-export { registerPaletteCommand, registeredPaletteCommands } from "./paletteRegistry";
-export type { PaletteCommand, PaletteCommandContext } from "./paletteRegistry";
+export {
+  registerPaletteCommand,
+  registerPaletteSource,
+  registeredPaletteCommands,
+  visiblePaletteCommands,
+  hasPaletteSources,
+  subscribePaletteCommands,
+  paletteCommandsVersion,
+} from "./paletteRegistry";
+export type {
+  PaletteCommand,
+  PaletteCommandContext,
+  PaletteCommandOrigin,
+  PaletteCommandSource,
+} from "./paletteRegistry";
 export { registerKeybinding, registeredKeybindings } from "./keybindingRegistry";
 export type { Keybinding } from "./keybindingRegistry";
 export { createUISlice, registeredUISlices } from "./uiStateRegistry";
