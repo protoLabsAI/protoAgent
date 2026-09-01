@@ -51,7 +51,7 @@ import { memberDmView } from "../PaletteChat";
 import { navigate } from "./nav";
 import type { NavIntent } from "./nav";
 import { matchCommand } from "./rank";
-import { markAgentUsed } from "./recents";
+import { markAgentUsed, markCommandUsed } from "./recents";
 import { paletteRootView } from "./rootView";
 import type { RootViewConfig } from "./rootView";
 
@@ -159,8 +159,9 @@ export function toDsCommand(pc: PaletteCommand): Command {
  *  `paletteCommandsVersion()` moves only on register/unregister — so a snapshot would go
  *  stale silently and stay stale: the fork's new tab missing from the palette, its closed tab
  *  still listed and still runnable. A provider is the read-time path the root view keeps: it
- *  re-invokes `getCommands(query)` on every keystroke (debounced 120ms), which is exactly the
- *  promise the seam makes.
+ *  re-invokes `getCommands(query)` on every palette READ — once when the palette opens (fired
+ *  immediately, without the debounce, so a source's rows are on screen with the recents) and
+ *  again on every keystroke (debounced 120ms) — which is exactly the promise the seam makes.
  *
  *  Statics stay on the snapshot path — a fixed list is correct to freeze, and it keeps them
  *  in their registered display position instead of trailing the list. `from: "dynamic"`
@@ -193,6 +194,45 @@ export function paletteSourceProvider(
       }
     },
   };
+}
+
+/** Commands that are a DOOR, not a destination: running one only morphs the palette into
+ *  another list, and that list records what you pick out of it (`withRecency`). Recording
+ *  the door as well would spend one of the four recent slots on a row that is a permanent
+ *  member of the Commands group anyway — evicting a surface the operator really did open,
+ *  since a search-only surface has nowhere else on the empty list to appear.
+ *
+ *  Only `Open…` qualifies. `Ask <agent>` and `Fleet Room` morph too, but the view they morph
+ *  into IS the destination — there is no second pick to record — so they stay recorded. */
+const DOORWAY_COMMANDS = new Set(["open"]);
+
+/** The root view's frecency write. Exported (and injected below) so the doorway rule is
+ *  testable and lives next to the list it exists for, rather than inside the view. */
+export function recordPaletteRun(c: Command): void {
+  if (DOORWAY_COMMANDS.has(c.id)) return;
+  markCommandUsed(c.id);
+}
+
+/** Wrap a command list so RUNNING one records its frecency.
+ *
+ *  The root view records every row IT renders, in one place, on purpose (`rootView.tsx`'s
+ *  `run`). A SUBMORPH is a different view: `Open ▸` is a DS `commandsView`, and the DS's own
+ *  `run` is `c.run(ctx)` with no hook of any kind. So the palette learned from typing and
+ *  learned nothing from BROWSING — open Knowledge by typing its name and the recents list
+ *  picks it up; open the same surface through `Open ▸`, which is where the guide sends you
+ *  ("the built-in surfaces live one hop in"), and the only thing recorded was `Open…` itself.
+ *
+ *  Applied ONLY to the submorph's copy of the list, never to the search corpus the root view
+ *  renders — that one already passes through the root's `run`, and wrapping both would count
+ *  every typed run twice. */
+export function withRecency(commands: Command[]): Command[] {
+  return commands.map((c) => ({
+    ...c,
+    run: (ctx) => {
+      markCommandUsed(c.id);
+      c.run(ctx);
+    },
+  }));
 }
 
 /** Every built-in / fork surface as a "go to" command, resolved BY ID through ADR 0056's
@@ -273,7 +313,11 @@ export function usePaletteRegistry(
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const registry = useMemo(
-    () => createRankedPaletteRegistry({ searchOnly: () => surfaceRef.current }),
+    () =>
+      createRankedPaletteRegistry({
+        searchOnly: () => surfaceRef.current,
+        onRun: recordPaletteRun,
+      }),
     [],
   );
 
@@ -333,7 +377,12 @@ export function usePaletteRegistry(
     );
     vs.push(memberDmView()); // Fleet Room → DM a member (the wired chat, retargeted)
     vs.push({
-      ...commandsView({ commands: surfaceRef.current, placeholder: "Open a surface…" }),
+      // `withRecency` because this list is rendered by the DS, not by our root view — the
+      // one `run()` chokepoint does not reach in here. See the helper.
+      ...commandsView({
+        commands: withRecency(surfaceRef.current),
+        placeholder: "Open a surface…",
+      }),
       id: "open",
       title: "Open",
     });

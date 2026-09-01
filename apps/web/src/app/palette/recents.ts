@@ -127,8 +127,9 @@ export function markPaletteUsed(key: string, now: number = Date.now()): void {
   }
 }
 
-/** Record that a command was RUN. Called from the root view's single `run()`, so no
- *  command source can forget to feed it. */
+/** Record that a command was RUN. Called from the root view's single `run()` — so no command
+ *  SOURCE can forget to feed it — and from `withRecency`, which the adapter wraps a submorph's
+ *  own list in (a submorph is a DS view; the root's chokepoint does not reach inside it). */
 export function markCommandUsed(id: string, now?: number): void {
   markPaletteUsed(commandKey(id), now);
 }

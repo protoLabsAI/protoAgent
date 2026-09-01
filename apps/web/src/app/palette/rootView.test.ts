@@ -15,8 +15,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CommandPalette, createPaletteRegistry } from "@protolabsai/ui/command-palette";
 import type { Command, PaletteRegistry } from "@protolabsai/ui/command-palette";
 
-import { matchCommand } from "./rank";
-import { createRankedPaletteRegistry } from "./registry";
+import { matchCommand, rankCommands } from "./rank";
+import { createRankedPaletteRegistry, recordPaletteRun, withRecency } from "./registry";
 import { EMPTY_CAP, GROUP_CAP, RECENT_CAP, RECENT_GROUP, emptyQueryList, paletteRootView, pickRootFill } from "./rootView";
 import type { RecentMap } from "./recents";
 
@@ -58,6 +58,8 @@ function mountPalette(registry: PaletteRegistry) {
 }
 
 const rows = () => [...document.querySelectorAll<HTMLElement>('[role="option"]')];
+const headers = () =>
+  [...document.querySelectorAll(".pl-cmdk-commands__group")].map((g) => g.textContent);
 const labels = () => rows().map((r) => r.querySelector(".pl-cmdk-commands__label")?.textContent ?? "");
 const input = () => document.querySelector<HTMLInputElement>(".pl-cmdk-commands__input")!;
 const selected = () => document.querySelector<HTMLElement>('[data-sel="true"]')?.textContent ?? null;
@@ -68,6 +70,14 @@ function type(value: string) {
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
     setter.call(el, value);
     el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+/** Settle the provider read. It is a chain of microtasks (`Promise.allSettled` over
+ *  synchronous providers), not a timer, on the empty-query path — which is the point. */
+async function flush() {
+  await act(async () => {
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
   });
 }
 
@@ -215,23 +225,80 @@ describe("inherited from commandsView — silent if lost", () => {
       await vi.advanceTimersByTimeAsync(200); // past the 120ms debounce
     });
     expect(getCommands).toHaveBeenCalled();
-    expect(getCommands.mock.calls[0][0]).toBe("proj");
+    // The LAST call, not the first: the first is the empty-query read the palette does on
+    // open (the seam's "called once when ⌘K opens"), so the typed query is the latest one.
+    const calls = getCommands.mock.calls;
+    expect(calls[calls.length - 1][0]).toBe("proj");
     expect(labels()).toContain("Result for proj");
     expect(document.querySelector(".pl-cmdk-commands__chip")?.textContent).toBe("boardy");
   });
 
-  it("never debounces or spins on an EMPTY query — the palette opens straight onto recents", () => {
+  it("reads a SOURCE on the EMPTY query — its rows are on screen the instant ⌘⇧K opens", async () => {
+    // The contract ADR 0061 states and `ext/README.md` sells: "A source is called every time
+    // the palette is read — once when ⌘K opens and again on each keystroke." A source exists
+    // for rows that track live data (open chat tabs, a roster), so a fork's rows have to be
+    // in the OPENED palette, not one keystroke later. Short-circuiting the loop on the empty
+    // query deleted every one of them and left three shipped docs saying the opposite.
+    const registry = createRankedPaletteRegistry();
+    const getCommands = vi.fn((_q: string) => [cmd({ id: "tab:alpha", label: "Go to Alpha" })]);
+    registry.registerProvider({ id: "ext-palette-sources", getCommands });
+    registry.registerCommands([cmd({ id: "a", label: "Alpha" })]);
+    mountPalette(registry);
+    await flush();
+    expect(getCommands).toHaveBeenCalledWith("", expect.anything());
+    expect(labels()).toEqual(["Alpha", "Go to Alpha"]);
+  });
+
+  it("never debounces or spins on an EMPTY query — the palette opens straight onto recents", async () => {
     vi.useFakeTimers();
     const registry = createRankedPaletteRegistry();
-    const getCommands = vi.fn(() => []);
+    const getCommands = vi.fn(() => [cmd({ id: "r", label: "Row" })]);
     registry.registerProvider({ id: "p", getCommands });
     registry.registerCommands([cmd({ id: "a", label: "Alpha" })]);
     mountPalette(registry);
-    // No spinner on open, and no provider round-trip: a later live-search PR must not turn
-    // "press the palette open" into 120ms of "Searching...".
+    // The read HAPPENS — it just isn't a debounced one, and it never spins: pressing the
+    // palette open must not put 120ms of "Searching..." in front of the recents list.
+    expect(getCommands).toHaveBeenCalledTimes(1);
     expect(document.querySelector(".pl-cmdk-commands__spinner")).toBeNull();
-    expect(getCommands).not.toHaveBeenCalled();
-    expect(labels()).toEqual(["Alpha"]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0); // no timer to advance; settles the microtasks
+    });
+    expect(document.querySelector(".pl-cmdk-commands__spinner")).toBeNull();
+    expect(labels()).toEqual(["Alpha", "Row"]);
+
+    // And on the way BACK to empty, which is the transition that actually has a spinner up:
+    // the flag has to come down WITH the keystroke, not one awaited tick later. `read` only
+    // lowers it after its `await`, so deleting a query that is still in flight would commit
+    // a "Searching…" frame over the recents list on the way back to them.
+    type("row");
+    expect(document.querySelector(".pl-cmdk-commands__spinner")).not.toBeNull();
+    type(""); // cleared mid-flight — the debounce never even fired
+    expect(document.querySelector(".pl-cmdk-commands__spinner")).toBeNull();
+  });
+
+  it("lets a source row that was RUN come back under Recent on the next open", async () => {
+    // Second-order, and invisible without the read above: the root records `cmd:<id>` for
+    // EVERY row it runs, source rows included. That write is unreadable unless the same id
+    // resolves on the next open — which needs the source read on the empty query AND its
+    // rows in the recents lookup pool. Without both, running a source row just accumulates
+    // dead keys against the store's 120-entry cap.
+    const registry = createRankedPaletteRegistry();
+    registry.registerProvider({
+      id: "ext-palette-sources",
+      getCommands: () => [cmd({ id: "tab:alpha", label: "Go to Alpha" })],
+    });
+    registry.registerCommands([cmd({ id: "a", label: "Alpha" })]);
+    mountPalette(registry);
+    await flush();
+    press("ArrowDown");
+    press("Enter"); // runs the SOURCE row
+    expect(JSON.parse(localStorage.getItem("protoagent.palette.recent")!)["cmd:tab:alpha"].n).toBe(1);
+    act(() => root.unmount()); // the palette closes…
+    root = createRoot(container);
+    mountPalette(registry); // …and reopens
+    await flush();
+    expect(labels()[0]).toBe("Go to Alpha");
+    expect(headers()[0]).toBe(RECENT_GROUP);
   });
 
   it("shows the spinner while a typed query is in flight, then swaps to the results", async () => {
@@ -270,8 +337,41 @@ describe("inherited from commandsView — silent if lost", () => {
       cmd({ id: "c", label: "C", group: "Commands" }),
     ]);
     mountPalette(registry);
-    expect([...document.querySelectorAll(".pl-cmdk-commands__group")].map((g) => g.textContent))
-      .toEqual(["Agents", "Commands"]);
+    expect(headers()).toEqual(["Agents", "Commands"]);
+  });
+
+  it("renders NO headers once the list is ranked — the contiguity rule would repeat them", () => {
+    // The inherited rule is `c.group !== lastGroup`, and it equals "grouping" only while the
+    // list is in REGISTRATION order — which the empty list is (the adapter registers
+    // Agents -> Plugins -> Commands) and the ranked list, by construction, is not. The
+    // corpus below is registered grouped, so the empty list still renders one header per
+    // group; ranking then interleaves them, and the same rule would re-emit a header at
+    // every transition. On the real console `t` produced 8 headers over 16 rows.
+    // Registered GROUPED, as the adapter registers the real root. Each group holds one row
+    // that PREFIX-matches "s" and one that only contains it, so ranking deals the groups out
+    // in strict rotation — the shape the real corpus takes and the tests never had.
+    const corpus = [
+      cmd({ id: "a1", label: "Switch agent", group: "Agents" }),
+      cmd({ id: "a2", label: "Ask agent", group: "Agents" }),
+      cmd({ id: "p1", label: "Scratch", group: "Plugins" }),
+      cmd({ id: "p2", label: "Board notes", group: "Plugins" }),
+      cmd({ id: "c1", label: "Settings", group: "Commands" }),
+      cmd({ id: "c2", label: "Plugins: Discover", group: "Commands" }),
+    ];
+    const registry = createRankedPaletteRegistry();
+    registry.registerCommands(corpus);
+    mountPalette(registry);
+    expect(headers()).toEqual(["Agents", "Plugins", "Commands"]);
+
+    type("s");
+    // Self-evidencing: run the contiguity rule over the ranked order and it emits a group
+    // it already emitted. That is the list this assertion exists to keep off the screen.
+    const wouldEmit = rankCommands(corpus, "s")
+      .map((c) => c.group)
+      .filter((g, i, all) => g !== all[i - 1]);
+    expect(wouldEmit.length).toBeGreaterThan(new Set(wouldEmit).size);
+    expect(headers()).toEqual([]);
+    expect(rows().length).toBe(corpus.length); // …and no row was dropped with them
   });
 
   it("wraps around on ArrowUp/ArrowDown and runs the selection on Enter", () => {
@@ -367,6 +467,33 @@ describe("frecency is written where every command runs", () => {
     mountPalette(registry);
     press("Enter");
     expect(JSON.parse(localStorage.getItem("protoagent.palette.recent")!)["cmd:settings"].n).toBe(1);
+  });
+
+  it("records a SUBMORPH pick too — browsing through `Open ▸` teaches the list", () => {
+    // `Open ▸` is a DS `commandsView`, and the DS's `run` is `c.run(ctx)` with no hook: the
+    // root's single `run()` does not reach inside another view. So the palette learned from
+    // TYPING a surface's name and learned nothing from BROWSING to it — the path the guide
+    // points operators at — and the only thing it recorded was `Open…` itself.
+    const ran: string[] = [];
+    const [wrapped] = withRecency([
+      cmd({ id: "open:knowledge", label: "Knowledge", run: () => ran.push("knowledge") }),
+    ]);
+    wrapped.run({} as never);
+    expect(ran).toEqual(["knowledge"]); // …and it still runs the command it wrapped
+    expect(JSON.parse(localStorage.getItem("protoagent.palette.recent")!)["cmd:open:knowledge"].n)
+      .toBe(1);
+  });
+
+  it("does not record `Open…` itself — the door is not the destination", () => {
+    // `Open…` morphs into a list that records its own picks, and the row is a permanent
+    // member of the Commands group the empty list guarantees a slot to. Recording it too
+    // would spend one of the four recent slots on a row that is already on screen — and the
+    // surface it evicts is a search-only row with nowhere else on the empty list to go.
+    recordPaletteRun(cmd({ id: "open", label: "Open…" }));
+    recordPaletteRun(cmd({ id: "open:knowledge", label: "Knowledge" }));
+    recordPaletteRun(cmd({ id: "fleet-room", label: "Fleet Room" })); // morphs, but IS the place
+    expect(Object.keys(JSON.parse(localStorage.getItem("protoagent.palette.recent")!)).sort())
+      .toEqual(["cmd:fleet-room", "cmd:open:knowledge"]);
   });
 
   it("orders the empty list by what was actually run", () => {
@@ -521,6 +648,38 @@ describe("the empty list gives every group a turn — the FIRST-RUN case", () =>
     expect(list).toHaveLength(EMPTY_CAP);
     expect(list[0].group).toBe(RECENT_GROUP);
     expect(list.filter((c) => c.id === "Commands11")).toHaveLength(1);
+  });
+
+  it("still gives the LAST group a row once recents have taken most of the cap", () => {
+    // The STEADY state, not an edge case: recents are subtracted from the cap BEFORE the
+    // fill runs, so a full block leaves 5 slots for Agents(2) -> Plugins(3) -> Commands(6).
+    // A fixed `groupCap` of 4 never binds there — the first two groups take all five and the
+    // ENTIRE Commands group (`Open…`, `Settings`, every deep link, rows this list is the only
+    // place to reach) drops off. Only a guaranteed first row per group survives the squeeze.
+    const root = [...group("Agents", 2), ...group("Plugins", 3), ...group("Commands", 6)];
+    const surfaces = group("Go to", RECENT_CAP);
+    const now = Date.now();
+    const recency: RecentMap = Object.fromEntries(
+      surfaces.map((c, i) => [`cmd:${c.id}`, { n: RECENT_CAP - i, t: now }]),
+    );
+    const list = emptyQueryList(root, [...root, ...surfaces], recency);
+    expect(list.filter((c) => c.group === RECENT_GROUP)).toHaveLength(RECENT_CAP);
+    expect(list).toHaveLength(EMPTY_CAP);
+    // Every group of the curated root is represented, not just the ones registered first.
+    expect([...new Set(list.map((c) => c.group))].sort()).toEqual(
+      ["Agents", "Commands", "Plugins", RECENT_GROUP].sort(),
+    );
+  });
+
+  it("guarantees one row per group before any group takes a second", () => {
+    // The quota is a ceiling, never the guarantee — with 5 slots and a groupCap of 4 it
+    // never fires at all. `pickRootFill` sweeps at a quota of ONE first, so the number of
+    // groups represented does not depend on how many slots recents happened to leave.
+    const root = [...group("Agents", 2), ...group("Plugins", 3), ...group("Commands", 6)];
+    expect(new Set(pickRootFill(root, 5).map((c) => c.group)).size).toBe(3);
+    expect(pickRootFill(root, 5)).toHaveLength(5);
+    // …and the sweep never costs a slot: a single-group root still fills the whole list.
+    expect(pickRootFill(group("Commands", 12), 9)).toHaveLength(9);
   });
 
   it("caps recents well under the list — they lead it, they do not become it", () => {

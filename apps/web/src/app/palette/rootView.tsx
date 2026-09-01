@@ -33,9 +33,12 @@
 //     `[filtered.length]` and scrolls on `[sel]`, which is safe only while order is stable;
 //     the instant order depends on the query, a re-rank that preserves the row count leaves
 //     the highlight on a different command, off-screen, and Enter runs the wrong thing.
-//   • Every group gets a TURN on the empty list (`pickRootFill`). Registration order alone
-//     hands the whole list to whoever registered first, which on a first run — no recency to
-//     rescue anything — drops Settings and `Open…` off a plugin-heavy console entirely.
+//   • Every group is GUARANTEED a row on the empty list (`pickRootFill`). Registration order
+//     alone hands the whole list to whoever registered first, which on a first run — no
+//     recency to rescue anything — drops Settings and `Open…` off a plugin-heavy console
+//     entirely; a per-group ceiling alone stops binding the moment recents shrink the cap.
+//   • Group headers are the EMPTY list's, not the ranked one's. The DS's rule is contiguity,
+//     which equals grouping only in registration order — the order this view replaces.
 //   • Provider rows are ORDERED, never re-filtered, and a broken provider is CONTAINED.
 //     Both are contracts the DS states and then leaves to chance; see the two sites below.
 //   • The combobox is finished: `aria-activedescendant`, a named listbox, presentational
@@ -67,14 +70,16 @@ export const EMPTY_CAP = 9;
 /** Recents on the empty query, at most. Under half the list: recents lead it, they do not
  *  BECOME it — a palette that only ever shows what you already ran can't teach you anything. */
 export const RECENT_CAP = 4;
-/** Rows any ONE group may contribute to the empty list before the others get a turn.
+/** Rows any ONE group may contribute to the empty list once every group has had its first.
  *  Load-bearing, not cosmetic: the root corpus is Agents(2) → Plugins(N) → Commands(6) in
  *  REGISTRATION order, so a plain `slice(0, EMPTY_CAP)` hands the whole list to whoever is
  *  registered first. Install seven plugin views and the first-run palette becomes two agent
  *  rows and seven plugins, with Settings and `Open…` pushed off the bottom — on the ONE run
- *  where there is no recency to rescue them. The quota is a first PASS, not a hard ceiling:
+ *  where there is no recency to rescue them. The quota is a PASS, not a hard ceiling:
  *  leftover slots are filled in registration order, so a console with no plugins still gets
- *  a full list. */
+ *  a full list. It is also not the guarantee — `pickRootFill` sweeps once at a quota of ONE
+ *  before this one applies, because a fixed 4 stops binding the moment recents shrink the
+ *  cap; see the comment there. */
 export const GROUP_CAP = 4;
 /** Debounce before the async provider loop fires, in ms. The DS's own figure
  *  (`command-palette.views.tsx`) — kept identical so a provider written against the DS
@@ -143,15 +148,28 @@ export function pickRootFill(root: Command[], cap: number, groupCap = GROUP_CAP)
   if (cap <= 0) return [];
   const taken = new Set<number>();
   const perGroup = new Map<string, number>();
-  root.forEach((c, i) => {
-    if (taken.size >= cap) return;
-    const g = c.group ?? "";
-    const n = perGroup.get(g) ?? 0;
-    if (n >= groupCap) return;
-    perGroup.set(g, n + 1);
-    taken.add(i);
-  });
-  // Second pass: the quota was a turn-taking device, not a budget. Spend what's left.
+  /** One sweep in registration order, admitting up to `quota` rows per group. */
+  const sweep = (quota: number) =>
+    root.forEach((c, i) => {
+      if (taken.size >= cap || taken.has(i)) return;
+      const g = c.group ?? "";
+      const n = perGroup.get(g) ?? 0;
+      if (n >= quota) return;
+      perGroup.set(g, n + 1);
+      taken.add(i);
+    });
+  // ONE ROW PER GROUP FIRST, and this sweep is the guarantee — `groupCap` alone is not one.
+  // The quota only binds while there are more slots than `groupCap * groups`; the moment
+  // recents eat into the cap it stops binding entirely and the list reverts to a plain
+  // prefix of registration order. With EMPTY_CAP 9 and four recents there are five slots for
+  // Agents(2) → Plugins(3) → Commands(6): a `groupCap` of 4 never fires, the first two groups
+  // take all five, and the ENTIRE Commands group — `Open…`, `Settings`, every
+  // `registerPaletteCommand` deep link, the rows reachable from nowhere else — drops off the
+  // list. That is the steady state after day one, not an edge case.
+  sweep(1);
+  // Then up to the quota, so no single group runs away with a list it shares.
+  sweep(groupCap);
+  // Last: the quota was a turn-taking device, not a budget. Spend what's left.
   root.forEach((_, i) => {
     if (taken.size >= cap) return;
     taken.add(i);
@@ -163,10 +181,13 @@ export function pickRootFill(root: Command[], cap: number, groupCap = GROUP_CAP)
  *  addressable (root commands AND search-only surfaces) so a surface you opened yesterday
  *  can be a recent; `root` alone fills the rest, so surfaces never flood it.
  *
- *  FIRST RUN is the case this has to be judged on. There is no recency at all then, so the
- *  whole list is `pickRootFill` — which is why the group quota lives there and not in some
- *  later polish PR: the one run where the list is pure registration order is the run where
- *  a plugin-heavy console would show no Settings and no `Open…`. */
+ *  FIRST RUN is one of the two cases this has to be judged on. There is no recency at all
+ *  then, so the whole list is `pickRootFill` — which is why the group quota lives there and
+ *  not in some later polish PR: the one run where the list is pure registration order is the
+ *  run where a plugin-heavy console would show no Settings and no `Open…`. The other case is
+ *  the STEADY state, where recents are subtracted from the cap BEFORE the fill runs and the
+ *  quota therefore has far fewer slots to spread — which is why `pickRootFill` guarantees a
+ *  row per group rather than relying on `groupCap` to bind. */
 export function emptyQueryList(
   root: Command[],
   pool: Command[],
@@ -241,23 +262,35 @@ function RootBody({ ctx, config }: { ctx: PaletteContext; config: RootViewConfig
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [registry, regVersion]);
 
-  // Async provider results for the live query (debounced + cancellable) — the DS's loop,
-  // with one addition: an empty query short-circuits BEFORE the debounce, so opening the
-  // palette paints recents immediately instead of showing the spinner for 120 ms the day a
-  // live-search provider is registered.
+  // Async provider results (debounced + cancellable) — the DS's loop, with the one timing
+  // split the DS never had to make.
+  //
+  // A SOURCE IS READ ON EVERY PALETTE READ, THE OPEN INCLUDED. That is the contract ADR 0061
+  // states and `ext/README.md` sells ("once when ⌘K opens and again on each keystroke"), and
+  // it is the whole point of the read-time half of the seam: a source exists for rows that
+  // track live data — open chat tabs, a roster — and a fork's rows have to be ON SCREEN when
+  // the palette opens, not one keystroke later. So the loop runs for the empty query too.
+  // Skipping it there (an earlier revision of this file did) silently deleted every source
+  // row from the opened palette and left three shipped docs describing the opposite.
+  //
+  // What the empty query skips is the SPINNER and the DEBOUNCE, which is all the short-circuit
+  // was ever for: the debounce exists to keep a live-search provider from firing per keystroke,
+  // and there are no keystrokes before the first one. Firing immediately with `loading` left
+  // false means ⌘⇧K still paints recents on the first commit — source rows merge in when they
+  // settle — instead of showing "Searching…" for 120ms. Typed queries keep the DS's debounce
+  // and spinner exactly.
   const [dynamic, setDynamic] = useState<Command[]>([]);
   const [loading, setLoading] = useState(false);
   useEffect(() => {
     const providers = registry.getProviders().filter((p) => p.getCommands);
-    if (!typed || providers.length === 0) {
+    if (providers.length === 0) {
       setDynamic([]);
       setLoading(false);
       return;
     }
     const ac = new AbortController();
     let alive = true;
-    setLoading(true);
-    const t = setTimeout(async () => {
+    const read = async () => {
       const settled = await Promise.allSettled(
         providers.map((p) => {
           // CONTAINMENT, and the reason owning the view is worth it. A provider that throws
@@ -285,7 +318,21 @@ function RootBody({ ctx, config }: { ctx: PaletteContext; config: RootViewConfig
       );
       setDynamic(cmds);
       setLoading(false);
-    }, PROVIDER_DEBOUNCE_MS);
+    };
+    if (!typed) {
+      // Cleared BEFORE the read, not inside it. `read` only lowers the flag after its
+      // `await`, and the empty query is also reached by DELETING a query that was in
+      // flight — where `loading` is already true, so that one awaited tick would commit a
+      // "Searching…" frame over the recents list on the way back to it.
+      setLoading(false);
+      void read();
+      return () => {
+        alive = false;
+        ac.abort();
+      };
+    }
+    setLoading(true);
+    const t = setTimeout(read, PROVIDER_DEBOUNCE_MS);
     return () => {
       alive = false;
       ac.abort();
@@ -310,13 +357,22 @@ function RootBody({ ctx, config }: { ctx: PaletteContext; config: RootViewConfig
     // React reconciles them as one: a duplicate-key warning, and a highlight that jumps.
     //
     // Two corpora, and keeping them apart IS the feature: `root` is what the empty list may
-    // FILL from (registered commands only), `local` is everything addressable and is only
-    // ever the recents lookup pool / the search corpus. Fold the surfaces into `root` and the
-    // empty palette dumps every rail surface — the flood the whole split exists to prevent.
-    const root = dedupe(baseCommands);
+    // FILL from (registered commands + a source's live rows), `local` is everything
+    // addressable and is only ever the recents lookup pool / the search corpus. Fold the
+    // surfaces into `root` and the empty palette dumps every rail surface — the flood the
+    // whole split exists to prevent.
+    //
+    // `dynamic` belongs to the EMPTY corpora and not to `local`, and the asymmetry is
+    // deliberate on both sides. It is IN the empty ones because a source's rows are read on
+    // open (see the loop above) and must therefore be listable there — and because a source
+    // row that gets run writes `cmd:<id>` frecency, which is unreadable unless the same id
+    // can be resolved out of the recents `pool`. It is OUT of `local` because `local` is
+    // what `rankCommands` CLIENT-FILTERS, and a provider's rows must never be re-filtered
+    // (they take the `orderCommands` path below instead — see `orderCommands`).
+    const root = dedupe([...baseCommands, ...dynamic]);
     const local = dedupe([...baseCommands, ...searchOnly]);
     if (!typed) {
-      return emptyQueryList(root, local, recency, {
+      return emptyQueryList(root, dedupe([...local, ...dynamic]), recency, {
         emptyCap: config.emptyCap,
         recentCap: config.recentCap,
         groupCap: config.groupCap,
@@ -359,8 +415,10 @@ function RootBody({ ctx, config }: { ctx: PaletteContext; config: RootViewConfig
 
   const run = (c: Command | undefined) => {
     if (!c || c.disabled) return;
-    // The ONE place every command runs, whatever contributed it — so the frecency write
-    // can't be forgotten by a source. Recorded BEFORE `run`, which may navigate away.
+    // The ONE place every row THIS VIEW renders runs, whatever contributed it — so the
+    // frecency write can't be forgotten by a source. Recorded BEFORE `run`, which may
+    // navigate away. A SUBMORPH (`Open ▸`, the Fleet Room) is a different view with its own
+    // list and does not pass through here; the adapter wraps those lists in `withRecency`.
     (config.onRun ?? ((cmd: Command) => markCommandUsed(cmd.id)))(c);
     c.run(ctx);
   };
@@ -434,7 +492,16 @@ function RootBody({ ctx, config }: { ctx: PaletteContext; config: RootViewConfig
         ) : (
           filtered.map((c, i) => {
             const selected = i === sel;
-            const showHeader = c.group != null && c.group !== lastGroup;
+            // HEADERS BELONG TO THE EMPTY LIST ONLY. `c.group !== lastGroup` is the DS's
+            // contiguity rule, and contiguity means "grouping" only while the list is in
+            // REGISTRATION order — which the empty list is and the typed list, by
+            // construction, is not. Ranking sorts by match tier ACROSS groups, so one
+            // group's rows are scattered through the result and the same header re-emits at
+            // every transition: on the default console, typing `t` produced 8 headers over
+            // 16 rows, "Commands" three times. Dropping them on the typed path is the honest
+            // reading as well as the fix — a relevance-ordered list has no sections, and a
+            // section title over rows that are not a section is worse than none.
+            const showHeader = !typed && c.group != null && c.group !== lastGroup;
             lastGroup = c.group;
             return (
               // `presentation` on the wrapper and the header: a listbox may only own

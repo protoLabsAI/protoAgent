@@ -52,9 +52,13 @@ first, then a curated root (agents, plugin views, commands). Every rail surface 
 deliberately *not* in that list — there are too many of them to be useful before you've
 said what you want.
 
-Each group gets a turn before any one of them fills the list, so installing a pile of
-plugins can't push **Settings** or **Open…** off the bottom — which matters most on a first
-run, when there's no history yet to promote them. Any slots left over are filled in order.
+Every group is guaranteed a row before any one of them takes a second, so neither a stack of
+plugin views nor a full block of recents can drop a whole *section* off the list. On a first
+run there's no history competing for the space and you get all of **Open…**, **Settings** and
+the deep links; once your recents have taken half the list, the commands section is down to
+**Open…** — one row rather than none, which is the part that matters, since **Open…** is where
+browsing starts. Everything else is a keystroke away. Any slots left over are filled in
+registration order.
 
 The moment you type, the list becomes the **whole** corpus — every surface included, no
 cap — ordered by how well each row matches:
@@ -75,10 +79,16 @@ Results from a plugin **source** are a separate case: a source runs its own sear
 (server-side, fuzzy, whatever it likes), so its rows are ordered alongside the rest but
 never re-filtered — a hit whose text doesn't literally contain what you typed still shows.
 
+The typed list has **no group headers**. A header marks where one section ends and the next
+begins, which is only true while the list is in registration order; ranking sorts by match
+quality *across* groups, so the sections interleave and a header would re-appear every few
+rows. The untyped list is grouped, and keeps them.
+
 Ties break on how often and how recently you've run the command, then on registration
-order, so the list is stable and the thing you actually use rises. Matching itself is
-unchanged from the design system's rule — every whitespace-separated term must appear
-somewhere in the row — so a row that used to be findable still is.
+order, so the list is stable and the thing you actually use rises — and it learns either way
+you got there, whether you typed the surface's name or picked it out of **Open…**. Matching
+itself is unchanged from the design system's rule — every whitespace-separated term must
+appear somewhere in the row — so a row that used to be findable still is.
 
 ## For plugin authors
 

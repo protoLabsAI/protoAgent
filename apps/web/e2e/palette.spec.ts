@@ -87,6 +87,62 @@ test("running a command teaches the empty list — it leads with recents next ti
   await expect(page.locator(`${PANEL} .pl-cmdk-commands__group`).first()).toHaveText("Recent");
 });
 
+test("BROWSING teaches the empty list too — not just typing", async ({ page }) => {
+  // `Open ▸` is a DS `commandsView`; the root view's single `run()` — where the frecency
+  // write lives — does not reach inside another view. So the palette learned from typing and
+  // learned nothing from the path this guide sends operators down ("the built-in surfaces
+  // live one hop in, behind Open…"): the only thing recorded was `Open…` itself, and the
+  // surface the operator actually opened never became a recent.
+  await openPalette(page);
+  await page.getByRole("option", { name: "Open…" }).click();
+  await page.getByRole("option", { name: "Knowledge", exact: true }).click();
+  await expect(page.locator(PANEL)).toHaveCount(0);
+
+  await openPalette(page);
+  await expect(page.locator(`${PANEL} .pl-cmdk-commands__group`).first()).toHaveText("Recent");
+  await expect(page.getByRole("option", { name: "Knowledge", exact: true })).toBeVisible();
+});
+
+test("the empty list keeps every group, even once recents have taken most of it", async ({ page }) => {
+  // The steady state after day one, and the case every OTHER assertion in this file misses:
+  // they all run in a fresh context with no recency at all, which is the one situation where
+  // a per-group CEILING happens to work. Recents are subtracted from the cap before the
+  // curated fill runs, so a full block leaves five slots for Agents -> Plugins -> Commands —
+  // and a ceiling of four never fires against five slots. The first two groups took all of
+  // them and the whole Commands group (`Open…`, `Settings`, every registered deep link) went
+  // off the bottom. Only a guaranteed first row per group survives that squeeze.
+  //
+  // The block is filled through `Open ▸` rather than by typing, so this also pins that
+  // BROWSING feeds the recents list at all — the submorph is a DS view the root's `run()`
+  // does not reach into.
+  for (let i = 0; i < 4; i += 1) {
+    await openPalette(page);
+    await page.getByRole("option", { name: "Open…" }).click();
+    // Wait for the morph to FINISH. Both bodies are mounted while it animates, so a bare
+    // `nth(i)` can address the root list that is on its way out.
+    await expect(page.getByPlaceholder("Open a surface…")).toBeVisible();
+    await expect(page.getByPlaceholder(/Search commands/)).toHaveCount(0);
+    await page.locator(`${PANEL} ${ROW}`).nth(i).click();
+    await expect(page.locator(PANEL)).toHaveCount(0);
+  }
+  await openPalette(page);
+  // Recents lead, and EVERY group still contributes — Commands last, and Commands is the one
+  // that vanished. Asserting the whole header list, not just the first: "recents are on top"
+  // was already true when the bug was live.
+  await expect(page.locator(`${PANEL} .pl-cmdk-commands__group`)).toHaveText([
+    "Recent",
+    "Agents",
+    "Plugins",
+    "Commands",
+  ]);
+  // What the guarantee is worth is ONE row per group, not a named row: with four recents the
+  // Commands group is down to its first member. `Open…` is that member and it is the row the
+  // whole browse path hangs off — with it gone, every surface would be reachable only by
+  // typing its name. `Settings` and the deep links are a keystroke away, and this list holds
+  // all of them on a first run (the assertion at the top of this file).
+  await expect(page.getByRole("option", { name: "Open…" })).toBeVisible();
+});
+
 test("ranking: a label match leads, and keyword-only rows stay listed under it", async ({ page }) => {
   const input = await openPalette(page);
   await input.fill("chat");
@@ -100,6 +156,20 @@ test("ranking: a label match leads, and keyword-only rows stay listed under it",
   await input.fill("settings");
   await expect(page.locator(`${PANEL} ${ROW}`).first()).toHaveText(/^Settings/);
   await expect(page.getByRole("option", { name: "Settings: Fleet" })).toBeVisible();
+});
+
+test("the ranked list renders no group header twice", async ({ page }) => {
+  // Headers are a CONTIGUITY marker, which equals grouping only in registration order.
+  // Ranking sorts across groups, so the DS's inherited rule re-emitted the same header at
+  // every transition — 8 headers over 16 rows on this console, "Commands" three times.
+  const input = await openPalette(page);
+  const groups = page.locator(`${PANEL} .pl-cmdk-commands__group`);
+  await expect(groups.first()).toBeVisible(); // the untyped list IS grouped, and keeps them
+  for (const q of ["s", "o", "t"]) {
+    await input.fill(q);
+    await expect(page.locator(`${PANEL} .pl-cmdk-commands__item`).first()).toBeVisible();
+    expect(await groups.count()).toBe(0);
+  }
 });
 
 test("a keyword-only hit still surfaces — ranking reorders, it never filters", async ({ page }) => {
