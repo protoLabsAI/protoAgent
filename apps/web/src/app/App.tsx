@@ -537,7 +537,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
     openContextMenu("rail-background", e, { side, hidden });
   };
 
-  // ── Command palette (⌘K, ADR 0057) ────────────────────────────────────────────
+  // ── Command palette (⌘⇧K, ADR 0057) ───────────────────────────────────────────
   // Every resolvable View becomes a "go to" command (via openView → setSurface);
   // deep-link actions ride alongside. Plugin-declared `commands:` + inline plugin
   // views are step 3. The registry re-resolves as plugin views appear/disappear.
@@ -550,7 +550,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
       .map((s) => ({ id: s.id, label: s.label, icon: s.icon })),
   });
   // Plugin views opted into inline palette morphing (manifest `views[].palette`):
-  // ⌘K → the view's command expands its iframe in the palette body, themed + authed
+  // ⌘⇧K → the view's command expands its iframe in the palette body, themed + authed
   // via the same handshake PluginView uses. `"inline"` reuses the rail page; an object
   // `{ path }` ships a DISTINCT page for the palette (e.g. a tighter quick editor) vs
   // the full rail panel — so a plugin can serve separate panel and palette views.
@@ -565,7 +565,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
       token: authToken(),
       sandbox: "allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-pointer-lock allow-downloads",
     }));
-  // Inline chat with the focused agent (ADR 0057) — ⌘K → a quick chat that streams via
+  // Inline chat with the focused agent (ADR 0057) — ⌘⇧K → a quick chat that streams via
   // api.streamChat (ephemeral context per open). Memoized so the transport (+ its
   // session) is stable across renders; re-created only when the agent name changes.
   const chatAgentName = brandName(runtime?.identity?.name);
@@ -583,7 +583,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
     [chatAgentName],
   );
   const paletteRegistry = usePaletteRegistry(paletteViews, inlinePaletteViews, paletteChat);
-  // Palette open-state lives in the keybinding intents store now: ⌘K is a regular,
+  // Palette open-state lives in the keybinding intents store now: ⌘⇧K is a regular,
   // rebindable keybinding (ADR 0063) that toggles it — no DS-internal hotkey hook.
   const paletteOpen = useKbIntents((s) => s.paletteOpen);
   const setPaletteOpen = useKbIntents((s) => s.setPaletteOpen);
@@ -801,7 +801,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
 
   return (
     <>
-    {/* Command palette (⌘K, ADR 0057) — portals over the shell; the same component
+    {/* Command palette (⌘⇧K, ADR 0057) — portals over the shell; the same component
         backs the desktop quick-command (step 4). */}
     <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} registry={paletteRegistry} />
     <div className={`app-shell${isTauriMac ? " is-tauri-mac" : ""}`}>
@@ -1063,8 +1063,8 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
             start={
               <>
                 {/* Settings (far left, 2026-06 consolidation) — opens the one settings dialog
-                    (SettingsOverlay). A plain pill, not a UtilityWidget, so the drawer + ⌘K
-                    deep-links can open it too via the store flag (openGlobalSettings). */}
+                    (SettingsOverlay). A plain pill, not a UtilityWidget, so the drawer +
+                    palette deep-links can open it too via the store flag (openGlobalSettings). */}
                 <Tooltip label="Settings — model, plugins, knowledge & more">
                   <button
                     type="button"

@@ -121,8 +121,10 @@ Forward chords you don't handle so global shortcuts keep working while your view
 parent.postMessage({ type: "protoagent:keydown", combo, editable }, "*");
 ```
 
-Set `editable: true` when focus is in one of your own text fields — the host honours it, so ⌘K
-doesn't fire out from under someone typing in your search box. Absent means `false`.
+Set `editable: true` when focus is in one of your own text fields — the host honours it, so a
+chord that hasn't opted into `allowInInput` doesn't fire out from under someone typing in your
+search box. Absent means `false`. (Chords that *are* marked `allowInInput` — the ⌘⇧K palette
+among them — still fire; see [ADR 0063](/adr/0063-keybinding-system).)
 
 ## Context menus — `contextmenu:register` / `:open` / `:action`
 

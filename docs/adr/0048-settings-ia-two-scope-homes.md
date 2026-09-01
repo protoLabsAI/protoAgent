@@ -166,8 +166,8 @@ Separate planes by **what you're doing**, and collapse redundant doors:
 
 - **Operate** — the rail, unchanged: `Chat · Work · Knowledge` + plugin views.
 - **Configure** — **one** Settings door (the utility-bar pill; the AppDrawer entry
-  points at the same dialog; ⌘K deep-links to a group/section; `⌘,` opens it). The
-  surface is §2.1's three groups.
+  points at the same dialog; the command palette deep-links to a group/section;
+  `⌘,` opens it). The surface is §2.1's three groups.
 - Remove the **redundant AppDrawer "Telemetry" shortcut** — Telemetry is the Box
   group; Settings is the single door.
 - Activity stays a utility widget; Notes stays a utility widget (they're not config).
@@ -186,7 +186,7 @@ Separate planes by **what you're doing**, and collapse redundant doors:
 | C5 | `identity.name` dual path (schema vs `/api/config`) | ✅ **Already fixed** (2026-06-28) — `identity.name` is `ui_hidden` in the schema (#1076); the Identity panel owned it via `/api/config`. *(Superseded by **T2** (#1428): the name now saves via the canonical `/api/settings` cascade; see §6.)* |
 | C6 | `skills.top_k` in the `Knowledge` section | ⚠️ **Deviation — left in Knowledge.** Moving it to a `Capabilities`-only home would orphan it (no rendered Capabilities panel covers it cleanly), and it's recall-adjacent. Kept under Knowledge. |
 | C7 | `Network/Discovery/Keep-warm` under System | ✅ **Done** — re-homed to the **Box** domain (rendered in the host-only "Box config" item). |
-| C8 | AppDrawer "Telemetry" shortcut | ✅ **Done** — removed; Settings is the single door (Telemetry = a Box section / ⌘K deep-link). |
+| C8 | AppDrawer "Telemetry" shortcut | ✅ **Done** — removed; Settings is the single door (Telemetry = a Box section / palette deep-link). |
 | C9 | QuickSetting chips (`mcp.scope`, `skills.scope`, `knowledge.*`, `telemetry.*`) | ✅ **Kept as shortcuts** — all write the same `/api/settings` key as their canonical domain panel (no second save path), so they satisfy §2.2. The canonical full editors are the "Sharing & tiers" (Capabilities) and "Box config" (Box) panels. |
 | C10 | `uiStore` default `settingsSection: "overview"` | ✅ **Done** — default is `identity`; the v14 migration remaps old ids (`overview/settings/memory/system/middleware`). |
 
@@ -215,8 +215,8 @@ This console  Theme · Chat · Keyboard
   it could grow beyond plugins; it never did — Secrets became its own item (ADR 0080) and the
   panel only ever hosts the plugin manager. Renamed back to **Plugins** on 2026-07-17 so the
   label agrees with what the rest of the system already calls it — the section id stays
-  `plugins`, the Python config category is `Plugins`, and the ⌘K palette commands are
-  `Plugins: …`. Id unchanged, so the ⌘K/deep-link contract holds.)*
+  `plugins`, the Python config category is `Plugins`, and the command palette's commands are
+  `Plugins: …`. Id unchanged, so the palette/deep-link contract holds.)*
 - **No standalone schema-only items.** The sharing/tier + box-runtime knobs are reached
   via contextual **chips** on the relevant manager (Skills chip = `skills.scope` +
   `commons.path`; MCP chip = `mcp.scope`; Fleet chip = box-runtime; Telemetry chip =
@@ -238,7 +238,7 @@ UX — the UI local-test gate).
    Agent domain panels. DRAFT.
 4. **S4 — De-dup the bespoke panels:** C5 (Identity single path) + C9 (QuickSetting
    audit). DRAFT.
-5. **S5 — Top-level polish:** C8 + the `This console` group labeling + ⌘K
+5. **S5 — Top-level polish:** C8 + the `This console` group labeling + palette
    deep-links per §2.4. DRAFT.
 
 ## 5. Consequences
@@ -350,7 +350,7 @@ grandchild invisible to the hub and break the "a member's empty workspaces root 
 self-report, not on the URL slug).
 
 **Scope of the change.** Three surfaces move together, because they're one affordance
-seen from three doors: the header switcher's **New agent** + **Fleet settings**, the ⌘K
+seen from three doors: the header switcher's **New agent** + **Fleet settings**, the palette's
 **Fleet Room**, and **Settings ▸ Box ▸ Fleet**. Narrowing the Box group per section rather
 than dropping it is what makes the "Fleet settings" deep-link resolve in a member window —
 with the group gone, `openGlobalSettings("fleet")` fell back to the first section.

@@ -9,15 +9,30 @@
 // registered as DS `pluginView()`s — their command morphs the palette body into the
 // plugin's own iframe (themed/authed via the handshake) instead of navigating to its rail.
 import type { ReactNode } from "react";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { commandsView, createPaletteRegistry, pluginView } from "@protolabsai/ui/command-palette";
-import type { Command, PaletteRegistry, PaletteView } from "@protolabsai/ui/command-palette";
+import type {
+  Command,
+  CommandProvider,
+  PaletteRegistry,
+  PaletteView,
+} from "@protolabsai/ui/command-palette";
 import { useUI } from "../state/uiStore";
 import type { View } from "../lib/viewRegistry";
-import { registerPaletteCommand, registeredPaletteCommands } from "../ext/paletteRegistry";
+import {
+  hasPaletteSources,
+  paletteCommandsVersion,
+  registerPaletteCommand,
+  subscribePaletteCommands,
+  visiblePaletteCommands,
+} from "../ext/paletteRegistry";
 import type { PaletteCommand } from "../ext/paletteRegistry";
+import { registeredKeybindings } from "../ext/keybindingRegistry";
+import { formatCombo } from "../keybindings/combo";
+import { effectiveCombo, useKeybindingOverrides } from "../keybindings/overrides";
+import { useFlagPredicate } from "../flags/flags";
 import { useQuery } from "@tanstack/react-query";
-import { agentHref } from "../lib/api";
+import { agentHref, isHostConsole } from "../lib/api";
 import { fleetQuery } from "../lib/queries";
 import { markAgentOpened } from "./fleetPalette";
 import { fleetRoomView } from "./FleetRoom";
@@ -53,13 +68,13 @@ export type InlinePluginView = {
 /** Open any view by id, routed to the dock it actually lives on (and uncollapsed).
  *  Reads live state via the store's `getState()` so it isn't a render subscription.
  *  A HIDDEN surface (railOrder.hidden — enabled but not shown) is un-hidden first: the
- *  palette is the restore point, so ⌘K → a hidden view's name brings it back onto a dock. */
+ *  palette is the restore point, so ⌘⇧K → a hidden view's name brings it back onto a dock. */
 export function openView(id: string) {
   const ui = useUI.getState();
   if ((ui.railOrder.hidden ?? []).includes(id)) ui.showSurface(id); // restore onto its dock, then route
   const ro = useUI.getState().railOrder; // re-read: showSurface mutated it
   // The mobile shell reads `mobileActive`, NOT the per-dock ids — so without this every
-  // programmatic navigation (⌘K "go to", the rail context menu, a plugin's `ui.navigate`,
+  // programmatic navigation (a palette "go to", the rail context menu, a plugin's `ui.navigate`,
   // a launcher intent) silently did nothing on a phone: it moved a dock the mobile shell
   // never renders. Set both; `mobileActive` is inert on desktop.
   ui.setMobileActive(id);
@@ -158,7 +173,7 @@ _link("plug:download", "Plugins: Install from URL", ["plugins", "install", "url"
   tab: "local",
 });
 // Settings is the consolidated dialog now (2026-06) — opened from the utility-bar pill,
-// the drawer, or these ⌘K commands. A bare "Settings" command + Box-section deep-links.
+// the drawer, or these palette commands. A bare "Settings" command + Box-section deep-links.
 _link("settings", "Settings", ["settings", "config", "preferences", "options"], { kind: "global" });
 _link("box:fleet", "Settings: Fleet", ["fleet", "agents", "box"], { kind: "global", section: "fleet" });
 _link("box:telemetry", "Settings: Telemetry", ["telemetry", "metrics", "box", "global"], {
@@ -166,14 +181,85 @@ _link("box:telemetry", "Settings: Telemetry", ["telemetry", "metrics", "box", "g
   section: "telemetry",
 });
 
-/** Map a registered (core or fork) PaletteCommand onto a DS palette `Command`. */
+/** Map a registered (core or fork) PaletteCommand onto a DS palette `Command`. The DS row
+ *  has no shortcut slot, so a command that ADVERTISES a keybinding (ADR 0061 `keybinding` =
+ *  a `registerKeybinding` id) renders its combo as the row's trailing hint — resolved
+ *  through `effectiveCombo`, so the row shows the combo the operator REBOUND it to rather
+ *  than a stale default. An explicit `hint` wins (a disabled row explains itself there). */
 function toDsCommand(pc: PaletteCommand): Command {
+  const bound = pc.keybinding
+    ? registeredKeybindings().find((b) => b.id === pc.keybinding)
+    : undefined;
   return {
     id: pc.id,
     label: pc.label,
     group: pc.group ?? "Commands",
     keywords: pc.keywords ?? [],
+    icon: pc.icon,
+    hint: pc.hint ?? (bound ? formatCombo(effectiveCombo(bound)) : undefined),
+    disabled: pc.disabled,
     run: (c) => pc.run({ close: () => c.close() }),
+  };
+}
+
+/** Does this row match what the operator typed? A deliberate mirror of the DS commands
+ *  view's own `matchCommand` (module-private in @protolabsai/ui): every whitespace-separated
+ *  term must appear somewhere in the row's label / hint / group / keywords, case-insensitively.
+ *  (The DS also searches a row's `source` chip label; the seam stamps none, so there is
+ *  nothing to search there.)
+ *
+ *  The seam's provider has to apply it ITSELF because the DS client-filters only its STATIC
+ *  commands — a provider is normally a remote search that already applied the query, so its
+ *  results are appended verbatim (`command-palette.views.tsx`: `[...baseCommands.filter(…),
+ *  ...dynamic]`). Skip this and a source's rows would ignore the search box entirely and sit
+ *  under every query. Keep it in step with the DS if that matcher changes; the seam's own
+ *  tests pin the behavior it must have (all terms, any field, case-insensitive). */
+function matchesQuery(c: Command, q: string): boolean {
+  const query = q.trim().toLowerCase();
+  if (!query) return true;
+  const hay = [c.label, c.hint, c.group, ...(c.keywords ?? [])]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return query.split(/\s+/).every((term) => hay.includes(term));
+}
+
+/** The DS `CommandProvider` that serves `registerPaletteSource` rows — the seam's READ-TIME
+ *  half (ADR 0061).
+ *
+ *  A source's rows exist to track live data (open chat tabs, a roster), and the DS's static
+ *  path cannot carry them: `registerCommands` stores the array it is handed VERBATIM
+ *  (`getStaticCommands: () => groups.flatMap(g => g.commands)`), so rows snapshotted in an
+ *  effect freeze until something unrelated re-runs it. Nothing observes a source's data —
+ *  `paletteCommandsVersion()` moves only on register/unregister — so a snapshot would go
+ *  stale silently and stay stale: the fork's new tab missing from ⌘K, its closed tab still
+ *  listed and still runnable. A provider is the DS's actual read-time path: the commands
+ *  view re-invokes `getCommands(query)` every time the palette opens and on every keystroke
+ *  (debounced 120ms), which is exactly the promise the seam makes.
+ *
+ *  Statics stay on the snapshot path — a fixed list is correct to freeze, and it keeps them
+ *  in their registered display position instead of trailing the list. `from: "dynamic"`
+ *  already excludes any id a static claimed, so the two halves never double up.
+ *
+ *  Everything is inside the try: a sync throw out of `getCommands` escapes into the DS's
+ *  `Promise.allSettled` callback as an unhandled rejection and leaves the palette spinning
+ *  "Searching…" forever. `visiblePaletteCommands` contains a broken SOURCE already; this
+ *  contains the mapping around it (a fork's exotic `icon`, a keybinding lookup). */
+export function paletteSourceProvider(
+  flagOn: (id: string) => boolean,
+  onHost: boolean,
+): CommandProvider {
+  return {
+    id: "ext-palette-sources",
+    getCommands: (query) => {
+      try {
+        return visiblePaletteCommands(flagOn, onHost, "dynamic")
+          .map(toDsCommand)
+          .filter((c) => matchesQuery(c, query));
+      } catch {
+        return [];
+      }
+    },
   };
 }
 
@@ -187,6 +273,23 @@ export function usePaletteRegistry(
 ): PaletteRegistry {
   const registry = useMemo(() => createPaletteRegistry(), []);
   const inlineIds = useMemo(() => new Set(inlineViews.map((v) => v.id)), [inlineViews]);
+
+  // Seam commands (ADR 0061) are RE-READ, not read once at mount, because their inputs land
+  // late: `useFlagPredicate` fails closed until /api/flags answers (a flag-gated row would
+  // otherwise stay hidden forever), and a fork module can register (or withdraw) after the
+  // first render — which is what the registry's version counter reports. A keybinding
+  // override re-labels the row that advertises it. Each feeds the effect below as a
+  // dependency. The fourth input — a dynamic source's rows changing with the live data
+  // behind them — deliberately does NOT: nothing observes that data, so no dependency could
+  // track it. Those rows go through `paletteSourceProvider` instead, which the DS palette
+  // re-invokes per read; the effect only decides WHETHER to wire it.
+  const seamVersion = useSyncExternalStore(
+    subscribePaletteCommands,
+    paletteCommandsVersion,
+    paletteCommandsVersion,
+  );
+  const flagOn = useFlagPredicate();
+  const kbOverrides = useKeybindingOverrides((s) => s.overrides);
 
   // The live fleet roster (polled) → member names on the Fleet Room command's keywords. Works
   // in both the console window and the desktop launcher (both sit under QueryClientProvider).
@@ -232,7 +335,7 @@ export function usePaletteRegistry(
       }),
     );
     if (chat) vs.push(chat.view);
-    // The ⌘K Fleet Room morph-view (sibling of the chat view). Opening a member routes
+    // The Fleet Room morph-view (sibling of the chat view). Opening a member routes
     // through the shared nav chokepoint so it forwards from the launcher window too.
     vs.push(
       fleetRoomView({
@@ -269,7 +372,7 @@ export function usePaletteRegistry(
           },
         ])
       : undefined;
-    // Fleet Room (⌘K palette overhaul) — the co-present roster + address/broadcast, opened
+    // Fleet Room (the palette-UX overhaul) — the co-present roster + address/broadcast, opened
     // as a morph-view. Top of the Agents group, right under "Chat with <this agent>".
     // Quick-chat (#1733) and Toggle Fleet Agent (#1769) are FOLDED INTO the room: the
     // roster row carries DM / open-console / start / stop, and every member's name rides
@@ -343,16 +446,30 @@ export function usePaletteRegistry(
     };
     const offCommands = registry.registerCommands([
       openCommand,
-      ...registeredPaletteCommands().map(toDsCommand),
+      // The GATED read: a `flag`-off or (off-host) `hostOnly` command is omitted, exactly as
+      // a gated Settings section is (`visibleSections`). Gating here rather than at
+      // registration is what lets a late `/api/flags` answer reveal the row.
+      // STATICS ONLY — a fixed list is safe to snapshot. Source rows would freeze here; they
+      // take the read-time provider path below instead.
+      ...visiblePaletteCommands(flagOn, isHostConsole(), "static").map(toDsCommand),
     ]);
+    // Dynamic sources, served per palette read. Wired only when a fork registered one: the DS
+    // shows its "Searching…" spinner whenever ANY provider declares `getCommands`, and core
+    // ships zero sources — so an unconditional provider would put a 120ms spinner in front of
+    // every keystroke in the default console. Registering a source bumps `seamVersion`, which
+    // re-runs this effect and wires the provider then.
+    const offSources = hasPaletteSources()
+      ? registry.registerProvider(paletteSourceProvider(flagOn, isHostConsole()))
+      : undefined;
     return () => {
       offChat?.();
       offFleetRoom();
       offPlugins?.();
       offCommands();
+      offSources?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navSig, inlineSig, fleetSig, chat, registry]);
+  }, [navSig, inlineSig, fleetSig, chat, registry, seamVersion, flagOn, kbOverrides]);
 
   return registry;
 }

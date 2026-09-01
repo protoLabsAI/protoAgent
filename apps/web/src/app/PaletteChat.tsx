@@ -73,7 +73,7 @@ export function PaletteChat({
 }) {
   // A Fleet Room DM streams to a SPECIFIC member (agentSlug) and keeps its own thread,
   // scoped so DMing different members never crosses transcripts. No slug = the normal
-  // ⌘K chat with this window's agent (unchanged).
+  // palette chat with this window's agent (unchanged).
   const scope = agentSlug ? `dm:${agentSlug}` : undefined;
   const [boot] = useState(() => loadPaletteThread(scope)); // run once
   const [messages, setMessages] = useState<ChatMessage[]>(boot.messages);
@@ -256,7 +256,7 @@ export function PaletteChat({
         ) : null}
         {messages.map((m, i) => (
           // Shared renderer (ADR 0035) — the SAME message tree as the main chat (reasoning,
-          // tools, content, components, the report card), so the ⌘K chat never drifts. No
+          // tools, content, components, the report card), so the palette chat never drifts. No
           // per-message action row (transient quick-chat). Streaming is read from m.status.
           <ChatMessageView key={i} message={m} />
         ))}
@@ -310,7 +310,7 @@ function MemberDm({ slug, name, initial }: { slug?: string; name?: string; initi
   return <PaletteChat agentSlug={slug} agentName={name ?? "agent"} initial={initial} />;
 }
 
-/** The Fleet Room DM view — the SAME wired ⌘K chat (PaletteChat), pointed at a specific
+/** The Fleet Room DM view — the SAME wired palette chat (PaletteChat), pointed at a specific
  *  member. A member row does `ctx.enter("member-dm", { slug, name })`; the palette pushes
  *  it on the stack (so Back/Escape return to the roster) and the turn streams to that
  *  member via the hub proxy. Keyed by slug so switching members remounts a clean pane
