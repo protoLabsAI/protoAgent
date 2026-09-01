@@ -223,6 +223,26 @@ describe("compilePluginCommands", () => {
     expect(rows).toEqual([]);
   });
 
+  it("navigate/open_view at a view with no console SURFACE makes no row either", () => {
+    // Declared is not navigable. `pluginCommandSources` hands over only the navigable ids
+    // (see its own test below); a chat-slot claimant or a utility widget is therefore absent
+    // from `viewIds` and drops the row — rather than compiling a live "go to" that sets a
+    // surface id nothing renders, which App answers by yanking the operator to chat.
+    const rows = compilePluginCommands(
+      makeSource(
+        [
+          { id: "a", title: "A", action: { type: "navigate", view: "quick" } },
+          { id: "b", title: "B", action: { type: "open_view", view: "chatty", inline: true } },
+          // A chain onto one is exactly as undispatchable as its target.
+          { id: "c", title: "C", action: { type: "command", command: "a" } },
+        ],
+        { viewIds: new Set(["browser"]) },
+      ),
+      makeDeps(),
+    );
+    expect(rows).toEqual([]);
+  });
+
   it("tool → an authenticated call on the composed namespace path, then a toast", async () => {
     const deps = makeDeps();
     const rows = compilePluginCommands(
@@ -522,6 +542,48 @@ describe("pluginCommandSources", () => {
     expect(sources).toHaveLength(1);
     expect(sources[0]).toMatchObject({ id: "files", name: "Files", loaded: true });
     expect([...sources[0].viewIds]).toEqual(["browser"]);
+  });
+
+  it("offers only the views the console mounts as a SURFACE — not every declared one", () => {
+    // App's rail and the launcher both derive their surfaces as `allDeclaredViews` MINUS the
+    // chat-slot claimant and the utility widgets (`isNavigablePluginView`). This allow-set
+    // has to be the same list: a `navigate` at a view with no surface compiled a row that
+    // read "go to", set `plugin:files:quick` as the surface, found no panel — and App's
+    // stale-surface fallback dropped the operator on chat, off whatever they were looking at.
+    const sources = pluginCommandSources(
+      [
+        enabledPlugin({
+          views: [
+            { id: "browser", label: "Files", path: "/plugins/files/browser" },
+            { id: "panel", label: "Panel", path: "/plugins/files/panel", placement: "right" },
+            { id: "quick", label: "Quick", path: "/plugins/files/quick", utility: true },
+            { id: "info", label: "Info", path: "/plugins/files/info", utility: { info: "hi" } },
+            { id: "chatty", label: "Chat", path: "/plugins/files/chatty", slot: "chat" },
+          ],
+        }),
+      ],
+      () => null,
+    );
+    // A right-dock view IS a surface (railOrder reconciles rail/right/bottom alike).
+    expect([...sources[0].viewIds].sort()).toEqual(["browser", "panel"]);
+  });
+
+  it("compiles NO row for a declared command whose view has no surface (end to end)", () => {
+    // The two halves above, joined: the derivation the hosts actually call, feeding the
+    // compile step. This is the shipped path — the unit cases can both pass while the wiring
+    // between them hands over the raw list.
+    const deps = makeDeps();
+    const sources = pluginCommandSources(
+      [
+        enabledPlugin({
+          views: [{ id: "quick", label: "Quick", path: "/plugins/files/quick", utility: true }],
+          commands: [{ id: "q", title: "Quick capture", action: { type: "navigate", view: "quick" } }],
+        }),
+      ],
+      () => null,
+    );
+    expect(compilePluginCommands(sources[0], deps)).toEqual([]);
+    expect(deps.navigate).not.toHaveBeenCalled();
   });
 
   it("carries the plugin's LOAD state through, so a tool row can disable itself", () => {

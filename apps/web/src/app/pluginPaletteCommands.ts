@@ -42,6 +42,7 @@
 import type { ReactNode } from "react";
 import type { Command, PaletteContext, PaletteSource } from "@protolabsai/ui/command-palette";
 import type { PluginCommand, PluginCommandAction, RuntimeStatus } from "../lib/types";
+import { isNavigablePluginView } from "../lib/pluginViews";
 // Type-only (erased at build): the runtime import would be a cycle, since
 // `usePaletteRegistry` imports the compiler below.
 import type { NavIntent } from "./usePaletteRegistry";
@@ -169,7 +170,12 @@ export type PluginCommandSource = {
    *  `views[].pluginLoaded` exists to explain on the view host. A `tool` row needs it
    *  (see `NOT_LOADED`). */
   loaded: boolean;
-  /** View ids this manifest declares — a `navigate`/`open_view` may target no other. */
+  /** View ids this manifest declares that the console mounts as a NAVIGABLE surface — a
+   *  `navigate`/`open_view` may target no other. Declared is not navigable: a `slot: "chat"`
+   *  claimant renders under the core chat id and a `utility` widget is a bottom-left pill,
+   *  so neither is reconciled onto a dock (`isNavigablePluginView`). Targeting one used to
+   *  compile a live "go to" row that set a surface id nothing renders, which App's
+   *  stale-surface fallback answered by yanking the operator to chat. */
   viewIds: ReadonlySet<string>;
   /** Resolved icon for a manifest icon name. Injected because the two windows resolve
    *  glyphs differently: App resolves the full lucide set, the launcher deliberately uses
@@ -200,7 +206,13 @@ export function pluginCommandSources(
       name: p.name || p.id,
       commands: p.commands ?? [],
       loaded: !!p.loaded,
-      viewIds: new Set((Array.isArray(p.views) ? p.views : []).map((v) => String(v?.id))),
+      // The NAVIGABLE subset, through the same predicate App's rail and the launcher use —
+      // not the raw declared list. Filtering here, at the single place the allow-set is
+      // built, is what makes `compileAction`'s existing `viewIds.has(...)` guard drop the
+      // row: this module's own answer to "there is nothing honest to run".
+      viewIds: new Set(
+        (Array.isArray(p.views) ? p.views : []).filter(isNavigablePluginView).map((v) => String(v?.id)),
+      ),
       icon,
     }));
 }
@@ -283,9 +295,10 @@ const RUN = "run";
 
 /** Compile ONE action, or `null` when it cannot be dispatched safely. `null` drops the row:
  *  an action type this adapter does not implement, a route that escapes the namespace, a
- *  topic outside the plugin's own, or a view the manifest never declared all mean the same
- *  thing — there is nothing honest to run. (Not runnable YET — a plugin that failed to
- *  load — is a different answer: that row ships disabled, saying so.) */
+ *  topic outside the plugin's own, or a view that is not a navigable surface of this plugin
+ *  (never declared, or declared as a chat-slot claimant / utility widget — see `viewIds`)
+ *  all mean the same thing — there is nothing honest to run. (Not runnable YET — a plugin
+ *  that failed to load — is a different answer: that row ships disabled, saying so.) */
 function compileAction(
   action: PluginCommandAction | undefined,
   src: PluginCommandSource,

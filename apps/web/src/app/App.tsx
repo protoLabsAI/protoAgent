@@ -28,6 +28,7 @@ import { dedupeRailById } from "./rail";
 import { AuthGate } from "./AuthGate";
 import { authRequired, subscribeAuth } from "../lib/auth";
 import { pluginViewIcon } from "../lib/pluginIcon";
+import { isNavigablePluginView } from "../lib/pluginViews";
 import { TenantGuard } from "./TenantGuard";
 import { SessionHistoryHydrator } from "./SessionHistoryHydrator";
 import { Splash, BootGate } from "@protolabsai/ui/splash";
@@ -88,7 +89,7 @@ import { invalidateAllAfterSetup } from "../setup/finish";
 import { SetupWizard } from "../setup/SetupWizard";
 import { hostRuntimeStatusQuery, installedPluginsQuery, pluginUpdatesQuery, runtimeStatusQuery } from "../lib/queries";
 import { buildViews } from "../lib/viewRegistry";
-import { applyNavIntent, openView, usePaletteRegistry } from "./usePaletteRegistry";
+import { applyNavIntent, openView, useForwardedPaletteNotices, usePaletteRegistry } from "./usePaletteRegistry";
 import type { NavIntent } from "./usePaletteRegistry";
 import { pluginCommandSources } from "./pluginPaletteCommands";
 import { PaletteChat } from "./PaletteChat";
@@ -368,7 +369,9 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   // A view with `utility` is a bottom-left utility-bar widget (a pill → dialog), NOT a rail
   // surface — so it's excluded from the rail list, like the chat-slot claimant.
   const utilityWidgetViews = allDeclaredViews.filter((v) => v.utility);
-  const allPluginViews = allDeclaredViews.filter((v) => v.slot !== "chat" && !v.utility);
+  // The navigable surfaces — through the SHARED predicate, because the launcher and the
+  // palette-command adapter have to answer this question identically (#3294 review).
+  const allPluginViews = allDeclaredViews.filter(isNavigablePluginView);
   // Enabled plugin ids — gates ext surfaces that declare requiresPlugin (e.g. Studio → workflows).
   const enabledPluginIds = new Set((runtime?.plugins ?? []).filter((p) => p.enabled).map((p) => p.id));
 
@@ -609,6 +612,11 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
     });
     return () => off();
   }, []);
+  // …and the same handoff for what a launcher row's `tool`/`emit` call came BACK with. The
+  // launcher hides itself the moment a row fires, so a toast raised there would land in a
+  // hidden webview; it forwards the outcome here instead (and has already raised this window
+  // via `focus_main`).
+  useForwardedPaletteNotices(toast);
 
   function renderSurface(id: string): ReactNode {
     switch (id) {

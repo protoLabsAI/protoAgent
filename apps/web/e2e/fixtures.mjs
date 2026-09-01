@@ -65,6 +65,16 @@ export const RUNTIME_STATUS = {
         // A utility-bar widget (2026-06 IA pass): a bottom-left pill → dialog, with hover info.
         { id: "snap", label: "Boardy Snapshot", icon: "Gauge", path: "/plugins/boardy/snap", utility: { info: "A quick board snapshot" } },
       ],
+      // Manifest-DECLARED palette commands (ADR 0057 §3), compiled by the console adapter.
+      // `gotoboard` names a rail view — a live row. `gotosnap` names the utility WIDGET
+      // above, which the console gives no rail/dock surface: it must compile to no row at
+      // all, not a "go to" that strands the operator on chat. (A real backend drops this
+      // one at parse time; the fixture ships it raw on purpose, because the console's
+      // mirror is what has to hold when the payload never passed the parser.)
+      commands: [
+        { id: "gotoboard", title: "Boardy Board", action: { type: "navigate", view: "board" } },
+        { id: "gotosnap", title: "Boardy Snapshot Go", action: { type: "navigate", view: "snap" } },
+      ],
     },
   ],
 };

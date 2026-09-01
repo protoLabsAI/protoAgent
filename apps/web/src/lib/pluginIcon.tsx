@@ -104,7 +104,18 @@ function lazyLucideIcon(key: string): IconComp {
 
 export function pluginViewIcon(name?: string, size = 18): ReactNode {
   if (!name) return <Puzzle size={size} />;
-  const Curated = PLUGIN_VIEW_ICONS[name];
+  // `hasOwnProperty`, not a bare lookup: the curated table is an object LITERAL, so a
+  // manifest naming an `Object.prototype` key resolves to a "component" that is really
+  // `Object` / `hasOwnProperty` / `toString`. React then calls it — and since this glyph is
+  // built inside App's render and the palette-registry effect, the throw lands on the ROOT
+  // error boundary: the entire console replaced by the crash card, and still crashed on
+  // reload because the manifest is still installed. Every other manifest string in this
+  // path is coerced or validated; `icon` is a name we look up, so the lookup is where the
+  // guard belongs. (`lazyLucideIcon` below is already safe — `m.icons` is a module
+  // namespace, which has no prototype, and it falls back to Puzzle.)
+  const Curated = Object.prototype.hasOwnProperty.call(PLUGIN_VIEW_ICONS, name)
+    ? PLUGIN_VIEW_ICONS[name]
+    : undefined;
   if (Curated) return <Curated size={size} />;
   const Lazy = lazyLucideIcon(toPascalCase(name));
   return (

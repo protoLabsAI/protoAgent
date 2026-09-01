@@ -134,13 +134,19 @@ class PluginManifest:
     # turns a surviving entry into a palette row — grouped with the plugin's view rows and
     # chipped with its name, in the console palette and the desktop launcher alike. It
     # MIRRORS the route and topic namespace checks above rather than trusting the status
-    # payload, so an entry that fails the mirror is simply absent. Two console-side
-    # limits worth knowing while writing a manifest: `open_view` needs its target view to
-    # have opted into the inline morph via `views[].palette` — something this parser
-    # cannot see, so a command naming a view that did not opt in opens it on its rail
-    # instead of morphing — and a `provider` is parsed and shipped but not compiled yet
-    # (ADR 0057 §8 leaves its per-query timeout/cancel + result-cap budget open), so an
-    # entry declaring only a provider contributes no row.
+    # payload, so an entry that fails the mirror is simply absent. Three console-side
+    # limits worth knowing while writing a manifest: `navigate` and `open_view` may only
+    # name a view the console mounts as a SURFACE — a rail, right-panel or bottom-dock
+    # view — because a `slot: "chat"` claimant renders under the core chat id and a
+    # `utility` widget is a bottom-left pill opening a dialog, so neither is reconciled
+    # onto a dock and neither has anywhere for a row to go (a command naming one is
+    # dropped with a warning, and the console drops it again on its own side);
+    # `open_view` needs its target view to have opted into the inline morph via
+    # `views[].palette` — something this parser cannot see, so a command naming a view
+    # that did not opt in opens it on its rail instead of morphing; and a `provider` is
+    # parsed and shipped but not compiled yet (ADR 0057 §8 leaves its per-query
+    # timeout/cancel + result-cap budget open), so an entry declaring only a provider
+    # contributes no row.
     commands: list[dict] = field(default_factory=list)
     # Auth-exempt paths — prefixes under THIS plugin's own /plugins/<id>/ (or
     # /api/plugins/<id>/) namespace that the default-deny auth middleware lets
@@ -504,7 +510,31 @@ def _parse_command_topic(raw, plugin_id: str, *, command_id: str) -> str | None:
     return None
 
 
-def _parse_command_action(raw, plugin_id: str, *, command_id: str, view_ids: set[str], label: str) -> dict | None:
+def _navigable_view_ids(views: list[dict]) -> set[str]:
+    """The declared views the CONSOLE mounts as a navigable surface.
+
+    Declared is not navigable, and the difference is what a ``navigate`` / ``open_view``
+    may name. A ``slot: "chat"`` claimant (ADR 0045) renders under the core ``chat`` rail
+    id and a ``utility`` widget (a bottom-left pill opening a dialog) never joins the rail
+    at all, so neither is reconciled onto a dock and neither has a ``plugin:<id>:<view>``
+    surface to open. A command pointed at one used to ship: the console compiled a live
+    "go to" row that set a surface id nothing renders, and its stale-surface fallback then
+    dropped the operator on chat. ``_parse_views`` keeps the whole view mapping, so both
+    flags are readable here — the console mirrors this check, but the WARNING is only
+    available at parse time, which is the half a plugin author can act on.
+    """
+    return {str(v.get("id")) for v in views if v.get("slot") != "chat" and not v.get("utility")}
+
+
+def _parse_command_action(
+    raw,
+    plugin_id: str,
+    *,
+    command_id: str,
+    view_ids: set[str],
+    unnavigable_view_ids: set[str],
+    label: str,
+) -> dict | None:
     """One declarative ``action`` → the normalized mapping the console dispatches on.
 
     Returns ``None`` (warned) for anything the adapter could not run safely. The result
@@ -529,14 +559,25 @@ def _parse_command_action(raw, plugin_id: str, *, command_id: str, view_ids: set
     if kind in ("navigate", "open_view"):
         view = str(raw.get("view", "") or "").strip()
         if view not in view_ids:
-            log.warning(
-                "[plugins] %s: command %r %s targets view %r, which this manifest does not "
-                "declare — a command may only open its own plugin's views; dropped",
-                plugin_id,
-                command_id,
-                label,
-                view,
-            )
+            if view in unnavigable_view_ids:
+                log.warning(
+                    "[plugins] %s: command %r %s targets view %r, which is a chat-slot "
+                    "claimant or a utility widget — the console gives those no rail/dock "
+                    "surface, so there is nowhere for the row to go; dropped",
+                    plugin_id,
+                    command_id,
+                    label,
+                    view,
+                )
+            else:
+                log.warning(
+                    "[plugins] %s: command %r %s targets view %r, which this manifest does not "
+                    "declare — a command may only open its own plugin's views; dropped",
+                    plugin_id,
+                    command_id,
+                    label,
+                    view,
+                )
             return None
         action = {"type": kind, "view": view}
         # `open_view` IS the inline morph (ADR 0057 §2C/§4 spell it
@@ -597,7 +638,14 @@ def _parse_command_action(raw, plugin_id: str, *, command_id: str, view_ids: set
     return {"type": "command", "command": target}
 
 
-def _parse_command_provider(raw, plugin_id: str, *, command_id: str, view_ids: set[str]) -> dict | None:
+def _parse_command_provider(
+    raw,
+    plugin_id: str,
+    *,
+    command_id: str,
+    view_ids: set[str],
+    unnavigable_view_ids: set[str],
+) -> dict | None:
     """A ``provider`` block → ``{route, result_action}``, or ``None`` (warned).
 
     A provider is a live-search row: the console queries ``route`` as the operator
@@ -630,6 +678,7 @@ def _parse_command_provider(raw, plugin_id: str, *, command_id: str, view_ids: s
         plugin_id,
         command_id=command_id,
         view_ids=view_ids,
+        unnavigable_view_ids=unnavigable_view_ids,
         label="provider result_action",
     )
     if result is None:
@@ -658,12 +707,18 @@ def _parse_commands(entries, plugin_id: str, views: list[dict]) -> list[dict]:
     Every escape hatch is closed here rather than in the console: routes are confined
     to /api/plugins/<id>/… (``_parse_command_route``), emit topics to the plugin's own
     event namespace (``_parse_command_topic``), ``navigate`` / ``open_view`` to views
-    this manifest declares, and ``command`` chaining to entries in this same list —
-    resolved to a fixed point, so a chain into a dropped command is dropped too.
+    this manifest declares AND the console mounts as a surface (``_navigable_view_ids``
+    — a chat-slot claimant or a utility widget is neither), and ``command`` chaining to
+    entries in this same list — resolved to a fixed point, so a chain into a dropped
+    command is dropped too.
     """
     if not isinstance(entries, (list, tuple)):
         return []
-    view_ids = {str(v.get("id")) for v in views}
+    # NAVIGABLE views only — a chat-slot claimant / utility widget is declared but has no
+    # console surface to open (see `_navigable_view_ids`). The rest are kept apart only so
+    # the warning can say WHICH mistake it was.
+    view_ids = _navigable_view_ids(views)
+    unnavigable_view_ids = {str(v.get("id")) for v in views} - view_ids
     kept: list[dict] = []
     seen: set[str] = set()
     for raw in entries:
@@ -700,12 +755,23 @@ def _parse_commands(entries, plugin_id: str, views: list[dict]) -> list[dict]:
         action = provider = None
         if has_action:
             action = _parse_command_action(
-                raw["action"], plugin_id, command_id=command_id, view_ids=view_ids, label="action"
+                raw["action"],
+                plugin_id,
+                command_id=command_id,
+                view_ids=view_ids,
+                unnavigable_view_ids=unnavigable_view_ids,
+                label="action",
             )
             if action is None:
                 continue
         if has_provider:
-            provider = _parse_command_provider(raw["provider"], plugin_id, command_id=command_id, view_ids=view_ids)
+            provider = _parse_command_provider(
+                raw["provider"],
+                plugin_id,
+                command_id=command_id,
+                view_ids=view_ids,
+                unnavigable_view_ids=unnavigable_view_ids,
+            )
             if provider is None:
                 continue
         entry: dict = {"id": command_id, "title": title}

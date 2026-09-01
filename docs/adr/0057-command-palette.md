@@ -228,6 +228,18 @@ Backend: add `_parse_commands` next to `_parse_views` (`graph/plugins/manifest.p
 > - **`open_view` falls back to `navigate`** when the target view never opted into the inline
 >   morph through `views[].palette` — something `_parse_commands` cannot see, and `ctx.enter` on
 >   an unregistered view id blanks the whole palette.
+> - **A view action may only name a NAVIGABLE view.** Declared is not navigable: a `slot: "chat"`
+>   claimant renders under the core chat id and a `utility` widget is a bottom-left pill, so
+>   neither joins `railOrder` and neither has a `plugin:<id>:<view>` surface. The allow-set is
+>   built through the one predicate all three hosts share (`lib/pluginViews.ts`
+>   `isNavigablePluginView`), so a command at one of those produces no row — rather than a live
+>   "go to" that sets a surface nothing renders, which App's stale-surface fallback answers by
+>   dropping the operator on chat. `_parse_commands` mirrors it, because only the parse side can
+>   warn the plugin author.
+> - **A launcher row's `tool`/`emit` OUTCOME is forwarded to the console window.** Firing one
+>   closes the palette, and on the launcher closing the palette hides the window — a toast
+>   raised there renders into a webview nobody can see. It rides `palette:notify` to the main
+>   window, which is raised the same way a `navigate` row raises it.
 > - **A `tool` row on an enabled plugin that failed to LOAD ships disabled**, with the reason
 >   where its hint goes. That route is served by the plugin's own router, so there is nothing to
 >   call; `emit` (the core bus route) and the view actions (the view host shows the loader's real

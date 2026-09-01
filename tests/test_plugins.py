@@ -987,6 +987,54 @@ def test_emit_topics_are_forced_into_the_plugin_namespace(tmp_path, caplog) -> N
     assert "otherplugin.wipe" in caplog.text and "outside the plugin's own namespace" in caplog.text
 
 
+def test_commands_at_a_view_with_no_console_surface_are_dropped(tmp_path, caplog) -> None:
+    """DECLARED is not NAVIGABLE.
+
+    A ``slot: "chat"`` claimant renders under the core chat rail id and a ``utility`` widget
+    is a bottom-left pill opening a dialog — neither is reconciled onto a dock, so neither
+    has a ``plugin:<id>:<view>`` surface for a row to open. Shipping such a command put a
+    live "go to" row in the palette that set a surface id nothing renders, and the console's
+    stale-surface fallback answered by dropping the operator on chat, off whatever they were
+    looking at. The console mirrors this check; the WARNING only exists here, and it is the
+    half a plugin author can act on — so it has to name which mistake it was.
+    """
+    import logging as _logging
+
+    _make_plugin(
+        tmp_path,
+        "cmdy",
+        manifest_extra=(
+            "views:\n"
+            "  - {id: browser, label: Files, path: /plugins/cmdy/browser}\n"
+            "  - {id: panel, label: Panel, path: /plugins/cmdy/panel, placement: right}\n"
+            "  - {id: quick, label: Quick, path: /plugins/cmdy/quick, utility: true}\n"
+            "  - {id: info, label: Info, path: /plugins/cmdy/info, utility: {info: hi}}\n"
+            "  - {id: chatty, label: Chat, path: /plugins/cmdy/chatty, slot: chat}\n"
+            "commands:\n"
+            "  - {id: rail, title: Rail, action: {type: navigate, view: browser}}\n"
+            "  - {id: dock, title: Dock, action: {type: navigate, view: panel}}\n"
+            "  - {id: util, title: Util, action: {type: navigate, view: quick}}\n"
+            "  - {id: util2, title: Util2, action: {type: open_view, view: info}}\n"
+            "  - {id: chat, title: Chat, action: {type: open_view, view: chatty}}\n"
+            "  - {id: hop, title: Hop, action: {type: command, command: util}}\n"
+            "  - {id: find, title: Find, provider: {route: search, result_action: {type: navigate, view: quick}}}\n"
+        ),
+    )
+    with caplog.at_level(_logging.WARNING, logger="protoagent.plugins"):
+        m = load_manifest(tmp_path / "cmdy")
+    assert m is not None
+    # A right-dock view IS a surface (railOrder reconciles rail/right/bottom alike); a chain
+    # onto a dropped command, and a provider whose result action names one, go with it.
+    assert [c["id"] for c in m.commands] == ["rail", "dock"]
+    assert "which is a chat-slot claimant or a utility widget" in caplog.text
+    # …and the message stays distinct from the "never declared it at all" one, which is a
+    # different author mistake with a different fix. (The chain warning below legitimately
+    # uses that phrasing about a COMMAND — this is about the VIEW wording only.)
+    assert "targets view 'quick', which this manifest does not declare" not in caplog.text
+    # The chain and the provider both inherit the drop, rather than shipping a dead row.
+    assert "command 'hop' chain does not end" in caplog.text
+
+
 def test_commands_reject_shapes_the_console_cannot_dispatch(tmp_path, caplog) -> None:
     import logging as _logging
 
