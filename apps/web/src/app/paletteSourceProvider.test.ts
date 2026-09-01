@@ -106,8 +106,10 @@ describe("registerPaletteSource → the DS read-time provider", () => {
 
   it("wires the provider only once a source exists, and withdraws it again", async () => {
     const registry = await mountRegistry();
-    // Core ships no sources: an always-on provider would put the palette's "Searching…"
-    // spinner in front of every keystroke in the default console.
+    // Nothing has registered a source here — the adapter under test doesn't import core's
+    // one (the chat-tab rows self-register from App/Launcher), which is what keeps this
+    // assertion testable. An always-on provider would put the palette's "Searching…" spinner
+    // in front of every keystroke in a console with nothing dynamic to serve.
     expect(registry.getProviders().map((p) => p.id)).not.toContain(SOURCE_PROVIDER);
 
     const off = source(() => [{ id: "probe:late", label: "Late", run: () => {} }]);

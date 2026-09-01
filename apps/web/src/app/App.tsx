@@ -90,6 +90,7 @@ import { hostRuntimeStatusQuery, installedPluginsQuery, pluginUpdatesQuery, runt
 import { buildViews } from "../lib/viewRegistry";
 import { applyNavIntent, openView, usePaletteRegistry } from "./usePaletteRegistry";
 import type { NavIntent } from "./usePaletteRegistry";
+import "./chatTabPalette"; // core's dynamic ⌘K source: a row per open chat tab (side effect)
 import { PaletteChat } from "./PaletteChat";
 import { CORE_SURFACES } from "./coreSurfaces";
 import { listen } from "../lib/desktop";

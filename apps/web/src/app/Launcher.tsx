@@ -16,6 +16,7 @@ import { CommandPalette } from "@protolabsai/ui/command-palette";
 import type { PaletteView } from "@protolabsai/ui/command-palette";
 import { setPaletteNavigator, usePaletteRegistry } from "./usePaletteRegistry";
 import type { InlinePluginView } from "./usePaletteRegistry";
+import "./chatTabPalette"; // core's dynamic ⌘K source: a row per open chat tab (side effect)
 import { PaletteChat } from "./PaletteChat";
 import { CORE_SURFACES } from "./coreSurfaces";
 import { buildViews } from "../lib/viewRegistry";

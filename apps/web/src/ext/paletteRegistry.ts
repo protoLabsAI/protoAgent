@@ -117,8 +117,10 @@ export function paletteCommandsVersion(): number {
 
 /** Whether any dynamic source is registered. The host wires the DS provider path (a
  *  debounced re-read plus the palette's "Searching…" affordance on every keystroke) only
- *  when a fork actually registered one — core ships none, and paying for an always-empty
- *  provider would put a spinner in front of every keystroke in the default console.
+ *  when a source actually exists — paying for an always-empty provider would put a spinner
+ *  in front of every keystroke in a console with nothing dynamic to serve. Core registers
+ *  one (the open-chat-tab rows, `app/chatTabPalette.ts`), so the default console arms it;
+ *  the gate still matters for a build that strips it and for a fork's own sources.
  *  Registering/unregistering a source bumps the version, so a consumer keyed on
  *  `paletteCommandsVersion()` re-asks at the right moment. */
 export function hasPaletteSources(): boolean {

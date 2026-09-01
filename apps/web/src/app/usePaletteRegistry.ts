@@ -18,6 +18,7 @@ import type {
   PaletteView,
 } from "@protolabsai/ui/command-palette";
 import { useUI } from "../state/uiStore";
+import { chatStore } from "../chat/chat-store";
 import type { View } from "../lib/viewRegistry";
 import {
   hasPaletteSources,
@@ -103,7 +104,12 @@ export type NavIntent =
   | { kind: "view"; id: string }
   | { kind: "plugins"; tab: "local" | "market" }
   | { kind: "global"; section?: string }
-  | { kind: "agent"; slug: string };
+  | { kind: "agent"; slug: string }
+  // Switch the chat tab strip to one already-open session (chatTabPalette.ts). An INTENT
+  // rather than a direct `chatStore.switchSession` at the call site so it crosses the
+  // launcher boundary like every other navigation, and so the id is validated in the window
+  // that owns the store — see `applyNavIntent`.
+  | { kind: "chat"; sessionId: string };
 
 /** Apply an intent to THIS window's UI store. The default navigator, and what the main
  *  window calls when it receives a forwarded intent from the launcher. */
@@ -129,6 +135,26 @@ export function applyNavIntent(intent: NavIntent) {
       // `window.location` targets the window the operator is actually looking at.
       window.location.href = agentHref(intent.slug);
       break;
+    case "chat": {
+      // Re-validate against a FRESH snapshot before switching. A dynamic source's rows are
+      // built when the palette is READ and run a keystroke later, and `chatStore.switchSession`
+      // does not check the id it is handed: for a session deleted in that window (another
+      // browser tab's cross-tab merge, a background job) it still sets `currentSessionId` and
+      // pushes the phantom id into `activeSessions` — evicting a real tab — after which
+      // ChatSurface's `useSession` finds nothing and mounts a DEAD SLOT.
+      //
+      // The check belongs HERE and not in the row's `run()`: in the desktop launcher `run()`
+      // executes in a different JS context from the store that is about to be mutated, so a
+      // check there would validate against the wrong snapshot. This is the window that owns it.
+      //
+      // A vanished chat still routes to the chat surface — the operator lands where their
+      // chats are and can see the tab is gone, which beats a click that does nothing at all.
+      if (chatStore.getSnapshot().sessions.some((s) => s.id === intent.sessionId)) {
+        chatStore.switchSession(intent.sessionId);
+      }
+      openView("chat");
+      break;
+    }
   }
 }
 
@@ -140,8 +166,11 @@ export function setPaletteNavigator(fn: ((intent: NavIntent) => void) | null) {
   navigator = fn ?? applyNavIntent;
 }
 
-/** The single entry point every nav command + deep-link runs through. */
-function navigate(intent: NavIntent) {
+/** The single entry point every nav command + deep-link runs through. Exported so a core
+ *  feature module that registers its own palette rows (chatTabPalette.ts) routes through the
+ *  SAME chokepoint — a direct `useUI.getState()` / store call is a silent no-op in the
+ *  shell-less launcher window. */
+export function navigate(intent: NavIntent) {
   navigator(intent);
 }
 
@@ -453,11 +482,13 @@ export function usePaletteRegistry(
       // take the read-time provider path below instead.
       ...visiblePaletteCommands(flagOn, isHostConsole(), "static").map(toDsCommand),
     ]);
-    // Dynamic sources, served per palette read. Wired only when a fork registered one: the DS
-    // shows its "Searching…" spinner whenever ANY provider declares `getCommands`, and core
-    // ships zero sources — so an unconditional provider would put a 120ms spinner in front of
-    // every keystroke in the default console. Registering a source bumps `seamVersion`, which
-    // re-runs this effect and wires the provider then.
+    // Dynamic sources, served per palette read. Wired only when a source exists: the DS shows
+    // its "Searching…" spinner whenever ANY provider declares `getCommands`, so wiring one
+    // unconditionally would put a 120ms spinner in front of every keystroke in a console with
+    // nothing dynamic to serve. Core registers one (the open-chat-tab rows,
+    // `chatTabPalette.ts`, imported by App and Launcher), so the default console does arm it.
+    // Registering a source bumps `seamVersion`, which re-runs this effect and wires the
+    // provider then.
     const offSources = hasPaletteSources()
       ? registry.registerProvider(paletteSourceProvider(flagOn, isHostConsole()))
       : undefined;

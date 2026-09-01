@@ -140,9 +140,13 @@ menu from `registeredSlashCommands()` + the server list, and `runClientSlash` di
     correct to freeze, and it keeps them in their registered display position), while
     `"dynamic"` rows are served by a DS **`CommandProvider`** the commands view re-invokes on
     every open and every keystroke. The provider is wired only while a source exists — the DS
-    shows its "Searching…" affordance whenever any provider declares `getCommands`, and core
-    ships none — and it applies the query itself, because the DS client-filters only statics
-    (a provider is normally a remote search that already applied it). The honest contract is
+    shows its "Searching…" affordance whenever any provider declares `getCommands`, so wiring
+    one unconditionally would put that spinner in front of every keystroke in a console with
+    nothing dynamic to serve — and it applies the query itself, because the DS client-filters
+    only statics (a provider is normally a remote search that already applied it).
+    **Dogfooded:** core's one source is the open-chat-tab list (`app/chatTabPalette.ts`) —
+    a ⌘K row per open chat, so a chat is reachable by NAME and not only by the ⌘1–9 ordinal —
+    which is what arms the provider in the default console. The honest contract is
     therefore "re-read on every palette read", not "re-rendered when your data changes": a
     row that changes while the palette sits open and untouched appears at the next keystroke.
 
