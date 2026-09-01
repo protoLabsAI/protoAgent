@@ -69,20 +69,18 @@ def _read_summary(paths: list[str]) -> dict:
     raise FileNotFoundError(paths[0])
 
 
-def _digest_policy() -> tuple[str, int, int]:
-    """The LIVE digest policy and its ceilings — ``context.prior_sessions`` plus
-    ``memory.max_sessions`` / ``memory.max_tokens``, read through the one shape
-    the composer reads (``ProjectionOptions.from_config``) so the inspector can't
-    describe a policy the turn isn't running. Falls back to the defaults when the
-    graph is down (a graphless server still serves this listing)."""
+def _digest_options():
+    """The LIVE delivery knobs — read through the one shape the composer reads
+    (``ProjectionOptions.from_config``) so the inspector can't describe a policy
+    the turn isn't running. Falls back to the defaults when the graph is down (a
+    graphless server still serves this listing)."""
     from graph.projection import ProjectionOptions
 
     try:
-        opts = ProjectionOptions.from_config(getattr(STATE, "graph_config", None))
+        return ProjectionOptions.from_config(getattr(STATE, "graph_config", None))
     except Exception:  # noqa: BLE001 — a partial config must not 500 the inspector
         log.debug("[memory] digest policy unreadable — assuming defaults", exc_info=True)
-        opts = ProjectionOptions()
-    return opts.prior_sessions_policy, opts.prior_sessions_max, opts.prior_sessions_max_tokens
+        return ProjectionOptions()
 
 
 def _list_sessions(active_session_id: str = "") -> tuple[list[dict], str]:
@@ -102,17 +100,24 @@ def _list_sessions(active_session_id: str = "") -> tuple[list[dict], str]:
       draws no badge) and the policy explains it instead;
     - ``off``: nothing is injected, so every row is ``False``. The old listing
       badged the newest ten as in-digest here, which was exactly backwards.
+
+    One honest limit: this is the digest as CHOSEN, not as finally delivered. A
+    listed entry can still shed from the tail under the per-turn context budget
+    (ADR 0108 D6), which depends on the turn's model window and everything else
+    competing for it — knowable per turn, not per listing. The Injections panel
+    (D6 record) is what says what actually entered a given turn.
     """
     from graph.middleware.memory import digest_entry, load_prior_sessions_digest, memory_path
 
     base = memory_path()
-    policy, max_sessions, max_tokens = _digest_policy()
+    opts = _digest_options()
+    policy = opts.prior_sessions_policy
     digest_ids: set[str] = set()
     if policy == "newest":
         digest_ids = set(
             load_prior_sessions_digest(
-                max_sessions=max_sessions,
-                max_tokens=max_tokens,
+                max_sessions=opts.prior_sessions_max,
+                max_tokens=opts.prior_sessions_max_tokens,
                 exclude_session_id=active_session_id,
             )[1]
         )
@@ -132,11 +137,11 @@ def _list_sessions(active_session_id: str = "") -> tuple[list[dict], str]:
                 continue
             entry = digest_entry(summary)
             entry["size_bytes"] = size
-            if policy == "off":
-                entry["in_digest"] = False
-            elif policy == "newest":
-                entry["in_digest"] = entry["session_id"] in digest_ids
-            # "relevant": no key — the digest is re-chosen per turn.
+            # "relevant" gets no key at all — the digest is re-chosen from each
+            # turn's query, so there is no window to report. Under "off" nothing is
+            # injected, which `digest_ids` (empty) already says.
+            if policy != "relevant":
+                entry["in_digest"] = policy == "newest" and entry["session_id"] in digest_ids
             if active_session_id and entry["session_id"] == active_session_id:
                 entry["is_active_session"] = True
             sessions.append((mtime, entry))

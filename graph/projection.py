@@ -167,9 +167,12 @@ class ProjectionOptions:
             object.__setattr__(self, "prior_sessions_policy", normalized)
         # The digest ceilings are counts, not switches: a non-positive value would
         # render the empty `<prior_sessions/>` tag, which is "off" spelled in a way
-        # nothing documents. from_config already falls back + warns; this keeps a
-        # directly-constructed options object honest too.
-        for attr, default in (("prior_sessions_max", 10), ("prior_sessions_max_tokens", 2000)):
+        # nothing documents. The defaults come off the FIELDS above rather than being
+        # retyped — a literal here would silently revert a changed default. Silent
+        # like the budget clamp above: `graph/config.py` already warns for an
+        # operator's YAML, and direct construction is a caller's bug, not a typo.
+        for attr in ("prior_sessions_max", "prior_sessions_max_tokens"):
+            default = getattr(type(self), attr)
             try:
                 n = int(getattr(self, attr))
             except (TypeError, ValueError):

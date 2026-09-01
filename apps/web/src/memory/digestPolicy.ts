@@ -7,7 +7,7 @@ import type { MemoryDigestPolicy, MemorySessionDigest } from "../lib/types";
 
 export const DIGEST_POLICY_HINT: Record<MemoryDigestPolicy, string> = {
   newest:
-    "The <prior_sessions> digest the agent sees each turn carries only the newest few (token-capped; background sessions excluded) — badged rows are stored but not currently in it.",
+    "The <prior_sessions> digest the agent sees each turn carries only the newest few (token-capped; background sessions excluded) — badged rows are stored but not currently in it. A listed row can still shed under the per-turn context budget; the Injections panel is what a given turn actually received.",
   relevant:
     "The digest is set to relevant: each turn lists only the sessions matching what was just asked, so there is no fixed window to badge — every summary here is reachable.",
   off: "The automatic digest is off: none of these are injected. The agent reaches them on demand with session_search and recall_session.",

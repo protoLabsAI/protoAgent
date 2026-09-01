@@ -1417,13 +1417,14 @@ export type ReviewState = "confirmed" | "pending" | "rejected";
 export type MemoryHotChunk = KnowledgeChunk & { injecting?: boolean };
 
 // Memory inspector (ADR 0069 D7) — the delivery-layer audit surface.
-// One session-summary digest row (GET /api/memory/sessions) — the same
-// derivation the <prior_sessions> digest injects, so the list can't drift
-// from what the agent is actually told.
+
 // How the <prior_sessions> digest is chosen each turn (`context.prior_sessions`,
 // ADR 0108 D9). Absent on an older backend → treat as "newest".
 export type MemoryDigestPolicy = "newest" | "relevant" | "off";
 
+// One session-summary digest row (GET /api/memory/sessions) — the same
+// derivation the <prior_sessions> digest injects, so the list can't drift
+// from what the agent is actually told.
 export type MemorySessionDigest = {
   session_id: string;
   timestamp: string;

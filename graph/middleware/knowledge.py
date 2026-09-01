@@ -122,7 +122,6 @@ class KnowledgeMiddleware(AgentMiddleware):
         # directly keeps the legacy rendered-block path).
         self._prior_sessions_pool: list | None = None
         self._prior_sessions_dir_exists: bool = True
-        self._prior_sessions_max_tokens: int = 2000
         self._prior_sessions_max: int = 10  # entries the digest SHOWS (the pool holds one spare)
         # ADR 0108 D2: the per-turn projection is composed in before_agent and
         # delivered ephemerally via wrap_model_call (request.override) so it
@@ -193,7 +192,12 @@ class KnowledgeMiddleware(AgentMiddleware):
 
         ``exclude_session_id`` keeps the caller's own summary out of the RENDERED
         block (ADR 0108 D9). It DEFAULTS to the ambient tracing session — the same
-        chain the summary writer keys on — so this public seam is safe by default:
+        chain the summary writer keys on — which makes this public seam safe
+        WHEREVER a session context is bound. It is a default, not a guarantee:
+        with no tracing context (a background thread, an operator route, inside a
+        tool body) it resolves to "" and the digest is unfiltered, so a caller who
+        knows its session id should pass it. The composer always does.
+        Concretely:
         a fork or plugin calling it mid-turn gets the guarantee the composer has,
         instead of the leak #3252 fixed. Pass ``""`` for a deliberately neutral
         digest; that is what the shared cache primer does, since a block cached
@@ -223,7 +227,6 @@ class KnowledgeMiddleware(AgentMiddleware):
         # re-renders per call while the disk read stays TTL-cached.
         self._prior_sessions_pool = list(pool)
         self._prior_sessions_dir_exists = exists
-        self._prior_sessions_max_tokens = max_tokens
         self._prior_sessions_max = max_sessions
         shown = [e for e in pool if e.session_id != exclude_session_id] if exclude_session_id else pool
         res = finish_digest(shown[:max_sessions], max_tokens, dir_exists=exists)

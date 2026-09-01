@@ -81,7 +81,6 @@ export function MemorySurface() {
 
 // ── Sessions — the summaries behind the <prior_sessions> digest ───────────────
 
-
 function SessionsPanel({ onShowInjections }: { onShowInjections: (sid: string) => void }) {
   const qc = useQueryClient();
   const toast = useToast();
@@ -140,7 +139,12 @@ function SessionsPanel({ onShowInjections }: { onShowInjections: (sid: string) =
         />
       ) : (
         <ul className="playbook-list memory-list">
-          {sessions.map((s) => (
+          {sessions.map((s) => {
+            // Which badge (if any) this row earns under the active policy — see
+            // digestPolicy.ts: the viewed chat is excluded by design, and an absent
+            // in_digest means unknown, never "excluded".
+            const badge = sessionBadge(s, policy);
+            return (
             <li key={s.session_id} className="playbook-card memory-row">
               <button
                 type="button"
@@ -151,17 +155,11 @@ function SessionsPanel({ onShowInjections }: { onShowInjections: (sid: string) =
                 <span className="memory-row-title">
                   <Badge status="neutral">{s.surface}</Badge>
                   <code>{s.session_id}</code>
-                  {/* Which badge (if any) this row earns under the active policy —
-                      see digestPolicy.ts: the viewed chat is excluded by design, and an
-                      absent in_digest means unknown, never "excluded". */}
-                  {(() => {
-                    const badge = sessionBadge(s, policy);
-                    return badge ? (
-                      <span title={badge.title}>
-                        <Badge status={badge.tone}>{badge.label}</Badge>
-                      </span>
-                    ) : null;
-                  })()}
+                  {badge ? (
+                    <span title={badge.title}>
+                      <Badge status={badge.tone}>{badge.label}</Badge>
+                    </span>
+                  ) : null}
                 </span>
                 <span className="memory-row-topic">{s.topic || "(no user message)"}</span>
                 <span className="memory-row-meta">
@@ -192,7 +190,8 @@ function SessionsPanel({ onShowInjections }: { onShowInjections: (sid: string) =
                 </Button>
               </span>
             </li>
-          ))}
+            );
+          })}
         </ul>
       )}
       <ConfirmDialog
