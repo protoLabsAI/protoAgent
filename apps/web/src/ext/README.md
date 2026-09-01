@@ -61,7 +61,7 @@ path.
 
 ```tsx
 import { BarChart3 } from "lucide-react";
-import { registerPaletteCommand, registerPaletteSource } from "./index";
+import { registerPaletteCommand, registerPaletteCommands, registerPaletteSource } from "./index";
 
 registerPaletteCommand({
   id: "my-dashboard.open",       // stable id — dedup key, LAST registration of an id wins
@@ -77,8 +77,39 @@ registerPaletteCommand({
 
 Gates are **read** at render (`visiblePaletteCommands`), never at registration — developer flags
 fail closed while `/api/flags` is in flight, so a row filtered at registration would stay hidden
-forever. For rows that track live data (or a condition `flag`/`hostOnly` can't express), register a
-**source** instead:
+forever.
+
+### A live list of rows
+
+For a list that changes while the console runs, register the whole thing as a **block** and
+re-register it when your data moves:
+
+```tsx
+const rows = () => openTabs().map((t) => ({
+  id: `my-fork:tab:${t.id}`,
+  label: t.title,
+  group: "Tabs",
+  run: (ctx) => { focusTab(t.id); ctx.close(); },
+}));
+
+let off = registerPaletteCommands(rows());
+myStore.subscribe(() => {
+  if (unchanged()) return;        // your store probably notifies far more often than the list moves
+  const stale = off;              // new block first, old handle second: no row ever blinks out
+  off = registerPaletteCommands(rows());
+  stale();
+});
+```
+
+`registerPaletteCommands` is one version bump for the whole block, re-inserts it as a unit in the
+order you hand in (so it renders under one group header, and a reordered list really reorders), and
+its unregister removes only the rows it still owns — so the refresh above deletes exactly what went
+away. Core's own list is exactly this shape: `app/chatTabPalette.ts` is a row per open chat tab,
+subscribed to the chat store. Read it when yours needs one to copy.
+
+### …and when you can't be notified
+
+Only when nothing can tell you your data moved, register a **source** — rows computed at read time:
 
 ```tsx
 registerPaletteSource(() => openTabs().map((t) => ({
@@ -94,9 +125,24 @@ called *when your data changes*: nothing watches it. A row that changes while th
 and untouched appears on the next keystroke.) That is why a source has to be **cheap and
 synchronous**: no fetches, no store writes, no `async`. Keep it to mapping state you already have.
 
+**Prefer the block whenever you have the choice.** A source is served through a
+`CommandProvider`, which the palette debounces by 120ms — and for that window the *previous*
+query's rows are still on screen, because provider rows are ordered but never re-filtered (that is
+on purpose: a source is usually a remote or fuzzy search, and re-filtering would delete the hits it
+exists to contribute). So for a beat after every keystroke the palette lists rows the query
+excludes, and if nothing else matches, Enter runs one. Statics have none of that: they are
+client-filtered per keystroke with nothing retained, and ranked in the same pass as every other row
+rather than appended after it. Core moved its chat rows off the source path for exactly this
+reason.
+
+A source's row is also **built at read time and run a keystroke later**, so whatever it points at
+can be gone by the time the operator hits Enter. Re-check it where you act on it, not where you
+build the row — core's chat rows re-validate the session id before switching tabs, because the
+store they hand it to does not.
+
 A broken source is contained: it is skipped, the sources registered after it still run, and the
 palette keeps every other row. That covers a `throw` **and** a return that isn't an array — an
 `async` source (which returns a Promise), an id-keyed object, `false` for "nothing to show" — since
 the seam is a build-time edge where a fork's own mistake typechecks.
 
-Both return an unregister fn, so a feature can withdraw its commands.
+All three return an unregister fn, so a feature can withdraw its commands.

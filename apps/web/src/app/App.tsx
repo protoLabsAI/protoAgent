@@ -92,6 +92,7 @@ import { buildViews } from "../lib/viewRegistry";
 import { applyNavIntent, openView, useForwardedPaletteNotices, usePaletteRegistry } from "./usePaletteRegistry";
 import type { NavIntent } from "./usePaletteRegistry";
 import { pluginCommandSources } from "./pluginPaletteCommands";
+import "./chatTabPalette"; // core's live ⌘K rows: one per open chat tab (side effect)
 import { PaletteChat } from "./PaletteChat";
 import { CORE_SURFACES } from "./coreSurfaces";
 import { listen } from "../lib/desktop";

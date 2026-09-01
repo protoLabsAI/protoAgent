@@ -477,6 +477,41 @@ describe("selection follows the COMMAND, not the index", () => {
     expect(selected()).toContain("B");
   });
 
+  it("RUNS the row the operator selected after provider rows land, not row 0", async () => {
+    // The claim three palette reviews raised, in the operator's terms: "arming a provider
+    // makes ⌘K reset the selection, so Enter runs the wrong command." It was a DS
+    // `commandsView` defect — `useEffect(() => setSel(0), [filtered.length])` — and this view
+    // replaced it, so the guarantee is asserted HERE, at the root, rather than worked around
+    // by each feature that arms a provider (#3290's chat rows were the first to hit it).
+    //
+    // Separate from the test above on purpose: that one pins the HIGHLIGHT, and a highlight
+    // is only a picture. This pins the thing the operator actually loses — which command
+    // runs — and it lands the rows in a batch that changes the row COUNT, which is the exact
+    // input the old reset keyed on.
+    const ran: string[] = [];
+    let resolveRows: (c: Command[]) => void = () => {};
+    const registry = createRankedPaletteRegistry();
+    registry.registerCommands(
+      ["A", "B", "C"].map((l) => cmd({ id: l, label: l, run: () => ran.push(l) })),
+    );
+    registry.registerProvider({
+      id: "late",
+      getCommands: () => new Promise<Command[]>((res) => { resolveRows = res; }),
+    });
+    mountPalette(registry);
+
+    press("ArrowDown"); // the operator picks B while the provider is still in flight
+    expect(selected()).toContain("B");
+
+    await act(async () => {
+      resolveRows(["L1", "L2", "L3"].map((l) => cmd({ id: l, label: l, run: () => ran.push(l) })));
+      await Promise.resolve();
+    });
+
+    press("Enter");
+    expect(ran).toEqual(["B"]); // not "A" — where a count-keyed reset would have left it
+  });
+
   it("falls back to the first row when the selected command LEAVES the list", () => {
     // The other half of the same rule: preserving the selection must not strand the highlight
     // on a row that no longer exists, or `sel` derives to 0 while `selId` points at nothing.

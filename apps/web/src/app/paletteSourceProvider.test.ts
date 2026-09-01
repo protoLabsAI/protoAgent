@@ -163,8 +163,10 @@ describe("registerPaletteSource → the DS read-time provider", () => {
   });
 
   it("contains a broken source instead of wedging the palette on 'Searching…'", () => {
-    // A sync throw out of `getCommands` escapes into the DS's `Promise.allSettled` callback
-    // as an unhandled rejection, and the commands view never clears its loading state.
+    // A sync throw out of `getCommands` escapes into the root view's `Promise.allSettled`
+    // callback as an unhandled rejection, and the view never clears its loading state. The
+    // view contains that too now (rootView.tsx), but core's own provider still guards itself:
+    // this is the seam's half of the contract, not a second copy of the view's.
     const provider = paletteSourceProvider(() => {
       throw new Error("flags blew up");
     }, true);

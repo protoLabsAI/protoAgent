@@ -461,10 +461,12 @@ export function usePaletteRegistry(
   // otherwise stay hidden forever), and a fork module can register (or withdraw) after the
   // first render — which is what the registry's version counter reports. A keybinding
   // override re-labels the row that advertises it. Each feeds the effect below as a
-  // dependency. The fourth input — a dynamic source's rows changing with the live data
-  // behind them — deliberately does NOT: nothing observes that data, so no dependency could
-  // track it. Those rows go through `paletteSourceProvider` instead, which the root view
-  // re-invokes per read; the effect only decides WHETHER to wire it.
+  // dependency. A live BLOCK of statics rides the same counter: its owner re-registers the
+  // block when its data moves (core's chat rows subscribe to the chat store), so the bump
+  // that re-runs this effect IS the data change. Only a SOURCE's rows are outside that —
+  // nothing observes their data, so no dependency could track it. Those rows go through
+  // `paletteSourceProvider` instead, which the root view re-invokes per read; the effect only
+  // decides WHETHER to wire it.
   const seamVersion = useSyncExternalStore(
     subscribePaletteCommands,
     paletteCommandsVersion,
@@ -696,8 +698,10 @@ export function usePaletteRegistry(
       // The GATED read: a `flag`-off or (off-host) `hostOnly` command is omitted, exactly as
       // a gated Settings section is (`visibleSections`). Gating here rather than at
       // registration is what lets a late `/api/flags` answer reveal the row.
-      // STATICS ONLY — a fixed list is safe to snapshot. Source rows would freeze here; they
-      // take the read-time provider path below instead.
+      // STATICS ONLY — safe to snapshot BECAUSE this effect re-runs on `seamVersion`, so a
+      // live block re-registering (core's chat rows) is itself the signal to re-snapshot.
+      // Source rows have no such signal and would freeze here; they take the read-time
+      // provider path below instead.
       ...visiblePaletteCommands(flagOn, isHostConsole(), "static").map(toDsCommand),
     ]);
     // The chat's own verbs — the client slash commands and the server's user-facing skills
@@ -711,11 +715,23 @@ export function usePaletteRegistry(
     const offChatRows = chatRows.length
       ? registry.registerCommands(chatRows.filter((c) => !c.flag || flagOn(c.flag)).map(toDsCommand))
       : undefined;
-    // Dynamic sources, served per palette read. Wired only when a fork registered one: the
-    // root view shows its "Searching…" spinner whenever ANY provider declares
-    // `getCommands`, and core ships zero sources — so an unconditional provider would put a
-    // 120ms spinner in front of every keystroke in the default console. Registering a source
-    // bumps `seamVersion`, which re-runs this effect and wires the provider then.
+    // Dynamic sources, served per palette read. Wired only when a source actually exists,
+    // and core registers none — its one live list (the open chat tabs) is observable, so it
+    // re-registers as a block of statics off a store subscription instead
+    // (`app/chatTabPalette.ts`), which is the better half of the seam whenever the data can
+    // be observed at all.
+    //
+    // What the gate spares the default console is the PROVIDER PATH's two remaining costs,
+    // both of which are contracts rather than bugs — the root view is ours now, so the DS
+    // `commandsView` defects that used to be listed here (a selection reset on a row-count
+    // change, an Enter aimed at row 0) are gone at the root; see `rootView.tsx`. What is
+    // left: the root view arms `loading` and debounces `getCommands` 120ms for any provider
+    // declaring it, and for that window the PREVIOUS query's provider rows are still on
+    // screen — provider rows are ordered, never re-filtered, deliberately, so a remote or
+    // fuzzy source's hits are not silently deleted. A row whose match is plain substring
+    // pays that price for nothing. A fork with genuinely unobservable rows still gets the
+    // path. Registering a source bumps `seamVersion`, which re-runs this effect and wires the
+    // provider then.
     const offSources = hasPaletteSources()
       ? registry.registerProvider(paletteSourceProvider(flagOn, isHostConsole()))
       : undefined;

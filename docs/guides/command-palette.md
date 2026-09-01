@@ -127,21 +127,30 @@ Settings ▸ Keyboard, not with the in-app chords above.
   (A search the store itself errors on is the exception: that route answers `200` with an
   empty list, so it does read as "no matches" — check the agent log if a term you know is
   there returns nothing.)
+- **Chats** — every open chat tab, by title, so you land on the conversation about the
+  release notes by typing "release" instead of counting tab positions. Type the name and press
+  Enter; there is nothing to wait for, and the rows narrow with every keystroke like the rest
+  of the list. The list follows the tab strip as it moves: a chat you close drops out, a new
+  one appears, and a chat renames itself once its first message gives it a title. The one
+  you're on is marked *current* (and still runs — that's how you get back to chat from
+  Knowledge or Studio), and the first nine carry their `⌘1`–`⌘9` jump shortcut, rendered live
+  so it keeps up with a rebind. Typing what a chat *is* finds them too — "switch", "jump",
+  "tabs", "sessions", "threads", or "incognito" for the memory-free ones.
 
 ## Two lists, not one
 
 The palette shows a **short** list when you haven't typed anything: what you ran recently
-first, then a curated root (agents, plugin views, commands). Every rail surface is
+first, then a curated root (agents, plugin views, commands, chats). Every rail surface is
 deliberately *not* in that list — there are too many of them to be useful before you've
 said what you want.
 
 Every group is guaranteed a row before any one of them takes a second, so neither a stack of
-plugin views nor a full block of recents can drop a whole *section* off the list. On a first
-run there's no history competing for the space and you get all of **Open…**, **Settings** and
-the deep links; once your recents have taken half the list, the commands section is down to
-**Open…** — one row rather than none, which is the part that matters, since **Open…** is where
-browsing starts. Everything else is a keystroke away. Any slots left over are filled in
-registration order.
+plugin views, a wall of open chats, nor a full block of recents can drop a whole *section* off
+the list. On a first run there's no history competing for the space and you get all of
+**Open…**, **Settings** and the deep links; once your recents have taken half the list, the
+commands section is down to **Open…** — one row rather than none, which is the part that
+matters, since **Open…** is where browsing starts. Everything else is a keystroke away. Any
+slots left over are filled in registration order.
 
 The moment you type, the list becomes the **whole** corpus — every surface included, no
 cap — ordered by how well each row matches:

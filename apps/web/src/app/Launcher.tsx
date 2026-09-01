@@ -18,6 +18,7 @@ import { useToast } from "@protolabsai/ui/overlays";
 import { forwardPaletteNotice, setPaletteNavigator, usePaletteRegistry } from "./usePaletteRegistry";
 import type { InlinePluginView } from "./usePaletteRegistry";
 import { pluginCommandSources } from "./pluginPaletteCommands";
+import "./chatTabPalette"; // core's live ⌘K rows: one per open chat tab (side effect)
 import { PaletteChat } from "./PaletteChat";
 import { CORE_SURFACES } from "./coreSurfaces";
 import { buildViews } from "../lib/viewRegistry";

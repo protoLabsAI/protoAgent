@@ -159,9 +159,15 @@ test("the empty list keeps every group, even once recents have taken most of it"
     await expect(page.locator(PANEL)).toHaveCount(0);
   }
   await openPalette(page);
-  // Recents lead, and EVERY group still contributes — Commands last, and Commands is the one
-  // that vanished. Asserting the whole header list, not just the first: "recents are on top"
-  // was already true when the bug was live.
+  // Recents lead, and EVERY group still contributes — Commands, and Commands is the one that
+  // vanished. Asserting the whole header list, not just the first: "recents are on top" was
+  // already true when the bug was live.
+  //
+  // Chats is the fifth group and it is the reason this list is worth re-asserting rather than
+  // relaxing: #3290 registers a row per open chat tab, so a group joined the root AFTER the
+  // guarantee was written. Five groups against five post-recents slots is the tightest the
+  // quota has ever been squeezed — every group is down to exactly its guaranteed first row
+  // plus one — which makes this the strongest form of the assertion, not a weakened one.
   await expect(page.locator(`${PANEL} .pl-cmdk-commands__group`)).toHaveText([
     "Recent",
     "Agents",
@@ -173,6 +179,7 @@ test("the empty list keeps every group, even once recents have taken most of it"
     // oldest off the bottom. Every group here contributes exactly one row.
     "Chat",
     "Skills",
+    "Chats",
   ]);
   // What the guarantee is worth is ONE row per group, not a named row: with four recents the
   // Commands group is down to its first member. `Open…` is that member and it is the row the
