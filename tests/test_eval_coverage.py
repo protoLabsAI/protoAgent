@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -536,7 +537,10 @@ def test_continuity_cases_seed_and_purge_the_same_sessions():
     """A leaked fixture is a poisoned next run: the summaries a case seeds must be
     the summaries it removes."""
     cases = [c for c in TASKS if c.get("category") == "continuity"]
-    assert len(cases) >= 5, "the #3186 fixture set is direct/vague recall, update, noise, abstention"
+    assert len(cases) >= 7, (
+        "the #3186 fixture set is direct/vague recall, update, noise, abstention, "
+        "identity confusion and the expansion path"
+    )
     for c in cases:
         seeded = {s["session_seed"]["session_id"] for s in c["setup"] if "session_seed" in s}
         purged = {s["session_purge"]["session_id"] for s in c.get("teardown", []) if "session_purge" in s}
@@ -546,15 +550,47 @@ def test_continuity_cases_seed_and_purge_the_same_sessions():
         assert c.get("verify_rubric") or c.get("expected_patterns") or c.get("forbidden_patterns")
 
 
+def test_empty_expected_tools_actually_asserts_that_nothing_fired():
+    """`expected_tools: []` is documented as "no tool may fire" and was vacuous:
+    `assert_tools_fired` iterates the EXPECTED names, so an empty list produced no
+    "missing" and passed however many tools the agent had called. Every abstention
+    case in the suite was passing for free."""
+    fired = [{"tool": "session_search", "success": True}]
+    assert verify.assert_tools_fired(fired, [])[0] is True  # the old, vacuous path
+    assert verify.assert_no_tools_fired(fired)[0] is False  # what the runner now uses
+    assert verify.assert_no_tools_fired([])[0] is True
+
+
 def test_noise_case_asserts_both_halves_of_irrelevant_memory_use():
     """The bias probe is the one that answers "does the digest cost us anything?" —
-    it has to check that no tool fired AND that no unrelated topic leaked."""
+    it has to check that the retrieval tools stayed cold AND that no unrelated topic
+    leaked into the reply."""
     case = {c["id"]: c for c in TASKS}["continuity_unrelated_noise"]
-    assert case["expected_tools"] == []  # explicit empty list = nothing may fire
-    assert case["forbidden_patterns"]
+    assert case["expected_tools"] == []
+    # Belt and braces: the named-tool assertion is the one that can't be read two ways.
+    assert {"session_search", "recall_session"} <= set(case["forbidden_tools"])
     topics = " ".join(s["session_seed"]["topic"] for s in case["setup"])
     for pat in case["forbidden_patterns"]:
         assert pat in topics, f"forbidden pattern {pat!r} isn't in any seeded session"
+
+
+def test_continuity_rubrics_cannot_be_satisfied_by_a_refusal():
+    """A 0.67 threshold over three criteria passes on 2/3 — and "I can't see your
+    other sessions" satisfies both negative criteria vacuously, which is exactly the
+    behaviour the fixtures exist to detect."""
+    by_id = {c["id"]: c for c in TASKS}
+    for cid in ("continuity_direct_recall", "continuity_vague_recall", "continuity_identity_confusion"):
+        rubric = by_id[cid]["verify_rubric"]
+        needed = rubric["threshold"] * len(rubric["criteria"])
+        assert needed > len(rubric["criteria"]) - 1, f"{cid} passes while missing a criterion"
+
+
+def test_expansion_path_case_requires_a_retrieval_tool():
+    """Acceptance box 7 of #3186 — session_search/recall_session stay the way a past
+    session is expanded — is only evidence if a case actually watches them fire."""
+    case = {c["id"]: c for c in TASKS}["continuity_expansion_path"]
+    assert set(case["expected_any_tools"]) == {"recall_session", "session_search"}
+    assert case["expected_patterns"]  # …and that the expansion carried real content
 
 
 def test_sweep_collects_the_seed_steps_for_the_selected_cases():
@@ -567,6 +603,50 @@ def test_sweep_collects_the_seed_steps_for_the_selected_cases():
     ]
     # A category with no session fixtures seeds nothing (and must not raise).
     assert sweep._session_seed_steps("simple", None) == []
+
+
+def test_sweep_resolves_an_arm_store_through_instance_paths(tmp_path, monkeypatch):
+    """Joining ~/.protoagent/<instance>/memory by hand is right only on a plain host
+    install: PROTOAGENT_HOME (the desktop) makes the instance root that directory
+    itself. Getting it wrong fails SILENTLY — fixtures land where the arm never
+    looks, seeding reports success, and the A/B measures an empty digest."""
+    from infra.paths import instance_paths, reset_instance_paths
+
+    from evals import sweep
+
+    monkeypatch.setenv("PROTOAGENT_HOME", str(tmp_path / "box"))
+    monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
+    reset_instance_paths()
+
+    resolved = sweep._instance_memory_dir("eval-sweep-1-0")
+    # Whatever infra.paths says the arm will read — never a hand-joined
+    # ~/.protoagent/<instance>/memory, which is right only on a plain host install.
+    assert str(tmp_path / "box") in str(resolved)
+    assert "/.protoagent/eval-sweep-1-0/memory" not in str(resolved)
+    # …and the sweep process is left resolving exactly where it started.
+    assert "PROTOAGENT_INSTANCE" not in os.environ
+    assert instance_paths().store("memory") == resolved  # HOME is terminal: no per-arm isolation
+
+
+def test_sweep_refuses_to_seed_when_instances_cannot_be_isolated(tmp_path, monkeypatch, capsys):
+    """Under PROTOAGENT_HOME every instance resolves to ONE root, so arms would share
+    the operator's config and session memory — a confident matrix comparing a policy
+    against itself. Refuse instead."""
+    from evals import sweep
+
+    monkeypatch.setenv("PROTOAGENT_HOME", str(tmp_path / "box"))
+    rc = sweep.main(["--models", "fake/model", "--prior-sessions", "newest,off", "--category", "continuity"])
+    assert rc == 2
+    assert "cannot be isolated" in capsys.readouterr().err
+
+
+def test_sweep_selection_matches_the_runner_when_both_filters_are_given():
+    """--tasks X --category Y must seed the same cases it runs; an OR here would
+    seed one set and run another."""
+    from evals import sweep
+
+    both = sweep._session_seed_steps("continuity", "memory_abstention")
+    assert both == []  # memory_abstention is not a continuity case
 
 
 def test_sweep_seed_config_carries_the_policy(tmp_path, monkeypatch):

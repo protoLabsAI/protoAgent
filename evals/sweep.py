@@ -84,11 +84,32 @@ def _instance_dirs(instance: str) -> list[Path]:
 
 
 def _instance_memory_dir(instance: str) -> Path:
-    """Where that instance's session summaries live — the digest's source."""
-    return Path(os.path.expanduser("~/.protoagent")) / instance / "memory"
+    """Where that instance's session summaries live — the digest's source.
+
+    Resolved through ``infra.paths`` under the ARM's environment rather than
+    joined by hand (PROTO.md: never compute store paths yourself). The hand-rolled
+    ``~/.protoagent/<instance>/memory`` is right on a plain host install and wrong
+    everywhere else — ``PROTOAGENT_HOME`` (the desktop) makes the instance root
+    that directory itself, and ``PROTOAGENT_BOX_ROOT`` moves the whole tree. The
+    failure would have been silent: fixtures land where the arm never looks,
+    seeding reports success, and the A/B measures an empty digest.
+    """
+    from infra.paths import instance_paths, reset_instance_paths
+
+    previous = os.environ.get("PROTOAGENT_INSTANCE")
+    os.environ["PROTOAGENT_INSTANCE"] = instance
+    reset_instance_paths()  # the singleton caches the FIRST resolution
+    try:
+        return instance_paths().store("memory")
+    finally:
+        if previous is None:
+            os.environ.pop("PROTOAGENT_INSTANCE", None)
+        else:
+            os.environ["PROTOAGENT_INSTANCE"] = previous
+        reset_instance_paths()  # never leave this process pointed at the arm
 
 
-def _yaml_quoted(value: str):
+def _yaml_quoted(value: str) -> object:
     """A scalar that survives the dump as a STRING.
 
     ``off`` is the policy whose name YAML 1.1 also spells as the boolean False
@@ -142,17 +163,21 @@ def _seed_config_for(policy: str, ts: int, slug: str) -> Path | None:
 def _session_seed_steps(category: str | None, tasks: str | None) -> list[dict]:
     """Every ``session_seed`` setup step of the cases this run will execute.
 
-    Seeded BEFORE the arm boots for two reasons: the digest's pool is cached for
-    60 s per process (a post-boot write can be invisible for the first turns), and
-    an arm running with ``prior_sessions: off`` must still have the same summaries
-    on disk — that is the whole comparison.
+    Seeded before the arm boots — see ``_run_one_model``; an arm running with
+    ``prior_sessions: off`` needs the same summaries on disk either way, since
+    that is the whole comparison.
     """
+    from evals.runner import select_by_ids
+
     cases = json.loads((Path(__file__).parent / "tasks.json").read_text())
-    if tasks:
-        wanted = {t.strip() for t in tasks.split(",") if t.strip()}
-        cases = [c for c in cases if c.get("id") in wanted]
-    elif category:
+    # AND, exactly like the runner composes them (--tasks X --category Y runs the
+    # intersection). Filtering differently here would seed one set and run another.
+    if category:
         cases = [c for c in cases if c.get("category") == category]
+    if tasks:
+        cases, unknown = select_by_ids(cases, tasks)
+        for cid in unknown:
+            print(f"  ! --tasks names {cid!r}, which no selected case matches")
     steps: list[dict] = []
     for c in cases:
         for step in c.get("setup") or []:
@@ -195,7 +220,7 @@ def _run_one_model(
     label: str | None = None,
     prior_sessions: str | None = None,
     seed_steps: list[dict] | None = None,
-) -> list[dict]:
+) -> list[dict] | None:
     """Boot one agent on ``model`` and run the suite ``repeat`` times against
     it; return the list of report dicts (empty if the agent never came up).
 
@@ -221,7 +246,8 @@ def _run_one_model(
         env["PROTOAGENT_SEED_CONFIG"] = str(seed_cfg)
     # Fixtures land BEFORE boot: the digest pool is cached per process (60 s), so a
     # summary written after boot may be missing from the first turns' digest — which
-    # would quietly measure the cache instead of the policy.
+    # would quietly measure the cache instead of the policy.  (The one statement of
+    # this; the module docstring and docs/guides/evals.md point back here.)
     if seed_steps:
         mem = _instance_memory_dir(instance)
         err = verify.apply_setup(seed_steps, memory_dir=str(mem))
@@ -253,6 +279,11 @@ def _run_one_model(
 
         reports: list[dict] = []
         for run_i in range(repeat):
+            if seed_steps and run_i:
+                # Each case tears down what it seeded, so run 1 leaves an empty
+                # store behind. Re-seed between runs — by now the agent's 60 s
+                # pool cache has long expired, so the next turn re-reads the dir.
+                verify.apply_setup(seed_steps, memory_dir=str(_instance_memory_dir(instance)))
             suffix = f"-r{run_i + 1}" if repeat > 1 else ""
             report_path = _RESULTS_DIR / f"run-sweep-{ts}-{_slug(label)}{suffix}.json"
             cmd = [
@@ -408,11 +439,7 @@ def main(argv: list[str] | None = None) -> int:
             "separate arms — the #3186 A/B. Empty (default) = leave the config alone."
         ),
     )
-    p.add_argument(
-        "--no-seed-sessions",
-        action="store_true",
-        help="don't pre-seed the selected cases' session fixtures into each arm before boot",
-    )
+
     args = p.parse_args(argv)
 
     models = [m.strip() for m in args.models.split(",") if m.strip()]
@@ -421,20 +448,38 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     repeat = max(1, args.repeat)
 
+    from graph.middleware.memory import PRIOR_SESSION_POLICIES
+
     policies = [p.strip() for p in (args.prior_sessions or "").split(",") if p.strip()]
-    unknown = [p for p in policies if p not in ("newest", "relevant", "off")]
+    unknown = [p for p in policies if p not in PRIOR_SESSION_POLICIES]
     if unknown:
         sys.stderr.write(f"unknown prior_sessions policy: {', '.join(unknown)}\n")
         return 2
     # One arm per (model, policy). Without a policy axis an arm is just a model,
     # labelled exactly as before so existing reports keep their shape.
     arms = [(m, pol) for m in models for pol in (policies or [None])]
-    seed_steps = [] if args.no_seed_sessions else _session_seed_steps(args.category, args.tasks)
+    seed_steps = _session_seed_steps(args.category, args.tasks)
+
+    if os.environ.get("PROTOAGENT_HOME", "").strip() and (policies or seed_steps):
+        # PROTOAGENT_HOME is terminal: the instance root IS that directory, and
+        # PROTOAGENT_INSTANCE stops moving it. Arms would share one config and one
+        # memory store — the seed config of the last arm booted, fixtures written
+        # into the operator's OWN store, and a comparison of a policy against
+        # itself. Refuse rather than produce a confident, meaningless matrix.
+        sys.stderr.write(
+            "PROTOAGENT_HOME is set, which pins every instance to one root — sweep arms cannot be "
+            "isolated (they would share config and session memory). Unset it, or run the sweep on a "
+            "plain host install.\n"
+        )
+        return 2
 
     ts = int(time.time())
     model_runs: dict[str, list[dict]] = {}
     for i, (model, policy) in enumerate(arms):
-        label = model if policy is None else (policy if len(models) == 1 else f"{model} @ {policy}")
+        # The label rides `--model-label` into the report, and evals.report trends
+        # reports BY that label — so an arm always names its model, or a policy would
+        # show up in the model leaderboard as if it were one.
+        label = model if policy is None else f"{model} @ prior_sessions={policy}"
         runs = _run_one_model(
             model,
             port=args.port_base + i,

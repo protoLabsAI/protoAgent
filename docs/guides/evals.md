@@ -169,8 +169,11 @@ Both positive channels have an inverse:
   not be obeyed).
 - `forbidden_tools: ["…"]` — tools that must **not** fire, checked against the
   audit log. This is *selective* abstention: `expected_tools: []` asserts no
-  tool fired at all, while `forbidden_tools` lets unrelated tools fire and only
-  requires the named ones to stay cold — e.g. a plain calendar question may hit
+  tool fired at all (it does now — until #3186 it was checked by iterating the
+  *expected* names, so an empty list passed however many tools had fired, and
+  every abstention case in the suite was passing for free), while
+  `forbidden_tools` lets unrelated tools fire and only requires the named ones to
+  stay cold — e.g. a plain calendar question may hit
   the calendar tool but must not render a full daily brief. An errored attempt
   still counts as fired: reaching for the tool is the violation.
 
@@ -355,8 +358,13 @@ Two things worth knowing when you read a continuity result:
   `session_search` under **every** policy; what the digest changes is whether it
   knows there is something to reach for.
 - **The digest's pool is cached ~60 s per process.** Seed before the agent boots
-  (`evals.sweep` does this per arm) or you may measure a cold cache instead of
-  the policy.
+  (`evals.sweep` does this per arm, and again between `--repeat` runs, since each
+  case tears down what it seeded) or you may measure a cold cache instead of the
+  policy. Note the asymmetry this creates in a three-arm run: `relevant` bypasses
+  that cache by construction and `newest` does not, so the `relevant` arm sees a
+  fixture the instant it lands while `newest` can be up to a minute behind. It is
+  a property of the implementation, not of the harness — but read a
+  three-way result with it in mind.
 
 The policy itself is a sweep axis:
 

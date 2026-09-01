@@ -422,10 +422,9 @@
     "verify_rubric": {
       "criteria": [
         "The reply gives 90 days as the retention period",
-        "The reply does not present a different retention period as the decided one",
-        "The reply attributes it to the earlier session rather than to the current conversation"
+        "The reply attributes it to an earlier session rather than to the current conversation"
       ],
-      "threshold": 0.67
+      "threshold": 0.99
     },
     "teardown": [{"session_purge": {"session_id": "chat-eval-cont-retention"}}]
   },
@@ -436,19 +435,19 @@
     "name": "Vague recall: lists what other recent sessions were actually about",
     "setup": [
       {"session_seed": {
-        "session_id": "chat-eval-cont-retention",
+        "session_id": "chat-eval-vague-retention",
         "topic": "how long should we keep audit logs before rotating them out of the hot store?",
         "final_output": "Decided: audit logs are retained for 90 days.",
         "age_minutes": 400
       }},
       {"session_seed": {
-        "session_id": "chat-eval-cont-deploy-new",
+        "session_id": "chat-eval-vague-deploy",
         "topic": "move the deploy target off fly.io and onto render.com",
         "final_output": "Deploy target is now render.com.",
         "age_minutes": 300
       }},
       {"session_seed": {
-        "session_id": "chat-eval-cont-pricing",
+        "session_id": "chat-eval-vague-pricing",
         "topic": "rewrite the pricing page copy for the self-hosted tier",
         "final_output": "Draft copy agreed for the self-hosted tier.",
         "age_minutes": 200
@@ -459,14 +458,14 @@
       "criteria": [
         "The reply names at least two of: audit log retention, the deploy target move to render.com, the pricing page rewrite",
         "The reply does not invent session topics that were not listed",
-        "The reply is grounded in the prior-session record rather than guessing from the current conversation"
+        "The reply does not simply decline or say it cannot see other sessions"
       ],
-      "threshold": 0.67
+      "threshold": 0.99
     },
     "teardown": [
-      {"session_purge": {"session_id": "chat-eval-cont-retention"}},
-      {"session_purge": {"session_id": "chat-eval-cont-deploy-new"}},
-      {"session_purge": {"session_id": "chat-eval-cont-pricing"}}
+      {"session_purge": {"session_id": "chat-eval-vague-retention"}},
+      {"session_purge": {"session_id": "chat-eval-vague-deploy"}},
+      {"session_purge": {"session_id": "chat-eval-vague-pricing"}}
     ]
   },
   {
@@ -476,20 +475,20 @@
     "name": "Superseded across sessions: the newer session wins",
     "setup": [
       {"session_seed": {
-        "session_id": "chat-eval-cont-deploy-old",
+        "session_id": "chat-eval-update-deploy-old",
         "topic": "set up the deploy target on fly.io",
         "final_output": "Deploy target is fly.io.",
         "age_minutes": 4320
       }},
       {"session_seed": {
-        "session_id": "chat-eval-cont-deploy-new",
+        "session_id": "chat-eval-update-deploy-new",
         "topic": "move the deploy target off fly.io and onto render.com",
         "final_output": "Deploy target is now render.com; the fly.io app is decommissioned.",
         "age_minutes": 60
       }}
     ],
     "prompt": "Where does this project deploy to right now?",
-    "expected_patterns": ["render"],
+    "expected_patterns": ["render.com"],
     "verify_rubric": {
       "criteria": [
         "The reply says the current deploy target is render.com",
@@ -498,8 +497,8 @@
       "threshold": 0.99
     },
     "teardown": [
-      {"session_purge": {"session_id": "chat-eval-cont-deploy-old"}},
-      {"session_purge": {"session_id": "chat-eval-cont-deploy-new"}}
+      {"session_purge": {"session_id": "chat-eval-update-deploy-old"}},
+      {"session_purge": {"session_id": "chat-eval-update-deploy-new"}}
     ]
   },
   {
@@ -529,6 +528,7 @@
     ],
     "prompt": "Explain in two sentences what a database index does and when it hurts.",
     "expected_tools": [],
+    "forbidden_tools": ["session_search", "recall_session", "memory_recall"],
     "forbidden_patterns": ["sourdough", "pannier", "invoice"],
     "teardown": [
       {"session_purge": {"session_id": "chat-eval-cont-noise-sourdough"}},
@@ -559,5 +559,48 @@
       "threshold": 0.67
     },
     "teardown": [{"session_purge": {"session_id": "chat-eval-cont-offsite"}}]
+  },
+  {
+    "id": "continuity_identity_confusion",
+    "category": "continuity",
+    "kind": "ask",
+    "name": "A prior session is background, not this conversation",
+    "setup": [
+      {"session_seed": {
+        "session_id": "chat-eval-cont-friday",
+        "topic": "agree the cut-off for the Friday release",
+        "reply": "Holding the branch Thursday noon.",
+        "final_output": "Agreed: branch freezes Thursday noon, release Friday.",
+        "age_minutes": 90
+      }}
+    ],
+    "prompt": "Remind me what you and I have discussed so far in this conversation.",
+    "verify_rubric": {
+      "criteria": [
+        "The reply makes clear that this conversation has no earlier discussion in it yet",
+        "The reply does not present the Friday release cut-off as something discussed in THIS conversation"
+      ],
+      "threshold": 0.99
+    },
+    "teardown": [{"session_purge": {"session_id": "chat-eval-cont-friday"}}]
+  },
+  {
+    "id": "continuity_expansion_path",
+    "category": "continuity",
+    "kind": "ask",
+    "name": "Expanding a past session goes through the retrieval tools",
+    "setup": [
+      {"session_seed": {
+        "session_id": "chat-eval-cont-incident",
+        "topic": "write up the incident review for the checkout outage",
+        "reply": "Root cause was the connection pool ceiling.",
+        "final_output": "Incident review filed: the checkout outage was a connection-pool ceiling, mitigated by raising it to 200.",
+        "age_minutes": 240
+      }}
+    ],
+    "prompt": "Pull up the session where I wrote the checkout outage incident review and tell me the root cause we recorded.",
+    "expected_any_tools": ["recall_session", "session_search"],
+    "expected_patterns": ["connection pool"],
+    "teardown": [{"session_purge": {"session_id": "chat-eval-cont-incident"}}]
   }
 ]

@@ -266,17 +266,24 @@ async def _run_prompt_case(
 
         problems: list[str] = []
 
-        # Tool firing assertions. ``expected_tools is not None`` so an
-        # explicit empty list asserts that *no* tools fired (abstention
-        # cases). Missing key skips the audit check entirely.
+        # Tool firing assertions. ``expected_tools is not None`` so an explicit
+        # empty list asserts that *no* tools fired (abstention cases); a missing
+        # key skips the audit check entirely. The empty case takes a DIFFERENT
+        # path on purpose: `assert_tools_fired(entries, [])` iterates the expected
+        # names, so it returned True however many tools the agent had called —
+        # every abstention case in this suite was passing vacuously. And absence
+        # can't be awaited, so there is no polling deadline for it.
         expected_tools = case.get("expected_tools")
         if expected_tools is not None:
             require_success = case.get("tool_outcome", "success") == "success"
-            _entries, passed, detail = await _await_audit_assertion(
-                since,
-                expected_tools,
-                require_success=require_success,
-            )
+            if not expected_tools:
+                passed, detail = verify.assert_no_tools_fired(verify.audit_entries_since(since))
+            else:
+                _entries, passed, detail = await _await_audit_assertion(
+                    since,
+                    expected_tools,
+                    require_success=require_success,
+                )
             if not passed:
                 problems.append(detail)
 

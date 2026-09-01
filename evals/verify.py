@@ -84,6 +84,25 @@ def audit_entries_since(ts_iso: str) -> list[dict]:
     return out
 
 
+def assert_no_tools_fired(audit_entries: list[dict]) -> tuple[bool, str]:
+    """Confirm NOTHING fired — what ``expected_tools: []`` has always claimed to
+    mean, and never did.
+
+    ``assert_tools_fired(entries, [])`` loops over the expected names, so an empty
+    list produced no "missing" and returned True no matter what the agent called:
+    every abstention case in the suite was passing vacuously. Absence can't be
+    polled for (the turn is already terminal when this runs), so there is no
+    deadline loop here — same reasoning as ``assert_tools_not_fired``.
+
+    Like every audit assertion, this reads a time-windowed slice of a SHARED log:
+    it assumes the agent under test is otherwise quiet for the case's duration.
+    """
+    fired = sorted({e.get("tool", "?") for e in audit_entries})
+    if fired:
+        return False, f"expected NO tool calls, saw: {', '.join(fired)}"
+    return True, "no tools fired"
+
+
 def assert_tools_fired(
     audit_entries: list[dict],
     expected: list[str],
@@ -320,7 +339,7 @@ def apply_setup(steps: list[dict], *, memory_dir: str | None = None) -> str | No
     return None
 
 
-def apply_teardown(steps: list[dict]) -> None:
+def apply_teardown(steps: list[dict], *, memory_dir: str | None = None) -> None:
     """Best-effort teardown. Never raises so a setup failure or assertion
     failure doesn't poison subsequent cases.
 
@@ -329,6 +348,9 @@ def apply_teardown(steps: list[dict]) -> None:
     - ``kb_delete_by_content``: ``{contains}``
     - ``kb_delete_by_heading``: ``{domain, heading}``
     - ``session_purge``: ``{session_id}``
+
+    ``memory_dir`` mirrors :func:`apply_setup` — whatever store the fixtures were
+    seeded into is the one they have to be removed from.
     """
     store = None
     for step in steps:
@@ -341,6 +363,6 @@ def apply_teardown(steps: list[dict]) -> None:
                     store = store or _kb_store()
                     store.delete_by_heading(args["domain"], args["heading"])
                 elif kind == "session_purge":
-                    purge_session(args["session_id"])
+                    purge_session(args["session_id"], memory_dir=memory_dir)
             except Exception as exc:  # pragma: no cover
                 log.debug("[verify] teardown step %s failed: %s", kind, exc)
