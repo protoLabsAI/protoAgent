@@ -541,11 +541,14 @@ def _parse_command_action(raw, plugin_id: str, *, command_id: str, view_ids: set
         action = {"type": kind, "view": view}
         # `open_view` IS the inline morph (ADR 0057 §2C/§4 spell it
         # `{type: open_view, view, inline: true}`, and `navigate` is the non-inline half),
-        # so `inline` is normalized ON rather than read. A manifest that merely omitted it
-        # would otherwise compile to an action the adapter's `isInlineView` filter skips,
-        # leaving its `ctx.enter(<view id>)` pointing at a palette view nobody registered —
-        # and the DS palette renders `null` for an unknown view id, so the whole palette
-        # blanks (until Escape pops the frame) instead of the command doing nothing.
+        # so `inline` is normalized ON rather than read: one spelling reaches the console
+        # whether or not the manifest wrote it. What this parser CANNOT promise is that the
+        # named view opted into the morph — that lives in `views[].palette`, which
+        # `_parse_views` keeps verbatim and never surfaces here — so the console adapter
+        # (#3294) checks the registered morph targets itself and sends a view that never
+        # opted in to its rail instead. Without that check the compiled `ctx.enter(<view
+        # id>)` would name a palette view nobody registered, and the DS renders `null` for
+        # an unknown view id: the whole palette blanks until Escape pops the frame.
         if kind == "open_view":
             action["inline"] = True
         return action

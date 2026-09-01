@@ -227,6 +227,11 @@ Backend: add `_parse_commands` next to `_parse_views` (`graph/plugins/manifest.p
 > - **`open_view` falls back to `navigate`** when the target view never opted into the inline
 >   morph through `views[].palette` — something `_parse_commands` cannot see, and `ctx.enter` on
 >   an unregistered view id blanks the whole palette.
+> - **A `tool` row on an enabled plugin that failed to LOAD ships disabled**, with the reason
+>   where its hint goes. That route is served by the plugin's own router, so there is nothing to
+>   call; `emit` (the core bus route) and the view actions (the view host shows the loader's real
+>   error) stay live. Disabling rather than hiding follows the Fleet Room command's convention —
+>   a row that explains itself is discoverable, a row that vanishes reads as never shipped.
 >
 > `provider` rows are **not** compiled: the §8 provider budget (per-query timeout/cancel,
 > per-plugin result cap) is still open, so a provider-only entry contributes no row.

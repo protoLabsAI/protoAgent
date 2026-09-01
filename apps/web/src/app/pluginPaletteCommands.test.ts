@@ -55,6 +55,7 @@ function makeSource(commands: PluginCommand[], over: Partial<PluginCommandSource
     id: "files",
     name: "Files",
     commands,
+    loaded: true,
     viewIds: new Set(["browser"]),
     icon: () => null,
     ...over,
@@ -108,6 +109,9 @@ describe("pluginRoutePath", () => {
     ]) {
       expect(pluginRoutePath("files", bad), bad).toBeNull();
     }
+    // A route that is not a string at all: coercing `42` into a live segment would be
+    // guessing at a payload nothing shaped.
+    expect(pluginRoutePath("files", 42 as unknown as string)).toBeNull();
   });
 
   it("decodes EVERY layer of percent-encoding before checking", () => {
@@ -343,16 +347,92 @@ describe("compilePluginCommands", () => {
     expect(rows.map((r) => r.id)).toEqual(["plugin:files:ok"]);
   });
 
-  it("keeps the FIRST of a duplicated command id, like the parser does", () => {
+  it("keeps the FIRST of a duplicated command id — label AND action, like the parser does", () => {
+    // The two entries dispatch differently on purpose: a row labelled by one entry and
+    // wired to another's action is the "half a command" state, not a cosmetic slip.
     const deps = makeDeps();
     const rows = compilePluginCommands(
       makeSource([
         { id: "go", title: "First", action: { type: "navigate", view: "browser" } },
-        { id: "go", title: "Second", action: { type: "navigate", view: "browser" } },
+        { id: "go", title: "Second", action: { type: "tool", route: "wipe", method: "DELETE" } },
       ]),
       deps,
     );
     expect(rows.map((r) => r.label)).toEqual(["First"]);
+    run(rows, "plugin:files:go", makeCtx());
+    expect(deps.navigate).toHaveBeenCalledWith({ kind: "view", id: "plugin:files:browser" });
+    expect(deps.request).not.toHaveBeenCalled();
+  });
+
+  it("resolves a chain of any length — the mirror stops at a REVISIT, not a depth", () => {
+    // The backend resolves chains to a fixed point with no length cap, so a mirror that
+    // gave up at some depth would drop a row the parser kept.
+    const deps = makeDeps();
+    const hops: PluginCommand[] = Array.from({ length: 40 }, (_, i) => ({
+      id: `hop${i}`,
+      title: `Hop ${i}`,
+      action: { type: "command", command: i === 39 ? "reindex" : `hop${i + 1}` },
+    }));
+    const rows = compilePluginCommands(
+      makeSource([
+        ...hops,
+        { id: "reindex", title: "Reindex", action: { type: "tool", route: "reindex", method: "POST" } },
+      ]),
+      deps,
+    );
+    run(rows, "plugin:files:hop0", makeCtx());
+    expect(deps.request).toHaveBeenCalledWith("/api/plugins/files/reindex", { method: "POST" });
+  });
+
+  it("a `tool` row on a plugin that never LOADED ships disabled, saying why", () => {
+    // Enabled is not loaded: a missing dep or a bad import leaves the plugin with no
+    // routers, so its own route 404s. The DS greys a `disabled` row and refuses to run it,
+    // which beats firing an authenticated call that can only fail — and beats hiding the
+    // row, which reads as "this plugin never shipped it" (the Fleet Room convention).
+    const deps = makeDeps();
+    const rows = compilePluginCommands(
+      makeSource(
+        [
+          { id: "reindex", title: "Reindex", hint: "the whole tree", action: { type: "tool", route: "reindex", method: "POST" } },
+          { id: "alias", title: "Alias", action: { type: "command", command: "reindex" } },
+          // Neither of these depends on the plugin's own process: `emit` publishes on the
+          // core bus route, and the view host surfaces the loader's real error itself.
+          { id: "ping", title: "Ping", action: { type: "emit", topic: "indexed" } },
+          { id: "open", title: "Open browser", action: { type: "navigate", view: "browser" } },
+        ],
+        { loaded: false },
+      ),
+      deps,
+    );
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    expect(byId["plugin:files:reindex"]).toMatchObject({ disabled: true, hint: "plugin not loaded" });
+    // A chain into it inherits the reason — an alias for an unrunnable tool is unrunnable.
+    expect(byId["plugin:files:alias"]).toMatchObject({ disabled: true, hint: "plugin not loaded" });
+    expect(byId["plugin:files:ping"].disabled).toBe(false);
+    expect(byId["plugin:files:open"].disabled).toBe(false);
+    // Loaded: the manifest's own hint is back and the row runs.
+    const live = compilePluginCommands(
+      makeSource([
+        { id: "reindex", title: "Reindex", hint: "the whole tree", action: { type: "tool", route: "reindex", method: "POST" } },
+      ]),
+      deps,
+    );
+    expect(live[0]).toMatchObject({ disabled: false, hint: "the whole tree" });
+  });
+
+  it("drops an entry whose title is not a string rather than labelling a row with it", () => {
+    // The payload is JSON off a status response, not something the parser is guaranteed to
+    // have shaped — a non-string field has no honest reading.
+    const rows = compilePluginCommands(
+      makeSource([
+        { id: "numeric", title: 42, action: { type: "navigate", view: "browser" } },
+        { id: "ok", title: "Ok", hint: { evil: true }, group: 7, action: { type: "navigate", view: "browser" } },
+      ] as unknown as PluginCommand[]),
+      makeDeps(),
+    );
+    expect(rows.map((r) => r.id)).toEqual(["plugin:files:ok"]);
+    expect(rows[0].hint).toBeUndefined();
+    expect(rows[0].group).toBe("Plugins"); // not `7`, which would open a junk heading
   });
 
   it("groups a row with the plugin's other palette presence and keeps it findable", () => {
@@ -391,8 +471,15 @@ describe("pluginCommandSources", () => {
   it("derives one source per enabled plugin that declares commands", () => {
     const sources = pluginCommandSources([enabledPlugin()], () => null);
     expect(sources).toHaveLength(1);
-    expect(sources[0]).toMatchObject({ id: "files", name: "Files" });
+    expect(sources[0]).toMatchObject({ id: "files", name: "Files", loaded: true });
     expect([...sources[0].viewIds]).toEqual(["browser"]);
+  });
+
+  it("carries the plugin's LOAD state through, so a tool row can disable itself", () => {
+    // Enabled-but-not-loaded is a real, common state (a missing pip dep); the compile step
+    // needs it to tell a runnable row from one that can only 404.
+    const sources = pluginCommandSources([enabledPlugin({ loaded: false })], () => null);
+    expect(sources[0].loaded).toBe(false);
   });
 
   it("contributes NOTHING for a disabled plugin", () => {
@@ -436,6 +523,34 @@ describe("pluginCommandGroups", () => {
     expect(groups).toHaveLength(1); // the all-dropped plugin registers nothing
     expect(groups[0].source).toEqual({ id: "plugin:files", label: "Files" });
     expect(groups[0].commands.map((c) => c.id)).toEqual(["plugin:files:go"]);
+  });
+
+  it("orders registrations so each section is CONTIGUOUS, default first", () => {
+    // Registration order is display order and the DS opens a heading only when the group
+    // changes — so a manifest naming its own section must not split the default one, or
+    // "Plugins" appears twice with the custom section wedged between.
+    const groups = pluginCommandGroups(
+      [
+        makeSource([
+          { id: "own", title: "Own section", group: "Bookmarks", action: { type: "navigate", view: "browser" } },
+          { id: "def", title: "Default", action: { type: "navigate", view: "browser" } },
+        ]),
+        makeSource([{ id: "def", title: "Default", action: { type: "navigate", view: "browser" } }], {
+          id: "notes",
+          name: "Notes",
+        }),
+      ],
+      makeDeps(),
+    );
+    // Every row, in the order the host registers them: the default section (which the
+    // plugin VIEW rows already opened) completes before the named one starts.
+    expect(groups.flatMap((g) => g.commands.map((c) => `${c.group}/${c.id}`))).toEqual([
+      "Plugins/plugin:files:def",
+      "Plugins/plugin:notes:def",
+      "Bookmarks/plugin:files:own",
+    ]);
+    // Still one registration per plugin per section, so each keeps its own chip.
+    expect(groups.map((g) => g.source.label)).toEqual(["Files", "Notes", "Files"]);
   });
 });
 

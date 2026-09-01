@@ -19,7 +19,9 @@
 // through UNCHANGED, and `applyAuth` attaches the operator bearer — so an escaped route is
 // an authenticated write against whatever it names. A route that fails the mirror produces
 // NO ROW (half a command is worse than none — a row that fires something its author didn't
-// write), and the same goes for a malformed or unknown action type.
+// write), and the same goes for a malformed or unknown action type. The one row that ships
+// without running is a `tool` on a plugin that is enabled but never LOADED: it has no route
+// to call, so the row is disabled and says why (`NOT_LOADED`) rather than vanishing.
 //
 // Enable-gating is NOT re-implemented here: `loader.py` emits `"commands": []` for a
 // plugin that isn't enabled, so a disabled plugin sends nothing to compile. The
@@ -65,6 +67,14 @@ const URL_RESHAPING_CHARS = /[\u0000-\u001f\u007f]/;
  *  so this is the difference between a same-origin plugin call and an authenticated
  *  cross-origin one. Mirrors `_NON_SAME_ORIGIN_PATH`. */
 const NON_SAME_ORIGIN = /https?:\/\/|^\/\/|localhost|:\d/i;
+
+/** A manifest string, or "" — coerced, never guessed at. The payload is JSON off a status
+ *  response, so a field that is not a string is a field this adapter has no honest reading
+ *  of: for a title or a route that means no row at all, for the decorative fields it means
+ *  absent. */
+function text(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
 
 /** `value` with EVERY layer of percent-encoding removed — nested on purpose, because a
  *  single decode turns `%252e%252e` into `%2e%2e`, which the browser then decodes again
@@ -117,7 +127,7 @@ function normalizePath(path: string): string {
 export function pluginRoutePath(pluginId: string, route: string): string | null {
   if (!SAFE_SLUG.test(pluginId)) return null;
   const root = `/api/plugins/${pluginId}/`;
-  const declared = String(route ?? "").trim();
+  const declared = text(route);
   const decoded = percentDecoded(declared);
   if (!decoded) return null;
   if (URL_RESHAPING_CHARS.test(decoded)) return null;
@@ -137,7 +147,7 @@ export function pluginRoutePath(pluginId: string, route: string): string | null 
  *  start with the plugin id. */
 export function pluginEventTopic(pluginId: string, topic: string): string | null {
   if (!SAFE_SLUG.test(pluginId)) return null;
-  const declared = String(topic ?? "").trim();
+  const declared = text(topic);
   const segments = declared.split(".");
   if (!declared || /\s/.test(declared)) return null;
   if (declared.includes("*") || declared.includes("#")) return null;
@@ -154,6 +164,11 @@ export type PluginCommandSource = {
   name: string;
   /** The manifest's declared commands (already enable-gated server-side). */
   commands: PluginCommand[];
+  /** Did the plugin actually LOAD? Enabled is not loaded: a missing dep, a bad import or
+   *  a mount race leaves an enabled plugin with no routers, which is exactly the state
+   *  `views[].pluginLoaded` exists to explain on the view host. A `tool` row needs it
+   *  (see `NOT_LOADED`). */
+  loaded: boolean;
   /** View ids this manifest declares — a `navigate`/`open_view` may target no other. */
   viewIds: ReadonlySet<string>;
   /** Resolved icon for a manifest icon name. Injected because the two windows resolve
@@ -178,6 +193,7 @@ export function pluginCommandSources(
       id: p.id,
       name: p.name || p.id,
       commands: p.commands ?? [],
+      loaded: !!p.loaded,
       viewIds: new Set((p.views ?? []).map((v) => String(v.id))),
       icon,
     }));
@@ -201,10 +217,21 @@ export type PluginCommandDeps = {
   notify: (n: { tone: "success" | "error"; title?: string; message: string }) => void;
 };
 
-/** A chain longer than this is a manifest doing something pathological. The backend
- *  already proves every chain terminates inside the plugin's own list, so this is only the
- *  mirror's own stop condition. */
-const MAX_CHAIN = 16;
+/** The section a row lands in unless its manifest names another — the SAME heading the
+ *  plugin's view rows register under, so a plugin's commands continue its existing palette
+ *  section instead of opening a generic "Commands" bucket underneath it. */
+const DEFAULT_GROUP = "Plugins";
+
+/** Why a compiled row is present but not runnable, said out loud on the row.
+ *
+ *  Only `tool` needs it: that route is served by the PLUGIN's own router, so an enabled
+ *  plugin that failed to load (missing dep, bad import, mount race) has nothing mounted and
+ *  the row could only 404 into an error toast. `emit` publishes on the core bus route and
+ *  `navigate`/`open_view` reach the view host, which surfaces the loader's real diagnostic
+ *  itself (`views[].pluginError`) — those stay live. Disabling rather than hiding is the
+ *  Fleet Room command's convention in `usePaletteRegistry`: a row that explains itself is
+ *  discoverable, a row that vanishes reads as "this plugin never shipped it". */
+const NOT_LOADED = "plugin not loaded";
 
 const HTTP_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
 
@@ -214,16 +241,23 @@ function rowId(pluginId: string, commandId: string): string {
   return `plugin:${pluginId}:${commandId}`;
 }
 
-/** Compile ONE action into a `run(ctx)`, or `null` when it cannot be dispatched safely.
- *  `null` drops the row: an action type this adapter does not implement, a route that
- *  escapes the namespace, a topic outside the plugin's own, or a view the manifest never
- *  declared all mean the same thing — there is nothing honest to run. */
+/** A compiled action: the `run(ctx)` plus, when the row is present but not runnable, the
+ *  reason it says out loud. A record rather than a flag baked into `run` so that a chain
+ *  INHERITS its target's reason — an alias for a tool on a plugin that never loaded is
+ *  exactly as unrunnable as the tool it points at. */
+type Compiled = { run: (ctx: PaletteContext) => void; unavailable?: string };
+
+/** Compile ONE action, or `null` when it cannot be dispatched safely. `null` drops the row:
+ *  an action type this adapter does not implement, a route that escapes the namespace, a
+ *  topic outside the plugin's own, or a view the manifest never declared all mean the same
+ *  thing — there is nothing honest to run. (Not runnable YET — a plugin that failed to
+ *  load — is a different answer: that row ships disabled, saying so.) */
 function compileAction(
   action: PluginCommandAction | undefined,
   src: PluginCommandSource,
   title: string,
   deps: PluginCommandDeps,
-): ((ctx: PaletteContext) => void) | null {
+): Compiled | null {
   if (!action || typeof action !== "object") return null;
   const fail = (e: unknown) =>
     deps.notify({ tone: "error", title: `${title} failed`, message: e instanceof Error ? e.message : String(e) });
@@ -232,55 +266,65 @@ function compileAction(
     case "navigate": {
       if (!src.viewIds.has(action.view)) return null;
       const viewKey = `plugin:${src.id}:${action.view}`;
-      return (ctx) => {
-        deps.navigate({ kind: "view", id: viewKey });
-        ctx.close();
+      return {
+        run: (ctx) => {
+          deps.navigate({ kind: "view", id: viewKey });
+          ctx.close();
+        },
       };
     }
     case "open_view": {
       if (!src.viewIds.has(action.view)) return null;
       const viewKey = `plugin:${src.id}:${action.view}`;
-      return (ctx) => {
-        // `ctx.enter` on a view id nobody registered renders `null` — the whole palette
-        // BLANKS until Escape pops the frame. A view only becomes an inline morph target
-        // by opting in through `views[].palette`, which `_parse_commands` cannot see, so a
-        // manifest can legitimately declare `open_view` against a view that never opted
-        // in. Route those to the rail instead: the operator still gets the view, just not
-        // inside the palette.
-        if (deps.inlineViewIds.has(viewKey)) {
-          ctx.enter(viewKey);
-          return;
-        }
-        deps.navigate({ kind: "view", id: viewKey });
-        ctx.close();
+      return {
+        run: (ctx) => {
+          // `ctx.enter` on a view id nobody registered renders `null` — the whole palette
+          // BLANKS until Escape pops the frame. A view only becomes an inline morph target
+          // by opting in through `views[].palette`, which `_parse_commands` cannot see, so a
+          // manifest can legitimately declare `open_view` against a view that never opted
+          // in. Route those to the rail instead: the operator still gets the view, just not
+          // inside the palette.
+          if (deps.inlineViewIds.has(viewKey)) {
+            ctx.enter(viewKey);
+            return;
+          }
+          deps.navigate({ kind: "view", id: viewKey });
+          ctx.close();
+        },
       };
     }
     case "tool": {
-      const method = String(action.method ?? "").trim().toUpperCase();
+      const method = text(action.method).toUpperCase();
       if (!HTTP_METHODS.has(method)) return null;
       // Composed + asserted HERE, once, so the closure below can only ever hold a path
       // that passed the namespace check — there is no code path from a manifest string to
       // `fetch` that skips this line.
       const path = pluginRoutePath(src.id, action.route);
       if (!path) return null;
-      return (ctx) => {
-        ctx.close();
-        deps
-          .request(path, { method })
-          .then(() => deps.notify({ tone: "success", title, message: `${src.name} ran the command.` }))
-          .catch(fail);
+      return {
+        run: (ctx) => {
+          ctx.close();
+          deps
+            .request(path, { method })
+            .then(() => deps.notify({ tone: "success", title, message: `${src.name} ran the command.` }))
+            .catch(fail);
+        },
+        // The plugin serves this route itself; if it never loaded, nothing does.
+        unavailable: src.loaded ? undefined : NOT_LOADED,
       };
     }
     case "emit": {
       const topic = pluginEventTopic(src.id, action.topic);
       if (!topic) return null;
       const data = action.data && typeof action.data === "object" ? action.data : {};
-      return (ctx) => {
-        ctx.close();
-        deps
-          .request("/api/events/publish", { method: "POST", body: { topic, data } })
-          .then(() => deps.notify({ tone: "success", title, message: `Published ${topic}.` }))
-          .catch(fail);
+      return {
+        run: (ctx) => {
+          ctx.close();
+          deps
+            .request("/api/events/publish", { method: "POST", body: { topic, data } })
+            .then(() => deps.notify({ tone: "success", title, message: `Published ${topic}.` }))
+            .catch(fail);
+        },
       };
     }
     // `command` is resolved by `compilePluginCommands`, which is the only place that can
@@ -292,6 +336,18 @@ function compileAction(
   }
 }
 
+/** One entry, normalized the way `_parse_commands` normalizes it — so every pass below
+ *  works on strings and cannot be surprised by a payload the parser never shaped. */
+type Entry = {
+  id: string;
+  title: string;
+  hint: string;
+  icon: string;
+  group: string;
+  keywords: string[];
+  action?: PluginCommandAction;
+};
+
 /** Compile one plugin's declared commands into DS palette `Command`s.
  *
  *  Chains are resolved HERE, at compile time, the way the backend resolves them: a
@@ -300,71 +356,109 @@ function compileAction(
  *  halves matter — a dead row that silently does nothing is exactly the "half a command"
  *  state the strictness on both sides of this seam exists to prevent. */
 export function compilePluginCommands(src: PluginCommandSource, deps: PluginCommandDeps): Command[] {
-  const entries = (src.commands ?? []).filter(
-    (c): c is PluginCommand => !!c && typeof c === "object" && SAFE_SLUG.test(String(c.id ?? "")) && !!c.title,
-  );
+  // Normalize and de-duplicate ONCE, applying the parser's own three gates in its own
+  // order (safe id, non-empty title, first of a repeated id wins). Deduping here rather
+  // than at the end is what keeps a repeated id honest: a later entry that overwrote the
+  // compiled run would ship a row LABELLED by the first and WIRED to the second.
+  const seenIds = new Set<string>();
+  const entries: Entry[] = (src.commands ?? []).flatMap((c) => {
+    if (!c || typeof c !== "object") return [];
+    const id = text(c.id);
+    const title = text(c.title);
+    if (!SAFE_SLUG.test(id) || !title || seenIds.has(id)) return [];
+    seenIds.add(id);
+    return [
+      {
+        id,
+        title,
+        hint: text(c.hint),
+        icon: text(c.icon),
+        group: text(c.group) || DEFAULT_GROUP,
+        keywords: (Array.isArray(c.keywords) ? c.keywords.map(text) : []).filter(Boolean),
+        action: c.action,
+      },
+    ];
+  });
   // Pass 1 — everything that dispatches directly.
-  const direct = new Map<string, (ctx: PaletteContext) => void>();
+  const direct = new Map<string, Compiled>();
   const chain = new Map<string, string>();
   for (const c of entries) {
     if (c.action?.type === "command") {
-      const target = String(c.action.command ?? "").trim();
+      const target = text(c.action.command);
       if (target) chain.set(c.id, target);
       continue;
     }
-    const run = compileAction(c.action, src, c.title, deps);
-    if (run) direct.set(c.id, run);
+    const compiled = compileAction(c.action, src, c.title, deps);
+    if (compiled) direct.set(c.id, compiled);
   }
-  // Pass 2 — follow each chain to a directly-dispatchable entry, refusing loops.
-  const resolve = (id: string): ((ctx: PaletteContext) => void) | undefined => {
+  // Pass 2 — follow each chain to a directly-dispatchable entry. `seen` is the whole
+  // termination proof: every hop either lands on one, dangles, or revisits an id, and the
+  // id space is finite. Deliberately UNCAPPED, like the backend's fixed-point resolution —
+  // a mirror that quietly stopped at some depth would drop a row the parser kept.
+  const resolve = (id: string): Compiled | undefined => {
     const seen = new Set<string>();
     let current = id;
-    for (let i = 0; i < MAX_CHAIN; i++) {
-      if (seen.has(current)) return undefined; // a --> b --> a
+    while (!seen.has(current)) {
       seen.add(current);
-      const run = direct.get(current);
-      if (run) return run;
+      const compiled = direct.get(current);
+      if (compiled) return compiled;
       const next = chain.get(current);
       if (!next) return undefined; // dangling, or it pointed at a dropped command
       current = next;
     }
-    return undefined;
+    return undefined; // a --> b --> a
   };
 
   const out: Command[] = [];
-  const claimed = new Set<string>();
   for (const c of entries) {
-    if (claimed.has(c.id)) continue; // duplicate id — keep the first, like the parser
-    const run = resolve(c.id);
-    if (!run) continue;
-    claimed.add(c.id);
+    const compiled = resolve(c.id);
+    if (!compiled) continue;
     out.push({
       id: rowId(src.id, c.id),
       label: c.title,
-      hint: c.hint || undefined,
-      icon: src.icon(c.icon),
+      // A row that cannot run explains itself and greys out instead of firing into a 404.
+      // The reason WINS over the manifest's own hint: on a disabled row, why is the only
+      // trailing text worth the space.
+      hint: compiled.unavailable || c.hint || undefined,
+      disabled: !!compiled.unavailable,
+      icon: src.icon(c.icon || undefined),
       // Grouped with the plugin's OTHER palette presence (its view rows) rather than
       // dumped in the generic "Commands" bucket; a manifest may name its own section.
-      group: c.group || "Plugins",
+      group: c.group,
       // The plugin's id and name join the manifest's own keywords, so "projectboard" or
       // the chip text finds the row even when the title says neither.
-      keywords: [...(c.keywords ?? []).map(String), src.id, src.name, "plugin"],
-      run,
+      keywords: [...c.keywords, src.id, src.name, "plugin"],
+      run: compiled.run,
     });
   }
   return out;
 }
 
 /** Every plugin's rows, each stamped with the plugin as its DS `source` (rendered as the
- *  attribution chip). Registered per-plugin by the host so the chip is per-source. */
+ *  attribution chip), in the order the host should register them. */
 export function pluginCommandGroups(
   sources: PluginCommandSource[],
   deps: PluginCommandDeps,
 ): { source: PaletteSource; commands: Command[] }[] {
-  return sources
+  const compiled = sources
     .map((src) => ({
       source: { id: `plugin:${src.id}`, label: src.name } satisfies PaletteSource,
       commands: compilePluginCommands(src, deps),
     }))
     .filter((g) => g.commands.length > 0);
+  // Registration order IS display order, and the DS opens a section heading only where a
+  // row's group differs from the row above it — so rows sharing a section have to be
+  // CONTIGUOUS or its name appears twice. A manifest may name its own section, which would
+  // otherwise interleave: one plugin's `group: Files` row landing between default rows
+  // re-opens "Plugins" underneath it. So the split is per (section, plugin): sections in
+  // display order with the default FIRST (it continues the heading the plugin view rows
+  // already opened), and each plugin's rows within a section stay ONE registration, which
+  // is what stamps that plugin's own chip on them.
+  const named = compiled.flatMap((g) => g.commands.map((c) => c.group ?? DEFAULT_GROUP));
+  const sections = [DEFAULT_GROUP, ...new Set(named.filter((s) => s !== DEFAULT_GROUP))];
+  return sections.flatMap((section) =>
+    compiled
+      .map((g) => ({ source: g.source, commands: g.commands.filter((c) => c.group === section) }))
+      .filter((g) => g.commands.length > 0),
+  );
 }

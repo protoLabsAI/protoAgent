@@ -344,11 +344,16 @@ export function usePaletteRegistry(
   // (React Query's structural sharing keeps `agents` stable when the 3s poll returns equal data).
   const fleetSig = agents.map((a) => `${a.host ? "host" : a.id}:${a.running}:${a.name}`).join("|");
   // Plugin-declared commands (ADR 0057 §3) — keyed on the CONTENT the compile step reads,
-  // so the rows re-register when a plugin is enabled/disabled or its manifest changes but
-  // not on every status poll (the array identity churns; this string doesn't).
+  // so the rows re-register when a plugin is enabled/disabled, finishes loading, is renamed
+  // or edits its manifest, but not on every status poll (the array identity churns each
+  // time; this string doesn't). EVERY compile input is in it, not just the visible fields:
+  // a route or topic edit rewrites what the row fires, `loaded` flips a `tool` row between
+  // runnable and disabled, the name is the attribution chip, and the view ids decide
+  // whether a `navigate` compiles at all. The icon resolver is the one input left out —
+  // it is a per-window constant.
   const cmdSources = plugins?.sources ?? [];
   const cmdSig = cmdSources
-    .map((p) => `${p.id}:${p.commands.map((c) => `${c.id} ${c.title} ${c.action?.type ?? ""}`).join(",")}`)
+    .map((p) => JSON.stringify([p.id, p.name, p.loaded, [...p.viewIds], p.commands]))
     .join("|");
 
   // Views the palette can morph into: inline plugin iframes, the chat view, and the
@@ -477,11 +482,12 @@ export function usePaletteRegistry(
     });
     const offPlugins = pluginCommands.length ? registry.registerCommands(pluginCommands) : undefined;
     // Each enabled plugin's DECLARED commands (ADR 0057 §3/§4), compiled by the trusted
-    // adapter — the only place manifest data becomes behavior. Registered per plugin and
-    // right after that plugin's view rows, for two reasons: the DS stamps `source` per
-    // registration (so every row carries its own plugin's attribution chip), and it renders
-    // a group heading only when the group CHANGES, so a default-grouped row sitting next to
-    // the "Plugins" nav rows joins that section instead of opening a second one.
+    // adapter — the only place manifest data becomes behavior. Registered right after the
+    // plugin VIEW rows above and split per (section, plugin) by `pluginCommandGroups`, for
+    // two reasons: the DS stamps `source` per registration (so every row carries its own
+    // plugin's attribution chip), and it renders a group heading only when the group
+    // CHANGES, so a default-grouped row landing next to the "Plugins" nav rows continues
+    // that section instead of opening a second one under the same name.
     const offDeclared = pluginCommandGroups(cmdSources, {
       inlineViewIds: inlineIds,
       navigate,
