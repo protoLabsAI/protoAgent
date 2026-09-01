@@ -62,6 +62,21 @@ context:
                            # boolean false, and it is restored to the policy.
 ```
 
+The digest's own ceilings live in the `memory` block — how many sessions it may
+list, and the token cap on the rendered block:
+
+```yaml
+memory:
+  max_sessions: 10   # attributed lines the digest may carry (~30 tokens each)
+  max_tokens: 2000   # chars/4 ceiling; entries shed from the end past it
+```
+
+Both are ceilings, not switches — a non-positive value falls back to the default
+with a warning, since removing the digest is what `prior_sessions: off` is for.
+(Neither key was read by anything before #3308; setting them used to be a silent
+no-op.) There is no `memory.path`: summaries live in the instance store, or
+wherever `MEMORY_PATH` points.
+
 The budget never drops below 16k chars (room for always-on memory + the digest),
 so on a 32k window or smaller that floor is the budget and only RAG hits / skill
 descriptions beyond it shed. With the default 8% on a 128k-window model it is

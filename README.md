@@ -177,7 +177,7 @@ First-party plugins ship in `plugins/` — `delegates` is a built-in, `notes`, `
 | [`telegram`](./plugins/telegram/) | surface | Run the agent as a Telegram bot — the reference [communication plugin](./docs/guides/communication-plugins.md) |
 | [`execute_code`](./plugins/execute_code/) | tool · settings | A Python interpreter the agent runs code in — on desktop, provision the one-click [managed runtime](./docs/guides/python-runtime.md) and the document skills (docx · xlsx · pptx · pdf) light up |
 | [`coder`](./plugins/coder/) | tool · settings | Verifier-grounded code-solve (`coder_solve`) — an execution-grounded search ladder for testable coding tasks ([guide](./docs/guides/coder.md)) |
-| [`friction`](./plugins/friction/) | tools | Friction log — the agent records its own missing/awkward tooling and confusing errors, so you can fix the sharp edges |
+| [`friction`](./plugins/friction/) | tools · view · skill · subagent · settings | Friction log — the agent records its own missing/awkward tooling and confusing errors, and **open friction is projected into its working state** so it acts on the backlog instead of re-reporting it. `/friction` for the operator, a read-only `friction_triage` delegate for filing |
 | [`orgchart`](./plugins/orgchart/) | view | Live diagram of the agent fleet — every agent a node, delegation edges drawn as they happen |
 | [`hello`](./plugins/hello/) | tool · skill · view | Minimal example — copy it to start your own |
 

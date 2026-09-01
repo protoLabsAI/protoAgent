@@ -108,13 +108,15 @@ The template's middleware chain (`_build_middleware` in `graph/agent.py`) is ord
 
 ## Session memory
 
-Memory is **enabled by default** (`middleware.memory: true` in `langgraph-config.yaml`). At session end `SessionSummaryMiddleware` writes a JSON summary to `/sandbox/memory/`. On the next session, `KnowledgeMiddleware.load_memory()` reads the 10 most recent summaries and injects them as a `<prior_sessions>` XML block into the system prompt context, giving the agent continuity across restarts without any external store.
+Memory is **enabled by default** (`middleware.memory: true` in `langgraph-config.yaml`). `SessionSummaryMiddleware` writes a reasoning-stripped JSON summary per session to the instance memory store (`~/.protoagent/<instance>/memory`, or `MEMORY_PATH`). Each turn, `KnowledgeMiddleware` reads those summaries back as a `<prior_sessions>` digest — one attributed line per session (id, timestamp, surface, topic, message count), not the message bodies — and the agent expands any one of them on demand with `recall_session`, or searches across them with `session_search`. That gives continuity across restarts without an external store.
 
-**Token budget:** the prior-sessions block is capped at 2 000 tokens (character approximation: chars ÷ 4). Oldest sessions are dropped first when the budget is exceeded.
+**Which sessions** is a policy, `context.prior_sessions` ([ADR 0108 D9](../adr/0108-context-architecture-v2.md)): `newest` (default) lists the newest `memory.max_sessions`; `relevant` lists only the ones matching the turn's query; `off` injects no digest at all and leaves `session_search` / `recall_session` as the path. **A session's own summary is never listed as a "prior" session in its own thread** — it is persisted on every terminal turn, so from turn 2 it would otherwise be the newest entry in its own digest.
+
+**Token budget:** the block is capped at `memory.max_tokens` (default 2 000, estimated as chars ÷ 4); entries drop from the end — oldest first under `newest`, lowest-ranked first under `relevant`. The digest also sheds entry by entry under the wider per-turn context budget (`context.budget_pct`, [ADR 0108 D6](../adr/0108-context-architecture-v2.md)).
 
 **Disabling memory:** set `middleware.memory: false` in your fork's config, or set `PROTOAGENT_DISABLE_MEMORY=1` in the environment to suppress disk writes without changing the config.
 
-**Persistence across container restarts:** mount a volume at `/sandbox/memory/`. Without a volume the directory is ephemeral and summaries are lost on container stop.
+**Persistence across container restarts:** in the container `/sandbox` *is* the instance root (`PROTOAGENT_HOME=/sandbox`), so summaries land in `/sandbox/memory` and the bundled `protoagent-sandbox` volume — which covers all of `/sandbox` — already persists them. Without that volume the directory is ephemeral and summaries are lost on container stop. `MEMORY_PATH` overrides the location anywhere.
 
 ## Security
 

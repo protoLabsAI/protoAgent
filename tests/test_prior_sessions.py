@@ -84,5 +84,8 @@ def test_both_middlewares_use_the_same_loader(tmp_path):
     from graph.middleware.knowledge import KnowledgeMiddleware
 
     _write(tmp_path, "s1", [{"role": "user", "content": "shared loader check"}])
-    mw = KnowledgeMiddleware.__new__(KnowledgeMiddleware)  # no __init__ needed
+    # A real instance since #3308: load_memory defaults its ceilings from the
+    # configured `memory.max_sessions` / `memory.max_tokens`, which it reads off
+    # the middleware's own options.
+    mw = KnowledgeMiddleware(None)
     assert mw.load_memory(str(tmp_path)) == load_prior_sessions(str(tmp_path))

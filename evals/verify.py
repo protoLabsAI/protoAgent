@@ -11,6 +11,11 @@ Two channels:
   template default). ``find_chunk_containing`` confirms a memory
   write actually landed; ``setup_chunk`` / ``teardown`` mutate the
   store directly so cases start from a known state.
+- **Session summaries** — the JSON files behind the ``<prior_sessions>``
+  digest (``MEMORY_PATH`` / the instance store). ``seed_session`` writes
+  one in the shape ``SessionSummaryMiddleware`` persists, so a case can
+  ask about "what we decided last week" without a week of real sessions
+  (#3186).
 
 The store is opened read/write so setup steps can pre-seed (BFCL's
 ``initial_config`` pattern). The model never sees these direct writes
@@ -77,6 +82,25 @@ def audit_entries_since(ts_iso: str) -> list[dict]:
             if entry.get("ts", "") > ts_iso:
                 out.append(entry)
     return out
+
+
+def assert_no_tools_fired(audit_entries: list[dict]) -> tuple[bool, str]:
+    """Confirm NOTHING fired — what ``expected_tools: []`` has always claimed to
+    mean, and never did.
+
+    ``assert_tools_fired(entries, [])`` loops over the expected names, so an empty
+    list produced no "missing" and returned True no matter what the agent called:
+    every abstention case in the suite was passing vacuously. Absence can't be
+    polled for (the turn is already terminal when this runs), so there is no
+    deadline loop here — same reasoning as ``assert_tools_not_fired``.
+
+    Like every audit assertion, this reads a time-windowed slice of a SHARED log:
+    it assumes the agent under test is otherwise quiet for the case's duration.
+    """
+    fired = sorted({e.get("tool", "?") for e in audit_entries})
+    if fired:
+        return False, f"expected NO tool calls, saw: {', '.join(fired)}"
+    return True, "no tools fired"
 
 
 def assert_tools_fired(
@@ -215,19 +239,88 @@ def count_chunks_containing(text: str, *, domain: str | None = None) -> int:
 # ── setup / teardown helpers ─────────────────────────────────────────────────
 
 
-def apply_setup(steps: list[dict]) -> str | None:
+# ── session summaries (the <prior_sessions> digest) ──────────────────────────
+
+
+def seed_session(args: dict, *, memory_dir: str | None = None) -> str | None:
+    """Write ONE session summary in the shape ``SessionSummaryMiddleware``
+    persists, so a case can ask about a past session that never happened.
+
+    ``args``: ``session_id`` (the filename AND the digest's attribution — keep the
+    ``chat-`` prefix if you want the digest to call it a chat), ``topic`` (becomes
+    the first USER message, which is the only thing the digest line carries),
+    optional ``reply`` (assistant turn), ``final_output`` (what ``recall_session``
+    renders as the outcome) and ``age_minutes`` (default 60 — the file's mtime is
+    what the newest-N cut sorts on, so an "older" session needs an older mtime,
+    not just an older timestamp string).
+
+    Returns None on success, an error string otherwise. Never raises.
+    """
+    try:
+        from graph.middleware.memory import is_safe_session_id, memory_path, session_filename
+
+        sid = str(args.get("session_id") or "").strip()
+        if not sid or not is_safe_session_id(sid):
+            return f"session_seed: unusable session_id {sid!r}"
+        base = Path(memory_dir or memory_path())
+        base.mkdir(parents=True, exist_ok=True)
+        age_s = float(args.get("age_minutes", 60)) * 60
+        when = datetime.now(timezone.utc).timestamp() - age_s
+        messages = [{"role": "user", "content": args["topic"]}]
+        if args.get("reply"):
+            messages.append({"role": "assistant", "content": args["reply"]})
+        summary = {
+            "session_id": sid,
+            "timestamp": datetime.fromtimestamp(when, timezone.utc).isoformat(),
+            "messages": messages,
+            "final_output": args.get("final_output", ""),
+        }
+        path = base / session_filename(sid)
+        path.write_text(json.dumps(summary), encoding="utf-8")
+        # mtime is what the digest sorts by — an "older" session has to LOOK older
+        # on disk, or every seeded session lands at the top of the newest-N window.
+        os.utime(path, (when, when))
+        return None
+    except Exception as exc:  # noqa: BLE001 — setup failures are reported, not raised
+        return f"session_seed failed for {args!r}: {exc}"
+
+
+def purge_session(session_id: str, *, memory_dir: str | None = None) -> None:
+    """Remove a seeded summary under every name it may live under. Best effort."""
+    try:
+        from graph.middleware.memory import is_safe_session_id, memory_path, session_file_candidates
+
+        if not is_safe_session_id(str(session_id)):
+            return
+        for cand in session_file_candidates(session_id, memory_dir or memory_path()):
+            try:
+                os.remove(cand)
+            except OSError:
+                continue
+    except Exception as exc:  # pragma: no cover
+        log.debug("[verify] session_purge %s failed: %s", session_id, exc)
+
+
+def apply_setup(steps: list[dict], *, memory_dir: str | None = None) -> str | None:
     """Apply a list of setup steps. Each step is a dict with one key.
 
     Supported step kinds:
 
     - ``kb_ingest``: ``{content, domain, heading?}``
+    - ``session_seed``: ``{session_id, topic, ...}`` — see :func:`seed_session`
+
+    ``memory_dir`` targets the session writes at a specific instance's memory
+    store; ``None`` = the ambient one (``MEMORY_PATH`` / the running instance).
+    ``evals.sweep`` passes an arm's directory to seed it BEFORE that agent boots,
+    which is also how it dodges the digest's 60 s pool cache.
 
     Returns ``None`` on success, an error string on first failure.
     """
-    store = _kb_store()
+    store = None
     for step in steps:
         for kind, args in step.items():
             if kind == "kb_ingest":
+                store = store or _kb_store()
                 if (
                     store.add_chunk(
                         args["content"],
@@ -237,12 +330,16 @@ def apply_setup(steps: list[dict]) -> str | None:
                     is None
                 ):
                     return f"kb_ingest failed for {args!r}"
+            elif kind == "session_seed":
+                err = seed_session(args, memory_dir=memory_dir)
+                if err:
+                    return err
             else:
                 return f"unknown setup step: {kind}"
     return None
 
 
-def apply_teardown(steps: list[dict]) -> None:
+def apply_teardown(steps: list[dict], *, memory_dir: str | None = None) -> None:
     """Best-effort teardown. Never raises so a setup failure or assertion
     failure doesn't poison subsequent cases.
 
@@ -250,14 +347,22 @@ def apply_teardown(steps: list[dict]) -> None:
 
     - ``kb_delete_by_content``: ``{contains}``
     - ``kb_delete_by_heading``: ``{domain, heading}``
+    - ``session_purge``: ``{session_id}``
+
+    ``memory_dir`` mirrors :func:`apply_setup` — whatever store the fixtures were
+    seeded into is the one they have to be removed from.
     """
-    store = _kb_store()
+    store = None
     for step in steps:
         for kind, args in step.items():
             try:
                 if kind == "kb_delete_by_content":
+                    store = store or _kb_store()
                     store.delete_by_content(args["contains"])
                 elif kind == "kb_delete_by_heading":
+                    store = store or _kb_store()
                     store.delete_by_heading(args["domain"], args["heading"])
+                elif kind == "session_purge":
+                    purge_session(args["session_id"], memory_dir=memory_dir)
             except Exception as exc:  # pragma: no cover
                 log.debug("[verify] teardown step %s failed: %s", kind, exc)

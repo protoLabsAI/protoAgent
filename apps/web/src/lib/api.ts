@@ -39,6 +39,7 @@ import type {
   PluginInstallSummary,
   PluginUpdate,
   KnowledgeChunk,
+  MemoryDigestPolicy,
   MemoryHotChunk,
   MemoryInjectionDetail,
   MemoryInjectionRow,
@@ -1299,8 +1300,13 @@ export const api = {
 
   // --- Memory inspector (ADR 0069 D7) — the delivery-layer audit surface -----
   // Session summaries: the files behind the <prior_sessions> digest.
-  memorySessions() {
-    return request<{ sessions: MemorySessionDigest[] }>("/api/memory/sessions");
+  // `sessionId` = the chat being viewed, so the row for it is reported the way
+  // the agent sees it (a session is never a "prior" session of itself).
+  memorySessions(sessionId = "") {
+    const q = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : "";
+    return request<{ sessions: MemorySessionDigest[]; digest_policy?: MemoryDigestPolicy }>(
+      `/api/memory/sessions${q}`,
+    );
   },
   memorySession(sessionId: string) {
     return request<{ session: MemorySessionDigest }>(

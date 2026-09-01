@@ -23,4 +23,7 @@ paths = [
   # deliberately shaped like real sk-/ghp_ credentials, because obviously-fake strings
   # wouldn't prove the patterns catch the real thing.
   '''^tests/test_tool_output_redaction\.py$''',
+  # Fleet-diagnostics tool redaction (#3170) — sixth file with the same job, on both the
+  # success and the error path.
+  '''^tests/test_fleet_diagnostics_tool\.py$''',
 ]

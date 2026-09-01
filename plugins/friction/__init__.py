@@ -17,14 +17,22 @@ agent captures where it hit friction and feeds that back into improving its harn
 `kind` splits the backlog: `"harness"` → an improvement to the tools/framework;
 `"model"` → a labeled trace worth learning from. `friction_review` surfaces it;
 `resolve_friction` dismisses entries once fixed (a `resolved_at` stamp in place — the
-ledger stays append-only, so the audit trail survives). Enable via
-`plugins: { enabled: [friction] }`. The ledger path is `$FRICTION_LOG` or, by
-default, `<instance data dir>/friction/friction.jsonl`.
+ledger stays append-only, so the audit trail survives).
+
+Nothing here waits for someone to go looking. Open friction is projected into the agent's
+`<working_state>` (ADR 0079), broadcast on the plugin's event bus (ADR 0039), reviewable by
+the operator with `/friction`, and triaged by the read-only `friction_triage` subagent. A
+`recording-friction` SKILL.md teaches WHEN to record — the tools were always here; the
+judgement for using them was the missing half.
+
+First-party, **on by default**; disable via `plugins: { disabled: [friction] }`. The ledger
+path is `$FRICTION_LOG` or, by default, `instance_paths().store("friction")`.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,9 +40,55 @@ from pathlib import Path
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.tools import tool
 
+log = logging.getLogger(__name__)
+
+# The live registry, captured in ``register()``. Held so the tools (which the agent calls
+# far from any registry reference) can emit on the plugin's own event-bus namespace and read
+# live config after a hot-reload. Module-level because a LangChain @tool is a free function.
+_REGISTRY = None
+
+
+def _emit(topic: str, data: dict) -> None:
+    """Publish on the plugin's namespaced bus (ADR 0039), never fatally.
+
+    Friction is the one signal in the system that says "this got in the way". Other
+    plugins — a board that opens a card, a digest that rolls it up — should be able to
+    hear it without importing this module, which is exactly what the bus is for."""
+    if _REGISTRY is None:
+        return
+    try:
+        _REGISTRY.emit(topic, data)
+    except Exception:  # noqa: BLE001 — a bus problem must never break a tool call
+        log.debug("[friction] emit(%s) failed", topic, exc_info=True)
+
+
+def _cfg(key: str, default):
+    """One live config read (ADR 0019), tolerant of every context this module runs in —
+    tests and headless boots have no registry at all."""
+    if _REGISTRY is None:
+        return default
+    try:
+        live = _REGISTRY.live_config()  # already falls back to the register-time snapshot
+        value = (live or {}).get(key)
+        return default if value is None else value
+    except Exception:  # noqa: BLE001
+        return default
+
+
 _KINDS = ("harness", "model")
 _SEVERITIES = ("minor", "major")
 _SEVERITY_RANK = {"minor": 1, "major": 2}
+
+
+def _triage_rank(group: dict) -> tuple:
+    """Worst-first ordering, defined ONCE. The operator's `/friction` list and the agent's
+    working-state projection have to agree about what the top of the backlog is, or the two
+    of them read different lists off the same ledger."""
+    return (
+        _SEVERITY_RANK.get(str(group.get("severity")), 0),
+        int(group.get("count") or 1),
+        str(group.get("last_seen") or ""),
+    )
 
 # A general shell/exec tool being reached for is itself a friction signal — the agent
 # wanted a capability that isn't a first-class tool yet.
@@ -45,13 +99,46 @@ _CONTROL_FLOW = {"GraphInterrupt", "Interrupt", "NodeInterrupt", "GraphBubbleUp"
                  "ParentCommand", "GraphDelegate", "CancelledError"}
 
 
+def _legacy_ledger_path() -> Path:
+    """Where the ledger lived before it was instance-scoped. Read-only, for migration."""
+    base = os.environ.get("PROTOAGENT_HOME") or (Path.home() / ".protoagent")
+    return Path(base) / "friction" / "friction.jsonl"
+
+
 def _ledger_path() -> Path:
-    """Resolve at call time so $FRICTION_LOG and the instance dir are honored live."""
+    """Resolve at call time so $FRICTION_LOG and the instance dir are honored live.
+
+    Via ``instance_paths()`` (ADR 0004), NOT by re-deriving a path from
+    ``PROTOAGENT_HOME``. The old guess was ``<PROTOAGENT_HOME or ~/.protoagent>/friction/``,
+    which is only correct on the desktop — there ``PROTOAGENT_HOME`` points at one
+    workspace, so ``instance_root`` IS that directory and the two agree. On every other
+    install the instance root is ``~/.protoagent/default`` (or ``…/dev``), so the ledger
+    landed one level ABOVE it: outside the instance tree, shared by every instance on the
+    box, and untouched by ``scripts/dev-reset.sh``, which wipes only the sandbox.
+
+    It went unnoticed because the agent that uses this most is a desktop workspace. It
+    starts mattering now that the plugin is on by default and every instance writes."""
     override = os.environ.get("FRICTION_LOG")
     if override:
         return Path(override)
-    base = os.environ.get("PROTOAGENT_HOME") or (Path.home() / ".protoagent")
-    return Path(base) / "friction" / "friction.jsonl"
+    try:
+        from infra.paths import instance_paths
+
+        path = Path(instance_paths().store("friction")) / "friction.jsonl"
+    except Exception:  # noqa: BLE001 — a path-resolution failure must not disable recording
+        return _legacy_ledger_path()
+    # Adopt an existing pre-instance-scoping ledger rather than silently starting a second
+    # one: an operator who upgrades should keep their history, not appear to have none.
+    if not path.exists():
+        legacy = _legacy_ledger_path()
+        if legacy.is_file() and legacy != path:
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                legacy.replace(path)
+                log.info("[friction] migrated ledger %s -> %s", legacy, path)
+            except OSError:
+                return legacy  # can't move it — keep using it where it is
+    return path
 
 
 # The ledger is append-only and was unbounded (#2595). Trimmed to the newest N on write,
@@ -62,12 +149,22 @@ _MAX_ENTRIES = 2000
 _TRIM_SLACK = 200
 
 
+def _clip(text: str, limit: int) -> str:
+    """Truncate to ``limit`` characters, saying so. A silent clip reads as a thought the
+    agent failed to finish; an explicit one reads as a cap that was hit."""
+    text = text or ""
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "\u2026"
+
+
 def _log(kind: str, summary: str, detail: str, severity: str, source: str, tool_name: str = "") -> None:
     path = _ledger_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     rec = {
         "ts": datetime.now(timezone.utc).isoformat(),
-        "kind": kind, "summary": summary[:200], "detail": detail[:600],
+        # Mark a clip instead of stopping mid-word. Four of protoEngineer's 27 entries
+        # ended mid-sentence with no indication anything was missing, so the report read
+        # as a half-finished thought rather than a truncated one.
+        "kind": kind, "summary": _clip(summary, 200), "detail": _clip(detail, 600),
         "severity": severity, "source": source,
     }
     if tool_name:
@@ -79,6 +176,7 @@ def _log(kind: str, summary: str, detail: str, severity: str, source: str, tool_
     with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(rec, default=str) + "\n")
     _trim(path)
+    _emit("recorded", dict(rec))
 
 
 def _trim(path: Path) -> None:
@@ -201,23 +299,44 @@ async def record_friction(kind: str, summary: str, detail: str = "", severity: s
     return f"logged {severity} {kind} friction: “{summary}”."
 
 
-@tool
-async def resolve_friction(summary: str, reason: str = "") -> str:
-    """Mark friction entries as resolved so they drop out of the review backlog — call this
-    once the underlying rough edge is actually fixed, not to silence a live signal.
+def _rewrite_ledger(path: Path, lines: list[str]) -> None:
+    """Replace the ledger atomically.
 
-    ``summary`` is a substring match: EVERY unresolved entry whose summary contains it is
-    stamped with a ``resolved_at`` timestamp (and ``reason``, if given) in place. Nothing
-    is deleted — the ledger stays append-only and the audit trail survives."""
-    if not summary.strip():
-        return "summary is required (a substring of the entries to resolve)"
+    ``resolve_friction`` used ``path.write_text``, which truncates before it writes:
+    an interrupted rewrite left a half-empty ledger with no way back. The whole point
+    of stamping ``resolved_at`` in place (rather than deleting) is that the audit trail
+    survives, so the write that does it must not be the thing that loses it. Write a
+    sibling temp file, then ``os.replace`` it over the original — atomic on POSIX and
+    Windows alike."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def set_resolved(
+    summary: str, *, resolved: bool = True, reason: str = "", kind: str = "", exact: bool = False
+) -> int:
+    """Stamp (or clear) ``resolved_at`` on matching entries in place; returns the count.
+
+    ``exact`` is the difference between the two callers, and it matters. The agent's
+    ``resolve_friction`` tool matches a SUBSTRING — it is fixing a rough edge it just
+    described and wants every phrasing of it to drop out of the backlog. The console
+    acts on one grouped row, keyed by ``(kind, summary)``; a substring match from there
+    would silently resolve every OTHER row whose summary happens to contain this one's
+    text (``"tool 'task' raised"`` is a substring of nothing, but
+    ``"reached for escape hatch 'shell'"`` sits inside a longer agent-written summary
+    the operator never looked at). The console therefore matches the full summary and
+    the kind, and touches exactly the row that was clicked.
+
+    Nothing is ever deleted — un-resolving clears the stamp, so a row reopened by
+    mistake is recoverable and the ledger stays append-only in shape."""
     path = _ledger_path()
     if not path.exists():
-        return "no matching entries found — the friction backlog is empty."
+        return 0
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return "no matching entries found — the ledger could not be read."
+        return 0
     needle = summary.strip()
     stamp = datetime.now(timezone.utc).isoformat()
     out_lines: list[str] = []
@@ -228,18 +347,51 @@ async def resolve_friction(summary: str, reason: str = "") -> str:
         except json.JSONDecodeError:
             out_lines.append(line)  # foreign lines pass through untouched
             continue
-        if isinstance(rec, dict) and not rec.get("resolved_at") and needle in str(rec.get("summary", "")):
-            rec["resolved_at"] = stamp
-            if reason.strip():
-                rec["resolved_reason"] = reason.strip()[:300]
+        if not isinstance(rec, dict):
+            out_lines.append(line)
+            continue
+        rec_summary = str(rec.get("summary", ""))
+        hit = rec_summary == needle if exact else needle in rec_summary
+        if hit and kind and str(rec.get("kind", "")) != kind:
+            hit = False
+        # Only flip entries that are not already in the requested state, so the count
+        # reports real changes rather than rows that were already there.
+        if hit and bool(rec.get("resolved_at")) != resolved:
+            if resolved:
+                rec["resolved_at"] = stamp
+                if reason.strip():
+                    rec["resolved_reason"] = _clip(reason.strip(), 300)
+            else:
+                rec.pop("resolved_at", None)
+                rec.pop("resolved_reason", None)
             out_lines.append(json.dumps(rec, default=str))
             matched += 1
         else:
             out_lines.append(line)
+    if matched:
+        _rewrite_ledger(path, out_lines)
+        _emit("resolved" if resolved else "reopened",
+              {"summary": needle, "kind": kind, "count": matched, "reason": _clip(reason.strip(), 300)})
+    return matched
+
+
+@tool
+async def resolve_friction(summary: str, reason: str = "") -> str:
+    """Mark friction entries as resolved so they drop out of the review backlog — call this
+    once the underlying rough edge is actually fixed, not to silence a live signal.
+
+    ``summary`` is a substring match: EVERY unresolved entry whose summary contains it is
+    stamped with a ``resolved_at`` timestamp (and ``reason``, if given) in place. Nothing
+    is deleted — the ledger stays append-only and the audit trail survives."""
+    if not summary.strip():
+        return "summary is required (a substring of the entries to resolve)"
+    if not _ledger_path().exists():
+        return "no matching entries found — the friction backlog is empty."
+    needle = summary.strip()
+    matched = set_resolved(needle, resolved=True, reason=reason)
     if not matched:
-        return f"no matching entries found for “{needle}”."
-    path.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
-    return f"resolved {matched} {'entry' if matched == 1 else 'entries'} matching “{needle}”."
+        return f"no matching entries found for \u201c{needle}\u201d."
+    return f"resolved {matched} {'entry' if matched == 1 else 'entries'} matching \u201c{needle}\u201d."
 
 
 @tool
@@ -264,6 +416,73 @@ async def friction_review(kind: str = "", include_resolved: bool = False) -> str
     return "\n".join(lines)
 
 
+# ── ADR 0079 seam: the agent's own backlog, in its own working state ─────────
+#
+# #2595 called the ledger "write-only". A read API (#2607) and a console view (#2621)
+# both landed, and it stayed write-only IN THE WAY THAT MATTERED: every consumer was
+# something a HUMAN had to open. The agent recorded friction and then never saw it again,
+# so the same rough edge got re-reported for weeks. `register_work_provider` is the seam
+# that closes it — open friction is rendered into `<working_state>` beside OPEN TASKS, so
+# the agent observes its own backlog on every turn instead of polling for it.
+
+# The provider runs INLINE ON EVERY TURN, so it must never re-read the ledger just because
+# it was asked. Cache the projection and invalidate on the file's (mtime, size) — a stat is
+# cheap, parsing 2000 JSONL rows is not.
+_WORK_CACHE: dict = {"stamp": None, "items": []}
+
+
+def _work_snapshot() -> list[dict]:
+    """The grouped, unresolved ledger — recomputed only when the file actually changed."""
+    path = _ledger_path()
+    try:
+        st = path.stat()
+        stamp = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        _WORK_CACHE["stamp"], _WORK_CACHE["items"] = None, []
+        return []
+    if _WORK_CACHE["stamp"] != stamp:
+        _WORK_CACHE["items"] = grouped_entries()
+        _WORK_CACHE["stamp"] = stamp
+    return _WORK_CACHE["items"]
+
+
+def open_friction_work() -> list[dict]:
+    """The friction worth interrupting the agent's turn for.
+
+    Deliberately NOT the whole backlog. `<working_state>` is a shared, bounded budget —
+    four core sections live in it — so a 23-row ledger dumped in every turn would crowd
+    out the agent's actual commitments and train it to skim the block. The filter is the
+    same one a person triaging would apply: something is worth carrying if it is `major`,
+    or if it has happened enough times to be a pattern rather than an incident.
+
+    A quiet instance therefore contributes NOTHING, which is the property that makes this
+    safe to ship on by default: the block only grows when there is real, repeated friction.
+    """
+    if not bool(_cfg("working_state", True)):
+        return []
+    threshold = max(1, int(_cfg("working_state_repeat_threshold", 3) or 3))
+    limit = max(1, int(_cfg("working_state_limit", 3) or 3))
+    ranked = sorted(
+        (g for g in _work_snapshot()
+         if g.get("severity") == "major" or int(g.get("count") or 1) >= threshold),
+        key=_triage_rank, reverse=True,
+    )
+    out: list[dict] = []
+    for g in ranked[:limit]:
+        count = int(g.get("count") or 1)
+        state = str(g.get("severity") or "minor")
+        if count > 1:
+            state += f" x{count}"
+        out.append({
+            "state": state,
+            "title": str(g.get("summary") or ""),
+            # The hint names the escape hatch, because "what would have helped" is the
+            # actionable half and it is the half the agent is being asked to fix.
+            "hint": f"tool: {g['tool']}" if g.get("tool") else "resolve_friction when fixed",
+        })
+    return out
+
+
 class FrictionMiddleware(AgentMiddleware):
     """Auto-capture: escape-hatch reaches (missing-tool signal) + genuine tool errors,
     logged without the agent's help. HITL/interrupt control-flow is filtered out."""
@@ -271,14 +490,27 @@ class FrictionMiddleware(AgentMiddleware):
     def _note_escape_hatch(self, request) -> None:
         name = request.tool_call.get("name", "?")
         if name in _ESCAPE_HATCHES:
+            # json.dumps, not str(): a Python dict repr ({'command': 'git diff'}) is not
+            # parseable by anything downstream, and the console rendered it verbatim —
+            # single quotes, u-prefixes and all — as the "detail" an operator is meant to
+            # read. JSON is the same information the view can pretty-print.
+            try:
+                args = json.dumps(request.tool_call.get("args", {}), default=str)
+            except (TypeError, ValueError):
+                args = str(request.tool_call.get("args", {}))
             _log("harness", f"reached for escape hatch '{name}' — candidate for a first-class tool",
-                 detail=str(request.tool_call.get("args", {}))[:300], severity="minor",
-                 source="auto", tool_name=name)
+                 detail=_clip(args, 300), severity="minor", source="auto", tool_name=name)
 
     def _note_error(self, request, e: Exception) -> None:
         if type(e).__name__ in _CONTROL_FLOW:
             return  # HITL pause / delegation / cancel — not friction
-        _log("harness", f"tool '{request.tool_call.get('name', '?')}' raised",
+        # The exception type belongs in the SUMMARY, not only the detail. Groups are keyed
+        # on (kind, summary), so a bare "tool 'task' raised" collapsed every distinct
+        # failure of that tool into ONE row — a RuntimeError and a TimeoutError counted
+        # together, showing "x5" against whichever detail happened to be logged first. The
+        # count is the triage signal, so a count that spans unrelated bugs is worse than no
+        # count: it argues for a fix nobody can scope.
+        _log("harness", f"tool '{request.tool_call.get('name', '?')}' raised {type(e).__name__}",
              detail=f"{type(e).__name__}: {e}", severity="major", source="auto",
              tool_name=request.tool_call.get("name", ""))
 
@@ -299,8 +531,113 @@ class FrictionMiddleware(AgentMiddleware):
             raise
 
 
-def _build_router():
-    """``GET /api/friction`` — the read path the ledger never had (#2595).
+def _build_subagent():
+    """A read-only triage delegate the lead agent can dispatch with ``task``.
+
+    Triage is a genuinely different job from recording: it reads the WHOLE backlog at
+    once, looks for the pattern across entries, and decides what is worth filing. Doing
+    that inline costs the lead agent a long context of raw ledger rows mid-task, which is
+    exactly what delegation is for.
+
+    Read-only by construction — it gets `friction_review` and nothing that writes. A
+    triage pass must not be able to resolve what it just decided to file; that is the
+    operator's call (`/friction`) or a deliberate `resolve_friction` after the fix lands.
+    """
+    from graph.subagents.config import SubagentConfig
+
+    return SubagentConfig(
+        name="friction_triage",
+        description=(
+            "Read the friction backlog and turn it into a filing plan: group related "
+            "entries, name the root cause, and draft issue titles/bodies for the ones "
+            "worth tracking. Read-only — it never resolves or records."
+        ),
+        system_prompt=(
+            "You triage this agent's own friction backlog.\n\n"
+            "Call `friction_review` (both channels) and read the whole list before "
+            "judging any single entry — the value is in the pattern. Then:\n"
+            "1. GROUP entries that share a root cause, even when the summaries differ. "
+            "Five 'reached for escape hatch' entries and one 'no tool to do X' are "
+            "usually one missing tool.\n"
+            "2. RANK by cost: how often it recurs x how much it blocked. A major seen "
+            "once can outrank a minor seen ten times, or not — say which and why.\n"
+            "3. For each group worth tracking, draft a title and a body: what happens, "
+            "how to reproduce it, and what would have helped. The last part is the "
+            "actionable half and the half that gets dropped.\n"
+            "4. Say explicitly which entries are NOT worth filing, and why — a triage "
+            "pass that files everything has not triaged anything.\n\n"
+            "You cannot resolve anything and should not ask to. Report the plan and stop."
+        ),
+        # Explicitly listed: a subagent gets only the tools named here, so an empty list
+        # would leave it unable to read the very backlog it exists to triage.
+        tools=["friction_review"],
+        default_prompt="Triage the current friction backlog and propose what to file.",
+    )
+
+
+async def _friction_command(rest: str, _session_id: str):
+    """``/friction`` — the operator's read of the backlog, without spending a turn.
+
+    User-only by design (``register_chat_command`` is not an agent tool), which is the
+    point: an operator can RESOLVE friction from here, and the model cannot resolve its
+    own backlog by talking to itself. ``/friction`` summarises; ``/friction <text>``
+    resolves every entry matching that text and says how many it stamped.
+    """
+    needle = rest.strip()
+    if needle:
+        # Substring, like the tool — an operator clearing "board_cancel" means every
+        # phrasing of it. But a bulk action whose blast radius is invisible is how you
+        # resolve six signals meaning to resolve one, so NAME what went. Each row can be
+        # reopened individually from the Friction view; nothing is ever deleted.
+        hit = [g for g in grouped_entries() if needle in str(g.get("summary", ""))]
+        changed = set_resolved(needle, resolved=True, reason="resolved by the operator via /friction")
+        if not changed:
+            return f"No open friction matching “{needle}”. `/friction` lists what is open."
+        lines = [
+            f"Resolved **{changed}** {'entry' if changed == 1 else 'entries'} across "
+            f"{len(hit)} {'signal' if len(hit) == 1 else 'signals'} matching “{needle}”:",
+            "",
+        ]
+        lines += [f"- {g.get('summary', '')}" for g in hit[:10]]
+        if len(hit) > 10:
+            lines.append(f"- …and {len(hit) - 10} more")
+        lines += ["", "Reopen any of them from the **Friction** view if that was too broad."]
+        return "\n".join(lines)
+
+    groups = grouped_entries()
+    if not groups:
+        return "**Friction backlog is empty** — nothing recorded, or everything is resolved."
+    occurrences = sum(int(g.get("count") or 1) for g in groups)
+    major = [g for g in groups if g.get("severity") == "major"]
+    lines = [
+        f"**Friction backlog** — {len(groups)} open "
+        f"{'signal' if len(groups) == 1 else 'signals'} across {occurrences} "
+        f"{'occurrence' if occurrences == 1 else 'occurrences'}"
+        + (f", {len(major)} major" if major else ""),
+        "",
+    ]
+    # Worst first — the same ranking the working-state projection uses, so the operator
+    # and the agent are looking at the same top of the list.
+    ranked = sorted(groups, key=_triage_rank, reverse=True)
+    for g in ranked[:10]:
+        count = int(g.get("count") or 1)
+        tail = f" ×{count}" if count > 1 else ""
+        lines.append(f"- `{g.get('severity', 'minor')}`{tail} {g.get('summary', '')}")
+    if len(ranked) > 10:
+        lines.append(f"- …and {len(ranked) - 10} more")
+    lines += ["", "Open the **Friction** view to read details, or `/friction <text>` to resolve."]
+    return "\n".join(lines)
+
+
+def _build_router(*, legacy: bool = False):
+    """The ledger's read + triage API — the read path it never had (#2595).
+
+    Mounted TWICE, on purpose. The canonical mount is the namespaced
+    ``/api/plugins/friction/...`` that plugin-view Rule 2 asks for
+    (docs/guides/building-react-plugin-views.md); ``legacy=True`` re-serves the same
+    handlers at the top-level ``/api/friction`` that #2607 shipped and documented, so
+    anything already calling it keeps working. Both are bearer-gated — they live under
+    ``/api/`` — and the console view calls the canonical one.
 
     Agents were doing the hard part: noticing friction at the moment it happened and
     writing it down with the failing command attached. Nothing consumed it, so entries sat
@@ -311,8 +648,12 @@ def _build_router():
     from fastapi import APIRouter
 
     router = APIRouter()
+    # The prefix is applied by register_router for the canonical mount, so the paths here
+    # are relative; the legacy mount carries the old absolute paths itself.
+    read_path = "/api/friction" if legacy else ""
+    resolve_path = "/api/friction/resolve" if legacy else "/resolve"
 
-    @router.get("/api/friction")
+    @router.get(read_path or "/")
     async def _friction(kind: str = "", grouped: bool = True, limit: int = 100, resolved: bool = False) -> dict:
         """Recorded friction, newest first. ``grouped`` (default) collapses repeats of the
         same summary into one item with a count — five identical escape-hatch reaches are
@@ -333,6 +674,36 @@ def _build_router():
             "counts": {k: sum(1 for r in read_entries(include_resolved=resolved) if r.get("kind") == k)
                        for k in _KINDS},
         }
+
+    @router.post(resolve_path)
+    async def _resolve(payload: dict) -> dict:
+        """Resolve (or reopen) one grouped row — the console's half of the triage state.
+
+        The view used to "dismiss" into ``localStorage``: per-browser, invisible to the
+        agent, and contradicted by the ledger the moment ``friction_review`` ran. An
+        operator would clear the backlog on screen and the agent would keep reporting
+        every item as live. There is one backlog, so there is one place to record that a
+        row is done — the ledger, the same ``resolved_at`` stamp the ``resolve_friction``
+        tool writes.
+
+        Matches the full ``summary`` and ``kind`` exactly (see ``set_resolved``): the
+        console is acting on the row it rendered, not on a search.
+        """
+        summary = str(payload.get("summary") or "").strip()
+        if not summary:
+            return {"error": "summary is required", "changed": 0}
+        kind = str(payload.get("kind") or "").strip()
+        if kind and kind not in _KINDS:
+            return {"error": f"kind must be one of {_KINDS}", "changed": 0}
+        resolved = bool(payload.get("resolved", True))
+        changed = set_resolved(
+            summary,
+            resolved=resolved,
+            reason=str(payload.get("reason") or ""),
+            kind=kind,
+            exact=True,
+        )
+        return {"changed": changed, "resolved": resolved, "summary": summary, "kind": kind}
 
     return router
 
@@ -370,9 +741,39 @@ def _build_view_router():
 
 def register(registry):
     """protoAgent plugin entrypoint."""
+    global _REGISTRY
+    _REGISTRY = registry
     registry.register_tools([record_friction, friction_review, resolve_friction])
     registry.register_middleware(lambda config: FrictionMiddleware())
-    registry.register_router(_build_router(), prefix="")
+    # ADR 0079 — the agent observes its own backlog instead of re-reporting it (see
+    # ``open_friction_work``). Bounded and self-limiting: a quiet ledger adds no lines.
+    registry.register_work_provider("backlog", open_friction_work, label="OPEN FRICTION")
+    # The tools were always here; what was missing was the judgement for USING them. The
+    # module docstring said as much ("the model has to reach for it") and then shipped no
+    # skill, leaving every operator to paste the same guidance into their own persona.
+    registry.register_skill_dir("skills")
+    # User-only (never an agent tool) so resolving stays an operator action — the model
+    # must not be able to clear its own backlog by deciding it is clear.
+    registry.register_chat_command("friction", _friction_command)
+    registry.register_subagent(_build_subagent())
+    # Advertised on the agent card so a PEER can ask this agent what has been getting in
+    # its way — the fleet-level version of the same question the console view answers.
+    registry.register_a2a_skill({
+        "id": "friction-review",
+        "name": "Friction review",
+        "description": (
+            "Report this agent's recorded friction — the tools that were missing or "
+            "awkward, the errors that misled it, and how often each recurred."
+        ),
+        "tags": ["diagnostics", "self-report", "observability"],
+        "examples": ["What has been getting in your way lately?"],
+    })
+    # Rule 2 (docs/guides/building-react-plugin-views.md): the data API belongs in the
+    # plugin's own namespace. #2607 shipped it at the top-level /api/friction and that is
+    # a documented, in-use path, so the canonical mount is added rather than swapped and
+    # the old one is kept as an alias.
+    registry.register_router(_build_router(), prefix="/api/plugins/friction")
+    registry.register_router(_build_router(legacy=True), prefix="")
     # Default prefix (None) resolves to /plugins/friction — the canonical public
     # view prefix (ADR 0026) — so the manifest's views[].path matches exactly.
     registry.register_router(_build_view_router())

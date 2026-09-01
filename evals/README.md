@@ -51,6 +51,29 @@ python -m evals.report
 python -m evals.compare results/run-OLD.json results/run-NEW.json
 ```
 
+## Compare digest policies (the #3186 A/B)
+
+`--prior-sessions` turns `context.prior_sessions` into a sweep axis: one arm per
+policy, each booted from a seed config carrying it.
+
+```bash
+# Is the always-on digest worth its turn cost now that session_search exists?
+python -m evals.sweep --models protolabs/reasoning \
+  --prior-sessions newest,off --category continuity --repeat 3
+```
+
+Each arm gets a throwaway instance whose session fixtures are seeded **before**
+boot — the digest's entry pool is cached for 60 s per process, so a summary
+written after boot can be missing from the first turns' digest and you would be
+measuring the cache, not the policy. The arms are labelled by policy in the
+matrix, and the per-case `passes/N` table is what the decision rests on; the
+latency/token footnote is the cost side.
+
+Running the same cases against an ALREADY-RUNNING agent (`python -m evals.runner
+--category continuity`) works and is the fast way to smoke-test the fixtures, but
+the first case's seeded summaries may not be in that agent's digest yet — under
+`newest` that makes the run measure a colder digest than the policy really gives.
+
 ## Categories
 
 | Category | What it covers |
@@ -64,6 +87,7 @@ python -m evals.compare results/run-OLD.json results/run-NEW.json
 | `goal` | Goal mode: set a goal, trigger the loop, assert the resulting goal state + footer |
 | `subagent` | Lead delegates open-ended work (`expected_any_tools`: `task` / `run_workflow`) |
 | `workflow` | A recipe runs end-to-end via `/api/workflows/{name}/run`; assert on its output **and** (optionally) on tool-firing — `expected_tools` / `expected_any_tools` check the audit log, so a case can require a step to have actually called a tool (e.g. a quant step that backtests, not one that only describes a backtest) |
+| `continuity` | Cross-session continuity ([#3186](https://github.com/protoLabsAI/protoAgent/issues/3186)): direct recall of a past decision, vague "what was I working on", a decision superseded in a LATER session, bias from unrelated recent sessions (no tool should fire, and none of their topics may leak), and abstention about a session that never happened. Cases seed their own summaries with `session_seed`, so the A/B arms below all see the same past |
 | `memory-regression` | Memory delivery-layer probes ([ADR 0069](../docs/adr/0069-memory-delivery-layer.md) D10): a knowledge-update case (seed a fact, seed its supersede, assert the newer value wins and the stale one is not restated — `forbidden_patterns`), an abstention case (ask about an adjacent-but-absent fact, judge that it declines rather than fabricates — `verify_rubric`), and a poisoning replay (ingest a doc with an embedded instruction payload, then a later benign turn; assert both the behavioral condition — the payload token never appears — and the store-level one — `verify_kb.max_chunks_containing` bounds the marker's row count so the "save a memory that …" payload never persists) |
 
 ## PTC graduation bench (ADR 0103, #2807)

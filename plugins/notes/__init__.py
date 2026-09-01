@@ -639,8 +639,8 @@ _EDITOR_HTML = r"""<!doctype html><html><head><meta charset="utf-8">
      re-theme; falls back to plain text where a theme omits them. */
   #hdiff{margin:0;padding:10px;font-family:var(--pl-font-mono,ui-monospace,Menlo,monospace);
     font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
-  .dadd{color:var(--pl-color-success,inherit)}
-  .ddel{color:var(--pl-color-danger,inherit)}
+  .dadd{color:var(--pl-color-status-success,inherit)}
+  .ddel{color:var(--pl-color-status-error,inherit)}
   .dhdr{color:var(--pl-color-fg-subtle)}
 
   /* CodeMirror hooks. It ships no colours of its own, so these are the whole theme.

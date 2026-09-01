@@ -1,23 +1,60 @@
 id: friction
 name: Friction Log
-version: 0.1.0
+version: 0.2.0
 description: >
   The agent records its own friction — missing or awkward tools, confusing errors,
   wrong paths it recognizes — alongside auto-captured tool errors and escape-hatch
   reaches. One ledger, split into harness vs model friction, so the improvement
-  backlog writes itself from real use. A self-report pattern in the spirit of
-  NousResearch/hermes-agent. Bundled example — opt in via plugins.enabled.
-enabled: false
+  backlog writes itself from real use. Open friction is projected into the agent's
+  working state (ADR 0079), so it observes its own backlog instead of re-reporting
+  the same rough edge for weeks. A self-report pattern in the spirit of
+  NousResearch/hermes-agent.
+# First-party, on by default (2026-09). The plugin is self-limiting: auto-capture only
+# fires on real tool errors and escape-hatch reaches, and the working-state projection
+# adds NOTHING until there is major or repeated friction to report. Disable per-instance
+# via `plugins.disabled: [friction]`.
+enabled: true
 requires_env: []
 capabilities:
   network: []
   filesystem: scoped   # appends a JSONL ledger under the instance data dir
-emits: []
+
+# ADR 0039 — friction is broadcast on this plugin's own namespace so a board can open a
+# card, or a digest can roll it up, WITHOUT importing this module.
+emits:
+  - friction.recorded
+  - friction.resolved
+  - friction.reopened
 subscribes: []
 
-# Console surface (ADR 0026): a rail icon opening the read-only ledger view this
-# plugin's router serves at /plugins/friction/view (public page; its data comes
-# from the existing bearer-gated GET /api/friction, #2607). Nothing to enable
-# separately — the view only appears once this plugin itself is opted in.
+# Operator config (ADR 0019) — `config:` declares the defaults; `settings:` renders the
+# editable fields in Settings ▸ Plugins (no restart). Read live, so a save takes effect
+# on the next turn rather than the next boot.
+config_section: friction
+config:
+  working_state: true                 # project open friction into <working_state> (ADR 0079)
+  working_state_limit: 3              # at most N lines — the block is a shared budget
+  working_state_repeat_threshold: 3   # a minor signal must repeat this often to be carried
+
+settings:
+  - key: working_state
+    label: "Show open friction in the agent's working state"
+    type: bool
+  - key: working_state_limit
+    label: "Max friction lines in working state"
+    type: number
+  - key: working_state_repeat_threshold
+    label: "Repeats before a minor friction is carried (major always is)"
+    type: number
+
+# Console surface (ADR 0026): a rail icon opening the ledger view this plugin's router
+# serves at /plugins/friction/view (public page; its data comes from the bearer-gated
+# GET /api/friction, #2607). The palette entry (ADR 0057) morphs ⌘K straight into the
+# same page with the search field focused.
 views:
-  - { id: friction, label: "Friction", icon: "AlertTriangle", path: "/plugins/friction/view" }
+  - id: friction
+    label: "Friction"
+    icon: "AlertTriangle"
+    placement: rail
+    path: "/plugins/friction/view"
+    palette: { path: "/plugins/friction/view?mode=search" }
