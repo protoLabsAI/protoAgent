@@ -867,18 +867,24 @@ def test_tracing_is_reachable_from_a_fleet_members_console():
     """
     import re
 
-    src = _console_source("settings", "SettingsSurface.tsx")
-    section = re.search(r'\{[^{}]*id: "tracing"[^{}]*\}', src)
+    # The section TABLE (ids + gates) is a leaf, `settings/sections.ts`, so ⌘K and the desktop
+    # Launcher can name a section without importing the whole settings tree; SettingsSurface.tsx
+    # keeps the render functions. The two halves are asserted against their two files.
+    table = _console_source("settings", "sections.ts")
+    surface = _console_source("settings", "SettingsSurface.tsx")
+    section = re.search(r'\{[^{}]*id: "tracing"[^{}]*\}', table)
     assert section, "Settings has no 'tracing' section — the fields render in no console surface"
     body = section.group(0)
-    assert 'category="Observability"' in body, "the Tracing section renders some other category"
+    assert 'tracing: () => <SettingsCategoryPanel category="Observability"' in surface, (
+        "the Tracing section renders some other category"
+    )
     assert "hostOnly" not in body, (
         "the Tracing section is host-console-only again — a fleet member (the deployment shape "
         "#3017 exists for) can no longer reach it"
     )
     # The contrast that makes the point, and the reason this section is not simply folded in
     # beside the telemetry rollup.
-    telemetry_section = re.search(r'\{[^{}]*id: "telemetry"[^{}]*\}', src)
+    telemetry_section = re.search(r'\{[^{}]*id: "telemetry"[^{}]*\}', table)
     assert telemetry_section and "hostOnly: true" in telemetry_section.group(0)
 
 

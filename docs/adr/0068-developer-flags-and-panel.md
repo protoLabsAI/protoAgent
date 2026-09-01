@@ -20,7 +20,7 @@ Status: **Accepted** (shipped — #1506, Developer panel + flag backend)
     `:768`) with the typed `Field`/`FIELDS` schema (`graph/settings_schema.py:23-51,61-687`) and the
     plugin-config precedence **ENV > UI > default** (`plugins/artifact/__init__.py:60-102`).
   - **The settings surface** — domain-first IA (ADR 0048): four section registries in
-    `apps/web/src/settings/SettingsSurface.tsx`, incl. `CONSOLE_SECTIONS` (device-local prefs —
+    `apps/web/src/settings/sections.ts` (they lived in `SettingsSurface.tsx` until #3285), incl. `CONSOLE_SECTIONS` (device-local prefs —
     Theme/Chat/Keyboard, **no cascade**, localStorage), and the schema-driven `SettingInput` renderer.
   - **Plugin enable/disable** — a **load-time** gate on whether a plugin's code/tools/router mount at
     all (`graph/plugins/loader.py:257-299`, `plugins.enabled`/`plugins.disabled` lists).
@@ -83,7 +83,7 @@ overrides, then the channel default.
 
 ### D4 — The Developer panel is a device-local settings section, gated to `dev`/`beta`
 
-A new **Settings ▸ Developer** section (a `CONSOLE_SECTIONS` entry in `SettingsSurface.tsx` — the same
+A new **Settings ▸ Developer** section (a `CONSOLE_SECTIONS` entry in `settings/sections.ts`, `SettingsSurface.tsx` until #3285 — the same
 device-local, no-cascade home as Theme/Chat/Keyboard) lists every registered flag with its tier, resolved
 state, a **per-session override** toggle, and **Reset**. Override state is device-local (localStorage via
 the `createUISlice`/`uiStore` pattern, `apps/web/src/ext/uiStateRegistry.ts:39-47`) — a developer's toggles

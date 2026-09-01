@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import src from "./SettingsSurface.tsx?raw";
+import { settingsSections } from "./sections";
+// The section table lives in ./sections (a leaf); SettingsSurface.tsx now holds only renderers.
+import src from "./sections.ts?raw";
 import flags from "../../../../runtime/flags.py?raw";
 
 // Settings ▸ Devices is gated OFF (ADR 0068). The pairing flow behind it stopped the desktop
@@ -15,9 +17,14 @@ describe("Settings ▸ Devices is flag-gated", () => {
   });
 
   it("flag-off sections are filtered from nav AND from id resolution", () => {
-    // Filtering only the nav would leave a persisted "devices" id rendering the panel.
-    expect(src).toContain("const shown = (list: Section[])");
-    expect(src).toMatch(/const sections = \[\s*\.\.\.agentSections/);
+    // Filtering only the nav would leave a persisted "devices" id rendering the panel. The
+    // resolvable set IS the flattened nav, so one assertion covers both.
+    const ids = settingsSections({ flagOn: () => false, onHost: true }).map((s) => s.id);
+    expect(ids).not.toContain("devices");
+    const on = settingsSections({ flagOn: (f) => f === "settings.devices", onHost: true }).map(
+      (s) => s.id,
+    );
+    expect(on).toContain("devices");
   });
 
   it("the flag ships OFF", () => {
