@@ -1572,6 +1572,15 @@ class LangGraphConfig:
     # (comma-separated). See graph/fleet/supervisor.start_autostart_members.
     fleet_autostart: list[str] = field(default_factory=list)
 
+    # Guarded read-only fleet-diagnostics tool (ADR 0071, #3170). Default OFF: when on, the
+    # model gets the ``fleet_diagnostics`` tool so an explicitly authorized managing agent can
+    # inspect a REGISTERED member's bounded log snapshot or one exact A2A task through that
+    # member's own operator-authenticated /api/diagnostics surface (#3168) — roster-only
+    # addressing, read-only, redacted. The endpoints exist regardless; exposing a
+    # fleet-reaching read to the model is the operator's explicit choice, so the default
+    # fleet never widens what an ordinary agent turn can reach. Config-only (no env).
+    fleet_diagnostics_enabled: bool = False
+
     # System lifecycle reactions (ADR 0074) — a top-level ``lifecycle_hooks:`` YAML list
     # of ``{event, prompt?, webhook?, session?}`` entries the runtime runs when a system
     # lifecycle event fires. ``event`` is one of ``app_loaded`` / ``agent_active`` /
@@ -2232,6 +2241,10 @@ class LangGraphConfig:
                     [s.strip() for s in os.environ.get("PROTOAGENT_FLEET_AUTOSTART", "").split(",") if s.strip()],
                 )
                 or []
+            ),
+            # Guarded fleet-diagnostics tool exposure (ADR 0071, #3170) — default off.
+            fleet_diagnostics_enabled=bool(
+                fleet.get("diagnostics", {}).get("enabled", cls.fleet_diagnostics_enabled)
             ),
             # System lifecycle reactions (ADR 0074) — top-level ``lifecycle_hooks:`` list.
             # Opt-in: absent/empty ⇒ [] ⇒ nothing fires beyond the bus broadcast.

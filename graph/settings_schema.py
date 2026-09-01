@@ -1271,6 +1271,24 @@ FIELDS: list[Field] = [
         restart=True,
         scope="host",
     ),
+    # Guarded fleet-diagnostics tool (ADR 0071, #3170). Same disposition as
+    # tools.self_config_enabled / soul.self_edit_enabled above: crossing into a
+    # fleet-reaching capability is the operator's explicit choice, so it ships off and is
+    # settable via YAML/API while staying out of the generic Settings UI for now. ui_hidden
+    # keeps it in FIELDS so it round-trips.
+    Field(
+        "fleet.diagnostics.enabled",
+        "fleet_diagnostics_enabled",
+        "Let the agent read fleet members' diagnostics",
+        "bool",
+        "Tools",
+        "When on, the lead agent gets the read-only `fleet_diagnostics` tool: it can inspect a "
+        "REGISTERED fleet member's bounded log tail or one exact A2A task through that member's "
+        "own operator-authenticated diagnostics endpoints (#3168). Roster-only (no arbitrary "
+        "host), redacted, and read-only — it can never start, resume, answer, or change a member. "
+        "Off by default; the endpoints exist regardless, this only exposes the tool to the model.",
+        ui_hidden=True,
+    ),
     Field(
         "developer.channel",
         "developer_channel",

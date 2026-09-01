@@ -24,10 +24,15 @@ from runtime.state import STATE
 
 log = logging.getLogger(__name__)
 
-# Tools "*" skips — a coding-agent brain already has its own code execution / file tools,
-# so exposing protoAgent's execute_code over the bus is redundant. Not a security gate
-# (you can still allowlist it by name); just avoids handing it a tool it already has.
-_STAR_EXCLUDE = {"execute_code"}
+# Tools "*" skips. ``execute_code``: a coding-agent brain already has its own code execution /
+# file tools, so exposing protoAgent's over the bus is redundant (not a gate — allowlist it by
+# name). ``fleet_diagnostics`` is different: it is a guarded, fleet-REACHING read (ADR 0071,
+# #3170) whose operator-MCP exposure is deliberately DEFERRED to its own security review, so a
+# ``full`` / ``*`` profile must not sweep it onto a foreign client. It is never built in this
+# path anyway — ``operator_tools`` passes no ``graph_config``, so its config gate stays off —
+# but the wildcard exclusion makes the deferral explicit and holds even if it ever arrives via
+# ``plugin_tools``. Naming it in the read-only profile is likewise out of scope this slice.
+_STAR_EXCLUDE = {"execute_code", "fleet_diagnostics"}
 
 # NEVER exposed over MCP, even when named explicitly — ask_human / request_user_input are
 # HITL tools that pause the turn via a LangGraph ``interrupt`` only the lead-turn runner

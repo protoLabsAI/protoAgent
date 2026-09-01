@@ -341,6 +341,47 @@ def test_host_and_sidecar_agree_with_registries_and_denylist(monkeypatch, goal_e
     assert ("create_watch" in host) is watches_enabled
 
 
+# ── fleet_diagnostics stays OUT of the operator-MCP profiles this slice (ADR 0071 / #3170) ──
+
+
+def test_fleet_diagnostics_not_in_read_only_profile():
+    """The guarded fleet-diagnostics tool must not ride the curated read-only profile — its
+    operator-MCP exposure is deferred to its own security review (#3170)."""
+    from runtime.operator_mcp_tools import _READ_ONLY_TOOLS
+
+    assert "fleet_diagnostics" not in _READ_ONLY_TOOLS
+
+
+def test_fleet_diagnostics_excluded_from_star(monkeypatch):
+    """Even if the tool reaches the exposure candidates (here via plugin_tools), a ``*`` / full
+    profile must NOT sweep it onto a foreign client — it is in the wildcard exclusion set."""
+    from langchain_core.tools import tool
+
+    from runtime.operator_mcp_tools import _STAR_EXCLUDE
+
+    assert "fleet_diagnostics" in _STAR_EXCLUDE
+
+    @tool
+    def fleet_diagnostics(member: str) -> str:
+        """stand-in for the guarded fleet-diagnostics tool"""
+        return member
+
+    monkeypatch.setattr(STATE, "plugin_tools", [fleet_diagnostics], raising=False)
+    star = {t.name for t in operator_tools(_cfg(["*"]))}
+    assert "fleet_diagnostics" not in star  # wildcard skips it
+    read_only = {t.name for t in operator_tools(_cfg_profile("read-only"))}
+    assert "fleet_diagnostics" not in read_only  # nor the read-only profile
+
+
+def test_fleet_diagnostics_absent_from_operator_mcp_by_default():
+    """The MCP build passes no graph_config, so the config-gated tool is never even built for
+    the bus — regardless of profile or the fleet.diagnostics.enabled flag on the agent."""
+    cfg = _cfg(["*"])
+    cfg.fleet_diagnostics_enabled = True  # on for the agent's own turn…
+    names = {t.name for t in operator_tools(cfg)}
+    assert "fleet_diagnostics" not in names  # …still absent from the operator MCP surface
+
+
 def test_registryless_sidecar_serves_no_verifier_gated_tools(monkeypatch):
     """With an EMPTY verifier registry (the pre-fix standalone sidecar) neither side may
     claim the goal/watch tools — the drift the re-check probe demonstrated."""

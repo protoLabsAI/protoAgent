@@ -134,6 +134,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "filesystem_projects": [],
     "filesystem_run_requires_approval": True,
     "fleet_autostart": [],
+    "fleet_diagnostics_enabled": False,  # #3170 — guarded tool, default off (example omits it)
     "fleet_max_warm": 0,
     "fleet_trace_export_enabled": False,
     "fleet_port_base": 7870,

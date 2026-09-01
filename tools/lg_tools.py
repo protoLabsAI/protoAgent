@@ -2388,6 +2388,8 @@ _CONFIG_WRITE_DENIED = (
     "delegates",         # each entry is an EXECUTABLE (command/args/workdir, permissions: auto)
     "egress",            # ADR 0008 network fence
     "filesystem",        # allow_run + the ADR 0007 project fence
+    "fleet",             # spawns members (autostart), announces on the LAN (mdns), and
+                         # exposes the guarded fleet-diagnostics reader (#3170) — no self-widening
     "mcp",               # out-of-process tool servers = new capability
     "operator",          # allowed_dirs / project_dir — the operator fence
     "plugins",           # enabling a plugin runs its code in-process AS the agent
@@ -2744,6 +2746,16 @@ def get_all_tools(
         from tools.onboard_tools import build_onboard_tools
 
         tools.extend(build_onboard_tools(graph_config))
+    # Guarded read-only fleet-diagnostics tool (ADR 0071, #3170). Default OFF: binds only when
+    # `fleet.diagnostics.enabled` is set, so an ordinary agent turn never sees it. The flag is
+    # read off graph_config (already threaded) rather than a new get_all_tools parameter, so no
+    # lead/subagent build has to change — and the operator-MCP build passes NO graph_config, so
+    # the tool is structurally absent from that surface (its MCP exposure is a separate security
+    # review, ADR 0071 / #3170). Lead + subagent allowlists still gate who actually calls it.
+    if getattr(graph_config, "fleet_diagnostics_enabled", False):
+        from tools.fleet_diagnostics import build_fleet_diagnostics_tool
+
+        tools.extend(build_fleet_diagnostics_tool())
     if knowledge_store is not None:
         tools.extend(_build_memory_tools(knowledge_store, graph_config, background_mgr))
     if scheduler is not None:
