@@ -1,4 +1,4 @@
-import { queryOptions } from "@tanstack/react-query";
+import { queryOptions, type QueryClient } from "@tanstack/react-query";
 
 import { api, currentSlug } from "./api";
 import type { FleetTelemetry, ReviewState } from "./types";
@@ -92,6 +92,13 @@ export const queryKeys = {
   // look again.
   get chatMentions() {
     return ns("delegates", "mentions");
+  },
+  // SERVER slash commands (`/api/chat/commands` — `/goal`, plugin commands, workflows,
+  // subagents, user-facing skills). Its own top-level key rather than a `plugins` subkey:
+  // plugins are only ONE of its sources, so it can't ride a prefix invalidation — every
+  // surface that writes one of the four names this key, via `invalidateChatCommands`.
+  get chatCommands() {
+    return ns("chat", "commands");
   },
   get acpAgents() {
     return ns("acp", "agents");
@@ -416,6 +423,56 @@ export const chatMentionsQuery = () =>
     queryFn: () => api.chatMentions(),
     retry: false,
   });
+
+// SERVER slash commands for the composer's `/` menu (and anything else that lists them —
+// the ⌘K palette next). Was a bare `useEffect` + `api.chatCommands()` + slot-local
+// useState inside ChatSessionSlot, so EVERY open chat tab refetched the same list on
+// mount with no shared cache and no key anything could invalidate. One query key, one
+// fetch.
+//
+// NO staleTime override, deliberately. The endpoint is LIVE, not static:
+// `_operator_chat_commands` re-resolves the registries per request, so the answer changes
+// with no restart. The client default (5s, queryClient.ts) is what keeps this a strict
+// improvement on the per-slot fetch it replaces rather than a regression: the slots that
+// mount together at boot still share ONE fetch (the dedupe this key exists for), while a
+// chat tab opened later still refetches on mount exactly as the old `useEffect` did. A
+// longer window would buy nothing and cost freshness — `staleTime` schedules no refetch,
+// it only withholds one, and with `refetchOnWindowFocus: false` and no `refetchInterval`
+// the ONLY triggers are a new observer mounting while stale and an explicit invalidation.
+//
+// Invalidation is the other half, because the list folds in four sources
+// (graph/slash_commands.py): plugin commands, workflows, subagents and user-facing skills.
+// Each console surface that writes one must call `invalidateChatCommands` — see its note.
+//
+// No `retry: false` here — unlike chatMentions a 404 isn't an expected answer, and the
+// shared default (one retry, riding out cold-start codes) is a strict improvement on the
+// fire-and-forget `.catch(() => {})` this replaces. It's a plain `useQuery`, so a failure
+// just leaves the server rows out of the menu (client commands still list) rather than
+// tripping an error boundary.
+export const chatCommandsQuery = () =>
+  queryOptions({
+    queryKey: queryKeys.chatCommands,
+    queryFn: () => api.chatCommands(),
+  });
+
+/** Refresh the `/`-menu command list after a mutation that changes what
+ *  `/api/chat/commands` answers.
+ *
+ *  Call this from EVERY such path. The endpoint folds FOUR registries into one list
+ *  (graph/slash_commands.py `resolve_slash_commands`) — plugin `register_chat_command`
+ *  tokens, workflow recipes, subagents, and user-facing skills — so no single surface owns
+ *  the key and no key prefix covers it: the plugins manager, Workflow Studio and the
+ *  Playbooks editor each invalidate a DIFFERENT key for their own list, and every one of
+ *  them also changes this one. Missing the call doesn't break a surface, it just leaves the
+ *  newly-created `/command` out of the composer's autocomplete until the next chat tab
+ *  opens (5s staleness) or a reload — the quiet failure `chatCommandsFreshness.test.ts` guards.
+ *
+ *  Not everything HAS a console mutation: a skill the agent authors mid-turn
+ *  (graph/skills/authoring) publishes no console event and no bus topic, so it surfaces on
+ *  the next newly-mounted chat tab rather than instantly. */
+export function invalidateChatCommands(qc: QueryClient): Promise<void> {
+  return qc.invalidateQueries({ queryKey: queryKeys.chatCommands });
+}
 
 export const installedPluginsQuery = () =>
   queryOptions({

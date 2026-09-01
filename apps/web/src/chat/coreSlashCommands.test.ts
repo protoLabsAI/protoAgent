@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { findSlashCommand } from "../ext/slashRegistry";
+import { findSlashCommand, registeredSlashCommands } from "../ext/slashRegistry";
 import "./coreSlashCommands"; // side-effect: registers /new, /clear, /effort
 
 import type { ComposerFormSpec, SlashContext } from "../ext/slashRegistry";
@@ -39,11 +39,50 @@ describe("core slash commands (dogfood the seam, ADR 0061)", () => {
     expect(findSlashCommand("new")!.flag).toBeUndefined(); // shipped commands stay untagged
   });
 
-  it("/clear, /effort, /compact, /help are no-ops (return false → fall through) without a session", () => {
-    expect(findSlashCommand("clear")!.run(ctx())).toBe(false);
-    expect(findSlashCommand("effort")!.run(ctx())).toBe(false);
-    expect(findSlashCommand("compact")!.run(ctx())).toBe(false);
-    expect(findSlashCommand("help")!.run(ctx())).toBe(false);
+  // ── The session-less inventory (#3283) ──────────────────────────────────────────────
+  // `chat/slashDispatch.ts` documents what a caller OUTSIDE the composer may offer when the
+  // visible slot has no session, and the ADR + changelog quote its numbers. In the composer
+  // a false is visible (the token falls through to the draft and gets sent as text); from a
+  // palette the same false is a silent no-op, so those numbers are a contract, not trivia.
+  // These three tests are what stops the note from going stale behind the 17th command.
+
+  const DECLINE_WITHOUT_SESSION = [
+    "clear", "export", "publish", "btw", "trajectory", "prompt", "perf",
+    "compact", "effort", "model", "incognito", "help", "bypass",
+  ];
+
+  it("exactly 13 core commands return false (→ fall through) without a session", () => {
+    for (const name of DECLINE_WITHOUT_SESSION) {
+      expect.soft(findSlashCommand(name)!.run(ctx()), `/${name} without a session`).toBe(false);
+    }
+    // The count itself is quoted in slashDispatch.ts, ADR 0061 and the changelog.
+    expect(DECLINE_WITHOUT_SESSION).toHaveLength(13);
+  });
+
+  it("pins the core inventory, so a new command has to face the session question", () => {
+    // A 17th command changes the "13 of the 16" arithmetic every one of those docs cites.
+    // If this trips: decide whether the command needs a session, add it to the list above
+    // (or not), and update the note in chat/slashDispatch.ts.
+    expect(registeredSlashCommands().map((c) => c.name).sort()).toEqual(
+      [
+        "btw", "bypass", "clear", "compact", "effort", "export", "goal", "help",
+        "incognito", "model", "new", "perf", "prompt", "publish", "trajectory", "watch",
+      ],
+    );
+  });
+
+  it("a `true` from a session-less command is NOT proof it did anything visible", () => {
+    // The reason a caller can't just treat "not in the 13" as the safe subset. /new is the
+    // only command that genuinely works with no session; /goal (and /watch) claim the token
+    // and answer through noteToThread — which the host itself no-ops without a session, so
+    // outside the composer the operator sees nothing at all.
+    const created = vi.spyOn(chatStore, "createSession");
+    expect(findSlashCommand("new")!.run(ctx())).toBe(true);
+    expect(created).toHaveBeenCalled(); // real work, no session needed
+
+    const notes: string[] = [];
+    expect(findSlashCommand("goal")!.run(ctx({ rest: "new", noteToThread: (m) => notes.push(m) }))).toBe(true);
+    expect(notes.join(" ")).toMatch(/open a chat tab/i); // …and only a note, which is dropped
   });
 
   it("/clear parks a clear request for confirmation instead of wiping inline (#2996)", () => {
