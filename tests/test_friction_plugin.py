@@ -225,7 +225,8 @@ def test_read_api_returns_grouped_items(monkeypatch, tmp_path):
 
     _seed(monkeypatch, tmp_path, [("harness", "repeated", "minor")] * 3 + [("model", "once", "minor")])
     app = FastAPI()
-    app.include_router(friction._build_router())
+    app.include_router(friction._build_router(), prefix="/api/plugins/friction")
+    app.include_router(friction._build_router(legacy=True))  # as register() mounts them
     client = TestClient(app)
 
     body = client.get("/api/friction").json()
@@ -331,7 +332,8 @@ def test_read_api_filters_resolved(ledger):
     _record("harness", "still broken")
     asyncio.run(resolve_friction.ainvoke({"summary": "fixed thing"}))
     app = FastAPI()
-    app.include_router(friction._build_router())
+    app.include_router(friction._build_router(), prefix="/api/plugins/friction")
+    app.include_router(friction._build_router(legacy=True))  # as register() mounts them
     client = TestClient(app)
 
     body = client.get("/api/friction").json()
@@ -357,7 +359,8 @@ def _client(monkeypatch, tmp_path):
 
     monkeypatch.setenv("FRICTION_LOG", str(tmp_path / "friction.jsonl"))
     app = FastAPI()
-    app.include_router(friction._build_router())
+    app.include_router(friction._build_router(), prefix="/api/plugins/friction")
+    app.include_router(friction._build_router(legacy=True))  # as register() mounts them
     return TestClient(app)
 
 
@@ -632,7 +635,7 @@ def test_friction_slash_resolves_and_says_how_many(wired):
     _record("harness", "board priority is immutable")
     _record("harness", "unrelated")
 
-    assert "Resolved 2 entries" in _slash(wired, "board priority")
+    assert "Resolved **2** entries" in _slash(wired, "board priority")
     assert [g["summary"] for g in grouped_entries()] == ["unrelated"]
 
 
@@ -767,3 +770,121 @@ class _FakePaths:
 
     def store(self, name):
         return self._root / name
+
+
+# ── review follow-ups ───────────────────────────────────────────────────────
+
+
+def test_bulk_resolve_names_what_it_resolved(wired):
+    """`/friction <text>` matches a SUBSTRING, like the tool — an operator clearing
+    "board_cancel" means every phrasing of it. A bulk action whose blast radius is
+    invisible is how you resolve six signals meaning to resolve one, so it has to say."""
+    _record("harness", "board_cancel refuses with open deps")
+    _record("harness", "board_cancel cannot cancel bd-uwj")
+    _record("harness", "something else entirely")
+
+    out = asyncio.run(wired.chat_commands["friction"]("board_cancel", "s"))
+
+    assert "board_cancel refuses with open deps" in out
+    assert "board_cancel cannot cancel bd-uwj" in out
+    assert "something else entirely" not in out
+    assert "Reopen" in out  # and it says the action is recoverable
+    assert [g["summary"] for g in grouped_entries()] == ["something else entirely"]
+
+
+def test_the_operator_and_the_agent_rank_the_backlog_identically(wired):
+    """Three copies of this ordering existed, one of them mislabelled as matching the
+    others. If they disagree, the operator and the agent read different lists off the
+    same ledger."""
+    from plugins.friction import _triage_rank, open_friction_work
+
+    for n in range(4):
+        asyncio.run(record_friction.ainvoke(
+            {"kind": "harness", "summary": f"repeated {n}", "severity": "minor"}))
+    for _ in range(5):
+        _record("harness", "repeated 0")
+    asyncio.run(record_friction.ainvoke({"kind": "harness", "summary": "one major", "severity": "major"}))
+
+    wired.config = {"working_state_limit": 10, "working_state_repeat_threshold": 1}
+    agent_order = [i["title"] for i in open_friction_work()]
+    operator_order = [g["summary"] for g in sorted(grouped_entries(), key=_triage_rank, reverse=True)]
+
+    assert agent_order == operator_order[: len(agent_order)]
+    assert agent_order[0] == "one major"
+
+
+def test_auto_captured_payloads_are_clipped_with_a_marker_too(ledger):
+    """The clip marker was added to `record_friction` but the auto-capture path kept a
+    bare 300-char slice, so the payload an operator actually reads still stopped
+    mid-word — and the view's "capped on write" notice never fired for it."""
+    mw = FrictionMiddleware()
+    mw._note_escape_hatch(_Req("shell", {"command": "x" * 500}))
+
+    detail = _recs(ledger)[0]["detail"]
+    assert len(detail) == 300 and detail.endswith("…")
+
+
+def test_the_working_state_provider_stays_far_inside_its_inline_budget(wired):
+    """It runs inline on EVERY turn. `graph.work_providers.SLOW_PROVIDER_S` is the line;
+    measured ~6.5ms cold at the ledger's 2000-entry cap, so this asserts an order of
+    magnitude of headroom rather than the exact number."""
+    import time
+
+    from graph.work_providers import SLOW_PROVIDER_S
+    from plugins.friction import _WORK_CACHE, open_friction_work
+
+    path = _ledger_for(wired)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as fh:
+        for i in range(2000):
+            fh.write(json.dumps({
+                "ts": f"2026-08-{(i % 28) + 1:02d}T00:00:00+00:00", "kind": "harness",
+                "summary": f"signal {i % 97}", "severity": "major", "source": "auto",
+                "detail": "d" * 400,
+            }) + "\n")
+
+    _WORK_CACHE["stamp"] = None
+    started = time.perf_counter()
+    open_friction_work()
+    cold = time.perf_counter() - started
+
+    assert cold < SLOW_PROVIDER_S / 5, f"cold projection took {cold * 1000:.0f}ms"
+
+
+def test_the_api_serves_its_own_namespace_and_keeps_the_documented_alias(monkeypatch, tmp_path):
+    """Plugin-view Rule 2 wants the data API under /api/plugins/<id>/. #2607 shipped it at
+    the top-level /api/friction and that path is documented and in use, so the namespaced
+    mount is ADDED and the old one kept — rather than breaking a published API to satisfy
+    a convention."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from plugins import friction
+
+    monkeypatch.setenv("FRICTION_LOG", str(tmp_path / "friction.jsonl"))
+    app = FastAPI()
+    app.include_router(friction._build_router(), prefix="/api/plugins/friction")
+    app.include_router(friction._build_router(legacy=True))
+    client = TestClient(app)
+    _record("harness", "reachable both ways")
+
+    canonical = client.get("/api/plugins/friction/").json()
+    legacy = client.get("/api/friction").json()
+
+    assert canonical == legacy
+    assert [i["summary"] for i in canonical["items"]] == ["reachable both ways"]
+    assert client.post("/api/plugins/friction/resolve", json={"summary": "reachable both ways"}).json()["changed"] == 1
+    assert client.post("/api/friction/resolve", json={"summary": "reachable both ways", "resolved": False}).json()["changed"] == 1
+
+
+def test_the_view_calls_the_namespaced_api(monkeypatch):
+    """The page is the one caller we control; it should use the canonical path so the
+    alias only ever serves external callers."""
+    from pathlib import Path as _P
+
+    from plugins import friction
+
+    page = (_P(friction.__file__).parent / "view.html").read_text(encoding="utf-8")
+
+    assert 'apiFetch("/api/plugins/friction/?' in page
+    assert 'apiFetch("/api/plugins/friction/resolve"' in page

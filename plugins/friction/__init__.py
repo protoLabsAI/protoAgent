@@ -17,9 +17,16 @@ agent captures where it hit friction and feeds that back into improving its harn
 `kind` splits the backlog: `"harness"` → an improvement to the tools/framework;
 `"model"` → a labeled trace worth learning from. `friction_review` surfaces it;
 `resolve_friction` dismisses entries once fixed (a `resolved_at` stamp in place — the
-ledger stays append-only, so the audit trail survives). Enable via
-`plugins: { enabled: [friction] }`. The ledger path is `$FRICTION_LOG` or, by
-default, `<instance data dir>/friction/friction.jsonl`.
+ledger stays append-only, so the audit trail survives).
+
+Nothing here waits for someone to go looking. Open friction is projected into the agent's
+`<working_state>` (ADR 0079), broadcast on the plugin's event bus (ADR 0039), reviewable by
+the operator with `/friction`, and triaged by the read-only `friction_triage` subagent. A
+`recording-friction` SKILL.md teaches WHEN to record — the tools were always here; the
+judgement for using them was the missing half.
+
+First-party, **on by default**; disable via `plugins: { disabled: [friction] }`. The ledger
+path is `$FRICTION_LOG` or, by default, `instance_paths().store("friction")`.
 """
 
 from __future__ import annotations
@@ -61,7 +68,7 @@ def _cfg(key: str, default):
     if _REGISTRY is None:
         return default
     try:
-        live = _REGISTRY.live_config() if hasattr(_REGISTRY, "live_config") else _REGISTRY.config
+        live = _REGISTRY.live_config()  # already falls back to the register-time snapshot
         value = (live or {}).get(key)
         return default if value is None else value
     except Exception:  # noqa: BLE001
@@ -71,6 +78,17 @@ def _cfg(key: str, default):
 _KINDS = ("harness", "model")
 _SEVERITIES = ("minor", "major")
 _SEVERITY_RANK = {"minor": 1, "major": 2}
+
+
+def _triage_rank(group: dict) -> tuple:
+    """Worst-first ordering, defined ONCE. The operator's `/friction` list and the agent's
+    working-state projection have to agree about what the top of the backlog is, or the two
+    of them read different lists off the same ledger."""
+    return (
+        _SEVERITY_RANK.get(str(group.get("severity")), 0),
+        int(group.get("count") or 1),
+        str(group.get("last_seen") or ""),
+    )
 
 # A general shell/exec tool being reached for is itself a friction signal — the agent
 # wanted a capability that isn't a first-class tool yet.
@@ -342,7 +360,7 @@ def set_resolved(
             if resolved:
                 rec["resolved_at"] = stamp
                 if reason.strip():
-                    rec["resolved_reason"] = reason.strip()[:300]
+                    rec["resolved_reason"] = _clip(reason.strip(), 300)
             else:
                 rec.pop("resolved_at", None)
                 rec.pop("resolved_reason", None)
@@ -353,7 +371,7 @@ def set_resolved(
     if matched:
         _rewrite_ledger(path, out_lines)
         _emit("resolved" if resolved else "reopened",
-              {"summary": needle, "kind": kind, "count": matched, "reason": reason.strip()[:300]})
+              {"summary": needle, "kind": kind, "count": matched, "reason": _clip(reason.strip(), 300)})
     return matched
 
 
@@ -447,9 +465,7 @@ def open_friction_work() -> list[dict]:
     ranked = sorted(
         (g for g in _work_snapshot()
          if g.get("severity") == "major" or int(g.get("count") or 1) >= threshold),
-        key=lambda g: (_SEVERITY_RANK.get(str(g.get("severity")), 0), int(g.get("count") or 1),
-                       str(g.get("last_seen") or "")),
-        reverse=True,
+        key=_triage_rank, reverse=True,
     )
     out: list[dict] = []
     for g in ranked[:limit]:
@@ -483,7 +499,7 @@ class FrictionMiddleware(AgentMiddleware):
             except (TypeError, ValueError):
                 args = str(request.tool_call.get("args", {}))
             _log("harness", f"reached for escape hatch '{name}' — candidate for a first-class tool",
-                 detail=args[:300], severity="minor", source="auto", tool_name=name)
+                 detail=_clip(args, 300), severity="minor", source="auto", tool_name=name)
 
     def _note_error(self, request, e: Exception) -> None:
         if type(e).__name__ in _CONTROL_FLOW:
@@ -569,10 +585,24 @@ async def _friction_command(rest: str, _session_id: str):
     """
     needle = rest.strip()
     if needle:
+        # Substring, like the tool — an operator clearing "board_cancel" means every
+        # phrasing of it. But a bulk action whose blast radius is invisible is how you
+        # resolve six signals meaning to resolve one, so NAME what went. Each row can be
+        # reopened individually from the Friction view; nothing is ever deleted.
+        hit = [g for g in grouped_entries() if needle in str(g.get("summary", ""))]
         changed = set_resolved(needle, resolved=True, reason="resolved by the operator via /friction")
         if not changed:
             return f"No open friction matching “{needle}”. `/friction` lists what is open."
-        return f"Resolved {changed} {'entry' if changed == 1 else 'entries'} matching “{needle}”."
+        lines = [
+            f"Resolved **{changed}** {'entry' if changed == 1 else 'entries'} across "
+            f"{len(hit)} {'signal' if len(hit) == 1 else 'signals'} matching “{needle}”:",
+            "",
+        ]
+        lines += [f"- {g.get('summary', '')}" for g in hit[:10]]
+        if len(hit) > 10:
+            lines.append(f"- …and {len(hit) - 10} more")
+        lines += ["", "Reopen any of them from the **Friction** view if that was too broad."]
+        return "\n".join(lines)
 
     groups = grouped_entries()
     if not groups:
@@ -588,11 +618,7 @@ async def _friction_command(rest: str, _session_id: str):
     ]
     # Worst first — the same ranking the working-state projection uses, so the operator
     # and the agent are looking at the same top of the list.
-    ranked = sorted(
-        groups,
-        key=lambda g: (_SEVERITY_RANK.get(str(g.get("severity")), 0), int(g.get("count") or 1)),
-        reverse=True,
-    )
+    ranked = sorted(groups, key=_triage_rank, reverse=True)
     for g in ranked[:10]:
         count = int(g.get("count") or 1)
         tail = f" ×{count}" if count > 1 else ""
@@ -603,8 +629,15 @@ async def _friction_command(rest: str, _session_id: str):
     return "\n".join(lines)
 
 
-def _build_router():
-    """``GET /api/friction`` — the read path the ledger never had (#2595).
+def _build_router(*, legacy: bool = False):
+    """The ledger's read + triage API — the read path it never had (#2595).
+
+    Mounted TWICE, on purpose. The canonical mount is the namespaced
+    ``/api/plugins/friction/...`` that plugin-view Rule 2 asks for
+    (docs/guides/building-react-plugin-views.md); ``legacy=True`` re-serves the same
+    handlers at the top-level ``/api/friction`` that #2607 shipped and documented, so
+    anything already calling it keeps working. Both are bearer-gated — they live under
+    ``/api/`` — and the console view calls the canonical one.
 
     Agents were doing the hard part: noticing friction at the moment it happened and
     writing it down with the failing command attached. Nothing consumed it, so entries sat
@@ -615,8 +648,12 @@ def _build_router():
     from fastapi import APIRouter
 
     router = APIRouter()
+    # The prefix is applied by register_router for the canonical mount, so the paths here
+    # are relative; the legacy mount carries the old absolute paths itself.
+    read_path = "/api/friction" if legacy else ""
+    resolve_path = "/api/friction/resolve" if legacy else "/resolve"
 
-    @router.get("/api/friction")
+    @router.get(read_path or "/")
     async def _friction(kind: str = "", grouped: bool = True, limit: int = 100, resolved: bool = False) -> dict:
         """Recorded friction, newest first. ``grouped`` (default) collapses repeats of the
         same summary into one item with a count — five identical escape-hatch reaches are
@@ -638,7 +675,7 @@ def _build_router():
                        for k in _KINDS},
         }
 
-    @router.post("/api/friction/resolve")
+    @router.post(resolve_path)
     async def _resolve(payload: dict) -> dict:
         """Resolve (or reopen) one grouped row — the console's half of the triage state.
 
@@ -731,7 +768,12 @@ def register(registry):
         "tags": ["diagnostics", "self-report", "observability"],
         "examples": ["What has been getting in your way lately?"],
     })
-    registry.register_router(_build_router(), prefix="")
+    # Rule 2 (docs/guides/building-react-plugin-views.md): the data API belongs in the
+    # plugin's own namespace. #2607 shipped it at the top-level /api/friction and that is
+    # a documented, in-use path, so the canonical mount is added rather than swapped and
+    # the old one is kept as an alias.
+    registry.register_router(_build_router(), prefix="/api/plugins/friction")
+    registry.register_router(_build_router(legacy=True), prefix="")
     # Default prefix (None) resolves to /plugins/friction — the canonical public
     # view prefix (ADR 0026) — so the manifest's views[].path matches exactly.
     registry.register_router(_build_view_router())

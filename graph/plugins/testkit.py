@@ -412,7 +412,7 @@ class FakeRegistry:
         pid = getattr(self, "plugin_id", "") or ""
         if pid and topic != pid and not topic.startswith(f"{pid}."):
             topic = f"{pid}.{topic}"
-        self.emitted.append((topic, data))
+        self.emitted.append((topic, data or {}))  # the bus publishes {} for a bare emit
 
     def on(self, topic: str, handler) -> None:
         self.handlers.setdefault(topic, []).append(handler)
