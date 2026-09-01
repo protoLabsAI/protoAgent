@@ -13,13 +13,16 @@ import { api } from "../lib/api";
 import { ago, bytes, errMsg } from "../lib/format";
 import { queryKeys } from "../lib/queries";
 import type {
+  MemoryDigestPolicy,
   MemoryHotChunk,
   MemoryInjectionDetail,
   MemoryInjectionRow,
   MemorySessionDigest,
 } from "../lib/types";
+import { useChatState } from "../chat/chat-store";
 
 import { ReviewActions, ReviewChip } from "../knowledge/ReviewVerdict";
+import { DIGEST_POLICY_HINT, sessionBadge } from "./digestPolicy";
 import { injectionSummary } from "./injectionSummary";
 import "./memory.css";
 
@@ -81,11 +84,17 @@ export function MemorySurface() {
 function SessionsPanel({ onShowInjections }: { onShowInjections: (sid: string) => void }) {
   const qc = useQueryClient();
   const toast = useToast();
+  // The chat being viewed: its own summary is never a "prior" session in its own
+  // thread (ADR 0108 D9), so the backend needs to know which row that is.
+  const activeSessionId = useChatState().currentSessionId ?? "";
   const { data, isFetching, error, refetch } = useQuery({
-    queryKey: queryKeys.memorySessions,
-    queryFn: () => api.memorySessions(),
+    // The id is part of the key (invalidation is by prefix, so the subtree
+    // invalidate in the delete flow still matches).
+    queryKey: [...queryKeys.memorySessions, activeSessionId],
+    queryFn: () => api.memorySessions(activeSessionId),
   });
   const sessions = data?.sessions ?? [];
+  const policy: MemoryDigestPolicy = data?.digest_policy ?? "newest";
   const [pendingDelete, setPendingDelete] = useState<MemorySessionDigest | null>(null);
 
   const del = useMutation({
@@ -117,9 +126,7 @@ function SessionsPanel({ onShowInjections }: { onShowInjections: (sid: string) =
     <>
       <div className="memory-panel-head">
         <p className="memory-panel-hint">
-          Persisted session summaries. The <code>&lt;prior_sessions&gt;</code> digest the agent
-          sees each turn carries only the newest few (token-capped; background sessions
-          excluded) — badged rows are stored but not currently in it. Click a row for the full
+          Persisted session summaries. {DIGEST_POLICY_HINT[policy]} Click a row for the full
           summary (what <code>recall_session</code> returns); delete to forget a session.
         </p>
         <RefreshButton onClick={() => void refetch()} busy={isFetching} />
@@ -132,7 +139,12 @@ function SessionsPanel({ onShowInjections }: { onShowInjections: (sid: string) =
         />
       ) : (
         <ul className="playbook-list memory-list">
-          {sessions.map((s) => (
+          {sessions.map((s) => {
+            // Which badge (if any) this row earns under the active policy — see
+            // digestPolicy.ts: the viewed chat is excluded by design, and an absent
+            // in_digest means unknown, never "excluded".
+            const badge = sessionBadge(s, policy);
+            return (
             <li key={s.session_id} className="playbook-card memory-row">
               <button
                 type="button"
@@ -143,11 +155,9 @@ function SessionsPanel({ onShowInjections }: { onShowInjections: (sid: string) =
                 <span className="memory-row-title">
                   <Badge status="neutral">{s.surface}</Badge>
                   <code>{s.session_id}</code>
-                  {/* Only an explicit false draws the badge — an older backend omits
-                      the field entirely, and unknown must not read as "excluded". */}
-                  {s.in_digest === false ? (
-                    <span title="Outside the current digest window (the newest summaries under the token cap; background sessions excluded) — stored, but not in the <prior_sessions> digest the agent sees.">
-                      <Badge status="warning">not in digest</Badge>
+                  {badge ? (
+                    <span title={badge.title}>
+                      <Badge status={badge.tone}>{badge.label}</Badge>
                     </span>
                   ) : null}
                 </span>
@@ -180,7 +190,8 @@ function SessionsPanel({ onShowInjections }: { onShowInjections: (sid: string) =
                 </Button>
               </span>
             </li>
-          ))}
+            );
+          })}
         </ul>
       )}
       <ConfirmDialog

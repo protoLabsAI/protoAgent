@@ -469,6 +469,33 @@ def _coerce_prior_sessions(value, default: str) -> str:
     return v
 
 
+def _coerce_digest_cap(value, default: int, key: str) -> int:
+    """``memory.max_sessions`` / ``memory.max_tokens`` → a positive int.
+
+    Both knobs are ceilings on the ``<prior_sessions>`` digest, and neither has a
+    meaningful zero: ``max_sessions: 0`` would be a second, undocumented spelling
+    of ``context.prior_sessions: off``, and ``max_tokens: 0`` would trim every
+    entry away and render the empty ``<prior_sessions/>`` tag. A non-positive or
+    non-numeric value therefore falls back to the default, WARNED — the knob was
+    inert for its whole life before #3308, and a silent fallback is how it stayed
+    invisible."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        log.warning("[config] %s=%r is not a whole number — using the default %s", key, value, default)
+        return default
+    if n <= 0:
+        log.warning(
+            "[config] %s=%s must be positive (it is a ceiling, not a switch) — using the default %s. "
+            "To turn the digest off entirely set context.prior_sessions: off.",
+            key,
+            n,
+            default,
+        )
+        return default
+    return n
+
+
 def yaml_word_for_bool(value):
     """The word an operator wrote, for a STRING knob YAML parsed as a bool (#3253).
 
@@ -1213,6 +1240,17 @@ class LangGraphConfig:
     # never injected as a "prior" session. Default stays "newest" pending the
     # #3186 eval. YAML: `context.prior_sessions`.
     context_prior_sessions: str = "newest"
+    # Prior-session digest ceilings (ADR 0021; wired to YAML in #3308 — they were
+    # documented in the example config but read by nothing for their whole life,
+    # so an operator shrinking the digest got a silent no-op). max_sessions is how
+    # many summaries the digest may LIST (the loader keeps one spare in its pool so
+    # excluding the active session can't shorten the block); max_tokens is the
+    # char/4 ceiling for the rendered block, past which entries shed from the end
+    # (oldest under `newest`, lowest-rank under `relevant`). Both are ceilings, not
+    # switches — to remove the digest use `context.prior_sessions: off`.
+    # YAML: `memory.max_sessions` / `memory.max_tokens`.
+    memory_max_sessions: int = 10
+    memory_max_tokens: int = 2000
     # Always-on write confirm gate (ADR 0069 D8, widened by ADR 0108 D4). When
     # True, the agent's own write paths (memory_ingest and knowledge_ingest)
     # refuse always-on writes — domain="hot" or delivery_policy="always" — with
@@ -1917,6 +1955,7 @@ class LangGraphConfig:
         middleware = data.get("middleware", {})
         knowledge = data.get("knowledge", {})
         context = data.get("context") or {}  # ADR 0108 D6 — `or {}`: an all-commented block parses to None
+        memory = data.get("memory") or {}  # same `or {}` reason as context
         skills = data.get("skills", {})
         mcp = data.get("mcp", {})
         operator_mcp = data.get("operator_mcp", {})
@@ -2115,6 +2154,12 @@ class LangGraphConfig:
             context_budget_pct=_coerce_budget_pct(context.get("budget_pct", cls.context_budget_pct), cls.context_budget_pct),
             context_prior_sessions=_coerce_prior_sessions(
                 context.get("prior_sessions", cls.context_prior_sessions), cls.context_prior_sessions
+            ),
+            memory_max_sessions=_coerce_digest_cap(
+                memory.get("max_sessions", cls.memory_max_sessions), cls.memory_max_sessions, "memory.max_sessions"
+            ),
+            memory_max_tokens=_coerce_digest_cap(
+                memory.get("max_tokens", cls.memory_max_tokens), cls.memory_max_tokens, "memory.max_tokens"
             ),
             knowledge_vector_k=knowledge.get("vector_k", cls.knowledge_vector_k),
             knowledge_rrf_k=knowledge.get("rrf_k", cls.knowledge_rrf_k),

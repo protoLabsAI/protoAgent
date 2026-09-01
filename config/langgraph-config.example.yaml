@@ -144,13 +144,19 @@ knowledge:
   # contextual_enrichment: false
   # context_max_doc_chars: 12000   # cap the document text sent in the context prompt
 
-# Session memory loading — prior summaries injected into system prompt
-# by KnowledgeMiddleware when it is active. Persistence via MemoryMiddleware
-# uses the same path. Mount a volume at this path to survive container restarts.
+# Session memory — the <prior_sessions> digest KnowledgeMiddleware injects each
+# turn, one attributed line per past session (~30 tokens each). Both keys are
+# CEILINGS on that block; to remove the digest entirely use
+# `context.prior_sessions: off` below.
+#
+# The digest's location is NOT configured here: summaries live in the instance
+# store (`~/.protoagent/<instance>/memory`), overridable only with the
+# MEMORY_PATH env var. The old `path:` key was read by nothing — it pointed at a
+# container-era `/sandbox/memory/` that is unwritable on an ordinary host, which
+# is why the path moved to the instance store in the first place (#3308).
 memory:
-  path: /sandbox/memory/
-  max_sessions: 10
-  max_tokens: 2000
+  max_sessions: 10   # how many past sessions the digest may list
+  max_tokens: 2000   # char/4 ceiling for the rendered block; entries shed from the end
 
 # Projected context — everything injected per turn on top of the stable prompt
 # (working state, always-on memory, the skill index, the prior-session digest,

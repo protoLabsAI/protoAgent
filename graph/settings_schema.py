@@ -565,6 +565,35 @@ FIELDS: list[Field] = [
         "injected as a \"prior\" session.",
         options=["newest", "relevant", "off"],
     ),
+    # Prior-session digest ceilings (ADR 0021; wired in #3308).
+    Field(
+        "memory.max_sessions",
+        "memory_max_sessions",
+        "Prior-session digest size",
+        "number",
+        "Knowledge",
+        "How many past sessions the prior-session digest may list each turn. One "
+        "attributed line each (id, time, surface, topic, message count) — roughly 30 "
+        "tokens per entry. Lower it to keep continuity while spending less of the turn "
+        "on unrelated history; it is a ceiling, not a switch, so to remove the digest "
+        "entirely set the prior-session digest policy to \"off\".",
+        minimum=1,
+        maximum=100,
+    ),
+    Field(
+        "memory.max_tokens",
+        "memory_max_tokens",
+        "Prior-session digest token cap",
+        "number",
+        "Knowledge",
+        "Token ceiling for the rendered digest block (estimated at 4 characters per "
+        "token). Entries past the ceiling drop from the end — oldest first under "
+        "\"newest\", lowest-ranked first under \"relevant\". With the default digest "
+        "size the block lands well under this cap, so the session count is usually the "
+        "binding limit.",
+        minimum=1,
+        maximum=100000,
+    ),
     # Hot-memory write confirm gate (ADR 0069 D8).
     Field(
         "knowledge.hot_write_confirm",
@@ -1533,6 +1562,8 @@ _KNOWLEDGE_SUBSECTION = {
     "skills.top_k": "Recall",  # skills surfaced into context — a recall-count sibling
     "context.budget_pct": "Recall",  # the ceiling on everything Recall puts in the prompt (ADR 0108 D6)
     "context.prior_sessions": "Recall",  # which sessions the digest recalls each turn (ADR 0108 D9)
+    "memory.max_sessions": "Recall",  # how many of them the digest lists
+    "memory.max_tokens": "Recall",  # and the ceiling on the rendered block
     # Ingestion — bringing documents in (extraction, chunking, enrichment).
     "knowledge.transcribe_model": "Ingestion",
     "knowledge.image_describe_model": "Ingestion",

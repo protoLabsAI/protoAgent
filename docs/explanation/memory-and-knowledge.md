@@ -163,7 +163,9 @@ prompt layer, don't just hope the store stays clean). Three parts, in order:
    (no assistant text — that's the identity confusion + poisoning surface).
    Which sessions the digest lists is a policy, `context.prior_sessions`
    ([ADR 0108 D9](../adr/0108-context-architecture-v2.md)): `newest` (default)
-   takes the newest 10 summaries; `relevant` takes only sessions whose content
+   takes the newest `memory.max_sessions` summaries (10, and `memory.max_tokens`
+   caps the block — both are ceilings, and both were inert until #3308);
+   `relevant` takes only sessions whose content
    matches the turn's query (the session-search FTS index, best match first,
    falling back to `newest` on an empty query, a build without FTS5, or zero
    matches); `off` injects no automatic digest at all — `session_search` /

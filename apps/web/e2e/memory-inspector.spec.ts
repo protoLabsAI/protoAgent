@@ -195,6 +195,38 @@ test("a backend without the delivery fields renders exactly as before — no bad
   await expect(surface.getByText("not injecting")).toHaveCount(0);
 });
 
+test("the panel describes the ACTIVE digest policy, and drops badges that no longer mean anything", async ({
+  page,
+}) => {
+  // #3308: the copy used to describe the `newest` window unconditionally. Under
+  // `off` nothing is injected at all, so "not in digest" on every row said
+  // nothing while implying this row in particular aged out.
+  await page.request.post("/api/__test__/memory/mode", { data: { policy: "off" } });
+  await openMemory(page);
+  const surface = page.getByTestId("memory-surface");
+  await expect(surface.getByText(/The automatic digest is off/)).toBeVisible();
+  await expect(surface.getByText("not in digest")).toHaveCount(0);
+
+  await page.request.post("/api/__test__/memory/mode", { data: { policy: "relevant" } });
+  await openMemory(page);
+  await expect(surface.getByText(/only the sessions matching what was just asked/)).toBeVisible();
+  await expect(surface.getByText("not in digest")).toHaveCount(0);
+
+  // The default still reads exactly as before.
+  await page.request.post("/api/__test__/memory/mode", { data: { policy: "newest" } });
+  await openMemory(page);
+  await expect(surface.getByText(/carries only the newest few/)).toBeVisible();
+  await expect(surface.getByText("not in digest")).toHaveCount(1);
+});
+
+test("the listing is scoped to the chat being viewed", async ({ page }) => {
+  // The backend needs to know which row is the operator's own chat: a session is
+  // never a "prior" session of itself, so its row must not read as "aged out".
+  const req = page.waitForRequest((r) => /\/api\/memory\/sessions\?session_id=chat-/.test(r.url()));
+  await openMemory(page);
+  expect(new URL((await req).url()).searchParams.get("session_id")).toMatch(/^chat-/);
+});
+
 // ── Error / empty / store-off branches ───────────────────────────────────────
 
 test("each tab shows its contained error alert when the backend read fails", async ({ page }) => {

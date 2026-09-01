@@ -129,6 +129,13 @@ class ProjectionOptions:
     # query, falling back to newest), or "off" (no automatic digest;
     # session_search/recall_session remain the on-demand path).
     prior_sessions_policy: str = "newest"
+    # ADR 0021 / #3308: the digest's own ceilings — entries listed and the char/4
+    # token cap on the rendered block (`memory.max_sessions` / `memory.max_tokens`).
+    # Both are positive-only; a non-positive value means the config layer already
+    # warned and handed back the default, and __post_init__ enforces the same floor
+    # for options built directly.
+    prior_sessions_max: int = 10
+    prior_sessions_max_tokens: int = 2000
 
     def __post_init__(self) -> None:
         # A NEGATIVE top_k is not a smaller cap — it is no cap at all, twice over
@@ -158,6 +165,22 @@ class ProjectionOptions:
         normalized = _coerce_prior_sessions_policy(self.prior_sessions_policy)
         if normalized != self.prior_sessions_policy:
             object.__setattr__(self, "prior_sessions_policy", normalized)
+        # The digest ceilings are counts, not switches: a non-positive value would
+        # render the empty `<prior_sessions/>` tag, which is "off" spelled in a way
+        # nothing documents. The defaults come off the FIELDS above rather than being
+        # retyped — a literal here would silently revert a changed default. Silent
+        # like the budget clamp above: `graph/config.py` already warns for an
+        # operator's YAML, and direct construction is a caller's bug, not a typo.
+        for attr in ("prior_sessions_max", "prior_sessions_max_tokens"):
+            default = getattr(type(self), attr)
+            try:
+                n = int(getattr(self, attr))
+            except (TypeError, ValueError):
+                n = default
+            if n <= 0:
+                n = default
+            if n != getattr(self, attr):
+                object.__setattr__(self, attr, n)
 
     @classmethod
     def from_config(cls, config, *, model_name: str | None = None) -> ProjectionOptions:
@@ -223,6 +246,10 @@ class ProjectionOptions:
             skills_top_k=_int_or_default(getattr(config, "skills_top_k", cls.skills_top_k), cls.skills_top_k),
             skills_index_chars=int(window * 0.02 * 4) if window else cls.skills_index_chars,
             budget_chars=budget_chars,
+            # Raw: __post_init__ does the int-coercion + positive floor, so a duck-typed
+            # config carrying a string (or nonsense) can't raise out of the options build.
+            prior_sessions_max=getattr(config, "memory_max_sessions", cls.prior_sessions_max),
+            prior_sessions_max_tokens=getattr(config, "memory_max_tokens", cls.prior_sessions_max_tokens),
         )
 
 
@@ -357,6 +384,8 @@ def compose_projected_context(
             policy=opts.prior_sessions_policy,
             query=query,
             exclude_session_id=_active_session_id(state),
+            max_sessions=opts.prior_sessions_max,
+            max_tokens=opts.prior_sessions_max_tokens,
         )
         if not digest:
             digest_entries, digest_ids = [], []
@@ -746,7 +775,13 @@ def _active_session_id(state: dict) -> str:
 
 
 def _load_digest(
-    loader: DigestLoader | None, *, policy: str = "newest", query: str = "", exclude_session_id: str = ""
+    loader: DigestLoader | None,
+    *,
+    policy: str = "newest",
+    query: str = "",
+    exclude_session_id: str = "",
+    max_sessions: int = 10,
+    max_tokens: int = 2000,
 ) -> tuple[str, list, list[str]]:
     """The prior-sessions digest as ``(block, entries, session_ids)``.
 
@@ -755,7 +790,9 @@ def _load_digest(
     loader returning ``(block, ids)`` is called bare and yields no entries (the
     budget then sheds its digest as one unit). With no loader, the canonical
     on-disk digest is read under ``policy`` (``graph.middleware.memory.load_digest``
-    — resolved ``memory_path()``, read-time reasoning stripping, ADR 0021).
+    — resolved ``memory_path()``, read-time reasoning stripping, ADR 0021) under
+    the caller's ``max_sessions``/``max_tokens`` ceilings (`memory.*`, #3308); a
+    loader supplies its own, since it owns the pool cache those ceilings size.
     Never raises."""
     try:
         if loader is not None:
@@ -777,7 +814,13 @@ def _load_digest(
         else:
             from graph.middleware.memory import load_digest
 
-            out = load_digest(policy, query=query, exclude_session_id=exclude_session_id)
+            out = load_digest(
+                policy,
+                query=query,
+                exclude_session_id=exclude_session_id,
+                max_sessions=max_sessions,
+                max_tokens=max_tokens,
+            )
         if hasattr(out, "block") and hasattr(out, "entries"):
             entries = list(out.entries or [])
             return (out.block or ""), entries, [e.session_id for e in entries]

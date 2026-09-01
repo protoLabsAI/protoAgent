@@ -89,10 +89,10 @@ Session memory is enabled by default. See [architecture § Session memory](/expl
 
 | Variable | Default | What |
 |---|---|---|
-| `MEMORY_PATH` | `/sandbox/memory/` | Directory where `SessionSummaryMiddleware` writes JSON session summaries and where `KnowledgeMiddleware.load_memory()` reads them. Writes are atomic (temp file + rename). |
+| `MEMORY_PATH` | `<instance_root>/memory` | Directory where `SessionSummaryMiddleware` writes JSON session summaries and where `KnowledgeMiddleware` reads them back as the `<prior_sessions>` digest. Writes are atomic (temp file + rename). Unset, it resolves to the instance store — `~/.protoagent/<instance>/memory` on a host install, `/sandbox/memory` in the container (where `PROTOAGENT_HOME=/sandbox` makes `/sandbox` the instance root). The `memory:` block in `langgraph-config.yaml` sizes the digest but does **not** locate it. |
 | `PROTOAGENT_DISABLE_MEMORY` | (unset) | Set to `1` (or any non-empty value) to suppress disk persistence without changing `langgraph-config.yaml`. Loading still occurs if summaries exist from prior runs. |
 
-To persist memory across container restarts, mount a volume at whatever `MEMORY_PATH` resolves to. Without a volume the directory is ephemeral.
+To persist memory across container restarts, mount a volume covering whatever `MEMORY_PATH` resolves to — the bundled compose file already does, since its `protoagent-sandbox` volume covers all of `/sandbox`. Without a volume the directory is ephemeral.
 
 ## Knowledge store
 
