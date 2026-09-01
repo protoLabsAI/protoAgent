@@ -188,6 +188,13 @@
   kit.initPluginView(start);
   setTimeout(start, 1500);
 
+  // ADR 0057 — the manifest's `palette.path` opens this page with `?mode=search`, so ⌘K
+  // lands the operator in the field instead of at the top of a list they then have to
+  // reach for. Same page, same data; only the initial focus differs.
+  if (new URLSearchParams(location.search).get("mode") === "search") {
+    requestAnimationFrame(() => document.getElementById("q")?.focus());
+  }
+
   const listEl = document.getElementById("list");
   const tallyEl = document.getElementById("tally");
   const toastSlot = document.getElementById("toast-slot");

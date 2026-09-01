@@ -466,6 +466,50 @@ class FrictionMiddleware(AgentMiddleware):
             raise
 
 
+async def _friction_command(rest: str, _session_id: str):
+    """``/friction`` — the operator's read of the backlog, without spending a turn.
+
+    User-only by design (``register_chat_command`` is not an agent tool), which is the
+    point: an operator can RESOLVE friction from here, and the model cannot resolve its
+    own backlog by talking to itself. ``/friction`` summarises; ``/friction <text>``
+    resolves every entry matching that text and says how many it stamped.
+    """
+    needle = rest.strip()
+    if needle:
+        changed = set_resolved(needle, resolved=True, reason="resolved by the operator via /friction")
+        if not changed:
+            return f"No open friction matching “{needle}”. `/friction` lists what is open."
+        return f"Resolved {changed} {'entry' if changed == 1 else 'entries'} matching “{needle}”."
+
+    groups = grouped_entries()
+    if not groups:
+        return "**Friction backlog is empty** — nothing recorded, or everything is resolved."
+    occurrences = sum(int(g.get("count") or 1) for g in groups)
+    major = [g for g in groups if g.get("severity") == "major"]
+    lines = [
+        f"**Friction backlog** — {len(groups)} open "
+        f"{'signal' if len(groups) == 1 else 'signals'} across {occurrences} "
+        f"{'occurrence' if occurrences == 1 else 'occurrences'}"
+        + (f", {len(major)} major" if major else ""),
+        "",
+    ]
+    # Worst first — the same ranking the working-state projection uses, so the operator
+    # and the agent are looking at the same top of the list.
+    ranked = sorted(
+        groups,
+        key=lambda g: (_SEVERITY_RANK.get(str(g.get("severity")), 0), int(g.get("count") or 1)),
+        reverse=True,
+    )
+    for g in ranked[:10]:
+        count = int(g.get("count") or 1)
+        tail = f" ×{count}" if count > 1 else ""
+        lines.append(f"- `{g.get('severity', 'minor')}`{tail} {g.get('summary', '')}")
+    if len(ranked) > 10:
+        lines.append(f"- …and {len(ranked) - 10} more")
+    lines += ["", "Open the **Friction** view to read details, or `/friction <text>` to resolve."]
+    return "\n".join(lines)
+
+
 def _build_router():
     """``GET /api/friction`` — the read path the ledger never had (#2595).
 
@@ -578,6 +622,9 @@ def register(registry):
     # module docstring said as much ("the model has to reach for it") and then shipped no
     # skill, leaving every operator to paste the same guidance into their own persona.
     registry.register_skill_dir("skills")
+    # User-only (never an agent tool) so resolving stays an operator action — the model
+    # must not be able to clear its own backlog by deciding it is clear.
+    registry.register_chat_command("friction", _friction_command)
     registry.register_router(_build_router(), prefix="")
     # Default prefix (None) resolves to /plugins/friction — the canonical public
     # view prefix (ADR 0026) — so the manifest's views[].path matches exactly.

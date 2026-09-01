@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
-from plugins.friction import FrictionMiddleware, friction_review, record_friction, resolve_friction
+from plugins.friction import (
+    FrictionMiddleware,
+    friction_review,
+    grouped_entries,
+    record_friction,
+    resolve_friction,
+)
 
 
 @pytest.fixture
@@ -469,43 +476,20 @@ def test_auto_capture_detail_is_json_the_view_can_render(ledger):
 
 @pytest.fixture
 def wired(tmp_path, monkeypatch):
-    """The plugin with a registry attached, as the host wires it at boot."""
+    """The plugin with a registry attached, as the host wires it at boot.
+
+    ``FakeRegistry`` is the shipped testkit, not a hand-rolled stub, on purpose: it mirrors
+    the real ``PluginRegistry`` surface under a parity test, and it RAISES where the live
+    registry warns-and-skips — so a registration the host would silently drop fails here
+    instead of shipping green."""
+    from graph.plugins.testkit import FakeRegistry
+
     from plugins import friction
 
     monkeypatch.setenv("FRICTION_LOG", str(tmp_path / "friction.jsonl"))
     friction._WORK_CACHE["stamp"] = None  # module-level cache, per-test
 
-    class _Registry:
-        plugin_id = "friction"
-
-        def __init__(self):
-            self.events: list[tuple[str, dict]] = []
-            self.work_providers: dict = {}
-            self.skill_dirs: list = []
-            self.cfg: dict = {}
-
-        def emit(self, topic, data=None):
-            self.events.append((topic, data or {}))
-
-        def live_config(self):
-            return self.cfg
-
-        def register_work_provider(self, name, fn, label=""):
-            self.work_providers[name] = (fn, label)
-
-        def register_skill_dir(self, path):
-            self.skill_dirs.append(path)
-
-        def register_tools(self, tools):
-            pass
-
-        def register_middleware(self, factory):
-            pass
-
-        def register_router(self, router, prefix=None):
-            pass
-
-    reg = _Registry()
+    reg = FakeRegistry(plugin_id="friction", plugin_dir=Path(friction.__file__).parent)
     friction.register(reg)
     monkeypatch.setattr(friction, "_REGISTRY", reg)
     yield reg
@@ -546,9 +530,9 @@ def test_working_state_is_bounded_and_configurable(wired):
 
     assert len(open_friction_work()) == 3  # default cap
 
-    wired.cfg = {"working_state_limit": 5}
+    wired.config = {"working_state_limit": 5}
     assert len(open_friction_work()) == 5
-    wired.cfg = {"working_state": False}
+    wired.config = {"working_state": False}
     assert open_friction_work() == []  # an operator can turn the injection off entirely
 
 
@@ -584,7 +568,7 @@ def test_the_work_snapshot_does_not_reparse_an_unchanged_ledger(wired, monkeypat
 def test_the_plugin_registers_its_seams(wired):
     """A core plugin should reach the agent through more than a tool list."""
     assert "backlog" in wired.work_providers
-    assert wired.work_providers["backlog"][1] == "OPEN FRICTION"
+    assert wired.work_provider_meta["backlog"]["label"] == "OPEN FRICTION"
     assert wired.skill_dirs == ["skills"]
 
 
@@ -594,13 +578,13 @@ def test_the_plugin_registers_its_seams(wired):
 def test_recording_and_resolving_emit_on_the_bus(wired):
     asyncio.run(record_friction.ainvoke({"kind": "harness", "summary": "worth hearing", "severity": "major"}))
 
-    topic, data = wired.events[-1]
-    assert topic == "recorded"
+    topic, data = wired.emitted[-1]
+    assert topic == "friction.recorded"  # auto-namespaced by the bus
     assert data["summary"] == "worth hearing" and data["severity"] == "major" and data["kind"] == "harness"
 
     asyncio.run(resolve_friction.ainvoke({"summary": "worth hearing", "reason": "shipped"}))
-    assert wired.events[-1][0] == "resolved"
-    assert wired.events[-1][1]["count"] == 1 and wired.events[-1][1]["reason"] == "shipped"
+    assert wired.emitted[-1][0] == "friction.resolved"
+    assert wired.emitted[-1][1]["count"] == 1 and wired.emitted[-1][1]["reason"] == "shipped"
 
 
 def test_a_bus_failure_never_breaks_a_tool_call(wired):
@@ -609,7 +593,8 @@ def test_a_bus_failure_never_breaks_a_tool_call(wired):
     def _boom(topic, data=None):
         raise RuntimeError("bus down")
 
-    wired.emit = _boom
+    monkeypatch_target = wired
+    monkeypatch_target.emit = _boom
     out = asyncio.run(record_friction.ainvoke({"kind": "harness", "summary": "still logged"}))
 
     assert "logged" in out
@@ -620,3 +605,52 @@ def _ledger_for(_registry):
     from plugins.friction import _ledger_path
 
     return _ledger_path()
+
+
+# ── the operator's control command — user-only by design ────────────────────
+
+
+def _slash(wired, rest=""):
+    return asyncio.run(wired.chat_commands["friction"](rest, "session-1"))
+
+
+def test_friction_slash_summarises_worst_first(wired):
+    asyncio.run(record_friction.ainvoke({"kind": "harness", "summary": "blocks everything", "severity": "major"}))
+    for _ in range(2):
+        _record("harness", "nags twice")
+
+    out = _slash(wired)
+
+    assert "3 occurrences" in out and "2 open signals" in out and "1 major" in out
+    # worst-first, the same ranking the working-state projection uses
+    assert out.index("blocks everything") < out.index("nags twice")
+    assert "×2" in out
+
+
+def test_friction_slash_resolves_and_says_how_many(wired):
+    _record("harness", "board priority is immutable")
+    _record("harness", "board priority is immutable")
+    _record("harness", "unrelated")
+
+    assert "Resolved 2 entries" in _slash(wired, "board priority")
+    assert [g["summary"] for g in grouped_entries()] == ["unrelated"]
+
+
+def test_friction_slash_reports_a_miss_instead_of_claiming_success(wired):
+    _record("harness", "real")
+    out = _slash(wired, "never recorded")
+    assert "No open friction matching" in out
+    assert not [g for g in grouped_entries() if g.get("resolved_at")]
+
+
+def test_friction_slash_on_an_empty_backlog(wired):
+    assert "backlog is empty" in _slash(wired)
+
+
+def test_resolving_is_operator_only_never_an_agent_tool(wired):
+    """`/friction <text>` resolves, and it is registered as a chat command rather than a
+    tool ON PURPOSE: the model must not be able to clear its own backlog by deciding it is
+    clear. The agent's `resolve_friction` tool still exists for a rough edge it actually
+    fixed — that is a different claim."""
+    assert "friction" in wired.chat_commands
+    assert "friction" not in {getattr(t, "name", "") for t in wired.tools}

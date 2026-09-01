@@ -401,6 +401,17 @@ class FakeRegistry:
 
     # bus / nav (no-op capture)
     def emit(self, topic: str, data: dict | None = None) -> None:
+        """Capture the topic AS THE BUS WOULD PUBLISH IT — namespaced to the plugin.
+
+        The real registry auto-prefixes (``emit("created")`` publishes
+        ``"<plugin_id>.created"``), and a fake that recorded the raw string let a plugin
+        assert the wrong wire topic and ship green: every subscriber keyed on the
+        documented ``<plugin>.<event>`` would then hear nothing. Same reasoning as the
+        slugify duplication above — behaviour a plugin asserts against has to match.
+        Host-free by contract, so the two lines are duplicated rather than imported."""
+        pid = getattr(self, "plugin_id", "") or ""
+        if pid and topic != pid and not topic.startswith(f"{pid}."):
+            topic = f"{pid}.{topic}"
         self.emitted.append((topic, data))
 
     def on(self, topic: str, handler) -> None:

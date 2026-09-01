@@ -276,3 +276,16 @@ def test_register_with_subagent_and_knobs_runs_against_the_stubs(monkeypatch):
     assert reg.subagents[0].name == "architect"
     assert reg.subagents[0].tools == ["read_file"]
     assert [t.name for t in reg.tools] == ["demo_knobs", "demo_tune", "demo_preset"]  # knob tools wired
+
+
+def test_fake_registry_emit_namespaces_like_the_real_bus():
+    """Behavioural parity, not just signature parity: the real registry auto-prefixes a
+    topic with the plugin id, so a fake that recorded the raw string would let a plugin
+    assert a wire topic no subscriber will ever receive."""
+    reg = testkit.FakeRegistry(plugin_id="friction")
+
+    reg.emit("recorded", {"a": 1})
+    reg.emit("friction.resolved")          # already namespaced — must not double-prefix
+    reg.emit("friction")                   # the bare plugin id is a valid topic
+
+    assert [t for t, _ in reg.emitted] == ["friction.recorded", "friction.resolved", "friction"]
