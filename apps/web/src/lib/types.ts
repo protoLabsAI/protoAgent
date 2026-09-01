@@ -1599,6 +1599,46 @@ export type FleetAgent = {
 // The focused agent is the URL slug now (ADR 0042 slug routing) — no server-side 'active'.
 export type FleetStatus = { agents: FleetAgent[] };
 
+// Member diagnostics contract (#3168) — the two read-only, operator-tier, redacted,
+// bounded reads every member serves under /api/diagnostics/*, reached for an arbitrary
+// member through the hub's /agents/<slug>/* proxy. The console's Fleet Room drawer (#3169)
+// renders these; the server owns the bounds and redaction, so the client only presents them.
+
+// GET /api/diagnostics/logs — a bounded tail of the member's in-process log ring.
+// `enabled:false` is a DELIBERATE state, not an error: an unconfigured buffer (a library
+// embedding) or an operator opt-out (`LOG_BUFFER_LINES=0`) — `note` says which. When
+// enabled, `returned` lines are the already-bounded slice of a ring of size `capacity`;
+// `note` may also flag a clamped `lines=` request.
+export type DiagnosticsLogs = {
+  enabled: boolean;
+  capacity: number;
+  returned: number;
+  lines: string[];
+  note?: string;
+};
+
+// One trimmed history message / artifact of an inspected task. `text` is capped server-side;
+// a hit is reported via the task's `truncated` list rather than by silently cutting.
+export type DiagnosticsTaskMessage = { role: string | null; message_id: string | null; text: string };
+export type DiagnosticsTaskArtifact = { artifact_id: string | null; name: string | null; text: string };
+
+// GET /api/diagnostics/tasks/{task_id} — one exact A2A task, summarized. `truncated` names
+// the fields the server capped (history / artifacts / accumulated_text / status_message);
+// `malformed` names columns it couldn't parse (a partial answer beats a 500 for an operator
+// who is here because something is already broken). Both are surfaced, never hidden.
+export type DiagnosticsTask = {
+  task_id: string | null;
+  context_id: string | null;
+  state: string | null;
+  status_message: string;
+  last_updated: string | null;
+  history: DiagnosticsTaskMessage[];
+  artifacts: DiagnosticsTaskArtifact[];
+  accumulated_text: string;
+  truncated: string[];
+  malformed: string[];
+};
+
 // Another protoAgent found on the box / LAN (ADR 0042 §I) — a candidate remote delegate.
 export type DiscoveredAgent = { name: string; url: string; host: string; port: number };
 
