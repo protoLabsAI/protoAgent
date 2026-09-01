@@ -16,7 +16,11 @@ import type { PaletteRegistry } from "@protolabsai/ui/command-palette";
 
 import { registerPaletteSource } from "../ext/paletteRegistry";
 import type { PaletteCommand } from "../ext/paletteRegistry";
+import { buildViews } from "../lib/viewRegistry";
 import { paletteSourceProvider, usePaletteRegistry } from "./usePaletteRegistry";
+
+// The hook takes ADR 0056's whole View facade now (`{ views, viewFor }`), not a bare array.
+const EMPTY_VIEWS = buildViews({ core: [], plugins: [], ext: [] });
 
 const SOURCE_PROVIDER = "ext-palette-sources";
 const allOn = () => true;
@@ -35,7 +39,7 @@ const offs: (() => void)[] = [];
 async function mountRegistry(): Promise<PaletteRegistry> {
   let registry: PaletteRegistry | null = null;
   const Probe = () => {
-    registry = usePaletteRegistry([], []);
+    registry = usePaletteRegistry(EMPTY_VIEWS, []);
     return null;
   };
   const host = document.createElement("div");

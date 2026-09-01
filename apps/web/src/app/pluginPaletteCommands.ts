@@ -35,17 +35,19 @@
 // palette views (ADR 0057)"). Plugin manifest data is the other path, and it needs three
 // things the fork seam deliberately does not carry: `ctx.enter` (the inline morph), a DS
 // `source` stamp (the attribution chip a fork command has no use for), and registration
-// ADJACENT to the plugin's own view rows, since the DS opens a new group heading whenever
-// the group changes and the seam's statics are registered at the end of the list. So the
+// ADJACENT to the plugin's own view rows, since the palette's root view opens a group
+// heading wherever a row's group differs from the row above it, and the seam's statics are
+// registered at the end of the list. So the
 // host registers these on the DS registry directly, exactly as it already does for a
 // plugin's nav rows — the ADR 0057 §4 sketch's `registry.registerCommands(cmds, {source})`.
 import type { ReactNode } from "react";
 import type { Command, PaletteContext, PaletteSource } from "@protolabsai/ui/command-palette";
 import type { PluginCommand, PluginCommandAction, RuntimeStatus } from "../lib/types";
 import { isNavigablePluginView } from "../lib/pluginViews";
-// Type-only (erased at build): the runtime import would be a cycle, since
-// `usePaletteRegistry` imports the compiler below.
-import type { NavIntent } from "./usePaletteRegistry";
+// Straight at the nav chokepoint's own module rather than the `usePaletteRegistry` barrel:
+// type-only either way (erased at build), but `palette/registry.ts` imports the compiler
+// below, so going through the barrel would draw a cycle on the module graph for no reason.
+import type { NavIntent } from "./palette/nav";
 
 /** A plugin id namespaces its routes, its config section and its event topics, so it has
  *  to be a safe slug before any of those get composed from it. Mirrors `_VALID_PLUGIN_ID`
@@ -241,7 +243,7 @@ export type PluginCommandDeps = {
 const DEFAULT_GROUP = "Plugins";
 
 /** Headings the CONSOLE already renders, which a manifest may not claim. Plugin rows
- *  register between the plugin nav rows and the Commands group (`usePaletteRegistry`), so a
+ *  register between the plugin nav rows and the Commands group (`palette/registry.ts`), so a
  *  manifest naming one of these would put a SECOND "Agents"/"Commands" heading in the middle
  *  of the list — the exact duplicate-heading failure `pluginCommandGroups` orders its
  *  registrations to avoid. A collision falls back to the plugin's own section rather than
@@ -507,9 +509,11 @@ export function pluginCommandGroups(
       commands: compilePluginCommands(src, deps),
     }))
     .filter((g) => g.commands.length > 0);
-  // Registration order IS display order, and the DS opens a section heading only where a
-  // row's group differs from the row above it — so rows sharing a section have to be
-  // CONTIGUOUS or its name appears twice. A manifest may name its own section, which would
+  // On the EMPTY query — the one list that is grouped at all — registration order is display
+  // order (`pickRootFill` selects rows but never reorders them), and a section heading opens
+  // wherever a row's group differs from the row above it. So rows sharing a section have to be
+  // CONTIGUOUS or its name appears twice. (A TYPED query is ranked across groups and renders
+  // no headings at all, so none of this binds there.) A manifest may name its own section, which would
   // otherwise interleave: one plugin's `group: Files` row landing between default rows
   // re-opens "Plugins" underneath it. So the split is per (section, plugin): sections in
   // display order with the default FIRST (it continues the heading the plugin view rows

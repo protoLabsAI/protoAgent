@@ -49,8 +49,10 @@ export function Launcher() {
     .flatMap((p) => (p.views ?? []).map((v) => ({ ...v, key: `plugin:${p.id}:${v.id}` })))
     .filter(isNavigablePluginView);
 
-  // The same three command sources the in-app palette feeds usePaletteRegistry.
-  const { views: paletteViews } = buildViews({
+  // The same three command sources the in-app palette feeds usePaletteRegistry — handed
+  // over as the WHOLE ADR 0056 facade, `viewFor` included (the palette resolves surfaces by
+  // id through it), rather than destructured down to the id list.
+  const paletteFacade = buildViews({
     core: CORE_SURFACES,
     plugins: allPluginViews.map((v) => ({ key: v.key, label: v.label, icon: pluginIcon() })),
     ext: [], // fork/ext surfaces are build-time host concerns — not surfaced from the launcher
@@ -99,7 +101,7 @@ export function Launcher() {
   const toast = useToast();
   const notify = useMemo(() => forwardPaletteNotice(toast), [toast]);
 
-  const registry = usePaletteRegistry(paletteViews, inlinePaletteViews, paletteChat, {
+  const registry = usePaletteRegistry(paletteFacade, inlinePaletteViews, paletteChat, {
     sources: pluginPaletteCommands,
     notify,
   });

@@ -16,9 +16,10 @@ Settings ▸ Keyboard, not with the in-app chords above.
 
 ## What's in it
 
-- **Chat with _‹agent›_** — morphs the palette into a quick chat with this window's
+- **Ask _‹agent›_** — morphs the palette into a quick chat with this window's
   agent: one preserved thread, full streaming and tool cards, `/clear` to wipe it — handy
-  for a one-off ask without leaving what you're doing.
+  for a one-off ask without leaving what you're doing. (It used to be *Chat with ‹agent›*,
+  which competed with the **Chat** surface for the word you were typing.)
 - **Fleet Room** — the fleet as a room, opened inside the palette: a presence-aware
   roster of members (*this instance* · online · stopped · remote), the live fleet
   activity feed beside it, and a send bar below (Enter goes to the `@name` you addressed,
@@ -36,14 +37,64 @@ Settings ▸ Keyboard, not with the in-app chords above.
 - **Plugin views** — each enabled plugin's views are their own group. A view can also opt
   to render *inside* the palette by declaring `palette: "inline"` on it (so a lightweight
   tool can live behind a keystroke instead of taking a rail slot).
+- **Plugin commands** — a plugin can also declare rows that aren't views at all, in its
+  manifest's `commands:` block: go to one of its views, run one of its routes, or publish
+  an event. They sit with that plugin's view rows and carry its name as a chip, so it is
+  clear which plugin a row belongs to. A plugin that is enabled but failed to load shows
+  its route-backed rows greyed out saying so, rather than offering a call that could only
+  fail.
 - **Open…** — the built-in surfaces (Chat, Activity, Knowledge, Studio, Agent, Plugins,
   Settings, plus whatever a fork adds) live one hop in, behind **Open…**, so the root list
-  stays short.
+  stays short. They are also **searchable from the root**: type a surface's name and it is
+  there, without the hop. (It used not to be — `memory` and `knowledge` answered *No
+  matches*, because those surfaces existed only inside **Open…**.)
 - **Deep links** — the jumps worth their own command: **Settings**, **Settings: Fleet**,
   **Settings: Telemetry**, **Plugins: Discover**, **Plugins: Install from URL**.
 
-Groups render in registration order — **Agents**, then **Plugins**, then **Commands** —
-so the agent and its fleet stay at the top.
+## Two lists, not one
+
+The palette shows a **short** list when you haven't typed anything: what you ran recently
+first, then a curated root (agents, plugin views, commands). Every rail surface is
+deliberately *not* in that list — there are too many of them to be useful before you've
+said what you want.
+
+Every group is guaranteed a row before any one of them takes a second, so neither a stack of
+plugin views nor a full block of recents can drop a whole *section* off the list. On a first
+run there's no history competing for the space and you get all of **Open…**, **Settings** and
+the deep links; once your recents have taken half the list, the commands section is down to
+**Open…** — one row rather than none, which is the part that matters, since **Open…** is where
+browsing starts. Everything else is a keystroke away. Any slots left over are filled in
+registration order.
+
+The moment you type, the list becomes the **whole** corpus — every surface included, no
+cap — ordered by how well each row matches:
+
+1. the label IS what you typed
+2. the label starts with it
+3. a word in the label starts with it
+4. the label contains it
+5. a keyword / hint / group / source contains it
+6. the label matches loosely (fuzzy)
+7. it matched only by spreading your terms across the label *and* its metadata
+
+Tier 7 is a residual, not a design goal: matching joins every field into one haystack, so a
+query like `bra goals` can be admitted with `bra` in the label and `goals` in a keyword —
+no single-field tier describes that, and it sorts last rather than being dropped.
+
+Results from a plugin **source** are a separate case: a source runs its own search
+(server-side, fuzzy, whatever it likes), so its rows are ordered alongside the rest but
+never re-filtered — a hit whose text doesn't literally contain what you typed still shows.
+
+The typed list has **no group headers**. A header marks where one section ends and the next
+begins, which is only true while the list is in registration order; ranking sorts by match
+quality *across* groups, so the sections interleave and a header would re-appear every few
+rows. The untyped list is grouped, and keeps them.
+
+Ties break on how often and how recently you've run the command, then on registration
+order, so the list is stable and the thing you actually use rises — and it learns either way
+you got there, whether you typed the surface's name or picked it out of **Open…**. Matching
+itself is unchanged from the design system's rule — every whitespace-separated term must
+appear somewhere in the row — so a row that used to be findable still is.
 
 ## For plugin authors
 
@@ -51,15 +102,33 @@ A plugin's view opts into the palette by setting `palette: "inline"` on its view
 in `protoagent.plugin.yaml` (the same view that would otherwise mount in a rail/tab).
 When opened from the palette, it renders the view's body in place.
 
-> Plugin-declared *commands* (a manifest `commands:` list that contributes arbitrary
-> actions, beyond views) are the next slice of ADR 0057 and not shipped yet — today a
-> plugin reaches the palette via an inline **view**.
+Beyond views, a plugin contributes rows through its manifest's `commands:` block — see
+[`commands`](/reference/plugin-manifest#field-commands) for the field itself. Each entry
+declares what it *does* (`navigate`, `open_view`, `tool`, `emit`, or `command`, chaining to
+another entry) and the console compiles that declaration into the row's behaviour inside its
+own trusted adapter, `apps/web/src/app/pluginPaletteCommands.ts`. That indirection is the
+point: plugin code never enters the console bundle, so the manifest is data and this adapter
+is the single place data becomes behaviour. It re-checks every route and event topic against
+the plugin's own namespace instead of trusting the status payload, and anything that fails —
+along with any action it does not implement — contributes no row at all rather than a row
+that fires something its author did not write.
+
+> A `provider` entry (a live search that queries the plugin as you type) is parsed and
+> shipped on the status payload but not compiled yet, so an entry declaring only a provider
+> still contributes nothing.
 
 The palette is mounted in `apps/web/src/app/App.tsx` — the
 `@protolabsai/ui/command-palette` substrate, opened from the keybinding intents store
 (`useKbIntents().paletteOpen`) rather than a DS-internal hotkey hook: the chord is the
 ordinary, rebindable `palette.toggle` binding in
 `apps/web/src/keybindings/coreKeybindings.ts` ([ADR 0063](/adr/0063-keybinding-system)).
-The command + view registry is built in `apps/web/src/app/usePaletteRegistry.ts`, where
-core's own commands go through the same public `registerPaletteCommand` seam a fork uses
-([ADR 0061](/adr/0061-frontend-extension-registries)).
+The desktop launcher window (`apps/web/src/app/Launcher.tsx`) mounts the same palette.
+
+Both build their registry through `apps/web/src/app/usePaletteRegistry.ts`, a re-export
+barrel over `apps/web/src/app/palette/` — `registry.ts` (what core contributes, through
+the same public `registerPaletteCommand` seam a fork uses,
+[ADR 0061](/adr/0061-frontend-extension-registries)), `rank.ts` (matching + ordering),
+`recents.ts` (the frecency store) and `rootView.tsx`. That last one is the root list
+itself, which the **console** owns rather than the design system; read the note at the top
+of it before changing the DS dependency — it records the upstream gap, and which of the
+behaviours there are fixes to the DS view that handing the root back would undo.

@@ -16,9 +16,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement as h } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CommandPalette } from "@protolabsai/ui/command-palette";
 import type { Command, PaletteContext, PaletteRegistry } from "@protolabsai/ui/command-palette";
 
 import type { PluginCommand, RuntimeStatus } from "../lib/types";
+import { buildViews } from "../lib/viewRegistry";
 import {
   compilePluginCommands,
   pluginCommandGroups,
@@ -27,7 +29,12 @@ import {
   pluginRoutePath,
 } from "./pluginPaletteCommands";
 import type { PluginCommandDeps, PluginCommandSource } from "./pluginPaletteCommands";
-import { usePaletteRegistry } from "./usePaletteRegistry";
+import { setPaletteNavigator, usePaletteRegistry } from "./usePaletteRegistry";
+import type { NavIntent } from "./palette/nav";
+
+// jsdom implements no layout, so it ships no `scrollIntoView` — the palette root scrolls its
+// selected row into view. An environment gap, not a behaviour under test.
+Element.prototype.scrollIntoView ??= () => {};
 
 const TAB = "\t";
 const CR = "\r";
@@ -684,6 +691,11 @@ describe("pluginCommandGroups", () => {
 
 let root: Root | null = null;
 
+// The hook takes ADR 0056's whole View facade now (`{ views, viewFor }`), not a bare array.
+// Empty on purpose: these tests are about the PLUGIN rows, and a core surface list would
+// only add noise to `getStaticCommands()`.
+const EMPTY_VIEWS = buildViews({ core: [], plugins: [], ext: [] });
+
 beforeEach(() => {
   // The fleet roster poll would otherwise hit the network on every mount; hanging it keeps
   // the fleet data undefined, a state the hook already handles.
@@ -707,7 +719,7 @@ function Probe({
   sources: PluginCommandSource[];
   onRegistry: (r: PaletteRegistry) => void;
 }) {
-  onRegistry(usePaletteRegistry([], [], undefined, { sources, notify: () => {} }));
+  onRegistry(usePaletteRegistry(EMPTY_VIEWS, [], undefined, { sources, notify: () => {} }));
   return null;
 }
 
@@ -769,5 +781,103 @@ describe("usePaletteRegistry — plugin-declared commands", () => {
     rerender([{ ...source, loaded: true, commands: [{ id: "other", title: "Other", action: { type: "emit", topic: "ping" } }] }]);
     await vi.waitFor(() => expect(row("plugin:files:other")).toBeTruthy());
     expect(row("plugin:files:reindex")).toBeUndefined();
+  });
+});
+
+// ── The late-arrival case: plugin rows landing under the operator's arrow ─────────
+//
+// Reviewers raised this on both palette PRs: arm a second command source and ⌘K resets the
+// highlight to row 0, so Enter runs whatever is first instead of what you arrowed to. It was
+// real, and it was the DS `commandsView`'s defect — that view resets selection on
+// `[filtered.length]`, which is index-keyed and therefore blind to a re-rank that keeps the
+// count or inserts a row above the selection. #3289 replaced it with a host-owned root that
+// keys selection on the COMMAND ID, so the fix is INHERITED here rather than re-implemented.
+//
+// Inherited is exactly why the test belongs on this side of the seam. Plugin rows are the
+// console's own late arrival — runtime status resolves after mount, and `cmdSig` re-registers
+// them on every manifest change — and nothing in `palette/rootView.test.ts` mounts the real
+// adapter. Move these rows onto a provider, or re-key the effect so a re-register sweeps the
+// registry, and every test in that file would still pass while ⌘K went back to running the
+// wrong command.
+describe("plugin rows arriving late never steal the operator's selection", () => {
+  const intents: NavIntent[] = [];
+
+  beforeEach(() => {
+    // The palette's nav chokepoint, captured instead of applied — so "which row did Enter
+    // actually run?" is one exact payload rather than an inspection of the UI store.
+    intents.length = 0;
+    setPaletteNavigator((i) => intents.push(i));
+  });
+  afterEach(() => setPaletteNavigator(null));
+
+  function PalettePane({ sources }: { sources: PluginCommandSource[] }) {
+    const registry = usePaletteRegistry(EMPTY_VIEWS, [], undefined, { sources, notify: () => {} });
+    return h(CommandPalette, { open: true, onOpenChange: () => {}, registry });
+  }
+
+  const rowLabels = () =>
+    [...document.querySelectorAll('[role="option"] .pl-cmdk-commands__label')].map((n) => n.textContent);
+  const selectedLabel = () =>
+    document.querySelector('[data-sel="true"] .pl-cmdk-commands__label')?.textContent ?? null;
+  const input = () => document.querySelector<HTMLInputElement>(".pl-cmdk-commands__input")!;
+
+  function type(value: string) {
+    const el = input();
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    setter.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  const press = (key: string) =>
+    input().dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+
+  async function mountPalette(sources: PluginCommandSource[]) {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const mounted = createRoot(host);
+    root = mounted;
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const rerender = (next: PluginCommandSource[]) =>
+      mounted.render(h(QueryClientProvider, { client }, h(PalettePane, { sources: next })));
+    rerender(sources);
+    await vi.waitFor(() => expect(document.querySelector(".pa-cmdk")).not.toBeNull());
+    return rerender;
+  }
+
+  it("keeps the highlight — and Enter — on the row the operator arrowed to", async () => {
+    // No plugin sources yet: this is the console a beat before runtime status lands.
+    const rerender = await mountPalette([]);
+    type("settings");
+    // Three core rows match, ranked exact-then-prefix.
+    await vi.waitFor(() =>
+      expect(rowLabels()).toEqual(["Settings", "Settings: Fleet", "Settings: Telemetry"]),
+    );
+    press("ArrowDown");
+    await vi.waitFor(() => expect(selectedLabel()).toBe("Settings: Fleet"));
+
+    // Status lands. The new row is a PREFIX match registered ahead of the deep links, so it
+    // ranks in ABOVE the selection — the selected command keeps its identity and loses its
+    // index, which is precisely what an index-keyed reset cannot survive.
+    rerender([
+      makeSource([{ id: "sync", title: "Settings Sync", action: { type: "emit", topic: "sync" } }]),
+    ]);
+    await vi.waitFor(() =>
+      expect(rowLabels()).toEqual([
+        "Settings",
+        "Settings Sync",
+        "Settings: Fleet",
+        "Settings: Telemetry",
+      ]),
+    );
+    expect(selectedLabel()).toBe("Settings: Fleet");
+    // `aria-activedescendant` is the only thing a screen reader has to go on, so it has to
+    // have followed the row too — a highlight that moved without it is half a fix.
+    expect(input().getAttribute("aria-activedescendant")).toBe(
+      document.querySelector('[data-sel="true"]')!.id,
+    );
+
+    // The whole point: Enter runs what was selected. Row 0 (`Settings`) would push
+    // `{ kind: "global" }` with no section, so this payload distinguishes the two outcomes.
+    press("Enter");
+    expect(intents).toEqual([{ kind: "global", section: "fleet" }]);
   });
 });

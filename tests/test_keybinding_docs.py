@@ -22,7 +22,7 @@ docs claim rots in three different ways:
 3. **A page tells you to run a command that no longer exists** — "press ⌘⇧K → Toggle Fleet
    Agent" survived in `docs/guides/fleet.md` long after #1769 folded that command into the
    Fleet Room, and a chord-only check can never see it. Command *names* are re-derived from
-   `usePaletteRegistry.ts` too.
+   the palette adapter (`apps/web/src/app/palette/`) too.
 
 Two deliberate limits, so the gate stays a tripwire and not a pile of exceptions:
 
@@ -43,7 +43,12 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 CORE_KEYBINDINGS = REPO / "apps" / "web" / "src" / "keybindings" / "coreKeybindings.ts"
-PALETTE_REGISTRY = REPO / "apps" / "web" / "src" / "app" / "usePaletteRegistry.ts"
+# The adapter that registers the root commands. `app/usePaletteRegistry.ts` is a four-line
+# re-export barrel since #3289 split the adapter into `app/palette/*`, so scanning THAT file
+# for `label:` yields nothing — which is precisely how a docs gate goes vacuum-green. The
+# whole directory is read instead, and `test_the_two_swapped_bindings_are_still_parseable`
+# asserts a known label comes back out of it.
+PALETTE_ADAPTER = REPO / "apps" / "web" / "src" / "app" / "palette"
 DESKTOP_SHELL = REPO / "apps" / "desktop" / "src-tauri" / "src" / "lib.rs"
 PALETTE_GUIDE = REPO / "docs" / "guides" / "command-palette.md"
 
@@ -154,7 +159,11 @@ def _shell_chords() -> set[str]:
 
 def _palette_labels() -> tuple[set[str], tuple[str, ...]]:
     """(exact labels, label prefixes) the palette registers as ROOT commands."""
-    src = PALETTE_REGISTRY.read_text(encoding="utf-8")
+    assert PALETTE_ADAPTER.is_dir(), (
+        f"palette adapter moved: {PALETTE_ADAPTER.relative_to(REPO)} — update this test"
+    )
+    sources = [p for p in sorted(PALETTE_ADAPTER.glob("*.ts*")) if ".test." not in p.name]
+    src = "\n".join(p.read_text(encoding="utf-8") for p in sources)
     labels = set(_LABEL_RE.findall(src)) | set(_LINK_RE.findall(src))
     # `label: \`Chat with ${chat.name}\`` — only the literal head is checkable.
     prefixes = tuple(t.split("${")[0].strip() for t in _TEMPLATE_LABEL_RE.findall(src) if "${" in t)
@@ -213,7 +222,7 @@ def test_the_two_swapped_bindings_are_still_parseable() -> None:
     assert any(_claims(p) for p in _doc_pages()), "no chord claims matched — the scan broke"
     labels, _ = _palette_labels()
     assert "Fleet Room" in labels, (
-        "palette command labels no longer parse out of usePaletteRegistry.ts — "
+        "palette command labels no longer parse out of apps/web/src/app/palette/ — "
         "test_no_page_invokes_a_command_the_palette_dropped would pass vacuously"
     )
 
@@ -289,7 +298,7 @@ def test_no_page_invokes_a_command_the_palette_dropped() -> None:
     assert not dead, (
         "Docs tell a user to run a palette command that isn't registered:\n  "
         + "\n  ".join(dead)
-        + "\nThe root commands live in apps/web/src/app/usePaletteRegistry.ts — registered: "
+        + "\nThe root commands live in apps/web/src/app/palette/ — registered: "
         + ", ".join(sorted(labels))
         + ". (Surfaces are behind `Open…`, so name that, not the surface.)"
     )

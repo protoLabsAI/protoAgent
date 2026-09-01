@@ -212,7 +212,7 @@ Backend: add `_parse_commands` next to `_parse_views` (`graph/plugins/manifest.p
 > `usePaletteRegistry` for BOTH the console window and the frameless desktop launcher off one
 > shared derivation (`pluginCommandSources`) rather than the two hand-synced copies the
 > plugin-*view* derivation still carries. Rows register per plugin, adjacent to that plugin's
-> view rows, stamped with `{source}` so the DS renders the attribution chip and its
+> view rows, stamped with `{source}` so the palette root renders the attribution chip and its
 > contiguous-group rendering keeps a single "Plugins" heading — a manifest `group` naming a
 > heading the console already owns ("Agents", "Commands") falls back to that plugin section
 > rather than opening a second one mid-list. Five deltas from the sketch above:
@@ -246,7 +246,7 @@ Backend: add `_parse_commands` next to `_parse_views` (`graph/plugins/manifest.p
 >   error) stay live. Disabling rather than hiding follows the Fleet Room command's convention —
 >   a row that explains itself is discoverable, a row that vanishes reads as never shipped.
 > - **A row with no manifest `hint` says what it DOES** — "go to" for a `navigate`, "run" for a
->   `tool`/`emit` — and carries that word in its keywords either way. The DS matches on
+>   `tool`/`emit` — and carries that word in its keywords either way. `rank.ts` matches on
 >   `label + hint + group + source.label + keywords`, and the plugin's own view rows already hint
 >   "go to", so without it a plugin-declared navigation row is the one navigation row in the
 >   palette that typing "go to" misses. "open" is deliberately not used: `Open…` owns it.
