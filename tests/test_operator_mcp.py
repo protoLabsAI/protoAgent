@@ -147,6 +147,33 @@ def test_hitl_tools_never_exposed_even_when_named():
     assert names == {"calculator"}  # the HITL names are dropped, hard
 
 
+# ── fleet_diagnostics stays OFF the operator MCP bus (ADR 0071 / #3170) ──
+
+
+def test_fleet_diagnostics_not_in_read_only_profile():
+    """Its operator-MCP exposure is a separate security review (#3170), so the guarded
+    fleet-diagnostics tool must not be in the read-only profile set."""
+    from runtime.operator_mcp_tools import _READ_ONLY_TOOLS
+
+    assert "fleet_diagnostics" not in _READ_ONLY_TOOLS
+
+
+def test_fleet_diagnostics_hard_excluded_even_via_star(monkeypatch):
+    """Hard-excluded like the HITL tools: never exposed even under ``"*"`` or when named
+    explicitly — until its own review lands (ADR 0071). Exercised by planting a plugin tool
+    of that name, since the in-graph config flag that builds the real one isn't threaded here."""
+    from langchain_core.tools import tool
+
+    @tool
+    def fleet_diagnostics(member: str) -> str:
+        """stand-in for the guarded fleet diagnostics tool"""
+        return member
+
+    monkeypatch.setattr(STATE, "plugin_tools", [fleet_diagnostics], raising=False)
+    assert "fleet_diagnostics" not in {t.name for t in operator_tools(_cfg(["*"]))}
+    assert "fleet_diagnostics" not in {t.name for t in operator_tools(_cfg(["fleet_diagnostics"]))}
+
+
 # ── profile presets (ADR 0075 D3) ──
 
 

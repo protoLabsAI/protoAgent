@@ -1012,6 +1012,17 @@ class LangGraphConfig:
     # (ADR 0081): crossing into self-modification is the operator's explicit choice.
     tools_self_config_enabled: bool = False
 
+    # Guarded read-only fleet diagnostics (config ``tools.fleet_diagnostics_enabled``, #3170,
+    # ADR 0071). When on, the managing agent gets a ``fleet_diagnostics`` tool that inspects a
+    # registered fleet member's bounded log tail or one exact A2A task through the member-local
+    # diagnostics API (#3168) — roster-addressed, operator-authenticated, bounded, redacted, and
+    # READ-ONLY (no start/resume/answer/checkpoint/config mutation). Off by default: crossing
+    # into cross-member introspection is the operator's explicit choice, the same disposition as
+    # ``tools.self_config_enabled`` / ``soul.self_edit_enabled``, so it never widens an ordinary
+    # agent's default toolset. NOT exposed over the operator MCP — that is a separate security
+    # review (``runtime.operator_mcp_tools``).
+    tools_fleet_diagnostics_enabled: bool = False
+
     # Tool HIDE list (config ``tools.hidden``, #2172) — a HARD superset of ``disabled``:
     # a hidden tool is denied like a disabled one (never bound to the graph), AND it is
     # dropped from the console's tool inventory entirely, so it never renders as a
@@ -2010,6 +2021,7 @@ class LangGraphConfig:
             .get("enabled", cls.tools_memoize_reads_enabled),
             tools_disabled=list(data.get("tools", {}).get("disabled", []) or []),
             tools_self_config_enabled=bool(data.get("tools", {}).get("self_config_enabled", False)),
+            tools_fleet_diagnostics_enabled=bool(data.get("tools", {}).get("fleet_diagnostics_enabled", False)),
             tools_hidden=list(data.get("tools", {}).get("hidden", []) or []),
             settings_hidden=list(data.get("settings", {}).get("hidden", []) or []),
             routing_fallback_models=data.get("routing", {}).get("fallback_models", []),

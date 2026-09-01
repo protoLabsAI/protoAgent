@@ -2744,6 +2744,15 @@ def get_all_tools(
         from tools.onboard_tools import build_onboard_tools
 
         tools.extend(build_onboard_tools(graph_config))
+        # Guarded read-only fleet diagnostics (#3170, ADR 0071 — config
+        # ``tools.fleet_diagnostics_enabled``, default OFF). When on, the managing agent
+        # gets a `fleet_diagnostics` tool that inspects a registered member's bounded logs
+        # or one exact A2A task through the member-local diagnostics API (#3168), roster-
+        # addressed and operator-authenticated. The factory returns [] when off, so an
+        # ordinary agent never sees it (the build_onboard_tools disposition).
+        from tools.fleet_diagnostics import build_fleet_diagnostics_tools
+
+        tools.extend(build_fleet_diagnostics_tools(graph_config))
     if knowledge_store is not None:
         tools.extend(_build_memory_tools(knowledge_store, graph_config, background_mgr))
     if scheduler is not None:

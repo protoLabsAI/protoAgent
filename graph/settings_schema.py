@@ -419,6 +419,20 @@ FIELDS: list[Field] = [
         ui_hidden=True,
     ),
     Field(
+        "tools.fleet_diagnostics_enabled",
+        "tools_fleet_diagnostics_enabled",
+        "Let the agent inspect fleet members' diagnostics",
+        "bool",
+        "Tools",
+        "When on, the managing agent gets a read-only `fleet_diagnostics` tool that inspects a "
+        "registered fleet member's bounded log tail or one exact A2A task by id, through the "
+        "member's operator-authenticated diagnostics API (#3168). Roster-addressed (unknown "
+        "members are refused), bounded and redacted, and strictly read-only — it can't start a "
+        "member, resume or answer a task/HITL prompt, edit a checkpoint, or change config. Off by "
+        "default (ADR 0071): cross-member introspection is the operator's explicit choice.",
+        ui_hidden=True,
+    ),
+    Field(
         "soul.self_edit_enabled",
         "soul_self_edit_enabled",
         "Let the agent edit its own persona (SOUL.md)",

@@ -298,6 +298,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "tools_memoize_reads_enabled": False,
     "tools_disabled": [],
     "tools_self_config_enabled": False,
+    "tools_fleet_diagnostics_enabled": False,
     "tools_hidden": [],
     "settings_hidden": [],
     "top_k": -1,
