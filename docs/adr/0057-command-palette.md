@@ -208,6 +208,29 @@ Backend: add `_parse_commands` next to `_parse_views` (`graph/plugins/manifest.p
   | `emit`       | `POST /api/events/publish` (ADR 0039, the bus `PluginView` already relays) |
   | `command`    | look up + run another command |
 
+> **As shipped (#3294).** The adapter is `apps/web/src/app/pluginPaletteCommands.ts`, wired by
+> `usePaletteRegistry` for BOTH the console window and the frameless desktop launcher off one
+> shared derivation (`pluginCommandSources`) rather than the two hand-synced copies the
+> plugin-*view* derivation still carries. Rows register per plugin, adjacent to that plugin's
+> view rows, stamped with `{source}` so the DS renders the attribution chip and its
+> contiguous-group rendering keeps a single "Plugins" heading. Three deltas from the sketch
+> above:
+>
+> - **Navigation goes through the serializable `NavIntent` chokepoint**, not `ui.setSurface`.
+>   The launcher mounts this same registry in a shell-less JS context where store mutations are
+>   inert, so a direct store call is a silent no-op there.
+> - **The adapter re-validates every route and topic namespace** instead of trusting
+>   `/api/runtime/status`. `apiUrl()` forwards an absolute URL unchanged and the operator bearer
+>   is attached, so an escaped route is an authenticated write, not a blank iframe — and the
+>   payload it reads never has to have passed through `_parse_commands` (a stale cache, a parser
+>   regression, a hand-edited response). Failing the mirror produces no row.
+> - **`open_view` falls back to `navigate`** when the target view never opted into the inline
+>   morph through `views[].palette` — something `_parse_commands` cannot see, and `ctx.enter` on
+>   an unregistered view id blanks the whole palette.
+>
+> `provider` rows are **not** compiled: the §8 provider budget (per-query timeout/cancel,
+> per-plugin result cap) is still open, so a provider-only entry contributes no row.
+
 ## 5. Sequencing
 
 1. **Bump `@protolabsai/ui`** to the release carrying `/command-palette`
