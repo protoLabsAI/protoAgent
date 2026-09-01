@@ -44,6 +44,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 CORE_KEYBINDINGS = REPO / "apps" / "web" / "src" / "keybindings" / "coreKeybindings.ts"
 PALETTE_REGISTRY = REPO / "apps" / "web" / "src" / "app" / "usePaletteRegistry.ts"
+KEYBINDING_COMMANDS = REPO / "apps" / "web" / "src" / "app" / "keybindingCommands.ts"
 DESKTOP_SHELL = REPO / "apps" / "desktop" / "src-tauri" / "src" / "lib.rs"
 PALETTE_GUIDE = REPO / "docs" / "guides" / "command-palette.md"
 
@@ -152,10 +153,31 @@ def _shell_chords() -> set[str]:
     return {_glyph(c) for c in combos}
 
 
+def _keyboard_action_labels() -> set[str]:
+    """Labels of the palette's keyboard-action rows (#3295).
+
+    Those rows are built in `keybindingCommands.ts` from an allow-list of binding ids, and
+    each one takes its label from the BINDING — so neither the id nor the label appears in
+    `usePaletteRegistry.ts`, and a scan of that file alone would call a guide's **New chat**
+    a command the palette dropped. Read the allow-list, then the labels it points at. A row
+    may override the wording (`label:`), so those literals count too; the union is a
+    superset, which is the safe direction for a check that only reports DEAD names."""
+    assert KEYBINDING_COMMANDS.exists(), (
+        f"keyboard-action rows moved: {KEYBINDING_COMMANDS.relative_to(REPO)} — update this test"
+    )
+    src = KEYBINDING_COMMANDS.read_text(encoding="utf-8")
+    # `(?<!\w)` so the prose `keybinding: "settings.open"` in that file's header — the id it
+    # explains DROPPING — can't smuggle "Open Settings" in as a shipped command name.
+    wanted = set(re.findall(r'(?<!\w)binding:\s*"([\w.]+)"', src))
+    core = CORE_KEYBINDINGS.read_text(encoding="utf-8")
+    by_id = dict(re.findall(r'id:\s*"([\w.]+)".*?label:\s*"([^"]+)"', core, re.S))
+    return {by_id[b] for b in wanted if b in by_id} | set(_LABEL_RE.findall(src))
+
+
 def _palette_labels() -> tuple[set[str], tuple[str, ...]]:
     """(exact labels, label prefixes) the palette registers as ROOT commands."""
     src = PALETTE_REGISTRY.read_text(encoding="utf-8")
-    labels = set(_LABEL_RE.findall(src)) | set(_LINK_RE.findall(src))
+    labels = set(_LABEL_RE.findall(src)) | set(_LINK_RE.findall(src)) | _keyboard_action_labels()
     # `label: \`Chat with ${chat.name}\`` — only the literal head is checkable.
     prefixes = tuple(t.split("${")[0].strip() for t in _TEMPLATE_LABEL_RE.findall(src) if "${" in t)
     return labels, prefixes
@@ -215,6 +237,11 @@ def test_the_two_swapped_bindings_are_still_parseable() -> None:
     assert "Fleet Room" in labels, (
         "palette command labels no longer parse out of usePaletteRegistry.ts — "
         "test_no_page_invokes_a_command_the_palette_dropped would pass vacuously"
+    )
+    assert "New chat" in labels, (
+        "the keyboard-action rows no longer parse out of keybindingCommands.ts + "
+        "coreKeybindings.ts — a doc naming one of those nine commands would be reported "
+        "dead, and a folded-away one would keep its instructions"
     )
 
 

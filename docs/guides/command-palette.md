@@ -39,8 +39,19 @@ Settings ▸ Keyboard, not with the in-app chords above.
 - **Open…** — the built-in surfaces (Chat, Activity, Knowledge, Studio, Agent, Plugins,
   Settings, plus whatever a fork adds) live one hop in, behind **Open…**, so the root list
   stays short.
-- **Deep links** — the jumps worth their own command: **Settings**, **Settings: Fleet**,
-  **Settings: Telemetry**, **Plugins: Discover**, **Plugins: Install from URL**.
+- **Keyboard actions** — the console's own shortcuts, as ordinary rows you can run by
+  name: **New chat**, **Clear conversation**, **Focus chat composer**, **Next chat tab** /
+  **Previous chat tab**, **Toggle latest tool block**, and the **left rail** / **right
+  panel** / **bottom dock** toggles. Each row shows the chord it is bound to *right now* —
+  rebind one in Settings ▸ Keyboard and the row re-labels itself — so the palette doubles as
+  the shortcut cheat-sheet: type `shortcuts` to list the whole set. A chat action navigates
+  to chat before it runs, so picking one from Knowledge or Settings does what you meant.
+  (Not every binding gets a row. A shortcut whose row would open the thing you are already
+  looking at, duplicate another row's action, or land somewhere it can't act is deliberately
+  left to the keyboard — the full triage is in `apps/web/src/app/keybindingCommands.ts`.)
+- **Deep links** — the jumps worth their own command: **Settings**, **Settings: Keyboard**
+  (where every chord above is rebound), **Settings: Fleet**, **Settings: Telemetry**,
+  **Plugins: Discover**, **Plugins: Install from URL**.
 
 Groups render in registration order — **Agents**, then **Plugins**, then **Commands** —
 so the agent and its fleet stay at the top.

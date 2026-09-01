@@ -31,7 +31,7 @@ import { registeredKeybindings } from "../ext/keybindingRegistry";
 import { formatCombo } from "../keybindings/combo";
 import { effectiveCombo, useKeybindingOverrides } from "../keybindings/overrides";
 import { runBindingById } from "../keybindings/useKeybindings";
-import { registerKeybindingCommands } from "./keybindingCommands";
+import { registerKeybindingCommands, SHORTCUT_KEYWORDS } from "./keybindingCommands";
 import { useFlagPredicate } from "../flags/flags";
 import { useQuery } from "@tanstack/react-query";
 import { agentHref, isHostConsole } from "../lib/api";
@@ -222,6 +222,19 @@ _link("box:telemetry", "Settings: Telemetry", ["telemetry", "metrics", "box", "g
   kind: "global",
   section: "telemetry",
 });
+// The screen that REBINDS a chord. The keyboard rows below teach an operator which chord runs
+// what — the first half of a question whose second half ("that one's wrong, change it") had no
+// palette row at all: Settings ▸ Keyboard was reachable only by opening Settings and finding
+// the section. It carries `SHORTCUT_KEYWORDS`, the same tail as the rows it explains, so ONE
+// `shortcuts` query returns the whole keyboard surface and the way to rebind it. `keybindings`
+// is the section id SettingsSurface.tsx registers (labelled "Keyboard"), and it is neither
+// flag- nor host-gated, so this resolves in a sister agent's window too.
+_link(
+  "settings:keyboard",
+  "Settings: Keyboard",
+  ["settings", "rebind", "remap", "chord", "combo", ...SHORTCUT_KEYWORDS],
+  { kind: "global", section: "keybindings" },
+);
 // Keyboard actions as commands (ADR 0063 × ADR 0061): the triaged allow-list of registered
 // bindings, each row RUNNING its binding's action and ADVERTISING that binding's live combo.
 // `navigate` is handed in rather than imported so `keybindingCommands` has no runtime edge

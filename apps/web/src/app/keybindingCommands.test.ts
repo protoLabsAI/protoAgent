@@ -1,17 +1,20 @@
-// Keyboard actions as ⌘K rows (ADR 0061 × ADR 0063). Four things are worth pinning, and
-// they are the four this file is organized around:
+// Keyboard actions as ⌘K rows (ADR 0061 × ADR 0063). Five things are worth pinning, and
+// they are the five this file is organized around:
 //   1. WHICH bindings became rows — the triage is a judgement call, so it belongs in a test
 //      rather than only in a review comment: the 9 kept, and every deliberate drop named.
-//   2. The advertised combo tracks a user OVERRIDE, not `defaultKeys` — the entire reason
+//   2. That the rows are FINDABLE by the words an operator types. This is a search surface,
+//      so a correct row nobody's query reaches is a row that doesn't ship.
+//   3. The advertised combo tracks a user OVERRIDE, not `defaultKeys` — the entire reason
 //      the seam takes a binding ID instead of a literal "⌘K".
-//   3. A SCOPED binding is handled, not bypassed: `resolveBinding` is the only enforcement
+//   4. A SCOPED binding is handled, not bypassed: `resolveBinding` is the only enforcement
 //      of `scope`, and a row calls `run()` directly — so the row must open the surface its
-//      scope names first, and the action must genuinely land there.
-//   4. A throwing binding leaves the palette working (and still closes it).
+//      scope names first, and the action must genuinely land there. A scope this module
+//      can't resolve to a surface gets no row at all.
+//   5. A throwing binding leaves the palette working (and still closes it).
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, createElement as h } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Command, PaletteRegistry } from "@protolabsai/ui/command-palette";
 
 import { chatStore } from "../chat/chat-store";
@@ -26,27 +29,22 @@ import { runBindingById } from "../keybindings/useKeybindings";
 import { useUI } from "../state/uiStore";
 import { KEYBINDING_ROWS, keybindingCommandId, registerKeybindingCommands } from "./keybindingCommands";
 import type { NavIntent } from "./usePaletteRegistry";
+// Importing the adapter (for its exports, below) also RUNS its module-load registrations —
+// the core deep-links and the keybinding rows, wired to the real, module-private `navigate`.
+// That is what every assertion here reads, so the import is load-bearing beyond its bindings.
 import { applyNavIntent, usePaletteRegistry } from "./usePaletteRegistry";
 
 // The live-combo case mounts the adapter and drives a store update through `act`.
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-// Importing the adapter runs its module-load registrations — the core deep-links AND the
-// keybinding rows, wired to the real (module-private) `navigate`. The generous timeout is
-// for the transform: the adapter pulls in the DS palette, the UI store, react-query and the
-// flags query, and that cold import blows past vitest's 5s default under a full-suite run.
-beforeAll(async () => {
-  await import("./usePaletteRegistry");
-}, 30_000);
-
 const paletteIds = () => registeredPaletteCommands("static").map((c) => c.id);
+const kbRowIds = () => paletteIds().filter((id) => id.startsWith("kb:"));
 const row = (bindingId: string): PaletteCommand | undefined =>
   registeredPaletteCommands("static").find((c) => c.id === keybindingCommandId(bindingId));
 
 describe("which keybindings became palette rows", () => {
   it("lists exactly the triaged allow-list", () => {
-    const kbRows = paletteIds().filter((id) => id.startsWith("kb:"));
-    expect(kbRows.sort()).toEqual(
+    expect(kbRowIds().sort()).toEqual(
       [
         "kb:chat.clear",
         "kb:chat.new",
@@ -85,18 +83,78 @@ describe("which keybindings became palette rows", () => {
     for (const r of KEYBINDING_ROWS) expect(ids, `binding ${r.binding}`).toContain(r.binding);
   });
 
-  it("advertises its binding rather than a literal combo, and keeps them well-keyworded", () => {
+  it("advertises its binding rather than a literal combo", () => {
     for (const r of KEYBINDING_ROWS) {
       const cmd = row(r.binding);
       expect(cmd?.keybinding).toBe(r.binding);
       expect(cmd?.hint).toBeUndefined(); // a literal here is what `keybinding` exists to prevent
-      expect(cmd?.keywords).toEqual(expect.arrayContaining(["keyboard", "shortcut"]));
     }
   });
 
   it("gives the Settings deep-link ⌘, instead of a second 'Open Settings' row", () => {
     const settings = registeredPaletteCommands("static").find((c) => c.id === "settings");
     expect(settings?.keybinding).toBe("settings.open");
+  });
+
+  it("offers the screen that REBINDS them, deep-linked to the Keyboard section", () => {
+    const cmd = registeredPaletteCommands("static").find((c) => c.id === "settings:keyboard");
+    expect(cmd, "Settings: Keyboard row").toBeTruthy();
+    cmd!.run({ close: () => {} });
+    // The section id SettingsSurface.tsx registers — a typo here is a dialog that opens on
+    // whatever section was last used, which looks like the deep-link working.
+    expect(useUI.getState().globalSettingsSection).toBe("keybindings");
+    useUI.getState().closeGlobalSettings();
+  });
+});
+
+// ── Findability ──────────────────────────────────────────────────────────────────────
+// The palette is a SEARCH surface: a row whose keywords miss the words an operator types is
+// as good as unregistered, and that failure is invisible to every other test in this file.
+//
+// `finds` mirrors the DS's `matchCommand` (command-palette.views.tsx): lowercase the row's
+// label + group + keywords into one haystack, and require every whitespace-separated term to
+// appear in it — `haystack.includes(term)`, which is why the keyword lists prefer the plural
+// ("shortcuts" answers "shortcut" too; "shortcut" does not answer "shortcuts"). Conservative
+// by one field: the DS also searches the row's rendered `hint` (its combo), which this can't
+// see, so anything passing here passes there.
+describe("an operator can actually find these rows", () => {
+  const finds = (query: string, cmd: PaletteCommand | undefined): boolean => {
+    if (!cmd) return false;
+    const hay = [cmd.label, cmd.group, ...(cmd.keywords ?? [])].join(" ").toLowerCase();
+    return query
+      .trim()
+      .toLowerCase()
+      .split(/\s+/)
+      .every((term) => hay.includes(term));
+  };
+
+  it.each([
+    ["new chat", "chat.new"],
+    ["start conversation", "chat.new"],
+    ["wipe conversation", "chat.clear"],
+    ["clear messages", "chat.clear"],
+    ["focus composer", "composer.focus"],
+    ["write reply", "composer.focus"],
+    ["next tab", "chat.tab.next"],
+    ["switch tabs", "chat.tab.prev"],
+    ["expand tool output", "chat.tool.toggle"],
+    ["hide sidebar", "panel.toggle.left"],
+    ["right inspector", "panel.toggle.right"],
+    ["collapse drawer", "panel.toggle.bottom"],
+  ])("'%s' finds %s", (query, bindingId) => {
+    expect(finds(query, row(bindingId))).toBe(true);
+  });
+
+  it("lists the WHOLE keyboard surface — plus the way to rebind it — for 'keyboard shortcuts'", () => {
+    // The claim `keybindingCommands.ts` makes: ⌘K doubles as the shortcut cheat-sheet. The
+    // plural is what an operator types, and the form the first draft of these keywords
+    // missed — with a singular tail this case is the only one in the file that reddens.
+    for (const r of KEYBINDING_ROWS) {
+      expect(finds("keyboard shortcuts", row(r.binding)), `row for ${r.binding}`).toBe(true);
+    }
+    const rebind = registeredPaletteCommands("static").find((c) => c.id === "settings:keyboard");
+    expect(finds("keyboard shortcuts", rebind)).toBe(true);
+    expect(finds("rebind shortcut", rebind)).toBe(true);
   });
 });
 
@@ -136,12 +194,36 @@ describe("every row routes through the NavIntent chokepoint", () => {
   it("carries the surface a SCOPED binding's scope names, and none for a global one", () => {
     run("chat.clear");
     run("composer.focus");
-    expect(intents[0]).toMatchObject({ kind: "keybinding", id: "chat.clear", surface: "chat" });
-    expect(intents[1].kind === "keybinding" && intents[1].surface).toBeUndefined();
+    expect(intents[0]).toEqual({ kind: "keybinding", id: "chat.clear", surface: "chat" });
+    expect(intents[1]).toEqual({ kind: "keybinding", id: "composer.focus", surface: undefined });
   });
 
   it("closes the palette after dispatching", () => {
     expect(run("chat.tab.next")).toBe(true);
+  });
+});
+
+// ── The fork contract ────────────────────────────────────────────────────────────────
+describe("a scope with no surface gets no row at all", () => {
+  it("skips the binding and ships the other eight", () => {
+    const original = registeredKeybindings().find((b) => b.id === "chat.clear")!;
+    // Claim the nine ids off the module-load registration, then withdraw OUR set: the seam is
+    // last-write-wins, so this is the only way to get to a genuinely empty `kb:` namespace.
+    registerKeybindingCommands(() => {})();
+    expect(kbRowIds()).toHaveLength(0);
+    // A fork adding a `data-kb-scope` its own panel declares, without teaching SCOPE_SURFACE
+    // about it: `applyNavIntent` could not make the precondition true, so there is no honest
+    // row to build — and building one anyway is the dead-row failure the triage rejected.
+    registerKeybinding({ ...original, scope: "a-fork-scope-nobody-mapped" });
+    const off = registerKeybindingCommands(() => {});
+    try {
+      expect(kbRowIds()).not.toContain(keybindingCommandId("chat.clear"));
+      expect(kbRowIds()).toHaveLength(8);
+    } finally {
+      off();
+      registerKeybinding(original);
+      registerKeybindingCommands(applyNavIntent); // restore the shipped rows for what follows
+    }
   });
 });
 
@@ -202,7 +284,7 @@ describe("a throwing binding does not break the palette", () => {
     expect(() => cmd!.run({ close: () => (closed = true) })).not.toThrow();
     expect(closed).toBe(true);
     // …and the registry the palette reads is intact, so the next open still lists everything.
-    expect(paletteIds().filter((id) => id.startsWith("kb:"))).toHaveLength(9);
+    expect(kbRowIds()).toHaveLength(9);
   });
 });
 
