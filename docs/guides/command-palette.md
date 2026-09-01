@@ -7,6 +7,15 @@ act without hunting through rails and menus ([ADR 0057](/adr/0057-command-palett
 Note the shift: **plain ⌘K is _Clear conversation_** in chat, not the palette. Both chords
 are rebindable in Settings ▸ Keyboard ([ADR 0063](/adr/0063-keybinding-system)).
 
+**You don't have to know the chord.** There's a search box on the utility bar, bottom-left —
+click it and the palette opens. It shows the chord it would have taken, read live from the
+binding, so if you rebound the palette the button re-labels itself rather than teaching you a
+chord that no longer works.
+
+**On a phone**, where there is no chord to press, the same search sits in the header beside
+**+**. Without it the palette would be unreachable on mobile — and with it, so would every
+Settings section, the chat's own verbs, and knowledge search.
+
 **On the desktop app the palette also has its own window.** The quick launcher —
 **⌥Space** (macOS) / **Ctrl+Alt+Space** — is this same palette, frameless and
 always-on-top, summoned with the console hidden or another app focused; a "go to" hands

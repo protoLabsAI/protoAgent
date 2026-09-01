@@ -1,7 +1,8 @@
-import { ChevronDown, ChevronLeft, Menu, Plus } from "lucide-react";
+import { ChevronDown, ChevronLeft, Menu, Plus, Search } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
 
 import { chatStore, unusedSession, useChatState } from "../chat/chat-store";
+import { useKbIntents } from "../keybindings/intents";
 import { SessionSheet } from "./SessionSheet";
 
 /**
@@ -110,6 +111,24 @@ export function MobileShell({
             >
               <span className="mshell-title-text">{current?.title ?? "New chat"}</span>
               <ChevronDown size={15} aria-hidden />
+            </button>
+            {/* The palette, on the shell that needs it MOST and had it least. A phone has no
+                keyboard to press the chord with, so without this button every surface behind
+                the drawer, every Settings section, the chat's verbs and live knowledge search
+                were unreachable on mobile — the shortcut was the only door, and mobile has no
+                shortcuts. Icon-only and no chord: there is nothing to teach here.
+
+                Reaches the intents store directly rather than taking a prop, matching the New
+                chat button beside it — this header already owns its own actions, and a prop
+                would mean a second edit at the App call site for no gain. */}
+            <button
+              type="button"
+              className="mshell-head-btn"
+              aria-label="Search commands"
+              title="Search commands, surfaces and agents"
+              onClick={() => useKbIntents.getState().togglePalette()}
+            >
+              <Search size={20} aria-hidden />
             </button>
             <button
               type="button"

@@ -90,6 +90,7 @@ import { hostRuntimeStatusQuery, installedPluginsQuery, pluginUpdatesQuery, runt
 import { buildViews } from "../lib/viewRegistry";
 import { applyNavIntent, openView, usePaletteRegistry } from "./usePaletteRegistry";
 import type { NavIntent } from "./usePaletteRegistry";
+import { PaletteButton } from "./PaletteButton";
 import { PaletteChat } from "./PaletteChat";
 import { CORE_SURFACES } from "./coreSurfaces";
 import { listen } from "../lib/desktop";
@@ -1072,6 +1073,10 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
             // GitHub moved into the header drawer.
             start={
               <>
+                {/* The palette's only visible way in (ADR 0057). FIRST on the bar: it is the
+                    entry point to every surface, command and search in the console, and the
+                    one pill whose job is to teach the chord that replaces it. */}
+                <PaletteButton />
                 {/* Settings (far left, 2026-06 consolidation) — opens the one settings dialog
                     (SettingsOverlay). A plain pill, not a UtilityWidget, so the drawer +
                     palette deep-links can open it too via the store flag (openGlobalSettings). */}
