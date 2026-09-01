@@ -11,13 +11,22 @@
 // `SettingsSectionId`, so adding one without search vocabulary is a type error rather than
 // a silently unfindable row.
 //
-// ── Why this module imports the LEAF and not the surface ────────────────────────────
-// `settings/sections.ts` is import-light on purpose: no React, no lucide components, no
-// panels. Reaching for `settings/SettingsSurface` to get the same ids would weld ~69
-// modules / ~470 KB of eager panel code onto the ⌘K path AND onto the desktop Launcher
-// window, which mounts the palette registry but never mounts App — and CI has no
-// bundle-size gate that would notice. `settingsPalette.test.ts` parses this file's own
-// import list to keep that door shut.
+// ── What this module may import, and why the list is short ──────────────────────────
+// Both edges are places ⌘K can quietly become expensive, and CI has no bundle-size gate
+// that would say so — hence a SOURCE guard: `settingsPalette.test.ts` parses this file's
+// own import list and pins it exactly.
+//
+//   • NOT `settings/SettingsSurface`. `settings/sections.ts` is import-light on purpose (no
+//     React, no lucide components, no panels); taking the same ids off the surface instead
+//     would weld ~69 modules / ~470 KB of eager panel code onto the ⌘K path AND onto the
+//     desktop Launcher window, which mounts the palette registry but never mounts App.
+//   • NOT `lib/lucideIcon`, which is the OBVIOUS way to turn the leaf's icon name into a
+//     glyph and is a lazy `import("lucide-react")` of the whole icon set — a 738 KB chunk
+//     nothing else eagerly loads, so ⌘K would go from free to the heaviest thing the
+//     Launcher downloads, every row flashing a Package box while it arrives. That resolver
+//     is right for a name chosen at runtime; these 23 are a closed set, so
+//     `settings/sectionIcons` maps them statically, from glyphs the Settings rail already
+//     put in the main chunk.
 //
 // ── Gating is DECLARATIVE — this module filters nothing ─────────────────────────────
 // A row for a flag-gated section carries the leaf's `flag` verbatim; a host-only section
@@ -35,7 +44,7 @@
 // therefore leave a dead id in localStorage — a settings dialog that opens on Identity
 // forever after, for no visible reason. Because `flag`/`hostOnly` ride the row, the host
 // never renders it in that state, so the run can't happen.
-import { lucideIcon } from "../lib/lucideIcon";
+import { sectionIcon } from "../settings/sectionIcons";
 import { settingsSectionGroups } from "../settings/sections";
 import type { PaletteCommand } from "../ext/paletteRegistry";
 import type { SectionMeta, SettingsSectionId } from "../settings/sections";
@@ -54,41 +63,53 @@ import type { SectionMeta, SettingsSectionId } from "../settings/sections";
 export type SettingsNavigate = (intent: { kind: "global"; section?: string }) => void;
 
 /**
- * Search vocabulary per section — the words an operator actually types when they want that
- * pane, which are usually NOT its nav label ("shortcuts" for Keyboard, "dark mode" for
- * Theme, "rag" for Knowledge, "a2a" for Delegates). The label and the group heading are
- * matched too (the DS matcher searches label · hint · group · keywords), so these are the
- * SYNONYMS only.
+ * Search vocabulary per section — the words an operator actually TYPES when they want that
+ * pane, which are usually not its nav label ("shortcuts" for Keyboard, "dark mode" for Theme,
+ * "api key" for Model, "rag" for Knowledge).
+ *
+ * Three rules, each learned by getting it wrong:
+ *
+ *  • SYNONYMS ONLY. The DS matcher searches label · hint · group · keywords as one lowercased
+ *    haystack, substring per whitespace-separated term (`matchCommand`, mirrored in
+ *    usePaletteRegistry). Every label here already begins "Settings: ", so a "settings"
+ *    keyword — and the section's own label word — buys nothing.
+ *  • TRUE of the PANE, not of the word. A keyword that sends an operator somewhere plausible
+ *    but wrong is worse than no keyword: they stop searching. Behavior is Goal mode ·
+ *    Watches · Compaction · Security (graph/settings_schema.py `_SECTION_CATEGORY`), so
+ *    "prompt"/"persona" belong to Identity, whose panel is the SOUL editor; the DS ThemePanel
+ *    has colors and shape and no typography, so "font" belongs to nothing.
+ *  • Multi-word entries are FREE. Matching is per term over the joined haystack, so
+ *    "api key" makes both `api key` and `key` land on Model, and costs one array slot.
  *
  * `Record<SettingsSectionId, …>` makes it exhaustive: a section added to the leaf without
- * keywords fails to compile rather than shipping a row nobody can find by name.
+ * vocabulary fails to compile rather than shipping a row nobody can find by name.
  */
 const SECTION_KEYWORDS: Record<SettingsSectionId, string[]> = {
-  identity: ["identity", "name", "rename", "persona", "soul", "character", "avatar", "who"],
-  access: ["operator", "owner", "org", "organization", "access", "permissions", "auth"],
-  devices: ["devices", "pair", "pairing", "qr", "phone", "mobile", "tablet", "revoke"],
-  model: ["model", "llm", "routing", "provider", "gateway", "connection", "oauth", "temperature", "caching"],
-  behavior: ["behavior", "prompt", "personality", "style", "tone", "autonomy", "limits"],
-  knowledge: ["knowledge", "rag", "memory", "embeddings", "index", "retrieval", "documents"],
-  tracing: ["tracing", "trace", "langfuse", "spans", "observability", "debug"],
-  secrets: ["secrets", "vault", "credentials", "keys", "manager"],
-  publish: ["publish", "share", "link", "public", "hosted", "viewer"],
-  plugins: ["plugins", "extensions", "install", "marketplace", "discover", "addons"],
-  snapshot: ["snapshot", "export", "import", "backup", "restore", "clone", "portable"],
-  tools: ["tools", "toolset", "allowlist", "functions", "python", "runtime"],
-  mcp: ["mcp", "servers", "connectors", "stdio", "sse", "model context protocol"],
-  skills: ["skills", "playbooks", "procedures", "recipes", "how-to"],
-  subagents: ["subagents", "sub agents", "workers", "task", "delegation"],
-  delegates: ["delegates", "a2a", "acp", "cli", "coding agent", "peers", "remote"],
-  overview: ["overview", "status", "health", "runtime", "system", "diagnostics", "version"],
-  fleet: ["fleet", "agents", "roster", "members", "spawn", "start", "stop"],
-  telemetry: ["telemetry", "metrics", "usage", "cost", "tokens", "spend", "analytics"],
-  theme: ["theme", "appearance", "colors", "dark mode", "light mode", "accent", "font"],
-  chat: ["chat", "messages", "composer", "streaming", "reasoning", "transcript"],
-  keybindings: ["keyboard", "shortcuts", "keybinding", "chord", "hotkey", "rebind", "keys"],
-  // Never reached: `developer` is filtered out below (see SETTINGS_PALETTE_EXCLUDED), but
-  // the map is exhaustive over the id union, so it still needs an entry.
-  developer: ["developer", "flags", "debug", "experimental", "internal"],
+  identity: ["name", "rename", "persona", "soul", "soul.md", "system prompt", "instructions", "who"],
+  access: ["owner", "org", "organization", "auth", "bearer", "token", "federation", "project directory"],
+  devices: ["pair", "pairing", "qr", "phone", "mobile", "tablet", "revoke"],
+  model: ["llm", "provider", "api key", "keys", "gateway", "litellm", "routing", "connection", "oauth", "temperature", "sampling", "caching", "runtime"],
+  behavior: ["goals", "goal mode", "autonomy", "watches", "compaction", "middleware", "background", "security", "redaction", "egress", "self-improvement"],
+  knowledge: ["rag", "recall", "memory", "embeddings", "retrieval", "ingestion", "index", "documents", "history"],
+  tracing: ["trace", "langfuse", "spans", "observability", "debug"],
+  secrets: ["vault", "credentials", "keys", "manager", "external"],
+  publish: ["share", "link", "public", "hosted", "viewer", "transcript"],
+  plugins: ["extensions", "integrations", "install", "uninstall", "enable", "disable", "addons", "marketplace"],
+  snapshot: ["export", "import", "backup", "restore", "clone", "migrate", "portable"],
+  tools: ["toolset", "allowlist", "functions", "python", "runtime", "execute code", "filesystem", "work folders"],
+  mcp: ["model context protocol", "servers", "connectors", "stdio", "sse"],
+  skills: ["playbooks", "procedures", "recipes", "how-to", "skill.md"],
+  subagents: ["workers", "task", "delegation", "roles"],
+  delegates: ["a2a", "acp", "cli", "coding agent", "claude code", "codex", "peers", "remote"],
+  overview: ["status", "health", "runtime", "system", "diagnostics", "version", "storage", "disk", "about"],
+  fleet: ["agents", "roster", "members", "spawn", "new agent", "start", "stop", "archetype"],
+  telemetry: ["metrics", "usage", "cost", "spend", "tokens", "analytics", "rollup"],
+  theme: ["appearance", "colors", "dark mode", "light mode", "accent", "brand", "palette", "contrast", "preset"],
+  chat: ["transcript", "usage", "tokens", "cost", "context window", "footer", "meter"],
+  keybindings: ["shortcuts", "keybinding", "chord", "hotkey", "rebind", "keys"],
+  // Never reached: `developer` is filtered out below (see SETTINGS_PALETTE_EXCLUDED), but the
+  // map is exhaustive over the id union, so it still needs an entry.
+  developer: ["flags", "channel", "experimental", "internal", "debug"],
 };
 
 /**
@@ -109,6 +130,10 @@ const SECTION_KEYWORDS: Record<SettingsSectionId, string[]> = {
  *     when `hasPaletteSources()`, and the DS shows its "Searching…" spinner whenever any
  *     provider exists. One row is not worth putting a 120ms spinner in front of every
  *     keystroke in every console.
+ *   • `usePaletteRegistry` could register/unregister the row from an EFFECT keyed on the
+ *     channel — it works, and it costs no provider. It also makes core's first stateful
+ *     palette registration, which is a pattern the next five special cases would copy, to
+ *     reach a panel that is off-prod only and already one click away in the Settings rail.
  *
  * So the panel keeps its existing entrances (the Settings rail, off prod) and the palette
  * stays honest about what it can gate. If the seam ever grows a channel axis, delete this.
@@ -127,10 +152,13 @@ export const SETTINGS_PALETTE_EXCLUDED: readonly SettingsSectionId[] = ["develop
  * on each row for the host to apply per render.
  *
  * Rows land in the "Commands" group labelled "Settings: <Section>", matching the two
- * hand-written rows this replaces, so nothing about the root view's shape changes. The
- * trailing hint is the section's own nav heading (Agent · Capabilities · Box · This
- * console), which both disambiguates same-named rows and makes the heading searchable —
- * typing "capabilities" lists exactly the five capability panes.
+ * hand-written rows this replaces, so the root view's structure is unchanged. The trailing
+ * hint is the section's own nav heading (Agent · Capabilities · Box · This console), which
+ * both disambiguates same-named rows and makes the heading searchable — typing
+ * "capabilities" lists exactly the five capability panes. Each row wears the same glyph its
+ * section wears in the Settings rail, so ⌘K reads like the rail it deep-links into. (The
+ * four hand-written Commands rows took glyphs of their own at the same time — see
+ * usePaletteRegistry: the DS row has no icon gutter, so a half-glyphed group steps.)
  */
 export function settingsPaletteCommands(navigate: SettingsNavigate): PaletteCommand[] {
   const excluded = new Set<string>(SETTINGS_PALETTE_EXCLUDED);
@@ -148,15 +176,11 @@ export function settingsPaletteCommands(navigate: SettingsNavigate): PaletteComm
             label: `Settings: ${section.label}`,
             group: "Commands",
             hint: group.label,
-            // The lucide NAME resolved lazily (lib/lucideIcon → `icons[name] || Package`),
-            // which is why the leaf stores names and `sections.test.ts` pins each one against
-            // lucide's `icons` map: a deprecated alias would type-check, render correctly in
-            // the Settings rail's static map, and silently be the Package box here.
-            // Default size (18) — the size every other palette row's icon renders at
-            // (coreSurfaces, the plugin-view rows); the Settings rail's own 15 would read as
-            // a second, smaller class of row.
-            icon: lucideIcon(section.icon),
-            keywords: ["settings", ...SECTION_KEYWORDS[section.id]],
+            // Default size (18) — what every other palette row's icon renders at (the
+            // plugin-view rows, the chat row); the Settings rail's own 15 would read as a
+            // second, smaller class of row.
+            icon: sectionIcon(section.icon),
+            keywords: SECTION_KEYWORDS[section.id],
             // Gates copied through, never evaluated — the host resolves them per render.
             ...(meta.flag ? { flag: meta.flag } : {}),
             ...(meta.hostOnly ? { hostOnly: true } : {}),

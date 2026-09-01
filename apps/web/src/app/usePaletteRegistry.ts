@@ -9,7 +9,9 @@
 // registered as DS `pluginView()`s — their command morphs the palette body into the
 // plugin's own iframe (themed/authed via the handshake) instead of navigating to its rail.
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { createElement, useEffect, useMemo, useSyncExternalStore } from "react";
+import { Download, PanelsTopLeft, Settings2, Store, Users } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { commandsView, createPaletteRegistry, pluginView } from "@protolabsai/ui/command-palette";
 import type {
   Command,
@@ -153,10 +155,21 @@ function navigate(intent: NavIntent) {
 // ids are the uiStore union types (source of truth), so they can't drift into a 404.
 // (Inbox moved to a utility-bar widget; Schedule is a top-level rail surface that
 // auto-registers as a "go to" nav command — so no Activity deep-links here.)
-const _link = (id: string, label: string, keywords: string[], intent: NavIntent) =>
+
+// The DS row is a flex line — `[icon] label … hint` with NO icon gutter — so an icon-less
+// row's label sits flush left while an icon'd row's is indented past the glyph. That cost
+// nothing while every core row went without one; the generated Settings rows below carry the
+// Settings rail's glyphs, which would otherwise leave a visible step mid-group. So the hand-
+// written rows take the glyph their DESTINATION already wears: the utility-bar Settings pill
+// (Settings2), the Plugins tabs (Store), the Install-from-URL button (Download), and the two
+// morph commands. `createElement` because this module is a .ts, not a .tsx.
+const glyph = (Icon: LucideIcon) => createElement(Icon, { size: 18 });
+
+const _link = (id: string, label: string, icon: ReactNode, keywords: string[], intent: NavIntent) =>
   registerPaletteCommand({
     id,
     label,
+    icon,
     group: "Commands",
     keywords,
     run: (ctx) => {
@@ -164,19 +177,21 @@ const _link = (id: string, label: string, keywords: string[], intent: NavIntent)
       ctx.close();
     },
   });
-_link("plug:market", "Plugins: Discover", ["plugins", "discover", "market", "directory", "browse"], {
+_link("plug:market", "Plugins: Discover", glyph(Store), ["plugins", "discover", "market", "directory", "browse"], {
   kind: "plugins",
   tab: "market",
 });
 // Install-from-URL is the advanced action under Installed now (ADR 0059 D4) — land there.
-_link("plug:download", "Plugins: Install from URL", ["plugins", "install", "url", "git"], {
+_link("plug:download", "Plugins: Install from URL", glyph(Download), ["plugins", "install", "url", "git"], {
   kind: "plugins",
   tab: "local",
 });
 // Settings is the consolidated dialog now (2026-06) — opened from the utility-bar pill,
 // the drawer, or these palette commands. This one opens it wherever it was left; the
 // per-section deep-links below open a named pane.
-_link("settings", "Settings", ["settings", "config", "preferences", "options"], { kind: "global" });
+_link("settings", "Settings", glyph(Settings2), ["settings", "config", "preferences", "options"], {
+  kind: "global",
+});
 // …and one row per Settings SECTION, generated from the section table rather than hand-listed
 // here. Three sections used to be reachable from ⌘K (this "Settings", plus hand-written Fleet
 // and Telemetry rows, now superseded) and the other twenty were not — a list nobody remembered
@@ -396,6 +411,7 @@ export function usePaletteRegistry(
       {
         id: "fleet-room",
         label: "Fleet Room",
+        icon: glyph(Users),
         hint: fleetGate ? "host instance only" : "members · DM · broadcast",
         disabled: !!fleetGate,
         group: "Agents",
@@ -448,6 +464,7 @@ export function usePaletteRegistry(
       id: "open",
       label: "Open…",
       hint: "surface",
+      icon: glyph(PanelsTopLeft),
       group: "Commands",
       keywords: ["open", "go to", "surface", "view", "navigate", "switch", "panel"],
       run: (c) => c.enter("open"),

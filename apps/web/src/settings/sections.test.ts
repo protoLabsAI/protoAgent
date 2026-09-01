@@ -135,14 +135,16 @@ describe("settings/sections.ts is a leaf", () => {
     for (const s of ALL_SECTIONS) expect(typeof s.icon).toBe("string");
   });
 
-  it("every icon name resolves through lucide's `icons` map — the LAZY consumer's path", () => {
-    // The table names glyphs as strings precisely so a consumer that never mounts Settings can
-    // render them, and that consumer (⌘K / the desktop Launcher) resolves via lib/lucideIcon:
-    // `icons[name] || Package`. SettingsSurface's static map does NOT exercise that path — it
-    // imports top-level named exports, where lucide KEEPS deprecated aliases it has already
-    // dropped from `icons`. `icon: "BarChart3"` shipped exactly that way: type-checked, correct
-    // in the rail, silently the Package box in ⌘K — the same glyph as Agent ▸ Snapshot, so it
-    // read as intentional. Assert against `icons`, which is the map the resolver actually reads.
+  it("every icon name is CANONICAL — a key of lucide's own `icons` map, not a stale alias", () => {
+    // `icons` is lucide's registry of live names; its top-level named exports are a superset,
+    // because it keeps DEPRECATED aliases exported after dropping them from the map. So an
+    // alias satisfies a static `Record<SettingsSectionIcon, LucideIcon>` (settings/sectionIcons)
+    // and renders perfectly, while being invisible to anything that resolves the string —
+    // `icons[name] || Package`, which is what lib/lucideIcon does for a name chosen at runtime.
+    // `icon: "BarChart3"` shipped exactly that way: type-checked, correct in the rail, silently
+    // the Package box for a by-name consumer — the same glyph as Agent ▸ Snapshot, so it read
+    // as intentional. Both of the table's consumers are static today and neither would notice;
+    // the point of storing NAMES is that the next one (a plugin, the Launcher) need not be.
     for (const s of ALL_SECTIONS) {
       expect(
         icons[s.icon as keyof typeof icons],

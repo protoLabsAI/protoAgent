@@ -12,10 +12,13 @@
 //   3. The WIRING hands both of those to the seam. A perfect row factory nothing registers,
 //      or one registered through a filter, looks identical from the factory's own tests — so
 //      the last block reads the registry back after the module-load registration.
-//   4. The module stays a LEAF. Importing `settings/SettingsSurface` for the same ids would
-//      weld the whole panel tree onto ⌘K and onto the desktop Launcher window, and CI has no
-//      bundle-size gate to notice. Only a source guard can catch that.
+//   4. The module stays a LEAF, and CHEAP. Importing `settings/SettingsSurface` for the same
+//      ids would weld the whole panel tree onto ⌘K and onto the desktop Launcher window;
+//      reaching for `lib/lucideIcon` to draw the same glyphs would pull the 738 KB lucide
+//      barrel onto both. CI has no bundle-size gate, so neither costs a test a single
+//      assertion — only a source guard can catch them.
 import ts from "typescript";
+import { Suspense, type ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -25,6 +28,7 @@ import {
 } from "./settingsPalette";
 import { ALL_SECTIONS, settingsSections } from "../settings/sections";
 import type { SectionMeta } from "../settings/sections";
+import { sectionIcon } from "../settings/sectionIcons";
 import { visiblePaletteCommands } from "../ext/paletteRegistry";
 import paletteSrc from "./settingsPalette.ts?raw";
 // Imported for its MODULE-LOAD side effect: `usePaletteRegistry` is where core registers
@@ -36,6 +40,8 @@ const rows = () => settingsPaletteCommands(nav);
 const byId = (id: string) => rows().find((c) => c.id === id);
 /** The section table read through the widened view, so the optional gate keys are readable. */
 const meta = (id: string): SectionMeta => ALL_SECTIONS.find((s) => s.id === id)! as SectionMeta;
+/** …and the same row UNwidened, where the literal `icon` (not `string`) is what's wanted. */
+const iconOf = (id: string) => ALL_SECTIONS.find((s) => s.id === id)!.icon;
 
 describe("coverage is derived from the section table, not hand-listed", () => {
   it("produces exactly one row per declared section, minus the documented exclusions", () => {
@@ -108,28 +114,123 @@ describe("the row shape is the one the docs and the ranking claim", () => {
     }
   });
 
-  it("keywords carry the section's own vocabulary, not just its label", () => {
-    // A row findable only by its nav label is barely findable: nobody types "keybindings"
-    // when they want to change a shortcut.
-    const kw = (id: string) => byId(`settings:${id}`)?.keywords ?? [];
-    expect(kw("keybindings")).toEqual(expect.arrayContaining(["shortcuts", "chord", "rebind"]));
-    expect(kw("theme")).toEqual(expect.arrayContaining(["dark mode", "appearance"]));
-    expect(kw("knowledge")).toEqual(expect.arrayContaining(["rag", "embeddings"]));
-    expect(kw("delegates")).toEqual(expect.arrayContaining(["a2a", "acp"]));
-    expect(kw("mcp")).toEqual(expect.arrayContaining(["servers", "connectors"]));
+  it("every row carries ITS OWN glyph, at the palette's size, resolved statically", () => {
+    // The obvious assertion — `expect(c.icon).toBeTruthy()` — is VACUOUS here: every path
+    // yields an element, the right name and the wrong name and the lazy fallback alike. So:
+    //   • `type` is the component settings/sectionIcons maps THIS section's name to, which an
+    //     off-by-one in the generator (the neighbour's glyph) fails;
+    //   • the 22 types are all DISTINCT, so that check discriminates rather than being
+    //     satisfied by one shared fallback;
+    //   • and it is the lucide component itself, never a <Suspense> — which is what going
+    //     back to lib/lucideIcon yields, along with the 738 KB barrel the import guard bans.
+    const el = (n: unknown) => n as ReactElement<{ size?: number }>;
     for (const c of rows()) {
-      expect(c.keywords?.[0]).toBe("settings");
-      // Vocabulary BEYOND the shared "settings" prefix — an empty tail is the regression.
-      expect((c.keywords ?? []).length).toBeGreaterThan(3);
+      const want = el(sectionIcon(iconOf(c.id.slice("settings:".length))));
+      expect(el(c.icon).type, `${c.id} renders the wrong glyph`).toBe(want.type);
+      expect(el(c.icon).type).not.toBe(Suspense);
+      expect(el(c.icon).props.size).toBe(18);
     }
+    expect(new Set(rows().map((c) => el(c.icon).type)).size).toBe(rows().length);
+  });
+});
+
+// ── The search surface: what an operator TYPES has to land ───────────────────────────
+//
+// The rows can be perfectly derived, gated and wired and still be unusable, because ⌘K is a
+// SEARCH box: coverage is the implementation's claim, findability is the operator's. So these
+// run real queries — the words you say out loud reaching for the pane — over the real rows.
+//
+// The matcher is the DS's `matchCommand` (command-palette.views.tsx), reproduced here for the
+// same reason usePaletteRegistry reproduces it: it is module-private. All whitespace-separated
+// terms must appear as SUBSTRINGS of one lowercased haystack of label · hint · group ·
+// keywords. Substring, note — "rag" is inside "sto-rag-e" — so the assertions below say
+// "lands" (contains) except where a query really is unambiguous.
+function matching(query: string): string[] {
+  return rows()
+    .filter((c) => {
+      const hay = [c.label, c.hint, c.group, ...(c.keywords ?? [])].join(" ").toLowerCase();
+      return query
+        .trim()
+        .toLowerCase()
+        .split(/\s+/)
+        .every((term) => hay.includes(term));
+    })
+    .map((c) => c.id);
+}
+
+describe("typing the obvious word lands on the right pane", () => {
+  it.each([
+    ["shortcuts", "settings:keybindings"],
+    ["rebind", "settings:keybindings"],
+    ["dark mode", "settings:theme"],
+    ["api key", "settings:model"],
+    ["temperature", "settings:model"],
+    ["rag", "settings:knowledge"],
+    ["langfuse", "settings:tracing"],
+    ["mcp server", "settings:mcp"],
+    ["a2a", "settings:delegates"],
+    ["codex", "settings:delegates"],
+    ["goal mode", "settings:behavior"],
+    ["redaction", "settings:behavior"],
+    ["backup", "settings:snapshot"],
+    ["pair phone", "settings:devices"],
+    ["spend", "settings:telemetry"],
+    ["system prompt", "settings:identity"],
+    ["soul", "settings:identity"],
+    ["work folders", "settings:tools"],
+    ["project directory", "settings:access"],
+    ["disk", "settings:overview"],
+  ])("`%s` → %s", (query, id) => {
+    expect(matching(query)).toContain(id);
   });
 
-  it("every row carries an icon, resolved from the leaf's lucide NAME", () => {
-    // The leaf stores names, not components, so it stays import-light; this consumer feeds
-    // them to lib/lucideIcon. `icon` being present is all that can be asserted here — that
-    // the name is a REAL lucide glyph rather than a deprecated alias silently falling back to
-    // the Package box is pinned in settings/sections.test.ts against lucide's `icons` map.
-    for (const c of rows()) expect(c.icon, `${c.id} has no icon`).toBeTruthy();
+  it("a keyword must be TRUE of the pane — a plausible wrong answer is worse than none", () => {
+    // The regression these two catch is a keyword list written from the section's NAME rather
+    // than its contents. Behavior is Goal mode · Watches · Compaction · Security
+    // (graph/settings_schema.py `_SECTION_CATEGORY`) — the prompt/persona knobs are Identity,
+    // whose panel is the SOUL editor. And the DS ThemePanel has colors and shape and no
+    // typography at all, so nothing may answer "font": an operator sent to a pane that does
+    // not hold the thing stops searching, they don't try a synonym.
+    expect(matching("prompt")).toContain("settings:identity");
+    expect(matching("prompt")).not.toContain("settings:behavior");
+    expect(matching("font")).toEqual([]);
+  });
+
+  it("the nav heading is searchable — `capabilities` is exactly the five capability panes", () => {
+    // The reason `hint` is the group label and not "go to": it makes the IA itself a query.
+    expect(matching("capabilities")).toEqual([
+      "settings:tools",
+      "settings:mcp",
+      "settings:skills",
+      "settings:subagents",
+      "settings:delegates",
+    ]);
+    expect(matching("this console")).toEqual([
+      "settings:theme",
+      "settings:chat",
+      "settings:keybindings",
+    ]);
+  });
+
+  it("keywords are SYNONYMS — none of them repeats what the row already says", () => {
+    // The label/hint/group are searched too, so a keyword whose every term already appears
+    // there changes no query's answer: it is list-length, not findability. The whole "settings"
+    // column went that way (22 rows all labelled "Settings: …"), and so did "keyboard" on the
+    // row LABELLED Keyboard. Enforced mechanically, because it reads as diligence — a reviewer
+    // scanning the map sees a fuller list and nods.
+    expect(matching("settings")).toEqual(rows().map((c) => c.id));
+    for (const c of rows()) {
+      const said = [c.label, c.hint, c.group].join(" ").toLowerCase();
+      for (const kw of c.keywords ?? []) {
+        const redundant = kw
+          .toLowerCase()
+          .split(/\s+/)
+          .every((term) => said.includes(term));
+        expect(redundant, `${c.id}: "${kw}" is already matched by "${said}"`).toBe(false);
+      }
+      // Synonyms, plural — one word is a list nobody finished.
+      expect((c.keywords ?? []).length).toBeGreaterThan(3);
+    }
   });
 });
 
@@ -312,14 +413,14 @@ describe("settingsPalette.ts stays off the settings panel tree", () => {
     // SettingsCategory, a panel's helper). Pinning the whole list makes any new edge a
     // conscious decision with this comment attached.
     expect(specifiersOf(paletteSrc)).toEqual([
-      "../lib/lucideIcon",
+      "../settings/sectionIcons",
       "../settings/sections",
       "../ext/paletteRegistry",
       "../settings/sections",
     ]);
   });
 
-  it("…which means no SettingsSurface, no panels, and no heavy runtime deps", () => {
+  it("…which means no SettingsSurface, no panels, and not the lazy icon resolver", () => {
     const specs = specifiersOf(paletteSrc);
     for (const banned of [
       "../settings/SettingsSurface",
@@ -333,6 +434,14 @@ describe("settingsPalette.ts stays off the settings panel tree", () => {
       "@protolabsai/ui/command-palette",
       "../state/uiStore",
       "./usePaletteRegistry",
+      // The subtle one, and the reason this list is pinned rather than merely denied: it is
+      // the OBVIOUS way to turn the leaf's icon NAME into a glyph, it type-checks, and it
+      // looks right — while being `lazy(() => import("lucide-react"))` over the full `icons`
+      // map. Nothing else in the console eagerly loads that 738 KB chunk, so ⌘K (and the
+      // Launcher, which mounts this registry and nothing else) would go from free to the
+      // heaviest thing they download, and every row would flash a Package box first.
+      // `settings/sectionIcons` is the closed static map instead.
+      "../lib/lucideIcon",
     ]) {
       expect(specs, `settingsPalette.ts must not import ${banned}`).not.toContain(banned);
     }

@@ -1,8 +1,8 @@
-import { Activity, Bot, BookMarked, Boxes, Brain, ChartColumn, Cpu, Database, FlaskConical, Gauge, Keyboard, KeyRound, Lock, MessageSquare, Network, Package, Palette, Plug, Puzzle, Server, Share2, Smartphone, Sparkles, Store, Wrench } from "lucide-react";
+import { Boxes, Store } from "lucide-react";
 import { useFlagPredicate } from "../flags/flags";
+import { sectionIcon } from "./sectionIcons";
 import { settingsSectionGroups } from "./sections";
-import type { LucideIcon } from "lucide-react";
-import type { SettingsSection, SettingsSectionIcon, SettingsSectionId } from "./sections";
+import type { SettingsSection, SettingsSectionId } from "./sections";
 import { useEffect, type ReactNode } from "react";
 
 import { SideNav, Tabs } from "@protolabsai/ui/navigation";
@@ -38,40 +38,9 @@ import { ThemeSurface } from "./ThemeSurface";
 
 // The Settings IA and the section TABLE (ids · labels · icon names · flag/hostOnly gates ·
 // group order) live in ./sections — a leaf that imports neither React nor lucide, so ⌘K and
-// the desktop Launcher can name a section without dragging this whole panel tree along.
-// This file supplies the two halves that genuinely need React: what each id RENDERS, and the
-// name → lucide component map.
-
-// Explicit, statically-imported icon components rather than lib/lucideIcon's lazy resolver:
-// the rail is on screen the instant Settings opens and must not flicker through a Suspense
-// fallback, and a static map keeps the 23 glyphs tree-shakeable instead of pulling the whole
-// lucide set. `Record<SettingsSectionIcon, …>` makes the map exhaustive — a new section with
-// an unmapped icon name is a type error, not a missing glyph.
-const ICONS: Record<SettingsSectionIcon, LucideIcon> = {
-  Sparkles,
-  KeyRound,
-  Smartphone,
-  Cpu,
-  Brain,
-  Database,
-  Activity,
-  Lock,
-  Share2,
-  Puzzle,
-  Package,
-  Wrench,
-  Plug,
-  BookMarked,
-  Bot,
-  Network,
-  Gauge,
-  Server,
-  ChartColumn,
-  Palette,
-  MessageSquare,
-  Keyboard,
-  FlaskConical,
-};
+// the desktop Launcher can name a section without dragging this whole panel tree along, and
+// the name → glyph map lives in ./sectionIcons, so they can DRAW one just as cheaply. This
+// file supplies the half that genuinely needs the tree: what each id renders.
 
 // The Plugins manager (install · enable · configure, plus the Discover directory) — the
 // Plugins domain. Per-plugin config is inline per row (ADR 0059).
@@ -189,17 +158,14 @@ export function SettingsSurface({ initialSection }: { only?: "host" | "workspace
     ) : undefined;
 
   // No cast on either lookup: settingsSectionGroups hands back rows with literal ids/icons,
-  // so an entry these maps don't cover is a type error here rather than `undefined` — a
-  // crashed <Icon /> or a blank content pane at runtime.
-  const toItem = (s: SettingsSection) => {
-    const Icon = ICONS[s.icon];
-    return {
-      id: s.id,
-      label: s.label,
-      icon: <Icon size={15} />,
-      badge: s.id === "tools" ? toolsBadge : undefined,
-    };
-  };
+  // so an entry RENDERERS (or sectionIcons' map) doesn't cover is a type error here rather
+  // than `undefined` — a crashed <Icon /> or a blank content pane at runtime.
+  const toItem = (s: SettingsSection) => ({
+    id: s.id,
+    label: s.label,
+    icon: sectionIcon(s.icon, 15),
+    badge: s.id === "tools" ? toolsBadge : undefined,
+  });
   const navGroups = groups.map((g) => ({ label: g.label, items: g.sections.map(toItem) }));
 
   return (

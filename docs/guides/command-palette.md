@@ -45,8 +45,12 @@ Settings ▸ Keyboard, not with the in-app chords above.
   Snapshot and the rest. Those rows are GENERATED from the section table
   (`apps/web/src/settings/sections.ts`) by `apps/web/src/app/settingsPalette.ts`, so a new
   section is deep-linkable the moment it is declared rather than when somebody remembers to
-  add a command. Each row's trailing hint is its nav heading (Agent · Capabilities · Box ·
-  This console), which is searchable too — typing `capabilities` lists exactly those five.
+  add a command. Each row wears its Settings-rail glyph and a trailing hint naming its nav
+  heading (Agent · Capabilities · Box · This console) — the hint is searchable too, so
+  typing `capabilities` lists exactly those five.
+  Search by what you'd *say*, not by the label: `shortcuts` finds Keyboard, `dark mode`
+  Theme, `api key` Model, `rag` Knowledge, `a2a` Delegates, `backup` Snapshot. (Keywords
+  are synonyms only — the matcher already searches each row's label, hint and group.)
   A section behind a developer flag (Secrets, Devices, Publish) or restricted to the host
   console (Overview, Telemetry) carries that gate on the row and is resolved *per render*,
   never at registration. The one section with no row is **Developer**: its visibility is a
