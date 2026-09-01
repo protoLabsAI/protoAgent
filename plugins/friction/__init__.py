@@ -80,6 +80,32 @@ _SEVERITIES = ("minor", "major")
 _SEVERITY_RANK = {"minor": 1, "major": 2}
 
 
+def _issue_repo() -> str:
+    """The ``owner/name`` this instance files friction against, or "" if it can't tell.
+
+    Two sources, in order: this plugin's own ``issue_repo`` when an operator has pinned
+    one, then the managed-projects registry (ADR 0095) — "the ONE place a project is
+    declared" — whose ``projects[].github`` already answers "what is this on GitHub".
+
+    Deliberately NOT the github plugin's ``default_repo``: plugins coordinate through the
+    host, never by reading each other's config (ADR 0039), and ADR 0095 lists that field as
+    a CONSUMER projecting from the same registry. Reading the registry gets the same answer
+    without the coupling, and works when the github plugin isn't installed at all."""
+    pinned = str(_cfg("issue_repo", "") or "").strip()
+    if pinned:
+        return pinned.removeprefix("https://github.com/").strip("/")
+    try:
+        from graph.sdk import config
+
+        for project in getattr(config(), "projects", []) or []:
+            repo = str((project or {}).get("github") or "").strip()
+            if repo:
+                return repo.removeprefix("https://github.com/").strip("/")
+    except Exception:  # noqa: BLE001 — no host, no registry, no problem: the view falls
+        pass          # back to copy-to-clipboard rather than losing the affordance
+    return ""
+
+
 def _triage_rank(group: dict) -> tuple:
     """Worst-first ordering, defined ONCE. The operator's `/friction` list and the agent's
     working-state projection have to agree about what the top of the backlog is, or the two
@@ -671,6 +697,9 @@ def _build_router(*, legacy: bool = False):
             "total": len(items),
             "returned": len(capped),
             "grouped": bool(grouped),
+            # "" when this instance can't tell which repo it files against — the view then
+            # offers copy-to-clipboard instead of a link that would 404.
+            "issue_repo": _issue_repo(),
             "counts": {k: sum(1 for r in read_entries(include_resolved=resolved) if r.get("kind") == k)
                        for k in _KINDS},
         }

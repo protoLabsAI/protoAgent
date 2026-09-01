@@ -888,3 +888,68 @@ def test_the_view_calls_the_namespaced_api(monkeypatch):
 
     assert 'apiFetch("/api/plugins/friction/?' in page
     assert 'apiFetch("/api/plugins/friction/resolve"' in page
+
+
+# ── #2595 acceptance 3: "an entry can be turned into a GitHub issue in one step" ──
+
+
+def test_issue_repo_prefers_the_operators_pin(wired):
+    from plugins.friction import _issue_repo
+
+    wired.config = {"issue_repo": "protoLabsAI/protoAgent"}
+    assert _issue_repo() == "protoLabsAI/protoAgent"
+
+    wired.config = {"issue_repo": "https://github.com/protoLabsAI/protoAgent"}
+    assert _issue_repo() == "protoLabsAI/protoAgent"  # a pasted URL is the same answer
+
+
+def test_issue_repo_falls_back_to_the_managed_projects_registry(wired, monkeypatch):
+    """ADR 0095: projects[] is "the ONE place a project is declared". Reading it beats
+    reading the github plugin's own config — plugins coordinate through the host, and this
+    works when that plugin isn't installed at all."""
+    from plugins.friction import _issue_repo
+
+    class _Cfg:
+        projects = [{"name": "local-only", "path": "/x"},
+                    {"name": "protoAgent", "github": "protoLabsAI/protoAgent"}]
+
+    monkeypatch.setattr("graph.sdk.config", lambda: _Cfg())
+    wired.config = {}
+
+    assert _issue_repo() == "protoLabsAI/protoAgent"
+
+
+def test_issue_repo_is_empty_when_nothing_declares_one(wired, monkeypatch):
+    """The view must be able to tell, so it can offer the clipboard instead of a link
+    that would 404."""
+    from plugins.friction import _issue_repo
+
+    class _Cfg:
+        projects = []
+
+    monkeypatch.setattr("graph.sdk.config", lambda: _Cfg())
+    wired.config = {}
+
+    assert _issue_repo() == ""
+
+
+def test_the_read_api_tells_the_view_which_repo_to_file_against(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    _record("harness", "filable")
+
+    assert "issue_repo" in client.get("/api/friction").json()
+
+
+def test_the_view_links_a_prefilled_issue_and_degrades_to_the_clipboard(monkeypatch):
+    """One step when the repo is known; the two-step clipboard only when it isn't."""
+    from pathlib import Path as _P
+
+    from plugins import friction
+
+    page = (_P(friction.__file__).parent / "view.html").read_text(encoding="utf-8")
+
+    assert '"https://github.com/" + state.issueRepo + "/issues/new?"' in page
+    assert 'new URLSearchParams({ title: issueTitle(item), body: issueBody(item) })' in page
+    assert 'if (!state.issueRepo) return "";' in page          # no repo → no link
+    assert 'target = "_blank"' in page and 'noopener noreferrer' in page
+    assert "Copy as issue" in page                              # the fallback survives

@@ -35,6 +35,8 @@ config:
   working_state: true                 # project open friction into <working_state> (ADR 0079)
   working_state_limit: 3              # at most N lines — the block is a shared budget
   working_state_repeat_threshold: 3   # a minor signal must repeat this often to be carried
+  issue_repo: ""                      # owner/name to file friction against; empty = derive
+                                      # it from the managed-projects registry (ADR 0095)
 
 settings:
   - key: working_state
@@ -46,6 +48,9 @@ settings:
   - key: working_state_repeat_threshold
     label: "Repeats before a minor friction is carried (major always is)"
     type: number
+  - key: issue_repo
+    label: "File friction against this repo (owner/name — empty derives it from projects)"
+    type: string
 
 # Console surface (ADR 0026): a rail icon opening the ledger view this plugin's router
 # serves at /plugins/friction/view (public page; its data comes from the bearer-gated

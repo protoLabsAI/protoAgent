@@ -206,7 +206,7 @@
   const state = {
     kind: "", severity: "", source: "", sort: "recent",
     query: "", showResolved: false,
-    items: [], counts: {}, occurrences: 0, open: new Set(), busy: new Set(),
+    items: [], counts: {}, occurrences: 0, issueRepo: "", open: new Set(), busy: new Set(),
   };
 
   // ── helpers ───────────────────────────────────────────────────────────────
@@ -270,10 +270,17 @@
    *  broke, how often, over what window, and the failing payload — so filing should be a
    *  paste, not a re-type. (A prefilled github.com deep link needs a repo to target,
    *  which this plugin does not know yet; that's a follow-up.) */
-  function issueMarkdown(item) {
+  /** GitHub caps a prefilled URL well before this matters, but a runaway detail would
+   *  silently truncate the body rather than error, so keep the whole thing bounded. */
+  const ISSUE_URL_CAP = 6000;
+
+  function issueTitle(item) {
+    const summary = (item.summary || "friction").trim();
+    return summary.length > 120 ? summary.slice(0, 119) + "…" : summary;
+  }
+
+  function issueBody(item) {
     const lines = [
-      "**Friction:** " + (item.summary || ""),
-      "",
       "| | |",
       "|---|---|",
       "| Channel | `" + (item.kind || "?") + "` |",
@@ -289,6 +296,19 @@
     }
     lines.push("", "_Recorded by the protoAgent friction log._");
     return lines.join("\n");
+  }
+
+  /** The clipboard form keeps the summary as a heading, because a paste has no title
+   *  field to put it in. */
+  function issueMarkdown(item) {
+    return "**Friction:** " + (item.summary || "") + "\n\n" + issueBody(item);
+  }
+
+  function issueUrl(item) {
+    if (!state.issueRepo) return "";
+    const url = "https://github.com/" + state.issueRepo + "/issues/new?"
+      + new URLSearchParams({ title: issueTitle(item), body: issueBody(item) }).toString();
+    return url.length <= ISSUE_URL_CAP ? url : "";   // too long to prefill — copy instead
   }
 
   async function copyText(text) {
@@ -432,15 +452,32 @@
     meta.appendChild(el("span", "spacer"));
 
     const acts = el("div", "acts");
-    const copyBtn = el("button", "pl-btn pl-btn--sm", "Copy as issue");
-    copyBtn.type = "button";
-    copyBtn.addEventListener("click", async () => {
-      const ok = await copyText(issueMarkdown(item));
-      toast(ok ? "Issue markdown copied to the clipboard."
-               : "Couldn't reach the clipboard — copy the detail by hand.",
-            ok ? "success" : "warning");
-    });
-    acts.appendChild(copyBtn);
+    // #2595 asked that "an entry can be turned into a GitHub issue in ONE step". When the
+    // instance knows which repo it files against, that is a prefilled new-issue link —
+    // title and body already written. Otherwise the clipboard, which is two steps but
+    // beats a link that 404s.
+    const url = issueUrl(item);
+    if (url) {
+      const link = el("a", "pl-btn pl-btn--sm", "File issue");
+      link.href = url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.title = "Open a prefilled issue on " + state.issueRepo;
+      acts.appendChild(link);
+    } else {
+      const copyBtn = el("button", "pl-btn pl-btn--sm", "Copy as issue");
+      copyBtn.type = "button";
+      copyBtn.title = state.issueRepo
+        ? "This entry is too long to prefill a URL — copy it instead"
+        : "No issue repo configured (Settings ▸ Plugins ▸ Friction), so copy it instead";
+      copyBtn.addEventListener("click", async () => {
+        const ok = await copyText(issueMarkdown(item));
+        toast(ok ? "Issue markdown copied to the clipboard."
+                 : "Couldn't reach the clipboard — copy the detail by hand.",
+              ok ? "success" : "warning");
+      });
+      acts.appendChild(copyBtn);
+    }
 
     const resolveBtn = el("button", "pl-btn pl-btn--sm",
       state.busy.has(key) ? "Saving…" : (isResolved ? "Reopen" : "Resolve"));
@@ -516,6 +553,7 @@
       const data = await res.json();
       state.items = Array.isArray(data.items) ? data.items : [];
       state.counts = data.counts || {};
+      state.issueRepo = String(data.issue_repo || "");
       state.occurrences = Object.values(state.counts).reduce((a, b) => a + (b || 0), 0);
       render();
     } catch (err) {
