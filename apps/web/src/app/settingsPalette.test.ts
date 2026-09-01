@@ -29,11 +29,14 @@ import {
 import { ALL_SECTIONS, settingsSections } from "../settings/sections";
 import type { SectionMeta } from "../settings/sections";
 import { sectionIcon } from "../settings/sectionIcons";
-import { visiblePaletteCommands } from "../ext/paletteRegistry";
+import { registeredPaletteCommands, visiblePaletteCommands } from "../ext/paletteRegistry";
+import { registeredKeybindings } from "../ext/keybindingRegistry";
 import paletteSrc from "./settingsPalette.ts?raw";
-// Imported for its MODULE-LOAD side effect: `usePaletteRegistry` is where core registers
-// these rows through the public seam. The block at the bottom reads the registry back.
+// Imported for their MODULE-LOAD side effects: `usePaletteRegistry` is where core registers
+// these rows through the public seam, and coreKeybindings is where `settings.open` is
+// declared. The wiring block below reads both registries back.
 import "./usePaletteRegistry";
+import "../keybindings/coreKeybindings";
 
 const nav: SettingsNavigate = () => {};
 const rows = () => settingsPaletteCommands(nav);
@@ -175,6 +178,16 @@ describe("typing the obvious word lands on the right pane", () => {
     ["backup", "settings:snapshot"],
     ["pair phone", "settings:devices"],
     ["spend", "settings:telemetry"],
+    // The Box runtime chip on the Fleet pane: nothing else in the dialog holds a port or a
+    // bind address, and neither word is in any label. ("port" also lands on Snapshot, via
+    // ex-port-/-port-able — hence `toContain`, like every case here.)
+    ["port", "settings:fleet"],
+    ["network", "settings:fleet"],
+    // Two terms, and only Access has both: Delegates owns "a2a" but holds no token.
+    ["a2a token", "settings:access"],
+    // Real ambiguity, so it must reach BOTH halves — see the keyword map's note.
+    ["delegation", "settings:delegates"],
+    ["delegation", "settings:subagents"],
     ["system prompt", "settings:identity"],
     ["soul", "settings:identity"],
     ["work folders", "settings:tools"],
@@ -350,6 +363,21 @@ describe("wired into the registry, the HOST applies the gates", () => {
     expect(ids(true, true)).toContain("settings");
     const labels = visiblePaletteCommands(() => true, true, "static").map((c) => c.label);
     expect(labels.filter((l) => l === "Settings: Fleet")).toHaveLength(1);
+  });
+
+  it("the bare Settings row ADVERTISES ⌘, by binding id, not by a hard-coded hint", () => {
+    // The seam's `keybinding` field (ADR 0061/0063) is the declarative way to put a chord on
+    // a row: the host renders `formatCombo(effectiveCombo(binding))`, so the row follows a
+    // rebind instead of lying about it. The id has to RESOLVE for any of that to happen —
+    // a typo renders no hint and nothing complains, which is why the last assertion reads
+    // the keybinding registry rather than just pinning the string.
+    const bare = registeredPaletteCommands("static").find((c) => c.id === "settings")!;
+    expect(bare.keybinding).toBe("settings.open");
+    expect(bare.hint).toBeUndefined(); // an explicit hint would WIN over the live combo
+    expect(registeredKeybindings().map((b) => b.id)).toContain(bare.keybinding);
+    // The generated rows spend their hint on the nav heading, so none of them may claim a
+    // chord — there is no per-section binding to advertise.
+    for (const c of rows()) expect(c.keybinding).toBeUndefined();
   });
 
   it("Developer is registered nowhere — not statically, not dynamically", () => {

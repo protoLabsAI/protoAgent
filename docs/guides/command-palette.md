@@ -40,7 +40,8 @@ Settings ▸ Keyboard, not with the in-app chords above.
   Settings, plus whatever a fork adds) live one hop in, behind **Open…**, so the root list
   stays short.
 - **Deep links** — **Plugins: Discover**, **Plugins: Install from URL**, **Settings** (opens
-  the dialog wherever you left it), and a **Settings: `<Section>`** row for *every* section of
+  the dialog wherever you left it, and shows its **⌘,** chord on the row — read live from the
+  binding, so it follows a rebind), and a **Settings: `<Section>`** row for *every* section of
   the Settings dialog — Theme, Keyboard, Model, Tools, MCP, Skills, Subagents, Delegates,
   Snapshot and the rest. Those rows are GENERATED from the section table
   (`apps/web/src/settings/sections.ts`) by `apps/web/src/app/settingsPalette.ts`, so a new
@@ -49,8 +50,9 @@ Settings ▸ Keyboard, not with the in-app chords above.
   heading (Agent · Capabilities · Box · This console) — the hint is searchable too, so
   typing `capabilities` lists exactly those five.
   Search by what you'd *say*, not by the label: `shortcuts` finds Keyboard, `dark mode`
-  Theme, `api key` Model, `rag` Knowledge, `a2a` Delegates, `backup` Snapshot. (Keywords
-  are synonyms only — the matcher already searches each row's label, hint and group.)
+  Theme, `api key` Model, `rag` Knowledge, `a2a` Delegates, `backup` Snapshot, and `port` or
+  `network` the box-runtime knobs that live behind a chip on Fleet. (Keywords are synonyms
+  only — the matcher already searches each row's label, hint and group.)
   A section behind a developer flag (Secrets, Devices, Publish) or restricted to the host
   console (Overview, Telemetry) carries that gate on the row and is resolved *per render*,
   never at registration. The one section with no row is **Developer**: its visibility is a

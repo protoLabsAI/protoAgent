@@ -33,15 +33,16 @@ export type SectionMeta = GatedSection & {
   label: string;
   /**
    * The lucide icon's CANONICAL name, never the component: a component here would drag
-   * lucide-react into every consumer of this table. It must be a key of lucide's `icons` map,
-   * because the table has two consumers and only one of them resolves names the lax way —
-   * SettingsSurface maps the name to a statically-imported component (the rail must not
-   * flicker through a Suspense fallback), while a consumer that can tolerate a lazy glyph
-   * feeds the same name to lib/lucideIcon, which looks it up in `icons` and falls back to
-   * Package on a miss. lucide keeps DEPRECATED aliases (`BarChart3`) as top-level named
-   * exports but drops them from `icons`, so an alias here type-checks, renders correctly in
-   * the rail, and silently degrades to the Package box in ⌘K / the Launcher. sections.test.ts
-   * pins every name against `icons` so that gap can't reopen.
+   * lucide-react into every consumer of this table. Both of today's consumers — the Settings
+   * rail and ⌘K's generated deep-links — draw it through ./sectionIcons, one static
+   * exhaustive map, which is what lets a second consumer NAME a section for free and DRAW it
+   * for ~0 bytes. That map does NOT vouch for the name, though: lucide keeps DEPRECATED
+   * aliases (`BarChart3`) as top-level named exports after dropping them from its `icons`
+   * map, so an alias type-checks against `Record<SettingsSectionIcon, LucideIcon>` and renders
+   * perfectly, while being invisible to anything that resolves the STRING — `icons[name] ||
+   * Package`, which is what lib/lucideIcon does for a name chosen at runtime and what the next
+   * consumer (a plugin's rail, a fork) will do. Storing names is only worth it while they stay
+   * resolvable, so sections.test.ts pins every one against `icons`.
    */
   icon: string;
 };

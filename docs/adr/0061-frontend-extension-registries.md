@@ -82,7 +82,9 @@ menu from `registeredSlashCommands()` + the server list, and `runClientSlash` di
   row per Settings section, generated from `settings/sections.ts` by `app/settingsPalette.ts`)
   register through this seam, so the registry is the only path (no `deepLinkCommands()`
   bypass) — and the generated rows carry each section's own `flag`/`hostOnly` as row gates,
-  so the declarative gating below is exercised by core, not only by a fork.
+  so the declarative gating below is exercised by core, not only by a fork. The bare
+  `Settings` row names `keybinding: "settings.open"`, so the rebind-safe shortcut slot below
+  is dogfooded too rather than existing only for forks.
   Handler context: `{ close }`. (Distinct from plugin manifest `palette` views,
   ADR 0057, which morph the palette body into a plugin iframe — these RUN trusted in-process
   code.)

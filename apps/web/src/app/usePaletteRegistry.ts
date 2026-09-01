@@ -165,33 +165,63 @@ function navigate(intent: NavIntent) {
 // morph commands. `createElement` because this module is a .ts, not a .tsx.
 const glyph = (Icon: LucideIcon) => createElement(Icon, { size: 18 });
 
-const _link = (id: string, label: string, icon: ReactNode, keywords: string[], intent: NavIntent) =>
+/** One core deep-link row: registered through the public seam, its `run` a NavIntent. The
+ *  row is spelled as FIELDS rather than positionals — it has grown an icon and now a
+ *  keybinding, and five positional arguments of which two are a ReactNode and a string[]
+ *  is a miscall a reader can't see and the types won't catch. `group` is fixed here: every
+ *  core deep-link lands in Commands, beside the generated Settings rows. */
+const _link = (cmd: Omit<PaletteCommand, "run" | "group">, intent: NavIntent) =>
   registerPaletteCommand({
-    id,
-    label,
-    icon,
+    ...cmd,
     group: "Commands",
-    keywords,
     run: (ctx) => {
       navigate(intent);
       ctx.close();
     },
   });
-_link("plug:market", "Plugins: Discover", glyph(Store), ["plugins", "discover", "market", "directory", "browse"], {
-  kind: "plugins",
-  tab: "market",
-});
+_link(
+  {
+    id: "plug:market",
+    label: "Plugins: Discover",
+    icon: glyph(Store),
+    keywords: ["plugins", "discover", "market", "directory", "browse"],
+  },
+  { kind: "plugins", tab: "market" },
+);
 // Install-from-URL is the advanced action under Installed now (ADR 0059 D4) — land there.
-_link("plug:download", "Plugins: Install from URL", glyph(Download), ["plugins", "install", "url", "git"], {
-  kind: "plugins",
-  tab: "local",
-});
+_link(
+  {
+    id: "plug:download",
+    label: "Plugins: Install from URL",
+    icon: glyph(Download),
+    keywords: ["plugins", "install", "url", "git"],
+  },
+  { kind: "plugins", tab: "local" },
+);
 // Settings is the consolidated dialog now (2026-06) — opened from the utility-bar pill,
 // the drawer, or these palette commands. This one opens it wherever it was left; the
 // per-section deep-links below open a named pane.
-_link("settings", "Settings", glyph(Settings2), ["settings", "config", "preferences", "options"], {
-  kind: "global",
-});
+//
+// It ADVERTISES the `settings.open` binding (ADR 0063) instead of leaving its hint empty or
+// hard-coding "⌘,": the chord is rebindable in Settings ▸ Keyboard, and the seam renders
+// `formatCombo(effectiveCombo(binding))`, so a literal would start lying the moment an
+// operator rebound it. It also stops this row being the one blank right edge in a group
+// where the 22 generated rows below all carry one — and teaches the shortcut at the moment
+// someone is reaching for Settings the slow way. In the desktop Launcher window the hint is
+// simply absent: only App.tsx pulls the keybindings barrel, so nothing has registered
+// `settings.open` there and `toDsCommand` finds no binding. That degradation is the right
+// one — the chord isn't live in that window either, and importing the binding host for a
+// cosmetic hint is most of what keeping the Launcher lean bought.
+_link(
+  {
+    id: "settings",
+    label: "Settings",
+    icon: glyph(Settings2),
+    keybinding: "settings.open",
+    keywords: ["settings", "config", "preferences", "options"],
+  },
+  { kind: "global" },
+);
 // …and one row per Settings SECTION, generated from the section table rather than hand-listed
 // here. Three sections used to be reachable from ⌘K (this "Settings", plus hand-written Fleet
 // and Telemetry rows, now superseded) and the other twenty were not — a list nobody remembered

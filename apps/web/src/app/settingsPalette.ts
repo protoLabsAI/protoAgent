@@ -42,8 +42,16 @@
 // (uiStore is not partialized) BEFORE the section gate runs, and only then falls back to
 // the first visible section. A row that could be RUN while its section is gated off would
 // therefore leave a dead id in localStorage — a settings dialog that opens on Identity
-// forever after, for no visible reason. Because `flag`/`hostOnly` ride the row, the host
-// never renders it in that state, so the run can't happen.
+// forever after, for no visible reason. Because `flag`/`hostOnly` ride the row, the window
+// that RENDERS it has already answered both axes, so within a console window the run can't
+// happen. The desktop Launcher is the one window that answers them for a DIFFERENT one: it
+// loads `/app/`, so it gates with `isHostConsole() === true` and the host's `/api/flags`,
+// then forwards the intent to whichever slug the main window sits on. Running `Settings:
+// Telemetry` there, with the main window on a member slug, still lands the dead id. That
+// hole predates these rows and is narrower with them (the `box:telemetry` row they replace
+// carried no gate at all, so it was listed in every member window's OWN palette too);
+// closing it means resolving the intent where it LANDS — `applyNavIntent`, or the surface's
+// deep-link effect — not by pre-filtering here, which is the fail-closed trap above.
 import { sectionIcon } from "../settings/sectionIcons";
 import { settingsSectionGroups } from "../settings/sections";
 import type { PaletteCommand } from "../ext/paletteRegistry";
@@ -86,7 +94,9 @@ export type SettingsNavigate = (intent: { kind: "global"; section?: string }) =>
  */
 const SECTION_KEYWORDS: Record<SettingsSectionId, string[]> = {
   identity: ["name", "rename", "persona", "soul", "soul.md", "system prompt", "instructions", "who"],
-  access: ["owner", "org", "organization", "auth", "bearer", "token", "federation", "project directory"],
+  // "a2a": the A2A bearer and the federation token (ADR 0066) are Identity-category fields
+  // and render HERE, not on Delegates — which owns the word otherwise.
+  access: ["owner", "org", "organization", "auth", "bearer", "token", "a2a", "federation", "project directory"],
   devices: ["pair", "pairing", "qr", "phone", "mobile", "tablet", "revoke"],
   model: ["llm", "provider", "api key", "keys", "gateway", "litellm", "routing", "connection", "oauth", "temperature", "sampling", "caching", "runtime"],
   behavior: ["goals", "goal mode", "autonomy", "watches", "compaction", "middleware", "background", "security", "redaction", "egress", "self-improvement"],
@@ -100,9 +110,16 @@ const SECTION_KEYWORDS: Record<SettingsSectionId, string[]> = {
   mcp: ["model context protocol", "servers", "connectors", "stdio", "sse"],
   skills: ["playbooks", "procedures", "recipes", "how-to", "skill.md"],
   subagents: ["workers", "task", "delegation", "roles"],
-  delegates: ["a2a", "acp", "cli", "coding agent", "claude code", "codex", "peers", "remote"],
+  // "delegation" landed on Subagents alone, which is the wrong half of a real ambiguity:
+  // subagents are in-process `task()` workers, delegates are the external A2A/ACP agents.
+  // Both are delegation; the word must reach both.
+  delegates: ["a2a", "acp", "cli", "coding agent", "claude code", "codex", "peers", "remote", "delegation"],
   overview: ["status", "health", "runtime", "system", "diagnostics", "version", "storage", "disk", "about"],
-  fleet: ["agents", "roster", "members", "spawn", "new agent", "start", "stop", "archetype"],
+  // The tail is the "Box runtime" QuickSetting in this panel's header (FleetManagerPanel's
+  // BOX_RUNTIME_KEYS: network.bind · fleet.port_base · discovery ports/mDNS · keep-warm).
+  // It is the ONLY home of those knobs in the whole dialog, and no word on any row reached
+  // it — "port" and "network" are what an operator types, and neither is in a label.
+  fleet: ["agents", "roster", "members", "spawn", "new agent", "start", "stop", "archetype", "box runtime", "network", "port", "discovery", "keep-warm"],
   telemetry: ["metrics", "usage", "cost", "spend", "tokens", "analytics", "rollup"],
   theme: ["appearance", "colors", "dark mode", "light mode", "accent", "brand", "palette", "contrast", "preset"],
   chat: ["transcript", "usage", "tokens", "cost", "context window", "footer", "meter"],
