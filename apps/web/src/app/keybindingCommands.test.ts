@@ -100,8 +100,9 @@ describe("which keybindings became palette rows", () => {
     const cmd = registeredPaletteCommands("static").find((c) => c.id === "settings:keyboard");
     expect(cmd, "Settings: Keyboard row").toBeTruthy();
     cmd!.run({ close: () => {} });
-    // The section id SettingsSurface.tsx registers — a typo here is a dialog that opens on
-    // whatever section was last used, which looks like the deep-link working.
+    // The id of the settings section table's Keyboard entry (`id: "keybindings"`, under
+    // `settings/`) — a typo here is a dialog that opens on whatever section was last used,
+    // which looks exactly like the deep-link working.
     expect(useUI.getState().globalSettingsSection).toBe("keybindings");
     useUI.getState().closeGlobalSettings();
   });

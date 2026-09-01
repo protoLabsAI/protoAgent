@@ -226,9 +226,10 @@ _link("box:telemetry", "Settings: Telemetry", ["telemetry", "metrics", "box", "g
 // what — the first half of a question whose second half ("that one's wrong, change it") had no
 // palette row at all: Settings ▸ Keyboard was reachable only by opening Settings and finding
 // the section. It carries `SHORTCUT_KEYWORDS`, the same tail as the rows it explains, so ONE
-// `shortcuts` query returns the whole keyboard surface and the way to rebind it. `keybindings`
-// is the section id SettingsSurface.tsx registers (labelled "Keyboard"), and it is neither
-// flag- nor host-gated, so this resolves in a sister agent's window too.
+// `shortcuts` query returns the whole keyboard surface and the way to rebind it. The section id
+// is `keybindings` (labelled "Keyboard") — grep `id: "keybindings"` under `settings/`, which is
+// where the section table lives; it is neither flag- nor host-gated, so this row resolves in a
+// sister agent's window too.
 _link(
   "settings:keyboard",
   "Settings: Keyboard",
