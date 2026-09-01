@@ -303,6 +303,13 @@ function PlaybooksBody() {
       qc.setQueryData<{ enabled: boolean; playbooks: Playbook[] }>(queryKeys.playbooks, (old) =>
         old ? { ...old, playbooks: old.playbooks.filter((x) => x.id !== p.id) } : old,
       );
+      // A `user_facing` playbook IS a /slash command, so deleting one has to retire the row
+      // as well as the list — the save path above already does this at :201, and the delete
+      // path skipping it is the asymmetry. It matters more since the command list became a
+      // SHARED query: it used to self-heal because every ChatSessionSlot refetched on mount,
+      // and now an already-open composer would keep offering a command the server no longer
+      // resolves until the staleTime lapsed.
+      void invalidateChatCommands(qc);
     },
     onError: (e) => onError(errMsg(e)),
   });

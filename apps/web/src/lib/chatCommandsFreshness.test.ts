@@ -159,27 +159,65 @@ const TS_SOURCES = import.meta.glob("../**/*.{ts,tsx}", {
 // Keys naming a registry the server resolves into the slash-command list.
 const SLASH_SOURCE_KEY = /queryKeys\.(workflows|playbooks|subagents)\b/;
 
+// A surface mutates one of those registries two ways, and BOTH retire a `/` command:
+// `invalidateQueries` (refetch the list) and `setQueryData` (patch the cached list in place,
+// which a delete does to skip a round-trip).
+//
+// Counting matters more than presence. The first cut of this guard asked "does this FILE
+// mention invalidateChatCommands?", which a file passes as soon as ONE of its paths calls it
+// — so PlaybooksSurface, which invalidated on save and forgot on delete, reported clean while
+// a deleted playbook's slash command stayed in the shared menu. Presence is the wrong
+// question; every write site needs its own refresh, so compare COUNTS per file.
+//
+// The window is `[\s\S]` and not `[^;]`: a `setQueryData<{ enabled: boolean; playbooks:
+// Playbook[] }>(queryKeys.playbooks, …)` carries a SEMICOLON inside its type argument, so a
+// semicolon-bounded window stops before ever reaching the key and the write is invisible.
+// That is not hypothetical — it is why the first two attempts at this guard reported clean
+// against the very delete path they were written to catch.
+const SLASH_SOURCE_WRITE =
+  /\b(?:invalidateQueries|setQueryData)\b[\s\S]{0,160}?queryKeys\.(?:workflows|playbooks|subagents)\b/g;
+const REFRESH_CALL = /\binvalidateChatCommands\s*\(/g;
+
 describe("every writer of a slash-command source refreshes the menu (#3283)", () => {
-  it("invalidates chatCommands alongside its own list", () => {
+  it("refreshes the command list once per slash-source write, not once per file", () => {
     const offenders: string[] = [];
     for (const [file, text] of Object.entries(TS_SOURCES)) {
       if (file.endsWith(".test.ts") || file.endsWith(".test.tsx")) continue;
       if (file === "./queries.ts") continue; // where the keys and the helper are DEFINED
-      if (!text.includes("invalidateQueries")) continue;
       if (!SLASH_SOURCE_KEY.test(text)) continue;
-      if (text.includes("invalidateChatCommands")) continue;
-      offenders.push(file.replace(/^\.\.\//, "src/").replace(/^\.\//, "src/lib/"));
+      const writes = (text.match(SLASH_SOURCE_WRITE) ?? []).length;
+      if (writes === 0) continue;
+      const refreshes = (text.match(REFRESH_CALL) ?? []).length;
+      if (refreshes < writes) {
+        offenders.push(
+          `${file.replace(/^\.\.\//, "src/").replace(/^\.\//, "src/lib/")} (${writes} write(s), ${refreshes} refresh(es))`,
+        );
+      }
     }
     expect(
       offenders,
-      "these surfaces invalidate a registry the server folds into /api/chat/commands, but " +
-        "never refresh the command list itself — add invalidateChatCommands(qc) beside the " +
-        "existing invalidateQueries call (see lib/queries.ts)",
+      "these surfaces write a registry the server folds into /api/chat/commands (via " +
+        "invalidateQueries OR a setQueryData patch) more often than they refresh the command " +
+        "list — every write path needs its own invalidateChatCommands(qc), not just one " +
+        "somewhere in the file (see lib/queries.ts)",
     ).toEqual([]);
   });
 
   it("the plugin refresh path covers it too", () => {
     // Plugins reach the list through the one shared refresh rather than a key of their own.
     expect(TS_SOURCES["../plugins/usePluginManage.ts"]).toContain("invalidateChatCommands");
+  });
+
+  it("the counting guard actually bites when one path forgets", () => {
+    // Proof the guard is not vacuous: simulate PlaybooksSurface's real pre-fix state — the
+    // save path refreshes, the delete path patches the cache and does not. A presence-based
+    // check passes this; the counting check must not.
+    const oneSided = `
+      void qc.invalidateQueries({ queryKey: queryKeys.playbooks });
+      void invalidateChatCommands(qc);
+      qc.setQueryData<{ enabled: boolean; playbooks: Playbook[] }>(queryKeys.playbooks, (old) => old);
+    `;
+    expect((oneSided.match(SLASH_SOURCE_WRITE) ?? []).length).toBe(2);
+    expect((oneSided.match(REFRESH_CALL) ?? []).length).toBe(1);
   });
 });
