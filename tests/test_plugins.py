@@ -812,6 +812,337 @@ def test_view_paths_are_auto_public(tmp_path) -> None:
     ]
 
 
+# ── Palette commands (ADR 0057 §3) ────────────────────────────────────────────
+#
+# `commands:` is the one manifest contribution whose parse failure is a SECURITY
+# event, not a cosmetic one. A view is chrome: a bad path blanks an iframe. A command
+# is a dispatch: the console compiles its action into a fetch that carries the
+# operator bearer (`apiUrl` passes an absolute URL through untouched, `applyAuth`
+# attaches the bearer, and the browser collapses `/api/plugins/<id>/../../config`
+# into `/api/config` before the request leaves). So these tests assert DROP, not the
+# warn-and-keep posture `_parse_views` uses.
+
+_COMMANDS_PLUGIN = (
+    "views:\n"
+    "  - {id: browser, label: Files, path: /plugins/cmdy/browser}\n"
+    "commands:\n"
+    "  - id: search\n"
+    "    title: Search files\n"
+    "    hint: by name\n"
+    "    icon: Search\n"
+    "    group: Files\n"
+    "    keywords: [file, find]\n"
+    "    action: {type: open_view, view: browser, inline: true}\n"
+    "  - id: quick\n"
+    "    title: Quick browse\n"
+    "    action: {type: open_view, view: browser}\n"
+    "  - id: reindex\n"
+    "    title: Reindex workspace\n"
+    "    action: {type: tool, route: reindex}\n"
+    "  - id: announce\n"
+    "    title: Announce\n"
+    "    keywords: broadcast\n"
+    "    action: {type: emit, topic: reindexed}\n"
+    "  - id: files-search\n"
+    "    title: Files\n"
+    "    provider:\n"
+    "      route: search\n"
+    "      result_action: {type: navigate, view: browser}\n"
+)
+
+
+def test_manifest_parses_palette_commands(tmp_path) -> None:
+    _make_plugin(tmp_path, "cmdy", manifest_extra=_COMMANDS_PLUGIN)
+    m = load_manifest(tmp_path / "cmdy")
+    assert m is not None
+    assert m.commands == [
+        {
+            "id": "search",
+            "title": "Search files",
+            "hint": "by name",
+            "icon": "Search",
+            "group": "Files",
+            "keywords": ["file", "find"],
+            "action": {"type": "open_view", "view": "browser", "inline": True},
+        },
+        # `open_view` IS the inline morph, so `inline` is normalized ON even when the
+        # manifest omits it — an `open_view` the adapter's inline filter skipped would
+        # `enter()` a palette view nobody registered, and the DS palette renders nothing
+        # at all for an unknown view id. `navigate` is the non-inline spelling.
+        {"id": "quick", "title": "Quick browse", "action": {"type": "open_view", "view": "browser", "inline": True}},
+        # `method` defaults to POST rather than being guessed per call site.
+        {"id": "reindex", "title": "Reindex workspace", "action": {"type": "tool", "route": "reindex", "method": "POST"}},
+        # A bare emit topic is forced into the plugin's own event namespace; the bare-string
+        # `keywords` is left off rather than iterated into ["b", "r", "o", "a", …].
+        {"id": "announce", "title": "Announce", "action": {"type": "emit", "topic": "cmdy.reindexed"}},
+        {
+            "id": "files-search",
+            "title": "Files",
+            "provider": {"route": "search", "result_action": {"type": "navigate", "view": "browser"}},
+        },
+    ]
+
+
+def test_command_routes_that_escape_the_plugin_namespace_are_dropped(tmp_path, caplog) -> None:
+    """A route the console would turn into an authenticated call outside
+    /api/plugins/<id>/ is dropped, never kept-with-a-warning like a view path."""
+    import json
+    import logging as _logging
+
+    escapes = {
+        "absolute": "https://evil.example/x",
+        "protocol_relative": "//evil/x",
+        "rooted": "/api/config",
+        "dotdot": "../../config",
+        "nested_dotdot": "a/../../../config",
+        "encoded_dotdot": "%2e%2e/%2e%2e/config",
+        "double_encoded": "%252e%252e/config",
+        "port": "localhost:7870/x",
+        # Reaches the normpath re-assert: no `..` segment, but it composes to the
+        # namespace root itself rather than to a route inside it.
+        "bare_dot": ".",
+        # The WHATWG URL parser DELETES tab/LF/CR from the input before it resolves
+        # `..`, so each of these is a `..`-free string here and `/api/config` (or
+        # `/api/restart`, or the `/api/plugins/install` RCE) by the time `fetch` sends
+        # it. Percent-encoding spells the same trick, so the two normalizations have to
+        # compose: unwrap the encoding first, THEN reject what the parser would strip.
+        "tab_dotdot": ".\t./.\t./config",
+        "cr_dotdot": ".\r./.\r./config",
+        "lf_dotdot": ".\n./install",
+        "encoded_tab_dotdot": "%2e%09%2e/%2e%09%2e/config",
+        "encoded_lf_dotdot": "%2e%0a%2e/%2e%0a%2e/restart",
+        # Same stripping rule, aimed at the scheme check instead of the `..` check.
+        "tab_scheme": "htt\tps://evil.example/x",
+    }
+    lines = "".join(
+        f"  - {{id: {cid.replace('_', '-')}, title: T, action: {{type: tool, route: {json.dumps(route)}}}}}\n"
+        for cid, route in escapes.items()
+    )
+    _make_plugin(tmp_path, "esc", manifest_extra=f"commands:\n{lines}")
+    with caplog.at_level(_logging.WARNING, logger="protoagent.plugins"):
+        m = load_manifest(tmp_path / "esc")
+    assert m is not None
+    assert m.commands == []  # every one dropped
+    # Each escape is named in its own warning — a drop the author can't see in the log is
+    # a plugin that "just doesn't work", so silence would be its own bug.
+    for route in escapes.values():
+        assert repr(route) in caplog.text, route
+    assert caplog.text.count("dropped") >= len(escapes)
+    assert "operator bearer" in caplog.text
+    # `.` is caught by the compose-and-re-assert step, not by any of the cheap textual
+    # checks before it — so this pins that belt-and-braces branch as live, not dead code.
+    assert "normalizes outside the plugin namespace" in caplog.text
+    # …and this pins the control-character branch, which has to run BEFORE every textual
+    # check (a validator reading the declared bytes and a browser reading the stripped
+    # ones are looking at two different paths).
+    assert "carries a tab, newline or other control character" in caplog.text
+
+
+def test_command_routes_are_not_auto_public(tmp_path) -> None:
+    """View PAGES are auto-exempted from the auth gate (public chrome); command
+    ROUTES must not be — they are authenticated API calls, and exempting one would
+    publish an unauthenticated write."""
+    _make_plugin(
+        tmp_path,
+        "cmdy",
+        manifest_extra=(
+            "views:\n"
+            "  - {id: browser, label: Files, path: /plugins/cmdy/browser}\n"
+            "commands:\n"
+            "  - {id: reindex, title: Reindex, action: {type: tool, route: reindex}}\n"
+        ),
+    )
+    m = load_manifest(tmp_path / "cmdy")
+    assert m is not None
+    assert m.public_paths == ["/plugins/cmdy/browser"]
+    assert "/api/plugins/cmdy/reindex" not in m.public_paths
+    assert m.federation_paths == []
+
+
+def test_emit_topics_are_forced_into_the_plugin_namespace(tmp_path, caplog) -> None:
+    """The bus guard on POST /api/events/publish only checks that a topic is dotted
+    and wildcard-free — it never checks the caller — so the namespace has to be
+    enforced here or a manifest could forge another plugin's events."""
+    import logging as _logging
+
+    _make_plugin(
+        tmp_path,
+        "cmdy",
+        manifest_extra=(
+            "commands:\n"
+            "  - {id: own, title: Own, action: {type: emit, topic: cmdy.done}}\n"
+            "  - {id: bare, title: Bare, action: {type: emit, topic: done}}\n"
+            "  - {id: forged, title: Forged, action: {type: emit, topic: otherplugin.wipe}}\n"
+            "  - {id: wild, title: Wild, action: {type: emit, topic: 'cmdy.*'}}\n"
+            "  - {id: empty-seg, title: Empty, action: {type: emit, topic: 'cmdy..wipe'}}\n"
+        ),
+    )
+    with caplog.at_level(_logging.WARNING, logger="protoagent.plugins"):
+        m = load_manifest(tmp_path / "cmdy")
+    assert m is not None
+    assert [(c["id"], c["action"]["topic"]) for c in m.commands] == [
+        ("own", "cmdy.done"),
+        ("bare", "cmdy.done"),
+    ]
+    assert "otherplugin.wipe" in caplog.text and "outside the plugin's own namespace" in caplog.text
+
+
+def test_commands_reject_shapes_the_console_cannot_dispatch(tmp_path, caplog) -> None:
+    import logging as _logging
+
+    _make_plugin(
+        tmp_path,
+        "cmdy",
+        manifest_extra=(
+            "views:\n"
+            "  - {id: browser, label: Files, path: /plugins/cmdy/browser}\n"
+            "commands:\n"
+            "  - {id: ok, title: Fine, action: {type: navigate, view: browser}}\n"
+            "  - {id: ok, title: Duplicate, action: {type: navigate, view: browser}}\n"
+            "  - {id: 'not safe', title: Unsafe, action: {type: navigate, view: browser}}\n"
+            "  - {id: untitled, action: {type: navigate, view: browser}}\n"
+            "  - {id: inert, title: Nothing to run}\n"
+            "  - {id: alien, title: Alien view, action: {type: navigate, view: settings}}\n"
+            "  - {id: unknown, title: Unknown, action: {type: eval, code: 'x'}}\n"
+            "  - {id: verb, title: Bad verb, action: {type: tool, route: r, method: TRACE}}\n"
+            "  - {id: chain, title: Chain, action: {type: command, command: nope}}\n"
+            "  - {id: inert-search, title: Inert, provider: {route: search}}\n"
+        ),
+    )
+    with caplog.at_level(_logging.WARNING, logger="protoagent.plugins"):
+        m = load_manifest(tmp_path / "cmdy")
+    assert m is not None
+    assert [c["id"] for c in m.commands] == ["ok"]
+    assert m.commands[0]["title"] == "Fine"  # duplicate id keeps the first
+    for expected in (
+        "duplicate command id",
+        "this manifest does not declare",
+        "is not one of navigate, open_view, tool, emit, command",
+        "method 'TRACE'",
+        "chain does not end — it names nope, which this manifest does not declare",
+        "neither an action nor a provider",
+        "provider declares no result_action",
+        # The id/title warning fires before there is a valid id, so it has to name the
+        # entry itself — otherwise it is unfindable in a manifest of a dozen commands.
+        "entry (id 'not safe', title 'Unsafe')",
+        "entry (id 'untitled', title '')",
+    ):
+        assert expected in caplog.text, expected
+
+
+def test_command_chains_must_provably_end(tmp_path, caplog) -> None:
+    """Only a chain that terminates survives: a hop into a command that was itself
+    dropped goes too, and so does a loop the console would run until the tab froze."""
+    import logging as _logging
+
+    _make_plugin(
+        tmp_path,
+        "cmdy",
+        manifest_extra=(
+            "commands:\n"
+            "  - {id: a, title: A, action: {type: command, command: b}}\n"
+            "  - {id: b, title: B, action: {type: command, command: gone}}\n"
+            "  - {id: loop, title: Loop, action: {type: command, command: back}}\n"
+            "  - {id: back, title: Back, action: {type: command, command: loop}}\n"
+            "  - {id: selfy, title: Self, action: {type: command, command: selfy}}\n"
+            "  - {id: ends, title: Ends, action: {type: command, command: leaf}}\n"
+            "  - {id: leaf, title: Leaf, action: {type: emit, topic: ok}}\n"
+        ),
+    )
+    with caplog.at_level(_logging.WARNING, logger="protoagent.plugins"):
+        m = load_manifest(tmp_path / "cmdy")
+    assert m is not None
+    assert [c["id"] for c in m.commands] == ["ends", "leaf"]
+    # `a` chains to `b`, which was itself dropped for naming a command that isn't here.
+    assert "it names gone, which this manifest does not declare" in caplog.text
+    assert caplog.text.count("it loops, or leads only into commands that were themselves dropped") == 4
+
+
+def test_view_palette_opt_in_must_be_inline_or_a_path_mapping(tmp_path, caplog) -> None:
+    """`palette: true` is the shape an author reaches for first, and the console reads
+    only `"inline"` or `{path}` — so it did nothing, silently. Warn and drop the value
+    (an array would otherwise pass the console's `typeof … === "object"` test and morph
+    a view nobody opted in)."""
+    import logging as _logging
+
+    _make_plugin(
+        tmp_path,
+        "viewy",
+        manifest_extra=(
+            "views:\n"
+            "  - {id: a, label: A, path: /plugins/viewy/a, palette: inline}\n"
+            '  - {id: b, label: B, path: /plugins/viewy/b, palette: {path: "/plugins/viewy/quick"}}\n'
+            "  - {id: c, label: C, path: /plugins/viewy/c, palette: true}\n"
+            "  - {id: d, label: D, path: /plugins/viewy/d, palette: []}\n"
+            "  - {id: e, label: E, path: /plugins/viewy/e, palette: {}}\n"
+        ),
+    )
+    with caplog.at_level(_logging.WARNING, logger="protoagent.plugins"):
+        m = load_manifest(tmp_path / "viewy")
+    assert m is not None
+    assert [v["id"] for v in m.views] == ["a", "b", "c", "d", "e"]  # every view still loads
+    assert [v.get("palette") for v in m.views] == ["inline", {"path": "/plugins/viewy/quick"}, None, None, None]
+    assert caplog.text.count("neither the literal 'inline'") == 3
+    # Only the two honored palette pages reach the auth-gate exemption list.
+    assert m.public_paths == [
+        "/plugins/viewy/a",
+        "/plugins/viewy/b",
+        "/plugins/viewy/quick",  # only b's honored {path} morph earns a second exemption
+        "/plugins/viewy/c",
+        "/plugins/viewy/d",
+        "/plugins/viewy/e",
+    ]
+
+
+def test_loader_meta_exposes_commands_only_for_enabled_plugins(monkeypatch, tmp_path) -> None:
+    """ADR 0057: palette entries appear for ENABLED plugins only — install != enable
+    != trust, and a command row is a runnable dispatch."""
+    root = tmp_path / "plugins"
+    _make_plugin(
+        root,
+        "cmdy",
+        enabled=True,
+        tool="ct",
+        manifest_extra=(
+            "commands:\n  - {id: reindex, title: Reindex, action: {type: tool, route: reindex}}\n"
+        ),
+    )
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
+
+    on = load_plugins(_cfg(plugins_enabled=["cmdy"])).meta[0]
+    assert on["enabled"] is True
+    assert on["commands"] == [{"id": "reindex", "title": "Reindex", "action": {"type": "tool", "route": "reindex", "method": "POST"}}]
+    # `commands` is the palette contribution; `chat_commands` (a loaded plugin's
+    # register_chat_command tokens) is a different thing entirely — this plugin registers
+    # none, so a palette entry leaking into that key would show up here as a phantom
+    # slash-command in the composer.
+    assert on["chat_commands"] == []
+
+    off = load_plugins(_cfg(plugins_disabled=["cmdy"])).meta[0]
+    assert off["enabled"] is False and off["commands"] == []
+
+
+def test_unserved_command_route_warns(monkeypatch, tmp_path, caplog) -> None:
+    """A declared command route no router answers is a palette row that 404s on
+    click — the command-side twin of the blank-iframe view warning."""
+    import logging as _logging
+
+    root = tmp_path / "plugins"
+    _make_plugin(
+        root,
+        "cmdy",
+        enabled=True,
+        tool="ct",
+        manifest_extra=(
+            "commands:\n  - {id: reindex, title: Reindex, action: {type: tool, route: reindex}}\n"
+        ),
+    )
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
+    with caplog.at_level(_logging.WARNING, logger="protoagent.plugins"):
+        load_plugins(_cfg(plugins_enabled=["cmdy"]))
+    assert "no registered router serves /api/plugins/cmdy/reindex" in caplog.text
+
+
 def test_loader_meta_exposes_views_for_enabled_plugin(monkeypatch, tmp_path) -> None:
     root = tmp_path / "plugins"
     _make_plugin(
