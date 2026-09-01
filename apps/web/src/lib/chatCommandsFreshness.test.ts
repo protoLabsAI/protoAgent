@@ -177,6 +177,10 @@ const SLASH_SOURCE_KEY = /queryKeys\.(workflows|playbooks|subagents)\b/;
 const SLASH_SOURCE_WRITE =
   /\b(?:invalidateQueries|setQueryData)\b[\s\S]{0,160}?queryKeys\.(?:workflows|playbooks|subagents)\b/g;
 const REFRESH_CALL = /\binvalidateChatCommands\s*\(/g;
+// Non-global twin for single assertions: a /g regex carries `lastIndex` across
+// `.test()` calls, so reusing REFRESH_CALL in an `expect().toMatch()` would alternate
+// pass and fail between runs.
+const REFRESH_CALL_ONCE = /\binvalidateChatCommands\s*\(/;
 
 describe("every writer of a slash-command source refreshes the menu (#3283)", () => {
   it("refreshes the command list once per slash-source write, not once per file", () => {
@@ -205,7 +209,10 @@ describe("every writer of a slash-command source refreshes the menu (#3283)", ()
 
   it("the plugin refresh path covers it too", () => {
     // Plugins reach the list through the one shared refresh rather than a key of their own.
-    expect(TS_SOURCES["../plugins/usePluginManage.ts"]).toContain("invalidateChatCommands");
+    // Match the INVOCATION, not the bare symbol: a substring check is satisfied by an unused
+    // import, a comment, or a re-export, so it would keep passing after someone deleted the
+    // call itself.
+    expect(TS_SOURCES["../plugins/usePluginManage.ts"]).toMatch(REFRESH_CALL_ONCE);
   });
 
   it("the counting guard actually bites when one path forgets", () => {
