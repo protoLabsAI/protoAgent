@@ -36,7 +36,7 @@ import { Tooltip } from "@protolabsai/ui/overlays";
 
 import { registeredKeybindings } from "../ext/keybindingRegistry";
 import { useKbIntents } from "../keybindings/intents";
-import { formatCombo } from "../keybindings/combo";
+import { ariaKeyshortcuts, formatCombo } from "../keybindings/combo";
 import { useKeybindingOverrides } from "../keybindings/overrides";
 
 /** The binding this button advertises AND invokes — one id, so the two can't drift. */
@@ -46,10 +46,14 @@ export const PALETTE_BINDING_ID = "palette.toggle";
  *  it. The empty case is real: only `App` imports the keybindings barrel, so in the frameless
  *  desktop launcher — which mounts the palette but not the shell — there is no binding to
  *  read. Rendering no chord there is correct; the chord isn't live in that window either. */
-export function paletteCombo(overrides: Record<string, string>): string {
+export function paletteCombo(overrides: Record<string, string>): { text: string; aria: string } {
   const binding = registeredKeybindings().find((b) => b.id === PALETTE_BINDING_ID);
-  if (!binding) return "";
-  return formatCombo(overrides[binding.id] ?? binding.defaultKeys);
+  if (!binding) return { text: "", aria: "" };
+  const combo = overrides[binding.id] ?? binding.defaultKeys;
+  // Two serializations of ONE combo, deliberately: `text` is for the eye ("⌘⇧K"), `aria` is the
+  // WAI-ARIA token grammar assistive tech parses ("Meta+Shift+K"). Putting the display string in
+  // `aria-keyshortcuts` renders as glyphs read out one character at a time.
+  return { text: formatCombo(combo), aria: ariaKeyshortcuts(combo) };
 }
 
 /** The utility-bar affordance. Shaped like the search field it opens rather than like the
@@ -58,14 +62,14 @@ export function paletteCombo(overrides: Record<string, string>): string {
 export function PaletteButton() {
   const overrides = useKeybindingOverrides((s) => s.overrides);
   const toggle = useKbIntents((s) => s.togglePalette);
-  const combo = paletteCombo(overrides);
+  const { text: combo, aria } = paletteCombo(overrides);
   return (
     <Tooltip label="Search commands, surfaces and agents — the command palette">
       <button
         type="button"
         className="util-btn palette-btn"
         aria-label="Search commands"
-        aria-keyshortcuts={combo || undefined}
+        aria-keyshortcuts={aria || undefined}
         data-testid="palette-widget"
         onClick={toggle}
       >

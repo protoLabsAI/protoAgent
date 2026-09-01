@@ -215,7 +215,7 @@ Backend: add `_parse_commands` next to `_parse_views` (`graph/plugins/manifest.p
 > view rows, stamped with `{source}` so the palette root renders the attribution chip and its
 > contiguous-group rendering keeps a single "Plugins" heading — a manifest `group` naming a
 > heading the console already owns ("Agents", "Commands") falls back to that plugin section
-> rather than opening a second one mid-list. Five deltas from the sketch above:
+> rather than opening a second one mid-list. Seven deltas from the sketch above:
 >
 > - **Navigation goes through the serializable `NavIntent` chokepoint**, not `ui.setSurface`.
 >   The launcher mounts this same registry in a shell-less JS context where store mutations are

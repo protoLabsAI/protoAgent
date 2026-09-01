@@ -440,7 +440,14 @@ def register_knowledge_routes(app) -> None:
         # for. Forwarded only when asked, so a plugin backend whose ``search`` predates the
         # kwarg keeps serving the same results it always did (``_search_chunks`` re-runs
         # without it on the ``TypeError`` that proves the backend is one of those).
-        if prefix:
+        #
+        # Gated on a NON-EMPTY query as well as the flag: the empty-``q`` arm below calls
+        # ``list_chunks``, which takes no ``prefix`` kwarg at all. Passing it there raised a
+        # ``TypeError`` that this route's own blanket ``except`` then swallowed into an empty
+        # list — so the palette's browse path answered ``200`` with no rows instead of the
+        # recent entries, and read as "your store is empty". A type-ahead flag only means
+        # anything when there is a term to widen.
+        if prefix and q and q.strip():
             filters["prefix"] = True
         results: list[dict] = []
         try:

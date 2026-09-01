@@ -87,10 +87,10 @@ Settings ▸ Keyboard, not with the in-app chords above.
   left to the keyboard — the full triage is in
   `apps/web/src/app/palette/keybindingCommands.ts`.)
 - **Deep links** — **Settings** (opens the dialog wherever you left it, and shows its **⌘,**
-  chord on the row — read live from the binding, so it follows a rebind), **Settings:
-  Keyboard** (where every chord above is rebound), **Plugins: Discover**, **Plugins: Install
-  from URL**, and a **Settings: `<Section>`** row for *every*
-  section of the Settings dialog — Theme, Keyboard, Model, Tools, MCP, Skills, Subagents,
+  chord on the row — read live from the binding, so it follows a rebind), **Plugins: Discover**,
+  **Plugins: Install from URL**, and a **Settings: `<Section>`** row for *every*
+  section of the Settings dialog — including **Settings: Keyboard**, where every chord above is
+  rebound. Theme, Model, Tools, MCP, Skills, Subagents,
   Delegates, Snapshot and the rest. Those rows are GENERATED from the section table
   (`apps/web/src/settings/sections.ts`) by `apps/web/src/app/settingsPalette.ts`, so a new
   section is deep-linkable the moment it is declared rather than when somebody remembers to

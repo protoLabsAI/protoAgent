@@ -331,10 +331,18 @@ export type PluginCommandsOptions = {
  *  route this is runs THERE — and the bearer is attached exactly as `lib/api`'s `request`
  *  does. The path itself was already asserted to sit under `/api/plugins/<id>/`
  *  (`pluginRoutePath`) before any row that reaches this line was created. */
+/** Longest a plugin `tool`/`emit` row may run without an answer. The row calls `ctx.close()`
+ *  BEFORE this fetch, so the palette is already gone: a route that accepts the connection and
+ *  never responds settles neither the success toast nor the error one, and the operator gets no
+ *  outcome at all for something they ran. A timeout turns silence into a reported failure —
+ *  the same trade the root view's provider deadline makes one layer up. */
+const PLUGIN_REQUEST_TIMEOUT_MS = 30_000;
+
 async function pluginRequest(path: string, init: { method: string; body?: unknown }): Promise<void> {
   const token = authToken();
   const res = await fetch(apiUrl(path), {
     method: init.method,
+    signal: AbortSignal.timeout(PLUGIN_REQUEST_TIMEOUT_MS),
     headers: {
       ...(init.body !== undefined ? { "Content-Type": "application/json" } : {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),

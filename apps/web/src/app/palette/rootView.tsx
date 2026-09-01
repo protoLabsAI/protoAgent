@@ -229,12 +229,18 @@ export function emptyQueryList(
   // each, and let recents take what remains (never fewer than `RECENT_MIN`, or the block stops
   // being a block). A lean console is unaffected: with three groups there are six slots spare
   // and recents still take their full four.
+  //
+  // `cap` clamps first, and `recentSlots` is clamped BY it: the floor is a floor against
+  // GROUPS competing for slots, never a licence to exceed the caller's cap. Without that,
+  // `{ emptyCap: 1 }` reserved two recents and returned two rows for a cap of one — the floor
+  // out-arguing the budget. A caller asking for one row gets one row.
+  const cap = Math.max(0, emptyCap);
   const groupCount = new Set(root.map((c) => c.group ?? "")).size;
-  const recentSlots = Math.min(recentCap, Math.max(RECENT_MIN, emptyCap - groupCount));
+  const recentSlots = Math.min(recentCap, cap, Math.max(RECENT_MIN, cap - groupCount));
   const recents = recentsRanked.slice(0, recentSlots);
   const shown = new Set(recents.map((c) => c.id));
   const rest = root.filter((c) => !shown.has(c.id));
-  return [...recents, ...pickRootFill(rest, emptyCap - recents.length, groupCap)];
+  return [...recents, ...pickRootFill(rest, cap - recents.length, groupCap)];
 }
 
 /** Longest a single provider may hold the palette's "Searching…" state.

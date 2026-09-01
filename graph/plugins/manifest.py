@@ -523,7 +523,18 @@ def _navigable_view_ids(views: list[dict]) -> set[str]:
     flags are readable here — the console mirrors this check, but the WARNING is only
     available at parse time, which is the half a plugin author can act on.
     """
-    return {str(v.get("id")) for v in views if v.get("slot") != "chat" and not v.get("utility")}
+    # ``utility`` is tested for PRESENCE, not Python truthiness. The console applies JS
+    # truthiness (``isNavigablePluginView``, apps/web/src/lib/pluginViews.ts), where ``{}`` and
+    # ``[]`` are TRUTHY and the view is a utility widget with no dock surface. Python calls both
+    # falsy, so ``utility: {}`` stayed navigable here: the parser kept the command, emitted no
+    # warning, and the console silently dropped the row — costing the author the parse-time
+    # warning this function exists to give. Only an absent value or an explicit ``False`` means
+    # "not a utility widget".
+    def _is_utility(v) -> bool:
+        u = v.get("utility")
+        return u is not None and u is not False
+
+    return {str(v.get("id")) for v in views if v.get("slot") != "chat" and not _is_utility(v)}
 
 
 def _parse_command_action(

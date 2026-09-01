@@ -61,13 +61,25 @@ export function paletteNoticeFrom(raw: unknown): PaletteNotice | null {
  *  so the message lands where the operator is looking. A no-op outside the desktop shell. */
 export function useForwardedPaletteNotices(notify: (n: PaletteNotice) => void): void {
   useEffect(() => {
-    let off = () => {};
+    // `listen` resolves ASYNCHRONOUSLY, so cleanup can run before there is anything to clean
+    // up. Assigning `off` in `.then` and calling it from the teardown loses that race: the
+    // teardown no-ops, the listener registers a tick later, and nothing ever removes it.
+    // Under StrictMode's mount/unmount/mount that leaves TWO listeners and every forwarded
+    // notice toasts twice. The `cancelled` latch makes the unsubscribe idempotent in both
+    // orders — unlisten now if we have it, or the moment it arrives.
+    let cancelled = false;
+    let off: (() => void) | null = null;
     void listen<unknown>(PALETTE_NOTICE_EVENT, (raw) => {
       const notice = paletteNoticeFrom(raw);
       if (notice) notify(notice);
     }).then((fn) => {
-      off = fn;
+      if (cancelled) fn();
+      else off = fn;
     });
-    return () => off();
+    return () => {
+      cancelled = true;
+      off?.();
+      off = null;
+    };
   }, [notify]);
 }

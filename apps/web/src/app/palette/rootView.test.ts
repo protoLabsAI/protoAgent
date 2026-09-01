@@ -562,6 +562,18 @@ describe("the empty list keeps every group as sources are added", () => {
     expect(out.filter((c) => c.group === RECENT_GROUP).length).toBeGreaterThanOrEqual(RECENT_MIN);
   });
 
+  it("never exceeds the caller's cap, even below the recents floor", () => {
+    // The floor argues against GROUPS for slots; it must not out-argue the BUDGET. Before the
+    // clamp, `Math.max(RECENT_MIN, cap - groupCount)` returned 2 for a cap of 1 and the list
+    // came back with two rows.
+    const root = ["Agents", "Plugins"].flatMap((g) => group(g, 2));
+    const recency = Object.fromEntries(
+      ["Agents0", "Plugins0"].map((id, i) => [`cmd:${id}`, { n: 9 - i, t: 1_000 - i }]),
+    );
+    expect(emptyQueryList(root, root, recency, { emptyCap: 1, now: 1_000 })).toHaveLength(1);
+    expect(emptyQueryList(root, root, recency, { emptyCap: 0, now: 1_000 })).toHaveLength(0);
+  });
+
   it("leaves a lean console's recents untouched", () => {
     // Three groups, six slots spare: the reservation must not fire at all.
     const root = ["Agents", "Plugins", "Commands"].flatMap((g) => group(g, 3));

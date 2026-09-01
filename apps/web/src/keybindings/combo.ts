@@ -43,6 +43,42 @@ const SEGMENT_LABEL: Record<string, string> = {
   arrowright: "→",
 };
 
+// WAI-ARIA modifier names. `aria-keyshortcuts` is NOT the display string: the spec defines a
+// token grammar (`Alt` `Control` `Meta` `Shift` joined by `+`, then a `key` value), and assistive
+// tech parses it. Handing it "⌘⇧K" gives a screen reader glyphs to read out character by
+// character instead of a shortcut to announce — right for the eye, wrong for the API, which is
+// exactly the kind of thing that looks correct in a browser and is broken where it matters.
+const ARIA_MODIFIER: Record<string, string> = {
+  mod: IS_MAC ? "Meta" : "Control",
+  ctrl: "Control",
+  meta: "Meta",
+  alt: "Alt",
+  shift: "Shift",
+};
+
+/** ARIA `key` values for the named keys our combos use; anything else is a single character. */
+const ARIA_KEY: Record<string, string> = {
+  tab: "Tab",
+  enter: "Enter",
+  escape: "Escape",
+  space: " ",
+  arrowup: "ArrowUp",
+  arrowdown: "ArrowDown",
+  arrowleft: "ArrowLeft",
+  arrowright: "ArrowRight",
+};
+
+/** A combo serialized for `aria-keyshortcuts`, e.g. "mod+shift+k" → "Meta+Shift+K" (mac) /
+ *  "Control+Shift+K" (else). Empty string for an empty combo, so a caller can omit the
+ *  attribute rather than render an empty one. */
+export function ariaKeyshortcuts(combo: string): string {
+  if (!combo) return "";
+  return combo
+    .split("+")
+    .map((p) => ARIA_MODIFIER[p] ?? ARIA_KEY[p] ?? (p.length === 1 ? p.toUpperCase() : p))
+    .join("+");
+}
+
 /** Human display for a combo, e.g. "mod+shift+k" → "⌘⇧K" (mac) / "Ctrl+Shift+K" (else). */
 export function formatCombo(combo: string): string {
   if (!combo) return "—";
