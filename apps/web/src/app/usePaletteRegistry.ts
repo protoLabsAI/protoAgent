@@ -38,6 +38,7 @@ import { markAgentOpened } from "./fleetPalette";
 import { fleetRoomView } from "./FleetRoom";
 import { fleetSettingsDisabledReason } from "./fleetSettingsGate";
 import { memberDmView } from "./PaletteChat";
+import { settingsPaletteCommands } from "./settingsPalette";
 
 /** Optional inline chat with the focused agent (ADR 0057). App builds the native chat
  *  PaletteView (it needs JSX + the focused agent name); the adapter registers it + a
@@ -173,13 +174,20 @@ _link("plug:download", "Plugins: Install from URL", ["plugins", "install", "url"
   tab: "local",
 });
 // Settings is the consolidated dialog now (2026-06) — opened from the utility-bar pill,
-// the drawer, or these palette commands. A bare "Settings" command + Box-section deep-links.
+// the drawer, or these palette commands. This one opens it wherever it was left; the
+// per-section deep-links below open a named pane.
 _link("settings", "Settings", ["settings", "config", "preferences", "options"], { kind: "global" });
-_link("box:fleet", "Settings: Fleet", ["fleet", "agents", "box"], { kind: "global", section: "fleet" });
-_link("box:telemetry", "Settings: Telemetry", ["telemetry", "metrics", "box", "global"], {
-  kind: "global",
-  section: "telemetry",
-});
+// …and one row per Settings SECTION, generated from the section table rather than hand-listed
+// here. Three sections used to be reachable from ⌘K (this "Settings", plus hand-written Fleet
+// and Telemetry rows, now superseded) and the other twenty were not — a list nobody remembered
+// to extend, failing silently when they didn't. `settingsPaletteCommands` derives them from
+// settings/sections.ts, so coverage follows the table.
+//
+// Registered UNCONDITIONALLY, gates and all: each row carries the section's own
+// `flag`/`hostOnly` as DATA, and `visiblePaletteCommands` applies them per render below. That
+// ordering is the point — resolving a flag HERE, at module load, would read the fail-closed
+// answer `/api/flags` hasn't returned yet and hide Secrets/Devices/Publish permanently.
+for (const cmd of settingsPaletteCommands(navigate)) registerPaletteCommand(cmd);
 
 /** Map a registered (core or fork) PaletteCommand onto a DS palette `Command`. The DS row
  *  has no shortcut slot, so a command that ADVERTISES a keybinding (ADR 0061 `keybinding` =

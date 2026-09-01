@@ -78,9 +78,12 @@ menu from `registeredSlashCommands()` + the server list, and `runClientSlash` di
   `{ sessionId, setDraft, focusComposer, noteToThread }`.
 - **`registerPaletteCommand`** (`apps/web/src/ext/paletteRegistry.ts`) — adds a root command-palette
   command in the "Commands" group; `usePaletteRegistry` maps these onto DS palette `Command`s.
-  **Dogfooded:** core's deep-links (Plugins: Discover, Settings, Settings: Fleet/Telemetry)
+  **Dogfooded:** core's deep-links (Plugins: Discover, Settings, and one `Settings: <Section>`
+  row per Settings section, generated from `settings/sections.ts` by `app/settingsPalette.ts`)
   register through this seam, so the registry is the only path (no `deepLinkCommands()`
-  bypass). Handler context: `{ close }`. (Distinct from plugin manifest `palette` views,
+  bypass) — and the generated rows carry each section's own `flag`/`hostOnly` as row gates,
+  so the declarative gating below is exercised by core, not only by a fork.
+  Handler context: `{ close }`. (Distinct from plugin manifest `palette` views,
   ADR 0057, which morph the palette body into a plugin iframe — these RUN trusted in-process
   code.)
 

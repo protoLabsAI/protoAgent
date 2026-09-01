@@ -39,8 +39,19 @@ Settings ▸ Keyboard, not with the in-app chords above.
 - **Open…** — the built-in surfaces (Chat, Activity, Knowledge, Studio, Agent, Plugins,
   Settings, plus whatever a fork adds) live one hop in, behind **Open…**, so the root list
   stays short.
-- **Deep links** — the jumps worth their own command: **Settings**, **Settings: Fleet**,
-  **Settings: Telemetry**, **Plugins: Discover**, **Plugins: Install from URL**.
+- **Deep links** — **Plugins: Discover**, **Plugins: Install from URL**, **Settings** (opens
+  the dialog wherever you left it), and a **Settings: `<Section>`** row for *every* section of
+  the Settings dialog — Theme, Keyboard, Model, Tools, MCP, Skills, Subagents, Delegates,
+  Snapshot and the rest. Those rows are GENERATED from the section table
+  (`apps/web/src/settings/sections.ts`) by `apps/web/src/app/settingsPalette.ts`, so a new
+  section is deep-linkable the moment it is declared rather than when somebody remembers to
+  add a command. Each row's trailing hint is its nav heading (Agent · Capabilities · Box ·
+  This console), which is searchable too — typing `capabilities` lists exactly those five.
+  A section behind a developer flag (Secrets, Devices, Publish) or restricted to the host
+  console (Overview, Telemetry) carries that gate on the row and is resolved *per render*,
+  never at registration. The one section with no row is **Developer**: its visibility is a
+  channel decision (`developerPanelVisible`), which is neither of the two axes the seam can
+  gate on — see the comment in `settingsPalette.ts`.
 
 Groups render in registration order — **Agents**, then **Plugins**, then **Commands** —
 so the agent and its fleet stay at the top.
