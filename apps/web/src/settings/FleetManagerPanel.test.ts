@@ -7,10 +7,10 @@ import {
   fleetAutostartRoster,
   fleetOrderIds,
   memberAutostarts,
-  moveDisabled,
+  moveAnnouncement,
   moveInList,
-  moveLabel,
   orderAgentsByIds,
+  reorderLabel,
   reorderByDrag,
   sameOrder,
   shouldSubmitOrder,
@@ -99,9 +99,11 @@ describe("fleet member autostart rows", () => {
 });
 
 // ── Manual roster reordering (#3197) — the pure ordering core ───────────────────────────
-// The API payload, the drag / move math, boundary + busy disabling, accessible labels and the
-// failure-safe reconciliation are all pure, so they're unit-tested without rendering the panel
-// (the console has no @testing-library; this suite is `.test.ts` only).
+// The API payload, the drag / arrow-key math, the boundaries, the handle's accessible name, its
+// live-region announcement and the failure-safe reconciliation are all pure, so they're unit-
+// tested without rendering the panel (the console has no @testing-library; this suite is
+// `.test.ts` only). The rendered interaction — a real drag, a real ↑ / ↓ press, and the order
+// surviving a reload — is covered end-to-end in e2e/fleet.spec.ts.
 
 describe("fleetOrderIds — the complete immutable-id order PUT to /api/fleet/order", () => {
   it("is the roster ids in display order — stable ids, never the editable name/label", () => {
@@ -115,7 +117,7 @@ describe("fleetOrderIds — the complete immutable-id order PUT to /api/fleet/or
   });
 });
 
-describe("moveInList — the move-up / move-down control payload", () => {
+describe("moveInList — the ↑ / ↓ keyboard payload", () => {
   const ids = ["host", "ava", "roxy"];
 
   it("moves a row up one slot", () => {
@@ -161,8 +163,8 @@ describe("reorderByDrag — the drag-and-drop payload", () => {
   });
 });
 
-describe("canMove / moveDisabled — boundary + busy disabling of the move controls", () => {
-  it("disables move-up only at the top and move-down only at the bottom", () => {
+describe("canMove — the list boundaries the keyboard path announces", () => {
+  it("is false for ↑ at the top and ↓ at the bottom", () => {
     expect(canMove(0, "up", 3)).toBe(false);
     expect(canMove(1, "up", 3)).toBe(true);
     expect(canMove(2, "down", 3)).toBe(false);
@@ -170,22 +172,40 @@ describe("canMove / moveDisabled — boundary + busy disabling of the move contr
   });
 
   it("a member just below the pinned host can still move up (full-array indices)", () => {
-    // host at 0, first member at 1 → move-up is enabled and swaps it above the host.
-    expect(moveDisabled(1, "up", 3, false)).toBe(false);
-  });
-
-  it("disables every move control while a reorder save is pending (busy), even off a boundary", () => {
-    expect(moveDisabled(1, "up", 3, true)).toBe(true);
-    expect(moveDisabled(1, "down", 3, true)).toBe(true);
-    // …and stays disabled at a boundary regardless of pending.
-    expect(moveDisabled(0, "up", 3, false)).toBe(true);
+    // host at 0, first member at 1 → ↑ is a real move and swaps it above the host.
+    expect(canMove(1, "up", 3)).toBe(true);
   });
 });
 
-describe("moveLabel — the move control's accessible name", () => {
+describe("reorderLabel — the handle's accessible name", () => {
   it("names the DISPLAY name (label ?? name), never the id", () => {
-    expect(moveLabel({ name: "ava", label: "Ava 🚀" }, "up")).toBe("Move Ava 🚀 up");
-    expect(moveLabel({ name: "roxy" }, "down")).toBe("Move roxy down");
+    expect(reorderLabel({ name: "ava", label: "Ava 🚀" })).toContain("Ava 🚀");
+    expect(reorderLabel({ name: "roxy" })).toContain("roxy");
+  });
+
+  it("carries the keys, because no visible control does any more", () => {
+    // The move-up / move-down buttons are gone; the handle's name is where a keyboard user
+    // learns the path exists at all (with aria-keyshortcuts + the tooltip).
+    expect(reorderLabel({ name: "roxy" })).toMatch(/up and down arrow keys/);
+  });
+});
+
+describe("moveAnnouncement — the keyboard path's polite live region", () => {
+  it("reports the DESTINATION slot, one-based, of the whole roster", () => {
+    // roster host, ava, roxy — ↓ on ava (index 1) lands it in the third slot, ↑ in the first.
+    expect(moveAnnouncement({ name: "ava" }, 1, "down", 3)).toBe("Moved ava to position 3 of 3.");
+    expect(moveAnnouncement({ name: "ava" }, 1, "up", 3)).toBe("Moved ava to position 1 of 3.");
+  });
+
+  it("names the boundary instead of going silent on a no-op press", () => {
+    // A press that cannot move is the one case with NO visual change at all — the old UI
+    // showed it as a disabled button; now only this line carries it.
+    expect(moveAnnouncement({ name: "roxy" }, 0, "up", 3)).toBe("roxy is already first.");
+    expect(moveAnnouncement({ name: "roxy" }, 2, "down", 3)).toBe("roxy is already last.");
+  });
+
+  it("uses the display label when there is one", () => {
+    expect(moveAnnouncement({ name: "ava", label: "Ava 🚀" }, 1, "up", 3)).toContain("Ava 🚀");
   });
 });
 
@@ -197,7 +217,7 @@ describe("sameOrder — skip a no-op PUT", () => {
   });
 });
 
-describe("shouldSubmitOrder — the single guard shared by the drag AND move-control paths", () => {
+describe("shouldSubmitOrder — the single guard shared by the drag AND keyboard paths", () => {
   const current = ["host", "ava", "roxy"];
 
   it("submits a real change only when no reorder save is in flight", () => {

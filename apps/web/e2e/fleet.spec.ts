@@ -55,6 +55,63 @@ test("Agents tab lists the host (this instance) + peers, host active by default"
   await expect(page.locator(".fleet-row", { hasText: "main" }).getByRole("button")).toHaveCount(0);
 });
 
+// ── Manual roster reordering (#3197) ─────────────────────────────────────────────────────
+// The ordering math is unit-tested pure (FleetManagerPanel.test.ts); what only a rendered
+// browser can prove is that the wiring holds end to end — a real drag, a real key press, the
+// PUT the server accepts, and the order surviving a reload rather than living in a React cache.
+const rosterNames = (page) => page.locator(".fleet-row .fleet-name");
+const reorderHandle = (page, name) =>
+  page.locator(".fleet-row", { hasText: name }).getByRole("button", { name: new RegExp(`^Reorder ${name}\\b`) });
+
+test("Fleet Config: the arrow keys reorder from the handle, and the order survives a reload (#3197)", async ({ page }) => {
+  await openAgents(page);
+  await expect(rosterNames(page)).toHaveText([/main/, /ava/, /roxy/]);
+
+  // A member row carries exactly ONE reorder control now — the grip. The always-visible
+  // move-up / move-down button pair is retired; the row's width went back to the roster, and
+  // the keys travel on the handle (its accessible name, aria-keyshortcuts, and its tooltip).
+  const roxy = page.locator(".fleet-row", { hasText: "roxy" });
+  await expect(roxy.getByRole("button", { name: /^Move roxy/ })).toHaveCount(0);
+  const handle = reorderHandle(page, "roxy");
+  await expect(handle).toHaveAttribute("aria-keyshortcuts", "ArrowUp ArrowDown");
+  await expect(handle).toHaveAttribute("draggable", "true");
+
+  // ↑ on the focused handle moves the row one slot — the accessible, non-pointer path.
+  await handle.focus();
+  await page.keyboard.press("ArrowUp");
+  await expect(rosterNames(page)).toHaveText([/main/, /roxy/, /ava/]);
+  // …and it is ANNOUNCED. With no move buttons on screen there is no other feedback that the
+  // press did anything: a silent live region is the one failure a visual review never catches.
+  await expect(page.locator(".fleet-reorder-status")).toHaveText("Moved roxy to position 2 of 3.");
+  // Focus rides the moved row, so a second press keeps reordering the same member.
+  await expect(handle).toBeFocused();
+
+  // A press at the boundary is a no-op that SAYS so rather than going quiet.
+  await reorderHandle(page, "ava").focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.locator(".fleet-reorder-status")).toHaveText("ava is already last.");
+  await expect(rosterNames(page)).toHaveText([/main/, /roxy/, /ava/]);
+
+  // The order is the SERVER's now: a reload re-reads GET /api/fleet and gets it back.
+  await page.reload({ waitUntil: "load" });
+  await openFleet(page);
+  await expect(rosterNames(page)).toHaveText([/main/, /roxy/, /ava/]);
+});
+
+test("Fleet Config: dragging a member's handle onto another row reorders the roster (#3197)", async ({ page }) => {
+  await openAgents(page);
+  await expect(rosterNames(page)).toHaveText([/main/, /ava/, /roxy/]);
+
+  // Drag roxy's handle onto the host row — the pinned host carries no handle of its own but is
+  // still a valid drop slot, which is the only way to land a member above it.
+  await reorderHandle(page, "roxy").dragTo(page.locator(".fleet-row", { hasText: "this instance" }));
+  await expect(rosterNames(page)).toHaveText([/roxy/, /main/, /ava/]);
+
+  await page.reload({ waitUntil: "load" });
+  await openFleet(page);
+  await expect(rosterNames(page)).toHaveText([/roxy/, /main/, /ava/]);
+});
+
 test("New agent → archetype picker → create navigates into the new agent", async ({ page }) => {
   await openAgents(page);
   await page.getByRole("button", { name: "New agent" }).click();

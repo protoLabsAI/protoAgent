@@ -18,35 +18,64 @@
 .fleet-row.dragging {
   opacity: 0.5;
 }
-/* Manual roster reordering (#3197) — a leading reorder cell: a drag handle (native HTML5 DnD,
-   pointer path) + explicit move-up / move-down controls (the accessible, non-pointer path).
-   Rendered on every roster row (empty on the pinned host); a FIXED width (grip + two 30px DS
-   icon buttons) keeps every row's status dot aligned whether or not the row is reorderable. */
+/* Manual roster reordering (#3197) — a leading reorder cell holding ONE control: the grip, which
+   is both the pointer drag handle (native HTML5 DnD) and the keyboard path. The move-up /
+   move-down button pair that used to sit beside it is retired: two 30px DS icon buttons on every
+   row held this cell at a fixed 80px, and the roster's name / badges / meta are what the width is
+   worth. A FIXED width still keeps every row's status dot aligned whether or not the row is
+   reorderable (the pinned host renders an empty cell). */
 .fleet-reorder {
   flex: 0 0 auto;
-  width: 80px;
+  width: 18px;
   display: flex;
   align-items: center;
-  gap: 2px;
 }
 .fleet-drag-handle {
   display: inline-flex;
   align-items: center;
+  /* It is a <button> now (focusable — the keyboard reorder path), so strip the UA chrome. The
+     padding/negative-margin pair grows the HIT box around a 14px glyph without widening the
+     cell: it is the row's smallest control and the only one you have to grab. */
+  padding: 6px 2px;
+  margin: -6px -2px;
+  border: 0;
+  background: none;
   color: var(--pl-color-fg-subtle);
   cursor: grab;
 }
 .fleet-drag-handle:active {
   cursor: grabbing;
 }
-/* A reorder save in flight disables the drag path (like the move buttons) — dim it and drop the
-   grab cursor so it reads as inert while the PUT is pending (#3197). */
-.fleet-drag-handle.disabled {
+.fleet-drag-handle:hover {
+  color: var(--pl-color-fg);
+}
+/* The keyboard path is invisible unless the handle shows focus — this ring IS the affordance
+   that replaced the two chevrons. */
+.fleet-drag-handle:focus-visible {
+  outline: 1px solid var(--pl-color-fg);
+  outline-offset: 2px;
+  border-radius: 3px;
+  color: var(--pl-color-fg);
+}
+/* A reorder save in flight blocks the drag + key paths — dim it and drop the grab cursor so it
+   reads as inert while the PUT is pending. `aria-disabled`, not `disabled`: the button must keep
+   focus or a keyboard user is stranded mid-reorder (#3197). */
+.fleet-drag-handle[aria-disabled="true"] {
   cursor: default;
   opacity: 0.4;
 }
-.fleet-move-controls {
-  display: inline-flex;
-  align-items: center;
+/* The keyboard path's polite announcer. Clipped, NOT display:none — the latter drops it from the
+   accessibility tree and the live region goes silent. */
+.fleet-reorder-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 /* The row status dot is the DS <StatusDot> now (FleetSwitcher + FleetManager both use it);
    the hand-rolled .fleet-dot* is retired. */
