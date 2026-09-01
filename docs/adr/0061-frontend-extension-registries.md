@@ -87,7 +87,9 @@ menu from `registeredSlashCommands()` + the server list, and `runClientSlash` di
   is dogfooded too rather than existing only for forks.
   Handler context: `{ close }`. (Distinct from plugin manifest `palette` views,
   ADR 0057, which morph the palette body into a plugin iframe — these RUN trusted in-process
-  code.)
+  code.) `keybinding` has a core consumer as well (#3295): a triaged allow-list of registered
+  bindings (`app/palette/keybindingCommands.ts`) ships as rows that run the binding's action and
+  advertise its live combo, with `Settings: Keyboard` beside them as the row that rebinds one.
 
   A command carries presentation alongside behavior — `icon`, `hint`, `disabled`, and a
   `keybinding` id. The presentation fields are the DS `Command` fields (`toDsCommand` passes

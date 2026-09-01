@@ -49,16 +49,20 @@ async function mountRegistry(): Promise<PaletteRegistry> {
   root.render(h(QueryClientProvider, { client }, h(Probe)));
   await vi.waitFor(() => expect(registry).not.toBeNull());
   // …and then for the adapter's registration EFFECT to have flushed, which is a separate
-  // moment: `registry` is assigned during RENDER, while everything the adapter contributes
-  // is registered in an effect afterwards. Waiting only for the object hands back a registry
-  // that is briefly empty, so a case that reads it synchronously passes or fails on how long
-  // the commit took — green in isolation, red under a loaded parallel run (and an empty read
-  // reads like "the source returned nothing" rather than like a race).
+  // moment: `registry` is assigned during RENDER, while everything the adapter contributes —
+  // the commands AND the source provider — is registered in effects, in the commit after.
+  // Returning on the render alone hands back a registry that is briefly empty, so a case that
+  // reads it synchronously passes or fails on how long the commit took: green in isolation,
+  // red under a loaded parallel run, and an empty read looks like "the source returned
+  // nothing" rather than like a race. Both effects run in the SAME commit, so the arrival of
+  // the static commands is also the signal that the provider effect has run.
   //
   // Wait on one of the UNCONDITIONAL registrations, never on the PROVIDER: waiting for the
   // provider would make the "no source ⇒ no provider" arm below unobservable — it would hang
   // instead of asserting. `fleet-room` is registered unconditionally, so it marks the flush
-  // without presupposing any provider (the case below asserts there are NONE at this point).
+  // without presupposing any provider (the case below asserts there are NONE at this point),
+  // and naming an id rather than `length > 0` keeps the wait from being satisfied by whatever
+  // happens to register first.
   await vi.waitFor(() =>
     expect(registry!.getStaticCommands().map((c) => c.id)).toContain("fleet-room"),
   );

@@ -47,14 +47,20 @@ test("empty query: a short root list that does NOT dump every surface into it", 
   // `slice(0, cap)` hands it to whoever registered first, and every plugin view installed
   // pushes one more Commands row off the bottom. The per-group quota is what keeps Settings
   // here, and this is the run where losing it would hurt most. It is also what absorbed the
-  // 22 generated `Settings: <Section>` rows (#3291) without moving anything above.
+  // 22 generated `Settings: <Section>` rows (#3291) without moving anything above it.
   //
-  // Matched on the LABEL span, not the option's accessible name: the bare Settings row
-  // advertises its `settings.open` chord as a trailing hint, which rides the accessible name
-  // ("Settings ⌘,") and made an `exact: true` role match fail. The label is the assertion
-  // that was meant — and it still has to be exact, or the 22 `Settings: …` rows satisfy it.
-  const labels = await rows.locator(".pl-cmdk-commands__label").allInnerTexts();
-  expect(labels).toContain("Settings");
+  // Matched on the row's LABEL span, not on the option's accessible name: the Settings row
+  // advertises its shortcut now (#3295 gave it `keybinding: "settings.open"`), and an
+  // advertised combo renders as a trailing hint INSIDE the same button — so the accessible
+  // name is "Settings ⌘," and `{ name: "Settings", exact: true }` finds nothing. The span
+  // still holds the bare label, which is what has to stay exact: a loose "Settings" match
+  // would be satisfied by any of the 22 `Settings: …` rows and stop testing the quota at all.
+  // It is also the platform-independent half — `formatCombo` renders ⌘ on macOS, Ctrl on CI.
+  // A retrying locator assertion rather than a one-shot `allInnerTexts()` read, because the
+  // empty-query list is settled by an async provider read.
+  await expect(
+    page.locator(`${PANEL} ${ROW} .pl-cmdk-commands__label`, { hasText: /^Settings$/ }),
+  ).toBeVisible();
 });
 
 test("the active row is announced — aria-activedescendant, not just a highlight", async ({ page }) => {

@@ -4,9 +4,12 @@
 // view, the adapter, and the desktop launcher can each import just what they need. The
 // public entry points are re-exported verbatim from `../usePaletteRegistry`, so nothing
 // that imports them had to change.
+import { flushSync } from "react-dom";
+
 import { useUI } from "../../state/uiStore";
 import { agentHref } from "../../lib/api";
 import { seedKnowledgeSearch } from "../../knowledge/searchSeed";
+import { runBindingById } from "../../keybindings/useKeybindings";
 
 /** Open any view by id, routed to the dock it actually lives on (and uncollapsed).
  *  Reads live state via the store's `getState()` so it isn't a render subscription.
@@ -56,7 +59,14 @@ export type NavIntent =
   // Knowledge" is already `{ kind: "view", id: "knowledge" }`, and letting it in here would
   // add a second reading — does an absent term leave the surface alone, or clear it? — for
   // a caller that has no reason to exist.
-  | { kind: "knowledge"; query: string };
+  | { kind: "knowledge"; query: string }
+  // Run a registered keybinding's action (ADR 0063) — what a ⌘K row that advertises a
+  // shortcut does. An INTENT rather than a direct `binding.run()` at the row for the usual
+  // launcher reason: these actions mutate the console's stores and walk its DOM, both of
+  // which are absent in the frameless launcher window, so the work has to be able to cross
+  // to the main window as a plain payload. `surface` is the view that makes a SCOPED
+  // binding's scope real — see the case in `applyNavIntent`.
+  | { kind: "keybinding"; id: string; surface?: string };
 
 /** Apply an intent to THIS window's UI store. The default navigator, and what the main
  *  window calls when it receives a forwarded intent from the launcher. */
@@ -89,6 +99,34 @@ export function applyNavIntent(intent: NavIntent) {
       // `window.location` targets the window the operator is actually looking at.
       window.location.href = agentHref(intent.slug);
       break;
+    case "keybinding": {
+      // Make the binding's SCOPE real before running it, rather than bypassing it.
+      // `resolveBinding` is the only place `scope` is enforced and a palette row calls
+      // `run()` directly, so a chat-scoped action would otherwise fire from an overlay that
+      // is never inside `[data-kb-scope="chat"]`. Navigating first is also what the operator
+      // asked for — "Clear conversation" chosen from Knowledge means "go to chat and clear
+      // it". A row for a scope with no surface is never built (keybindingCommands.ts).
+      //
+      // …and `flushSync`, because "navigating first" has to mean the DOM, not the store.
+      // `openView` only writes zustand state; the row runs from a React event handler, so
+      // React commits AFTER the handler returns — the next line would otherwise read a DOM
+      // the navigation had not produced yet. That matters because the chat slot's #613
+      // "mounted for the app's LIFETIME" contract is about the slot within its DOCK, and the
+      // DS AppShell renders each column conditionally (`const showLeft = !leftCollapsed`;
+      // `{showLeft && <main className="pl-appshell__col--left">…</main>}`, app-shell.tsx). A
+      // collapsed dock takes `.chat-session-slot` and `[data-kb-scope="chat"]` out of the
+      // document entirely, so `chat.tool.toggle` — the one action here that WALKS the DOM
+      // (toolCollapse.ts `chatRoot()`) — found nothing and returned silently, re-opening the
+      // panel and doing nothing else. Flushing keeps every store-only action in this switch
+      // synchronous and observable (a deferred run would make `chat.clear` / `chat.new`
+      // land a frame later, in the launcher hand-off too), while giving the DOM-walking one
+      // a committed tree. Cheap: one navigation, only when a row names a surface.
+      // (Braced: `const` in a bare case clause leaks into the whole switch.)
+      const surface = intent.surface;
+      if (surface) flushSync(() => openView(surface));
+      runBindingById(intent.id);
+      break;
+    }
   }
 }
 

@@ -49,6 +49,9 @@ CORE_KEYBINDINGS = REPO / "apps" / "web" / "src" / "keybindings" / "coreKeybindi
 # whole directory is read instead, and `test_the_two_swapped_bindings_are_still_parseable`
 # asserts a known label comes back out of it.
 PALETTE_ADAPTER = REPO / "apps" / "web" / "src" / "app" / "palette"
+# One module in that directory needs reading a SECOND way, not just globbed for `label:` —
+# see `_keyboard_action_labels`.
+KEYBINDING_COMMANDS = PALETTE_ADAPTER / "keybindingCommands.ts"
 DESKTOP_SHELL = REPO / "apps" / "desktop" / "src-tauri" / "src" / "lib.rs"
 PALETTE_GUIDE = REPO / "docs" / "guides" / "command-palette.md"
 
@@ -162,6 +165,29 @@ def _shell_chords() -> set[str]:
     return {_glyph(c) for c in combos}
 
 
+def _keyboard_action_labels() -> set[str]:
+    """Labels of the palette's keyboard-action rows (#3295).
+
+    `_palette_labels` globs this whole directory, which is not enough for these rows: they
+    are built in `keybindingCommands.ts` from an allow-list of binding IDS, and each one
+    takes its label from the BINDING (`label: binding.label`). So the module the glob reads
+    contains not one of the nine names, and the glob alone would call a guide's **New chat**
+    a command the palette dropped. Read the allow-list, then the labels it points at, in
+    `coreKeybindings.ts`. There is no per-row label override to also collect: a row is
+    deliberately worded exactly as Settings ▸ Keyboard words it, so the binding is the one
+    place a name can come from."""
+    assert KEYBINDING_COMMANDS.exists(), (
+        f"keyboard-action rows moved: {KEYBINDING_COMMANDS.relative_to(REPO)} — update this test"
+    )
+    src = KEYBINDING_COMMANDS.read_text(encoding="utf-8")
+    # `(?<!\w)` so the prose `keybinding: "settings.open"` in that file's header — the id it
+    # explains DROPPING — can't smuggle "Open Settings" in as a shipped command name.
+    wanted = set(re.findall(r'(?<!\w)binding:\s*"([\w.]+)"', src))
+    core = CORE_KEYBINDINGS.read_text(encoding="utf-8")
+    by_id = dict(re.findall(r'id:\s*"([\w.]+)".*?label:\s*"([^"]+)"', core, re.S))
+    return {by_id[b] for b in wanted if b in by_id}
+
+
 def _palette_labels() -> tuple[set[str], tuple[str, ...]]:
     """(exact labels, label prefixes) the palette registers as ROOT commands."""
     assert PALETTE_ADAPTER.is_dir(), (
@@ -169,7 +195,7 @@ def _palette_labels() -> tuple[set[str], tuple[str, ...]]:
     )
     sources = [p for p in sorted(PALETTE_ADAPTER.glob("*.ts*")) if ".test." not in p.name]
     src = "\n".join(p.read_text(encoding="utf-8") for p in sources)
-    labels = set(_LABEL_RE.findall(src)) | set(_LINK_RE.findall(src))
+    labels = set(_LABEL_RE.findall(src)) | set(_LINK_RE.findall(src)) | _keyboard_action_labels()
     # `label: \`Chat with ${chat.name}\`` — only the literal head is checkable.
     prefixes = tuple(t.split("${")[0].strip() for t in _TEMPLATE_LABEL_RE.findall(src) if "${" in t)
     return labels, prefixes
@@ -229,6 +255,11 @@ def test_the_two_swapped_bindings_are_still_parseable() -> None:
     assert "Fleet Room" in labels, (
         "palette command labels no longer parse out of apps/web/src/app/palette/ — "
         "test_no_page_invokes_a_command_the_palette_dropped would pass vacuously"
+    )
+    assert "New chat" in labels, (
+        "the keyboard-action rows no longer parse out of keybindingCommands.ts + "
+        "coreKeybindings.ts — a doc naming one of those nine commands would be reported "
+        "dead, and a folded-away one would keep its instructions"
     )
 
 

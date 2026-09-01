@@ -65,9 +65,22 @@ Settings ▸ Keyboard, not with the in-app chords above.
   stays short. They are also **searchable from the root**: type a surface's name and it is
   there, without the hop. (It used not to be — `memory` and `knowledge` answered *No
   matches*, because those surfaces existed only inside **Open…**.)
+- **Keyboard actions** — the console's own shortcuts, as ordinary rows you can run by
+  name: **New chat**, **Clear conversation**, **Focus chat composer**, **Next chat tab** /
+  **Previous chat tab**, **Toggle latest tool block**, and the **left rail** / **right
+  panel** / **bottom dock** toggles. Each row shows the chord it is bound to *right now* —
+  rebind one in Settings ▸ Keyboard and the row re-labels itself — so the palette doubles as
+  the shortcut cheat-sheet: type `shortcuts` to list the whole set. A chat action navigates
+  to chat before it runs — re-opening the dock chat lives on if you had it collapsed — so
+  picking one from Knowledge, Settings, or a folded-away rail does what you meant.
+  (Not every binding gets a row. A shortcut whose row would open the thing you are already
+  looking at, duplicate another row's action, or land somewhere it can't act is deliberately
+  left to the keyboard — the full triage is in
+  `apps/web/src/app/palette/keybindingCommands.ts`.)
 - **Deep links** — **Settings** (opens the dialog wherever you left it, and shows its **⌘,**
-  chord on the row — read live from the binding, so it follows a rebind), **Plugins:
-  Discover**, **Plugins: Install from URL**, and a **Settings: `<Section>`** row for *every*
+  chord on the row — read live from the binding, so it follows a rebind), **Settings:
+  Keyboard** (where every chord above is rebound), **Plugins: Discover**, **Plugins: Install
+  from URL**, and a **Settings: `<Section>`** row for *every*
   section of the Settings dialog — Theme, Keyboard, Model, Tools, MCP, Skills, Subagents,
   Delegates, Snapshot and the rest. Those rows are GENERATED from the section table
   (`apps/web/src/settings/sections.ts`) by `apps/web/src/app/settingsPalette.ts`, so a new
