@@ -27,6 +27,14 @@ and prints a per-case ``passes/N`` table, scoring each model on the cases that
 passed the majority of runs — the way to see past single-run sampling noise on
 non-deterministic cases (tool selection especially).
 
+``--prior-sessions newest,off`` adds a CONFIG axis: each value becomes its own arm
+(cross-producted with ``--models``), booted from a seed config carrying that
+``context.prior_sessions`` policy. That is the vehicle for the #3186 evaluation —
+"is the always-on prior-session digest worth its turn cost, now that session_search
+exists?" — and it is why arms seed their session fixtures BEFORE boot: the digest's
+entry pool is cached for 60 s per process, so a summary written after boot may not
+be in the first turns' digest at all.
+
 The combined result lands in ``evals/results/sweep-<ts>.json``; each run is
 written alongside as ``run-sweep-<ts>-<model>[-r<i>].json``.
 """
@@ -50,6 +58,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+from evals import verify  # noqa: E402
 from evals.compare import _category_passed, _pct  # noqa: E402
 
 _RESULTS_DIR = Path(__file__).parent / "results"
@@ -72,6 +81,84 @@ def _instance_dirs(instance: str) -> list[Path]:
         base / "scheduler" / instance,
         base / "knowledge" / instance,
     ]
+
+
+def _instance_memory_dir(instance: str) -> Path:
+    """Where that instance's session summaries live — the digest's source."""
+    return Path(os.path.expanduser("~/.protoagent")) / instance / "memory"
+
+
+def _yaml_quoted(value: str):
+    """A scalar that survives the dump as a STRING.
+
+    ``off`` is the policy whose name YAML 1.1 also spells as the boolean False
+    (#3254), and ruamel dumps a bare Python ``str`` bare. The config layer happens
+    to restore ``False`` to ``"off"``, but a seed config that says ``off`` and means
+    ``False`` is a trap waiting for the next reader — so quote it at the source.
+    PyYAML already quotes it; this only has to teach ruamel.
+    """
+    try:
+        from ruamel.yaml.scalarstring import DoubleQuotedScalarString
+
+        return DoubleQuotedScalarString(str(value))
+    except Exception:  # noqa: BLE001 — no ruamel → PyYAML quotes it itself
+        return str(value)
+
+
+def _seed_config_for(policy: str, ts: int, slug: str) -> Path | None:
+    """A config file for one arm, carrying ``context.prior_sessions: <policy>``.
+
+    Handed to the arm through ``PROTOAGENT_SEED_CONFIG`` — the documented
+    seed-a-fresh-instance seam — so the throwaway instance comes up already
+    configured instead of being patched after boot (the policy is read at boot).
+
+    The base is the operator's own live config when there is one, so an arm talks
+    to the same gateway the real agent does; otherwise the bundled ``.example``.
+    Secrets are NOT copied: ``api_key`` falls back to ``OPENAI_API_KEY``, which is
+    how the sweep has always fed its throwaway agents.
+    """
+    from graph.config_io import config_example_path, config_yaml_path, load_yaml_doc, save_yaml_doc
+
+    try:
+        base = config_yaml_path()
+        if not base.is_file():
+            base = Path(config_example_path())
+        doc = load_yaml_doc(base)
+        if not isinstance(doc, dict):
+            return None
+        doc.setdefault("context", {})
+        if not isinstance(doc["context"], dict):
+            doc["context"] = {}
+        doc["context"]["prior_sessions"] = _yaml_quoted(policy)
+        out = _RESULTS_DIR / f"seed-config-{ts}-{slug}.yaml"
+        _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        save_yaml_doc(doc, out)
+        return out
+    except Exception as exc:  # noqa: BLE001 — an unseedable arm is reported, not fatal
+        print(f"  ! could not build a seed config for prior_sessions={policy}: {exc}")
+        return None
+
+
+def _session_seed_steps(category: str | None, tasks: str | None) -> list[dict]:
+    """Every ``session_seed`` setup step of the cases this run will execute.
+
+    Seeded BEFORE the arm boots for two reasons: the digest's pool is cached for
+    60 s per process (a post-boot write can be invisible for the first turns), and
+    an arm running with ``prior_sessions: off`` must still have the same summaries
+    on disk — that is the whole comparison.
+    """
+    cases = json.loads((Path(__file__).parent / "tasks.json").read_text())
+    if tasks:
+        wanted = {t.strip() for t in tasks.split(",") if t.strip()}
+        cases = [c for c in cases if c.get("id") in wanted]
+    elif category:
+        cases = [c for c in cases if c.get("category") == category]
+    steps: list[dict] = []
+    for c in cases:
+        for step in c.get("setup") or []:
+            if "session_seed" in step:
+                steps.append(step)
+    return steps
 
 
 def _cleanup_instance(instance: str) -> None:
@@ -105,6 +192,9 @@ def _run_one_model(
     tasks: str | None,
     keep: bool,
     repeat: int = 1,
+    label: str | None = None,
+    prior_sessions: str | None = None,
+    seed_steps: list[dict] | None = None,
 ) -> list[dict]:
     """Boot one agent on ``model`` and run the suite ``repeat`` times against
     it; return the list of report dicts (empty if the agent never came up).
@@ -113,22 +203,39 @@ def _run_one_model(
     model's own run-to-run sampling variance (the thing best-of-N measures) from
     boot/cold-start variance, and costs one boot per model instead of N."""
     base_url = f"http://127.0.0.1:{port}"
-    log_path = _RESULTS_DIR / f"server-sweep-{ts}-{_slug(model)}.log"
+    log_path = _RESULTS_DIR / f"server-sweep-{ts}-{_slug(label or model)}.log"
     _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
+    label = label or model
     env = {
         **os.environ,
         "PROTOAGENT_MODEL": model,
         "PROTOAGENT_INSTANCE": instance,
         "PROTOAGENT_UI": "none",
     }
+    if prior_sessions:
+        seed_cfg = _seed_config_for(prior_sessions, ts, _slug(label))
+        if seed_cfg is None:
+            print(f"  ✗ no seed config for prior_sessions={prior_sessions} — skipping this arm")
+            return None
+        env["PROTOAGENT_SEED_CONFIG"] = str(seed_cfg)
+    # Fixtures land BEFORE boot: the digest pool is cached per process (60 s), so a
+    # summary written after boot may be missing from the first turns' digest — which
+    # would quietly measure the cache instead of the policy.
+    if seed_steps:
+        mem = _instance_memory_dir(instance)
+        err = verify.apply_setup(seed_steps, memory_dir=str(mem))
+        if err:
+            print(f"  ! session fixtures not seeded: {err}")
+        else:
+            print(f"  · seeded {len(seed_steps)} session fixture(s) into {mem}")
     # Give the throwaway agent a bearer token so the auth-gating eval cases are
     # actually exercised (an unconfigured instance accepts any token → the
     # negative-auth case can't pass). The runner's client reads the same env
     # var, so the good-token cases still authenticate. Respect a token the
     # operator already set.
     env.setdefault("A2A_AUTH_TOKEN", f"eval-sweep-{ts}")
-    print(f"\n=== {model} :: booting on {base_url} (instance={instance}) ===")
+    print(f"\n=== {label} :: booting on {base_url} (instance={instance}) ===")
     log_f = open(log_path, "w", encoding="utf-8")
     proc = subprocess.Popen(
         [sys.executable, "-m", "server", "--port", str(port), "--ui", "none"],
@@ -147,7 +254,7 @@ def _run_one_model(
         reports: list[dict] = []
         for run_i in range(repeat):
             suffix = f"-r{run_i + 1}" if repeat > 1 else ""
-            report_path = _RESULTS_DIR / f"run-sweep-{ts}-{_slug(model)}{suffix}.json"
+            report_path = _RESULTS_DIR / f"run-sweep-{ts}-{_slug(label)}{suffix}.json"
             cmd = [
                 sys.executable,
                 "-m",
@@ -155,7 +262,7 @@ def _run_one_model(
                 "--base-url",
                 base_url,
                 "--model-label",
-                model,
+                label,
                 "--out",
                 str(report_path),
             ]
@@ -169,7 +276,7 @@ def _run_one_model(
             if report_path.exists():
                 reports.append(json.loads(report_path.read_text()))
             else:
-                print(f"  ✗ no report written for {model} (run {run_i + 1})")
+                print(f"  ✗ no report written for {label} (run {run_i + 1})")
         return reports
     finally:
         proc.terminate()
@@ -293,6 +400,19 @@ def main(argv: list[str] | None = None) -> int:
         default=1,
         help="run the suite N times per model for a best-of-N (majority) per-case table",
     )
+    p.add_argument(
+        "--prior-sessions",
+        default="",
+        help=(
+            "comma-separated context.prior_sessions policies (newest|relevant|off) to run as "
+            "separate arms — the #3186 A/B. Empty (default) = leave the config alone."
+        ),
+    )
+    p.add_argument(
+        "--no-seed-sessions",
+        action="store_true",
+        help="don't pre-seed the selected cases' session fixtures into each arm before boot",
+    )
     args = p.parse_args(argv)
 
     models = [m.strip() for m in args.models.split(",") if m.strip()]
@@ -301,9 +421,20 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     repeat = max(1, args.repeat)
 
+    policies = [p.strip() for p in (args.prior_sessions or "").split(",") if p.strip()]
+    unknown = [p for p in policies if p not in ("newest", "relevant", "off")]
+    if unknown:
+        sys.stderr.write(f"unknown prior_sessions policy: {', '.join(unknown)}\n")
+        return 2
+    # One arm per (model, policy). Without a policy axis an arm is just a model,
+    # labelled exactly as before so existing reports keep their shape.
+    arms = [(m, pol) for m in models for pol in (policies or [None])]
+    seed_steps = [] if args.no_seed_sessions else _session_seed_steps(args.category, args.tasks)
+
     ts = int(time.time())
     model_runs: dict[str, list[dict]] = {}
-    for i, model in enumerate(models):
+    for i, (model, policy) in enumerate(arms):
+        label = model if policy is None else (policy if len(models) == 1 else f"{model} @ {policy}")
         runs = _run_one_model(
             model,
             port=args.port_base + i,
@@ -313,9 +444,12 @@ def main(argv: list[str] | None = None) -> int:
             tasks=args.tasks,
             keep=args.keep,
             repeat=repeat,
+            label=label,
+            prior_sessions=policy,
+            seed_steps=seed_steps,
         )
         if runs:
-            model_runs[model] = runs
+            model_runs[label] = runs
 
     if not model_runs:
         sys.stderr.write("no model produced a report\n")

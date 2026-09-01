@@ -321,6 +321,55 @@ all". These probes exercise the whole store-and-inject loop, so — like the oth
 resolve to the same per-instance knowledge DB — the same requirement the
 `memory_ingest` cases already rely on).
 
+## Cross-session continuity — and whether the digest earns its keep
+
+The `continuity` category covers what the agent knows about its *other* sessions
+([#3186](https://github.com/protoLabsAI/protoAgent/issues/3186)). `session_seed`
+writes a summary in the shape `SessionSummaryMiddleware` persists, so a case can
+ask about "what we decided last week" without a week of real sessions:
+
+```json
+{ "kind": "ask", "category": "continuity",
+  "setup": [
+    {"session_seed": {
+      "session_id": "chat-eval-cont-retention",
+      "topic": "how long should we keep audit logs before rotating them?",
+      "final_output": "Decided: audit logs are retained for 90 days.",
+      "age_minutes": 2880
+    }}
+  ],
+  "prompt": "In an earlier session we settled how long audit logs are retained. What did we land on?",
+  "expected_patterns": ["90"],
+  "teardown": [{"session_purge": {"session_id": "chat-eval-cont-retention"}}] }
+```
+
+`age_minutes` sets the file's **mtime**, not just its timestamp string — the
+newest-N digest cut sorts on mtime, so an "older" session has to look older on
+disk or every fixture lands at the top of the window.
+
+Two things worth knowing when you read a continuity result:
+
+- **The digest carries pointers, not content.** A `<prior_sessions>` line is
+  `id · timestamp · surface · topic · message count` — the *topic*, never the
+  decision. So a direct-recall case makes the agent call `recall_session` /
+  `session_search` under **every** policy; what the digest changes is whether it
+  knows there is something to reach for.
+- **The digest's pool is cached ~60 s per process.** Seed before the agent boots
+  (`evals.sweep` does this per arm) or you may measure a cold cache instead of
+  the policy.
+
+The policy itself is a sweep axis:
+
+```bash
+python -m evals.sweep --models protolabs/reasoning \
+  --prior-sessions newest,off --category continuity --repeat 3
+```
+
+Each policy becomes its own arm, booted from a seed config carrying it
+(`PROTOAGENT_SEED_CONFIG`), with the same fixtures on disk. The per-case
+`passes/N` table is the quality evidence; the latency/token footnote is the cost
+side — which is the shape the #3186 default decision is meant to rest on.
+
 ## Prompt rule
 
 **The tool name never appears in the prompt.** Every prompt must be
@@ -347,6 +396,8 @@ more):
 | `kb_ingest` | `content`, `domain`, `heading?` | Insert a chunk |
 | `kb_delete_by_content` | `contains` | Delete chunks where content LIKE `%contains%` |
 | `kb_delete_by_heading` | `domain`, `heading` | Delete chunks matching (domain, heading) |
+| `session_seed` | `session_id`, `topic`, `reply?`, `final_output?`, `age_minutes?` | Write a session summary in the shape the agent persists — a past session that never happened |
+| `session_purge` | `session_id` | Remove a seeded summary (every name it may live under) |
 
 ## What forks should test by default
 
