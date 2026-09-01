@@ -298,20 +298,56 @@ def _read_anthropic_store() -> dict[str, Any] | None:
     return doc if isinstance(doc, dict) and doc.get("access_token") else None
 
 
+def _anthropic_account_uuid(doc: dict[str, Any]) -> str | None:
+    """The Claude account a token response — or an already-written store — belongs to.
+
+    An ``sk-ant-…`` pair is opaque: unlike a Codex JWT there is nothing to decode after
+    the fact, so the token RESPONSE is the only place the account is ever named. Reading
+    it there and keeping it is what lets the box-tier promotion tell "the same login,
+    refreshed" from "a different person's login" instead of having to defer both (see
+    :func:`_oauth_store_account`). Already-stamped stores win, so re-writing one never
+    loses the id; otherwise take the response's ``account.uuid``, falling back to the
+    organization when a response names only that.
+    """
+    explicit = doc.get("account_uuid")
+    if isinstance(explicit, str) and explicit.strip():
+        return explicit.strip()
+    for key in ("account", "organization"):
+        node = doc.get(key)
+        if isinstance(node, dict):
+            uuid = node.get("uuid")
+            if isinstance(uuid, str) and uuid.strip():
+                return uuid.strip()
+    return None
+
+
 def _write_anthropic_store(tokens: dict[str, Any]) -> None:
     """Persist a freshly minted/refreshed Claude token set. Stamps ``expires_at`` from
-    the response's ``expires_in`` so the resolver can refresh proactively."""
+    the response's ``expires_in`` so the resolver can refresh proactively, and
+    ``account_uuid`` so two copies of this store can later be matched to one login."""
     access = str(tokens.get("access_token", "") or "").strip()
     if not access:
         return
     expires_in = tokens.get("expires_in")
     expires_at = _now() + float(expires_in) if isinstance(expires_in, (int, float)) else None
-    doc = {
+    path = _anthropic_store_path()
+    account = _anthropic_account_uuid(tokens)
+    if account is None:
+        # A refresh response need not repeat the account block. Carry forward what the
+        # store already knows rather than dropping back to an unidentifiable file —
+        # the Codex path preserves ``account_id`` across a refresh for the same reason.
+        try:
+            previous = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            previous = None
+        account = _anthropic_account_uuid(previous) if isinstance(previous, dict) else None
+    doc: dict[str, Any] = {
         "access_token": access,
         "refresh_token": str(tokens.get("refresh_token", "") or ""),
         "expires_at": expires_at,
     }
-    path = _anthropic_store_path()
+    if account:
+        doc["account_uuid"] = account
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write(path, json.dumps(doc), mode=0o600)
 
@@ -496,15 +532,21 @@ def _oauth_store_account(provider: str, payload: str) -> str | None:
     tokens, so two copies of ONE login stop matching byte-for-byte the first time
     either side refreshes — minutes, not months. Codex tokens carry the ChatGPT account
     id (an explicit field, else the ``chatgpt_account_id`` JWT claim); Anthropic's
-    opaque ``sk-ant-…`` pair carries none, so that provider answers ``None`` and the
-    caller must treat it as unknown rather than as distinct.
+    opaque ``sk-ant-…`` pair carries none of its own, so we stamp ``account_uuid`` from
+    the token response at write time instead.
+
+    ``None`` means unknown, which the caller must not read as "different" — a store
+    written before that stamp existed simply cannot be matched, and the honest answer
+    there is to leave both copies alone.
     """
     try:
         doc = json.loads(payload)
     except (ValueError, json.JSONDecodeError):
         return None
-    if provider != "openai-codex" or not isinstance(doc, dict):
+    if not isinstance(doc, dict):
         return None
+    if provider != "openai-codex":
+        return _anthropic_account_uuid(doc)
     tokens = doc.get("tokens")
     return _codex_account_id(tokens) if isinstance(tokens, dict) else None
 

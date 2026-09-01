@@ -1599,6 +1599,82 @@ def test_anthropic_store_follows_the_same_scope_rule(monkeypatch, tmp_path):
     assert oauth_mod._anthropic_store_path(paths) == inst / "anthropic-oauth.json"
 
 
+def test_anthropic_store_records_the_account_from_the_token_response(monkeypatch, tmp_path):
+    """An ``sk-ant-…`` pair is opaque, so the token response is the ONLY place the Claude
+    account is ever named. Stamp it at write time or two copies of this store can never
+    be told apart afterwards."""
+    store = tmp_path / "anthropic-oauth.json"
+    monkeypatch.setattr(oauth_mod, "_anthropic_store_path", lambda paths=None: store)
+
+    oauth_mod._write_anthropic_store(
+        {
+            "access_token": "sk-ant-oat01-a",
+            "refresh_token": "sk-ant-ort01-a",
+            "expires_in": 3600,
+            "account": {"uuid": "acct-uuid-1", "email_address": "someone@example.test"},
+        }
+    )
+
+    doc = json.loads(store.read_text())
+    assert doc["account_uuid"] == "acct-uuid-1"
+    assert doc["access_token"] == "sk-ant-oat01-a"
+    # The account block is read for its id, not copied in — no address lands on disk.
+    assert "email_address" not in store.read_text()
+
+
+def test_anthropic_store_keeps_the_account_across_a_refresh(monkeypatch, tmp_path):
+    """A refresh response need not repeat the account block. Dropping the id there would
+    quietly un-identify a store on its next refresh — hours later, and looking exactly
+    like a store that never had one."""
+    store = tmp_path / "anthropic-oauth.json"
+    monkeypatch.setattr(oauth_mod, "_anthropic_store_path", lambda paths=None: store)
+    store.write_text(json.dumps({"access_token": "old", "refresh_token": "r", "account_uuid": "acct-uuid-1"}))
+
+    oauth_mod._write_anthropic_store({"access_token": "sk-ant-oat01-b", "refresh_token": "r2", "expires_in": 3600})
+
+    assert json.loads(store.read_text())["account_uuid"] == "acct-uuid-1"
+
+
+def test_legacy_oauth_promotion_matches_stamped_anthropic_accounts(monkeypatch, tmp_path):
+    """Once stamped, a Claude store dedupes on the account like the Codex one — the
+    stamp is what moves Anthropic out of the permanently-deferred lane."""
+    box, inst = tmp_path / "box", tmp_path / "inst"
+    inst.mkdir()
+    box.mkdir()
+    monkeypatch.setattr(oauth_mod, "box_root", lambda: box)
+    fresh = json.dumps({"access_token": "new", "refresh_token": "r2", "expires_at": 2_000_009_999, "account_uuid": "u1"})
+    (box / "anthropic-oauth.json").write_text(
+        json.dumps({"access_token": "old", "refresh_token": "r1", "expires_at": 2_000_000_000, "account_uuid": "u1"})
+    )
+    (inst / "anthropic-oauth.json").write_text(fresh)
+
+    result = oauth_mod.promote_instance_oauth_to_box(inst)
+
+    assert result.promoted == ["anthropic-oauth.json"] and not result.deferred
+    assert (box / "anthropic-oauth.json").read_text() == fresh
+    assert not (inst / "anthropic-oauth.json").exists()
+
+
+def test_legacy_oauth_promotion_separates_stamped_anthropic_accounts(monkeypatch, tmp_path):
+    """Two different Claude accounts stay apart — the stamp has to distinguish as well
+    as match, or it has only traded one wrong answer for another."""
+    box, inst = tmp_path / "box", tmp_path / "inst"
+    inst.mkdir()
+    box.mkdir()
+    monkeypatch.setattr(oauth_mod, "box_root", lambda: box)
+    theirs = json.dumps({"access_token": "theirs", "refresh_token": "r1", "account_uuid": "u2"})
+    mine = json.dumps({"access_token": "mine", "refresh_token": "r2", "account_uuid": "u1"})
+    (box / "anthropic-oauth.json").write_text(theirs)
+    (inst / "anthropic-oauth.json").write_text(mine)
+
+    result = oauth_mod.promote_instance_oauth_to_box(inst)
+
+    assert not result.promoted
+    assert [d for d in result.deferred if "different account" in d]
+    assert (box / "anthropic-oauth.json").read_text() == theirs
+    assert (inst / "anthropic-oauth.json").read_text() == mine
+
+
 def test_legacy_oauth_promotion_reports_deferred_stores_without_touching_them(monkeypatch, tmp_path):
     """The seam's own contract, independent of workspace creation: a store it declines
     to merge is named in ``deferred`` and left byte-for-byte alone on both sides. Callers
