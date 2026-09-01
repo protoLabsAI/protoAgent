@@ -159,9 +159,9 @@ def _keyboard_action_labels() -> set[str]:
     Those rows are built in `keybindingCommands.ts` from an allow-list of binding ids, and
     each one takes its label from the BINDING — so neither the id nor the label appears in
     `usePaletteRegistry.ts`, and a scan of that file alone would call a guide's **New chat**
-    a command the palette dropped. Read the allow-list, then the labels it points at. A row
-    may override the wording (`label:`), so those literals count too; the union is a
-    superset, which is the safe direction for a check that only reports DEAD names."""
+    a command the palette dropped. Read the allow-list, then the labels it points at. There
+    is no per-row label override to also collect: a row is deliberately worded exactly as
+    Settings ▸ Keyboard words it, so the binding is the one place a name can come from."""
     assert KEYBINDING_COMMANDS.exists(), (
         f"keyboard-action rows moved: {KEYBINDING_COMMANDS.relative_to(REPO)} — update this test"
     )
@@ -171,7 +171,7 @@ def _keyboard_action_labels() -> set[str]:
     wanted = set(re.findall(r'(?<!\w)binding:\s*"([\w.]+)"', src))
     core = CORE_KEYBINDINGS.read_text(encoding="utf-8")
     by_id = dict(re.findall(r'id:\s*"([\w.]+)".*?label:\s*"([^"]+)"', core, re.S))
-    return {by_id[b] for b in wanted if b in by_id} | set(_LABEL_RE.findall(src))
+    return {by_id[b] for b in wanted if b in by_id}
 
 
 def _palette_labels() -> tuple[set[str], tuple[str, ...]]:

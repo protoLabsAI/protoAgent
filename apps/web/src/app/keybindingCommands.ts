@@ -1,6 +1,6 @@
 // Keyboard actions as ⌘K rows (ADR 0061 × ADR 0063).
 //
-// The console registers 25 keybindings and the palette listed none of them, so ⌘K couldn't
+// The console registered 25 keybindings and the palette listed none of them, so ⌘K couldn't
 // run the app's own commands and the shortcuts themselves were discoverable only by opening
 // Settings ▸ Keyboard. These rows fix both: each one RUNS a registered binding's action and
 // ADVERTISES the combo that binding currently answers to.
@@ -65,29 +65,39 @@ import "../keybindings/coreKeybindings";
 
 /** A `data-kb-scope` id → the view id that owns it. The only way a scoped binding earns a
  *  palette row: opening that view is what makes its scope real. Core declares one scope
- *  ("chat", ChatSurface.tsx). A fork adding a scope adds its surface here. */
+ *  ("chat", ChatSurface.tsx).
+ *
+ *  It governs the allow-list below and nothing else. A fork adding its OWN scoped binding
+ *  registers its own row through `registerPaletteCommand` and never touches this; a fork
+ *  that RE-SCOPES a core binding (`registerKeybinding` is last-write-wins by id) maps the
+ *  new scope here too, and has to be registered by the time this module loads — the rows
+ *  are built once, from whatever the registry holds then. */
 const SCOPE_SURFACE: Record<string, string> = { chat: "chat" };
 
 /** Words for the keyboard surface ITSELF, added to every row so typing any of them lists
  *  the whole family — the palette doubles as the shortcut cheat-sheet, and "Settings:
  *  Keyboard" carries them too so the way to REBIND lands in the same list.
  *
- *  PLURAL on purpose. The matcher is `haystack.includes(term)` (the DS's `matchCommand`,
- *  mirrored by `matchesQuery` in usePaletteRegistry), so a keyword answers every query it
- *  CONTAINS: "shortcuts" answers both "shortcut" and "shortcuts", while the singular answers
- *  only itself — and "keyboard shortcuts" is what an operator actually types. Same reason
- *  "keys" is here next to "keyboard", and "keybindings" covers bind/binding/keybinding. */
+ *  PLURAL on purpose, and it is the rule for every keyword in this file. The matcher is
+ *  `haystack.includes(term)` (the DS's `matchCommand`, mirrored by `matchesQuery` in
+ *  usePaletteRegistry), so a keyword answers every query it CONTAINS: "shortcuts" answers
+ *  both "shortcut" and "shortcuts", while the singular answers only itself — and "keyboard
+ *  shortcuts" is what an operator actually types. Same reason "keys" is here next to
+ *  "keyboard", and "keybindings" covers bind/binding/keybinding. */
 export const SHORTCUT_KEYWORDS = ["keyboard", "shortcuts", "keys", "hotkeys", "keybindings"];
 
 type KeybindingRow = {
-  /** `registerKeybinding` id — the action the row runs AND the shortcut it advertises. */
+  /** `registerKeybinding` id — the action the row runs, the shortcut it advertises, AND the
+   *  wording it wears. There is deliberately NO per-row label override: an operator who
+   *  found a chord on a ⌘K row has to be able to find the same name in Settings ▸ Keyboard
+   *  to change it, and two spellings of one action is how that breaks. Same argument as the
+   *  combo, one field over. */
   binding: string;
   /** Fuzzy-match terms. The label is already searched, so these are the words an operator
-   *  reaches for INSTEAD of the label ("wipe", "sidebar", "drawer") — and, per the plural
-   *  rule above, in the longest form that still reads as a word. */
+   *  reaches for INSTEAD of the label ("wipe", "sidebar", "drawer"). Anything there are MANY
+   *  of goes in plural per the rule above ("conversations" answers "conversation" too); the
+   *  one-per-side furniture stays singular, because nobody types "hide sidebars". */
   keywords: string[];
-  /** Palette wording, when it should differ from the Settings ▸ Keyboard label. */
-  label?: string;
 };
 
 /** The allow-list, in display order. `chat.new` is also ADR 0057's never-built "New chat"
@@ -96,15 +106,19 @@ type KeybindingRow = {
 export const KEYBINDING_ROWS: KeybindingRow[] = [
   {
     binding: "chat.new", // "New chat"
-    keywords: ["new", "create", "start", "blank", "fresh", "chats", "conversation", "thread", "sessions", "tabs"],
+    keywords: ["new", "create", "start", "blank", "fresh", "chats", "conversations", "threads", "sessions", "tabs"],
   },
   {
     binding: "chat.clear", // "Clear conversation"
-    keywords: ["clear", "wipe", "reset", "empty", "erase", "chats", "history", "messages", "transcript", "fresh"],
+    // "conversations" even though the label carries the singular: the label answers only
+    // "conversation", and "clear conversations" is the query an operator with tabs open types.
+    keywords: ["clear", "wipe", "reset", "empty", "erase", "fresh",
+               "chats", "conversations", "history", "messages", "transcripts"],
   },
   {
     binding: "composer.focus", // "Focus chat composer"
-    keywords: ["focus", "type", "write", "input", "message", "prompt", "reply", "textbox", "chats"],
+    // "reply" stays singular — "replies" doesn't contain it, so the plural rule can't apply.
+    keywords: ["focus", "type", "write", "input", "messages", "prompts", "reply", "textbox", "chats"],
   },
   {
     binding: "chat.tab.next", // "Next chat tab"
@@ -116,7 +130,10 @@ export const KEYBINDING_ROWS: KeybindingRow[] = [
   },
   {
     binding: "chat.tool.toggle", // "Toggle latest tool block"
-    keywords: ["expand", "collapse", "show", "hide", "tools", "calls", "output", "result", "details", "blocks"],
+    // "chats" like its five chat-surface siblings — nothing in this label says where the
+    // tool block it toggles actually lives.
+    keywords: ["expand", "collapse", "show", "hide", "details",
+               "chats", "tools", "calls", "blocks", "outputs", "results"],
   },
   {
     binding: "panel.toggle.left", // "Toggle left rail"
@@ -159,7 +176,7 @@ export function registerKeybindingCommands(navigate: (intent: NavIntent) => void
     offs.push(
       registerPaletteCommand({
         id: keybindingCommandId(binding.id),
-        label: row.label ?? binding.label,
+        label: binding.label, // the BINDING's wording — see `KeybindingRow.binding`
         group: "Commands",
         keywords: [...row.keywords, ...SHORTCUT_KEYWORDS],
         // The row ADVERTISES the combo; it binds nothing. Resolved per render by the host

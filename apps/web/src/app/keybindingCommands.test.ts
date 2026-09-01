@@ -91,13 +91,24 @@ describe("which keybindings became palette rows", () => {
     }
   });
 
+  it("wears the BINDING's wording, so Settings ▸ Keyboard names the same action the same way", () => {
+    // The label half of the argument the combo makes: an operator who found a chord on a ⌘K
+    // row goes to Settings ▸ Keyboard to change it, and a row worded differently there is a
+    // row they can't find. There is no per-row label override for exactly this reason.
+    const byId = new Map(registeredKeybindings().map((b) => [b.id, b.label]));
+    for (const r of KEYBINDING_ROWS) {
+      expect(byId.get(r.binding), r.binding).toBeTruthy(); // else the compare is vacuous
+      expect(row(r.binding)?.label, r.binding).toBe(byId.get(r.binding));
+    }
+  });
+
   it("gives the Settings deep-link ⌘, instead of a second 'Open Settings' row", () => {
     const settings = registeredPaletteCommands("static").find((c) => c.id === "settings");
     expect(settings?.keybinding).toBe("settings.open");
   });
 
   it("offers the screen that REBINDS them, deep-linked to the Keyboard section", () => {
-    const cmd = registeredPaletteCommands("static").find((c) => c.id === "settings:keyboard");
+    const cmd = registeredPaletteCommands("static").find((c) => c.id === "box:keybindings");
     expect(cmd, "Settings: Keyboard row").toBeTruthy();
     cmd!.run({ close: () => {} });
     // The id of the settings section table's Keyboard entry (`id: "keybindings"`, under
@@ -139,11 +150,39 @@ describe("an operator can actually find these rows", () => {
     ["next tab", "chat.tab.next"],
     ["switch tabs", "chat.tab.prev"],
     ["expand tool output", "chat.tool.toggle"],
+    ["tool results", "chat.tool.toggle"],
+    ["clear conversations", "chat.clear"],
     ["hide sidebar", "panel.toggle.left"],
     ["right inspector", "panel.toggle.right"],
     ["collapse drawer", "panel.toggle.bottom"],
   ])("'%s' finds %s", (query, bindingId) => {
     expect(finds(query, row(bindingId))).toBe(true);
+  });
+
+  it("answers BOTH numbers of every countable word it claims", () => {
+    // `haystack.includes(term)` means a keyword answers only the queries it CONTAINS:
+    // "conversations" answers "conversation" too, the singular answers only itself. So a
+    // countable word stored singular silently drops half the queries for it — invisibly,
+    // because the row is still registered and every other test in this file still passes.
+    // Pinned as BEHAVIOR rather than as a spelling rule, so a row stays free to carry both
+    // forms instead.
+    //
+    // The list is the words these rows use for things there are MANY of. Deliberately not in
+    // it: `panel` / `dock` / `sidebar` / `drawer` / `rail` / `tray`, of which there is one
+    // per side — "hide sidebars" is not a query anyone types — and `reply`, whose plural
+    // does not contain it, so no single form can answer both.
+    const countable = ["chat", "conversation", "session", "tab", "thread", "message",
+      "transcript", "prompt", "tool", "call", "result", "output", "block", "key", "shortcut",
+      "hotkey", "keybinding"];
+    for (const r of KEYBINDING_ROWS) {
+      const cmd = row(r.binding);
+      const hay = [cmd?.label, ...(cmd?.keywords ?? [])].join(" ").toLowerCase();
+      for (const word of countable) {
+        if (!hay.includes(word)) continue; // this row doesn't claim the word at all
+        expect(finds(word, cmd), `${r.binding} ← "${word}"`).toBe(true);
+        expect(finds(`${word}s`, cmd), `${r.binding} ← "${word}s"`).toBe(true);
+      }
+    }
   });
 
   it("lists the WHOLE keyboard surface — plus the way to rebind it — for 'keyboard shortcuts'", () => {
@@ -153,7 +192,7 @@ describe("an operator can actually find these rows", () => {
     for (const r of KEYBINDING_ROWS) {
       expect(finds("keyboard shortcuts", row(r.binding)), `row for ${r.binding}`).toBe(true);
     }
-    const rebind = registeredPaletteCommands("static").find((c) => c.id === "settings:keyboard");
+    const rebind = registeredPaletteCommands("static").find((c) => c.id === "box:keybindings");
     expect(finds("keyboard shortcuts", rebind)).toBe(true);
     expect(finds("rebind shortcut", rebind)).toBe(true);
   });
