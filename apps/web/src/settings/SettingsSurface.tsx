@@ -135,7 +135,7 @@ const RENDERERS: Record<SettingsSectionId, () => ReactNode> = {
 // One consolidated settings surface. `initialSection` deep-links a section (the overlay / a
 // palette command). The Box group's agent-scoped sections are gated to the host console;
 // Fleet is not.
-export function SettingsSurface({ initialSection }: { only?: "host" | "workspace"; initialSection?: string } = {}) {
+export function SettingsSurface({ initialSection }: { initialSection?: string } = {}) {
   const onHost = isHostConsole();
   // On phones the two-column shell can't fit a 200px rail + readable content, so collapse
   // the SideNav to its DS <select> (mobile only — the desktop rail is deliberately a tablist).
