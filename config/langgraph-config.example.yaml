@@ -387,9 +387,13 @@ execute_code:
 #     (a setup-time / restricted-console control; ADR 0071). disabled = off-but-visible.
 #   deferred: withhold tool schemas until the agent searches for them (cuts the
 #     per-turn footprint past ~15 tools). OFF by default.
+#   fleet_diagnostics.enabled: expose the future fleet-diagnostics tool to the
+#     model. OFF by default; no tool is bound unless a later slice supplies it.
 tools:
   disabled: []
   hidden: []
+  fleet_diagnostics:
+    enabled: false
   # - calculator
   # - web_search
   # deferred:

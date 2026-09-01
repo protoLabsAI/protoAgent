@@ -892,6 +892,15 @@ FIELDS: list[Field] = [
         "Covers every contributor: core, plugin, MCP, filesystem (e.g. run_command), "
         "and delegation tools. Applies on save (the graph rebuilds).",
     ),
+    Field(
+        "tools.fleet_diagnostics.enabled",
+        "tools_fleet_diagnostics_enabled",
+        "Expose fleet diagnostics to the model",
+        "bool",
+        "Tools",
+        "When on, the future fleet-diagnostics tool may be exposed to the model. Off by default; "
+        "this slice only lands the config gate and binds no tool.",
+    ),
     # ── Middleware toggles ───────────────────────────────────────────────────
     Field("middleware.knowledge", "knowledge_middleware", "Knowledge middleware", "bool", "Middleware"),
     Field("middleware.memory", "memory_middleware", "Memory middleware", "bool", "Middleware"),

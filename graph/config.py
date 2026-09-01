@@ -995,6 +995,13 @@ class LangGraphConfig:
     # turn. OFF by default — new, unproven in production.
     tools_memoize_reads_enabled: bool = False
 
+    # Fleet diagnostics model exposure (ADR 0071 / #3170). This gates whether a
+    # future fleet-diagnostics tool is exposed to the model. Slice 1 only lands
+    # the config switch; no tool is written or bound here. Default OFF so
+    # ordinary agents do not gain a new diagnostics surface until an operator
+    # opts in.
+    tools_fleet_diagnostics_enabled: bool = False
+
     # Tool denylist — drop named core tools from the agent without editing
     # ``tools/lg_tools.py::get_all_tools``. A fork keeps what it wants by listing
     # the rest here (config ``tools.disabled``); plugins still ADD tools. So
@@ -2008,6 +2015,9 @@ class LangGraphConfig:
             tools_memoize_reads_enabled=data.get("tools", {})
             .get("memoize_reads", {})
             .get("enabled", cls.tools_memoize_reads_enabled),
+            tools_fleet_diagnostics_enabled=data.get("tools", {})
+            .get("fleet_diagnostics", {})
+            .get("enabled", cls.tools_fleet_diagnostics_enabled),
             tools_disabled=list(data.get("tools", {}).get("disabled", []) or []),
             tools_self_config_enabled=bool(data.get("tools", {}).get("self_config_enabled", False)),
             tools_hidden=list(data.get("tools", {}).get("hidden", []) or []),
