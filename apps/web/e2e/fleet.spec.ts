@@ -620,22 +620,29 @@ async function stubDiagnostics(page) {
     }
     return route.fulfill({ json: { enabled: true, capacity: 2000, returned: 2, lines: [`[${slug}] boot ok`, `[${slug}] ready`] } });
   });
+  // Per-id fetch counter — a "live" task evolves between snapshots so a re-inspect of the SAME
+  // id observes an updated state, proving Inspect refetches rather than pinning the first read.
+  const taskHits = new Map();
   await page.route("**/api/diagnostics/tasks/**", async (route) => {
     const taskId = decodeURIComponent(new URL(route.request().url()).pathname.split("/").pop());
     if (taskId.includes("missing")) {
       return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ detail: "no such task on this member", task_id: taskId }) });
     }
+    const n = (taskHits.get(taskId) ?? 0) + 1;
+    taskHits.set(taskId, n);
+    const settling = taskId.includes("live") && n < 2;
+    const body = settling ? "still working…" : "diagnostics summary body";
     return route.fulfill({
       json: {
         task_id: taskId,
         context_id: "s-diag",
-        state: "TASK_STATE_COMPLETED",
+        state: settling ? "TASK_STATE_WORKING" : "TASK_STATE_COMPLETED",
         status_message: "",
         last_updated: "2026-08-30T10:00:00Z",
         history: [{ role: "ROLE_USER", message_id: "m1", text: "diagnose me" }],
-        artifacts: [{ artifact_id: "a1", name: "answer", text: "diagnostics summary body" }],
-        accumulated_text: "diagnostics summary body",
-        truncated: ["history"],
+        artifacts: [{ artifact_id: "a1", name: "answer", text: body }],
+        accumulated_text: body,
+        truncated: taskId.includes("live") ? [] : ["history"],
         malformed: [],
       },
     });
@@ -664,6 +671,14 @@ test("Fleet Room diagnostics: view a member's bounded logs and inspect an exact 
   await expect(page.getByTestId("diag-task")).toContainText("TASK_STATE_COMPLETED");
   await expect(page.getByTestId("diag-task")).toContainText("diagnostics summary body");
   await expect(page.getByTestId("diag-task-notes")).toContainText("history");
+
+  // Re-inspecting the SAME id refetches: a task still settling on the first read shows its updated
+  // state on a second Inspect (snapshot refresh — the pane never pins a stale first snapshot).
+  await page.getByLabel("Task id").fill("t-live");
+  await page.getByRole("button", { name: "Inspect" }).click();
+  await expect(page.getByTestId("diag-task")).toContainText("TASK_STATE_WORKING");
+  await page.getByRole("button", { name: "Inspect" }).click();
+  await expect(page.getByTestId("diag-task")).toContainText("TASK_STATE_COMPLETED");
 
   // A missing task id is an actionable inline state, not a blank panel.
   await page.getByLabel("Task id").fill("missing-999");

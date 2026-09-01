@@ -199,6 +199,40 @@ describe("MemberDiagnostics — exact task inspection", () => {
     expect(notes?.textContent).toContain("artifact_entry");
   });
 
+  it("re-inspecting the same task id refetches an updated snapshot (no stale pin)", async () => {
+    vi.spyOn(api, "memberDiagnosticsLogs").mockResolvedValue(LOGS_OK);
+    // A task whose state/output moves between two inspects of the SAME id: the second Inspect must
+    // fetch again (staleTime:Infinity would otherwise pin the first read to the unchanged key).
+    const inspect = vi
+      .spyOn(api, "memberDiagnosticsTask")
+      .mockResolvedValueOnce(taskFixture({ state: "TASK_STATE_WORKING", accumulated_text: "partial…" }))
+      .mockResolvedValueOnce(taskFixture({ state: "TASK_STATE_COMPLETED", accumulated_text: "final answer" }));
+    mount({ slug: "ava", name: "ava", agent: AVA, onClose: () => {} });
+    await flush();
+
+    const input = container.querySelector<HTMLInputElement>(".flr__diag-taskinput")!;
+    const inspectBtn = () => container.querySelector<HTMLButtonElement>(".flr__diag-inspect")!;
+    setValue(input, "t-1");
+    await flush();
+    act(() => inspectBtn().click());
+    await flush();
+    await flush();
+
+    expect(text()).toContain("TASK_STATE_WORKING");
+    expect(text()).toContain("partial…");
+
+    // Same id, click Inspect again → a fresh fetch, not the cached first snapshot.
+    act(() => inspectBtn().click());
+    await flush();
+    await flush();
+
+    expect(inspect).toHaveBeenCalledTimes(2);
+    expect(inspect).toHaveBeenNthCalledWith(2, "ava", "t-1");
+    expect(text()).toContain("TASK_STATE_COMPLETED");
+    expect(text()).toContain("final answer");
+    expect(text()).not.toContain("partial…");
+  });
+
   it("surfaces a missing task id (404) as the missing-task state", async () => {
     vi.spyOn(api, "memberDiagnosticsLogs").mockResolvedValue(LOGS_OK);
     vi.spyOn(api, "memberDiagnosticsTask").mockRejectedValue(new ApiError(404, "no such task on this member"));

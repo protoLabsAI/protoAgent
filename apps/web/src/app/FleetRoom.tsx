@@ -536,7 +536,13 @@ export function MemberDiagnostics({
 
   const inspect = () => {
     const id = taskDraft.trim();
-    if (id) setTaskId(id);
+    if (!id) return;
+    // Re-inspecting the SAME id would leave the query key unchanged, so setTaskId is a no-op and
+    // (with staleTime:Infinity) no refetch fires — the first snapshot stays pinned even after the
+    // task's state/output has moved on. Inspect IS the task pane's Refresh: force a refetch on an
+    // unchanged id, mirroring the logs Refresh button. A new id changes the key and fetches.
+    if (id === taskId) task.refetch();
+    else setTaskId(id);
   };
   const onTaskKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
