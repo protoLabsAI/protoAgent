@@ -52,9 +52,13 @@ async function mountRegistry(): Promise<PaletteRegistry> {
   // moment: `registry` is assigned during RENDER, while everything the adapter contributes
   // is registered in an effect afterwards. Waiting only for the object hands back a registry
   // that is briefly empty, so a case that reads it synchronously passes or fails on how long
-  // the commit took — green in isolation, red under a loaded parallel run. `fleet-room` is
-  // registered unconditionally, so it marks the flush without presupposing any provider (the
-  // case below asserts there are NONE at this point).
+  // the commit took — green in isolation, red under a loaded parallel run (and an empty read
+  // reads like "the source returned nothing" rather than like a race).
+  //
+  // Wait on one of the UNCONDITIONAL registrations, never on the PROVIDER: waiting for the
+  // provider would make the "no source ⇒ no provider" arm below unobservable — it would hang
+  // instead of asserting. `fleet-room` is registered unconditionally, so it marks the flush
+  // without presupposing any provider (the case below asserts there are NONE at this point).
   await vi.waitFor(() =>
     expect(registry!.getStaticCommands().map((c) => c.id)).toContain("fleet-room"),
   );
@@ -119,18 +123,22 @@ describe("registerPaletteSource → the DS read-time provider", () => {
   });
 
   it("wires the provider only once a source exists, and withdraws it again", async () => {
+    // The arm that pins the host's CONDITIONAL, not just the registry's boolean. Core ships
+    // no sources — an always-on provider would put the palette's "Searching…" spinner and its
+    // 120ms debounce in front of every keystroke in the default console, and in the desktop
+    // launcher, which can serve no source rows at all. (#3292's chat rows were nearly a
+    // source; they are statics precisely so this stays true.) Delete the `hasPaletteSources()`
+    // check in usePaletteRegistry and this test is what reddens.
     const registry = await mountRegistry();
-    // Core ships no sources: an always-on provider would put the palette's "Searching…"
-    // spinner in front of every keystroke in the default console.
-    //
-    // Asserted on the WHOLE provider list, not just this id. The rule the comment states is
-    // about provider COUNT — the root view raises `loading` when ANY provider declares
-    // `getCommands` (`palette/rootView.tsx` early-returns only on `providers.length === 0`)
-    // — so an id-specific assertion stays green while some other always-on provider
-    // reintroduces the exact spinner this guards against. That is not hypothetical: the live
-    // knowledge provider was added unconditionally and this test did not notice. Nothing
-    // whose capability is unproven may be registered here (this mount's `fetch` hangs, so
-    // `/api/runtime/status` never answers and every capability gate must read as "no").
+    // Asserted on the WHOLE provider list, not just this id. The rule the comment above
+    // states is about provider COUNT — the root view raises `loading` when ANY provider
+    // declares `getCommands` (`palette/rootView.tsx` early-returns only on
+    // `providers.length === 0`) — so an id-specific assertion stays green while some other
+    // always-on provider reintroduces the exact spinner this guards against. That is not
+    // hypothetical: the live knowledge provider was added unconditionally and this test did
+    // not notice. Nothing whose capability is unproven may be registered here (this mount's
+    // `fetch` hangs, so `/api/runtime/status` never answers and every capability gate must
+    // read as "no").
     expect(registry.getProviders().map((p) => p.id)).toEqual([]);
 
     const off = source(() => [{ id: "probe:late", label: "Late", run: () => {} }]);

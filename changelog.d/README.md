@@ -28,6 +28,12 @@ The file's contents are the markdown bullet(s) exactly as they should appear:
 Write it the way you'd want to read it in release notes six months from now: what broke,
 why it mattered, what changed. Same bar as before — only the destination moved.
 
+**Put the `(#N)` inside the bold lead-in**, as above — not at the end of the paragraph. The
+marketing `/changelog` bullet is derived from the `**…**` lead ALONE (`changelog.py scaffold`
+→ `_titles`), so a trailing ref is silently dropped and that release note ends up the one
+entry with nothing to look up. The PR gate checks this (#3291); everything after the bold
+lead is yours to shape.
+
 ## What happens at release
 
 `scripts/changelog.py collate` folds every fragment into `## [Unreleased]`, grouped under

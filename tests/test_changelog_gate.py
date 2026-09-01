@@ -104,7 +104,7 @@ def test_a_changelog_edit_alongside_a_fragment_is_fine(tmp_path: Path) -> None:
     repo = _pr_repo(tmp_path)
     (repo / "CHANGELOG.md").write_text("# Changelog\n\n## [Unreleased]\n", encoding="utf-8")
     (repo / "changelog.d").mkdir(exist_ok=True)
-    (repo / "changelog.d" / "42.fixed.md").write_text("- a thing\n", encoding="utf-8")
+    (repo / "changelog.d" / "42.fixed.md").write_text("- **a thing (#42).** why\n", encoding="utf-8")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "fragment + unrelated changelog touch")
 
@@ -260,7 +260,9 @@ def test_passes_when_pr_adds_a_changelog_fragment(tmp_path: Path) -> None:
     """The path #2322 introduces: a new file per PR, so two PRs in flight can't conflict."""
     repo = _pr_repo(tmp_path)
     (repo / "changelog.d").mkdir(exist_ok=True)
-    (repo / "changelog.d" / "2286.fixed.md").write_text("- fleet stop lied\n", encoding="utf-8")
+    (repo / "changelog.d" / "2286.fixed.md").write_text(
+        "- **fleet stop lied (#2286).** it reported a stop it never achieved\n", encoding="utf-8"
+    )
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "add fragment")
 
@@ -309,6 +311,21 @@ def test_fragment_without_a_top_level_bullet_fails_the_gate(tmp_path: Path) -> N
     assert result.returncode == 1
     assert "top-level" in result.stdout or "top-level" in result.stderr
     assert "2555.added.md" in result.stdout + result.stderr  # names the offending file
+
+
+def test_fragment_whose_ref_sits_outside_the_bold_lead_fails_the_gate(tmp_path: Path) -> None:
+    """#3291, the same loss a size smaller: `scaffold` keeps only the **bold** lead, so a
+    ref trailing the paragraph is dropped and the marketing bullet ships naming nothing.
+    The fragment parses, collates and rolls perfectly, so nothing downstream complains —
+    and by then the filename that held the number is gone."""
+    repo = _pr_repo(tmp_path)
+    _add_fragment(repo, "3291.added.md", "- **Every Settings section is a deep-link.** Why. (#3291)\n")
+
+    result = _run_gate(repo)
+
+    assert result.returncode == 1
+    out = result.stdout + result.stderr
+    assert "3291.added.md" in out and "#N" in out
 
 
 def test_well_formed_fragment_still_passes(tmp_path: Path) -> None:

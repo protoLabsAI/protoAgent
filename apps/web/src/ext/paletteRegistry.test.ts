@@ -241,6 +241,11 @@ describe("palette-command registry (ADR 0061)", () => {
   });
 
   it("reports whether any source is registered, so the host wires the provider only then", () => {
+    // The registry-level fact, and the reason the host asks before wiring the DS provider:
+    // it shows a "Searching…" spinner (and debounces 120ms) whenever ANY provider declares
+    // `getCommands`. (The host's own conditional is pinned separately, in
+    // paletteSourceProvider.test.ts — this boolean being right is not the same fact as the
+    // effect acting on it.)
     expect(hasPaletteSources()).toBe(false); // core registers none
     const off = source(() => []);
     expect(hasPaletteSources()).toBe(true); // …even though the source yields no rows
@@ -312,13 +317,21 @@ describe("palette-command registry (ADR 0061)", () => {
       // Kept LAST and dynamic: the import registers into this module's global state, so every
       // test above sees the registry without core's rows in it. The generous timeout is for
       // the transform, not the assertion — the adapter pulls in the DS palette, the UI store,
-      // react-query, the flags query and the keybinding store, and under a full-suite run
-      // that cold import blows past vitest's 5s default.
+      // react-query, the flags query, the keybinding store and (since #3292) the chat rows'
+      // chat-store/seam modules, and under a full-suite run that cold import blows past
+      // vitest's 5s default. It has measured ~30s on a loaded machine, so the cap is well
+      // clear of it: this test failing on time says the import graph grew, not that the
+      // dogfooding broke.
       await import("../app/usePaletteRegistry");
       const ids = registeredPaletteCommands().map((c) => c.id);
       expect(ids).toContain("settings");
       expect(ids).toContain("plug:market");
+      // …and importing the adapter still registers NO source. #3292's chat rows go through
+      // the static path (the DS keeps a provider's previous results listed and runnable for
+      // the 120ms it debounces the new query — not a thing to do with rows that RUN), so the
+      // default console never pays the provider's spinner.
+      expect(hasPaletteSources()).toBe(false);
     },
-    30_000,
+    90_000,
   );
 });

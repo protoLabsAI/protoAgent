@@ -261,6 +261,21 @@ function removePluginSchemaGroup(id) {
   }
 }
 
+/** Whole-TOKEN matching, mirroring the real store's FTS index (`knowledge/store.py` quotes
+ *  each token as a phrase) rather than a substring scan — `rag` must not match "grade", or a
+ *  spec searching for a Settings section would pull a hiking note in behind it. Every token
+ *  must hit (AND), and with `prefix=1` the LAST token matches a word PREFIX, which is the
+ *  type-ahead widening the palette asks for and the surface deliberately does not. */
+function matchesKnowledge(chunk, q, prefix) {
+  const hay = `${chunk.heading || ""} ${chunk.content || ""} ${chunk.source || ""}`.toLowerCase();
+  const tokens = q.toLowerCase().split(/\s+/).filter(Boolean);
+  return tokens.every((tok, i) => {
+    const esc = tok.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const last = i === tokens.length - 1;
+    return new RegExp(`\\b${esc}${prefix && last ? "" : "\\b"}`).test(hay);
+  });
+}
+
 // `params` = the request URL's searchParams (empty by default) — the folder picker
 // route reads ?path=/?files= from it to serve a NAVIGABLE tree.
 function handleApiGet(pathname, fleet = FLEET, params = new URLSearchParams(), mcp = RUNTIME_STATUS.mcp) {
@@ -506,14 +521,25 @@ function handleApiGet(pathname, fleet = FLEET, params = new URLSearchParams(), m
       return { enabled: true, insights: TELEMETRY_INSIGHTS };
     case "/api/playbooks":
       return { enabled: true, playbooks };
-    case "/api/knowledge/search":
+    case "/api/knowledge/search": {
+      // An empty `q` is a LISTING (what the Knowledge surface opens on); a non-empty one is
+      // a SEARCH, and this mock has to actually perform it. Returning the whole store for
+      // every query was survivable while only the surface called this route and only ever
+      // with `q=""` — but the ⌘K provider (#3293) queries it on every keystroke in every
+      // spec, so an unfiltered answer puts knowledge rows under queries like `shortcuts`
+      // and `zzqqxx-nothing-matches-this`, stealing Enter from the row the spec meant to
+      // run and turning "No matches" into a list. Two specs caught exactly that.
+      const q = (params.get("q") || "").trim();
+      const prefix = params.get("prefix") === "1";
+      const results = q ? knowledgeChunks.filter((c) => matchesKnowledge(c, q, prefix)) : knowledgeChunks;
       return {
-        enabled: true, query: "", results: knowledgeChunks,
+        enabled: true, query: q, results,
         stats: {
-          total: knowledgeChunks.length,
-          commons: knowledgeChunks.filter((c) => c.tier === "commons").length,
+          total: results.length,
+          commons: results.filter((c) => c.tier === "commons").length,
         },
       };
+    }
     case "/api/flags":
       // Developer flags (ADR 0068). channel "dev" so the Developer panel is visible in e2e.
       return {

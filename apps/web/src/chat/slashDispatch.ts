@@ -14,14 +14,16 @@
 // the operator would be looking at — whether the chat SURFACE holding it is itself on
 // screen is a separate question, and a separate field (see "visibility semantics").
 //
-// WHAT `null` MEANS — not "the operator navigated away". The built-in chat surface is
-// mounted for the app's LIFETIME and `active` only toggles visibility (ChatSlot, #613), so
-// in a normal console window a slot stays registered while the operator is on Settings or
-// a plugin rail. That is deliberate: it is what lets ⌘K dispatch a chat command from any
-// surface — but it is ALSO why the target reports `surfaceActive` (see below), because a
-// registered slot is not the same as a slot the operator can see.
-// `slashDispatchTarget()` returns null in the two cases where there is genuinely
-// nothing to dispatch INTO:
+// WHAT `null` MEANS — and, more importantly, WHAT IT DOES NOT. Switching rail surfaces does
+// not clear it: the built-in chat surface keeps its mount while another surface swaps in on
+// the same dock and `active` only toggles visibility (ChatSlot, #613), so a slot stays
+// registered while the operator is on Settings or a plugin rail. That is deliberate — it is
+// what lets ⌘⇧K dispatch a chat command from any surface — and it is why the target reports
+// `surfaceActive` (see below), because a registered slot is not the same as a slot the
+// operator can see.
+//
+// `slashDispatchTarget()` returns null in THREE cases, and they are not the same kind of
+// fact — the third is the one that has already caused a bug:
 //   1. the frameless desktop LAUNCHER window (ADR 0057) — a separate webview that boots
 //      straight into the palette and mounts no ChatSurface at all. Its nav commands already
 //      forward a serializable NavIntent to the main window; a client slash command cannot
@@ -29,6 +31,19 @@
 //   2. a fork surface (`registerSurface({id:"chat"})`) or a plugin iframe (`slot:"chat"`)
 //      holding the chat slot — ChatSlot resolves those BEFORE the built-in surface, so the
 //      built-in one never renders and nothing registers here.
+//   3. a COLLAPSED DOCK. The DS AppShell renders a dock's content only while the dock is
+//      open (`{showLeft && <main>{leftContent}</main>}`), and chat lives on a dock — so the
+//      one-click "Hide left panel" gesture UNMOUNTS the slot and this goes null, while chat
+//      is still entirely this window's chat.
+//
+// So null is "there is nothing to dispatch into RIGHT NOW", never "this window has no chat".
+// A caller deciding whether to OFFER a chat action must not read it as the latter: that is
+// exactly how the command palette lost its whole Chat group the moment the panel was hidden
+// (#3292). Ask the surface/plugin registries instead — `chatSlotProvider` (app/ChatSlot)
+// answers "who provides the chat slot in this window", which a collapse does not change —
+// and keep this seam for the two questions it really answers: where a dispatch would land,
+// and whether it would be seen. A caller that RUNS one can recover from case 3 on its own:
+// raise chat (which un-collapses its dock) and wait for the remount to re-register.
 //
 // SESSION SEMANTICS — the reason this seam exposes more than a run() function. With
 // `sessionId: null` there is a mounted slot but no thread, and dispatching from outside is
@@ -65,6 +80,19 @@
 // raise is fine — the note lands in the session's message list, which renders when the
 // surface does; only the pre-raise render still reports `surfaceActive: false`.
 
+// WHY THE SEAM ALSO CARRIES A DRAFT SETTER — the user-facing SKILL case (#3292). A server
+// `user_facing` skill (`/api/chat/commands`, kind "skill") is NOT a thing an outside
+// surface can run: it is a message REWRITE the server applies on the NEXT SEND
+// (server/chat_commands.py `_skill_directive` injects the procedure and falls through to a
+// normal lead-agent turn). There is no "run this skill" call anywhere, and inventing one
+// from the palette would mean sending a message on the operator's behalf.
+// So the honest action for a skill is the composer's own: put `/<skill> ` in the draft and
+// hand the operator the caret. That needs the SAME live React closure `run` needs — the
+// draft is `useState` inside ChatSessionSlot (seeded from sessionStorage on mount), so
+// writing sessionStorage from outside would be swallowed by the mounted slot and a store
+// write has nowhere to go. Hence `prefillDraft` rides the same registration rather than a
+// second parallel seam.
+
 /** The visible chat slot's dispatcher. Registered per render (see ChatSurface), so treat
  *  the object identity as per-render — only the guarded unregister compares it. */
 export type SlashDispatchTarget = {
@@ -79,6 +107,16 @@ export type SlashDispatchTarget = {
    *  command draws (a system note, the /effort picker) would actually be on screen. False
    *  while the operator is on another rail; the slot stays registered anyway (#613). */
   surfaceActive: boolean;
+  /** Put `text` at the FRONT of this slot's composer draft and focus the textarea — the
+   *  "hand the operator a half-written message" verb, for a token that CANNOT be run from
+   *  outside (a user-facing skill) and for anything else that wants the send left to the
+   *  operator. Prefix rather than replace: a `/token` has to lead the message anyway, and a
+   *  draft the operator already typed must survive being handed one (idempotent, so the same
+   *  prefill twice doesn't stutter).
+   *  Required, not optional: a host that owns the chat slot owns a composer by definition,
+   *  and an optional setter would invite a caller to skip the check and silently drop the
+   *  prefill — exactly the failure mode this seam exists to prevent. */
+  prefillDraft: (text: string) => void;
 };
 
 let target: SlashDispatchTarget | null = null;
@@ -123,4 +161,22 @@ export function runSlashFromOutside(raw: string): boolean {
   const command = raw.trim().replace(/^\/+/, "").trim();
   if (!command) return false;
   return dispatcher.run(command);
+}
+
+/** Put `text` at the front of the visible slot's composer draft and focus it, leaving the
+ *  SEND to the operator (and leaving anything already typed there in place, after it). The
+ *  action for a user-facing skill, which is a server-side message rewrite rather than
+ *  anything a caller can invoke (see the note above `SlashDispatchTarget`).
+ *
+ *  Returns false when no slot is registered — the same real signal `runSlashFromOutside`
+ *  returns, and the caller must treat it the same way (fall back, don't assume it landed).
+ *  Note the two conditions on `slashDispatchTarget()` still apply and this function does
+ *  NOT check them for you: with `sessionId: null` there is no slot state to write into, and
+ *  with `surfaceActive: false` the operator is looking at another rail and would never see
+ *  the draft appear — raise the chat surface first, exactly as for a dispatched command. */
+export function prefillChatDraft(text: string): boolean {
+  const dispatcher = target;
+  if (!dispatcher) return false;
+  dispatcher.prefillDraft(text);
+  return true;
 }

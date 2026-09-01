@@ -46,8 +46,15 @@ test("empty query: a short root list that does NOT dump every surface into it", 
   // all — the list is pure registration order, Agents → Plugins → Commands. A plain
   // `slice(0, cap)` hands it to whoever registered first, and every plugin view installed
   // pushes one more Commands row off the bottom. The per-group quota is what keeps Settings
-  // here, and this is the run where losing it would hurt most.
-  await expect(page.getByRole("option", { name: "Settings", exact: true })).toBeVisible();
+  // here, and this is the run where losing it would hurt most. It is also what absorbed the
+  // 22 generated `Settings: <Section>` rows (#3291) without moving anything above.
+  //
+  // Matched on the LABEL span, not the option's accessible name: the bare Settings row
+  // advertises its `settings.open` chord as a trailing hint, which rides the accessible name
+  // ("Settings ⌘,") and made an `exact: true` role match fail. The label is the assertion
+  // that was meant — and it still has to be exact, or the 22 `Settings: …` rows satisfy it.
+  const labels = await rows.locator(".pl-cmdk-commands__label").allInnerTexts();
+  expect(labels).toContain("Settings");
 });
 
 test("the active row is announced — aria-activedescendant, not just a highlight", async ({ page }) => {
@@ -154,6 +161,12 @@ test("the empty list keeps every group, even once recents have taken most of it"
     "Agents",
     "Plugins",
     "Commands",
+    // Chat + Skills (#3292) — the chat's slash commands and the server's user-facing skills.
+    // They are what the guarantee is FOR: ~80 commands land across the sibling command PRs,
+    // each in its own group, and a per-group ceiling would have let the newest ones push the
+    // oldest off the bottom. Every group here contributes exactly one row.
+    "Chat",
+    "Skills",
   ]);
   // What the guarantee is worth is ONE row per group, not a named row: with four recents the
   // Commands group is down to its first member. `Open…` is that member and it is the row the

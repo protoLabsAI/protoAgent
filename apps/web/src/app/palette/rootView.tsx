@@ -306,12 +306,24 @@ function RootBody({ ctx, config }: { ctx: PaletteContext; config: RootViewConfig
   // false means ⌘⇧K still paints recents on the first commit — source rows merge in when they
   // settle — instead of showing "Searching…" for 120ms. Typed queries keep the DS's debounce
   // and spinner exactly.
-  const [dynamic, setDynamic] = useState<Command[]>([]);
+  //
+  // Results are STAMPED WITH THE QUERY THEY ANSWER, and `filtered` drops them when that stamp
+  // is stale. Without it a provider's rows survive a query change untouched — the loop only
+  // overwrites `dynamic` when a read RESOLVES, and its cleanup aborts the request without
+  // clearing what is on screen — so for the whole debounce the palette lists, highlights and
+  // (on Enter) RUNS rows fetched for the query BEFORE. Selection is by id here, so a stale row
+  // can even keep the highlight across the change. That is invisible with a read-only source
+  // and unacceptable with an action one, and no fork can opt out of it from the seam side.
+  // Clearing on `q` instead would be wrong the other way: it would blank a settled list on
+  // every keystroke and flash the empty state between reads. (Upstream: the DS's own
+  // `CommandsBody` has the same bug — protoContent#504 — which is why core's chat rows take
+  // the static path rather than this one.)
+  const [dynamic, setDynamic] = useState<{ q: string; cmds: Command[] }>({ q: "", cmds: [] });
   const [loading, setLoading] = useState(false);
   useEffect(() => {
     const providers = registry.getProviders().filter((p) => p.getCommands);
     if (providers.length === 0) {
-      setDynamic([]);
+      setDynamic({ q, cmds: [] });
       setLoading(false);
       return;
     }
@@ -343,7 +355,7 @@ function RootBody({ ctx, config }: { ctx: PaletteContext; config: RootViewConfig
           ? r.value.map((c) => (providers[i].source ? { source: providers[i].source, ...c } : c))
           : [],
       );
-      setDynamic(cmds);
+      setDynamic({ q, cmds });
       setLoading(false);
     };
     if (!typed) {
@@ -396,10 +408,15 @@ function RootBody({ ctx, config }: { ctx: PaletteContext; config: RootViewConfig
     // can be resolved out of the recents `pool`. It is OUT of `local` because `local` is
     // what `rankCommands` CLIENT-FILTERS, and a provider's rows must never be re-filtered
     // (they take the `orderCommands` path below instead — see `orderCommands`).
-    const root = dedupe([...baseCommands, ...dynamic]);
+    // Only the rows the CURRENT query was answered with. A read in flight leaves the previous
+    // query's stamp behind, and those rows are not this query's answer — listing them would
+    // put a row on screen that Enter runs and the input does not describe (see the stamp note
+    // on `dynamic`). The spinner is what says a read is still coming.
+    const live = dynamic.q === q ? dynamic.cmds : [];
+    const root = dedupe([...baseCommands, ...live]);
     const local = dedupe([...baseCommands, ...searchOnly]);
     if (!typed) {
-      return emptyQueryList(root, dedupe([...local, ...dynamic]), recency, {
+      return emptyQueryList(root, dedupe([...local, ...live]), recency, {
         emptyCap: config.emptyCap,
         recentCap: config.recentCap,
         groupCap: config.groupCap,
@@ -418,7 +435,7 @@ function RootBody({ ctx, config }: { ctx: PaletteContext; config: RootViewConfig
     // hits — the exact rows a source exists to contribute. See `orderCommands`.
     return dedupe([
       ...rankCommands(local, q, { score }),
-      ...orderCommands(dynamic, q, { score }),
+      ...orderCommands(live, q, { score }),
     ]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseCommands, dynamic, q, typed, recency, regVersion, searchOnlySig]);

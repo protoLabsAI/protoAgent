@@ -19,7 +19,9 @@
 // registered as DS `pluginView()`s — their command morphs the palette body into the plugin's
 // own iframe (themed/authed via the handshake) instead of navigating to its rail.
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { createElement, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { Download, PanelsTopLeft, Settings2, Store, Users } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { commandsView, createPaletteRegistry, pluginView } from "@protolabsai/ui/command-palette";
 import type {
   Command,
@@ -43,11 +45,14 @@ import { formatCombo } from "../../keybindings/combo";
 import { effectiveCombo, useKeybindingOverrides } from "../../keybindings/overrides";
 import { useFlagPredicate } from "../../flags/flags";
 import { isHostConsole } from "../../lib/api";
-import { fleetQuery, runtimeStatusQuery } from "../../lib/queries";
+import { chatCommandsQuery, fleetQuery, runtimeStatusQuery } from "../../lib/queries";
+import { chatStore } from "../../chat/chat-store";
+import { chatPaletteSignature, chatSlashPaletteRows } from "../chatSlashPalette";
 import { markAgentOpened } from "../fleetPalette";
 import { fleetRoomView } from "../FleetRoom";
 import { fleetSettingsDisabledReason } from "../fleetSettingsGate";
 import { memberDmView } from "../PaletteChat";
+import { settingsPaletteCommands } from "../settingsPalette";
 import { navigate } from "./nav";
 import type { NavIntent } from "./nav";
 import { matchCommand } from "./rank";
@@ -95,12 +100,25 @@ export type ViewsFacade = ReturnType<typeof buildViews>;
 // ids are the uiStore union types (source of truth), so they can't drift into a 404.
 // (Inbox moved to a utility-bar widget; Schedule is a top-level rail surface that
 // is searchable as a "go to" surface — so no Activity deep-links here.)
-const _link = (id: string, label: string, keywords: string[], intent: NavIntent) =>
+
+// The row is a flex line — `[icon] label … hint` with NO icon gutter — so an icon-less row's
+// label sits flush left while an icon'd row's is indented past the glyph. That cost nothing
+// while every core row went without one; the generated Settings rows below carry the Settings
+// rail's glyphs, which would otherwise leave a visible step mid-group. So the hand-written
+// rows take the glyph their DESTINATION already wears: the utility-bar Settings pill
+// (Settings2), the Plugins tabs (Store), the Install-from-URL button (Download), and the two
+// morph commands. `createElement` because this module is a .ts, not a .tsx.
+const glyph = (Icon: LucideIcon) => createElement(Icon, { size: 18 });
+
+/** One core deep-link row: registered through the public seam, its `run` a NavIntent. The
+ *  row is spelled as FIELDS rather than positionals — it has grown an icon and now a
+ *  keybinding, and five positional arguments of which two are a ReactNode and a string[]
+ *  is a miscall a reader can't see and the types won't catch. `group` is fixed here: every
+ *  core deep-link lands in Commands, beside the generated Settings rows. */
+const _link = (cmd: Omit<PaletteCommand, "run" | "group">, intent: NavIntent) =>
   registerPaletteCommand({
-    id,
-    label,
+    ...cmd,
     group: "Commands",
-    keywords,
     run: (ctx) => {
       navigate(intent);
       ctx.close();
@@ -111,23 +129,65 @@ const _link = (id: string, label: string, keywords: string[], intent: NavIntent)
 // only row here that is a destination in its own right rather than a shortcut into one, and
 // on a first run — no recency, nothing to promote it — whichever rows are registered last
 // are the rows an operator never sees. It used to sit third, behind both plugin deep-links.
-// Settings is the consolidated dialog now (2026-06) — opened from the utility-bar pill,
-// the drawer, or these palette commands. A bare "Settings" command + Box-section deep-links.
-_link("settings", "Settings", ["settings", "config", "preferences", "options"], { kind: "global" });
-_link("plug:market", "Plugins: Discover", ["plugins", "discover", "market", "directory", "browse"], {
-  kind: "plugins",
-  tab: "market",
-});
+//
+// Settings is the consolidated dialog now (2026-06) — opened from the utility-bar pill, the
+// drawer, or these palette commands. This one opens it wherever it was left; the generated
+// per-section rows below open a named pane, and they are registered LAST on purpose: 22 rows
+// must not crowd the empty-query root out from under the three that lead it. They cost the
+// root nothing (the per-group quota caps it) and everything they add lands on SEARCH.
+//
+// The bare row ADVERTISES the `settings.open` binding (ADR 0063) instead of leaving its hint
+// empty or hard-coding "⌘,": the chord is rebindable in Settings ▸ Keyboard, and the seam
+// renders `formatCombo(effectiveCombo(binding))`, so a literal would start lying the moment
+// an operator rebound it. It also stops this row being the one blank right edge in a group
+// where the generated rows all carry one — and teaches the shortcut at the moment someone is
+// reaching for Settings the slow way. In the desktop Launcher window the hint is simply
+// absent: only App.tsx pulls the keybindings barrel, so nothing has registered
+// `settings.open` there and `toDsCommand` finds no binding. That degradation is the right one
+// — the chord isn't live in that window either, and importing the binding host for a cosmetic
+// hint is most of what keeping the Launcher lean bought.
+_link(
+  {
+    id: "settings",
+    label: "Settings",
+    icon: glyph(Settings2),
+    keybinding: "settings.open",
+    keywords: ["settings", "config", "preferences", "options"],
+  },
+  { kind: "global" },
+);
+_link(
+  {
+    id: "plug:market",
+    label: "Plugins: Discover",
+    icon: glyph(Store),
+    keywords: ["plugins", "discover", "market", "directory", "browse"],
+  },
+  { kind: "plugins", tab: "market" },
+);
 // Install-from-URL is the advanced action under Installed now (ADR 0059 D4) — land there.
-_link("plug:download", "Plugins: Install from URL", ["plugins", "install", "url", "git"], {
-  kind: "plugins",
-  tab: "local",
-});
-_link("box:fleet", "Settings: Fleet", ["fleet", "agents", "box"], { kind: "global", section: "fleet" });
-_link("box:telemetry", "Settings: Telemetry", ["telemetry", "metrics", "box", "global"], {
-  kind: "global",
-  section: "telemetry",
-});
+_link(
+  {
+    id: "plug:download",
+    label: "Plugins: Install from URL",
+    icon: glyph(Download),
+    keywords: ["plugins", "install", "url", "git"],
+  },
+  { kind: "plugins", tab: "local" },
+);
+// …and one row per Settings SECTION, generated from the section table rather than hand-listed
+// here. Three sections used to be reachable from ⌘K (the bare "Settings" above, plus
+// hand-written `box:fleet` / `box:telemetry` rows these supersede) and the other twenty were
+// not — a list nobody remembered to extend, failing silently when they didn't.
+// `settingsPaletteCommands` derives them from settings/sections.ts, so coverage follows the
+// table. (`settings:telemetry` also picks up the `hostOnly` gate the hand-written row never
+// had, so a member window stops listing a pane it cannot open.)
+//
+// Registered UNCONDITIONALLY, gates and all: each row carries the section's own
+// `flag`/`hostOnly` as DATA, and `visiblePaletteCommands` applies them per render below. That
+// ordering is the point — resolving a flag HERE, at module load, would read the fail-closed
+// answer `/api/flags` hasn't returned yet and hide Secrets/Devices/Publish permanently.
+for (const cmd of settingsPaletteCommands(navigate)) registerPaletteCommand(cmd);
 
 /** Map a registered (core or fork) PaletteCommand onto a DS palette `Command`. The DS row
  *  has no shortcut slot, so a command that ADVERTISES a keybinding (ADR 0061 `keybinding` =
@@ -269,6 +329,21 @@ export function createRankedPaletteRegistry(
   return reg;
 }
 
+/** What only the HOST window can answer about itself.
+ *
+ *  `builtInChat` is "this window's chat slot is the BUILT-IN ChatSurface" — App computes it
+ *  with `chatSlotProvider` (the same resolution `ChatSlot` renders with); the launcher leaves
+ *  it false because it mounts no chat at all. It gates the chat's slash-command rows, which
+ *  dispatch through a seam only the built-in surface publishes.
+ *
+ *  Deliberately a fact about the WINDOW, not about what is mounted: the DS AppShell unmounts
+ *  a collapsed dock, so "is a chat slot registered right now?" flips every time the operator
+ *  hides the panel — and gating rows on that emptied the Chat and Skills groups out of ⌘⇧K
+ *  in exactly the state the palette is most useful in. */
+export type PaletteHostOptions = {
+  builtInChat?: boolean;
+};
+
 /** Build the palette registry from the resolved view façade + the inline plugin views.
  *  Stable across renders; nav commands + inline views re-register only when their set
  *  changes (plugins enable/disable) — matching the DS registry's add/withdraw model. */
@@ -276,6 +351,7 @@ export function usePaletteRegistry(
   built: ViewsFacade,
   inlineViews: InlinePluginView[] = [],
   chat?: PaletteChatConfig,
+  opts: PaletteHostOptions = {},
 ): PaletteRegistry {
   const { views, viewFor } = built;
   const inlineIds = useMemo(() => new Set(inlineViews.map((v) => v.id)), [inlineViews]);
@@ -355,6 +431,39 @@ export function usePaletteRegistry(
   // that can never return a row.
   const { data: runtime } = useQuery(runtimeStatusQuery());
   const knowledgeOn = runtime?.knowledge?.enabled === true;
+
+  // ── The chat's own verbs (#3292), and what keeps them live ──────────────────────────
+  // These rows go through the STATIC path (`registerCommands`), not `registerPaletteSource`,
+  // for reasons about the PATH rather than about how live the data is: a provider's rows are
+  // ORDERED but never RANKED against the corpus (`orderCommands` after `rankCommands` in
+  // rootView), so `/clear` under the query "clear" would sit below every surface; declaring
+  // `getCommands` at all costs a 120ms debounce and a spinner in every window that mounts the
+  // palette, the chat-less launcher included; and a provider's results outlive the query they
+  // answered (rootView stamps and drops them now, the DS's own view still doesn't —
+  // protoContent#504). Statics are filtered and ranked against what is on screen,
+  // synchronously.
+  //
+  // The cost of a snapshot is that something has to re-take it, so both live inputs are
+  // subscriptions and both feed the effect below as dependencies:
+  //   • the chat store, through `chatPaletteSignature()` — a STRING projection of everything
+  //     a row renders from (the current session, whether it is the reusable blank, the two
+  //     per-tab modes), so the store's per-streamed-token notifications don't re-register the
+  //     whole group every frame;
+  //   • `/api/chat/commands`, the same shared query the composer's `/` menu uses — so
+  //     enabling a plugin or authoring a skill adds its row with no restart. Off in a window
+  //     with no built-in chat (the launcher), which can't serve these rows anyway.
+  const chatSig = useSyncExternalStore(
+    chatStore.subscribe,
+    chatPaletteSignature,
+    chatPaletteSignature,
+  );
+  const builtInChat = !!opts.builtInChat;
+  const { data: chatCommands } = useQuery({ ...chatCommandsQuery(), enabled: builtInChat });
+  const skills = useMemo(
+    () => (chatCommands?.commands ?? []).filter((c) => c.kind === "skill"),
+    [chatCommands],
+  );
+  const skillSig = skills.map((c) => `${c.name} ${c.description}`).join("|");
 
   // Re-register the fleet section only when the roster's identity/status/name actually changes
   // (React Query's structural sharing keeps `agents` stable when the 3s poll returns equal data).
@@ -441,6 +550,7 @@ export function usePaletteRegistry(
       {
         id: "fleet-room",
         label: "Fleet Room",
+        icon: glyph(Users),
         hint: fleetGate ? "host instance only" : "members · DM · broadcast",
         disabled: !!fleetGate,
         group: "Agents",
@@ -493,6 +603,7 @@ export function usePaletteRegistry(
       id: "open",
       label: "Open…",
       hint: "surface",
+      icon: glyph(PanelsTopLeft),
       group: "Commands",
       keywords: ["open", "go to", "surface", "view", "navigate", "switch", "panel"],
       run: (c) => c.enter("open"),
@@ -506,6 +617,17 @@ export function usePaletteRegistry(
       // take the read-time provider path below instead.
       ...visiblePaletteCommands(flagOn, isHostConsole(), "static").map(toDsCommand),
     ]);
+    // The chat's own verbs — the client slash commands and the server's user-facing skills
+    // (#3292). Registered LAST so the Chat and Skills groups sit after the fixed ones in the
+    // untyped list, and registered STATICALLY so a row is client-filtered against the query
+    // on screen (see the note where `chatSig` is read). Flag-gated here rather than in the
+    // row builder, exactly as the seam's statics are: a row gated on a flag still in flight
+    // (`/publish`) appears when `/api/flags` lands instead of being hidden for the life of
+    // the window.
+    const chatRows = chatSlashPaletteRows(navigate, { reachable: builtInChat, skills });
+    const offChatRows = chatRows.length
+      ? registry.registerCommands(chatRows.filter((c) => !c.flag || flagOn(c.flag)).map(toDsCommand))
+      : undefined;
     // Dynamic sources, served per palette read. Wired only when a fork registered one: the
     // root view shows its "Searching…" spinner whenever ANY provider declares
     // `getCommands`, and core ships zero sources — so an unconditional provider would put a
@@ -559,11 +681,25 @@ export function usePaletteRegistry(
       offFleetRoom();
       offPlugins?.();
       offCommands();
+      offChatRows?.();
       offSources?.();
       offKnowledge?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navSig, inlineSig, fleetSig, chat, registry, seamVersion, flagOn, kbOverrides, knowledgeOn]);
+  }, [
+    navSig,
+    inlineSig,
+    fleetSig,
+    chat,
+    registry,
+    seamVersion,
+    flagOn,
+    kbOverrides,
+    builtInChat,
+    chatSig,
+    skillSig,
+    knowledgeOn,
+  ]);
 
   return registry;
 }

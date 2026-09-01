@@ -34,6 +34,23 @@ Settings ▸ Keyboard, not with the in-app chords above.
   on its own port, where it points you at the host instead.
   *(Per-member root commands — the old **Toggle Fleet Agent** picker and per-member
   quick-chat — folded into this room; they are one hop in now, not gone.)*
+- **Chat** — the chat's own slash commands, the ones that used to exist only inside the
+  composer's `/` menu: `/clear`, `/export`, `/model`, `/compact`, `/incognito`, `/perf` and
+  the rest, each listed as `/token · what it does` and searchable by the words you'd
+  actually reach for ("wipe" finds `/clear`, "llm" finds `/model`). A command that acts on
+  the chat in front of you stays listed with no chat open but is visibly disabled and says
+  why; one that just needs somewhere to work opens or focuses a chat first. They stay listed
+  when the chat panel is hidden, too — running one brings the panel back first.
+  The two per-tab **modes**, `/bypass` and `/incognito`, are the exception to "picking a row
+  runs it": their row shows the current setting (`… — now off`) and then hands you the
+  composer with `/bypass ` typed, so you say which way and press Enter yourself. Nothing in
+  the palette can turn off tool-approval prompts on its own.
+- **Skills** — every *user-facing* skill you or a plugin has installed. A skill isn't
+  something the console runs: the server folds its procedure into your **next message**, so
+  picking one takes you to the chat with `/‹skill› ` typed and leaves the send to you (the
+  row says so). The token lands in *front* of anything already in the composer rather than
+  replacing it, so you can reach for a skill mid-message. `/btw` behaves the same way, since
+  it needs the question you were going to ask.
 - **Plugin views** — each enabled plugin's views are their own group. A view can also opt
   to render *inside* the palette by declaring `palette: "inline"` on it (so a lightweight
   tool can live behind a keystroke instead of taking a rail slot).
@@ -42,8 +59,27 @@ Settings ▸ Keyboard, not with the in-app chords above.
   stays short. They are also **searchable from the root**: type a surface's name and it is
   there, without the hop. (It used not to be — `memory` and `knowledge` answered *No
   matches*, because those surfaces existed only inside **Open…**.)
-- **Deep links** — the jumps worth their own command: **Settings**, **Settings: Fleet**,
-  **Settings: Telemetry**, **Plugins: Discover**, **Plugins: Install from URL**.
+- **Deep links** — **Settings** (opens the dialog wherever you left it, and shows its **⌘,**
+  chord on the row — read live from the binding, so it follows a rebind), **Plugins:
+  Discover**, **Plugins: Install from URL**, and a **Settings: `<Section>`** row for *every*
+  section of the Settings dialog — Theme, Keyboard, Model, Tools, MCP, Skills, Subagents,
+  Delegates, Snapshot and the rest. Those rows are GENERATED from the section table
+  (`apps/web/src/settings/sections.ts`) by `apps/web/src/app/settingsPalette.ts`, so a new
+  section is deep-linkable the moment it is declared rather than when somebody remembers to
+  add a command. Each row wears its Settings-rail glyph and a trailing hint naming its nav
+  heading (Agent · Capabilities · Box · This console) — the hint is searchable too, so typing
+  `capabilities` lists exactly those five.
+  Search by what you'd *say*, not by the label: `shortcuts` finds Keyboard, `dark mode`
+  Theme, `api key` Model, `rag` Knowledge, `a2a` Delegates, `backup` Snapshot, and `port` or
+  `network` the box-runtime knobs that live behind a chip on Fleet. (Keywords are synonyms
+  only — the matcher already searches each row's label, hint and group.)
+  The per-section rows are registered after the three above, so the **root** list is
+  unchanged — they earn their place on search, and through recency once you've used one.
+  A section behind a developer flag (Secrets, Devices, Publish) or restricted to the host
+  console (Overview, Telemetry) carries that gate on the row and is resolved *per render*,
+  never at registration. The one section with no row is **Developer**: its visibility is a
+  channel decision (`developerPanelVisible`), which is neither of the two axes the seam can
+  gate on — see the comment in `settingsPalette.ts`.
 - **Knowledge** — type two or more characters and the palette searches the agent's
   knowledge store live ([ADR 0021](/adr/0021-agent-memory-architecture)) — findings,
   notes, the daily log, harvested sessions — and lists the top matches among your results,

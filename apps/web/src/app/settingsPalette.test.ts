@@ -1,0 +1,505 @@
+// The generated Settings deep-links (audit finding 06). Four claims are load-bearing, and
+// each is a failure this console can produce SILENTLY — which is why each gets a test rather
+// than a code comment:
+//
+//   1. COVERAGE follows the section table. The bug being fixed is a hand-written list of
+//      three rows that nobody extended when twenty more sections landed. If these tests only
+//      checked "some rows exist" they would have passed before the fix too, so they pin the
+//      row set against `settings/sections.ts` itself.
+//   2. GATES ride the row; they are not applied when the row is built. `useFlagPredicate`
+//      fails CLOSED while /api/flags is in flight, so a `flag` resolved at registration hides
+//      its row forever — on every channel, in a way no flags stub reproduces.
+//   3. The WIRING hands both of those to the seam. A perfect row factory nothing registers,
+//      or one registered through a filter, looks identical from the factory's own tests — so
+//      the last block reads the registry back after the module-load registration.
+//   4. The module stays a LEAF. Reaching for `lib/lucideIcon` to draw the same glyphs would
+//      pull the 737.8 kB lucide barrel — its own chunk, which nothing else eagerly loads —
+//      onto ⌘K and onto the desktop Launcher window. Importing `settings/SettingsSurface`
+//      for the same ids costs no bytes TODAY (see the last block: one entry chunk), but it
+//      is what would make the leaf pointless and the split unrecoverable. CI has no
+//      bundle-size gate, so only a source guard catches either.
+import ts from "typescript";
+import { Suspense, type ReactElement } from "react";
+import { describe, expect, it, vi } from "vitest";
+
+import {
+  SETTINGS_PALETTE_EXCLUDED,
+  settingsPaletteCommands,
+  type SettingsNavigate,
+} from "./settingsPalette";
+import { ALL_SECTIONS, settingsSections } from "../settings/sections";
+import type { SectionMeta } from "../settings/sections";
+import { sectionIcon } from "../settings/sectionIcons";
+import { registeredPaletteCommands, visiblePaletteCommands } from "../ext/paletteRegistry";
+import { registeredKeybindings } from "../ext/keybindingRegistry";
+import paletteSrc from "./settingsPalette.ts?raw";
+// For the entry-chunk assertion at the bottom: the two files that decide whether the desktop
+// Launcher window downloads App's tree. Read as SOURCE — importing main.tsx would boot React.
+import mainSrc from "../main.tsx?raw";
+import viteConfigSrc from "../../vite.config.ts?raw";
+// Imported for their MODULE-LOAD side effects: `app/palette/registry` (reached through the
+// `usePaletteRegistry` barrel it kept) is where core registers
+// these rows through the public seam, and coreKeybindings is where `settings.open` is
+// declared. The wiring block below reads both registries back.
+import "./usePaletteRegistry";
+import "../keybindings/coreKeybindings";
+
+const nav: SettingsNavigate = () => {};
+const rows = () => settingsPaletteCommands(nav);
+const byId = (id: string) => rows().find((c) => c.id === id);
+/** The section table read through the widened view, so the optional gate keys are readable. */
+const meta = (id: string): SectionMeta => ALL_SECTIONS.find((s) => s.id === id)! as SectionMeta;
+/** …and the same row UNwidened, where the literal `icon` (not `string`) is what's wanted. */
+const iconOf = (id: string) => ALL_SECTIONS.find((s) => s.id === id)!.icon;
+
+describe("coverage is derived from the section table, not hand-listed", () => {
+  it("produces exactly one row per declared section, minus the documented exclusions", () => {
+    // The whole point of the change: not "3 of 23" and not "some". The expected set is
+    // COMPUTED from the table, so adding a section to sections.ts and forgetting this module
+    // fails here rather than shipping an unreachable pane.
+    const expected = ALL_SECTIONS.map((s) => s.id).filter(
+      (id) => !SETTINGS_PALETTE_EXCLUDED.includes(id),
+    );
+    expect(rows().map((c) => c.id)).toEqual(expected.map((id) => `settings:${id}`));
+    // …and that really is nearly everything: 22 of the 23 declared sections.
+    expect(rows()).toHaveLength(ALL_SECTIONS.length - SETTINGS_PALETTE_EXCLUDED.length);
+    expect(SETTINGS_PALETTE_EXCLUDED).toEqual(["developer"]);
+  });
+
+  it("covers the sections the audit named as palette-invisible", () => {
+    // Before this module ⌘K deep-linked three sections: Settings, Settings: Fleet, Settings:
+    // Telemetry. Spelled out rather than derived, because a derivation from the same table
+    // the implementation reads could not fail — this is the human-legible claim.
+    for (const id of [
+      "theme",
+      "keybindings",
+      "model",
+      "tools",
+      "mcp",
+      "skills",
+      "subagents",
+      "delegates",
+      "secrets",
+      "snapshot",
+    ]) {
+      expect(byId(`settings:${id}`), `no palette row for Settings ▸ ${id}`).toBeDefined();
+    }
+  });
+
+  it("keeps the rows in the section table's own order, so the palette reads like the rail", () => {
+    // settingsSections() flattens the groups in nav order; the rows must not re-sort.
+    const navOrder = settingsSections({ flagOn: () => true, onHost: true, developerVisible: true })
+      .map((s) => s.id)
+      .filter((id) => !SETTINGS_PALETTE_EXCLUDED.includes(id));
+    expect(rows().map((c) => c.id)).toEqual(navOrder.map((id) => `settings:${id}`));
+  });
+
+  it("every id is unique and namespaced, so a row can't silently evict another command", () => {
+    // registerPaletteCommand is last-wins by id: a collision with an existing core row
+    // ("settings", "plug:market", "fleet-room", "open") would REPLACE it, not warn.
+    const ids = rows().map((c) => c.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const id of ids) expect(id.startsWith("settings:")).toBe(true);
+    // The bare "Settings" command survives: `settings` is not `settings:<id>`.
+    expect(ids).not.toContain("settings");
+  });
+});
+
+describe("the row shape is the one the docs and the ranking claim", () => {
+  it('labels read "Settings: <Section>" in the Commands group, hinted with the nav heading', () => {
+    expect(byId("settings:keybindings")).toMatchObject({
+      label: "Settings: Keyboard",
+      group: "Commands",
+      hint: "This console",
+    });
+    expect(byId("settings:fleet")).toMatchObject({ label: "Settings: Fleet", hint: "Box" });
+    expect(byId("settings:tools")).toMatchObject({ label: "Settings: Tools", hint: "Capabilities" });
+    expect(byId("settings:model")).toMatchObject({ label: "Settings: Model", hint: "Agent" });
+    // Uniform, not just for the four spot-checked rows.
+    for (const c of rows()) {
+      expect(c.group).toBe("Commands");
+      expect(c.label).toBe(`Settings: ${meta(c.id.slice("settings:".length)).label}`);
+      expect(["Agent", "Capabilities", "Box", "This console"]).toContain(c.hint);
+    }
+  });
+
+  it("every row carries ITS OWN glyph, at the palette's size, resolved statically", () => {
+    // The obvious assertion — `expect(c.icon).toBeTruthy()` — is VACUOUS here: every path
+    // yields an element, the right name and the wrong name and the lazy fallback alike. So:
+    //   • `type` is the component settings/sectionIcons maps THIS section's name to, which an
+    //     off-by-one in the generator (the neighbour's glyph) fails;
+    //   • the 22 types are all DISTINCT, so that check discriminates rather than being
+    //     satisfied by one shared fallback;
+    //   • and it is the lucide component itself, never a <Suspense> — which is what going
+    //     back to lib/lucideIcon yields, along with the 738 KB barrel the import guard bans.
+    const el = (n: unknown) => n as ReactElement<{ size?: number }>;
+    for (const c of rows()) {
+      const want = el(sectionIcon(iconOf(c.id.slice("settings:".length))));
+      expect(el(c.icon).type, `${c.id} renders the wrong glyph`).toBe(want.type);
+      expect(el(c.icon).type).not.toBe(Suspense);
+      expect(el(c.icon).props.size).toBe(18);
+    }
+    expect(new Set(rows().map((c) => el(c.icon).type)).size).toBe(rows().length);
+  });
+});
+
+// ── The search surface: what an operator TYPES has to land ───────────────────────────
+//
+// The rows can be perfectly derived, gated and wired and still be unusable, because ⌘K is a
+// SEARCH box: coverage is the implementation's claim, findability is the operator's. So these
+// run real queries — the words you say out loud reaching for the pane — over the real rows.
+//
+// The matcher is the DS's `matchCommand` (command-palette.views.tsx), reproduced here for the
+// same reason palette/rank reproduces it: it is module-private. All whitespace-separated
+// terms must appear as SUBSTRINGS of one lowercased haystack of label · hint · group ·
+// keywords. Substring, note — "rag" is inside "sto-rag-e" — so the assertions below say
+// "lands" (contains) except where a query really is unambiguous.
+function matching(query: string): string[] {
+  return rows()
+    .filter((c) => {
+      const hay = [c.label, c.hint, c.group, ...(c.keywords ?? [])].join(" ").toLowerCase();
+      return query
+        .trim()
+        .toLowerCase()
+        .split(/\s+/)
+        .every((term) => hay.includes(term));
+    })
+    .map((c) => c.id);
+}
+
+describe("typing the obvious word lands on the right pane", () => {
+  it.each([
+    ["shortcuts", "settings:keybindings"],
+    ["rebind", "settings:keybindings"],
+    ["dark mode", "settings:theme"],
+    ["api key", "settings:model"],
+    ["temperature", "settings:model"],
+    ["rag", "settings:knowledge"],
+    ["langfuse", "settings:tracing"],
+    ["mcp server", "settings:mcp"],
+    ["a2a", "settings:delegates"],
+    ["codex", "settings:delegates"],
+    ["goal mode", "settings:behavior"],
+    ["redaction", "settings:behavior"],
+    ["backup", "settings:snapshot"],
+    ["pair phone", "settings:devices"],
+    ["spend", "settings:telemetry"],
+    // The Box runtime chip on the Fleet pane: nothing else in the dialog holds a port or a
+    // bind address, and neither word is in any label. ("port" also lands on Snapshot, via
+    // ex-port-/-port-able — hence `toContain`, like every case here.)
+    ["port", "settings:fleet"],
+    ["network", "settings:fleet"],
+    // Two terms, and only Access has both: Delegates owns "a2a" but holds no token.
+    ["a2a token", "settings:access"],
+    // Real ambiguity, so it must reach BOTH halves — see the keyword map's note.
+    ["delegation", "settings:delegates"],
+    ["delegation", "settings:subagents"],
+    ["system prompt", "settings:identity"],
+    ["soul", "settings:identity"],
+    ["work folders", "settings:tools"],
+    ["project directory", "settings:access"],
+    ["disk", "settings:overview"],
+  ])("`%s` → %s", (query, id) => {
+    expect(matching(query)).toContain(id);
+  });
+
+  it("a keyword must be TRUE of the pane — a plausible wrong answer is worse than none", () => {
+    // The regression these two catch is a keyword list written from the section's NAME rather
+    // than its contents. Behavior is Goal mode · Watches · Compaction · Security
+    // (graph/settings_schema.py `_SECTION_CATEGORY`) — the prompt/persona knobs are Identity,
+    // whose panel is the SOUL editor. And the DS ThemePanel has colors and shape and no
+    // typography at all, so nothing may answer "font": an operator sent to a pane that does
+    // not hold the thing stops searching, they don't try a synonym.
+    expect(matching("prompt")).toContain("settings:identity");
+    expect(matching("prompt")).not.toContain("settings:behavior");
+    expect(matching("font")).toEqual([]);
+  });
+
+  it("the nav heading is searchable — `capabilities` is exactly the five capability panes", () => {
+    // The reason `hint` is the group label and not "go to": it makes the IA itself a query.
+    expect(matching("capabilities")).toEqual([
+      "settings:tools",
+      "settings:mcp",
+      "settings:skills",
+      "settings:subagents",
+      "settings:delegates",
+    ]);
+    expect(matching("this console")).toEqual([
+      "settings:theme",
+      "settings:chat",
+      "settings:keybindings",
+    ]);
+  });
+
+  it("keywords are SYNONYMS — none of them repeats what the row already says", () => {
+    // The label/hint/group are searched too, so a keyword whose every term already appears
+    // there changes no query's answer: it is list-length, not findability. The whole "settings"
+    // column went that way (22 rows all labelled "Settings: …"), and so did "keyboard" on the
+    // row LABELLED Keyboard. Enforced mechanically, because it reads as diligence — a reviewer
+    // scanning the map sees a fuller list and nods.
+    expect(matching("settings")).toEqual(rows().map((c) => c.id));
+    for (const c of rows()) {
+      const said = [c.label, c.hint, c.group].join(" ").toLowerCase();
+      for (const kw of c.keywords ?? []) {
+        const redundant = kw
+          .toLowerCase()
+          .split(/\s+/)
+          .every((term) => said.includes(term));
+        expect(redundant, `${c.id}: "${kw}" is already matched by "${said}"`).toBe(false);
+      }
+      // Synonyms, plural — one word is a list nobody finished.
+      expect((c.keywords ?? []).length).toBeGreaterThan(3);
+    }
+  });
+});
+
+describe("gating is declarative — the rows are never pre-filtered", () => {
+  it("flag-gated sections are LISTED, carrying the leaf's flag id as data", () => {
+    // The failure mode this prevents: filtering on the flag at registration. Registration
+    // runs at module load, before /api/flags has answered, and the predicate fails closed —
+    // so the row would be computed as "hidden" once and never recomputed.
+    expect(byId("settings:secrets")).toMatchObject({ flag: "secrets-panel" });
+    expect(byId("settings:devices")).toMatchObject({ flag: "settings.devices" });
+    expect(byId("settings:publish")).toMatchObject({ flag: "chat.publish" });
+    // Nothing invented and nothing dropped: the row's flag is the section's flag, verbatim.
+    for (const c of rows()) expect(c.flag).toBe(meta(c.id.slice("settings:".length)).flag);
+  });
+
+  it("host-only sections are LISTED, carrying hostOnly — and Fleet deliberately is not", () => {
+    expect(byId("settings:overview")).toMatchObject({ hostOnly: true });
+    expect(byId("settings:telemetry")).toMatchObject({ hostOnly: true });
+    // /api/fleet is a hub path, so Fleet names the same fleet from a member window too.
+    // Marking it hostOnly here would take the roster away from every sister agent's ⌘K.
+    expect(byId("settings:fleet")?.hostOnly).toBeUndefined();
+    for (const c of rows()) {
+      expect(c.hostOnly).toBe(meta(c.id.slice("settings:".length)).hostOnly);
+    }
+  });
+
+  it("an ungated section carries neither key, so the host's filter is a no-op for it", () => {
+    // `{ flag: undefined }` would be harmless to `visiblePaletteCommands` but noisy to a
+    // "why is this row hidden?" reader; the keys are omitted, not set to undefined.
+    expect("flag" in byId("settings:theme")!).toBe(false);
+    expect("hostOnly" in byId("settings:theme")!).toBe(false);
+  });
+
+  it("no row is disabled — a gated section vanishes rather than teasing an unrunnable pane", () => {
+    // `disabled` keeps a row LISTED but unrunnable, which is right for Fleet Room (it can
+    // explain itself) and wrong here: running a deep-link for a gated-off section writes its
+    // id into the PERSISTED settingsSection before the surface's own gate drops it, leaving a
+    // dead id in localStorage. Gating (not disabling) is what makes that unreachable.
+    for (const c of rows()) expect(c.disabled).toBeUndefined();
+  });
+});
+
+describe("running a row goes through the NavIntent chokepoint", () => {
+  it("emits a serializable { kind: 'global', section } and closes the palette", () => {
+    // NOT `useUI.getState().openGlobalSettings(...)`: the frameless desktop launcher mounts
+    // this same registry in a shell-less JS context where store mutations are inert, so a
+    // direct store call is a silent no-op there. The intent is a plain object precisely so it
+    // can cross the window boundary as an event payload.
+    const navigate = vi.fn();
+    const close = vi.fn();
+    const row = settingsPaletteCommands(navigate).find((c) => c.id === "settings:mcp")!;
+    row.run({ close });
+    expect(navigate).toHaveBeenCalledWith({ kind: "global", section: "mcp" });
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(JSON.stringify(navigate.mock.calls[0][0]))).toEqual({
+      kind: "global",
+      section: "mcp",
+    });
+  });
+
+  it("every row navigates to its OWN section id — the id the uiStore persists", () => {
+    // An off-by-one in the generator would deep-link the neighbouring pane, which reads as
+    // "the palette is fine" until you notice you keep landing on Behavior.
+    for (const c of rows()) {
+      const navigate = vi.fn();
+      settingsPaletteCommands(navigate)
+        .find((r) => r.id === c.id)!
+        .run({ close: () => {} });
+      expect(navigate).toHaveBeenCalledWith({
+        kind: "global",
+        section: c.id.slice("settings:".length),
+      });
+    }
+  });
+});
+
+describe("wired into the registry, the HOST applies the gates", () => {
+  // The factory tests above prove the rows CARRY their gates; this one proves the wiring
+  // actually hands them to the seam, and that the seam's read is what decides visibility.
+  // Together they cover the regression neither half sees alone: rows that are correct but
+  // never registered, or registered but gated at the wrong moment.
+  const ids = (flagsOn: boolean, onHost: boolean) =>
+    visiblePaletteCommands(() => flagsOn, onHost, "static").map((c) => c.id);
+  const settingsIds = (flagsOn: boolean, onHost: boolean) =>
+    ids(flagsOn, onHost).filter((id) => id.startsWith("settings:"));
+
+  it("registers every row STATICALLY — core must not ship a dynamic source", () => {
+    // `palette/registry` wires the CommandProvider the moment ANY source exists, and the
+    // DS shows its "Searching…" spinner whenever a provider does — so one source here would
+    // put a 120ms spinner in front of every keystroke in every console.
+    expect(settingsIds(true, true)).toHaveLength(
+      ALL_SECTIONS.length - SETTINGS_PALETTE_EXCLUDED.length,
+    );
+    expect(visiblePaletteCommands(() => true, true, "dynamic")).toEqual([]);
+  });
+
+  it("a flag-gated row is hidden while /api/flags is in flight and REVEALED when it lands", () => {
+    // THE regression. Registration ran at module load — before this file could stub anything —
+    // and the fail-closed predicate is applied here, at read time. A row filtered at
+    // registration would be absent from BOTH reads, identically and permanently.
+    expect(settingsIds(false, true)).not.toContain("settings:secrets");
+    expect(settingsIds(true, true)).toContain("settings:secrets");
+    expect(settingsIds(false, true)).toContain("settings:theme"); // ungated, listed either way
+  });
+
+  it("host-only rows drop in a member window; Fleet stays", () => {
+    expect(settingsIds(true, false)).not.toContain("settings:telemetry");
+    expect(settingsIds(true, false)).not.toContain("settings:overview");
+    expect(settingsIds(true, false)).toContain("settings:fleet");
+  });
+
+  it("supersedes the hand-written rows instead of doubling up with them", () => {
+    // The old ids are gone; nothing renders "Settings: Fleet" twice. The bare `Settings`
+    // command (open wherever you left it) is deliberately kept.
+    expect(ids(true, true)).not.toContain("box:fleet");
+    expect(ids(true, true)).not.toContain("box:telemetry");
+    expect(ids(true, true)).toContain("settings");
+    const labels = visiblePaletteCommands(() => true, true, "static").map((c) => c.label);
+    expect(labels.filter((l) => l === "Settings: Fleet")).toHaveLength(1);
+  });
+
+  it("the bare Settings row ADVERTISES ⌘, by binding id, not by a hard-coded hint", () => {
+    // The seam's `keybinding` field (ADR 0061/0063) is the declarative way to put a chord on
+    // a row: the host renders `formatCombo(effectiveCombo(binding))`, so the row follows a
+    // rebind instead of lying about it. The id has to RESOLVE for any of that to happen —
+    // a typo renders no hint and nothing complains, which is why the last assertion reads
+    // the keybinding registry rather than just pinning the string.
+    const bare = registeredPaletteCommands("static").find((c) => c.id === "settings")!;
+    expect(bare.keybinding).toBe("settings.open");
+    expect(bare.hint).toBeUndefined(); // an explicit hint would WIN over the live combo
+    expect(registeredKeybindings().map((b) => b.id)).toContain(bare.keybinding);
+    // The generated rows spend their hint on the nav heading, so none of them may claim a
+    // chord — there is no per-section binding to advertise.
+    for (const c of rows()) expect(c.keybinding).toBeUndefined();
+  });
+
+  it("Developer is registered nowhere — not statically, not dynamically", () => {
+    expect(ids(true, true)).not.toContain("settings:developer");
+    expect(visiblePaletteCommands(() => true, true).map((c) => c.id)).not.toContain(
+      "settings:developer",
+    );
+  });
+});
+
+// ── Source guard: this module must not drag the settings tree onto the palette ───────
+//
+// The house pattern (settings/sections.test.ts), reproduced deliberately rather than
+// imported: that file guards a DIFFERENT module, and a guard shared between two invariants
+// is one edit away from being relaxed for the wrong one. It PARSES rather than greps,
+// because the regex version of this guard was blind to exactly the shapes that matter — a
+// prettier-wrapped multi-line import, a bare side-effect `import "./x.css"`, and a lazy
+// `() => import("./SettingsSurface")` (still a chunk this module owns).
+function specifiersOf(src: string, kind: ts.ScriptKind = ts.ScriptKind.TS): string[] {
+  // `kind` matters: main.tsx is parsed too (the entry-chunk assertion at the bottom), and
+  // JSX read as plain TS produces a mangled tree rather than an error.
+  const sf = ts.createSourceFile("settingsPalette.ts", src, ts.ScriptTarget.Latest, false, kind);
+  const found: string[] = [];
+  const text = (n: ts.Node | undefined) => (n && ts.isStringLiteralLike(n) ? n.text : undefined);
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) || (ts.isExportDeclaration(node) && node.moduleSpecifier)) {
+      const spec = text((node as ts.ImportDeclaration | ts.ExportDeclaration).moduleSpecifier);
+      if (spec !== undefined) found.push(spec);
+    } else if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      if (callee.kind === ts.SyntaxKind.ImportKeyword) found.push(text(node.arguments[0]) ?? "<computed>");
+    }
+    ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(sf, visit);
+  return found;
+}
+
+describe("settingsPalette.ts stays off the settings panel tree", () => {
+  it("the guard sees imports in every shape an edit could take", () => {
+    // A net with a hole in it reads exactly like a net, so the guard is itself tested. Each
+    // shape below was invisible to the line-anchored regexes this pattern replaced.
+    expect(
+      specifiersOf(
+        [
+          'import {\n  SettingsSurface,\n} from "../settings/SettingsSurface";',
+          'import "./palette.css";',
+          'export * from "../settings/SettingsSurface";',
+          'const lazy = () => import("../settings/SettingsSurface");',
+        ].join("\n"),
+      ),
+    ).toEqual([
+      "../settings/SettingsSurface",
+      "./palette.css",
+      "../settings/SettingsSurface",
+      "../settings/SettingsSurface",
+    ]);
+  });
+
+  it("imports the LEAF and nothing from the settings panel tree", () => {
+    // Exact list, not a denylist: a denylist only forbids what someone thought of, and the
+    // cheap way back into the panel tree is a *new* import nobody anticipated (SettingsOverlay,
+    // SettingsCategory, a panel's helper). Pinning the whole list makes any new edge a
+    // conscious decision with this comment attached.
+    expect(specifiersOf(paletteSrc)).toEqual([
+      "../settings/sectionIcons",
+      "../settings/sections",
+      "../ext/paletteRegistry",
+      "../settings/sections",
+    ]);
+  });
+
+  it("…which means no SettingsSurface, no panels, and not the lazy icon resolver", () => {
+    const specs = specifiersOf(paletteSrc);
+    for (const banned of [
+      "../settings/SettingsSurface",
+      "./SettingsSurface",
+      "../settings/SettingsOverlay",
+      "../settings/SettingsCategory",
+      "../settings/FleetSurface",
+      "../telemetry/TelemetrySurface",
+      "../plugins/PluginsSurface",
+      "@tanstack/react-query",
+      "@protolabsai/ui/command-palette",
+      "../state/uiStore",
+      "./usePaletteRegistry",
+      // The subtle one, and the reason this list is pinned rather than merely denied: it is
+      // the OBVIOUS way to turn the leaf's icon NAME into a glyph, it type-checks, and it
+      // looks right — while being `lazy(() => import("lucide-react"))` over the full `icons`
+      // map. Nothing else in the console eagerly loads that 738 KB chunk, so ⌘K (and the
+      // Launcher, which mounts this registry and nothing else) would go from free to the
+      // heaviest thing they download, and every row would flash a Package box first.
+      // `settings/sectionIcons` is the closed static map instead.
+      "../lib/lucideIcon",
+    ]) {
+      expect(specs, `settingsPalette.ts must not import ${banned}`).not.toContain(banned);
+    }
+    // Not even by substring — a re-export barrel or a deeper path would still pull it in.
+    for (const s of specs) expect(s).not.toMatch(/SettingsSurface/);
+  });
+
+  // The guard above is worth having, but the reason usually given for it is WRONG, and a
+  // wrong reason in a comment is how a claim reaches release notes. Today `main.tsx`
+  // statically imports BOTH App and Launcher and vite declares no `manualChunks`, so the
+  // build emits ONE entry chunk that both desktop windows load: App's settings tree is
+  // already in the Launcher's bytes, and importing SettingsSurface here would add none.
+  // (Measured against the branch point: 1,481.61 kB → 1,485.15 kB, i.e. +3.5 kB for the
+  // feature — not the ~470/~800 kB "saving" the guard was once described as making.)
+  //
+  // Pin that, so the prose and the build cannot drift apart in either direction: if someone
+  // makes App lazy — the change that WOULD make the byte argument true — this fails, and
+  // the comments in settingsPalette.ts / sections.ts / sectionIcons.tsx get their upgrade.
+  it("App and Launcher share one entry chunk — so the guard is graph hygiene, not bytes", () => {
+    const specs = specifiersOf(mainSrc, ts.ScriptKind.TSX);
+    expect(specs).toContain("./app/App"); // static — a lazy() would read as import("./app/App")
+    expect(specs).toContain("./app/Launcher");
+    expect(viteConfigSrc).not.toMatch(/manualChunks|rollupOptions/);
+  });
+});

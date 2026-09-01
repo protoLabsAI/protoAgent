@@ -104,3 +104,113 @@ test("clicking Send on a bare command closes the slash menu so the picker is mou
   await form.getByRole("button", { name: /submit/i }).click();
   await expect(form).toBeHidden();
 });
+
+// ⌘⇧K knows the chat's verbs too (#3292). The two halves have DIFFERENT semantics and the
+// difference is the whole risk: a client command RUNS, a user-facing skill cannot be run at
+// all (the server rewrites the message on the next SEND) so its row must draft and stop.
+test("the palette lists the chat's slash commands, and a skill row DRAFTS rather than runs", async ({ page }) => {
+  const composer = page.getByPlaceholder(/Message protoAgent/i);
+  await page.keyboard.press("ControlOrMeta+Shift+k");
+  const palette = page.locator(".pl-cmdk__panel");
+  await expect(palette).toBeVisible();
+  const input = palette.locator(".pl-cmdk-commands__input");
+
+  // A client command, by the token the operator already types in the composer, and reading
+  // `/token · what it does` — the description has to be ON the row, since the hint slot is
+  // spent on the row's caveat.
+  await input.fill("/clear");
+  await expect(
+    page.getByRole("option", { name: "/clear · Clear this chat's history" }),
+  ).toBeVisible();
+
+  // A user-facing skill: picking it must leave the operator in chat with the token typed and
+  // the send still theirs — never a turn fired on their behalf.
+  await input.fill("/triage");
+  await page.getByRole("option", { name: "/triage" }).click();
+  await expect(palette).toBeHidden();
+  await expect(composer).toHaveValue("/triage ");
+
+  // …and picking one must not EAT a message already in progress. A skill directive leads the
+  // message, so the token goes in FRONT of the draft: the operator gets "/triage <what they
+  // were writing>", which is what they meant, rather than watching it disappear.
+  await composer.fill("the deploy is flapping");
+  await page.keyboard.press("ControlOrMeta+Shift+k");
+  await expect(palette).toBeVisible();
+  await input.fill("/triage");
+  await page.getByRole("option", { name: "/triage" }).click();
+  await expect(composer).toHaveValue("/triage the deploy is flapping");
+});
+
+// The chat's rows are STATIC, and that is a correctness property, not a performance one: the
+// DS commands view keeps a read-time provider's PREVIOUS results on screen — appended to
+// `filtered` unfiltered, and runnable by Enter — for the 120ms it debounces the new query.
+// With the chat's ACTION rows on that path, retyping a query and hitting Enter as one motion
+// ran the command from the query BEFORE. Statics are client-filtered synchronously instead,
+// so a query that matches nothing lists nothing, immediately.
+test("a query that matches nothing lists nothing — and Enter runs nothing", async ({ page }) => {
+  const palette = page.locator(".pl-cmdk__panel");
+  await page.keyboard.press("ControlOrMeta+Shift+k");
+  await expect(palette).toBeVisible();
+  const input = palette.locator(".pl-cmdk-commands__input");
+
+  // Settle on a query that DOES match a chat row — this is the row a stale provider would
+  // have left listed and runnable.
+  await input.fill("yolo");
+  await expect(page.getByRole("option")).toHaveCount(1);
+
+  // …then type something that matches nothing, anywhere, and press Enter immediately. No
+  // waiting: the whole point is that there is no window in which the old row is still live.
+  await input.fill("zzqqxx-nothing-matches-this");
+  await expect(page.getByRole("option")).toHaveCount(0);
+  await page.keyboard.press("Enter");
+  // Nothing ran, so the palette is still open on the empty result.
+  await expect(palette).toBeVisible();
+  await expect(page.locator(".pl-cmdk-commands__empty")).toHaveText("No matches");
+});
+
+// Hiding the chat's dock is a one-click gesture, and the DS AppShell collapses a dock by
+// UNMOUNTING it — taking the chat slot and its `slashDispatch` registration with it. Gating
+// the rows on "is a dispatcher registered right now?" therefore emptied the entire Chat +
+// Skills group out of ⌘⇧K in exactly the state the palette is most useful in.
+test("the chat's rows survive collapsing the panel chat lives on — and still run", async ({ page }) => {
+  await page.getByTestId("toggle-left").click();
+  await expect(page.locator(".pl-appshell__col--left")).toHaveCount(0);
+
+  await page.keyboard.press("ControlOrMeta+Shift+k");
+  const palette = page.locator(".pl-cmdk__panel");
+  await expect(palette).toBeVisible();
+  const input = palette.locator(".pl-cmdk-commands__input");
+
+  await input.fill("/clear");
+  const clear = page.getByRole("option", { name: "/clear · Clear this chat's history" });
+  await expect(clear).toBeVisible();
+  await expect(clear).toBeEnabled(); // listed AND live — there is still a chat, it is just hidden
+
+  // Running it brings the panel back (openView un-collapses the dock chat lives on) and then
+  // dispatches into the remounted slot — here, `/clear`'s confirm.
+  await clear.click();
+  await expect(page.locator(".pl-appshell__col--left")).toBeVisible();
+  await expect(page.getByRole("dialog").filter({ hasText: /Clear this conversation/i })).toBeVisible();
+});
+
+// A palette row must never arm a permission. `/bypass` turns off the approval gate on
+// `run_command`, and dispatched bare it TOGGLES — so from a fuzzy search one Enter would flip
+// a trust boundary in a direction the row never named. Its row drafts instead: the operator
+// types the direction and sends it themselves, on the tab it applies to.
+test("/bypass drafts into the composer instead of arming auto-approval", async ({ page }) => {
+  const composer = page.getByPlaceholder(/Message protoAgent/i);
+  await page.keyboard.press("ControlOrMeta+Shift+k");
+  const palette = page.locator(".pl-cmdk__panel");
+  await expect(palette).toBeVisible();
+  await palette.locator(".pl-cmdk-commands__input").fill("yolo");
+
+  // The row names the tab's CURRENT mode — the thing an operator opens the palette to find out.
+  const bypass = page.getByRole("option", { name: /\/bypass · .* — now off/ });
+  await expect(bypass).toBeVisible();
+  await bypass.click();
+
+  await expect(palette).toBeHidden();
+  await expect(composer).toHaveValue("/bypass ");
+  // Nothing was armed: no system note, and the composer's bypass chip stays away.
+  await expect(page.getByText(/Bypass permissions ON/i)).toHaveCount(0);
+});

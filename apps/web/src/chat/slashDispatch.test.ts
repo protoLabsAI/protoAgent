@@ -7,12 +7,20 @@
 // "succeed" into a note nobody sees) is pinned in coreSlashCommands.test.ts.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { registerSlashDispatcher, runSlashFromOutside, slashDispatchTarget } from "./slashDispatch";
+import {
+  prefillChatDraft,
+  registerSlashDispatcher,
+  runSlashFromOutside,
+  slashDispatchTarget,
+} from "./slashDispatch";
+import type { SlashDispatchTarget } from "./slashDispatch";
 
 // The seam is module state; every test registers explicitly, so clear any leak between them.
 const offs: (() => void)[] = [];
-const register = (dispatcher: Parameters<typeof registerSlashDispatcher>[0]) => {
-  const off = registerSlashDispatcher(dispatcher);
+// `prefillDraft` defaults to a no-op so the cases below stay about the axis they test
+// (dispatch, session, visibility) rather than restating every field of the target.
+const register = (dispatcher: Omit<SlashDispatchTarget, "prefillDraft"> & { prefillDraft?: (t: string) => void }) => {
+  const off = registerSlashDispatcher({ prefillDraft: () => {}, ...dispatcher });
   offs.push(off);
   return off;
 };
@@ -173,5 +181,39 @@ describe("the chat slot's registration (source guard)", () => {
     expect(call).not.toMatch(/surfaceActive:\s*(true|false)\b/);
     expect(call).toContain("sessionId");
     expect(call).not.toMatch(/sessionId:\s*"/);
+  });
+});
+
+// The draft half of the seam (#3292). A user-facing SKILL cannot be run from outside — the
+// server rewrites the message on the next SEND — so the only honest outside action is to
+// hand the operator the draft. Same contract as `run`: inert with nothing registered, and
+// a false return is a real signal rather than a shrug.
+describe("prefillChatDraft", () => {
+  it("is inert with no slot registered, and says so", () => {
+    expect(prefillChatDraft("/triage ")).toBe(false);
+  });
+
+  it("writes the draft into the CURRENT slot", () => {
+    const stale = vi.fn();
+    const live = vi.fn();
+    register({ run: () => true, sessionId: "s1", surfaceActive: true, prefillDraft: stale });
+    register({ run: () => true, sessionId: "s2", surfaceActive: true, prefillDraft: live });
+    expect(prefillChatDraft("/triage ")).toBe(true);
+    expect(live).toHaveBeenCalledWith("/triage ");
+    expect(stale).not.toHaveBeenCalled();
+  });
+
+  it("passes the text through VERBATIM — the trailing space is the caret affordance", () => {
+    const prefillDraft = vi.fn();
+    register({ run: () => true, sessionId: "s1", surfaceActive: true, prefillDraft });
+    prefillChatDraft("/research-and-brief ");
+    expect(prefillDraft).toHaveBeenCalledWith("/research-and-brief ");
+  });
+
+  it("does NOT run the command — a skill row that executed would be a lie", () => {
+    const run = vi.fn(() => true);
+    register({ run, sessionId: "s1", surfaceActive: true, prefillDraft: () => {} });
+    prefillChatDraft("/triage ");
+    expect(run).not.toHaveBeenCalled();
   });
 });
