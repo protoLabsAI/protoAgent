@@ -55,12 +55,32 @@ test("the active row is announced — aria-activedescendant, not just a highligh
   // Focus never leaves the input (arrows move a class, not focus), so this pointer is the
   // ONLY thing that tells a screen reader which row is live. The DS's own view ships the
   // combobox role without it, which is silence from the first ArrowDown onward.
-  const active = () => input.getAttribute("aria-activedescendant");
-  const selectedId = () => page.locator(`${PANEL} [data-sel="true"]`).getAttribute("id");
-  expect(await active()).toBe(await selectedId());
+  //
+  // Read BOTH values inside one `expect.poll` evaluation and let it retry. Two separate
+  // `getAttribute` round trips can straddle a provider read settling: the signature changes,
+  // the selection recomputes, and the two reads disagree about a state that was never
+  // actually inconsistent. Polling one combined read asserts the invariant instead of racing it.
+  const pair = () =>
+    page.evaluate((panel) => {
+      const input = document.querySelector(`${panel} .pl-cmdk-commands__input`);
+      const row = document.querySelector(`${panel} [data-sel="true"]`);
+      return {
+        active: input?.getAttribute("aria-activedescendant") ?? null,
+        selected: row?.getAttribute("id") ?? null,
+      };
+    }, PANEL);
+
+  await expect.poll(pair).toEqual(expect.objectContaining({ active: expect.any(String) }));
+  await expect.poll(async () => {
+    const { active, selected } = await pair();
+    return active === selected && active !== null;
+  }).toBe(true);
+
   await input.press("ArrowDown");
-  expect(await active()).toBe(await selectedId());
-  expect(await active()).not.toBeNull();
+  await expect.poll(async () => {
+    const { active, selected } = await pair();
+    return active === selected && active !== null;
+  }).toBe(true);
 });
 
 test("typing 'memory' finds the Memory surface — the defect this view exists to fix", async ({ page }) => {

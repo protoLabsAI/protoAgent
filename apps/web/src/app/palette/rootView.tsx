@@ -262,6 +262,27 @@ function RootBody({ ctx, config }: { ctx: PaletteContext; config: RootViewConfig
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [registry, regVersion]);
 
+/** Longest a single provider may hold the palette's "Searching…" state.
+ *
+ *  The containment below turns a synchronous throw and a non-array result into settled
+ *  results, but neither covers a promise that simply NEVER settles — a fetch with no
+ *  timeout, a dropped socket. `ac.abort()` does not help: aborting only ends the read if the
+ *  provider observes the signal, and a fork's provider is under no obligation to. Without a
+ *  bound the spinner stays up until the operator types again or closes the palette.
+ *
+ *  Resolves to an empty result rather than rejecting, so a slow provider degrades to "no
+ *  rows from that source" instead of poisoning the round for the others. */
+const PROVIDER_DEADLINE_MS = 4_000;
+
+function withDeadline<T>(p: Promise<T>, ms = PROVIDER_DEADLINE_MS): Promise<T | never[]> {
+  let timer: ReturnType<typeof setTimeout>;
+  const bound = new Promise<never[]>((resolve) => {
+    timer = setTimeout(() => resolve([]), ms);
+  });
+  // Clear on settle so a resolved read does not hold a timer for the full deadline.
+  return Promise.race([p, bound]).finally(() => clearTimeout(timer));
+}
+
   // Async provider results (debounced + cancellable) — the DS's loop, with the one timing
   // split the DS never had to make.
   //
@@ -301,7 +322,7 @@ function RootBody({ ctx, config }: { ctx: PaletteContext; config: RootViewConfig
           // fork's `registry.registerProvider` is a public DS seam and cannot be made to.
           // Turning the throw into a rejection makes it one more settled result.
           try {
-            return Promise.resolve(p.getCommands!(q, { signal: ac.signal }));
+            return withDeadline(Promise.resolve(p.getCommands!(q, { signal: ac.signal })));
           } catch (err) {
             return Promise.reject(err);
           }
@@ -405,8 +426,26 @@ function RootBody({ ctx, config }: { ctx: PaletteContext; config: RootViewConfig
   const signature = filtered.map((c) => c.id).join(" ");
   const found = filtered.findIndex((c) => c.id === selId);
   const sel = found >= 0 ? found : 0;
+  // Two DIFFERENT things re-rank the list, and they want opposite selection behavior — which
+  // is why this is two effects rather than one rule keyed on `signature`.
+  //
+  //  • The QUERY changed. A new query is a new ranking, so the highlight belongs on the new
+  //    best match: type "bee" then "queen" and the leader flips even though the row COUNT is
+  //    identical. Keying only on `signature` (or, as the DS does, on `filtered.length`) leaves
+  //    the highlight on row 0 of a list whose row 0 is now a different command.
+  //  • Provider rows MERGED IN at the same query. That lands asynchronously — after the
+  //    debounce on a typed query, and after the empty-query read on open — so resetting here
+  //    yanks the highlight back to row 0 out from under an operator who has already pressed
+  //    ArrowDown, and Enter runs the first row instead of the selected one.
+  //
+  // So: reset on the query, preserve across a same-query re-rank, and never strand the
+  // selection on a row that left the list.
   useEffect(() => {
     setSelId(filtered[0]?.id ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q]);
+  useEffect(() => {
+    setSelId((cur) => (cur !== null && filtered.some((c) => c.id === cur) ? cur : (filtered[0]?.id ?? null)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signature]);
   useEffect(() => {
@@ -554,7 +593,9 @@ function RootBody({ ctx, config }: { ctx: PaletteContext; config: RootViewConfig
           empty while the list is empty so the `role="status"` above owns that message
           instead of both firing at once. */}
       <div className="pa-cmdk__sr" role="status">
-        {typed && filtered.length > 0 ? `${filtered.length} results` : ""}
+        {typed && filtered.length > 0
+          ? `${filtered.length} ${filtered.length === 1 ? "result" : "results"}`
+          : ""}
       </div>
     </div>
   );

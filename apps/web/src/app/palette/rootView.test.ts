@@ -449,6 +449,45 @@ describe("selection follows the COMMAND, not the index", () => {
     });
     expect(selected()).toContain("B");
   });
+
+  it("keeps the highlight when ASYNC provider rows arrive under the operator's arrow", async () => {
+    // The regression this pins: `signature` also changes when provider rows merge in, which
+    // lands asynchronously — after the debounce on a typed query, and after the empty-query
+    // read on open. Resetting on every signature change yanked the highlight back to row 0
+    // mid-keystroke, so Enter ran the FIRST row instead of the selected one. That is the exact
+    // failure the id-keyed selection model exists to prevent, so it has to be pinned.
+    let resolveRows: (c: Command[]) => void = () => {};
+    const registry = createRankedPaletteRegistry();
+    registry.registerCommands(["A", "B", "C"].map((l) => cmd({ id: l, label: l })));
+    registry.registerProvider({
+      id: "late",
+      getCommands: () => new Promise<Command[]>((res) => { resolveRows = res; }),
+    });
+    mountPalette(registry);
+
+    press("ArrowDown"); // operator moves to B while the provider is still in flight
+    expect(selected()).toContain("B");
+
+    await act(async () => {
+      resolveRows([cmd({ id: "late-1", label: "Late row" })]);
+      await Promise.resolve();
+    });
+
+    // B survived the re-rank, so the highlight must still be on B — not reset to row 0.
+    expect(selected()).toContain("B");
+  });
+
+  it("falls back to the first row when the selected command LEAVES the list", () => {
+    // The other half of the same rule: preserving the selection must not strand the highlight
+    // on a row that no longer exists, or `sel` derives to 0 while `selId` points at nothing.
+    const registry = createRankedPaletteRegistry();
+    registry.registerCommands(["Alpha", "Beta", "Gamma"].map((l) => cmd({ id: l, label: l })));
+    mountPalette(registry);
+    press("ArrowDown");
+    expect(selected()).toContain("Beta");
+    type("Alp"); // Beta is filtered out
+    expect(selected()).toContain("Alpha");
+  });
 });
 
 describe("frecency is written where every command runs", () => {
