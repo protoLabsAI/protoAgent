@@ -21,11 +21,12 @@ def client(monkeypatch):
     app = FastAPI()
     register_provider_routes(app)
 
-    written: dict = {"entries": None, "secrets": None}
+    written: dict = {"entries": None, "secrets": None, "extra": None}
 
-    def _fake_write(entries, secrets):
+    def _fake_write(entries, secrets, extra=None):
         written["entries"] = entries
         written["secrets"] = secrets
+        written["extra"] = extra
 
     monkeypatch.setattr("operator_api.provider_routes._write_providers", _fake_write)
     # This focused route fixture has no running server. Keep it on the disk-writer
@@ -242,6 +243,284 @@ def test_delete_sees_a_reference_from_any_slot_not_just_the_main_model(client, m
 def test_delete_sees_a_reference_from_favorites(client, monkeypatch):
     _install(monkeypatch, **{**BASE, "model": {**BASE["model"], "favorites": ["local-vllm:qwen3-32b"]}})
     assert client.delete("/api/config/providers/local-vllm").status_code == 409
+
+
+# ── structured references + the `releases` DELETE body (bd-neiz) ────────────────
+#
+# The bare/no-body DELETE keeps refusing an in-use connection (above); these cover the
+# structured `in_use` the Providers panel needs and the `releases` body that lets the
+# operator repoint/clear those slots in the SAME transaction that removes the connection.
+
+
+def _apply_spy(monkeypatch, seen):
+    def _apply(updates):
+        seen["calls"] = seen.get("calls", 0) + 1
+        seen["updates"] = updates
+        return True, ["reloaded"]
+
+    monkeypatch.setattr("graph.plugins.host.HOST.apply_settings", _apply)
+    return seen
+
+
+def test_list_reports_structured_references_alongside_the_strings(client, monkeypatch):
+    _install(
+        monkeypatch,
+        providers=[
+            {"id": "prod-gateway", "type": "openai-compat", "base_url": "https://prod/v1"},
+            {"id": "local-vllm", "type": "openai-compat", "base_url": "http://localhost:8000/v1"},
+        ],
+        model={"name": "prod-gateway:reasoning", "favorites": ["prod-gateway:a", "prod-gateway:c"]},
+        routing={"aux_model": "prod-gateway:aux"},
+        subagents={"researcher": {"model": "prod-gateway:sub"}},
+    )
+    providers = client.get("/api/config/providers").json()["providers"]
+    prod = next(p for p in providers if p["id"] == "prod-gateway")
+    by_key = {e["key"]: e for e in prod["in_use"]}
+    # The lead model is a slot, and the ONE reference that can never be cleared.
+    assert by_key["model.name"] == {
+        "key": "model.name",
+        "value": "prod-gateway:reasoning",
+        "kind": "slot",
+        "clearable": False,
+    }
+    assert by_key["routing.aux_model"] == {
+        "key": "routing.aux_model",
+        "value": "prod-gateway:aux",
+        "kind": "slot",
+        "clearable": True,
+    }
+    # Favorites collapse to ONE entry whose value is the matching favorites (not the rest).
+    assert by_key["model.favorites"] == {
+        "key": "model.favorites",
+        "value": ["prod-gateway:a", "prod-gateway:c"],
+        "kind": "favorite",
+        "clearable": True,
+    }
+    # Each subagent tier is its own entry, keyed subagents.<name>.model.
+    assert by_key["subagents.researcher.model"] == {
+        "key": "subagents.researcher.model",
+        "value": "prod-gateway:sub",
+        "kind": "subagent",
+        "clearable": True,
+    }
+    # The display strings are unchanged and still carried alongside.
+    assert "model.name=prod-gateway:reasoning" in prod["in_use_by"]
+    assert "subagents.researcher.model=prod-gateway:sub" in prod["in_use_by"]
+    # An unused connection reports empty on both.
+    local = next(p for p in providers if p["id"] == "local-vllm")
+    assert local["in_use"] == [] and local["in_use_by"] == []
+
+
+def test_list_reports_the_implicit_gateway_lead_as_a_model_name_reference(client, monkeypatch):
+    _install(
+        monkeypatch,
+        providers=[{"id": "gateway", "type": "openai-compat", "base_url": "https://gateway/v1"}],
+        model={"name": "protolabs/reasoning"},
+    )
+    row = client.get("/api/config/providers").json()["providers"][0]
+    assert row["in_use"] == [
+        {"key": "model.name", "value": "protolabs/reasoning", "kind": "slot", "clearable": False}
+    ]
+    assert row["in_use_by"] == ["model.name=protolabs/reasoning (implicit gateway)"]
+
+
+def test_delete_with_releases_resolves_every_slot_in_one_apply(client, monkeypatch):
+    _install(
+        monkeypatch,
+        providers=[
+            {"id": "prod-gateway", "type": "openai-compat", "base_url": "https://prod/v1"},
+            {"id": "local-vllm", "type": "openai-compat", "base_url": "http://localhost:8000/v1"},
+        ],
+        model={"name": "prod-gateway:reasoning", "favorites": ["prod-gateway:fav"]},
+        routing={"aux_model": "prod-gateway:aux"},
+        subagents={"researcher": {"model": "prod-gateway:sub"}},
+    )
+    seen = _apply_spy(monkeypatch, {})
+    r = client.request(
+        "DELETE",
+        "/api/config/providers/prod-gateway",
+        json={
+            "releases": {
+                "model.name": "local-vllm:reasoning",
+                "routing.aux_model": "local-vllm:aux",
+                "subagents.researcher.model": "local-vllm:sub",
+                "model.favorites": None,
+            }
+        },
+    )
+    assert r.status_code == 200
+    assert r.json() == {
+        "ok": True,
+        "removed": "prod-gateway",
+        "released": ["model.favorites", "model.name", "routing.aux_model", "subagents.researcher.model"],
+    }
+    # EXACTLY one transactional apply carrying BOTH halves.
+    assert seen["calls"] == 1
+    updates = seen["updates"]
+    assert [e["id"] for e in updates["providers"]] == ["local-vllm"]  # pid gone
+    assert updates["model"]["name"] == "local-vllm:reasoning"
+    assert updates["model"]["favorites"] == []  # the only favorite was prod-gateway's → cleared
+    assert updates["routing"]["aux_model"] == "local-vllm:aux"
+    assert updates["subagents"] == {"researcher": {"model": "local-vllm:sub"}}
+    assert client.written["entries"] is None  # the fallback disk writer was never touched
+
+
+def test_delete_with_releases_that_leave_a_reference_is_refused(client, monkeypatch):
+    _install(
+        monkeypatch,
+        providers=[
+            {"id": "prod-gateway", "type": "openai-compat", "base_url": "https://prod/v1"},
+            {"id": "local-vllm", "type": "openai-compat", "base_url": "http://localhost:8000/v1"},
+        ],
+        model={"name": "prod-gateway:reasoning"},
+        routing={"aux_model": "prod-gateway:aux"},
+    )
+    seen = _apply_spy(monkeypatch, {})
+    r = client.request(
+        "DELETE",
+        "/api/config/providers/prod-gateway",
+        json={"releases": {"model.name": "local-vllm:reasoning"}},  # aux left dangling
+    )
+    assert r.status_code == 409
+    assert "routing.aux_model=prod-gateway:aux" in r.json()["detail"]
+    assert seen.get("calls", 0) == 0  # nothing applied
+    assert client.written["entries"] is None
+
+
+def test_delete_release_validation_rejects_bad_bodies(client, monkeypatch):
+    _install(
+        monkeypatch,
+        providers=[
+            {"id": "prod-gateway", "type": "openai-compat", "base_url": "https://prod/v1"},
+            {"id": "local-vllm", "type": "openai-compat", "base_url": "http://localhost:8000/v1"},
+        ],
+        model={"name": "prod-gateway:reasoning", "favorites": ["prod-gateway:fav"]},
+    )
+    seen = _apply_spy(monkeypatch, {})
+
+    def _delete(releases):
+        return client.request("DELETE", "/api/config/providers/prod-gateway", json={"releases": releases})
+
+    # A key that isn't a reference of this connection at all.
+    assert _delete({"routing.aux_model": None}).status_code == 400
+    # A target on a provider that doesn't exist.
+    assert _delete({"model.name": "ghost:reasoning"}).status_code == 400
+    # A target on the connection being removed.
+    assert _delete({"model.name": "prod-gateway:reasoning"}).status_code == 400
+    # A malformed target (no <provider>:<model> split).
+    assert _delete({"model.name": "reasoning"}).status_code == 400
+    # Clearing the lead model — it must be repointed, not emptied.
+    assert _delete({"model.name": None}).status_code == 400
+    # Favorites can only be cleared, never repointed with a string.
+    assert _delete({"model.favorites": "local-vllm:fav"}).status_code == 400
+    # None of the rejected bodies wrote anything.
+    assert seen.get("calls", 0) == 0
+    assert client.written["entries"] is None
+
+
+def test_delete_release_clears_only_this_connections_favorites(client, monkeypatch):
+    _install(
+        monkeypatch,
+        providers=[
+            {"id": "prod-gateway", "type": "openai-compat", "base_url": "https://prod/v1"},
+            {"id": "local-vllm", "type": "openai-compat", "base_url": "http://localhost:8000/v1"},
+        ],
+        model={"name": "local-vllm:main", "favorites": ["prod-gateway:x", "local-vllm:y", "prod-gateway:z"]},
+    )
+    seen = _apply_spy(monkeypatch, {})
+    r = client.request(
+        "DELETE", "/api/config/providers/prod-gateway", json={"releases": {"model.favorites": None}}
+    )
+    assert r.status_code == 200
+    assert seen["calls"] == 1
+    # Only local-vllm's favorite survives; both prod-gateway favorites are gone.
+    assert seen["updates"]["model"]["favorites"] == ["local-vllm:y"]
+    assert [e["id"] for e in seen["updates"]["providers"]] == ["local-vllm"]
+
+
+def test_delete_release_repoints_and_clears_a_subagent_model(client, monkeypatch):
+    def _setup():
+        _install(
+            monkeypatch,
+            providers=[
+                {"id": "prod-gateway", "type": "openai-compat", "base_url": "https://prod/v1"},
+                {"id": "local-vllm", "type": "openai-compat", "base_url": "http://localhost:8000/v1"},
+            ],
+            model={"name": "local-vllm:main"},
+            subagents={"researcher": {"model": "prod-gateway:sub"}},
+        )
+
+    seen = _apply_spy(monkeypatch, {})
+
+    # Repoint — the written shape is EXACTLY what the settings writer accepts for a
+    # subagent model (subagents.<name>.model nested), alongside the trimmed providers.
+    _setup()
+    r = client.request(
+        "DELETE",
+        "/api/config/providers/prod-gateway",
+        json={"releases": {"subagents.researcher.model": "local-vllm:sub"}},
+    )
+    assert r.status_code == 200
+    assert seen["updates"]["subagents"] == {"researcher": {"model": "local-vllm:sub"}}
+    assert [e["id"] for e in seen["updates"]["providers"]] == ["local-vllm"]
+
+    # Clear — the same key, emptied.
+    _setup()
+    seen.clear()
+    r = client.request(
+        "DELETE",
+        "/api/config/providers/prod-gateway",
+        json={"releases": {"subagents.researcher.model": None}},
+    )
+    assert r.status_code == 200
+    assert seen["updates"]["subagents"] == {"researcher": {"model": ""}}
+
+
+def test_delete_release_no_host_writes_providers_and_slots_in_one_save(monkeypatch):
+    """No host wired: providers (minus pid) AND the released slots land in a SINGLE
+    save_yaml_doc, through the same YAML-doc seam the disk fallback already uses."""
+    import graph.config_io as config_io
+
+    app = FastAPI()
+    register_provider_routes(app)
+    monkeypatch.setattr("graph.plugins.host.HOST.apply_settings", None)
+    _install(
+        monkeypatch,
+        providers=[
+            {"id": "prod-gateway", "type": "openai-compat", "base_url": "https://prod/v1"},
+            {"id": "local-vllm", "type": "openai-compat", "base_url": "http://localhost:8000/v1"},
+        ],
+        model={"name": "prod-gateway:reasoning"},
+        routing={"aux_model": "prod-gateway:aux"},
+    )
+
+    doc = {
+        "providers": [
+            {"id": "prod-gateway", "type": "openai-compat", "base_url": "https://prod/v1"},
+            {"id": "local-vllm", "type": "openai-compat", "base_url": "http://localhost:8000/v1"},
+        ],
+        "model": {"name": "prod-gateway:reasoning"},
+        "routing": {"aux_model": "prod-gateway:aux"},
+    }
+    saved: dict = {"count": 0, "doc": None}
+    monkeypatch.setattr(config_io, "load_yaml_doc", lambda path=None: doc)
+
+    def _save(d, path=None):
+        saved["count"] += 1
+        saved["doc"] = d
+
+    monkeypatch.setattr(config_io, "save_yaml_doc", _save)
+
+    r = TestClient(app).request(
+        "DELETE",
+        "/api/config/providers/prod-gateway",
+        json={"releases": {"model.name": "local-vllm:reasoning", "routing.aux_model": None}},
+    )
+    assert r.status_code == 200
+    assert saved["count"] == 1  # providers + released slots in ONE save
+    assert [e["id"] for e in saved["doc"]["providers"]] == ["local-vllm"]
+    assert saved["doc"]["model"]["name"] == "local-vllm:reasoning"
+    assert saved["doc"]["routing"]["aux_model"] == ""  # cleared
 
 
 def test_unknown_ids_are_404_not_500(client, monkeypatch):
