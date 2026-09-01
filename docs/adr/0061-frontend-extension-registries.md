@@ -196,6 +196,63 @@ host-internal bridge between two core surfaces (the ⌘K palette and the chat co
 an extension point: a fork adds a command with `registerSlashCommand` and gets palette
 dispatch for free. `escapeStop` sets that precedent — same shape, same non-export.
 
+The seam also carries **`prefillDraft` / `prefillChatDraft(text)`** — "put this in the
+composer and hand the operator the caret", the action for a token that *cannot* be run from
+outside. It rides the same registration rather than a parallel seam because it needs the
+same live closure: the draft is `useState` inside `ChatSessionSlot` (seeded from
+sessionStorage on mount), so a write from outside React is swallowed by the mounted slot.
+
+### The chat's verbs in ⌘K (`app/chatSlashPalette.ts`)
+
+The palette's first consumer of both seams (#3285): every client slash command and every
+server **user-facing skill** as palette rows, so the console's real verbs are reachable from
+the one surface an operator asks "how do I do X?".
+
+**A skill is not runnable, and its row must not pretend otherwise.** A `user_facing` skill
+(ADR 0052) is a message *rewrite* the server applies on the next **send** — `_skill_directive`
+injects the procedure and falls through to an ordinary lead-agent turn. There is no endpoint
+that runs one, and the palette must not send a message on the operator's behalf. So a skill
+row prefills `/<skill> ` into the composer, raises chat, and stops.
+
+Generalised: **a row either RUNS or DRAFTS, and every drafting row says the same thing**
+("drafts in chat — you send it"), so one phrase means one behaviour. Every skill drafts;
+`/btw` does too, because it takes a question the palette has no way to ask for and running it
+bare only prints its own usage note. And a row dispatches the token it actually *claims* —
+`/goal`'s row runs `goal new`, the one branch the client command owns (bare `/goal` falls
+through to the server control command and would return `false`), and is labelled `/goal new`
+so it can't promise a verb it doesn't run.
+
+**Session semantics are decided per command, on one question: does it need THIS
+conversation's content, or merely A thread?** Outside the composer a `return false` is a
+silent no-op — there is no draft for the token to fall into — so a row that would decline
+must not look runnable:
+
+- **Needs this conversation** (`/clear /export /publish /btw /trajectory /prompt /perf
+  /compact`) — the row is `disabled` with the reason in `hint`. Auto-creating a blank tab to
+  export an empty transcript or compact nothing would "succeed" and tell the operator
+  nothing. Disabled-and-explaining keeps it discoverable.
+- **Needs only a thread** (`/help /effort /model /incognito /bypass /goal /watch`) — a place
+  to print, or a tab to configure before typing into it. The row creates or focuses one
+  first (`chatStore.createSession` reuses a pristine blank), then dispatches.
+- **Needs nothing** — `/new`.
+
+The gate is "is there a session", never "does it have messages": the palette must not invent
+a stricter rule than the composer, where `/export` on an empty tab is allowed.
+
+**Both halves are a `registerPaletteSource`, not static rows.** The skill list is live server
+state (`/api/chat/commands` re-resolves the registries per request, so enabling a plugin
+changes it with no restart) and the client rows' `disabled` flags track the chat slot's
+session, which moves as tabs open and close. A snapshot would freeze each. The source reads
+the shared React-Query **cache** (`queryKeys.chatCommands`) rather than fetching, because it
+runs on every keystroke into the palette. Consequence to own: core now ships a source, so the
+DS commands view wires its provider unconditionally — these rows arrive after its 120ms
+debounce, behind a small "Searching…" spinner, while the static rows still render instantly.
+
+Every navigation goes through the palette's serializable `NavIntent` chokepoint, injected
+rather than imported: a direct `useUI.getState()` call is an inert no-op in the frameless
+launcher's shell-less context. (The launcher gets no rows at all — it mounts no chat slot, so
+`slashDispatchTarget()` is `null` and the source returns nothing.)
+
 ### UI-state slices (shipped, `createUISlice`)
 
 - **`createUISlice(namespace, initial)`** (`apps/web/src/ext/uiStateRegistry.ts`) — a fork

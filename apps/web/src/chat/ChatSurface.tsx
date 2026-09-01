@@ -956,6 +956,13 @@ function ChatSessionSlot({
       run: runClientSlash,
       sessionId: session?.id ?? null,
       surfaceActive,
+      // The skill path (#3285): a user-facing skill is a server-side message REWRITE, so
+      // the only honest outside action is to hand the operator the draft — the same
+      // `setDraft` + focus a picked `/`-menu row does, minus the send.
+      prefillDraft: (text: string) => {
+        setDraft(text);
+        textareaRef.current?.focus();
+      },
     });
   });
 

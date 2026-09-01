@@ -104,3 +104,26 @@ test("clicking Send on a bare command closes the slash menu so the picker is mou
   await form.getByRole("button", { name: /submit/i }).click();
   await expect(form).toBeHidden();
 });
+
+// ⌘K knows the chat's verbs too (#3285). The two halves have DIFFERENT semantics and the
+// difference is the whole risk: a client command RUNS, a user-facing skill cannot be run at
+// all (the server rewrites the message on the next SEND) so its row must draft and stop.
+test("the palette lists the chat's slash commands, and a skill row DRAFTS rather than runs", async ({ page }) => {
+  const composer = page.getByPlaceholder(/Message protoAgent/i);
+  await page.keyboard.press("ControlOrMeta+Shift+k");
+  const palette = page.locator(".pl-cmdk__panel");
+  await expect(palette).toBeVisible();
+  const input = palette.locator(".pl-cmdk-commands__input");
+
+  // A client command, by the token the operator already types in the composer. These arrive
+  // through the seam's read-time provider, so the row appears a debounce after the keystroke.
+  await input.fill("/clear");
+  await expect(page.getByRole("option", { name: "/clear" })).toBeVisible();
+
+  // A user-facing skill: picking it must leave the operator in chat with the token typed and
+  // the send still theirs — never a turn fired on their behalf.
+  await input.fill("/triage");
+  await page.getByRole("option", { name: "/triage" }).click();
+  await expect(palette).toBeHidden();
+  await expect(composer).toHaveValue("/triage ");
+});

@@ -65,6 +65,19 @@
 // raise is fine — the note lands in the session's message list, which renders when the
 // surface does; only the pre-raise render still reports `surfaceActive: false`.
 
+// WHY THE SEAM ALSO CARRIES A DRAFT SETTER — the user-facing SKILL case (#3285). A server
+// `user_facing` skill (`/api/chat/commands`, kind "skill") is NOT a thing an outside
+// surface can run: it is a message REWRITE the server applies on the NEXT SEND
+// (server/chat_commands.py `_skill_directive` injects the procedure and falls through to a
+// normal lead-agent turn). There is no "run this skill" call anywhere, and inventing one
+// from the palette would mean sending a message on the operator's behalf.
+// So the honest action for a skill is the composer's own: put `/<skill> ` in the draft and
+// hand the operator the caret. That needs the SAME live React closure `run` needs — the
+// draft is `useState` inside ChatSessionSlot (seeded from sessionStorage on mount), so
+// writing sessionStorage from outside would be swallowed by the mounted slot and a store
+// write has nowhere to go. Hence `prefillDraft` rides the same registration rather than a
+// second parallel seam.
+
 /** The visible chat slot's dispatcher. Registered per render (see ChatSurface), so treat
  *  the object identity as per-render — only the guarded unregister compares it. */
 export type SlashDispatchTarget = {
@@ -79,6 +92,13 @@ export type SlashDispatchTarget = {
    *  command draws (a system note, the /effort picker) would actually be on screen. False
    *  while the operator is on another rail; the slot stays registered anyway (#613). */
   surfaceActive: boolean;
+  /** Replace this slot's composer draft with `text` and focus the textarea — the "hand the
+   *  operator a half-written message" verb, for a token that CANNOT be run from outside
+   *  (a user-facing skill) and for anything else that wants the send left to the operator.
+   *  Required, not optional: a host that owns the chat slot owns a composer by definition,
+   *  and an optional setter would invite a caller to skip the check and silently drop the
+   *  prefill — exactly the failure mode this seam exists to prevent. */
+  prefillDraft: (text: string) => void;
 };
 
 let target: SlashDispatchTarget | null = null;
@@ -123,4 +143,21 @@ export function runSlashFromOutside(raw: string): boolean {
   const command = raw.trim().replace(/^\/+/, "").trim();
   if (!command) return false;
   return dispatcher.run(command);
+}
+
+/** Put `text` in the visible slot's composer draft and focus it, leaving the SEND to the
+ *  operator. The action for a user-facing skill, which is a server-side message rewrite
+ *  rather than anything a caller can invoke (see the note above `SlashDispatchTarget`).
+ *
+ *  Returns false when no slot is registered — the same real signal `runSlashFromOutside`
+ *  returns, and the caller must treat it the same way (fall back, don't assume it landed).
+ *  Note the two conditions on `slashDispatchTarget()` still apply and this function does
+ *  NOT check them for you: with `sessionId: null` there is no slot state to write into, and
+ *  with `surfaceActive: false` the operator is looking at another rail and would never see
+ *  the draft appear — raise the chat surface first, exactly as for a dispatched command. */
+export function prefillChatDraft(text: string): boolean {
+  const dispatcher = target;
+  if (!dispatcher) return false;
+  dispatcher.prefillDraft(text);
+  return true;
 }
