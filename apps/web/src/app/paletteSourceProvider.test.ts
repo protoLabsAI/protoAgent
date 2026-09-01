@@ -113,7 +113,7 @@ describe("registerPaletteSource → the DS read-time provider", () => {
   it("wires the provider for a source registered AFTER mount, and serves its rows", async () => {
     // The zero-sources arm ("no source ⇒ no provider ⇒ no 'Searching…' spinner in front of
     // every keystroke") moved to paletteRegistry.test.ts's `hasPaletteSources` case: since
-    // #3285 core itself registers one (chatSlashPalette — the chat's slash commands and the
+    // #3292 core itself registers one (chatSlashPalette — the chat's slash commands and the
     // server's user-facing skills), so importing this module registers it and the arm is no
     // longer observable from a mounted registry. What this file still owns is the half that
     // needed React to catch: registering bumps the seam version, which re-runs the effect

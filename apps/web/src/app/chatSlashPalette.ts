@@ -1,4 +1,4 @@
-// The chat's own verbs in ⌘K (#3285) — the 16 client slash commands (ADR 0061) and every
+// The chat's own verbs in ⌘⇧K (#3292) — the 16 client slash commands (ADR 0061) and every
 // server user-facing SKILL (ADR 0052), which until now existed ONLY inside the composer's
 // `/` menu. They are the console's real actions ("clear this chat", "switch model",
 // "export"), and the palette — the console's one "how do I do X?" surface — did not know
@@ -20,6 +20,15 @@
 // ("drafts in chat — you send it"), because one phrase should mean one behaviour. Every
 // skill drafts; one client command does too (`/btw`, which needs a question the palette has
 // no way to ask for — running it bare would only print its own usage note).
+//
+// ── The row's two slots ──────────────────────────────────────────────────────────────
+// LABEL = `/token · what it does`, the composer `/` menu's own shape and the reason this
+// reads as the same list in a second place. HINT = the row's CAVEAT (a disabled reason, the
+// draft promise, "opens a chat first"), or nothing — which leaves it free for the live
+// keybinding combo. The description could not live in the hint: the hint is occupied
+// precisely when the operator needs the prose most (with no chat open, every client row's
+// hint is a reason; a skill row's is always its draft promise), and a column of bare tokens
+// — `/perf`, `/btw`, `/postmortem` — is a list you cannot shop from.
 //
 // ── Why a dynamic SOURCE and not static registration ────────────────────────────────
 // Both halves are live, for different reasons, and a snapshot would freeze each:
@@ -110,33 +119,39 @@ const CONVERSATION_SCOPED = new Set([
  *  exactly as picking it from the `/` menu does. */
 const DRAFTS = new Set(["btw"]);
 
-/** What a row actually dispatches, where that differs from the bare token. `/goal` is the
- *  live case: the client command claims ONLY the `new` subcommand (the guided form) and
- *  returns false for everything else so bare `/goal`, `/goal <text>` and `/goal clear` fall
- *  through to the SERVER control command. Dispatching bare "goal" from here would hit that
- *  false and do nothing at all — the exact silent no-op this whole file is about. The label
- *  follows the dispatched token, so the row can't promise a verb it doesn't run. */
-const DISPATCH: Record<string, string> = { goal: "goal new" };
+/** Rows that restate the registered command, because the row is NARROWER than it. `/goal`
+ *  is the only live case: the client command claims ONLY the `new` subcommand (the guided
+ *  form) and returns false for everything else, so bare `/goal`, `/goal <text>` and
+ *  `/goal clear` fall through to the SERVER control command. Dispatching bare "goal" from
+ *  here would hit that false and do nothing at all — the exact silent no-op this whole file
+ *  is about. So the row dispatches `goal new`, is labelled `/goal new`, and takes a `blurb`
+ *  of its own: the registry description ("Set or check goals — /goal new opens a guided
+ *  form") LEADS with the two branches this row does not run, and a row must not lead with a
+ *  verb it can't deliver. */
+const RESTATED: Record<string, { token: string; blurb: string }> = {
+  goal: { token: "goal new", blurb: "Open the guided goal form" },
+};
 
 /** Extra search terms per command, for words an operator would reach for that the
  *  description doesn't contain ("wipe" for /clear, "llm" for /model, "yolo" for /bypass).
- *  Purely additive: a command missing an entry still matches on its label + description, so
- *  this never needs a drift guard the way a replacement-label table would. */
+ *  Purely additive: a command missing an entry still matches on its label (token AND
+ *  description) and its usage, so this never needs a drift guard the way a replacement-label
+ *  table would. */
 const SYNONYMS: Record<string, string[]> = {
   new: ["start", "another", "conversation", "tab"],
   clear: ["wipe", "reset", "erase", "empty", "delete history"],
-  export: ["download", "save", "transcript", "file"],
+  export: ["download", "save", "transcript", "file", "markdown"],
   publish: ["share", "link", "public", "read-only"],
   btw: ["aside", "side question", "by the way", "off the record"],
-  trajectory: ["timeline", "trace", "tool calls", "what the agent saw", "debug"],
+  trajectory: ["timeline", "trace", "tool calls", "steps", "what the agent saw", "debug"],
   prompt: ["system prompt", "instructions", "soul", "context"],
-  perf: ["performance", "latency", "cost", "tokens", "cache", "speed", "spend"],
-  compact: ["summarize", "condense", "shrink", "context", "history"],
+  perf: ["performance", "latency", "cost", "tokens", "usage", "cache", "speed", "spend"],
+  compact: ["summarize", "condense", "shrink", "trim", "context", "history"],
   effort: ["reasoning", "thinking", "low", "medium", "high", "max"],
-  model: ["llm", "switch", "provider", "favorites"],
+  model: ["llm", "switch", "change", "provider", "favorites"],
   incognito: ["private", "no memory", "ephemeral", "off the record"],
   help: ["shortcuts", "reference", "keys", "cheat sheet"],
-  bypass: ["permissions", "auto-approve", "yolo", "dangerous", "run_command"],
+  bypass: ["permissions", "auto-approve", "approve", "yolo", "dangerous", "run_command"],
   goal: ["objective", "target", "self-driving", "form"],
   watch: ["watches", "monitor", "alert", "condition", "trigger"],
 };
@@ -144,9 +159,10 @@ const SYNONYMS: Record<string, string[]> = {
 /** `registerKeybinding` ids these rows ADVERTISE (ADR 0063) — the host renders the LIVE
  *  combo through `effectiveCombo`, so a rebind can't leave the row lying. Only where the
  *  binding does the same thing as the command: `chat.new` is `chatStore.createSession`,
- *  `chat.clear` is the same `requestClearSession` confirm `/clear` raises. Setting one is
- *  only half the job — `toDsCommand` renders `hint ?? combo`, so a row that wants the combo
- *  shown must leave `hint` unset (see `hintFor`). */
+ *  `chat.clear` is the same `requestClearSession` confirm `/clear` raises. `toDsCommand`
+ *  renders `hint ?? combo`, so the combo shows only while the row has nothing more urgent
+ *  to say — which is why the description rides the LABEL here and `hintFor` returns
+ *  undefined by default rather than filling that slot with prose. */
 const KEYBINDING: Record<string, string> = { new: "chat.new", clear: "chat.clear" };
 
 const HANDOFF_TRIES = 30;
@@ -193,37 +209,53 @@ function onChatReady(act: () => void, navigate: Navigate): void {
  *  the client commands in `DRAFTS`, so the operator learns it once. */
 const DRAFT_HINT = "drafts in chat — you send it";
 
-/** The muted trailing text, in priority order: a disabled row explains ITSELF here (the
- *  seam's contract), a drafting row promises the draft, a row that will make a tab first
- *  says so, and a row advertising a keybinding leaves it UNSET so the host can render the
- *  live combo instead of a static sentence. Everything else falls back to the command's own
- *  description. */
+/** `/token · what it does` — the shape of the composer's own `/` menu, which is where the
+ *  operator learned these (a `slash-name` span, then a `slash-desc` one). The description
+ *  has to ride the LABEL rather than the hint because the hint is spent on the row's caveat
+ *  exactly when the prose is most needed: with no chat open EVERY client row's hint is a
+ *  reason, and a skill row's is always its draft promise — leaving a column of bare tokens
+ *  (`/perf`, `/btw`, and skills named by whoever authored them: `/triage`, `/postmortem`)
+ *  with nothing on the row saying what they are. The DS label span ellipsizes, so a long
+ *  description degrades to its first clause instead of crowding the row's hint out. */
+function rowLabel(token: string, blurb: string | undefined): string {
+  return blurb ? `/${token} · ${blurb}` : `/${token}`;
+}
+
+/** The muted trailing text — the row's CAVEAT, in priority order: a disabled row explains
+ *  ITSELF here (the seam's contract), a drafting row promises the draft, and a row that
+ *  will make a tab first says so. Undefined otherwise, which is the point: the label
+ *  already carries the description, so the slot is free for `toDsCommand` to render the
+ *  live keybinding combo where a row advertises one. */
 function hintFor(
-  cmd: { name: string; description: string },
+  name: string,
   opts: { disabled: boolean; willOpenChat: boolean },
 ): string | undefined {
   if (opts.disabled) return "needs an open chat";
-  if (DRAFTS.has(cmd.name)) return DRAFT_HINT;
+  if (DRAFTS.has(name)) return DRAFT_HINT;
   if (opts.willOpenChat) return "opens a chat first";
-  if (KEYBINDING[cmd.name]) return undefined; // let the live combo show
-  return cmd.description;
+  return undefined;
 }
 
 /** The rows for the client slash commands registered through `registerSlashCommand`. */
 function clientRows(sessionId: string | null, navigate: Navigate): PaletteCommand[] {
   return registeredSlashCommands().map((cmd) => {
-    const token = DISPATCH[cmd.name] ?? cmd.name;
+    const restated = RESTATED[cmd.name];
+    const token = restated?.token ?? cmd.name;
     const disabled = !sessionId && CONVERSATION_SCOPED.has(cmd.name);
+    // `/new` never promises to open a chat first — opening one IS the action.
     const willOpenChat = !sessionId && !disabled && cmd.name !== "new";
     return {
       id: `chat-slash:${cmd.name}`,
-      // The token IS the label: it is the name the operator already knows from the composer
-      // and the one this audit found missing from ⌘K. The prose lives in `hint` (when it is
-      // free) and in `keywords` (always), so search works in every row state.
-      label: `/${token}`,
+      // The token LEADS the label: it is the name the operator already knows from the
+      // composer and the one this audit found missing from ⌘⇧K. `usage` joins the keywords
+      // so the argument words are searchable too ("incognito off", "effort max") — they are
+      // what an operator types, and no other field carries them.
+      label: rowLabel(token, restated?.blurb ?? cmd.description),
       group: "Chat",
-      keywords: ["slash", cmd.description, ...(SYNONYMS[cmd.name] ?? [])],
-      hint: hintFor(cmd, { disabled, willOpenChat }),
+      keywords: ["slash", cmd.description, cmd.usage, ...(SYNONYMS[cmd.name] ?? [])].filter(
+        Boolean,
+      ) as string[],
+      hint: hintFor(cmd.name, { disabled, willOpenChat }),
       keybinding: KEYBINDING[cmd.name],
       disabled,
       // Carried, never evaluated here: the host resolves it per render, so a row gated on a
@@ -264,7 +296,9 @@ function skillRows(navigate: Navigate): PaletteCommand[] {
     .filter((skill) => !findSlashCommand(skill.name))
     .map((skill) => ({
       id: `chat-skill:${skill.name}`,
-      label: `/${skill.name}`,
+      // The description matters MORE here than on a client row: a skill's token is whatever
+      // its author called it, so `/triage` alone names nothing an operator can act on.
+      label: rowLabel(skill.name, skill.description || skill.usage),
       group: "Skills",
       keywords: ["skill", "playbook", "procedure", skill.description, skill.usage].filter(
         Boolean,

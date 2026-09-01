@@ -34,11 +34,11 @@ import { useFlagPredicate } from "../flags/flags";
 import { useQuery } from "@tanstack/react-query";
 import { agentHref, isHostConsole } from "../lib/api";
 import { fleetQuery } from "../lib/queries";
+import { registerChatSlashPalette } from "./chatSlashPalette";
 import { markAgentOpened } from "./fleetPalette";
 import { fleetRoomView } from "./FleetRoom";
 import { fleetSettingsDisabledReason } from "./fleetSettingsGate";
 import { memberDmView } from "./PaletteChat";
-import { registerChatSlashPalette } from "./chatSlashPalette";
 
 /** Optional inline chat with the focused agent (ADR 0057). App builds the native chat
  *  PaletteView (it needs JSX + the focused agent name); the adapter registers it + a
@@ -147,7 +147,7 @@ function navigate(intent: NavIntent) {
 }
 
 // The chat's own verbs — the client slash commands and the server's user-facing skills
-// (#3285) — as a DYNAMIC source, because both halves are live: the skill list is
+// (#3292) — as a DYNAMIC source, because both halves are live: the skill list is
 // re-resolved server-side per request, and a client row's disabled state tracks whether the
 // visible chat slot has a session. `navigate` is INJECTED rather than imported so the module
 // keeps no runtime edge back here (its only import from this file is the `NavIntent` type,

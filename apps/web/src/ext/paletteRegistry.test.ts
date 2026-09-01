@@ -244,7 +244,7 @@ describe("palette-command registry (ADR 0061)", () => {
     // The registry-level fact, and the reason the host asks before wiring the DS provider:
     // it shows a "Searching…" spinner (and debounces 120ms) whenever ANY provider declares
     // `getCommands`. Asserted HERE because this file imports only the registry — the app's
-    // own source (app/chatSlashPalette, #3285) registers when `usePaletteRegistry` is
+    // own source (app/chatSlashPalette, #3292) registers when `usePaletteRegistry` is
     // imported, which this module graph never does.
     expect(hasPaletteSources()).toBe(false);
     const off = source(() => []);
@@ -317,7 +317,7 @@ describe("palette-command registry (ADR 0061)", () => {
       // Kept LAST and dynamic: the import registers into this module's global state, so every
       // test above sees the registry without core's rows in it. The generous timeout is for
       // the transform, not the assertion — the adapter pulls in the DS palette, the UI store,
-      // react-query, the flags query, the keybinding store and (since #3285) the chat slash
+      // react-query, the flags query, the keybinding store and (since #3292) the chat slash
       // source's chat-store/seam modules, and under a full-suite run that cold import blows
       // past vitest's 5s default. It has measured ~30s on a loaded machine, so the cap is
       // well clear of it: this test failing on time says the import graph grew, not that the
@@ -326,7 +326,7 @@ describe("palette-command registry (ADR 0061)", () => {
       const ids = registeredPaletteCommands().map((c) => c.id);
       expect(ids).toContain("settings");
       expect(ids).toContain("plug:market");
-      // …and so does core's own dynamic SOURCE (app/chatSlashPalette, #3285) — which is why
+      // …and so does core's own dynamic SOURCE (app/chatSlashPalette, #3292) — which is why
       // the `hasPaletteSources()` case above has to run before this import, and why it is
       // the only place the "core registers none" arm is still observable.
       expect(hasPaletteSources()).toBe(true);

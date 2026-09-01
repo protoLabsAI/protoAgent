@@ -65,7 +65,7 @@
 // raise is fine — the note lands in the session's message list, which renders when the
 // surface does; only the pre-raise render still reports `surfaceActive: false`.
 
-// WHY THE SEAM ALSO CARRIES A DRAFT SETTER — the user-facing SKILL case (#3285). A server
+// WHY THE SEAM ALSO CARRIES A DRAFT SETTER — the user-facing SKILL case (#3292). A server
 // `user_facing` skill (`/api/chat/commands`, kind "skill") is NOT a thing an outside
 // surface can run: it is a message REWRITE the server applies on the NEXT SEND
 // (server/chat_commands.py `_skill_directive` injects the procedure and falls through to a

@@ -293,7 +293,7 @@ export const SLASH_COMMANDS = [
   { name: "research-and-brief", description: "Research a topic, then write a brief.", usage: "/research-and-brief <topic> [depth]" },
   // A user-facing SKILL (ADR 0052). Unlike a workflow it runs nothing: the server rewrites
   // the message on the next SEND, which is why the ⌘K row for one drafts into the composer
-  // instead of executing (#3285). `kind` is what the resolver stamps and what tells the two
+  // instead of executing (#3292). `kind` is what the resolver stamps and what tells the two
   // apart.
   { name: "triage", description: "Triage an incoming report.", usage: "/triage <report>", kind: "skill" },
 ];

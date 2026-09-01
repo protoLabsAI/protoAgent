@@ -1,4 +1,4 @@
-// The chat's verbs in ⌘K (#3285). Three things can go wrong here and all three are quiet,
+// The chat's verbs in ⌘⇧K (#3292). Three things can go wrong here and all three are quiet,
 // so all three are pinned:
 //
 //   1. a row that VISIBLY DOES NOTHING. Most client slash commands `return false` without a
@@ -81,20 +81,30 @@ describe("no chat slot in this window", () => {
 });
 
 describe("client slash command rows", () => {
-  it("offers every registered command, labelled by the token the operator already types", () => {
+  it("labels a row `/token · what it does` — the composer `/` menu's own shape", () => {
     slot();
     const ids = rows().map((r) => r.id);
     for (const cmd of registeredSlashCommands()) expect(ids).toContain(`chat-slash:${cmd.name}`);
-    expect(row("chat-slash:clear").label).toBe("/clear");
+    expect(row("chat-slash:clear").label).toBe("/clear · Clear this chat's history");
     expect(row("chat-slash:clear").group).toBe("Chat");
   });
 
-  it("keeps the description searchable even when the hint is spent on a reason", () => {
+  it("still says what the row DOES when the hint is spent on a reason", () => {
+    // The regression this guards: put the description in the hint and it vanishes in exactly
+    // the state an operator opens the palette in — no chat yet, so every hint is a caveat.
     slot({ sessionId: null });
     const clear = row("chat-slash:clear");
-    expect(clear.hint).toBe("needs an open chat"); // the hint slot is the REASON here
-    expect(clear.keywords?.join(" ")).toContain("Clear this chat's history"); // …so search still works
+    expect(clear.hint).toBe("needs an open chat"); // the hint slot is the REASON here…
+    expect(clear.label).toContain("Clear this chat's history"); // …and the label still explains
     expect(clear.keywords?.join(" ")).toContain("wipe"); // plus reach-for-it synonyms
+  });
+
+  it("searches the ARGUMENT words too — they are what an operator types", () => {
+    slot();
+    // `usage` is the only field carrying "on|off", "low|medium|high"; a row found by
+    // "incognito off" is a row the operator can pick without knowing the syntax first.
+    expect(row("chat-slash:incognito").keywords?.join(" ")).toContain("off");
+    expect(row("chat-slash:effort").keywords?.join(" ")).toContain("max");
   });
 
   it("carries /publish's flag onto the row instead of evaluating it", () => {
@@ -170,7 +180,9 @@ describe("running a row", () => {
     // Bare `/goal` returns false (it falls through to the SERVER control command), so a row
     // that dispatched "goal" would be the exact silent no-op this source exists to avoid.
     slot();
-    expect(row("chat-slash:goal").label).toBe("/goal new"); // …and the label can't over-promise
+    // …and the label can't over-promise: the registry description LEADS with the two
+    // branches (`/goal <text>`, `/goal clear`) this row does NOT run, so the row restates it.
+    expect(row("chat-slash:goal").label).toBe("/goal new · Open the guided goal form");
     run(row("chat-slash:goal"));
     expect(dispatch).toHaveBeenCalledWith("goal new");
   });
@@ -234,7 +246,9 @@ describe("user-facing skill rows", () => {
     slot();
     skills("triage");
     const r = row("chat-skill:triage");
-    expect(r.label).toBe("/triage");
+    // A skill's token is whatever its author called it, so the description is the only thing
+    // on the row that names what it does — it must be ON the row, not only in `keywords`.
+    expect(r.label).toBe("/triage · The triage skill.");
     expect(r.group).toBe("Skills");
     expect(r.hint).toBe("drafts in chat — you send it"); // the row promises a draft, not a run
     run(r);
@@ -290,7 +304,7 @@ describe("the source is cheap, and tracks the LIVE list", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("follows the query CACHE, so enabling a plugin changes ⌘K with no restart", () => {
+  it("follows the query CACHE, so enabling a plugin changes ⌘⇧K with no restart", () => {
     // /api/chat/commands is re-resolved per request, so the answer moves under a live
     // console. A snapshot taken at registration would list yesterday's skills forever.
     slot();

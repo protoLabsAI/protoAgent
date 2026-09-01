@@ -184,7 +184,7 @@ describe("the chat slot's registration (source guard)", () => {
   });
 });
 
-// The draft half of the seam (#3285). A user-facing SKILL cannot be run from outside — the
+// The draft half of the seam (#3292). A user-facing SKILL cannot be run from outside — the
 // server rewrites the message on the next SEND — so the only honest outside action is to
 // hand the operator the draft. Same contract as `run`: inert with nothing registered, and
 // a false return is a real signal rather than a shrug.

@@ -204,7 +204,7 @@ sessionStorage on mount), so a write from outside React is swallowed by the moun
 
 ### The chat's verbs in the command palette (`app/chatSlashPalette.ts`)
 
-The palette's first consumer of both seams (#3285): every client slash command and every
+The palette's first consumer of both seams (#3292): every client slash command and every
 server **user-facing skill** as palette rows, so the console's real verbs are reachable from
 the one surface an operator asks "how do I do X?".
 
@@ -219,8 +219,19 @@ Generalised: **a row either RUNS or DRAFTS, and every drafting row says the same
 `/btw` does too, because it takes a question the palette has no way to ask for and running it
 bare only prints its own usage note. And a row dispatches the token it actually *claims* —
 `/goal`'s row runs `goal new`, the one branch the client command owns (bare `/goal` falls
-through to the server control command and would return `false`), and is labelled `/goal new`
-so it can't promise a verb it doesn't run.
+through to the server control command and would return `false`), and is labelled
+`/goal new · Open the guided goal form`: the registry description ("Set or check goals — …")
+leads with two branches this row does not run, and a row must not lead with a verb it can't
+deliver.
+
+**The row's two slots: label = `/token · what it does`, hint = the caveat.** The label is the
+composer `/` menu's own shape (token, then description), which is what makes this read as the
+same list in a second place. The description cannot live in the hint, because the hint is
+occupied exactly when the prose is needed most: with no chat open every client row's hint is a
+reason, and a skill row's is always its draft promise — leaving a column of bare tokens
+(`/perf`, `/btw`, and skills named by whoever authored them) that an operator cannot shop
+from. Leaving `hint` unset is also what lets `toDsCommand` render the row's live keybinding
+combo, so a row that advertises one says nothing else.
 
 **Session semantics are decided per command, on one question: does it need THIS
 conversation's content, or merely A thread?** Outside the composer a `return false` is a
