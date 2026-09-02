@@ -47,7 +47,9 @@ def test_search_indexes_existing_summaries_and_returns_attribution(tmp_path):
 def test_schema_reset_persists_the_declared_version(monkeypatch, tmp_path):
     import graph.session_search as session_search_module
 
-    monkeypatch.setattr(session_search_module, "_SCHEMA_VERSION", 2)
+    # A version the module does NOT declare, or this asserts nothing: `_SCHEMA_VERSION`
+    # is 2 since #3322, so patching it to 2 would pass whether the write happens or not.
+    monkeypatch.setattr(session_search_module, "_SCHEMA_VERSION", 3)
     _write(tmp_path, "chat-versioned", "schema version probe")
     assert search_session_summaries("schema version", memory_dir=str(tmp_path))
 
@@ -55,7 +57,7 @@ def test_schema_reset_persists_the_declared_version(monkeypatch, tmp_path):
         stored = conn.execute(
             "SELECT value FROM session_search_meta WHERE key = 'schema_version'"
         ).fetchone()
-    assert stored == ("2",)
+    assert stored == ("3",)
 
 
 def test_search_reconciles_rewrites_and_deletes(tmp_path):
@@ -147,3 +149,70 @@ async def test_session_search_tool_reports_bad_surface(monkeypatch, tmp_path):
     tool = {item.name: item for item in get_all_tools(object())}["session_search"]
     output = await tool.ainvoke({"query": "needle", "surface": "email"})
     assert output.startswith("Error: unknown surface")
+
+
+def test_query_matches_a_plural_or_tense_variant(tmp_path):
+    """The index stems (porter), so recall doesn't depend on reproducing the stored
+    surface form. Before #3322 every one of these missed while the session sat
+    indexed on disk — the agent searched, found nothing, and correctly said so."""
+    _write(tmp_path, "chat-audit", "how long we keep audit logs before rotating them")
+
+    for query in ("audit log", "audit logs", "rotation", "rotating"):
+        assert search_session_summaries(query, memory_dir=str(tmp_path)), f"{query!r} found nothing"
+
+
+def test_derivational_mismatch_still_misses(tmp_path):
+    """The KNOWN limit, pinned so it shows up the day it changes. Porter stems
+    inflections, not derivations: "retained" → "retain" but "retention" → "retent".
+    Closing this needs semantic retrieval, which this index deliberately doesn't have —
+    which is why on-demand search is not a complete substitute for the prior-session
+    digest (ADR 0108 D9, the #3186 decision)."""
+    _write(tmp_path, "chat-ret", "audit logs are retained for ninety days")
+
+    assert search_session_summaries("retained", memory_dir=str(tmp_path))
+    assert search_session_summaries("retention", memory_dir=str(tmp_path)) == []
+
+
+def test_an_index_from_the_previous_schema_is_rebuilt_with_the_stemmer(tmp_path):
+    """The upgrade path that matters: every existing install already has an index
+    built by the OLD tokenizer. The version bump is the whole migration — a stale
+    index must rebuild itself on first open rather than serve unstemmed results
+    forever."""
+    _write(tmp_path, "chat-audit", "how long we keep audit logs before rotating them")
+    index = tmp_path / ".session-search.sqlite3"
+
+    # An index exactly as v1 left it: old tokenizer, old declared version, and a row
+    # already in it so a "rebuild" is observable rather than a first-time build.
+    with sqlite3.connect(index) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE session_search_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE session_search_files (
+                session_id TEXT PRIMARY KEY, filename TEXT NOT NULL UNIQUE,
+                mtime_ns INTEGER NOT NULL, size INTEGER NOT NULL,
+                timestamp TEXT NOT NULL, surface TEXT NOT NULL
+            );
+            CREATE VIRTUAL TABLE session_search_fts USING fts5(
+                session_id UNINDEXED, content, tokenize='unicode61'
+            );
+            INSERT INTO session_search_meta (key, value) VALUES ('schema_version', '1');
+            """
+        )
+    # Sanity: under the OLD schema the singular really does miss — otherwise this test
+    # would pass whether or not the rebuild happened.
+    with sqlite3.connect(index) as conn:
+        conn.execute(
+            "INSERT INTO session_search_fts (session_id, content) VALUES ('chat-audit', 'audit logs rotating')"
+        )
+        stale = conn.execute(
+            "SELECT count(*) FROM session_search_fts WHERE session_search_fts MATCH ?", ('"audit" AND "log"',)
+        ).fetchone()[0]
+    assert stale == 0
+
+    assert search_session_summaries("audit log", memory_dir=str(tmp_path))
+
+    with sqlite3.connect(index) as conn:
+        stored = conn.execute(
+            "SELECT value FROM session_search_meta WHERE key = 'schema_version'"
+        ).fetchone()
+    assert stored == ("2",)

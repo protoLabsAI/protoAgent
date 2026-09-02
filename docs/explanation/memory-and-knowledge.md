@@ -182,7 +182,11 @@ prompt layer, don't just hope the store stays clean). Three parts, in order:
    The full summary of any listed session is one tool call away with
    `recall_session(session_id)`; when the id is unknown, `session_search(query)`
    searches reasoning-stripped, credential-redacted transcript content in a
-   lazy FTS5 index and returns ids to expand.
+   lazy FTS5 index and returns ids to expand. That search is **stemmed but not
+   semantic** — it finds "audit logs" for "audit log", and nothing at all for a
+   query that shares no word stem with the stored text ("retention" vs
+   "retained"). The digest's job is to remove that guess: it says which sessions
+   exist so the agent knows there is something to reach for.
 2. **Always-on memory ("hot").** Chunks with `delivery_policy="always"` are
    always-on operator facts: the newest 100 under a 6 000-char budget inject
    **every turn**, loaded fresh per turn so a just-added fact is seen

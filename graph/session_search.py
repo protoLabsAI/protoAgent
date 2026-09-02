@@ -21,7 +21,9 @@ from graph.output_format import strip_reasoning
 
 
 _INDEX_FILENAME = ".session-search.sqlite3"
-_SCHEMA_VERSION = 1
+# 2 (#3322): the tokenizer gained a stemmer. The index is derived and disposable, so
+# bumping this is the whole migration — `_open_index` sees the mismatch and rebuilds.
+_SCHEMA_VERSION = 2
 _MAX_INDEXED_CHARS = 256_000
 _QUERY_TERM_RE = re.compile(r"\w+", re.UNICODE)
 SESSION_SEARCH_SURFACES = frozenset({"chat", "a2a/other", "activity", "palette", "background"})
@@ -66,7 +68,19 @@ def _reset_schema(conn: sqlite3.Connection) -> None:
         CREATE VIRTUAL TABLE session_search_fts USING fts5(
             session_id UNINDEXED,
             content,
-            tokenize='unicode61'
+            -- `porter` STEMS both the indexed text and the query, so "audit log" finds
+            -- a session about "audit logs" and "rotation" finds one about "rotating".
+            -- Without it a caller had to reproduce the stored surface form exactly,
+            -- which is not how anyone recalls their own past sessions: a real run had
+            -- the agent search "audit log retention", miss every term, and correctly
+            -- report it found nothing while the session sat indexed on disk (#3322).
+            --
+            -- What it does NOT fix: DERIVATIONAL mismatch. "retained" stems to "retain"
+            -- and "retention" to "retent", so that pair still misses. Closing that needs
+            -- semantic retrieval, which the knowledge store has and this index
+            -- deliberately does not — so "just search for it" is not a complete
+            -- substitute for the always-on prior-session digest (ADR 0108 D9).
+            tokenize='porter unicode61'
         );
         """
     )
