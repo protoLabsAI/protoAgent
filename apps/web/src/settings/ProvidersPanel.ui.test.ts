@@ -12,6 +12,15 @@ import { ProvidersPanel } from "./ProvidersPanel";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+// jsdom ships no layout and no pointer-capture, so a Radix DropdownMenu (the DS
+// `DropdownSelect`) never opens under it: its Trigger guards `onPointerDown` on
+// `hasPointerCapture`, and its Content scrolls the active item into view. Stub the three so
+// the resolve dialog's repoint menu can actually be opened and selected from here — the same
+// jsdom-layout gap the palette tests fill with a `scrollIntoView` no-op.
+Element.prototype.hasPointerCapture ??= () => false;
+Element.prototype.releasePointerCapture ??= () => {};
+Element.prototype.scrollIntoView ??= () => {};
+
 let container: HTMLElement;
 let root: Root;
 
@@ -190,6 +199,26 @@ const primary = () =>
     | HTMLButtonElement
     | undefined;
 
+// Open a repoint DropdownSelect. Radix opens on `pointerdown` (a synthetic `.click()` never
+// reaches its trigger), so drive that; its options render as `menuitemradio`, not `option`.
+const openLaneMenu = (label: string) => {
+  const trigger = document.querySelector(`[aria-label="New target for ${label}"]`) as HTMLElement;
+  act(() => {
+    trigger.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 }));
+  });
+};
+
+const laneItems = () => [...document.querySelectorAll<HTMLElement>('[role="menuitemradio"]')];
+
+const chooseLane = (contains: string) => {
+  const item = laneItems().find((option) => option.textContent?.includes(contains))!;
+  act(() => {
+    item.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 }));
+    item.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, button: 0 }));
+    item.click();
+  });
+};
+
 const inUseRow = (inUse: Entry[], id = "gateway", display = "Gateway"): Row => ({
   id,
   type: "openai-compat",
@@ -343,17 +372,18 @@ describe("Resolve-references dialog (bd-v6xy)", () => {
     await flush();
 
     clickRemove("Gateway");
+    // No target chosen yet for the non-clearable lead model → the destructive primary is off.
     expect(primary()?.disabled).toBe(true);
 
-    const trigger = document.querySelector('[aria-label="New target for Lead model"]') as HTMLElement;
-    act(() => trigger.click());
+    await flush(); // the dialog's schema query resolves → the repoint dropdown enables
+    openLaneMenu("Lead model");
     await flush();
 
-    const options = [...document.querySelectorAll<HTMLElement>('[role="option"]')];
+    const options = laneItems();
+    // The other connection's lane is offered; the connection being removed (its `gpt-x`) is not.
     expect(options.map((option) => option.textContent).join(" ")).toContain("qwen3-32b");
     expect(options.map((option) => option.textContent).join(" ")).not.toContain("gpt-x");
-    const target = options.find((option) => option.textContent?.includes("qwen3-32b"))!;
-    act(() => target.click());
+    chooseLane("qwen3-32b");
     await flush();
 
     expect(primary()?.disabled).toBe(false);
