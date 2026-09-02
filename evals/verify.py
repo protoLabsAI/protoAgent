@@ -37,8 +37,8 @@ log = logging.getLogger(__name__)
 
 
 def _audit_path() -> Path:
-    """Audit JSONL location. ``AUDIT_PATH`` wins, then the container default, then
-    the INSTANCE's own audit store.
+    """Audit JSONL location: an explicit ``AUDIT_PATH``, else the container default when
+    that file actually exists, else the INSTANCE's own audit store.
 
     The old fallback was a hand-joined ``~/.protoagent/audit/audit.jsonl`` — the
     BOX root, not the instance's. Every agent except an unscoped one writes to
@@ -49,10 +49,19 @@ def _audit_path() -> Path:
     the whole tool-firing channel was blind there (`saw: {}` on a case whose tool
     demonstrably fired). Resolved through ``infra.paths`` now — same rule as the
     memory store."""
-    raw = os.environ.get("AUDIT_PATH") or "/sandbox/audit/audit.jsonl"
-    p = Path(raw).expanduser()
-    if p.is_file():
-        return p
+    # An explicit override wins OUTRIGHT. Gating it on is_file() (as this did) means an
+    # operator pointing at a log the agent hasn't created yet is silently ignored — and
+    # worse, `assert_tools_fired` re-resolves on every poll of its deadline loop, so the
+    # target would flip mid-assertion the moment the file appeared.
+    raw = os.environ.get("AUDIT_PATH", "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    # The container default, only when it is really there: inside the image it is the
+    # agent's log, but on a host it is a path nothing writes, and preferring it would
+    # reintroduce exactly the bug this function was fixed for.
+    container = Path("/sandbox/audit/audit.jsonl")
+    if container.is_file():
+        return container
     try:
         from infra.paths import instance_paths
 

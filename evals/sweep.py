@@ -73,19 +73,35 @@ def _slug(model: str) -> str:
 
 
 def _instance_dirs(instance: str) -> list[Path]:
-    """The scoped-data dirs an instance creates under ``~/.protoagent``."""
-    base = Path(os.path.expanduser("~/.protoagent"))
-    return [
-        base / instance,
-        base / "inbox" / instance,
-        base / "scheduler" / instance,
-        base / "knowledge" / instance,
-    ]
+    """The dirs an arm owns, resolved the way that arm resolves them.
+
+    This used to hand-join ``~/.protoagent/<instance>`` and friends — right only on a
+    plain host install, and the paths feed ``rmtree``. Two failure modes, in opposite
+    directions: under ``PROTOAGENT_BOX_ROOT`` it deleted NOTHING, so an arm's store
+    (including the audit log the tool assertions read) leaked into the next arm; and a
+    naive reroute through ``instance_paths`` would be far worse, because under
+    ``PROTOAGENT_HOME`` every instance resolves to the OPERATOR's own root — the sweep
+    would delete their real data.
+
+    So: resolve properly, then refuse anything that isn't demonstrably the arm's own.
+    """
+    root = _instance_root(instance)
+    if root == _instance_root("") or instance not in root.parts:
+        # PROTOAGENT_HOME is terminal — every instance resolves to the same directory,
+        # which is the operator's. Nothing here is the arm's to delete.
+        print(f"  ! {instance} shares its root with this process ({root}) — not deleting anything")
+        return []
+    return [root]
 
 
 def _instance_memory_dir(instance: str) -> Path:
     """Where that instance's session summaries live — the digest's source."""
     return _instance_store(instance, "memory")
+
+
+def _instance_root(instance: str) -> Path:
+    """That instance's root, resolved under its own environment."""
+    return _resolve_for(instance, lambda p: p.instance_root)
 
 
 def _instance_store(instance: str, name: str) -> Path:
@@ -99,13 +115,22 @@ def _instance_store(instance: str, name: str) -> Path:
     failure would have been silent: fixtures land where the arm never looks,
     seeding reports success, and the A/B measures an empty digest.
     """
+    return _resolve_for(instance, lambda p: p.store(name))
+
+
+def _resolve_for(instance: str, pick):
+    """Run ``pick`` against ``instance``'s resolved paths, then put this process back.
+
+    The env mutation and the cache reset both sit INSIDE the try: if the first reset
+    raises, the sweep process must not be left pointing at an arm for the rest of the
+    run. Arms are sequential, so this is not thread-safe and does not need to be."""
     from infra.paths import instance_paths, reset_instance_paths
 
     previous = os.environ.get("PROTOAGENT_INSTANCE")
-    os.environ["PROTOAGENT_INSTANCE"] = instance
-    reset_instance_paths()  # the singleton caches the FIRST resolution
     try:
-        return instance_paths().store(name)
+        os.environ["PROTOAGENT_INSTANCE"] = instance
+        reset_instance_paths()  # the singleton caches the FIRST resolution
+        return pick(instance_paths())
     finally:
         if previous is None:
             os.environ.pop("PROTOAGENT_INSTANCE", None)
@@ -129,11 +154,6 @@ def _yaml_quoted(value: str) -> object:
         return DoubleQuotedScalarString(str(value))
     except Exception:  # noqa: BLE001 — no ruamel → PyYAML quotes it itself
         return str(value)
-
-
-def _instance_audit_path(instance: str) -> Path:
-    """That instance's audit JSONL — what its tool-firing assertions must read."""
-    return _instance_store(instance, "audit") / "audit.jsonl"
 
 
 def _seed_config_for(policy: str, ts: int, slug: str) -> Path | None:
@@ -248,10 +268,6 @@ def _run_one_model(
         "PROTOAGENT_INSTANCE": instance,
         "PROTOAGENT_UI": "none",
     }
-    # The runner asserts on the ARM's audit log, not this process's. `_audit_path`
-    # resolves it from the instance now, but the runner subprocess inherits THIS
-    # process's instance identity — so name the file outright.
-    env["AUDIT_PATH"] = str(_instance_audit_path(instance))
     if prior_sessions:
         seed_cfg = _seed_config_for(prior_sessions, ts, _slug(label))
         if seed_cfg is None:
