@@ -105,6 +105,13 @@ def _dump(doc: Any) -> str:
     return text
 
 
+def _selected_dump(doc: Any) -> str | None:
+    text = json.dumps(doc, indent=2, default=str, sort_keys=True)
+    if len(text) <= _MAX_CHARS:
+        return text
+    return None
+
+
 def _path_error(path: str, part: str, seen: list[str], current: Any) -> str:
     at = ".".join(seen) or "<root>"
     if isinstance(current, dict):
@@ -157,7 +164,38 @@ def _page_value(value: Any, *, section: str, offset: int, limit: int) -> str:
         return "Error: limit must be >= 0."
     page_limit = min(limit or _DEFAULT_PAGE_LIMIT, _MAX_PAGE_LIMIT)
     if not isinstance(value, (dict, list)):
-        return _dump({section: value})
+        text = _selected_dump({section: value})
+        if text is not None and (
+            not isinstance(value, str) or (not offset and not limit)
+        ):
+            return text
+        if not isinstance(value, str):
+            return (
+                f"Error: selected scalar {section!r} exceeds {_MAX_CHARS} chars and "
+                "cannot be paged safely unless it is a string."
+            )
+        page = value[offset : offset + page_limit]
+        next_offset = offset + len(page)
+        has_more = next_offset < len(value)
+        envelope = {
+            "section": section,
+            "pagination": {
+                "offset": offset,
+                "limit": page_limit,
+                "returned": len(page),
+                "total": len(value),
+                "next_offset": next_offset if has_more else None,
+                "has_more": has_more,
+            },
+            "value": page,
+        }
+        text = _selected_dump(envelope)
+        if text is not None:
+            return text
+        return (
+            f"Error: scalar page for {section!r} exceeds {_MAX_CHARS} chars. "
+            "Reduce limit."
+        )
 
     keys = sorted(value, key=str) if isinstance(value, dict) else []
     total = len(value)
@@ -212,9 +250,10 @@ def build_config_tools(config) -> list:
         - ``section``: a dotted key path (e.g. "project_board",
           "project_board.projects", "filesystem", "mcp", "model"). Omit it to see
           the whole config, or to list the sections when it's too large to show at once.
-        - ``offset`` / ``limit``: page a selected dict or list. Dict keys are sorted
-          deterministically. Large selected values return an explicit page envelope
-          instead of being silently cut off; ``next_offset`` tells you how to continue.
+        - ``offset`` / ``limit``: page a selected dict, list, or oversized string.
+          Dict keys are sorted deterministically. Large selected values return an
+          explicit page envelope instead of being silently cut off; ``next_offset``
+          tells you how to continue.
 
         Read-only — this never changes anything. Secrets are masked as «redacted»;
         seeing that marker means the value IS set, just not readable here."""
@@ -228,7 +267,10 @@ def build_config_tools(config) -> list:
 
         wanted = (section or "").strip()
         if wanted:
-            ok, selected, error = _resolve_path(doc, wanted)
+            if wanted in doc:
+                ok, selected, error = True, doc[wanted], ""
+            else:
+                ok, selected, error = _resolve_path(doc, wanted)
             if not ok and "." not in wanted:
                 near = sorted(k for k in doc if wanted.lower() in k.lower())
                 suggestion = f" Did you mean: {', '.join(near)}?" if near else ""
@@ -240,8 +282,8 @@ def build_config_tools(config) -> list:
                 return error
             if offset or limit:
                 return _page_value(selected, section=wanted, offset=offset, limit=limit)
-            text = _dump({wanted: selected})
-            if text.endswith("chars — ask for one section instead)"):
+            text = _selected_dump({wanted: selected})
+            if text is None:
                 return _page_value(selected, section=wanted, offset=0, limit=_DEFAULT_PAGE_LIMIT)
             return text
 

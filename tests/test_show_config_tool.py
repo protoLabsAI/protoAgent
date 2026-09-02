@@ -69,6 +69,19 @@ def test_dotted_selector_reads_nested_value(show_config_with_projects):
     assert json.loads(out)["project_board.projects.proj-003"]["repo"] == "org/repo-003"
 
 
+def test_exact_top_level_section_with_dot_still_wins_over_path_parsing():
+    cfg = LangGraphConfig()
+    cfg.plugin_config = {
+        "vendor.plugin": {"repo": "org/exact-section"},
+        "vendor": {"plugin": {"repo": "org/nested-section"}},
+    }
+    show_config = build_config_tools(cfg)[0]
+
+    out = show_config.invoke({"section": "vendor.plugin"})
+
+    assert json.loads(out)["vendor.plugin"]["repo"] == "org/exact-section"
+
+
 def test_dotted_selector_reports_missing_path(show_config_with_projects):
     out = show_config_with_projects.invoke({"section": "project_board.projects.missing"})
 
@@ -162,8 +175,49 @@ def test_large_nested_map_exceeding_cap_is_readable_across_pages():
     assert reconstructed["proj-039"]["repo"] == "org/repo-039"
 
 
+def test_large_selected_string_is_paged_without_truncated_json():
+    large_note = "abcdefghijklmnopqrstuvwxyz" * 600
+    cfg = LangGraphConfig()
+    cfg.plugin_config = {
+        "project_board": {
+            "large_note": large_note,
+        }
+    }
+    show_config = build_config_tools(cfg)[0]
+
+    first = json.loads(show_config.invoke({"section": "project_board.large_note"}))
+
+    assert first["pagination"] == {
+        "offset": 0,
+        "limit": 100,
+        "returned": 100,
+        "total": 15600,
+        "next_offset": 100,
+        "has_more": True,
+    }
+
+    chunks = [first["value"]]
+    offset = first["pagination"]["next_offset"]
+    while offset is not None:
+        page = json.loads(
+            show_config.invoke(
+                {
+                    "section": "project_board.large_note",
+                    "offset": offset,
+                    "limit": 500,
+                }
+            )
+        )
+        chunks.append(page["value"])
+        offset = page["pagination"]["next_offset"]
+
+    assert "".join(chunks) == large_note
+
+
 def test_nested_page_redacts_secret_shaped_values(show_config_with_projects):
-    out = show_config_with_projects.invoke({"section": "project_board.projects", "limit": 2})
+    out = show_config_with_projects.invoke(
+        {"section": "project_board.projects", "limit": 2}
+    )
 
     assert "pbt_project_" not in out
     page = json.loads(out)

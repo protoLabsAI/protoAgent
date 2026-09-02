@@ -845,16 +845,18 @@ Returns the agent's own **effective, merged configuration** — the same view `G
 serves — as JSON. Pass a `section` as either a top-level key (`"model"`, `"mcp"`,
 `"filesystem"`, or any plugin section such as `"project_board"`) or a dotted nested path
 such as `"project_board.projects"` to keep the output small; omit it for the whole document,
-which falls back to a section index when it's too large to render at once. An unknown
-top-level section returns the available names plus a near-match suggestion; an unknown dotted
-path names the missing segment and the keys available at the last resolved object.
+which falls back to a section index when it's too large to render at once. Exact top-level
+keys win before dotted parsing, so existing sections whose names contain dots remain
+addressable. An unknown top-level section returns the available names plus a near-match
+suggestion; an unknown dotted path names the missing segment and the keys available at the
+last resolved object.
 
-Selected dicts and lists can be paged with `offset` and `limit`. Dict pages use sorted keys,
-so repeated calls reconstruct the same value deterministically. Paged responses are JSON
-envelopes with `section`, `pagination` (`offset`, actual `limit`, `returned`, `total`,
-`next_offset`, `has_more`) and `value`. If a selected value is too large for the 12k transport
-safeguard, `show_config` returns an explicit first page instead of cutting the JSON; continue
-with `offset=<next_offset>` until `next_offset` is `null`.
+Selected dicts, lists, and oversized strings can be paged with `offset` and `limit`. Dict
+pages use sorted keys, so repeated calls reconstruct the same value deterministically. Paged
+responses are JSON envelopes with `section`, `pagination` (`offset`, actual `limit`,
+`returned`, `total`, `next_offset`, `has_more`) and `value`. If a selected value is too large
+for the 12k transport safeguard, `show_config` returns an explicit first page instead of
+cutting the JSON; continue with `offset=<next_offset>` until `next_offset` is `null`.
 
 **Read-only.** It never writes, and it binds whenever a config is available. Drop it with
 `tools.disabled: [show_config]` like any other core tool.
