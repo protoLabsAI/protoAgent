@@ -45,6 +45,16 @@ MIN_CACHEABLE_CHARS = 4096
 # prefix) before the once-per-model "caching isn't engaging" warning fires.
 ZERO_HIT_WARN_AFTER = 3
 
+# A provider that reports a cache WRITE (Anthropic's `cache_creation`) tells us a cold
+# call apart from a dead one: the write proves caching engaged. A provider that reports
+# only READS (OpenAI/Codex `cached_tokens`) gives no such signal, so its first call on
+# any new prefix is indistinguishable from "ignoring caching" — and a run of short turns
+# is a run of first calls. Warning after three of those accuses a lane that is caching
+# fine: measured on protoEngineer, the codex lane reads ~4.1M cached tokens against
+# 14.5M input (#3342), while this detector was calling it dead. So a lane with no write
+# signal has to miss for far longer, and never after it has demonstrably cached once.
+ZERO_HIT_WARN_AFTER_NO_WRITE_SIGNAL = 40
+
 # Rolling history breakpoints (#2777, ADR 0101 D1): of Anthropic's four
 # cache_control slots, one holds the stable system prefix and up to this many
 # ride the newest markable messages — so call N+1 reads call N's history from
@@ -80,6 +90,11 @@ class PromptCacheMiddleware(AgentMiddleware):
         # cache fields (explicit zeros) — distinguishes "provider shows zero
         # activity" from "provider doesn't report cache usage at all".
         self._streak_reported: set[str] = set()
+        # Models that have demonstrably cached at least once this session, and models
+        # whose provider reports cache WRITES. Both gate the zero-activity accusation:
+        # see ZERO_HIT_WARN_AFTER_NO_WRITE_SIGNAL.
+        self._reads_seen: set[str] = set()
+        self._writes_seen: set[str] = set()
 
     def _model_name(self, request) -> str:
         m = getattr(request, "model", None)
@@ -234,10 +249,17 @@ class PromptCacheMiddleware(AgentMiddleware):
             from observability import pricing
 
             read, creation = pricing.cache_tokens(usage)
+            if creation:
+                # A write proves the lane SIGNALS writes, which is what makes its later
+                # zeros informative — not that it is immune to the warning.
+                self._writes_seen.add(model)
+            if read:
+                self._reads_seen.add(model)
             if read or creation:
                 self._zero_hit_streak[model] = 0
                 self._streak_reported.discard(model)
                 return
+
             # Explicit zeros mean the provider REPORTS cache usage and there
             # genuinely was none; absent keys mean it doesn't report at all —
             # caching may be working invisibly (a vLLM lane without
@@ -245,9 +267,24 @@ class PromptCacheMiddleware(AgentMiddleware):
             # which is indistinguishable from 0 unless we keep the difference).
             if pricing.reports_cache(details):
                 self._streak_reported.add(model)
+                if model in self._reads_seen and model not in self._writes_seen:
+                    # A read-only lane that has demonstrably cached: this zero is a cold
+                    # prefix, not refusal, and there is no write signal to tell them
+                    # apart. Never accuse it. Scoped to the REPORTED case on purpose —
+                    # a lane that later stops reporting fields at all still earns the
+                    # (different) reporting-gap notice.
+                    self._zero_hit_streak[model] = 0
+                    return
             streak = self._zero_hit_streak.get(model, 0) + 1
             self._zero_hit_streak[model] = streak
-            if streak >= ZERO_HIT_WARN_AFTER and model not in self._warned:
+            # The slow threshold is only for the case that was getting it wrong: a lane
+            # that REPORTS cache fields but never signals writes, where a zero is
+            # ambiguous between "cold prefix" and "refuses to cache". A lane that
+            # signals writes, or one that reports nothing at all (a different notice —
+            # a reporting gap, not an accusation), keeps the fast three-strike rule.
+            ambiguous = model in self._streak_reported and model not in self._writes_seen
+            threshold = ZERO_HIT_WARN_AFTER_NO_WRITE_SIGNAL if ambiguous else ZERO_HIT_WARN_AFTER
+            if streak >= threshold and model not in self._warned:
                 self._warned.add(model)
                 if model in self._streak_reported:
                     log.warning(

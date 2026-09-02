@@ -102,9 +102,14 @@ def test_zero_hit_warning_lands_in_the_feed(tmp_path):
 
     feed = _feed(tmp_path)
     set_default_feed(feed)
+    from graph.middleware.prompt_cache import ZERO_HIT_WARN_AFTER_NO_WRITE_SIGNAL
+
     mw = PromptCacheMiddleware()
     req = _Req("protolabs/fast", SystemMessage(content="S" * 5000), state={})
-    for _ in range(4):
+    # A lane that reports cache fields but never signals a WRITE is ambiguous — a zero
+    # could be a cold prefix — so the accusation waits for a long run (#3342). The
+    # "never reads anything, ever" signature still trips it, just later.
+    for _ in range(ZERO_HIT_WARN_AFTER_NO_WRITE_SIGNAL + 1):
         mw.wrap_model_call(req, lambda r: _zero_usage_response())
     rows = [r for r in feed.recent() if "not engaging" in r["text"]]
     assert len(rows) == 1  # once per model, like the log warning
