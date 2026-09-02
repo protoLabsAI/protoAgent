@@ -391,12 +391,16 @@ async def _build(cfg: dict) -> dict:
         while frontier and len(nodes) < max_nodes:
             fresh: list[dict] = []
             fresh_ids: set[str] = set()
-            for owner, targets in frontier:
-                for t in targets:
-                    add_edge(owner, t["id"], t.get("via") or "delegate", t.get("scope"))
-                    if t["id"] not in nodes and t["id"] not in fresh_ids and len(nodes) + len(fresh) < max_nodes:
-                        fresh.append(t)
-                        fresh_ids.add(t["id"])
+            # Agents first within a layer. Leaves now spend the same node budget, so a
+            # roster that happens to list ten coders ahead of its peers must not starve
+            # the crawl of the agent graph the chart exists to show. Stable, so order
+            # within each class is still the roster's.
+            layer = [(owner, t) for owner, targets in frontier for t in targets]
+            for owner, t in sorted(layer, key=lambda ot: ot[1]["kind"] != "agent"):
+                add_edge(owner, t["id"], t.get("via") or "delegate", t.get("scope"))
+                if t["id"] not in nodes and t["id"] not in fresh_ids and len(nodes) + len(fresh) < max_nodes:
+                    fresh.append(t)
+                    fresh_ids.add(t["id"])
             # Only agents are probeable: a coder has no listener and a model endpoint's
             # /models is the delegates prober's job, not a page-refresh's.
             peers = [t for t in fresh if t["kind"] == "agent"]

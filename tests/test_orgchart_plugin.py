@@ -399,3 +399,23 @@ def test_max_nodes_caps_the_crawl(monkeypatch):
     _wire(monkeypatch, calls, roster=roster)
     data = asyncio.run(topo.get_topology({"max_nodes": 4}))
     assert data["count"] == 4
+
+
+def test_leaves_do_not_starve_the_agent_graph_under_max_nodes(monkeypatch):
+    """Leaves spend the same node budget as agents, so roster ORDER could decide whether
+    the chart shows the delegation graph at all. Agents are taken first within a layer."""
+    calls: list[str] = []
+    _wire(
+        monkeypatch,
+        calls,
+        roster=[
+            {"type": "acp", "name": "c1", "command": "proto", "workdir": "/w"},
+            {"type": "acp", "name": "c2", "command": "proto", "workdir": "/w"},
+            {"type": "acp", "name": "c3", "command": "proto", "workdir": "/w"},
+            {"type": "a2a", "name": "alpha", "url": ALPHA, "auth": {"token": "tok-alpha"}},
+        ],
+    )
+    # self + 2 more: the peer must be one of them, whatever order the roster listed.
+    nodes = {n["id"]: n for n in asyncio.run(topo.get_topology({"max_nodes": 3}))["nodes"]}
+    assert ALPHA in nodes, "a peer lost its slot to coders listed ahead of it"
+    assert len(nodes) == 3
