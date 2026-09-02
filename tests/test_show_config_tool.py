@@ -27,7 +27,28 @@ def show_config():
             "headers": {"Authorization": "Bearer sk-live-abc"},
         },
     ]
-    cfg.plugin_config = {"project_board": {"repo": "protoLabsAI/protoAgent", "api_token": "pbt_live"}}
+    cfg.plugin_config = {
+        "project_board": {"repo": "protoLabsAI/protoAgent", "api_token": "pbt_live"}
+    }
+    return build_config_tools(cfg)[0]
+
+
+@pytest.fixture
+def show_config_with_projects():
+    cfg = LangGraphConfig()
+    cfg.plugin_config = {
+        "project_board": {
+            "repo": "protoLabsAI/protoAgent",
+            "projects": {
+                f"proj-{i:03d}": {
+                    "repo": f"org/repo-{i:03d}",
+                    "status": "active",
+                    "api_token": f"pbt_project_{i:03d}",
+                }
+                for i in range(7)
+            },
+        }
+    }
     return build_config_tools(cfg)[0]
 
 
@@ -38,6 +59,116 @@ def test_agent_can_see_how_its_plugin_is_bound(show_config):
 
     assert "protoLabsAI/protoAgent" in out
     assert json.loads(out)["project_board"]["repo"] == "protoLabsAI/protoAgent"
+
+
+def test_dotted_selector_reads_nested_value(show_config_with_projects):
+    out = show_config_with_projects.invoke(
+        {"section": "project_board.projects.proj-003"}
+    )
+
+    assert json.loads(out)["project_board.projects.proj-003"]["repo"] == "org/repo-003"
+
+
+def test_dotted_selector_reports_missing_path(show_config_with_projects):
+    out = show_config_with_projects.invoke({"section": "project_board.projects.missing"})
+
+    assert out.startswith("Error: no config path 'project_board.projects.missing'")
+    assert "missing 'missing' at project_board.projects" in out
+    assert "proj-000" in out
+
+
+def test_nested_map_can_be_reconstructed_from_deterministic_pages(show_config_with_projects):
+    first = json.loads(
+        show_config_with_projects.invoke({"section": "project_board.projects", "limit": 3})
+    )
+    second = json.loads(
+        show_config_with_projects.invoke(
+            {
+                "section": "project_board.projects",
+                "offset": first["pagination"]["next_offset"],
+                "limit": 3,
+            }
+        )
+    )
+    third = json.loads(
+        show_config_with_projects.invoke(
+            {
+                "section": "project_board.projects",
+                "offset": second["pagination"]["next_offset"],
+                "limit": 3,
+            }
+        )
+    )
+
+    assert first["pagination"] == {
+        "offset": 0,
+        "limit": 3,
+        "returned": 3,
+        "total": 7,
+        "next_offset": 3,
+        "has_more": True,
+    }
+    assert second["pagination"]["next_offset"] == 6
+    assert third["pagination"] == {
+        "offset": 6,
+        "limit": 3,
+        "returned": 1,
+        "total": 7,
+        "next_offset": None,
+        "has_more": False,
+    }
+    reconstructed = {}
+    reconstructed.update(first["value"])
+    reconstructed.update(second["value"])
+    reconstructed.update(third["value"])
+    assert list(reconstructed) == [f"proj-{i:03d}" for i in range(7)]
+    assert reconstructed["proj-006"]["repo"] == "org/repo-006"
+
+
+def test_large_nested_map_exceeding_cap_is_readable_across_pages():
+    cfg = LangGraphConfig()
+    cfg.plugin_config = {
+        "project_board": {
+            "projects": {
+                f"proj-{i:03d}": {
+                    "repo": f"org/repo-{i:03d}",
+                    "description": "x" * 400,
+                }
+                for i in range(40)
+            }
+        }
+    }
+    show_config = build_config_tools(cfg)[0]
+
+    whole = show_config.invoke({"section": "project_board.projects"})
+    assert "truncated at" not in whole
+    assert json.loads(whole)["pagination"]["total"] == 40
+
+    reconstructed = {}
+    offset = 0
+    while True:
+        page = json.loads(
+            show_config.invoke(
+                {"section": "project_board.projects", "offset": offset, "limit": 10}
+            )
+        )
+        reconstructed.update(page["value"])
+        if page["pagination"]["next_offset"] is None:
+            break
+        offset = page["pagination"]["next_offset"]
+
+    assert len(reconstructed) == 40
+    assert reconstructed["proj-000"]["description"] == "x" * 400
+    assert reconstructed["proj-039"]["repo"] == "org/repo-039"
+
+
+def test_nested_page_redacts_secret_shaped_values(show_config_with_projects):
+    out = show_config_with_projects.invoke({"section": "project_board.projects", "limit": 2})
+
+    assert "pbt_project_" not in out
+    page = json.loads(out)
+    assert page["value"]["proj-000"]["api_token"] == _REDACTED
+    assert page["value"]["proj-001"]["api_token"] == _REDACTED
 
 
 def test_mcp_env_and_headers_never_reach_the_model(show_config):

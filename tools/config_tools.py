@@ -36,6 +36,8 @@ from langchain_core.tools import tool
 log = logging.getLogger("protoagent.tools.config")
 
 _MAX_CHARS = 12_000
+_DEFAULT_PAGE_LIMIT = 100
+_MAX_PAGE_LIMIT = 500
 _REDACTED = "«redacted»"
 
 # Free-form string maps whose VALUES are credentials often enough that the whole map is
@@ -82,7 +84,9 @@ def redact_for_agent(value: Any, *, key: str = "") -> Any:
             elif str(k).strip().lower() in _OPAQUE_MAPS and isinstance(v, dict):
                 # Every value, not just the sensibly-named ones: these maps are
                 # free-form, and "FOO_BAR" is as likely to be a token as "API_KEY".
-                out[k] = {ik: (_REDACTED if iv not in (None, "") else iv) for ik, iv in v.items()}
+                out[k] = {
+                    ik: (_REDACTED if iv not in (None, "") else iv) for ik, iv in v.items()
+                }
             else:
                 out[k] = redact_for_agent(v, key=str(k))
         return out
@@ -94,8 +98,97 @@ def redact_for_agent(value: Any, *, key: str = "") -> Any:
 def _dump(doc: Any) -> str:
     text = json.dumps(doc, indent=2, default=str, sort_keys=True)
     if len(text) > _MAX_CHARS:
-        return text[:_MAX_CHARS] + f"\n… (truncated at {_MAX_CHARS} chars — ask for one section instead)"
+        return (
+            text[:_MAX_CHARS]
+            + f"\n… (truncated at {_MAX_CHARS} chars — ask for one section instead)"
+        )
     return text
+
+
+def _path_error(path: str, part: str, seen: list[str], current: Any) -> str:
+    at = ".".join(seen) or "<root>"
+    if isinstance(current, dict):
+        available = ", ".join(sorted(str(k) for k in current))
+        suffix = (
+            f" Available keys at {at}: {available}"
+            if available
+            else f" {at} is an empty object."
+        )
+    elif isinstance(current, list):
+        suffix = f" {at} is a list with {len(current)} item(s); use a numeric path segment."
+    else:
+        suffix = f" {at} is {type(current).__name__}, so it has no child keys."
+    return f"Error: no config path {path!r}; missing {part!r} at {at}.{suffix}"
+
+
+def _resolve_path(doc: dict, path: str) -> tuple[bool, Any, str]:
+    current: Any = doc
+    seen: list[str] = []
+    for part in path.split("."):
+        if not part:
+            return False, None, f"Error: invalid config path {path!r}; empty path segment."
+        if isinstance(current, dict):
+            if part not in current:
+                return False, None, _path_error(path, part, seen, current)
+            current = current[part]
+        elif isinstance(current, list):
+            try:
+                idx = int(part)
+            except ValueError:
+                return False, None, _path_error(path, part, seen, current)
+            if idx < 0 or idx >= len(current):
+                return (
+                    False,
+                    None,
+                    f"Error: no config path {path!r}; list index {idx} is out of range "
+                    f"at {'.'.join(seen)}.",
+                )
+            current = current[idx]
+        else:
+            return False, None, _path_error(path, part, seen, current)
+        seen.append(part)
+    return True, current, ""
+
+
+def _page_value(value: Any, *, section: str, offset: int, limit: int) -> str:
+    if offset < 0:
+        return "Error: offset must be >= 0."
+    if limit < 0:
+        return "Error: limit must be >= 0."
+    page_limit = min(limit or _DEFAULT_PAGE_LIMIT, _MAX_PAGE_LIMIT)
+    if not isinstance(value, (dict, list)):
+        return _dump({section: value})
+
+    keys = sorted(value, key=str) if isinstance(value, dict) else []
+    total = len(value)
+    while page_limit >= 1:
+        if isinstance(value, dict):
+            page_keys = keys[offset : offset + page_limit]
+            page = {k: value[k] for k in page_keys}
+        else:
+            page = value[offset : offset + page_limit]
+        next_offset = offset + len(page)
+        has_more = next_offset < total
+        envelope = {
+            "section": section,
+            "pagination": {
+                "offset": offset,
+                "limit": page_limit,
+                "returned": len(page),
+                "total": total,
+                "next_offset": next_offset if has_more else None,
+                "has_more": has_more,
+            },
+            "value": page,
+        }
+        text = _dump(envelope)
+        if len(text) <= _MAX_CHARS:
+            return text
+        page_limit //= 2
+    return (
+        f"Error: one item in {section!r} exceeds {_MAX_CHARS} chars by itself. "
+        "Select a deeper path or reduce the configured value size."
+    )
 
 
 def build_config_tools(config) -> list:
@@ -106,7 +199,7 @@ def build_config_tools(config) -> list:
     trusted to answer "how am I actually wired right now"."""
 
     @tool
-    def show_config(section: str = "") -> str:
+    def show_config(section: str = "", offset: int = 0, limit: int = 0) -> str:
         """Read your own effective configuration — the merged, live settings this agent
         is actually running with, including plugin sections.
 
@@ -116,9 +209,12 @@ def build_config_tools(config) -> list:
         tools can reach. Reading a plugin's defaults from its source tells you what it
         would do unconfigured — this tells you what YOUR instance actually set.
 
-        - ``section``: a top-level key (e.g. "project_board", "filesystem", "mcp",
-          "model"). Omit it to see the whole config, or to list the sections when it's
-          too large to show at once.
+        - ``section``: a dotted key path (e.g. "project_board",
+          "project_board.projects", "filesystem", "mcp", "model"). Omit it to see
+          the whole config, or to list the sections when it's too large to show at once.
+        - ``offset`` / ``limit``: page a selected dict or list. Dict keys are sorted
+          deterministically. Large selected values return an explicit page envelope
+          instead of being silently cut off; ``next_offset`` tells you how to continue.
 
         Read-only — this never changes anything. Secrets are masked as «redacted»;
         seeing that marker means the value IS set, just not readable here."""
@@ -132,11 +228,22 @@ def build_config_tools(config) -> list:
 
         wanted = (section or "").strip()
         if wanted:
-            if wanted not in doc:
+            ok, selected, error = _resolve_path(doc, wanted)
+            if not ok and "." not in wanted:
                 near = sorted(k for k in doc if wanted.lower() in k.lower())
                 suggestion = f" Did you mean: {', '.join(near)}?" if near else ""
-                return f"Error: no config section {wanted!r}.{suggestion}\nSections: {', '.join(sorted(doc))}"
-            return _dump({wanted: doc[wanted]})
+                return (
+                    f"Error: no config section {wanted!r}.{suggestion}\n"
+                    f"Sections: {', '.join(sorted(doc))}"
+                )
+            if not ok:
+                return error
+            if offset or limit:
+                return _page_value(selected, section=wanted, offset=offset, limit=limit)
+            text = _dump({wanted: selected})
+            if text.endswith("chars — ask for one section instead)"):
+                return _page_value(selected, section=wanted, offset=0, limit=_DEFAULT_PAGE_LIMIT)
+            return text
 
         text = _dump(doc)
         if not text.endswith("chars — ask for one section instead)"):
