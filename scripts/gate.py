@@ -119,6 +119,19 @@ def run_gate(lint_only: bool = False) -> int:
             return 1
         print(f"gate: RUN   {check.name}", flush=True)
         result = subprocess.run(check.argv, cwd=REPO)
+        if result.returncode < 0:
+            # KILLED, not failed. `subprocess` reports a signal death as a NEGATIVE code,
+            # and flattening that to 1 tells the caller the repo failed its own gate when
+            # in truth the check never reached a verdict — a restart, an operator kill, a
+            # worktree reaped underneath it, the OOM killer. Automation cannot tell the two
+            # apart from an exit code alone, and guessing "broken" is the expensive guess:
+            # projectBoard #386 blocked a card for ~40 minutes on `exit -15` with a merged
+            # state that was in fact fully green (7362 passed). Exit 128+N instead — the
+            # universal shell convention for "killed by signal N" — so the distinction
+            # survives the process boundary and callers can re-run rather than judge.
+            sig = -result.returncode
+            print(f"gate: KILLED {check.name} (signal {sig}) — no verdict, not a failure", flush=True)
+            return 128 + sig
         if result.returncode != 0:
             print(f"gate: FAIL  {check.name} (exit {result.returncode})", flush=True)
             return 1
