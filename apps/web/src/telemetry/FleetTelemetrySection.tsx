@@ -22,7 +22,8 @@ export function FleetTelemetrySection({ fleet }: { fleet: FleetTelemetry }) {
 
   return (
     <section className="telemetry-section fleet-telemetry" data-testid="fleet-telemetry">
-      <h2 className="panel-kicker">Fleet</h2>
+      {/* No heading of its own: this renders inside the surface's "Fleet" tab, which
+          names it already (#3329). The flags sub-heading below still earns one. */}
 
       {/* One row per member: reachability/running + the turns/cost/success/cache-hit
           rollup. No action controls — this is a read-only observability grid. */}

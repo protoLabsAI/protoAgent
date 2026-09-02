@@ -15,6 +15,11 @@ async function openTelemetry(page: import("@playwright/test").Page) {
     .click();
   const surface = page.getByTestId("telemetry-surface");
   await expect(surface).toBeVisible();
+  // The rollup lives behind the Fleet tab since #3329. It is the tab the surface
+  // OPENS on when this box has no turns of its own; the mock gives it turns, so
+  // select it. (That a Fleet tab exists at all is the fleet-install signal — the
+  // single-box path in telemetry.spec.ts asserts its absence.)
+  await surface.getByTestId("telemetry-views").getByRole("tab", { name: "Fleet" }).click();
   return surface;
 }
 
