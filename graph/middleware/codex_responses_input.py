@@ -1,5 +1,9 @@
 """CodexResponsesInputMiddleware — the Codex backend's input-shape rules (ADR 0097).
 
+It also carries the lane's ``prompt_cache_key`` (#3342): cache routing is a request
+shape concern on this backend, and this middleware already owns ``model_settings``
+for it. See ``_cache_key`` for why the session id is the grain.
+
 The ChatGPT/Codex Responses backend rejects a ``system``-role input item
 ("System messages are not allowed") — the system prompt must ride the top-level
 ``instructions`` field instead. langchain-openai maps a ``SystemMessage`` to a
@@ -33,8 +37,35 @@ def _system_text(content) -> str:
     return ""
 
 
+def _cache_key(request) -> str:
+    """A stable per-thread ``prompt_cache_key``, or "" when there is no session.
+
+    OpenAI routes a request to an inference engine by hashing its first ~256 tokens,
+    and a cache hit needs the shared prefix AND the same machine. Every call from this
+    agent opens with the same `instructions`, so the GENERIC head (instructions + tool
+    schemas) is warm wherever it lands — but the continuation, this thread's
+    conversation, exists in KV cache on only the engine that saw it. Without a sticky
+    key, calls scatter and each one reuses just that head.
+
+    Measured on protoEngineer before this: every call cached exactly 24,064 tokens and
+    never one more, across 204 calls with inputs up to 1.2M (#3342).
+
+    The session id is the right grain: it is stable for the life of a thread, so a
+    turn's tool loop and the turns after it route together, and it is distinct per
+    thread, so two conversations don't fight over one engine. Absent a session we send
+    NOTHING — a random key per call would pin each call to its own engine, which is
+    worse than no key at all.
+    """
+    state = getattr(request, "state", None) or {}
+    try:
+        return str(state.get("session_id") or "").strip()
+    except AttributeError:  # not a mapping — no session to key on
+        return ""
+
+
 class CodexResponsesInputMiddleware(AgentMiddleware):
-    """Move the system prompt into the Responses ``instructions`` field for Codex."""
+    """Move the system prompt into the Responses ``instructions`` field for Codex,
+    and key the request for cache routing."""
 
     def _transform(self, request):
         model = getattr(request, "model", None)
@@ -51,10 +82,13 @@ class CodexResponsesInputMiddleware(AgentMiddleware):
         # PromptCapture (upstream of this transform) still showed the full prompt.
         # model_settings is spread into every factory bind/bind_tools branch, and the
         # Responses payload builder passes `instructions` through as the top-level field.
-        return request.override(
-            system_message=None,
-            model_settings={**(getattr(request, "model_settings", None) or {}), "instructions": text},
-        )
+        settings = {**(getattr(request, "model_settings", None) or {}), "instructions": text}
+        key = _cache_key(request)
+        if key:
+            # Routing stickiness, not a cache control: it cannot make an unmatched
+            # prefix hit, only keep matching requests on the engine that holds it.
+            settings["prompt_cache_key"] = key
+        return request.override(system_message=None, model_settings=settings)
 
     def wrap_model_call(self, request, handler):
         return handler(self._transform(request))

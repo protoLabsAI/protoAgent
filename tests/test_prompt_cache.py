@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import SystemMessage
 
-from graph.middleware.prompt_cache import PromptCacheMiddleware
+from graph.middleware.prompt_cache import ZERO_HIT_WARN_AFTER_NO_WRITE_SIGNAL, PromptCacheMiddleware
 
 
 class _Req:
@@ -163,7 +163,11 @@ def test_zero_hit_streak_warns_once_per_model(caplog):
     mw = PromptCacheMiddleware()
     req = _Req("protolabs/fast", SystemMessage(content=BIG), state={})
     with caplog.at_level("WARNING"):
-        for _ in range(5):
+        # A gateway alias reports cache fields but never signals writes, so a single
+        # zero is ambiguous (cold prefix vs refusal) and the accusation waits for a
+        # long run — the homelab-iac#242 signature is a lane that NEVER reads, which
+        # still trips it, just later (#3342).
+        for _ in range(ZERO_HIT_WARN_AFTER_NO_WRITE_SIGNAL + 2):
             mw.wrap_model_call(req, lambda r: _usage_response())
     hits = [r for r in caplog.records if "ZERO cache activity" in r.message]
     assert len(hits) == 1  # fires at the threshold, then latches
@@ -220,16 +224,53 @@ def test_unreported_usage_warns_reporting_gap_not_ignoring(caplog):
     assert "ZERO cache activity" not in caplog.text  # not the ignoring message
 
 
-def test_reported_zero_still_warns_ignoring(caplog):
-    # Explicit zeros = the provider reports and there was genuinely no cache
-    # activity — the original "likely ignoring" message stays for that case.
+def test_reported_zero_warns_ignoring_once_the_lane_signals_writes(caplog):
+    """Explicit zeros accuse the provider ONLY on a lane that reports cache WRITES.
+
+    A write (Anthropic's `cache_creation`) is what separates a cold call from a dead
+    one, so after one the zeros are informative and three of them earn the warning.
+    Without that signal the same three zeros are just three cold calls — see the next
+    test, which is the case this heuristic used to get wrong (#3342)."""
     mw = PromptCacheMiddleware()
     req = _Req("protolabs/fast", SystemMessage(content=BIG), state={})
     with caplog.at_level("WARNING"):
+        # One write proves the lane both caches and signals writes...
+        mw.wrap_model_call(req, lambda r: _usage_response(cache_creation=50))
+        # ...so now a run of explicit zeros means something.
         for _ in range(3):
             mw.wrap_model_call(req, lambda r: _usage_response())
     assert "ZERO cache activity" in caplog.text
     assert "NO cache-usage fields" not in caplog.text
+
+
+def test_a_read_only_lane_is_not_accused_of_ignoring_caching(caplog):
+    """The regression this whole investigation produced (#3342).
+
+    OpenAI/Codex report cached_tokens on READS and nothing on writes, so the first call
+    against any new prefix reports zero everything — identical, to this detector, to a
+    provider that ignores caching. A run of short turns is a run of first calls, and the
+    old three-strike rule turned that into a confident, wrong accusation: measured on
+    protoEngineer, the lane it called dead was reading 4.1M cached tokens against 14.5M
+    input."""
+    mw = PromptCacheMiddleware()
+    req = _Req("openai-codex:gpt-5.6-terra", SystemMessage(content=BIG), state={})
+    with caplog.at_level("WARNING"):
+        for _ in range(6):
+            mw.wrap_model_call(req, lambda r: _usage_response())
+    assert "ZERO cache activity" not in caplog.text
+
+
+def test_a_lane_that_has_cached_once_is_never_accused(caplog):
+    """Even a long run of cold calls cannot mean 'ignores caching' on a lane that has
+    demonstrably cached — the reads are proof, and the zeros afterwards are turns whose
+    prefix moved on."""
+    mw = PromptCacheMiddleware()
+    req = _Req("openai-codex:gpt-5.6-terra", SystemMessage(content=BIG), state={})
+    with caplog.at_level("WARNING"):
+        mw.wrap_model_call(req, lambda r: _usage_response(cache_read=4096))
+        for _ in range(60):
+            mw.wrap_model_call(req, lambda r: _usage_response())
+    assert "ZERO cache activity" not in caplog.text
 
 
 def test_cache_hit_resets_reported_flavor(caplog):

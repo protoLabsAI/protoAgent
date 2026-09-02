@@ -579,10 +579,11 @@ def test_identity_splits_a_first_block_that_starts_with_the_line():
 
 
 class _FakeCodexReq:
-    def __init__(self, sysmsg, model):
+    def __init__(self, sysmsg, model, state=None):
         self.system_message = sysmsg
         self.model = model
         self.model_settings = {}
+        self.state = state if state is not None else {}
 
     def override(self, **kw):
         for k, v in kw.items():
@@ -1995,3 +1996,52 @@ def test_other_failures_never_spend_a_refresh_token(text):
     from graph.providers.discovery import _is_auth_rejection
 
     assert _is_auth_rejection(Exception(text)) is False
+
+
+def test_codex_keys_the_request_for_cache_routing():
+    """OpenAI routes by a hash of the first ~256 tokens, and a cache hit needs the shared
+    prefix AND the same engine. Every call here opens with the same instructions, so the
+    generic head stays warm anywhere — but this thread's conversation is cached on only
+    the engine that saw it. `prompt_cache_key` is what keeps a session's calls together.
+
+    Measured before it: every call cached exactly 24,064 tokens and never one more,
+    across 204 calls with inputs up to 1.2M (#3342)."""
+    from langchain_core.messages import SystemMessage
+
+    from graph.middleware.codex_responses_input import CodexResponsesInputMiddleware
+
+    req = _FakeCodexReq(SystemMessage(content="S" * 100), object(), state={"session_id": "chat-abc"})
+    out = CodexResponsesInputMiddleware()._transform(req)
+    assert out.model_settings["prompt_cache_key"] == "chat-abc"
+
+
+def test_codex_cache_key_is_stable_across_calls_in_a_session():
+    """Stickiness is the whole point: two calls in one thread must carry the SAME key, or
+    they route to different engines and the second re-reads everything."""
+    from langchain_core.messages import SystemMessage
+
+    from graph.middleware.codex_responses_input import CodexResponsesInputMiddleware
+
+    mw = CodexResponsesInputMiddleware()
+    keys = {
+        mw._transform(
+            _FakeCodexReq(SystemMessage(content="S" * 100), object(), state={"session_id": "chat-abc"})
+        ).model_settings["prompt_cache_key"]
+        for _ in range(3)
+    }
+    assert keys == {"chat-abc"}
+
+
+def test_codex_sends_no_cache_key_without_a_session():
+    """No key beats a made-up one. A per-call random key would pin every call to its own
+    engine — strictly worse than letting them land wherever the prefix hash sends them."""
+    from langchain_core.messages import SystemMessage
+
+    from graph.middleware.codex_responses_input import CodexResponsesInputMiddleware
+
+    for state in ({}, {"session_id": ""}, {"session_id": None}):
+        out = CodexResponsesInputMiddleware()._transform(
+            _FakeCodexReq(SystemMessage(content="S" * 100), object(), state=state)
+        )
+        assert "prompt_cache_key" not in out.model_settings
+        assert out.model_settings["instructions"]  # the ADR 0097 behaviour is untouched

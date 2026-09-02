@@ -131,3 +131,42 @@ def test_cache_counts_exceeding_input_cannot_refund_the_turn():
     # negative and hand back a credit.
     usage = {"input_tokens": 100, "output_tokens": 0, "cache_read_input_tokens": 5000}
     assert pricing.cost_usd("claude-opus-5", usage) > 0
+
+
+def test_service_tier_prefixed_cache_keys_are_counted():
+    """LangChain reports `{tier}_cache_read` when a response carries a service tier
+    (`priority_cache_read`, `flex_cache_read`). Reading only the bare key records a
+    REAL cache read as zero — which overstates cost, understates the hit ratio, and
+    makes the prompt-cache detector blame the provider for our own parse (#3342)."""
+    from observability.pricing import cache_tokens
+
+    assert cache_tokens({"input_token_details": {"cache_read": 100, "cache_creation": 5}}) == (100, 5)
+    assert cache_tokens({"input_token_details": {"priority_cache_read": 100, "priority_cache_creation": 5}}) == (100, 5)
+    assert cache_tokens({"input_token_details": {"flex_cache_read": 7}}) == (7, 0)
+    # The telemetry-row shape still wins when present.
+    assert cache_tokens({"cache_read_input_tokens": 42}) == (42, 0)
+    assert cache_tokens({}) == (0, 0)
+
+
+def test_reports_cache_separates_zero_from_silence():
+    """The distinction the detector rests on. LangChain DROPS the key when the provider
+    says nothing (`if v is not None`), so a present key — bare or prefixed — is an
+    explicit number and an absent one is silence. Confusing the two is how a lane gets
+    blamed for 'ignoring' caching when it was only failing to report it."""
+    from observability.pricing import reports_cache
+
+    assert reports_cache({"cache_read": 0}) is True  # explicit zero: will not cache
+    assert reports_cache({"priority_cache_read": 0}) is True  # same, service-tiered
+    assert reports_cache({}) is False  # silence: may be caching invisibly
+    assert reports_cache({"reasoning": 12}) is False  # unrelated details only
+
+
+def test_cost_counts_a_prefixed_cache_read_as_cached():
+    """The money consequence: a prefixed cache read must be billed at the cache rate,
+    not as fresh input."""
+    from observability.pricing import cost_usd
+
+    usage = {"input_tokens": 10_000, "output_tokens": 100}
+    plain = cost_usd("claude-opus-4-6", usage)
+    cached = cost_usd("claude-opus-4-6", {**usage, "input_token_details": {"priority_cache_read": 9_000}})
+    assert cached < plain, "a service-tier-prefixed cache read was billed as fresh input"

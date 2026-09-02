@@ -35,6 +35,12 @@ test("Box ▸ Telemetry shows the summary cards and recent turns", async ({ page
   // pinned insights block's flag-model span, which is earlier in the DOM — that
   // assertion passed with zero table rows.
   await expect(byModel.getByText("claude-opus-4-8").first()).toBeVisible();
+  // Each lane's OWN cache-hit ratio (#3342). The rollup card above reads 60% because
+  // that is the BLEND of these two — a store-wide figure can't tell an operator which
+  // lane to go fix, which is how a codex lane billed full input price for four days.
+  const laneCells = byModel.locator("tbody tr").first().locator("td");
+  await expect(laneCells.nth(3)).toHaveText("60%");
+  await expect(byModel.locator("tbody tr").nth(1).locator("td").nth(3)).toHaveText("0%");
   // …and switching away takes the previous table off the page — the point of the tabs.
   await expect(surface.getByTestId("telemetry-turns")).toHaveCount(0);
 

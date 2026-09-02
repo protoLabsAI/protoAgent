@@ -323,7 +323,15 @@ class TelemetryStore:
                 SELECT model,
                        COUNT(*)                     AS turns,
                        COALESCE(SUM(cost_usd), 0.0)  AS cost_usd,
-                       COALESCE(SUM(total_tokens),0) AS total_tokens
+                       COALESCE(SUM(total_tokens),0) AS total_tokens,
+                       -- The three cache operands, PER LANE (#3342). A store-wide
+                       -- ratio hides the case it exists to catch: one model caching
+                       -- well carries the average while another bills full input
+                       -- price on every call. Same disjoint columns `_cache_hit_ratio`
+                       -- reads, so the per-lane figure and the rollup can't drift.
+                       COALESCE(SUM(input_tokens),0) AS input_tokens,
+                       COALESCE(SUM(cache_read_input_tokens),0) AS cache_read_input_tokens,
+                       COALESCE(SUM(cache_creation_input_tokens),0) AS cache_creation_input_tokens
                 FROM turns {where}
                 GROUP BY model ORDER BY cost_usd DESC
                 """,
@@ -339,18 +347,28 @@ class TelemetryStore:
             # an N+1 query per model, and sidesteps `model = ?` never matching a NULL
             # model group (SQL equality never matches NULL; grouping in Python does).
             durations_by_model: dict[str | None, list[int]] = {}
-            for r in db.execute(f"SELECT model, duration_ms FROM turns {where}", params).fetchall():
+            # Context fill per lane rides along on the same pass (#3342): judging
+            # whether a model's prompts are even big enough to cache needs ITS OWN
+            # fill, not the store's. Zero rows excluded for the same reason as the
+            # turn-level series above — absent, not empty.
+            fills_by_model: dict[str | None, list[int]] = {}
+            for r in db.execute(f"SELECT model, duration_ms, context_tokens FROM turns {where}", params).fetchall():
                 if r["duration_ms"] is not None:
                     durations_by_model.setdefault(r["model"], []).append(r["duration_ms"])
+                if r["context_tokens"]:
+                    fills_by_model.setdefault(r["model"], []).append(r["context_tokens"])
             by_model_out = []
             for row in by_model:
                 model_durations = sorted(durations_by_model.get(row["model"], []))
+                model_fills = sorted(fills_by_model.get(row["model"], []))
                 by_model_out.append({
                     **dict(row),
                     "cost_usd": round(row["cost_usd"] or 0.0, 6),
                     "p50_duration_ms": _percentile(model_durations, 50),
                     "p95_duration_ms": _percentile(model_durations, 95),
                     "p99_duration_ms": _percentile(model_durations, 99),
+                    "cache_hit_ratio": _cache_hit_ratio(dict(row)),
+                    "p95_context_tokens": _percentile(model_fills, 95),
                 })
             out["by_model"] = by_model_out
             # #2697 — durable p50/p95/p99 duration PER TOOL, the by-model breakdown's

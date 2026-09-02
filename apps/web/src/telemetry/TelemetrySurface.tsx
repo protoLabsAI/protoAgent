@@ -28,6 +28,7 @@ import { QuickSetting } from "../settings/QuickSetting";
 import { api } from "../lib/api";
 import { localStamp, localStampTitle, ms, pct, tokens, usd } from "../lib/format";
 import { fleetTelemetryQuery, telemetryQuery } from "../lib/queries";
+import { coldLaneLabel, laneCacheHit } from "./cacheLanes";
 import { FleetTelemetrySection } from "./FleetTelemetrySection";
 import { defaultTelemetryTab, hasTelemetryViews, telemetryTabItems } from "./telemetryTabs";
 import { traceCellState } from "./traceUrl";
@@ -205,10 +206,21 @@ function InsightsBlock({ insights }: { insights: TelemetryInsights }) {
           <><CheckCircle2 size={15} /> No cost or latency outliers</>
         )}
       </div>
-      <div className="insight-row ok">
-        <CheckCircle2 size={15} /> Prompt cache: {pct(insights.levers.cache.hit_ratio)} hit ·
-        ~{usd(insights.levers.cache.est_savings_usd)} saved
-      </div>
+      {insights.levers.cache.engaging === false ? (
+        /* The #2255 detector already knows this within three calls, but it said so in a
+           log line and a best-effort Activity emit — which is how a lane billed full
+           input price for four days unread (#3342). Cache performance is read HERE. */
+        <div className="insight-row warn" data-testid="telemetry-cache-off">
+          <AlertTriangle size={15} /> Prompt caching is not engaging on{" "}
+          {coldLaneLabel(insights.levers.cache)} — every call there bills full input price.
+          Check the gateway's model mapping, or turn the blocks off.
+        </div>
+      ) : (
+        <div className="insight-row ok">
+          <CheckCircle2 size={15} /> Prompt cache: {pct(insights.levers.cache.hit_ratio)} hit ·
+          ~{usd(insights.levers.cache.est_savings_usd)} saved
+        </div>
+      )}
       {insights.flagged.length ? (
         <ul className="insight-flags">
           {insights.flagged.slice(0, 5).map((f, i) => (
@@ -257,7 +269,7 @@ function ByModelPanel({ rows }: { rows: TelemetrySummary["by_model"] }) {
     <div className="telemetry-section" data-testid="telemetry-by-model">
       <Table className="telemetry-table">
         <THead>
-          <Tr><Th>Model</Th><Th>Turns</Th><Th>Tokens</Th><Th>Cost</Th><Th>p50</Th><Th>p95</Th><Th>p99</Th></Tr>
+          <Tr><Th>Model</Th><Th>Turns</Th><Th>Tokens</Th><Th>Cache</Th><Th>Cost</Th><Th>p50</Th><Th>p95</Th><Th>p99</Th></Tr>
         </THead>
         <TBody>
           {rows.map((m) => (
@@ -265,6 +277,7 @@ function ByModelPanel({ rows }: { rows: TelemetrySummary["by_model"] }) {
               <Td>{m.model || "—"}</Td>
               <Td>{m.turns}</Td>
               <Td>{tokens(m.total_tokens)}</Td>
+              <Td>{laneCacheHit(m, pct)}</Td>
               <Td>{usd(m.cost_usd)}</Td>
               <Td>{ms(m.p50_duration_ms)}</Td>
               <Td>{ms(m.p95_duration_ms)}</Td>
