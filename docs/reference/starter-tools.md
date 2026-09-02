@@ -145,7 +145,7 @@ Defaults to **true**, same verifier requirement. See [Watches](/guides/watches) 
 
 | Tool | What it does | Bound when |
 |---|---|---|
-| [`show_config(section="")`](#show_config) | Read the agent's own effective, merged config, secrets masked. | a config is available (always, in the server) |
+| [`show_config(section="", offset=0, limit=0)`](#show_config) | Read the agent's own effective, merged config, secrets masked. | a config is available (always, in the server) |
 | [`onboard_project(github_repo, name=None, write=None)`](#onboard_project) | Clone a repo into the onboarding root and register it as a managed project. | `onboarding.enabled: true` (default **off**) |
 
 ### Opt-in singles
@@ -838,14 +838,34 @@ Remove a watch by the id `list_watches` shows. Reports whether it existed.
 ### `show_config`
 
 ```python
-def show_config(section: str = "") -> str
+def show_config(section: str = "", offset: int = 0, limit: int = 0) -> str
 ```
 
 Returns the agent's own **effective, merged configuration** — the same view `GET /api/config`
-serves — as JSON. Pass a top-level `section` (`"model"`, `"mcp"`, `"filesystem"`, or any
-plugin section such as `"project_board"`) to keep the output small; omit it for the whole
-document, which falls back to a section index when it's too large to render at once. An
-unknown section returns the available names plus a near-match suggestion.
+serves — as JSON. Pass a `section` as either a top-level key (`"model"`, `"mcp"`,
+`"filesystem"`, or any plugin section such as `"project_board"`) or a dotted nested path
+such as `"project_board.projects"` to keep the output small; omit it for the whole document,
+which falls back to a section index when it's too large to render at once. Exact top-level
+keys win before dotted parsing, so existing sections whose names contain dots remain
+addressable. An unknown top-level section returns the available names plus a near-match
+suggestion; an unknown dotted path names the missing segment and the keys available at the
+last resolved object.
+
+Selected dicts, lists, and oversized strings can be paged with `offset` and `limit`. Dict
+pages use sorted keys, so repeated calls reconstruct the same value deterministically. Paged
+responses are JSON envelopes with `section`, `pagination` (`offset`, actual `limit`,
+`returned`, `total`, `next_offset`, `has_more`) and `value`. If a selected value is too large
+for the 12k transport safeguard, `show_config` returns an explicit first page instead of
+cutting the JSON; continue with `offset=<next_offset>` until `next_offset` is `null`. When a
+single child is itself too big to embed in a page, it comes back as a `__truncated__` pointer
+carrying the deeper `read_with` path (and shape metadata, never the value) — so paging a
+parent never dead-ends on one oversized child, and nothing is silently dropped.
+
+Selectors are dot-separated. A key that itself contains a dot (or is empty) is escaped in
+the path — a literal dot is written `\.` and a literal backslash `\\` — so `read_with`
+pointers resolve back to exactly that child instead of re-splitting through the middle of
+its name. Exact top-level keys are still matched before any dotted parsing, so a section
+whose name contains a dot stays addressable as-is.
 
 **Read-only.** It never writes, and it binds whenever a config is available. Drop it with
 `tools.disabled: [show_config]` like any other core tool.
