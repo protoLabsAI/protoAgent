@@ -572,12 +572,15 @@ def _extract_subagent_usage(messages, *, subagent_type: str, fallback_model: str
             usage = getattr(msg, "usage_metadata", None)
             if not isinstance(usage, dict) or not usage:
                 continue
-            details = usage.get("input_token_details") or {}
+            # Prefix-tolerant: a response carrying a service tier reports
+            # `{tier}_cache_read`, and reading the bare key alone records a real
+            # cache read as zero (observability.pricing.cache_tokens).
+            cache_read, cache_creation = pricing.cache_tokens(usage)
             row = {
                 "input_tokens": int(usage.get("input_tokens", 0) or 0),
                 "output_tokens": int(usage.get("output_tokens", 0) or 0),
-                "cache_read_input_tokens": int(details.get("cache_read", 0) or 0),
-                "cache_creation_input_tokens": int(details.get("cache_creation", 0) or 0),
+                "cache_read_input_tokens": cache_read,
+                "cache_creation_input_tokens": cache_creation,
             }
             model = (getattr(msg, "response_metadata", None) or {}).get("model_name") or fallback_model or "model"
             row["cost_usd"] = pricing.cost_usd(model, row)

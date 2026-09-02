@@ -205,10 +205,21 @@ function InsightsBlock({ insights }: { insights: TelemetryInsights }) {
           <><CheckCircle2 size={15} /> No cost or latency outliers</>
         )}
       </div>
-      <div className="insight-row ok">
-        <CheckCircle2 size={15} /> Prompt cache: {pct(insights.levers.cache.hit_ratio)} hit ·
-        ~{usd(insights.levers.cache.est_savings_usd)} saved
-      </div>
+      {insights.levers.cache.engaging === false ? (
+        /* The #2255 detector already knows this within three calls, but it said so in a
+           log line and a best-effort Activity emit — which is how a lane billed full
+           input price for four days unread (#3342). Cache performance is read HERE. */
+        <div className="insight-row warn" data-testid="telemetry-cache-off">
+          <AlertTriangle size={15} /> Prompt caching is not engaging
+          {insights.levers.cache.model ? ` on ${insights.levers.cache.model}` : ""} — every call
+          bills full input price. Check the gateway's model mapping, or turn the blocks off.
+        </div>
+      ) : (
+        <div className="insight-row ok">
+          <CheckCircle2 size={15} /> Prompt cache: {pct(insights.levers.cache.hit_ratio)} hit ·
+          ~{usd(insights.levers.cache.est_savings_usd)} saved
+        </div>
+      )}
       {insights.flagged.length ? (
         <ul className="insight-flags">
           {insights.flagged.slice(0, 5).map((f, i) => (

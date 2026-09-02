@@ -115,6 +115,64 @@ CACHE_READ_MULTIPLIER = 0.1
 CACHE_CREATION_MULTIPLIER = 1.25
 
 
+# LangChain prefixes the cache keys with the response's SERVICE TIER when one is
+# present: a `service_tier: "priority"` response reports `priority_cache_read`, not
+# `cache_read` (langchain_openai maps `{tier}_cache_read` from the provider's
+# `cached_tokens`). Reading only the bare key therefore records a real cache read as
+# ZERO — which overstates cost, understates the hit ratio, and makes the
+# prompt-cache detector blame the provider for our own parse. Every reader goes
+# through these two helpers so the prefix can only be handled once.
+_CACHE_READ_SUFFIX = "cache_read"
+_CACHE_CREATION_SUFFIX = "cache_creation"
+
+
+def _detail_for(details: dict, suffix: str) -> int:
+    """The cache count under ``suffix``, bare or service-tier-prefixed."""
+    if not isinstance(details, dict):
+        return 0
+    total = 0
+    for key, value in details.items():
+        if key == suffix or (key.endswith("_" + suffix) and key != suffix):
+            total += int(value or 0)
+    return total
+
+
+def cache_tokens(usage: dict) -> tuple[int, int]:
+    """``(cache_read, cache_creation)`` from a usage dict, in either shape.
+
+    Accepts the telemetry-row names (``cache_read_input_tokens``) or LangChain's
+    nested ``input_token_details``, and tolerates the service-tier prefix."""
+    if not isinstance(usage, dict):
+        return 0, 0
+    details = usage.get("input_token_details") or {}
+    read = usage.get("cache_read_input_tokens")
+    creation = usage.get("cache_creation_input_tokens")
+    return (
+        int(read or 0) if read is not None else _detail_for(details, _CACHE_READ_SUFFIX),
+        int(creation or 0) if creation is not None else _detail_for(details, _CACHE_CREATION_SUFFIX),
+    )
+
+
+def reports_cache(details: dict) -> bool:
+    """Whether the provider REPORTED cache counts at all (vs. staying silent).
+
+    LangChain drops the key entirely when the provider says nothing
+    (``{k: v for k, v in ... if v is not None}``), so a present key — bare or
+    service-tier-prefixed — means an explicit number, and an absent one means the
+    lane never mentioned caching. The prompt-cache detector needs that difference:
+    'reports zero' is a provider that will not cache, 'says nothing' may be caching
+    invisibly."""
+    if not isinstance(details, dict):
+        return False
+    return any(
+        key == _CACHE_READ_SUFFIX
+        or key == _CACHE_CREATION_SUFFIX
+        or key.endswith("_" + _CACHE_READ_SUFFIX)
+        or key.endswith("_" + _CACHE_CREATION_SUFFIX)
+        for key in details
+    )
+
+
 def cost_usd(model: str | None, usage: dict) -> float:
     """USD cost for one LangChain-shaped usage dict.
 
@@ -141,9 +199,7 @@ def cost_usd(model: str | None, usage: dict) -> float:
     usage. Never raises.
     """
     rate = rate_for(model)
-    details = usage.get("input_token_details") or {}
-    cache_read = int(usage.get("cache_read_input_tokens", details.get("cache_read", 0)) or 0)
-    cache_creation = int(usage.get("cache_creation_input_tokens", details.get("cache_creation", 0)) or 0)
+    cache_read, cache_creation = cache_tokens(usage)
     inp = int(usage.get("input_tokens", 0) or 0)
     out = int(usage.get("output_tokens", 0) or 0)
     # Clamp rather than trust the arithmetic: a provider that reports cache counts

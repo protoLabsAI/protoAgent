@@ -1284,7 +1284,15 @@ export type TelemetryInsights = {
   flagged: (TelemetryTurn & { reasons: string[] })[];
   flagged_count: number;
   levers: {
-    cache: { hit_ratio: number; read_tokens: number; est_savings_usd: number };
+    cache: {
+      hit_ratio: number;
+      read_tokens: number;
+      est_savings_usd: number;
+      // Is caching engaging at all? false = every call bills full input price;
+      // null/undefined = not enough evidence to judge (#3342).
+      engaging?: boolean | null;
+      model?: string;
+    };
     routing: { by_model: TelemetryByModelRow[] };
     success_rate: number;
   };

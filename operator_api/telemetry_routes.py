@@ -101,6 +101,22 @@ def _local_insights_payload() -> dict:
         by_model[0]["model"] if by_model else ((STATE.graph_config.model_name if STATE.graph_config else "") or "")
     )
     cache_saved = pricing.cache_read_savings_usd(dom_model, s.get("cache_read_input_tokens", 0))
+    # Is prompt caching engaging AT ALL? The middleware's #2255 detector knows within
+    # three calls, but it says so in a log line and a best-effort Activity emit — which
+    # is how an `openai-codex` lane billed full input price for four days while the
+    # warning repeated unread (#3342). The same fact is legible from the recorded rows,
+    # so report it where cache performance is actually looked at. `None` = not enough
+    # evidence to judge; the console shows nothing rather than guessing.
+    cache_engaging: bool | None = None
+    turns_seen = int(s.get("turns", 0) or 0)
+    if turns_seen >= _CACHE_VERDICT_MIN_TURNS:
+        read = int(s.get("cache_read_input_tokens", 0) or 0)
+        created = int(s.get("cache_creation_input_tokens", 0) or 0)
+        # Only judge a store whose prompts are big enough to be cacheable at all —
+        # every provider has a floor (Anthropic ~1024 tokens), and a store full of
+        # one-line turns legitimately shows zero.
+        if int(s.get("p95_context_tokens", 0) or 0) >= _CACHE_VERDICT_MIN_CONTEXT:
+            cache_engaging = bool(read or created)
     return {
         "enabled": True,
         "insights": {
@@ -112,6 +128,10 @@ def _local_insights_payload() -> dict:
                     "hit_ratio": s.get("cache_hit_ratio", 0.0),
                     "read_tokens": s.get("cache_read_input_tokens", 0),
                     "est_savings_usd": cache_saved,
+                    # True = caching is working, False = every call bills full input
+                    # price, None = not enough evidence to say (#3342).
+                    "engaging": cache_engaging,
+                    "model": dom_model,
                 },
                 "routing": {"by_model": by_model},
                 "success_rate": s.get("success_rate", 0.0),
@@ -122,6 +142,12 @@ def _local_insights_payload() -> dict:
             "unproven_levers": [],
         },
     }
+
+
+# Enough turns to distinguish "not caching" from "hasn't warmed yet", and a prompt
+# large enough that every provider's cacheable floor is cleared.
+_CACHE_VERDICT_MIN_TURNS = 10
+_CACHE_VERDICT_MIN_CONTEXT = 4000
 
 
 async def _fetch_member_json(slug: str, path: str) -> dict | None:

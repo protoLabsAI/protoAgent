@@ -562,3 +562,59 @@ def test_export_is_streaming_response(monkeypatch):
     lines = res.text.strip().splitlines()
     assert lines[0].startswith("task_id,")  # CSV header
     assert "t1" in res.text
+
+
+class _CacheStore:
+    """A store whose summary the cache verdict is computed from (#3342)."""
+
+    def __init__(self, **over):
+        self.s = {
+            "turns": 50,
+            "p95_context_tokens": 120_000,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_hit_ratio": 0.0,
+            "by_model": [{"model": "gpt-5.6-terra", "turns": 50}],
+            **over,
+        }
+
+    def summary(self, since_iso=None):
+        return self.s
+
+    def outliers(self):
+        return []
+
+
+def _cache(c):
+    return c.get("/api/telemetry/insights").json()["insights"]["levers"]["cache"]
+
+
+def test_insights_report_caching_is_not_engaging(monkeypatch):
+    """The whole point of #3342: the middleware knows within three calls that a lane
+    bills full input price, but it says so in a log line and a best-effort Activity
+    emit — which is how an openai-codex lane went four days unread. The same fact is
+    legible from the rows, so it surfaces where cache performance is looked at."""
+    c = _client(monkeypatch, _CacheStore())
+    cache = _cache(c)
+    assert cache["engaging"] is False
+    assert cache["model"] == "gpt-5.6-terra"
+
+
+def test_insights_report_caching_is_working(monkeypatch):
+    c = _client(monkeypatch, _CacheStore(cache_read_input_tokens=900_000, cache_hit_ratio=0.71))
+    assert _cache(c)["engaging"] is True
+
+
+def test_no_cache_verdict_without_enough_evidence(monkeypatch):
+    """`None`, not False — the console shows nothing rather than accusing a lane that
+    simply hasn't warmed up, or one whose prompts are too small to be cacheable at all
+    (every provider has a floor, Anthropic's is ~1024 tokens)."""
+    assert _cache(_client(monkeypatch, _CacheStore(turns=3)))["engaging"] is None
+    assert _cache(_client(monkeypatch, _CacheStore(p95_context_tokens=500)))["engaging"] is None
+
+
+def test_a_cache_write_alone_counts_as_engaging(monkeypatch):
+    """First call of a cold prefix writes and reads nothing. That is caching working,
+    not failing — judging on reads alone would flag a healthy lane."""
+    c = _client(monkeypatch, _CacheStore(cache_creation_input_tokens=50_000))
+    assert _cache(c)["engaging"] is True

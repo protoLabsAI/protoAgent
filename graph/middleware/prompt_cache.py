@@ -231,7 +231,10 @@ class PromptCacheMiddleware(AgentMiddleware):
                 return  # no usage reported — can't judge this call
             details = usage.get("input_token_details") or {}
             model = self._model_name(request)
-            if int(details.get("cache_read") or 0) or int(details.get("cache_creation") or 0):
+            from observability import pricing
+
+            read, creation = pricing.cache_tokens(usage)
+            if read or creation:
                 self._zero_hit_streak[model] = 0
                 self._streak_reported.discard(model)
                 return
@@ -240,7 +243,7 @@ class PromptCacheMiddleware(AgentMiddleware):
             # caching may be working invisibly (a vLLM lane without
             # --enable-prompt-tokens-details emits no prompt_tokens_details,
             # which is indistinguishable from 0 unless we keep the difference).
-            if "cache_read" in details or "cache_creation" in details:
+            if pricing.reports_cache(details):
                 self._streak_reported.add(model)
             streak = self._zero_hit_streak.get(model, 0) + 1
             self._zero_hit_streak[model] = streak
