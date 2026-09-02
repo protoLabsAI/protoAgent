@@ -13,9 +13,11 @@ import type { ChatMessage } from "../lib/types";
 import {
   chatStore,
   DEFAULT_SESSION_TITLE,
+  needsDurableHydration,
   type ChatSession,
   type HydrationEligibility,
 } from "./chat-store";
+import { replaceText } from "./parts";
 import { applyComponent, applyReasoning, applyText, applyToolEvent, applyUsage } from "./turnReducers";
 
 const TERMINAL = /completed|failed|canceled|cancelled|rejected/i;
@@ -97,6 +99,27 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
         call.status === "running" ? { ...call, status: "done" as const } : call,
       ),
     };
+    // ChatMessageView draws a parts-bearing bubble FROM its ordered parts and only
+    // falls back to `content` when there are none — so a completed multi-part turn
+    // (tool cards/components + reply) whose answer text landed only in flat
+    // `content` rehydrates with the cards but no reply: switching agents and back
+    // would drop the assistant's prose (#3340). The server ships the joined answer
+    // as `turn.text`; when ordered parts exist but do not carry that answer,
+    // reconcile it in as the trailing run — the same seam reattach.finalize closes
+    // on the live resubscribe path, applied here to durable hydration. A turn that
+    // already surfaced the full ordered text is left untouched.
+    const hasOrderedParts = Boolean(assistant.parts?.length);
+    const orderedText = (assistant.parts ?? [])
+      .filter((part) => part.kind === "text")
+      .map((part) => part.text)
+      .join("");
+    if (turn.text && hasOrderedParts && orderedText.trim() !== turn.text.trim()) {
+      assistant = {
+        ...assistant,
+        content: turn.text,
+        parts: replaceText(assistant.parts, turn.text, orderedText),
+      };
+    }
   } else {
     // Keep the durable partial visible if a cold/failed reattach cannot produce
     // a newer Task snapshot. The reattach handler recognizes this marker and
@@ -140,11 +163,11 @@ export async function hydrateDurableChatSessions(): Promise<void> {
   } catch {
     return;
   }
-  const local = new Map(chatStore.getSnapshot().sessions.map((session) => [session.id, session]));
   const eligibility = new Map<string, HydrationEligibility>();
+  const local = new Map(chatStore.getSnapshot().sessions.map((session) => [session.id, session]));
   const wanted = summaries.filter((summary) => {
     const session = local.get(summary.session_id);
-    if (session?.messages.length) return false;
+    if (session?.messages.length && !needsDurableHydration(session)) return false;
     const token = chatStore.captureHydrationEligibility(summary.session_id);
     if (!token) return false;
     eligibility.set(summary.session_id, token);
