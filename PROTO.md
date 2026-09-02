@@ -220,6 +220,13 @@ silence it removes. Logic and rationale: `scripts/review_at_head.py`, covered by
 the **`skip-review-gate`** label, which passes the check with the waiver recorded
 in the status description.
 
+It is **required** on the `main` ruleset, so a red `Review at head` blocks the
+merge. If the panel has already reviewed your head and the check is still red, it
+is just stale — a sweep refreshes every open PR every 10 minutes, or run it now
+with `gh workflow run "Review at head"`. (The `pull_request_review` fast path only
+fires for PRs whose branch contains the workflow file, which is why the sweep, not
+the event, is the guarantee.)
+
 Also, when reading a red gate: **"QA panel: N finding(s) persist" is usually not
 the panel's own finding.** That gate counts *unresolved review threads* — Vera can
 return PASS with zero findings while the check is red because a CodeRabbit thread
