@@ -50,6 +50,12 @@ _READ_ONLY_TOOLS = frozenset(
     }
 )
 
+# Guardrails pending the tool's own security review (ADR 0071 / #3170): fleet
+# diagnostics stays out of the operator-MCP read-only profile even though the tool
+# itself is read-only and separately config-gated.
+_READ_ONLY_EXCLUDED_TOOLS = frozenset({"fleet_diagnostics"})
+assert _READ_ONLY_TOOLS.isdisjoint(_READ_ONLY_EXCLUDED_TOOLS)
+
 
 def _profile_allow(profile: str) -> set[str] | None:
     """A profile name → its allowlist set (or ``{"*"}`` for full), or ``None`` when the

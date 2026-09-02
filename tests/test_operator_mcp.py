@@ -164,6 +164,16 @@ def test_profile_read_only_exposes_reads_not_writes():
     assert "memory_ingest" not in names and "write_note" not in names
 
 
+def test_profile_read_only_excludes_fleet_diagnostics_guard():
+    """ADR 0071 / #3170: fleet_diagnostics stays out of this profile until it gets
+    its own operator-MCP security review."""
+    from runtime.operator_mcp_tools import _READ_ONLY_EXCLUDED_TOOLS, _READ_ONLY_TOOLS, resolve_allow
+
+    assert "fleet_diagnostics" in _READ_ONLY_EXCLUDED_TOOLS
+    assert "fleet_diagnostics" not in _READ_ONLY_TOOLS
+    assert "fleet_diagnostics" not in resolve_allow(_cfg_profile("read-only"))
+
+
 def test_profile_full_is_wildcard(monkeypatch):
     from langchain_core.tools import tool
 
