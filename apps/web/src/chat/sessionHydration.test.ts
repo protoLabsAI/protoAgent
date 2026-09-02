@@ -72,6 +72,12 @@ describe("durable turn conversion", () => {
   it("replays reasoning, components, cost, and context through the shared snapshot path", () => {
     const messages = messagesFromDurableTurn(
       turn({
+        // `text` is the server's join of the artifact text parts
+        // (operator_api/chat_routes.py `_text`), so it MUST match them: leaving the
+        // fixture's default "answer" against a "ready" artifact described a response
+        // the server cannot produce, and #3340's reconciliation reasonably trusts
+        // `text` over the replay.
+        text: "ready",
         history: [
           { role: "ROLE_USER", parts: [{ text: "Show the release" }] },
           { role: "ROLE_AGENT", parts: [{ data: { text: "checking" }, metadata: { mimeType: REASONING } }] },
@@ -290,7 +296,7 @@ describe("boot hydration", () => {
     ]);
     expect(assistant?.content).toBe("Shipped — the release is live.");
     expect(assistant?.parts?.some((part) => part.kind === "tools")).toBe(true);
-    expect(assistant?.parts?.at(-1)).toMatchObject({
+    expect(assistant?.parts?.slice(-1)[0]).toMatchObject({
       kind: "text",
       text: "Shipped — the release is live.",
     });
@@ -364,7 +370,7 @@ describe("boot hydration", () => {
       expect.objectContaining({ id: "call-1", name: "run_command", status: "done" }),
     ]);
     expect(assistant?.parts?.some((part) => part.kind === "tools")).toBe(true);
-    expect(assistant?.parts?.at(-1)).toMatchObject({ kind: "text", text: "The release is live." });
+    expect(assistant?.parts?.slice(-1)[0]).toMatchObject({ kind: "text", text: "The release is live." });
   });
 
   it("repairs switched-back component output without dropping the component (#3340)", () => {
@@ -417,7 +423,7 @@ describe("boot hydration", () => {
 
     expect(assistant?.components).toEqual([{ component: "key-value", props: { version: "1.2.3" } }]);
     expect(assistant?.parts?.some((part) => part.kind === "component")).toBe(true);
-    expect(assistant?.parts?.at(-1)).toMatchObject({ kind: "text", text: "Here is the latest release." });
+    expect(assistant?.parts?.slice(-1)[0]).toMatchObject({ kind: "text", text: "Here is the latest release." });
   });
 
   it("fetches only missing/empty sessions, tolerates one failure, and commits successful siblings", async () => {
