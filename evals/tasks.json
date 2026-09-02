@@ -457,7 +457,7 @@
     "verify_rubric": {
       "criteria": [
         "The reply names at least two of: audit log retention, the deploy target move to render.com, the pricing page rewrite",
-        "Every topic the reply names is one it could have read from the session record, not one it made up (other unrelated sessions may legitimately appear)",
+        "Every topic the reply names is drawn from this list, and it invents none beyond it: audit log retention, the deploy target move to render.com, the pricing page rewrite, a sourdough starter, bicycle panniers, an unpaid invoice, an offsite room booking",
         "The reply does not simply decline or say it cannot see other sessions"
       ],
       "threshold": 0.99

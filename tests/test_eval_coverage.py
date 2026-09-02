@@ -691,12 +691,49 @@ def test_audit_path_resolves_to_the_instance_not_the_box(tmp_path, monkeypatch):
     assert resolved != Path.home() / ".protoagent" / "audit" / "audit.jsonl"
 
 
-def test_sweep_points_the_runner_at_the_arm_audit_log(tmp_path, monkeypatch):
+def test_explicit_audit_path_wins_even_before_the_file_exists(tmp_path, monkeypatch):
+    """An operator override was gated on `is_file()`, so pointing at a log the agent
+    had not created yet was silently ignored — and `assert_tools_fired` re-resolves on
+    every poll of its deadline loop, so the target would flip mid-assertion the moment
+    the file appeared."""
+    from infra.paths import reset_instance_paths
+
+    target = tmp_path / "somewhere" / "audit.jsonl"
+    monkeypatch.setenv("AUDIT_PATH", str(target))
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(tmp_path / "box"))
+    reset_instance_paths()
+
+    assert not target.exists()
+    assert verify._audit_path() == target
+
+
+def test_arm_dirs_resolve_to_the_arms_own_root(tmp_path, monkeypatch):
+    """The hand-joined `~/.protoagent/<instance>` deleted NOTHING under a custom box
+    root, so an arm's store — including the audit log the tool assertions read — leaked
+    into the next arm."""
     from infra.paths import reset_instance_paths
 
     from evals import sweep
 
     monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(tmp_path / "box"))
+    monkeypatch.delenv("PROTOAGENT_HOME", raising=False)
     monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
     reset_instance_paths()
-    assert sweep._instance_audit_path("arm-3") == tmp_path / "box" / "arm-3" / "audit" / "audit.jsonl"
+
+    assert sweep._instance_dirs("eval-sweep-9-0") == [tmp_path / "box" / "eval-sweep-9-0"]
+
+
+def test_arm_cleanup_refuses_a_root_it_does_not_own(tmp_path, monkeypatch, capsys):
+    """The dangerous direction. These paths feed `rmtree`, and under PROTOAGENT_HOME
+    every instance resolves to the OPERATOR's own root — a naive reroute through
+    instance_paths would have the sweep delete their real data on teardown."""
+    from infra.paths import reset_instance_paths
+
+    from evals import sweep
+
+    monkeypatch.setenv("PROTOAGENT_HOME", str(tmp_path / "operator"))
+    monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
+    reset_instance_paths()
+
+    assert sweep._instance_dirs("eval-sweep-9-0") == []
+    assert "not deleting anything" in capsys.readouterr().out

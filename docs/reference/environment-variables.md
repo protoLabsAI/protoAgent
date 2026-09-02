@@ -125,7 +125,7 @@ instance-scoped via `PROTOAGENT_INSTANCE`.
 
 | Variable | Default | What |
 |---|---|---|
-| `AUDIT_PATH` | `/sandbox/audit/audit.jsonl` | Directory + filename of the JSONL audit log written by `AuditMiddleware`. Read by `evals/verify.py` for side-effect assertions. |
+| `AUDIT_PATH` | (unset) | Where **`evals/verify.py`** looks for the audit JSONL when asserting that a tool fired. Read by the eval harness only — the agent's own `AuditLogger` resolves `<instance_root>/audit/audit.jsonl` through `infra.paths` and never consults this variable, so setting it does not move the log. Unset, the harness uses `/sandbox/audit/audit.jsonl` when that file exists (the container layout), else the instance store — matching where the agent actually writes. |
 
 ## Scheduler
 
