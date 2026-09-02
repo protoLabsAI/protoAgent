@@ -292,6 +292,33 @@ def test_summary_by_model_includes_per_model_duration_percentiles(store):
     assert models["claude-haiku-4-5"]["p50_duration_ms"] == 500
 
 
+def test_summary_by_model_carries_each_lanes_own_cache_figures(store):
+    """#3342 — the store-wide ratio is the MEAN of every lane, so an agent whose
+    Anthropic lane caches beautifully reads healthy while its codex lane bills full
+    input price on every call. The per-lane figure is what makes the cold one visible."""
+    store.record(_row("t1", model="claude-opus-5", input_tokens=1000, cache_read_input_tokens=9000))
+    store.record(_row("t2", model="openai-codex", input_tokens=10_000, cache_read_input_tokens=0))
+    models = {m["model"]: m for m in store.summary()["by_model"]}
+    assert models["claude-opus-5"]["cache_hit_ratio"] == 0.9
+    assert models["openai-codex"]["cache_hit_ratio"] == 0.0
+    # The operands travel with the row so a consumer can tell "cached nothing" apart
+    # from "recorded nothing" (an ACP coder leg reports no usage at all — #3015).
+    assert models["openai-codex"]["input_tokens"] == 10_000
+    assert models["openai-codex"]["cache_read_input_tokens"] == 0
+    # ...and the rollup is the blend that hides it.
+    assert store.summary()["cache_hit_ratio"] == round(9000 / 20_000, 4)
+
+
+def test_summary_by_model_carries_each_lanes_own_context_fill(store):
+    """Judging whether a lane's prompts are big enough to cache at all needs ITS OWN
+    fill, not the store's — otherwise one long-context lane vouches for every other."""
+    store.record(_row("t1", model="claude-opus-5", context_tokens=120_000))
+    store.record(_row("t2", model="tiny", context_tokens=300))
+    models = {m["model"]: m for m in store.summary()["by_model"]}
+    assert models["claude-opus-5"]["p95_context_tokens"] == 120_000
+    assert models["tiny"]["p95_context_tokens"] == 300
+
+
 def test_summary_by_model_percentiles_handle_a_null_model_group(store):
     # A turn recorded with no model set groups under model=NULL — SQL equality
     # (`model = ?`) never matches NULL, so a naive per-model lookup would silently

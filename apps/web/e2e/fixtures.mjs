@@ -1154,8 +1154,19 @@ export const TELEMETRY_SUMMARY = {
   success_rate: 0.6667,
   cache_hit_ratio: 0.6,
   by_model: [
-    { model: "claude-opus-4-8", turns: 2, cost_usd: 0.21, total_tokens: 12000 },
-    { model: "claude-haiku-4-5", turns: 1, cost_usd: 0.0054, total_tokens: 1800 },
+    // Each lane carries its OWN cache operands and ratio (#3342) — the store-wide
+    // 0.6 above is their blend, which is exactly what hides a lane that caches
+    // nothing. The haiku leg genuinely read no cache; opus read 7200 of 12000.
+    {
+      model: "claude-opus-4-8", turns: 2, cost_usd: 0.21, total_tokens: 12000,
+      input_tokens: 4800, cache_read_input_tokens: 7200, cache_creation_input_tokens: 0,
+      cache_hit_ratio: 0.6, p95_context_tokens: 96000,
+    },
+    {
+      model: "claude-haiku-4-5", turns: 1, cost_usd: 0.0054, total_tokens: 1800,
+      input_tokens: 1800, cache_read_input_tokens: 0, cache_creation_input_tokens: 0,
+      cache_hit_ratio: 0.0, p95_context_tokens: 1800,
+    },
   ],
   by_tool: [
     { tool: "web_search", calls: 3, p50_duration_ms: 800, p95_duration_ms: 2200, p99_duration_ms: 3000 },

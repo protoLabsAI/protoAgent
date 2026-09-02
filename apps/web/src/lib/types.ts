@@ -1169,6 +1169,14 @@ export type TelemetryByModelRow = {
   p50_duration_ms: number;
   p95_duration_ms: number;
   p99_duration_ms: number;
+  /** This lane's OWN cache figures (#3342) — the store-wide ratio is the mean of
+   *  every lane, so a model that caches nothing hides behind one that caches well.
+   *  Optional: a fleet member on a pre-#3342 backend sends neither. */
+  cache_hit_ratio?: number;
+  p95_context_tokens?: number;
+  input_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
 };
 
 // One row of TelemetrySummary.by_tool (#2697) — per-tool p50/p95/p99 EXECUTION
@@ -1288,10 +1296,13 @@ export type TelemetryInsights = {
       hit_ratio: number;
       read_tokens: number;
       est_savings_usd: number;
-      // Is caching engaging at all? false = every call bills full input price;
-      // null/undefined = not enough evidence to judge (#3342).
+      // Is caching engaging at all? false = at least one lane bills full input
+      // price; null/undefined = not enough evidence to judge (#3342).
       engaging?: boolean | null;
       model?: string;
+      /** The lanes that are cold, named. `model` above is the DOMINANT model, which
+       *  is usually the one caching fine — naming it would accuse the wrong lane. */
+      cold_lanes?: { model: string; turns: number }[];
     };
     routing: { by_model: TelemetryByModelRow[] };
     success_rate: number;

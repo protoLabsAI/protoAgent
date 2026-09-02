@@ -564,17 +564,36 @@ def test_export_is_streaming_response(monkeypatch):
     assert "t1" in res.text
 
 
-class _CacheStore:
-    """A store whose summary the cache verdict is computed from (#3342)."""
+def _lane(model, **over):
+    """One `by_model` row as the store emits it (#3342) — the cache operands per lane."""
+    return {
+        "model": model,
+        "turns": 50,
+        "input_tokens": 900_000,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_hit_ratio": 0.0,
+        "p95_context_tokens": 120_000,
+        **over,
+    }
 
-    def __init__(self, **over):
+
+class _CacheStore:
+    """A store whose summary the cache verdict is computed from (#3342).
+
+    The store-wide totals are DERIVED from the lanes rather than set independently, so a
+    test can't accidentally describe an agent whose rollup contradicts its own rows.
+    """
+
+    def __init__(self, lanes=None, **over):
+        lanes = [_lane("gpt-5.6-terra")] if lanes is None else lanes
         self.s = {
-            "turns": 50,
-            "p95_context_tokens": 120_000,
-            "cache_read_input_tokens": 0,
-            "cache_creation_input_tokens": 0,
+            "turns": sum(int(m["turns"]) for m in lanes),
+            "p95_context_tokens": max([int(m["p95_context_tokens"]) for m in lanes] or [0]),
+            "cache_read_input_tokens": sum(int(m["cache_read_input_tokens"]) for m in lanes),
+            "cache_creation_input_tokens": sum(int(m["cache_creation_input_tokens"]) for m in lanes),
             "cache_hit_ratio": 0.0,
-            "by_model": [{"model": "gpt-5.6-terra", "turns": 50}],
+            "by_model": lanes,
             **over,
         }
 
@@ -598,23 +617,69 @@ def test_insights_report_caching_is_not_engaging(monkeypatch):
     cache = _cache(c)
     assert cache["engaging"] is False
     assert cache["model"] == "gpt-5.6-terra"
+    assert [m["model"] for m in cache["cold_lanes"]] == ["gpt-5.6-terra"]
 
 
 def test_insights_report_caching_is_working(monkeypatch):
-    c = _client(monkeypatch, _CacheStore(cache_read_input_tokens=900_000, cache_hit_ratio=0.71))
-    assert _cache(c)["engaging"] is True
+    c = _client(monkeypatch, _CacheStore([_lane("gpt-5.6-terra", cache_read_input_tokens=900_000)]))
+    cache = _cache(c)
+    assert cache["engaging"] is True
+    assert cache["cold_lanes"] == []
 
 
 def test_no_cache_verdict_without_enough_evidence(monkeypatch):
     """`None`, not False — the console shows nothing rather than accusing a lane that
     simply hasn't warmed up, or one whose prompts are too small to be cacheable at all
     (every provider has a floor, Anthropic's is ~1024 tokens)."""
-    assert _cache(_client(monkeypatch, _CacheStore(turns=3)))["engaging"] is None
-    assert _cache(_client(monkeypatch, _CacheStore(p95_context_tokens=500)))["engaging"] is None
+    assert _cache(_client(monkeypatch, _CacheStore([_lane("m", turns=3)])))["engaging"] is None
+    assert _cache(_client(monkeypatch, _CacheStore([_lane("m", p95_context_tokens=500)])))["engaging"] is None
 
 
 def test_a_cache_write_alone_counts_as_engaging(monkeypatch):
     """First call of a cold prefix writes and reads nothing. That is caching working,
     not failing — judging on reads alone would flag a healthy lane."""
-    c = _client(monkeypatch, _CacheStore(cache_creation_input_tokens=50_000))
+    c = _client(monkeypatch, _CacheStore([_lane("m", cache_creation_input_tokens=50_000)]))
     assert _cache(c)["engaging"] is True
+
+
+def test_a_caching_lane_does_not_mask_a_cold_one(monkeypatch):
+    """Why the verdict is per-lane at all.
+
+    A store-wide figure is an average over lanes that have nothing to do with each
+    other. Measured on protoEngineer's live store: a rollup of 0.511 spans lanes from
+    0.5629 down to a lane at 0.0 across 17 turns and 3.4M input tokens. The rollup can
+    only ever say "something is fine on average"; it structurally cannot name a lane,
+    and one busy healthy lane will always outvote a quiet broken one."""
+    c = _client(
+        monkeypatch,
+        _CacheStore([
+            _lane("claude-opus-5", cache_read_input_tokens=4_000_000),
+            _lane("openai-codex", turns=38),
+        ]),
+    )
+    cache = _cache(c)
+    assert cache["engaging"] is False
+    # And it names the guilty lane, not the dominant one.
+    assert [m["model"] for m in cache["cold_lanes"]] == ["openai-codex"]
+    assert cache["cold_lanes"][0]["turns"] == 38
+
+
+def test_an_unmeasured_lane_is_not_accused(monkeypatch):
+    """An ACP coder leg runs outside the gateway and reports no usage at all (#3015):
+    zero input, zero cache. That is unmeasured, not uncached — reading it as "not
+    caching" is the false accusation this verdict exists to stop making."""
+    c = _client(
+        monkeypatch,
+        _CacheStore([
+            _lane("claude-opus-5", cache_read_input_tokens=4_000_000),
+            _lane("acp:coder", input_tokens=0),
+        ]),
+    )
+    cache = _cache(c)
+    assert cache["engaging"] is True
+    assert cache["cold_lanes"] == []
+
+
+def test_only_unmeasured_lanes_yields_no_verdict(monkeypatch):
+    """An agent that runs nothing but coder legs has no evidence either way."""
+    assert _cache(_client(monkeypatch, _CacheStore([_lane("acp:coder", input_tokens=0)])))["engaging"] is None
