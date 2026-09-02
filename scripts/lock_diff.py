@@ -40,7 +40,32 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def _versions(raw: str) -> dict[str, str]:
-    return {p["name"]: p.get("version", "") for p in tomllib.loads(raw).get("package", []) if p.get("name")}
+    """Every locked DEPENDENCY and its version.
+
+    The project's own entry — ``source = { virtual = "." }`` — is excluded. It is not a
+    dependency: its version is a copy of ``pyproject.toml``'s, so it moves on exactly one
+    event, a release commit. Comparing it across branches therefore measures BRANCH AGE,
+    not dependency risk.
+
+    Including it made the gate structurally wrong rather than occasionally wrong: every
+    dependabot PR that outlived one release reported ``protolabs-agent 0.156.0 ->
+    0.155.3`` — the project "downgrading itself" — purely because the branch predated the
+    release commit (#3277, #3278; both branched 08-31, main released 09-01). Releases here
+    land days apart and dependabot PRs routinely sit longer than that, so the false
+    positive was on a schedule. That is worse than noise: a guard that is predictably
+    wrong teaches everyone to reach for ``lock-downgrade-ok`` on reflex, and the day it is
+    RIGHT about a real downgrade — the #3218 langgraph regression this exists to catch —
+    it looks exactly like the times it was not.
+
+    Only the virtual root is dropped, and only real dependencies are compared, so #3218
+    still fails the gate. (A workspace ``editable`` member would deserve the same
+    treatment for the same reason; this repo has none, so none is coded for.)
+    """
+    return {
+        p["name"]: p.get("version", "")
+        for p in tomllib.loads(raw).get("package", [])
+        if p.get("name") and "virtual" not in (p.get("source") or {})
+    }
 
 
 def _at(ref: str) -> dict[str, str]:

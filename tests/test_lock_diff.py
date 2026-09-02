@@ -17,18 +17,24 @@ ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "lock_diff.py"
 
 
-def _lock(**versions: str) -> str:
-    return "\n".join(
-        textwrap.dedent(f"""
+def _lock(_virtual: str = "", **versions: str) -> str:
+    """A minimal uv.lock. ``_virtual`` names the package to mark as the project's own
+    entry (``source = { virtual = "." }``), the way uv writes the workspace root."""
+
+    def one(name: str, ver: str) -> str:
+        block = textwrap.dedent(f"""
             [[package]]
             name = "{name}"
             version = "{ver}"
         """).strip()
-        for name, ver in versions.items()
-    )
+        if name == _virtual:
+            block += '\nsource = { virtual = "." }'
+        return block
+
+    return "\n".join(one(name, ver) for name, ver in versions.items())
 
 
-def _run(tmp_path: Path, base: dict[str, str], head: dict[str, str], *extra: str):
+def _run(tmp_path: Path, base: dict[str, str], head: dict[str, str], *extra: str, _virtual: str = ""):
     """Run the script against a throwaway git repo whose HEAD lock is `head`."""
     git = ["git", "-C", str(tmp_path)]
     subprocess.run([*git, "init", "-q", "-b", "main"], check=True)
@@ -36,10 +42,10 @@ def _run(tmp_path: Path, base: dict[str, str], head: dict[str, str], *extra: str
     subprocess.run([*git, "config", "user.name", "t"], check=True)
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts" / "lock_diff.py").write_text(SCRIPT.read_text())
-    (tmp_path / "uv.lock").write_text(_lock(**base))
+    (tmp_path / "uv.lock").write_text(_lock(_virtual, **base))
     subprocess.run([*git, "add", "-A"], check=True)
     subprocess.run([*git, "commit", "-qm", "base"], check=True)
-    (tmp_path / "uv.lock").write_text(_lock(**head))
+    (tmp_path / "uv.lock").write_text(_lock(_virtual, **head))
     return subprocess.run(
         [sys.executable, str(tmp_path / "scripts" / "lock_diff.py"), "--base", "HEAD", *extra],
         cwd=tmp_path,
@@ -108,3 +114,48 @@ def test_version_ordering(before, after, is_down):
     finally:
         sys.path.pop(0)
     assert _is_downgrade(before, after) is is_down
+
+
+# ── the project's own entry is not a dependency ───────────────────────────────
+#
+# `source = { virtual = "." }` mirrors pyproject's version, so it moves only on a release
+# commit. Comparing it across branches measures branch age. Left in, it made every
+# dependabot PR older than one release report the project downgrading ITSELF (#3277,
+# #3278) — a scheduled false positive, which is how a guard's credibility gets spent.
+
+
+def test_the_projects_own_version_going_backwards_is_not_a_downgrade(tmp_path):
+    """The #3277/#3278 shape: a branch cut before the release commit."""
+    r = _run(
+        tmp_path,
+        {"protolabs-agent": "0.156.0", "zeroconf": "0.150.0"},
+        {"protolabs-agent": "0.155.3", "zeroconf": "0.150.5"},
+        _virtual="protolabs-agent",
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "DOWNGRADED" not in r.stdout
+    assert "zeroconf" in r.stdout  # the real bump is still reported
+
+
+def test_a_real_downgrade_still_fails_even_beside_a_stale_virtual_root(tmp_path):
+    """The exclusion must not become a smuggling route: a genuine dependency walking
+    backwards still fails the gate even when the project's own entry moved too."""
+    r = _run(
+        tmp_path,
+        {"protolabs-agent": "0.156.0", "langgraph": "0.6.7"},
+        {"protolabs-agent": "0.155.3", "langgraph": "0.6.4"},
+        _virtual="protolabs-agent",
+    )
+    assert r.returncode != 0
+    assert "langgraph" in r.stdout
+    assert "protolabs-agent" not in r.stdout  # not named — it is not a dependency
+
+
+def test_a_package_named_like_the_project_but_registry_sourced_still_counts(tmp_path):
+    """Only the VIRTUAL entry is exempt — the name alone earns nothing."""
+    r = _run(
+        tmp_path,
+        {"protolabs-agent": "0.156.0"},
+        {"protolabs-agent": "0.155.3"},
+    )
+    assert r.returncode != 0 and "protolabs-agent" in r.stdout
