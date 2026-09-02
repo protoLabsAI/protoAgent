@@ -177,6 +177,14 @@ const clickRemove = (display: string) => {
   act(() => button.click());
 };
 
+const clickTest = (display: string) => {
+  const row = [...container.querySelectorAll<HTMLElement>('[data-testid="provider-row"]')].find((providerRow) =>
+    providerRow.textContent?.includes(display),
+  )!;
+  const button = [...row.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Test")!;
+  act(() => button.click());
+};
+
 const primary = () =>
   [...document.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Repoint and remove")) as
     | HTMLButtonElement
@@ -313,10 +321,56 @@ describe("Resolve-references dialog (bd-v6xy)", () => {
     expect(primary()?.disabled).toBe(true);
   });
 
+  it("lets model.name be repointed only to another connection's lane and sends that exact release", async () => {
+    const remove = vi.spyOn(api, "removeProvider").mockResolvedValue({ ok: true, removed: "gateway" });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    mountPanel(
+      [
+        inUseRow([{ key: "model.name", value: "gateway:gpt-x", kind: "slot", clearable: false }]),
+        {
+          id: "local-vllm",
+          type: "openai-compat",
+          label: "Local vLLM",
+          display: "Local vLLM",
+          has_key: true,
+          in_use_by: [],
+          in_use: [],
+        },
+      ],
+      client,
+    );
+    await flush();
+    await flush();
+
+    clickRemove("Gateway");
+    expect(primary()?.disabled).toBe(true);
+
+    const trigger = document.querySelector('[aria-label="New target for Lead model"]') as HTMLElement;
+    act(() => trigger.click());
+    await flush();
+
+    const options = [...document.querySelectorAll<HTMLElement>('[role="option"]')];
+    expect(options.map((option) => option.textContent).join(" ")).toContain("qwen3-32b");
+    expect(options.map((option) => option.textContent).join(" ")).not.toContain("gpt-x");
+    const target = options.find((option) => option.textContent?.includes("qwen3-32b"))!;
+    act(() => target.click());
+    await flush();
+
+    expect(primary()?.disabled).toBe(false);
+    await act(async () => {
+      primary()!.click();
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(remove).toHaveBeenCalledWith("gateway", false, { "model.name": "local-vllm:qwen3-32b" });
+  });
+
   it("submits Clear/favorites as null, invalidates both caches, and closes on success", async () => {
     const remove = vi
       .spyOn(api, "removeProvider")
       .mockResolvedValue({ ok: true, removed: "gateway", released: ["routing.aux_model", "model.favorites"] });
+    vi.spyOn(api, "providerModels").mockResolvedValue({ models: ["probe-only-model"], error: "" });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     mountPanel(
       [
@@ -339,6 +393,10 @@ describe("Resolve-references dialog (bd-v6xy)", () => {
     await flush();
     await flush();
 
+    clickTest("Gateway");
+    await flush();
+    expect(document.body.textContent).toContain("probe-only-model");
+
     clickRemove("Gateway");
     const invalidate = vi.spyOn(client, "invalidateQueries");
     // No non-clearable references → the primary is enabled with the Clear defaults.
@@ -357,6 +415,7 @@ describe("Resolve-references dialog (bd-v6xy)", () => {
     expect(keys).toContain(JSON.stringify({ queryKey: ["providers"] }));
     expect(keys).toContain(JSON.stringify({ queryKey: settingsSchemaQuery().queryKey }));
     expect(document.querySelector('[data-testid="provider-resolve-gateway"]')).toBeNull();
+    expect(document.body.textContent).not.toContain("probe-only-model");
   });
 
   it("keeps the dialog open and shows the server detail inline on a 409/400", async () => {
