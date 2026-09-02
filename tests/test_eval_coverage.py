@@ -685,7 +685,10 @@ def test_audit_path_resolves_to_the_instance_not_the_box(tmp_path, monkeypatch):
 
     resolved = verify._audit_path()
     assert resolved == tmp_path / "box" / "eval-arm-7" / "audit" / "audit.jsonl"
-    assert str(Path.home()) not in str(resolved)
+    # …and specifically NOT the old hand-joined box-level guess. Stated as the exact
+    # path, not "$HOME isn't in it": on a Windows runner tmp_path lives under the home
+    # dir, so the substring form is false for a perfectly correct answer.
+    assert resolved != Path.home() / ".protoagent" / "audit" / "audit.jsonl"
 
 
 def test_sweep_points_the_runner_at_the_arm_audit_log(tmp_path, monkeypatch):
