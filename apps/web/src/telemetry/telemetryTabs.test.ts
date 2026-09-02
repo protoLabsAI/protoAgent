@@ -2,20 +2,40 @@ import { describe, expect, it } from "vitest";
 
 import { defaultTelemetryTab, hasTelemetryViews, telemetryTabItems } from "./telemetryTabs";
 
-import type { FleetTelemetry, TelemetrySummary } from "../lib/types";
-
-const summary = (turns: number) => ({ turns } as TelemetrySummary);
-const fleet = (on: boolean) => ({ fleet: on, members: [] } as unknown as FleetTelemetry);
+const views = (o: Partial<{ hasModels: boolean; hasTools: boolean; hasFleet: boolean }> = {}) => ({
+  hasModels: false,
+  hasTools: false,
+  hasFleet: false,
+  ...o,
+});
 
 describe("telemetryTabItems", () => {
-  it("offers the three per-box views", () => {
-    expect(telemetryTabItems(false).map((t) => t.id)).toEqual(["turns", "models", "tools"]);
+  it("always anchors on the turns table", () => {
+    // It carries the store's empty/disabled message, so it is the one tab that has
+    // something to say even with no data at all.
+    expect(telemetryTabItems(views()).map((t) => t.id)).toEqual(["turns"]);
+  });
+
+  it("adds a tab only when there are rows behind it", () => {
+    expect(telemetryTabItems(views({ hasModels: true })).map((t) => t.id)).toEqual(["turns", "models"]);
+    expect(telemetryTabItems(views({ hasTools: true })).map((t) => t.id)).toEqual(["turns", "tools"]);
+    // A box that never called a tool has nothing to put under "By tool" — the same
+    // reason Fleet is conditional, applied consistently.
+    expect(telemetryTabItems(views({ hasModels: true, hasFleet: true })).map((t) => t.id)).not.toContain("tools");
   });
 
   it("adds Fleet only on a fleet install", () => {
-    // A single box has no members to roll up, and an empty tab is worse than no tab.
-    expect(telemetryTabItems(true).map((t) => t.id)).toContain("fleet");
-    expect(telemetryTabItems(false).map((t) => t.id)).not.toContain("fleet");
+    expect(telemetryTabItems(views({ hasFleet: true })).map((t) => t.id)).toContain("fleet");
+    expect(telemetryTabItems(views()).map((t) => t.id)).not.toContain("fleet");
+  });
+
+  it("keeps a stable left-to-right order", () => {
+    expect(telemetryTabItems(views({ hasModels: true, hasTools: true, hasFleet: true })).map((t) => t.id)).toEqual([
+      "turns",
+      "models",
+      "tools",
+      "fleet",
+    ]);
   });
 });
 
@@ -41,13 +61,11 @@ describe("hasTelemetryViews", () => {
   it("is false only when there is neither a turn nor a fleet", () => {
     // With nothing to show there is one message to render; a strip of empty tabs
     // above it is furniture.
-    expect(hasTelemetryViews(summary(0), fleet(false))).toBe(false);
-    expect(hasTelemetryViews(null, fleet(false))).toBe(false);
-    expect(hasTelemetryViews(undefined, fleet(false))).toBe(false);
+    expect(hasTelemetryViews(false, false)).toBe(false);
   });
 
   it("is true when either side has something", () => {
-    expect(hasTelemetryViews(summary(3), fleet(false))).toBe(true);
-    expect(hasTelemetryViews(summary(0), fleet(true))).toBe(true);
+    expect(hasTelemetryViews(true, false)).toBe(true);
+    expect(hasTelemetryViews(false, true)).toBe(true);
   });
 });

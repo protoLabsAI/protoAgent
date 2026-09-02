@@ -29,8 +29,12 @@ test("Box ▸ Telemetry shows the summary cards and recent turns", async ({ page
   await expect(surface.getByText("failed")).toBeVisible();
 
   await views.getByRole("tab", { name: "By model" }).click();
-  await expect(surface.getByTestId("telemetry-by-model")).toBeVisible();
-  await expect(surface.getByText("claude-opus-4-8").first()).toBeVisible();
+  const byModel = surface.getByTestId("telemetry-by-model");
+  await expect(byModel).toBeVisible();
+  // SCOPED to the table: `surface.getByText("claude-opus-4-8")` also matches the
+  // pinned insights block's flag-model span, which is earlier in the DOM — that
+  // assertion passed with zero table rows.
+  await expect(byModel.getByText("claude-opus-4-8").first()).toBeVisible();
   // …and switching away takes the previous table off the page — the point of the tabs.
   await expect(surface.getByTestId("telemetry-turns")).toHaveCount(0);
 
@@ -46,6 +50,11 @@ test("Box ▸ Telemetry shows the summary cards and recent turns", async ({ page
   // A traced turn deep-links to Langfuse; the untraced one shows no link.
   const traceLink = surface.getByTestId("telemetry-trace-link");
   await expect(traceLink).toHaveCount(1);
+  // Trace is the LAST of ten columns in a table wider than the dialog. It has to be
+  // reachable, not clipped: scrolling it into view inside its own container is what
+  // `overflow-x: auto` on the section buys, and this fails if the panel clips it.
+  await traceLink.scrollIntoViewIfNeeded();
+  await expect(traceLink).toBeVisible();
   await expect(traceLink).toHaveAttribute(
     "href",
     "https://langfuse.example.com/project/p1/traces/0f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5",
