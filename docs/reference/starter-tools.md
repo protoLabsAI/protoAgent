@@ -519,6 +519,17 @@ carry an excerpt plus id for expansion with `recall_session`.
 `surface` optionally limits results to `chat`, `a2a/other`, `activity`, `palette`, or
 `background`. Query text is converted to literal terms; raw FTS operators are never executed.
 
+Matching is **stemmed** (FTS5 `porter`), so "audit log" finds a session about "audit logs"
+and "rotation" finds one about "rotating" — recall doesn't depend on reproducing the stored
+wording. Stemming handles inflections, not derivations: "retained" and "retention" have
+different stems and do not match each other. There is no semantic/vector search over sessions,
+so a query that shares no word stem with the stored text will miss — which is why the
+automatic `<prior_sessions>` digest still earns its place where it is enabled
+([ADR 0108 D9](/adr/0108-context-architecture-v2)): it tells the agent a session EXISTS
+without requiring it to guess the wording first. It is not unconditional —
+`context.prior_sessions: off` turns it off entirely, and goal-driven turns suppress it —
+so on those turns this search is the ONLY way back to a past session, wording guess and all.
+
 ### `recall_session`
 
 ```python
