@@ -1,5 +1,17 @@
 [
   {
+    "version": "v0.158.0",
+    "date": "2026-09-02",
+    "changes": [
+      "Paged effective-config reads (#3341).",
+      "Retain rendered assistant replies across agent switches (#3340).",
+      "A cache read reported under a service tier was counted as zero (#3342).",
+      "Telemetry says when prompt caching isn't engaging at all (#3342).",
+      "The codex lane now keys its requests for cache routing (#3342).",
+      "The cache verdict is per model, so one lane can't vouch for another (#3342)."
+    ]
+  },
+  {
     "version": "v0.157.0",
     "date": "2026-09-02",
     "changes": [

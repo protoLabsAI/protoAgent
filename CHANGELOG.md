@@ -15,6 +15,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.158.0] - 2026-09-02
+
+### Added
+- **Paged effective-config reads (#3341).** `show_config` now accepts dotted nested selectors (e.g. `project_board.projects`) and explicit `offset`/`limit` pagination for selected dicts, lists, and oversized strings, so large sections can be enumerated reproducibly across deterministic calls without losing data to the 12k transport cap. Paged responses carry an explicit `pagination` cursor (`next_offset`/`has_more`), and a single child too big to embed comes back as a `__truncated__` drill-in pointer rather than dead-ending. Selector segments are escape-aware (`\.` for a literal dot, `\\` for a backslash), so a drill-in pointer resolves back to its child even when the key contains a dot or is empty — no child is ever stranded. Redaction is preserved at every depth.
+
+### Fixed
+- **Retain rendered assistant replies across agent switches (#3340).** Switching agents and returning to a completed turn now restores its assistant prose alongside its tool cards and component output. Durable-boot hydration reconciles the joined answer into the ordered parts of a settled tool/component reply, and the eligibility scan considers every assistant turn — not just the last — so an earlier stale reply is no longer stranded once a later reply renders on top of it.
+
+- **A cache read reported under a service tier was counted as zero (#3342).** LangChain reports
+  `{tier}_cache_read` when a response carries a service tier (`priority_cache_read`,
+  `flex_cache_read`), and telemetry, cost and the prompt-cache detector all read only the bare
+  `cache_read`. On any lane returning a tier that overstated cost, understated the hit ratio, and
+  made the detector blame the provider for our own parse. Handled once now, in shared helpers.
+- **Telemetry says when prompt caching isn't engaging at all (#3342).** The detector has known this
+  within three calls since #2255, but it said so in a log line and a best-effort Activity emit —
+  which is how an `openai-codex` lane billed full input price for four days with the warning
+  repeating unread. The insights now carry the verdict, and the Telemetry panel shows it instead of
+  a reassuring hit-rate. It stays silent rather than accusing a lane with too few turns, or prompts
+  below every provider's cacheable floor.
+- **The codex lane now keys its requests for cache routing (#3342).** OpenAI routes a request to
+  an inference engine by hashing its first ~256 tokens, and a cache hit needs the shared prefix
+  *and* the same machine — so a thread's conversation, which lives in KV cache on only the engine
+  that saw it, was being re-read at full price whenever a call landed elsewhere. Measured on a live
+  agent: every call cached exactly 24,064 tokens (the instructions plus tool schemas, warm
+  anywhere) and never one token more, across 204 calls with inputs up to 1.2M. Requests now carry
+  `prompt_cache_key` keyed by session, which is what keeps a turn's tool loop on one engine.
+  Nothing is sent when there is no session — a per-call key would be worse than none.
+- **The cache verdict is per model, so one lane can't vouch for another (#3342).** A store-wide
+  hit ratio is an average over lanes that have nothing to do with each other: measured on a live
+  agent, a rollup of 0.511 spans lanes from 0.5629 down to one sitting at 0.0 across 17 turns and
+  3.4M input tokens. `by_model` now carries each lane's own cache operands, ratio and context fill,
+  the verdict is taken per lane, and both the warning and the By-model table name the lane rather
+  than the dominant model — which is generally the innocent party. A lane that recorded no prompt
+  tokens at all is reported as unmeasured rather than uncached: ACP coder legs run outside the
+  gateway and report no usage, and they are a third of that agent's recorded turns, so accusing
+  them would drown the signal. This is lane attribution, not a detector for the routing problem
+  above — a lane can show a healthy ratio while caching only its constant head.
+
 ## [0.157.0] - 2026-09-02
 
 ### Added
