@@ -16,7 +16,6 @@ distinction survives the process boundary; genuinely failed → `1`, exactly as 
 from __future__ import annotations
 
 import importlib.util
-import signal
 import sys
 import subprocess
 from pathlib import Path
@@ -56,17 +55,21 @@ def _fake_run(returncode):
     return _run
 
 
-@pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGKILL, signal.SIGINT])
+# Plain integers, not `signal.SIG*`: `signal.SIGKILL` does not exist on Windows and a
+# parametrize list is evaluated at IMPORT, so naming it would make this module fail
+# COLLECTION on the Windows shards rather than skip. The mapping under test is pure
+# arithmetic on a return code and is platform-independent, so the numbers are the contract.
+@pytest.mark.parametrize("sig", [15, 9, 2], ids=["SIGTERM", "SIGKILL", "SIGINT"])
 def test_a_check_killed_by_a_signal_exits_128_plus_signal(gate, monkeypatch, capsys, sig):
     """Not 1 — a caller must be able to see that no verdict was reached."""
     monkeypatch.setattr(gate, "build_checks", lambda lint_only=False: _one_check(gate))
-    monkeypatch.setattr(gate.subprocess, "run", _fake_run(-int(sig)))
+    monkeypatch.setattr(gate.subprocess, "run", _fake_run(-sig))
 
     rc = gate.run_gate()
 
-    assert rc == 128 + int(sig)
+    assert rc == 128 + sig
     out = capsys.readouterr().out
-    assert "KILLED" in out and f"signal {int(sig)}" in out
+    assert "KILLED" in out and f"signal {sig}" in out
     # It must NOT claim the check failed — that is the false statement #386 acted on.
     assert "gate: FAIL" not in out
 
@@ -97,7 +100,7 @@ def test_the_killed_exit_code_is_outside_the_ordinary_failure_range(gate, monkey
     """128+N must not collide with the codes a normal failing tool returns, or the
     board's re-run heuristic would swallow real failures."""
     monkeypatch.setattr(gate, "build_checks", lambda lint_only=False: _one_check(gate))
-    monkeypatch.setattr(gate.subprocess, "run", _fake_run(-int(signal.SIGTERM)))
+    monkeypatch.setattr(gate.subprocess, "run", _fake_run(-15))
     killed = gate.run_gate()
 
     monkeypatch.setattr(gate.subprocess, "run", _fake_run(2))
