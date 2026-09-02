@@ -336,7 +336,14 @@ function render(){
 
 function fmtAge(ts){
   const s = Math.max(0, Math.round(Date.now()/1000 - ts));
-  return s < 5 ? "just now" : s < 90 ? s + "s ago" : Math.round(s/60) + "m ago";
+  // Rolls over past minutes: the health prober backs off to 15-minute sweeps when
+  // nobody is watching, and a "Checked" of `526822m ago` is not a legible number.
+  if (s < 5) return "just now";
+  if (s < 90) return s + "s ago";
+  const m = Math.round(s/60);
+  if (m < 90) return m + "m ago";
+  const h = Math.round(m/60);
+  return h < 36 ? h + "h ago" : Math.round(h/24) + "d ago";
 }
 
 async function load(force){
