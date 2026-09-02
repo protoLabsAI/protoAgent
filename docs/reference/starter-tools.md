@@ -856,7 +856,10 @@ pages use sorted keys, so repeated calls reconstruct the same value deterministi
 responses are JSON envelopes with `section`, `pagination` (`offset`, actual `limit`,
 `returned`, `total`, `next_offset`, `has_more`) and `value`. If a selected value is too large
 for the 12k transport safeguard, `show_config` returns an explicit first page instead of
-cutting the JSON; continue with `offset=<next_offset>` until `next_offset` is `null`.
+cutting the JSON; continue with `offset=<next_offset>` until `next_offset` is `null`. When a
+single child is itself too big to embed in a page, it comes back as a `__truncated__` pointer
+carrying the deeper `read_with` path (and shape metadata, never the value) — so paging a
+parent never dead-ends on one oversized child, and nothing is silently dropped.
 
 **Read-only.** It never writes, and it binds whenever a config is available. Drop it with
 `tools.disabled: [show_config]` like any other core tool.

@@ -175,6 +175,60 @@ def test_large_nested_map_exceeding_cap_is_readable_across_pages():
     assert reconstructed["proj-039"]["repo"] == "org/repo-039"
 
 
+def test_parent_with_one_oversized_child_points_instead_of_dead_ending():
+    """Selecting a parent whose single child busts the cap must not dead-end: the child
+    comes back as a drill-in pointer, the cursor still advances, and the full child stays
+    readable via the deeper dotted path — no data lost, nothing silently cut."""
+    cfg = LangGraphConfig()
+    cfg.plugin_config = {
+        "project_board": {
+            "repo": "org/repo",
+            "projects": {
+                f"proj-{i:03d}": {
+                    "repo": f"org/repo-{i:03d}",
+                    "api_token": f"pbt_project_{i:03d}",
+                    "blob": "y" * 500,
+                }
+                for i in range(60)
+            },
+        }
+    }
+    show_config = build_config_tools(cfg)[0]
+
+    first = show_config.invoke({"section": "project_board"})
+    assert "truncated at" not in first  # not the old silent-cut sentinel
+    page = json.loads(first)
+    # `projects` sorts before `repo`, so it is the first (oversized) child.
+    pointer = page["value"]["projects"]
+    assert pointer["__truncated__"] is True
+    assert pointer["read_with"] == "project_board.projects"
+    assert pointer["type"] == "object"
+    assert pointer["keys"] == 60
+    # A pointer carries shape only — never the value, so no nested secret rides along.
+    assert "pbt_project_" not in first
+    # The cursor advanced by one, so the sibling `repo` is still reachable.
+    assert page["pagination"]["returned"] == 1
+    assert page["pagination"]["has_more"] is True
+
+    # Following the pointer reconstructs the whole child across pages, redacted throughout.
+    reconstructed = {}
+    offset = 0
+    while True:
+        child_page = json.loads(
+            show_config.invoke(
+                {"section": "project_board.projects", "offset": offset, "limit": 10}
+            )
+        )
+        reconstructed.update(child_page["value"])
+        if child_page["pagination"]["next_offset"] is None:
+            break
+        offset = child_page["pagination"]["next_offset"]
+
+    assert len(reconstructed) == 60
+    assert reconstructed["proj-059"]["repo"] == "org/repo-059"
+    assert reconstructed["proj-000"]["api_token"] == _REDACTED
+
+
 def test_large_selected_string_is_paged_without_truncated_json():
     large_note = "abcdefghijklmnopqrstuvwxyz" * 600
     cfg = LangGraphConfig()

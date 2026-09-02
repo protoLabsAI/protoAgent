@@ -157,6 +157,59 @@ def _resolve_path(doc: dict, path: str) -> tuple[bool, Any, str]:
     return True, current, ""
 
 
+def _page_envelope(
+    section: str,
+    *,
+    offset: int,
+    limit: int,
+    returned: int,
+    total: int,
+    page: Any,
+    note: str = "",
+) -> dict:
+    """The one shape every paged response takes: the selected ``section``, an explicit
+    ``pagination`` cursor (so the boundary/continuation is stated, never implied), and
+    the ``value`` slice. ``next_offset`` is the resume cursor, or ``None`` at the end."""
+    next_offset = offset + returned
+    has_more = next_offset < total
+    env: dict = {
+        "section": section,
+        "pagination": {
+            "offset": offset,
+            "limit": limit,
+            "returned": returned,
+            "total": total,
+            "next_offset": next_offset if has_more else None,
+            "has_more": has_more,
+        },
+        "value": page,
+    }
+    if note:
+        env["note"] = note
+    return env
+
+
+def _oversized_pointer(section: str, child: Any, value: Any) -> dict:
+    """A stand-in for a single child too large to embed in one page: it names how to
+    read the child with a deeper dotted selector, so a page advances by one instead of
+    dead-ending on one big value. Carries only shape metadata — never the value — so it
+    cannot leak a credential the value might hold."""
+    if isinstance(value, dict):
+        shape = {"type": "object", "keys": len(value)}
+    elif isinstance(value, list):
+        shape = {"type": "array", "items": len(value)}
+    elif isinstance(value, str):
+        shape = {"type": "string", "chars": len(value)}
+    else:
+        shape = {"type": type(value).__name__}
+    return {
+        "__truncated__": True,
+        "reason": f"value exceeds the {_MAX_CHARS}-char per-response cap",
+        "read_with": f"{section}.{child}",
+        **shape,
+    }
+
+
 def _page_value(value: Any, *, section: str, offset: int, limit: int) -> str:
     if offset < 0:
         return "Error: offset must be >= 0."
@@ -175,20 +228,14 @@ def _page_value(value: Any, *, section: str, offset: int, limit: int) -> str:
                 "cannot be paged safely unless it is a string."
             )
         page = value[offset : offset + page_limit]
-        next_offset = offset + len(page)
-        has_more = next_offset < len(value)
-        envelope = {
-            "section": section,
-            "pagination": {
-                "offset": offset,
-                "limit": page_limit,
-                "returned": len(page),
-                "total": len(value),
-                "next_offset": next_offset if has_more else None,
-                "has_more": has_more,
-            },
-            "value": page,
-        }
+        envelope = _page_envelope(
+            section,
+            offset=offset,
+            limit=page_limit,
+            returned=len(page),
+            total=len(value),
+            page=page,
+        )
         text = _selected_dump(envelope)
         if text is not None:
             return text
@@ -197,36 +244,44 @@ def _page_value(value: Any, *, section: str, offset: int, limit: int) -> str:
             "Reduce limit."
         )
 
-    keys = sorted(value, key=str) if isinstance(value, dict) else []
+    keys = sorted(value, key=str) if isinstance(value, dict) else list(range(len(value)))
     total = len(value)
-    while page_limit >= 1:
-        if isinstance(value, dict):
-            page_keys = keys[offset : offset + page_limit]
-            page = {k: value[k] for k in page_keys}
-        else:
-            page = value[offset : offset + page_limit]
-        next_offset = offset + len(page)
-        has_more = next_offset < total
-        envelope = {
-            "section": section,
-            "pagination": {
-                "offset": offset,
-                "limit": page_limit,
-                "returned": len(page),
-                "total": total,
-                "next_offset": next_offset if has_more else None,
-                "has_more": has_more,
-            },
-            "value": page,
-        }
+    pl = page_limit
+    while True:
+        window = keys[offset : offset + pl]
+        page = (
+            {k: value[k] for k in window}
+            if isinstance(value, dict)
+            else [value[k] for k in window]
+        )
+        envelope = _page_envelope(
+            section, offset=offset, limit=pl, returned=len(window), total=total, page=page
+        )
         text = _dump(envelope)
         if len(text) <= _MAX_CHARS:
             return text
-        page_limit //= 2
-    return (
-        f"Error: one item in {section!r} exceeds {_MAX_CHARS} chars by itself. "
-        "Select a deeper path or reduce the configured value size."
+        if len(window) <= 1:
+            break
+        pl //= 2
+
+    # One child at `offset` is bigger than a whole page holds. Don't dead-end: return it
+    # as a drill-in pointer so the cursor still advances by one and nothing is silently
+    # dropped — the full value stays reachable via the deeper dotted path it names.
+    if not window:  # unreachable (an empty page always fits) — an explicit floor, not a cut
+        return f"Error: could not render {section!r} within {_MAX_CHARS} chars."
+    child = window[0]
+    pointer = _oversized_pointer(section, child, value[child])
+    page = {str(child): pointer} if isinstance(value, dict) else [pointer]
+    envelope = _page_envelope(
+        section,
+        offset=offset,
+        limit=pl,
+        returned=1,
+        total=total,
+        page=page,
+        note=f"one item was too large to embed; read it with section={pointer['read_with']!r}",
     )
+    return _dump(envelope)
 
 
 def build_config_tools(config) -> list:
@@ -253,7 +308,9 @@ def build_config_tools(config) -> list:
         - ``offset`` / ``limit``: page a selected dict, list, or oversized string.
           Dict keys are sorted deterministically. Large selected values return an
           explicit page envelope instead of being silently cut off; ``next_offset``
-          tells you how to continue.
+          tells you how to continue. A single child too big to embed comes back as a
+          ``__truncated__`` pointer naming the deeper ``read_with`` path — the page
+          never dead-ends, so nothing is silently dropped.
 
         Read-only — this never changes anything. Secrets are masked as «redacted»;
         seeing that marker means the value IS set, just not readable here."""
