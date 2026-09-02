@@ -2514,6 +2514,50 @@ def _build_config_editor_tool() -> list:
     return [set_config]
 
 
+def _build_fleet_diagnostics_tool() -> list:
+    """Bind the read-only fleet diagnostics tool (``tools.fleet_diagnostics.enabled``).
+
+    The core implementation resolves members only through the configured fleet roster and
+    reads through the hub-owned diagnostics proxy. Keep this adapter narrow: it exposes logs
+    and exact task-by-id reads only, with no runtime control, checkpoint, HITL, or config path.
+    """
+
+    @tool
+    async def fleet_diagnostics(member: str, read: str = "logs", lines: int = 200, task_id: str = "") -> dict:
+        """Read diagnostics from a registered fleet member.
+
+        Use this only for inspection. It is read-only and cannot start members, resume or
+        answer tasks, mutate checkpoints, or change configuration.
+
+        Args:
+            member: Fleet member display name or id from the configured roster.
+            read: ``"logs"`` for recent logs, or ``"task"`` for one exact task.
+            lines: Recent log line count for ``read="logs"``; clamped by the diagnostics layer.
+            task_id: Exact A2A task id for ``read="task"``.
+
+        Returns a compact dict with either diagnostics data or a structured refusal/error.
+        """
+        from tools.fleet_diagnostics import read_member_logs, read_member_task
+
+        mode = (read or "logs").strip().lower()
+        if mode in {"logs", "log"}:
+            return await read_member_logs(member, lines)
+        if mode in {"task", "tasks"}:
+            return await read_member_task(member, task_id)
+        detail = (
+            "fleet_diagnostics only supports read='logs' or read='task'. "
+            "It has no runtime control actions."
+        )
+        return {
+            "ok": False,
+            "error": "unsupported_read",
+            "detail": detail,
+            "member": (member or "").strip(),
+        }
+
+    return [fleet_diagnostics]
+
+
 def _build_soul_editor_tool(reload_callback=None, *, provenance_required: bool = False) -> list:
     """Bind the guarded self-persona editor (config ``soul.self_edit_enabled``, default off).
 
@@ -2775,6 +2819,11 @@ def get_all_tools(
         # can never reach the write path. The fence lives in the tool, not here, so the
         # refusal is legible to the model that tried it.
         tools.extend(_build_config_editor_tool())
+    if getattr(graph_config, "tools_fleet_diagnostics_enabled", False):
+        # Fleet diagnostics (ADR 0071 / #3170), default off. The adapter exposes only
+        # read-only member logs and exact task-by-id inspection through the existing
+        # authenticated fleet proxy; no operator/runtime mutation path is bound here.
+        tools.extend(_build_fleet_diagnostics_tool())
     if soul_edit_enabled:
         # ADR 0079/0081 — guarded self-authored persona (config soul.self_edit_enabled,
         # default off). Lead-agent only: no subagent build passes soul_edit_enabled, so
