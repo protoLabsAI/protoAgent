@@ -21,17 +21,48 @@ test("Box ▸ Telemetry shows the summary cards and recent turns", async ({ page
   await expect(surface.getByText("Cache hit")).toBeVisible();
   await expect(surface.getByText("60%", { exact: true })).toBeVisible(); // cache-hit card
 
-  // Per-model + per-tool (#2697) + recent-turns tables.
-  await expect(surface.getByText("By model")).toBeVisible();
-  await expect(surface.getByText("claude-opus-4-8").first()).toBeVisible();
-  await expect(surface.getByText("By tool")).toBeVisible();
-  await expect(surface.getByText("web_search")).toBeVisible();
-  await expect(surface.getByText("Recent turns")).toBeVisible();
+  // The drill-downs are tabs now (#3329), not stacked sections: the surface opens on
+  // recent turns, and the per-model / per-tool (#2697) rollups are one click away.
+  const views = surface.getByTestId("telemetry-views");
+  await expect(surface.getByTestId("telemetry-turns")).toBeVisible();
   // The failed turn renders its state pill.
   await expect(surface.getByText("failed")).toBeVisible();
+
+  await views.getByRole("tab", { name: "By model" }).click();
+  const byModel = surface.getByTestId("telemetry-by-model");
+  await expect(byModel).toBeVisible();
+  // SCOPED to the table: `surface.getByText("claude-opus-4-8")` also matches the
+  // pinned insights block's flag-model span, which is earlier in the DOM — that
+  // assertion passed with zero table rows.
+  await expect(byModel.getByText("claude-opus-4-8").first()).toBeVisible();
+  // …and switching away takes the previous table off the page — the point of the tabs.
+  await expect(surface.getByTestId("telemetry-turns")).toHaveCount(0);
+
+  await views.getByRole("tab", { name: "By tool" }).click();
+  await expect(surface.getByTestId("telemetry-by-tool")).toBeVisible();
+  await expect(surface.getByText("web_search")).toBeVisible();
+
+  // A single-box install has no Fleet tab at all.
+  await expect(views.getByRole("tab", { name: "Fleet" })).toHaveCount(0);
+
+  await views.getByRole("tab", { name: "Recent turns" }).click();
+  await expect(surface.getByTestId("telemetry-turns")).toBeVisible();
   // A traced turn deep-links to Langfuse; the untraced one shows no link.
   const traceLink = surface.getByTestId("telemetry-trace-link");
   await expect(traceLink).toHaveCount(1);
+  // Trace is the LAST of ten columns in a table wider than the dialog, so it has to be
+  // REACHABLE rather than clipped — that is what `overflow-x: auto` on the section
+  // buys. Assert the container actually overflows and actually scrolls: Playwright's
+  // toBeVisible() only requires a non-empty bounding box, NOT viewport intersection,
+  // so it passes either way and proves nothing here.
+  const turnsBox = surface.getByTestId("telemetry-turns");
+  const overflows = await turnsBox.evaluate((el) => el.scrollWidth > el.clientWidth);
+  expect(overflows, "the turns table should be wider than the panel at this width").toBe(true);
+  const before = await turnsBox.evaluate((el) => el.scrollLeft);
+  await traceLink.scrollIntoViewIfNeeded();
+  const after = await turnsBox.evaluate((el) => el.scrollLeft);
+  expect(after, "reaching the Trace column should scroll its own container").toBeGreaterThan(before);
+  await expect(traceLink).toBeVisible();
   await expect(traceLink).toHaveAttribute(
     "href",
     "https://langfuse.example.com/project/p1/traces/0f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5",

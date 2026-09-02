@@ -287,7 +287,16 @@ function matchesKnowledge(chunk, q, prefix) {
 
 // `params` = the request URL's searchParams (empty by default) — the folder picker
 // route reads ?path=/?files= from it to serve a NAVIGABLE tree.
-function handleApiGet(pathname, fleet = FLEET, params = new URLSearchParams(), mcp = RUNTIME_STATUS.mcp) {
+function handleApiGet(
+  pathname,
+  fleet = FLEET,
+  params = new URLSearchParams(),
+  mcp = RUNTIME_STATUS.mcp,
+  // `x-e2e-telemetry: off` switches THIS box's store off while leaving the fleet
+  // rollup alone — the two are independent, and a hub can run with telemetry
+  // disabled while its members are busy (#3329).
+  telemetryOff = false,
+) {
   switch (pathname) {
     case "/api/runtime/status":
       // `mcp` is the caller's SCOPED roster (see mcpFor) — never the shared baseline.
@@ -517,17 +526,19 @@ function handleApiGet(pathname, fleet = FLEET, params = new URLSearchParams(), m
     case "/api/prompts/task-e2e-1": // the canned A2A turn's taskId
       return { enabled: true, calls: [PROMPT_CALL] };
     case "/api/telemetry/summary":
-      return { enabled: true, summary: TELEMETRY_SUMMARY };
+      return telemetryOff ? { enabled: false, summary: null } : { enabled: true, summary: TELEMETRY_SUMMARY };
     case "/api/telemetry/recent":
-      return {
-        enabled: true,
-        turns: TELEMETRY_TURNS,
-        langfuse_trace_url_template: "https://langfuse.example.com/project/p1/traces/{trace_id}",
-        // #3017 — the surface renders "off" in the Trace column when this is false.
-        tracing_enabled: true,
-      };
+      return telemetryOff
+        ? { enabled: false, turns: [], langfuse_trace_url_template: null, tracing_enabled: false }
+        : {
+            enabled: true,
+            turns: TELEMETRY_TURNS,
+            langfuse_trace_url_template: "https://langfuse.example.com/project/p1/traces/{trace_id}",
+            // #3017 — the surface renders "off" in the Trace column when this is false.
+            tracing_enabled: true,
+          };
     case "/api/telemetry/insights":
-      return { enabled: true, insights: TELEMETRY_INSIGHTS };
+      return telemetryOff ? { enabled: false, insights: null } : { enabled: true, insights: TELEMETRY_INSIGHTS };
     case "/api/playbooks":
       return { enabled: true, playbooks };
     case "/api/knowledge/search": {
@@ -966,7 +977,13 @@ const server = createServer(async (req, res) => {
           req.headers["x-e2e-fleet-telemetry"] === "multi" ? FLEET_TELEMETRY : FLEET_TELEMETRY_SINGLE,
         );
       }
-      const payload = handleApiGet(pathname, fleetFor(req), url.searchParams, mcpFor(req));
+      const payload = handleApiGet(
+        pathname,
+        fleetFor(req),
+        url.searchParams,
+        mcpFor(req),
+        req.headers["x-e2e-telemetry"] === "off",
+      );
       if (payload !== null) return sendJson(res, payload);
       return sendJson(res, { detail: "not mocked" }, 404);
     }

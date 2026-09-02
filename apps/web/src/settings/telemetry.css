@@ -1,6 +1,57 @@
 /* Telemetry dashboard (ADR 0006 Slice 3) */
 .telemetry-section {
   margin-top: 22px;
+  /* The turns table is ten columns wide and the Settings dialog is not. Scroll it in
+     its own container rather than letting the panel clip the right-hand columns
+     (Trace, the one you click) or force the whole page sideways. */
+  overflow-x: auto;
+}
+
+/* The pinned headline's metric cards (#3329). `.metric-grid` is SHARED with the
+   Settings Overview panel, which shows a handful of metrics where two wide columns
+   read well — so the density change is scoped here rather than applied to the
+   shared class. Telemetry shows up to eleven, and two columns turned the headline
+   into six rows of mostly-empty card, taller than the table it sat above.
+
+   The lattice is drawn by the CELLS (container: top + left; each cell: right +
+   bottom) instead of by 1px gaps over a coloured container background. The gap
+   technique paints an empty grey block wherever the last row is short — which it
+   is whenever the metric count is odd, i.e. most of the time.
+
+   Both rules are COMPOUND (`.metric-grid.telemetry-metrics`, two classes on one
+   element) to outrank the shared single-class rules in theme.css. A lone
+   `.telemetry-metrics` ties with `.metric-grid` at one class each, and ties are
+   settled by load order — which is why the first attempt at this rendered
+   identically to no override at all. */
+.metric-grid.telemetry-metrics {
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  gap: 0;
+  background: transparent;
+  border-top: 1px solid var(--pl-color-border);
+  border-left: 1px solid var(--pl-color-border);
+  /* The shared rule draws the bottom edge on the CONTAINER; here every cell draws
+     its own, so keeping both puts a 2px line under the last row. */
+  border-bottom: 0;
+}
+.metric-grid.telemetry-metrics .metric {
+  border-right: 1px solid var(--pl-color-border);
+  border-bottom: 1px solid var(--pl-color-border);
+  padding: 5px 10px;
+  min-height: 36px;
+}
+
+/* The drill-down tab strip (#3329). It separates the pinned headline above from
+   whichever table is showing below, so it carries a rule of its own rather than
+   inheriting the 22px every stacked section used when they all shared the page.
+   The section that follows it sits tight against the strip — the strip IS that
+   section's heading now. */
+.telemetry-views {
+  margin-top: 20px;
+  border-bottom: 1px solid var(--pl-color-border);
+}
+.telemetry-views + .telemetry-section,
+.telemetry-views + .telemetry-empty {
+  margin-top: 12px;
 }
 .telemetry-section > .panel-kicker {
   margin-bottom: 8px;

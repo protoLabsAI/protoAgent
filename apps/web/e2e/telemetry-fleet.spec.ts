@@ -15,6 +15,11 @@ async function openTelemetry(page: import("@playwright/test").Page) {
     .click();
   const surface = page.getByTestId("telemetry-surface");
   await expect(surface).toBeVisible();
+  // The rollup lives behind the Fleet tab since #3329. It is the tab the surface
+  // OPENS on when this box has no turns of its own; the mock gives it turns, so
+  // select it. (That a Fleet tab exists at all is the fleet-install signal — the
+  // single-box path in telemetry.spec.ts asserts its absence.)
+  await surface.getByTestId("telemetry-views").getByRole("tab", { name: "Fleet" }).click();
   return surface;
 }
 
@@ -94,4 +99,32 @@ test("Telemetry ▸ Fleet flags carry evidence and render the member LABEL, not 
     "href",
     "https://langfuse.example.com/project/p1/traces/0f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5",
   );
+});
+
+test("a hub with its own store switched OFF still shows the fleet rollup", async ({ page }) => {
+  // The two are independent: `telemetry.enabled` is this box's store, `fleet.fleet`
+  // is the members'. An earlier cut of #3329 put the fleet section inside the
+  // `!enabled` branch, so a hub with telemetry off showed "Telemetry store is
+  // disabled" and nothing else — while its members were busy.
+  await page.setExtraHTTPHeaders({ "x-e2e-fleet-telemetry": "multi", "x-e2e-telemetry": "off" });
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.getByTestId("settings-widget").click();
+  await page
+    .locator(".settings-overlay .pl-sidenav")
+    .getByRole("tab", { name: "Telemetry", exact: true })
+    .click();
+
+  const surface = page.getByTestId("telemetry-surface");
+  await expect(surface.getByTestId("telemetry-views")).toBeVisible();
+  // With no turns of its own it OPENS on Fleet — the only populated view.
+  await expect(surface.getByTestId("fleet-telemetry")).toBeVisible();
+  await expect(surface.getByTestId("fleet-member-name-protoEngineer-ba4c")).toHaveText("protoEngineer");
+
+  // The per-box tabs say WHY they are empty, and the store-off reason is not the
+  // same as "no turns yet".
+  await surface.getByTestId("telemetry-views").getByRole("tab", { name: "Recent turns" }).click();
+  await expect(surface.getByText(/Telemetry store is disabled/)).toBeVisible();
+
+  // Nothing to roll up per model/tool, so those tabs are absent entirely.
+  await expect(surface.getByTestId("telemetry-views").getByRole("tab", { name: "By model" })).toHaveCount(0);
 });
