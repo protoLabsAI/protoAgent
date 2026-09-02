@@ -15,6 +15,270 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.157.0] - 2026-09-02
+
+### Added
+- **Fleet diagnostics: roster-only member resolution and the bounded log read (#3170).**
+  Added `tools/fleet_diagnostics.py` — it resolves a target EXCLUSIVELY through the configured
+  fleet roster (a caller cannot name a host, port, or URL, so there is no addressing path the hub
+  does not already own) and reads a member's recent logs through the existing authenticated
+  `/agents/<slug>/api/diagnostics/logs` proxy endpoint (#3168), honouring a caller-bounded line
+  selector and preserving the server's own truncation/malformed/disabled signals rather than
+  swallowing them. Unknown members, unreachable peers, timeouts, and unauthorized responses each
+  return a compact structured failure instead of an uncaught error — as does a display name two
+  members share, which is refused with the unique ids to re-ask by rather than silently answering
+  for one of them. Output is bounded and secret-redacted on the error path as well as the success
+  path, and a member that returns more rows than were asked for is capped. The tool is not yet exposed to
+  the model — that binding lands behind the default-off `tools.fleet_diagnostics.enabled` gate in a
+  later slice.
+
+- **Fleet diagnostics: exact task-by-id read, with redaction and hard output bounds on both reads (#3170).**
+  `tools/fleet_diagnostics.py` now also reads one exact A2A task by id from a registered fleet
+  member through the existing authenticated `/agents/<slug>/api/diagnostics/tasks/<task_id>`
+  proxy endpoint (#3168) — roster-only like the log read, with no host/URL path. A task the
+  member does not have (or a store that is unconfigured) returns a compact structured failure
+  rather than an uncaught error. Both the log and task reads are now bounded and secret-redacted
+  at the tool's own boundary — the destination — never trusting the member to have done it:
+  redaction runs on the full text BEFORE the tool's own truncation, so a secret straddling a
+  bound can't leak as a fragment, and each read re-caps its counts and text fields (history /
+  artifacts / accumulated output) while preserving the member's own truncated/malformed/state
+  signals and flagging any tool-side trim via `tool_truncated`. Still not exposed to the model —
+  the config-gated binding lands in a later slice.
+
+- **Fleet diagnostics model-exposure gate defaults off (#3170).**
+  Added the `tools.fleet_diagnostics.enabled` config switch and Settings schema entry
+  ahead of the tool binding slice, so fleet diagnostics cannot become model-visible
+  until an operator explicitly opts in.
+- **Fleet diagnostics binds behind the model-exposure gate (#3170).**
+  The model-facing `fleet_diagnostics` tool is now omitted under default configuration
+  and only binds when `tools.fleet_diagnostics.enabled` is true, exposing read-only
+  fleet logs and exact task-by-id inspection through the existing diagnostics layer.
+
+- **Resolve a connection's blocking slots in a dialog before removing it (#3172).**
+  Settings Providers no longer just surfaces the "Still in use" 409 and leaves the operator to
+  hunt each slot down elsewhere. Clicking Remove on a connection any slot still routes through now
+  opens a resolve dialog: one row per blocking reference (`model.name`, `routing.aux_model`,
+  `compaction.model`, `goal.eval_model`, `soul.drift_judge_model`, favorites, and each
+  `subagents.<name>.model`), where a clearable slot defaults to "Clear (use lead model)" or can be
+  repointed to any other connection's model, the non-clearable lead model must be repointed before
+  removal, and a favorites entry is shown read-only. Confirming removes the connection and clears or
+  repoints every reference in one `DELETE .../{pid}` request, then invalidates both the providers
+  list and the settings schema so every model picker and chip reflects the repointed slots.
+
+- **Removing an in-use model connection can now repoint/clear its slots in one transaction (#3172).**
+  `GET /api/config/providers` rows carry a structured `in_use: [{key, value, kind, clearable}]`
+  alongside the unchanged `in_use_by` display strings — `kind` is `slot` / `favorite` / `subagent`,
+  and `model.name` is reported non-`clearable` (the lead model must always resolve). The subagent
+  tiers are now actually walked (`subagents.<name>.model`), not read from a `subagents` dict the
+  config never exposed. `DELETE /api/config/providers/{pid}` accepts an optional
+  `{"releases": {<slot key>: "<other_pid>:<model>" | null}}` body: a string repoints a slot to
+  ANOTHER registered connection, `null` clears it (`model.favorites` accepts only `null`, dropping
+  just that connection's favorites; `model.name` cannot be cleared, only repointed). Releases are
+  applied in memory and the references re-checked before anything is written — a body that leaves
+  any reference dangling is still a 409 — and the trimmed provider list plus the released slot
+  values persist in ONE `apply_settings` (or one YAML save with no host), so a failed rebuild rolls
+  back both halves. The bare no-body DELETE keeps its refuse-if-in-use behaviour verbatim.
+
+- **Eval harness can now seed past sessions and sweep the prior-session digest policy (#3186).**
+  `session_seed` / `session_purge` setup steps write and remove session summaries in the shape
+  the agent persists, so a case can ask about "what we decided last week" without a week of real
+  sessions — and `python -m evals.sweep --prior-sessions newest,off` runs each
+  `context.prior_sessions` policy as its own arm, booted from a seed config carrying it, with the
+  fixtures seeded before boot so the digest's 60-second pool cache can't be mistaken for the
+  policy. A new `continuity` eval category covers direct recall, vague recall, a decision
+  superseded in a later session, bias from unrelated recent sessions, and abstention about a
+  session that never happened.
+- **`expected_tools: []` in an eval case now actually asserts that no tool fired (#3186).**
+  It was checked by iterating the *expected* tool names, so an empty list found nothing
+  missing and passed however many tools the agent had called — the suite's three abstention
+  cases were passing vacuously. They assert for real now, which can turn a previously green
+  abstention case red.
+
+- **The friction log became a first-party plugin, and its loop actually closes (#3310).**
+  Open friction is now projected into the agent's `<working_state>` (ADR 0079) beside OPEN
+  TASKS, so it observes its own backlog every turn instead of re-reporting the same rough
+  edge for weeks. The projection is bounded and self-limiting — `major`, or repeated enough
+  to be a pattern, capped at three lines — so an instance with nothing wrong contributes
+  nothing. The plugin is now on by default; disable it via `plugins.disabled: [friction]`.
+- **`/friction` lists and resolves the backlog from chat, and a `friction_triage` delegate drafts what to file (#3310).**
+  `/friction` is a chat command rather than a tool on purpose: resolving stays an operator
+  action, so the model cannot clear its own backlog by deciding it is clear. The triage
+  subagent is read-only for the same reason — it decides what to file and cannot resolve
+  what it just decided to file. A `recording-friction` skill teaches when to record at all,
+  and friction is broadcast on the event bus (`friction.recorded` / `.resolved` /
+  `.reopened`, ADR 0039) so other plugins can react without importing it.
+- **`FakeRegistry.emit` now namespaces topics the way the real bus does (#3310).**
+  The real registry auto-prefixes a topic with the plugin id; the testkit recorded the raw
+  string, so a plugin could assert `("recorded", …)`, ship green, and have every subscriber
+  keyed on the documented `friction.recorded` hear nothing. The parity test covered method
+  signatures but not behaviour.
+
+- **A friction entry can be filed as a GitHub issue in one step (#3318).**
+  Each row links a prefilled new-issue URL — title from the summary, body carrying the
+  channel, severity, source, tool, occurrence count, the first/last-seen window and the
+  detail. The repo comes from `friction.issue_repo`, or from the managed-projects registry
+  (ADR 0095) when no one has pinned it. Where nothing declares a repo, the view keeps the
+  clipboard copy and says why rather than offering a link that would 404.
+- **A hub can roll its fleet's friction up in one view (#3318).**
+  `GET /api/plugins/friction/fleet` fans out across the supervised roster and merges by
+  summary while keeping per-member attribution, so "12 times" and "across 4 agents" are
+  both answerable. Unreachable members are named rather than dropped — a rollup that
+  quietly omits an agent reads as "that agent is fine" — and every call carries an explicit
+  read timeout, because the fleet proxy has none of its own. The view's Fleet toggle stays
+  hidden unless the instance is actually a hub with members.
+
+- **orgChart draws coding agents and model endpoints, not just A2A peers (#3325).** The chart
+  filtered the delegate roster down to `type: a2a`, so every `acp` coder and every
+  OpenAI-compatible `openai` endpoint — most of the org on a PM/engineer setup — was
+  invisible. Both now appear as leaf nodes badged `ACP` / `MODEL`, with a chip row above
+  the chart to hide or show a class, and two new **Settings → Org Chart** toggles to drop
+  them from the crawl entirely.
+
+  A leaf serves no agent card and no delegate list, so it is never contacted from here:
+  its status is its **owner's** probe result — our own health snapshot for our delegates,
+  the `health` a peer's `/api/delegates` already reports for the peer's. Never probed ⇒
+  grey "not probed yet" rather than a red dot that claims a failure nobody observed, and
+  when a leaf *is* red the panel shows the owner's error, so a coder whose binary left
+  `PATH` finally says so. ACP nodes are owner-scoped (a coder is a subprocess on its own
+  box); model endpoints merge across owners, so several agents sharing one model converge
+  on a single node.
+
+### Changed
+- **Operator MCP profile guard (#3170).** Pin fleet diagnostics outside the read-only operator-MCP profile pending its dedicated security review.
+
+- **The fleet roster reorders from one handle now, and the row got its width back (#3197).**
+  Every member row in Settings → Fleet Config carried a grip *plus* a move-up / move-down
+  button pair — two 30px controls that held an 80px column open on every row for a gesture
+  the grip already offered. The pair is gone and the cell is 18px; the width goes to the
+  agent's name, badges and address. The accessible, non-pointer path did not go with it: the
+  grip is a real focusable button now (it was an `aria-hidden` span), so ↑ / ↓ on it move the
+  row exactly as the buttons did, a polite live region announces the new position — and the
+  list boundary, which the disabled buttons used to show — and the whole interaction is
+  covered end to end for the first time.
+
+- **Settings ▸ Telemetry is no longer one long scroll (#3329).** The headline you open the surface
+  for — the insights block and the metric cards — is pinned at the top, and the drill-downs are tabs:
+  `Recent turns`, `By model`, `By tool`, and `Fleet` on a fleet install. A hub whose own store is
+  empty while its members have turns opens on Fleet, so the rollup that deliberately renders outside
+  this box's empty-state gates isn't buried behind a click. The metric cards are denser for telemetry
+  (the Settings Overview panel keeps its two wide columns) and no longer paint a grey ghost cell when
+  the count is odd, and the ten-column turns table scrolls in its own container instead of clipping
+  the Trace column at the dialog's width.
+
+### Fixed
+- **Eval tool-firing assertions were blind in every sweep arm (#3186).** `evals/verify._audit_path()`
+  fell back to the box-level `~/.protoagent/audit/audit.jsonl`, but every agent under a named
+  instance writes `<instance_root>/audit/audit.jsonl` — and `evals.sweep` runs every arm under a
+  named instance. So `expected_tools`, `forbidden_tools` and `expected_any_tools` all read a file
+  the agent never wrote and reported `saw: {}` on cases whose tools demonstrably fired. The path
+  now resolves through `infra.paths`, and the sweep names the arm's log outright for the runner.
+
+- **Drag-and-drop works in the desktop app again — all of it (#3197).**
+  Tauri's native drag-drop handler is enabled by default, and on macOS wry implements it by
+  overriding the webview's `NSDraggingDestination` methods and returning "accepted" *without
+  calling super* — so WKWebView's own drop handling never ran and the page received no
+  `dragover` or `drop` at all (Tauri documents the same effect on Windows). Nothing in the
+  console consumes the native `tauri://drag-*` events, but three surfaces use HTML5 drop: the
+  fleet roster reorder, the chat composer's drag-a-file-to-attach, and the knowledge store's.
+  All three were dead in the packaged app while working in every browser. The handler is now
+  disabled on all three windows, which hands drag-and-drop back to the web content.
+
+- **The friction log is readable again — crushed cards, an invisible "major" badge, and a dismiss that lied (#3307).**
+  The view listed every signal as an overlapping sliver: `.entry` inherited `flex-shrink: 1`
+  inside a scrolling column, so flexbox squeezed each card from 47px of content into a 24px
+  box, spilled its text onto the card below, and never let the list overflow — so the
+  scrollbar never appeared and it worsened with every entry recorded. The severity styles
+  referenced `--pl-color-danger`, a token the design system has never defined, which made the
+  "major" badge `#0a0a0c` text on the `#0a0a0c` page (invisible in dark, white-on-white in
+  light) and ringed every major entry in near-white instead of red.
+- **Friction triage is now server-side, so the console and the agent read one backlog (#3307).**
+  "Dismiss" wrote `localStorage` while `resolve_friction` stamped the ledger, so an operator
+  could clear the backlog on screen while the agent kept reporting every item as live. The new
+  `POST /api/friction/resolve` writes the same `resolved_at` stamp, matching the row's full
+  summary and kind exactly, and rewrites the ledger atomically instead of truncating it first.
+- **The friction view is rebuilt on the design system, with search, filters and sort (#3307).**
+  Cards, badges, inputs, the segmented filters, the scroll region and the code block all come
+  from the DS kit rather than hand-rolled CSS. The summary gets its own line at body size
+  instead of competing with five badges for width, and stays legible down to a 420px dock.
+  Adds search, severity/source filters, sort by recent/frequent/severe, and "Copy as issue".
+- **Four other bundled plugin views stopped silently ignoring the operator's theme (#3307).**
+  orgchart, notes, plugin-devkit and artifact also referenced `--pl-color-danger` (and
+  `--pl-color-success`, `--pl-radius-md`, `--pl-radius-sm`). Theirs carried fallbacks so they
+  rendered, but always as the hardcoded hex — never re-theming.
+
+- **The memory inspector now tells the truth about the prior-session digest (#3308).**
+  The console's "in digest" badge was derived under a hardcoded `newest` policy with no
+  active-session exclusion, so under `context.prior_sessions: off` it badged the newest ten
+  summaries as injected while nothing was, under `relevant` it showed a window that policy
+  doesn't have, and the chat you were looking at was badged as being in its own digest —
+  the one thing the runtime guarantees never happens. The listing is now derived under the
+  configured policy (and reports it), the viewed chat is excluded and badged as itself, and
+  the panel copy explains the active policy instead of assuming one.
+- **`memory.max_sessions` and `memory.max_tokens` actually do something now (#3308).**
+  Both were documented in the example config and read by nothing, so shrinking the
+  prior-session digest was a silent no-op. They are wired through `graph/config.py` into the
+  projection, surfaced in Settings, and treated as ceilings — a non-positive value falls back
+  to the default with a warning rather than becoming an undocumented second spelling of
+  `context.prior_sessions: off`. The dead `memory.path` key is gone from the example config:
+  summaries live in the instance store, or wherever `MEMORY_PATH` points.
+- **`KnowledgeMiddleware.load_memory()` accepts `exclude_session_id` (#3308).** The public
+  seam rendered an unexcluded digest — only the internal cached path applied the
+  active-session filter — so a fork or plugin calling it directly reintroduced the leak
+  #3252 fixed.
+
+- **A link clicked in a second desktop window no longer opens a crippled in-app webview (#3316).**
+  `on_new_window` — the triage that routes an own-origin target to a real managed window and
+  anything else to the system browser — was wired to the **main** window only. Every window
+  opened after it (the multi-window `new_window` command, and the windows the triage itself
+  creates) fell through to the webview's default and spawned an unmanaged child: no
+  initialization script, so no API base and a boot into the setup wizard against the wrong
+  origin; no title-bar style; and none of the drag-drop repair from #3197. The sharpest case
+  was `window.open` on an OAuth provider login, which belongs in the system browser and instead
+  rendered chrome-less inside the app. The triage is now a shared function every shell-built
+  window wires — main, secondary and launcher — with the routing decision split out pure and
+  unit-tested.
+
+- **Cross-session search no longer misses on plurals and tense (#3322).** The session index was
+  built with FTS5's `unicode61` tokenizer, which does no stemming — so "audit log" did not find a
+  session about "audit log**s**", and "rotation" did not find one about "rotat**ing**". A real run
+  had the agent search, broaden, and correctly report it found nothing while the session sat
+  indexed on disk. The index now uses `porter unicode61`; it is derived and disposable, so the
+  schema-version bump rebuilds every existing index on first search, with no operator action.
+  Stemming fixes inflections, not derivations — "retained" and "retention" still don't match — so
+  on-demand search remains a complement to the prior-session digest rather than a replacement.
+
+- **Follow-ups on the eval audit-path fix (#3324), from a retroactive review.** An explicit
+  `AUDIT_PATH` was gated on the file already existing, so an operator override to a log the agent
+  had not created yet was silently ignored — and it re-resolved on every poll of the tool-assertion
+  deadline loop, so the target could flip mid-assertion. It wins outright now. The sweep's
+  arm-teardown still hand-joined `~/.protoagent/<instance>`, which deleted nothing under a custom
+  box root (so one arm's store leaked into the next) and would have deleted the operator's own root
+  if rerouted naively, since `PROTOAGENT_HOME` resolves every instance to the same directory; it
+  resolves properly now and refuses any root that is not demonstrably the arm's. The redundant
+  per-arm `AUDIT_PATH` export is gone — the runner already inherits the arm's instance identity —
+  along with the test that claimed to cover it and could not fail.
+
+- **A killed gate check is no longer reported as a failed one (#3331).** `scripts/gate.py`
+  flattened every non-zero child to exit `1`, so a check killed by a signal — a restart, an
+  operator kill, the OOM killer — was indistinguishable from the repo genuinely failing its
+  own gate. A killed check now prints `gate: KILLED <name> (signal N)` and exits `128+N`, the
+  universal shell convention, so automation can re-run instead of judging. Failing and passing
+  checks are unchanged.
+
+- **The lock gate no longer calls a stale branch a downgrade (#3335).** `scripts/lock_diff.py`
+  compared the project's own `uv.lock` entry (`source = { virtual = "." }`), whose version is a
+  copy of `pyproject.toml`'s and therefore moves only on a release commit — so any branch cut
+  before a release reported the project downgrading itself. Only real dependencies are compared
+  now, so a genuine downgrade still fails the gate.
+
+### Docs
+- **The marketing site now states protoAgent's actual install footprint (#3315).**
+  `/download` shows each installer's real size, read from the same release asset the
+  button links to, so the label can never drift from the file. The "lean core" cards on
+  `/` and `/features` carry the measured figure — the macOS app is ~100 MB installed
+  (a 78 MB bundled agent server plus a 22 MB shell) and fetches no runtime at first
+  launch — instead of asserting leanness with no number attached.
+
 ## [0.156.0] - 2026-09-01
 
 ### Added
