@@ -17,6 +17,7 @@ const BUTTONDOWN_USER = 'protoLabsAI';
 // marketing-deploy.yml); other pages still render in `astro dev` if it fails.
 const desktop = await fetchLatestDesktopRelease();
 const { dmgUrl, setupExeUrl, appImageUrl, debUrl } = desktop;
+const { dmgSize, setupExeSize, appImageSize, debSize } = desktop;
 
 const subscribeAction = `https://buttondown.com/api/emails/embed-subscribe/${BUTTONDOWN_USER}`;
 const subscribePopup = `https://buttondown.com/${BUTTONDOWN_USER}`;
@@ -30,7 +31,7 @@ const macRequirements = [
 const macInstall = [
   'Download the .dmg above.',
   'Open it and drag protoAgent to Applications.',
-  'Launch protoAgent — it starts its own bundled server, nothing else to install.',
+  'Launch protoAgent — it starts its own bundled server. No Python, Node, or runtime is fetched at first launch; the installed app is about 100 MB, all in.',
   'The setup wizard connects your model and you’re live.',
 ];
 
@@ -109,7 +110,7 @@ const linuxInstall = [
           <a href={dmgUrl} class="pl-btn pl-btn--primary">Download for macOS (.dmg)</a>
           <a href={setupExeUrl} class="pl-btn">Windows (setup.exe)</a>
         </div>
-        <p class="meta-note">Apple Silicon · signed &amp; notarized · updates itself in place.</p>
+        <p class="meta-note">{dmgSize} · Apple Silicon · signed &amp; notarized · updates itself in place.</p>
       </div>
 
       <!-- ===== Windows ===== -->
@@ -118,7 +119,7 @@ const linuxInstall = [
           <a href={setupExeUrl} class="pl-btn pl-btn--primary">Download for Windows (setup.exe)</a>
           <a href={dmgUrl} class="pl-btn">macOS (.dmg)</a>
         </div>
-        <p class="meta-note">Windows 11 x64 · unsigned build · updates itself in place.</p>
+        <p class="meta-note">{setupExeSize} · Windows 11 x64 · unsigned build · updates itself in place.</p>
       </div>
 
       <!-- ===== Linux ===== -->
@@ -127,7 +128,7 @@ const linuxInstall = [
           <a href={appImageUrl} class="pl-btn pl-btn--primary">Download for Linux (.AppImage)</a>
           <a href={debUrl} class="pl-btn">Debian/Ubuntu (.deb)</a>
         </div>
-        <p class="meta-note">x86_64 · glibc 2.35+ · unsigned build · the AppImage updates itself in place.</p>
+        <p class="meta-note">{appImageSize} AppImage ({debSize} .deb) · x86_64 · glibc 2.35+ · unsigned build · the AppImage updates itself in place.</p>
       </div>
 
       <!-- ===== Unknown OS: offer everything ===== -->
