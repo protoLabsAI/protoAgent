@@ -20,7 +20,9 @@ import json
 import httpx
 import pytest
 
+from graph.config import LangGraphConfig
 import tools.fleet_diagnostics as fd
+import tools.lg_tools as lg_tools
 
 # ── fixtures / helpers ────────────────────────────────────────────────────────
 
@@ -88,6 +90,82 @@ def _task_body(**overrides):
     }
     body.update(overrides)
     return body
+
+
+# ── slice 4: model-facing binding is default-off and read-only ─────────────────
+
+
+def _bound_tool_names(config=None):
+    return {getattr(t, "name", "") for t in lg_tools.get_all_tools(graph_config=config)}
+
+
+def _bound_tool(config=None):
+    return {getattr(t, "name", ""): t for t in lg_tools.get_all_tools(graph_config=config)}["fleet_diagnostics"]
+
+
+def test_fleet_diagnostics_is_absent_from_the_default_model_toolset():
+    assert "fleet_diagnostics" not in _bound_tool_names()
+    assert "fleet_diagnostics" not in _bound_tool_names(LangGraphConfig())
+
+
+async def test_fleet_diagnostics_is_bound_and_callable_when_enabled(monkeypatch):
+    _install_roster(monkeypatch, [_LOCAL])
+    _install_http(monkeypatch, body={"enabled": True, "lines": [{"message": "ready"}], "returned": 1, "capacity": 5})
+
+    tool = _bound_tool(LangGraphConfig(tools_fleet_diagnostics_enabled=True))
+    out = await tool.ainvoke({"member": "Alpha", "read": "logs", "lines": 5})
+
+    assert out["ok"] is True
+    assert out["member"] == "Alpha"
+    assert out["logs"]["lines"] == [{"message": "ready"}]
+
+
+async def test_fleet_diagnostics_bound_tool_can_read_one_exact_task_when_enabled(monkeypatch):
+    _install_roster(monkeypatch, [_LOCAL])
+    _install_http(monkeypatch, body=_task_body(task_id="task-7"))
+
+    tool = _bound_tool(LangGraphConfig(tools_fleet_diagnostics_enabled=True))
+    out = await tool.ainvoke({"member": "Alpha", "read": "task", "task_id": "task-7"})
+
+    assert out["ok"] is True
+    assert out["task_id"] == "task-7"
+    assert out["task"]["context_id"] == "c-1"
+
+
+async def test_fleet_diagnostics_bound_tool_refuses_non_read_actions_without_http(monkeypatch):
+    _install_roster(monkeypatch, [_LOCAL])
+    _forbid_http(monkeypatch)
+
+    tool = _bound_tool(LangGraphConfig(tools_fleet_diagnostics_enabled=True))
+    out = await tool.ainvoke({"member": "Alpha", "read": "start"})
+
+    assert out["ok"] is False
+    assert out["error"] == "unsupported_read"
+    assert "only supports read='logs' or read='task'" in out["detail"]
+    assert "runtime control" in out["detail"]
+    assert out["member"] == "Alpha"
+
+
+def test_fleet_diagnostics_bound_tool_has_no_mutation_arguments():
+    tool = _bound_tool(LangGraphConfig(tools_fleet_diagnostics_enabled=True))
+    schema = (
+        tool.args_schema.model_json_schema()
+        if hasattr(tool.args_schema, "model_json_schema")
+        else tool.args_schema.schema()
+    )
+    assert set(schema["properties"]) == {"member", "read", "lines", "task_id"}
+    forbidden = {
+        "answer",
+        "checkpoint",
+        "command",
+        "config",
+        "resume",
+        "start",
+        "state",
+        "task",
+        "update",
+    }
+    assert forbidden.isdisjoint(schema["properties"])
 
 
 # ── r2: roster-only addressing (no host/URL path) ─────────────────────────────
