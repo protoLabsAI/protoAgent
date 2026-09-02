@@ -14,6 +14,14 @@ The graph is assembled from three sources, cheapest first:
    members the hub supervises but doesn't necessarily delegate to, drawn with a
    ``member`` edge. Their stored bearer also widens the crawl.
 
+Nodes are not all agents. An ``a2a`` delegate is a peer we can crawl; an ``acp``
+delegate is a coding agent (a subprocess on its OWNER's box) and an ``openai`` delegate is
+a model endpoint — both are LEAVES, since neither serves a card or a delegate list. Their
+liveness is therefore always their *owner's* probe result: source 2 for ours, the peer's
+own reported ``health`` (which ``GET /api/delegates`` already returns) for theirs. Neither
+is probeable from here, so their ``up`` is tri-state — ``None`` means "no probe result
+yet", which is not the same claim as "down".
+
 Network reads are TTL-cached per peer (positive + negative — an unreachable peer is
 remembered for ``_NEG_TTL`` so it can't stall every reload), fetched concurrently per
 BFS layer, and the assembled snapshot itself is served stale-while-revalidate: a stale
@@ -40,6 +48,8 @@ DEFAULTS = {
     "probe_timeout_s": 3.0,  # per-request read timeout (connect is capped at 2s)
     "max_nodes": 80,
     "include_fleet_members": True,
+    "include_acp": True,  # draw acp coding agents (leaves)
+    "include_model_endpoints": True,  # draw openai-compatible model endpoints (leaves)
 }
 
 _CARD_TTL = 300.0  # a peer's identity (card) changes rarely
@@ -173,27 +183,99 @@ def _token_for(raw: dict) -> str:
     return os.environ.get(env, "") if env else ""
 
 
-def _a2a_edges(dlist, via: str = "delegate") -> list[dict]:
-    """[{name, base, desc, token, via, scope}] for the a2a-type entries in a delegate
-    list. Peer-reported lists are redacted (no auth) → token='' → the peer's peers stay
-    leaves."""
+def _endpoint(url: str) -> str:
+    """A model endpoint's base URL. Deliberately NOT ``_norm`` — that strips a trailing
+    ``/a2a``, which is an A2A convention and would mangle a ``/v1`` gateway path."""
+    return (url or "").strip().rstrip("/")
+
+
+def _model_id(url: str, model: str) -> str:
+    """Node id for an ``openai`` delegate: ``model:<host><path>/<model>``.
+
+    Merged across owners ON PURPOSE — two agents pointing at the same gateway and model
+    are talking to the same thing, so one node answers "who shares this model". ``acp``
+    gets the opposite rule (``_acp_id``): a coder is a subprocess on ITS owner's box, so
+    the same name on two agents means two different processes, and merging them would
+    draw a machine-local tool as if it were shared infrastructure."""
+    from urllib.parse import urlsplit
+
+    try:
+        u = urlsplit(_endpoint(url))
+        where = f"{(u.netloc or '').lower()}{(u.path or '').rstrip('/')}"
+    except ValueError:
+        where = ""
+    return f"model:{where or _endpoint(url) or '?'}/{(model or '').strip()}"
+
+
+def _acp_id(owner: str, name: str) -> str:
+    return f"acp:{owner}#{name}"
+
+
+def _targets(dlist, *, owner: str, via: str = "delegate", cfg: dict | None = None) -> list[dict]:
+    """One record per delegate entry we're willing to draw, resolved to the node id it
+    lands on: ``{id, name, kind, desc, token, via, scope, health, …}``.
+
+    Only ``a2a`` records carry a token — they're the one crawlable kind. Peer-reported
+    lists are redacted (``auth`` keeps only ``scheme``) → token='' → the peer's peers
+    stay leaves, exactly as before. ``acp``/``model`` records carry the owner's reported
+    ``health`` (present on a peer's ``/api/delegates`` view, absent on our own roster,
+    where ``_health()`` supplies it by name instead).
+
+    **Never build a node from the raw entry.** ``_roster()`` returns entries with secrets
+    OVERLAID (``api_key``, ``auth.token``), so every display field is copied by name.
+    """
+    cfg = cfg or {}
+    include_acp = bool(cfg.get("include_acp", DEFAULTS["include_acp"]))
+    include_model = bool(cfg.get("include_model_endpoints", DEFAULTS["include_model_endpoints"]))
     out = []
     for d in dlist or []:
-        if not isinstance(d, dict) or str(d.get("type")) != "a2a":
+        if not isinstance(d, dict):
             continue
-        url = d.get("url")
-        if not url:
-            continue
-        out.append(
-            {
-                "name": d.get("name") or "",
-                "base": _norm(url),
-                "desc": (d.get("description") or "").strip(),
-                "token": _token_for(d),
-                "via": via,
-                "scope": str(d.get("scope") or "") or None,
-            }
-        )
+        dtype = str(d.get("type") or "")
+        name = str(d.get("name") or "")
+        common = {
+            "name": name,
+            "desc": (d.get("description") or "").strip(),
+            "via": via,
+            "scope": str(d.get("scope") or "") or None,
+            "health": d["health"] if isinstance(d.get("health"), dict) else None,
+        }
+        if dtype == "a2a":
+            if not d.get("url"):
+                continue
+            base = _norm(str(d["url"]))
+            out.append({**common, "id": base, "kind": "agent", "url": base, "token": _token_for(d)})
+        elif dtype == "acp" and include_acp:
+            command = str(d.get("command") or "").strip()
+            if not (name and command):
+                continue
+            out.append(
+                {
+                    **common,
+                    "id": _acp_id(owner, name),
+                    "kind": "coder",
+                    "url": "",
+                    "token": "",
+                    "command": command,
+                    "workdir": str(d.get("workdir") or "").strip(),
+                    "owner": owner,
+                }
+            )
+        elif dtype == "openai" and include_model:
+            url, model = _endpoint(str(d.get("url") or "")), str(d.get("model") or "").strip()
+            if not (url and model):
+                continue
+            out.append(
+                {
+                    **common,
+                    "id": _model_id(url, model),
+                    "kind": "model",
+                    "url": "",
+                    "token": "",
+                    "endpoint": url,
+                    "model": model,
+                }
+            )
     return out
 
 
@@ -265,21 +347,26 @@ async def _build(cfg: dict) -> dict:
     self_name, self_base, self_role = _self_identity()
     health = _health()  # delegate NAME -> {ok, latency_ms, checked_at}
 
-    seed = _a2a_edges(_roster())
-    name_of = {d["base"]: d["name"] for d in seed}  # direct delegates only — health is name-keyed
-    tokens = {d["base"]: d["token"] for d in seed if d["token"]}
+    seed = _targets(_roster(), owner=self_base, cfg=cfg)
+    # Health is name-keyed, so it may only be applied to OUR OWN entries — a peer's
+    # `coder` is a different process from ours and must never inherit its badge.
+    name_of = {t["id"]: t["name"] for t in seed}
+    tokens = {t["id"]: t["token"] for t in seed if t["token"]}
     if cfg.get("include_fleet_members", DEFAULTS["include_fleet_members"]):
         for rec in _fleet_remotes():
             b = _norm(str(rec.get("url")))
-            if b and b != self_base and b not in {d["base"] for d in seed}:
+            if b and b != self_base and b not in {t["id"] for t in seed}:
                 seed.append(
                     {
                         "name": rec.get("name") or str(rec.get("id") or ""),
-                        "base": b,
+                        "id": b,
+                        "kind": "agent",
+                        "url": b,
                         "desc": "fleet member",
                         "token": str(rec.get("token") or ""),
                         "via": "member",
                         "scope": None,
+                        "health": None,
                     }
                 )
             if rec.get("token"):
@@ -303,41 +390,73 @@ async def _build(cfg: dict) -> dict:
         frontier: list[tuple[str, list[dict]]] = [(self_base, seed)]
         while frontier and len(nodes) < max_nodes:
             fresh: list[dict] = []
-            fresh_bases: set[str] = set()
-            for owner, dels in frontier:
-                for d in dels:
-                    add_edge(owner, d["base"], d.get("via") or "delegate", d.get("scope"))
-                    if d["base"] not in nodes and d["base"] not in fresh_bases and len(nodes) + len(fresh) < max_nodes:
-                        fresh.append(d)
-                        fresh_bases.add(d["base"])
-            idents = await asyncio.gather(*[_identity(client, d["base"]) for d in fresh], return_exceptions=True)
+            fresh_ids: set[str] = set()
+            for owner, targets in frontier:
+                for t in targets:
+                    add_edge(owner, t["id"], t.get("via") or "delegate", t.get("scope"))
+                    if t["id"] not in nodes and t["id"] not in fresh_ids and len(nodes) + len(fresh) < max_nodes:
+                        fresh.append(t)
+                        fresh_ids.add(t["id"])
+            # Only agents are probeable: a coder has no listener and a model endpoint's
+            # /models is the delegates prober's job, not a page-refresh's.
+            peers = [t for t in fresh if t["kind"] == "agent"]
+            probed = await asyncio.gather(*[_identity(client, t["id"]) for t in peers], return_exceptions=True)
+            idents = {t["id"]: (i if isinstance(i, dict) else None) for t, i in zip(peers, probed)}
             crawlable: list[str] = []
-            for d, ident in zip(fresh, idents):
-                b = d["base"]
-                ident = ident if isinstance(ident, dict) else None
-                hs = health.get(name_of.get(b, ""))  # background prober's view, direct delegates only
-                node = {
-                    "id": b,
-                    "name": (ident or {}).get("name") or d["name"] or b,
-                    "role": (ident or {}).get("role") or _short(d["desc"]),
-                    "up": bool(ident) or bool(hs and hs.get("ok")),
-                    "version": (ident or {}).get("version") or "",
-                    "kind": "agent",
-                    "url": b,
-                }
-                lat = (hs or {}).get("latency_ms", (ident or {}).get("latency_ms"))
+            for t in fresh:
+                tid = t["id"]
+                own = health.get(name_of.get(tid, ""))  # our prober — our own delegates only
+                if t["kind"] == "agent":
+                    # OUR probe stays authoritative for a peer. A peer's own health for it
+                    # is deliberately NOT consulted: it would paint a node green that this
+                    # agent cannot reach, which is the one thing the chart must not claim.
+                    hs = own
+                    ident = idents.get(tid)
+                    node = {
+                        "id": tid,
+                        "name": (ident or {}).get("name") or t["name"] or tid,
+                        "role": (ident or {}).get("role") or _short(t["desc"]),
+                        "up": bool(ident) or bool(hs and hs.get("ok")),
+                        "version": (ident or {}).get("version") or "",
+                        "kind": "agent",
+                        "url": tid,
+                    }
+                    lat = (hs or {}).get("latency_ms", (ident or {}).get("latency_ms"))
+                else:
+                    # A leaf is unprobeable from here, so its liveness is whoever owns it:
+                    # our snapshot for ours, the peer's reported health for the peer's.
+                    hs = own or t.get("health")
+                    node = {
+                        "id": tid,
+                        "name": t["name"] or tid,
+                        # A coder's identity is its command; a model's is the model id.
+                        "role": _short(t["desc"]) or (t.get("model") or t.get("command") or ""),
+                        # Tri-state: no probe result is NOT the same claim as "down".
+                        "up": None if not hs else bool(hs.get("ok")),
+                        "version": "",
+                        "kind": t["kind"],
+                        "url": "",
+                    }
+                    for extra in ("command", "workdir", "owner", "endpoint", "model"):
+                        if t.get(extra):
+                            node[extra] = t[extra]
+                    lat = (hs or {}).get("latency_ms")
                 if lat is not None:
                     node["latency_ms"] = int(lat)
                 if hs and hs.get("checked_at"):
                     node["checked_at"] = hs["checked_at"]
-                nodes[b] = node
-                if node["up"] and tokens.get(b):
-                    crawlable.append(b)
+                # Why a leaf is red is actionable and otherwise invisible here — a coder
+                # whose binary left PATH looks identical to one whose box is off.
+                if hs and not hs.get("ok") and hs.get("error"):
+                    node["error"] = str(hs["error"])[:200]
+                nodes[tid] = node
+                if node["kind"] == "agent" and node["up"] and tokens.get(tid):
+                    crawlable.append(tid)
             peer_lists = await asyncio.gather(
                 *[_peer_delegates(client, b, tokens[b]) for b in crawlable], return_exceptions=True
             )
             frontier = [
-                (b, _a2a_edges(pl))
+                (b, _targets(pl, owner=b, cfg=cfg))
                 for b, pl in zip(crawlable, peer_lists)
                 if isinstance(pl, list) and pl
             ]
@@ -350,6 +469,11 @@ async def _build(cfg: dict) -> dict:
         "generated_at": time.time(),
         "ttl_s": int(cfg.get("cache_ttl_s", DEFAULTS["cache_ttl_s"])),
         "poll_s": int(cfg.get("poll_interval_s", DEFAULTS["poll_interval_s"])),
+        # So the view can distinguish "no coders configured" from "coders turned off".
+        "include": {
+            "acp": bool(cfg.get("include_acp", DEFAULTS["include_acp"])),
+            "model": bool(cfg.get("include_model_endpoints", DEFAULTS["include_model_endpoints"])),
+        },
     }
 
 

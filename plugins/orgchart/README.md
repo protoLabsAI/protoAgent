@@ -1,10 +1,34 @@
 # orgChart
 
-A console rail view that renders a **live diagram of the agent fleet**: every agent is
+A console rail view that renders a **live diagram of the agent fleet**: every delegate is
 a node, a directed edge A→B means "A can delegate to B", a dashed edge means "A
-supervises B" (a hub-registered fleet member). Green = up, red = down/unreachable, the
-accent-outlined node is the agent you're looking from. Click any node for details
-(URL, version, latency, in/out degree).
+supervises B" (a hub-registered fleet member). Green = up, red = down/unreachable, grey =
+not probed yet, the accent-outlined node is the agent you're looking from. Click any node
+for details.
+
+## The three kinds of node
+
+All three delegate types are drawn, and the chip row above the chart hides or shows a
+class of them (the choice sticks per browser):
+
+| Badge | Type | What it is | Crawled? |
+|---|---|---|---|
+| — | `a2a` | A peer agent | **Yes** — its card and its own delegate list |
+| `ACP` | `acp` | A CLI coding agent (protoCLI, Claude Code) | No — a **leaf** |
+| `MODEL` | `openai` | An OpenAI-compatible model endpoint | No — a **leaf** |
+
+A leaf serves no agent card and no `/api/delegates`, so it is never contacted from here:
+its status is **its owner's** probe result — our delegates health snapshot for our own,
+the `health` the peer's `/api/delegates` already reports for a peer's. Nothing has probed
+it yet ⇒ `up: null` ⇒ grey "not probed yet", which is a different claim from red. When a
+leaf is red, the panel shows the owner's **error** — the fastest way to see that a coder's
+binary left `PATH`.
+
+**Identity differs by kind, on purpose.** An ACP coder is a subprocess on *its owner's*
+box, so it's owner-scoped (`acp:<owner>#<name>`) and the same name on two agents is two
+nodes. A model endpoint is shared infrastructure, so it merges by endpoint + model
+(`model:<host><path>/<model>`) and several agents pointing at one model converge on a
+single node — which is what makes "who shares this model" answerable at a glance.
 
 ## What it shows
 
@@ -22,6 +46,8 @@ orgChart **crawls** from the agent it runs on:
    background prober that already maintains it — never a duplicate probe.
 4. Peers it holds no token for (a delegate-of-a-delegate) still appear as **leaf
    nodes** with identity from the public card; unreachable peers show red.
+5. Every crawled peer's **acp and openai delegates** join as leaves too, so the chart
+   covers the coders and models the fleet works through — not only the agents it talks to.
 
 Best run on your **orchestrator / org-head** agent, which holds the peer tokens and so
 renders the widest view of the fleet.
@@ -38,7 +64,9 @@ renders the widest view of the fleet.
 
 **Tokens never reach the browser** — the crawl runs entirely server-side in the gated
 `/api/plugins/orgchart/topology` route; the page only ever sees names, roles, health,
-and edges.
+and edges. Every display field is copied **by name**, never by spreading the raw entry:
+`merged_delegates()` hands back the roster with secrets *overlaid* (`api_key`,
+`auth.token`), so a node built from the raw dict would ship them to the page.
 
 ## Enable
 
@@ -54,7 +82,10 @@ self-contained HTML page (kept single-file on purpose: split-out `.js` would nee
 `public_paths` or 401 behind the bearer gate).
 
 Tunables live in **Settings → Org Chart**: cache TTL, poll interval, probe timeout,
-max nodes, and whether supervised fleet members are drawn.
+max nodes, whether supervised fleet members are drawn, and whether coding agents and
+model endpoints are included at all. Turning a class off there removes it from the crawl
+result entirely; the chips only hide what the server already sent, and the chip row says
+so when a class is excluded in Settings.
 
 ## Layout
 
