@@ -250,7 +250,11 @@ from server.chat import (  # noqa: E402,F401 — re-export of the extracted chat
     _setup_required_message,
     _skill_directive,
     acp_sessions_snapshot,
+    attendance_stream,
     chat,
+    is_session_attended,
+    mark_session_attended,
+    release_session_attended,
 )
 
 
@@ -1063,6 +1067,21 @@ def _main():
     @fastapi_app.get("/api/acp/sessions")
     async def _acp_sessions():
         return await acp_sessions_snapshot()
+
+    # Session attendance (#3110) — the SSE boundary that tells the server a live operator is
+    # watching a chat session. The console holds this stream open while the session is on
+    # screen; for its whole lifetime the session reads as attended, so a background-resume
+    # report delivered into it may PARK for ask_human / request_user_input (a human can
+    # answer) instead of taking the unattended autonomous auto-answer. ``attendance_stream``
+    # releases the registration in a ``finally``, so a tab close / navigation / dropped socket
+    # always cleans up and presence fails back to unattended. Bearer-gated under /api/ like
+    # every operator route (the console passes the same short-lived SSE token as /api/events).
+    @fastapi_app.get("/api/chat/attend", include_in_schema=False)
+    async def _chat_attend(request: Request, session: str = ""):
+        return StreamingResponse(
+            attendance_stream(session, is_disconnected=request.is_disconnected),
+            media_type="text/event-stream",
+        )
 
     # Core media output channel (#1929): ONE route serves every artifact a plugin
     # tool saved via registry.save_media() — signed-URL / opt-in-public access is

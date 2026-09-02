@@ -1401,9 +1401,98 @@ def _thread_lock(thread_id: str) -> asyncio.Lock:
 # inbound `a2a` calls are excluded too, because the remote caller can itself resume the
 # input-required task. For everything here, we auto-answer the interrupt instead of parking.
 # "background-resume" is the ADR 0070 push-resume nudge — server-fired like the rest
-# (the manager discards the A2A response), so a briefing turn that asks a question
-# must auto-answer, not park.
+# (the manager discards the A2A response). It stays in this set so an UNATTENDED nudge
+# still auto-answers, but it is no longer conclusive on its own (#3110): when a live
+# operator is attending the origin session (see the attendance registry below), the
+# manager stamps the nudge ``attended`` and the report-delivery turn becomes eligible to
+# park for a human, exactly like an ordinary operator turn.
 _AUTONOMOUS_ORIGINS = frozenset({"scheduler", "watch", "inbox", "webhook", "background", "background-resume"})
+
+# The immutable provenance of a push-resume nudge (kept in _AUTONOMOUS_ORIGINS above) is
+# distinct from whether a human is *currently* attending its origin session (#3110). This
+# is the one origin whose autonomy is conditional on live attendance rather than fixed.
+_ATTENDANCE_CONDITIONAL_ORIGIN = "background-resume"
+
+# ── session attendance (SSE presence) — #3110 ────────────────────────────────
+# Which origin chat sessions currently have a LIVE operator SSE connection (the console
+# opens GET /api/chat/attend while a session is on screen; see ``attendance_stream``).
+# Refcounted, because N tabs / a reconnect mid-drop can attend one session at once, and
+# an unbalanced release must not evict a session another connection still holds. Bounded
+# so a leaked registration can never grow it without limit. This is a live, in-process
+# snapshot the manager reads at push-resume time to decide attended vs. unattended — it
+# is NOT durable and, by design, fails CLOSED (an unknown/blank/over-cap session reads
+# unattended), so ambiguity can never let a server-fired turn park with nobody to answer.
+_ATTENDED_SESSIONS: dict[str, int] = {}
+_ATTENDED_SESSIONS_MAX = 1024
+
+
+def mark_session_attended(session_id: str) -> bool:
+    """Register one live operator SSE connection to ``session_id`` (refcount++). Returns
+    whether the session is now recorded attended. Bounded + fail-closed: a blank id, or a
+    NEW session once the registry is at its cap, is a no-op (that session reads unattended)
+    — a presence leak degrades to the pre-#3110 auto-answer behavior, never to unbounded
+    growth or a spurious park."""
+    sid = str(session_id or "").strip()
+    if not sid:
+        return False
+    if sid not in _ATTENDED_SESSIONS and len(_ATTENDED_SESSIONS) >= _ATTENDED_SESSIONS_MAX:
+        log.warning("[attendance] registry at cap (%d) — dropping presence for %s", _ATTENDED_SESSIONS_MAX, sid)
+        return False
+    _ATTENDED_SESSIONS[sid] = _ATTENDED_SESSIONS.get(sid, 0) + 1
+    return True
+
+
+def release_session_attended(session_id: str) -> None:
+    """Drop one live SSE connection to ``session_id`` (refcount--); the entry is removed at
+    zero. Idempotent and never raises — safe to call from an SSE teardown ``finally`` even
+    for a session that was never (or is no longer) registered."""
+    sid = str(session_id or "").strip()
+    if not sid:
+        return
+    n = _ATTENDED_SESSIONS.get(sid, 0) - 1
+    if n > 0:
+        _ATTENDED_SESSIONS[sid] = n
+    else:
+        _ATTENDED_SESSIONS.pop(sid, None)
+
+
+def is_session_attended(session_id: str) -> bool:
+    """Whether a live operator is connected to ``session_id`` right now. Fails CLOSED: a
+    blank id or any lookup error reads as unattended (#3110 — an ambiguous attendance
+    signal must never make an otherwise-autonomous turn eligible to park indefinitely)."""
+    try:
+        sid = str(session_id or "").strip()
+        return bool(sid) and _ATTENDED_SESSIONS.get(sid, 0) > 0
+    except Exception:  # noqa: BLE001 — ambiguity fails closed to unattended
+        return False
+
+
+async def attendance_stream(session_id: str, *, keepalive_s: float = 15.0, is_disconnected=None):
+    """SSE body for ``GET /api/chat/attend`` (#3110). Marks ``session_id`` attended for the
+    whole life of the connection and RELEASES it in a ``finally`` — so a tab close, a route
+    change, or a dropped socket always cleans up and presence fails back to unattended.
+
+    Yields a ``: attending`` comment up front (fires the client's ``onopen``) then periodic
+    ``: keepalive`` comments to hold the connection open through idle stretches, mirroring
+    ``operator_api.routes._sse_event_stream``. ``is_disconnected`` (the request's disconnect
+    probe) lets the loop exit promptly; when omitted the generator relies on being cancelled
+    on client disconnect, which still runs the ``finally``."""
+    sid = str(session_id or "").strip()
+    attended = mark_session_attended(sid)
+    try:
+        yield ": attending\n\n"
+        while True:
+            if is_disconnected is not None:
+                try:
+                    if await is_disconnected():
+                        break
+                except Exception:  # noqa: BLE001 — a probe failure ends the stream (cleanup in finally)
+                    break
+            await asyncio.sleep(keepalive_s)
+            yield ": keepalive\n\n"
+    finally:
+        if attended:
+            release_session_attended(sid)
 
 # What we resume an autonomous turn's HITL interrupt with, so the agent stops waiting and
 # finishes the turn instead of deadlocking. Bounded by the cap below so a model that keeps
@@ -1437,17 +1526,43 @@ def is_autonomous_origin(origin: object) -> bool:
     return str(origin or "").strip().lower() in _AUTONOMOUS_ORIGINS
 
 
+def _background_resume_attended(request_metadata: dict | None) -> bool:
+    """Whether a ``background-resume`` nudge was stamped ATTENDED at push-resume time — a
+    live operator was connected to the origin session when the manager fired it (#3110).
+
+    Read from the request metadata (the manager snapshots the SSE-boundary presence once,
+    at resume time, so singleton and coalesced-batch nudges make the SAME decision for a
+    given origin session and the turn honors it deterministically instead of re-racing a
+    flapping signal). Fail-closed: anything but an explicit truthy ``attended`` reads as
+    unattended, so an unstamped nudge keeps the pre-#3110 autonomous behavior."""
+    return _truthy((request_metadata or {}).get("attended"))
+
+
 def _is_autonomous(request_metadata: dict | None) -> bool:
     """Whether this turn runs with no operator watching (see _AUTONOMOUS_ORIGINS).
 
     Headless-first (#1911): a fleet-to-fleet A2A caller with no human in the loop can also
     DECLARE the turn unattended by setting ``unattended: true`` in the request metadata,
     which takes the same no-deadlock path as the internal autonomous origins. Undeclared
-    plain A2A stays operator-attended (an approval interrupt still parks for a human)."""
+    plain A2A stays operator-attended (an approval interrupt still parks for a human).
+
+    Attended background-resume (#3110): a ``background-resume`` nudge is autonomous ONLY
+    while its origin session has no live operator connection. When the manager stamped it
+    ``attended`` (an operator was on the wire at resume time), the report-delivery turn is
+    NOT autonomous — it may park for ``ask_human`` / ``request_user_input`` so the human
+    can answer, exactly like an ordinary operator turn. Every other autonomous origin
+    (scheduler / watch / inbox / webhook / detached background) is unconditional, and an
+    explicit ``unattended: true`` always wins."""
     md = request_metadata or {}
     if _truthy(md.get("unattended")):
         return True
-    return is_autonomous_origin(md.get("origin"))
+    origin = md.get("origin")
+    if (
+        str(origin or "").strip().lower() == _ATTENDANCE_CONDITIONAL_ORIGIN
+        and _background_resume_attended(md)
+    ):
+        return False
+    return is_autonomous_origin(origin)
 
 
 def _awaiting_self_resume(session_id: str) -> bool:
