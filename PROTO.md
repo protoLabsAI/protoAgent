@@ -210,6 +210,16 @@ in the PR says so. ADR 0078 D3 names this failure directly; it has happened here
 (#3298 merged at a head the panel had never seen, and an integration-branch merge
 put 65 files on `main` with no panel verdict at all).
 
+**The `Review at head` check does that comparison for you.**
+`.github/workflows/review-at-head.yml` posts a commit status on every open PR
+answering one question — is there a panel verdict for *this* head SHA? It does
+not re-judge code (a `WARN` passes; verdict quality is the panel's own `QA panel`
+status), and it is posted even when the panel never runs, which is precisely the
+silence it removes. Logic and rationale: `scripts/review_at_head.py`, covered by
+`tests/test_review_at_head.py`. Escape hatch when a verdict is never coming:
+the **`skip-review-gate`** label, which passes the check with the waiver recorded
+in the status description.
+
 Also, when reading a red gate: **"QA panel: N finding(s) persist" is usually not
 the panel's own finding.** That gate counts *unresolved review threads* — Vera can
 return PASS with zero findings while the check is red because a CodeRabbit thread

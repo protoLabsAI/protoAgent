@@ -1,0 +1,64 @@
+name: Review at head
+
+# The QA panel (`protoreview[bot]`) is NOT one of the required checks on `main`, and when it
+# does not review a head it posts NOTHING — so an unreviewed merge looks exactly like a
+# reviewed one: no status, nothing red, `mergeStateStatus` still CLEAN. #3298 merged at a head
+# the panel had never seen; #3301 put 65 files on `main` with no verdict at all.
+#
+# This job posts a `Review at head` commit status on every open PR answering one question:
+# is there a panel verdict for THIS head SHA? It does not re-judge code — verdict quality is
+# the panel's own `QA panel` status, and a WARN passes here (ADR 0078 keeps that tier
+# advisory; #3297 shipped one). Logic lives in scripts/review_at_head.py, covered by
+# tests/test_review_at_head.py; this job only wires the token in.
+#
+# Make it required on the `main` ruleset to close the hole for real — the status is posted on
+# every open PR, including ones the panel never touches, so it cannot silently go missing the
+# way the thing it guards does. `skip-review-gate` is the documented escape hatch.
+#
+# `pull_request_target` (not `pull_request`) for the same reason as team-ready-claims.yml:
+# posting a commit status needs a write token, which `pull_request` withholds from fork PRs.
+# Safe here for the usual reason — the job checks out and runs the BASE repo's script, reads
+# only the GitHub API, and never executes any PR-authored code.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+  pull_request_review:
+    types: [submitted, dismissed]
+  schedule:
+    - cron: "23 * * * *" # hourly backstop — webhooks get dropped, a stale red status must not stick
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print the decision without posting statuses"
+        type: boolean
+        default: false
+
+permissions:
+  statuses: write
+  pull-requests: read
+  contents: read
+
+concurrency:
+  # Per PR, so a rapid push/review pair cannot post two statuses out of order for one head.
+  # Never cancel-in-progress: a cancelled run leaves the status it was about to write missing,
+  # which is the exact silence this gate exists to remove.
+  group: review-at-head-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  assert:
+    name: Review at head
+    runs-on: ubuntu-latest # workspace-config: allow-hosted-runner public repo — GH-hosted is free
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Assert a verdict exists for this head
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+        run: python3 scripts/review_at_head.py
