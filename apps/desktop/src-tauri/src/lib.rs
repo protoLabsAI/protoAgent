@@ -1045,6 +1045,12 @@ fn open_chat_window<R: Runtime>(app: &AppHandle<R>, path: Option<String>) -> Res
         // roster reorder, the chat composer's file attach, and the knowledge store's — and all
         // three were dead in the desktop build while working in every browser.
         .disable_drag_drop_handler()
+        // The gap #3316 was filed for: this ran on the MAIN window only, so a link clicked in
+        // a second window bypassed the triage entirely and spawned an unmanaged child webview.
+        .on_new_window({
+            let app = app.clone();
+            move |url, _features| serve_new_window(&app, port, url.as_str())
+        })
         .initialization_script(&init);
     #[cfg(target_os = "macos")]
     {
@@ -1102,6 +1108,62 @@ fn own_origin_path(target: &str) -> Option<String> {
     } else {
         Some(rest.to_string())
     }
+}
+
+/// What a new-window request should become (#1706, generalised in #3316). Pure, so the triage
+/// is unit-tested without a webview.
+#[derive(Debug, PartialEq, Eq)]
+enum NewWindow {
+    /// Ours — open a real managed window, optionally already at this in-app route.
+    Managed(Option<String>),
+    /// The wider web — hand it to the system browser.
+    External,
+    /// Some other scheme we don't serve (mailto:, a custom protocol): drop it.
+    Ignore,
+}
+
+fn route_new_window(target: &str, port: u16) -> NewWindow {
+    if is_own_origin(target, port) {
+        NewWindow::Managed(own_origin_path(target))
+    } else if target.starts_with("http://") || target.starts_with("https://") {
+        NewWindow::External
+    } else {
+        NewWindow::Ignore
+    }
+}
+
+/// Serve a new-window request ourselves, then always `Deny`.
+///
+/// **Every window the shell builds must wire this, not just the main one (#3316).** A window
+/// without it lets the webview spawn an unmanaged child, which gets none of the setup a window
+/// needs: no `initialization_script` (so no `__PROTOAGENT_API_BASE__` — it boots the setup
+/// wizard against the wrong origin), no title-bar style, and no `disable_drag_drop_handler`
+/// (#3197). `on_new_window` used to sit on the main window alone, so a link clicked in a
+/// SECONDARY window fell through to exactly that — including `window.open` on an OAuth
+/// provider login, which belongs in the system browser and instead rendered chrome-less
+/// inside the app.
+fn serve_new_window<R: Runtime>(
+    app: &AppHandle<R>,
+    port: u16,
+    target: &str,
+) -> tauri::webview::NewWindowResponse<R> {
+    match route_new_window(target, port) {
+        NewWindow::Managed(path) => {
+            // Our OWN origin asking for a new window means "open this in a second window" —
+            // serve it with a real Tauri window rather than a chrome-less child (#1706).
+            if let Err(e) = open_chat_window(app, path) {
+                log::error!("desktop: failed to open a new chat window: {e}");
+            }
+        }
+        NewWindow::External => {
+            if let Err(e) = app.opener().open_url(target, None::<&str>) {
+                log::error!("desktop: failed to open external link {target}: {e}");
+            }
+        }
+        NewWindow::Ignore => {}
+    }
+    // Deny either way: we've already served the request ourselves.
+    tauri::webview::NewWindowResponse::Deny
 }
 
 /// Check the updater manifest for a newer build, returning its version + notes for the
@@ -1346,24 +1408,7 @@ pub fn run() {
                 .disable_drag_drop_handler()
                 .initialization_script(&init)
                 .on_new_window(move |url, _features| {
-                    let target = url.as_str();
-                    // Our OWN origin asking for a new window is "open this in a second
-                    // window", not an external link — that request used to fall through
-                    // to Deny below, which is why the menu item did nothing (#1706).
-                    // Serve it with a real Tauri window rather than letting the webview
-                    // spawn a chrome-less child that never gets our init script.
-                    if is_own_origin(target, sidecar_port) {
-                        if let Err(e) = open_chat_window(&link_opener, own_origin_path(target)) {
-                            log::error!("desktop: failed to open a new chat window: {e}");
-                        }
-                    } else if target.starts_with("http://") || target.starts_with("https://") {
-                        if let Err(e) = link_opener.opener().open_url(target, None::<&str>) {
-                            log::error!("desktop: failed to open external link {target}: {e}");
-                        }
-                    }
-                    // Deny either way: we've already served the request ourselves, and an
-                    // unmanaged child webview would have no API base and no title bar.
-                    tauri::webview::NewWindowResponse::Deny
+                    serve_new_window(&link_opener, sidecar_port, url.as_str())
                 });
             // Invisible title bar (macOS): no opaque chrome — content fills the
             // frame and the native traffic lights float top-left. The web shell
@@ -1401,9 +1446,14 @@ pub fn run() {
                 .resizable(false)
                 .center()
                 .visible(false)
-                // Kept consistent with the other two windows (#3197): the launcher hosts the
-                // same web bundle, so it must not behave differently if a surface lands there.
+                // Kept consistent with the other two windows (#3197 / #3316): the launcher
+                // hosts the same web bundle, so it must not behave differently if a surface
+                // lands there — a palette result that opens a link included.
                 .disable_drag_drop_handler()
+                .on_new_window({
+                    let app = app.handle().clone();
+                    move |url, _features| serve_new_window(&app, port, url.as_str())
+                })
                 .initialization_script(&launcher_init)
                 .build()?;
 
@@ -1588,7 +1638,58 @@ mod auth_token_tests {
 
 #[cfg(test)]
 mod new_window_tests {
-    use super::{is_own_origin, own_origin_path};
+    use super::{is_own_origin, own_origin_path, route_new_window, NewWindow};
+
+    // ── #3316: the triage every shell-built window shares ─────────────────────
+    // These ran on the MAIN window only; a link clicked in a second window skipped
+    // them and got an unmanaged child webview with no API base, no title bar and no
+    // drag-drop fix. The routing is pure so the DECISION is testable without a webview.
+    // The WIRING — that every builder actually calls it — is covered by no test and
+    // cannot be without a real webview; it is a review-visible one line per window,
+    // which is exactly how it went missing in the first place.
+    #[test]
+    fn our_own_origin_becomes_a_managed_window_at_its_route() {
+        assert_eq!(
+            route_new_window("http://127.0.0.1:7870/app/agent/roxy-1a2b/", 7870),
+            NewWindow::Managed(Some("agent/roxy-1a2b/".into())),
+        );
+        // The bare app root opens a default console window, not a routed one.
+        assert_eq!(
+            route_new_window("tauri://localhost/app/", 7870),
+            NewWindow::Managed(None)
+        );
+    }
+
+    #[test]
+    fn the_wider_web_goes_to_the_system_browser() {
+        // The AppDrawer's doc links, a published link — and the one that matters most,
+        // an OAuth provider login: it must never render chrome-less inside the app.
+        assert_eq!(
+            route_new_window("https://docs.protolabs.studio/", 7870),
+            NewWindow::External
+        );
+        assert_eq!(
+            route_new_window("https://github.com/login/oauth/authorize?x=1", 7870),
+            NewWindow::External
+        );
+        // Loopback on somebody else's port is somebody else's server.
+        assert_eq!(
+            route_new_window("http://127.0.0.1:5173/", 7870),
+            NewWindow::External
+        );
+    }
+
+    #[test]
+    fn a_scheme_we_dont_serve_is_dropped_rather_than_opened() {
+        assert_eq!(
+            route_new_window("mailto:hi@example.com", 7870),
+            NewWindow::Ignore
+        );
+        assert_eq!(
+            route_new_window("javascript:alert(1)", 7870),
+            NewWindow::Ignore
+        );
+    }
 
     // ── #1706: which new-window targets are OURS ──────────────────────────────
     #[test]
