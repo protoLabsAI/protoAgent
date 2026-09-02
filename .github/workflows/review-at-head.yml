@@ -58,7 +58,12 @@ concurrency:
 
 jobs:
   assert:
-    name: Review at head
+    # NOT named "Review at head": that is the COMMIT STATUS this job posts, and a check-run
+    # sharing the name puts three same-named rows on every PR — two green (the job ran fine)
+    # and one red (the verdict is missing). The rollup does resolve to failure, but the
+    # required-check context would then be ambiguous between a check-run that only says "the
+    # job executed" and the status that carries the actual answer. One name, one meaning.
+    name: Assert a panel verdict at head
     runs-on: ubuntu-latest # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     timeout-minutes: 5
     steps:
