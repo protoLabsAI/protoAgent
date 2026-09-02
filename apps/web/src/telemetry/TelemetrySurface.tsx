@@ -62,7 +62,14 @@ async function downloadTelemetryCsv() {
 // are not interchangeable: the store is switched off, or it is on and empty. Both
 // are reachable while the FLEET tab still has plenty to show.
 const NO_TURNS = "No turns recorded yet — run a turn and refresh.";
-const STORE_OFF = "Telemetry store is disabled (set telemetry.enabled: true).";
+// A fragment, not a string: the same sentence is rendered from two branches, and a
+// plain string drops the <code> the other one has — the setting name is a literal
+// the operator has to type.
+const STORE_OFF = (
+  <>
+    Telemetry store is disabled (set <code>telemetry.enabled: true</code>).
+  </>
+);
 
 function TelemetryBody() {
   const { data, isFetching, refetch } = useSuspenseQuery(telemetryQuery());
@@ -141,9 +148,7 @@ function TelemetryBody() {
             telemetry switched off entirely while its members are busy. Gating the
             whole surface on `enabled` hid it — the regression this shape avoids. */}
         {!hasTelemetryViews(hasTurns, hasFleet) ? (
-          <Empty>
-            {enabled ? NO_TURNS : <>Telemetry store is disabled (set <code>telemetry.enabled: true</code>).</>}
-          </Empty>
+          <Empty>{enabled ? NO_TURNS : STORE_OFF}</Empty>
         ) : (
           <>
             {/* The pinned headline: what the surface is opened FOR. Absent when this box
