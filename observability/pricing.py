@@ -132,7 +132,7 @@ def _detail_for(details: dict, suffix: str) -> int:
         return 0
     total = 0
     for key, value in details.items():
-        if key == suffix or (key.endswith("_" + suffix) and key != suffix):
+        if key == suffix or key.endswith("_" + suffix):
             total += int(value or 0)
     return total
 

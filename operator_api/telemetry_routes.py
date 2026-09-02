@@ -84,6 +84,55 @@ def _local_summary_payload(since: str | None = None) -> dict:
     return {"enabled": True, "summary": STATE.telemetry_store.summary(since_iso=since)}
 
 
+# Enough turns to distinguish "not caching" from "hasn't warmed yet", and a prompt
+# large enough that every provider's cacheable floor is cleared.
+_CACHE_VERDICT_MIN_TURNS = 10
+_CACHE_VERDICT_MIN_CONTEXT = 4000
+
+
+def _cache_verdict(by_model: list[dict]) -> tuple[bool | None, list[dict]]:
+    """Is prompt caching engaging — PER LANE (#3342)? Returns (verdict, cold lanes).
+
+    The middleware's #2255 detector knows within three calls, but it says so in a log
+    line and a best-effort Activity emit, which is how an `openai-codex` lane billed
+    full input price for four days while the warning repeated unread. The same fact is
+    legible from the recorded rows, so it is reported where cache performance is
+    actually looked at.
+
+    Judged per model, not over the store, because the store-wide figure hides exactly
+    the shape that went unnoticed: an agent whose Anthropic lane caches beautifully
+    carries the average while its codex lane caches nothing. A rollup ratio of 0.51
+    looks healthy and is the mean of "fine" and "broken".
+
+    ``None`` = no lane cleared the evidence bar; the console shows nothing rather than
+    guessing.
+    """
+    judged, cold = False, []
+    for m in by_model:
+        turns = int(m.get("turns", 0) or 0)
+        if turns < _CACHE_VERDICT_MIN_TURNS:
+            continue
+        read = int(m.get("cache_read_input_tokens", 0) or 0)
+        created = int(m.get("cache_creation_input_tokens", 0) or 0)
+        # A lane that recorded NO prompt tokens at all is UNMEASURED, not uncached: an
+        # ACP coder leg runs outside the gateway and reports no usage (#3015). Reading
+        # its zero as "not caching" is precisely the false accusation this verdict
+        # exists to stop making.
+        if int(m.get("input_tokens", 0) or 0) + read + created <= 0:
+            continue
+        # Only judge a lane whose prompts are big enough to be cacheable at all — every
+        # provider has a floor (Anthropic ~1024 tokens, OpenAI 1024), and a lane of
+        # one-line turns legitimately shows zero.
+        if int(m.get("p95_context_tokens", 0) or 0) < _CACHE_VERDICT_MIN_CONTEXT:
+            continue
+        judged = True
+        if not (read or created):
+            cold.append({"model": m.get("model") or "", "turns": turns})
+    if not judged:
+        return None, []
+    return (not cold), cold
+
+
 def _local_insights_payload() -> dict:
     """This instance's ``/api/telemetry/insights`` body (ADR 0006 Slice 4) —
     shared with the fleet rollup for the same byte-identical degradation."""
@@ -131,55 +180,6 @@ def _local_insights_payload() -> dict:
             "unproven_levers": [],
         },
     }
-
-
-# Enough turns to distinguish "not caching" from "hasn't warmed yet", and a prompt
-# large enough that every provider's cacheable floor is cleared.
-def _cache_verdict(by_model: list[dict]) -> tuple[bool | None, list[dict]]:
-    """Is prompt caching engaging — PER LANE (#3342)? Returns (verdict, cold lanes).
-
-    The middleware's #2255 detector knows within three calls, but it says so in a log
-    line and a best-effort Activity emit, which is how an `openai-codex` lane billed
-    full input price for four days while the warning repeated unread. The same fact is
-    legible from the recorded rows, so it is reported where cache performance is
-    actually looked at.
-
-    Judged per model, not over the store, because the store-wide figure hides exactly
-    the shape that went unnoticed: an agent whose Anthropic lane caches beautifully
-    carries the average while its codex lane caches nothing. A rollup ratio of 0.51
-    looks healthy and is the mean of "fine" and "broken".
-
-    ``None`` = no lane cleared the evidence bar; the console shows nothing rather than
-    guessing.
-    """
-    judged, cold = False, []
-    for m in by_model:
-        turns = int(m.get("turns", 0) or 0)
-        if turns < _CACHE_VERDICT_MIN_TURNS:
-            continue
-        read = int(m.get("cache_read_input_tokens", 0) or 0)
-        created = int(m.get("cache_creation_input_tokens", 0) or 0)
-        # A lane that recorded NO prompt tokens at all is UNMEASURED, not uncached: an
-        # ACP coder leg runs outside the gateway and reports no usage (#3015). Reading
-        # its zero as "not caching" is precisely the false accusation this verdict
-        # exists to stop making.
-        if int(m.get("input_tokens", 0) or 0) + read + created <= 0:
-            continue
-        # Only judge a lane whose prompts are big enough to be cacheable at all — every
-        # provider has a floor (Anthropic ~1024 tokens, OpenAI 1024), and a lane of
-        # one-line turns legitimately shows zero.
-        if int(m.get("p95_context_tokens", 0) or 0) < _CACHE_VERDICT_MIN_CONTEXT:
-            continue
-        judged = True
-        if not (read or created):
-            cold.append({"model": m.get("model") or "", "turns": turns})
-    if not judged:
-        return None, []
-    return (not cold), cold
-
-
-_CACHE_VERDICT_MIN_TURNS = 10
-_CACHE_VERDICT_MIN_CONTEXT = 4000
 
 
 async def _fetch_member_json(slug: str, path: str) -> dict | None:
