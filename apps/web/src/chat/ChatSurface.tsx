@@ -1178,6 +1178,8 @@ function ChatSessionSlot({
   // cards, reasoning, text) and the live tail streams in like a normal turn.
   // Cold agents (409/502 behind the fleet proxy) are retried with backoff; a
   // turn that already ended falls back to one snapshot replay + finalize.
+  // Settled-but-stale local transcripts from an agent switch are not reattached;
+  // durable boot hydration repairs their rendered answer parts in the store.
   const reattachKey = reattachKeyForMessages(session?.messages);
   useEffect(() => {
     if (abortRef.current) return; // a live turn in this slot owns the stream

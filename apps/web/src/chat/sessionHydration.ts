@@ -13,6 +13,7 @@ import type { ChatMessage } from "../lib/types";
 import {
   chatStore,
   DEFAULT_SESSION_TITLE,
+  needsDurableHydration,
   type ChatSession,
   type HydrationEligibility,
 } from "./chat-store";
@@ -162,11 +163,11 @@ export async function hydrateDurableChatSessions(): Promise<void> {
   } catch {
     return;
   }
-  const local = new Map(chatStore.getSnapshot().sessions.map((session) => [session.id, session]));
   const eligibility = new Map<string, HydrationEligibility>();
+  const local = new Map(chatStore.getSnapshot().sessions.map((session) => [session.id, session]));
   const wanted = summaries.filter((summary) => {
     const session = local.get(summary.session_id);
-    if (session?.messages.length) return false;
+    if (session?.messages.length && !needsDurableHydration(session)) return false;
     const token = chatStore.captureHydrationEligibility(summary.session_id);
     if (!token) return false;
     eligibility.set(summary.session_id, token);

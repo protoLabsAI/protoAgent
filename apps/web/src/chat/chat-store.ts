@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 
 import type { ChatMessage } from "../lib/types";
+import { replaceText } from "./parts";
 
 export const MAX_SESSIONS = 50;
 export const MAX_ACTIVE_SESSIONS = 5;
@@ -120,6 +121,55 @@ export type HydrationEligibility = {
   sessionId: string;
   localSession: ChatSession | null;
 };
+
+function assistantTextFromParts(message: ChatMessage): string {
+  return (message.parts ?? [])
+    .filter((part) => part.kind === "text")
+    .map((part) => part.text)
+    .join("");
+}
+
+function lastAssistant(messages: ChatMessage[]): ChatMessage | undefined {
+  return [...messages].reverse().find((message) => message.role === "assistant");
+}
+
+function hydrationCanRepairMessage(message: ChatMessage | undefined): message is ChatMessage {
+  if (!message || message.role !== "assistant" || message.status === "streaming") return false;
+  if (!message.parts?.length) return false;
+  return Boolean(message.taskId && (message.toolCalls?.length || message.components?.length));
+}
+
+export function needsDurableHydration(session: ChatSession): boolean {
+  const message = lastAssistant(session.messages);
+  if (!hydrationCanRepairMessage(message)) return false;
+  const orderedText = assistantTextFromParts(message).trim();
+  return Boolean(message.content.trim() && orderedText !== message.content.trim()) || !orderedText;
+}
+
+function repairHydratedMessages(local: ChatMessage[], recovered: ChatMessage[]): ChatMessage[] | null {
+  let changed = false;
+  const recoveredByTask = new Map<string, ChatMessage>();
+  for (const message of recovered) {
+    if (message.role === "assistant" && message.status !== "streaming" && message.taskId && message.content.trim()) {
+      recoveredByTask.set(message.taskId, message);
+    }
+  }
+  const messages = local.map((message) => {
+    if (!hydrationCanRepairMessage(message) || !message.taskId) return message;
+    const recoveredMessage = recoveredByTask.get(message.taskId);
+    if (!recoveredMessage) return message;
+    const text = recoveredMessage.content.trim();
+    const orderedText = assistantTextFromParts(message);
+    if (orderedText.trim() === text) return message;
+    changed = true;
+    return {
+      ...message,
+      content: recoveredMessage.content,
+      parts: replaceText(message.parts, recoveredMessage.content, orderedText),
+    };
+  });
+  return changed ? messages : null;
+}
 
 // ── goal kickoff seam ──────────────────────────────────────────────────────────
 // When a goal is created from the Work panel we open a dedicated tab and drive the goal
@@ -285,7 +335,13 @@ export function mergeHydratedSessions(current: ChatState, incoming: ChatSession[
   for (const recovered of incoming) {
     if (!recovered.messages.length) continue;
     const existing = byId.get(recovered.id);
-    if (existing?.messages.length) continue;
+    if (existing?.messages.length) {
+      const messages = repairHydratedMessages(existing.messages, recovered.messages);
+      if (!messages) continue;
+      byId.set(recovered.id, { ...existing, messages, updatedAt: Math.max(existing.updatedAt, recovered.updatedAt) });
+      hydratedIds.add(recovered.id);
+      continue;
+    }
     if (existing) {
       const next = {
         ...recovered,
@@ -690,7 +746,7 @@ export const chatStore = {
   captureHydrationEligibility(sessionId: string): HydrationEligibility | null {
     if (locallyDeletedIds.has(sessionId) || locallyDismissedIds.has(sessionId)) return null;
     const localSession = state.sessions.find((session) => session.id === sessionId) ?? null;
-    if (localSession?.messages.length) return null;
+    if (localSession?.messages.length && !needsDurableHydration(localSession)) return null;
     return { sessionId, localSession };
   },
 
@@ -701,7 +757,8 @@ export const chatStore = {
         if (locallyDeletedIds.has(session.id) || locallyDismissedIds.has(session.id)) return false;
         if (!tokens.has(session.id)) return eligibility.length === 0;
         const now = current.sessions.find((candidate) => candidate.id === session.id) ?? null;
-        return now === tokens.get(session.id) && !now?.messages.length;
+        const tokenSession = tokens.get(session.id);
+        return now === tokenSession && (!now?.messages.length || (now != null && needsDurableHydration(now)));
       });
       return mergeHydratedSessions(current, eligible);
     });

@@ -296,6 +296,130 @@ describe("boot hydration", () => {
     });
   });
 
+  it("repairs a stale non-empty switched-back tab from the durable answer (#3340)", () => {
+    const staleOriginal = {
+      id: "chat-original",
+      title: "Ship the release",
+      messages: [
+        { id: "local-user", role: "user", content: "Ship the release", status: "done" },
+        {
+          id: "local-assistant",
+          role: "assistant",
+          content: "The release is live.",
+          status: "done",
+          taskId: "task-1",
+          toolCalls: [{ id: "call-1", name: "run_command", input: "make release", output: "done", status: "done" }],
+          parts: [{ kind: "tools", ids: ["call-1"] }],
+        },
+      ],
+      createdAt: 1,
+      updatedAt: 1,
+    } as ChatSession;
+    const other = {
+      id: "chat-other",
+      title: "Other agent",
+      messages: [{ id: "other-user", role: "user", content: "meanwhile", status: "done" }],
+      createdAt: 2,
+      updatedAt: 2,
+    } as ChatSession;
+    const recovered = sessionFromDurableTurns(summary(staleOriginal.id), [
+      turn({
+        text: "The release is live.",
+        artifacts: [{ parts: [{ kind: "data", text: "The release is live.", data: { ok: true } }] }],
+        history: [
+          { role: "ROLE_USER", parts: [{ text: "Ship the release" }] },
+          {
+            role: "ROLE_AGENT",
+            parts: [],
+            metadata: { [TOOL]: { toolCallId: "call-1", name: "run_command", phase: "started", args: "make release" } },
+          },
+          {
+            role: "ROLE_AGENT",
+            parts: [],
+            metadata: { [TOOL]: { toolCallId: "call-1", name: "run_command", phase: "completed", result: "done" } },
+          },
+        ],
+      }),
+    ]);
+    if (!recovered) throw new Error("durable turn should produce a recovered session");
+
+    const hydrated = mergeHydratedSessions(
+      {
+        version: 1,
+        sessions: [staleOriginal, other],
+        currentSessionId: other.id,
+        activeSessions: [other.id],
+        sessionStatusMap: {},
+        pendingDeleteRequest: null,
+        pendingClearRequest: null,
+      },
+      [recovered],
+    );
+    const switchedBack = { ...hydrated, currentSessionId: staleOriginal.id };
+    const assistant = switchedBack.sessions
+      .find((session) => session.id === switchedBack.currentSessionId)
+      ?.messages.find((message) => message.id === "local-assistant");
+
+    expect(assistant?.toolCalls).toEqual([
+      expect.objectContaining({ id: "call-1", name: "run_command", status: "done" }),
+    ]);
+    expect(assistant?.parts?.some((part) => part.kind === "tools")).toBe(true);
+    expect(assistant?.parts?.at(-1)).toMatchObject({ kind: "text", text: "The release is live." });
+  });
+
+  it("repairs switched-back component output without dropping the component (#3340)", () => {
+    const staleOriginal = {
+      id: "chat-original",
+      title: "Release status",
+      messages: [
+        { id: "local-user", role: "user", content: "show release status", status: "done" },
+        {
+          id: "local-assistant",
+          role: "assistant",
+          content: "Here is the latest release.",
+          status: "done",
+          taskId: "task-1",
+          components: [{ component: "key-value", props: { version: "1.2.3" } }],
+          parts: [{ kind: "component", spec: { component: "key-value", props: { version: "1.2.3" } } }],
+        },
+      ],
+      createdAt: 1,
+      updatedAt: 1,
+    } as ChatSession;
+    const recovered = sessionFromDurableTurns(summary(staleOriginal.id), [
+      turn({
+        text: "Here is the latest release.",
+        artifacts: [{ parts: [{ kind: "data", text: "Here is the latest release.", data: {} }] }],
+        history: [
+          { role: "ROLE_USER", parts: [{ text: "show release status" }] },
+          {
+            role: "ROLE_AGENT",
+            parts: [{ data: { component: "key-value", props: { version: "1.2.3" } }, metadata: { mimeType: COMPONENT } }],
+          },
+        ],
+      }),
+    ]);
+    if (!recovered) throw new Error("durable turn should produce a recovered session");
+
+    const hydrated = mergeHydratedSessions(
+      {
+        version: 1,
+        sessions: [staleOriginal],
+        currentSessionId: staleOriginal.id,
+        activeSessions: [staleOriginal.id],
+        sessionStatusMap: {},
+        pendingDeleteRequest: null,
+        pendingClearRequest: null,
+      },
+      [recovered],
+    );
+    const assistant = hydrated.sessions[0].messages.find((message) => message.id === "local-assistant");
+
+    expect(assistant?.components).toEqual([{ component: "key-value", props: { version: "1.2.3" } }]);
+    expect(assistant?.parts?.some((part) => part.kind === "component")).toBe(true);
+    expect(assistant?.parts?.at(-1)).toMatchObject({ kind: "text", text: "Here is the latest release." });
+  });
+
   it("fetches only missing/empty sessions, tolerates one failure, and commits successful siblings", async () => {
     const nonEmpty = {
       id: "chat-local",
@@ -320,6 +444,53 @@ describe("boot hydration", () => {
     expect(reads.mock.calls.map(([id]) => id).sort()).toEqual(["chat-empty", "chat-fails", "chat-new"]);
     expect(commit).toHaveBeenCalledTimes(1);
     expect(commit.mock.calls[0][0].map((session) => session.id).sort()).toEqual(["chat-empty", "chat-new"]);
+  });
+
+  it("fetches stale non-empty sessions that need durable render repair (#3340)", async () => {
+    const ordinary = {
+      id: "chat-local",
+      title: "Local",
+      messages: [{ role: "user", content: "local" }],
+      createdAt: 1,
+      updatedAt: 1,
+    } as ChatSession;
+    const stale = {
+      id: "chat-stale",
+      title: "Release",
+      messages: [
+        { id: "u1", role: "user", content: "Ship it", status: "done" },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "Done.",
+          status: "done",
+          taskId: "task-chat-stale",
+          toolCalls: [{ id: "call-1", name: "run_command", status: "done" }],
+          parts: [{ kind: "tools", ids: ["call-1"] }],
+        },
+      ],
+      createdAt: 1,
+      updatedAt: 1,
+    } as ChatSession;
+    const empty = { id: "chat-empty", title: "Empty", messages: [], createdAt: 1, updatedAt: 1 } as ChatSession;
+    vi.spyOn(chatStore, "getSnapshot").mockReturnValue({ sessions: [ordinary, stale, empty] } as never);
+    vi.spyOn(chatStore, "captureHydrationEligibility").mockImplementation((id) => {
+      if (id === ordinary.id) return null;
+      const localSession = id === stale.id ? stale : id === empty.id ? empty : null;
+      return { sessionId: id, localSession };
+    });
+    const commit = vi.spyOn(chatStore, "hydrateSessions").mockImplementation(() => {});
+    vi.spyOn(api, "chatSessions").mockResolvedValue({
+      sessions: [summary(ordinary.id), summary(stale.id), summary(empty.id), summary("chat-new")],
+    });
+    const reads = vi.spyOn(api, "chatSessionTurns").mockImplementation(async (id) => ({
+      turns: [turn({ task_id: id === stale.id ? "task-chat-stale" : `task-${id}` })],
+    }));
+
+    await hydrateDurableChatSessions();
+
+    expect(reads.mock.calls.map(([id]) => id).sort()).toEqual(["chat-empty", "chat-new", "chat-stale"]);
+    expect(commit).toHaveBeenCalledTimes(1);
   });
 
   it("never exceeds the bounded fetch fan-out", async () => {
