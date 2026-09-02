@@ -122,6 +122,20 @@ _PLUGIN_FEDERATION: list[str] = []
 # SSE token lifetime (seconds).
 _SSE_TOKEN_LIFETIME = 30
 
+# Read-only SSE streams a browser ``EventSource`` opens — which cannot send an
+# ``Authorization`` header, so they authenticate with a short-lived query-string token
+# instead (see ``_validate_sse_token``). ``/api/events`` is the event bus; ``/api/chat/attend``
+# is the session-attendance presence stream (#3110) the console holds open while a chat is on
+# screen, so a background-resume into that session can park for HITL. Matched by exact path OR
+# trailing suffix so the fleet-proxy variants (``/agents/<slug>/api/events``) are covered too.
+_SSE_QUERY_TOKEN_PATHS = ("/api/events", "/api/chat/attend")
+
+
+def _is_sse_query_token_path(path: str) -> bool:
+    """Whether ``path`` is one of the EventSource streams that accept a ``?token=`` in place
+    of a bearer header (see ``_SSE_QUERY_TOKEN_PATHS``)."""
+    return any(path == p or path.endswith(p) for p in _SSE_QUERY_TOKEN_PATHS)
+
 # A plugin public-prefix must be a real SUBTREE of its own namespace —
 # ``/plugins/<id>/…`` or ``/api/plugins/<id>/…`` with a trailing slash after the
 # id segment — so a bare core route like ``/api/plugins/install`` can never be
@@ -537,8 +551,9 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
                 logger.exception("[a2a] media access check failed for %s", path)
 
         # SSE endpoint: accept either a valid query-string token OR a bearer header.
-        # The query token is for browser EventSource clients that cannot send headers.
-        if path == "/api/events" or path.endswith("/api/events"):
+        # The query token is for browser EventSource clients that cannot send headers
+        # (the event bus AND the session-attendance stream — see _SSE_QUERY_TOKEN_PATHS).
+        if _is_sse_query_token_path(path):
             sse_token = request.query_params.get("token", "")
             if _validate_sse_token(sse_token):
                 # A valid SSE token proves the caller held the operator bearer — it's HMAC-signed
