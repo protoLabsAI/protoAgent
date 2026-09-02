@@ -129,21 +129,28 @@ function assistantTextFromParts(message: ChatMessage): string {
     .join("");
 }
 
-function lastAssistant(messages: ChatMessage[]): ChatMessage | undefined {
-  return [...messages].reverse().find((message) => message.role === "assistant");
-}
-
 function hydrationCanRepairMessage(message: ChatMessage | undefined): message is ChatMessage {
   if (!message || message.role !== "assistant" || message.status === "streaming") return false;
   if (!message.parts?.length) return false;
   return Boolean(message.taskId && (message.toolCalls?.length || message.components?.length));
 }
 
-export function needsDurableHydration(session: ChatSession): boolean {
-  const message = lastAssistant(session.messages);
+/** Would durable hydration have prose to reconcile into THIS assistant message?
+ *  A completed, parts-bearing tool/component reply whose ordered parts don't carry
+ *  its flat `content` answer renders the cards but no text — the #3340 regression.
+ *  Judged per-message so a whole-session scan can still catch an earlier stale turn. */
+function messageNeedsDurableHydration(message: ChatMessage): boolean {
   if (!hydrationCanRepairMessage(message)) return false;
   const orderedText = assistantTextFromParts(message).trim();
   return Boolean(message.content.trim() && orderedText !== message.content.trim()) || !orderedText;
+}
+
+/** True when ANY assistant turn in the session is a settled tool/component reply
+ *  missing its rendered prose. Scanning every message — not just the last assistant
+ *  (#3340 review) — is load-bearing: a healthy later reply must not mask an earlier
+ *  stale turn, which would otherwise stay permanently stripped of its answer text. */
+export function needsDurableHydration(session: ChatSession): boolean {
+  return session.messages.some(messageNeedsDurableHydration);
 }
 
 function repairHydratedMessages(local: ChatMessage[], recovered: ChatMessage[]): ChatMessage[] | null {

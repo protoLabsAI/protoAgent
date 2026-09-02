@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { api, type DurableChatSession, type DurableChatTurn } from "../lib/api";
-import { chatStore, DEFAULT_SESSION_TITLE, mergeHydratedSessions, type ChatSession } from "./chat-store";
+import {
+  chatStore,
+  DEFAULT_SESSION_TITLE,
+  mergeHydratedSessions,
+  needsDurableHydration,
+  type ChatSession,
+} from "./chat-store";
 import {
   HYDRATION_CONCURRENCY,
   hydrateDurableChatSessions,
@@ -426,6 +432,102 @@ describe("boot hydration", () => {
     expect(assistant?.parts?.slice(-1)[0]).toMatchObject({ kind: "text", text: "Here is the latest release." });
   });
 
+  it("flags a session whose EARLIER turn lost its prose even when the last reply is healthy (#3340)", () => {
+    // The eligibility gate must scan every assistant turn, not just the last one.
+    // Here the tail reply rendered fine, but an earlier tool turn kept only its
+    // cards. A last-assistant-only check reads the healthy tail and reports the
+    // session as up to date, so the earlier turn's answer stays stripped forever.
+    const mixed = {
+      id: "chat-mixed",
+      title: "Releases",
+      messages: [
+        { id: "u1", role: "user", content: "Ship v1", status: "done" },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "v1 is live.",
+          status: "done",
+          taskId: "task-a",
+          toolCalls: [{ id: "call-1", name: "run_command", status: "done" }],
+          parts: [{ kind: "tools", ids: ["call-1"] }],
+        },
+        { id: "u2", role: "user", content: "Ship v2", status: "done" },
+        {
+          id: "a2",
+          role: "assistant",
+          content: "v2 is live.",
+          status: "done",
+          taskId: "task-b",
+          parts: [{ kind: "text", text: "v2 is live." }],
+        },
+      ],
+      createdAt: 1,
+      updatedAt: 1,
+    } as ChatSession;
+    expect(needsDurableHydration(mixed)).toBe(true);
+  });
+
+  it("repairs a stale EARLIER turn on switch-back and leaves the healthy later reply intact (#3340)", () => {
+    const staleEarlier = {
+      id: "chat-original",
+      title: "Releases",
+      messages: [
+        { id: "u1", role: "user", content: "Ship v1", status: "done" },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "v1 is live.",
+          status: "done",
+          taskId: "task-a",
+          toolCalls: [{ id: "call-1", name: "run_command", status: "done" }],
+          parts: [{ kind: "tools", ids: ["call-1"] }],
+        },
+        { id: "u2", role: "user", content: "Ship v2", status: "done" },
+        {
+          id: "a2",
+          role: "assistant",
+          content: "v2 is live.",
+          status: "done",
+          taskId: "task-b",
+          parts: [{ kind: "text", text: "v2 is live." }],
+        },
+      ],
+      createdAt: 1,
+      updatedAt: 1,
+    } as ChatSession;
+    const recovered = {
+      id: staleEarlier.id,
+      title: "Releases",
+      messages: [
+        { id: "durable-task-a-assistant", role: "assistant", content: "v1 is live.", status: "done", taskId: "task-a" },
+        { id: "durable-task-b-assistant", role: "assistant", content: "v2 is live.", status: "done", taskId: "task-b" },
+      ],
+      createdAt: 1,
+      updatedAt: 2,
+    } as ChatSession;
+
+    const hydrated = mergeHydratedSessions(
+      {
+        version: 1,
+        sessions: [staleEarlier],
+        currentSessionId: staleEarlier.id,
+        activeSessions: [staleEarlier.id],
+        sessionStatusMap: {},
+        pendingDeleteRequest: null,
+        pendingClearRequest: null,
+      },
+      [recovered],
+    );
+    const messages = hydrated.sessions[0].messages;
+    const earlier = messages.find((message) => message.id === "a1");
+    const later = messages.find((message) => message.id === "a2");
+    // Earlier turn: tool card kept, prose reconciled in as the trailing run.
+    expect(earlier?.parts?.some((part) => part.kind === "tools")).toBe(true);
+    expect(earlier?.parts?.slice(-1)[0]).toMatchObject({ kind: "text", text: "v1 is live." });
+    // Later turn was already whole — untouched.
+    expect(later?.parts).toEqual([{ kind: "text", text: "v2 is live." }]);
+  });
+
   it("fetches only missing/empty sessions, tolerates one failure, and commits successful siblings", async () => {
     const nonEmpty = {
       id: "chat-local",
@@ -496,6 +598,53 @@ describe("boot hydration", () => {
     await hydrateDurableChatSessions();
 
     expect(reads.mock.calls.map(([id]) => id).sort()).toEqual(["chat-empty", "chat-new", "chat-stale"]);
+    expect(commit).toHaveBeenCalledTimes(1);
+  });
+
+  it("fetches a session whose earlier turn needs repair even when its last reply is healthy (#3340)", async () => {
+    // Regression for the last-assistant-only eligibility gate: the tail reply is
+    // whole, an earlier tool turn is not. The session must still be fetched so the
+    // earlier turn's answer can be reconciled; a tail-only check would skip it.
+    const mixed = {
+      id: "chat-mixed",
+      title: "Releases",
+      messages: [
+        { id: "u1", role: "user", content: "Ship v1", status: "done" },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "v1 is live.",
+          status: "done",
+          taskId: "task-mixed-a",
+          toolCalls: [{ id: "call-1", name: "run_command", status: "done" }],
+          parts: [{ kind: "tools", ids: ["call-1"] }],
+        },
+        { id: "u2", role: "user", content: "Ship v2", status: "done" },
+        {
+          id: "a2",
+          role: "assistant",
+          content: "v2 is live.",
+          status: "done",
+          taskId: "task-mixed-b",
+          parts: [{ kind: "text", text: "v2 is live." }],
+        },
+      ],
+      createdAt: 1,
+      updatedAt: 1,
+    } as ChatSession;
+    vi.spyOn(chatStore, "getSnapshot").mockReturnValue({ sessions: [mixed] } as never);
+    vi.spyOn(chatStore, "captureHydrationEligibility").mockImplementation((id) =>
+      id === mixed.id ? { sessionId: id, localSession: mixed } : null,
+    );
+    const commit = vi.spyOn(chatStore, "hydrateSessions").mockImplementation(() => {});
+    vi.spyOn(api, "chatSessions").mockResolvedValue({ sessions: [summary(mixed.id)] });
+    const reads = vi.spyOn(api, "chatSessionTurns").mockResolvedValue({
+      turns: [turn({ task_id: "task-mixed-a" })],
+    });
+
+    await hydrateDurableChatSessions();
+
+    expect(reads.mock.calls.map(([id]) => id)).toEqual([mixed.id]);
     expect(commit).toHaveBeenCalledTimes(1);
   });
 
