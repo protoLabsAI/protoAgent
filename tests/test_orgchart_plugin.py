@@ -56,7 +56,7 @@ def test_short_strips_label_and_caps():
     assert len(topo._short("x" * 100)) <= 34
 
 
-def test_a2a_edges_scope_and_token_resolution(monkeypatch):
+def test_targets_scope_and_token_resolution(monkeypatch):
     monkeypatch.setenv("PEER_TOK", "sekrit")
     monkeypatch.delenv("UNSET_TOK", raising=False)
     dels = [
@@ -68,10 +68,9 @@ def test_a2a_edges_scope_and_token_resolution(monkeypatch):
         # no stored value, env var named but unset: resolves to nothing (matches dispatch)
         {"type": "a2a", "name": "unset", "url": "http://f:1", "auth": {"credentialsEnv": "UNSET_TOK"}},
         {"type": "a2a", "name": "redacted", "url": "http://c:1"},  # peer-reported: no auth
-        {"type": "acp", "name": "coder", "url": "http://d:1"},  # non-a2a: skipped
         {"type": "a2a", "name": "nourl"},
     ]
-    edges = topo._a2a_edges(dels)
+    edges = topo._targets(dels, owner="http://self:1")
     assert [(e["name"], e["token"], e["scope"]) for e in edges] == [
         ("a", "inline", "host"),
         ("b", "sekrit", None),
@@ -79,6 +78,173 @@ def test_a2a_edges_scope_and_token_resolution(monkeypatch):
         ("unset", "", None),
         ("redacted", "", None),
     ]
+
+
+# ── acp / model leaves (#3325) ───────────────────────────────────────────────
+
+
+def test_acp_is_owner_scoped_and_model_merges_by_endpoint():
+    """A coder is a subprocess on ITS owner's box, so the same name on two agents is two
+    nodes. A model endpoint is shared infrastructure, so the same url+model is one."""
+    dels = [
+        {"type": "acp", "name": "coder", "command": "proto", "workdir": "/w"},
+        {"type": "openai", "name": "brain", "url": "https://gw.example/v1/", "model": "big"},
+    ]
+    mine = topo._targets(dels, owner="http://self:1")
+    theirs = topo._targets(dels, owner="http://peer:1")
+    assert mine[0]["id"] == "acp:http://self:1#coder" != theirs[0]["id"]
+    assert mine[1]["id"] == theirs[1]["id"] == "model:gw.example/v1/big"
+    assert (mine[0]["kind"], mine[1]["kind"]) == ("coder", "model")
+    # A /v1 path must survive: _norm's trailing-/a2a strip is an A2A convention.
+    assert mine[1]["endpoint"] == "https://gw.example/v1"
+
+
+def test_incomplete_acp_and_model_entries_are_skipped():
+    assert topo._targets([{"type": "acp", "name": "c"}], owner="o") == []  # no command
+    assert topo._targets([{"type": "openai", "name": "m", "url": "u"}], owner="o") == []  # no model
+
+
+def test_leaf_types_are_gated_by_config():
+    dels = [
+        {"type": "acp", "name": "coder", "command": "proto", "workdir": "/w"},
+        {"type": "openai", "name": "brain", "url": "https://gw/v1", "model": "big"},
+    ]
+    assert len(topo._targets(dels, owner="o")) == 2  # both default on
+    off = {"include_acp": False, "include_model_endpoints": False}
+    assert topo._targets(dels, owner="o", cfg=off) == []
+    only_acp = topo._targets(dels, owner="o", cfg={"include_model_endpoints": False})
+    assert [t["kind"] for t in only_acp] == ["coder"]
+
+
+def test_secret_bearing_fields_never_reach_the_payload(monkeypatch):
+    """`_roster()` returns entries with secrets OVERLAID, so a node built from the raw
+    dict would ship the api key to the browser. Every display field is copied by name."""
+    calls: list[str] = []
+    _wire(
+        monkeypatch,
+        calls,
+        roster=[
+            {"type": "openai", "name": "brain", "url": "https://gw/v1", "model": "big", "api_key": "sk-LEAK"},
+            {"type": "acp", "name": "coder", "command": "proto", "workdir": "/w", "env": {"TOKEN": "sh-LEAK"}},
+            {"type": "a2a", "name": "alpha", "url": ALPHA, "auth": {"token": "tok-alpha"}},
+        ],
+    )
+    import json
+
+    blob = json.dumps(asyncio.run(topo.get_topology({})))
+    assert "LEAK" not in blob and "tok-alpha" not in blob
+
+
+def test_leaves_are_never_probed_or_crawled(monkeypatch):
+    """A coder has no listener and a model endpoint's /models is the delegates prober's
+    job — a page refresh must not spawn a subprocess or bill a gateway."""
+    calls: list[str] = []
+    _wire(
+        monkeypatch,
+        calls,
+        roster=[
+            {"type": "acp", "name": "coder", "command": "proto", "workdir": "/w"},
+            {"type": "openai", "name": "brain", "url": "https://gw/v1", "model": "big"},
+        ],
+    )
+    data = asyncio.run(topo.get_topology({}))
+    assert calls == []  # no card, no /healthz, no /models, no /api/delegates
+    assert {n["kind"] for n in data["nodes"]} == {"self", "coder", "model"}
+    assert data["include"] == {"acp": True, "model": True}
+
+
+def test_leaf_liveness_is_the_owners_probe_result(monkeypatch):
+    """Ours comes from the delegates health snapshot by NAME; a peer's comes from the
+    `health` its own /api/delegates reports. No result at all is `up: None` — "unknown",
+    which is not the claim "down"."""
+    calls: list[str] = []
+    _wire(
+        monkeypatch,
+        calls,
+        roster=[
+            {"type": "acp", "name": "coder", "command": "proto", "workdir": "/w"},
+            {"type": "acp", "name": "ghost", "command": "nope", "workdir": "/w"},
+            {"type": "openai", "name": "brain", "url": "https://gw/v1", "model": "big"},
+        ],
+        health={"coder": {"ok": True, "latency_ms": 12, "checked_at": 99.0}},
+    )
+    nodes = {n["id"]: n for n in asyncio.run(topo.get_topology({}))["nodes"]}
+    SELF = "http://self:7870"
+    assert nodes[f"acp:{SELF}#coder"]["up"] is True
+    assert nodes[f"acp:{SELF}#coder"]["latency_ms"] == 12
+    assert nodes[f"acp:{SELF}#ghost"]["up"] is None  # never probed ≠ down
+    assert nodes["model:gw/v1/big"]["up"] is None
+
+
+def test_peer_reported_health_carries_the_error_for_its_leaves(monkeypatch):
+    """A peer's coder is invisible to our prober, so its reported health is the only
+    source — and WHY it is red is actionable and otherwise unrecoverable from here."""
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        if request.url.host == "alpha":
+            if request.url.path == "/.well-known/agent-card.json":
+                return httpx.Response(200, json={"name": "Alpha"})
+            if request.url.path == "/api/delegates":
+                return httpx.Response(
+                    200,
+                    json={
+                        "delegates": [
+                            {
+                                "type": "acp",
+                                "name": "coder",
+                                "command": "claude",
+                                "workdir": "/repo",
+                                "health": {"ok": False, "error": "binary not on PATH: 'claude'"},
+                            }
+                        ]
+                    },
+                )
+        raise httpx.ConnectError("down")
+
+    monkeypatch.setattr(topo, "_make_client", lambda cfg: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(topo, "_roster", lambda: [{"type": "a2a", "name": "alpha", "url": ALPHA, "auth": {"token": "t"}}])
+    # OUR prober also knows a `coder` — a different process. It must not badge the peer's.
+    monkeypatch.setattr(topo, "_health", lambda: {"coder": {"ok": True, "latency_ms": 5}})
+    monkeypatch.setattr(topo, "_fleet_remotes", lambda: [])
+    monkeypatch.setattr(topo, "_self_identity", lambda: ("ava", "http://self:7870", "org head"))
+
+    nodes = {n["id"]: n for n in asyncio.run(topo.get_topology({}))["nodes"]}
+    peer_coder = nodes[f"acp:{ALPHA}#coder"]
+    assert peer_coder["up"] is False and "not on PATH" in peer_coder["error"]
+    assert peer_coder.get("latency_ms") is None  # our snapshot never leaked across
+
+
+def test_a_peers_health_never_overrides_our_own_probe_of_an_agent(monkeypatch):
+    """A peer's `/api/delegates` reports health for its a2a delegates too. Trusting it
+    would paint a node GREEN that this agent cannot reach — the one claim the chart must
+    never make. Only leaves, which nothing here can probe, take a peer's word."""
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        if request.url.host == "alpha":
+            if request.url.path == "/.well-known/agent-card.json":
+                return httpx.Response(200, json={"name": "Alpha"})
+            if request.url.path == "/api/delegates":
+                # alpha reaches beta fine; we cannot (the handler refuses beta below).
+                return httpx.Response(
+                    200,
+                    json={"delegates": [{"type": "a2a", "name": "beta", "url": BETA,
+                                         "health": {"ok": True, "latency_ms": 3}}]},
+                )
+        raise httpx.ConnectError("down")
+
+    monkeypatch.setattr(topo, "_make_client", lambda cfg: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(topo, "_roster", lambda: [{"type": "a2a", "name": "alpha", "url": ALPHA, "auth": {"token": "t"}}])
+    monkeypatch.setattr(topo, "_health", lambda: {})
+    monkeypatch.setattr(topo, "_fleet_remotes", lambda: [])
+    monkeypatch.setattr(topo, "_self_identity", lambda: ("ava", "http://self:7870", "org head"))
+
+    nodes = {n["id"]: n for n in asyncio.run(topo.get_topology({}))["nodes"]}
+    assert nodes[BETA]["up"] is False  # unreachable from HERE, whatever alpha thinks
+    assert nodes[BETA].get("latency_ms") is None
 
 
 # ── the crawl ────────────────────────────────────────────────────────────────
@@ -233,3 +399,23 @@ def test_max_nodes_caps_the_crawl(monkeypatch):
     _wire(monkeypatch, calls, roster=roster)
     data = asyncio.run(topo.get_topology({"max_nodes": 4}))
     assert data["count"] == 4
+
+
+def test_leaves_do_not_starve_the_agent_graph_under_max_nodes(monkeypatch):
+    """Leaves spend the same node budget as agents, so roster ORDER could decide whether
+    the chart shows the delegation graph at all. Agents are taken first within a layer."""
+    calls: list[str] = []
+    _wire(
+        monkeypatch,
+        calls,
+        roster=[
+            {"type": "acp", "name": "c1", "command": "proto", "workdir": "/w"},
+            {"type": "acp", "name": "c2", "command": "proto", "workdir": "/w"},
+            {"type": "acp", "name": "c3", "command": "proto", "workdir": "/w"},
+            {"type": "a2a", "name": "alpha", "url": ALPHA, "auth": {"token": "tok-alpha"}},
+        ],
+    )
+    # self + 2 more: the peer must be one of them, whatever order the roster listed.
+    nodes = {n["id"]: n for n in asyncio.run(topo.get_topology({"max_nodes": 3}))["nodes"]}
+    assert ALPHA in nodes, "a peer lost its slot to coders listed ahead of it"
+    assert len(nodes) == 3

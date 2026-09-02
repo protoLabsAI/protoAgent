@@ -1,9 +1,12 @@
 id: orgchart
 name: Org Chart
-version: 0.2.0
+version: 0.3.0
 description: >-
-  Live diagram of the agent fleet — every agent a node, a directed edge wherever one
+  Live diagram of the agent fleet — every delegate a node, a directed edge wherever one
   agent can delegate to another (dashed where the hub merely supervises a member).
+  Draws all three delegate types: a2a peers (crawled outward), acp coding agents, and
+  OpenAI-compatible model endpoints — the last two as leaves, badged by their owner's
+  probe result.
   Crawls outward from this agent's EFFECTIVE roster (own + fleet-shared delegates,
   ADR 0105) using the peer tokens it already holds, reusing the delegates plugin's
   cached health, TTL-caching every peer read, and serving the assembled topology
@@ -18,12 +21,16 @@ config:
   probe_timeout_s: 3.0
   max_nodes: 80
   include_fleet_members: true
+  include_acp: true
+  include_model_endpoints: true
 settings:
   - { key: cache_ttl_s, label: "Topology cache TTL (s)", type: number, description: "How long an assembled topology stays fresh. A stale one is still served instantly while a re-crawl runs in the background." }
   - { key: poll_interval_s, label: "View poll interval (s)", type: number, description: "How often the open view re-fetches. A hidden tab doesn't poll at all." }
   - { key: probe_timeout_s, label: "Peer probe timeout (s)", type: number, description: "Per-request timeout when probing a peer's card/health/delegates. Unreachable peers are remembered for 30s so they can't stall every reload." }
   - { key: max_nodes, label: "Max agents drawn", type: number, description: "Crawl stops past this many nodes." }
   - { key: include_fleet_members, label: "Include supervised fleet members", type: bool, description: "On a hub, also draw remote members it supervises (dashed edge), even when no delegate points at them — and use their stored tokens to read their delegate lists." }
+  - { key: include_acp, label: "Include coding agents (ACP)", type: bool, description: "Draw acp delegates — the CLI coding agents an agent dispatches implementation work to. Leaf nodes: a coder serves no card and no delegate list, so it is never probed or crawled from here, and its status is its owner's health result. Owner-scoped, since a coder is a subprocess on ITS box." }
+  - { key: include_model_endpoints, label: "Include model endpoints", type: bool, description: "Draw openai delegates — OpenAI-compatible endpoints an agent asks for a second opinion. Leaf nodes, never probed from here. Merged by endpoint + model, so several agents sharing one model converge on a single node." }
 
 # One console rail item → an iframe of the self-contained view page. `Network` is a
 # lucide icon in the curated instant-render set. `path` is the PUBLIC page route the
@@ -35,5 +42,5 @@ views:
 # fleet/tailnet to read their cards, health, and delegate lists; the roster comes from
 # this instance's config plus the box's fleet-shared host layer.
 capabilities:
-  network: ["fleet peers (A2A cards, /healthz, /api/delegates)"]
+  network: ["fleet peers (A2A cards, /healthz, /api/delegates)"]  # acp/model leaves are never contacted
   filesystem: ["reads the delegate roster (langgraph-config.yaml + host-config.yaml, via the delegates store)"]
