@@ -228,6 +228,74 @@ describe("boot hydration", () => {
     expect(mergeHydratedSessions(current, [recovered]).sessions[0].incognito).toBe(true);
   });
 
+  it("retains rendered assistant text when switching back to a hydrated durable tab (#3340)", () => {
+    const original = {
+      id: "chat-original",
+      title: DEFAULT_SESSION_TITLE,
+      messages: [],
+      createdAt: 1,
+      updatedAt: 1,
+    } as ChatSession;
+    const other = {
+      id: "chat-other",
+      title: "Other agent",
+      messages: [
+        { id: "other-user", role: "user", content: "meanwhile", status: "done" },
+      ],
+      createdAt: 2,
+      updatedAt: 2,
+    } as ChatSession;
+    const recovered = sessionFromDurableTurns(summary(original.id), [
+      turn({
+        text: "Shipped — the release is live.",
+        artifacts: [
+          { parts: [{ kind: "data", text: "Shipped — the release is live.", data: { ok: true } }] },
+        ],
+        history: [
+          { role: "ROLE_USER", parts: [{ text: "Ship the release" }] },
+          {
+            role: "ROLE_AGENT",
+            parts: [],
+            metadata: { [TOOL]: { toolCallId: "call-1", name: "run_command", phase: "started", args: "make release" } },
+          },
+          {
+            role: "ROLE_AGENT",
+            parts: [],
+            metadata: { [TOOL]: { toolCallId: "call-1", name: "run_command", phase: "completed", result: "done" } },
+          },
+        ],
+      }),
+    ]);
+    if (!recovered) throw new Error("durable turn should produce a recovered session");
+
+    const hydrated = mergeHydratedSessions(
+      {
+        version: 1,
+        sessions: [original, other],
+        currentSessionId: other.id,
+        activeSessions: [other.id],
+        sessionStatusMap: {},
+        pendingDeleteRequest: null,
+        pendingClearRequest: null,
+      },
+      [recovered],
+    );
+    const switchedBack = { ...hydrated, currentSessionId: original.id };
+    const assistant = switchedBack.sessions
+      .find((session) => session.id === switchedBack.currentSessionId)
+      ?.messages.find((message) => message.role === "assistant");
+
+    expect(assistant?.toolCalls).toEqual([
+      expect.objectContaining({ id: "call-1", name: "run_command", status: "done" }),
+    ]);
+    expect(assistant?.content).toBe("Shipped — the release is live.");
+    expect(assistant?.parts?.some((part) => part.kind === "tools")).toBe(true);
+    expect(assistant?.parts?.at(-1)).toMatchObject({
+      kind: "text",
+      text: "Shipped — the release is live.",
+    });
+  });
+
   it("fetches only missing/empty sessions, tolerates one failure, and commits successful siblings", async () => {
     const nonEmpty = {
       id: "chat-local",

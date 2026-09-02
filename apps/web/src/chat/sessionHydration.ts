@@ -100,23 +100,23 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
     };
     // ChatMessageView draws a parts-bearing bubble FROM its ordered parts and only
     // falls back to `content` when there are none — so a completed multi-part turn
-    // (tool cards + reply) whose answer text the snapshot replay did not surface as
-    // a trailing text run rehydrates with the cards but no reply: switching agents
-    // and back would drop the assistant's prose (#3340). The server ships the joined
-    // answer as `turn.text`; when the replay produced no answer of its own, reconcile
-    // it in as the trailing run — the same seam reattach.finalize closes on the live
-    // resubscribe path, applied here to durable hydration. Guarded on "the replay
-    // produced no answer", so a turn that already surfaced one (the common path, and
-    // where the durable artifact text is authoritative) is left untouched.
-    const replayedAnswer = (assistant.parts ?? []).some((part) => part.kind === "text") || Boolean(assistant.content);
-    if (!replayedAnswer && turn.text) {
+    // (tool cards/components + reply) whose answer text landed only in flat
+    // `content` rehydrates with the cards but no reply: switching agents and back
+    // would drop the assistant's prose (#3340). The server ships the joined answer
+    // as `turn.text`; when ordered parts exist but do not carry that answer,
+    // reconcile it in as the trailing run — the same seam reattach.finalize closes
+    // on the live resubscribe path, applied here to durable hydration. A turn that
+    // already surfaced the full ordered text is left untouched.
+    const hasOrderedParts = Boolean(assistant.parts?.length);
+    const orderedText = (assistant.parts ?? [])
+      .filter((part) => part.kind === "text")
+      .map((part) => part.text)
+      .join("");
+    if (turn.text && hasOrderedParts && orderedText.trim() !== turn.text.trim()) {
       assistant = {
         ...assistant,
         content: turn.text,
-        // Only synthesize the trailing text run when the bubble already carries
-        // ordered parts (tool/component cards) that would otherwise suppress the
-        // `content` fallback; a bare no-parts bubble renders its `content` directly.
-        parts: assistant.parts ? replaceText(assistant.parts, turn.text, "") : assistant.parts,
+        parts: replaceText(assistant.parts, turn.text, orderedText),
       };
     }
   } else {
