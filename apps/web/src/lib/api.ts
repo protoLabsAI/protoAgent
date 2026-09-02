@@ -1524,6 +1524,17 @@ export const api = {
         display: string;
         has_key: boolean;
         in_use_by: string[];
+        // The same dependencies `in_use_by` names, structured so the panel can offer a
+        // repoint/clear per row (bd-v6xy). `kind`: slot | favorite | subagent. `clearable`
+        // is false for `model.name` only (the lead model must always resolve). A favorites
+        // entry is ONE row whose `value` is the matching favorite list. Optional so a
+        // pre-bd-neiz backend (or a test fixture) that omits it still types.
+        in_use?: {
+          key: string;
+          value: string | string[];
+          kind: "slot" | "favorite" | "subagent";
+          clearable: boolean;
+        }[];
       }[];
     }>("/api/config/providers");
   },
@@ -1541,12 +1552,19 @@ export const api = {
     });
   },
 
-  /** 409 with the referencing slots named when the connection is still in use. */
-  removeProvider(id: string, confirmLast = false) {
+  /** 409 with the referencing slots named when the connection is still in use.
+   *
+   *  `releases` (bd-v6xy) repoints or clears each blocking reference in the SAME request
+   *  that removes the connection — `<other_pid>:<model>` to repoint, `null` to clear
+   *  (favorites: drop those prefixed `<pid>:`). It is sent as the JSON body ONLY when
+   *  provided; the bare `removeProvider(id, confirmLast)` call stays byte-identical (no
+   *  body), preserving the old refuse-if-in-use behaviour. */
+  removeProvider(id: string, confirmLast = false, releases?: Record<string, string | null>) {
     const query = confirmLast ? "?confirm_last=true" : "";
-    return request<{ ok: boolean; removed: string }>(`/api/config/providers/${encodeURIComponent(id)}${query}`, {
-      method: "DELETE",
-    });
+    return request<{ ok: boolean; removed: string; released?: string[] }>(
+      `/api/config/providers/${encodeURIComponent(id)}${query}`,
+      releases ? { method: "DELETE", body: { releases } } : { method: "DELETE" },
+    );
   },
 
   /** That connection's own model list — its endpoint, or its subscription account. */
