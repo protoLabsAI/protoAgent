@@ -35,6 +35,13 @@ on:
     # live: reviews landing on #3323 and #3319 at 00:17 and 00:18 triggered no run at all,
     # and only the sweep turned them green. Now that this check is REQUIRED, the sweep interval
     # is the worst-case time a reviewed PR sits red — an hour of that is not acceptable.
+    #
+    # NOTE: this asks for 10 minutes and does not get it. GitHub throttles high-frequency
+    # schedules, and a newly added one takes a while to register at all (this fired nothing for
+    # ~30 minutes after it merged). Observed cadence here is ~30 min: 01:10, 01:40, 02:09, 02:47.
+    # Asking for 10 still yields a shorter interval than asking for 30, so it stays — but the
+    # honest guarantee is "roughly half-hourly", and `gh workflow run "Review at head"` is the
+    # way to refresh now. Do not tighten this expecting it to help.
     - cron: "*/10 * * * *"
 
   workflow_dispatch:

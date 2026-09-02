@@ -222,8 +222,11 @@ in the status description.
 
 It is **required** on the `main` ruleset, so a red `Review at head` blocks the
 merge. If the panel has already reviewed your head and the check is still red, it
-is just stale — a sweep refreshes every open PR every 10 minutes, or run it now
-with `gh workflow run "Review at head"`. (The `pull_request_review` fast path only
+is just stale — a sweep refreshes every open PR, or run it now with
+`gh workflow run "Review at head"` rather than waiting. The cron asks for every
+10 minutes; GitHub throttles high-frequency schedules, and the **observed**
+interval on this repo is closer to 30 (01:10, 01:40, 02:09, 02:47 on the day it
+landed), so treat the manual dispatch as the fast path, not the exception. (The `pull_request_review` fast path only
 fires for PRs whose branch contains the workflow file, which is why the sweep, not
 the event, is the guarantee.)
 
