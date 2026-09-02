@@ -47,14 +47,16 @@ _READ_ONLY_TOOLS = frozenset(
         "search_tools", "list_skills", "recent_activity", "list_agents",
         "memory_recall", "recall_session", "memory_list", "memory_stats",
         "list_schedules", "check_inbox", "task_list", "list_watches", "read_note",
+        # Fleet diagnostics (ADR 0071 / #3170) is a read-only, roster-only, bounded and
+        # secret-redacted member-inspection read (recent logs + one exact task-by-id), so it
+        # belongs in this profile — the operator already decided foreign operator-MCP clients
+        # may receive this diagnostic capability. Listing it here only NOMINATES it a
+        # candidate: the tool is built (and thus exposable) EXCLUSIVELY when its own
+        # default-off gate ``tools.fleet_diagnostics.enabled`` is set (see ``_exposed_tools``),
+        # so joining the profile never binds it by itself and never bypasses that gate.
+        "fleet_diagnostics",
     }
 )
-
-# Guardrails pending the tool's own security review (ADR 0071 / #3170): fleet
-# diagnostics stays out of the operator-MCP read-only profile even though the tool
-# itself is read-only and separately config-gated.
-_READ_ONLY_EXCLUDED_TOOLS = frozenset({"fleet_diagnostics"})
-assert _READ_ONLY_TOOLS.isdisjoint(_READ_ONLY_EXCLUDED_TOOLS)
 
 
 def _profile_allow(profile: str) -> set[str] | None:
@@ -128,6 +130,18 @@ def _exposed_tools(config, allow: set[str], *, knowledge_store, scheduler, inbox
         )
     )
     tools += list(plugin_tools or [])
+    # Fleet diagnostics (ADR 0071 / #3170) is gated by its OWN default-off flag
+    # ``tools.fleet_diagnostics.enabled`` and is built inside get_all_tools only when the full
+    # graph_config carries that flag. The operator-MCP path deliberately does NOT thread
+    # graph_config (that would also pull in the config-introspection and onboarding tools, the
+    # latter a clone+register mutation surface that must never ride this bus), so bind the SAME
+    # read-only adapter here under the SAME gate. The read-only profile only nominates it a
+    # candidate (``_READ_ONLY_TOOLS``); this flag — never the profile — is the authority on
+    # whether it is ever a candidate at all, so a disabled gate keeps it absent everywhere.
+    if bool(getattr(config, "tools_fleet_diagnostics_enabled", False)):
+        from tools.lg_tools import _build_fleet_diagnostics_tool
+
+        tools += list(_build_fleet_diagnostics_tool())
     # The fork tool denylist (tools.disabled/hidden) is applied over the ASSEMBLED set in
     # graph.agent — get_all_tools doesn't filter it — so the bus must filter here too or a
     # disabled tool stays callable over MCP even though it never binds to the graph (#3248).
