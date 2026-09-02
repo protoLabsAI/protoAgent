@@ -250,6 +250,37 @@ once you edit the issue to conform. Use the **Bug** / **Enhancement** issue form
 proposed-direction / acceptance (enhancements). Intentional free-form → add the
 `gate-exempt` label. Full checklist: **[CONTRIBUTING.md](./CONTRIBUTING.md)**.
 
+### Getting an issue picked up: the `team-ready` label
+
+Filing an issue does not queue it. **`team-ready` is the only intake gate the board
+pipeline accepts** — without it an issue is invisible to autonomous dispatch, no
+matter how well written or how high its priority.
+
+```
+gh issue edit <N> --add-label team-ready
+```
+
+Nothing in this repo dispatches. `team-ready-claims.yml` (logic in
+`scripts/team_ready_claims.py`) only *reconciles* the label: an open PR saying
+`Closes #N` swaps `team-ready` → **`claimed-by-pr`** so a second agent doesn't
+burn a run on work already in flight, and the swap reverses if that PR is
+abandoned. Seeing the bot remove your label is the pipeline working, not a fault.
+
+**Two things decide whether a labelled issue actually moves:**
+
+- **The body has to stand alone.** A dispatched agent gets the issue, not the
+  conversation that produced it — so decisions belong in the body, not in a
+  comment thread below it, and a stale body is worse than a thin one. If work has
+  landed since filing, rewrite the body (and the *title*) to what is genuinely
+  left before labelling, or the agent rebuilds what already shipped.
+- **A decision is not a task.** If part of the scope is an operator or security
+  call, say so in the body and tell the agent to stop and comment rather than
+  decide. Otherwise it will pick one.
+
+Corollary for anything you want done autonomously: an empty `team-ready` queue is
+the normal state here, and it reads exactly like a broken pipeline. Check the
+label before concluding the loop is stuck.
+
 ---
 
 ## House rules & gotchas that bite
