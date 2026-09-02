@@ -519,6 +519,24 @@ routing:
 
 Requires a gateway key (`model.api_key` or `OPENAI_API_KEY`); without one the alias is ignored with a warning, since there'd be nothing to route to. A gateway alias as the **main** `model.name` under a native provider is still an error — that's a misconfiguration, not a fallback.
 
+#### Removing a connection that slots still name
+
+`DELETE /api/config/providers/{pid}` **refuses (409)** while any slot still routes through the connection — dropping it under those slots would turn a qualified `pid:model` value into a bare model id sent to whatever provider remains (a wrong-provider call, not an error). `GET /api/config/providers` reports those dependencies twice per row: `in_use_by` as display strings, and `in_use` as `[{key, value, kind, clearable}]` for the Providers panel to act on (`kind` is `slot` \| `favorite` \| `subagent`; `model.name` is never `clearable`).
+
+To remove an in-use connection, resolve its slots **in the same request** with an optional body:
+
+```jsonc
+// DELETE /api/config/providers/prod-gateway
+{ "releases": {
+    "model.name": "local-vllm:reasoning",   // repoint → <other_pid>:<model>
+    "routing.aux_model": null,               // clear the slot
+    "model.favorites": null,                 // drop only this connection's favorites
+    "subagents.researcher.model": null
+} }
+```
+
+Each key must be one the walk currently reports for `pid`; a repoint target must name **another** registered connection; `model.favorites` accepts only `null` (it drops just the `pid:`-prefixed favorites, keeping the rest); and `model.name` **must be repointed, not cleared** — the lead model always has to resolve. Every release is applied in memory and the references re-checked *before* anything is written: a body that leaves any reference dangling is still a 409, and the provider list plus the released slots persist in one transaction (so a failed rebuild rolls back both). The response is `{ "ok": true, "removed": pid, "released": [<keys applied>] }`. A bare `DELETE` with no body is unchanged.
+
 ## `goal`
 
 **Goal mode** (`graph/goals/`) lets you give the agent a *testable outcome* it self-drives toward. After each terminal turn (the agent stops with a final answer), the goal's **verifier** decides whether it's met; if not, the agent is re-invoked with a continuation prompt — carrying the verifier's evidence and the running plan the agent records with the `update_goal_plan` tool — until the verifier passes, the iteration budget runs out (`exhausted`), or the goal is flagged `unachievable` (a no-progress streak, or the agent calling the `abandon_goal` tool). Unlike a pure-LLM "are we done?" check, completion is backed by a real verifier.

@@ -41,6 +41,12 @@ _SLOT_ATTRS = (
     ("soul.drift_judge_model", "soul_drift_judge_model"),
 )
 
+# A reported slot key whose live SETTINGS key differs from the flat label the walk uses.
+# Only the drift judge: it is read from `soul.drift.judge.model`, but the referencing walk
+# and the `in_use_by` strings have always labelled it `soul.drift_judge_model`. A release
+# writes through the settings key so `apply_settings` addresses the right node.
+_SLOT_WRITE_KEYS = {"soul.drift_judge_model": "soul.drift.judge.model"}
+
 
 class ProviderCreate(BaseModel):
     id: str
@@ -59,68 +65,150 @@ class ProviderPatch(BaseModel):
     api_key: str | None = None
 
 
+class ProviderDelete(BaseModel):
+    # Optional DELETE body: the referencing slots the operator has chosen to resolve
+    # in the same transaction that removes the connection. Each key is a slot key the
+    # structured walk reported for this connection (`model.name`, `routing.aux_model`,
+    # `model.favorites`, `subagents.<name>.model`, …); the value is `<other_pid>:<model>`
+    # to repoint, or `null` to clear. An empty body (the query-only call) keeps the old
+    # refuse-if-in-use behaviour verbatim.
+    releases: dict[str, str | None] = {}
+
+
 def _config():
     if STATE.graph_config is None:
         raise HTTPException(status_code=503, detail="config not loaded")
     return STATE.graph_config
 
 
-def _referencing_slots(cfg, pid: str) -> list[str]:
-    """Dotted slot names whose value routes through `pid`, plus favorites."""
-    out: list[str] = []
-    for label, attr in _SLOT_ATTRS:
-        value = str(getattr(cfg, attr, "") or "")
+def _referencing_view(cfg) -> dict:
+    """Everything the referencing walk reads, copied out as plain, mutable data — so a
+    DELETE can apply its `releases` in memory and re-run the walk without ever touching
+    the live config. Subagent tiers are typed fields (`cfg.researcher.model`), so read
+    them through the registry the coherence checker already uses rather than a `subagents`
+    dict the config never exposes."""
+    from graph.config import _SUBAGENT_MODEL_SLOTS
+
+    return {
+        "slots": {label: str(getattr(cfg, attr, "") or "") for label, attr in _SLOT_ATTRS},
+        "favorites": [str(f) for f in (getattr(cfg, "model_favorites", []) or [])],
+        "subagents": {
+            name: str(getattr(getattr(cfg, name, None), "model", "") or "") for name in _SUBAGENT_MODEL_SLOTS
+        },
+        "model_provider": str(getattr(cfg, "model_provider", "") or "").lower(),
+    }
+
+
+def _walk_references(view: dict, pid: str) -> tuple[list[str], list[dict]]:
+    """ONE walk over `view` → (the `in_use_by` display strings, the structured entries).
+    Both describe the SAME dependencies from the same pass, so they can never drift.
+
+    A structured entry is ``{"key", "value", "kind", "clearable"}``. ``model.name`` is
+    never clearable (the lead model must always resolve); every other slot is. Favorites
+    collapse to a SINGLE entry whose ``value`` is the list of matching favorites, while the
+    display strings still list one per favorite (the shape the 409 detail has always used).
+    """
+    strings: list[str] = []
+    entries: list[dict] = []
+    for label, _attr in _SLOT_ATTRS:
+        value = view["slots"][label]
         if value.lower().startswith(f"{pid}:"):
-            out.append(f"{label}={value}")
+            strings.append(f"{label}={value}")
+            entries.append({"key": label, "value": value, "kind": "slot", "clearable": label != "model.name"})
         elif (
             label == "model.name"
             and pid == "gateway"
             and value
             and ":" not in value
-            and str(getattr(cfg, "model_provider", "") or "").lower() not in {"anthropic-oauth", "openai-codex"}
+            and view["model_provider"] not in {"anthropic-oauth", "openai-codex"}
         ):
-            # A pre-registry config's bare lead model implicitly runs through the
-            # migrated `gateway` connection. Treat that dependency exactly like the
-            # qualified `gateway:<model>` form; otherwise Settings can claim there are
-            # no connections while the legacy gateway is still serving the agent.
-            out.append(f"{label}={value} (implicit gateway)")
-    for fav in getattr(cfg, "model_favorites", []) or []:
-        if str(fav).lower().startswith(f"{pid}:"):
-            out.append(f"model.favorites={fav}")
-    for name, sub in (getattr(cfg, "subagents", {}) or {}).items():
-        value = str(getattr(sub, "model", "") or "")
+            # A pre-registry config's bare lead model implicitly runs through the migrated
+            # `gateway` connection. Treat that dependency exactly like the qualified
+            # `gateway:<model>` form; otherwise Settings can claim there are no connections
+            # while the legacy gateway is still serving the agent.
+            strings.append(f"{label}={value} (implicit gateway)")
+            entries.append({"key": label, "value": value, "kind": "slot", "clearable": False})
+    matched_favs = [f for f in view["favorites"] if f.lower().startswith(f"{pid}:")]
+    for fav in matched_favs:
+        strings.append(f"model.favorites={fav}")
+    if matched_favs:
+        entries.append({"key": "model.favorites", "value": matched_favs, "kind": "favorite", "clearable": True})
+    for name, value in view["subagents"].items():
         if value.lower().startswith(f"{pid}:"):
-            out.append(f"subagents.{name}.model={value}")
+            strings.append(f"subagents.{name}.model={value}")
+            entries.append(
+                {"key": f"subagents.{name}.model", "value": value, "kind": "subagent", "clearable": True}
+            )
+    return strings, entries
+
+
+def _referencing_slots(cfg, pid: str) -> list[str]:
+    """Dotted slot names whose value routes through `pid`, plus favorites (display form)."""
+    return _walk_references(_referencing_view(cfg), pid)[0]
+
+
+def _referencing_entries(cfg, pid: str) -> list[dict]:
+    """The same dependencies as `_referencing_slots`, structured for the UI to act on."""
+    return _walk_references(_referencing_view(cfg), pid)[1]
+
+
+def _nest_updates(dotted: dict) -> dict:
+    """Fold dotted settings keys (`model.name`, `subagents.researcher.model`,
+    `soul.drift.judge.model`) into the nested section dict `apply_settings` /
+    `apply_updates_to_yaml` understand."""
+    out: dict = {}
+    for key, val in dotted.items():
+        parts = key.split(".")
+        cursor = out
+        for part in parts[:-1]:
+            cursor = cursor.setdefault(part, {})
+        cursor[parts[-1]] = val
     return out
 
 
-def _write_providers(entries: list[dict], secret_updates: dict[str, str]) -> None:
+def _write_providers(
+    entries: list[dict], secret_updates: dict[str, str], extra_updates: dict | None = None
+) -> None:
     """Persist the registry to YAML, routing keys to the secrets overlay.
 
     Same split model.api_key has always used: the key never lands in the config file,
     which gets exported, backed up and forked.
+
+    `extra_updates` (a nested settings dict) is folded into the SAME document before the
+    single save — so removing a connection and repointing/clearing the slots that named
+    it land in one atomic write, not two.
     """
-    from graph.config_io import load_yaml_doc, save_secrets, save_yaml_doc
+    from graph.config_io import apply_updates_to_yaml, load_yaml_doc, save_secrets, save_yaml_doc
 
     doc = load_yaml_doc()
     doc["providers"] = entries
+    if extra_updates:
+        apply_updates_to_yaml(doc, extra_updates)
     save_yaml_doc(doc)
     if secret_updates:
         save_secrets({"providers": secret_updates})
 
 
-async def _apply_providers(entries: list[dict], secret_updates: dict[str, str]) -> None:
+async def _apply_providers(
+    entries: list[dict], secret_updates: dict[str, str], extra_updates: dict | None = None
+) -> None:
     """Persist the registry and make it the live registry before returning.
 
     The server wires ``HOST.apply_settings`` to the transactional config writer: it
     validates, persists, rebuilds, and rolls back on a failed rebuild. Route-only unit
     tests have no host, so they keep using the narrow disk-writer seam they already
     exercise.
+
+    `extra_updates` carries extra DOTTED settings keys (`model.name`,
+    `subagents.researcher.model`, …) to write in the SAME transaction as the provider
+    list — nested here into the section shape both writers consume, so a failed rebuild
+    rolls back the released slots along with the removed connection.
     """
     from graph.plugins.host import HOST
 
+    nested = _nest_updates(extra_updates or {})
     if HOST.apply_settings is None:
-        await asyncio.to_thread(_write_providers, entries, secret_updates)
+        await asyncio.to_thread(_write_providers, entries, secret_updates, nested)
         return
 
     updates = [dict(entry) for entry in entries]
@@ -128,13 +216,46 @@ async def _apply_providers(entries: list[dict], secret_updates: dict[str, str]) 
         secret = secret_updates.get(str(entry.get("id", "")))
         if secret:
             entry["api_key"] = secret
-    ok, messages = await asyncio.to_thread(HOST.apply_settings, {"providers": updates})
+    ok, messages = await asyncio.to_thread(HOST.apply_settings, {"providers": updates, **nested})
     if not ok:
         raise HTTPException(status_code=400, detail=" · ".join(messages or ["connection update failed"]))
 
 
 def _entries_from_config(cfg) -> list[dict]:
     return [p.as_dict() for p in cfg.providers]
+
+
+def _remaining_after_releases(cfg, pid: str, releases: dict) -> list[str]:
+    """Apply `releases` to a copy of the referencing view, then re-walk: the display
+    strings that SURVIVE are the references the operator still hasn't resolved. Never
+    mutates the live config."""
+    import copy
+
+    sim = copy.deepcopy(_referencing_view(cfg))
+    for key, target in releases.items():
+        if key == "model.favorites":
+            sim["favorites"] = [f for f in sim["favorites"] if not f.lower().startswith(f"{pid}:")]
+        elif key.startswith("subagents.") and key.endswith(".model"):
+            name = key[len("subagents.") : -len(".model")]
+            sim["subagents"][name] = "" if target is None else str(target)
+        elif key in sim["slots"]:
+            sim["slots"][key] = "" if target is None else str(target)
+    return _walk_references(sim, pid)[0]
+
+
+def _bad_target_detail(cfg, pid: str, key: str, target) -> str:
+    """The precise 400 for a repoint target that didn't resolve to another registered
+    connection — malformed, self-referential, or naming a provider that isn't here."""
+    raw = str(target or "")
+    prefix, sep, rest = raw.partition(":")
+    prefix = prefix.strip().lower()
+    if not sep or not prefix or not rest.strip():
+        return f"{key}: {target!r} must be a <provider>:<model> target (e.g. 'local-vllm:qwen3-32b')."
+    if prefix == pid:
+        return f"{key}: cannot repoint to {pid!r} — that is the connection being removed."
+    if cfg.provider_by_id(prefix) is None:
+        return f"{key}: no connection named {prefix!r} to repoint to."
+    return f"{key}: {target!r} must be a <provider>:<model> target (e.g. 'local-vllm:qwen3-32b')."
 
 
 def register_provider_routes(app) -> None:
@@ -151,7 +272,12 @@ def register_provider_routes(app) -> None:
             entry = p.as_dict()
             entry["display"] = p.display()
             entry["has_key"] = bool((p.api_key or "").strip())
-            entry["in_use_by"] = _referencing_slots(cfg, p.id)
+            strings, structured = _walk_references(_referencing_view(cfg), p.id)
+            # `in_use_by` stays the display strings existing UI/tests read; `in_use` is
+            # the same dependencies structured so the Providers panel can offer a
+            # repoint/clear per row (bd-v6xy) instead of parsing a sentence.
+            entry["in_use_by"] = strings
+            entry["in_use"] = structured
             out.append(entry)
         return {"providers": out}
 
@@ -210,24 +336,65 @@ def register_provider_routes(app) -> None:
         return {"ok": True, "id": pid}
 
     @app.delete("/api/config/providers/{pid}")
-    async def _delete_provider(pid: str, confirm_last: bool = False):
+    async def _delete_provider(pid: str, confirm_last: bool = False, body: ProviderDelete | None = None):
+        from graph.llm import split_slot_target
+
         cfg = _config()
         pid = (pid or "").strip().lower()
         if cfg.provider_by_id(pid) is None:
             raise HTTPException(status_code=404, detail=f"no provider named {pid!r}")
-        in_use = _referencing_slots(cfg, pid)
-        if in_use:
-            # Refusing beats cascading. Silently rewriting someone's slots is a bigger
-            # surprise than an error, and dropping the connection under them turns a
-            # qualified value into a bare model id sent to whatever provider remains —
-            # a wrong-provider call rather than a failure.
+
+        releases = dict((body.releases if body else None) or {})
+        reported = {e["key"]: e for e in _referencing_entries(cfg, pid)}
+
+        # Resolve each release IN MEMORY → dotted SETTINGS key -> new value, for the write.
+        write_updates: dict = {}
+        for key, target in releases.items():
+            entry = reported.get(key)
+            if entry is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{key!r} does not currently route through {pid!r}; there is nothing to release there.",
+                )
+            write_key = _SLOT_WRITE_KEYS.get(key, key)
+            if entry["kind"] == "favorite":
+                if target is not None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="model.favorites can only be cleared (send null); a favorite list is not a routed slot to repoint.",
+                    )
+                # Drop only THIS connection's favorites; keep every other operator favorite.
+                write_updates[write_key] = [
+                    f for f in (getattr(cfg, "model_favorites", []) or []) if not str(f).lower().startswith(f"{pid}:")
+                ]
+                continue
+            if target is None:
+                if key == "model.name":
+                    raise HTTPException(
+                        status_code=400,
+                        detail="model.name is the lead model and cannot be cleared; repoint it to another connection.",
+                    )
+                write_updates[write_key] = ""  # clear the slot
+                continue
+            # A repoint: the target must resolve to ANOTHER registered connection.
+            other_pid, other_model = split_slot_target(target, cfg)
+            if not other_pid or not other_model or other_pid == pid or cfg.provider_by_id(other_pid) is None:
+                raise HTTPException(status_code=400, detail=_bad_target_detail(cfg, pid, key, target))
+            write_updates[write_key] = f"{other_pid}:{other_model}"
+
+        # Apply the releases in memory and re-walk. Any reference the operator did NOT
+        # resolve still blocks the delete, exactly as the bare (no-body) call does —
+        # refusing beats cascading, and nothing is written.
+        remaining = _remaining_after_releases(cfg, pid, releases)
+        if remaining:
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    f"{pid!r} is still named by: {', '.join(in_use)}. "
+                    f"{pid!r} is still named by: {', '.join(remaining)}. "
                     "Repoint those to another connection first."
                 ),
             )
+        # The last-connection guard is unchanged, and evaluated AFTER releases.
         if len(cfg.providers) == 1 and not confirm_last:
             raise HTTPException(
                 status_code=409,
@@ -237,8 +404,8 @@ def register_provider_routes(app) -> None:
                 ),
             )
         entries = [e for e in _entries_from_config(cfg) if e["id"] != pid]
-        await _apply_providers(entries, {})
-        return {"ok": True, "removed": pid}
+        await _apply_providers(entries, {}, write_updates)
+        return {"ok": True, "removed": pid, "released": sorted(releases)}
 
     @app.post("/api/config/providers/{pid}/models")
     async def _provider_models(pid: str):
