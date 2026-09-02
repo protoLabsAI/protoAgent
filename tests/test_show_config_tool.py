@@ -7,7 +7,14 @@ import json
 import pytest
 
 from graph.config import LangGraphConfig
-from tools.config_tools import _REDACTED, build_config_tools, redact_for_agent
+from tools.config_tools import (
+    _REDACTED,
+    _escape_segment,
+    _join_path,
+    _split_path,
+    build_config_tools,
+    redact_for_agent,
+)
 
 
 @pytest.fixture
@@ -227,6 +234,108 @@ def test_parent_with_one_oversized_child_points_instead_of_dead_ending():
     assert len(reconstructed) == 60
     assert reconstructed["proj-059"]["repo"] == "org/repo-059"
     assert reconstructed["proj-000"]["api_token"] == _REDACTED
+
+
+@pytest.mark.parametrize(
+    "segments",
+    [
+        ["project_board", "projects", "proj-003"],
+        ["project_board", "registry", "scope.one"],  # dot inside a key
+        ["vendor.plugin", "child"],  # dot in a top-level key name
+        ["a", "", "b"],  # empty-string key in the middle
+        ["parent", ""],  # empty-string key at the leaf
+        ["with\\slash", "x"],  # backslash inside a key
+        ["dot.and\\slash", ""],  # every special char at once
+    ],
+)
+def test_path_escaping_round_trips_any_key(segments):
+    """The invariant the drill-in pointer relies on: escaping then re-splitting a segment
+    list returns it verbatim, so a pointer built from resolved segments always resolves
+    back to the same child — even when a key holds a dot, a backslash, or is empty."""
+    assert _split_path(_join_path(segments)) == segments
+    for seg in segments:
+        assert _split_path(_escape_segment(seg)) == [seg]
+
+
+def test_oversized_child_with_dotted_key_stays_addressable():
+    """Review fix: raw dot-concatenation produced an unresolvable pointer for a child whose
+    key contains a dot, so its value was silently lost. The escaped selector resolves
+    straight back to that child, and the whole child reconstructs across pages."""
+    child = {f"item-{i:03d}": "z" * 20 for i in range(500)}
+    child["api_token"] = "pbt_secret"
+    cfg = LangGraphConfig()
+    cfg.plugin_config = {"project_board": {"registry": {"scope.one": child}}}
+    show_config = build_config_tools(cfg)[0]
+
+    page = json.loads(show_config.invoke({"section": "project_board.registry"}))
+    pointer = page["value"]["scope.one"]
+    assert pointer["__truncated__"] is True
+    assert pointer["type"] == "object"
+    # The dot in the key is escaped, so the deeper path targets the child itself rather
+    # than splitting into project_board.registry.scope -> one.
+    assert pointer["read_with"] == r"project_board.registry.scope\.one"
+    assert "pbt_secret" not in json.dumps(page)  # pointer carries shape only, never value
+
+    reconstructed = {}
+    offset = 0
+    while True:
+        cp = json.loads(
+            show_config.invoke(
+                {"section": pointer["read_with"], "offset": offset, "limit": 100}
+            )
+        )
+        reconstructed.update(cp["value"])
+        if cp["pagination"]["next_offset"] is None:
+            break
+        offset = cp["pagination"]["next_offset"]
+
+    assert len(reconstructed) == 501
+    assert reconstructed["item-499"] == "z" * 20
+    assert reconstructed["api_token"] == _REDACTED  # redacted at depth, through the pointer
+
+
+def test_oversized_child_with_empty_key_stays_addressable():
+    """Review fix: an oversized child under an empty-string key must stay pageable too. Its
+    pointer resolves through a trailing empty segment instead of dead-ending."""
+    child = {f"item-{i:03d}": "z" * 20 for i in range(500)}
+    cfg = LangGraphConfig()
+    cfg.plugin_config = {"project_board": {"registry": {"": child}}}
+    show_config = build_config_tools(cfg)[0]
+
+    page = json.loads(show_config.invoke({"section": "project_board.registry"}))
+    pointer = page["value"][""]
+    assert pointer["__truncated__"] is True
+    assert pointer["read_with"] == "project_board.registry."
+
+    reconstructed = {}
+    offset = 0
+    while True:
+        cp = json.loads(
+            show_config.invoke(
+                {"section": pointer["read_with"], "offset": offset, "limit": 100}
+            )
+        )
+        reconstructed.update(cp["value"])
+        if cp["pagination"]["next_offset"] is None:
+            break
+        offset = cp["pagination"]["next_offset"]
+
+    assert len(reconstructed) == 500
+    assert reconstructed["item-000"] == "z" * 20
+
+
+def test_dotted_key_child_reads_directly_via_escaped_selector():
+    """A nested key containing a dot is reachable head-on with an escaped selector, not
+    only via a drill-in pointer."""
+    cfg = LangGraphConfig()
+    cfg.plugin_config = {
+        "project_board": {"registry": {"scope.one": {"repo": "org/dotted"}}}
+    }
+    show_config = build_config_tools(cfg)[0]
+
+    out = show_config.invoke({"section": r"project_board.registry.scope\.one"})
+
+    assert json.loads(out)[r"project_board.registry.scope\.one"]["repo"] == "org/dotted"
 
 
 def test_large_selected_string_is_paged_without_truncated_json():

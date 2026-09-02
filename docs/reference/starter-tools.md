@@ -861,6 +861,12 @@ single child is itself too big to embed in a page, it comes back as a `__truncat
 carrying the deeper `read_with` path (and shape metadata, never the value) — so paging a
 parent never dead-ends on one oversized child, and nothing is silently dropped.
 
+Selectors are dot-separated. A key that itself contains a dot (or is empty) is escaped in
+the path — a literal dot is written `\.` and a literal backslash `\\` — so `read_with`
+pointers resolve back to exactly that child instead of re-splitting through the middle of
+its name. Exact top-level keys are still matched before any dotted parsing, so a section
+whose name contains a dot stays addressable as-is.
+
 **Read-only.** It never writes, and it binds whenever a config is available. Drop it with
 `tools.disabled: [show_config]` like any other core tool.
 
