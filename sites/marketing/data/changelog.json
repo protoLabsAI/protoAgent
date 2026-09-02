@@ -1,5 +1,43 @@
 [
   {
+    "version": "v0.157.0",
+    "date": "2026-09-02",
+    "changes": [
+      "Fleet diagnostics: roster-only member resolution and the bounded log read (#3170).",
+      "Fleet diagnostics: exact task-by-id read, with redaction and hard output bounds on both reads (#3170).",
+      "Fleet diagnostics model-exposure gate defaults off (#3170).",
+      "Fleet diagnostics binds behind the model-exposure gate (#3170).",
+      "Resolve a connection's blocking slots in a dialog before removing it (#3172).",
+      "Removing an in-use model connection can now repoint/clear its slots in one transaction (#3172).",
+      "Eval harness can now seed past sessions and sweep the prior-session digest policy (#3186).",
+      "expected_tools: [] in an eval case now actually asserts that no tool fired (#3186).",
+      "The friction log became a first-party plugin, and its loop actually closes (#3310).",
+      "/friction lists and resolves the backlog from chat, and a friction_triage delegate drafts what to file (#3310).",
+      "FakeRegistry.emit now namespaces topics the way the real bus does (#3310).",
+      "A friction entry can be filed as a GitHub issue in one step (#3318).",
+      "A hub can roll its fleet's friction up in one view (#3318).",
+      "orgChart draws coding agents and model endpoints, not just A2A peers (#3325).",
+      "Operator MCP profile guard (#3170).",
+      "The fleet roster reorders from one handle now, and the row got its width back (#3197).",
+      "Settings ▸ Telemetry is no longer one long scroll (#3329).",
+      "Eval tool-firing assertions were blind in every sweep arm (#3186).",
+      "Drag-and-drop works in the desktop app again — all of it (#3197).",
+      "The friction log is readable again — crushed cards, an invisible \"major\" badge, and a dismiss that lied (#3307).",
+      "Friction triage is now server-side, so the console and the agent read one backlog (#3307).",
+      "The friction view is rebuilt on the design system, with search, filters and sort (#3307).",
+      "Four other bundled plugin views stopped silently ignoring the operator's theme (#3307).",
+      "The memory inspector now tells the truth about the prior-session digest (#3308).",
+      "memory.max_sessions and memory.max_tokens actually do something now (#3308).",
+      "KnowledgeMiddleware.load_memory() accepts exclude_session_id (#3308).",
+      "A link clicked in a second desktop window no longer opens a crippled in-app webview (#3316).",
+      "Cross-session search no longer misses on plurals and tense (#3322).",
+      "Follow-ups on the eval audit-path fix (#3324), from a retroactive review.",
+      "A killed gate check is no longer reported as a failed one (#3331).",
+      "The lock gate no longer calls a stale branch a downgrade (#3335).",
+      "The marketing site now states protoAgent's actual install footprint (#3315)."
+    ]
+  },
+  {
     "version": "v0.156.0",
     "date": "2026-09-01",
     "changes": [
