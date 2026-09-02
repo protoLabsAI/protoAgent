@@ -24,9 +24,19 @@ on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
   pull_request_review:
+    # Fast path, best-effort: fires only for PRs whose branch contains this file (see the
+    # schedule comment). Kept because when it does fire it turns a PR green in seconds.
     types: [submitted, dismissed]
   schedule:
-    - cron: "23 * * * *" # hourly backstop — webhooks get dropped, a stale red status must not stick
+    # Every 10 minutes, and this is the PRIMARY refresh, not a backstop. `pull_request_review`
+    # runs the workflow from the PR's OWN BRANCH (unlike `pull_request_target`, which always
+    # uses the base) — so a PR branched before this file existed never fires that event, and a
+    # fork PR that does fire it gets a read-only token that cannot post a status. Observed
+    # live: reviews landing on #3323 and #3319 at 00:17 and 00:18 triggered no run at all,
+    # and only the sweep turned them green. Now that this check is REQUIRED, the sweep interval
+    # is the worst-case time a reviewed PR sits red — an hour of that is not acceptable.
+    - cron: "*/10 * * * *"
+
   workflow_dispatch:
     inputs:
       dry_run:
@@ -48,7 +58,12 @@ concurrency:
 
 jobs:
   assert:
-    name: Review at head
+    # NOT named "Review at head": that is the COMMIT STATUS this job posts, and a check-run
+    # sharing the name puts three same-named rows on every PR — two green (the job ran fine)
+    # and one red (the verdict is missing). The rollup does resolve to failure, but the
+    # required-check context would then be ambiguous between a check-run that only says "the
+    # job executed" and the status that carries the actual answer. One name, one meaning.
+    name: Assert a panel verdict at head
     runs-on: ubuntu-latest # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     timeout-minutes: 5
     steps:
