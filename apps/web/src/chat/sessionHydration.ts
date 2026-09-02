@@ -16,6 +16,7 @@ import {
   type ChatSession,
   type HydrationEligibility,
 } from "./chat-store";
+import { replaceText } from "./parts";
 import { applyComponent, applyReasoning, applyText, applyToolEvent, applyUsage } from "./turnReducers";
 
 const TERMINAL = /completed|failed|canceled|cancelled|rejected/i;
@@ -97,6 +98,27 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
         call.status === "running" ? { ...call, status: "done" as const } : call,
       ),
     };
+    // ChatMessageView draws a parts-bearing bubble FROM its ordered parts and only
+    // falls back to `content` when there are none — so a completed multi-part turn
+    // (tool cards + reply) whose answer text the snapshot replay did not surface as
+    // a trailing text run rehydrates with the cards but no reply: switching agents
+    // and back would drop the assistant's prose (#3340). The server ships the joined
+    // answer as `turn.text`; when the replay produced no answer of its own, reconcile
+    // it in as the trailing run — the same seam reattach.finalize closes on the live
+    // resubscribe path, applied here to durable hydration. Guarded on "the replay
+    // produced no answer", so a turn that already surfaced one (the common path, and
+    // where the durable artifact text is authoritative) is left untouched.
+    const replayedAnswer = (assistant.parts ?? []).some((part) => part.kind === "text") || Boolean(assistant.content);
+    if (!replayedAnswer && turn.text) {
+      assistant = {
+        ...assistant,
+        content: turn.text,
+        // Only synthesize the trailing text run when the bubble already carries
+        // ordered parts (tool/component cards) that would otherwise suppress the
+        // `content` fallback; a bare no-parts bubble renders its `content` directly.
+        parts: assistant.parts ? replaceText(assistant.parts, turn.text, "") : assistant.parts,
+      };
+    }
   } else {
     // Keep the durable partial visible if a cold/failed reattach cannot produce
     // a newer Task snapshot. The reattach handler recognizes this marker and

@@ -100,6 +100,72 @@ describe("durable turn conversion", () => {
     });
   });
 
+  it("keeps the rehydrated reply below the tool cards when the replay surfaces no answer text (#3340)", () => {
+    // A completed turn the operator switched away from and returned to: the tool
+    // frames live in `history`, and the durable store's joined answer is in `text`,
+    // but the answer artifact part is not one the snapshot replay reads as text
+    // (the console's `textFromParts` is stricter than the server's join, which
+    // ignores `kind`). Before #3340 the bubble rehydrated with the tool cards but
+    // NO reply — ChatMessageView draws a parts-bearing bubble from its ordered
+    // parts and never falls back to `content`, so the answer vanished on return.
+    const messages = messagesFromDurableTurn(
+      turn({
+        text: "Shipped — the release is live.",
+        artifacts: [{ parts: [{ kind: "data", text: "Shipped — the release is live.", data: { ok: true } }] }],
+        history: [
+          { role: "ROLE_USER", parts: [{ text: "Ship the release" }] },
+          {
+            role: "ROLE_AGENT",
+            parts: [],
+            metadata: { [TOOL]: { toolCallId: "call-1", name: "run_command", phase: "started", args: "make release" } },
+          },
+          {
+            role: "ROLE_AGENT",
+            parts: [],
+            metadata: { [TOOL]: { toolCallId: "call-1", name: "run_command", phase: "completed", result: "done" } },
+          },
+        ],
+      }),
+    );
+    const assistant = messages[messages.length - 1];
+    expect(assistant).toMatchObject({
+      role: "assistant",
+      status: "done",
+      content: "Shipped — the release is live.",
+      toolCalls: [{ id: "call-1", name: "run_command", status: "done" }],
+    });
+    // The reply must be an ORDERED trailing text run AFTER the tool group — a bubble
+    // that keeps only the tool cards is exactly the regression.
+    const parts = assistant.parts ?? [];
+    expect(parts.some((part) => part.kind === "tools")).toBe(true);
+    expect(parts[parts.length - 1]).toMatchObject({ kind: "text", text: "Shipped — the release is live." });
+  });
+
+  it("recovers the reply prose while preserving component/table output on rehydrate (#3340)", () => {
+    // r2: the persisted turn rendered a component (table/timeline/key-value) AND
+    // trailing prose. The component must survive the switch/return, and the prose
+    // must land as the trailing answer run below it — not be dropped with `content`.
+    const messages = messagesFromDurableTurn(
+      turn({
+        text: "Here is the latest release.",
+        artifacts: [{ parts: [{ kind: "data", text: "Here is the latest release.", data: {} }] }],
+        history: [
+          { role: "ROLE_USER", parts: [{ text: "show the release" }] },
+          {
+            role: "ROLE_AGENT",
+            parts: [{ data: { component: "key-value", props: { version: "1.2.3" } }, metadata: { mimeType: COMPONENT } }],
+          },
+        ],
+      }),
+    );
+    const assistant = messages[messages.length - 1];
+    expect(assistant.content).toBe("Here is the latest release.");
+    expect(assistant.components).toEqual([{ component: "key-value", props: { version: "1.2.3" } }]);
+    const parts = assistant.parts ?? [];
+    expect(parts.some((part) => part.kind === "component")).toBe(true);
+    expect(parts[parts.length - 1]).toMatchObject({ kind: "text", text: "Here is the latest release." });
+  });
+
   it("keeps a nonterminal assistant reattachable", () => {
     const messages = messagesFromDurableTurn(
       turn({ state: "TASK_STATE_WORKING", status: { state: "TASK_STATE_WORKING" } }),
