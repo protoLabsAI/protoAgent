@@ -50,10 +50,18 @@ test("Box ▸ Telemetry shows the summary cards and recent turns", async ({ page
   // A traced turn deep-links to Langfuse; the untraced one shows no link.
   const traceLink = surface.getByTestId("telemetry-trace-link");
   await expect(traceLink).toHaveCount(1);
-  // Trace is the LAST of ten columns in a table wider than the dialog. It has to be
-  // reachable, not clipped: scrolling it into view inside its own container is what
-  // `overflow-x: auto` on the section buys, and this fails if the panel clips it.
+  // Trace is the LAST of ten columns in a table wider than the dialog, so it has to be
+  // REACHABLE rather than clipped — that is what `overflow-x: auto` on the section
+  // buys. Assert the container actually overflows and actually scrolls: Playwright's
+  // toBeVisible() only requires a non-empty bounding box, NOT viewport intersection,
+  // so it passes either way and proves nothing here.
+  const turnsBox = surface.getByTestId("telemetry-turns");
+  const overflows = await turnsBox.evaluate((el) => el.scrollWidth > el.clientWidth);
+  expect(overflows, "the turns table should be wider than the panel at this width").toBe(true);
+  const before = await turnsBox.evaluate((el) => el.scrollLeft);
   await traceLink.scrollIntoViewIfNeeded();
+  const after = await turnsBox.evaluate((el) => el.scrollLeft);
+  expect(after, "reaching the Trace column should scroll its own container").toBeGreaterThan(before);
   await expect(traceLink).toBeVisible();
   await expect(traceLink).toHaveAttribute(
     "href",
