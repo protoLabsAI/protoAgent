@@ -37,14 +37,28 @@ log = logging.getLogger(__name__)
 
 
 def _audit_path() -> Path:
-    """Audit JSONL location. Falls back to the template's docker default."""
+    """Audit JSONL location. ``AUDIT_PATH`` wins, then the container default, then
+    the INSTANCE's own audit store.
+
+    The old fallback was a hand-joined ``~/.protoagent/audit/audit.jsonl`` — the
+    BOX root, not the instance's. Every agent except an unscoped one writes to
+    ``<instance_root>/audit/audit.jsonl``, so a case run against any named
+    instance read a file the agent never wrote: `expected_tools`,
+    `forbidden_tools` and `expected_any_tools` all saw an empty log and passed or
+    failed for no reason. `evals.sweep` runs EVERY arm under a named instance, so
+    the whole tool-firing channel was blind there (`saw: {}` on a case whose tool
+    demonstrably fired). Resolved through ``infra.paths`` now — same rule as the
+    memory store."""
     raw = os.environ.get("AUDIT_PATH") or "/sandbox/audit/audit.jsonl"
     p = Path(raw).expanduser()
     if p.is_file():
         return p
-    # Local-dev fallback: same shape, but under the home dir.
-    fallback = Path.home() / ".protoagent" / "audit" / "audit.jsonl"
-    return fallback
+    try:
+        from infra.paths import instance_paths
+
+        return instance_paths().store("audit") / "audit.jsonl"
+    except Exception:  # noqa: BLE001 — no infra on the path → the historical guess
+        return Path.home() / ".protoagent" / "audit" / "audit.jsonl"
 
 
 def _kb_store():

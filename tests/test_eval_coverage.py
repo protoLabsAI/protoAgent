@@ -669,3 +669,31 @@ def test_sweep_seed_config_carries_the_policy(tmp_path, monkeypatch):
     doc = yaml.safe_load(out.read_text())
     assert doc["context"]["prior_sessions"] == "off"
     assert doc["model"]["name"] == "fake/model"  # the rest of the operator's config survives
+
+
+def test_audit_path_resolves_to_the_instance_not_the_box(tmp_path, monkeypatch):
+    """A sweep arm runs under a named instance and writes `<instance>/audit/audit.jsonl`.
+    The old fallback read the BOX-level `~/.protoagent/audit/audit.jsonl`, so every
+    tool-firing assertion in an arm read a file the agent never wrote — `saw: {}` on a
+    case whose tool had demonstrably fired."""
+    from infra.paths import reset_instance_paths
+
+    monkeypatch.delenv("AUDIT_PATH", raising=False)
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(tmp_path / "box"))
+    monkeypatch.setenv("PROTOAGENT_INSTANCE", "eval-arm-7")
+    reset_instance_paths()
+
+    resolved = verify._audit_path()
+    assert resolved == tmp_path / "box" / "eval-arm-7" / "audit" / "audit.jsonl"
+    assert str(Path.home()) not in str(resolved)
+
+
+def test_sweep_points_the_runner_at_the_arm_audit_log(tmp_path, monkeypatch):
+    from infra.paths import reset_instance_paths
+
+    from evals import sweep
+
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(tmp_path / "box"))
+    monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
+    reset_instance_paths()
+    assert sweep._instance_audit_path("arm-3") == tmp_path / "box" / "arm-3" / "audit" / "audit.jsonl"

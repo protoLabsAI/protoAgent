@@ -84,7 +84,12 @@ def _instance_dirs(instance: str) -> list[Path]:
 
 
 def _instance_memory_dir(instance: str) -> Path:
-    """Where that instance's session summaries live — the digest's source.
+    """Where that instance's session summaries live — the digest's source."""
+    return _instance_store(instance, "memory")
+
+
+def _instance_store(instance: str, name: str) -> Path:
+    """One of ``instance``'s data stores, resolved the way that instance will.
 
     Resolved through ``infra.paths`` under the ARM's environment rather than
     joined by hand (PROTO.md: never compute store paths yourself). The hand-rolled
@@ -100,7 +105,7 @@ def _instance_memory_dir(instance: str) -> Path:
     os.environ["PROTOAGENT_INSTANCE"] = instance
     reset_instance_paths()  # the singleton caches the FIRST resolution
     try:
-        return instance_paths().store("memory")
+        return instance_paths().store(name)
     finally:
         if previous is None:
             os.environ.pop("PROTOAGENT_INSTANCE", None)
@@ -124,6 +129,11 @@ def _yaml_quoted(value: str) -> object:
         return DoubleQuotedScalarString(str(value))
     except Exception:  # noqa: BLE001 — no ruamel → PyYAML quotes it itself
         return str(value)
+
+
+def _instance_audit_path(instance: str) -> Path:
+    """That instance's audit JSONL — what its tool-firing assertions must read."""
+    return _instance_store(instance, "audit") / "audit.jsonl"
 
 
 def _seed_config_for(policy: str, ts: int, slug: str) -> Path | None:
@@ -238,6 +248,10 @@ def _run_one_model(
         "PROTOAGENT_INSTANCE": instance,
         "PROTOAGENT_UI": "none",
     }
+    # The runner asserts on the ARM's audit log, not this process's. `_audit_path`
+    # resolves it from the instance now, but the runner subprocess inherits THIS
+    # process's instance identity — so name the file outright.
+    env["AUDIT_PATH"] = str(_instance_audit_path(instance))
     if prior_sessions:
         seed_cfg = _seed_config_for(prior_sessions, ts, _slug(label))
         if seed_cfg is None:
