@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import type { ChatMessage } from "../lib/types";
-import { canSubmitChatDraft, chatComposerBusy, resolveComposerStopTarget } from "./ChatSurface";
+import {
+  canSubmitChatDraft,
+  chatComposerBusy,
+  resolveComposerStopTarget,
+  serverTurnRestoreAfterFailedCancel,
+} from "./ChatSurface";
 
 describe("ChatSurface server-turn controls", () => {
   const control = { taskId: "task-server" };
@@ -88,5 +93,31 @@ describe("ChatSurface server-turn controls", () => {
     expect(resolveComposerStopTarget(messages, "", control)).toBe("task-server");
     expect(resolveComposerStopTarget(messages, "", null)).toBe("task-local");
     expect(resolveComposerStopTarget(messages, "task-owned", control)).toBe("task-server");
+  });
+});
+
+describe("Stop whose cancel RPC fails (#3092 review finding)", () => {
+  // The board's review gate blocked PR #3350 on this and it was right: `stop()` clears
+  // the server-turn control BEFORE awaiting api.cancelTask, so a rejected cancel left a
+  // still-running server turn with no Stop or interjection affordance — the operator
+  // locked out of the very turn they asked to stop, with no way to retry.
+  const control = { taskId: "task-server" };
+
+  it("puts the control back so the operator can retry the cancel", () => {
+    const restore = serverTurnRestoreAfterFailedCancel(control, "running a scheduled task…");
+    expect(restore).toEqual({ control, label: "running a scheduled task…" });
+  });
+
+  it("restores the control even when the label is already gone", () => {
+    // noteTurnFinished may have dropped the label before the RPC rejected; the control is
+    // what drives Stop/interjection, so it must come back regardless.
+    expect(serverTurnRestoreAfterFailedCancel(control, null)).toEqual({ control, label: "" });
+  });
+
+  it("restores nothing for a locally-owned stream", () => {
+    // No server control: the browser aborted its own stream client-side, so the turn is
+    // correctly settled and there is no server-side task left to reach.
+    expect(serverTurnRestoreAfterFailedCancel(null, "streaming…")).toBeNull();
+    expect(serverTurnRestoreAfterFailedCancel(undefined, null)).toBeNull();
   });
 });

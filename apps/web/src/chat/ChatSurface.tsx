@@ -42,7 +42,7 @@ import { useFlag, useFlagPredicate } from "../flags/flags";
 import { registeredComposerActions } from "../ext/composerRegistry";
 import { ChatTranscript } from "./ChatTranscript";
 import { ComposerModelSelect } from "./ComposerModelSelect";
-import { noteTurnFinished, useServerTurn, useServerTurnSessions } from "./server-turn-store";
+import { noteTurnFinished, noteTurnStarted, useServerTurn, useServerTurnSessions } from "./server-turn-store";
 import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
 import { inputHistory, pushInputHistory } from "./inputHistory";
 import { dismissedToolCallSet, rememberDismissedToolCall } from "./dismissedToolCalls";
@@ -137,6 +137,23 @@ function useSession(sessionId: string) {
 // turn (serverTurnLabel only, no control frame) keeps the composer fully normal — the base
 // behavior — so a normal send still starts a browser-owned turn. `serverTurnLabel` is kept in
 // the signature for callers/tests; it deliberately does NOT gate busy on its own.
+/** After a Stop whose cancel RPC REJECTED: the turn the operator asked to stop is still
+ *  running server-side, but the optimistic release already dropped its Stop/interjection
+ *  control — so without putting it back the operator can neither retry the cancel nor
+ *  interject on their own live turn (#3092 review finding).
+ *
+ *  Returns what to restore, or `null` when there is nothing to put back: a locally-owned
+ *  stream carries no server control and was already aborted client-side, so a failed
+ *  server cancel leaves it correctly settled.
+ */
+export function serverTurnRestoreAfterFailedCancel<T extends { taskId?: string }>(
+  control: T | null | undefined,
+  label: string | null,
+): { control: T; label: string } | null {
+  if (!control) return null;
+  return { control, label: label || "" };
+}
+
 export function chatComposerBusy(
   status: SessionStatus,
   _serverTurnLabel: string | null,
@@ -2253,6 +2270,9 @@ function ChatSessionSlot({
     // thing that actually halts the turn there.
     const before = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
     const control = chatStore.getSnapshot().serverTurnControls[sessionId];
+    // Captured before the release below clears it — needed to restore the turn label if
+    // the cancel RPC fails and the turn turns out to still be live.
+    const labelBeforeStop = serverTurnLabel;
     const cancelId = resolveComposerStopTarget(before?.messages || [], taskId, control);
     // Settle the thread immediately: no bubble may stay `streaming` after Stop.
     // The send-loop only finalizes turns it owns; a re-attached turn has none.
@@ -2270,7 +2290,17 @@ function ChatSessionSlot({
       try {
         await api.cancelTask(cancelId);
       } catch {
-        // Best-effort — the UI is already released; the task may have finished.
+        // The cancel did NOT land, so an attended server turn is STILL RUNNING — but the
+        // optimistic release above already dropped its Stop/interjection control, leaving
+        // a live task with no affordance to reach it: the operator can neither retry the
+        // cancel nor interject, on the very turn they asked to stop. Restore the control
+        // (and its label) so the turn stays reachable. A locally-owned stream is already
+        // aborted client-side and needs no restore — only the server-controlled turn does.
+        const restore = serverTurnRestoreAfterFailedCancel(control, labelBeforeStop);
+        if (restore) {
+          chatStore.setServerTurnControl(restore.control);
+          if (restore.label) noteTurnStarted(sessionId, restore.label);
+        }
       }
     }
   }
