@@ -236,6 +236,7 @@ describe("boot hydration", () => {
       sessionStatusMap: {},
       pendingDeleteRequest: null,
       pendingClearRequest: null,
+      serverTurnControls: {},
     };
     expect(mergeHydratedSessions(current, [recovered]).sessions[0].incognito).toBe(true);
   });
@@ -289,6 +290,7 @@ describe("boot hydration", () => {
         sessionStatusMap: {},
         pendingDeleteRequest: null,
         pendingClearRequest: null,
+        serverTurnControls: {},
       },
       [recovered],
     );
@@ -364,6 +366,7 @@ describe("boot hydration", () => {
         sessionStatusMap: {},
         pendingDeleteRequest: null,
         pendingClearRequest: null,
+        serverTurnControls: {},
       },
       [recovered],
     );
@@ -422,6 +425,7 @@ describe("boot hydration", () => {
         sessionStatusMap: {},
         pendingDeleteRequest: null,
         pendingClearRequest: null,
+        serverTurnControls: {},
       },
       [recovered],
     );
@@ -515,6 +519,7 @@ describe("boot hydration", () => {
         sessionStatusMap: {},
         pendingDeleteRequest: null,
         pendingClearRequest: null,
+        serverTurnControls: {},
       },
       [recovered],
     );

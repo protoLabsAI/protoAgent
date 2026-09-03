@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => {
     handlers: new Map<string, (data: Record<string, unknown>) => void>(),
     sessions,
     updateMessages,
+    setServerTurnControl: vi.fn(),
+    clearServerTurnControl: vi.fn(),
   };
 });
 
@@ -28,6 +30,8 @@ vi.mock("../chat/chat-store", () => ({
   chatStore: {
     getSnapshot: () => ({ sessions: mocks.sessions }),
     updateMessages: mocks.updateMessages,
+    setServerTurnControl: mocks.setServerTurnControl,
+    clearServerTurnControl: mocks.clearServerTurnControl,
   },
 }));
 
@@ -56,6 +60,17 @@ describe("parseServerTurnControl", () => {
     expect(parseServerTurnControl({ session_id: "s1", controllable: true })).toBeNull();
     expect(parseServerTurnControl(null)).toBeNull();
   });
+
+  it("does not infer operator control when the server explicitly withholds it", () => {
+    expect(
+      parseServerTurnControl({
+        session_id: "s1",
+        task_id: "task-1",
+        controllable: true,
+        operator_controllable: false,
+      }),
+    ).toMatchObject({ controllable: true, operator_controllable: false });
+  });
 });
 
 describe("ServerTurnWatch control payload bridge", () => {
@@ -65,6 +80,8 @@ describe("ServerTurnWatch control payload bridge", () => {
   beforeEach(() => {
     mocks.handlers.clear();
     mocks.updateMessages.mockClear();
+    mocks.setServerTurnControl.mockClear();
+    mocks.clearServerTurnControl.mockClear();
     mocks.sessions[0].messages = [];
     node = document.createElement("div");
     document.body.appendChild(node);
@@ -110,8 +127,84 @@ describe("ServerTurnWatch control payload bridge", () => {
         operator_controllable: true,
       },
     ]);
+    expect(mocks.setServerTurnControl).toHaveBeenCalledWith({
+      sessionId: "s1",
+      taskId: "task-1",
+      origin: "background-resume",
+      trigger: "bg-1",
+      controllable: true,
+      operatorControllable: true,
+    });
     expect(mocks.updateMessages).not.toHaveBeenCalled();
     window.removeEventListener("protoagent:server-turn-control", onControl);
+  });
+
+  it("stores non-interactive control frames as a clear for the session", () => {
+    act(() => root?.render(h(ServerTurnWatch)));
+    act(() =>
+      mocks.handlers.get("turn.started")?.({
+        session_id: "s1",
+        origin: "scheduler",
+        control: {
+          session_id: "s1",
+          task_id: "task-1",
+          origin: "scheduler",
+          controllable: false,
+          operator_controllable: false,
+        },
+      }),
+    );
+
+    expect(mocks.setServerTurnControl).toHaveBeenCalledWith({
+      sessionId: "s1",
+      taskId: "task-1",
+      origin: "scheduler",
+      trigger: "",
+      controllable: false,
+      operatorControllable: false,
+    });
+  });
+
+  it("clears the stored control for the finished durable task when the server turn finishes", () => {
+    act(() => root?.render(h(ServerTurnWatch)));
+    act(() => mocks.handlers.get("turn.finished")?.({ session_id: "s1", task_id: "task-1" }));
+
+    expect(mocks.clearServerTurnControl).toHaveBeenCalledWith("s1", "task-1");
+  });
+
+  it("does not clear a newer same-session control when an older server turn finishes late", () => {
+    act(() => root?.render(h(ServerTurnWatch)));
+    act(() =>
+      mocks.handlers.get("turn.started")?.({
+        session_id: "s1",
+        origin: "scheduler",
+        control: {
+          session_id: "s1",
+          task_id: "task-new",
+          origin: "scheduler",
+          controllable: true,
+          operator_controllable: true,
+        },
+      }),
+    );
+    act(() => mocks.handlers.get("turn.finished")?.({ session_id: "s1", task_id: "task-old" }));
+
+    expect(mocks.setServerTurnControl).toHaveBeenCalledWith({
+      sessionId: "s1",
+      taskId: "task-new",
+      origin: "scheduler",
+      trigger: "",
+      controllable: true,
+      operatorControllable: true,
+    });
+    expect(mocks.clearServerTurnControl).toHaveBeenCalledWith("s1", "task-old");
+  });
+
+  it("keeps legacy session-level cleanup for finish events without a task id", () => {
+    act(() => root?.render(h(ServerTurnWatch)));
+    act(() => mocks.handlers.get("turn.finished")?.({ session_id: "s1" }));
+
+    expect(mocks.clearServerTurnControl).toHaveBeenCalledWith("s1", undefined);
   });
 
   it("keeps ordinary progress rendering intact", () => {

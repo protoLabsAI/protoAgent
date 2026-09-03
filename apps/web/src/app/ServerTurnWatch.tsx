@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 
-import { chatStore } from "../chat/chat-store";
+import { chatStore, type ServerTurnControlState } from "../chat/chat-store";
 import { labelForOrigin, noteTurnFinished, noteTurnStarted, rememberOrigin } from "../chat/server-turn-store";
 import { onTopic } from "../lib/events";
 import { applyProgressFrame, parseProgress } from "./serverTurnProgress";
@@ -37,20 +37,35 @@ export function parseServerTurnControl(value: unknown): ServerTurnControl | null
   const session_id = String(data.session_id ?? "");
   const task_id = String(data.task_id ?? "");
   if (!session_id || !task_id) return null;
-  const controllable = data.operator_controllable === true || data.controllable === true;
+  const operator_controllable =
+    data.operator_controllable === true || (data.operator_controllable == null && data.controllable === true);
+  const controllable = data.controllable === true || operator_controllable;
   return {
     session_id,
     task_id,
     origin: String(data.origin ?? ""),
     trigger: String(data.trigger ?? ""),
     controllable,
-    operator_controllable: controllable,
+    operator_controllable,
+  };
+}
+
+function controlState(control: ServerTurnControl): ServerTurnControlState {
+  return {
+    sessionId: control.session_id,
+    taskId: control.task_id,
+    origin: control.origin,
+    trigger: control.trigger,
+    controllable: control.controllable,
+    operatorControllable: control.operator_controllable,
   };
 }
 
 function emitServerTurnControl(value: unknown) {
   const control = parseServerTurnControl(value);
-  if (!control || typeof window === "undefined") return;
+  if (!control) return;
+  chatStore.setServerTurnControl(controlState(control));
+  if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent("protoagent:server-turn-control", { detail: control }));
 }
 
@@ -69,7 +84,11 @@ export function ServerTurnWatch() {
     });
     const offFinished = onTopic("turn.finished", (data) => {
       const session = String(data.session_id ?? "");
-      if (session) noteTurnFinished(session);
+      if (session) {
+        const taskId = String(data.task_id ?? "");
+        chatStore.clearServerTurnControl(session, taskId || undefined);
+        noteTurnFinished(session);
+      }
     });
     const offProgress = onTopic("chat.progress", (data) => {
       emitServerTurnControl(data.control);

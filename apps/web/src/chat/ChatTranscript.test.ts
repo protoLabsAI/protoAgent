@@ -1,4 +1,4 @@
-import { act, createElement, Fragment, useState } from "react";
+import { act, createElement, Fragment, useState, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -9,7 +9,8 @@ const messageRender = vi.hoisted(() => vi.fn());
 
 vi.mock("@protolabsai/ui/ai", () => ({
   Conversation: ({ children }: { children: unknown }) => children,
-  Message: ({ children }: { children: unknown }) => children,
+  Message: ({ children, queuedLabel }: { children: ReactNode; queuedLabel?: string }) =>
+    createElement("div", null, queuedLabel ? createElement("span", null, queuedLabel) : null, children),
 }));
 
 vi.mock("./ChatMessageView", () => ({
@@ -35,6 +36,7 @@ const noop = () => {};
 const actions = {};
 const dismissedToolCalls = new Set<string>();
 const steerQueue: { id: string; text: string }[] = [];
+const serverInterjectionQueue: { id: string; text: string }[] = [];
 
 function Harness() {
   const [draft, setDraft] = useState("");
@@ -49,6 +51,7 @@ function Harness() {
       dismissedToolCalls,
       actions,
       steerQueue,
+      serverInterjectionQueue,
       serverTurnLabel: null,
       status: "idle",
       onCancelDelegation: noop,
@@ -93,6 +96,7 @@ function StreamingHarness() {
       dismissedToolCalls: dismissedTask,
       actions,
       steerQueue,
+      serverInterjectionQueue,
       serverTurnLabel: null,
       status: "streaming",
       onCancelDelegation: noop,
@@ -142,5 +146,28 @@ describe("ChatTranscript render isolation", () => {
       "live-row",
       "live-row",
     ]);
+  });
+
+  it("labels queued server-turn interjections distinctly from normal steers", async () => {
+    await act(async () =>
+      root.render(
+        createElement(ChatTranscript, {
+          sessionId: "server-session",
+          messages: [],
+          dismissedToolCalls,
+          actions,
+          steerQueue,
+          serverInterjectionQueue: [{ id: "i1", text: "Use the newest inbox item" }],
+          serverTurnLabel: "running a scheduled task…",
+          status: "idle",
+          onCancelDelegation: noop,
+          onDismissToolCall: noop,
+          onCancelSteer: noop,
+        }),
+      ),
+    );
+
+    expect(host.textContent).toContain("Use the newest inbox item");
+    expect(host.textContent).toContain("queued interjection");
   });
 });
