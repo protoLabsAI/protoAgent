@@ -22,11 +22,44 @@ import { applyProgressFrame, parseProgress } from "./serverTurnProgress";
 // final answer (ChatResumeWatch matches it by id). Mounted once, app-wide, alongside the
 // other bus watchers.
 
+export type ServerTurnControl = {
+  session_id: string;
+  task_id: string;
+  origin: string;
+  trigger: string;
+  controllable: boolean;
+  operator_controllable: boolean;
+};
+
+export function parseServerTurnControl(value: unknown): ServerTurnControl | null {
+  if (!value || typeof value !== "object") return null;
+  const data = value as Record<string, unknown>;
+  const session_id = String(data.session_id ?? "");
+  const task_id = String(data.task_id ?? "");
+  if (!session_id || !task_id) return null;
+  const controllable = data.operator_controllable === true || data.controllable === true;
+  return {
+    session_id,
+    task_id,
+    origin: String(data.origin ?? ""),
+    trigger: String(data.trigger ?? ""),
+    controllable,
+    operator_controllable: controllable,
+  };
+}
+
+function emitServerTurnControl(value: unknown) {
+  const control = parseServerTurnControl(value);
+  if (!control || typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent("protoagent:server-turn-control", { detail: control }));
+}
+
 export function ServerTurnWatch() {
   useEffect(() => {
     const offStarted = onTopic("turn.started", (data) => {
       const session = String(data.session_id ?? "");
       const origin = String(data.origin ?? "");
+      emitServerTurnControl(data.control);
       if (session) {
         // Remember the RAW origin (#3028) so the terminal `chat.resumed` can tag its settled
         // message as a server result even after `turn.finished` clears the live indicator below.
@@ -39,6 +72,7 @@ export function ServerTurnWatch() {
       if (session) noteTurnFinished(session);
     });
     const offProgress = onTopic("chat.progress", (data) => {
+      emitServerTurnControl(data.control);
       const frame = parseProgress(data);
       if (!frame) return;
       const target = chatStore.getSnapshot().sessions.find((s) => s.id === frame.session);

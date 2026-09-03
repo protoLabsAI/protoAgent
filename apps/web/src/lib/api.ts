@@ -2653,6 +2653,12 @@ export const api = {
       { method: "DELETE" },
     );
   },
+  serverTurnInterject(sessionId: string, taskId: string, id: string, text: string) {
+    return request<{ ok: boolean; id?: string | null; pending: number; reason?: string }>(
+      `/api/chat/sessions/${encodeURIComponent(sessionId)}/server-turns/${encodeURIComponent(taskId)}/interject`,
+      { method: "POST", body: { id, text } },
+    );
+  },
   // Abort ONE running foreground subagent delegation (the Stop on a running `task`
   // tool card, Tier 2) — cancels just that subagent, NOT the whole turn: the lead
   // continues with a 'cancelled' result. `delegationId` is the `task` tool-call id.

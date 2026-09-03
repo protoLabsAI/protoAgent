@@ -301,21 +301,24 @@ class TestAttendanceStream:
 
 
 class TestAttendedResumeDecision:
-    """``_is_autonomous`` — a background-resume nudge is autonomous only while unattended;
-    every OTHER autonomous origin is unconditional, and ``unattended: true`` always wins."""
+    """``_is_autonomous`` — result-delivery nudges are autonomous only while unattended;
+    every other autonomous origin is unconditional, and ``unattended: true`` always wins."""
 
     def test_attended_background_resume_is_not_autonomous(self):
         assert chat_mod._is_autonomous({"origin": "background-resume", "attended": True}) is False
+        assert chat_mod._is_autonomous({"origin": "delegate-result", "attended": True}) is False
 
     def test_unattended_background_resume_is_autonomous(self):
         assert chat_mod._is_autonomous({"origin": "background-resume", "attended": False}) is True
+        assert chat_mod._is_autonomous({"origin": "delegate-result", "attended": False}) is True
 
     def test_unstamped_background_resume_fails_closed_to_autonomous(self):
         assert chat_mod._is_autonomous({"origin": "background-resume"}) is True
+        assert chat_mod._is_autonomous({"origin": "delegate-result"}) is True
 
     def test_attended_flag_does_not_leak_to_other_origins(self):
         # r3 — scheduler/watch/inbox/webhook/background stay autonomous regardless of any
-        # stray attended flag (only background-resume consults it).
+        # stray attended flag (only result-delivery origins consult it).
         for origin in ("scheduler", "watch", "inbox", "webhook", "background"):
             assert chat_mod._is_autonomous({"origin": origin, "attended": True}) is True
 

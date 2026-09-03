@@ -19,6 +19,7 @@ import logging
 import re
 import time
 import weakref
+from dataclasses import dataclass, field
 from typing import Any
 
 from graph.output_format import extract_output
@@ -1406,12 +1407,14 @@ def _thread_lock(thread_id: str) -> asyncio.Lock:
 # operator is attending the origin session (see the attendance registry below), the
 # manager stamps the nudge ``attended`` and the report-delivery turn becomes eligible to
 # park for a human, exactly like an ordinary operator turn.
-_AUTONOMOUS_ORIGINS = frozenset({"scheduler", "watch", "inbox", "webhook", "background", "background-resume"})
+_AUTONOMOUS_ORIGINS = frozenset(
+    {"scheduler", "watch", "inbox", "webhook", "background", "background-resume", "delegate-result"}
+)
 
-# The immutable provenance of a push-resume nudge (kept in _AUTONOMOUS_ORIGINS above) is
-# distinct from whether a human is *currently* attending its origin session (#3110). This
-# is the one origin whose autonomy is conditional on live attendance rather than fixed.
-_ATTENDANCE_CONDITIONAL_ORIGIN = "background-resume"
+# The immutable provenance of a result-delivery nudge (kept in _AUTONOMOUS_ORIGINS above)
+# is distinct from whether a human is *currently* attending its origin session (#3110).
+# These are the origins whose autonomy is conditional on live attendance rather than fixed.
+_ATTENDANCE_CONDITIONAL_ORIGINS = frozenset({"background-resume", "delegate-result"})
 
 # ── session attendance (SSE presence) — #3110 ────────────────────────────────
 # Which origin chat sessions currently have a LIVE operator SSE connection (the console
@@ -1465,6 +1468,156 @@ def is_session_attended(session_id: str) -> bool:
         return bool(sid) and _ATTENDED_SESSIONS.get(sid, 0) > 0
     except Exception:  # noqa: BLE001 — ambiguity fails closed to unattended
         return False
+
+
+# ── server-turn control plane (#3092) ───────────────────────────────────────
+
+_CONTROL_ORIGINS = frozenset({"background-resume", "scheduler", "watch", "inbox", "delegate-result"})
+
+
+@dataclass
+class _LiveServerTurn:
+    session_id: str
+    task_id: str
+    origin: str
+    trigger: str = ""
+    controllable: bool = False
+    accepted_ids: set[str] = field(default_factory=set)
+
+
+_LIVE_SERVER_TURNS: dict[str, _LiveServerTurn] = {}
+
+
+def _server_turn_key(session_id: str, task_id: str) -> str:
+    return f"{session_id}\0{task_id}"
+
+
+def _control_origin(origin: object) -> str:
+    return str(origin or "").strip().lower()
+
+
+def server_turn_control_payload(
+    session_id: str,
+    task_id: str,
+    *,
+    origin: object = "",
+    trigger: object = "",
+    attended: object = None,
+) -> dict[str, Any] | None:
+    """Session-scoped control descriptor for a server-originated chat turn.
+
+    The payload is deliberately small and durable-task keyed: the UI can address the
+    in-flight turn by ``task_id``, but the server will only honor it for the SAME
+    ``session_id`` and while that exact task remains live in this registry.
+    """
+    sid = str(session_id or "").strip()
+    tid = str(task_id or "").strip()
+    org = _control_origin(origin)
+    if not sid or not tid or org not in _CONTROL_ORIGINS:
+        return None
+    is_attended = _truthy(attended) if attended is not None else is_session_attended(sid)
+    controllable = bool(is_attended)
+    return {
+        "session_id": sid,
+        "task_id": tid,
+        "origin": org,
+        "trigger": str(trigger or ""),
+        "controllable": controllable,
+        "operator_controllable": controllable,
+    }
+
+
+def register_live_server_turn(
+    session_id: str,
+    task_id: str,
+    *,
+    origin: object = "",
+    trigger: object = "",
+    attended: object = None,
+) -> dict[str, Any] | None:
+    """Record an attended-capable server-originated turn as addressable by task id."""
+    payload = server_turn_control_payload(
+        session_id,
+        task_id,
+        origin=origin,
+        trigger=trigger,
+        attended=attended,
+    )
+    if payload is None:
+        return None
+    key = _server_turn_key(payload["session_id"], payload["task_id"])
+    _LIVE_SERVER_TURNS[key] = _LiveServerTurn(
+        session_id=payload["session_id"],
+        task_id=payload["task_id"],
+        origin=payload["origin"],
+        trigger=payload["trigger"],
+        controllable=bool(payload["controllable"]),
+    )
+    return payload
+
+
+def finish_live_server_turn(session_id: str, task_id: str) -> None:
+    """Forget a live server turn once it parks or reaches a terminal state."""
+    sid = str(session_id or "").strip()
+    tid = str(task_id or "").strip()
+    if sid and tid:
+        _LIVE_SERVER_TURNS.pop(_server_turn_key(sid, tid), None)
+
+
+def live_server_turn_control(session_id: str, task_id: str) -> dict[str, Any] | None:
+    """The recorded control payload for this exact live session/task, if any."""
+    sid = str(session_id or "").strip()
+    tid = str(task_id or "").strip()
+    turn = _LIVE_SERVER_TURNS.get(_server_turn_key(sid, tid)) if sid and tid else None
+    if turn is None:
+        return None
+    currently_controllable = bool(turn.controllable and is_session_attended(turn.session_id))
+    return {
+        "session_id": turn.session_id,
+        "task_id": turn.task_id,
+        "origin": turn.origin,
+        "trigger": turn.trigger,
+        "controllable": currently_controllable,
+        "operator_controllable": currently_controllable,
+    }
+
+
+def submit_server_turn_interjection(
+    session_id: str,
+    task_id: str,
+    text: str,
+    *,
+    msg_id: str | None = None,
+) -> dict[str, Any]:
+    """Queue an operator interjection for a live, attended server-originated turn.
+
+    This intentionally does not acquire the per-thread graph lock or start a graph
+    turn. It only enqueues into the same steering queue that an already-running turn
+    drains at the model-call boundary. Stale, terminal, wrong-session, unattended, and
+    duplicate-id submissions are rejected without touching another session's queue.
+    """
+    sid = str(session_id or "").strip()
+    tid = str(task_id or "").strip()
+    body = str(text or "").strip()
+    if not body:
+        return {"ok": False, "reason": "empty", "pending": 0}
+    turn = _LIVE_SERVER_TURNS.get(_server_turn_key(sid, tid)) if sid and tid else None
+    if turn is None:
+        return {"ok": False, "reason": "not_live", "pending": 0}
+    if not turn.controllable or not is_session_attended(sid):
+        return {"ok": False, "reason": "uncontrollable", "pending": 0}
+    mid = str(msg_id or "").strip() or f"server-steer:{tid}:{len(turn.accepted_ids) + 1}"
+    if mid in turn.accepted_ids:
+        from graph import steering
+
+        return {"ok": False, "reason": "duplicate", "id": mid, "pending": steering.pending(sid)}
+    from graph import steering
+
+    queued = steering.enqueue(sid, body, msg_id=mid)
+    if queued is None:
+        return {"ok": False, "reason": "empty", "pending": steering.pending(sid)}
+    turn.accepted_ids.add(mid)
+    return {"ok": True, "id": queued, "pending": steering.pending(sid)}
 
 
 async def attendance_stream(session_id: str, *, keepalive_s: float = 15.0, is_disconnected=None):
@@ -1558,7 +1711,7 @@ def _is_autonomous(request_metadata: dict | None) -> bool:
         return True
     origin = md.get("origin")
     if (
-        str(origin or "").strip().lower() == _ATTENDANCE_CONDITIONAL_ORIGIN
+        str(origin or "").strip().lower() in _ATTENDANCE_CONDITIONAL_ORIGINS
         and _background_resume_attended(md)
     ):
         return False

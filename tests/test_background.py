@@ -1000,10 +1000,47 @@ class TestChatProgress:
         assert published == []
 
     def test_unknown_phase_is_not_published(self, monkeypatch):
-        """turn_started / reasoning / anything new must not leak a malformed frame."""
+        """Reasoning / anything new must not leak a malformed frame."""
         a2a, published = self._capture(monkeypatch)
-        a2a._a2a_progress("chat-7", "t", {"phase": "turn_started", "origin": "scheduler"})
+        a2a._a2a_progress("chat-7", "t", {"phase": "reasoning", "text": "hmm", "origin": "scheduler"})
         assert published == []
+
+    def test_turn_started_publishes_control_payload_for_attended_server_turn(self, monkeypatch):
+        import importlib
+
+        chat_mod = importlib.import_module("server.chat")
+        chat_mod._LIVE_SERVER_TURNS.clear()
+        chat_mod._ATTENDED_SESSIONS.clear()
+        chat_mod.mark_session_attended("chat-7")
+        try:
+            a2a, published = self._capture(monkeypatch)
+            a2a._a2a_progress(
+                "chat-7",
+                "t",
+                {"phase": "turn_started", "origin": "scheduler", "trigger": "job-1"},
+            )
+            assert published == [
+                (
+                    "chat.progress",
+                    {
+                        "session_id": "chat-7",
+                        "task_id": "t",
+                        "phase": "turn_started",
+                        "control": {
+                            "session_id": "chat-7",
+                            "task_id": "t",
+                            "origin": "scheduler",
+                            "trigger": "job-1",
+                            "controllable": True,
+                            "operator_controllable": True,
+                        },
+                    },
+                    {"retain": False},
+                )
+            ]
+        finally:
+            chat_mod._LIVE_SERVER_TURNS.clear()
+            chat_mod._ATTENDED_SESSIONS.clear()
 
     def test_long_tool_output_is_previewed(self, monkeypatch):
         a2a, published = self._capture(monkeypatch)

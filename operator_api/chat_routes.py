@@ -749,6 +749,25 @@ def register_chat_routes(app, ui: str) -> None:
 
         return {"pending": steering.pending_items(session_id)}
 
+    @app.post("/api/chat/sessions/{session_id}/server-turns/{task_id}/interject")
+    async def _api_server_turn_interject(session_id: str, task_id: str, body: dict | None = None):
+        """Queue a normal operator interjection into an attended server-originated turn.
+
+        The addressed turn is identified by its durable A2A task id plus the origin chat
+        session. The helper rejects stale, terminal, wrong-session, unattended, and
+        duplicate submissions without acquiring the graph lock or starting a competing
+        turn; accepted text enters the ordinary steering queue.
+        """
+        from fastapi import HTTPException
+
+        from server.chat import submit_server_turn_interjection
+
+        text = str((body or {}).get("text", "")).strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="text is required")
+        msg_id = str((body or {}).get("id", "")).strip() or None
+        return submit_server_turn_interjection(session_id, task_id, text, msg_id=msg_id)
+
     @app.delete("/api/chat/sessions/{session_id}/steer/{msg_id}")
     async def _api_steer_cancel(session_id: str, msg_id: str):
         """Cancel a still-queued steer before it folds into the turn (the ✕ on a
