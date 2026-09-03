@@ -289,6 +289,44 @@ also reads the remote's app version off its A2A agent card; when it differs from
 the fleet manager shows a warning badge on that member ("remote runs vX.Y.Z, the hub
 vA.B.C — features may misbehave"). Upgrade the lagging side to clear it.
 
+## Fleet diagnostics — let an agent read a member without touching it
+
+*(ADR 0071 · #3170.)* A managing agent can inspect a fleet member's health without any
+runtime control: the **`fleet_diagnostics`** tool reads a member's **recent logs** and **one
+exact task by id**, and nothing else. It is **off by default** — turn it on with a single
+config knob:
+
+```yaml
+tools:
+  fleet_diagnostics:
+    enabled: true   # default: false — binds the read-only fleet-diagnostics tool
+```
+
+(Settings ▸ Tools ▸ *Expose fleet diagnostics to the model*.) What the tool can and cannot do,
+by design:
+
+- **Read-only, two reads.** `read="logs"` returns a bounded tail of a member's recent log
+  lines; `read="task"` returns one exact A2A task by id. There is **no** path to start/stop a
+  member, resume or answer a task, mutate a checkpoint, prompt a human (HITL), or change any
+  configuration — a mutation request comes back as a structured refusal, never an action.
+- **Roster-only addressing.** The target is resolved **exclusively** through the configured
+  fleet roster (the same host + local-peer + remote members every console surface reads). The
+  agent names a member by display name or id; there is no parameter — and no code path — that
+  accepts a host, port, or URL, so the model can never point it at anything the hub does not
+  already own. An unknown member is a refusal.
+- **Bounded and secret-redacted, on success and error.** Every read is line/field-capped and
+  secret-redacted at the tool's own boundary (defense in depth over the member's own bounding),
+  and a stopped / unreachable / slow member or a missing task id returns a compact structured
+  `{"ok": false, "error": …}` rather than a stack trace or an unbounded dump.
+
+**Exposing it to a foreign operator-MCP client.** The operator-MCP `read-only`
+[profile](./mcp.md) lists `fleet_diagnostics` as a **candidate** so a foreign
+client (Claude Desktop, Cursor, an ACP sidecar) can receive this read-only capability. But
+**profile membership never enables the tool by itself** — the `tools.fleet_diagnostics.enabled`
+gate above remains the sole authority on whether the tool is bound at all. With the gate off,
+the tool is absent from every surface — the local model's toolset, the resolver, the
+`/api/mcp/exposed` discovery route, and the ACP sidecar — regardless of the selected profile.
+
 ## See also
 
 - ADRs: [0040 bundles](../adr/0040-plugin-bundles.md) ·

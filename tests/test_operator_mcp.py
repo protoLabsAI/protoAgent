@@ -164,14 +164,44 @@ def test_profile_read_only_exposes_reads_not_writes():
     assert "memory_ingest" not in names and "write_note" not in names
 
 
-def test_profile_read_only_excludes_fleet_diagnostics_guard():
-    """ADR 0071 / #3170: fleet_diagnostics stays out of this profile until it gets
-    its own operator-MCP security review."""
-    from runtime.operator_mcp_tools import _READ_ONLY_EXCLUDED_TOOLS, _READ_ONLY_TOOLS, resolve_allow
+def test_profile_read_only_exposes_fleet_diagnostics_when_gate_enabled():
+    """ADR 0071 / #3170: fleet_diagnostics is now a read-only-profile candidate. With the
+    profile selected AND the tool's own default-off gate on, it is exposed through the
+    resolver AND the /api/mcp/exposed discovery surface — read-only, no writes ride along."""
+    from runtime.operator_mcp_tools import _READ_ONLY_TOOLS, resolve_allow, resolve_exposed_names
 
-    assert "fleet_diagnostics" in _READ_ONLY_EXCLUDED_TOOLS
-    assert "fleet_diagnostics" not in _READ_ONLY_TOOLS
-    assert "fleet_diagnostics" not in resolve_allow(_cfg_profile("read-only"))
+    assert "fleet_diagnostics" in _READ_ONLY_TOOLS  # a nominated candidate now
+    assert "fleet_diagnostics" in resolve_allow(_cfg_profile("read-only"))
+
+    cfg = _cfg_profile("read-only")
+    cfg.tools_fleet_diagnostics_enabled = True  # its own gate — the authority on binding
+    names = {t.name for t in operator_tools(cfg)}
+    assert "fleet_diagnostics" in names  # candidate + gate on → exposed (r1)
+    assert "fleet_diagnostics" in set(resolve_exposed_names(cfg))  # same on the API surface
+    assert "current_time" in names and "load_skill" in names  # ordinary reads intact
+    # r3: no lifecycle / mutation / HITL capability joins the profile alongside it
+    for mutating in ("memory_ingest", "write_note", "set_config", "edit_soul", "ask_human"):
+        assert mutating not in names
+
+
+def test_profile_read_only_fleet_diagnostics_absent_when_gate_disabled():
+    """r2: the profile only nominates a candidate — with the tool's own gate off (the
+    default), joining read-only never binds fleet_diagnostics. The enable gate is never
+    bypassed by profile membership."""
+    from runtime.operator_mcp_tools import resolve_allow
+
+    cfg = _cfg_profile("read-only")
+    cfg.tools_fleet_diagnostics_enabled = False
+    assert "fleet_diagnostics" in resolve_allow(cfg)  # still a listed candidate…
+    assert "fleet_diagnostics" not in {t.name for t in operator_tools(cfg)}  # …but not built/exposed
+
+
+def test_fleet_diagnostics_gate_off_absent_even_under_full_wildcard():
+    """The gate is the authority everywhere, not just under read-only: with the tool's flag
+    off, even the ``full``/``*`` profile does not conjure it (it was never built)."""
+    cfg = _cfg_profile("full")
+    assert cfg.tools_fleet_diagnostics_enabled is False  # default off
+    assert "fleet_diagnostics" not in {t.name for t in operator_tools(cfg)}
 
 
 def test_profile_full_is_wildcard(monkeypatch):
