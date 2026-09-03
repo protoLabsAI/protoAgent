@@ -50,6 +50,15 @@ export function effectiveReasoningEffort(session?: { reasoningEffort?: string } 
 
 export type SessionStatus = "idle" | "streaming" | "error";
 
+export type ServerTurnControlState = {
+  sessionId: string;
+  taskId: string;
+  origin: string;
+  trigger: string;
+  controllable: boolean;
+  operatorControllable: boolean;
+};
+
 export type PersistedChatState = {
   version: number;
   sessions: ChatSession[];
@@ -70,6 +79,10 @@ export type ChatState = PersistedChatState & {
   // opt-in, same as delete). Distinct from the delete request: clear wipes the history but
   // KEEPS the tab open, so it can't ride the delete-request path. Ephemeral, never persisted.
   pendingClearRequest: string | null;
+  // bd-v92b server-initiated-turn control affordance. Ephemeral: the backend owns the
+  // durable task and republishes control frames while the turn is live; persisting this
+  // would leave stale Stop/interjection controls after a completed turn.
+  serverTurnControls: Record<string, ServerTurnControlState>;
 };
 
 // Chat sessions are PER AGENT — namespace the persisted key by the URL slug (ADR 0042 slug
@@ -625,6 +638,7 @@ let state: ChatState = {
   sessionStatusMap: Object.fromEntries(resumeIds.map((id) => [id, "streaming" as SessionStatus])),
   pendingDeleteRequest: null,
   pendingClearRequest: null,
+  serverTurnControls: {},
 };
 
 const listeners = new Set<() => void>();
@@ -649,7 +663,9 @@ function removeLocalSession(sessionId: string) {
     const currentSessionId =
       current.currentSessionId === sessionId ? sessions[0]?.id || null : current.currentSessionId;
     const sessionStatusMap = { ...current.sessionStatusMap };
+    const serverTurnControls = { ...current.serverTurnControls };
     delete sessionStatusMap[sessionId];
+    delete serverTurnControls[sessionId];
     return {
       ...current,
       sessions,
@@ -665,6 +681,7 @@ function removeLocalSession(sessionId: string) {
         currentSessionId,
       ),
       sessionStatusMap,
+      serverTurnControls,
     };
   });
 }
@@ -895,6 +912,30 @@ export const chatStore = {
       ...current,
       sessionStatusMap: { ...current.sessionStatusMap, [sessionId]: status },
     }));
+  },
+
+  setServerTurnControl(control: ServerTurnControlState) {
+    if (!control.sessionId) return;
+    setState((current) => {
+      const serverTurnControls = { ...current.serverTurnControls };
+      if (control.controllable && control.operatorControllable && control.taskId) {
+        serverTurnControls[control.sessionId] = control;
+      } else {
+        delete serverTurnControls[control.sessionId];
+      }
+      return { ...current, serverTurnControls };
+    });
+  },
+
+  clearServerTurnControl(sessionId: string, taskId?: string) {
+    if (!sessionId) return;
+    setState((current) => {
+      const existing = current.serverTurnControls[sessionId];
+      if (!existing || (taskId && existing.taskId !== taskId)) return current;
+      const serverTurnControls = { ...current.serverTurnControls };
+      delete serverTurnControls[sessionId];
+      return { ...current, serverTurnControls };
+    });
   },
 
   // Per-tab model override. Empty string clears it (→ configured default).

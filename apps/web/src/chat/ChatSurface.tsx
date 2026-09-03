@@ -26,6 +26,7 @@ import {
   sessionCast,
   subscribeGoalKickoff,
   takeGoalKickoff,
+  type SessionStatus,
 } from "./chat-store";
 import "./coreSlashCommands"; // registers /new, /clear, /effort via the slash-command seam (ADR 0061)
 import { ClearConversationDialog } from "./ClearConversationDialog";
@@ -41,7 +42,7 @@ import { useFlag, useFlagPredicate } from "../flags/flags";
 import { registeredComposerActions } from "../ext/composerRegistry";
 import { ChatTranscript } from "./ChatTranscript";
 import { ComposerModelSelect } from "./ComposerModelSelect";
-import { useServerTurn, useServerTurnSessions } from "./server-turn-store";
+import { noteTurnFinished, useServerTurn, useServerTurnSessions } from "./server-turn-store";
 import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
 import { inputHistory, pushInputHistory } from "./inputHistory";
 import { dismissedToolCallSet, rememberDismissedToolCall } from "./dismissedToolCalls";
@@ -129,6 +130,49 @@ function withConfigHint(detail: string): string {
 function useSession(sessionId: string) {
   const state = useChatState();
   return state.sessions.find((session) => session.id === sessionId) || null;
+}
+
+// The composer takes its queue-while-working `busy` shape from a turn this browser can act
+// on: its OWN stream (steer) or an ATTENDED server turn (interject). An unattended server
+// turn (serverTurnLabel only, no control frame) keeps the composer fully normal — the base
+// behavior — so a normal send still starts a browser-owned turn. `serverTurnLabel` is kept in
+// the signature for callers/tests; it deliberately does NOT gate busy on its own.
+export function chatComposerBusy(
+  status: SessionStatus,
+  _serverTurnLabel: string | null,
+  serverTurnControl: unknown,
+): boolean {
+  return status === "streaming" || Boolean(serverTurnControl);
+}
+
+export function canSubmitChatDraft({
+  draft,
+  hasReadyAttachment,
+  status,
+  signedOut,
+  serverTurnControl,
+}: {
+  draft: string;
+  hasReadyAttachment: boolean;
+  status: SessionStatus;
+  signedOut: boolean;
+  serverTurnLabel: string | null;
+  serverTurnControl: unknown;
+}): boolean {
+  if (signedOut || status === "streaming") return false;
+  // Attended server turn: Enter submits a text interjection (attachments can't ride the
+  // control path), so require non-empty text.
+  if (serverTurnControl) return Boolean(draft.trim());
+  // Idle OR an unattended server turn: ordinary send gating (text or a ready attachment).
+  return Boolean(draft.trim()) || hasReadyAttachment;
+}
+
+export function resolveComposerStopTarget(
+  messages: ChatMessage[],
+  liveTaskId: string,
+  serverTurnControl: { taskId: string } | null | undefined,
+): string {
+  return serverTurnControl?.taskId || resolveStopTarget(messages, liveTaskId);
 }
 
 export function ChatSurface({
@@ -637,6 +681,12 @@ function ChatSessionSlot({
     setSteerQueueState(next);
     saveSteers(sessionId, next); // scratch state survives a swap (S3)
   };
+  const [serverInterjectionQueue, setServerInterjectionQueueState] = useState<{ id: string; text: string }[]>([]);
+  const serverInterjectionQueueRef = useRef<{ id: string; text: string }[]>([]);
+  const setServerInterjectionQueue = (next: { id: string; text: string }[]) => {
+    serverInterjectionQueueRef.current = next;
+    setServerInterjectionQueueState(next);
+  };
   // Forwarded into the DS PromptInput (inputRef) — for slash-completion focus and
   // the Ctrl/⌘+Enter caret insert. The DS component owns the auto-grow.
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -660,6 +710,7 @@ function ChatSessionSlot({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [composerFocusNonce]);
   const status = chat.sessionStatusMap[sessionId] || "idle";
+  const serverTurnControl = chat.serverTurnControls?.[sessionId] ?? null;
   // Escape-to-stop (#2968): the `chat.stop` keybinding runs outside React, so the VISIBLE
   // slot publishes its behavior on the escapeStop seam. No dep array — re-registered each
   // render so the binding always sees the CURRENT stop() closure (it reads taskId state);
@@ -678,6 +729,12 @@ function ChatSessionSlot({
   // running into THIS session — the browser can't stream it, so show a labelled typing
   // indicator. Suppressed while this tab is itself streaming (its own spinner covers it).
   const serverTurnLabel = useServerTurn(sessionId);
+  const serverTurnInteractive = status === "streaming" || Boolean(serverTurnControl);
+  useEffect(() => {
+    if (!serverTurnControl && serverInterjectionQueueRef.current.length) {
+      setServerInterjectionQueue([]);
+    }
+  }, [serverTurnControl]);
 
   // Pending file attachments. Each is uploaded to /api/knowledge/attach on pick;
   // the backend tiers it (inline small / index large) and returns a `context`
@@ -1213,14 +1270,19 @@ function ChatSessionSlot({
   // which also enables submit when attachments are present (@protolabsai/ui ≥ 0.34).
   const canSend = useMemo(
     () =>
-      (Boolean(draft.trim()) || attachments.some((a) => a.status === "ready")) &&
-      status !== "streaming" &&
-      !signedOut,
-    [draft, attachments, status, signedOut],
+      canSubmitChatDraft({
+        draft,
+        hasReadyAttachment: attachments.some((a) => a.status === "ready"),
+        status,
+        signedOut,
+        serverTurnLabel,
+        serverTurnControl,
+      }),
+    [draft, attachments, serverTurnControl, serverTurnLabel, status, signedOut],
   );
 
   async function send() {
-    if (!session || !canSend) return;
+    if (!session || signedOut) return;
     // A HITL form/question/approval is open (#1560): a fresh send would race the
     // pending form — the server holds unmarked messages anyway — so queue it as a
     // steer instead. It folds into the agent's context right AFTER the form
@@ -1230,6 +1292,11 @@ function ChatSessionSlot({
       void queueSteer();
       return;
     }
+    if (serverTurnControl) {
+      void queueServerInterjection();
+      return;
+    }
+    if (!canSend) return;
     const text = draft.trim();
     pushInputHistory(text); // record for ↑/↓ recall, then reset nav to the newest
     histIndexRef.current = null;
@@ -1280,6 +1347,28 @@ function ChatSessionSlot({
     } catch (e) {
       setSteerQueue(steerQueueRef.current.filter((x) => x.id !== id));
       onError(`Couldn't queue message: ${errMsg(e)}`);
+    }
+  }
+
+  // Interject into an ATTENDED server-initiated turn without starting a competing
+  // browser-owned turn. The durable task id comes from bd-v92b control frames, not
+  // from local stream ownership, so this also works after remount when the backend
+  // republishes the live control contract.
+  async function queueServerInterjection() {
+    const text = draft.trim();
+    const control = chatStore.getSnapshot().serverTurnControls[sessionId];
+    if (!session || !text || !control) return;
+    pushInputHistory(text);
+    histIndexRef.current = null;
+    histStashRef.current = "";
+    const id = messageId();
+    setDraft("");
+    setServerInterjectionQueue([...serverInterjectionQueueRef.current, { id, text }]);
+    try {
+      await api.serverTurnInterject(session.id, control.taskId, id, text);
+    } catch (e) {
+      setServerInterjectionQueue(serverInterjectionQueueRef.current.filter((x) => x.id !== id));
+      onError(`Couldn't queue interjection: ${errMsg(e)}`);
     }
   }
 
@@ -2159,14 +2248,20 @@ function ChatSessionSlot({
     // ignores the abort signal entirely, so this server-side cancel is the only
     // thing that actually halts the turn there.
     const before = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
-    const cancelId = resolveStopTarget(before?.messages || [], taskId);
+    const control = chatStore.getSnapshot().serverTurnControls[sessionId];
+    const cancelId = resolveComposerStopTarget(before?.messages || [], taskId, control);
     // Settle the thread immediately: no bubble may stay `streaming` after Stop.
     // The send-loop only finalizes turns it owns; a re-attached turn has none.
     if (before) chatStore.updateMessages(sessionId, finalizeStoppedMessages(before.messages));
+    if (control) {
+      chatStore.clearServerTurnControl(sessionId, control.taskId);
+      noteTurnFinished(sessionId);
+    }
     chatStore.setSessionStatus(sessionId, "idle");
     setStatusMessage("stopped");
     // Drop any optimistic queued-steer bubbles; the user chose to stop.
     setSteerQueue([]);
+    setServerInterjectionQueue([]);
     if (cancelId) {
       try {
         await api.cancelTask(cancelId);
@@ -2223,6 +2318,7 @@ function ChatSessionSlot({
         dismissedToolCalls={dismissedToolCalls}
         actions={transcriptActions}
         steerQueue={steerQueue}
+        serverInterjectionQueue={serverInterjectionQueue}
         serverTurnLabel={serverTurnLabel}
         status={status}
         onCancelDelegation={transcriptCancelDelegation}
@@ -2347,18 +2443,26 @@ function ChatSessionSlot({
             histIndexRef.current = null; // typing detaches from history nav (readline)
             refreshSlash(); // re-parse the "/name" token at the (post-input) caret (#1530)
           }}
-          // Idle → send. While a turn streams (`busy`), the field stays live: Enter
-          // queues a steer into the running turn (onQueue) without stopping it, and
-          // the kit renders a dedicated Stop (onStop) beside Send.
+          // Idle → send. While this browser streams, Enter queues a steer. While an
+          // attended server turn is live, Enter queues an interjection through its
+          // durable server-control task id instead of starting a competing turn.
           onSubmit={() => void send()}
-          busy={status === "streaming"}
-          onQueue={() => void queueSteer()}
-          onStop={() => void stop()}
+          busy={chatComposerBusy(status, serverTurnLabel, serverTurnControl)}
+          onQueue={
+            serverTurnInteractive
+              ? () => void (serverTurnControl ? queueServerInterjection() : queueSteer())
+              : undefined
+          }
+          onStop={serverTurnInteractive ? () => void stop() : undefined}
           // Short hints only (#1699) — key/command discoverability lives in /help now, not
           // in a placeholder wall of text competing with the message being written. ("Steer
           // the agent" is also an e2e anchor — chat-steer-cancel.spec.ts.) With a steer
           // queued mid-turn, the hint flips to ↑-recall discoverability (#2837).
-          placeholder={composerPlaceholder(status, steerQueue.length)}
+          placeholder={
+            serverTurnControl
+              ? "Interject into the running server task…"
+              : composerPlaceholder(status, steerQueue.length)
+          }
           inputRef={textareaRef}
           onKeyDown={onComposerKeyDown}
           onPaste={(e) => {

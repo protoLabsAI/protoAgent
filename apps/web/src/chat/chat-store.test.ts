@@ -100,6 +100,7 @@ describe("mergeHydratedSessions", () => {
       currentSessionId: "chat-a",
       pendingDeleteRequest: null,
       pendingClearRequest: null,
+      serverTurnControls: {},
     };
     const next = mergeHydratedSessions(current, [session("chat-a", [user("server")], 20)]);
     expect(next).toBe(current);
@@ -115,6 +116,7 @@ describe("mergeHydratedSessions", () => {
       currentSessionId: "chat-a",
       pendingDeleteRequest: null,
       pendingClearRequest: null,
+      serverTurnControls: {},
     };
     const next = mergeHydratedSessions(current, [session("chat-a", [user("server")], 20)]);
     expect(next.sessions[0]).toMatchObject({ id: "chat-a", title: "Release plan", updatedAt: 20 });
@@ -130,6 +132,7 @@ describe("mergeHydratedSessions", () => {
       currentSessionId: blank.id,
       pendingDeleteRequest: null,
       pendingClearRequest: null,
+      serverTurnControls: {},
     };
     const next = mergeHydratedSessions(current, [
       session("chat-old", [user("old")], 10),
@@ -153,6 +156,7 @@ describe("mergeHydratedSessions", () => {
       currentSessionId: blank.id,
       pendingDeleteRequest: null,
       pendingClearRequest: null,
+      serverTurnControls: {},
     };
     const next = mergeHydratedSessions(current, [live]);
     expect(next.sessionStatusMap["chat-live"]).toBe("streaming");
@@ -750,5 +754,80 @@ describe("clear-conversation request (#2996)", () => {
     chatStore.requestClearSession("s-clear");
     // A clear must not spill into the delete lifecycle — the two dialogs are separate.
     expect(chatStore.getSnapshot().pendingDeleteRequest).toBeNull();
+  });
+});
+
+describe("server-turn control state (#3092)", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    vi.resetModules(); // fresh module-level store per test
+  });
+
+  it("stores attended controls by session using the durable server task id", async () => {
+    const { chatStore } = await import("./chat-store");
+
+    chatStore.setServerTurnControl({
+      sessionId: "s1",
+      taskId: "task-live",
+      origin: "scheduler",
+      trigger: "job-1",
+      controllable: true,
+      operatorControllable: true,
+    });
+
+    expect(chatStore.getSnapshot().serverTurnControls["s1"]).toMatchObject({
+      taskId: "task-live",
+      origin: "scheduler",
+      trigger: "job-1",
+    });
+  });
+
+  it("clears the session affordance for unattended controls", async () => {
+    const { chatStore } = await import("./chat-store");
+
+    chatStore.setServerTurnControl({
+      sessionId: "s1",
+      taskId: "task-live",
+      origin: "scheduler",
+      trigger: "job-1",
+      controllable: true,
+      operatorControllable: true,
+    });
+    chatStore.setServerTurnControl({
+      sessionId: "s1",
+      taskId: "task-live",
+      origin: "scheduler",
+      trigger: "job-1",
+      controllable: false,
+      operatorControllable: false,
+    });
+
+    expect(chatStore.getSnapshot().serverTurnControls["s1"]).toBeUndefined();
+  });
+
+  it("keeps a newer control when a stale completion races in", async () => {
+    const { chatStore } = await import("./chat-store");
+
+    chatStore.setServerTurnControl({
+      sessionId: "s1",
+      taskId: "task-old",
+      origin: "scheduler",
+      trigger: "job-1",
+      controllable: true,
+      operatorControllable: true,
+    });
+    chatStore.setServerTurnControl({
+      sessionId: "s1",
+      taskId: "task-new",
+      origin: "inbox",
+      trigger: "message-1",
+      controllable: true,
+      operatorControllable: true,
+    });
+    chatStore.clearServerTurnControl("s1", "task-old");
+
+    expect(chatStore.getSnapshot().serverTurnControls["s1"]?.taskId).toBe("task-new");
+    chatStore.clearServerTurnControl("s1", "task-new");
+    expect(chatStore.getSnapshot().serverTurnControls["s1"]).toBeUndefined();
   });
 });

@@ -15,6 +15,7 @@ type ChatTranscriptProps = {
   dismissedToolCalls: Set<string>;
   actions: ChatMessageActions;
   steerQueue: { id: string; text: string }[];
+  serverInterjectionQueue: { id: string; text: string }[];
   serverTurnLabel: string | null;
   status: SessionStatus;
   onCancelDelegation: (id: string) => void;
@@ -63,6 +64,7 @@ export const ChatTranscript = memo(function ChatTranscript({
   dismissedToolCalls,
   actions,
   steerQueue,
+  serverInterjectionQueue,
   serverTurnLabel,
   status,
   onCancelDelegation,
@@ -97,6 +99,11 @@ export const ChatTranscript = memo(function ChatTranscript({
           queuedLabel="queued — folds into the agent's work at its next step"
           onCancel={() => onCancelSteer(queued.id)}
         >
+          <span className="chat-user-text">{queued.text}</span>
+        </Message>
+      ))}
+      {serverInterjectionQueue.map((queued) => (
+        <Message key={queued.id} role="user" queued queuedLabel="queued interjection — sent to this server turn">
           <span className="chat-user-text">{queued.text}</span>
         </Message>
       ))}
