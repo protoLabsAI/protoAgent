@@ -165,11 +165,46 @@ describe("ServerTurnWatch control payload bridge", () => {
     });
   });
 
-  it("clears the stored control when the server turn finishes", () => {
+  it("clears the stored control for the finished durable task when the server turn finishes", () => {
+    act(() => root?.render(h(ServerTurnWatch)));
+    act(() => mocks.handlers.get("turn.finished")?.({ session_id: "s1", task_id: "task-1" }));
+
+    expect(mocks.clearServerTurnControl).toHaveBeenCalledWith("s1", "task-1");
+  });
+
+  it("does not clear a newer same-session control when an older server turn finishes late", () => {
+    act(() => root?.render(h(ServerTurnWatch)));
+    act(() =>
+      mocks.handlers.get("turn.started")?.({
+        session_id: "s1",
+        origin: "scheduler",
+        control: {
+          session_id: "s1",
+          task_id: "task-new",
+          origin: "scheduler",
+          controllable: true,
+          operator_controllable: true,
+        },
+      }),
+    );
+    act(() => mocks.handlers.get("turn.finished")?.({ session_id: "s1", task_id: "task-old" }));
+
+    expect(mocks.setServerTurnControl).toHaveBeenCalledWith({
+      sessionId: "s1",
+      taskId: "task-new",
+      origin: "scheduler",
+      trigger: "",
+      controllable: true,
+      operatorControllable: true,
+    });
+    expect(mocks.clearServerTurnControl).toHaveBeenCalledWith("s1", "task-old");
+  });
+
+  it("keeps legacy session-level cleanup for finish events without a task id", () => {
     act(() => root?.render(h(ServerTurnWatch)));
     act(() => mocks.handlers.get("turn.finished")?.({ session_id: "s1" }));
 
-    expect(mocks.clearServerTurnControl).toHaveBeenCalledWith("s1");
+    expect(mocks.clearServerTurnControl).toHaveBeenCalledWith("s1", undefined);
   });
 
   it("keeps ordinary progress rendering intact", () => {

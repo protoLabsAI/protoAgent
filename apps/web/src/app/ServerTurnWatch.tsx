@@ -85,7 +85,8 @@ export function ServerTurnWatch() {
     const offFinished = onTopic("turn.finished", (data) => {
       const session = String(data.session_id ?? "");
       if (session) {
-        chatStore.clearServerTurnControl(session);
+        const taskId = String(data.task_id ?? "");
+        chatStore.clearServerTurnControl(session, taskId || undefined);
         noteTurnFinished(session);
       }
     });
