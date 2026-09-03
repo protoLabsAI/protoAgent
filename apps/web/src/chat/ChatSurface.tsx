@@ -729,7 +729,11 @@ function ChatSessionSlot({
   // running into THIS session — the browser can't stream it, so show a labelled typing
   // indicator. Suppressed while this tab is itself streaming (its own spinner covers it).
   const serverTurnLabel = useServerTurn(sessionId);
-  const serverTurnInteractive = status === "streaming" || Boolean(serverTurnControl);
+  // A turn is in flight that the composer can steer or stop — EITHER this browser
+  // streaming its own turn (Enter queues a steer) OR an attended server turn
+  // (Enter queues an interjection through its durable control task). Named for the
+  // capability rather than the source: it is not server-specific.
+  const turnInterruptible = status === "streaming" || Boolean(serverTurnControl);
   useEffect(() => {
     if (!serverTurnControl && serverInterjectionQueueRef.current.length) {
       setServerInterjectionQueue([]);
@@ -2449,11 +2453,11 @@ function ChatSessionSlot({
           onSubmit={() => void send()}
           busy={chatComposerBusy(status, serverTurnLabel, serverTurnControl)}
           onQueue={
-            serverTurnInteractive
+            turnInterruptible
               ? () => void (serverTurnControl ? queueServerInterjection() : queueSteer())
               : undefined
           }
-          onStop={serverTurnInteractive ? () => void stop() : undefined}
+          onStop={turnInterruptible ? () => void stop() : undefined}
           // Short hints only (#1699) — key/command discoverability lives in /help now, not
           // in a placeholder wall of text competing with the message being written. ("Steer
           // the agent" is also an e2e anchor — chat-steer-cancel.spec.ts.) With a steer
