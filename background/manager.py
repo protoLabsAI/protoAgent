@@ -49,12 +49,20 @@ class BackgroundManager:
         batch_join_timeout_s: float | None = None,
         event_publish=None,
         on_terminal=None,
+        attended_check=None,
     ) -> None:
         self.agent_name = agent_name
         self._invoke_url = invoke_url.rstrip("/")
         self.store = store
         self._api_key = api_key or ""
         self._bearer = bearer_token or ""
+        # attended_check(session_id) -> bool — the live SSE-boundary presence probe (#3110):
+        # whether an operator is connected to the origin session RIGHT NOW. Injected so this
+        # package need not import ``server`` (mirrors ``event_publish`` / ``on_terminal``);
+        # when absent, ``_session_attended`` falls back to the server registry lazily and, on
+        # any failure, fails CLOSED to unattended. Read once per push-resume to decide whether
+        # the report-delivery turn may park for HITL or must keep the autonomous auto-answer.
+        self._attended_check = attended_check
         # (topic, data) -> None — the server's event bus, so a live console gets a
         # ``background.started`` push the moment a job is spawned (ADR 0050). Optional;
         # a subagent-turn job's completion is published by the A2A terminal hook (which
@@ -345,6 +353,32 @@ class BackgroundManager:
         )
         return {"ok": ok, "status": "canceled", "detail": f"Canceled {job_id}."}
 
+    # ── session attendance (#3110) ────────────────────────────────────────────
+
+    def _session_attended(self, origin_session: str) -> bool:
+        """Whether a live operator is attending ``origin_session`` right now — the SSE-
+        boundary presence snapshot taken at push-resume time (#3110). An attended origin
+        makes the report-delivery nudge eligible to PARK for ``ask_human`` /
+        ``request_user_input`` (a human can answer); an unattended one keeps the existing
+        autonomous auto-answer (no deadlock). Both the singleton and the coalesced-batch
+        resume stamp this ONE decision into their metadata via this helper, so they agree.
+
+        Uses the injected ``attended_check`` when present; otherwise resolves the server-side
+        registry lazily (kept out of module import so this package doesn't depend on
+        ``server``). Fails CLOSED (unattended) on a missing signal or any error, so an
+        ambiguous attendance state can never let a server-fired turn park with nobody to
+        answer it."""
+        check = self._attended_check
+        if check is None:
+            try:
+                from server.chat import is_session_attended as check
+            except Exception:  # noqa: BLE001 — no presence signal available ⇒ unattended
+                return False
+        try:
+            return bool(check(origin_session or ""))
+        except Exception:  # noqa: BLE001 — ambiguity fails closed to unattended
+            return False
+
     # ── self-POST mechanics (shared by _fire and resume_origin — ADR 0050/0070) ─
 
     def _auth_headers(self) -> dict[str, str]:
@@ -451,6 +485,11 @@ class BackgroundManager:
         # `turn.started` before and `turn.finished` after so an open origin-session tab
         # renders its typing indicator ("responding to background reports…") for the turn.
         session_id = job.origin_session
+        # Snapshot SSE-boundary attendance ONCE, here at resume time (#3110): a nudge into a
+        # session a live operator is watching may park for HITL; an unattended one keeps the
+        # autonomous auto-answer. Stamped on the turn so the decision is deterministic and
+        # matches the batch path (which snapshots the same origin session the same way).
+        attended = self._session_attended(session_id)
         self._publish_turn("turn.started", session_id=session_id, origin="background-resume", trigger=job.id)
         ok = False
         try:
@@ -464,6 +503,10 @@ class BackgroundManager:
                     "origin": "background-resume",
                     "trigger": job.id,
                     "background_job_id": job.id,
+                    # Live operator attendance at resume time (#3110). Attended ⇒ the turn
+                    # is eligible to park for ask_human / request_user_input; unattended ⇒
+                    # the existing no-deadlock autonomous auto-answer.
+                    "attended": attended,
                 },
             )
             ok = True
@@ -590,6 +633,11 @@ class BackgroundManager:
                 f"[all {total} background jobs from your fan-out have finished ({summary}) — their completion "
                 "messages are attached to this turn; synthesize ONE briefing against all of them]"
             )
+        # Same attendance snapshot as the singleton path (#3110), on the SAME origin session:
+        # a coalesced batch briefing into an attended session may park for HITL, an unattended
+        # one keeps the autonomous auto-answer. Both paths go through ``_session_attended`` so
+        # they can never make different decisions for one origin session.
+        attended = self._session_attended(origin_session)
         # Turn-lifecycle events (#1767), keyed on the batch id: the nudge holds the
         # connection open for the whole origin-session briefing turn.
         self._publish_turn("turn.started", session_id=origin_session, origin="background-resume", trigger=batch_id)
@@ -602,6 +650,8 @@ class BackgroundManager:
                     "origin": "background-resume",
                     "trigger": batch_id,
                     "background_batch_id": batch_id,
+                    # Live operator attendance at resume time (#3110) — see resume_origin.
+                    "attended": attended,
                 },
             )
             ok = True

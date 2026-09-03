@@ -19,6 +19,7 @@ import { UpdateNotice } from "./UpdateNotice";
 import { BackgroundWatch } from "./BackgroundWatch";
 import { ScheduledWatch } from "./ScheduledWatch";
 import { ChatResumeWatch } from "./ChatResumeWatch";
+import { ChatAttendance } from "./ChatAttendance";
 import { PluginChangeWatch } from "./PluginChangeWatch";
 import { ServerTurnWatch } from "./ServerTurnWatch";
 import { BackgroundJobs } from "./BackgroundJobs";
@@ -848,6 +849,10 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
       {/* wait/scheduled resumes (ADR 0053, bd-k02): a server-fired resume turn lands in
           the chat thread; surface it live in the open tab instead of on next interaction. */}
       <ChatResumeWatch />
+      {/* Session attendance (#3110): hold an SSE presence stream open for the on-screen chat so
+          a background-resume delivered into it can park for HITL (an operator is watching) instead
+          of auto-answering. Released on session switch / unmount → the session reads unattended. */}
+      <ChatAttendance />
       {/* Server-initiated turns (#1767): background push-resume / scheduled / watch fires
           hold the connection open for the whole turn but never stream to the browser —
           drive the chat typing indicator off turn.started/turn.finished so the app doesn't

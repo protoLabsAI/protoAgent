@@ -372,11 +372,18 @@ class _HitlTurnStream:
 
 
 class TestResumeTurnIsAutonomous:
-    async def test_nudge_turn_auto_answers_hitl_instead_of_parking(self, monkeypatch):
+    """A push-resume nudge's provenance (``background-resume``) is server-fired, but whether
+    it is AUTONOMOUS depends on live operator attendance of the origin session (#3110): an
+    UNATTENDED nudge auto-answers a HITL pause (nobody can answer); an ATTENDED one — the
+    manager saw an operator on the SSE boundary at resume time and stamped ``attended`` —
+    parks for the human, exactly like an ordinary operator turn."""
+
+    async def test_unattended_nudge_auto_answers_hitl_instead_of_parking(self, monkeypatch):
         """The push-resume nudge is server-fired — the manager discards the A2A
-        response, so nobody can answer a HITL pause. origin="background-resume"
-        must ride the autonomous auto-answer path (like scheduler/background), or a
-        briefing turn that asks a question parks its task in input-required forever."""
+        response, so with NO operator attending nobody can answer a HITL pause.
+        origin="background-resume" (unstamped / attended false) must ride the autonomous
+        auto-answer path (like scheduler/background), or a briefing turn that asks a
+        question parks its task in input-required forever."""
         import importlib
 
         from runtime.state import STATE
@@ -399,6 +406,33 @@ class TestResumeTurnIsAutonomous:
         assert "input_required" not in kinds  # never parks
         assert ("done", "Briefing delivered.") in frames
         assert chat_mod._AUTONOMOUS_HITL_SENTINEL in fake.resume_values
+
+    async def test_attended_nudge_parks_for_hitl(self, monkeypatch):
+        """When the manager stamped the nudge ``attended`` (a live operator was connected to
+        the origin session at resume time), the report-delivery turn is NOT autonomous — it
+        parks for the human to answer instead of auto-answering (#3110)."""
+        import importlib
+
+        from runtime.state import STATE
+
+        chat_mod = importlib.import_module("server.chat")
+        monkeypatch.setattr(STATE, "goal_controller", None, raising=False)
+        fake = _HitlTurnStream()
+        monkeypatch.setattr(chat_mod, "_run_turn_stream", fake)
+
+        frames = [
+            frame
+            async for frame in chat_mod._run_native_turn(
+                "[background job bg-abcabcabcabc (dig) finished — brief the operator]",
+                "chat-42",
+                {"configurable": {"thread_id": "a2a:chat-42"}},
+                request_metadata={"origin": "background-resume", "attended": True},
+            )
+        ]
+        kinds = [k for k, _ in frames]
+        assert "input_required" in kinds  # parked for the attending operator
+        assert "done" not in kinds  # a parked turn yields no terminal answer
+        assert fake.resume_values == [None]  # never auto-resumed with the sentinel
 
 
 # ── D2: report indexing ──────────────────────────────────────────────────────

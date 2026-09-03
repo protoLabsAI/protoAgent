@@ -293,6 +293,44 @@ def test_ac9_sse_expired_token(monkeypatch):
     assert c.get(f"/api/events?token={token}").status_code == 401
 
 
+# #3110: the session-attendance presence stream authenticates with the SAME short-lived SSE
+# query token as /api/events, so a browser EventSource (which can't send an Authorization
+# header) can hold /api/chat/attend open in bearer mode. Without this exemption the console
+# consumer 401s and no session ever registers as attended.
+def _attend_client() -> TestClient:
+    app = Starlette(
+        routes=[Route("/api/chat/attend", lambda r: PlainTextResponse("ok"), methods=["GET"])]
+    )
+    app.add_middleware(auth.A2AAuthMiddleware)
+    return TestClient(app)
+
+
+def test_sse_attend_valid_token(monkeypatch):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
+    token = auth.generate_sse_token()
+    assert _attend_client().get(f"/api/chat/attend?session=s&token={token}").status_code == 200
+
+
+def test_sse_attend_rejects_missing_or_forged_token(monkeypatch):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
+    c = _attend_client()
+    assert c.get("/api/chat/attend?session=s").status_code == 401  # no token
+    assert c.get("/api/chat/attend?session=s&token=forged-garbage").status_code == 401
+
+
+def test_sse_attend_accepts_bearer_header(monkeypatch):
+    # A server-to-server caller with the operator bearer still passes (falls through to the
+    # normal bearer check), exactly like /api/events.
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
+    r = _attend_client().get(
+        "/api/chat/attend?session=s", headers={"Authorization": "Bearer secret"}
+    )
+    assert r.status_code == 200
+
+
 # AC10: valid bearer on /api/* passes
 def test_ac10_bearer_passes_api(monkeypatch):
     monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)

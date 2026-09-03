@@ -512,6 +512,90 @@ class TestResumeOriginTurnEvents:
         assert finished["ok"] is False
 
 
+# ── #3110: attendance snapshot stamped onto the push-resume nudge ────────────
+
+
+class TestResumeAttendance:
+    """The push-resume nudge snapshots live operator attendance for its origin session
+    ONCE, at resume time, and stamps the decision (``attended``) into the turn metadata so
+    the server-side HITL path is deterministic (#3110). An attended report delivery may then
+    park for ask_human / request_user_input; an unattended one keeps the autonomous
+    auto-answer. Singleton and coalesced-batch resume read the SAME origin session through
+    ``_session_attended``, so they can never disagree."""
+
+    def _recorder(self, mgr) -> list:
+        sends: list[dict] = []
+
+        async def _fake_send(*, context_id, text, metadata):
+            sends.append({"context_id": context_id, "metadata": metadata})
+
+        mgr._send_a2a_message = _fake_send
+        return sends
+
+    async def test_singleton_stamps_attended_true_when_operator_present(self, tmp_path):
+        mgr = _manager(tmp_path, attended_check=lambda s: s == "sess-1")
+        sends = self._recorder(mgr)
+        assert await mgr.resume_origin(_resume_job()) is True  # origin_session == "sess-1"
+        assert sends[0]["metadata"]["attended"] is True
+
+    async def test_singleton_stamps_attended_false_when_unattended(self, tmp_path):
+        mgr = _manager(tmp_path, attended_check=lambda _s: False)
+        sends = self._recorder(mgr)
+        assert await mgr.resume_origin(_resume_job()) is True
+        assert sends[0]["metadata"]["attended"] is False
+
+    async def test_batch_stamps_the_same_decision_as_singleton(self, tmp_path):
+        # r4 — one origin session, one decision, whichever resume shape delivers it.
+        attended_sessions = {"sess-1"}
+        mgr = _manager(
+            tmp_path, batch_join_timeout_s=1000, attended_check=lambda s: s in attended_sessions
+        )
+        sends = self._recorder(mgr)
+        # a singleton nudge into sess-1
+        await mgr.resume_origin(_resume_job())
+        # a coalesced batch on the SAME origin session
+        a = mgr.store.create(
+            agent_name="a", origin_session="sess-1", subagent_type="researcher",
+            description="a", prompt="p", batch_id="batch-Z",
+        )
+        b = mgr.store.create(
+            agent_name="a", origin_session="sess-1", subagent_type="researcher",
+            description="b", prompt="p", batch_id="batch-Z",
+        )
+        mgr.store.mark_complete(a, "completed", "ra")
+        assert await mgr.resume_for_terminal(mgr.store.get(a)) is None  # holds for the sibling
+        mgr.store.mark_complete(b, "completed", "rb")
+        assert await mgr.resume_for_terminal(mgr.store.get(b)) is True  # last member fires
+        assert [s["metadata"]["attended"] for s in sends] == [True, True]  # same decision
+        assert sends[1]["metadata"]["background_batch_id"] == "batch-Z"
+
+    async def test_session_attended_fails_closed_on_check_error(self, tmp_path):
+        def _boom(_s):
+            raise RuntimeError("presence probe down")
+
+        mgr = _manager(tmp_path, attended_check=_boom)
+        assert mgr._session_attended("sess-1") is False  # ambiguity → unattended
+
+    async def test_session_attended_falls_back_to_server_registry(self, tmp_path):
+        # With no injected check the manager reads the server-side registry lazily, and an
+        # unknown session is unattended (fail-closed). Registering it flips the decision.
+        # (Import the submodule via importlib — the re-exported ``chat`` function shadows
+        # the ``server.chat`` attribute in server/__init__.py.)
+        import importlib
+
+        chat_mod = importlib.import_module("server.chat")
+
+        chat_mod._ATTENDED_SESSIONS.clear()
+        mgr = _manager(tmp_path)  # attended_check=None → lazy server.chat.is_session_attended
+        assert mgr._session_attended("sess-live") is False
+        assert chat_mod.mark_session_attended("sess-live") is True
+        try:
+            assert mgr._session_attended("sess-live") is True
+        finally:
+            chat_mod.release_session_attended("sess-live")
+        assert mgr._session_attended("sess-live") is False  # released → unattended again
+
+
 # ── #1766: fan-out batch-join (coalesce N completions into one push-resume) ──
 
 

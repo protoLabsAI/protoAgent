@@ -233,6 +233,139 @@ async def test_multiple_pending_interrupts_return_first_with_id(monkeypatch):
     assert await chat_mod._resume_payload(cfg, "yes") == {"aaa": "yes"}
 
 
+# ── #3110: session attendance (SSE presence) + attended background-resume ─────
+# A background-resume report delivered into a session a live operator is watching must be
+# eligible to park for HITL, while an unattended / disconnected / ambiguous one keeps the
+# no-deadlock autonomous auto-answer. The signal is a bounded, refcounted, fail-closed
+# in-process registry fed by the /api/chat/attend SSE boundary.
+
+
+@pytest.fixture(autouse=True)
+def _clean_attendance():
+    """Every test starts and ends with an empty attendance registry (module-global)."""
+    chat_mod._ATTENDED_SESSIONS.clear()
+    yield
+    chat_mod._ATTENDED_SESSIONS.clear()
+
+
+class TestAttendanceRegistry:
+    def test_mark_release_refcounts(self):
+        assert chat_mod.mark_session_attended("s") is True
+        assert chat_mod.mark_session_attended("s") is True  # second tab on the same session
+        assert chat_mod.is_session_attended("s") is True
+        chat_mod.release_session_attended("s")
+        assert chat_mod.is_session_attended("s") is True  # one connection remains
+        chat_mod.release_session_attended("s")
+        assert chat_mod.is_session_attended("s") is False  # last one gone → unattended
+
+    def test_release_is_idempotent_and_never_raises(self):
+        chat_mod.release_session_attended("never-registered")  # no error, no negative refcount
+        assert chat_mod.is_session_attended("never-registered") is False
+
+    def test_blank_session_fails_closed(self):
+        assert chat_mod.mark_session_attended("") is False
+        assert chat_mod.mark_session_attended("   ") is False
+        assert chat_mod.is_session_attended("") is False
+        assert chat_mod.is_session_attended(None) is False
+
+    def test_registry_is_bounded(self, monkeypatch):
+        monkeypatch.setattr(chat_mod, "_ATTENDED_SESSIONS_MAX", 2)
+        assert chat_mod.mark_session_attended("a") is True
+        assert chat_mod.mark_session_attended("b") is True
+        # a NEW session past the cap is dropped (fail-closed), not grown unbounded
+        assert chat_mod.mark_session_attended("c") is False
+        assert chat_mod.is_session_attended("c") is False
+        # …but an already-registered session can still add connections (no new key)
+        assert chat_mod.mark_session_attended("a") is True
+
+
+class TestAttendanceStream:
+    async def test_stream_registers_then_releases_on_close(self):
+        agen = chat_mod.attendance_stream("sess-live", keepalive_s=0.01)
+        first = await agen.__anext__()
+        assert first == ": attending\n\n"
+        assert chat_mod.is_session_attended("sess-live") is True
+        await agen.aclose()  # tab close / navigation / dropped socket
+        assert chat_mod.is_session_attended("sess-live") is False  # cleaned up in finally
+
+    async def test_stream_releases_on_disconnect_probe(self):
+        async def _disconnected():
+            return True
+
+        agen = chat_mod.attendance_stream("sess-live", keepalive_s=100, is_disconnected=_disconnected)
+        assert await agen.__anext__() == ": attending\n\n"
+        assert chat_mod.is_session_attended("sess-live") is True
+        with pytest.raises(StopAsyncIteration):
+            await agen.__anext__()  # disconnect probe True → loop exits, finally runs
+        assert chat_mod.is_session_attended("sess-live") is False
+
+
+class TestAttendedResumeDecision:
+    """``_is_autonomous`` — a background-resume nudge is autonomous only while unattended;
+    every OTHER autonomous origin is unconditional, and ``unattended: true`` always wins."""
+
+    def test_attended_background_resume_is_not_autonomous(self):
+        assert chat_mod._is_autonomous({"origin": "background-resume", "attended": True}) is False
+
+    def test_unattended_background_resume_is_autonomous(self):
+        assert chat_mod._is_autonomous({"origin": "background-resume", "attended": False}) is True
+
+    def test_unstamped_background_resume_fails_closed_to_autonomous(self):
+        assert chat_mod._is_autonomous({"origin": "background-resume"}) is True
+
+    def test_attended_flag_does_not_leak_to_other_origins(self):
+        # r3 — scheduler/watch/inbox/webhook/background stay autonomous regardless of any
+        # stray attended flag (only background-resume consults it).
+        for origin in ("scheduler", "watch", "inbox", "webhook", "background"):
+            assert chat_mod._is_autonomous({"origin": origin, "attended": True}) is True
+
+    def test_explicit_unattended_overrides_attendance(self):
+        assert (
+            chat_mod._is_autonomous({"origin": "background-resume", "attended": True, "unattended": True})
+            is True
+        )
+
+    def test_operator_turn_still_not_autonomous(self):
+        assert chat_mod._is_autonomous({}) is False
+
+
+class _FormHitlStream:
+    """Stand-in for ``_run_turn_stream`` that pauses on a ``request_user_input`` FORM."""
+
+    def __init__(self):
+        self.resume_values: list = []
+
+    def __call__(self, message, session_id, config, *, resume_value=None, **_kw):
+        self.resume_values.append(resume_value)
+
+        async def _gen():
+            yield ("input_required", {"kind": "form", "title": "Pick env", "steps": [{"schema": {}}]})
+
+        return _gen()
+
+
+@pytest.mark.asyncio
+async def test_attended_nudge_parks_on_request_user_input_form(monkeypatch):
+    """An attended background-resume that calls ``request_user_input`` parks its FORM for the
+    operator rather than auto-answering — the form sibling of the ask_human park (#3110)."""
+    monkeypatch.setattr(STATE, "goal_controller", None, raising=False)
+    fake = _FormHitlStream()
+    monkeypatch.setattr(chat_mod, "_run_turn_stream", fake)
+
+    frames = await _collect(
+        chat_mod._run_native_turn(
+            "[background job finished — brief the operator]",
+            "chat-live",
+            {"configurable": {"thread_id": "a2a:chat-live"}},
+            request_metadata={"origin": "background-resume", "attended": True},
+        )
+    )
+    kinds = [k for k, _ in frames]
+    assert "input_required" in kinds  # the form parked for the attending operator
+    assert "done" not in kinds
+    assert fake.resume_values == [None]  # never auto-resumed
+
+
 class _FakeTask:
     def __init__(self, interrupts, result=None):
         self.interrupts = interrupts
