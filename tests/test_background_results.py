@@ -435,6 +435,126 @@ class TestResumeTurnIsAutonomous:
         assert fake.resume_values == [None]  # never auto-resumed with the sentinel
 
 
+class TestServerTurnControlPlane:
+    def setup_method(self):
+        import importlib
+
+        from graph import steering
+
+        chat_mod = importlib.import_module("server.chat")
+        steering._QUEUES.clear()
+        chat_mod._LIVE_SERVER_TURNS.clear()
+        chat_mod._ATTENDED_SESSIONS.clear()
+
+    def teardown_method(self):
+        import importlib
+
+        from graph import steering
+
+        chat_mod = importlib.import_module("server.chat")
+        steering._QUEUES.clear()
+        chat_mod._LIVE_SERVER_TURNS.clear()
+        chat_mod._ATTENDED_SESSIONS.clear()
+
+    def test_attended_server_turn_registers_control_payload_and_accepts_once(self):
+        import importlib
+
+        from graph import steering
+
+        chat_mod = importlib.import_module("server.chat")
+        chat_mod.mark_session_attended("chat-42")
+        payload = chat_mod.register_live_server_turn(
+            "chat-42", "task-9", origin="background-resume", trigger="bg-1", attended=True
+        )
+
+        assert payload == {
+            "session_id": "chat-42",
+            "task_id": "task-9",
+            "origin": "background-resume",
+            "trigger": "bg-1",
+            "controllable": True,
+            "operator_controllable": True,
+        }
+        assert chat_mod.submit_server_turn_interjection(
+            "chat-42", "task-9", "focus on the newest result", msg_id="m1"
+        ) == {"ok": True, "id": "m1", "pending": 1}
+        assert steering.pending_items("chat-42") == [{"id": "m1", "text": "focus on the newest result"}]
+        assert chat_mod.submit_server_turn_interjection(
+            "chat-42", "task-9", "focus on the newest result", msg_id="m1"
+        ) == {"ok": False, "reason": "duplicate", "id": "m1", "pending": 1}
+        assert steering.pending("chat-42") == 1
+
+    def test_wrong_session_unattended_and_terminal_are_rejected_without_cross_steer(self):
+        import importlib
+
+        from graph import steering
+
+        chat_mod = importlib.import_module("server.chat")
+        chat_mod.mark_session_attended("chat-a")
+        chat_mod.register_live_server_turn("chat-a", "task-a", origin="scheduler", trigger="job-a")
+        assert chat_mod.submit_server_turn_interjection(
+            "chat-b", "task-a", "wrong room", msg_id="x"
+        )["reason"] == "not_live"
+        assert steering.pending("chat-b") == 0
+
+        chat_mod.release_session_attended("chat-a")
+        assert chat_mod.submit_server_turn_interjection(
+            "chat-a", "task-a", "nobody is watching", msg_id="y"
+        )["reason"] == "uncontrollable"
+        assert steering.pending("chat-a") == 0
+
+        chat_mod.mark_session_attended("chat-a")
+        chat_mod.finish_live_server_turn("chat-a", "task-a")
+        assert chat_mod.submit_server_turn_interjection(
+            "chat-a", "task-a", "too late", msg_id="z"
+        )["reason"] == "not_live"
+        assert steering.pending("chat-a") == 0
+
+    def test_unattended_turn_is_addressable_but_not_operator_controllable(self):
+        import importlib
+
+        from graph import steering
+
+        chat_mod = importlib.import_module("server.chat")
+        payload = chat_mod.register_live_server_turn(
+            "chat-42", "task-9", origin="inbox", trigger="item-1", attended=False
+        )
+
+        assert payload["task_id"] == "task-9"
+        assert payload["operator_controllable"] is False
+        assert chat_mod.submit_server_turn_interjection(
+            "chat-42", "task-9", "please answer me", msg_id="m1"
+        )["reason"] == "uncontrollable"
+        assert steering.pending("chat-42") == 0
+
+    def test_pending_hitl_clears_live_control_before_non_answer_can_steer(self, monkeypatch):
+        import importlib
+
+        import server.a2a as a2a
+        from graph import steering
+
+        chat_mod = importlib.import_module("server.chat")
+        chat_mod.mark_session_attended("chat-42")
+        monkeypatch.setattr(a2a._event_bus, "publish", lambda *_a, **_kw: None)
+        a2a._a2a_progress(
+            "chat-42",
+            "task-9",
+            {
+                "phase": "turn_started",
+                "origin": "background-resume",
+                "trigger": "bg-1",
+                "attended": True,
+            },
+        )
+        assert chat_mod.live_server_turn_control("chat-42", "task-9")["controllable"] is True
+        a2a._a2a_progress("chat-42", "task-9", {"phase": "input_required", "prompt": "Approve?"})
+
+        assert chat_mod.submit_server_turn_interjection(
+            "chat-42", "task-9", "do something else", msg_id="m1"
+        )["reason"] == "not_live"
+        assert steering.pending("chat-42") == 0
+
+
 # ── D2: report indexing ──────────────────────────────────────────────────────
 
 

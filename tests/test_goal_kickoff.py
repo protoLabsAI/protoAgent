@@ -99,6 +99,7 @@ def test_is_autonomous_honors_unattended_and_origins():
     # internal autonomous origins (unchanged)
     assert _is_autonomous({"origin": "scheduler"})
     assert _is_autonomous({"origin": "background-resume"})
+    assert _is_autonomous({"origin": "delegate-result"})
     # declared unattended — bool AND string forms (JSON-RPC may send either)
     assert _is_autonomous({"unattended": True})
     assert _is_autonomous({"unattended": "true"})

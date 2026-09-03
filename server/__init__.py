@@ -252,9 +252,13 @@ from server.chat import (  # noqa: E402,F401 — re-export of the extracted chat
     acp_sessions_snapshot,
     attendance_stream,
     chat,
+    finish_live_server_turn,
     is_session_attended,
+    live_server_turn_control,
     mark_session_attended,
     release_session_attended,
+    register_live_server_turn,
+    submit_server_turn_interjection,
 )
 
 

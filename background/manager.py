@@ -507,6 +507,7 @@ class BackgroundManager:
                     # is eligible to park for ask_human / request_user_input; unattended ⇒
                     # the existing no-deadlock autonomous auto-answer.
                     "attended": attended,
+                    "operator_controllable": attended,
                 },
             )
             ok = True
@@ -652,6 +653,7 @@ class BackgroundManager:
                     "background_batch_id": batch_id,
                     # Live operator attendance at resume time (#3110) — see resume_origin.
                     "attended": attended,
+                    "operator_controllable": attended,
                 },
             )
             ok = True

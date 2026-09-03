@@ -668,6 +668,21 @@ _CHAT_PROGRESS_TEXT_LIMIT = 2000
 _CHAT_PROGRESS_OUTPUT_LIMIT = 500
 
 
+def _server_turn_control(context_id: str, task_id: str, frame: dict) -> dict | None:
+    """Return/register the session-scoped control payload for a server-fired chat turn."""
+    from server.chat import live_server_turn_control, register_live_server_turn
+
+    if frame.get("phase") == "turn_started":
+        return register_live_server_turn(
+            context_id,
+            task_id,
+            origin=frame.get("origin"),
+            trigger=frame.get("trigger"),
+            attended=frame.get("attended"),
+        )
+    return live_server_turn_control(context_id, task_id)
+
+
 def _publish_chat_progress(context_id: str, task_id: str, frame: dict) -> None:
     """Republish a SERVER-FIRED turn's frames into its chat session as ``chat.progress``
     (#2361), so an open console can watch the turn happen instead of staring at a typing
@@ -695,7 +710,12 @@ def _publish_chat_progress(context_id: str, task_id: str, frame: dict) -> None:
     if not is_autonomous_origin(frame.get("origin")):
         return
     phase = frame.get("phase")
-    if phase == "text":
+    control = _server_turn_control(context_id, task_id, frame)
+    if phase == "turn_started":
+        if control is None:
+            return
+        data = {"phase": "turn_started"}
+    elif phase == "text":
         text = str(frame.get("text") or "")
         if not text:
             return
@@ -731,7 +751,12 @@ def _publish_chat_progress(context_id: str, task_id: str, frame: dict) -> None:
         return
     _event_bus.publish(
         "chat.progress",
-        {"session_id": context_id, "task_id": task_id, **data},
+        {
+            "session_id": context_id,
+            "task_id": task_id,
+            **data,
+            **({"control": control} if control else {}),
+        },
         retain=False,
     )
 
@@ -745,6 +770,9 @@ def _a2a_progress(context_id: str, task_id: str, frame: dict) -> None:
     republishes ``background.progress`` for the console's live job card.
     Best-effort — never raises into the executor."""
     if frame.get("phase") == "input_required":
+        from server.chat import finish_live_server_turn
+
+        finish_live_server_turn(context_id, task_id)
         # The turn is parked awaiting a human answer/approval. Carries a short prompt so a
         # consumer can render "needs your approval — <what>" without fetching the task.
         _event_bus.publish(
@@ -1055,6 +1083,9 @@ def _a2a_terminal(outcome) -> None:
     its real A2A context/task identity; ordinary operator chat still returns through
     its own stream and is never duplicated here. Best-effort — never raises."""
     _record_a2a_telemetry(outcome)
+    from server.chat import finish_live_server_turn
+
+    finish_live_server_turn(getattr(outcome, "context_id", "") or "", getattr(outcome, "task_id", "") or "")
     # Scheduled fires (#2990): deliver the result back to the chat that created the
     # schedule as a ScheduledReportCard, whichever thread the fire actually ran in. A
     # no-op for every non-scheduled turn (guarded inside _scheduled_delivery_payload).

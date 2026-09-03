@@ -380,13 +380,6 @@ class ProtoAgentExecutor(AgentExecutor):
                     status=TaskStatus(state=TaskState.TASK_STATE_SUBMITTED),
                 )
             )
-        await updater.start_work()
-        # Realtime: announce the turn (carries the task_id — the handle a host needs to
-        # control or re-attach to this turn) before any work runs (ADR 0051). `resumed`
-        # marks a HITL continuation (the parked task got its answer), so a host can flip
-        # a "needs approval" surface back to "running" (#2132).
-        _notify_progress(context.context_id, context.task_id, {"phase": "turn_started", "resumed": resume})
-
         text = context.get_user_input()
         images = _extract_image_parts(context)
         caller_trace = _extract_caller_trace(context)
@@ -406,6 +399,26 @@ class ProtoAgentExecutor(AgentExecutor):
         _stimulus = (text or "").strip()
         if len(_stimulus) > 600:
             _stimulus = _stimulus[:600] + "…"
+
+        await updater.start_work()
+        # Realtime: announce the turn (carries the task_id — the handle a host needs to
+        # control or re-attach to this turn) before any work runs (ADR 0051). `resumed`
+        # marks a HITL continuation (the parked task got its answer), so a host can flip
+        # a "needs approval" surface back to "running" (#2132). The provenance fields ride
+        # this first frame too (#3092) so a server host can publish an addressable,
+        # session-scoped control capability without inferring task identity later from
+        # display frames.
+        _notify_progress(
+            context.context_id,
+            context.task_id,
+            {
+                "phase": "turn_started",
+                "resumed": resume,
+                "origin": _origin,
+                "trigger": _trigger,
+                "attended": _md.get("attended"),
+            },
+        )
 
         started = time.monotonic()
         accumulated = ""
