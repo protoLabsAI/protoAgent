@@ -147,6 +147,23 @@ def test_storm_guard_caps_then_recovers():
     assert g.allow(11.0) is True
 
 
+# ── now-item A2A acceptance ─────────────────────────────────────────────────
+
+
+def test_a2a_send_acceptance_requires_completed_task():
+    import server.a2a as a2a
+    from runtime.state import STATE
+
+    a2a.install_inbox_now_delivery()
+    assert STATE.inbox_now_delivery is a2a._fire_activity_from_inbox
+    assert a2a._a2a_send_accepted({"result": {"status": {"state": "TASK_STATE_COMPLETED"}}}) is True
+    assert a2a._a2a_send_accepted({"result": {"task": {"status": {"state": "TASK_STATE_COMPLETED"}}}}) is True
+    assert a2a._a2a_send_accepted({"result": {"status": {"state": "TASK_STATE_WORKING"}}}) is False
+    assert a2a._a2a_send_accepted({"result": {"status": {"state": "TASK_STATE_FAILED"}}}) is False
+    assert a2a._a2a_send_accepted({"error": {"code": -32603, "message": "boom"}}) is False
+    assert a2a._a2a_send_accepted({"result": {"text": "not a task"}}) is False
+
+
 # ── check_inbox tool ─────────────────────────────────────────────────────────
 
 

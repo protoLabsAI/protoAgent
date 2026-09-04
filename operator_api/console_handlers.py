@@ -709,60 +709,22 @@ def _inbox_authorized(token: str | None) -> bool:
 
 async def _fire_activity_from_inbox(item: dict) -> bool:
     """Fire a now-priority inbox item as a turn into the Activity thread.
-    Self-POSTs to /a2a (parity with the scheduler), guarded against storms."""
+    The concrete A2A sender is registered by ``server.a2a`` so this module does
+    not import across the operator_api → server boundary."""
     import time
-    from uuid import uuid4
-    import httpx
 
     if STATE.storm_guard is not None and not STATE.storm_guard.allow(time.monotonic()):
         log.warning("[inbox] storm guard suppressed now-fire for item %s", item.get("id"))
         return False
-    # A2A 1.0 (a2a-sdk ≥1.1): the version header + proto method name are
-    # mandatory — the 0.3 `message/send` 404s with -32601. Mirrors the
-    # scheduler's fire (scheduler/local.py).
-    headers = {"Content-Type": "application/json", "A2A-Version": "1.0"}
-    # Present what the guard actually requires, rather than re-reading config + env here
-    # with this call site's own precedence — that duplication is what let the agent card
-    # advertise a credential the server never enforced (#2620).
-    from a2a_impl.auth import inbound_credentials
-
-    bearer, api_key = inbound_credentials()
-    if bearer:
-        headers["Authorization"] = f"Bearer {bearer}"
-    if api_key:
-        headers["X-API-Key"] = api_key
-    mid = str(uuid4())
-    body = {
-        "jsonrpc": "2.0",
-        "id": mid,
-        "method": "SendMessage",
-        "params": {
-            # contextId is a field of Message in 1.0 (params-level => -32602).
-            "message": {
-                "role": "ROLE_USER",
-                "parts": [{"text": item["text"]}],
-                "messageId": mid,
-                "contextId": ACTIVITY_CONTEXT,
-            },
-            "metadata": {
-                "origin": "inbox",
-                "inbox_id": item.get("id"),
-                "inbox_source": item.get("source", ""),
-                "priority": item.get("priority", "now"),
-            },
-        },
-    }
+    delivery = getattr(STATE, "inbox_now_delivery", None)
+    if not callable(delivery):
+        log.warning(
+            "[inbox] now-fire unavailable for item %s: A2A delivery hook is not registered",
+            item.get("id"),
+        )
+        return False
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            r = await client.post(f"http://127.0.0.1:{STATE.active_port}/a2a", headers=headers, json=body)
-        # A JSON-RPC error rides a 200, so status alone isn't enough.
-        if r.status_code >= 400:
-            return False
-        err = r.json().get("error") if r.headers.get("content-type", "").startswith("application/json") else None
-        if err:
-            log.warning("[inbox] now-fire rejected for item %s: %s", item.get("id"), err)
-            return False
-        return True
+        return bool(await delivery(item))
     except Exception:
         log.exception("[inbox] now-fire failed for item %s", item.get("id"))
         return False
