@@ -2,6 +2,8 @@
 register_operator_routes, extracted from _main into operator_api/console_handlers.py.
 These exercise the STATE-driven degradation paths directly (no app needed)."""
 
+import logging
+
 import pytest
 
 from operator_api import console_handlers as ch
@@ -11,6 +13,7 @@ from operator_api import console_handlers as ch
 def _reset_state(monkeypatch):
     import runtime.state as rs
 
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
     for field in (
         "graph_config",
         "graph",
@@ -20,6 +23,7 @@ def _reset_state(monkeypatch):
         "inbox_store",
         "storm_guard",
         "skills_index",
+        "inbox_now_delivery",
     ):
         monkeypatch.setattr(rs.STATE, field, None, raising=False)
     yield
@@ -209,6 +213,108 @@ def test_as_str_list_coercion():
 async def test_inbox_add_requires_store():
     with pytest.raises(RuntimeError):
         await ch._operator_inbox_add({"text": "hi"})
+
+
+async def test_now_inbox_add_uses_registered_a2a_delivery(monkeypatch, tmp_path):
+    import runtime.state as rs
+    from inbox.store import InboxStore
+
+    store = InboxStore(str(tmp_path / "inbox.db"))
+    delivered: list[dict] = []
+    monkeypatch.setattr(rs.STATE, "inbox_store", store, raising=False)
+
+    async def _delivery(item):
+        delivered.append(dict(item))
+        return True
+
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", _delivery, raising=False)
+    res = await ch._operator_inbox_add({"text": "wake up", "priority": "now", "source": "test"})
+
+    assert res["fired"] is True
+    assert delivered and delivered[0]["text"] == "wake up"
+    assert store.list(priority_floor="later") == []
+
+
+async def test_now_inbox_add_restores_pending_when_a2a_delivery_rejects(monkeypatch, tmp_path, caplog):
+    import runtime.state as rs
+    from inbox.store import InboxStore
+
+    store = InboxStore(str(tmp_path / "inbox.db"))
+    monkeypatch.setattr(rs.STATE, "inbox_store", store, raising=False)
+    caplog.set_level(logging.WARNING, logger="protoagent.server")
+
+    async def _delivery(_item):
+        return False
+
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", _delivery, raising=False)
+
+    res = await ch._operator_inbox_add({"text": "try later", "priority": "now"})
+
+    assert res["fired"] is False
+    assert [row["text"] for row in store.list(priority_floor="later")] == ["try later"]
+    assert "now-fire not accepted" in caplog.text
+    assert "restoring pending fallback" in caplog.text
+
+
+async def test_now_inbox_add_does_not_fire_when_delivery_cannot_be_reserved(monkeypatch, tmp_path):
+    import runtime.state as rs
+    from inbox.store import InboxStore
+
+    class _BrokenReserveStore(InboxStore):
+        def mark_delivered(self, ids, *, now=None):
+            raise RuntimeError("sqlite busy")
+
+    store = _BrokenReserveStore(str(tmp_path / "inbox.db"))
+    calls: list[dict] = []
+    monkeypatch.setattr(rs.STATE, "inbox_store", store, raising=False)
+
+    async def _delivery(item):
+        calls.append(item)
+        return True
+
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", _delivery, raising=False)
+
+    res = await ch._operator_inbox_add({"text": "reserve first", "priority": "now"})
+
+    assert res["fired"] is False
+    assert calls == []
+    assert [row["text"] for row in store.list(priority_floor="later")] == ["reserve first"]
+
+
+async def test_now_inbox_add_stays_pending_without_a2a_delivery_hook(monkeypatch, tmp_path):
+    import runtime.state as rs
+    from inbox.store import InboxStore
+
+    store = InboxStore(str(tmp_path / "inbox.db"))
+    monkeypatch.setattr(rs.STATE, "inbox_store", store, raising=False)
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", None, raising=False)
+
+    res = await ch._operator_inbox_add({"text": "hook missing", "priority": "now"})
+
+    assert res["fired"] is False
+    assert [row["text"] for row in store.list(priority_floor="later")] == ["hook missing"]
+
+
+async def test_next_and_later_inbox_add_do_not_fire_a2a_delivery(monkeypatch, tmp_path):
+    import runtime.state as rs
+    from inbox.store import InboxStore
+
+    store = InboxStore(str(tmp_path / "inbox.db"))
+    calls: list[dict] = []
+    monkeypatch.setattr(rs.STATE, "inbox_store", store, raising=False)
+
+    async def _delivery(item):
+        calls.append(item)
+        return True
+
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", _delivery, raising=False)
+
+    next_res = await ch._operator_inbox_add({"text": "next item", "priority": "next"})
+    later_res = await ch._operator_inbox_add({"text": "later item", "priority": "later"})
+
+    assert next_res["fired"] is False and later_res["fired"] is False
+    assert calls == []
+    assert {row["text"] for row in store.list(priority_floor="later")} == {"next item", "later item"}
 
 
 def test_chat_commands_lists_workflows_and_subagents(monkeypatch):

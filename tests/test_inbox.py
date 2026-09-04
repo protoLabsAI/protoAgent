@@ -147,6 +147,111 @@ def test_storm_guard_caps_then_recovers():
     assert g.allow(11.0) is True
 
 
+# ── now-item A2A acceptance ─────────────────────────────────────────────────
+
+
+def test_a2a_send_acceptance_requires_owned_task():
+    import server.a2a as a2a
+    from runtime.state import STATE
+
+    a2a.install_inbox_now_delivery()
+    assert STATE.inbox_now_delivery is a2a._fire_activity_from_inbox
+    assert a2a._a2a_send_accepted({"result": {"status": {"state": "TASK_STATE_SUBMITTED"}}}) is True
+    assert a2a._a2a_send_accepted({"result": {"status": {"state": "TASK_STATE_WORKING"}}}) is True
+    assert a2a._a2a_send_accepted({"result": {"status": {"state": "TASK_STATE_INPUT_REQUIRED"}}}) is True
+    assert a2a._a2a_send_accepted({"result": {"status": {"state": "TASK_STATE_COMPLETED"}}}) is True
+    assert a2a._a2a_send_accepted({"result": {"task": {"status": {"state": "TASK_STATE_COMPLETED"}}}}) is True
+    assert a2a._a2a_send_accepted({"result": {"status": {"state": "TASK_STATE_FAILED"}}}) is False
+    assert a2a._a2a_send_accepted({"result": {"status": {"state": "TASK_STATE_AUTH_REQUIRED"}}}) is False
+    assert a2a._a2a_send_accepted({"error": {"code": -32603, "message": "boom"}}) is False
+    assert a2a._a2a_send_accepted({"result": {"text": "not a task"}}) is False
+
+
+@pytest.mark.asyncio
+async def test_now_inbox_fire_uses_mounted_a2a_app_without_loopback_port(monkeypatch):
+    import server.a2a as a2a
+    from events import ACTIVITY_CONTEXT
+    from runtime.state import STATE
+
+    app = FastAPI()
+    captured: dict = {}
+
+    @app.post("/a2a")
+    async def _a2a(body: dict):
+        captured.update(body)
+        return {"result": {"status": {"state": "TASK_STATE_COMPLETED"}}}
+
+    monkeypatch.setattr(STATE, "fastapi_app", app, raising=False)
+    monkeypatch.setattr(STATE, "active_port", 9, raising=False)
+
+    ok = await a2a._fire_activity_from_inbox(
+        {"id": 17, "text": "ship the priority page", "priority": "now", "source": "test"}
+    )
+
+    assert ok is True
+    assert captured["method"] == "SendMessage"
+    msg = captured["params"]["message"]
+    assert msg["contextId"] == ACTIVITY_CONTEXT
+    assert msg["parts"] == [{"text": "ship the priority page"}]
+    assert msg["metadata"]["origin"] == "inbox"
+    assert msg["metadata"]["inbox_id"] == 17
+    assert msg["metadata"]["priority"] == "now"
+
+
+@pytest.mark.asyncio
+async def test_now_inbox_fire_rejects_failed_a2a_response(monkeypatch):
+    import server.a2a as a2a
+    from runtime.state import STATE
+
+    app = FastAPI()
+
+    @app.post("/a2a")
+    async def _a2a(_body: dict):
+        return {"result": {"status": {"state": "TASK_STATE_FAILED"}}}
+
+    monkeypatch.setattr(STATE, "fastapi_app", app, raising=False)
+
+    ok = await a2a._fire_activity_from_inbox({"id": 18, "text": "not yet", "priority": "now"})
+
+    assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_now_inbox_fire_accepts_a2a_task_ownership_before_terminal(monkeypatch):
+    import server.a2a as a2a
+    from runtime.state import STATE
+
+    app = FastAPI()
+
+    @app.post("/a2a")
+    async def _a2a(_body: dict):
+        return {"result": {"status": {"state": "TASK_STATE_SUBMITTED"}}}
+
+    monkeypatch.setattr(STATE, "fastapi_app", app, raising=False)
+
+    ok = await a2a._fire_activity_from_inbox({"id": 19, "text": "accepted", "priority": "now"})
+
+    assert ok is True
+
+
+@pytest.mark.asyncio
+async def test_now_inbox_fire_rejects_jsonrpc_error(monkeypatch):
+    import server.a2a as a2a
+    from runtime.state import STATE
+
+    app = FastAPI()
+
+    @app.post("/a2a")
+    async def _a2a(_body: dict):
+        return {"error": {"code": -32603, "message": "boom"}}
+
+    monkeypatch.setattr(STATE, "fastapi_app", app, raising=False)
+
+    ok = await a2a._fire_activity_from_inbox({"id": 20, "text": "noisy response", "priority": "now"})
+
+    assert ok is False
+
+
 # ── check_inbox tool ─────────────────────────────────────────────────────────
 
 
@@ -189,6 +294,31 @@ async def test_fired_now_item_is_marked_delivered(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_accepted_now_item_does_not_require_or_survive_manual_check_inbox(tmp_path, monkeypatch):
+    """Accepted event delivery is the owning turn; check_inbox must not see the same trigger."""
+    import operator_api.console_handlers as ch
+    import runtime.state as rs
+    from tools.lg_tools import _build_inbox_tools
+
+    store = _store(tmp_path)
+    monkeypatch.setattr(rs.STATE, "inbox_store", store, raising=False)
+    fired: list[str] = []
+
+    async def _fire_ok(item):
+        fired.append(item["text"])
+        return True
+
+    monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_ok)
+
+    res = await ch._operator_inbox_add({"text": "new now page", "priority": "now"})
+    (check_inbox,) = _build_inbox_tools(store)
+
+    assert res["fired"] is True
+    assert fired == ["new now page"]
+    assert await check_inbox.ainvoke({"priority_floor": "later"}) == "Inbox empty."
+
+
+@pytest.mark.asyncio
 async def test_failed_now_fire_stays_pending(tmp_path, monkeypatch):
     """A now-item whose fire FAILED stays pending so check_inbox is the fallback."""
     import operator_api.console_handlers as ch
@@ -205,6 +335,11 @@ async def test_failed_now_fire_stays_pending(tmp_path, monkeypatch):
     res = await ch._operator_inbox_add({"text": "bg done", "priority": "now"})
     assert res["fired"] is False
     assert len(store.list(priority_floor="later")) == 1  # restored to pending for check_inbox
+
+    from tools.lg_tools import _build_inbox_tools
+
+    (check_inbox,) = _build_inbox_tools(store)
+    assert "bg done" in await check_inbox.ainvoke({"priority_floor": "later"})
 
 
 # ── badge dedup: inbox.item fires only for items that land in the queue (#1375) ──

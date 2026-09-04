@@ -709,60 +709,22 @@ def _inbox_authorized(token: str | None) -> bool:
 
 async def _fire_activity_from_inbox(item: dict) -> bool:
     """Fire a now-priority inbox item as a turn into the Activity thread.
-    Self-POSTs to /a2a (parity with the scheduler), guarded against storms."""
+    The concrete A2A sender is registered by ``server.a2a`` so this module does
+    not import across the operator_api → server boundary."""
     import time
-    from uuid import uuid4
-    import httpx
 
     if STATE.storm_guard is not None and not STATE.storm_guard.allow(time.monotonic()):
         log.warning("[inbox] storm guard suppressed now-fire for item %s", item.get("id"))
         return False
-    # A2A 1.0 (a2a-sdk ≥1.1): the version header + proto method name are
-    # mandatory — the 0.3 `message/send` 404s with -32601. Mirrors the
-    # scheduler's fire (scheduler/local.py).
-    headers = {"Content-Type": "application/json", "A2A-Version": "1.0"}
-    # Present what the guard actually requires, rather than re-reading config + env here
-    # with this call site's own precedence — that duplication is what let the agent card
-    # advertise a credential the server never enforced (#2620).
-    from a2a_impl.auth import inbound_credentials
-
-    bearer, api_key = inbound_credentials()
-    if bearer:
-        headers["Authorization"] = f"Bearer {bearer}"
-    if api_key:
-        headers["X-API-Key"] = api_key
-    mid = str(uuid4())
-    body = {
-        "jsonrpc": "2.0",
-        "id": mid,
-        "method": "SendMessage",
-        "params": {
-            # contextId is a field of Message in 1.0 (params-level => -32602).
-            "message": {
-                "role": "ROLE_USER",
-                "parts": [{"text": item["text"]}],
-                "messageId": mid,
-                "contextId": ACTIVITY_CONTEXT,
-            },
-            "metadata": {
-                "origin": "inbox",
-                "inbox_id": item.get("id"),
-                "inbox_source": item.get("source", ""),
-                "priority": item.get("priority", "now"),
-            },
-        },
-    }
+    delivery = getattr(STATE, "inbox_now_delivery", None)
+    if not callable(delivery):
+        log.warning(
+            "[inbox] now-fire unavailable for item %s: A2A delivery hook is not registered",
+            item.get("id"),
+        )
+        return False
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            r = await client.post(f"http://127.0.0.1:{STATE.active_port}/a2a", headers=headers, json=body)
-        # A JSON-RPC error rides a 200, so status alone isn't enough.
-        if r.status_code >= 400:
-            return False
-        err = r.json().get("error") if r.headers.get("content-type", "").startswith("application/json") else None
-        if err:
-            log.warning("[inbox] now-fire rejected for item %s: %s", item.get("id"), err)
-            return False
-        return True
+        return bool(await delivery(item))
     except Exception:
         log.exception("[inbox] now-fire failed for item %s", item.get("id"))
         return False
@@ -792,12 +754,17 @@ async def _operator_inbox_add(payload: dict) -> dict:
         # runs, so the fired turn can't re-read its own trigger via check_inbox (double
         # processing). If the fire never happens (storm-blocked / failed), restore it to
         # pending so it isn't lost — check_inbox stays the fallback delivery path.
+        premarked = False
         try:
-            await asyncio.to_thread(STATE.inbox_store.mark_delivered, [item["id"]])
-        except Exception:  # noqa: BLE001 — best-effort; a missed mark just means a double-read
+            premarked = (await asyncio.to_thread(STATE.inbox_store.mark_delivered, [item["id"]])) == 1
+        except Exception:  # noqa: BLE001 — delivery reservation failures fall back to pull
             log.warning("[inbox] could not pre-mark now-item %s delivered", item.get("id"))
-        fired = await _fire_activity_from_inbox(item)
-        if not fired:
+        if premarked:
+            fired = await _fire_activity_from_inbox(item)
+        else:
+            log.warning("[inbox] now-fire skipped for item %s: could not reserve delivery", item.get("id"))
+        if premarked and not fired:
+            log.warning("[inbox] now-fire not accepted for item %s; restoring pending fallback", item.get("id"))
             try:
                 await asyncio.to_thread(STATE.inbox_store.mark_pending, [item["id"]])
             except Exception:  # noqa: BLE001 — restore is best-effort

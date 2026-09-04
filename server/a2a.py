@@ -35,6 +35,18 @@ _BG_WAKE_TASKS: set = set()
 # the drain notification truncates it.
 _BG_INDEX_MIN_CHARS = 800
 
+_A2A_ACCEPTED_STATES = {
+    "TASK_STATE_SUBMITTED",
+    "TASK_STATE_WORKING",
+    "TASK_STATE_INPUT_REQUIRED",
+    "TASK_STATE_COMPLETED",
+    "submitted",
+    "working",
+    "input-required",
+    "input_required",
+    "completed",
+}
+
 
 def _background_wake_enabled() -> bool:
     """Whether a finished background job should autonomously wake the agent (ADR 0050
@@ -49,6 +61,127 @@ def _background_auto_resume_enabled() -> bool:
     (the drain on the origin session's next manual turn)."""
     cfg = STATE.graph_config
     return bool(getattr(cfg, "background_auto_resume", True)) if cfg is not None else True
+
+
+def _a2a_result_state(payload: dict) -> str:
+    """Best-effort extraction of task state from an A2A response frame.
+
+    The SDK has returned both bare Task payloads and ``{"task": Task}`` envelopes in
+    different A2A paths, so accept either shape. A missing state is deliberately not an
+    acceptance signal: the caller is about to mark a durable inbox item delivered.
+    """
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        return ""
+    status_update = result.get("statusUpdate")
+    if isinstance(status_update, dict):
+        status = status_update.get("status")
+        if isinstance(status, dict):
+            return str(status.get("state") or "")
+    task = result.get("task")
+    if isinstance(task, dict):
+        result = task
+    status = result.get("status")
+    if not isinstance(status, dict):
+        return ""
+    return str(status.get("state") or "")
+
+
+def _a2a_send_accepted(payload: dict) -> bool:
+    """Whether an A2A response proves the A2A layer owns the turn."""
+    if payload.get("error"):
+        return False
+    return _a2a_result_state(payload) in _A2A_ACCEPTED_STATES
+
+
+async def _fire_activity_from_inbox(item: dict) -> bool:
+    """Self-A2A fire for a newly received now-priority inbox item.
+
+    This lives in ``server`` rather than ``operator_api`` because the acceptance
+    check is server/A2A protocol knowledge. Returns True only once the self-POST is
+    accepted as an owned turn; HTTP reachability, JSON-RPC errors, explicit failed
+    states, and missing task evidence are all refusal/failure for inbox delivery
+    purposes.
+    """
+    from uuid import uuid4
+
+    import httpx
+
+    from a2a_impl.auth import self_invocation_headers
+
+    mid = str(uuid4())
+    body = {
+        "jsonrpc": "2.0",
+        "id": mid,
+        "method": "SendMessage",
+        "params": {
+            "message": {
+                "role": "ROLE_USER",
+                "parts": [{"text": item["text"]}],
+                "messageId": mid,
+                "contextId": ACTIVITY_CONTEXT,
+                "metadata": {
+                    "origin": "inbox",
+                    "inbox_id": item.get("id"),
+                    "inbox_source": item.get("source", ""),
+                    "priority": item.get("priority", "now"),
+                },
+            },
+        },
+    }
+    headers = {"Content-Type": "application/json", "A2A-Version": A2A_PROTOCOL_VERSION}
+    headers.update(self_invocation_headers())
+    app = getattr(STATE, "fastapi_app", None)
+    base_url = f"http://127.0.0.1:{STATE.active_port}"
+    client_kwargs = {"timeout": 30}
+    if app is not None:
+        client_kwargs.update({"transport": httpx.ASGITransport(app=app), "base_url": base_url})
+        url = "/a2a"
+    else:
+        url = f"{base_url}/a2a"
+    try:
+        async with httpx.AsyncClient(**client_kwargs) as client:
+            r = await client.post(url, headers=headers, json=body)
+        if r.status_code >= 400:
+            log.warning(
+                "[inbox] now-fire rejected for item %s: HTTP %d %s",
+                item.get("id"),
+                r.status_code,
+                r.text[:200],
+            )
+            return False
+        ctype = r.headers.get("content-type", "")
+        if not ctype.startswith("application/json"):
+            log.warning(
+                "[inbox] now-fire rejected for item %s: non-JSON A2A response %s %s",
+                item.get("id"),
+                ctype or "<missing-content-type>",
+                r.text[:200],
+            )
+            return False
+        payload = r.json()
+        if _a2a_send_accepted(payload):
+            return True
+        err = payload.get("error")
+        state = _a2a_result_state(payload)
+        if err:
+            log.warning("[inbox] now-fire rejected for item %s: %s", item.get("id"), err)
+        elif state:
+            log.warning("[inbox] now-fire not accepted for item %s: task state %s", item.get("id"), state)
+        else:
+            log.warning("[inbox] now-fire rejected for item %s: A2A response had no task status", item.get("id"))
+        return False
+    except Exception:
+        log.exception("[inbox] now-fire failed for item %s", item.get("id"))
+        return False
+
+
+def install_inbox_now_delivery() -> None:
+    """Register the server-owned now-inbox delivery hook for operator handlers."""
+    STATE.inbox_now_delivery = _fire_activity_from_inbox
+
+
+install_inbox_now_delivery()
 
 
 def _should_auto_resume(job) -> bool:
