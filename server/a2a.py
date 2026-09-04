@@ -165,7 +165,16 @@ async def _fire_activity_from_inbox(item: dict) -> bool:
                 async for line in r.aiter_lines():
                     if not line.startswith("data:"):
                         continue
-                    payload = json.loads(line[5:].strip())
+                    data = line[5:].strip()
+                    if not data:
+                        continue
+                    try:
+                        payload = json.loads(data)
+                    except (ValueError, TypeError):
+                        # An SSE heartbeat / comment / partial frame is not a task
+                        # status — skip it and keep reading for the real one rather
+                        # than aborting an already-accepted delivery as a failure.
+                        continue
                     if _a2a_send_accepted(payload):
                         return True
                     err = payload.get("error")

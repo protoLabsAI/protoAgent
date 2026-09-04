@@ -159,6 +159,17 @@ def _a2a_sse(payload: dict) -> StreamingResponse:
     return StreamingResponse(_events(), media_type="text/event-stream")
 
 
+def _a2a_sse_lines(*lines: str) -> StreamingResponse:
+    """A raw SSE body (verbatim lines) so tests can interleave heartbeats/comments
+    with the task-status frame the way a live A2A stream does."""
+
+    async def _events():
+        for line in lines:
+            yield line + "\n"
+
+    return StreamingResponse(_events(), media_type="text/event-stream")
+
+
 def test_a2a_send_acceptance_requires_owned_task():
     import server.a2a as a2a
     from runtime.state import STATE
@@ -239,6 +250,31 @@ async def test_now_inbox_fire_accepts_a2a_task_ownership_before_terminal(monkeyp
     monkeypatch.setattr(STATE, "fastapi_app", app, raising=False)
 
     ok = await a2a._fire_activity_from_inbox({"id": 19, "text": "accepted", "priority": "now"})
+
+    assert ok is True
+
+
+@pytest.mark.asyncio
+async def test_now_inbox_fire_skips_sse_heartbeats_before_accepting(monkeypatch):
+    """A live A2A SSE body interleaves comment/heartbeat/empty lines with the task
+    frame; a non-JSON line must be skipped, not treated as a delivery failure."""
+    import server.a2a as a2a
+    from runtime.state import STATE
+
+    app = FastAPI()
+
+    @app.post("/a2a")
+    async def _a2a(_body: dict):
+        return _a2a_sse_lines(
+            ": keep-alive",  # SSE comment — no `data:` prefix
+            "data: ",  # empty data frame
+            "data: not-json",  # malformed data frame
+            f'data: {json.dumps({"result": {"status": {"state": "TASK_STATE_WORKING"}}})}',
+        )
+
+    monkeypatch.setattr(STATE, "fastapi_app", app, raising=False)
+
+    ok = await a2a._fire_activity_from_inbox({"id": 20, "text": "noisy stream", "priority": "now"})
 
     assert ok is True
 
