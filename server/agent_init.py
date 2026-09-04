@@ -1572,6 +1572,11 @@ async def recover_pending_now_inbox_items(
     and used by newly posted ``now`` pages. An accepted item is then marked delivered;
     an unfired item is restored to pending with actionable failure evidence so pull
     fallback still works.
+
+    A claimed item that already carries a durable ``recovery_accepted_at`` (delivery was
+    accepted on a prior pass but its ``mark_delivered`` write failed) is COMPLETED here —
+    marked delivered without re-firing — so a restart cannot turn a recorded mark-failure
+    into a duplicate Activity turn.
     """
     import asyncio
 
@@ -1647,9 +1652,12 @@ async def recover_pending_now_inbox_items(
     async def _record_accepted_mark_failure(item_id: int, reason: str, claimed_at: str | None) -> None:
         """Best-effort: record accepted delivery whose delivered mark failed.
 
-        Do not clear the recovery claim here. Once delivery was accepted, releasing the
-        still-undelivered row would allow a later pull to fire a duplicate Activity turn
-        immediately; the store's bounded lease remains responsible for any future retry.
+        This persists a durable ``recovery_accepted_at`` marker (see
+        ``record_recovery_mark_delivered_failure``): the page stays undelivered but hidden
+        from the pull fallback, and the next recovery pass COMPLETES it (marks delivered)
+        without re-firing — so a restart can't turn this recorded mark-failure into a
+        duplicate Activity turn. The recovery claim is left in place too, hiding the page
+        within the current process before any restart.
         """
         try:
             await asyncio.to_thread(
@@ -1682,8 +1690,13 @@ async def recover_pending_now_inbox_items(
     for idx, item in enumerate(items):
         item_id = int(item["id"])
         claimed_at = item.get("recovery_claimed_at")
+        # A page carrying a durable recovery_accepted_at was already accepted-delivered on a
+        # prior pass whose mark_delivered write failed (#3351 review). Re-firing it would
+        # double-deliver, so COMPLETE it — mark delivered only, never fire again — then fall
+        # through to the shared mark path below.
+        already_accepted = bool(item.get("recovery_accepted_at"))
         try:
-            delivered = await _deliver(item)
+            delivered = True if already_accepted else await _deliver(item)
         except asyncio.CancelledError:
             # Restore the current item and every later item the batch already claimed,
             # otherwise the un-processed tail stays reserved until the recovery lease expires.

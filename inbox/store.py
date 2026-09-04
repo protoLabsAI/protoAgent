@@ -61,6 +61,7 @@ class InboxStore:
                     delivered_at TEXT,
                     recovery_claimed_at TEXT,
                     recovery_attempted_at TEXT,
+                    recovery_accepted_at TEXT,
                     recovery_error TEXT,
                     recovery_attempts INTEGER NOT NULL DEFAULT 0
                 )
@@ -71,6 +72,12 @@ class InboxStore:
                 db.execute("ALTER TABLE inbox ADD COLUMN recovery_claimed_at TEXT")
             if "recovery_attempted_at" not in existing:
                 db.execute("ALTER TABLE inbox ADD COLUMN recovery_attempted_at TEXT")
+            # Durable "delivery was accepted" marker (#3351 review). Survives restart so an
+            # accepted page whose mark_delivered write failed is COMPLETED on the next
+            # recovery pass (marked delivered) rather than re-fired — the in-process claim
+            # alone could not carry that across a boot, which reset_stale_recovery_claims clears.
+            if "recovery_accepted_at" not in existing:
+                db.execute("ALTER TABLE inbox ADD COLUMN recovery_accepted_at TEXT")
             if "recovery_error" not in existing:
                 db.execute("ALTER TABLE inbox ADD COLUMN recovery_error TEXT")
             if "recovery_attempts" not in existing:
@@ -139,7 +146,15 @@ class InboxStore:
         if not include_delivered:
             where += " AND delivered_at IS NULL"
             if not include_recovery_claimed:
-                where += " AND NOT (priority = 'now' AND recovery_claimed_at IS NOT NULL)"
+                # Hide a now page that recovery is holding: either an in-flight claim, OR a
+                # durable accepted-but-unmarked delivery (recovery_accepted_at). The latter
+                # was already delivered to the operator; surfacing it to a check_inbox pull
+                # would fire a duplicate Activity turn even after the ephemeral claim is
+                # cleared at startup. Recovery completes it (marks delivered) without re-firing.
+                where += (
+                    " AND NOT (priority = 'now' AND "
+                    "(recovery_claimed_at IS NOT NULL OR recovery_accepted_at IS NOT NULL))"
+                )
         db = self._connect()
         try:
             rows = db.execute(
@@ -179,7 +194,8 @@ class InboxStore:
         try:
             placeholders = ",".join("?" for _ in ids)
             cur = db.execute(
-                "UPDATE inbox SET delivered_at = NULL, recovery_claimed_at = NULL "
+                "UPDATE inbox SET delivered_at = NULL, recovery_claimed_at = NULL, "
+                "recovery_accepted_at = NULL "
                 f"WHERE id IN ({placeholders})",
                 tuple(ids),
             )
@@ -243,19 +259,27 @@ class InboxStore:
         still pick it up. If the process dies before that restore/deliver handoff, a
         later startup pass may reclaim the stale lease after ``retry_after_s``.
 
-        **Delivery is AT-LEAST-ONCE, by decision.** The claim commits before the fire and
-        ``mark_delivered`` commits after it, so a crash or a failed mark between the two is
-        indistinguishable at read time from a claim that never fired — no reader can tell
-        them apart without a two-phase commit against the Activity path. Faced with that,
-        this errs toward delivering a page twice rather than losing it: a duplicate is one
-        extra line in an Activity feed, while a lost page is the whole of #3351, which
-        stranded 29 operator alerts for four days. A caller that needs exactly-once must
-        dedupe downstream; do not add a test pinning exactly-once here, because the design
-        cannot honour it.
+        **Delivery is AT-LEAST-ONCE only across a genuine crash.** If the process dies
+        between the fire and any durable record, no reader can distinguish an accepted page
+        from a claim that never fired — without a two-phase commit against the Activity path
+        that is unavoidable, and this errs toward delivering a page twice rather than losing
+        it (a duplicate is one extra Activity line; a lost page is the whole of #3351, which
+        stranded 29 operator alerts for four days).
+
+        But when the process SURVIVES a ``mark_delivered`` failure it DOES know delivery was
+        accepted, and :meth:`record_recovery_mark_delivered_failure` persists that as a
+        durable ``recovery_accepted_at`` marker. Such a row stays undelivered but is hidden
+        from the ``check_inbox`` pull fallback (``list``) and is claimed here for COMPLETION
+        only: the recovery caller marks it delivered without re-firing, so a restart cannot
+        turn a recorded mark-failure into a duplicate Activity turn. A caller that needs
+        exactly-once against the unrecorded-crash case must still dedupe downstream.
 
         Storm protection is the bounded ``recovery_attempts`` count: a page that keeps
         refusing delivery stops after ``max_attempts`` and stays visible to the
-        ``check_inbox`` pull fallback while unclaimed. ``retry_after_s`` is retained for
+        ``check_inbox`` pull fallback while unclaimed. An accepted-but-unmarked page
+        (``recovery_accepted_at`` set) is exempt from that bound — completing it marks it
+        delivered and fires no turn, so it can never contribute to a replay storm and must
+        never be stranded by the attempt budget. ``retry_after_s`` is retained for
         compatibility with callers from the first slice, but recovery no longer gates
         crash recoverability on wall-clock age.
 
@@ -275,7 +299,7 @@ class InboxStore:
                 WHERE priority = 'now'
                   AND delivered_at IS NULL
                   AND recovery_claimed_at IS NULL
-                  AND recovery_attempts < ?
+                  AND (recovery_accepted_at IS NOT NULL OR recovery_attempts < ?)
                 ORDER BY created_at ASC
                 LIMIT ?
                 """,
@@ -365,17 +389,24 @@ class InboxStore:
     ) -> int:
         """Record that accepted delivery could not be marked delivered.
 
-        This deliberately leaves ``recovery_claimed_at`` in place. Once the accepted
-        delivery path has taken ownership of the Activity turn, clearing the claim would
-        let a later pull redeliver the same page immediately. The row remains
-        undelivered with operator-readable evidence; the next startup release makes it
-        eligible for the same bounded at-least-once recovery path instead of hiding the
-        page forever.
+        Persists a **durable** ``recovery_accepted_at`` marker (kept at its earliest value
+        via COALESCE). This is the accepted-delivery state the #3351 review found missing:
+        once the Activity turn has been accepted, this marker survives restart, so the next
+        recovery pass COMPLETES the page (marks it delivered) instead of re-firing it, and
+        ``list`` hides it from the pull fallback in the meantime. The in-process
+        ``recovery_claimed_at`` alone could not carry that intent across a boot —
+        ``reset_stale_recovery_claims`` clears every claim at startup — which is exactly how
+        an accepted page became eligible for redelivery again.
+
+        ``recovery_claimed_at`` is deliberately left in place too, so the page is also hidden
+        within the current process before any restart. The row stays undelivered with
+        operator-readable evidence rather than being marked delivered against a write that
+        did not land.
         """
         now = now or datetime.now(UTC)
         detail = (reason or "accepted delivery could not be marked delivered").strip()[:500]
         where = "id = ? AND delivered_at IS NULL"
-        params: list = [now.isoformat(), detail, int(item_id)]
+        params: list = [now.isoformat(), now.isoformat(), detail, int(item_id)]
         if claimed_at is not None:
             where += " AND recovery_claimed_at = ?"
             params.append(claimed_at)
@@ -384,7 +415,9 @@ class InboxStore:
             cur = db.execute(
                 f"""
                 UPDATE inbox
-                SET recovery_attempted_at = ?, recovery_error = ?
+                SET recovery_accepted_at = COALESCE(recovery_accepted_at, ?),
+                    recovery_attempted_at = ?,
+                    recovery_error = ?
                 WHERE {where}
                 """,
                 tuple(params),

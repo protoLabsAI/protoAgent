@@ -583,6 +583,9 @@ async def test_startup_recovery_accepted_but_mark_delivered_failure_stays_claime
     assert row["id"] == item["id"]
     assert row["delivered_at"] is None
     assert row["recovery_claimed_at"] is not None
+    # The durable accepted-delivery marker (#3351 review): survives a restart's claim reset,
+    # so this recorded mark-failure is completed — not re-fired — on the next pass.
+    assert row["recovery_accepted_at"] is not None
     assert (
         row["recovery_error"]
         == "accepted delivery could not be marked delivered: sqlite write failed"
@@ -591,6 +594,83 @@ async def test_startup_recovery_accepted_but_mark_delivered_failure_stays_claime
     listed = await ch._operator_inbox_list("now", include_delivered=False)
     assert [visible["id"] for visible in listed["items"]] == [item["id"]]
     assert listed["items"][0]["recovery_error"] == row["recovery_error"]
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_completes_accepted_page_after_restart_without_refiring(tmp_path, monkeypatch):
+    """Regression (#3351 review, blocking): an Activity delivery that was accepted but whose
+    ``mark_delivered`` write failed must NOT be delivered again after a restart. The durable
+    ``recovery_accepted_at`` marker makes the next recovery pass COMPLETE the page (mark it
+    delivered) instead of re-firing a duplicate turn."""
+    import runtime.state as rs
+    from server.agent_init import recover_pending_now_inbox_items
+
+    store = _store(tmp_path)
+    item = store.add("accepted but unmarked", priority="now")
+    monkeypatch.setattr(rs.STATE, "inbox_store", store, raising=False)
+
+    fires: list[int] = []
+
+    async def _fire_ok(delivered):
+        fires.append(delivered["id"])
+        return True
+
+    def _mark_delivered_raises(_ids):
+        raise RuntimeError("sqlite write failed")
+
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", _fire_ok, raising=False)
+    monkeypatch.setattr(store, "mark_delivered", _mark_delivered_raises)
+
+    # Pass 1: delivery is accepted (fired once), but the mark write fails.
+    first = await recover_pending_now_inbox_items(limit=8)
+    assert first == {"claimed": 1, "accepted": 0, "failed": 1}
+    assert fires == [item["id"]]
+    [row] = store.list(priority_floor="now", include_delivered=True)
+    assert row["delivered_at"] is None and row["recovery_accepted_at"] is not None
+
+    # A restart clears every in-flight claim — the durable accepted marker persists.
+    assert store.reset_stale_recovery_claims() == 1
+
+    # Pass 2: mark_delivered now works, and the delivery hook must NOT be called again.
+    monkeypatch.undo()
+    monkeypatch.setattr(rs.STATE, "inbox_store", store, raising=False)
+
+    async def _fire_must_not_run(_delivered):
+        raise AssertionError("an accepted-but-unmarked page must be completed, not re-fired")
+
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", _fire_must_not_run, raising=False)
+
+    second = await recover_pending_now_inbox_items(limit=8)
+    assert second == {"claimed": 1, "accepted": 1, "failed": 0}
+    assert fires == [item["id"]]  # never fired a second time
+    [done] = store.list(priority_floor="now", include_delivered=True)
+    assert done["delivered_at"] is not None
+    assert store.list(priority_floor="now") == []  # nothing left pending
+
+
+def test_accepted_but_unmarked_now_page_is_hidden_and_claimable_for_completion(tmp_path):
+    """Store-level: after an accepted delivery whose mark failed, the page is hidden from the
+    pull fallback (a check_inbox pull must not re-fire it) yet remains claimable for
+    completion even once the attempt budget is spent — completing it fires no turn, so it can
+    never be stranded by ``max_attempts`` nor cause a replay storm."""
+    store = InboxStore(str(tmp_path / "inbox.db"))
+    item = store.add("accepted but unmarked", priority="now")
+    [claimed] = store.claim_now_recovery_batch(limit=8, max_attempts=1)  # attempt budget now spent
+    store.record_recovery_mark_delivered_failure(
+        item["id"], "accepted delivery could not be marked delivered", claimed_at=claimed["recovery_claimed_at"]
+    )
+
+    # A durable accepted marker is set and the row is withheld from the pull fallback…
+    [row] = store.list(priority_floor="now", include_delivered=True)
+    assert row["recovery_accepted_at"] is not None and row["delivered_at"] is None
+    assert store.list(priority_floor="now") == []
+
+    # …but a restart's claim reset does not lose it: recovery reclaims it for completion
+    # despite max_attempts being exhausted, and the claimed row carries the accepted marker.
+    assert store.reset_stale_recovery_claims() == 1
+    [reclaimed] = store.claim_now_recovery_batch(limit=8, max_attempts=1)
+    assert reclaimed["id"] == item["id"]
+    assert reclaimed["recovery_accepted_at"] is not None
 
 
 @pytest.mark.asyncio
@@ -1159,16 +1239,19 @@ def test_storm_protection_is_a_bounded_count_not_a_clock(tmp_path):
     assert len(store.list(priority_floor="now")) == 1
 
 
-def test_delivery_is_at_least_once_by_decision(tmp_path):
-    """A page whose Activity delivery was accepted but whose `mark_delivered` write failed
-    IS re-fired. That is the documented guarantee, not a defect: no reader can distinguish
-    it from a claim that never fired without a two-phase commit against the Activity path,
-    and a duplicate line in a feed beats a lost operator alert (#3351 stranded 29 for four
-    days). This test exists so that trade-off is deliberate rather than incidental — if it
-    ever fails, the guarantee changed and the docstring must change with it."""
+def test_delivery_is_at_least_once_across_an_unrecorded_crash(tmp_path):
+    """When the process DIES between an accepted delivery and any durable record, the page IS
+    re-fired. That residual at-least-once is unavoidable, not a defect: no reader can
+    distinguish it from a claim that never fired without a two-phase commit against the
+    Activity path, and a duplicate feed line beats a lost operator alert (#3351 stranded 29
+    for four days). Distinct from the RECORDED mark-failure case — where the process survives
+    and ``record_recovery_mark_delivered_failure`` persists ``recovery_accepted_at`` so the
+    next pass completes the page instead of re-firing (see the completion test above). If
+    this ever fails, the unrecorded-crash guarantee changed and the docstring must too."""
     store = InboxStore(str(tmp_path / "inbox.db"))
     store.add("page whose mark_delivered lost the race", priority="now")
     assert len(store.claim_now_recovery_batch(limit=8)) == 1
-    # Delivery was accepted, but the mark_delivered write failed — nothing records it.
+    # Delivery was accepted, but the process died before ANYTHING recorded it — no
+    # recovery_accepted_at, so the row is indistinguishable from one that never fired.
     store.reset_stale_recovery_claims()
     assert len(store.claim_now_recovery_batch(limit=8)) == 1  # fired again: at-least-once
