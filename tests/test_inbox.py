@@ -374,8 +374,8 @@ def test_restore_recovery_failure_reopens_pending_with_evidence(tmp_path):
     while keeping ``recovery_attempted_at`` (restart backoff) and recording evidence."""
     store = _store(tmp_path)
     item = store.add("boom", priority="now")
-    [claimed] = store.claim_now_recovery_batch(limit=8)
-    assert claimed["id"] == item["id"]
+    [claimed_item] = store.claim_now_recovery_batch(limit=8)
+    assert claimed_item["id"] == item["id"]
     assert store.list(priority_floor="now") == []  # claimed out of the pending pool
 
     assert store.restore_recovery_failure(item["id"], "delivery was not accepted") == 1
@@ -589,6 +589,33 @@ async def test_startup_recovery_is_bounded(tmp_path, monkeypatch):
     assert result == {"claimed": 2, "accepted": 2, "failed": 0}
     assert fired == [items[0]["id"], items[1]["id"]]
     assert [row["id"] for row in store.list(priority_floor="now")] == [items[2]["id"]]
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_uses_storm_guarded_delivery_path(tmp_path, monkeypatch):
+    import runtime.state as rs
+    from server.agent_init import recover_pending_now_inbox_items
+
+    store = _store(tmp_path)
+    first = store.add("allowed now", priority="now")
+    second = store.add("storm held", priority="now")
+    monkeypatch.setattr(rs.STATE, "inbox_store", store, raising=False)
+    monkeypatch.setattr(rs.STATE, "storm_guard", StormGuard(max_fires=1, window_s=60.0), raising=False)
+    delivered: list[int] = []
+
+    async def _delivery(item):
+        delivered.append(item["id"])
+        return True
+
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", _delivery, raising=False)
+
+    result = await recover_pending_now_inbox_items(limit=8)
+    pending = store.list(priority_floor="now")
+
+    assert result == {"claimed": 2, "accepted": 1, "failed": 1}
+    assert delivered == [first["id"]]
+    assert [row["id"] for row in pending] == [second["id"]]
+    assert pending[0]["recovery_error"] == "delivery was not accepted"
 
 
 @pytest.mark.asyncio
