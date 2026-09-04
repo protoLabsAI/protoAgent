@@ -15,6 +15,7 @@ imports from ``server`` (``agent_name``, ``_event_bus``) are all defined in
 """
 
 import asyncio
+import json
 import logging
 import os
 from datetime import UTC, datetime
@@ -35,7 +36,17 @@ _BG_WAKE_TASKS: set = set()
 # the drain notification truncates it.
 _BG_INDEX_MIN_CHARS = 800
 
-_A2A_ACCEPTED_STATES = {"TASK_STATE_COMPLETED", "completed"}
+_A2A_ACCEPTED_STATES = {
+    "TASK_STATE_SUBMITTED",
+    "TASK_STATE_WORKING",
+    "TASK_STATE_INPUT_REQUIRED",
+    "TASK_STATE_COMPLETED",
+    "submitted",
+    "working",
+    "input-required",
+    "input_required",
+    "completed",
+}
 
 
 def _background_wake_enabled() -> bool:
@@ -54,7 +65,7 @@ def _background_auto_resume_enabled() -> bool:
 
 
 def _a2a_result_state(payload: dict) -> str:
-    """Best-effort extraction of the terminal state from SendMessage's response body.
+    """Best-effort extraction of task state from an A2A response frame.
 
     The SDK has returned both bare Task payloads and ``{"task": Task}`` envelopes in
     different A2A paths, so accept either shape. A missing state is deliberately not an
@@ -63,6 +74,11 @@ def _a2a_result_state(payload: dict) -> str:
     result = payload.get("result")
     if not isinstance(result, dict):
         return ""
+    status_update = result.get("statusUpdate")
+    if isinstance(status_update, dict):
+        status = status_update.get("status")
+        if isinstance(status, dict):
+            return str(status.get("state") or "")
     task = result.get("task")
     if isinstance(task, dict):
         result = task
@@ -73,7 +89,7 @@ def _a2a_result_state(payload: dict) -> str:
 
 
 def _a2a_send_accepted(payload: dict) -> bool:
-    """Whether a non-streaming SendMessage response proves delivery was accepted."""
+    """Whether an A2A response proves the A2A layer owns the turn."""
     if payload.get("error"):
         return False
     return _a2a_result_state(payload) in _A2A_ACCEPTED_STATES
@@ -84,8 +100,9 @@ async def _fire_activity_from_inbox(item: dict) -> bool:
 
     This lives in ``server`` rather than ``operator_api`` because the acceptance
     check is server/A2A protocol knowledge. Returns True only once the self-POST is
-    accepted as a completed turn; HTTP reachability, JSON-RPC errors, and non-terminal
-    or failed task states are all refusal/failure for inbox delivery purposes.
+    accepted as an owned turn; HTTP reachability, JSON-RPC errors, explicit failed
+    states, and missing task evidence are all refusal/failure for inbox delivery
+    purposes.
     """
     from uuid import uuid4
 
@@ -97,7 +114,7 @@ async def _fire_activity_from_inbox(item: dict) -> bool:
     body = {
         "jsonrpc": "2.0",
         "id": mid,
-        "method": "SendMessage",
+        "method": "SendStreamingMessage",
         "params": {
             "message": {
                 "role": "ROLE_USER",
@@ -125,27 +142,41 @@ async def _fire_activity_from_inbox(item: dict) -> bool:
         url = f"{base_url}/a2a"
     try:
         async with httpx.AsyncClient(**client_kwargs) as client:
-            r = await client.post(url, headers=headers, json=body)
-        if r.status_code >= 400:
-            log.warning(
-                "[inbox] now-fire rejected for item %s: HTTP %d %s",
-                item.get("id"),
-                r.status_code,
-                r.text[:200],
-            )
-            return False
-        if not r.headers.get("content-type", "").startswith("application/json"):
-            log.warning("[inbox] now-fire rejected for item %s: non-JSON A2A response", item.get("id"))
-            return False
-        payload = r.json()
-        if _a2a_send_accepted(payload):
-            return True
-        err = payload.get("error")
-        state = _a2a_result_state(payload) or "<missing>"
-        if err:
-            log.warning("[inbox] now-fire rejected for item %s: %s", item.get("id"), err)
-        else:
-            log.warning("[inbox] now-fire not accepted for item %s: task state %s", item.get("id"), state)
+            async with client.stream("POST", url, headers=headers, json=body) as r:
+                if r.status_code >= 400:
+                    body_preview = (await r.aread()).decode(errors="replace")[:200]
+                    log.warning(
+                        "[inbox] now-fire rejected for item %s: HTTP %d %s",
+                        item.get("id"),
+                        r.status_code,
+                        body_preview,
+                    )
+                    return False
+                ctype = r.headers.get("content-type", "")
+                if not ctype.startswith("text/event-stream"):
+                    body_preview = (await r.aread()).decode(errors="replace")[:200]
+                    log.warning(
+                        "[inbox] now-fire rejected for item %s: non-SSE A2A response %s %s",
+                        item.get("id"),
+                        ctype or "<missing-content-type>",
+                        body_preview,
+                    )
+                    return False
+                async for line in r.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    payload = json.loads(line[5:].strip())
+                    if _a2a_send_accepted(payload):
+                        return True
+                    err = payload.get("error")
+                    state = _a2a_result_state(payload)
+                    if err:
+                        log.warning("[inbox] now-fire rejected for item %s: %s", item.get("id"), err)
+                        return False
+                    if state:
+                        log.warning("[inbox] now-fire not accepted for item %s: task state %s", item.get("id"), state)
+                        return False
+        log.warning("[inbox] now-fire rejected for item %s: A2A stream ended without task status", item.get("id"))
         return False
     except Exception:
         log.exception("[inbox] now-fire failed for item %s", item.get("id"))

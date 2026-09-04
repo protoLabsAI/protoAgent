@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 
 from inbox.store import InboxStore, StormGuard
@@ -150,16 +152,26 @@ def test_storm_guard_caps_then_recovers():
 # ── now-item A2A acceptance ─────────────────────────────────────────────────
 
 
-def test_a2a_send_acceptance_requires_completed_task():
+def _a2a_sse(payload: dict) -> StreamingResponse:
+    async def _events():
+        yield f"data: {json.dumps(payload)}\n\n"
+
+    return StreamingResponse(_events(), media_type="text/event-stream")
+
+
+def test_a2a_send_acceptance_requires_owned_task():
     import server.a2a as a2a
     from runtime.state import STATE
 
     a2a.install_inbox_now_delivery()
     assert STATE.inbox_now_delivery is a2a._fire_activity_from_inbox
+    assert a2a._a2a_send_accepted({"result": {"status": {"state": "TASK_STATE_SUBMITTED"}}}) is True
+    assert a2a._a2a_send_accepted({"result": {"status": {"state": "TASK_STATE_WORKING"}}}) is True
+    assert a2a._a2a_send_accepted({"result": {"status": {"state": "TASK_STATE_INPUT_REQUIRED"}}}) is True
     assert a2a._a2a_send_accepted({"result": {"status": {"state": "TASK_STATE_COMPLETED"}}}) is True
     assert a2a._a2a_send_accepted({"result": {"task": {"status": {"state": "TASK_STATE_COMPLETED"}}}}) is True
-    assert a2a._a2a_send_accepted({"result": {"status": {"state": "TASK_STATE_WORKING"}}}) is False
     assert a2a._a2a_send_accepted({"result": {"status": {"state": "TASK_STATE_FAILED"}}}) is False
+    assert a2a._a2a_send_accepted({"result": {"status": {"state": "TASK_STATE_AUTH_REQUIRED"}}}) is False
     assert a2a._a2a_send_accepted({"error": {"code": -32603, "message": "boom"}}) is False
     assert a2a._a2a_send_accepted({"result": {"text": "not a task"}}) is False
 
@@ -176,7 +188,7 @@ async def test_now_inbox_fire_uses_mounted_a2a_app_without_loopback_port(monkeyp
     @app.post("/a2a")
     async def _a2a(body: dict):
         captured.update(body)
-        return {"result": {"status": {"state": "TASK_STATE_COMPLETED"}}}
+        return _a2a_sse({"result": {"statusUpdate": {"status": {"state": "TASK_STATE_COMPLETED"}}}})
 
     monkeypatch.setattr(STATE, "fastapi_app", app, raising=False)
     monkeypatch.setattr(STATE, "active_port", 9, raising=False)
@@ -186,7 +198,7 @@ async def test_now_inbox_fire_uses_mounted_a2a_app_without_loopback_port(monkeyp
     )
 
     assert ok is True
-    assert captured["method"] == "SendMessage"
+    assert captured["method"] == "SendStreamingMessage"
     msg = captured["params"]["message"]
     assert msg["contextId"] == ACTIVITY_CONTEXT
     assert msg["parts"] == [{"text": "ship the priority page"}]
@@ -196,7 +208,7 @@ async def test_now_inbox_fire_uses_mounted_a2a_app_without_loopback_port(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_now_inbox_fire_rejects_non_completed_a2a_response(monkeypatch):
+async def test_now_inbox_fire_rejects_failed_a2a_response(monkeypatch):
     import server.a2a as a2a
     from runtime.state import STATE
 
@@ -204,13 +216,31 @@ async def test_now_inbox_fire_rejects_non_completed_a2a_response(monkeypatch):
 
     @app.post("/a2a")
     async def _a2a(_body: dict):
-        return {"result": {"status": {"state": "TASK_STATE_WORKING"}}}
+        return _a2a_sse({"result": {"statusUpdate": {"status": {"state": "TASK_STATE_FAILED"}}}})
 
     monkeypatch.setattr(STATE, "fastapi_app", app, raising=False)
 
     ok = await a2a._fire_activity_from_inbox({"id": 18, "text": "not yet", "priority": "now"})
 
     assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_now_inbox_fire_accepts_a2a_task_ownership_before_terminal(monkeypatch):
+    import server.a2a as a2a
+    from runtime.state import STATE
+
+    app = FastAPI()
+
+    @app.post("/a2a")
+    async def _a2a(_body: dict):
+        return _a2a_sse({"result": {"statusUpdate": {"status": {"state": "TASK_STATE_SUBMITTED"}}}})
+
+    monkeypatch.setattr(STATE, "fastapi_app", app, raising=False)
+
+    ok = await a2a._fire_activity_from_inbox({"id": 19, "text": "accepted", "priority": "now"})
+
+    assert ok is True
 
 
 # ── check_inbox tool ─────────────────────────────────────────────────────────

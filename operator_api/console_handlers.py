@@ -754,12 +754,16 @@ async def _operator_inbox_add(payload: dict) -> dict:
         # runs, so the fired turn can't re-read its own trigger via check_inbox (double
         # processing). If the fire never happens (storm-blocked / failed), restore it to
         # pending so it isn't lost — check_inbox stays the fallback delivery path.
+        premarked = False
         try:
-            await asyncio.to_thread(STATE.inbox_store.mark_delivered, [item["id"]])
-        except Exception:  # noqa: BLE001 — best-effort; a missed mark just means a double-read
+            premarked = (await asyncio.to_thread(STATE.inbox_store.mark_delivered, [item["id"]])) == 1
+        except Exception:  # noqa: BLE001 — delivery reservation failures fall back to pull
             log.warning("[inbox] could not pre-mark now-item %s delivered", item.get("id"))
-        fired = await _fire_activity_from_inbox(item)
-        if not fired:
+        if premarked:
+            fired = await _fire_activity_from_inbox(item)
+        else:
+            log.warning("[inbox] now-fire skipped for item %s: could not reserve delivery", item.get("id"))
+        if premarked and not fired:
             try:
                 await asyncio.to_thread(STATE.inbox_store.mark_pending, [item["id"]])
             except Exception:  # noqa: BLE001 — restore is best-effort

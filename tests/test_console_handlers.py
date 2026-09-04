@@ -251,6 +251,31 @@ async def test_now_inbox_add_restores_pending_when_a2a_delivery_rejects(monkeypa
     assert [row["text"] for row in store.list(priority_floor="later")] == ["try later"]
 
 
+async def test_now_inbox_add_does_not_fire_when_delivery_cannot_be_reserved(monkeypatch, tmp_path):
+    import runtime.state as rs
+    from inbox.store import InboxStore
+
+    class _BrokenReserveStore(InboxStore):
+        def mark_delivered(self, ids, *, now=None):
+            raise RuntimeError("sqlite busy")
+
+    store = _BrokenReserveStore(str(tmp_path / "inbox.db"))
+    calls: list[dict] = []
+    monkeypatch.setattr(rs.STATE, "inbox_store", store, raising=False)
+
+    async def _delivery(item):
+        calls.append(item)
+        return True
+
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", _delivery, raising=False)
+
+    res = await ch._operator_inbox_add({"text": "reserve first", "priority": "now"})
+
+    assert res["fired"] is False
+    assert calls == []
+    assert [row["text"] for row in store.list(priority_floor="later")] == ["reserve first"]
+
+
 async def test_now_inbox_add_stays_pending_without_a2a_delivery_hook(monkeypatch, tmp_path):
     import runtime.state as rs
     from inbox.store import InboxStore
