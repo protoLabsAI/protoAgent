@@ -1561,16 +1561,17 @@ async def recover_pending_now_inbox_items(
     limit: int = _INBOX_NOW_RECOVERY_BATCH_LIMIT,
     retry_after_s: int = _INBOX_NOW_RECOVERY_RETRY_AFTER_S,
     max_attempts: int = _INBOX_NOW_RECOVERY_MAX_ATTEMPTS,
+    now=None,
 ) -> dict[str, int]:
     """One-shot startup recovery for pre-existing pending priority-``now`` inbox items.
 
     The inbox store owns the bounded claim/dedup policy: ``claim_now_recovery_batch``
     atomically claims the batch so a concurrent consumer can't double-deliver a
-    still-pending page while we await its turn. Delivery still flows through
-    ``operator_api.console_handlers._fire_activity_from_inbox``, the same accepted
-    self-A2A route used by newly posted ``now`` pages. An accepted item is then marked
-    delivered; an unfired item is restored to pending with actionable failure evidence
-    so pull fallback still works.
+    still-pending page while we await its turn. Delivery flows through
+    ``STATE.inbox_now_delivery``, the accepted self-A2A hook registered by ``server.a2a``
+    and used by newly posted ``now`` pages. An accepted item is then marked delivered;
+    an unfired item is restored to pending with actionable failure evidence so pull
+    fallback still works.
     """
     import asyncio
 
@@ -1584,7 +1585,11 @@ async def recover_pending_now_inbox_items(
     # deliver used to cost an operator alert a full retry window — and a replacement
     # process booting inside that window could not reclaim it at all.
     try:
-        stale = await asyncio.to_thread(store.reset_stale_recovery_claims)
+        stale = await asyncio.to_thread(
+            store.reset_stale_recovery_claims,
+            retry_after_s=retry_after_s,
+            now=now,
+        )
         if stale:
             log.info("[inbox] now-recovery released %d stale claim(s) from a prior process", stale)
     except Exception:  # noqa: BLE001 — reconciliation must not break boot
@@ -1596,6 +1601,7 @@ async def recover_pending_now_inbox_items(
             limit=limit,
             retry_after_s=retry_after_s,
             max_attempts=max_attempts,
+            now=now,
         )
     except Exception:  # noqa: BLE001 — recovery must not break boot
         log.exception("[inbox] now-recovery claim failed")
@@ -1606,7 +1612,21 @@ async def recover_pending_now_inbox_items(
     if not items:
         return {"claimed": 0, "accepted": 0, "failed": 0}
 
-    from operator_api.console_handlers import _fire_activity_from_inbox
+    async def _deliver(item: dict) -> bool:
+        import time
+
+        guard = getattr(STATE, "storm_guard", None)
+        if guard is not None and not guard.allow(time.monotonic()):
+            log.warning("[inbox] storm guard suppressed now-recovery for item %s", item.get("id"))
+            return False
+        delivery = getattr(STATE, "inbox_now_delivery", None)
+        if not callable(delivery):
+            log.warning(
+                "[inbox] now-recovery unavailable for item %s: delivery hook is not registered",
+                item.get("id"),
+            )
+            return False
+        return bool(await delivery(item))
 
     async def _restore(item_id: int, reason: str, claimed_at: str | None) -> None:
         """Best-effort: hand a claimed-but-unfired item back to pending with evidence.
@@ -1663,7 +1683,7 @@ async def recover_pending_now_inbox_items(
         item_id = int(item["id"])
         claimed_at = item.get("recovery_claimed_at")
         try:
-            delivered = await _fire_activity_from_inbox(item)
+            delivered = await _deliver(item)
         except asyncio.CancelledError:
             # Restore the current item and every later item the batch already claimed,
             # otherwise the un-processed tail stays reserved until the recovery lease expires.

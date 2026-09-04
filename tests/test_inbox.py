@@ -347,7 +347,7 @@ async def test_failed_now_fire_stays_pending(tmp_path, monkeypatch):
 
 def test_claim_now_recovery_batch_reserves_bounded_and_is_idempotent(tmp_path):
     """The claim atomically stamps a bounded in-flight marker on now items, so a
-    second claim inside the retry window does not re-fire the same rows."""
+    second claim from the same process does not re-fire the same rows."""
     store = _store(tmp_path)
     a = store.add("now a", priority="now")
     b = store.add("now b", priority="now")
@@ -364,7 +364,7 @@ def test_claim_now_recovery_batch_reserves_bounded_and_is_idempotent(tmp_path):
             assert row["delivered_at"] is None
             assert row["recovery_claimed_at"] is not None
             assert row["recovery_attempted_at"] is not None
-    # A repeat claim within the retry window returns only the still-unclaimed item.
+    # A repeat claim returns only the still-unclaimed item.
     again = store.claim_now_recovery_batch(limit=2, retry_after_s=3600)
     assert [r["id"] for r in again] == [c["id"]]
 
@@ -423,10 +423,10 @@ def test_recovery_claim_does_not_expire_into_pull_fallback(tmp_path):
     assert store.list(priority_floor="now") == []
 
 
-def test_recovery_claim_reclaims_stale_crash_lease_after_retry_window(tmp_path):
+def test_startup_claim_reset_reclaims_crash_lease_without_retry_window(tmp_path):
     """Regression (review): if a process exits after committing a recovery claim but
-    before delivery/restore, the undelivered now item must be eligible for a later
-    bounded recovery batch instead of being stranded forever."""
+    before delivery/restore, startup must release the in-process lease immediately
+    instead of stranding the page behind a wall-clock retry window."""
     store = _store(tmp_path)
     item = store.add("re-claimed after crash", priority="now")
 
@@ -437,11 +437,12 @@ def test_recovery_claim_reclaims_stale_crash_lease_after_retry_window(tmp_path):
         retry_after_s=3600,
         now=stale + timedelta(seconds=120),
     ) == []
+    assert store.reset_stale_recovery_claims() == 1
 
     [second] = store.claim_now_recovery_batch(
         limit=8,
         retry_after_s=3600,
-        now=stale + timedelta(seconds=3601),
+        now=stale + timedelta(seconds=121),
     )
     assert second["id"] == item["id"]
     assert second["recovery_claimed_at"] != first["recovery_claimed_at"]
@@ -453,7 +454,6 @@ def test_recovery_claim_reclaims_stale_crash_lease_after_retry_window(tmp_path):
 
 @pytest.mark.asyncio
 async def test_startup_recovery_retries_stale_claim_left_by_crashed_recovery(tmp_path, monkeypatch):
-    import operator_api.console_handlers as ch
     import runtime.state as rs
     from server.agent_init import recover_pending_now_inbox_items
 
@@ -468,14 +468,41 @@ async def test_startup_recovery_retries_stale_claim_left_by_crashed_recovery(tmp
         fired.append(fired_item["id"])
         return True
 
-    monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_ok)
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", _fire_ok, raising=False)
 
-    # Startup releases the dead process's lease first, so the page is recoverable
-    # IMMEDIATELY — even with a retry window of ten years. This previously asserted the
-    # opposite (claimed=0 inside the window), which pinned the stranding the review found:
-    # a crash between claim and deliver hid an operator alert for the whole window, and a
-    # replacement process booting inside it could never reclaim the row.
     recovered = await recover_pending_now_inbox_items(limit=8, retry_after_s=10 * 365 * 24 * 60 * 60)
+
+    assert recovered == {"claimed": 1, "accepted": 1, "failed": 0}
+    assert fired == [item["id"]]
+    [row] = store.list(priority_floor="now", include_delivered=True)
+    assert row["id"] == item["id"]
+    assert row["delivered_at"] is not None
+    assert row["recovery_claimed_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_retries_expired_claim_left_by_crashed_recovery(tmp_path, monkeypatch):
+    import runtime.state as rs
+    from server.agent_init import recover_pending_now_inbox_items
+
+    store = _store(tmp_path)
+    item = store.add("expired crash claim", priority="now")
+    stale = datetime(2026, 1, 1, tzinfo=UTC)
+    store.claim_now_recovery_batch(limit=8, retry_after_s=3600, now=stale)
+    monkeypatch.setattr(rs.STATE, "inbox_store", store, raising=False)
+    fired: list[int] = []
+
+    async def _fire_ok(fired_item):
+        fired.append(fired_item["id"])
+        return True
+
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", _fire_ok, raising=False)
+
+    recovered = await recover_pending_now_inbox_items(
+        limit=8,
+        retry_after_s=3600,
+        now=stale + timedelta(seconds=3601),
+    )
 
     assert recovered == {"claimed": 1, "accepted": 1, "failed": 0}
     assert fired == [item["id"]]
@@ -503,7 +530,6 @@ def test_recovery_claimed_items_are_operator_visible_when_requested(tmp_path):
 async def test_startup_recovery_does_not_reopen_a_concurrently_delivered_item(tmp_path, monkeypatch):
     """End-to-end: when recovery reports 'not accepted' after another owner delivered
     the page, the driver must leave the item delivered rather than un-delivering it."""
-    import operator_api.console_handlers as ch
     import runtime.state as rs
     from server.agent_init import recover_pending_now_inbox_items
 
@@ -517,7 +543,7 @@ async def test_startup_recovery_does_not_reopen_a_concurrently_delivered_item(tm
         store.mark_delivered([fired_item["id"]])
         return False
 
-    monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_then_deliver_concurrently)
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", _fire_then_deliver_concurrently, raising=False)
 
     result = await recover_pending_now_inbox_items(limit=8)
 
@@ -546,7 +572,7 @@ async def test_startup_recovery_accepted_but_mark_delivered_failure_stays_claime
     def _mark_delivered_raises(_ids):
         raise RuntimeError("sqlite write failed")
 
-    monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_ok)
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", _fire_ok, raising=False)
     monkeypatch.setattr(store, "mark_delivered", _mark_delivered_raises)
 
     result = await recover_pending_now_inbox_items(limit=8)
@@ -569,7 +595,6 @@ async def test_startup_recovery_accepted_but_mark_delivered_failure_stays_claime
 
 @pytest.mark.asyncio
 async def test_startup_recovery_accepts_preexisting_now_backlog(tmp_path, monkeypatch):
-    import operator_api.console_handlers as ch
     import runtime.state as rs
     from server.agent_init import recover_pending_now_inbox_items
 
@@ -582,7 +607,7 @@ async def test_startup_recovery_accepts_preexisting_now_backlog(tmp_path, monkey
         fired.append(item["id"])
         return True
 
-    monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_ok)
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", _fire_ok, raising=False)
 
     result = await recover_pending_now_inbox_items(limit=8)
 
@@ -592,12 +617,38 @@ async def test_startup_recovery_accepts_preexisting_now_backlog(tmp_path, monkey
 
 
 @pytest.mark.asyncio
+async def test_startup_recovery_uses_registered_accepted_delivery_hook(tmp_path, monkeypatch):
+    import operator_api.console_handlers as ch
+    import runtime.state as rs
+    from server.agent_init import recover_pending_now_inbox_items
+
+    store = _store(tmp_path)
+    item = store.add("use server hook", priority="now")
+    monkeypatch.setattr(rs.STATE, "inbox_store", store, raising=False)
+    fired: list[int] = []
+
+    async def _server_delivery(delivered_item):
+        fired.append(delivered_item["id"])
+        return True
+
+    async def _console_wrapper_should_not_run(_item):
+        raise AssertionError("startup recovery must use STATE.inbox_now_delivery directly")
+
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", _server_delivery, raising=False)
+    monkeypatch.setattr(ch, "_fire_activity_from_inbox", _console_wrapper_should_not_run)
+
+    result = await recover_pending_now_inbox_items(limit=8)
+
+    assert result == {"claimed": 1, "accepted": 1, "failed": 0}
+    assert fired == [item["id"]]
+
+
+@pytest.mark.asyncio
 async def test_startup_recovery_reserves_delivery_during_fire_to_block_double_delivery(tmp_path, monkeypatch):
     """The claim stamps ``recovery_claimed_at`` before the awaited fire, so a
     concurrent inbox consumer (a ``check_inbox`` pull or a fresh now-post) can't
     grab the same still-pending page and deliver it twice. On acceptance only
     then marks it delivered."""
-    import operator_api.console_handlers as ch
     import runtime.state as rs
     from server.agent_init import recover_pending_now_inbox_items
 
@@ -621,7 +672,7 @@ async def test_startup_recovery_reserves_delivery_during_fire_to_block_double_de
         )
         return True
 
-    monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_ok)
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", _fire_ok, raising=False)
 
     result = await recover_pending_now_inbox_items(limit=8)
     [row] = store.list(priority_floor="now", include_delivered=True)
@@ -643,7 +694,6 @@ async def test_startup_recovery_reserves_delivery_during_fire_to_block_double_de
 
 @pytest.mark.asyncio
 async def test_startup_recovery_is_bounded(tmp_path, monkeypatch):
-    import operator_api.console_handlers as ch
     import runtime.state as rs
     from server.agent_init import recover_pending_now_inbox_items
 
@@ -656,7 +706,7 @@ async def test_startup_recovery_is_bounded(tmp_path, monkeypatch):
         fired.append(item["id"])
         return True
 
-    monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_ok)
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", _fire_ok, raising=False)
 
     result = await recover_pending_now_inbox_items(limit=2)
 
@@ -694,7 +744,6 @@ async def test_startup_recovery_uses_storm_guarded_delivery_path(tmp_path, monke
 
 @pytest.mark.asyncio
 async def test_startup_recovery_failure_stays_pending_with_evidence(tmp_path, monkeypatch):
-    import operator_api.console_handlers as ch
     import runtime.state as rs
     from server.agent_init import recover_pending_now_inbox_items
 
@@ -705,7 +754,7 @@ async def test_startup_recovery_failure_stays_pending_with_evidence(tmp_path, mo
     async def _fire_fail(_item):
         return False
 
-    monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_fail)
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", _fire_fail, raising=False)
 
     result = await recover_pending_now_inbox_items(limit=8)
     pending = store.list(priority_floor="now")
@@ -720,7 +769,6 @@ async def test_startup_recovery_failure_stays_pending_with_evidence(tmp_path, mo
 
 @pytest.mark.asyncio
 async def test_startup_recovery_exception_stays_pending_with_evidence(tmp_path, monkeypatch):
-    import operator_api.console_handlers as ch
     import runtime.state as rs
     from server.agent_init import recover_pending_now_inbox_items
 
@@ -731,7 +779,7 @@ async def test_startup_recovery_exception_stays_pending_with_evidence(tmp_path, 
     async def _fire_raise(_item):
         raise RuntimeError("a2a unavailable")
 
-    monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_raise)
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", _fire_raise, raising=False)
 
     result = await recover_pending_now_inbox_items(limit=8)
     [pending] = store.list(priority_floor="now")
@@ -751,7 +799,6 @@ async def test_startup_recovery_cancellation_restores_entire_claimed_batch(tmp_p
     rows up front, so restoring only the current one strands the tail: hidden from pull
     fallback (``list`` excludes claimed ``now`` items) and from future recovery (the next
     claim requires ``recovery_claimed_at IS NULL``)."""
-    import operator_api.console_handlers as ch
     import runtime.state as rs
     from server.agent_init import recover_pending_now_inbox_items
 
@@ -766,7 +813,7 @@ async def test_startup_recovery_cancellation_restores_entire_claimed_batch(tmp_p
             raise asyncio.CancelledError
         return True
 
-    monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_cancel_on_second)
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", _fire_cancel_on_second, raising=False)
 
     with pytest.raises(asyncio.CancelledError):
         await recover_pending_now_inbox_items(limit=8)
@@ -790,8 +837,7 @@ async def test_startup_recovery_cancellation_restores_entire_claimed_batch(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_startup_recovery_retry_cooldown_prevents_restart_replay(tmp_path, monkeypatch):
-    import operator_api.console_handlers as ch
+async def test_startup_recovery_attempt_count_prevents_restart_replay_storm(tmp_path, monkeypatch):
     import runtime.state as rs
     from server.agent_init import recover_pending_now_inbox_items
 
@@ -804,15 +850,38 @@ async def test_startup_recovery_retry_cooldown_prevents_restart_replay(tmp_path,
         fired.append(item["text"])
         return False
 
-    monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_fail)
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", _fire_fail, raising=False)
 
-    # Storm protection is now a bounded COUNT, not a clock: a refused page is retried
-    # promptly (a transient failure should not silence an operator alert for an hour) and
-    # stops after `max_attempts`. This previously asserted a wall-clock cooldown, which
-    # bought throttling at the price of recoverability — the two are separated now.
-    results = [await recover_pending_now_inbox_items(limit=8, max_attempts=3) for _ in range(4)]
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    results = [
+        await recover_pending_now_inbox_items(limit=8, max_attempts=3, retry_after_s=3600, now=base),
+        await recover_pending_now_inbox_items(
+            limit=8,
+            max_attempts=3,
+            retry_after_s=3600,
+            now=base + timedelta(seconds=120),
+        ),
+        await recover_pending_now_inbox_items(
+            limit=8,
+            max_attempts=3,
+            retry_after_s=3600,
+            now=base + timedelta(seconds=3601),
+        ),
+        await recover_pending_now_inbox_items(
+            limit=8,
+            max_attempts=3,
+            retry_after_s=3600,
+            now=base + timedelta(seconds=7202),
+        ),
+        await recover_pending_now_inbox_items(
+            limit=8,
+            max_attempts=3,
+            retry_after_s=3600,
+            now=base + timedelta(seconds=10803),
+        ),
+    ]
 
-    assert [r["claimed"] for r in results] == [1, 1, 1, 0]  # bounded, then it stops
+    assert [r["claimed"] for r in results] == [1, 1, 1, 0, 0]  # count-bounded, not clock-bound
     assert results[0] == {"claimed": 1, "accepted": 0, "failed": 1}
     assert fired == ["retry later"] * 3
     # Exhausted, but NOT lost: the pull fallback still surfaces it to an operator.
@@ -821,7 +890,6 @@ async def test_startup_recovery_retry_cooldown_prevents_restart_replay(tmp_path,
 
 @pytest.mark.asyncio
 async def test_startup_recovery_excludes_next_and_later(tmp_path, monkeypatch):
-    import operator_api.console_handlers as ch
     import runtime.state as rs
     from server.agent_init import recover_pending_now_inbox_items
 
@@ -836,7 +904,7 @@ async def test_startup_recovery_excludes_next_and_later(tmp_path, monkeypatch):
         fired.append(item["text"])
         return True
 
-    monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_ok)
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", _fire_ok, raising=False)
 
     result = await recover_pending_now_inbox_items(limit=8)
     pending = store.list(priority_floor="later")

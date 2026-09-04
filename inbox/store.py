@@ -188,27 +188,35 @@ class InboxStore:
         finally:
             db.close()
 
-    def reset_stale_recovery_claims(self) -> int:
-        """Clear every in-flight recovery claim. Call ONCE at startup, before the recovery
-        pass, and nowhere else.
+    def reset_stale_recovery_claims(
+        self,
+        *,
+        retry_after_s: int = 3600,
+        now: datetime | None = None,
+    ) -> int:
+        """Clear prior-process in-flight recovery claims. Call ONCE at startup,
+        before the recovery pass, and nowhere else.
 
         The claim (``recovery_claimed_at``) is an in-process lease: it stops a concurrent
         ``check_inbox`` pull from grabbing a page while recovery awaits its Activity turn.
         A lease is therefore only meaningful to the process that took it — so any claim
-        still present at startup was taken by a process that no longer exists, and holding
-        it hides the page from BOTH recovery (the selector skips claimed rows) and the pull
-        fallback (``list`` skips claimed ``now`` rows) until the lease ages out.
+        still present at startup may have been taken by a process that no longer exists.
+        Holding it hides the page from pull fallback (``list`` skips claimed ``now`` rows),
+        so startup releases all claims regardless of wall-clock age.
 
-        Without this, a crash between the claim and the deliver/restore handoff made an
-        operator page invisible for the whole ``retry_after_s`` window, and a replacement
-        process that booted inside that window could not reclaim it at all — the page just
-        went quiet. Recoverability must not depend on wall-clock; storm protection is
-        ``recovery_attempts``, which this deliberately does NOT reset.
+        This deliberately does NOT reset ``recovery_attempts``: restart replay is bounded
+        by attempt count, not by a clock, so crashed pages are immediately recoverable
+        while permanently refused pages still stop replaying.
         """
+        _ = retry_after_s, now
         db = self._connect()
         try:
             cur = db.execute(
-                "UPDATE inbox SET recovery_claimed_at = NULL WHERE recovery_claimed_at IS NOT NULL"
+                """
+                UPDATE inbox
+                SET recovery_claimed_at = NULL
+                WHERE recovery_claimed_at IS NOT NULL
+                """
             )
             db.commit()
             return cur.rowcount
@@ -245,19 +253,18 @@ class InboxStore:
         dedupe downstream; do not add a test pinning exactly-once here, because the design
         cannot honour it.
 
-        Storm protection is ``recovery_attempts``, a bounded counter incremented on every
-        claim: a page that keeps refusing delivery stops being retried after
-        ``max_attempts`` and stays visible to the ``check_inbox`` pull instead. It is a
-        COUNT, not a clock, so a crashed page is eligible again on the next boot rather
-        than after ``retry_after_s`` — recoverability and throttling are separate concerns
-        and were previously conflated in one wall-clock gate.
+        Storm protection is the bounded ``recovery_attempts`` count: a page that keeps
+        refusing delivery stops after ``max_attempts`` and stays visible to the
+        ``check_inbox`` pull fallback while unclaimed. ``retry_after_s`` is retained for
+        compatibility with callers from the first slice, but recovery no longer gates
+        crash recoverability on wall-clock age.
 
         ``BEGIN IMMEDIATE`` takes the write lock before the candidate SELECT, so no other
         writer can deliver one of these rows between our read and our claim UPDATE.
         """
         now = now or datetime.now(UTC)
         now_iso = now.isoformat()
-        cutoff = (now - timedelta(seconds=max(0, int(retry_after_s)))).isoformat()
+        _ = retry_after_s
         batch_limit = max(1, int(limit))
         db = self._connect()
         try:
@@ -267,12 +274,12 @@ class InboxStore:
                 SELECT * FROM inbox
                 WHERE priority = 'now'
                   AND delivered_at IS NULL
-                  AND (recovery_claimed_at IS NULL OR recovery_claimed_at < ?)
+                  AND recovery_claimed_at IS NULL
                   AND recovery_attempts < ?
                 ORDER BY created_at ASC
                 LIMIT ?
                 """,
-                (cutoff, max_attempts, batch_limit),
+                (max_attempts, batch_limit),
             ).fetchall()
             ids = [int(r["id"]) for r in rows]
             if ids:
@@ -361,9 +368,9 @@ class InboxStore:
         This deliberately leaves ``recovery_claimed_at`` in place. Once the accepted
         delivery path has taken ownership of the Activity turn, clearing the claim would
         let a later pull redeliver the same page immediately. The row remains
-        undelivered with operator-readable evidence; if the mark cannot be repaired by
-        then, the bounded recovery lease can be retried after the retry window instead
-        of hiding the page forever.
+        undelivered with operator-readable evidence; the next startup release makes it
+        eligible for the same bounded at-least-once recovery path instead of hiding the
+        page forever.
         """
         now = now or datetime.now(UTC)
         detail = (reason or "accepted delivery could not be marked delivered").strip()[:500]
