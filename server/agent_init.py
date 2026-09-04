@@ -49,6 +49,10 @@ _CONFIG_WRITE_LOCK = threading.RLock()
 _INBOX_NOW_RECOVERY_STARTED = False
 _INBOX_NOW_RECOVERY_BATCH_LIMIT = 8
 _INBOX_NOW_RECOVERY_RETRY_AFTER_S = 60 * 60
+# Bounded retries for a page that keeps refusing delivery. A COUNT, not a clock:
+# recoverability after a crash must not wait on wall-time (a stale claim is released
+# at startup), while a genuinely undeliverable page still stops replaying.
+_INBOX_NOW_RECOVERY_MAX_ATTEMPTS = 5
 
 
 def _serialized_config_write(fn):
@@ -1556,6 +1560,7 @@ async def recover_pending_now_inbox_items(
     *,
     limit: int = _INBOX_NOW_RECOVERY_BATCH_LIMIT,
     retry_after_s: int = _INBOX_NOW_RECOVERY_RETRY_AFTER_S,
+    max_attempts: int = _INBOX_NOW_RECOVERY_MAX_ATTEMPTS,
 ) -> dict[str, int]:
     """One-shot startup recovery for pre-existing pending priority-``now`` inbox items.
 
@@ -1573,11 +1578,24 @@ async def recover_pending_now_inbox_items(
     if store is None:
         return {"claimed": 0, "accepted": 0, "failed": 0}
 
+    # Any recovery claim still set at startup was taken by a process that is gone: the
+    # claim is an in-process lease. Left in place it hides the page from recovery AND
+    # from the pull fallback until the lease ages out, so a crash between claim and
+    # deliver used to cost an operator alert a full retry window — and a replacement
+    # process booting inside that window could not reclaim it at all.
+    try:
+        stale = await asyncio.to_thread(store.reset_stale_recovery_claims)
+        if stale:
+            log.info("[inbox] now-recovery released %d stale claim(s) from a prior process", stale)
+    except Exception:  # noqa: BLE001 — reconciliation must not break boot
+        log.exception("[inbox] now-recovery could not release stale claims")
+
     try:
         items = await asyncio.to_thread(
             store.claim_now_recovery_batch,
             limit=limit,
             retry_after_s=retry_after_s,
+            max_attempts=max_attempts,
         )
     except Exception:  # noqa: BLE001 — recovery must not break boot
         log.exception("[inbox] now-recovery claim failed")

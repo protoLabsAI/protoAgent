@@ -470,11 +470,14 @@ async def test_startup_recovery_retries_stale_claim_left_by_crashed_recovery(tmp
 
     monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_ok)
 
-    too_soon = await recover_pending_now_inbox_items(limit=8, retry_after_s=10 * 365 * 24 * 60 * 60)
-    later = await recover_pending_now_inbox_items(limit=8, retry_after_s=0)
+    # Startup releases the dead process's lease first, so the page is recoverable
+    # IMMEDIATELY — even with a retry window of ten years. This previously asserted the
+    # opposite (claimed=0 inside the window), which pinned the stranding the review found:
+    # a crash between claim and deliver hid an operator alert for the whole window, and a
+    # replacement process booting inside it could never reclaim the row.
+    recovered = await recover_pending_now_inbox_items(limit=8, retry_after_s=10 * 365 * 24 * 60 * 60)
 
-    assert too_soon == {"claimed": 0, "accepted": 0, "failed": 0}
-    assert later == {"claimed": 1, "accepted": 1, "failed": 0}
+    assert recovered == {"claimed": 1, "accepted": 1, "failed": 0}
     assert fired == [item["id"]]
     [row] = store.list(priority_floor="now", include_delivered=True)
     assert row["id"] == item["id"]
@@ -803,12 +806,16 @@ async def test_startup_recovery_retry_cooldown_prevents_restart_replay(tmp_path,
 
     monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_fail)
 
-    first = await recover_pending_now_inbox_items(limit=8, retry_after_s=3600)
-    second = await recover_pending_now_inbox_items(limit=8, retry_after_s=3600)
+    # Storm protection is now a bounded COUNT, not a clock: a refused page is retried
+    # promptly (a transient failure should not silence an operator alert for an hour) and
+    # stops after `max_attempts`. This previously asserted a wall-clock cooldown, which
+    # bought throttling at the price of recoverability — the two are separated now.
+    results = [await recover_pending_now_inbox_items(limit=8, max_attempts=3) for _ in range(4)]
 
-    assert first == {"claimed": 1, "accepted": 0, "failed": 1}
-    assert second == {"claimed": 0, "accepted": 0, "failed": 0}
-    assert fired == ["retry later"]
+    assert [r["claimed"] for r in results] == [1, 1, 1, 0]  # bounded, then it stops
+    assert results[0] == {"claimed": 1, "accepted": 0, "failed": 1}
+    assert fired == ["retry later"] * 3
+    # Exhausted, but NOT lost: the pull fallback still surfaces it to an operator.
     assert len(store.list(priority_floor="now")) == 1
 
 
@@ -1041,3 +1048,59 @@ def test_inbox_route_accepts_with_token():
 
 async def _unused(*_a, **_k):  # pragma: no cover - placeholder callable
     return ""
+
+
+# ── the crash window: recoverability must not depend on wall-clock (#3351 r3) ─────
+
+
+def test_a_claim_left_by_a_dead_process_is_released_at_startup(tmp_path):
+    """The finding this closes: a crash between claim and deliver stranded the page.
+
+    The claim is an in-process lease. Left set, the row is invisible to BOTH the recovery
+    selector (which skips claimed rows) and the `check_inbox` pull fallback (which skips
+    claimed `now` rows) — so an operator alert went quiet for the whole retry window, and a
+    replacement process booting inside that window could not reclaim it at all.
+    """
+    store = InboxStore(str(tmp_path / "inbox.db"))
+    store.add("board card bd-x is blocked", priority="now")
+    claimed = store.claim_now_recovery_batch(limit=8)
+    assert len(claimed) == 1
+    # …the process dies here: no deliver, no restore.
+    assert store.list(priority_floor="now") == []  # invisible to pull, as designed in-flight
+
+    released = store.reset_stale_recovery_claims()  # what startup now does first
+
+    assert released == 1
+    assert len(store.list(priority_floor="now")) == 1  # pull fallback can see it again
+    assert len(store.claim_now_recovery_batch(limit=8)) == 1  # and recovery can reclaim it
+    # No clock was advanced: reclaim is immediate, not after retry_after_s.
+
+
+def test_storm_protection_is_a_bounded_count_not_a_clock(tmp_path):
+    """Replaces the wall-clock gate. A page that keeps refusing delivery stops being
+    retried after `max_attempts` — but a crashed page is eligible again on the very next
+    boot rather than after an hour, because the two concerns are now separate."""
+    store = InboxStore(str(tmp_path / "inbox.db"))
+    store.add("undeliverable page", priority="now")
+    for _ in range(3):
+        assert len(store.claim_now_recovery_batch(limit=8, max_attempts=3)) == 1
+        store.reset_stale_recovery_claims()  # simulate a boot after each failed attempt
+    # Budget spent: recovery stops re-firing it…
+    assert store.claim_now_recovery_batch(limit=8, max_attempts=3) == []
+    # …but it is NOT lost — the pull fallback still surfaces it to an operator.
+    assert len(store.list(priority_floor="now")) == 1
+
+
+def test_delivery_is_at_least_once_by_decision(tmp_path):
+    """A page whose Activity delivery was accepted but whose `mark_delivered` write failed
+    IS re-fired. That is the documented guarantee, not a defect: no reader can distinguish
+    it from a claim that never fired without a two-phase commit against the Activity path,
+    and a duplicate line in a feed beats a lost operator alert (#3351 stranded 29 for four
+    days). This test exists so that trade-off is deliberate rather than incidental — if it
+    ever fails, the guarantee changed and the docstring must change with it."""
+    store = InboxStore(str(tmp_path / "inbox.db"))
+    store.add("page whose mark_delivered lost the race", priority="now")
+    assert len(store.claim_now_recovery_batch(limit=8)) == 1
+    # Delivery was accepted, but the mark_delivered write failed — nothing records it.
+    store.reset_stale_recovery_claims()
+    assert len(store.claim_now_recovery_batch(limit=8)) == 1  # fired again: at-least-once
