@@ -346,8 +346,8 @@ async def test_failed_now_fire_stays_pending(tmp_path, monkeypatch):
 
 
 def test_claim_now_recovery_batch_reserves_bounded_and_is_idempotent(tmp_path):
-    """The claim atomically reserves ``delivered_at`` on a bounded batch of now items,
-    so a second claim (a concurrent consumer / a restart) sees nothing to re-fire."""
+    """The claim atomically stamps a bounded in-flight marker on now items, so a
+    second claim (a concurrent consumer / a restart) sees nothing to re-fire."""
     store = _store(tmp_path)
     a = store.add("now a", priority="now")
     b = store.add("now b", priority="now")
@@ -356,12 +356,13 @@ def test_claim_now_recovery_batch_reserves_bounded_and_is_idempotent(tmp_path):
 
     claimed = store.claim_now_recovery_batch(limit=2, retry_after_s=3600)
     assert [r["id"] for r in claimed] == [a["id"], b["id"]]  # bounded to the batch limit
-    # Reserved rows drop out of the pending pool: no concurrent double-delivery.
+    # Claimed rows drop out of the pending pool: no concurrent double-delivery.
     assert [r["id"] for r in store.list(priority_floor="now")] == [c["id"]]
     reserved = store.list(priority_floor="now", include_delivered=True)
     for row in reserved:
         if row["id"] in {a["id"], b["id"]}:
-            assert row["delivered_at"] is not None
+            assert row["delivered_at"] is None
+            assert row["recovery_claimed_at"] is not None
             assert row["recovery_attempted_at"] is not None
     # A repeat claim within the retry window returns only the still-unclaimed item.
     again = store.claim_now_recovery_batch(limit=2, retry_after_s=3600)
@@ -369,19 +370,20 @@ def test_claim_now_recovery_batch_reserves_bounded_and_is_idempotent(tmp_path):
 
 
 def test_restore_recovery_failure_reopens_pending_with_evidence(tmp_path):
-    """Restoring an unfired reservation clears ``delivered_at`` (pull fallback works)
+    """Restoring an unfired claim clears ``recovery_claimed_at`` (pull fallback works)
     while keeping ``recovery_attempted_at`` (restart backoff) and recording evidence."""
     store = _store(tmp_path)
     item = store.add("boom", priority="now")
     [claimed] = store.claim_now_recovery_batch(limit=8)
     assert claimed["id"] == item["id"]
-    assert store.list(priority_floor="now") == []  # reserved out of the pending pool
+    assert store.list(priority_floor="now") == []  # claimed out of the pending pool
 
     assert store.restore_recovery_failure(item["id"], "delivery was not accepted") == 1
 
     [pending] = store.list(priority_floor="now")
     assert pending["id"] == item["id"]
     assert pending["delivered_at"] is None
+    assert pending["recovery_claimed_at"] is None
     assert pending["recovery_attempted_at"]
     assert pending["recovery_error"] == "delivery was not accepted"
 
@@ -412,10 +414,10 @@ async def test_startup_recovery_accepts_preexisting_now_backlog(tmp_path, monkey
 
 @pytest.mark.asyncio
 async def test_startup_recovery_reserves_delivery_during_fire_to_block_double_delivery(tmp_path, monkeypatch):
-    """The claim RESERVES ``delivered_at`` before the awaited fire (deliver-before-fire,
-    #1375), so a concurrent inbox consumer (a ``check_inbox`` pull or a fresh now-post)
-    can't grab the same still-pending page and deliver it twice. On acceptance the
-    reservation persists as the delivery marker."""
+    """The claim stamps ``recovery_claimed_at`` before the awaited fire, so a
+    concurrent inbox consumer (a ``check_inbox`` pull or a fresh now-post) can't
+    grab the same still-pending page and deliver it twice. On acceptance only
+    then marks it delivered."""
     import operator_api.console_handlers as ch
     import runtime.state as rs
     from server.agent_init import recover_pending_now_inbox_items
@@ -423,14 +425,21 @@ async def test_startup_recovery_reserves_delivery_during_fire_to_block_double_de
     store = _store(tmp_path)
     old_now = store.add("reserve before fire", priority="now")
     monkeypatch.setattr(rs.STATE, "inbox_store", store, raising=False)
-    during_fire: list[tuple[list[int], str | None, str | None]] = []
+    during_fire: list[tuple[list[int], str | None, str | None, str | None]] = []
 
     async def _fire_ok(item):
-        # A concurrent pending consumer sees NOTHING while we deliver: the row is already
-        # reserved (delivered_at set), so it cannot be picked up and double-delivered.
+        # A concurrent pending consumer sees NOTHING while we deliver: the row has an
+        # active recovery claim, so it cannot be picked up and double-delivered.
         pending_now = [r["id"] for r in store.list(priority_floor="now")]
         [reserved] = store.list(priority_floor="now", include_delivered=True)
-        during_fire.append((pending_now, reserved["delivered_at"], reserved["recovery_attempted_at"]))
+        during_fire.append(
+            (
+                pending_now,
+                reserved["delivered_at"],
+                reserved["recovery_claimed_at"],
+                reserved["recovery_attempted_at"],
+            )
+        )
         return True
 
     monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_ok)
@@ -440,13 +449,15 @@ async def test_startup_recovery_reserves_delivery_during_fire_to_block_double_de
 
     assert result == {"claimed": 1, "accepted": 1, "failed": 0}
     assert len(during_fire) == 1
-    pending_now, reserved_delivered, reserved_attempted = during_fire[0]
+    pending_now, reserved_delivered, reserved_claimed, reserved_attempted = during_fire[0]
     assert pending_now == []  # nothing left for a concurrent consumer to grab
-    assert reserved_delivered is not None  # reservation held throughout the fire
+    assert reserved_delivered is None  # not falsely delivered before acceptance
+    assert reserved_claimed is not None
     assert reserved_attempted is not None
-    # After acceptance the reservation persists as the delivery marker; error stays clear.
+    # After acceptance the item is explicitly marked delivered; the claim and error clear.
     assert row["id"] == old_now["id"]
     assert row["delivered_at"]
+    assert row["recovery_claimed_at"] is None
     assert row["recovery_error"] is None
     assert store.list(priority_floor="now") == []
 
@@ -495,7 +506,8 @@ async def test_startup_recovery_failure_stays_pending_with_evidence(tmp_path, mo
 
     assert result == {"claimed": 1, "accepted": 0, "failed": 1}
     assert [row["id"] for row in pending] == [item["id"]]
-    assert pending[0]["delivered_at"] is None  # reservation restored, not left delivered
+    assert pending[0]["delivered_at"] is None
+    assert pending[0]["recovery_claimed_at"] is None
     assert pending[0]["recovery_attempted_at"]
     assert pending[0]["recovery_error"] == "delivery was not accepted"
 
@@ -521,6 +533,7 @@ async def test_startup_recovery_exception_stays_pending_with_evidence(tmp_path, 
     assert result == {"claimed": 1, "accepted": 0, "failed": 1}
     assert pending["id"] == item["id"]
     assert pending["delivered_at"] is None
+    assert pending["recovery_claimed_at"] is None
     assert pending["recovery_attempted_at"]
     assert pending["recovery_error"] == "delivery raised: a2a unavailable"
 
@@ -576,6 +589,52 @@ async def test_startup_recovery_excludes_next_and_later(tmp_path, monkeypatch):
     assert result == {"claimed": 1, "accepted": 1, "failed": 0}
     assert fired == ["run now"]
     assert [row["id"] for row in pending] == [next_item["id"], later_item["id"]]
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_lifecycle_schedules_once_on_running_loop(monkeypatch):
+    import server.agent_init as agent_init
+    import runtime.state as rs
+
+    called = asyncio.Event()
+    results: list[dict[str, int]] = []
+
+    async def _recover():
+        results.append({"claimed": 1, "accepted": 1, "failed": 0})
+        called.set()
+
+    monkeypatch.setattr(agent_init, "_INBOX_NOW_RECOVERY_STARTED", False)
+    monkeypatch.setattr(agent_init, "recover_pending_now_inbox_items", _recover)
+    monkeypatch.setattr(rs.STATE, "inbox_store", object(), raising=False)
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", lambda _item: True, raising=False)
+    monkeypatch.setattr(rs.STATE, "main_loop", asyncio.get_running_loop(), raising=False)
+
+    agent_init._start_inbox_now_recovery_once()
+    agent_init._start_inbox_now_recovery_once()
+    await asyncio.wait_for(called.wait(), timeout=1)
+    await asyncio.sleep(0)
+
+    assert results == [{"claimed": 1, "accepted": 1, "failed": 0}]
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_lifecycle_waits_for_delivery_hook(monkeypatch):
+    import server.agent_init as agent_init
+    import runtime.state as rs
+
+    async def _recover():
+        raise AssertionError("recovery must not start before accepted delivery is registered")
+
+    monkeypatch.setattr(agent_init, "_INBOX_NOW_RECOVERY_STARTED", False)
+    monkeypatch.setattr(agent_init, "recover_pending_now_inbox_items", _recover)
+    monkeypatch.setattr(rs.STATE, "inbox_store", object(), raising=False)
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", None, raising=False)
+    monkeypatch.setattr(rs.STATE, "main_loop", asyncio.get_running_loop(), raising=False)
+
+    agent_init._start_inbox_now_recovery_once()
+    await asyncio.sleep(0)
+
+    assert agent_init._INBOX_NOW_RECOVERY_STARTED is False
 
 
 # ── badge dedup: inbox.item fires only for items that land in the queue (#1375) ──

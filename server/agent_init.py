@@ -49,7 +49,6 @@ _CONFIG_WRITE_LOCK = threading.RLock()
 _INBOX_NOW_RECOVERY_STARTED = False
 _INBOX_NOW_RECOVERY_BATCH_LIMIT = 8
 _INBOX_NOW_RECOVERY_RETRY_AFTER_S = 60 * 60
-_INBOX_NOW_RECOVERY_STARTUP_WAIT_S = 120.0
 
 
 def _serialized_config_write(fn):
@@ -333,8 +332,6 @@ def _init_langgraph_agent(headless_setup: bool = False):
         from inbox import StormGuard
 
         STATE.storm_guard = StormGuard()
-    _start_inbox_now_recovery_once()
-
     # Background subagent manager (ADR 0050) — must exist before the graph build so
     # the `task` tool's run_in_background path can reach it.
     STATE.background_mgr = _build_background_manager(STATE.graph_config)
@@ -1563,12 +1560,12 @@ async def recover_pending_now_inbox_items(
     """One-shot startup recovery for pre-existing pending priority-``now`` inbox items.
 
     The inbox store owns the bounded claim/dedup policy: ``claim_now_recovery_batch``
-    atomically RESERVES the batch (deliver-before-fire, #1375) so a concurrent consumer
-    can't double-deliver a still-pending page while we await its turn. Delivery still
-    flows through ``operator_api.console_handlers._fire_activity_from_inbox``, the same
-    accepted self-A2A route used by newly posted ``now`` pages. An accepted item keeps
-    its reservation (stays delivered); an unfired item is restored to pending with
-    actionable failure evidence so pull fallback still works.
+    atomically claims the batch so a concurrent consumer can't double-deliver a
+    still-pending page while we await its turn. Delivery still flows through
+    ``operator_api.console_handlers._fire_activity_from_inbox``, the same accepted
+    self-A2A route used by newly posted ``now`` pages. An accepted item is then marked
+    delivered; an unfired item is restored to pending with actionable failure evidence
+    so pull fallback still works.
     """
     import asyncio
 
@@ -1594,15 +1591,15 @@ async def recover_pending_now_inbox_items(
     from operator_api.console_handlers import _fire_activity_from_inbox
 
     async def _restore(item_id: int, reason: str) -> None:
-        """Best-effort: hand a reserved-but-unfired item back to pending with evidence."""
+        """Best-effort: hand a claimed-but-unfired item back to pending with evidence."""
         try:
             await asyncio.to_thread(store.restore_recovery_failure, item_id, reason)
         except Exception:  # noqa: BLE001 — restore is best-effort; never break the batch
             log.warning("[inbox] now-recovery could not restore item %s to pending (%s)", item_id, reason)
 
-    # Every item in ``items`` was RESERVED (delivered_at set) by the atomic claim above,
-    # so no concurrent consumer can double-deliver it while we await its fire. Keep the
-    # reservation on accepted delivery; restore it to pending (with evidence) otherwise.
+    # Every item in ``items`` was claimed by the atomic claim above, so no concurrent
+    # consumer can double-deliver it while we await its fire. Mark accepted delivery
+    # explicitly; restore the claim to pending (with evidence) otherwise.
     for item in items:
         item_id = int(item["id"])
         try:
@@ -1617,6 +1614,13 @@ async def recover_pending_now_inbox_items(
             continue
 
         if delivered:
+            try:
+                await asyncio.to_thread(store.mark_delivered, [item_id])
+            except Exception as exc:  # noqa: BLE001 — keep processing the rest of the bounded batch
+                failed += 1
+                log.exception("[inbox] now-recovery accepted item %s but could not mark delivered", item_id)
+                await _restore(item_id, f"accepted delivery could not be marked delivered: {exc}")
+                continue
             accepted += 1
             continue
 
@@ -1634,36 +1638,37 @@ async def recover_pending_now_inbox_items(
 
 
 def _start_inbox_now_recovery_once() -> None:
-    """Start the one-shot boot recovery worker after FastAPI startup owns routes.
+    """Start the one-shot boot recovery worker from the FastAPI startup lifecycle.
 
-    ``_init_langgraph_agent`` runs before ``STATE.fastapi_app`` is mounted, so the
-    worker waits for the existing startup marker instead of firing during graph
-    construction. This is not a scheduler: it exits after one bounded recovery pass.
+    The accepted delivery path is self-A2A through the mounted FastAPI app, so this
+    must run after startup has established the app, graph, surfaces, and delivery
+    hook. This is not a scheduler: it exits after one bounded recovery pass.
     """
     global _INBOX_NOW_RECOVERY_STARTED
     if _INBOX_NOW_RECOVERY_STARTED:
         return
     if STATE.inbox_store is None:
         return
+    if not callable(getattr(STATE, "inbox_now_delivery", None)):
+        log.warning("[inbox] now-recovery skipped: delivery hook is not registered")
+        return
     _INBOX_NOW_RECOVERY_STARTED = True
 
-    def _worker() -> None:
-        deadline = time.monotonic() + _INBOX_NOW_RECOVERY_STARTUP_WAIT_S
-        while time.monotonic() < deadline:
-            if (
-                STATE.inbox_store is not None
-                and getattr(STATE, "plugin_surfaces_started", False)
-                and callable(getattr(STATE, "inbox_now_delivery", None))
-            ):
-                try:
-                    asyncio.run(recover_pending_now_inbox_items())
-                except Exception:  # noqa: BLE001 — boot worker must never crash the process
-                    log.exception("[inbox] now-recovery worker failed")
-                return
-            time.sleep(0.25)
-        log.warning("[inbox] now-recovery skipped: startup delivery route did not become ready")
+    async def _run() -> None:
+        try:
+            await recover_pending_now_inbox_items()
+        except Exception:  # noqa: BLE001 — boot worker must never crash the process
+            log.exception("[inbox] now-recovery worker failed")
 
-    threading.Thread(target=_worker, name="inbox-now-recovery", daemon=True).start()
+    loop = getattr(STATE, "main_loop", None)
+    if loop is not None and loop.is_running():
+        loop.create_task(_run())
+        return
+
+    try:
+        asyncio.get_running_loop().create_task(_run())
+    except RuntimeError:
+        log.warning("[inbox] now-recovery skipped: no running startup event loop")
 
 
 def _on_work_terminal(job) -> None:

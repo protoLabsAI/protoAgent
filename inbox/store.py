@@ -21,6 +21,7 @@ from pathlib import Path
 
 PRIORITIES = ("now", "next", "later")
 _RANK = {"now": 0, "next": 1, "later": 2}
+_RECOVERY_CLAIM_LEASE_S = 300
 
 
 def _floor_set(priority_floor: str) -> tuple[str, ...]:
@@ -59,12 +60,15 @@ class InboxStore:
                     text         TEXT NOT NULL,
                     dedup_key    TEXT,
                     delivered_at TEXT,
+                    recovery_claimed_at TEXT,
                     recovery_attempted_at TEXT,
                     recovery_error TEXT
                 )
                 """
             )
             existing = {r["name"] for r in db.execute("PRAGMA table_info(inbox)").fetchall()}
+            if "recovery_claimed_at" not in existing:
+                db.execute("ALTER TABLE inbox ADD COLUMN recovery_claimed_at TEXT")
             if "recovery_attempted_at" not in existing:
                 db.execute("ALTER TABLE inbox ADD COLUMN recovery_attempted_at TEXT")
             if "recovery_error" not in existing:
@@ -72,7 +76,7 @@ class InboxStore:
             db.execute("CREATE INDEX IF NOT EXISTS ix_inbox_undelivered ON inbox(delivered_at, priority)")
             db.execute(
                 "CREATE INDEX IF NOT EXISTS ix_inbox_now_recovery "
-                "ON inbox(priority, delivered_at, recovery_attempted_at)"
+                "ON inbox(priority, delivered_at, recovery_claimed_at, recovery_attempted_at)"
             )
             db.commit()
         finally:
@@ -128,15 +132,25 @@ class InboxStore:
         tiers = _floor_set(priority_floor)
         placeholders = ",".join("?" for _ in tiers)
         where = f"priority IN ({placeholders})"
+        params = tuple(tiers)
         if not include_delivered:
             where += " AND delivered_at IS NULL"
+            active_recovery_cutoff = (
+                datetime.now(UTC) - timedelta(seconds=_RECOVERY_CLAIM_LEASE_S)
+            ).isoformat()
+            where += (
+                " AND NOT (priority = 'now' "
+                "AND recovery_claimed_at IS NOT NULL "
+                "AND recovery_claimed_at >= ?)"
+            )
+            params = (*params, active_recovery_cutoff)
         db = self._connect()
         try:
             rows = db.execute(
                 f"SELECT * FROM inbox WHERE {where} "
                 "ORDER BY CASE priority WHEN 'now' THEN 0 WHEN 'next' THEN 1 ELSE 2 END, created_at ASC "
                 "LIMIT ?",
-                (*tiers, max(1, int(limit))),
+                (*params, max(1, int(limit))),
             ).fetchall()
             return [dict(r) for r in rows]
         finally:
@@ -150,7 +164,7 @@ class InboxStore:
         try:
             placeholders = ",".join("?" for _ in ids)
             cur = db.execute(
-                f"UPDATE inbox SET delivered_at = ?, recovery_error = NULL "
+                "UPDATE inbox SET delivered_at = ?, recovery_claimed_at = NULL, recovery_error = NULL "
                 f"WHERE id IN ({placeholders}) AND delivered_at IS NULL",
                 (now.isoformat(), *ids),
             )
@@ -169,7 +183,8 @@ class InboxStore:
         try:
             placeholders = ",".join("?" for _ in ids)
             cur = db.execute(
-                f"UPDATE inbox SET delivered_at = NULL WHERE id IN ({placeholders})",
+                "UPDATE inbox SET delivered_at = NULL, recovery_claimed_at = NULL "
+                f"WHERE id IN ({placeholders})",
                 tuple(ids),
             )
             db.commit()
@@ -184,27 +199,30 @@ class InboxStore:
         retry_after_s: int = 3600,
         now: datetime | None = None,
     ) -> list[dict]:
-        """Atomically RESERVE a bounded batch of pre-existing pending ``now`` items for
-        boot recovery, returning the reserved rows.
+        """Atomically claim a bounded batch of pre-existing pending ``now`` items for
+        boot recovery, returning the claimed rows.
 
-        Mirrors the live now→fire deliver-before-fire reservation (#1375): each claimed
-        row is marked ``delivered_at`` up front, in the same locked write, so a concurrent
-        inbox consumer (a fresh now-post or a ``check_inbox`` pull) can't grab the same
-        still-pending page while recovery awaits its Activity turn — i.e. no double
-        delivery. Callers MUST hand every reserved item that does NOT achieve accepted
-        delivery back to :meth:`restore_recovery_failure`, which clears the reservation so
-        pull fallback can still pick it up.
+        Claimed rows remain undelivered until accepted delivery marks them delivered.
+        ``recovery_claimed_at`` is the short-lived in-flight marker that keeps a
+        concurrent inbox consumer (a fresh now-post or a ``check_inbox`` pull) from
+        grabbing the same page while recovery awaits its Activity turn. Callers MUST
+        hand every claimed item that does NOT achieve accepted delivery back to
+        :meth:`restore_recovery_failure`, which clears the claim so pull fallback can
+        still pick it up. If the process dies mid-delivery, the row is still pending
+        and the claim lease expires back into the normal queue instead of being
+        falsely marked delivered.
 
         ``recovery_attempted_at`` is stamped in the same write for replay/storm protection:
         a page that keeps refusing delivery is not re-claimed until ``retry_after_s`` has
         elapsed, so a restart loop can't generate an unbounded replay storm.
 
         ``BEGIN IMMEDIATE`` takes the write lock before the candidate SELECT, so no other
-        writer can deliver one of these rows between our read and our reserving UPDATE.
+        writer can deliver one of these rows between our read and our claim UPDATE.
         """
         now = now or datetime.now(UTC)
         now_iso = now.isoformat()
         cutoff = (now - timedelta(seconds=max(0, int(retry_after_s)))).isoformat()
+        claim_cutoff = (now - timedelta(seconds=_RECOVERY_CLAIM_LEASE_S)).isoformat()
         batch_limit = max(1, int(limit))
         db = self._connect()
         try:
@@ -214,17 +232,18 @@ class InboxStore:
                 SELECT * FROM inbox
                 WHERE priority = 'now'
                   AND delivered_at IS NULL
+                  AND (recovery_claimed_at IS NULL OR recovery_claimed_at < ?)
                   AND (recovery_attempted_at IS NULL OR recovery_attempted_at < ?)
                 ORDER BY created_at ASC
                 LIMIT ?
                 """,
-                (cutoff, batch_limit),
+                (claim_cutoff, cutoff, batch_limit),
             ).fetchall()
             ids = [int(r["id"]) for r in rows]
             if ids:
                 placeholders = ",".join("?" for _ in ids)
                 db.execute(
-                    f"UPDATE inbox SET delivered_at = ?, recovery_attempted_at = ?, recovery_error = NULL "
+                    "UPDATE inbox SET recovery_claimed_at = ?, recovery_attempted_at = ?, recovery_error = NULL "
                     f"WHERE id IN ({placeholders}) AND delivered_at IS NULL",
                     (now_iso, now_iso, *ids),
                 )
@@ -237,13 +256,13 @@ class InboxStore:
             db.close()
 
     def restore_recovery_failure(self, item_id: int, reason: str, *, now: datetime | None = None) -> int:
-        """Restore a reserved-but-unfired recovery item to pending with bounded,
+        """Restore a claimed-but-unfired recovery item to pending with bounded,
         operator-readable failure evidence.
 
-        Clears the deliver-before-fire reservation (``delivered_at``) so ``check_inbox``
-        pull fallback can pick the page up, while keeping ``recovery_attempted_at`` set so
-        the next restart backs off (``retry_after_s``) instead of replaying it immediately.
-        The inverse landing spot for a :meth:`claim_now_recovery_batch` reservation whose
+        Clears the in-flight claim so ``check_inbox`` pull fallback can pick the page
+        up, while keeping ``recovery_attempted_at`` set so the next restart backs off
+        (``retry_after_s``) instead of replaying it immediately.
+        The inverse landing spot for a :meth:`claim_now_recovery_batch` claim whose
         delivery was not accepted."""
         now = now or datetime.now(UTC)
         detail = (reason or "delivery was not accepted").strip()[:500]
@@ -252,7 +271,7 @@ class InboxStore:
             cur = db.execute(
                 """
                 UPDATE inbox
-                SET delivered_at = NULL, recovery_attempted_at = ?, recovery_error = ?
+                SET delivered_at = NULL, recovery_claimed_at = NULL, recovery_attempted_at = ?, recovery_error = ?
                 WHERE id = ?
                 """,
                 (now.isoformat(), detail, int(item_id)),
