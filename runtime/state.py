@@ -53,6 +53,11 @@ class AppState:
     inbox_store: Any = None
     tasks_store: Any = None
     storm_guard: Any = None
+    # now-priority inbox delivery hook (ADR 0003 + ADR 0070): an async
+    # ``(item) -> bool`` self-A2A fire, registered by ``server.a2a`` at import so
+    # ``operator_api`` can trigger delivery without importing across the
+    # operator_api → server layering boundary. ``None`` until the server wires it.
+    inbox_now_delivery: Any = None
     activity_log: Any = None
     # MCP servers (ADR 0001) + plugin contributions (ADR 0018/0019).
     mcp_clients: list = field(default_factory=list)
