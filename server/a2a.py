@@ -87,8 +87,9 @@ async def _fire_activity_from_inbox(item: dict) -> bool:
     accepted as a completed turn; HTTP reachability, JSON-RPC errors, and non-terminal
     or failed task states are all refusal/failure for inbox delivery purposes.
     """
-    import httpx
     from uuid import uuid4
+
+    import httpx
 
     from a2a_impl.auth import self_invocation_headers
 
@@ -114,9 +115,17 @@ async def _fire_activity_from_inbox(item: dict) -> bool:
     }
     headers = {"Content-Type": "application/json", "A2A-Version": A2A_PROTOCOL_VERSION}
     headers.update(self_invocation_headers())
+    app = getattr(STATE, "fastapi_app", None)
+    base_url = f"http://127.0.0.1:{STATE.active_port}"
+    client_kwargs = {"timeout": 30}
+    if app is not None:
+        client_kwargs.update({"transport": httpx.ASGITransport(app=app), "base_url": base_url})
+        url = "/a2a"
+    else:
+        url = f"{base_url}/a2a"
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            r = await client.post(f"http://127.0.0.1:{STATE.active_port}/a2a", headers=headers, json=body)
+        async with httpx.AsyncClient(**client_kwargs) as client:
+            r = await client.post(url, headers=headers, json=body)
         if r.status_code >= 400:
             log.warning(
                 "[inbox] now-fire rejected for item %s: HTTP %d %s",
