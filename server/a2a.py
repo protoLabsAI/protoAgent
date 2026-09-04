@@ -15,7 +15,6 @@ imports from ``server`` (``agent_name``, ``_event_bus``) are all defined in
 """
 
 import asyncio
-import json
 import logging
 import os
 from datetime import UTC, datetime
@@ -114,7 +113,7 @@ async def _fire_activity_from_inbox(item: dict) -> bool:
     body = {
         "jsonrpc": "2.0",
         "id": mid,
-        "method": "SendStreamingMessage",
+        "method": "SendMessage",
         "params": {
             "message": {
                 "role": "ROLE_USER",
@@ -142,50 +141,35 @@ async def _fire_activity_from_inbox(item: dict) -> bool:
         url = f"{base_url}/a2a"
     try:
         async with httpx.AsyncClient(**client_kwargs) as client:
-            async with client.stream("POST", url, headers=headers, json=body) as r:
-                if r.status_code >= 400:
-                    body_preview = (await r.aread()).decode(errors="replace")[:200]
-                    log.warning(
-                        "[inbox] now-fire rejected for item %s: HTTP %d %s",
-                        item.get("id"),
-                        r.status_code,
-                        body_preview,
-                    )
-                    return False
-                ctype = r.headers.get("content-type", "")
-                if not ctype.startswith("text/event-stream"):
-                    body_preview = (await r.aread()).decode(errors="replace")[:200]
-                    log.warning(
-                        "[inbox] now-fire rejected for item %s: non-SSE A2A response %s %s",
-                        item.get("id"),
-                        ctype or "<missing-content-type>",
-                        body_preview,
-                    )
-                    return False
-                async for line in r.aiter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
-                    if not data:
-                        continue
-                    try:
-                        payload = json.loads(data)
-                    except (ValueError, TypeError):
-                        # An SSE heartbeat / comment / partial frame is not a task
-                        # status — skip it and keep reading for the real one rather
-                        # than aborting an already-accepted delivery as a failure.
-                        continue
-                    if _a2a_send_accepted(payload):
-                        return True
-                    err = payload.get("error")
-                    state = _a2a_result_state(payload)
-                    if err:
-                        log.warning("[inbox] now-fire rejected for item %s: %s", item.get("id"), err)
-                        return False
-                    if state:
-                        log.warning("[inbox] now-fire not accepted for item %s: task state %s", item.get("id"), state)
-                        return False
-        log.warning("[inbox] now-fire rejected for item %s: A2A stream ended without task status", item.get("id"))
+            r = await client.post(url, headers=headers, json=body)
+        if r.status_code >= 400:
+            log.warning(
+                "[inbox] now-fire rejected for item %s: HTTP %d %s",
+                item.get("id"),
+                r.status_code,
+                r.text[:200],
+            )
+            return False
+        ctype = r.headers.get("content-type", "")
+        if not ctype.startswith("application/json"):
+            log.warning(
+                "[inbox] now-fire rejected for item %s: non-JSON A2A response %s %s",
+                item.get("id"),
+                ctype or "<missing-content-type>",
+                r.text[:200],
+            )
+            return False
+        payload = r.json()
+        if _a2a_send_accepted(payload):
+            return True
+        err = payload.get("error")
+        state = _a2a_result_state(payload)
+        if err:
+            log.warning("[inbox] now-fire rejected for item %s: %s", item.get("id"), err)
+        elif state:
+            log.warning("[inbox] now-fire not accepted for item %s: task state %s", item.get("id"), state)
+        else:
+            log.warning("[inbox] now-fire rejected for item %s: A2A response had no task status", item.get("id"))
         return False
     except Exception:
         log.exception("[inbox] now-fire failed for item %s", item.get("id"))

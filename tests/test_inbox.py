@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 
 from inbox.store import InboxStore, StormGuard
@@ -152,24 +150,6 @@ def test_storm_guard_caps_then_recovers():
 # ── now-item A2A acceptance ─────────────────────────────────────────────────
 
 
-def _a2a_sse(payload: dict) -> StreamingResponse:
-    async def _events():
-        yield f"data: {json.dumps(payload)}\n\n"
-
-    return StreamingResponse(_events(), media_type="text/event-stream")
-
-
-def _a2a_sse_lines(*lines: str) -> StreamingResponse:
-    """A raw SSE body (verbatim lines) so tests can interleave heartbeats/comments
-    with the task-status frame the way a live A2A stream does."""
-
-    async def _events():
-        for line in lines:
-            yield line + "\n"
-
-    return StreamingResponse(_events(), media_type="text/event-stream")
-
-
 def test_a2a_send_acceptance_requires_owned_task():
     import server.a2a as a2a
     from runtime.state import STATE
@@ -199,7 +179,7 @@ async def test_now_inbox_fire_uses_mounted_a2a_app_without_loopback_port(monkeyp
     @app.post("/a2a")
     async def _a2a(body: dict):
         captured.update(body)
-        return _a2a_sse({"result": {"statusUpdate": {"status": {"state": "TASK_STATE_COMPLETED"}}}})
+        return {"result": {"status": {"state": "TASK_STATE_COMPLETED"}}}
 
     monkeypatch.setattr(STATE, "fastapi_app", app, raising=False)
     monkeypatch.setattr(STATE, "active_port", 9, raising=False)
@@ -209,7 +189,7 @@ async def test_now_inbox_fire_uses_mounted_a2a_app_without_loopback_port(monkeyp
     )
 
     assert ok is True
-    assert captured["method"] == "SendStreamingMessage"
+    assert captured["method"] == "SendMessage"
     msg = captured["params"]["message"]
     assert msg["contextId"] == ACTIVITY_CONTEXT
     assert msg["parts"] == [{"text": "ship the priority page"}]
@@ -227,7 +207,7 @@ async def test_now_inbox_fire_rejects_failed_a2a_response(monkeypatch):
 
     @app.post("/a2a")
     async def _a2a(_body: dict):
-        return _a2a_sse({"result": {"statusUpdate": {"status": {"state": "TASK_STATE_FAILED"}}}})
+        return {"result": {"status": {"state": "TASK_STATE_FAILED"}}}
 
     monkeypatch.setattr(STATE, "fastapi_app", app, raising=False)
 
@@ -245,7 +225,7 @@ async def test_now_inbox_fire_accepts_a2a_task_ownership_before_terminal(monkeyp
 
     @app.post("/a2a")
     async def _a2a(_body: dict):
-        return _a2a_sse({"result": {"statusUpdate": {"status": {"state": "TASK_STATE_SUBMITTED"}}}})
+        return {"result": {"status": {"state": "TASK_STATE_SUBMITTED"}}}
 
     monkeypatch.setattr(STATE, "fastapi_app", app, raising=False)
 
@@ -255,9 +235,7 @@ async def test_now_inbox_fire_accepts_a2a_task_ownership_before_terminal(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_now_inbox_fire_skips_sse_heartbeats_before_accepting(monkeypatch):
-    """A live A2A SSE body interleaves comment/heartbeat/empty lines with the task
-    frame; a non-JSON line must be skipped, not treated as a delivery failure."""
+async def test_now_inbox_fire_rejects_jsonrpc_error(monkeypatch):
     import server.a2a as a2a
     from runtime.state import STATE
 
@@ -265,18 +243,13 @@ async def test_now_inbox_fire_skips_sse_heartbeats_before_accepting(monkeypatch)
 
     @app.post("/a2a")
     async def _a2a(_body: dict):
-        return _a2a_sse_lines(
-            ": keep-alive",  # SSE comment — no `data:` prefix
-            "data: ",  # empty data frame
-            "data: not-json",  # malformed data frame
-            f'data: {json.dumps({"result": {"status": {"state": "TASK_STATE_WORKING"}}})}',
-        )
+        return {"error": {"code": -32603, "message": "boom"}}
 
     monkeypatch.setattr(STATE, "fastapi_app", app, raising=False)
 
-    ok = await a2a._fire_activity_from_inbox({"id": 20, "text": "noisy stream", "priority": "now"})
+    ok = await a2a._fire_activity_from_inbox({"id": 20, "text": "noisy response", "priority": "now"})
 
-    assert ok is True
+    assert ok is False
 
 
 # ── check_inbox tool ─────────────────────────────────────────────────────────

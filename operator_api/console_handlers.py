@@ -764,6 +764,7 @@ async def _operator_inbox_add(payload: dict) -> dict:
         else:
             log.warning("[inbox] now-fire skipped for item %s: could not reserve delivery", item.get("id"))
         if premarked and not fired:
+            log.warning("[inbox] now-fire not accepted for item %s; restoring pending fallback", item.get("id"))
             try:
                 await asyncio.to_thread(STATE.inbox_store.mark_pending, [item["id"]])
             except Exception:  # noqa: BLE001 — restore is best-effort

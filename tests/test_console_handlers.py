@@ -2,6 +2,8 @@
 register_operator_routes, extracted from _main into operator_api/console_handlers.py.
 These exercise the STATE-driven degradation paths directly (no app needed)."""
 
+import logging
+
 import pytest
 
 from operator_api import console_handlers as ch
@@ -233,12 +235,13 @@ async def test_now_inbox_add_uses_registered_a2a_delivery(monkeypatch, tmp_path)
     assert store.list(priority_floor="later") == []
 
 
-async def test_now_inbox_add_restores_pending_when_a2a_delivery_rejects(monkeypatch, tmp_path):
+async def test_now_inbox_add_restores_pending_when_a2a_delivery_rejects(monkeypatch, tmp_path, caplog):
     import runtime.state as rs
     from inbox.store import InboxStore
 
     store = InboxStore(str(tmp_path / "inbox.db"))
     monkeypatch.setattr(rs.STATE, "inbox_store", store, raising=False)
+    caplog.set_level(logging.WARNING, logger="protoagent.server")
 
     async def _delivery(_item):
         return False
@@ -249,6 +252,8 @@ async def test_now_inbox_add_restores_pending_when_a2a_delivery_rejects(monkeypa
 
     assert res["fired"] is False
     assert [row["text"] for row in store.list(priority_floor="later")] == ["try later"]
+    assert "now-fire not accepted" in caplog.text
+    assert "restoring pending fallback" in caplog.text
 
 
 async def test_now_inbox_add_does_not_fire_when_delivery_cannot_be_reserved(monkeypatch, tmp_path):
