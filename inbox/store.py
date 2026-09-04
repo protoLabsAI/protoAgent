@@ -184,18 +184,31 @@ class InboxStore:
         retry_after_s: int = 3600,
         now: datetime | None = None,
     ) -> list[dict]:
-        """Reserve a bounded batch of pre-existing pending ``now`` items for boot recovery.
+        """Atomically RESERVE a bounded batch of pre-existing pending ``now`` items for
+        boot recovery, returning the reserved rows.
 
-        Recovery is intentionally independent from ``list(priority_floor="now")``:
-        it leaves newly failed items pending for pull fallback, but records the
-        last attempted timestamp so repeated restarts cannot replay the same
-        backlog item every boot.
+        Mirrors the live now→fire deliver-before-fire reservation (#1375): each claimed
+        row is marked ``delivered_at`` up front, in the same locked write, so a concurrent
+        inbox consumer (a fresh now-post or a ``check_inbox`` pull) can't grab the same
+        still-pending page while recovery awaits its Activity turn — i.e. no double
+        delivery. Callers MUST hand every reserved item that does NOT achieve accepted
+        delivery back to :meth:`restore_recovery_failure`, which clears the reservation so
+        pull fallback can still pick it up.
+
+        ``recovery_attempted_at`` is stamped in the same write for replay/storm protection:
+        a page that keeps refusing delivery is not re-claimed until ``retry_after_s`` has
+        elapsed, so a restart loop can't generate an unbounded replay storm.
+
+        ``BEGIN IMMEDIATE`` takes the write lock before the candidate SELECT, so no other
+        writer can deliver one of these rows between our read and our reserving UPDATE.
         """
         now = now or datetime.now(UTC)
+        now_iso = now.isoformat()
         cutoff = (now - timedelta(seconds=max(0, int(retry_after_s)))).isoformat()
         batch_limit = max(1, int(limit))
         db = self._connect()
         try:
+            db.execute("BEGIN IMMEDIATE")
             rows = db.execute(
                 """
                 SELECT * FROM inbox
@@ -211,17 +224,27 @@ class InboxStore:
             if ids:
                 placeholders = ",".join("?" for _ in ids)
                 db.execute(
-                    f"UPDATE inbox SET recovery_attempted_at = ?, recovery_error = NULL "
+                    f"UPDATE inbox SET delivered_at = ?, recovery_attempted_at = ?, recovery_error = NULL "
                     f"WHERE id IN ({placeholders}) AND delivered_at IS NULL",
-                    (now.isoformat(), *ids),
+                    (now_iso, now_iso, *ids),
                 )
             db.commit()
             return [dict(r) for r in rows]
+        except Exception:
+            db.rollback()
+            raise
         finally:
             db.close()
 
-    def record_recovery_failure(self, item_id: int, reason: str, *, now: datetime | None = None) -> int:
-        """Keep a recovered item pending with bounded, operator-readable failure evidence."""
+    def restore_recovery_failure(self, item_id: int, reason: str, *, now: datetime | None = None) -> int:
+        """Restore a reserved-but-unfired recovery item to pending with bounded,
+        operator-readable failure evidence.
+
+        Clears the deliver-before-fire reservation (``delivered_at``) so ``check_inbox``
+        pull fallback can pick the page up, while keeping ``recovery_attempted_at`` set so
+        the next restart backs off (``retry_after_s``) instead of replaying it immediately.
+        The inverse landing spot for a :meth:`claim_now_recovery_batch` reservation whose
+        delivery was not accepted."""
         now = now or datetime.now(UTC)
         detail = (reason or "delivery was not accepted").strip()[:500]
         db = self._connect()
@@ -229,8 +252,8 @@ class InboxStore:
             cur = db.execute(
                 """
                 UPDATE inbox
-                SET recovery_attempted_at = ?, recovery_error = ?
-                WHERE id = ? AND delivered_at IS NULL
+                SET delivered_at = NULL, recovery_attempted_at = ?, recovery_error = ?
+                WHERE id = ?
                 """,
                 (now.isoformat(), detail, int(item_id)),
             )

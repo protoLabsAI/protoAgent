@@ -345,6 +345,47 @@ async def test_failed_now_fire_stays_pending(tmp_path, monkeypatch):
 # ── startup recovery for pre-existing now backlog (#3351) ───────────────────
 
 
+def test_claim_now_recovery_batch_reserves_bounded_and_is_idempotent(tmp_path):
+    """The claim atomically reserves ``delivered_at`` on a bounded batch of now items,
+    so a second claim (a concurrent consumer / a restart) sees nothing to re-fire."""
+    store = _store(tmp_path)
+    a = store.add("now a", priority="now")
+    b = store.add("now b", priority="now")
+    c = store.add("now c", priority="now")
+    store.add("next d", priority="next")  # excluded: not now-priority
+
+    claimed = store.claim_now_recovery_batch(limit=2, retry_after_s=3600)
+    assert [r["id"] for r in claimed] == [a["id"], b["id"]]  # bounded to the batch limit
+    # Reserved rows drop out of the pending pool: no concurrent double-delivery.
+    assert [r["id"] for r in store.list(priority_floor="now")] == [c["id"]]
+    reserved = store.list(priority_floor="now", include_delivered=True)
+    for row in reserved:
+        if row["id"] in {a["id"], b["id"]}:
+            assert row["delivered_at"] is not None
+            assert row["recovery_attempted_at"] is not None
+    # A repeat claim within the retry window returns only the still-unclaimed item.
+    again = store.claim_now_recovery_batch(limit=2, retry_after_s=3600)
+    assert [r["id"] for r in again] == [c["id"]]
+
+
+def test_restore_recovery_failure_reopens_pending_with_evidence(tmp_path):
+    """Restoring an unfired reservation clears ``delivered_at`` (pull fallback works)
+    while keeping ``recovery_attempted_at`` (restart backoff) and recording evidence."""
+    store = _store(tmp_path)
+    item = store.add("boom", priority="now")
+    [claimed] = store.claim_now_recovery_batch(limit=8)
+    assert claimed["id"] == item["id"]
+    assert store.list(priority_floor="now") == []  # reserved out of the pending pool
+
+    assert store.restore_recovery_failure(item["id"], "delivery was not accepted") == 1
+
+    [pending] = store.list(priority_floor="now")
+    assert pending["id"] == item["id"]
+    assert pending["delivered_at"] is None
+    assert pending["recovery_attempted_at"]
+    assert pending["recovery_error"] == "delivery was not accepted"
+
+
 @pytest.mark.asyncio
 async def test_startup_recovery_accepts_preexisting_now_backlog(tmp_path, monkeypatch):
     import operator_api.console_handlers as ch
@@ -370,20 +411,26 @@ async def test_startup_recovery_accepts_preexisting_now_backlog(tmp_path, monkey
 
 
 @pytest.mark.asyncio
-async def test_startup_recovery_marks_delivered_only_after_acceptance(tmp_path, monkeypatch):
+async def test_startup_recovery_reserves_delivery_during_fire_to_block_double_delivery(tmp_path, monkeypatch):
+    """The claim RESERVES ``delivered_at`` before the awaited fire (deliver-before-fire,
+    #1375), so a concurrent inbox consumer (a ``check_inbox`` pull or a fresh now-post)
+    can't grab the same still-pending page and deliver it twice. On acceptance the
+    reservation persists as the delivery marker."""
     import operator_api.console_handlers as ch
     import runtime.state as rs
     from server.agent_init import recover_pending_now_inbox_items
 
     store = _store(tmp_path)
-    old_now = store.add("do not premark", priority="now")
+    old_now = store.add("reserve before fire", priority="now")
     monkeypatch.setattr(rs.STATE, "inbox_store", store, raising=False)
-    state_during_fire: list[tuple[str | None, str | None]] = []
+    during_fire: list[tuple[list[int], str | None, str | None]] = []
 
     async def _fire_ok(item):
-        [pending] = store.list(priority_floor="now")
-        assert pending["id"] == item["id"]
-        state_during_fire.append((pending["delivered_at"], pending["recovery_attempted_at"]))
+        # A concurrent pending consumer sees NOTHING while we deliver: the row is already
+        # reserved (delivered_at set), so it cannot be picked up and double-delivered.
+        pending_now = [r["id"] for r in store.list(priority_floor="now")]
+        [reserved] = store.list(priority_floor="now", include_delivered=True)
+        during_fire.append((pending_now, reserved["delivered_at"], reserved["recovery_attempted_at"]))
         return True
 
     monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_ok)
@@ -392,10 +439,16 @@ async def test_startup_recovery_marks_delivered_only_after_acceptance(tmp_path, 
     [row] = store.list(priority_floor="now", include_delivered=True)
 
     assert result == {"claimed": 1, "accepted": 1, "failed": 0}
-    assert state_during_fire == [(None, row["recovery_attempted_at"])]
+    assert len(during_fire) == 1
+    pending_now, reserved_delivered, reserved_attempted = during_fire[0]
+    assert pending_now == []  # nothing left for a concurrent consumer to grab
+    assert reserved_delivered is not None  # reservation held throughout the fire
+    assert reserved_attempted is not None
+    # After acceptance the reservation persists as the delivery marker; error stays clear.
     assert row["id"] == old_now["id"]
     assert row["delivered_at"]
     assert row["recovery_error"] is None
+    assert store.list(priority_floor="now") == []
 
 
 @pytest.mark.asyncio
@@ -442,6 +495,7 @@ async def test_startup_recovery_failure_stays_pending_with_evidence(tmp_path, mo
 
     assert result == {"claimed": 1, "accepted": 0, "failed": 1}
     assert [row["id"] for row in pending] == [item["id"]]
+    assert pending[0]["delivered_at"] is None  # reservation restored, not left delivered
     assert pending[0]["recovery_attempted_at"]
     assert pending[0]["recovery_error"] == "delivery was not accepted"
 
