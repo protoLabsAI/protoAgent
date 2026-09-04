@@ -203,3 +203,26 @@
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* A pending priority-`now` item only reaches this pull queue because its automatic self-A2A
+   delivery failed (#3351) — surface it as a conspicuous BLOCKED page (a warning-toned card +
+   flag) an operator can triage, distinct from an ordinary next/later stimulus. */
+.inbox-item--stuck {
+  border-color: var(--pl-color-status-warning, #f5a623);
+  background: color-mix(in srgb, var(--pl-color-status-warning, #f5a623) 12%, var(--pl-color-bg-raised, #111114));
+}
+
+.inbox-stuck-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--pl-color-status-warning, #f5a623);
+}
+
+.inbox-stuck-flag svg {
+  flex: none;
+}

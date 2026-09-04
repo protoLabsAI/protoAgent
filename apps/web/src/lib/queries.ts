@@ -356,6 +356,17 @@ export const inboxQuery = () =>
     queryFn: () => api.inbox("later", false),
   });
 
+// A pending priority-`now` inbox item is a BLOCKED page, not an ordinary queued stimulus
+// (ADR 0003, #3351). A now item only reaches the pull queue after its automatic self-A2A
+// delivery failed / was refused / was storm-blocked: a fire the A2A turn ACCEPTS is marked
+// delivered BEFORE it ever returns from the inbox list and pushes `activity.message` (not
+// `inbox.item`), so a fired now never appears here. A now item still showing as pending is
+// therefore an operator-facing fallback + diagnostic signal to triage — surfaced
+// conspicuously and distinctly from next/later, but never silently marked delivered.
+export function isPendingNowInboxPage(item: { priority?: unknown; delivered_at?: unknown }): boolean {
+  return item.priority === "now" && !item.delivered_at;
+}
+
 // Scheduled jobs over the active SchedulerBackend. Invalidated on add/cancel.
 export const schedulesQuery = () =>
   queryOptions({

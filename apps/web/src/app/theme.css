@@ -133,6 +133,13 @@
   color: var(--pl-color-accent, #7c8cff);
 }
 
+/* Undelivered priority-now page (#3351): tint the Feed pill's unread badge as an alert so a
+   page whose automatic delivery failed reads as conspicuous before the operator opens the feed. */
+.activity-badge--alert {
+  color: var(--pl-color-status-error, #ff6b6b);
+  font-weight: 700;
+}
+
 /* Utility-widget dialog (2026-06): the body registers its reload into the dialog header
    (UtilityWidget) and drops its own panel header, so the body fills the dialog — no double
    header. `util-dialog-title` lays the title + the registered reload in the dialog header;
