@@ -196,19 +196,18 @@ class InboxStore:
         boot recovery, returning the claimed rows.
 
         Claimed rows remain undelivered until accepted delivery marks them delivered.
-        ``recovery_claimed_at`` is the in-flight marker that keeps a
-        concurrent inbox consumer (a fresh now-post or a ``check_inbox`` pull) from
-        grabbing the same page while recovery awaits its Activity turn. Callers MUST
-        hand every claimed item that does NOT achieve accepted delivery back to
+        ``recovery_claimed_at`` is a bounded in-flight lease that keeps a concurrent
+        inbox consumer (a fresh now-post or a ``check_inbox`` pull) from grabbing the
+        same page while recovery awaits its Activity turn. Callers MUST hand every
+        claimed item that does NOT achieve accepted delivery back to
         :meth:`restore_recovery_failure`, which clears the claim so pull fallback can
-        still pick it up. Accepted-but-unmarked items MUST keep their claim via
-        :meth:`record_recovery_mark_delivered_failure`; they are still undelivered but
-        intentionally withheld from pull fallback because the accepted delivery path
-        may already own the turn.
+        still pick it up. If the process dies before that restore/deliver handoff, a
+        later startup pass may reclaim the stale lease after ``retry_after_s``.
 
-        ``recovery_attempted_at`` is stamped in the same write for replay/storm protection:
-        a page that keeps refusing delivery is not re-claimed until ``retry_after_s`` has
-        elapsed, so a restart loop can't generate an unbounded replay storm.
+        ``recovery_attempted_at`` is stamped in the same write for replay/storm
+        protection: a page that keeps refusing delivery is not re-claimed until
+        ``retry_after_s`` has elapsed, so a restart loop can't generate an unbounded
+        replay storm.
 
         ``BEGIN IMMEDIATE`` takes the write lock before the candidate SELECT, so no other
         writer can deliver one of these rows between our read and our claim UPDATE.
@@ -225,12 +224,12 @@ class InboxStore:
                 SELECT * FROM inbox
                 WHERE priority = 'now'
                   AND delivered_at IS NULL
-                  AND recovery_claimed_at IS NULL
+                  AND (recovery_claimed_at IS NULL OR recovery_claimed_at < ?)
                   AND (recovery_attempted_at IS NULL OR recovery_attempted_at < ?)
                 ORDER BY created_at ASC
                 LIMIT ?
                 """,
-                (cutoff, batch_limit),
+                (cutoff, cutoff, batch_limit),
             ).fetchall()
             ids = [int(r["id"]) for r in rows]
             if ids:
@@ -317,9 +316,10 @@ class InboxStore:
 
         This deliberately leaves ``recovery_claimed_at`` in place. Once the accepted
         delivery path has taken ownership of the Activity turn, clearing the claim would
-        let a later pull or recovery redeliver the same page. The row remains
-        undelivered with operator-readable evidence so the failed mark can be diagnosed
-        without causing an automatic duplicate delivery.
+        let a later pull redeliver the same page immediately. The row remains
+        undelivered with operator-readable evidence; if the mark cannot be repaired by
+        then, the bounded recovery lease can be retried after the retry window instead
+        of hiding the page forever.
         """
         now = now or datetime.now(UTC)
         detail = (reason or "accepted delivery could not be marked delivered").strip()[:500]

@@ -1610,8 +1610,8 @@ async def recover_pending_now_inbox_items(
         """Best-effort: record accepted delivery whose delivered mark failed.
 
         Do not clear the recovery claim here. Once delivery was accepted, releasing the
-        still-undelivered row would allow a later pull or recovery to fire a duplicate
-        Activity turn.
+        still-undelivered row would allow a later pull to fire a duplicate Activity turn
+        immediately; the store's bounded lease remains responsible for any future retry.
         """
         try:
             await asyncio.to_thread(
@@ -1632,10 +1632,9 @@ async def recover_pending_now_inbox_items(
         ``claim_now_recovery_batch`` claimed the whole batch up front, so on
         cancellation the current item AND all later, not-yet-processed items still
         bear this recovery's claim. Restoring only the current one would leave the
-        rest hidden from both pull fallback (``list`` excludes claimed ``now`` items)
-        and future recovery (the next claim requires ``recovery_claimed_at IS NULL``),
-        stranding them permanently. Each restore is scoped to its own ``claimed_at``,
-        so an item another owner has since delivered is left untouched."""
+        rest hidden from pull fallback until the recovery lease expires. Each restore
+        is scoped to its own ``claimed_at``, so an item another owner has since
+        delivered is left untouched."""
         for it in remaining:
             await _restore(int(it["id"]), reason, it.get("recovery_claimed_at"))
 
@@ -1649,7 +1648,7 @@ async def recover_pending_now_inbox_items(
             delivered = await _fire_activity_from_inbox(item)
         except asyncio.CancelledError:
             # Restore the current item and every later item the batch already claimed,
-            # otherwise the un-processed tail stays permanently reserved and invisible.
+            # otherwise the un-processed tail stays reserved until the recovery lease expires.
             await _restore_remaining(items[idx:], "delivery was cancelled")
             raise
         except Exception as exc:  # noqa: BLE001 — keep processing the rest of the bounded batch

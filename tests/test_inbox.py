@@ -347,7 +347,7 @@ async def test_failed_now_fire_stays_pending(tmp_path, monkeypatch):
 
 def test_claim_now_recovery_batch_reserves_bounded_and_is_idempotent(tmp_path):
     """The claim atomically stamps a bounded in-flight marker on now items, so a
-    second claim (a concurrent consumer / a restart) sees nothing to re-fire."""
+    second claim inside the retry window does not re-fire the same rows."""
     store = _store(tmp_path)
     a = store.add("now a", priority="now")
     b = store.add("now b", priority="now")
@@ -356,7 +356,7 @@ def test_claim_now_recovery_batch_reserves_bounded_and_is_idempotent(tmp_path):
 
     claimed = store.claim_now_recovery_batch(limit=2, retry_after_s=3600)
     assert [r["id"] for r in claimed] == [a["id"], b["id"]]  # bounded to the batch limit
-    # Claimed rows drop out of the pending pool: no concurrent double-delivery.
+    # Claimed rows drop out of the pending pool: no concurrent pull double-delivery.
     assert [r["id"] for r in store.list(priority_floor="now")] == [c["id"]]
     reserved = store.list(priority_floor="now", include_delivered=True)
     for row in reserved:
@@ -411,22 +411,74 @@ def test_restore_recovery_failure_does_not_reopen_a_concurrently_delivered_item(
     assert store.list(priority_floor="now") == []  # not resurrected into the pending pool
 
 
-def test_recovery_claim_does_not_expire_into_pending_or_reclaim(tmp_path):
-    """Regression (review): recovery claims are not finite leases. A slow delivery
-    must not let a later serially claimed item become visible for concurrent redelivery."""
+def test_recovery_claim_does_not_expire_into_pull_fallback(tmp_path):
+    """A recovery claim remains hidden from normal inbox pulls even after the retry
+    window; stale leases are recovered by the startup recovery owner, not check_inbox."""
     store = _store(tmp_path)
-    item = store.add("re-claimed", priority="now")
+    store.add("claimed", priority="now")
 
-    # Claim far enough in the past that the old finite lease and retry cooldown would
-    # have expired. The row must still remain reserved until explicit restore/delivery.
     stale = datetime.now(UTC) - timedelta(seconds=4000)
-    [first] = store.claim_now_recovery_batch(limit=8, retry_after_s=3600, now=stale)
+    store.claim_now_recovery_batch(limit=8, retry_after_s=3600, now=stale)
 
     assert store.list(priority_floor="now") == []
-    assert store.claim_now_recovery_batch(limit=8, retry_after_s=3600) == []
+
+
+def test_recovery_claim_reclaims_stale_crash_lease_after_retry_window(tmp_path):
+    """Regression (review): if a process exits after committing a recovery claim but
+    before delivery/restore, the undelivered now item must be eligible for a later
+    bounded recovery batch instead of being stranded forever."""
+    store = _store(tmp_path)
+    item = store.add("re-claimed after crash", priority="now")
+
+    stale = datetime(2026, 1, 1, tzinfo=UTC)
+    [first] = store.claim_now_recovery_batch(limit=8, retry_after_s=3600, now=stale)
+    assert store.claim_now_recovery_batch(
+        limit=8,
+        retry_after_s=3600,
+        now=stale + timedelta(seconds=120),
+    ) == []
+
+    [second] = store.claim_now_recovery_batch(
+        limit=8,
+        retry_after_s=3600,
+        now=stale + timedelta(seconds=3601),
+    )
+    assert second["id"] == item["id"]
+    assert second["recovery_claimed_at"] != first["recovery_claimed_at"]
     [row] = store.list(priority_floor="now", include_delivered=True)
     assert row["id"] == item["id"]
-    assert row["recovery_claimed_at"] == first["recovery_claimed_at"]
+    assert row["delivered_at"] is None
+    assert row["recovery_claimed_at"] == second["recovery_claimed_at"]
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_retries_stale_claim_left_by_crashed_recovery(tmp_path, monkeypatch):
+    import operator_api.console_handlers as ch
+    import runtime.state as rs
+    from server.agent_init import recover_pending_now_inbox_items
+
+    store = _store(tmp_path)
+    item = store.add("crashed after claim", priority="now")
+    stale = datetime(2026, 1, 1, tzinfo=UTC)
+    store.claim_now_recovery_batch(limit=8, retry_after_s=3600, now=stale)
+    monkeypatch.setattr(rs.STATE, "inbox_store", store, raising=False)
+    fired: list[int] = []
+
+    async def _fire_ok(fired_item):
+        fired.append(fired_item["id"])
+        return True
+
+    monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_ok)
+
+    too_soon = await recover_pending_now_inbox_items(limit=8, retry_after_s=10 * 365 * 24 * 60 * 60)
+    later = await recover_pending_now_inbox_items(limit=8, retry_after_s=0)
+
+    assert too_soon == {"claimed": 0, "accepted": 0, "failed": 0}
+    assert later == {"claimed": 1, "accepted": 1, "failed": 0}
+    assert fired == [item["id"]]
+    [row] = store.list(priority_floor="now", include_delivered=True)
+    assert row["id"] == item["id"]
+    assert row["delivered_at"] is not None
 
 
 def test_recovery_claimed_items_are_operator_visible_when_requested(tmp_path):
