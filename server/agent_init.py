@@ -1591,31 +1591,49 @@ async def recover_pending_now_inbox_items(
 
     for item in items:
         item_id = int(item["id"])
-        premarked = False
         try:
-            premarked = (await asyncio.to_thread(store.mark_delivered, [item_id])) == 1
-        except Exception:  # noqa: BLE001 — keep processing the rest of the bounded batch
-            log.exception("[inbox] now-recovery could not reserve item %s", item_id)
-        if not premarked:
-            failed += 1
+            delivered = await _fire_activity_from_inbox(item)
+        except asyncio.CancelledError:
             try:
-                await asyncio.to_thread(store.record_recovery_failure, item_id, "could not reserve delivery")
+                await asyncio.to_thread(store.record_recovery_failure, item_id, "delivery was cancelled")
             except Exception:  # noqa: BLE001
-                log.warning("[inbox] now-recovery could not record reservation failure for item %s", item_id)
+                log.warning("[inbox] now-recovery could not record cancellation for item %s", item_id)
+            raise
+        except Exception as exc:  # noqa: BLE001 — keep processing the rest of the bounded batch
+            failed += 1
+            log.exception("[inbox] now-recovery delivery raised for item %s", item_id)
+            try:
+                await asyncio.to_thread(store.record_recovery_failure, item_id, f"delivery raised: {exc}")
+            except Exception:  # noqa: BLE001
+                log.warning("[inbox] now-recovery could not record delivery failure for item %s", item_id)
             continue
 
-        delivered = await _fire_activity_from_inbox(item)
         if delivered:
-            accepted += 1
+            try:
+                if (await asyncio.to_thread(store.mark_delivered, [item_id])) == 1:
+                    accepted += 1
+                else:
+                    failed += 1
+                    await asyncio.to_thread(
+                        store.record_recovery_failure,
+                        item_id,
+                        "delivery accepted but item was already unavailable",
+                    )
+            except Exception:  # noqa: BLE001 — keep processing the rest of the bounded batch
+                failed += 1
+                log.exception("[inbox] now-recovery could not mark accepted item %s delivered", item_id)
+                try:
+                    await asyncio.to_thread(store.record_recovery_failure, item_id, "could not mark delivered")
+                except Exception:  # noqa: BLE001
+                    log.warning("[inbox] now-recovery could not record mark-delivered failure for item %s", item_id)
             continue
 
         failed += 1
-        log.warning("[inbox] now-recovery not accepted for item %s; restoring pending fallback", item_id)
+        log.warning("[inbox] now-recovery not accepted for item %s; leaving pending fallback", item_id)
         try:
-            await asyncio.to_thread(store.mark_pending, [item_id])
             await asyncio.to_thread(store.record_recovery_failure, item_id, "delivery was not accepted")
-        except Exception:  # noqa: BLE001 — restore is best-effort, same posture as new now delivery
-            log.warning("[inbox] now-recovery could not restore failed item %s to pending", item_id)
+        except Exception:  # noqa: BLE001
+            log.warning("[inbox] now-recovery could not record failed item %s", item_id)
 
     log.info(
         "[inbox] now-recovery claimed=%d accepted=%d failed=%d",

@@ -370,6 +370,35 @@ async def test_startup_recovery_accepts_preexisting_now_backlog(tmp_path, monkey
 
 
 @pytest.mark.asyncio
+async def test_startup_recovery_marks_delivered_only_after_acceptance(tmp_path, monkeypatch):
+    import operator_api.console_handlers as ch
+    import runtime.state as rs
+    from server.agent_init import recover_pending_now_inbox_items
+
+    store = _store(tmp_path)
+    old_now = store.add("do not premark", priority="now")
+    monkeypatch.setattr(rs.STATE, "inbox_store", store, raising=False)
+    state_during_fire: list[tuple[str | None, str | None]] = []
+
+    async def _fire_ok(item):
+        [pending] = store.list(priority_floor="now")
+        assert pending["id"] == item["id"]
+        state_during_fire.append((pending["delivered_at"], pending["recovery_attempted_at"]))
+        return True
+
+    monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_ok)
+
+    result = await recover_pending_now_inbox_items(limit=8)
+    [row] = store.list(priority_floor="now", include_delivered=True)
+
+    assert result == {"claimed": 1, "accepted": 1, "failed": 0}
+    assert state_during_fire == [(None, row["recovery_attempted_at"])]
+    assert row["id"] == old_now["id"]
+    assert row["delivered_at"]
+    assert row["recovery_error"] is None
+
+
+@pytest.mark.asyncio
 async def test_startup_recovery_is_bounded(tmp_path, monkeypatch):
     import operator_api.console_handlers as ch
     import runtime.state as rs
@@ -415,6 +444,31 @@ async def test_startup_recovery_failure_stays_pending_with_evidence(tmp_path, mo
     assert [row["id"] for row in pending] == [item["id"]]
     assert pending[0]["recovery_attempted_at"]
     assert pending[0]["recovery_error"] == "delivery was not accepted"
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_exception_stays_pending_with_evidence(tmp_path, monkeypatch):
+    import operator_api.console_handlers as ch
+    import runtime.state as rs
+    from server.agent_init import recover_pending_now_inbox_items
+
+    store = _store(tmp_path)
+    item = store.add("raise and keep", priority="now")
+    monkeypatch.setattr(rs.STATE, "inbox_store", store, raising=False)
+
+    async def _fire_raise(_item):
+        raise RuntimeError("a2a unavailable")
+
+    monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_raise)
+
+    result = await recover_pending_now_inbox_items(limit=8)
+    [pending] = store.list(priority_floor="now")
+
+    assert result == {"claimed": 1, "accepted": 0, "failed": 1}
+    assert pending["id"] == item["id"]
+    assert pending["delivered_at"] is None
+    assert pending["recovery_attempted_at"]
+    assert pending["recovery_error"] == "delivery raised: a2a unavailable"
 
 
 @pytest.mark.asyncio
