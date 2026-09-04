@@ -248,14 +248,32 @@ class InboxStore:
                     (now_iso, now_iso, *ids),
                 )
             db.commit()
-            return [dict(r) for r in rows]
+            # Reflect the claim we just wrote onto the returned rows: the SELECT above is a
+            # pre-UPDATE snapshot, so its recovery_claimed_at is stale. Callers pass this
+            # exact stamp back to restore_recovery_failure(claimed_at=...) so a late failure
+            # only restores a row that STILL bears this recovery's claim.
+            claimed = []
+            for r in rows:
+                d = dict(r)
+                d["recovery_claimed_at"] = now_iso
+                d["recovery_attempted_at"] = now_iso
+                d["recovery_error"] = None
+                claimed.append(d)
+            return claimed
         except Exception:
             db.rollback()
             raise
         finally:
             db.close()
 
-    def restore_recovery_failure(self, item_id: int, reason: str, *, now: datetime | None = None) -> int:
+    def restore_recovery_failure(
+        self,
+        item_id: int,
+        reason: str,
+        *,
+        claimed_at: str | None = None,
+        now: datetime | None = None,
+    ) -> int:
         """Restore a claimed-but-unfired recovery item to pending with bounded,
         operator-readable failure evidence.
 
@@ -263,18 +281,35 @@ class InboxStore:
         up, while keeping ``recovery_attempted_at`` set so the next restart backs off
         (``retry_after_s``) instead of replaying it immediately.
         The inverse landing spot for a :meth:`claim_now_recovery_batch` claim whose
-        delivery was not accepted."""
+        delivery was not accepted.
+
+        Guarded so a *late* recovery failure can never reopen a page that has since been
+        handled by someone else. Once the claim lease expires, ``list`` exposes a
+        still-undelivered ``now`` row again, so a normal consumer (a ``check_inbox`` pull
+        or a fresh now-post) — or a re-claiming recovery pass — can pick it up while this
+        recovery is still in flight. The restore therefore only touches the row while it
+        is still undelivered (``delivered_at IS NULL``) and, when ``claimed_at`` is given,
+        still bears *this* recovery's claim (``recovery_claimed_at = claimed_at``). If the
+        row was delivered or re-claimed in the meantime this is a no-op (returns 0): a
+        straggling failure cannot un-deliver a delivered item (the double-delivery the
+        review flagged) or clobber a newer claim. ``delivered_at`` is left untouched — the
+        undelivered guard makes clearing it unnecessary and never risks reopening."""
         now = now or datetime.now(UTC)
         detail = (reason or "delivery was not accepted").strip()[:500]
+        where = "id = ? AND delivered_at IS NULL"
+        params: list = [now.isoformat(), detail, int(item_id)]
+        if claimed_at is not None:
+            where += " AND recovery_claimed_at = ?"
+            params.append(claimed_at)
         db = self._connect()
         try:
             cur = db.execute(
-                """
+                f"""
                 UPDATE inbox
-                SET delivered_at = NULL, recovery_claimed_at = NULL, recovery_attempted_at = ?, recovery_error = ?
-                WHERE id = ?
+                SET recovery_claimed_at = NULL, recovery_attempted_at = ?, recovery_error = ?
+                WHERE {where}
                 """,
-                (now.isoformat(), detail, int(item_id)),
+                tuple(params),
             )
             db.commit()
             return cur.rowcount

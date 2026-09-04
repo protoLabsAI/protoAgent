@@ -388,6 +388,86 @@ def test_restore_recovery_failure_reopens_pending_with_evidence(tmp_path):
     assert pending["recovery_error"] == "delivery was not accepted"
 
 
+def test_restore_recovery_failure_does_not_reopen_a_concurrently_delivered_item(tmp_path):
+    """Regression (review): once the claim lease expires, ``list`` re-exposes a still-
+    undelivered ``now`` page, so a normal consumer can deliver it while recovery is still
+    in flight. A *late* recovery failure must NOT un-deliver that page (double-delivery)."""
+    store = _store(tmp_path)
+    item = store.add("delivered mid-flight", priority="now")
+    [claimed] = store.claim_now_recovery_batch(limit=8)
+
+    # A concurrent consumer delivers the page while recovery is still awaiting its turn.
+    assert store.mark_delivered([item["id"]]) == 1
+
+    # The straggling recovery now reports failure — scoped to its own claim, it is a no-op.
+    assert (
+        store.restore_recovery_failure(
+            item["id"], "delivery was not accepted", claimed_at=claimed["recovery_claimed_at"]
+        )
+        == 0
+    )
+
+    [row] = store.list(priority_floor="now", include_delivered=True)
+    assert row["delivered_at"] is not None  # stays delivered — not reopened
+    assert store.list(priority_floor="now") == []  # not resurrected into the pending pool
+
+
+def test_restore_recovery_failure_does_not_clobber_a_newer_claim(tmp_path):
+    """A stale recovery claim's late failure must not clear a fresh claim: after the
+    lease + cooldown expire and a new recovery pass re-claims the page, the old claim's
+    restore is scoped to its own (superseded) stamp and leaves the newer claim intact."""
+    store = _store(tmp_path)
+    item = store.add("re-claimed", priority="now")
+
+    # First claim, far enough in the past that BOTH the claim lease and the re-claim
+    # cooldown have elapsed, so a fresh recovery pass may legitimately re-claim.
+    stale = datetime.now(UTC) - timedelta(seconds=4000)
+    [first] = store.claim_now_recovery_batch(limit=8, retry_after_s=3600, now=stale)
+
+    # A fresh recovery re-claims the still-undelivered page.
+    [second] = store.claim_now_recovery_batch(limit=8, retry_after_s=3600)
+    assert first["recovery_claimed_at"] != second["recovery_claimed_at"]
+
+    # The straggling first recovery fails, scoped to its stale claim — a no-op.
+    assert (
+        store.restore_recovery_failure(item["id"], "stale failure", claimed_at=first["recovery_claimed_at"]) == 0
+    )
+
+    [row] = store.list(priority_floor="now", include_delivered=True)
+    assert row["recovery_claimed_at"] == second["recovery_claimed_at"]  # newer claim intact
+    assert row["recovery_error"] != "stale failure"
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_does_not_reopen_a_concurrently_delivered_item(tmp_path, monkeypatch):
+    """End-to-end (review): a recovery whose fire outlives the claim lease races a normal
+    consumer that delivers the page; when that recovery then reports 'not accepted', the
+    driver must leave the item delivered rather than un-delivering it."""
+    import operator_api.console_handlers as ch
+    import runtime.state as rs
+    from server.agent_init import recover_pending_now_inbox_items
+
+    store = _store(tmp_path)
+    item = store.add("delivered mid-flight", priority="now")
+    monkeypatch.setattr(rs.STATE, "inbox_store", store, raising=False)
+
+    async def _fire_then_deliver_concurrently(fired_item):
+        # Simulate a concurrent consumer delivering the page (lease expired) mid-fire,
+        # then this recovery failing to be accepted.
+        store.mark_delivered([fired_item["id"]])
+        return False
+
+    monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_then_deliver_concurrently)
+
+    result = await recover_pending_now_inbox_items(limit=8)
+
+    assert result == {"claimed": 1, "accepted": 0, "failed": 1}
+    [row] = store.list(priority_floor="now", include_delivered=True)
+    assert row["id"] == item["id"]
+    assert row["delivered_at"] is not None  # stays delivered — not reopened by the late failure
+    assert store.list(priority_floor="now") == []  # not resurrected into the pending pool
+
+
 @pytest.mark.asyncio
 async def test_startup_recovery_accepts_preexisting_now_backlog(tmp_path, monkeypatch):
     import operator_api.console_handlers as ch

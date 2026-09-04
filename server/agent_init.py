@@ -1590,10 +1590,15 @@ async def recover_pending_now_inbox_items(
 
     from operator_api.console_handlers import _fire_activity_from_inbox
 
-    async def _restore(item_id: int, reason: str) -> None:
-        """Best-effort: hand a claimed-but-unfired item back to pending with evidence."""
+    async def _restore(item_id: int, reason: str, claimed_at: str | None) -> None:
+        """Best-effort: hand a claimed-but-unfired item back to pending with evidence.
+
+        ``claimed_at`` scopes the restore to THIS recovery's claim: if the claim lease
+        expired and a concurrent consumer already delivered the page (or a fresh recovery
+        re-claimed it), the restore is a no-op — a late failure never un-delivers a
+        delivered item nor clobbers a newer claim."""
         try:
-            await asyncio.to_thread(store.restore_recovery_failure, item_id, reason)
+            await asyncio.to_thread(store.restore_recovery_failure, item_id, reason, claimed_at=claimed_at)
         except Exception:  # noqa: BLE001 — restore is best-effort; never break the batch
             log.warning("[inbox] now-recovery could not restore item %s to pending (%s)", item_id, reason)
 
@@ -1602,15 +1607,16 @@ async def recover_pending_now_inbox_items(
     # explicitly; restore the claim to pending (with evidence) otherwise.
     for item in items:
         item_id = int(item["id"])
+        claimed_at = item.get("recovery_claimed_at")
         try:
             delivered = await _fire_activity_from_inbox(item)
         except asyncio.CancelledError:
-            await _restore(item_id, "delivery was cancelled")
+            await _restore(item_id, "delivery was cancelled", claimed_at)
             raise
         except Exception as exc:  # noqa: BLE001 — keep processing the rest of the bounded batch
             failed += 1
             log.exception("[inbox] now-recovery delivery raised for item %s", item_id)
-            await _restore(item_id, f"delivery raised: {exc}")
+            await _restore(item_id, f"delivery raised: {exc}", claimed_at)
             continue
 
         if delivered:
@@ -1619,14 +1625,14 @@ async def recover_pending_now_inbox_items(
             except Exception as exc:  # noqa: BLE001 — keep processing the rest of the bounded batch
                 failed += 1
                 log.exception("[inbox] now-recovery accepted item %s but could not mark delivered", item_id)
-                await _restore(item_id, f"accepted delivery could not be marked delivered: {exc}")
+                await _restore(item_id, f"accepted delivery could not be marked delivered: {exc}", claimed_at)
                 continue
             accepted += 1
             continue
 
         failed += 1
         log.warning("[inbox] now-recovery not accepted for item %s; restoring pending fallback", item_id)
-        await _restore(item_id, "delivery was not accepted")
+        await _restore(item_id, "delivery was not accepted", claimed_at)
 
     log.info(
         "[inbox] now-recovery claimed=%d accepted=%d failed=%d",
