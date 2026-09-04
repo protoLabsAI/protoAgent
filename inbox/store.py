@@ -58,11 +58,22 @@ class InboxStore:
                     source       TEXT,
                     text         TEXT NOT NULL,
                     dedup_key    TEXT,
-                    delivered_at TEXT
+                    delivered_at TEXT,
+                    recovery_attempted_at TEXT,
+                    recovery_error TEXT
                 )
                 """
             )
+            existing = {r["name"] for r in db.execute("PRAGMA table_info(inbox)").fetchall()}
+            if "recovery_attempted_at" not in existing:
+                db.execute("ALTER TABLE inbox ADD COLUMN recovery_attempted_at TEXT")
+            if "recovery_error" not in existing:
+                db.execute("ALTER TABLE inbox ADD COLUMN recovery_error TEXT")
             db.execute("CREATE INDEX IF NOT EXISTS ix_inbox_undelivered ON inbox(delivered_at, priority)")
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS ix_inbox_now_recovery "
+                "ON inbox(priority, delivered_at, recovery_attempted_at)"
+            )
             db.commit()
         finally:
             db.close()
@@ -139,7 +150,8 @@ class InboxStore:
         try:
             placeholders = ",".join("?" for _ in ids)
             cur = db.execute(
-                f"UPDATE inbox SET delivered_at = ? WHERE id IN ({placeholders}) AND delivered_at IS NULL",
+                f"UPDATE inbox SET delivered_at = ?, recovery_error = NULL "
+                f"WHERE id IN ({placeholders}) AND delivered_at IS NULL",
                 (now.isoformat(), *ids),
             )
             db.commit()
@@ -159,6 +171,68 @@ class InboxStore:
             cur = db.execute(
                 f"UPDATE inbox SET delivered_at = NULL WHERE id IN ({placeholders})",
                 tuple(ids),
+            )
+            db.commit()
+            return cur.rowcount
+        finally:
+            db.close()
+
+    def claim_now_recovery_batch(
+        self,
+        *,
+        limit: int = 8,
+        retry_after_s: int = 3600,
+        now: datetime | None = None,
+    ) -> list[dict]:
+        """Reserve a bounded batch of pre-existing pending ``now`` items for boot recovery.
+
+        Recovery is intentionally independent from ``list(priority_floor="now")``:
+        it leaves newly failed items pending for pull fallback, but records the
+        last attempted timestamp so repeated restarts cannot replay the same
+        backlog item every boot.
+        """
+        now = now or datetime.now(UTC)
+        cutoff = (now - timedelta(seconds=max(0, int(retry_after_s)))).isoformat()
+        batch_limit = max(1, int(limit))
+        db = self._connect()
+        try:
+            rows = db.execute(
+                """
+                SELECT * FROM inbox
+                WHERE priority = 'now'
+                  AND delivered_at IS NULL
+                  AND (recovery_attempted_at IS NULL OR recovery_attempted_at < ?)
+                ORDER BY created_at ASC
+                LIMIT ?
+                """,
+                (cutoff, batch_limit),
+            ).fetchall()
+            ids = [int(r["id"]) for r in rows]
+            if ids:
+                placeholders = ",".join("?" for _ in ids)
+                db.execute(
+                    f"UPDATE inbox SET recovery_attempted_at = ?, recovery_error = NULL "
+                    f"WHERE id IN ({placeholders}) AND delivered_at IS NULL",
+                    (now.isoformat(), *ids),
+                )
+            db.commit()
+            return [dict(r) for r in rows]
+        finally:
+            db.close()
+
+    def record_recovery_failure(self, item_id: int, reason: str, *, now: datetime | None = None) -> int:
+        """Keep a recovered item pending with bounded, operator-readable failure evidence."""
+        now = now or datetime.now(UTC)
+        detail = (reason or "delivery was not accepted").strip()[:500]
+        db = self._connect()
+        try:
+            cur = db.execute(
+                """
+                UPDATE inbox
+                SET recovery_attempted_at = ?, recovery_error = ?
+                WHERE id = ? AND delivered_at IS NULL
+                """,
+                (now.isoformat(), detail, int(item_id)),
             )
             db.commit()
             return cur.rowcount

@@ -46,6 +46,10 @@ log = logging.getLogger("protoagent.server")
 # _reload_langgraph_agent, which is also lockable on its own (plugin routes
 # call it directly).
 _CONFIG_WRITE_LOCK = threading.RLock()
+_INBOX_NOW_RECOVERY_STARTED = False
+_INBOX_NOW_RECOVERY_BATCH_LIMIT = 8
+_INBOX_NOW_RECOVERY_RETRY_AFTER_S = 60 * 60
+_INBOX_NOW_RECOVERY_STARTUP_WAIT_S = 120.0
 
 
 def _serialized_config_write(fn):
@@ -329,6 +333,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
         from inbox import StormGuard
 
         STATE.storm_guard = StormGuard()
+    _start_inbox_now_recovery_once()
 
     # Background subagent manager (ADR 0050) — must exist before the graph build so
     # the `task` tool's run_in_background path can reach it.
@@ -1548,6 +1553,110 @@ def _build_inbox_store(config):
     except Exception:
         log.exception("[inbox] failed to build store at %s; inbox disabled", path)
         return None
+
+
+async def recover_pending_now_inbox_items(
+    *,
+    limit: int = _INBOX_NOW_RECOVERY_BATCH_LIMIT,
+    retry_after_s: int = _INBOX_NOW_RECOVERY_RETRY_AFTER_S,
+) -> dict[str, int]:
+    """One-shot startup recovery for pre-existing pending priority-``now`` inbox items.
+
+    The inbox store owns the bounded claim/dedup policy. Delivery still flows
+    through ``operator_api.console_handlers._fire_activity_from_inbox``, the same
+    accepted self-A2A route used by newly posted ``now`` pages.
+    """
+    import asyncio
+
+    store = STATE.inbox_store
+    if store is None:
+        return {"claimed": 0, "accepted": 0, "failed": 0}
+
+    try:
+        items = await asyncio.to_thread(
+            store.claim_now_recovery_batch,
+            limit=limit,
+            retry_after_s=retry_after_s,
+        )
+    except Exception:  # noqa: BLE001 — recovery must not break boot
+        log.exception("[inbox] now-recovery claim failed")
+        return {"claimed": 0, "accepted": 0, "failed": 0}
+
+    accepted = 0
+    failed = 0
+    if not items:
+        return {"claimed": 0, "accepted": 0, "failed": 0}
+
+    from operator_api.console_handlers import _fire_activity_from_inbox
+
+    for item in items:
+        item_id = int(item["id"])
+        premarked = False
+        try:
+            premarked = (await asyncio.to_thread(store.mark_delivered, [item_id])) == 1
+        except Exception:  # noqa: BLE001 — keep processing the rest of the bounded batch
+            log.exception("[inbox] now-recovery could not reserve item %s", item_id)
+        if not premarked:
+            failed += 1
+            try:
+                await asyncio.to_thread(store.record_recovery_failure, item_id, "could not reserve delivery")
+            except Exception:  # noqa: BLE001
+                log.warning("[inbox] now-recovery could not record reservation failure for item %s", item_id)
+            continue
+
+        delivered = await _fire_activity_from_inbox(item)
+        if delivered:
+            accepted += 1
+            continue
+
+        failed += 1
+        log.warning("[inbox] now-recovery not accepted for item %s; restoring pending fallback", item_id)
+        try:
+            await asyncio.to_thread(store.mark_pending, [item_id])
+            await asyncio.to_thread(store.record_recovery_failure, item_id, "delivery was not accepted")
+        except Exception:  # noqa: BLE001 — restore is best-effort, same posture as new now delivery
+            log.warning("[inbox] now-recovery could not restore failed item %s to pending", item_id)
+
+    log.info(
+        "[inbox] now-recovery claimed=%d accepted=%d failed=%d",
+        len(items),
+        accepted,
+        failed,
+    )
+    return {"claimed": len(items), "accepted": accepted, "failed": failed}
+
+
+def _start_inbox_now_recovery_once() -> None:
+    """Start the one-shot boot recovery worker after FastAPI startup owns routes.
+
+    ``_init_langgraph_agent`` runs before ``STATE.fastapi_app`` is mounted, so the
+    worker waits for the existing startup marker instead of firing during graph
+    construction. This is not a scheduler: it exits after one bounded recovery pass.
+    """
+    global _INBOX_NOW_RECOVERY_STARTED
+    if _INBOX_NOW_RECOVERY_STARTED:
+        return
+    if STATE.inbox_store is None:
+        return
+    _INBOX_NOW_RECOVERY_STARTED = True
+
+    def _worker() -> None:
+        deadline = time.monotonic() + _INBOX_NOW_RECOVERY_STARTUP_WAIT_S
+        while time.monotonic() < deadline:
+            if (
+                STATE.inbox_store is not None
+                and getattr(STATE, "plugin_surfaces_started", False)
+                and callable(getattr(STATE, "inbox_now_delivery", None))
+            ):
+                try:
+                    asyncio.run(recover_pending_now_inbox_items())
+                except Exception:  # noqa: BLE001 — boot worker must never crash the process
+                    log.exception("[inbox] now-recovery worker failed")
+                return
+            time.sleep(0.25)
+        log.warning("[inbox] now-recovery skipped: startup delivery route did not become ready")
+
+    threading.Thread(target=_worker, name="inbox-now-recovery", daemon=True).start()
 
 
 def _on_work_terminal(job) -> None:

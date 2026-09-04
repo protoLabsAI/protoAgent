@@ -342,6 +342,134 @@ async def test_failed_now_fire_stays_pending(tmp_path, monkeypatch):
     assert "bg done" in await check_inbox.ainvoke({"priority_floor": "later"})
 
 
+# ── startup recovery for pre-existing now backlog (#3351) ───────────────────
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_accepts_preexisting_now_backlog(tmp_path, monkeypatch):
+    import operator_api.console_handlers as ch
+    import runtime.state as rs
+    from server.agent_init import recover_pending_now_inbox_items
+
+    store = _store(tmp_path)
+    old_now = store.add("before repair", priority="now")
+    monkeypatch.setattr(rs.STATE, "inbox_store", store, raising=False)
+    fired: list[int] = []
+
+    async def _fire_ok(item):
+        fired.append(item["id"])
+        return True
+
+    monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_ok)
+
+    result = await recover_pending_now_inbox_items(limit=8)
+
+    assert result == {"claimed": 1, "accepted": 1, "failed": 0}
+    assert fired == [old_now["id"]]
+    assert store.list(priority_floor="later") == []
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_is_bounded(tmp_path, monkeypatch):
+    import operator_api.console_handlers as ch
+    import runtime.state as rs
+    from server.agent_init import recover_pending_now_inbox_items
+
+    store = _store(tmp_path)
+    items = [store.add(f"now {i}", priority="now") for i in range(3)]
+    monkeypatch.setattr(rs.STATE, "inbox_store", store, raising=False)
+    fired: list[int] = []
+
+    async def _fire_ok(item):
+        fired.append(item["id"])
+        return True
+
+    monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_ok)
+
+    result = await recover_pending_now_inbox_items(limit=2)
+
+    assert result == {"claimed": 2, "accepted": 2, "failed": 0}
+    assert fired == [items[0]["id"], items[1]["id"]]
+    assert [row["id"] for row in store.list(priority_floor="now")] == [items[2]["id"]]
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_failure_stays_pending_with_evidence(tmp_path, monkeypatch):
+    import operator_api.console_handlers as ch
+    import runtime.state as rs
+    from server.agent_init import recover_pending_now_inbox_items
+
+    store = _store(tmp_path)
+    item = store.add("not accepted", priority="now")
+    monkeypatch.setattr(rs.STATE, "inbox_store", store, raising=False)
+
+    async def _fire_fail(_item):
+        return False
+
+    monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_fail)
+
+    result = await recover_pending_now_inbox_items(limit=8)
+    pending = store.list(priority_floor="now")
+
+    assert result == {"claimed": 1, "accepted": 0, "failed": 1}
+    assert [row["id"] for row in pending] == [item["id"]]
+    assert pending[0]["recovery_attempted_at"]
+    assert pending[0]["recovery_error"] == "delivery was not accepted"
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_retry_cooldown_prevents_restart_replay(tmp_path, monkeypatch):
+    import operator_api.console_handlers as ch
+    import runtime.state as rs
+    from server.agent_init import recover_pending_now_inbox_items
+
+    store = _store(tmp_path)
+    store.add("retry later", priority="now")
+    monkeypatch.setattr(rs.STATE, "inbox_store", store, raising=False)
+    fired: list[str] = []
+
+    async def _fire_fail(item):
+        fired.append(item["text"])
+        return False
+
+    monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_fail)
+
+    first = await recover_pending_now_inbox_items(limit=8, retry_after_s=3600)
+    second = await recover_pending_now_inbox_items(limit=8, retry_after_s=3600)
+
+    assert first == {"claimed": 1, "accepted": 0, "failed": 1}
+    assert second == {"claimed": 0, "accepted": 0, "failed": 0}
+    assert fired == ["retry later"]
+    assert len(store.list(priority_floor="now")) == 1
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_excludes_next_and_later(tmp_path, monkeypatch):
+    import operator_api.console_handlers as ch
+    import runtime.state as rs
+    from server.agent_init import recover_pending_now_inbox_items
+
+    store = _store(tmp_path)
+    store.add("run now", priority="now")
+    next_item = store.add("wait next", priority="next")
+    later_item = store.add("wait later", priority="later")
+    monkeypatch.setattr(rs.STATE, "inbox_store", store, raising=False)
+    fired: list[str] = []
+
+    async def _fire_ok(item):
+        fired.append(item["text"])
+        return True
+
+    monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_ok)
+
+    result = await recover_pending_now_inbox_items(limit=8)
+    pending = store.list(priority_floor="later")
+
+    assert result == {"claimed": 1, "accepted": 1, "failed": 0}
+    assert fired == ["run now"]
+    assert [row["id"] for row in pending] == [next_item["id"], later_item["id"]]
+
+
 # ── badge dedup: inbox.item fires only for items that land in the queue (#1375) ──
 
 
