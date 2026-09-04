@@ -1593,14 +1593,38 @@ async def recover_pending_now_inbox_items(
     async def _restore(item_id: int, reason: str, claimed_at: str | None) -> None:
         """Best-effort: hand a claimed-but-unfired item back to pending with evidence.
 
-        ``claimed_at`` scopes the restore to THIS recovery's claim: if the claim lease
-        expired and a concurrent consumer already delivered the page (or a fresh recovery
-        re-claimed it), the restore is a no-op — a late failure never un-delivers a
-        delivered item nor clobbers a newer claim."""
+        ``claimed_at`` scopes the restore to THIS recovery's claim. If a concurrent
+        owner already delivered the page, the restore is a no-op: a late failure never
+        un-delivers a delivered item."""
         try:
-            await asyncio.to_thread(store.restore_recovery_failure, item_id, reason, claimed_at=claimed_at)
+            await asyncio.to_thread(
+                store.restore_recovery_failure,
+                item_id,
+                reason,
+                claimed_at=claimed_at,
+            )
         except Exception:  # noqa: BLE001 — restore is best-effort; never break the batch
             log.warning("[inbox] now-recovery could not restore item %s to pending (%s)", item_id, reason)
+
+    async def _record_accepted_mark_failure(item_id: int, reason: str, claimed_at: str | None) -> None:
+        """Best-effort: record accepted delivery whose delivered mark failed.
+
+        Do not clear the recovery claim here. Once delivery was accepted, releasing the
+        still-undelivered row would allow a later pull or recovery to fire a duplicate
+        Activity turn.
+        """
+        try:
+            await asyncio.to_thread(
+                store.record_recovery_mark_delivered_failure,
+                item_id,
+                reason,
+                claimed_at=claimed_at,
+            )
+        except Exception:  # noqa: BLE001 — evidence is best-effort; never break the batch
+            log.warning(
+                "[inbox] now-recovery could not record mark-delivered failure for item %s",
+                item_id,
+            )
 
     # Every item in ``items`` was claimed by the atomic claim above, so no concurrent
     # consumer can double-deliver it while we await its fire. Mark accepted delivery
@@ -1625,7 +1649,11 @@ async def recover_pending_now_inbox_items(
             except Exception as exc:  # noqa: BLE001 — keep processing the rest of the bounded batch
                 failed += 1
                 log.exception("[inbox] now-recovery accepted item %s but could not mark delivered", item_id)
-                await _restore(item_id, f"accepted delivery could not be marked delivered: {exc}", claimed_at)
+                await _record_accepted_mark_failure(
+                    item_id,
+                    f"accepted delivery could not be marked delivered: {exc}",
+                    claimed_at,
+                )
                 continue
             accepted += 1
             continue

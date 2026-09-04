@@ -21,7 +21,6 @@ from pathlib import Path
 
 PRIORITIES = ("now", "next", "later")
 _RANK = {"now": 0, "next": 1, "later": 2}
-_RECOVERY_CLAIM_LEASE_S = 300
 
 
 def _floor_set(priority_floor: str) -> tuple[str, ...]:
@@ -135,15 +134,7 @@ class InboxStore:
         params = tuple(tiers)
         if not include_delivered:
             where += " AND delivered_at IS NULL"
-            active_recovery_cutoff = (
-                datetime.now(UTC) - timedelta(seconds=_RECOVERY_CLAIM_LEASE_S)
-            ).isoformat()
-            where += (
-                " AND NOT (priority = 'now' "
-                "AND recovery_claimed_at IS NOT NULL "
-                "AND recovery_claimed_at >= ?)"
-            )
-            params = (*params, active_recovery_cutoff)
+            where += " AND NOT (priority = 'now' AND recovery_claimed_at IS NOT NULL)"
         db = self._connect()
         try:
             rows = db.execute(
@@ -203,14 +194,15 @@ class InboxStore:
         boot recovery, returning the claimed rows.
 
         Claimed rows remain undelivered until accepted delivery marks them delivered.
-        ``recovery_claimed_at`` is the short-lived in-flight marker that keeps a
+        ``recovery_claimed_at`` is the in-flight marker that keeps a
         concurrent inbox consumer (a fresh now-post or a ``check_inbox`` pull) from
         grabbing the same page while recovery awaits its Activity turn. Callers MUST
         hand every claimed item that does NOT achieve accepted delivery back to
         :meth:`restore_recovery_failure`, which clears the claim so pull fallback can
-        still pick it up. If the process dies mid-delivery, the row is still pending
-        and the claim lease expires back into the normal queue instead of being
-        falsely marked delivered.
+        still pick it up. Accepted-but-unmarked items MUST keep their claim via
+        :meth:`record_recovery_mark_delivered_failure`; they are still undelivered but
+        intentionally withheld from pull fallback because the accepted delivery path
+        may already own the turn.
 
         ``recovery_attempted_at`` is stamped in the same write for replay/storm protection:
         a page that keeps refusing delivery is not re-claimed until ``retry_after_s`` has
@@ -222,7 +214,6 @@ class InboxStore:
         now = now or datetime.now(UTC)
         now_iso = now.isoformat()
         cutoff = (now - timedelta(seconds=max(0, int(retry_after_s)))).isoformat()
-        claim_cutoff = (now - timedelta(seconds=_RECOVERY_CLAIM_LEASE_S)).isoformat()
         batch_limit = max(1, int(limit))
         db = self._connect()
         try:
@@ -232,12 +223,12 @@ class InboxStore:
                 SELECT * FROM inbox
                 WHERE priority = 'now'
                   AND delivered_at IS NULL
-                  AND (recovery_claimed_at IS NULL OR recovery_claimed_at < ?)
+                  AND recovery_claimed_at IS NULL
                   AND (recovery_attempted_at IS NULL OR recovery_attempted_at < ?)
                 ORDER BY created_at ASC
                 LIMIT ?
                 """,
-                (claim_cutoff, cutoff, batch_limit),
+                (cutoff, batch_limit),
             ).fetchall()
             ids = [int(r["id"]) for r in rows]
             if ids:
@@ -284,16 +275,12 @@ class InboxStore:
         delivery was not accepted.
 
         Guarded so a *late* recovery failure can never reopen a page that has since been
-        handled by someone else. Once the claim lease expires, ``list`` exposes a
-        still-undelivered ``now`` row again, so a normal consumer (a ``check_inbox`` pull
-        or a fresh now-post) — or a re-claiming recovery pass — can pick it up while this
-        recovery is still in flight. The restore therefore only touches the row while it
+        handled by someone else. The restore therefore only touches the row while it
         is still undelivered (``delivered_at IS NULL``) and, when ``claimed_at`` is given,
         still bears *this* recovery's claim (``recovery_claimed_at = claimed_at``). If the
-        row was delivered or re-claimed in the meantime this is a no-op (returns 0): a
-        straggling failure cannot un-deliver a delivered item (the double-delivery the
-        review flagged) or clobber a newer claim. ``delivered_at`` is left untouched — the
-        undelivered guard makes clearing it unnecessary and never risks reopening."""
+        row was delivered in the meantime this is a no-op (returns 0): a straggling
+        failure cannot un-deliver a delivered item. ``delivered_at`` is left untouched —
+        the undelivered guard makes clearing it unnecessary and never risks reopening."""
         now = now or datetime.now(UTC)
         detail = (reason or "delivery was not accepted").strip()[:500]
         where = "id = ? AND delivered_at IS NULL"
@@ -307,6 +294,44 @@ class InboxStore:
                 f"""
                 UPDATE inbox
                 SET recovery_claimed_at = NULL, recovery_attempted_at = ?, recovery_error = ?
+                WHERE {where}
+                """,
+                tuple(params),
+            )
+            db.commit()
+            return cur.rowcount
+        finally:
+            db.close()
+
+    def record_recovery_mark_delivered_failure(
+        self,
+        item_id: int,
+        reason: str,
+        *,
+        claimed_at: str | None = None,
+        now: datetime | None = None,
+    ) -> int:
+        """Record that accepted delivery could not be marked delivered.
+
+        This deliberately leaves ``recovery_claimed_at`` in place. Once the accepted
+        delivery path has taken ownership of the Activity turn, clearing the claim would
+        let a later pull or recovery redeliver the same page. The row remains
+        undelivered with operator-readable evidence so the failed mark can be diagnosed
+        without causing an automatic duplicate delivery.
+        """
+        now = now or datetime.now(UTC)
+        detail = (reason or "accepted delivery could not be marked delivered").strip()[:500]
+        where = "id = ? AND delivered_at IS NULL"
+        params: list = [now.isoformat(), detail, int(item_id)]
+        if claimed_at is not None:
+            where += " AND recovery_claimed_at = ?"
+            params.append(claimed_at)
+        db = self._connect()
+        try:
+            cur = db.execute(
+                f"""
+                UPDATE inbox
+                SET recovery_attempted_at = ?, recovery_error = ?
                 WHERE {where}
                 """,
                 tuple(params),
