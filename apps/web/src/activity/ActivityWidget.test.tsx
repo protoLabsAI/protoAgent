@@ -141,6 +141,23 @@ describe("ActivityWidget — pill signalling", () => {
     expect(testid("activity-widget")!.getAttribute("aria-label")).toBe("Feed — 1 new");
   });
 
+  it("does not flag a delivered now inbox payload as a blocked page", () => {
+    act(() => root.render(h(ActivityWidget)));
+
+    emit("inbox.item", {
+      id: 8,
+      priority: "now",
+      delivered_at: "2026-09-03T10:01:00Z",
+      source: "a2a",
+      text: "already delivered",
+    });
+
+    const badge = testid("activity-badge")!;
+    expect(badge.textContent).toBe("1");
+    expect(badge.classList.contains("activity-badge--alert")).toBe(false);
+    expect(badge.getAttribute("data-alert")).toBeNull();
+  });
+
   it("treats ordinary next/later inbox items as plain unread with no alert", () => {
     act(() => root.render(h(ActivityWidget)));
 

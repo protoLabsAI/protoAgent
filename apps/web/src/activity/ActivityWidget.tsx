@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Activity } from "lucide-react";
 
 import { onServerEvent } from "../lib/events";
+import { isPendingNowInboxPage } from "../lib/queries";
 import { UtilityWidget } from "../app/UtilityWidget";
 import { ActivitySurface } from "./ActivitySurface";
 
@@ -29,7 +30,7 @@ export function ActivityWidget() {
       onServerEvent("inbox.item", (data) => {
         if (openRef.current) return;
         setUnread((n) => n + 1);
-        if (data.priority === "now") setPendingNow(true);
+        if (isPendingNowInboxPage(data)) setPendingNow(true);
       }),
     [],
   );

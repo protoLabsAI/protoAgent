@@ -363,7 +363,7 @@ export const inboxQuery = () =>
 // `inbox.item`), so a fired now never appears here. A now item still showing as pending is
 // therefore an operator-facing fallback + diagnostic signal to triage — surfaced
 // conspicuously and distinctly from next/later, but never silently marked delivered.
-export function isPendingNowInboxPage(item: { priority?: string; delivered_at?: string | null }): boolean {
+export function isPendingNowInboxPage(item: { priority?: unknown; delivered_at?: unknown }): boolean {
   return item.priority === "now" && !item.delivered_at;
 }
 
