@@ -2,6 +2,7 @@ import "./activity.css";
 
 import { Button, Empty } from "@protolabsai/ui/primitives";
 import {
+  AlertTriangle,
   Check,
   Clock,
   CornerDownRight,
@@ -21,6 +22,7 @@ import { useUtilityHeaderReload } from "../app/UtilityWidget";
 import { api } from "../lib/api";
 import { ago, errMsg } from "../lib/format";
 import { onServerEvent } from "../lib/events";
+import { isPendingNowInboxPage } from "../lib/queries";
 import type { ActivityEntry, InboxItem } from "../lib/types";
 
 // The unified feed (#3029) merges the two former utility-bar widgets — the inbound
@@ -162,6 +164,11 @@ export function ActivitySurface() {
   }, [entries]);
 
   const chronological = [...entries].reverse();
+  // A pending priority-`now` item is only in this pull queue because its automatic delivery
+  // failed (#3351) — hoist those blocked pages above the ordinary queued stimuli and render
+  // them conspicuously, while leaving the next/later list exactly as it was.
+  const nowPages = items.filter(isPendingNowInboxPage);
+  const queued = items.filter((i) => !isPendingNowInboxPage(i));
   const nothing =
     items.length === 0 && chronological.length === 0 && !activityLoading && !inboxLoading;
 
@@ -175,7 +182,36 @@ export function ActivitySurface() {
       ) : null}
       {items.length > 0 ? (
         <div className="inbox-list" data-testid="feed-pending">
-          {items.map((item) => (
+          {/* Blocked priority-`now` pages first: a now item is only pending because its
+              automatic delivery failed (#3351), so it's a diagnostic fallback the operator must
+              triage — flagged conspicuously with full source/priority/text context. Dismiss stays
+              an EXPLICIT operator action (mark delivered); nothing here silently delivers it. */}
+          {nowPages.map((item) => (
+            <div className="inbox-item inbox-item--stuck" data-testid="inbox-now-page" key={item.id}>
+              <div className="inbox-item-head">
+                <span className="inbox-pri inbox-pri-now">{item.priority}</span>
+                <span
+                  className="inbox-stuck-flag"
+                  title="This priority-now page could not be delivered automatically — it is waiting for the pull fallback. Deliver it into a turn or dismiss it."
+                >
+                  <AlertTriangle size={12} aria-hidden /> undelivered page
+                </span>
+                {item.source ? <span className="inbox-source">{item.source}</span> : null}
+                <Button
+                  icon
+                  variant="ghost"
+                  className="inbox-dismiss"
+                  type="button"
+                  onClick={() => dismiss(item.id)}
+                  title="Deliver this page (mark delivered) and dismiss"
+                >
+                  <Check size={15} />
+                </Button>
+              </div>
+              <div className="inbox-text">{item.text}</div>
+            </div>
+          ))}
+          {queued.map((item) => (
             <div className="inbox-item" key={item.id}>
               <div className="inbox-item-head">
                 <span className={`inbox-pri inbox-pri-${PRIORITY_TONE[item.priority] || "next"}`}>
