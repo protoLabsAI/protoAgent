@@ -126,6 +126,7 @@ class InboxStore:
         *,
         priority_floor: str = "next",
         include_delivered: bool = False,
+        include_recovery_claimed: bool = False,
         limit: int = 20,
     ) -> list[dict]:
         tiers = _floor_set(priority_floor)
@@ -134,7 +135,8 @@ class InboxStore:
         params = tuple(tiers)
         if not include_delivered:
             where += " AND delivered_at IS NULL"
-            where += " AND NOT (priority = 'now' AND recovery_claimed_at IS NOT NULL)"
+            if not include_recovery_claimed:
+                where += " AND NOT (priority = 'now' AND recovery_claimed_at IS NOT NULL)"
         db = self._connect()
         try:
             rows = db.execute(

@@ -429,6 +429,21 @@ def test_recovery_claim_does_not_expire_into_pending_or_reclaim(tmp_path):
     assert row["recovery_claimed_at"] == first["recovery_claimed_at"]
 
 
+def test_recovery_claimed_items_are_operator_visible_when_requested(tmp_path):
+    """Active recovery claims stay out of agent pulls, but operator views can include
+    them so undelivered recovery evidence is inspectable."""
+    store = _store(tmp_path)
+    item = store.add("inspect me", priority="now")
+
+    [claimed] = store.claim_now_recovery_batch(limit=8)
+
+    assert store.list(priority_floor="now") == []
+    [visible] = store.list(priority_floor="now", include_recovery_claimed=True)
+    assert visible["id"] == item["id"]
+    assert visible["delivered_at"] is None
+    assert visible["recovery_claimed_at"] == claimed["recovery_claimed_at"]
+
+
 @pytest.mark.asyncio
 async def test_startup_recovery_does_not_reopen_a_concurrently_delivered_item(tmp_path, monkeypatch):
     """End-to-end: when recovery reports 'not accepted' after another owner delivered
@@ -491,6 +506,10 @@ async def test_startup_recovery_accepted_but_mark_delivered_failure_stays_claime
         row["recovery_error"]
         == "accepted delivery could not be marked delivered: sqlite write failed"
     )
+
+    listed = await ch._operator_inbox_list("now", include_delivered=False)
+    assert [visible["id"] for visible in listed["items"]] == [item["id"]]
+    assert listed["items"][0]["recovery_error"] == row["recovery_error"]
 
 
 @pytest.mark.asyncio
@@ -765,6 +784,20 @@ async def test_startup_recovery_lifecycle_waits_for_delivery_hook(monkeypatch):
 
     agent_init._start_inbox_now_recovery_once()
     await asyncio.sleep(0)
+
+    assert agent_init._INBOX_NOW_RECOVERY_STARTED is False
+
+
+def test_startup_recovery_lifecycle_no_loop_keeps_recovery_eligible(monkeypatch):
+    import server.agent_init as agent_init
+    import runtime.state as rs
+
+    monkeypatch.setattr(agent_init, "_INBOX_NOW_RECOVERY_STARTED", False)
+    monkeypatch.setattr(rs.STATE, "inbox_store", object(), raising=False)
+    monkeypatch.setattr(rs.STATE, "inbox_now_delivery", lambda _item: True, raising=False)
+    monkeypatch.setattr(rs.STATE, "main_loop", None, raising=False)
+
+    agent_init._start_inbox_now_recovery_once()
 
     assert agent_init._INBOX_NOW_RECOVERY_STARTED is False
 

@@ -1686,7 +1686,6 @@ def _start_inbox_now_recovery_once() -> None:
     if not callable(getattr(STATE, "inbox_now_delivery", None)):
         log.warning("[inbox] now-recovery skipped: delivery hook is not registered")
         return
-    _INBOX_NOW_RECOVERY_STARTED = True
 
     async def _run() -> None:
         try:
@@ -1696,13 +1695,17 @@ def _start_inbox_now_recovery_once() -> None:
 
     loop = getattr(STATE, "main_loop", None)
     if loop is not None and loop.is_running():
+        _INBOX_NOW_RECOVERY_STARTED = True
         loop.create_task(_run())
         return
 
     try:
-        asyncio.get_running_loop().create_task(_run())
+        running_loop = asyncio.get_running_loop()
     except RuntimeError:
         log.warning("[inbox] now-recovery skipped: no running startup event loop")
+        return
+    _INBOX_NOW_RECOVERY_STARTED = True
+    running_loop.create_task(_run())
 
 
 def _on_work_terminal(job) -> None:
