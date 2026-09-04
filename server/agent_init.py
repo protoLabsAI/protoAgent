@@ -1626,16 +1626,31 @@ async def recover_pending_now_inbox_items(
                 item_id,
             )
 
+    async def _restore_remaining(remaining: list[dict], reason: str) -> None:
+        """Restore EVERY still-claimed item in ``remaining`` back to pending.
+
+        ``claim_now_recovery_batch`` claimed the whole batch up front, so on
+        cancellation the current item AND all later, not-yet-processed items still
+        bear this recovery's claim. Restoring only the current one would leave the
+        rest hidden from both pull fallback (``list`` excludes claimed ``now`` items)
+        and future recovery (the next claim requires ``recovery_claimed_at IS NULL``),
+        stranding them permanently. Each restore is scoped to its own ``claimed_at``,
+        so an item another owner has since delivered is left untouched."""
+        for it in remaining:
+            await _restore(int(it["id"]), reason, it.get("recovery_claimed_at"))
+
     # Every item in ``items`` was claimed by the atomic claim above, so no concurrent
     # consumer can double-deliver it while we await its fire. Mark accepted delivery
     # explicitly; restore the claim to pending (with evidence) otherwise.
-    for item in items:
+    for idx, item in enumerate(items):
         item_id = int(item["id"])
         claimed_at = item.get("recovery_claimed_at")
         try:
             delivered = await _fire_activity_from_inbox(item)
         except asyncio.CancelledError:
-            await _restore(item_id, "delivery was cancelled", claimed_at)
+            # Restore the current item and every later item the batch already claimed,
+            # otherwise the un-processed tail stays permanently reserved and invisible.
+            await _restore_remaining(items[idx:], "delivery was cancelled")
             raise
         except Exception as exc:  # noqa: BLE001 — keep processing the rest of the bounded batch
             failed += 1

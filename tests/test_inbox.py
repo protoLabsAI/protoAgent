@@ -690,6 +690,51 @@ async def test_startup_recovery_exception_stays_pending_with_evidence(tmp_path, 
 
 
 @pytest.mark.asyncio
+async def test_startup_recovery_cancellation_restores_entire_claimed_batch(tmp_path, monkeypatch):
+    """Regression (review): cancelling mid-batch must hand the WHOLE claimed batch back to
+    pending — the in-flight item AND every later already-claimed item. The batch claims all
+    rows up front, so restoring only the current one strands the tail: hidden from pull
+    fallback (``list`` excludes claimed ``now`` items) and from future recovery (the next
+    claim requires ``recovery_claimed_at IS NULL``)."""
+    import operator_api.console_handlers as ch
+    import runtime.state as rs
+    from server.agent_init import recover_pending_now_inbox_items
+
+    store = _store(tmp_path)
+    items = [store.add(f"now {i}", priority="now") for i in range(3)]
+    monkeypatch.setattr(rs.STATE, "inbox_store", store, raising=False)
+    fired: list[int] = []
+
+    async def _fire_cancel_on_second(item):
+        fired.append(item["id"])
+        if item["id"] == items[1]["id"]:
+            raise asyncio.CancelledError
+        return True
+
+    monkeypatch.setattr(ch, "_fire_activity_from_inbox", _fire_cancel_on_second)
+
+    with pytest.raises(asyncio.CancelledError):
+        await recover_pending_now_inbox_items(limit=8)
+
+    # Item 0 was accepted before the cancel → delivered and out of the pending pool.
+    # Items 1 (in-flight) and 2 (later, already claimed) are BOTH restored to pending.
+    assert fired == [items[0]["id"], items[1]["id"]]  # cancel aborted before item 2 fired
+    delivered = store.list(priority_floor="now", include_delivered=True)
+    by_id = {row["id"]: row for row in delivered}
+    assert by_id[items[0]["id"]]["delivered_at"] is not None
+    pending = [row["id"] for row in store.list(priority_floor="now")]
+    assert pending == [items[1]["id"], items[2]["id"]]  # nothing stranded
+    for item_id in (items[1]["id"], items[2]["id"]):
+        assert by_id[item_id]["recovery_claimed_at"] is None
+        assert by_id[item_id]["recovery_error"] == "delivery was cancelled"
+    # And the restored tail is re-claimable by a subsequent recovery pass (not permanently hidden).
+    reclaim = store.claim_now_recovery_batch(
+        limit=8, retry_after_s=0, now=datetime.now(UTC) + timedelta(seconds=10)
+    )
+    assert [r["id"] for r in reclaim] == [items[1]["id"], items[2]["id"]]
+
+
+@pytest.mark.asyncio
 async def test_startup_recovery_retry_cooldown_prevents_restart_replay(tmp_path, monkeypatch):
     import operator_api.console_handlers as ch
     import runtime.state as rs
