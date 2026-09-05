@@ -337,6 +337,7 @@ from server.agent_init import (  # noqa: E402,F401 — re-export of the extracte
     _resolve_skills_db,
     _retire_thread,
     _run_on_server_loop,
+    _start_inbox_now_recovery_once,
     _start_scheduler_async,
     _stop_scheduler_async,
     _sync_autostart_with_config,
@@ -696,6 +697,15 @@ def _main():
         # until a full restart. Before this point a reload must not hot-start, or a
         # surface would start twice (here AND in reconcile). ADR 0018.
         STATE.plugin_surfaces_started = True
+
+        # Priority-now inbox backlog recovery (#3351): run one bounded recovery pass
+        # only after the accepted self-A2A route is mounted and startup has started
+        # plugin surfaces. This owns pre-existing backlog recovery; newly posted now
+        # pages still use the ingest-time path in operator_api.console_handlers.
+        try:
+            _start_inbox_now_recovery_once()
+        except Exception:  # noqa: BLE001 — backlog recovery must never break boot
+            log.exception("[inbox] now-recovery startup scheduling failed")
 
         # Fleet discovery (ADR 0042 §I) — advertise this agent on mDNS so siblings on the LAN can
         # find it. Best-effort; never breaks boot. Off the loop (to_thread): sync Zeroconf

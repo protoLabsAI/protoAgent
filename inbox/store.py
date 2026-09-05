@@ -58,11 +58,35 @@ class InboxStore:
                     source       TEXT,
                     text         TEXT NOT NULL,
                     dedup_key    TEXT,
-                    delivered_at TEXT
+                    delivered_at TEXT,
+                    recovery_claimed_at TEXT,
+                    recovery_attempted_at TEXT,
+                    recovery_accepted_at TEXT,
+                    recovery_error TEXT,
+                    recovery_attempts INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
+            existing = {r["name"] for r in db.execute("PRAGMA table_info(inbox)").fetchall()}
+            if "recovery_claimed_at" not in existing:
+                db.execute("ALTER TABLE inbox ADD COLUMN recovery_claimed_at TEXT")
+            if "recovery_attempted_at" not in existing:
+                db.execute("ALTER TABLE inbox ADD COLUMN recovery_attempted_at TEXT")
+            # Durable "delivery was accepted" marker (#3351 review). Survives restart so an
+            # accepted page whose mark_delivered write failed is COMPLETED on the next
+            # recovery pass (marked delivered) rather than re-fired — the in-process claim
+            # alone could not carry that across a boot, which reset_stale_recovery_claims clears.
+            if "recovery_accepted_at" not in existing:
+                db.execute("ALTER TABLE inbox ADD COLUMN recovery_accepted_at TEXT")
+            if "recovery_error" not in existing:
+                db.execute("ALTER TABLE inbox ADD COLUMN recovery_error TEXT")
+            if "recovery_attempts" not in existing:
+                db.execute("ALTER TABLE inbox ADD COLUMN recovery_attempts INTEGER NOT NULL DEFAULT 0")
             db.execute("CREATE INDEX IF NOT EXISTS ix_inbox_undelivered ON inbox(delivered_at, priority)")
+            db.execute(
+                "CREATE INDEX IF NOT EXISTS ix_inbox_now_recovery "
+                "ON inbox(priority, delivered_at, recovery_claimed_at, recovery_attempted_at)"
+            )
             db.commit()
         finally:
             db.close()
@@ -112,20 +136,32 @@ class InboxStore:
         *,
         priority_floor: str = "next",
         include_delivered: bool = False,
+        include_recovery_claimed: bool = False,
         limit: int = 20,
     ) -> list[dict]:
         tiers = _floor_set(priority_floor)
         placeholders = ",".join("?" for _ in tiers)
         where = f"priority IN ({placeholders})"
+        params = tuple(tiers)
         if not include_delivered:
             where += " AND delivered_at IS NULL"
+            if not include_recovery_claimed:
+                # Hide a now page that recovery is holding: either an in-flight claim, OR a
+                # durable accepted-but-unmarked delivery (recovery_accepted_at). The latter
+                # was already delivered to the operator; surfacing it to a check_inbox pull
+                # would fire a duplicate Activity turn even after the ephemeral claim is
+                # cleared at startup. Recovery completes it (marks delivered) without re-firing.
+                where += (
+                    " AND NOT (priority = 'now' AND "
+                    "(recovery_claimed_at IS NOT NULL OR recovery_accepted_at IS NOT NULL))"
+                )
         db = self._connect()
         try:
             rows = db.execute(
                 f"SELECT * FROM inbox WHERE {where} "
                 "ORDER BY CASE priority WHEN 'now' THEN 0 WHEN 'next' THEN 1 ELSE 2 END, created_at ASC "
                 "LIMIT ?",
-                (*tiers, max(1, int(limit))),
+                (*params, max(1, int(limit))),
             ).fetchall()
             return [dict(r) for r in rows]
         finally:
@@ -139,7 +175,8 @@ class InboxStore:
         try:
             placeholders = ",".join("?" for _ in ids)
             cur = db.execute(
-                f"UPDATE inbox SET delivered_at = ? WHERE id IN ({placeholders}) AND delivered_at IS NULL",
+                "UPDATE inbox SET delivered_at = ?, recovery_claimed_at = NULL, recovery_error = NULL "
+                f"WHERE id IN ({placeholders}) AND delivered_at IS NULL",
                 (now.isoformat(), *ids),
             )
             db.commit()
@@ -157,8 +194,233 @@ class InboxStore:
         try:
             placeholders = ",".join("?" for _ in ids)
             cur = db.execute(
-                f"UPDATE inbox SET delivered_at = NULL WHERE id IN ({placeholders})",
+                "UPDATE inbox SET delivered_at = NULL, recovery_claimed_at = NULL, "
+                "recovery_accepted_at = NULL "
+                f"WHERE id IN ({placeholders})",
                 tuple(ids),
+            )
+            db.commit()
+            return cur.rowcount
+        finally:
+            db.close()
+
+    def reset_stale_recovery_claims(
+        self,
+        *,
+        retry_after_s: int = 3600,
+        now: datetime | None = None,
+    ) -> int:
+        """Clear prior-process in-flight recovery claims. Call ONCE at startup,
+        before the recovery pass, and nowhere else.
+
+        The claim (``recovery_claimed_at``) is an in-process lease: it stops a concurrent
+        ``check_inbox`` pull from grabbing a page while recovery awaits its Activity turn.
+        A lease is therefore only meaningful to the process that took it — so any claim
+        still present at startup may have been taken by a process that no longer exists.
+        Holding it hides the page from pull fallback (``list`` skips claimed ``now`` rows),
+        so startup releases all claims regardless of wall-clock age.
+
+        This deliberately does NOT reset ``recovery_attempts``: restart replay is bounded
+        by attempt count, not by a clock, so crashed pages are immediately recoverable
+        while permanently refused pages still stop replaying.
+        """
+        _ = retry_after_s, now
+        db = self._connect()
+        try:
+            cur = db.execute(
+                """
+                UPDATE inbox
+                SET recovery_claimed_at = NULL
+                WHERE recovery_claimed_at IS NOT NULL
+                """
+            )
+            db.commit()
+            return cur.rowcount
+        finally:
+            db.close()
+
+    def claim_now_recovery_batch(
+        self,
+        *,
+        limit: int = 8,
+        retry_after_s: int = 3600,
+        max_attempts: int = 5,
+        now: datetime | None = None,
+    ) -> list[dict]:
+        """Atomically claim a bounded batch of pre-existing pending ``now`` items for
+        boot recovery, returning the claimed rows.
+
+        Claimed rows remain undelivered until accepted delivery marks them delivered.
+        ``recovery_claimed_at`` is a bounded in-flight lease that keeps a concurrent
+        inbox consumer (a fresh now-post or a ``check_inbox`` pull) from grabbing the
+        same page while recovery awaits its Activity turn. Callers MUST hand every
+        claimed item that does NOT achieve accepted delivery back to
+        :meth:`restore_recovery_failure`, which clears the claim so pull fallback can
+        still pick it up. If the process dies before that restore/deliver handoff, a
+        later startup pass may reclaim the stale lease after ``retry_after_s``.
+
+        **Delivery is AT-LEAST-ONCE only across a genuine crash.** If the process dies
+        between the fire and any durable record, no reader can distinguish an accepted page
+        from a claim that never fired — without a two-phase commit against the Activity path
+        that is unavoidable, and this errs toward delivering a page twice rather than losing
+        it (a duplicate is one extra Activity line; a lost page is the whole of #3351, which
+        stranded 29 operator alerts for four days).
+
+        But when the process SURVIVES a ``mark_delivered`` failure it DOES know delivery was
+        accepted, and :meth:`record_recovery_mark_delivered_failure` persists that as a
+        durable ``recovery_accepted_at`` marker. Such a row stays undelivered but is hidden
+        from the ``check_inbox`` pull fallback (``list``) and is claimed here for COMPLETION
+        only: the recovery caller marks it delivered without re-firing, so a restart cannot
+        turn a recorded mark-failure into a duplicate Activity turn. A caller that needs
+        exactly-once against the unrecorded-crash case must still dedupe downstream.
+
+        Storm protection is the bounded ``recovery_attempts`` count: a page that keeps
+        refusing delivery stops after ``max_attempts`` and stays visible to the
+        ``check_inbox`` pull fallback while unclaimed. An accepted-but-unmarked page
+        (``recovery_accepted_at`` set) is exempt from that bound — completing it marks it
+        delivered and fires no turn, so it can never contribute to a replay storm and must
+        never be stranded by the attempt budget. ``retry_after_s`` is retained for
+        compatibility with callers from the first slice, but recovery no longer gates
+        crash recoverability on wall-clock age.
+
+        ``BEGIN IMMEDIATE`` takes the write lock before the candidate SELECT, so no other
+        writer can deliver one of these rows between our read and our claim UPDATE.
+        """
+        now = now or datetime.now(UTC)
+        now_iso = now.isoformat()
+        _ = retry_after_s
+        batch_limit = max(1, int(limit))
+        db = self._connect()
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            rows = db.execute(
+                """
+                SELECT * FROM inbox
+                WHERE priority = 'now'
+                  AND delivered_at IS NULL
+                  AND recovery_claimed_at IS NULL
+                  AND (recovery_accepted_at IS NOT NULL OR recovery_attempts < ?)
+                ORDER BY created_at ASC
+                LIMIT ?
+                """,
+                (max_attempts, batch_limit),
+            ).fetchall()
+            ids = [int(r["id"]) for r in rows]
+            if ids:
+                placeholders = ",".join("?" for _ in ids)
+                db.execute(
+                    "UPDATE inbox SET recovery_claimed_at = ?, recovery_attempted_at = ?, recovery_error = NULL, "
+                    "recovery_attempts = recovery_attempts + 1 "
+                    f"WHERE id IN ({placeholders}) AND delivered_at IS NULL",
+                    (now_iso, now_iso, *ids),
+                )
+            db.commit()
+            # Reflect the claim we just wrote onto the returned rows: the SELECT above is a
+            # pre-UPDATE snapshot, so its recovery_claimed_at is stale. Callers pass this
+            # exact stamp back to restore_recovery_failure(claimed_at=...) so a late failure
+            # only restores a row that STILL bears this recovery's claim.
+            claimed = []
+            for r in rows:
+                d = dict(r)
+                d["recovery_claimed_at"] = now_iso
+                d["recovery_attempted_at"] = now_iso
+                d["recovery_error"] = None
+                claimed.append(d)
+            return claimed
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+    def restore_recovery_failure(
+        self,
+        item_id: int,
+        reason: str,
+        *,
+        claimed_at: str | None = None,
+        now: datetime | None = None,
+    ) -> int:
+        """Restore a claimed-but-unfired recovery item to pending with bounded,
+        operator-readable failure evidence.
+
+        Clears the in-flight claim so ``check_inbox`` pull fallback can pick the page
+        up, while keeping ``recovery_attempted_at`` set so the next restart backs off
+        (``retry_after_s``) instead of replaying it immediately.
+        The inverse landing spot for a :meth:`claim_now_recovery_batch` claim whose
+        delivery was not accepted.
+
+        Guarded so a *late* recovery failure can never reopen a page that has since been
+        handled by someone else. The restore therefore only touches the row while it
+        is still undelivered (``delivered_at IS NULL``) and, when ``claimed_at`` is given,
+        still bears *this* recovery's claim (``recovery_claimed_at = claimed_at``). If the
+        row was delivered in the meantime this is a no-op (returns 0): a straggling
+        failure cannot un-deliver a delivered item. ``delivered_at`` is left untouched —
+        the undelivered guard makes clearing it unnecessary and never risks reopening."""
+        now = now or datetime.now(UTC)
+        detail = (reason or "delivery was not accepted").strip()[:500]
+        where = "id = ? AND delivered_at IS NULL"
+        params: list = [now.isoformat(), detail, int(item_id)]
+        if claimed_at is not None:
+            where += " AND recovery_claimed_at = ?"
+            params.append(claimed_at)
+        db = self._connect()
+        try:
+            cur = db.execute(
+                f"""
+                UPDATE inbox
+                SET recovery_claimed_at = NULL, recovery_attempted_at = ?, recovery_error = ?
+                WHERE {where}
+                """,
+                tuple(params),
+            )
+            db.commit()
+            return cur.rowcount
+        finally:
+            db.close()
+
+    def record_recovery_mark_delivered_failure(
+        self,
+        item_id: int,
+        reason: str,
+        *,
+        claimed_at: str | None = None,
+        now: datetime | None = None,
+    ) -> int:
+        """Record that accepted delivery could not be marked delivered.
+
+        Persists a **durable** ``recovery_accepted_at`` marker (kept at its earliest value
+        via COALESCE). This is the accepted-delivery state the #3351 review found missing:
+        once the Activity turn has been accepted, this marker survives restart, so the next
+        recovery pass COMPLETES the page (marks it delivered) instead of re-firing it, and
+        ``list`` hides it from the pull fallback in the meantime. The in-process
+        ``recovery_claimed_at`` alone could not carry that intent across a boot —
+        ``reset_stale_recovery_claims`` clears every claim at startup — which is exactly how
+        an accepted page became eligible for redelivery again.
+
+        ``recovery_claimed_at`` is deliberately left in place too, so the page is also hidden
+        within the current process before any restart. The row stays undelivered with
+        operator-readable evidence rather than being marked delivered against a write that
+        did not land.
+        """
+        now = now or datetime.now(UTC)
+        detail = (reason or "accepted delivery could not be marked delivered").strip()[:500]
+        where = "id = ? AND delivered_at IS NULL"
+        params: list = [now.isoformat(), now.isoformat(), detail, int(item_id)]
+        if claimed_at is not None:
+            where += " AND recovery_claimed_at = ?"
+            params.append(claimed_at)
+        db = self._connect()
+        try:
+            cur = db.execute(
+                f"""
+                UPDATE inbox
+                SET recovery_accepted_at = COALESCE(recovery_accepted_at, ?),
+                    recovery_attempted_at = ?,
+                    recovery_error = ?
+                WHERE {where}
+                """,
+                tuple(params),
             )
             db.commit()
             return cur.rowcount

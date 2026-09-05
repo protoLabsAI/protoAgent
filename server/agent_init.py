@@ -46,6 +46,13 @@ log = logging.getLogger("protoagent.server")
 # _reload_langgraph_agent, which is also lockable on its own (plugin routes
 # call it directly).
 _CONFIG_WRITE_LOCK = threading.RLock()
+_INBOX_NOW_RECOVERY_STARTED = False
+_INBOX_NOW_RECOVERY_BATCH_LIMIT = 8
+_INBOX_NOW_RECOVERY_RETRY_AFTER_S = 60 * 60
+# Bounded retries for a page that keeps refusing delivery. A COUNT, not a clock:
+# recoverability after a crash must not wait on wall-time (a stale claim is released
+# at startup), while a genuinely undeliverable page still stops replaying.
+_INBOX_NOW_RECOVERY_MAX_ATTEMPTS = 5
 
 
 def _serialized_config_write(fn):
@@ -329,7 +336,6 @@ def _init_langgraph_agent(headless_setup: bool = False):
         from inbox import StormGuard
 
         STATE.storm_guard = StormGuard()
-
     # Background subagent manager (ADR 0050) — must exist before the graph build so
     # the `task` tool's run_in_background path can reach it.
     STATE.background_mgr = _build_background_manager(STATE.graph_config)
@@ -1548,6 +1554,223 @@ def _build_inbox_store(config):
     except Exception:
         log.exception("[inbox] failed to build store at %s; inbox disabled", path)
         return None
+
+
+async def recover_pending_now_inbox_items(
+    *,
+    limit: int = _INBOX_NOW_RECOVERY_BATCH_LIMIT,
+    retry_after_s: int = _INBOX_NOW_RECOVERY_RETRY_AFTER_S,
+    max_attempts: int = _INBOX_NOW_RECOVERY_MAX_ATTEMPTS,
+    now=None,
+) -> dict[str, int]:
+    """One-shot startup recovery for pre-existing pending priority-``now`` inbox items.
+
+    The inbox store owns the bounded claim/dedup policy: ``claim_now_recovery_batch``
+    atomically claims the batch so a concurrent consumer can't double-deliver a
+    still-pending page while we await its turn. Delivery flows through
+    ``STATE.inbox_now_delivery``, the accepted self-A2A hook registered by ``server.a2a``
+    and used by newly posted ``now`` pages. An accepted item is then marked delivered;
+    an unfired item is restored to pending with actionable failure evidence so pull
+    fallback still works.
+
+    A claimed item that already carries a durable ``recovery_accepted_at`` (delivery was
+    accepted on a prior pass but its ``mark_delivered`` write failed) is COMPLETED here —
+    marked delivered without re-firing — so a restart cannot turn a recorded mark-failure
+    into a duplicate Activity turn.
+    """
+    import asyncio
+
+    store = STATE.inbox_store
+    if store is None:
+        return {"claimed": 0, "accepted": 0, "failed": 0}
+
+    # Any recovery claim still set at startup was taken by a process that is gone: the
+    # claim is an in-process lease. Left in place it hides the page from recovery AND
+    # from the pull fallback until the lease ages out, so a crash between claim and
+    # deliver used to cost an operator alert a full retry window — and a replacement
+    # process booting inside that window could not reclaim it at all.
+    try:
+        stale = await asyncio.to_thread(
+            store.reset_stale_recovery_claims,
+            retry_after_s=retry_after_s,
+            now=now,
+        )
+        if stale:
+            log.info("[inbox] now-recovery released %d stale claim(s) from a prior process", stale)
+    except Exception:  # noqa: BLE001 — reconciliation must not break boot
+        log.exception("[inbox] now-recovery could not release stale claims")
+
+    try:
+        items = await asyncio.to_thread(
+            store.claim_now_recovery_batch,
+            limit=limit,
+            retry_after_s=retry_after_s,
+            max_attempts=max_attempts,
+            now=now,
+        )
+    except Exception:  # noqa: BLE001 — recovery must not break boot
+        log.exception("[inbox] now-recovery claim failed")
+        return {"claimed": 0, "accepted": 0, "failed": 0}
+
+    accepted = 0
+    failed = 0
+    if not items:
+        return {"claimed": 0, "accepted": 0, "failed": 0}
+
+    async def _deliver(item: dict) -> bool:
+        import time
+
+        guard = getattr(STATE, "storm_guard", None)
+        if guard is not None and not guard.allow(time.monotonic()):
+            log.warning("[inbox] storm guard suppressed now-recovery for item %s", item.get("id"))
+            return False
+        delivery = getattr(STATE, "inbox_now_delivery", None)
+        if not callable(delivery):
+            log.warning(
+                "[inbox] now-recovery unavailable for item %s: delivery hook is not registered",
+                item.get("id"),
+            )
+            return False
+        return bool(await delivery(item))
+
+    async def _restore(item_id: int, reason: str, claimed_at: str | None) -> None:
+        """Best-effort: hand a claimed-but-unfired item back to pending with evidence.
+
+        ``claimed_at`` scopes the restore to THIS recovery's claim. If a concurrent
+        owner already delivered the page, the restore is a no-op: a late failure never
+        un-delivers a delivered item."""
+        try:
+            await asyncio.to_thread(
+                store.restore_recovery_failure,
+                item_id,
+                reason,
+                claimed_at=claimed_at,
+            )
+        except Exception:  # noqa: BLE001 — restore is best-effort; never break the batch
+            log.warning("[inbox] now-recovery could not restore item %s to pending (%s)", item_id, reason)
+
+    async def _record_accepted_mark_failure(item_id: int, reason: str, claimed_at: str | None) -> None:
+        """Best-effort: record accepted delivery whose delivered mark failed.
+
+        This persists a durable ``recovery_accepted_at`` marker (see
+        ``record_recovery_mark_delivered_failure``): the page stays undelivered but hidden
+        from the pull fallback, and the next recovery pass COMPLETES it (marks delivered)
+        without re-firing — so a restart can't turn this recorded mark-failure into a
+        duplicate Activity turn. The recovery claim is left in place too, hiding the page
+        within the current process before any restart.
+        """
+        try:
+            await asyncio.to_thread(
+                store.record_recovery_mark_delivered_failure,
+                item_id,
+                reason,
+                claimed_at=claimed_at,
+            )
+        except Exception:  # noqa: BLE001 — evidence is best-effort; never break the batch
+            log.warning(
+                "[inbox] now-recovery could not record mark-delivered failure for item %s",
+                item_id,
+            )
+
+    async def _restore_remaining(remaining: list[dict], reason: str) -> None:
+        """Restore EVERY still-claimed item in ``remaining`` back to pending.
+
+        ``claim_now_recovery_batch`` claimed the whole batch up front, so on
+        cancellation the current item AND all later, not-yet-processed items still
+        bear this recovery's claim. Restoring only the current one would leave the
+        rest hidden from pull fallback until the recovery lease expires. Each restore
+        is scoped to its own ``claimed_at``, so an item another owner has since
+        delivered is left untouched."""
+        for it in remaining:
+            await _restore(int(it["id"]), reason, it.get("recovery_claimed_at"))
+
+    # Every item in ``items`` was claimed by the atomic claim above, so no concurrent
+    # consumer can double-deliver it while we await its fire. Mark accepted delivery
+    # explicitly; restore the claim to pending (with evidence) otherwise.
+    for idx, item in enumerate(items):
+        item_id = int(item["id"])
+        claimed_at = item.get("recovery_claimed_at")
+        # A page carrying a durable recovery_accepted_at was already accepted-delivered on a
+        # prior pass whose mark_delivered write failed (#3351 review). Re-firing it would
+        # double-deliver, so COMPLETE it — mark delivered only, never fire again — then fall
+        # through to the shared mark path below.
+        already_accepted = bool(item.get("recovery_accepted_at"))
+        try:
+            delivered = True if already_accepted else await _deliver(item)
+        except asyncio.CancelledError:
+            # Restore the current item and every later item the batch already claimed,
+            # otherwise the un-processed tail stays reserved until the recovery lease expires.
+            await _restore_remaining(items[idx:], "delivery was cancelled")
+            raise
+        except Exception as exc:  # noqa: BLE001 — keep processing the rest of the bounded batch
+            failed += 1
+            log.exception("[inbox] now-recovery delivery raised for item %s", item_id)
+            await _restore(item_id, f"delivery raised: {exc}", claimed_at)
+            continue
+
+        if delivered:
+            try:
+                await asyncio.to_thread(store.mark_delivered, [item_id])
+            except Exception as exc:  # noqa: BLE001 — keep processing the rest of the bounded batch
+                failed += 1
+                log.exception("[inbox] now-recovery accepted item %s but could not mark delivered", item_id)
+                await _record_accepted_mark_failure(
+                    item_id,
+                    f"accepted delivery could not be marked delivered: {exc}",
+                    claimed_at,
+                )
+                continue
+            accepted += 1
+            continue
+
+        failed += 1
+        log.warning("[inbox] now-recovery not accepted for item %s; restoring pending fallback", item_id)
+        await _restore(item_id, "delivery was not accepted", claimed_at)
+
+    log.info(
+        "[inbox] now-recovery claimed=%d accepted=%d failed=%d",
+        len(items),
+        accepted,
+        failed,
+    )
+    return {"claimed": len(items), "accepted": accepted, "failed": failed}
+
+
+def _start_inbox_now_recovery_once() -> None:
+    """Start the one-shot boot recovery worker from the FastAPI startup lifecycle.
+
+    The accepted delivery path is self-A2A through the mounted FastAPI app, so this
+    must run after startup has established the app, graph, surfaces, and delivery
+    hook. This is not a scheduler: it exits after one bounded recovery pass.
+    """
+    global _INBOX_NOW_RECOVERY_STARTED
+    if _INBOX_NOW_RECOVERY_STARTED:
+        return
+    if STATE.inbox_store is None:
+        return
+    if not callable(getattr(STATE, "inbox_now_delivery", None)):
+        log.warning("[inbox] now-recovery skipped: delivery hook is not registered")
+        return
+
+    async def _run() -> None:
+        try:
+            await recover_pending_now_inbox_items()
+        except Exception:  # noqa: BLE001 — boot worker must never crash the process
+            log.exception("[inbox] now-recovery worker failed")
+
+    loop = getattr(STATE, "main_loop", None)
+    if loop is not None and loop.is_running():
+        _INBOX_NOW_RECOVERY_STARTED = True
+        loop.create_task(_run())
+        return
+
+    try:
+        running_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        log.warning("[inbox] now-recovery skipped: no running startup event loop")
+        return
+    _INBOX_NOW_RECOVERY_STARTED = True
+    running_loop.create_task(_run())
 
 
 def _on_work_terminal(job) -> None:

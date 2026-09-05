@@ -797,6 +797,7 @@ async def _operator_inbox_list(floor: str, include_delivered: bool) -> dict:
         STATE.inbox_store.list,
         priority_floor=floor or "later",
         include_delivered=include_delivered,
+        include_recovery_claimed=True,
         limit=200,
     )
     return {"items": items}
