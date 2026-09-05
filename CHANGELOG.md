@@ -15,6 +15,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.159.0] - 2026-09-05
+
+### Added
+- **Chat server-turn controls (#3092).** Render attended server-initiated turns with Stop and queued interjection affordances in their origin chat.
+
+- **Priority-now inbox backlog recovery (#3351).** Startup now performs a bounded one-shot retry of pre-existing pending `now` inbox pages through the accepted delivery hook, leaving refused items pending with recovery evidence and an attempt-count replay bound instead of marking them delivered. An accepted delivery whose `mark_delivered` write fails records a durable accepted-delivery marker, so a restart completes the page (marks it delivered) rather than re-firing a duplicate Activity turn.
+
+### Changed
+- **Fleet diagnostics joins the operator-MCP read-only profile (#3313).** The read-only, roster-only `fleet_diagnostics` tool is now a candidate of the operator-MCP `read-only` profile, so a foreign operator-MCP client (Claude Desktop, Cursor, an ACP sidecar) can be handed the member-inspection reads (recent logs + one exact task-by-id, bounded and secret-redacted). The tool's own default-off gate `tools.fleet_diagnostics.enabled` remains the sole authority on whether it binds — profile membership never enables it by itself, and no lifecycle, checkpoint, HITL, or mutation capability is exposed.
+
+### Fixed
+- **A failed Stop no longer strands a running server turn (#3092).** Cancelling an attended
+  server turn released its Stop/interjection control before the cancel RPC was awaited, so a
+  rejected cancel left the task still running with no affordance to reach it — the operator
+  could neither retry the cancel nor interject, on the very turn they had asked to stop. The
+  control (and its label) are now restored when the cancel fails; a locally-owned stream is
+  already aborted client-side and correctly stays settled.
+
+- **A background report delivered into a chat an operator is actively watching can now stop for input (#3110).**
+  A completed background job push-resumes its origin session (ADR 0070); when that briefing
+  turn called `ask_human` or `request_user_input` it was always auto-answered with the
+  autonomous "no operator available" sentinel — even when an operator was sitting right there
+  in that chat. The `background-resume` origin was being treated as conclusive proof nobody
+  was watching. Attendance is now a real, session-scoped signal taken at the server/SSE
+  boundary: the manager snapshots whether a live operator is connected to the origin session
+  at resume time and stamps the nudge `attended`, so an attended report delivery parks for the
+  human while an unattended, disconnected, or ambiguous one keeps the existing no-deadlock
+  auto-answer. Singleton and coalesced batch resumes make the same decision, presence is
+  refcounted and cleaned up on SSE disconnect, and every ambiguity fails closed to unattended.
+  The console holds that presence stream (`GET /api/chat/attend`) open for the chat on screen —
+  authenticated with the same short-lived SSE token as the event bus — so a live console session
+  actually registers as attended and the report can reach the operator. Scheduler, watch, inbox,
+  webhook, detached-background, goal-driven, and explicitly `unattended` turns are unchanged.
+
+- **Priority-now inbox pages now self-deliver through accepted A2A turns (#3351).**
+  New `now` inbox items wake the Activity thread only after the self-A2A response proves
+  the turn is owned by A2A; refused or failed fires are restored to the pending queue for the
+  existing pull fallback. The console now flags those restored pending pages conspicuously in
+  the Feed so an operator can identify and explicitly deliver or dismiss the blocked page.
+
 ## [0.158.0] - 2026-09-02
 
 ### Added

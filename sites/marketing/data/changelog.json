@@ -1,5 +1,17 @@
 [
   {
+    "version": "v0.159.0",
+    "date": "2026-09-05",
+    "changes": [
+      "Chat server-turn controls (#3092).",
+      "Priority-now inbox backlog recovery (#3351).",
+      "Fleet diagnostics joins the operator-MCP read-only profile (#3313).",
+      "A failed Stop no longer strands a running server turn (#3092).",
+      "A background report delivered into a chat an operator is actively watching can now stop for input (#3110).",
+      "Priority-now inbox pages now self-deliver through accepted A2A turns (#3351)."
+    ]
+  },
+  {
     "version": "v0.158.0",
     "date": "2026-09-02",
     "changes": [
