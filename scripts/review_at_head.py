@@ -24,9 +24,27 @@ always, on every open PR — that answers one question:
 
 It deliberately does **not** re-judge code. Verdict *quality* is the panel's own business
 and it posts its own ``QA panel`` status for that; a ``WARN`` at head satisfies this gate
-(#3297 shipped one). Only two things fail here: no verdict for the head, and an explicitly
-blocking verdict. That keeps the gate safe to mark **required** without making the advisory
-tier of ADR 0078 secretly mandatory.
+(#3297 shipped one). What fails here: no verdict for the head, an explicitly blocking
+verdict, and — once the producer contract is live (#3334) — a verdict whose review
+**coverage is not complete** or that **retains a standing block**. That keeps the gate safe
+to mark **required** without making the advisory tier of ADR 0078 secretly mandatory.
+
+**The coverage / standing-block contract (#3334).** A promotable verdict is not enough: a
+PASS emitted while a structural lane was skipped (gateway exit 4) or while the panel brief
+was unreadable has *not actually reviewed the head*, and a PASS can be posted while a
+standing finding remains unresolved. So the panel stamps two further **producer-owned**
+facts as their own marker attributes — ``coverage`` (``complete`` vs. incomplete/unavailable)
+and ``standing_block`` (``false`` vs. an unresolved block) — and this gate consumes them
+**fail-closed**: a head merges only when coverage is explicitly complete *and* no standing
+block remains. These are independent attributes; we never infer either from the review prose
+(that would re-judge the code, which this script does not do) and we do not fold them into a
+widened verdict enum. Coverage and the standing block get their own status reason so a red
+check says *which* one blocked. Missing / unknown attributes are non-satisfying, but only
+after ``REQUIRE_COVERAGE_CONTRACT`` is turned on — the emitter and approve-on-green promoter
+ship the attributes FIRST (they are outside this repo), and enforcing fail-closed against
+today's legacy markers, which carry neither attribute, would red every open PR. An
+*explicit* attribute is always honoured regardless of the flag; the flag only governs how an
+*absent* attribute is treated.
 
 Escape hatch: the ``skip-review-gate`` label passes the check with the reason recorded in
 the status description — the same shape as ``skip-changelog`` and ``gate-exempt``. It
@@ -63,6 +81,29 @@ SKIP_LABEL = "skip-review-gate"
 # advisory by design (ADR 0078) and #3297 shipped one. Kept as a set so a new blocking
 # verdict name only has to be added here.
 BLOCKING_VERDICTS = frozenset({"FAIL", "BLOCK", "REJECT"})
+
+# The two producer-owned facts of the #3334 contract, carried as their own marker attributes
+# alongside the verdict — NOT inferred from prose and NOT folded into the verdict enum.
+COVERAGE_ATTR = "coverage"
+STANDING_ATTR = "standing_block"
+# The only attribute values that satisfy the gate (compared case-insensitively). Anything
+# else — incomplete/unavailable coverage, a retained block, or an unknown/malformed value —
+# is non-satisfying and fails closed.
+COVERAGE_COMPLETE = "complete"
+STANDING_CLEAR = "false"
+
+# Rollout gate for the contract above. The QA-panel emitter and approve-on-green promoter are
+# outside this repo and must ship authoritative `coverage`/`standing_block` attributes FIRST;
+# until then every legacy marker carries neither, so enforcing fail-closed on their ABSENCE
+# would red every open PR. Hence this stays OFF by default and is flipped (a repo variable
+# wired in the workflow) once the producer rollout is live. An attribute that IS present is
+# always honoured regardless of this flag — it only decides how a MISSING attribute is read.
+REQUIRE_COVERAGE_CONTRACT = os.environ.get("REQUIRE_COVERAGE_CONTRACT", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 
 @dataclass(frozen=True)
@@ -109,8 +150,46 @@ def verdict_for_head(reviews: list[dict], head_sha: str) -> dict[str, str] | Non
     return match
 
 
-def decide(reviews: list[dict], head_sha: str, labels: list[str]) -> Decision:
-    """Whether this head may merge, given the reviews on it. Pure — the tested seam."""
+def _contract_failure(attrs: dict[str, str], head_sha: str) -> str | None:
+    """The reason the coverage/standing-block contract (#3334) is not satisfied, else None.
+
+    Coverage completeness and standing-block clearance are INDEPENDENT producer-owned facts:
+    each is checked on its own attribute, and each yields its own status reason so a red check
+    says which one blocked. A missing or unknown value is non-satisfying (fail closed) — the
+    caller only reaches here once the attribute is present or the rollout flag requires it.
+    The standing block is checked first because it is a do-not-merge in its own right, holding
+    even when coverage is complete and the verdict is PASS.
+    """
+    head = head_sha[:12]
+
+    standing = attrs.get(STANDING_ATTR)
+    if standing is None:
+        return f"panel marker for {head} carries no {STANDING_ATTR} — cannot confirm the block is cleared"
+    if standing.strip().lower() != STANDING_CLEAR:
+        return f"QA panel retains a standing block ({STANDING_ATTR}={standing}) at {head}"
+
+    coverage = attrs.get(COVERAGE_ATTR)
+    if coverage is None:
+        return f"panel marker for {head} carries no {COVERAGE_ATTR} — review coverage is unconfirmed"
+    if coverage.strip().lower() != COVERAGE_COMPLETE:
+        return f"QA panel review coverage is {coverage} (not complete) at {head}"
+
+    return None
+
+
+def decide(
+    reviews: list[dict],
+    head_sha: str,
+    labels: list[str],
+    *,
+    require_contract: bool = False,
+) -> Decision:
+    """Whether this head may merge, given the reviews on it. Pure — the tested seam.
+
+    ``require_contract`` is the #3334 rollout gate: when true, a marker MISSING the
+    coverage/standing-block attributes fails closed. An attribute that is present is always
+    enforced regardless of the flag.
+    """
     if SKIP_LABEL in labels:
         return Decision("success", f"review gate waived by the {SKIP_LABEL} label")
 
@@ -135,6 +214,18 @@ def decide(reviews: list[dict], head_sha: str, labels: list[str]) -> Decision:
     verdict = attrs.get("verdict", "?").upper()
     if verdict in BLOCKING_VERDICTS:
         return Decision("failure", f"QA panel returned {verdict} for {head_sha[:12]}")
+
+    # Coverage completeness and standing-block clearance (#3334). Enforce when the marker
+    # actually carries either attribute (an explicit producer fact is always honoured) or when
+    # the rollout flag requires the contract (absent attributes then fail closed). Note: CI
+    # status is not an input to this function, so a green build can never rescue a failure
+    # here, and the check reads only marker attributes, never the review prose.
+    contract_present = COVERAGE_ATTR in attrs or STANDING_ATTR in attrs
+    if require_contract or contract_present:
+        reason = _contract_failure(attrs, head_sha)
+        if reason is not None:
+            return Decision("failure", reason)
+
     return Decision("success", f"{verdict} at {head_sha[:12]}")
 
 
@@ -178,7 +269,7 @@ def _post_status(sha: str, decision: Decision, pr: int) -> None:
 
 
 def check_pr(pr: int, head_sha: str, labels: list[str], *, dry_run: bool) -> Decision:
-    decision = decide(_reviews(pr), head_sha, labels)
+    decision = decide(_reviews(pr), head_sha, labels, require_contract=REQUIRE_COVERAGE_CONTRACT)
     if dry_run:
         print(f"[dry-run] #{pr} {head_sha[:12]} -> {decision.state}: {decision.description}")
     else:
