@@ -119,12 +119,25 @@ room:
   grows. Rounds 2..N re-run exactly those participants, in the order you wrote them — so
   each one now sees, through its catch-up, what the others just said. Nobody is ever
   dispatched only to decide they had nothing to say.
-- **`pass` means silence.** A reply that is empty, or is just `pass` / `(pass)` / `pass.`,
-  is not written to the room and does not count as speaking. A participant with nothing
-  to add can say so without either polluting the transcript or keeping the room alive.
-  (`pass` *inside* a sentence — "I'd pass on that approach" — is an answer.)
+- **Participants are *told* they can pass.** Above 1 round, the prompt an addressee
+  receives ends with the offer: *"If you have nothing to add, reply with exactly `pass`
+  and nothing else."* That instruction is the whole mechanism — a model that was never
+  invited to decline does not decline, and every room would then run to its cap. At
+  `max_rounds: 1` the offer is not sent at all, which is why single-round prompts are
+  unchanged.
+- **`pass` means silence.** A reply that is empty, or is just `pass` — bare, in parens,
+  with a full stop, in backticks, quoted or emphasised — is not written to the room and
+  does not count as speaking. A participant with nothing to add can say so without either
+  polluting the transcript or keeping the room alive. (`pass` *inside* a sentence — "I'd
+  pass on that approach" — is an answer, and so is a qualified one: *"Pass, but note the
+  auth change"* carries something the room needs, so it is recorded and it keeps the room
+  going.)
 - **A round in which nobody spoke settles the room.** It stops there. This is the normal,
   good ending, and it is deliberately quiet: no note, nothing added to the reply.
+- **A participant with nothing new to read is told so.** If everyone who spoke after it
+  was silent, its catch-up is empty; instead of re-sending the original question as if
+  nothing had happened — which gets you the same answer twice, word for word — the prompt
+  says *"Nothing new has been said since you last spoke"*, and it can pass.
 - **The cap is the backstop, and it announces itself.** If `room.max_rounds` rounds run
   and the conversation still hasn't settled, the reply says so:
 
@@ -136,8 +149,28 @@ room:
   it once per round is how a bounded room turns into N times the timeout you wait
   through.
 
-At `max_rounds: 1` — the default — none of this is observable: no pass handling, no
-notes, exactly the single pass rooms have always made.
+At `max_rounds: 1` — the default — none of this is observable: no pass offer in the
+prompt, no pass handling, no notes, exactly the single pass rooms have always made.
+
+### When to raise it
+
+Raise it when you want the participants to **react to each other**, not just answer you:
+a design disagreement between two agents, a review where one raises something the other
+should respond to, a plan two specialists have to reconcile. One round cannot do any of
+those — the second addressee sees the first's answer, but the first never sees a word
+back.
+
+Leave it at 1 when you are fanning the *same* question out to several participants and
+intend to read the answers yourself. A second round there costs dispatches and buys you
+agreement noise.
+
+The cost is easy to reason about, which is the point of bounding rounds rather than time:
+**at most `max_rounds` × (participants) dispatches**, minus everyone who passes, and the
+room stops the moment a whole round is silent. In practice a 3-round cap on a two-agent
+disagreement usually settles in 2. Start at `2` or `3`. If you never see the cap note,
+your rooms are ending by settling — which is the healthy case, and the cap is doing its
+job as a backstop; if you see it every time, the conversation needs more room than you
+gave it (or the participants are talking past each other, which more rounds won't fix).
 
 ::: warning Rounds are bounded; time is not
 There is deliberately **no wall-clock cap** on a round. A turn-length limit declares work

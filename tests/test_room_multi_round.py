@@ -314,3 +314,98 @@ async def test_the_configured_window_reaches_the_dispatch(monkeypatch):
 
     query = reg.calls[0]["query"]
     assert "[operator] m19" in query and "[operator] m10" not in query
+
+
+# --- the pass offer, and a room that must NOT settle ---------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_offer_to_pass_reaches_the_delegate_only_above_one_round(monkeypatch):
+    """The host lever (`RoundPlan.drop_silence`) has to reach the PROMPT, not just the
+    outcome. If it stops at the outcome the room honours a token nobody was asked for,
+    every round is full of prose, and the cap does all the stopping."""
+    reg = _Reg(names=("proto",), scripts={"proto": ["a", "pass"]})
+    _wire(monkeypatch, reg, max_rounds=2)
+    await sc._at_delegate_exchange("@proto status?", "p1")
+    assert "reply with exactly `pass`" in reg.calls[0]["query"]
+
+    single = _Reg(names=("proto",), scripts={"proto": ["a"]})
+    _wire(monkeypatch, single, max_rounds=1)
+    await sc._at_delegate_exchange("@proto status?", "p2")
+    assert "pass" not in single.calls[0]["query"].lower()
+
+
+@pytest.mark.asyncio
+async def test_a_qualified_pass_is_an_answer_and_keeps_the_room_going(monkeypatch):
+    """"Pass — but note X" is not silence. It carries the note the room needs, so it is
+    recorded, attributed, and it does NOT settle the room: someone still has to answer
+    it. The narrow token check is what makes that true."""
+    graph = _Graph()
+    reg = _Reg(scripts={"proto": ["Pass — but note the auth change landed", "pass"], "reviewer": ["pass", "pass"]})
+    _wire(monkeypatch, reg, max_rounds=3, graph=graph)
+
+    reply, outcomes = await sc._at_delegate_exchange("@proto @reviewer status?", "p3")
+
+    assert outcomes[0]["silent"] is False
+    assert "note the auth change landed" in _room_texts(graph)[1]
+    assert "note the auth change landed" in reply
+    # Round 1 spoke, so round 2 runs; round 2 is all-silent and settles it there.
+    assert [c["name"] for c in reg.calls] == ["proto", "reviewer", "proto", "reviewer"]
+    assert "cap" not in reply
+
+
+# --- the bounds are read through one guarded place -----------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_hand_edited_junk_cap_falls_back_instead_of_500ing(monkeypatch):
+    """`room.max_rounds: lots` is a YAML edit away, and this path runs inside an
+    operator's `@`. A bare `int()` on it would surface as a failed chat turn, not as a
+    config warning — so the cap is read through `mention_op.round_cap`."""
+    reg = _Reg(names=("proto",), scripts={"proto": ["line 40"]})
+    cfg = _wire(monkeypatch, reg, max_rounds=1)
+    cfg.room_max_rounds = "lots"
+
+    reply, _ = await sc._at_delegate_exchange("@proto status?", "p4")
+    assert reply == "line 40" and len(reg.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_zeroed_cap_is_one_round_not_zero(monkeypatch):
+    reg = _Reg(names=("proto",), scripts={"proto": ["line 40"]})
+    cfg = _wire(monkeypatch, reg, max_rounds=1)
+    cfg.room_max_rounds = 0
+
+    reply, _ = await sc._at_delegate_exchange("@proto status?", "p5")
+    assert reply == "line 40" and len(reg.calls) == 1
+
+
+# --- the #3126 fall-through still holds with rounds on -------------------------
+
+
+@pytest.mark.asyncio
+async def test_an_all_unreachable_room_still_falls_through_to_the_lead(monkeypatch):
+    """#3126: when EVERY addressed member is a stopped local one, the `@` returns None so
+    the lead agent's consent/start path can offer to start it. The check reads round ONE
+    (the only round that dispatches every target) — it used to read a length equality
+    that merely happened to mean the same thing."""
+    from plugins.delegates.adapters import KIND_UNREACHABLE
+
+    class _Unreachable(RuntimeError):
+        kind = KIND_UNREACHABLE
+
+    class _Down(_Reg):
+        async def dispatch(self, name, query, *, conversation_key=None, permissions=None):
+            self.calls.append({"name": name, "query": query})
+            raise _Unreachable("connection refused")
+
+    reg = _Down(names=("proto", "reviewer"))
+    _wire(monkeypatch, reg, max_rounds=3)
+    monkeypatch.setattr(
+        "plugins.delegates.autostart.startable_member", lambda url: {"name": "member"}, raising=False
+    )
+
+    reply, outcomes = await sc._at_delegate_exchange("@proto @reviewer status?", "p6")
+
+    assert reply is None and outcomes is None
+    assert len(reg.calls) == 2  # exhausted at round one — a dead delegate is not retried

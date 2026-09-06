@@ -1296,8 +1296,10 @@ async def _at_delegate_exchange(
     times it goes round. At the default ``1`` this loop is exactly the old single pass.
     Above 1 the same cast re-runs in the same order — each participant now catching up
     on what the others just said — until a round in which nobody speaks (the settle) or
-    the cap. A participant with nothing to add replies with a bare ``pass``; that is
-    silence, so it neither lands on the thread nor keeps the room alive. A target whose
+    the cap. A participant with nothing to add replies with a bare ``pass`` — which the
+    prompt explicitly offers it, because a participant that was never told it may decline
+    never does — and that is silence: it neither lands on the thread nor keeps the room
+    alive, and an all-silent round is how a room ends early. A target whose
     address FAILED is dropped from later rounds rather than retried into the operator's
     wait. Nothing here reads a delegate's reply for intent (#3067): who speaks next comes
     from the operator's addressed set and the room's structure, never from what was said.
@@ -1329,20 +1331,20 @@ async def _at_delegate_exchange(
         listing = " ".join(f"@{n}" for n in targets)
         return f"Usage: `{listing} <message>` — add a message to send.", None
 
-    from graph.mention_op import catchup_caps, run_mention
+    from graph.mention_op import catchup_caps, round_cap, run_mention
     from graph.room_rounds import plan_round
 
     cfg = getattr(STATE, "graph_config", None)
-    max_rounds = max(1, int(getattr(cfg, "room_max_rounds", 1) or 1))
+    max_rounds = round_cap(cfg)
     caps = catchup_caps(cfg)
 
     tid = _resolve_thread_id(request_metadata, session_id)
-    outcomes: list[dict] = []
+    # `rounds` is the whole state the driver needs — one list per round, in order. The
+    # flat `outcomes` the caller wants is derived from it at the end rather than kept in
+    # parallel, so there is only one place a round can be recorded.
     rounds: list[list[dict]] = []
-    while True:
-        plan = plan_round(targets, rounds, max_rounds=max_rounds)
-        if plan.done:
-            break
+    plan = plan_round(targets, rounds, max_rounds=max_rounds)
+    while not plan.done:
         this_round: list[dict] = []
         for name in plan.speakers:
             outcome = await run_mention(
@@ -1352,18 +1354,19 @@ async def _at_delegate_exchange(
                 name,
                 rest,
                 session_id=session_id,
-                # Rounds 2..N re-address the SAME message; re-writing the operator's own
-                # envelope each round would read, in everyone's catch-up, as the operator
-                # repeating themselves. Silence-dropping rides the same switch as the cap
-                # itself, so `room.max_rounds: 1` keeps today's verbatim recording.
-                record_address=plan.round_index == 1,
-                drop_silence=max_rounds > 1,
+                # Both levers come off the PLAN, not from re-deriving them here: they are
+                # the room's policy (`RoundPlan.record_address` / `.drop_silence`), and
+                # `drop_silence` in particular is what makes `room.max_rounds: 1` byte-
+                # identical to the single pass this used to be.
+                record_address=plan.record_address,
+                drop_silence=plan.drop_silence,
                 **caps,
             )
             outcome["round"] = plan.round_index
             this_round.append(outcome)
-            outcomes.append(outcome)
         rounds.append(this_round)
+        plan = plan_round(targets, rounds, max_rounds=max_rounds)
+    outcomes: list[dict] = [outcome for one_round in rounds for outcome in one_round]
 
     # A stopped member can already be started, with consent, by the lead agent's
     # delegate_to tool (#3126). Direct @ dispatch runs outside the graph and therefore
@@ -1403,35 +1406,19 @@ async def _at_delegate_exchange(
 def _with_room_notes(body: str, outcomes: list[dict], plan) -> str:
     """The room's reply plus the bounds it hit, if any — otherwise ``body`` untouched.
 
-    Two bounds are worth an operator's attention, and neither had ANY surface before:
+    Two bounds are worth an operator's attention and neither had ANY surface before: a
+    catch-up window that truncated (``catchup_note``) and the round cap ending the room
+    instead of a settle (``cap_note``, silent while ``room.max_rounds`` is 1 — i.e.
+    always, until an operator opts in). Both notes are the ROOM's copy about the room's
+    own bounds, so both live in ``graph/room_rounds.py``; this is only the composition.
 
-    * a catch-up window that truncated. ``dispatch_into_room`` has always returned
-      ``truncated``, and it has always gone only into the delegate's own preface
-      ("earlier messages omitted") — so the operator saw a confident answer given on a
-      partial view of the room and had no way to know. The workaround for a too-small
-      window is to re-mention, which fragments the conversation further; saying which
-      knob to raise is the point.
-    * the round cap ending the room instead of a settle (``cap_note``; silent when
-      ``room.max_rounds`` is 1, i.e. always, until an operator opts in).
-
-    Both are appended prose on the existing reply, deliberately: the room has no chrome
+    They are appended prose on the existing reply, deliberately: the room has no chrome
     of its own, and inventing a frame the console doesn't render would be a bound the
     operator still can't see.
     """
-    from graph.room_rounds import cap_note
+    from graph.room_rounds import cap_note, catchup_note
 
-    notes: list[str] = []
-    clipped = list(dict.fromkeys(str(o.get("author") or "") for o in outcomes if o.get("truncated")))
-    if clipped:
-        who = ", ".join(f"@{name}" for name in clipped)
-        notes.append(
-            f"_Older messages were left out of the catch-up for {who} — the room since they "
-            f"last spoke is longer than the window. Raise `room.catchup_max_messages` / "
-            f"`room.catchup_max_chars` to widen it._"
-        )
-    note = cap_note(plan)
-    if note:
-        notes.append(note)
+    notes = [note for note in (catchup_note(outcomes), cap_note(plan)) if note]
     return "\n\n".join([body, *notes]) if notes else body
 
 
@@ -1441,13 +1428,22 @@ def _all_mentions_are_startable_unreachable(reg, targets: list[str], outcomes: l
     Classification comes from the adapter exception, while member identity comes from
     the fleet roster. Both are required: an HTTP/timeout failure must not restart a live
     process, and an unreachable remote peer is not ours to spawn.
+
+    Judged on ROUND ONE only, and explicitly so. Round one is the only round that
+    dispatches every target (later rounds drop the failed and can be a subset), and "the
+    whole addressed set was unreachable at the first attempt" is the question the #3126
+    fall-through actually asks. Reading the flat list instead happens to give the same
+    answer today — an all-failed round one exhausts the room immediately, so there is no
+    round two — but that is an invariant of the driver, not of this loop, and a future
+    change to the exhaustion rule would break the fall-through silently.
     """
-    if not outcomes or len(outcomes) != len(targets):
+    first_round = [outcome for outcome in outcomes if (outcome.get("round") or 1) == 1]
+    if not first_round or len(first_round) != len(targets):
         return False
     from plugins.delegates.adapters import KIND_UNREACHABLE
     from plugins.delegates.autostart import startable_member
 
-    for name, outcome in zip(targets, outcomes, strict=True):
+    for name, outcome in zip(targets, first_round, strict=True):
         if outcome.get("ok") or outcome.get("error_kind") != KIND_UNREACHABLE:
             return False
         delegate = reg.get(name)

@@ -14,6 +14,7 @@ from graph.room_rounds import (
     EXHAUSTED,
     SETTLED,
     cap_note,
+    catchup_note,
     is_silence,
     plan_round,
     spoke,
@@ -33,7 +34,27 @@ def _failed(author: str, error: str = "connection refused") -> dict:
 
 @pytest.mark.parametrize(
     "text",
-    ["", "   ", "\n", "pass", "PASS", "Pass", "(pass)", "pass.", " (Pass) ", "*(pass)*", "_pass_", "pass!"],
+    [
+        "",
+        "   ",
+        "\n",
+        "pass",
+        "PASS",
+        "Pass",
+        "(pass)",
+        "pass.",
+        " (Pass) ",
+        "*(pass)*",
+        "_pass_",
+        "pass!",
+        # The prompt asks for the token as `pass`, in backticks — so a model echoing
+        # that formatting is the COMMON reply shape, not an exotic one.
+        "`pass`",
+        "**`pass`**",
+        '"pass"',
+        "'pass'",
+        "\u201cpass\u201d",
+    ],
 )
 def test_these_are_silence(text):
     assert is_silence(text) is True
@@ -48,6 +69,10 @@ def test_these_are_silence(text):
         "No — pass.",
         "compass",
         "pass, but only because Ana already covered it",
+        # The reviewer's question: a QUALIFIED pass. It carries the note, so it is an
+        # answer — recorded in the room, and it keeps the room alive for a reply to it.
+        "Pass \u2014 but note the auth change landed",
+        "pass for now; ping me when the build is green",
     ],
 )
 def test_these_are_answers_not_silence(text):
@@ -225,3 +250,46 @@ def test_single_round_mode_never_announces_a_cap():
 
 def test_an_open_plan_has_no_note():
     assert cap_note(plan_round(["proto"], [], max_rounds=3)) == ""
+
+
+# --- the two levers a host reads off the plan ---------------------------------
+
+
+def test_the_first_round_records_the_operator_address_and_later_ones_do_not():
+    """Rounds 2..N re-address the SAME message. Writing that envelope again would read,
+    in everyone's catch-up, as the operator repeating themselves."""
+    first = plan_round(["x", "y"], [], max_rounds=3)
+    second = plan_round(["x", "y"], [[_ok("x"), _ok("y")]], max_rounds=3)
+    assert (first.round_index, first.record_address) == (1, True)
+    assert (second.round_index, second.record_address) == (2, False)
+
+
+def test_silence_is_only_honored_when_there_is_a_next_round_to_decline():
+    """`drop_silence` off at the default cap is what keeps a single-round `@` byte-
+    identical: a delegate that literally replies "pass" is quoted like any other answer."""
+    assert plan_round(["x"], [], max_rounds=1).drop_silence is False
+    assert plan_round(["x"], [], max_rounds=2).drop_silence is True
+
+
+def test_the_levers_travel_with_the_plan_so_a_second_host_cannot_drift():
+    """The point of hanging them off `RoundPlan`: a console room view or a headless
+    driver gets the single-round invariant by construction, not by re-deriving it."""
+    plan = plan_round(["x"], [], max_rounds=1)
+    assert (plan.record_address, plan.drop_silence) == (True, False)
+
+
+def test_a_truncated_catchup_names_who_was_clipped_and_the_knob():
+    note = catchup_note([_ok("proto") | {"truncated": True}, _ok("reviewer")])
+    assert "@proto" in note and "@reviewer" not in note
+    assert "room.catchup_max_messages" in note and "room.catchup_max_chars" in note
+
+
+def test_a_participant_clipped_in_several_rounds_is_named_once():
+    note = catchup_note([_ok("proto") | {"truncated": True}, _ok("proto") | {"truncated": True}])
+    assert note.count("@proto") == 1
+
+
+def test_an_untruncated_room_gets_no_catchup_note():
+    """Which is what keeps an ordinary single-round address unchanged."""
+    assert catchup_note([_ok("proto"), _ok("reviewer")]) == ""
+    assert catchup_note([]) == ""

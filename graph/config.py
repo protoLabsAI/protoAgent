@@ -2016,6 +2016,11 @@ class LangGraphConfig:
         secret_tracing_public_key = secrets.get("tracing", {}).get("public_key")
         secret_tracing_secret_key = secrets.get("tracing", {}).get("secret_key")
         publish = data.get("publish", {}) or {}
+        # `or {}`: an operator who comments out every knob under `room:` leaves the key
+        # parsed as None, and the reads below would raise on it (same reason as `soul` /
+        # `fleet` above). The docs page hands people a `room:` block to edit, so this is
+        # a likely edit, not a theoretical one.
+        room = data.get("room", {}) or {}
 
         config = cls(
             model_provider=model.get("provider", cls.model_provider),
@@ -2092,11 +2097,9 @@ class LangGraphConfig:
             watch_keep_terminal_h=float(
                 data.get("watches", {}).get("keep_terminal_h", cls.watch_keep_terminal_h) or 0
             ),
-            room_catchup_max_messages=data.get("room", {}).get(
-                "catchup_max_messages", cls.room_catchup_max_messages
-            ),
-            room_catchup_max_chars=data.get("room", {}).get("catchup_max_chars", cls.room_catchup_max_chars),
-            room_max_rounds=data.get("room", {}).get("max_rounds", cls.room_max_rounds),
+            room_catchup_max_messages=room.get("catchup_max_messages", cls.room_catchup_max_messages),
+            room_catchup_max_chars=room.get("catchup_max_chars", cls.room_catchup_max_chars),
+            room_max_rounds=room.get("max_rounds", cls.room_max_rounds),
             soul_self_edit_enabled=soul.get("self_edit_enabled", cls.soul_self_edit_enabled),
             self_improvement_enabled=bool(
                 self_improvement.get("enabled", cls.self_improvement_enabled)

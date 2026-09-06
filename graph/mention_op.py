@@ -87,6 +87,17 @@ def catchup_caps(config=None) -> dict:
     }
 
 
+def round_cap(config=None) -> int:
+    """``room.max_rounds`` as a positive int — ``1`` (one pass, the shipped behavior) else.
+
+    ``catchup_caps``' sibling, and for the same reason: the host reads the round bound
+    through one guarded place, so a missing config, an old host, or a hand-edited
+    ``max_rounds: lots`` degrades to a single round instead of raising ``ValueError``
+    halfway through an operator's `@`.
+    """
+    return _positive(getattr(config, "room_max_rounds", None), 1)
+
+
 def _room_meta(message) -> dict:
     """The ``{"from", "to"}`` authorship stamp on a room message, or ``{}``."""
     kwargs = getattr(message, "additional_kwargs", None)
@@ -177,23 +188,57 @@ def catchup_window(
     return window, truncated
 
 
-def _prompt(window: list[tuple[str, str]], truncated: bool, target: str, message: str) -> str:
+# The one thing a participant has to be TOLD, or the settle can never happen: how to say
+# "nothing to add". `room_rounds.is_silence` recognizes a bare `pass`, but a model that
+# was never asked for one does not emit one — every multi-round room would run to its cap
+# and announce it, and the announcement would be a lie about the conversation. Rendered
+# only when silence is actually honored (``drop_silence``), so a single-round address
+# still sends the byte-identical prompt it always has.
+_PASS_OFFER = (
+    "If you have nothing to add, reply with exactly `pass` and nothing else — a pass is "
+    "not recorded in the room, and once nobody has anything left to say the conversation "
+    "ends there. Anything else you send is an answer, so say `pass` rather than saying "
+    "that you have nothing to say."
+)
+
+
+def _prompt(
+    window: list[tuple[str, str]],
+    truncated: bool,
+    target: str,
+    message: str,
+    *,
+    may_pass: bool = False,
+) -> str:
     """What the addressed delegate actually receives.
 
     Self-contained by construction — same contract as ``delegate_to``'s ``query``: the
     delegate is not in our conversation, so the room it needs is spelled out rather than
     assumed.
+
+    ``may_pass`` (the driver's ``drop_silence``) adds the one instruction a participant
+    cannot infer — that declining is a legal move and how to spell it. It also forces a
+    preface for an EMPTY window, which is otherwise a real multi-round wart: everyone who
+    spoke after this participant was silent, so there is nothing new to show it, and
+    re-sending the bare original message would have it answer the same question a second
+    time in identical words. Told that nothing new was said, it can pass instead.
     """
-    if not window:
+    if not window and not may_pass:
         return message
-    lines = "\n".join(f"[{author}] {text}" for author, text in window)
-    preface = (
-        f"You are taking part in a group chat. Here is what has been said since you last spoke"
-        f"{' (earlier messages omitted)' if truncated else ''}:\n\n"
-        f"{lines}\n\n"
-        f"You have been addressed directly as @{target}. Reply to this message:\n\n"
-    )
-    return preface + message
+    if window:
+        lines = "\n".join(f"[{author}] {text}" for author, text in window)
+        heard = (
+            f"You are taking part in a group chat. Here is what has been said since you last spoke"
+            f"{' (earlier messages omitted)' if truncated else ''}:\n\n"
+            f"{lines}\n\n"
+        )
+    else:
+        heard = "You are taking part in a group chat. Nothing new has been said since you last spoke.\n\n"
+    if may_pass:
+        ask = f"You have been addressed directly as @{target}. {_PASS_OFFER}\n\nOtherwise, reply to this message:\n\n"
+    else:
+        ask = f"You have been addressed directly as @{target}. Reply to this message:\n\n"
+    return heard + ask + message
 
 
 def _attr(value: str) -> str:
@@ -334,9 +379,11 @@ async def dispatch_into_room(
     * ``drop_silence`` — treat an empty reply or a bare ``pass`` token as SILENCE:
       flagged ``silent`` in the outcome and omitted from the thread rather than written
       as a message. That is what lets a participant with nothing to add decline without
-      polluting the transcript. Off by default, so a single-round `@` still records a
-      literal "pass" reply exactly as it always has — and ``silent`` stays False, which
-      is what every consumer keys off.
+      polluting the transcript. It also OFFERS the pass in the prompt (``_PASS_OFFER``),
+      because a participant that was never told it may decline never does. Off by
+      default, so a single-round `@` sends the same prompt it always has and still
+      records a literal "pass" reply verbatim — and ``silent`` stays False, which is what
+      every consumer keys off.
     """
     if registry is None:
         return {
@@ -382,7 +429,7 @@ async def dispatch_into_room(
         reply = str(
             await registry.dispatch(
                 target,
-                _prompt(window, truncated, target, message),
+                _prompt(window, truncated, target, message, may_pass=drop_silence),
                 **dispatch_kwargs,
             )
             or ""
