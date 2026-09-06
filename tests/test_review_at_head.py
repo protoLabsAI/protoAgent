@@ -31,11 +31,30 @@ REVIEWED = "373d27593952480244cf203392d5a8b5e0ef0087"
 MERGED = "7721e5b974c17ae5b7fb4f4a003f9d8fb8103447"
 
 
-def review(head, verdict="PASS", *, login=rah.REVIEWER_LOGIN, promoted="false", body=None):
-    """A review as the GitHub API returns it, carrying the panel's real marker shape."""
+def review(
+    head,
+    verdict="PASS",
+    *,
+    login=rah.REVIEWER_LOGIN,
+    promoted="false",
+    coverage=None,
+    standing_block=None,
+    body=None,
+):
+    """A review as the GitHub API returns it, carrying the panel's real marker shape.
+
+    ``coverage`` / ``standing_block`` are the #3334 contract attributes: omitted (``None``)
+    they are not stamped at all, reproducing today's legacy marker exactly, so the pre-rollout
+    cases and the older tests share one builder.
+    """
     if body is None:
+        attrs = f"head={head} verdict={verdict} promoted={promoted}"
+        if coverage is not None:
+            attrs += f" coverage={coverage}"
+        if standing_block is not None:
+            attrs += f" standing_block={standing_block}"
         body = (
-            f"<!-- protoagent-qa-review head={head} verdict={verdict} promoted={promoted} -->\n"
+            f"<!-- protoagent-qa-review {attrs} -->\n"
             "## QA panel review\n\nsome prose\n"
         )
     return {"user": {"login": login}, "body": body}
@@ -154,3 +173,192 @@ def test_the_description_stays_within_githubs_140_char_status_limit():
     # generated text should be comfortably short on its own for the common cases.
     many = [review(f"{i:040x}") for i in range(40)]
     assert len(rah.decide(many, MERGED, []).description) < 400  # truncation handles the rest
+
+
+# ── the coverage / standing-block contract (#3334) ─────────────────────────────
+#
+# Two INDEPENDENT producer-owned facts: `coverage` completeness and whether a `standing_block`
+# remains. A head merges only when coverage is explicitly complete AND no standing block is
+# retained. Missing/unknown attributes fail closed — but only once the producer rollout is on
+# (`require_contract=True`); an attribute that IS present is honoured either way.
+
+
+def test_complete_coverage_and_no_standing_block_passes_as_a_reviewed_head():
+    # r1: PASS with an explicit clean contract merges exactly as a valid reviewed head.
+    decision = rah.decide(
+        [review(MERGED, "PASS", coverage="complete", standing_block="false")],
+        MERGED,
+        [],
+        require_contract=True,
+    )
+    assert decision.ok and "PASS" in decision.description
+
+
+def test_WARN_with_a_clean_contract_still_passes():
+    # WARN stays advisory (ADR 0078) even under the contract, provided the contract is clean.
+    decision = rah.decide(
+        [review(MERGED, "WARN", coverage="complete", standing_block="false")],
+        MERGED,
+        [],
+        require_contract=True,
+    )
+    assert decision.ok and "WARN" in decision.description
+
+
+def test_a_clean_contract_is_honoured_case_insensitively():
+    decision = rah.decide(
+        [review(MERGED, "PASS", coverage="Complete", standing_block="FALSE")],
+        MERGED,
+        [],
+        require_contract=True,
+    )
+    assert decision.ok
+
+
+def test_incomplete_coverage_fails_and_names_coverage_as_the_reason():
+    # r2: incomplete coverage is a non-success that identifies coverage.
+    decision = rah.decide(
+        [review(MERGED, "PASS", coverage="incomplete", standing_block="false")],
+        MERGED,
+        [],
+        require_contract=True,
+    )
+    assert not decision.ok
+    assert "coverage" in decision.description.lower()
+
+
+def test_incomplete_coverage_is_not_rescued_by_a_confident_PASS_prose_body():
+    # r2 + r6: the verdict is PASS and the prose insists everything is done, but the machine
+    # attribute says coverage is incomplete. The gate reads the attribute, never the prose.
+    body = (
+        f"<!-- protoagent-qa-review head={MERGED} verdict=PASS coverage=incomplete standing_block=false -->\n"
+        "## QA panel review — **PASS**\n\nAll lanes complete, no blocking findings, ship it. ✅\n"
+    )
+    decision = rah.decide([review(MERGED, body=body)], MERGED, [], require_contract=True)
+    assert not decision.ok
+    assert "coverage" in decision.description.lower()
+
+
+def test_a_standing_block_fails_even_with_complete_coverage_and_a_PASS_verdict():
+    # r3: the standing block holds even when coverage is complete and the verdict is PASS.
+    decision = rah.decide(
+        [review(MERGED, "PASS", coverage="complete", standing_block="true")],
+        MERGED,
+        [],
+        require_contract=True,
+    )
+    assert not decision.ok
+    assert "standing" in decision.description.lower() or "block" in decision.description.lower()
+
+
+def test_coverage_and_standing_block_are_independent_reasons():
+    # A block is reported as a block, incomplete coverage as coverage — never conflated.
+    blocked = rah.decide(
+        [review(MERGED, "PASS", coverage="complete", standing_block="true")], MERGED, [], require_contract=True
+    )
+    uncovered = rah.decide(
+        [review(MERGED, "PASS", coverage="incomplete", standing_block="false")], MERGED, [], require_contract=True
+    )
+    assert "standing" in blocked.description.lower() and "coverage" not in blocked.description.lower()
+    assert "coverage" in uncovered.description.lower()
+
+
+# ── fail-closed, gated on the producer rollout ─────────────────────────────────
+
+
+def test_a_legacy_marker_still_passes_BEFORE_the_rollout():
+    # The load-bearing rollout guard: before the emitter ships the attributes every marker is
+    # legacy (no coverage/standing_block). Failing those closed now would red every open PR, so
+    # a legacy PASS must still pass while `require_contract` is off.
+    decision = rah.decide([review(MERGED, "PASS")], MERGED, [], require_contract=False)
+    assert decision.ok and "PASS" in decision.description
+
+
+def test_a_legacy_marker_fails_closed_AFTER_the_rollout():
+    # r4: once the producer contract is required, a marker missing the attributes is non-success.
+    decision = rah.decide([review(MERGED, "PASS")], MERGED, [], require_contract=True)
+    assert not decision.ok
+
+
+def test_an_unknown_coverage_value_fails_closed():
+    # r4: a malformed/unknown value is non-satisfying, not silently accepted.
+    decision = rah.decide(
+        [review(MERGED, "PASS", coverage="mostly", standing_block="false")],
+        MERGED,
+        [],
+        require_contract=True,
+    )
+    assert not decision.ok and "coverage" in decision.description.lower()
+
+
+def test_an_unknown_standing_block_value_fails_closed():
+    decision = rah.decide(
+        [review(MERGED, "PASS", coverage="complete", standing_block="maybe")],
+        MERGED,
+        [],
+        require_contract=True,
+    )
+    assert not decision.ok
+
+
+def test_a_half_contract_fails_closed_when_only_coverage_is_present():
+    # A marker that carries one attribute but not the other is malformed → non-success, because
+    # its mere presence enables enforcement even with the flag off.
+    decision = rah.decide(
+        [review(MERGED, "PASS", coverage="complete")], MERGED, [], require_contract=False
+    )
+    assert not decision.ok
+
+
+def test_an_explicit_attribute_is_honoured_even_BEFORE_the_rollout():
+    # An explicit producer fact is authoritative regardless of the flag: a standing block on
+    # the marker blocks even with `require_contract` off, and incomplete coverage likewise.
+    blocked = rah.decide(
+        [review(MERGED, "PASS", coverage="complete", standing_block="true")], MERGED, [], require_contract=False
+    )
+    uncovered = rah.decide(
+        [review(MERGED, "PASS", coverage="incomplete", standing_block="false")], MERGED, [], require_contract=False
+    )
+    assert not blocked.ok and not uncovered.ok
+
+
+def test_a_blocking_verdict_still_fails_before_the_contract_is_even_consulted():
+    # The verdict enum is unchanged: FAIL is refused as before, whatever the contract says.
+    decision = rah.decide(
+        [review(MERGED, "FAIL", coverage="complete", standing_block="false")],
+        MERGED,
+        [],
+        require_contract=True,
+    )
+    assert not decision.ok and "FAIL" in decision.description
+
+
+# ── v0.158.0 fixtures: the real shapes the contract must survive (r5) ──────────
+
+
+def test_v0158_structural_lane_skipped_after_gateway_exit_4_is_incomplete_coverage():
+    # A structural review lane bailed on gateway exit 4, so the panel never covered it: the
+    # verdict may read PASS, but coverage is not complete.
+    marker = review(MERGED, "PASS", coverage="incomplete", standing_block="false")
+    decision = rah.decide([marker], MERGED, [], require_contract=True)
+    assert not decision.ok and "coverage" in decision.description.lower()
+
+
+def test_v0158_unreadable_panel_brief_is_unavailable_coverage():
+    # The panel brief could not be read, so coverage could not be established.
+    marker = review(MERGED, "WARN", coverage="unavailable", standing_block="false")
+    decision = rah.decide([marker], MERGED, [], require_contract=True)
+    assert not decision.ok and "coverage" in decision.description.lower()
+
+
+def test_v0158_pass_that_explicitly_retains_a_standing_block_is_blocked():
+    marker = review(MERGED, "PASS", coverage="complete", standing_block="true")
+    decision = rah.decide([marker], MERGED, [], require_contract=True)
+    assert not decision.ok
+    assert "standing" in decision.description.lower() or "block" in decision.description.lower()
+
+
+def test_v0158_a_genuinely_clean_pass_succeeds():
+    marker = review(MERGED, "PASS", coverage="complete", standing_block="false")
+    decision = rah.decide([marker], MERGED, [], require_contract=True)
+    assert decision.ok and "PASS" in decision.description

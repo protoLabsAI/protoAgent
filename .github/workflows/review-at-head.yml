@@ -83,4 +83,12 @@ jobs:
           PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+          # Rollout gate for the coverage / standing-block contract (#3334). Left EMPTY (off)
+          # until the QA-panel emitter + approve-on-green promoter — both outside this repo —
+          # ship the authoritative `coverage`/`standing_block` attributes; enforcing fail-closed
+          # on their absence against today's legacy markers would red every open PR. When present,
+          # an explicit attribute is honoured regardless of this flag; the flag only decides how a
+          # MISSING attribute is read. Flip it by setting the `REQUIRE_COVERAGE_CONTRACT` repo
+          # variable to a truthy value ("1"/"true") once the producer rollout is live — no code change.
+          REQUIRE_COVERAGE_CONTRACT: ${{ vars.REQUIRE_COVERAGE_CONTRACT }}
         run: python3 scripts/review_at_head.py
