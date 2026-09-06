@@ -1111,6 +1111,25 @@ class LangGraphConfig:
     # forever. 0 = keep forever, the repo's convention for a retention knob.
     watch_keep_terminal_h: float = DEFAULT_KEEP_TERMINAL_H
 
+    # The room (#3042) — `@name` addressing turns a chat thread into a group chat, and
+    # these are its bounds. All three were module constants or an implicit `1` until they
+    # were lifted here: a hardcoded cap silently drops the tail of a busy round, and the
+    # only workaround is re-mentioning, which fragments the conversation.
+    #   ``room_catchup_max_messages`` / ``room_catchup_max_chars`` — the catch-up window
+    #     an addressed delegate receives ("the room since you last spoke"). Whichever
+    #     bound trips first wins, and the window is taken from the END. Raising them buys
+    #     continuity at the cost of every addressed dispatch's prompt.
+    #   ``room_max_rounds`` — how many serial round-robin rounds one addressed run may
+    #     take. ``1`` (the default) is exactly today's behavior: each addressee answers
+    #     once and the exchange ends. Above 1 the addressed set re-runs, in the same
+    #     order, so each participant sees what the others just said; a round in which
+    #     nobody spoke (empty, or a `pass` token) settles the room early, and the cap is
+    #     the backstop. Deliberately a ROUND cap, not a wall-clock one — a wall-clock turn
+    #     cap declares work dead while a participant is still doing it.
+    room_catchup_max_messages: int = 40
+    room_catchup_max_chars: int = 8000
+    room_max_rounds: int = 1
+
     # Self-authored persona (guarded, default OFF). When on, the lead agent gets the
     # ``edit_soul`` tool — it can rewrite SECTIONS of its own ``SOUL.md`` (persona /
     # identity ONLY, never operating doctrine — ADR 0079). Every edit is snapshotted to
@@ -2073,6 +2092,11 @@ class LangGraphConfig:
             watch_keep_terminal_h=float(
                 data.get("watches", {}).get("keep_terminal_h", cls.watch_keep_terminal_h) or 0
             ),
+            room_catchup_max_messages=data.get("room", {}).get(
+                "catchup_max_messages", cls.room_catchup_max_messages
+            ),
+            room_catchup_max_chars=data.get("room", {}).get("catchup_max_chars", cls.room_catchup_max_chars),
+            room_max_rounds=data.get("room", {}).get("max_rounds", cls.room_max_rounds),
             soul_self_edit_enabled=soul.get("self_edit_enabled", cls.soul_self_edit_enabled),
             self_improvement_enabled=bool(
                 self_improvement.get("enabled", cls.self_improvement_enabled)

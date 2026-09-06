@@ -280,8 +280,9 @@ async def _dispatch_into_room(
     if item_id or resume_task_id:
         return await plain()
     try:
-        from graph.mention_op import dispatch_into_room
+        from graph.mention_op import catchup_caps, dispatch_into_room
         from graph.thread_ids import resolve_thread_id
+        from runtime.state import STATE
         from tools.lg_tools import _session_id_from
 
         session_id = _session_id_from(state) or ""
@@ -296,6 +297,9 @@ async def _dispatch_into_room(
             thread_id=resolve_thread_id(None, session_id),
             speaker="assistant",
             timeout=timeout,
+            # The room's catch-up bounds are the operator's (room.catchup_max_*), not this
+            # call site's — one delegation and one `@` must see the same window.
+            **catchup_caps(getattr(STATE, "graph_config", None)),
         )
     except Exception:  # noqa: BLE001 — conversation bookkeeping must never cost the reply
         log.exception("[delegates] recording delegation in the room failed")
