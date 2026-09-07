@@ -137,6 +137,7 @@ export default defineConfig({
           collapsed: false,
           items: [
             { text: "Delegates (agents & endpoints)", link: "/guides/delegates" },
+            { text: "Rooms (@name group chat)", link: "/guides/rooms" },
             { text: "Spawn CLI coding agents (ACP)", link: "/guides/coding-agents" },
             { text: "Verifier-grounded coder (coder_solve)", link: "/guides/coder" },
             { text: "Fleet (many agents on one host)", link: "/guides/fleet" },

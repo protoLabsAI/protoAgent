@@ -395,6 +395,50 @@ FIELDS: list[Field] = [
         "bound on an instance that supervises anything on a cadence.",
         minimum=0,
     ),
+    # ── Room (`@name` group chat) ────────────────────────────────────────────
+    # #3042's bounds, previously module constants in graph/mention_op.py plus an
+    # implicit single round. Rendered so an operator can widen a truncating catch-up
+    # window without hand-editing YAML — the workaround for a silent cap is to
+    # re-mention, which fragments the very conversation the room exists to hold.
+    Field(
+        "room.catchup_max_messages",
+        "room_catchup_max_messages",
+        "Catch-up window (messages)",
+        "number",
+        "Room",
+        "How many room messages an addressed participant is caught up on — 'the room since "
+        "you last spoke'. Whichever of the two caps trips first wins; the window is taken "
+        "from the newest end, and the operator is told when it truncated.",
+        minimum=1,
+        maximum=500,
+    ),
+    Field(
+        "room.catchup_max_chars",
+        "room_catchup_max_chars",
+        "Catch-up window (characters)",
+        "number",
+        "Room",
+        "Character ceiling on the same catch-up window. This is what keeps the cost of a "
+        "room proportional to the conversation rather than to its length.",
+        minimum=500,
+        # Both caps carry a ceiling for the same reason `max_rounds` does: they are
+        # per-dispatch COST knobs, and an unbounded one ships the whole thread as the
+        # prompt on every addressed dispatch — the opposite of what this section is for.
+        maximum=200000,
+    ),
+    Field(
+        "room.max_rounds",
+        "room_max_rounds",
+        "Max rounds per address",
+        "number",
+        "Room",
+        "How many serial round-robin rounds one `@` address may take. 1 (the default) = "
+        "each addressee answers once. Above 1, the addressed set re-runs in the same order "
+        "so participants can answer each other; a round in which nobody speaks (a `pass`) "
+        "settles the room early, and this cap is the backstop.",
+        minimum=1,
+        maximum=10,
+    ),
     # ── Persona (self-authored SOUL) ─────────────────────────────────────────
     # Guarded, default OFF. When on, the lead agent gets the `edit_soul` tool and can
     # rewrite sections of its own SOUL.md (persona only — ADR 0079; every edit snapshotted
@@ -1725,6 +1769,9 @@ _SECTION_CATEGORY = {
     "Caching": "Model",
     # Behavior — how the agent thinks, loops, and decides.
     "Goal mode": "Behavior",
+    # Room (#3042) — the `@name` group chat's bounds. Behavior, not Capabilities: `@`
+    # addressing is always available; these only say how far one address may run.
+    "Room": "Behavior",
     "Self-improvement": "Behavior",
     # Watches (ADR 0067) sit beside Goal mode, not inside it: the two are independent
     # dispositions (drive vs. supervise) and each has its own enable flag.

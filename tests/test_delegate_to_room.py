@@ -45,7 +45,9 @@ class _Registry:
         return "proto"
 
     async def dispatch(self, name, query, *, conversation_key=None, permissions=None, timeout=None, **_kwargs):
-        self.calls.append({"conversation_key": conversation_key, "permissions": permissions, "timeout": timeout})
+        self.calls.append(
+            {"query": query, "conversation_key": conversation_key, "permissions": permissions, "timeout": timeout}
+        )
         return "the token expires before refresh"
 
 
@@ -104,3 +106,30 @@ async def test_real_toolnode_checkpoints_the_room_with_its_turn(monkeypatch):
         {"from": "proto"},
     ]
     assert any(isinstance(message, ToolMessage) and message.tool_call_id == "call-1" for message in messages)
+
+
+@pytest.mark.asyncio
+async def test_delegate_to_reads_the_operators_catchup_bounds(monkeypatch):
+    """One `@` and one `delegate_to` must show a participant the SAME window. The bounds
+    are the operator's config, not this call site's constant — a delegation that quietly
+    used a different window would be a second, invisible room policy."""
+    import runtime.state as rs
+    from graph.config import LangGraphConfig
+
+    cfg = LangGraphConfig()
+    cfg.room_catchup_max_messages = 2
+    monkeypatch.setattr(rs.STATE, "graph_config", cfg, raising=False)
+
+    registry = _Registry()
+    history = [HumanMessage(content=f"m{i}") for i in range(10)]
+    await _dispatch_into_room(
+        registry,
+        "proto",
+        "inspect auth",
+        {"session_id": "room-caps", "messages": history},
+        tool_call_id="call-caps",
+    )
+
+    query = registry.calls[0]["query"]
+    assert "[operator] m9" in query and "[operator] m7" not in query
+    assert "earlier messages omitted" in query

@@ -130,6 +130,10 @@
           "title": "Delegates (agents & endpoints)"
         },
         {
+          "path": "guides/rooms.md",
+          "title": "Rooms (@name group chat)"
+        },
+        {
           "path": "guides/coding-agents.md",
           "title": "Spawn CLI coding agents (ACP)"
         },

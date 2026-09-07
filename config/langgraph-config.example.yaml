@@ -356,6 +356,23 @@ watches:
   # interval: 30
   # keep_terminal_h: 24
 
+# The room (#3042) — `@name` in chat addresses a delegate directly and its reply lands
+# in the transcript under its own name. The checkpointer thread IS the room, so an
+# addressed participant is caught up on "the room since you last spoke" instead of the
+# whole history. These are that room's bounds; see docs/guides/rooms.
+room:
+  # The catch-up window handed to an addressed participant. Whichever cap trips first
+  # wins, and the window is taken from the newest end. When it truncates, the operator
+  # is told so — the alternative (silently dropping the tail) leaves re-mentioning as
+  # the only workaround, which fragments the conversation.
+  catchup_max_messages: 40
+  catchup_max_chars: 8000
+  # Serial round-robin rounds one address may take. 1 = each addressee answers once
+  # (the shipped behavior). Above 1 the addressed set re-runs in the same order so
+  # participants can answer each other; a round where everyone passes settles the room
+  # early, and this cap is the backstop.
+  max_rounds: 1
+
 # Persona — the agent's own SOUL.md. `self_edit_enabled` (OFF by default) gives the
 # LEAD agent the `edit_soul` tool so it can rewrite SECTIONS of its own persona
 # (identity/voice ONLY, never operating doctrine — ADR 0079/0081). Every edit is

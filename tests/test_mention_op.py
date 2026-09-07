@@ -11,6 +11,8 @@ Two invariants carry the feature:
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
@@ -331,3 +333,57 @@ def test_angle_brackets_in_a_name_cannot_close_the_tag():
     envelope = mop._envelope("a>b", "hi", to="c<d")
     assert "&gt;" in envelope and "&lt;" in envelope
     assert envelope.startswith("<room-message ") and envelope.endswith("</room-message>")
+
+
+# --- the pass has to be OFFERED, or the settle can never happen ------------------
+
+
+@pytest.mark.asyncio
+async def test_a_single_round_address_is_never_told_about_pass():
+    """The default cap sends the prompt it always has. Mentioning a token whose silence
+    handling is OFF would be worse than useless: the delegate would decline, and the
+    "pass" would be quoted to the operator as its answer."""
+    graph, reg = _Graph([HumanMessage(content="here's the plan")]), _Registry()
+    await mop.run_mention(graph, reg, "t1", "proto", "what do you think?")
+    assert "pass" not in reg.calls[0]["query"].lower()
+
+
+@pytest.mark.asyncio
+async def test_a_multi_round_address_is_told_how_to_decline():
+    """The settle is the good ending, and it depends entirely on participants emitting
+    the token. A model that was never invited to decline does not — the room would then
+    always run to its cap and announce a cap that means nothing."""
+    graph, reg = _Graph([HumanMessage(content="here's the plan")]), _Registry()
+    await mop.run_mention(graph, reg, "t1", "proto", "what do you think?", drop_silence=True)
+
+    query = reg.calls[0]["query"]
+    assert "reply with exactly `pass`" in query
+    assert "[operator] here's the plan" in query  # the catch-up still leads
+    assert query.endswith("what do you think?")  # …and the question is still last
+
+
+@pytest.mark.asyncio
+async def test_the_offered_token_is_the_one_the_room_recognises():
+    """A drifting instruction is the failure mode with no symptom: the delegate declines
+    politely, `is_silence` says no, and the room runs to its cap anyway."""
+    from graph.room_rounds import is_silence
+
+    graph, reg = _Graph(), _Registry()
+    await mop.run_mention(graph, reg, "t1", "proto", "anything?", drop_silence=True)
+    quoted = re.findall(r"`([^`]+)`", reg.calls[0]["query"])
+    assert quoted and all(is_silence(token) for token in quoted)
+
+
+@pytest.mark.asyncio
+async def test_nothing_new_since_you_spoke_is_said_out_loud():
+    """The multi-round wart this closes: everyone who spoke after this participant was
+    silent, so its catch-up is empty. Re-sending the bare question would get the same
+    answer a second time in identical words — told that nothing new was said, it can
+    pass instead, and the room settles."""
+    graph, reg = _Graph(), _Registry()
+    await mop.run_mention(graph, reg, "t1", "proto", "still happy?", drop_silence=True)
+
+    query = reg.calls[0]["query"]
+    assert "Nothing new has been said since you last spoke" in query
+    assert "reply with exactly `pass`" in query
+    assert query != "still happy?"

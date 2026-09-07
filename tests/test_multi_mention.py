@@ -254,6 +254,27 @@ async def test_addressed_turn_opens_live_work_before_delegate_finishes(wired, mo
 
 
 @pytest.mark.asyncio
+async def test_the_card_counts_participants_not_dispatches(wired, monkeypatch):
+    """A multi-round room produces one outcome per participant PER ROUND. Summing them
+    renders "4 replied over 2 rounds" for a room of two people, which describes a cast
+    that does not exist — the round count is already the other half of the sentence."""
+    monkeypatch.setattr(rs.STATE, "graph", object(), raising=False)
+
+    async def _two_rounds(message, session_id="", request_metadata=None):
+        return "combined", [
+            {"author": "proto", "ok": True, "reply": "a", "round": 1, "catchup": 0, "truncated": False},
+            {"author": "reviewer", "ok": True, "reply": "b", "round": 1, "catchup": 0, "truncated": False},
+            {"author": "proto", "ok": True, "reply": "c", "round": 2, "catchup": 1, "truncated": False},
+            {"author": "reviewer", "ok": True, "reply": "d", "round": 2, "catchup": 1, "truncated": False},
+        ]
+
+    monkeypatch.setattr(sc, "_at_delegate_exchange", _two_rounds)
+    frames = [f async for f in sc._chat_langgraph_stream_impl("@proto @reviewer status?", "s-card")]
+    ends = [p for k, p in frames if k == "tool_end"]
+    assert ends[0]["output"] == "2 replied over 2 rounds"
+
+
+@pytest.mark.asyncio
 async def test_bare_address_does_not_flash_a_work_card(wired, monkeypatch):
     monkeypatch.setattr(rs.STATE, "graph", object(), raising=False)
     frames = [frame async for frame in sc._chat_langgraph_stream_impl("@proto", "s-bare")]

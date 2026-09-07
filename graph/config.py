@@ -1111,6 +1111,29 @@ class LangGraphConfig:
     # forever. 0 = keep forever, the repo's convention for a retention knob.
     watch_keep_terminal_h: float = DEFAULT_KEEP_TERMINAL_H
 
+    # The room (#3042) — `@name` addressing turns a chat thread into a group chat, and
+    # these are its bounds. All three were module constants or an implicit `1` until they
+    # were lifted here: a hardcoded cap silently drops the tail of a busy round, and the
+    # only workaround is re-mentioning, which fragments the conversation.
+    #   ``room_catchup_max_messages`` / ``room_catchup_max_chars`` — the catch-up window
+    #     an addressed delegate receives ("the room since you last spoke"). Whichever
+    #     bound trips first wins, and the window is taken from the END. Raising them buys
+    #     continuity at the cost of every addressed dispatch's prompt.
+    #   ``room_max_rounds`` — how many serial round-robin rounds one addressed run may
+    #     take. ``1`` (the default) is exactly today's behavior: each addressee answers
+    #     once and the exchange ends. Above 1 the addressed set re-runs, in the same
+    #     order, so each participant sees what the others just said; a round in which
+    #     nobody spoke (empty, or a `pass` token) settles the room early, and the cap is
+    #     the backstop. Deliberately a ROUND cap, not a wall-clock one — a wall-clock turn
+    #     cap declares work dead while a participant is still doing it. It is a CEILING,
+    #     not a count: a cast that cannot hold a conversation (one addressee, or one
+    #     survivor left after failures) runs a single round however high this is set,
+    #     because rounds 2..N would re-send the operator's words to the same delegate
+    #     with an empty catch-up. See ``graph/room_rounds.plan_round``.
+    room_catchup_max_messages: int = 40
+    room_catchup_max_chars: int = 8000
+    room_max_rounds: int = 1
+
     # Self-authored persona (guarded, default OFF). When on, the lead agent gets the
     # ``edit_soul`` tool — it can rewrite SECTIONS of its own ``SOUL.md`` (persona /
     # identity ONLY, never operating doctrine — ADR 0079). Every edit is snapshotted to
@@ -1997,6 +2020,11 @@ class LangGraphConfig:
         secret_tracing_public_key = secrets.get("tracing", {}).get("public_key")
         secret_tracing_secret_key = secrets.get("tracing", {}).get("secret_key")
         publish = data.get("publish", {}) or {}
+        # `or {}`: an operator who comments out every knob under `room:` leaves the key
+        # parsed as None, and the reads below would raise on it (same reason as `soul` /
+        # `fleet` above). The docs page hands people a `room:` block to edit, so this is
+        # a likely edit, not a theoretical one.
+        room = data.get("room", {}) or {}
 
         config = cls(
             model_provider=model.get("provider", cls.model_provider),
@@ -2073,6 +2101,9 @@ class LangGraphConfig:
             watch_keep_terminal_h=float(
                 data.get("watches", {}).get("keep_terminal_h", cls.watch_keep_terminal_h) or 0
             ),
+            room_catchup_max_messages=room.get("catchup_max_messages", cls.room_catchup_max_messages),
+            room_catchup_max_chars=room.get("catchup_max_chars", cls.room_catchup_max_chars),
+            room_max_rounds=room.get("max_rounds", cls.room_max_rounds),
             soul_self_edit_enabled=soul.get("self_edit_enabled", cls.soul_self_edit_enabled),
             self_improvement_enabled=bool(
                 self_improvement.get("enabled", cls.self_improvement_enabled)

@@ -12,8 +12,10 @@ history and knows what was said and by whom. Skipping that write is what would m
 goes to the lead, so it would be blind at exactly the wrong moment.
 
 **Catch-up, not the whole room.** An addressed delegate receives the room messages that
-landed since it last spoke, attributed by author, capped by ``_CATCHUP_MAX_MESSAGES`` /
-``_CATCHUP_MAX_CHARS``. That bound is what keeps the cost of a room proportional to the
+landed since it last spoke, attributed by author, capped by ``max_messages`` /
+``max_chars`` (configurable — ``room.catchup_max_messages`` / ``room.catchup_max_chars``;
+the module constants below are the defaults, so the pure functions stay callable with no
+config at all). That bound is what keeps the cost of a room proportional to the
 conversation rather than to its length — and it's also the only continuity some delegate
 types get: ``conversation_key`` is ACP-only (``DelegateRegistry.dispatch`` refuses it for
 every other type), so an ``a2a`` fleet member or a model endpoint remembers nothing
@@ -31,14 +33,28 @@ import re
 
 from langgraph.constants import START
 
+from graph.room_rounds import is_silence
+
 log = logging.getLogger(__name__)
 
-# The catch-up window handed to an addressed delegate. Whichever bound trips first wins,
-# and the window is taken from the END (the newest messages are the ones being replied
-# to). A delegate that has been silent for 300 messages gets the recent room and a note
-# saying so — not a context-window-sized bill for its own silence.
+# DEFAULTS for the catch-up window handed to an addressed delegate — the caps themselves
+# are per-call arguments (and `room.catchup_max_messages` / `room.catchup_max_chars` in
+# config). Whichever bound trips first wins, and the window is taken from the END (the
+# newest messages are the ones being replied to). A delegate that has been silent for 300
+# messages gets the recent room and a note saying so — not a context-window-sized bill for
+# its own silence. These stay module-level so `catchup_window` is a pure function that
+# needs no config to call, which is what keeps it unit-testable.
 _CATCHUP_MAX_MESSAGES = 40
 _CATCHUP_MAX_CHARS = 8000
+
+# Ceilings for the same three knobs. These MIRROR the ``maximum=`` on the matching
+# ``graph.settings_schema`` fields — `tests/test_room_catchup_bounds.py` pins them to it,
+# because a schema ceiling that drifts from the one actually enforced is a bound nobody
+# is applying. Kept as literals rather than imported so ``mention_op`` stays importable
+# without the schema module in a host that has none.
+_CATCHUP_MAX_MESSAGES_CEILING = 500
+_CATCHUP_MAX_CHARS_CEILING = 200000
+_MAX_ROUNDS_CEILING = 10
 
 # Marks a message this module wrote onto the thread. `lc_source` mirrors the compaction
 # convention; `room` carries authorship STRUCTURALLY so later readers (catch-up windowing
@@ -49,6 +65,73 @@ _SOURCE = "room"
 # The inverse of `_envelope` — see `_text_of`. Anchored and exact, so it can only ever
 # match a carrier this module wrote, never prose that happens to mention the tag.
 _ENVELOPE_RE = re.compile(r"^<room-message\b[^>]*>\n(.*)\n</room-message>$", re.DOTALL)
+
+
+def _positive(value, fallback: int, ceiling: int) -> int:
+    """``value`` as a positive int within ``ceiling``, or ``fallback`` for anything else.
+
+    A non-positive bound means "the operator zeroed the knob", which is a request not to
+    bound the window — never a request to send an EMPTY one. An empty catch-up silently
+    strips a delegate's entire picture of the room, which for an ``a2a`` or model
+    delegate is the only picture it has.
+
+    ``OverflowError`` is in the tuple because ``max_rounds: .inf`` is a legal YAML float
+    that ``int()`` refuses. Without it, one hand-edited line makes every `@` address in
+    the instance raise mid-turn — the exact failure this guard exists to prevent.
+
+    The ceiling is clamped HERE rather than in ``LangGraphConfig.from_dict``, because
+    ``from_dict`` assigns what the YAML said and the settings schema's ``maximum=`` only
+    fences the Settings UI — a hand-edited ``room.max_rounds: 500`` reaches the dataclass
+    untouched, and every one of these is a per-dispatch COST knob. Clamping at the read
+    keeps the dataclass a faithful record of what the operator wrote while the room
+    declines to act on a value the schema calls out of range, and it covers the
+    programmatic construction path the schema never sees at all. Silent on purpose: the
+    ceilings are documented and a warning here would fire on every address of a
+    long-running instance.
+    """
+    try:
+        number = int(value or 0)
+    except (TypeError, ValueError, OverflowError):
+        return fallback
+    return min(number, ceiling) if number > 0 else fallback
+
+
+def catchup_caps(config=None) -> dict:
+    """The configured catch-up caps as ``{"max_messages", "max_chars"}`` kwargs.
+
+    One place for the three hosts that thread config into the room (the streaming and
+    non-streaming chat drivers, and ``delegate_to``) to spell ``room.catchup_max_*``, and
+    ``getattr``-based so a host that predates the fields — or has no config object at
+    all — silently gets the module defaults instead of an AttributeError mid-dispatch.
+    """
+    return {
+        "max_messages": _positive(
+            getattr(config, "room_catchup_max_messages", None),
+            _CATCHUP_MAX_MESSAGES,
+            _CATCHUP_MAX_MESSAGES_CEILING,
+        ),
+        "max_chars": _positive(
+            getattr(config, "room_catchup_max_chars", None),
+            _CATCHUP_MAX_CHARS,
+            _CATCHUP_MAX_CHARS_CEILING,
+        ),
+    }
+
+
+def round_cap(config=None) -> int:
+    """``room.max_rounds`` as a positive int — ``1`` (one pass, the shipped behavior) else.
+
+    ``catchup_caps``' sibling, and for the same reason: the host reads the round bound
+    through one guarded place, so a missing config, an old host, or a hand-edited
+    ``max_rounds: lots`` degrades to a single round instead of raising ``ValueError``
+    halfway through an operator's `@`.
+
+    Clamped to ``_MAX_ROUNDS_CEILING``. This one matters most of the three: the chat
+    driver holds ``_thread_lock`` for the whole addressed run, so an unclamped
+    ``max_rounds: 500`` parks the operator's own thread behind 500 sequential delegate
+    dispatches with no way to steer out of it.
+    """
+    return _positive(getattr(config, "room_max_rounds", None), 1, _MAX_ROUNDS_CEILING)
 
 
 def _room_meta(message) -> dict:
@@ -97,13 +180,26 @@ def _author_of(message, *, lead_name: str) -> str | None:
     return None
 
 
-def catchup_window(messages: list, target: str, *, lead_name: str = "assistant") -> tuple[list[tuple[str, str]], bool]:
+def catchup_window(
+    messages: list,
+    target: str,
+    *,
+    lead_name: str = "assistant",
+    max_messages: int = _CATCHUP_MAX_MESSAGES,
+    max_chars: int = _CATCHUP_MAX_CHARS,
+) -> tuple[list[tuple[str, str]], bool]:
     """The room since ``target`` last spoke, as ``[(author, text), …]`` + a truncated flag.
 
     Everything after the target's own most recent message; the full room when it has
-    never spoken. Trimmed from the front to the message/char caps, because the newest
-    messages are the ones the target is being asked about.
+    never spoken. Trimmed from the front to ``max_messages`` / ``max_chars``, because the
+    newest messages are the ones the target is being asked about.
+
+    Both caps are ARGUMENTS with the module defaults, not reads of a config: the host
+    threads the operator's configured values in (``room.catchup_max_*``) while the
+    function itself stays pure and callable from a test with nothing wired.
     """
+    max_messages = _positive(max_messages, _CATCHUP_MAX_MESSAGES, _CATCHUP_MAX_MESSAGES_CEILING)
+    max_chars = _positive(max_chars, _CATCHUP_MAX_CHARS, _CATCHUP_MAX_CHARS_CEILING)
     start = 0
     for i in range(len(messages) - 1, -1, -1):
         if _room_meta(messages[i]).get("from") == target:
@@ -117,34 +213,68 @@ def catchup_window(messages: list, target: str, *, lead_name: str = "assistant")
             window.append((author, text))
 
     truncated = False
-    if len(window) > _CATCHUP_MAX_MESSAGES:
-        window = window[-_CATCHUP_MAX_MESSAGES:]
+    if len(window) > max_messages:
+        window = window[-max_messages:]
         truncated = True
     total = sum(len(a) + len(t) for a, t in window)
-    while window and total > _CATCHUP_MAX_CHARS:
+    while window and total > max_chars:
         author, text = window.pop(0)
         total -= len(author) + len(text)
         truncated = True
     return window, truncated
 
 
-def _prompt(window: list[tuple[str, str]], truncated: bool, target: str, message: str) -> str:
+# The one thing a participant has to be TOLD, or the settle can never happen: how to say
+# "nothing to add". `room_rounds.is_silence` recognizes a bare `pass`, but a model that
+# was never asked for one does not emit one — every multi-round room would run to its cap
+# and announce it, and the announcement would be a lie about the conversation. Rendered
+# only when silence is actually honored (``drop_silence``), so a single-round address
+# still sends the byte-identical prompt it always has.
+_PASS_OFFER = (
+    "If you have nothing to add, reply with exactly `pass` and nothing else — a pass is "
+    "not recorded in the room, and once nobody has anything left to say the conversation "
+    "ends there. Anything else you send is an answer, so say `pass` rather than saying "
+    "that you have nothing to say."
+)
+
+
+def _prompt(
+    window: list[tuple[str, str]],
+    truncated: bool,
+    target: str,
+    message: str,
+    *,
+    may_pass: bool = False,
+) -> str:
     """What the addressed delegate actually receives.
 
     Self-contained by construction — same contract as ``delegate_to``'s ``query``: the
     delegate is not in our conversation, so the room it needs is spelled out rather than
     assumed.
+
+    ``may_pass`` (the driver's ``drop_silence``) adds the one instruction a participant
+    cannot infer — that declining is a legal move and how to spell it. It also forces a
+    preface for an EMPTY window, which is otherwise a real multi-round wart: everyone who
+    spoke after this participant was silent, so there is nothing new to show it, and
+    re-sending the bare original message would have it answer the same question a second
+    time in identical words. Told that nothing new was said, it can pass instead.
     """
-    if not window:
+    if not window and not may_pass:
         return message
-    lines = "\n".join(f"[{author}] {text}" for author, text in window)
-    preface = (
-        f"You are taking part in a group chat. Here is what has been said since you last spoke"
-        f"{' (earlier messages omitted)' if truncated else ''}:\n\n"
-        f"{lines}\n\n"
-        f"You have been addressed directly as @{target}. Reply to this message:\n\n"
-    )
-    return preface + message
+    if window:
+        lines = "\n".join(f"[{author}] {text}" for author, text in window)
+        heard = (
+            f"You are taking part in a group chat. Here is what has been said since you last spoke"
+            f"{' (earlier messages omitted)' if truncated else ''}:\n\n"
+            f"{lines}\n\n"
+        )
+    else:
+        heard = "You are taking part in a group chat. Nothing new has been said since you last spoke.\n\n"
+    if may_pass:
+        ask = f"You have been addressed directly as @{target}. {_PASS_OFFER}\n\nOtherwise, reply to this message:\n\n"
+    else:
+        ask = f"You have been addressed directly as @{target}. Reply to this message:\n\n"
+    return heard + ask + message
 
 
 def _attr(value: str) -> str:
@@ -181,12 +311,20 @@ async def run_mention(
     lead_name: str = "assistant",
     permissions: str | None = None,
     speaker: str = "operator",
+    max_messages: int = _CATCHUP_MAX_MESSAGES,
+    max_chars: int = _CATCHUP_MAX_CHARS,
+    record_address: bool = True,
+    drop_silence: bool = False,
 ) -> dict:
     """Address ``target`` directly and record the exchange on ``thread_id``.
 
-    Returns ``{ok, author, reply, error, catchup, truncated}``. ``permissions`` is the
-    per-call ceiling — left unset for an operator-typed mention (the operator is the
-    authority) and set to ``"readonly"`` by any agent-originated path.
+    Returns ``{ok, author, reply, error, catchup, truncated, silent}``. ``permissions``
+    is the per-call ceiling — left unset for an operator-typed mention (the operator is
+    the authority) and set to ``"readonly"`` by any agent-originated path.
+
+    ``max_messages`` / ``max_chars`` bound the catch-up window (``room.catchup_max_*``).
+    ``record_address`` and ``drop_silence`` are the multi-round driver's two levers —
+    both default to today's single-round behavior; see ``dispatch_into_room``.
 
     The thread write is best-effort and happens even on a dispatch error, so a failed
     address is visible to the lead agent as something that happened in the room rather
@@ -202,9 +340,9 @@ async def run_mention(
     # thread record is bookkeeping on top of that, and losing the bookkeeping must never
     # cost them the answer. Without a graph there is simply no room to read or write.
     if registry is None:
-        return {"ok": False, "author": target, "reply": "", "error": "no_registry", "catchup": 0, "truncated": False}
+        return {"ok": False, "author": target, "reply": "", "error": "no_registry", "catchup": 0, "truncated": False, "silent": False}
     if not (message or "").strip():
-        return {"ok": False, "author": target, "reply": "", "error": "empty_message", "catchup": 0, "truncated": False}
+        return {"ok": False, "author": target, "reply": "", "error": "empty_message", "catchup": 0, "truncated": False, "silent": False}
 
     lg_config = {"configurable": {"thread_id": thread_id}}
 
@@ -216,8 +354,6 @@ async def run_mention(
         log.exception("[room] reading thread %s failed", thread_id)
         history = []
 
-    window, truncated = catchup_window(history, target, lead_name=lead_name)
-
     outcome = await dispatch_into_room(
         registry,
         target,
@@ -227,6 +363,10 @@ async def run_mention(
         lead_name=lead_name,
         permissions=permissions,
         speaker=speaker,
+        max_messages=max_messages,
+        max_chars=max_chars,
+        record_address=record_address,
+        drop_silence=drop_silence,
     )
     written = outcome.pop("messages")
     if graph is None or not written:
@@ -252,21 +392,51 @@ async def dispatch_into_room(
     permissions: str | None = None,
     speaker: str = "operator",
     timeout: float | None = None,
+    max_messages: int = _CATCHUP_MAX_MESSAGES,
+    max_chars: int = _CATCHUP_MAX_CHARS,
+    record_address: bool = True,
+    drop_silence: bool = False,
 ) -> dict:
     """Dispatch an address and return its room envelopes without writing state.
 
     ``run_mention`` writes these after an out-of-turn operator ``@``. A foreground
     ``delegate_to`` instead returns them in a ``Command`` so they are reduced into the
     active turn rather than lost to that turn's next checkpoint.
+
+    ``max_messages`` / ``max_chars`` bound the catch-up window (see ``catchup_window``).
+
+    The last two exist for the bounded multi-round driver (``graph/room_rounds.py``) and
+    both default to the single-round behavior every existing caller already has:
+
+    * ``record_address`` — write the operator's own message onto the thread as the
+      ``from=<speaker> to=<target>`` half of the exchange. False for rounds 2..N of one
+      address: the room already carries that message, and re-writing it per round would
+      read, in everyone's catch-up, as the operator repeating themselves.
+    * ``drop_silence`` — treat an empty reply or a bare ``pass`` token as SILENCE:
+      flagged ``silent`` in the outcome and omitted from the thread rather than written
+      as a message. That is what lets a participant with nothing to add decline without
+      polluting the transcript. It also OFFERS the pass in the prompt (``_PASS_OFFER``),
+      because a participant that was never told it may decline never does. Off by
+      default, so a single-round `@` sends the same prompt it always has and still
+      records a literal "pass" reply verbatim — and ``silent`` stays False, which is what
+      every consumer keys off.
     """
     if registry is None:
-        return {"ok": False, "author": target, "reply": "", "error": "no_registry", "catchup": 0, "truncated": False, "messages": []}
+        return {
+            "ok": False, "author": target, "reply": "", "error": "no_registry",
+            "catchup": 0, "truncated": False, "silent": False, "messages": [],
+        }
     if not (message or "").strip():
-        return {"ok": False, "author": target, "reply": "", "error": "empty_message", "catchup": 0, "truncated": False, "messages": []}
+        return {
+            "ok": False, "author": target, "reply": "", "error": "empty_message",
+            "catchup": 0, "truncated": False, "silent": False, "messages": [],
+        }
 
     from langchain_core.messages import HumanMessage
 
-    window, truncated = catchup_window(history, target, lead_name=lead_name)
+    window, truncated = catchup_window(
+        history, target, lead_name=lead_name, max_messages=max_messages, max_chars=max_chars
+    )
 
     # `conversation_key` is ACP-only — dispatch() raises for every other type, so it
     # rides only where it is accepted. Everyone else gets the attributed catch-up.
@@ -279,6 +449,7 @@ async def dispatch_into_room(
             "error": f"unknown delegate {target!r}",
             "catchup": 0,
             "truncated": False,
+            "silent": False,
             "messages": [],
         }
     conversation_key = thread_id if getattr(delegate, "type", "") == "acp" else None
@@ -294,7 +465,7 @@ async def dispatch_into_room(
         reply = str(
             await registry.dispatch(
                 target,
-                _prompt(window, truncated, target, message),
+                _prompt(window, truncated, target, message, may_pass=drop_silence),
                 **dispatch_kwargs,
             )
             or ""
@@ -309,15 +480,23 @@ async def dispatch_into_room(
         error_kind = str(getattr(exc, "kind", "") or "")
         log.warning("[room] dispatch to %r failed: %s: %s", target, type(exc).__name__, error)
 
+    # `silent` means "this reply WAS treated as silence" — never merely "looks like a
+    # pass". Gating it on drop_silence is what keeps a single-round address byte-identical
+    # to before: there, a delegate that literally replies "pass" is quoted like any other
+    # answer, on the thread and to the operator.
+    silent = bool(drop_silence and ok and is_silence(reply))
+
     # Both halves are ordered as they happened. The caller decides whether they join
     # the current turn via Command or are written after an operator-only address.
-    written = [
-        HumanMessage(
-            content=_envelope(speaker, message, to=target),
-            additional_kwargs={"lc_source": _SOURCE, "room": {"from": speaker, "to": target}},
+    written = []
+    if record_address:
+        written.append(
+            HumanMessage(
+                content=_envelope(speaker, message, to=target),
+                additional_kwargs={"lc_source": _SOURCE, "room": {"from": speaker, "to": target}},
+            )
         )
-    ]
-    if ok and reply:
+    if ok and reply and not silent:
         written.append(
             HumanMessage(
                 content=_envelope(target, reply),
@@ -339,5 +518,6 @@ async def dispatch_into_room(
         "error_kind": error_kind,
         "catchup": len(window),
         "truncated": truncated,
+        "silent": silent,
         "messages": written,
     }

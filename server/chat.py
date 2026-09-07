@@ -1291,6 +1291,19 @@ async def _at_delegate_exchange(
     second addressee's catch-up already contains the first one's reply. The room makes
     that true for free: each exchange is on the thread before the next one reads it.
 
+    **And it can run for more than one round** (``graph/room_rounds.py``). The addressed
+    set IS the cast, resolved before any dispatch; ``room.max_rounds`` bounds how many
+    times it goes round. At the default ``1`` this loop is exactly the old single pass.
+    Above 1 the same cast re-runs in the same order — each participant now catching up
+    on what the others just said — until a round in which nobody speaks (the settle) or
+    the cap. A participant with nothing to add replies with a bare ``pass`` — which the
+    prompt explicitly offers it, because a participant that was never told it may decline
+    never does — and that is silence: it neither lands on the thread nor keeps the room
+    alive, and an all-silent round is how a room ends early. A target whose
+    address FAILED is dropped from later rounds rather than retried into the operator's
+    wait. Nothing here reads a delegate's reply for intent (#3067): who speaks next comes
+    from the operator's addressed set and the room's structure, never from what was said.
+
     ``message`` is NOT mutated: the original ``@name rest`` is what the caller logs to
     session history, and only the stripped ``rest`` reaches the delegate.
 
@@ -1318,14 +1331,42 @@ async def _at_delegate_exchange(
         listing = " ".join(f"@{n}" for n in targets)
         return f"Usage: `{listing} <message>` — add a message to send.", None
 
-    from graph.mention_op import run_mention
+    from graph.mention_op import catchup_caps, round_cap, run_mention
+    from graph.room_rounds import plan_round
+
+    cfg = getattr(STATE, "graph_config", None)
+    max_rounds = round_cap(cfg)
+    caps = catchup_caps(cfg)
 
     tid = _resolve_thread_id(request_metadata, session_id)
-    outcomes: list[dict] = []
-    for name in targets:
-        outcomes.append(
-            await run_mention(STATE.graph, reg, tid, name, rest, session_id=session_id)
-        )
+    # `rounds` is the whole state the driver needs — one list per round, in order. The
+    # flat `outcomes` the caller wants is derived from it at the end rather than kept in
+    # parallel, so there is only one place a round can be recorded.
+    rounds: list[list[dict]] = []
+    plan = plan_round(targets, rounds, max_rounds=max_rounds)
+    while not plan.done:
+        this_round: list[dict] = []
+        for name in plan.speakers:
+            outcome = await run_mention(
+                STATE.graph,
+                reg,
+                tid,
+                name,
+                rest,
+                session_id=session_id,
+                # Both levers come off the PLAN, not from re-deriving them here: they are
+                # the room's policy (`RoundPlan.record_address` / `.drop_silence`), and
+                # `drop_silence` in particular is what makes `room.max_rounds: 1` byte-
+                # identical to the single pass this used to be.
+                record_address=plan.record_address,
+                drop_silence=plan.drop_silence,
+                **caps,
+            )
+            outcome["round"] = plan.round_index
+            this_round.append(outcome)
+        rounds.append(this_round)
+        plan = plan_round(targets, rounds, max_rounds=max_rounds)
+    outcomes: list[dict] = [outcome for one_round in rounds for outcome in one_round]
 
     # A stopped member can already be started, with consent, by the lead agent's
     # delegate_to tool (#3126). Direct @ dispatch runs outside the graph and therefore
@@ -1343,13 +1384,48 @@ async def _at_delegate_exchange(
         # Keep S1's wording — a delegate failure is an answer to the operator, not a 500.
         return f"Delegate @{who} failed: {o.get('error') or 'unknown error'}"
 
-    if len(outcomes) == 1:
-        return _line(outcomes[0]), outcomes
-    # Several participants answered one message: attribute each reply, because an
-    # unattributed join would read as one voice — the exact collapse the room exists
-    # to avoid. Consoles that render per-exchange frames show the parts; this text is
-    # the whole for everyone else.
-    return "\n\n".join(f"**@{o.get('author')}** — {_line(o)}" for o in outcomes), outcomes
+    # A silence (a `pass`) is not a message: it went onto no thread and it gets no line
+    # here either. Only ever set when multi-round is on — see dispatch_into_room.
+    spoken = [o for o in outcomes if not o.get("silent")]
+
+    if not spoken:
+        # Multi-round only: everyone passed on the first round, so the room settled with
+        # nothing said. Silence is a real answer to the operator, so say it plainly.
+        body = "_Nobody had anything to add._"
+    elif len(targets) == 1 and len(spoken) == 1:
+        body = _line(spoken[0])
+    else:
+        # Several participants answered one message: attribute each reply, because an
+        # unattributed join would read as one voice — the exact collapse the room exists
+        # to avoid. Consoles that render per-exchange frames show the parts; this text is
+        # the whole for everyone else.
+        #
+        # Gated on how many were ADDRESSED, not on how many happened to speak. Multi-
+        # round makes those differ: `@a @b` where b passes every round and a answers once
+        # leaves exactly one non-silent outcome, and the bare answer would then reach an
+        # A2A or /v1 consumer — which gets no `room_reply` frames — with no byline at all,
+        # from a message the operator sent to two participants.
+        body = "\n\n".join(f"**@{o.get('author')}** — {_line(o)}" for o in spoken)
+    return _with_room_notes(body, outcomes, plan), outcomes
+
+
+def _with_room_notes(body: str, outcomes: list[dict], plan) -> str:
+    """The room's reply plus the bounds it hit, if any — otherwise ``body`` untouched.
+
+    Two bounds are worth an operator's attention and neither had ANY surface before: a
+    catch-up window that truncated (``catchup_note``) and the round cap ending the room
+    instead of a settle (``cap_note``, silent while ``room.max_rounds`` is 1 — i.e.
+    always, until an operator opts in). Both notes are the ROOM's copy about the room's
+    own bounds, so both live in ``graph/room_rounds.py``; this is only the composition.
+
+    They are appended prose on the existing reply, deliberately: the room has no chrome
+    of its own, and inventing a frame the console doesn't render would be a bound the
+    operator still can't see.
+    """
+    from graph.room_rounds import cap_note, catchup_note
+
+    notes = [note for note in (catchup_note(outcomes), cap_note(plan)) if note]
+    return "\n\n".join([body, *notes]) if notes else body
 
 
 def _all_mentions_are_startable_unreachable(reg, targets: list[str], outcomes: list[dict]) -> bool:
@@ -1358,13 +1434,22 @@ def _all_mentions_are_startable_unreachable(reg, targets: list[str], outcomes: l
     Classification comes from the adapter exception, while member identity comes from
     the fleet roster. Both are required: an HTTP/timeout failure must not restart a live
     process, and an unreachable remote peer is not ours to spawn.
+
+    Judged on ROUND ONE only, and explicitly so. Round one is the only round that
+    dispatches every target (later rounds drop the failed and can be a subset), and "the
+    whole addressed set was unreachable at the first attempt" is the question the #3126
+    fall-through actually asks. Reading the flat list instead happens to give the same
+    answer today — an all-failed round one exhausts the room immediately, so there is no
+    round two — but that is an invariant of the driver, not of this loop, and a future
+    change to the exhaustion rule would break the fall-through silently.
     """
-    if not outcomes or len(outcomes) != len(targets):
+    first_round = [outcome for outcome in outcomes if (outcome.get("round") or 1) == 1]
+    if not first_round or len(first_round) != len(targets):
         return False
     from plugins.delegates.adapters import KIND_UNREACHABLE
     from plugins.delegates.autostart import startable_member
 
-    for name, outcome in zip(targets, outcomes, strict=True):
+    for name, outcome in zip(targets, first_round, strict=True):
         if outcome.get("ok") or outcome.get("error_kind") != KIND_UNREACHABLE:
             return False
         delegate = reg.get(name)
@@ -2173,11 +2258,26 @@ async def _chat_langgraph_stream_impl(
                 raise
             if _mention_tool is not None:
                 _failed = sum(not bool(item.get("ok")) for item in (_at_outcome or []))
-                _answered = sum(bool(item.get("ok")) for item in (_at_outcome or []))
+                # Distinct participants, not dispatches: over three rounds two delegates
+                # produce six outcomes, and "6 replied over 3 rounds" describes a room of
+                # six people that does not exist.
+                _answered = len(
+                    {
+                        str(item.get("author") or "")
+                        for item in (_at_outcome or [])
+                        if item.get("ok") and not item.get("silent")
+                    }
+                )
+                _rounds = max((int(item.get("round") or 1) for item in (_at_outcome or [])), default=1)
                 if _at_outcome:
                     _status = f"{_answered} replied"
                     if _failed:
                         _status += f", {_failed} failed"
+                    if _rounds > 1:
+                        # A multi-round room is several passes over the same cast; the
+                        # card is the only place the operator learns it took more than
+                        # one, since a settle is deliberately quiet in the reply text.
+                        _status += f" over {_rounds} rounds"
                 else:
                     # Every stopped local target can fall through to the lead's normal
                     # consent/start path (#3126); the addressed wait itself still ended.
@@ -2193,6 +2293,8 @@ async def _chat_langgraph_stream_impl(
                 )
             if _at_reply is not None:
                 for _exchange in _at_outcome or []:
+                    if _exchange.get("silent"):
+                        continue  # a `pass` is not a message — no thread record, no frame
                     # One authorship frame per exchange: the answer is that participant's
                     # own words, not the lead agent's, and a multi-mention turn is several
                     # participants answering. `text` rides along so a console that renders
