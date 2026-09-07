@@ -165,11 +165,15 @@ room:
   from later rounds. A dead delegate does not answer faster the third time, and retrying
   it once per round is how a bounded room turns into N times the timeout you wait
   through. That holds even for the failure that says the peer is *alive* — `still
-  running after 300s — the peer may still be working`: a room passes no resume handle, so
-  a retry opens a **second** task on a peer already busy with the first, waits the same
-  timeout again, and still returns nothing. The member is not quietly written off: its
-  failure is recorded in the room, and the adapter's own wording (including "raise its
-  poll timeout") is quoted straight to you.
+  running after 300s without observable progress — the peer may still be working`: for an
+  `a2a` delegate, `poll_timeout_s` is the time since the last material task observation,
+  not a cap on the whole turn. A `SendMessage` or `GetTask` response that changes the
+  same task's visible state, context, status message, or artifact content resets that
+  inactivity clock; repeated identical `TASK_STATE_WORKING` polls do not. A room passes
+  no resume handle, so a retry opens a **second** task on a peer already busy with the
+  first, waits the same timeout again, and still returns nothing. The member is not
+  quietly written off: its failure is recorded in the room, and the adapter's own wording
+  (including "raise its poll timeout") is quoted straight to you.
 - **A room needs two participants to be a room.** `@one-agent do X` is one round however
   high `max_rounds` is, and so is a room that has lost all but one participant. With a
   single speaker there is nothing new between its own reply and its next turn — the
@@ -223,8 +227,8 @@ were mid-deploy is worse than one that takes a while. Bound the number of rounds
 The flip side: the whole room runs inside the thread's write lock, so with a high
 `max_rounds` and slow participants every other writer on that thread — a scheduled fire, a
 goal continuation, an inbound A2A turn, compact — waits for it. Each dispatch is still
-bounded by the delegate's own configured timeout (`poll_timeout_s` for `a2a`, `timeout_s`
-for `acp`); the room adds none of its own.
+bounded by the delegate's own configured timeout (`poll_timeout_s` as the no-progress
+bound for `a2a`, `timeout_s` for `acp`); the room adds none of its own.
 :::
 
 ### Who decides who speaks next
@@ -364,13 +368,15 @@ behavior every address had before this existed, which is why none of it fails lo
   clean conversation and is answered normally, exactly as it was before continuity
   existed. Only the lead can actually answer a pause, with
   `delegate_to(target=…, resume_task_id=…)`, and that goes straight to the parked task.
-- **An address that failed with the peer still working.** "Still running after Ns", or a
-  read that timed out on a peer answering inline: the room writes `(could not be reached:
-  …)` and moves on, so whatever that turn eventually produced is in a conversation this
-  side has no record of. The pointer goes with it — otherwise the next address would both
-  inherit that invisible history and queue behind the turn the room already gave up on. An
-  address that failed because the peer was *unreachable* keeps its continuity: nothing
-  happened on the peer, so nothing about its conversation changed.
+- **An address that failed with the peer still working.** "Still running after Ns without
+  observable progress", or a read that timed out on a peer answering inline: the room
+  writes `(could not be reached: …)` and moves on, so whatever that turn eventually
+  produced is in a conversation this side has no record of. The pointer goes with it —
+  otherwise the next address would both inherit that invisible history and queue behind
+  the turn the room already gave up on. This is not a slow-peer rejoin mechanism, and no
+  resume handle is persisted for the room. An address that failed because the peer was
+  *unreachable* keeps its continuity: nothing happened on the peer, so nothing about its
+  conversation changed.
 
 **Compaction is the exception that keeps it.** `/compact` shortens *your* side to save
 your window; it is not a claim that anything was unsaid, and the peer manages its own
