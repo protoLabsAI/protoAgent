@@ -3000,6 +3000,35 @@ def forget_delegate_conversations(*thread_ids: str) -> int:
     return dropped
 
 
+def forget_delegate_conversations_for_session(*session_ids: str) -> int:
+    """Drop delegate transport continuity recorded as ORIGINATING from these chat sessions
+    (#3362).
+
+    The origin-scoped companion to ``forget_delegate_conversations``: that seam drops by
+    the resolved thread KEY a room dispatched under (the id rewind/fork already hold, because
+    they resolve it); this one drops by the chat SESSION a context was recorded against. A
+    custom thread-id resolver (ADR 0029 §D4 / #571) can map a session to any key and the map
+    is one-way, so a caller that knows only the session id — a DELETE route carries no request
+    metadata to re-resolve — can still reach every context that session minted, without a
+    prefix/substring guess at which keys belong to it.
+
+    Reached through ``STATE.delegate_registry`` and ``hasattr``-guarded, exactly like its
+    sibling, so a fork pinned to an older delegates plugin degrades to 'dropped nothing'; it
+    swallows because a cleanup must never fail the gesture it cleans up after. No route calls
+    it yet — this is the plumbing a following slice wires into the delete path.
+    """
+    reg = getattr(STATE, "delegate_registry", None)
+    if reg is None or not hasattr(reg, "forget_conversations_for_session"):
+        return 0
+    dropped = 0
+    for sid in dict.fromkeys(s for s in session_ids if s):
+        try:
+            dropped += int(reg.forget_conversations_for_session(sid) or 0)
+        except Exception as exc:  # noqa: BLE001 — best-effort, see docstring
+            log.warning("[chat] delegate-continuity session cleanup failed for %s: %s", sid, exc)
+    return dropped
+
+
 def _rewind_message(result: dict) -> str:
     """Human-readable status line for a rewind result (surfaced to non-UI callers /
     logs; the console just truncates its own thread on success)."""

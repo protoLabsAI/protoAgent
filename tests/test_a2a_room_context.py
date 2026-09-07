@@ -828,3 +828,153 @@ async def test_a_pool_timeout_keeps_the_conversation_a_read_timeout_drops_it(wir
     assert conversations.remembered("thread-1", "peer", PEER_URL) == "", (
         "the peer may have the request; its answer lands where we cannot see it"
     )
+
+
+# ── the originating session, kept apart from the resolved key (#3362) ─────────
+#
+# A resolved conversation key cannot be reversed into the chat session it came from — a
+# custom thread-id resolver (ADR 0029 §D4 / #571) mints keys off request metadata that a
+# delete route never carries. So each entry records its origin session too, and an
+# origin-scoped forget drops by that recorded value EXACTLY — never by the shape of a key.
+
+
+def test_a_remembered_context_records_its_origin_session_apart_from_its_key():
+    """The resolved thread key and the chat session it came from are two separate
+    identities on the entry: the key can't be reversed into the session, so the origin is
+    kept explicitly when the caller knows it. The lookup contract is unchanged — still
+    keyed on the resolved conversation key, still returns the bare contextId."""
+    conversations.remember("resolved-thread-key", "peer", PEER_URL, "ctx-1", session_id="s1")
+
+    (entry,) = conversations.snapshot().values()
+    assert entry.context_id == "ctx-1"
+    assert entry.session_id == "s1"
+    assert conversations.remembered("resolved-thread-key", "peer", PEER_URL) == "ctx-1"
+
+
+def test_an_origin_is_optional_and_defaults_to_none_recorded():
+    """A caller that does not know the origin (or a delegates plugin from before this seam)
+    records none — the entry is stored and reachable by KEY exactly as before, it just
+    carries no session for the origin-scoped forget to match."""
+    conversations.remember("thread-1", "peer", PEER_URL, "ctx-1")  # no session_id
+
+    (entry,) = conversations.snapshot().values()
+    assert entry.context_id == "ctx-1"
+    assert entry.session_id == ""
+    assert conversations.remembered("thread-1", "peer", PEER_URL) == "ctx-1"
+
+
+def test_forget_by_session_drops_every_entry_with_that_origin_whatever_the_key():
+    """r2: a custom resolver can key a session's thread to ANY value — a UUID, a
+    tenant-scoped handle — so a delete cannot find the entries by the shape of the key.
+    Recording the originating session lets it drop exactly them, across delegates and urls,
+    and leave a different session's rows alone."""
+    conversations.remember("weird-key-1", "alpha", PEER_URL, "a1", session_id="s1")
+    conversations.remember("weird-key-2", "beta", OTHER_URL, "b1", session_id="s1")
+    conversations.remember("weird-key-3", "alpha", PEER_URL, "c1", session_id="s2")
+
+    assert conversations.forget_by_session("s1") == 2
+    assert conversations.remembered("weird-key-1", "alpha", PEER_URL) == ""
+    assert conversations.remembered("weird-key-2", "beta", OTHER_URL) == ""
+    assert conversations.remembered("weird-key-3", "alpha", PEER_URL) == "c1"  # other session untouched
+
+
+def test_forget_by_session_is_exact_never_a_prefix_or_substring_match():
+    """r3: the origin is matched WHOLE. A session whose id is a prefix (or substring) of
+    another's — or of an entry's resolved KEY — must not drag the other down with it, the
+    trap a ``key.startswith(...)`` / ``sid in key`` heuristic would fall into."""
+    conversations.remember("a2a:s1", "peer", PEER_URL, "c1", session_id="s1")
+    conversations.remember("a2a:s1-child", "peer", PEER_URL, "c2", session_id="s1-child")
+
+    # 's1' is a prefix of BOTH keys and of the second session id — none of that matters.
+    assert conversations.forget_by_session("s1") == 1
+    assert conversations.remembered("a2a:s1", "peer", PEER_URL) == ""
+    assert conversations.remembered("a2a:s1-child", "peer", PEER_URL) == "c2"
+
+
+def test_forget_by_session_ignores_a_blank_and_never_sweeps_originless_entries():
+    """A blank origin match is a no-op, NOT a sweep of every entry that recorded no origin
+    — otherwise a stray ``forget_by_session('')`` would erase the pre-#3362 entries the
+    key-scoped forget is still responsible for."""
+    conversations.remember("thread-1", "peer", PEER_URL, "ctx-1")  # no origin recorded
+    conversations.remember("thread-2", "peer", PEER_URL, "ctx-2", session_id="s1")
+
+    assert conversations.forget_by_session("") == 0
+    assert conversations.forget_by_session("s-not-present") == 0
+    assert conversations.remembered("thread-1", "peer", PEER_URL) == "ctx-1"
+    assert conversations.remembered("thread-2", "peer", PEER_URL) == "ctx-2"
+
+
+def test_key_scoped_and_session_scoped_forget_are_independent():
+    """The two forgets answer different events and reach different rows. ``forget`` still
+    drops by resolved key alone — origin or not — and ``forget_by_session`` drops by origin
+    alone; neither is a substring of the other's behaviour."""
+    conversations.remember("k1", "peer", PEER_URL, "c1", session_id="s1")
+    conversations.remember("k2", "peer", PEER_URL, "c2", session_id="s1")
+
+    # Key-scoped drops only the matching key, though both share an origin.
+    assert conversations.forget("k1") == 1
+    assert conversations.remembered("k2", "peer", PEER_URL) == "c2"
+    # Session-scoped then mops up the rest by origin.
+    assert conversations.forget_by_session("s1") == 1
+    assert conversations.remembered("k2", "peer", PEER_URL) == ""
+
+
+def test_the_registry_exposes_session_scoped_forget():
+    """The registry publishes the origin-scoped forget the same way it does the key-scoped
+    one, so core can reach it duck-typed through ``STATE.delegate_registry``."""
+    reg = _registry()
+    conversations.remember("resolver-minted-key", "peer", PEER_URL, "ctx-room", session_id="s1")
+    conversations.remember("another-key", "peer", PEER_URL, "ctx-other", session_id="s2")
+
+    assert reg.forget_conversations_for_session("s1") == 1
+    assert conversations.remembered("resolver-minted-key", "peer", PEER_URL) == ""
+    assert conversations.remembered("another-key", "peer", PEER_URL) == "ctx-other"
+
+
+def test_the_session_scoped_registry_seam_never_raises(monkeypatch):
+    """r5: same best-effort contract as ``forget_conversation`` — a cleanup path must not
+    be able to fail the gesture it is cleaning up after."""
+    reg = _registry()
+
+    def _boom(_sid):
+        raise RuntimeError("store on fire")
+
+    monkeypatch.setattr(conversations, "forget_by_session", _boom)
+    assert reg.forget_conversations_for_session("s1") == 0
+
+
+def test_the_session_scoped_core_seam_is_duck_typed_and_swallowing(monkeypatch):
+    """The origin-scoped server seam degrades exactly like its key-scoped sibling — a
+    missing roster, a plugin from before it existed, or a raising one all mean 'dropped
+    nothing'. No route calls it yet; this is the plumbing the DELETE slice will use."""
+    from runtime.state import STATE
+    from server.chat import forget_delegate_conversations_for_session
+
+    class _Older:
+        """A fork pinned to a delegates plugin from before this seam existed."""
+
+    class _Broken:
+        def forget_conversations_for_session(self, _sid):
+            raise RuntimeError("nope")
+
+    for roster in (None, _Older(), _Broken()):
+        monkeypatch.setattr(STATE, "delegate_registry", roster, raising=False)
+        assert forget_delegate_conversations_for_session("s1") == 0
+
+    monkeypatch.setattr(STATE, "delegate_registry", _registry(), raising=False)
+    conversations.remember("resolver-minted", "peer", PEER_URL, "ctx-room", session_id="s1")
+    assert forget_delegate_conversations_for_session("", "s1") == 1  # blanks skipped, not counted
+
+
+def test_the_delete_route_still_uses_key_scoped_forget_unchanged():
+    """This preparatory slice adds the origin-scoped plumbing but does NOT rewire DELETE —
+    the route still reaches ``forget_delegate_conversations`` (key-scoped), so its behaviour
+    is byte-for-byte what it was. The origin-scoped seam ships alongside, wired by a
+    following slice."""
+    import inspect
+
+    from operator_api import chat_routes
+
+    src = inspect.getsource(chat_routes)
+    assert "forget_delegate_conversations(" in src
+    assert "forget_delegate_conversations_for_session(" not in src

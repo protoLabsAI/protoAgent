@@ -177,3 +177,27 @@ class DelegateRegistry:
         except Exception:  # noqa: BLE001 — best-effort cleanup, never the caller's problem
             logger.exception("[delegates] forgetting conversation %r failed", conversation_key)
             return 0
+
+    def forget_conversations_for_session(self, session_id: str) -> int:
+        """Drop the transport continuity this process holds for one CHAT SESSION (#3362).
+
+        The origin-scoped companion to ``forget_conversation``: that one takes the resolved
+        conversation KEY a room dispatched under (which rewind/fork know, because they
+        resolve it); this one takes the chat SESSION id, and drops every remembered A2A
+        context whose recorded origin is that session. It never infers membership from the
+        *shape* of a resolved key — a custom thread-id resolver (ADR 0029 §D4 / #571) can
+        mint one to anything and the map is one-way — so a caller that knows only the
+        session can still reach every context it minted.
+
+        Same contract as ``forget_conversation``: best-effort, never raises, returns how
+        many were dropped. Scoped to the A2A ``contextId`` map only; a persistent ACP
+        session is not torn down here, for the reasons ``forget_conversation`` gives. No
+        route calls this yet — the DELETE wiring lands in a following slice.
+        """
+        from . import conversations
+
+        try:
+            return conversations.forget_by_session(str(session_id or ""))
+        except Exception:  # noqa: BLE001 — best-effort cleanup, never the caller's problem
+            logger.exception("[delegates] forgetting session %r conversations failed", session_id)
+            return 0

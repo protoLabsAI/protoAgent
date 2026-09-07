@@ -26,6 +26,17 @@ conversation's continuity and is invisible: the next address opens a fresh conte
 is what every address did before this existed. Bounded LRU, so a long-lived instance with
 many threads cannot grow it without limit.
 
+**The origin session rides beside the resolved key (#3362).** The key is the *resolved*
+conversation/thread id a room dispatched under; a custom thread-id resolver (ADR 0029 §D4 /
+#571) may mint that from request metadata to anything, and the map is one-way — a resolved
+key cannot be reversed into the chat session it came from. So each entry ALSO records its
+originating session id explicitly, when the caller knew it, and ``forget_by_session`` drops
+by that recorded origin — never by the *shape* of a key (no prefix/substring guess). That
+is what lets a delete, which knows only the session id, reach every context that session
+minted even under a resolver's arbitrary keys, without replaying request metadata it has
+none of. The session is a property of the entry, not part of the key: keying still isolates
+delegate / url / credential exactly as before.
+
 The delegate's **url** is part of the key on purpose: re-pointing a delegate at a
 different peer must not send that peer a context id the old one minted. Its **name** is
 too, which is the conservative half of the same rule: one fleet member configured under
@@ -70,14 +81,26 @@ from __future__ import annotations
 import hashlib
 import threading
 from collections import OrderedDict
+from typing import NamedTuple
 
-# One entry is four short strings; the cap exists so a long-lived instance that has
-# addressed many threads can't accumulate them forever. Evicted least-recently-used,
-# which for a room means the conversations nobody is having any more.
+
+class _Entry(NamedTuple):
+    """One remembered context: the ``contextId`` the peer assigned, plus the chat session
+    this side resolved the key FROM (``""`` when the caller didn't know it — a resolved key
+    can't be reversed into its session, so an entry with no recorded origin stays unreachable
+    to ``forget_by_session`` rather than being swept by a blank match)."""
+
+    context_id: str
+    session_id: str
+
+
+# One entry is four short key strings and a two-field value; the cap exists so a long-lived
+# instance that has addressed many threads can't accumulate them forever. Evicted
+# least-recently-used, which for a room means the conversations nobody is having any more.
 _MAX_ENTRIES = 512
 
-# (conversation_key, delegate name, delegate url, credential digest) -> contextId
-_CONTEXTS: OrderedDict[tuple[str, str, str, str], str] = OrderedDict()
+# (conversation_key, delegate name, delegate url, credential digest) -> _Entry(contextId, session)
+_CONTEXTS: OrderedDict[tuple[str, str, str, str], _Entry] = OrderedDict()
 
 # Guards every mutation of _CONTEXTS as a GROUP: `__setitem__` + `move_to_end` + the LRU
 # eviction loop are three statements, and `forget()` deletes while it walks the mapping.
@@ -109,18 +132,31 @@ def remembered(conversation_key: str, delegate: str, url: str, credential: str =
         return ""
     key = _key(conversation_key, delegate, url, credential)
     with _LOCK:
-        context_id = _CONTEXTS.get(key, "")
-        if context_id:
+        entry = _CONTEXTS.get(key)
+        if entry is not None:
             _CONTEXTS.move_to_end(key)
-    return context_id
+    return entry.context_id if entry is not None else ""
 
 
-def remember(conversation_key: str, delegate: str, url: str, context_id: str, credential: str = "") -> None:
+def remember(
+    conversation_key: str,
+    delegate: str,
+    url: str,
+    context_id: str,
+    credential: str = "",
+    session_id: str = "",
+) -> None:
     """Record the ``contextId`` a peer just used for this conversation.
 
     A no-op without both a conversation key and a context id: a peer that answers
     without one has told us nothing to remember, and storing an empty string would make
     the next lookup look like a hit.
+
+    ``session_id`` is the chat session this conversation originated from, kept beside the
+    resolved key so a delete that knows only the session can find the entry later (#3362).
+    It is optional and defaults to ``""``: a caller that does not know the origin (or a
+    plugin from before this seam) records none, and such an entry is simply not reachable
+    by ``forget_by_session`` — the key-scoped ``forget``/``forget_one`` still find it.
 
     Called only for an exchange that ANSWERED — see the module docstring's invariant and
     ``forget_one`` for the other half.
@@ -129,7 +165,7 @@ def remember(conversation_key: str, delegate: str, url: str, context_id: str, cr
         return
     key = _key(conversation_key, delegate, url, credential)
     with _LOCK:
-        _CONTEXTS[key] = str(context_id)
+        _CONTEXTS[key] = _Entry(str(context_id), str(session_id or ""))
         _CONTEXTS.move_to_end(key)
         while len(_CONTEXTS) > _MAX_ENTRIES:
             _CONTEXTS.popitem(last=False)
@@ -192,7 +228,33 @@ def forget(conversation_key: str) -> int:
     return len(gone)
 
 
-def snapshot() -> dict[tuple[str, str, str, str], str]:
+def forget_by_session(session_id: str) -> int:
+    """Forget every context whose recorded ORIGIN session equals ``session_id``; returns
+    how many.
+
+    The origin-scoped counterpart to ``forget()``: that one takes the resolved conversation
+    KEY a room dispatched under, this one takes the chat SESSION id a delete knows. The two
+    exist because a custom thread-id resolver (ADR 0029 §D4 / #571) can map a session to any
+    key and the map is one-way — a delete that only holds the session id cannot recover the
+    keys to hand ``forget()``. So it matches the recorded origin EXACTLY: no ``startswith``,
+    no ``in``, nothing that would let one session's id drag down another whose key or id it
+    happens to be a prefix of. An entry that recorded no origin (``session_id == ""``) is
+    never matched, which is why a blank argument is a no-op rather than a sweep of them all.
+
+    Idempotent and total-loss-tolerant like ``forget()``, so it is safe to call best-effort
+    from a cleanup path that must not fail the operation it is cleaning up after.
+    """
+    if not session_id:
+        return 0
+    sid = str(session_id)
+    with _LOCK:
+        gone = [k for k, entry in _CONTEXTS.items() if entry.session_id == sid]
+        for k in gone:
+            _CONTEXTS.pop(k, None)
+    return len(gone)
+
+
+def snapshot() -> dict[tuple[str, str, str, str], _Entry]:
     """Everything remembered (copy) — for tests and debugging, never the wire."""
     with _LOCK:
         return dict(_CONTEXTS)
