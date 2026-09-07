@@ -1,4 +1,4 @@
-"""Bounded multi-round rooms — the speaking order, and when the room is over (#3042).
+r"""Bounded multi-round rooms — the speaking order, and when the room is over (#3042).
 
 `@proto @reviewer <question>` addresses two participants. Today each answers once and
 the exchange ends, which is fine for "ask two people the same thing" and useless for
@@ -24,14 +24,14 @@ Which makes the whole host side of a room this, and nothing else — ``server/ch
 runs exactly this loop, and a second host (a console room view, a headless driver) is
 the same handful of lines::
 
-    rounds: list[list[dict]] = []
-    plan = plan_round(targets, rounds, max_rounds=round_cap(config))
+    cap, rounds = round_cap(config), []
+    plan = plan_round(targets, rounds, max_rounds=cap)
     while not plan.done:
         rounds.append([
             await run_mention(..., record_address=plan.record_address, drop_silence=plan.drop_silence)
             for name in plan.speakers
         ])
-        plan = plan_round(targets, rounds, max_rounds=plan.max_rounds)
+        plan = plan_round(targets, rounds, max_rounds=cap)
     outcomes = [o for one_round in rounds for o in one_round]
     reply = "\n\n".join(x for x in (reply, catchup_note(outcomes), cap_note(plan)) if x)
 
@@ -60,22 +60,20 @@ settled. Two things are deliberately *not* here:
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-# Decoration a model wraps a one-word answer in: markdown emphasis, code ticks, quotes
-# (straight and smart). The prompt that ASKS for a pass writes the token as `pass`, so a
-# model echoing that formatting back is the common case, not the exotic one.
-_PASS_WRAP = r"[*_`\"'\u2018\u2019\u201c\u201d\s]*"
-
-# "I have nothing to add." Anchored to the WHOLE reply, so `pass` inside a sentence
-# ("I'd pass on that approach") is an answer and counts as speaking — and so is a
-# QUALIFIED one ("Pass, but note the auth change"), which carries something the room
-# needs. Tolerant only of decoration around the bare word: wrapping parens, a trailing
-# period, emphasis, ticks, quotes.
-_PASS_RE = re.compile(rf"^{_PASS_WRAP}\(?\s*pass\s*\)?\s*[.!]?{_PASS_WRAP}$", re.IGNORECASE)
+# Decoration a model wraps a one-word answer in, plus the punctuation it ends a line
+# with: markdown emphasis and bullets, code ticks, quotes (straight and smart), parens,
+# sentence punctuation. The prompt that ASKS for a pass writes the token as `pass`, so a
+# model echoing that formatting back is the common shape, not the exotic one — and it
+# routinely COMBINES the two (``**pass**.``, ``- `pass` ``, ``pass!!``). Which is why
+# this is one class stripped from BOTH ends rather than a wrapper with the punctuation
+# nested inside it: nesting made `**pass**` silence and `**pass**.` an answer, an
+# asymmetry no model knows about. Stripping only at the ENDS is what keeps `pass` inside
+# a sentence ("I'd pass on that approach") an answer.
+_PASS_DECORATION = "*_`\"'\u2018\u2019\u201c\u201d()[]{}<>.,;:!?-\u2013\u2014 \t\n\r"
 
 # Reasons a room ended. Plain strings rather than an enum, to match the dict-shaped
 # outcomes the rest of the room already speaks in.
@@ -92,7 +90,7 @@ def is_silence(text: Any) -> bool:
     transcript or keeping the room alive for another round.
     """
     stripped = str(text or "").strip()
-    return not stripped or bool(_PASS_RE.match(stripped))
+    return not stripped or stripped.strip(_PASS_DECORATION).casefold() == "pass"
 
 
 def spoke(outcome: Mapping) -> bool:
@@ -111,6 +109,13 @@ class RoundPlan:
     ``speakers`` is empty exactly when ``done`` is True. ``round_index`` is 1-based and
     names the round ``speakers`` would run (or, once done, how many rounds ran).
     ``reason`` is one of `SETTLED` / `CAPPED` / `EXHAUSTED` when done, else ``""``.
+
+    ``max_rounds`` is the EFFECTIVE cap for this room, which is the operator's
+    ``room.max_rounds`` narrowed by what the cast can actually do — a room with one
+    participant left is one round however high the knob is set (see ``plan_round``).
+    Reading the effective value is what keeps ``drop_silence`` and ``cap_note`` honest:
+    a solo cast is offered no pass it could not act on, and is told about no cap it did
+    not really hit.
 
     ``record_address`` / ``drop_silence`` are the two levers a host hands straight to
     ``mention_op.dispatch_into_room`` for this round. They live here rather than in the
@@ -155,6 +160,20 @@ def _dropped(rounds: Sequence[Sequence[Mapping]]) -> set[str]:
 
     A dead delegate answers no faster the third time. Re-dispatching it once per round
     is how a bounded room turns into N times the timeout the operator waits through.
+
+    Deliberately blind to ``error_kind``, including the "still running after Ns — the
+    peer may still be working" timeout, even though the outcome carries the class and
+    ``server/chat.py`` reads it for a different decision. Re-dispatching a
+    still-working peer cannot rejoin its work: the room passes no resume handle and
+    ``conversation_key`` is ACP-only, so an ``a2a`` retry opens a SECOND
+    ``SendMessage`` task on a peer already busy with the first, waits the same
+    ``poll_timeout_s`` again, and still returns nothing. The operator would pay N
+    timeouts and N duplicate tasks to be told the same thing N times. The member is not
+    silently declared dead either way — its failure is written onto the thread as a
+    ``(could not be reached: …)`` room message and the adapter's own "the peer may still
+    be working; raise its poll timeout" text is quoted straight to the operator — and
+    the cast guard in ``plan_round`` means a room that loses a participant this way ends
+    at once rather than spending further rounds on the survivors.
     """
     return {
         str(outcome.get("author") or "")
@@ -183,12 +202,34 @@ def plan_round(
     1. **Exhausted** — every addressed participant has failed an address.
     2. **Settled** — the last round completed and nobody in it spoke.
     3. **Capped** — ``max_rounds`` rounds have run.
+
+    ``max_rounds`` is the operator's ceiling, not the room's: a cast that cannot hold a
+    conversation is capped at one round regardless (see below). Junk (``None``, a
+    string, ``inf``) floors at one round rather than raising — this is a public seam a
+    second host calls directly, and a config typo must not take an operator's `@` down.
     """
-    cap = max(1, int(max_rounds or 1))
+    try:
+        cap = max(1, int(max_rounds or 1))
+    except (TypeError, ValueError, OverflowError):
+        cap = 1
     order = list(dict.fromkeys(str(name) for name in addressed))  # de-dup, keep order
     dropped = _dropped(rounds)
     remaining = tuple(name for name in order if name not in dropped)
     index = len(rounds)
+
+    # A round needs two participants to BE a round. With one speaker left there is
+    # nobody to react to: `record_address` is False after round 1, so nothing is written
+    # between that participant's own reply and its next turn — `catchup_window` returns
+    # an EMPTY window and `_prompt` re-sends the operator's original words verbatim. So
+    # rounds 2..N of a solo cast are provably a re-ask of a question already answered,
+    # in the same ACP session, with the delegate's file writes and bill attached, and
+    # the only brake is the model choosing the soft `pass`. `room.max_rounds` is one
+    # global knob and `@one-agent do X` is the common address; multiplying THAT by the
+    # cap is not what the operator opted into. Applied to the SURVIVORS, not to the
+    # addressed set, so a room that loses a participant mid-way stops instead of
+    # spending its remaining rounds on somebody talking to a failure envelope.
+    if len(remaining) < 2:
+        cap = 1
 
     if not remaining:
         return RoundPlan((), index, True, EXHAUSTED if order else SETTLED, cap)
@@ -212,9 +253,21 @@ def catchup_note(outcomes: Sequence[Mapping]) -> str:
     copy about the room's own bounds, and a second host that forgot to render it would
     reintroduce exactly the silence this fixes. Names every clipped participant once, in
     the order they were addressed.
+
+    Named only when that participant actually ANSWERED. ``truncated`` is computed before
+    the dispatch and survives the failure path unchanged, so a delegate that refused the
+    connection comes back ``{ok: False, truncated: True}`` — and telling the operator to
+    widen a catch-up window underneath ``Delegate @proto failed: connection refused``
+    points them at a knob that has nothing to do with why it failed. A silence is
+    excluded for the same reason the reply body excludes it: a pass is not an answer, so
+    there is no answer for the clipping to have shaped.
     """
     clipped = list(
-        dict.fromkeys(str(o.get("author") or "") for o in outcomes if o.get("truncated") and o.get("author"))
+        dict.fromkeys(
+            str(o.get("author") or "")
+            for o in outcomes
+            if o.get("ok") and not o.get("silent") and o.get("truncated") and o.get("author")
+        )
     )
     if not clipped:
         return ""

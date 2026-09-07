@@ -54,6 +54,16 @@ def _failed(author: str, error: str = "connection refused") -> dict:
         '"pass"',
         "'pass'",
         "\u201cpass\u201d",
+        # Decoration AND punctuation: the period lands OUTSIDE the emphasis, which is
+        # exactly how a model writes it after being handed the token in backticks.
+        "**pass**.",
+        "`pass`.",
+        "'pass'.",
+        "*pass*!",
+        "pass!!",
+        "pass;",
+        "- pass",
+        "\n\npass\n\n",
     ],
 )
 def test_these_are_silence(text):
@@ -73,6 +83,12 @@ def test_these_are_silence(text):
         # answer — recorded in the room, and it keeps the room alive for a reply to it.
         "Pass \u2014 but note the auth change landed",
         "pass for now; ping me when the build is green",
+        # Stripping decoration from the ENDS must never eat words: each of these still
+        # has something either side of the token.
+        "I pass",
+        "pass or fail",
+        "(pass on this one, but check auth)",
+        "...",
     ],
 )
 def test_these_are_answers_not_silence(text):
@@ -152,8 +168,8 @@ def test_a_settle_is_judged_on_the_LAST_round_only():
 
 
 def test_the_cap_stops_a_room_that_has_not_settled():
-    rounds = [[_ok("proto", "a")], [_ok("proto", "b")]]
-    plan = plan_round(["proto"], rounds, max_rounds=2)
+    rounds = [[_ok("a", "one"), _ok("b", "two")], [_ok("a", "three"), _ok("b", "four")]]
+    plan = plan_round(["a", "b"], rounds, max_rounds=2)
     assert plan.done is True and plan.reason == CAPPED and plan.round_index == 2
 
 
@@ -165,7 +181,7 @@ def test_max_rounds_one_is_exactly_one_round():
 def test_a_nonsense_cap_floors_at_one_round_rather_than_none():
     """0 / negative / None must never mean "address nobody" — an operator who zeroes the
     knob wants the shipped behavior back, not a `@` that silently does nothing."""
-    for bad in (0, -3, None):
+    for bad in (0, -3, None, "lots", "", float("inf"), float("nan"), object()):
         assert plan_round(["proto"], [], max_rounds=bad).speakers == ("proto",)
 
 
@@ -184,17 +200,17 @@ def test_the_cap_is_never_exceeded_when_driven_to_completion():
 
 
 def test_a_failed_target_is_not_dispatched_again():
-    rounds = [[_failed("proto"), _ok("reviewer", "I'll take it")]]
-    plan = plan_round(["proto", "reviewer"], rounds, max_rounds=3)
-    assert plan.speakers == ("reviewer",)
+    rounds = [[_failed("proto"), _ok("reviewer", "I'll take it"), _ok("ana", "same")]]
+    plan = plan_round(["proto", "reviewer", "ana"], rounds, max_rounds=3)
+    assert plan.speakers == ("reviewer", "ana")
 
 
 def test_a_target_that_failed_stays_out_for_every_later_round():
     rounds = [
-        [_failed("proto"), _ok("reviewer", "one")],
-        [_ok("reviewer", "two")],
+        [_failed("proto"), _ok("reviewer", "one"), _ok("ana", "also one")],
+        [_ok("reviewer", "two"), _ok("ana", "also two")],
     ]
-    assert plan_round(["proto", "reviewer"], rounds, max_rounds=5).speakers == ("reviewer",)
+    assert plan_round(["proto", "reviewer", "ana"], rounds, max_rounds=5).speakers == ("reviewer", "ana")
 
 
 def test_an_all_failed_round_exhausts_rather_than_settles():
@@ -207,6 +223,43 @@ def test_an_all_failed_round_exhausts_rather_than_settles():
 def test_survivors_keep_their_written_order():
     rounds = [[_ok("a", "x"), _failed("b"), _ok("c", "y")]]
     assert plan_round(["a", "b", "c"], rounds, max_rounds=3).speakers == ("a", "c")
+
+
+# --- a cast that cannot hold a conversation -----------------------------------
+
+
+def test_one_addressee_is_one_round_however_high_the_knob():
+    """`room.max_rounds` is a single global knob and `@one-agent do X` is the common
+    address. Rounds 2..N of a solo cast re-send the operator's words verbatim — the
+    catch-up is empty by construction, because nothing is written between that
+    participant's own reply and its next turn — so the cap would multiply the cost of
+    every ordinary `@` for a conversation that cannot happen."""
+    first = plan_round(["claude-code"], [], max_rounds=10)
+    assert first.speakers == ("claude-code",) and first.max_rounds == 1
+    assert plan_round(["claude-code"], [[_ok("claude-code", "done")]], max_rounds=10).done is True
+
+
+def test_a_solo_cast_is_offered_no_pass_and_told_of_no_cap():
+    """The effective cap has to reach both levers, or the room offers a `pass` that
+    cannot settle anything and then announces a cap it did not really hit."""
+    plan = plan_round(["proto"], [], max_rounds=5)
+    assert plan.drop_silence is False and plan.record_address is True
+    assert cap_note(plan_round(["proto"], [[_ok("proto", "a")]], max_rounds=5)) == ""
+
+
+def test_a_room_that_loses_all_but_one_participant_stops_there():
+    """The survivor has nobody to react to but a `(could not be reached: …)` envelope.
+    Spending the rest of the cap on that is the operator paying for the room to talk to
+    itself — and it is what would make a slow member's timeout cost N dispatches."""
+    rounds = [[_ok("reviewer", "I'd blame auth"), _failed("fleetmate", "still running after 300s")]]
+    plan = plan_round(["reviewer", "fleetmate"], rounds, max_rounds=3)
+    assert plan.done is True and plan.speakers == ()
+
+
+def test_the_guard_is_the_survivors_not_the_addressed_set():
+    """Three addressed, one dead, two left — that is still a conversation."""
+    rounds = [[_ok("a", "x"), _failed("b"), _ok("c", "y")]]
+    assert plan_round(["a", "b", "c"], rounds, max_rounds=3).max_rounds == 3
 
 
 # --- determinism --------------------------------------------------------------
@@ -231,14 +284,15 @@ def test_reply_text_never_changes_who_speaks_next():
 
 
 def test_a_cap_that_ended_the_room_is_announced():
-    plan = plan_round(["proto"], [[_ok("proto", "a")], [_ok("proto", "b")]], max_rounds=2)
-    note = cap_note(plan)
+    rounds = [[_ok("proto", "a"), _ok("reviewer", "b")], [_ok("proto", "c"), _ok("reviewer", "d")]]
+    note = cap_note(plan_round(["proto", "reviewer"], rounds, max_rounds=2))
     assert "2-round cap" in note and "room.max_rounds" in note
 
 
 def test_a_settle_says_nothing():
     """The good ending needs no announcement; a note on every settle would be chrome."""
-    assert cap_note(plan_round(["proto"], [[_ok("proto", "pass")]], max_rounds=3)) == ""
+    rounds = [[_ok("proto", "pass"), _ok("reviewer", "pass")]]
+    assert cap_note(plan_round(["proto", "reviewer"], rounds, max_rounds=3)) == ""
 
 
 def test_single_round_mode_never_announces_a_cap():
@@ -267,8 +321,8 @@ def test_the_first_round_records_the_operator_address_and_later_ones_do_not():
 def test_silence_is_only_honored_when_there_is_a_next_round_to_decline():
     """`drop_silence` off at the default cap is what keeps a single-round `@` byte-
     identical: a delegate that literally replies "pass" is quoted like any other answer."""
-    assert plan_round(["x"], [], max_rounds=1).drop_silence is False
-    assert plan_round(["x"], [], max_rounds=2).drop_silence is True
+    assert plan_round(["x", "y"], [], max_rounds=1).drop_silence is False
+    assert plan_round(["x", "y"], [], max_rounds=2).drop_silence is True
 
 
 def test_the_levers_travel_with_the_plan_so_a_second_host_cannot_drift():
@@ -293,3 +347,23 @@ def test_an_untruncated_room_gets_no_catchup_note():
     """Which is what keeps an ordinary single-round address unchanged."""
     assert catchup_note([_ok("proto"), _ok("reviewer")]) == ""
     assert catchup_note([]) == ""
+
+
+def test_a_failed_address_is_never_told_to_widen_its_window():
+    """`truncated` is computed BEFORE the dispatch and survives the failure path
+    unchanged, so a refused connection comes back `{ok: False, truncated: True}`.
+    Rendering the note there tells the operator to raise a catch-up knob directly under
+    "Delegate @proto failed: connection refused" — advice about a bound that had nothing
+    to do with the failure."""
+    assert catchup_note([_failed("proto") | {"truncated": True}]) == ""
+
+
+def test_a_participant_that_only_passed_is_not_named():
+    """Same rule the reply body already follows: a pass is not an answer, so there is no
+    answer for the clipping to have shaped."""
+    assert catchup_note([_ok("proto", "pass") | {"truncated": True, "silent": True}]) == ""
+
+
+def test_a_clipped_answer_alongside_a_clipped_failure_names_only_the_answer():
+    note = catchup_note([_ok("proto") | {"truncated": True}, _failed("reviewer") | {"truncated": True}])
+    assert "@proto" in note and "@reviewer" not in note

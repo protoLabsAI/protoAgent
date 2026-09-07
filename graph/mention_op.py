@@ -65,10 +65,14 @@ def _positive(value, fallback: int) -> int:
     bound the window — never a request to send an EMPTY one. An empty catch-up silently
     strips a delegate's entire picture of the room, which for an ``a2a`` or model
     delegate is the only picture it has.
+
+    ``OverflowError`` is in the tuple because ``max_rounds: .inf`` is a legal YAML float
+    that ``int()`` refuses. Without it, one hand-edited line makes every `@` address in
+    the instance raise mid-turn — the exact failure this guard exists to prevent.
     """
     try:
         number = int(value or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return fallback
     return number if number > 0 else fallback
 

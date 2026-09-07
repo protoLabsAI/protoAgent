@@ -83,15 +83,20 @@ The window is bounded twice, and whichever bound trips first wins:
 
 | Knob | Default | Bounds |
 |---|---|---|
-| `room.catchup_max_messages` | `40` | how many room messages are replayed |
+| `room.catchup_max_messages` | `40` | how many **thread messages** are replayed |
 | `room.catchup_max_chars` | `8000` | the total size of that replay |
+
+"Thread messages", not "room messages": the window counts every authored message since
+the participant last spoke — your own turns and the lead agent's replies as well as room
+traffic. So a first `@` in a long ordinary chat can truncate before a single room message
+exists, and `40` is 40 *messages of any kind*, not 40 replies from participants.
 
 The window is taken from the **newest end** — the messages being replied to. A
 participant that has been quiet for 300 messages gets the recent room, not a
 context-window-sized bill for its own silence.
 
-**When it truncates, you are told.** The reply carries a note naming who was clipped and
-which knob to raise:
+**When it truncates, you are told.** The reply carries a note naming each participant
+whose answer was given on a clipped view, and which knob to raise:
 
 > _Older messages were left out of the catch-up for @proto — the room since they last
 > spoke is longer than the window. Raise `room.catchup_max_messages` /
@@ -101,6 +106,17 @@ This exists because the alternative — dropping the tail quietly — leaves you
 confident answer given on a partial view of the room and no way to know. The workaround
 people reach for is to re-mention, which fragments the very conversation the room is
 holding.
+
+Only participants that actually **answered** are named. A dispatch that failed never
+produced an answer for the clipping to have shaped, and a note under `Delegate @proto
+failed: connection refused` telling you to widen a catch-up window would point you at a
+knob that has nothing to do with the failure. A `pass` is excluded for the same reason.
+
+::: tip On a first address, "since they last spoke" means the whole thread
+A participant that has never spoken here has no watermark, so its window starts at the
+top of the thread — mostly your chat with the lead agent. That is the common way this
+note appears on the very first `@` in a busy thread.
+:::
 
 ## Multi-round rooms
 
@@ -147,10 +163,24 @@ room:
 - **A failed address is not retried.** A participant whose dispatch failed is dropped
   from later rounds. A dead delegate does not answer faster the third time, and retrying
   it once per round is how a bounded room turns into N times the timeout you wait
-  through.
+  through. That holds even for the failure that says the peer is *alive* — `still
+  running after 300s — the peer may still be working`: a room passes no resume handle, so
+  a retry opens a **second** task on a peer already busy with the first, waits the same
+  timeout again, and still returns nothing. The member is not quietly written off: its
+  failure is recorded in the room, and the adapter's own wording (including "raise its
+  poll timeout") is quoted straight to you.
+- **A room needs two participants to be a room.** `@one-agent do X` is one round however
+  high `max_rounds` is, and so is a room that has lost all but one participant. With a
+  single speaker there is nothing new between its own reply and its next turn — the
+  catch-up is empty by construction — so a further round would re-send your original words
+  verbatim to a delegate that already carried them out, file writes and bill included.
+  `room.max_rounds` is one global knob; it must not multiply the cost of the most common
+  address, which is to a single agent.
 
-At `max_rounds: 1` — the default — none of this is observable: no pass offer in the
-prompt, no pass handling, no notes, exactly the single pass rooms have always made.
+At `max_rounds: 1` — the default — almost none of this is observable: no pass offer in
+the prompt, no pass handling, no cap note, exactly the single pass rooms have always
+made. The one addition on the default path is the **truncation note** above, and only
+when the window actually truncated.
 
 ### When to raise it
 
@@ -166,16 +196,29 @@ agreement noise.
 
 The cost is easy to reason about, which is the point of bounding rounds rather than time:
 **at most `max_rounds` × (participants) dispatches**, minus everyone who passes, and the
-room stops the moment a whole round is silent. In practice a 3-round cap on a two-agent
-disagreement usually settles in 2. Start at `2` or `3`. If you never see the cap note,
-your rooms are ending by settling — which is the healthy case, and the cap is doing its
-job as a backstop; if you see it every time, the conversation needs more room than you
-gave it (or the participants are talking past each other, which more rounds won't fix).
+room stops the moment a whole round is silent. Budget for the cap, not for a settle: a
+round only goes quiet if *every* participant emits a bare `pass`, so how often a room
+settles early is a property of your models, not a guarantee. Start at `2` or `3`. If you
+never see the cap note, your rooms are ending by settling — the healthy case, with the cap
+doing its job as a backstop; if you see it every time, the conversation needs more room
+than you gave it (or the participants are talking past each other, which more rounds
+won't fix).
+
+Every round is also written **permanently onto the thread**, because the thread is the
+transcript — so N rounds of participant output ride in every later lead-agent turn's
+context until compaction. That is the second half of the cost, and it is why the cap is
+low by default.
 
 ::: warning Rounds are bounded; time is not
 There is deliberately **no wall-clock cap** on a round. A turn-length limit declares work
 dead while a participant is still doing it, and a room that "settles" around members who
 were mid-deploy is worse than one that takes a while. Bound the number of rounds instead.
+
+The flip side: the whole room runs inside the thread's write lock, so with a high
+`max_rounds` and slow participants every other writer on that thread — a scheduled fire, a
+goal continuation, an inbound A2A turn, compact — waits for it. Each dispatch is still
+bounded by the delegate's own configured timeout (`poll_timeout_s` for `a2a`, `timeout_s`
+for `acp`); the room adds none of its own.
 :::
 
 ### Who decides who speaks next

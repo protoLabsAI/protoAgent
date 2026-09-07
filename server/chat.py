@@ -1392,13 +1392,19 @@ async def _at_delegate_exchange(
         # Multi-round only: everyone passed on the first round, so the room settled with
         # nothing said. Silence is a real answer to the operator, so say it plainly.
         body = "_Nobody had anything to add._"
-    elif len(spoken) == 1:
+    elif len(targets) == 1 and len(spoken) == 1:
         body = _line(spoken[0])
     else:
         # Several participants answered one message: attribute each reply, because an
         # unattributed join would read as one voice — the exact collapse the room exists
         # to avoid. Consoles that render per-exchange frames show the parts; this text is
         # the whole for everyone else.
+        #
+        # Gated on how many were ADDRESSED, not on how many happened to speak. Multi-
+        # round makes those differ: `@a @b` where b passes every round and a answers once
+        # leaves exactly one non-silent outcome, and the bare answer would then reach an
+        # A2A or /v1 consumer — which gets no `room_reply` frames — with no byline at all,
+        # from a message the operator sent to two participants.
         body = "\n\n".join(f"**@{o.get('author')}** — {_line(o)}" for o in spoken)
     return _with_room_notes(body, outcomes, plan), outcomes
 
@@ -2252,7 +2258,16 @@ async def _chat_langgraph_stream_impl(
                 raise
             if _mention_tool is not None:
                 _failed = sum(not bool(item.get("ok")) for item in (_at_outcome or []))
-                _answered = sum(bool(item.get("ok")) and not item.get("silent") for item in (_at_outcome or []))
+                # Distinct participants, not dispatches: over three rounds two delegates
+                # produce six outcomes, and "6 replied over 3 rounds" describes a room of
+                # six people that does not exist.
+                _answered = len(
+                    {
+                        str(item.get("author") or "")
+                        for item in (_at_outcome or [])
+                        if item.get("ok") and not item.get("silent")
+                    }
+                )
                 _rounds = max((int(item.get("round") or 1) for item in (_at_outcome or [])), default=1)
                 if _at_outcome:
                     _status = f"{_answered} replied"

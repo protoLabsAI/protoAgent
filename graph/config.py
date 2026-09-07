@@ -1125,7 +1125,11 @@ class LangGraphConfig:
     #     order, so each participant sees what the others just said; a round in which
     #     nobody spoke (empty, or a `pass` token) settles the room early, and the cap is
     #     the backstop. Deliberately a ROUND cap, not a wall-clock one — a wall-clock turn
-    #     cap declares work dead while a participant is still doing it.
+    #     cap declares work dead while a participant is still doing it. It is a CEILING,
+    #     not a count: a cast that cannot hold a conversation (one addressee, or one
+    #     survivor left after failures) runs a single round however high this is set,
+    #     because rounds 2..N would re-send the operator's words to the same delegate
+    #     with an empty catch-up. See ``graph/room_rounds.plan_round``.
     room_catchup_max_messages: int = 40
     room_catchup_max_chars: int = 8000
     room_max_rounds: int = 1

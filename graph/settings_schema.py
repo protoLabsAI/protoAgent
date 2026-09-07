@@ -410,6 +410,7 @@ FIELDS: list[Field] = [
         "you last spoke'. Whichever of the two caps trips first wins; the window is taken "
         "from the newest end, and the operator is told when it truncated.",
         minimum=1,
+        maximum=500,
     ),
     Field(
         "room.catchup_max_chars",
@@ -420,6 +421,10 @@ FIELDS: list[Field] = [
         "Character ceiling on the same catch-up window. This is what keeps the cost of a "
         "room proportional to the conversation rather than to its length.",
         minimum=500,
+        # Both caps carry a ceiling for the same reason `max_rounds` does: they are
+        # per-dispatch COST knobs, and an unbounded one ships the whole thread as the
+        # prompt on every addressed dispatch — the opposite of what this section is for.
+        maximum=200000,
     ),
     Field(
         "room.max_rounds",

@@ -189,10 +189,10 @@ async def test_the_operator_message_is_not_re_written_every_round(monkeypatch):
     """It is one address, not N. Re-recording the operator's envelope per round would
     read, in every later catch-up, as the operator saying the same thing three times."""
     graph = _Graph()
-    reg = _Reg(names=("proto",), scripts={"proto": ["a", "b", "c"]})
+    reg = _Reg(scripts={"proto": ["a", "b", "c"], "reviewer": ["x", "y", "z"]})
     _wire(monkeypatch, reg, max_rounds=3, graph=graph)
 
-    await sc._at_delegate_exchange("@proto think it through", "m3")
+    await sc._at_delegate_exchange("@proto @reviewer think it through", "m3")
 
     stamps = _authors(graph)
     assert sum(1 for s in stamps if s == {"from": "operator", "to": "proto"}) == 1
@@ -217,10 +217,10 @@ async def test_an_all_pass_round_settles_the_room_early(monkeypatch):
 @pytest.mark.asyncio
 async def test_a_settle_is_not_announced(monkeypatch):
     """The normal, good ending. A note on every settle would be chrome, not information."""
-    reg = _Reg(names=("proto",), scripts={"proto": ["line 40", "pass"]})
+    reg = _Reg(scripts={"proto": ["line 40", "pass"], "reviewer": ["pass"]})
     _wire(monkeypatch, reg, max_rounds=4)
-    reply, _ = await sc._at_delegate_exchange("@proto status?", "m5")
-    assert reply == "line 40"
+    reply, _ = await sc._at_delegate_exchange("@proto @reviewer status?", "m5")
+    assert reply == "**@proto** — line 40"
 
 
 @pytest.mark.asyncio
@@ -234,24 +234,50 @@ async def test_everyone_passing_immediately_still_answers_the_operator(monkeypat
 @pytest.mark.asyncio
 async def test_the_cap_ends_the_room_and_SAYS_so(monkeypatch):
     """A silent cap is the exact complaint this change exists to answer."""
-    reg = _Reg(names=("proto",), scripts={"proto": ["a", "b", "c"]})
+    reg = _Reg(scripts={"proto": ["a", "b", "c"], "reviewer": ["x", "y", "z"]})
     _wire(monkeypatch, reg, max_rounds=2)
 
-    reply, _ = await sc._at_delegate_exchange("@proto keep going", "m7")
+    reply, _ = await sc._at_delegate_exchange("@proto @reviewer keep going", "m7")
 
-    assert len(reg.calls) == 2
+    assert len(reg.calls) == 4
     assert "2-round cap" in reply and "room.max_rounds" in reply
 
 
 @pytest.mark.asyncio
 async def test_a_failed_target_is_dropped_from_later_rounds(monkeypatch):
-    reg = _Reg(scripts={"proto": ["a", "b"], "reviewer": ["x"]}, fails={"reviewer"})
+    reg = _Reg(
+        names=("proto", "reviewer", "ana"),
+        scripts={"proto": ["a", "b"], "reviewer": ["x"], "ana": ["c", "d"]},
+        fails={"reviewer"},
+    )
+    _wire(monkeypatch, reg, max_rounds=2)
+
+    _, outcomes = await sc._at_delegate_exchange("@proto @reviewer @ana status?", "m8")
+
+    assert [c["name"] for c in reg.calls] == ["proto", "reviewer", "ana", "proto", "ana"]
+    assert sum(1 for o in outcomes if not o["ok"]) == 1  # asked once, never retried
+
+
+@pytest.mark.asyncio
+async def test_losing_all_but_one_participant_ends_the_room_rather_than_billing_on(monkeypatch):
+    """A member whose OWN wall-clock budget expired ("still running — the peer may still
+    be working") is not re-dispatched: the room passes no resume handle, so a retry opens
+    a second task on a peer already busy with the first and waits the same timeout again.
+    What the room must not then do is spend its remaining rounds asking the survivor to
+    react to a `(could not be reached: …)` envelope."""
+    reg = _Reg(
+        names=("reviewer", "fleetmate"),
+        scripts={"reviewer": ["I'd blame auth", "still auth"], "fleetmate": ["x"]},
+        fails={"fleetmate"},
+    )
     _wire(monkeypatch, reg, max_rounds=3)
 
-    _, outcomes = await sc._at_delegate_exchange("@proto @reviewer status?", "m8")
+    reply, outcomes = await sc._at_delegate_exchange("@reviewer @fleetmate what broke?", "m8b")
 
-    assert [c["name"] for c in reg.calls] == ["proto", "reviewer", "proto", "proto"]
-    assert sum(1 for o in outcomes if not o["ok"]) == 1  # asked once, never retried
+    assert [c["name"] for c in reg.calls] == ["reviewer", "fleetmate"]  # no round 2
+    assert [o["round"] for o in outcomes] == [1, 1]
+    # The member is not silently declared dead — the adapter's own words reach the operator.
+    assert "Delegate @fleetmate failed: connection refused" in reply
 
 
 @pytest.mark.asyncio
@@ -291,6 +317,61 @@ async def test_a_truncated_catchup_is_surfaced_to_the_operator(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_a_failed_address_is_not_told_to_widen_a_window_it_never_used(monkeypatch):
+    """The window is computed BEFORE the dispatch and `truncated` rides the failure path
+    unchanged, so the outcome of a refused connection is `{ok: False, truncated: True}`.
+    Rendering the note there puts "raise `room.catchup_max_messages`" directly under
+    "Delegate @proto failed: connection refused" — new, false, operator-facing advice on
+    the DEFAULT path, since the truncation note is the one thing this change adds at
+    `room.max_rounds: 1`."""
+    from langchain_core.messages import HumanMessage
+
+    graph = _Graph()
+    graph.messages = [HumanMessage(content=f"m{i}") for i in range(60)]
+    reg = _Reg(names=("proto",), fails={"proto"})
+    cfg = _wire(monkeypatch, reg, max_rounds=1, graph=graph)
+    cfg.room_catchup_max_messages = 5
+
+    reply, outcomes = await sc._at_delegate_exchange("@proto what broke?", "t1b")
+
+    assert outcomes[0]["truncated"] is True and outcomes[0]["ok"] is False
+    assert reply == "Delegate @proto failed: connection refused"
+
+
+@pytest.mark.asyncio
+async def test_a_participant_that_only_passed_is_not_named_by_the_note(monkeypatch):
+    """A pass gets no line in the reply body; it gets no note about its window either."""
+    from langchain_core.messages import HumanMessage
+
+    graph = _Graph()
+    graph.messages = [HumanMessage(content=f"m{i}") for i in range(60)]
+    reg = _Reg(scripts={"proto": ["line 40"], "reviewer": ["pass"]})
+    cfg = _wire(monkeypatch, reg, max_rounds=2, graph=graph)
+    cfg.room_catchup_max_messages = 5
+
+    reply, outcomes = await sc._at_delegate_exchange("@proto @reviewer status?", "t1c")
+
+    clipped = {o["author"] for o in outcomes if o["truncated"]}
+    assert clipped == {"proto", "reviewer"}  # both windows really did truncate
+    assert "left out of the catch-up for @proto —" in reply  # …and only proto is named
+
+
+@pytest.mark.asyncio
+async def test_one_answer_out_of_two_addressees_keeps_its_byline(monkeypatch):
+    """`spoken` is the flat list minus silences, so multi-round can shrink it to one for
+    a room of two — and an unattributed body is the exact collapse the room exists to
+    avoid. A2A and /v1 consumers get no `room_reply` frames, so the byline is all they
+    have."""
+    reg = _Reg(scripts={"proto": ["line 40", "pass"], "reviewer": ["pass", "pass"]})
+    _wire(monkeypatch, reg, max_rounds=2)
+
+    reply, outcomes = await sc._at_delegate_exchange("@proto @reviewer status?", "t1d")
+
+    assert sum(1 for o in outcomes if not o["silent"]) == 1
+    assert reply == "**@proto** — line 40"
+
+
+@pytest.mark.asyncio
 async def test_an_untruncated_room_gets_no_note(monkeypatch):
     """Which is what keeps `room.max_rounds: 1` byte-identical for every ordinary room."""
     graph = _Graph()
@@ -324,15 +405,22 @@ async def test_the_offer_to_pass_reaches_the_delegate_only_above_one_round(monke
     """The host lever (`RoundPlan.drop_silence`) has to reach the PROMPT, not just the
     outcome. If it stops at the outcome the room honours a token nobody was asked for,
     every round is full of prose, and the cap does all the stopping."""
-    reg = _Reg(names=("proto",), scripts={"proto": ["a", "pass"]})
+    reg = _Reg(scripts={"proto": ["a", "pass"], "reviewer": ["b", "pass"]})
     _wire(monkeypatch, reg, max_rounds=2)
-    await sc._at_delegate_exchange("@proto status?", "p1")
+    await sc._at_delegate_exchange("@proto @reviewer status?", "p1")
     assert "reply with exactly `pass`" in reg.calls[0]["query"]
 
-    single = _Reg(names=("proto",), scripts={"proto": ["a"]})
+    single = _Reg(scripts={"proto": ["a"], "reviewer": ["b"]})
     _wire(monkeypatch, single, max_rounds=1)
-    await sc._at_delegate_exchange("@proto status?", "p2")
+    await sc._at_delegate_exchange("@proto @reviewer status?", "p2")
     assert "pass" not in single.calls[0]["query"].lower()
+
+    # A solo cast is a one-round room whatever the knob says, so it is offered no pass
+    # it could not act on — which is also what keeps `@one-agent do X` byte-identical.
+    solo = _Reg(names=("proto",), scripts={"proto": ["a"]})
+    _wire(monkeypatch, solo, max_rounds=5)
+    await sc._at_delegate_exchange("@proto status?", "p2b")
+    assert len(solo.calls) == 1 and "pass" not in solo.calls[0]["query"].lower()
 
 
 @pytest.mark.asyncio
