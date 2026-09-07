@@ -798,8 +798,6 @@ async def test_a_pool_timeout_keeps_the_conversation_a_read_timeout_drops_it(wir
     working, and its answer lands in a context this side will never see, so that one must
     drop. ``httpx.TimeoutException`` covers both, which is why they are caught separately.
     """
-    import pytest
-
     from plugins.delegates.adapters import KIND_TIMEOUT, KIND_UNREACHABLE
 
     # Establish a remembered context the timeouts can threaten.
