@@ -16,10 +16,14 @@ landed since it last spoke, attributed by author, capped by ``max_messages`` /
 ``max_chars`` (configurable — ``room.catchup_max_messages`` / ``room.catchup_max_chars``;
 the module constants below are the defaults, so the pure functions stay callable with no
 config at all). That bound is what keeps the cost of a room proportional to the
-conversation rather than to its length — and it's also the only continuity some delegate
-types get: ``conversation_key`` is ACP-only (``DelegateRegistry.dispatch`` refuses it for
-every other type), so an ``a2a`` fleet member or a model endpoint remembers nothing
-between calls and the catch-up is its entire picture of the room.
+conversation rather than to its length — and for a stateless participant it is also the
+only continuity there is. The room hands a ``conversation_key`` (this thread id) to every
+delegate type that has a conversation of its own to continue: an ACP session, or — since
+#3360 — the A2A ``contextId`` an ``a2a`` peer assigned this thread. A model endpoint
+gets none (``DelegateRegistry.dispatch`` refuses one: there is no server-side conversation
+to key), so for it the catch-up remains the entire picture of the room. So does it for any
+peer that ignores the key: the catch-up is sent regardless, and continuity on top of it is
+a bonus, never an assumption.
 
 Host-free-ish: takes the graph + a registry-shaped object like ``aside_op`` /
 ``rewind_op``, so both the transcript write and the catch-up window are unit-testable
@@ -55,6 +59,13 @@ _CATCHUP_MAX_CHARS = 8000
 _CATCHUP_MAX_MESSAGES_CEILING = 500
 _CATCHUP_MAX_CHARS_CEILING = 200000
 _MAX_ROUNDS_CEILING = 10
+
+# The delegate types that can hold a conversation of their own, so the room may hand them
+# a `conversation_key` (the thread id). MIRRORS ``DelegateRegistry._CONVERSATIONAL_TYPES``
+# — `tests/test_a2a_room_context.py` pins the two together — and is kept as a literal
+# rather than imported, because this module must stay host-free (it takes a
+# registry-SHAPED object, and `graph/` does not import `plugins/`).
+_CONVERSATIONAL_TYPES = ("acp", "a2a")
 
 # Marks a message this module wrote onto the thread. `lc_source` mirrors the compaction
 # convention; `room` carries authorship STRUCTURALLY so later readers (catch-up windowing
@@ -438,8 +449,20 @@ async def dispatch_into_room(
         history, target, lead_name=lead_name, max_messages=max_messages, max_chars=max_chars
     )
 
-    # `conversation_key` is ACP-only — dispatch() raises for every other type, so it
-    # rides only where it is accepted. Everyone else gets the attributed catch-up.
+    # A `conversation_key` gives the participant a conversation of its OWN on its side,
+    # keyed to this thread: an ACP session for a coding agent, and since #3360 the A2A
+    # `contextId` the peer assigned this thread for an `a2a` fleet member. `dispatch()`
+    # raises for a type that has neither (a stateless `openai` endpoint), so it rides
+    # only where it is accepted — and the attributed catch-up goes to everyone either
+    # way, because a peer is free to ignore the key and remember nothing.
+    #
+    # This is both entry points, not just `@`. The `delegate_to` TOOL routes here too
+    # (`plugins/delegates/_dispatch_into_room`) with the same thread id, so the lead's
+    # delegations and the operator's addresses to one participant are ONE conversation on
+    # its side — which is the point of #3102 calling a delegation a room address, and is
+    # exactly how `acp` has behaved since `conversation_key` existed. `delegate_to` with
+    # an `item_id`/`resume_task_id`, and `background=True`, bypass this function entirely
+    # and so keep opening conversations of their own.
     delegate = registry.get(target)
     if delegate is None:
         return {
@@ -452,7 +475,7 @@ async def dispatch_into_room(
             "silent": False,
             "messages": [],
         }
-    conversation_key = thread_id if getattr(delegate, "type", "") == "acp" else None
+    conversation_key = thread_id if getattr(delegate, "type", "") in _CONVERSATIONAL_TYPES else None
 
     ok, reply, error, error_kind = True, "", "", ""
     try:

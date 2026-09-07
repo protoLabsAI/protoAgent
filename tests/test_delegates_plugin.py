@@ -225,7 +225,7 @@ async def test_registry_dispatch_unknown_raises():
         await reg.dispatch("nope", "hi")
 
 
-async def test_registry_conversation_key_is_acp_only_and_does_not_mutate_roster(monkeypatch):
+async def test_registry_conversation_key_needs_a_continuable_type_and_does_not_mutate_roster(monkeypatch):
     reg = DelegateRegistry(
         [
             {"name": "coder", "type": "acp", "command": "proto", "workdir": "/tmp"},
@@ -246,7 +246,10 @@ async def test_registry_conversation_key_is_acp_only_and_does_not_mutate_roster(
     assert seen["delegate"] is not reg.get("coder")
     assert reg.get("coder").conversation_key == ""
     assert reg.roster() == before
-    with pytest.raises(DelegateError, match="conversation_key.*acp"):
+    # A stateless model endpoint has no conversation to select — still refused (#3360
+    # widened this to `a2a`, whose peer-assigned contextId IS one; see
+    # tests/test_a2a_room_context.py).
+    with pytest.raises(DelegateError, match="conversation_key.*stateless"):
         await reg.dispatch("model", "go", conversation_key="thread-1")
 
 

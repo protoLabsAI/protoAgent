@@ -40,6 +40,7 @@ from server.chat import (
     chat,
     compact_session,
     export_session,
+    forget_delegate_conversations,
     fork_session,
     publish_preview,
     publish_session,
@@ -376,6 +377,19 @@ def register_chat_routes(app, ui: str) -> None:
             await asyncio.to_thread(prompt_snapshots().purge_session, session_id)
         except Exception as exc:  # noqa: BLE001 — cleanup is best-effort
             log.warning("[chat] prompt-snapshot cleanup failed for %s: %s", session_id, exc)
+        # A room hands an `a2a` participant this thread as its conversation key, and the
+        # peer keeps its own side of that conversation under an A2A contextId (#3360).
+        # Same argument as the session-summary purge below: leaving the pointer alive
+        # would let the next address rejoin the deleted conversation on the peer, so the
+        # history the dialog promised to remove comes back in the participant's voice.
+        # Both retired prefixes, plus whatever the installed thread-id resolver answers
+        # for this session (#571) — that last one is the template default's `a2a:` id
+        # again, and for a fork with a custom resolver it is a best effort: a resolver that
+        # scopes threads off REQUEST METADATA cannot be replayed from a DELETE route, which
+        # carries none. (rewind/fork forget the metadata-resolved id, because they have it.)
+        forget_delegate_conversations(
+            f"a2a:{session_id}", f"chat:{session_id}", _resolve_thread_id(None, session_id)
+        )
         # The session-summary memory (#2482) — without this, a digest of the
         # deleted conversation kept riding <prior_sessions> into future prompts,
         # violating the delete dialog's "its history will be removed".

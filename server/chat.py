@@ -2961,6 +2961,45 @@ async def aside_session(
     return {**result, "message": msg}
 
 
+def forget_delegate_conversations(*thread_ids: str) -> int:
+    """Drop the transport continuity delegates hold for these checkpointer threads (#3360).
+
+    A room hands an ``a2a`` participant this thread id as its ``conversation_key``, and the
+    delegates plugin remembers the A2A ``contextId`` the peer assigned it — so the peer
+    keeps a conversation of its own, keyed to this thread. That pointer has to die with the
+    thread's history, or a gesture whose whole point is that something is GONE leaves the
+    peer still holding it and answering from it:
+
+    * **rewind** — destructive by design; before continuity existed it was total, because
+      the participant remembered nothing. Keep it total.
+    * **delete** — the same promise the attachment / prompt-snapshot / session-summary
+      purges beside it already make ("its history will be removed").
+    * **fork** (destination) — a new thread id that need not be an unused one.
+
+    Compaction is deliberately NOT here: it summarizes to save this side's window and
+    claims nothing was unsaid, and the peer manages its own context.
+
+    Reached through ``STATE.delegate_registry`` — the roster the plugin publishes on
+    runtime state and the ``@``-dispatch above already reads — so core keeps its
+    duck-typed distance from ``plugins/``. ``hasattr``-guarded for a fork pinned to an
+    older delegates plugin, and swallowing, because a cleanup must never fail the gesture.
+    Returns how many contexts were dropped (0 when nothing is wired).
+    """
+    reg = getattr(STATE, "delegate_registry", None)
+    if reg is None or not hasattr(reg, "forget_conversation"):
+        return 0
+    dropped = 0
+    # De-duplicated: a caller passes every id that could name this conversation (both
+    # retired prefixes, plus whatever a custom resolver answers) and they routinely
+    # coincide — dropping the same one twice would double-count and re-log.
+    for tid in dict.fromkeys(t for t in thread_ids if t):
+        try:
+            dropped += int(reg.forget_conversation(tid) or 0)
+        except Exception as exc:  # noqa: BLE001 — best-effort, see docstring
+            log.warning("[chat] delegate-continuity cleanup failed for %s: %s", tid, exc)
+    return dropped
+
+
 def _rewind_message(result: dict) -> str:
     """Human-readable status line for a rewind result (surfaced to non-UI callers /
     logs; the console just truncates its own thread on success)."""
@@ -3014,6 +3053,16 @@ async def rewind_session(
             occurrence=occurrence,
             before=before,
         )
+        if result.get("found") and result.get("removed"):
+            # Only when messages were actually discarded: a "that's already the last
+            # message" rewind erased nothing, so throwing away a participant's continuity
+            # would be a pure loss with no leak to close.
+            #
+            # INSIDE the lock, with the rewrite: outside it, a concurrent `@` dispatch can
+            # take the thread between the two and either re-learn a context for the thread
+            # this forget is about to clear, or learn one just after it — which is the leak
+            # this call exists to close, reopened by a race.
+            forget_delegate_conversations(tid)
     return {**result, "message": _rewind_message(result)}
 
 
@@ -3060,6 +3109,17 @@ async def fork_session(
                 target_content=content,
                 occurrence=occurrence,
             )
+            if result.get("found"):
+                # The destination thread's history is now the source's prefix, so any peer
+                # continuity a PREVIOUS occupant of this id left behind points at a
+                # conversation that has nothing to do with it. Both retired prefixes, so a
+                # destination that previously served non-streaming turns (`chat:`) does not
+                # keep the pointer the delete route would have dropped. The fork does not
+                # inherit the source's context either — that falls out of keying on the
+                # thread id, and it must not change: two threads writing into one peer
+                # conversation would splice two divergent rooms together on the peer's side.
+                # Inside the destination's lock, for the same reason the rewind is.
+                forget_delegate_conversations(dst_tid, f"chat:{new_session_id}")
     return {**result, "message": _fork_message(result)}
 
 

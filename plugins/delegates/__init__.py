@@ -269,6 +269,17 @@ async def _dispatch_into_room(
     here would race that turn's next checkpoint and lose the room record. Returning a
     ``Command`` lets the ToolNode reduce the address, reply, and required ToolMessage
     as part of the turn that produced them.
+
+    Because this is the room helper, the delegation also gets the room's CONTINUITY:
+    ``dispatch_into_room`` hands a conversational delegate this thread id as its
+    ``conversation_key`` — a persistent ACP session for a coding agent, and since #3360
+    the A2A ``contextId`` for an ``a2a`` peer. So two ``delegate_to`` calls to one peer in
+    one session are two turns of ONE conversation on its side, and they share that
+    conversation with the operator's ``@`` addresses to the same peer, which is what
+    "a delegation IS a room address" means. Every path that falls back to ``plain()`` — a
+    managed-git ``item_id`` claim, a parked-task resume, a turn with no session, a room
+    write that failed — and ``background=True``, which never reaches here at all, dispatch
+    with no key and therefore open a conversation of their own.
     """
     async def plain() -> str:
         return await registry.dispatch(

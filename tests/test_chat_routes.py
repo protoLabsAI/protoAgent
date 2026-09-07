@@ -419,6 +419,35 @@ def test_delete_session_cleans_ephemeral_attachments(monkeypatch):
     assert ns == ["attach:s1"]
 
 
+def test_delete_session_forgets_delegate_conversations(monkeypatch):
+    """Deleting a chat drops the A2A ``contextId`` a room's `a2a` participants hold for
+    it (#3360). Same promise the attachment / prompt-snapshot / session-summary purges
+    beside it make: without this, the next address rejoins the deleted conversation on
+    the peer and the removed history comes back in the participant's voice."""
+    import operator_api.chat_routes as cr
+
+    async def _fake_retire(thread_id, *, harvest=None, cascade=True):
+        return None
+
+    forgotten: list[str] = []
+
+    class _Roster:
+        def forget_conversation(self, key):
+            forgotten.append(key)
+            return 1
+
+    monkeypatch.setattr(cr, "_retire_thread", _fake_retire)
+    c = _client(monkeypatch)
+    import runtime.state as rs
+
+    monkeypatch.setattr(rs.STATE, "delegate_registry", _Roster(), raising=False)
+    monkeypatch.setattr(rs.STATE, "thread_id_resolver", None, raising=False)
+    assert c.delete("/api/chat/sessions/s1").json()["deleted"] is True
+    # Both retired prefixes, plus the resolver's own answer for a fork that scopes
+    # threads off request metadata (#571) — which here IS the default, so it collapses.
+    assert forgotten == ["a2a:s1", "chat:s1"]
+
+
 def test_healthz_ready_and_echoes_ui(monkeypatch):
     c = _client(monkeypatch, graph=object())
     r = c.get("/healthz")

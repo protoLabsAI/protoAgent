@@ -164,11 +164,17 @@ def _dropped(rounds: Sequence[Sequence[Mapping]]) -> set[str]:
     Deliberately blind to ``error_kind``, including the "still running after Ns — the
     peer may still be working" timeout, even though the outcome carries the class and
     ``server/chat.py`` reads it for a different decision. Re-dispatching a
-    still-working peer cannot rejoin its work: the room passes no resume handle and
-    ``conversation_key`` is ACP-only, so an ``a2a`` retry opens a SECOND
-    ``SendMessage`` task on a peer already busy with the first, waits the same
-    ``poll_timeout_s`` again, and still returns nothing. The operator would pay N
-    timeouts and N duplicate tasks to be told the same thing N times. The member is not
+    still-working peer cannot rejoin its work: the room passes no resume handle, so a
+    retry is a SECOND ``SendMessage`` task on a peer already busy with the first, waiting
+    the same ``poll_timeout_s`` again and still returning nothing. The
+    ``conversation_key`` an ``a2a`` member gets (#3360) does not change that in either
+    direction — and it is not even in play here, because a dispatch that leaves the peer
+    mid-turn drops this conversation's continuity on the way out, exactly so the next
+    address does not queue behind the turn this one gave up on (a protoAgent peer
+    serializes turns per thread). Held, it would have GROUPED the retry with the first
+    task under one ``contextId`` without joining it, and behind it on the peer's own
+    thread. The operator would pay N timeouts and N duplicate tasks to be told the same
+    thing N times. The member is not
     silently declared dead either way — its failure is written onto the thread as a
     ``(could not be reached: …)`` room message and the adapter's own "the peer may still
     be working; raise its poll timeout" text is quoted straight to the operator — and

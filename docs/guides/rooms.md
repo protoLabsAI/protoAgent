@@ -76,8 +76,9 @@ what broke the build?
 ```
 
 That window is what keeps the cost of a room proportional to *the conversation* rather
-than to its length. It is also, for most delegate types, the **only** continuity there
-is — see [the limitation](#the-conversation-key-limitation) below.
+than to its length. It is also sent to **every** participant on **every** address,
+whatever else that participant remembers of the room on its own side — see [what a
+participant remembers](#what-a-participant-remembers-between-addresses) below.
 
 The window is bounded twice, and whichever bound trips first wins:
 
@@ -255,26 +256,149 @@ finish, an unbounded round count parks your own thread behind every one of those
 dispatches. The Settings form will not offer a value above the ceiling; a hand-edited
 `langgraph-config.yaml` is kept as written and clamped when the room reads it.
 
-## The `conversation_key` limitation
+## What a participant remembers between addresses
 
-Be honest about what a participant remembers between addresses: **usually nothing.**
-
-`conversation_key` — the parameter that gives a delegate a persistent session of its own —
-is **ACP-only**. `DelegateRegistry.dispatch` refuses it for every other type. So:
+`conversation_key` — the parameter that gives a delegate a conversation of its own, keyed
+to *this* thread — rides to every delegate type that has one to continue.
+`DelegateRegistry.dispatch` refuses it for the type that doesn't:
 
 | Delegate type | Between addresses it remembers… |
 |---|---|
 | **acp** (protoCLI, Claude Code, …) | its own session, keyed to this thread |
-| **a2a** (a fleet agent) | nothing |
+| **a2a** (a fleet agent) | its own side of the conversation, if it keeps one — the room re-sends the A2A `contextId` that peer assigned this thread |
 | **openai** (a model endpoint) | nothing |
 
-For everything but `acp`, **the catch-up window is the participant's entire picture of
-the room.** That is why the caps are worth tuning, why truncation is surfaced rather than
-swallowed, and why a room of `a2a` members costs more prompt per round than a room of ACP
-coding agents.
+The `a2a` row is the one to read carefully, because it is a *best effort* in a way the
+other two are not. A2A's `contextId` is the protocol's "these messages are one
+conversation" grouping key, and the **peer** owns it: the room never invents one, it
+echoes back the id the peer itself assigned on the previous address. So the outcome
+depends on who you addressed —
+
+- **A protoAgent peer** (a fleet member, another instance) resolves an inbound `contextId`
+  to a chat thread of its own, so it genuinely picks the conversation back up. The catch-up
+  window stops being its whole world.
+- **A peer that assigns no `contextId`, or ignores the one we send**, remembers nothing —
+  exactly as before. Nothing fails and nothing is retried; the room simply carries on
+  sending the catch-up.
+- **A peer that answers every conversation with the *same* `contextId`** (its
+  authenticated session, say) merges your rooms on its side. Two of your chats become one
+  conversation to it. Nothing on the wire lets a client detect that, which is what "the
+  peer owns it" costs: the room keeps its threads apart, the peer need not.
+
+Which is why **the catch-up window is still sent to everyone, every time**. It is the
+floor, not an optimization to be skipped once continuity exists — and for an `openai`
+delegate (a stateless chat endpoint: every call is a fresh completion, so a conversation
+key would name nothing and it is refused rather than silently accepted) it remains the
+participant's *entire* picture of the room.
+
+### The conversation is the chat, not the `@`
+
+Continuity is keyed to *this chat thread and this participant* — not to how the
+participant was reached. Your `@name` addresses and the lead's own `delegate_to` calls to
+the same participant in the same chat are turns of **one** conversation on its side, which
+is what it means for [a delegation to be a room address](#who-decides-who-speaks-next). That
+is how `acp` has always worked, and `a2a` now matches it. Two consequences worth knowing:
+
+- Ask a peer something unrelated with `delegate_to` and it answers *inside* the room's
+  conversation, with the room's history behind it. That is usually what you want from a
+  participant; it is not what you want from a one-off lookup.
+- **`delegate_to(background=True)`, a parked-task resume, and a managed-git `item_id`
+  claim all bypass the room helper**, so each dispatches with no conversation key and
+  opens a conversation of its own. A background delegation to a participant that is also
+  in the room is therefore a *second* conversation with it, not a continuation.
+
+There is no per-call switch for this; the lever is *which* call you make.
+
+### What that changes about tuning the caps
+
+It changes what a wide window is *for*, and it splits the advice by who is in the room.
+
+Before, the window had to carry the participant's whole world, so the honest instinct was
+to widen it — a truncation note meant a participant answered on a partial view of a room
+it could not otherwise see. For a participant that resumes, the same content is now paid
+for **twice**: once in its own thread, and again in the catch-up you ship on top. Widening
+the caps for a room of protoAgent peers buys re-transmission, not knowledge.
+
+So:
+
+- **A room of resuming peers** — the window's job shrinks to *"what did I miss while I
+  wasn't the one being addressed"*, which the since-you-last-spoke watermark already
+  scopes. The defaults are generous for that, and a truncation note is worth much less
+  alarm: the clipped tail is mostly a re-send of what the peer already has. Reach for the
+  caps only when the note keeps naming the *same* participant, which means the room really
+  is outrunning it.
+- **A room with any `openai` participant, or any peer that assigns no `contextId`** —
+  nothing has changed. The window is still that participant's entire picture, truncation
+  still means it answered on a partial view, and the caps are still the only lever.
+- **Mixed rooms take the second rule**, because the caps are per-room, not per-participant.
+
+That is also why truncation is surfaced rather than swallowed: the note names *which*
+participant was clipped, which is exactly what you need to tell the two cases apart.
+
+### What continuity does not survive
+
+Deliberately, in each case — the fallback is always "open a fresh context", i.e. the
+behavior every address had before this existed, which is why none of it fails loudly:
+
+- **A restart.** The map from thread to peer context is in-memory and process-local. An
+  upgrade or a desktop relaunch ends every room's continuity, silently, and the next
+  address starts a new conversation on the peer.
+- **Rewind, and deleting the chat.** These are the ones that would otherwise be a *leak*
+  rather than a loss: rewind means "discard everything after this" and delete promises the
+  history is removed, so both drop the pointer. Without that, the next address would
+  rejoin the peer's copy of the conversation and the erased exchange would come back in
+  the participant's voice. (An `acp` participant's session is a live subprocess and is
+  **not** torn down by either gesture — a coding agent addressed in a rewound thread still
+  remembers.)
+- **Re-pointing a delegate's `url`, renaming it, or editing its credential.** A context id
+  only means anything to the peer that minted it — and to the principal it minted it for.
+- **Being addressed under a second delegate name.** Each name keeps its own conversation,
+  so one fleet member on two roster rows holds two half-rooms. Two roster rows can carry
+  two different credentials, and merging them on a matching url would cross that boundary
+  — address a member under one name.
+- **The participant asking a question it cannot be sent the answer to.** When an addressed
+  peer pauses for input (`ask_human`, a tool approval), the room shows you the `⏸ … needs
+  input` handle and the peer's thread is left holding that question. A room address is not
+  a resume — a peer that is paused would queue your next message behind the pause and hand
+  back the *same* question — so the room drops the pointer instead: your next `@` opens a
+  clean conversation and is answered normally, exactly as it was before continuity
+  existed. Only the lead can actually answer a pause, with
+  `delegate_to(target=…, resume_task_id=…)`, and that goes straight to the parked task.
+- **An address that failed with the peer still working.** "Still running after Ns", or a
+  read that timed out on a peer answering inline: the room writes `(could not be reached:
+  …)` and moves on, so whatever that turn eventually produced is in a conversation this
+  side has no record of. The pointer goes with it — otherwise the next address would both
+  inherit that invisible history and queue behind the turn the room already gave up on. An
+  address that failed because the peer was *unreachable* keeps its continuity: nothing
+  happened on the peer, so nothing about its conversation changed.
+
+**Compaction is the exception that keeps it.** `/compact` shortens *your* side to save
+your window; it is not a claim that anything was unsaid, and the peer manages its own
+context. Dropping continuity there would throw away the thing that makes a long room
+affordable.
+
+That list doubles as the **reset**: there is no "forget this room" button, so if you want
+a participant to start clean, rewind or delete the chat, or restart the instance. And
+note what none of it does — nothing is *ended* on the peer. It keeps its session and its
+content; what goes away is this side's ability to rejoin it. An incognito message that
+opens with `@name` is the same story: the peer stores the exchange the way it stores any
+other, exactly as it did before continuity existed.
+
+### What continuity is not
+
+It is not a way to rejoin work already in flight. A room passes no resume handle, so
+re-addressing a peer that is still working starts a *second* task beside the first rather
+than joining it — which is why [a failed address is not retried](#multi-round-rooms), even
+the failure that says the peer may still be working. That failure also drops the
+conversation, so your next address opens a clean one: it will be answered, but it will
+know nothing about whatever the abandoned turn eventually produced.
+
+It is not a *record*, either. The room's transcript is this thread, and that is the only
+copy you can read, search, export or rewind. What continuity buys is that the participant
+does not have to be re-told the room from scratch every time you address it.
 
 ## See also
 
 - [Delegates](/guides/delegates) — the roster `@name` resolves against
-- [CLI coding agents over ACP](/guides/coding-agents) — the one type with its own session
+- [CLI coding agents over ACP](/guides/coding-agents) — the type with a persistent local session
 - [Fleet](/guides/fleet) — many named agents on one host, addressable over `a2a`
