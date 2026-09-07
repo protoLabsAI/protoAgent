@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json as _json
 import logging
+import time as _time
 
 import httpx
 import pytest
@@ -20,6 +21,7 @@ from plugins.delegates.adapters import (
     Delegate,
     DelegateError,
     _a2a_error_detail,
+    _a2a_progress_fingerprint,
     _warn_if_suspiciously_short,
 )
 
@@ -128,6 +130,21 @@ class _FakeClient:
         return self.send_resp if (json or {}).get("method") == "SendMessage" else self.get_resp
 
 
+class _QueueClient(_FakeClient):
+    """A fake client whose GetTask responses advance through a finite script."""
+
+    def __init__(self, *, get_resps=None, **kw):
+        super().__init__(**kw)
+        self.get_resps = list(get_resps or [])
+
+    async def post(self, url, json=None, headers=None):
+        method = (json or {}).get("method")
+        if method == "GetTask" and self.get_resps:
+            self.posts += 1
+            return self.get_resps.pop(0)
+        return await super().post(url, json=json, headers=headers)
+
+
 @pytest.fixture
 def patched(monkeypatch):
     """Allow the url (skip the egress policy) and skip real sleeps."""
@@ -142,6 +159,46 @@ def patched(monkeypatch):
 
 def _install_client(monkeypatch, **kw):
     monkeypatch.setattr(httpx, "AsyncClient", lambda **client_kw: _FakeClient(**kw, **client_kw))
+
+
+def _task_resp(*, state="TASK_STATE_WORKING", task_id="t1", context_id=None, text=None):
+    task = {"id": task_id, "status": {"state": state}}
+    if context_id:
+        task["contextId"] = context_id
+    if text:
+        task["artifacts"] = [{"parts": [{"text": text}]}]
+    return _Resp({"jsonrpc": "2.0", "result": {"task": task}})
+
+
+def _clock(monkeypatch, step=0.3):
+    """A fake ``time.monotonic`` that ADVANCES by ``step`` on every read.
+
+    It must never stop advancing. The adapter reads the clock an
+    implementation-defined number of times per dispatch — ``_rpc_tracked`` alone reads
+    it twice per RPC — so a script that freezes on a final value can leave the poll
+    deadline permanently ahead of the clock. Combined with the ``patched`` fixture's
+    no-op ``asyncio.sleep``, that is not a slow test but an infinite spin (it timed out
+    a 15-minute CI job). An always-increasing clock guarantees every deadline is
+    eventually crossed, so a miscounted read fails the assertion instead of hanging.
+
+    Returns the list of values handed out, so a test can assert on elapsed time."""
+    reads: list[float] = []
+
+    def _monotonic() -> float:
+        reads.append(step * len(reads))
+        return reads[-1]
+
+    monkeypatch.setattr(_time, "monotonic", _monotonic)
+    return reads
+
+
+def test_progress_fingerprint_distinguishes_material_task_advancement():
+    working = _task_resp(state="TASK_STATE_WORKING").json()["result"]
+    same_working = _task_resp(state="TASK_STATE_WORKING").json()["result"]
+    advanced = _task_resp(state="TASK_STATE_WORKING", text="built wheels").json()["result"]
+
+    assert _a2a_progress_fingerprint(working) == _a2a_progress_fingerprint(same_working)
+    assert _a2a_progress_fingerprint(working) != _a2a_progress_fingerprint(advanced)
 
 
 def test_dispatch_unreachable_maps_to_clear_error(patched):
@@ -171,6 +228,44 @@ def test_dispatch_deadline_exceeded_reports_still_running(patched):
     with pytest.raises(DelegateError) as ei:
         asyncio.run(A.dispatch(d, "hi"))
     assert "still running" in str(ei.value)
+
+
+def test_identical_working_polls_timeout_without_a_second_send(patched):
+    patched.setattr("tools.a2a_parse._extract_text", lambda *_a, **_k: "")
+    _clock(patched, step=0.3)
+    running = _task_resp(state="TASK_STATE_WORKING")
+    bodies = _install_capture_client(patched, send_resp=running, get_resp=running)
+
+    with pytest.raises(DelegateError) as ei:
+        asyncio.run(A.dispatch(_parse(poll_timeout_s=1), "hi"))
+
+    assert "without observable progress" in str(ei.value)
+    methods = [b.get("method") for b in bodies]
+    # The invariant that matters: a heartbeat that never changes is not progress, so the
+    # bound still trips — and the timeout opens NO second task (room_rounds._dropped).
+    assert methods.count("SendMessage") == 1
+    assert methods.count("GetTask") >= 1
+
+
+def test_material_progress_resets_poll_timeout_until_completion(patched):
+    reads = _clock(patched, step=1.0)
+    bodies = _install_capture_client(
+        patched,
+        send_resp=_task_resp(state="TASK_STATE_WORKING"),
+        get_resps=[
+            _task_resp(state="TASK_STATE_WORKING", text="built wheels"),
+            _task_resp(state="TASK_STATE_COMPLETED", text="done"),
+        ],
+    )
+
+    assert asyncio.run(A.dispatch(_parse(poll_timeout_s=10), "hi")) == "done"
+    methods = [b.get("method") for b in bodies]
+    assert methods.count("SendMessage") == 1
+    assert methods.count("GetTask") == 2
+    # The point of the change: an advancing task runs past the nominal poll_timeout_s
+    # total and still returns its answer, because each material observation reset the
+    # inactivity deadline rather than the whole turn being capped at 10s.
+    assert reads[-1] - reads[0] >= 10
 
 
 def test_dispatch_returns_immediate_text(patched):
@@ -223,7 +318,7 @@ def test_explicit_timeout_overrides_read_budget(patched):
 # ── fleet tracing: outbound a2a.trace propagation ──────────────────────────────
 
 
-class _BodyCaptureClient(_FakeClient):
+class _BodyCaptureClient(_QueueClient):
     """A _FakeClient that also records every posted JSON-RPC body."""
 
     bodies: list  # class attr replaced per-install

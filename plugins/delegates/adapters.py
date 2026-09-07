@@ -124,7 +124,7 @@ class Delegate:
     url: str = ""
     auth_scheme: str = ""  # "" | bearer | apiKey
     auth_token: str = ""  # secret value (from secrets.yaml overlay)
-    poll_timeout_s: float = 300.0  # a2a: max seconds to await a long-running delegated task
+    poll_timeout_s: float = 300.0  # a2a: max seconds to wait without observed task progress
 
     # openai
     model: str = ""
@@ -335,6 +335,70 @@ def _a2a_error_detail(d: Delegate, err: object) -> str:
         return f"delegate {d.name!r}: {head}"
     detail = data if isinstance(data, str) else json.dumps(data, default=str)
     return f"delegate {d.name!r}: {head}: {' '.join(str(detail).split())[:_A2A_ERROR_DETAIL_LIMIT]}"
+
+
+def _a2a_progress_fingerprint(result: object) -> str:
+    """A stable fingerprint of the task fields this side can observe as progress.
+
+    A2A peers are allowed to report a long-running task as ``TASK_STATE_WORKING`` many
+    times. That heartbeat is not progress by itself: an identical task observation must
+    still trip ``poll_timeout_s``. The fields below are deliberately the material,
+    operator-visible shape the adapter can act on — task identity, context, state,
+    status-message content and artifact content — not incidental server metadata such as
+    timestamps that would make a stuck peer look alive forever.
+    """
+
+    def _compact(value):
+        if isinstance(value, dict):
+            return {
+                str(k): _compact(v)
+                for k, v in sorted(value.items(), key=lambda item: str(item[0]))
+                if v not in (None, "", [], {})
+            }
+        if isinstance(value, list):
+            return [_compact(v) for v in value]
+        return value
+
+    def _parts(message: object) -> list:
+        if not isinstance(message, dict):
+            return []
+        return [
+            _compact(
+                {
+                    "kind": part.get("kind") or part.get("type"),
+                    "text": part.get("text"),
+                    "data": part.get("data"),
+                    "file": part.get("file"),
+                }
+            )
+            for part in message.get("parts") or []
+            if isinstance(part, dict)
+        ]
+
+    if not isinstance(result, dict):
+        return json.dumps({"raw": _compact(result)}, sort_keys=True, separators=(",", ":"), default=str)
+    task = result.get("task", result)
+    if not isinstance(task, dict):
+        return json.dumps({"raw": _compact(result)}, sort_keys=True, separators=(",", ":"), default=str)
+    status = task.get("status") if isinstance(task.get("status"), dict) else {}
+    observation = {
+        "id": task.get("id"),
+        "contextId": task.get("contextId"),
+        "state": status.get("state"),
+        "statusMessage": _parts(status.get("message")),
+        "artifacts": [
+            _compact(
+                {
+                    "name": art.get("name"),
+                    "description": art.get("description"),
+                    "parts": _parts(art),
+                }
+            )
+            for art in task.get("artifacts") or []
+            if isinstance(art, dict)
+        ],
+    }
+    return json.dumps(_compact(observation), sort_keys=True, separators=(",", ":"), default=str)
 
 
 # The A2A protocol version(s) our delegate client can speak (it sends the
@@ -730,11 +794,12 @@ class A2aAdapter(Adapter):
                 "number",
                 default=300,
                 advanced=True,
-                help="Max seconds to wait for a long-running delegated task to finish before "
-                "giving up locally — the peer keeps working. Also caps the initial synchronous "
-                "SendMessage read, so a peer that answers inline (protoAgent's own server does) "
-                "may legitimately take up to this long to reply — the old flat 60s hard-failed "
-                "every member turn beyond it (#1778). Raise it for slow agents (e.g. a code build).",
+                help="Max seconds to wait without observed progress on a long-running delegated "
+                "task before giving up locally — the peer keeps working. Also caps the initial "
+                "synchronous SendMessage read, so a peer that answers inline (protoAgent's own "
+                "server does) may legitimately take up to this long to reply — the old flat 60s "
+                "hard-failed every member turn beyond it (#1778). Raise it for slow agents (e.g. "
+                "a code build).",
             ),
             *_env_fields(),
         ]
@@ -1049,6 +1114,7 @@ class A2aAdapter(Adapter):
                 await _bill_peer_usage(result, d.name)
                 _warn_if_suspiciously_short(d.name, text, time.monotonic() - t0)
                 return text
+            progress_fingerprint = _a2a_progress_fingerprint(result)
             deadline = time.monotonic() + poll_timeout
             while task_id and not _is_terminal(state) and not _is_input_required(state) and time.monotonic() < deadline:
                 await asyncio.sleep(1.0)
@@ -1060,7 +1126,12 @@ class A2aAdapter(Adapter):
                 # inline, so this path rarely ran).
                 result = await _rpc_tracked(client, "GetTask", {"id": task_id})
                 task = result.get("task", result) or {}
+                observed_task_id = task.get("id")
                 state = (task.get("status") or {}).get("state")
+                next_fingerprint = _a2a_progress_fingerprint(result)
+                if (not observed_task_id or observed_task_id == task_id) and next_fingerprint != progress_fingerprint:
+                    progress_fingerprint = next_fingerprint
+                    deadline = time.monotonic() + poll_timeout
             if _is_input_required(state):
                 # The peer parked on an input interrupt. The HITL delegation chain
                 # (operator decision, 2026-08-20): the QUESTION comes back to the
@@ -1126,8 +1197,9 @@ class A2aAdapter(Adapter):
             _drop()
             if task_id and not _is_terminal(state):
                 raise DelegateError(
-                    f"delegate {d.name!r} still running after {int(poll_timeout)}s — the peer may "
-                    f"still be working; raise its poll timeout if tasks legitimately take longer "
+                    f"delegate {d.name!r} still running after {int(poll_timeout)}s without observable "
+                    f"progress — the peer may still be working; raise its poll timeout if tasks go "
+                    f"that long without visible advancement "
                     f"(state={state})"
                 )
             raise DelegateError(f"delegate {d.name!r} returned no text (state={state})")
