@@ -978,3 +978,119 @@ def test_the_delete_route_still_uses_key_scoped_forget_unchanged():
     src = inspect.getsource(chat_routes)
     assert "forget_delegate_conversations(" in src
     assert "forget_delegate_conversations_for_session(" not in src
+
+
+# ── the real dispatch path actually POPULATES the origin session (#3362a.1) ────
+#
+# The store, registry seam and server seam above are exercised by hand-planted entries.
+# These pin the missing half CodeRabbit flagged: an ANSWERED a2a dispatch must record the
+# originating session the room bound, so ``forget_by_session`` has something to match.
+
+
+async def test_a_real_dispatch_records_the_origin_session_passed_explicitly(wire):
+    """r1: the answered exchange stores the session BESIDE the resolved key — not derived
+    from it. Lookup is unchanged: still keyed on the resolved conversation key, still the
+    bare contextId."""
+    wire(_always(context_id="ctx-room"))
+    reg = _registry()
+
+    await reg.dispatch("peer", "hi", conversation_key="resolved-thread-key", origin_session_id="s1")
+
+    (entry,) = conversations.snapshot().values()
+    assert entry.context_id == "ctx-room"
+    assert entry.session_id == "s1"
+    assert conversations.remembered("resolved-thread-key", "peer", PEER_URL) == "ctx-room"
+
+
+async def test_the_recording_session_block_supplies_the_origin_to_a_real_dispatch(wire):
+    """The room path can't pass ``origin_session_id`` through host-free ``graph/mention_op``,
+    so the chat-room boundary binds it with ``recording_session`` and ``dispatch`` reads it
+    off the ContextVar. Proven here without the room stack by dispatching inside the block —
+    exactly what ``server.chat`` and the ``delegate_to`` helper do around theirs."""
+    wire(_always(context_id="ctx-room"))
+    reg = _registry()
+
+    with reg.recording_session("s-room"):
+        await reg.dispatch("peer", "hi", conversation_key="resolved-thread-key")
+
+    (entry,) = conversations.snapshot().values()
+    assert entry.session_id == "s-room"
+
+
+async def test_an_explicit_origin_session_wins_over_a_bound_one(wire):
+    """Explicit beats ambient: a caller that knows the session overrides whatever block it
+    happens to run inside, so the two channels can never disagree silently."""
+    wire(_always(context_id="ctx-room"))
+    reg = _registry()
+
+    with reg.recording_session("bound"):
+        await reg.dispatch("peer", "hi", conversation_key="k", origin_session_id="explicit")
+
+    (entry,) = conversations.snapshot().values()
+    assert entry.session_id == "explicit"
+
+
+async def test_a_keyless_dispatch_records_no_session_even_when_bound(wire):
+    """No conversation key ⇒ nothing remembered, so nothing to tag: the origin binding must
+    not conjure an entry a keyless one-off never had (``remember`` is a no-op without a key)."""
+    wire(_always(context_id="ctx-room"))
+    reg = _registry()
+
+    with reg.recording_session("s1"):
+        await reg.dispatch("peer", "one-off")  # no conversation_key
+
+    assert conversations.snapshot() == {}
+
+
+async def test_the_origin_binding_resets_on_exit(wire):
+    """One room's session must not leak into the next dispatch on the same task. Inside the
+    block the entry carries the origin; the address after it records none."""
+    wire(_always(context_id="ctx-room"))
+    reg = _registry()
+
+    with reg.recording_session("s1"):
+        await reg.dispatch("peer", "hi", conversation_key="k1")
+    await reg.dispatch("peer", "later", conversation_key="k2")  # outside the block
+
+    by_key = {key[0]: entry.session_id for key, entry in conversations.snapshot().items()}
+    assert by_key["k1"] == "s1"
+    assert by_key["k2"] == ""
+
+
+async def test_forget_by_session_after_a_real_dispatch_drops_arbitrary_resolver_keys(wire):
+    """r2 end to end: a custom thread-id resolver can mint ANY key (a UUID, a tenant-scoped
+    handle), yet the recorded origin lets a delete that knows only the session reach every
+    context it minted — across delegates and urls — and leave another session's rows alone.
+    No key-shape inference anywhere in the path."""
+    reg = DelegateRegistry(
+        [
+            {"name": "alpha", "type": "a2a", "url": PEER_URL},
+            {"name": "beta", "type": "a2a", "url": OTHER_URL},
+        ]
+    )
+    wire(lambda url, _b: _result(context_id="ctx-alpha" if url == PEER_URL else "ctx-beta"))
+
+    with reg.recording_session("s1"):
+        await reg.dispatch("alpha", "hi", conversation_key="uuid-9f3a-not-derivable")
+        await reg.dispatch("beta", "hi", conversation_key="tenant/scope/xyz")
+    with reg.recording_session("s2"):
+        await reg.dispatch("alpha", "hey", conversation_key="another-key")
+
+    assert reg.forget_conversations_for_session("s1") == 2
+    assert conversations.remembered("uuid-9f3a-not-derivable", "alpha", PEER_URL) == ""
+    assert conversations.remembered("tenant/scope/xyz", "beta", OTHER_URL) == ""
+    assert conversations.remembered("another-key", "alpha", PEER_URL) == "ctx-alpha"  # other session untouched
+
+
+def test_both_room_boundaries_bind_the_origin_session():
+    """The mechanism only helps if the real dispatch boundaries actually open the block.
+    Neither can be reached here without the whole room stack, so pin it at the source (the
+    way the delete-route slice boundary is pinned above): the ``delegate_to`` room helper
+    binds via ``origin_session`` and the ``@`` path via the registry's ``recording_session``."""
+    import inspect
+
+    from plugins.delegates import _dispatch_into_room
+    from server.chat import _at_delegate_exchange
+
+    assert "origin_session(session_id)" in inspect.getsource(_dispatch_into_room)
+    assert "recording_session" in inspect.getsource(_at_delegate_exchange)

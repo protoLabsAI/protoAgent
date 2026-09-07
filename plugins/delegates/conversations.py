@@ -78,9 +78,11 @@ poll deadline makes the next address queue behind the very turn the room gave up
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import threading
 from collections import OrderedDict
+from contextvars import ContextVar
 from typing import NamedTuple
 
 
@@ -109,6 +111,38 @@ _CONTEXTS: OrderedDict[tuple[str, str, str, str], _Entry] = OrderedDict()
 # dictionary changed size during iteration` raised inside a cleanup path that swallows
 # exceptions — i.e. a forget that silently does nothing.
 _LOCK = threading.Lock()
+
+
+# The originating chat session for the delegations dispatched inside an ``origin_session``
+# block (#3362). It rides a ContextVar rather than a new argument because the chat-room
+# dispatch boundary (the server ``@`` dispatch and ``delegate_to``'s room helper) reaches
+# ``DelegateRegistry.dispatch`` THROUGH ``graph/mention_op``, which is host-free and never
+# imports this plugin — so an explicit parameter would have to be threaded through it.
+# Default ``""`` means "no origin bound": every caller outside a block (a background job, a
+# unit test, a plugin calling ``host.invoke_delegate``) records no session, exactly as
+# before. Reset with the token on the way out so one room's session never leaks into the
+# next dispatch on the same task.
+_ORIGIN_SESSION: ContextVar[str] = ContextVar("protoagent_delegate_origin_session", default="")
+
+
+@contextlib.contextmanager
+def origin_session(session_id: str):
+    """Bind ``session_id`` as the originating chat session for delegations dispatched in the
+    block, so their answered A2A exchanges record it beside the resolved conversation key
+    (#3362). A blank id binds ``""`` — the no-origin case, harmless. See ``_ORIGIN_SESSION``
+    for why this is a ContextVar and not a dispatch argument."""
+    token = _ORIGIN_SESSION.set(str(session_id or ""))
+    try:
+        yield
+    finally:
+        _ORIGIN_SESSION.reset(token)
+
+
+def current_origin_session() -> str:
+    """The originating chat session bound by the enclosing ``origin_session`` block, or ``""``
+    when there is none. Read by ``DelegateRegistry.dispatch`` to fill ``remember``'s
+    ``session_id`` for the room path that can't pass it explicitly."""
+    return _ORIGIN_SESSION.get()
 
 
 def _digest(credential: str) -> str:

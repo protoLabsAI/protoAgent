@@ -14,6 +14,7 @@ import cycle. ``server/__init__.py`` re-exports every public name so
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -1343,29 +1344,41 @@ async def _at_delegate_exchange(
     # flat `outcomes` the caller wants is derived from it at the end rather than kept in
     # parallel, so there is only one place a round can be recorded.
     rounds: list[list[dict]] = []
-    plan = plan_round(targets, rounds, max_rounds=max_rounds)
-    while not plan.done:
-        this_round: list[dict] = []
-        for name in plan.speakers:
-            outcome = await run_mention(
-                STATE.graph,
-                reg,
-                tid,
-                name,
-                rest,
-                session_id=session_id,
-                # Both levers come off the PLAN, not from re-deriving them here: they are
-                # the room's policy (`RoundPlan.record_address` / `.drop_silence`), and
-                # `drop_silence` in particular is what makes `room.max_rounds: 1` byte-
-                # identical to the single pass this used to be.
-                record_address=plan.record_address,
-                drop_silence=plan.drop_silence,
-                **caps,
-            )
-            outcome["round"] = plan.round_index
-            this_round.append(outcome)
-        rounds.append(this_round)
+    # Bind the originating chat session for the whole exchange so the delegates plugin
+    # records every a2a continuity this room mints against it (#3362) — the session then
+    # scopes a later session-DELETE cleanup. It rides a ContextVar the registry reads
+    # (`recording_session`), because run_mention reaches DelegateRegistry.dispatch through
+    # host-free `graph/mention_op`, which can't carry a new argument. Reached duck-typed
+    # through the roster like `forget_delegate_conversations`, and gated on a real session,
+    # so a fork without the plugin (or a session-less caller) is exactly today's behaviour.
+    _record_session = getattr(reg, "recording_session", None)
+    session_scope = (
+        _record_session(session_id) if _record_session is not None and session_id else contextlib.nullcontext()
+    )
+    with session_scope:
         plan = plan_round(targets, rounds, max_rounds=max_rounds)
+        while not plan.done:
+            this_round: list[dict] = []
+            for name in plan.speakers:
+                outcome = await run_mention(
+                    STATE.graph,
+                    reg,
+                    tid,
+                    name,
+                    rest,
+                    session_id=session_id,
+                    # Both levers come off the PLAN, not from re-deriving them here: they are
+                    # the room's policy (`RoundPlan.record_address` / `.drop_silence`), and
+                    # `drop_silence` in particular is what makes `room.max_rounds: 1` byte-
+                    # identical to the single pass this used to be.
+                    record_address=plan.record_address,
+                    drop_silence=plan.drop_silence,
+                    **caps,
+                )
+                outcome["round"] = plan.round_index
+                this_round.append(outcome)
+            rounds.append(this_round)
+            plan = plan_round(targets, rounds, max_rounds=max_rounds)
     outcomes: list[dict] = [outcome for one_round in rounds for outcome in one_round]
 
     # A stopped member can already be started, with consent, by the lead agent's

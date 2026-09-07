@@ -296,22 +296,30 @@ async def _dispatch_into_room(
         from runtime.state import STATE
         from tools.lg_tools import _session_id_from
 
+        from . import conversations
+
         session_id = _session_id_from(state) or ""
         if not session_id:
             return await plain()
         messages = list((state or {}).get("messages") or []) if isinstance(state, dict) else []
-        outcome = await dispatch_into_room(
-            registry,
-            target,
-            query,
-            messages,
-            thread_id=resolve_thread_id(None, session_id),
-            speaker="assistant",
-            timeout=timeout,
-            # The room's catch-up bounds are the operator's (room.catchup_max_*), not this
-            # call site's — one delegation and one `@` must see the same window.
-            **catchup_caps(getattr(STATE, "graph_config", None)),
-        )
+        # Bind the originating chat session so an answered a2a exchange records it beside the
+        # resolved conversation key (#3362). `dispatch_into_room` reaches `registry.dispatch`
+        # through host-free `graph/mention_op`, which can't carry a new argument, so the
+        # session rides a ContextVar the registry reads. Same session that scopes a later
+        # session-DELETE cleanup — the `@` path binds it identically in `server.chat`.
+        with conversations.origin_session(session_id):
+            outcome = await dispatch_into_room(
+                registry,
+                target,
+                query,
+                messages,
+                thread_id=resolve_thread_id(None, session_id),
+                speaker="assistant",
+                timeout=timeout,
+                # The room's catch-up bounds are the operator's (room.catchup_max_*), not this
+                # call site's — one delegation and one `@` must see the same window.
+                **catchup_caps(getattr(STATE, "graph_config", None)),
+            )
     except Exception:  # noqa: BLE001 — conversation bookkeeping must never cost the reply
         log.exception("[delegates] recording delegation in the room failed")
         return await plain()

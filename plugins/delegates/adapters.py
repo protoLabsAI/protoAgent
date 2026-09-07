@@ -156,8 +156,14 @@ class Delegate:
     # names one continuing conversation with this delegate — an ACP session for a coding
     # agent, the peer-assigned A2A ``contextId`` for an a2a peer (#3360);
     # ``permissions_ceiling`` stays ACP-only, being the one type that can enforce it.
+    # ``origin_session_id`` is the chat SESSION this dispatch originated from — recorded
+    # BESIDE (never inside) the resolved ``conversation_key`` so a delete that knows only the
+    # session can forget the a2a context later (#3362). A resolved key can't be reversed into
+    # its session (a custom thread-id resolver mints it from request metadata), so it has to
+    # ride explicitly; ``""`` for a caller that doesn't know it, which records no origin.
     conversation_key: str = ""
     permissions_ceiling: str = ""
+    origin_session_id: str = ""
     confirm: bool = False
     # acp managed git (ADR 0076): the framework owns branch/commit/push/PR; the
     # coder edits files only. Off by default — non-worktree setups keep the old
@@ -950,10 +956,21 @@ class A2aAdapter(Adapter):
             Called ONLY where this dispatch is about to return an ANSWER. A remembered
             context has to name a conversation that is idle and whose last exchange is on
             this side's thread; every other way out of the wire block below is ``_drop()``
-            instead."""
+            instead.
+
+            ``session_id`` is the chat session this dispatch originated from (the room set it
+            via ``DelegateRegistry.dispatch``), stored BESIDE the resolved key so a delete
+            that knows only the session can forget this context later (#3362). ``""`` when the
+            caller didn't know it — the entry is still keyed and remembered, just unreachable
+            by ``forget_by_session``."""
             if not resume_task_id:
                 conversations.remember(
-                    d.conversation_key, d.name, d.url, _extract_context_id(envelope), credential
+                    d.conversation_key,
+                    d.name,
+                    d.url,
+                    _extract_context_id(envelope),
+                    credential,
+                    session_id=d.origin_session_id,
                 )
 
         def _drop() -> None:
