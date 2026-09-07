@@ -30,6 +30,13 @@ async function flush() {
   });
 }
 
+async function waitForAct(assertion: () => void) {
+  await vi.waitFor(async () => {
+    await flush();
+    assertion();
+  });
+}
+
 beforeEach(() => {
   container = document.createElement("div");
   document.body.appendChild(container);
@@ -210,6 +217,35 @@ const openLaneMenu = (label: string) => {
 
 const laneItems = () => [...document.querySelectorAll<HTMLElement>('[role="menuitemradio"]')];
 
+const laneTrigger = (label: string) =>
+  document.querySelector(`[aria-label="New target for ${label}"]`) as HTMLButtonElement | null;
+
+const laneOptionText = () => laneItems().map((option) => option.textContent ?? "").join(" ");
+
+// The schema-backed repoint DropdownSelect is disabled until its cross-provider lanes are loaded.
+// Radix swallows `pointerdown` while disabled, so wait on the trigger before opening the menu.
+const waitForLaneTrigger = (label: string) =>
+  waitForAct(() => {
+    const trigger = laneTrigger(label);
+    expect(trigger).toBeTruthy();
+    expect(trigger?.disabled).toBe(false);
+    expect(trigger?.textContent).not.toContain("Loading models");
+  });
+
+const waitForLaneOptions = (contains: string) =>
+  waitForAct(() => {
+    expect(laneOptionText()).toContain(contains);
+  });
+
+const waitForPrimaryEnabled = () =>
+  waitForAct(() => {
+    expect(primary()?.disabled).toBe(false);
+  });
+
+const expectNoLaneOption = (contains: string) => {
+  expect(laneOptionText()).not.toContain(contains);
+};
+
 const chooseLane = (contains: string) => {
   const item = laneItems().find((option) => option.textContent?.includes(contains))!;
   act(() => {
@@ -375,23 +411,22 @@ describe("Resolve-references dialog (bd-v6xy)", () => {
     // No target chosen yet for the non-clearable lead model → the destructive primary is off.
     expect(primary()?.disabled).toBe(true);
 
-    await flush(); // the dialog's schema query resolves → the repoint dropdown enables
+    await waitForLaneTrigger("Lead model");
     openLaneMenu("Lead model");
-    await flush();
+    await waitForLaneOptions("qwen3-32b");
 
-    const options = laneItems();
     // The other connection's lane is offered; the connection being removed (its `gpt-x`) is not.
-    expect(options.map((option) => option.textContent).join(" ")).toContain("qwen3-32b");
-    expect(options.map((option) => option.textContent).join(" ")).not.toContain("gpt-x");
+    expectNoLaneOption("gpt-x");
     chooseLane("qwen3-32b");
-    await flush();
+    await waitForPrimaryEnabled();
 
-    expect(primary()?.disabled).toBe(false);
     await act(async () => {
       primary()!.click();
       await Promise.resolve();
     });
-    await flush();
+    await waitForAct(() => {
+      expect(remove).toHaveBeenCalled();
+    });
 
     expect(remove).toHaveBeenCalledWith("gateway", false, { "model.name": "local-vllm:qwen3-32b" });
   });
