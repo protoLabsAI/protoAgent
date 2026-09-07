@@ -76,8 +76,9 @@ what broke the build?
 ```
 
 That window is what keeps the cost of a room proportional to *the conversation* rather
-than to its length. It is also, for most delegate types, the **only** continuity there
-is — see [the limitation](#the-conversation-key-limitation) below.
+than to its length. It is also sent to **every** participant on **every** address,
+whatever else that participant remembers of the room on its own side — see [what a
+participant remembers](#what-a-participant-remembers-between-addresses) below.
 
 The window is bounded twice, and whichever bound trips first wins:
 
@@ -255,26 +256,45 @@ finish, an unbounded round count parks your own thread behind every one of those
 dispatches. The Settings form will not offer a value above the ceiling; a hand-edited
 `langgraph-config.yaml` is kept as written and clamped when the room reads it.
 
-## The `conversation_key` limitation
+## What a participant remembers between addresses
 
-Be honest about what a participant remembers between addresses: **usually nothing.**
-
-`conversation_key` — the parameter that gives a delegate a persistent session of its own —
-is **ACP-only**. `DelegateRegistry.dispatch` refuses it for every other type. So:
+`conversation_key` — the parameter that gives a delegate a conversation of its own, keyed
+to *this* thread — rides to every delegate type that has one to continue.
+`DelegateRegistry.dispatch` refuses it for the type that doesn't:
 
 | Delegate type | Between addresses it remembers… |
 |---|---|
 | **acp** (protoCLI, Claude Code, …) | its own session, keyed to this thread |
-| **a2a** (a fleet agent) | nothing |
+| **a2a** (a fleet agent) | its own side of the conversation, if it keeps one — the room re-sends the A2A `contextId` that peer assigned this thread |
 | **openai** (a model endpoint) | nothing |
 
-For everything but `acp`, **the catch-up window is the participant's entire picture of
-the room.** That is why the caps are worth tuning, why truncation is surfaced rather than
-swallowed, and why a room of `a2a` members costs more prompt per round than a room of ACP
-coding agents.
+The `a2a` row is the one to read carefully, because it is a *best effort* in a way the
+other two are not. A2A's `contextId` is the protocol's "these messages are one
+conversation" grouping key, and the **peer** owns it: the room never invents one, it
+echoes back the id the peer itself assigned on the previous address. So the outcome
+depends on who you addressed —
+
+- **A protoAgent peer** (a fleet member, another instance) resolves an inbound `contextId`
+  to a chat thread of its own, so it genuinely picks the conversation back up. The catch-up
+  window stops being its whole world.
+- **A peer that assigns no `contextId`, or ignores the one we send**, remembers nothing —
+  exactly as before. Nothing fails and nothing is retried; the room simply carries on
+  sending the catch-up.
+
+Which is why **the catch-up window is still sent to everyone, every time**. It is the
+floor, not an optimization to be skipped once continuity exists — and for an `openai`
+delegate (a stateless chat endpoint: every call is a fresh completion, so a conversation
+key would name nothing and it is refused rather than silently accepted) it remains the
+participant's *entire* picture of the room. That is why the caps are worth tuning, and why
+truncation is surfaced rather than swallowed.
+
+One thing continuity is not: a way to rejoin work already in flight. A room passes no
+resume handle, so a shared `contextId` groups a re-dispatch with the earlier task without
+joining it — which is why [a failed address is not retried](#multi-round-rooms), even the
+failure that says the peer is still working.
 
 ## See also
 
 - [Delegates](/guides/delegates) — the roster `@name` resolves against
-- [CLI coding agents over ACP](/guides/coding-agents) — the one type with its own session
+- [CLI coding agents over ACP](/guides/coding-agents) — the type with a persistent local session
 - [Fleet](/guides/fleet) — many named agents on one host, addressable over `a2a`

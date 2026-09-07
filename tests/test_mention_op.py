@@ -200,16 +200,20 @@ async def test_an_empty_room_sends_the_bare_message():
 
 
 @pytest.mark.asyncio
-async def test_conversation_key_rides_only_for_acp_delegates():
-    graph, reg = _Graph(), _Registry(dtype="acp")
-    await mop.run_mention(graph, reg, "t1", "proto", "hi")
-    assert reg.calls[0]["conversation_key"] == "t1"
+async def test_conversation_key_rides_for_delegates_that_can_continue_a_conversation():
+    """An ACP coding agent keeps a session; an ``a2a`` peer groups the thread's addresses
+    under one A2A ``contextId`` (#3360). Both get the thread id as the key."""
+    for dtype in ("acp", "a2a"):
+        graph, reg = _Graph(), _Registry(dtype=dtype)
+        await mop.run_mention(graph, reg, "t1", "proto", "hi")
+        assert reg.calls[0]["conversation_key"] == "t1", dtype
 
 
 @pytest.mark.asyncio
 async def test_conversation_key_is_withheld_from_every_other_delegate_type():
-    """dispatch() RAISES on a conversation_key for a non-acp delegate — never send one."""
-    for dtype in ("a2a", "model", "coding_agent"):
+    """dispatch() RAISES on a conversation_key for a type with no conversation to
+    continue (a stateless model endpoint) — never send one."""
+    for dtype in ("openai", "model", "coding_agent"):
         graph, reg = _Graph(), _Registry(dtype=dtype)
         await mop.run_mention(graph, reg, "t1", "proto", "hi")
         assert reg.calls[0]["conversation_key"] is None, dtype

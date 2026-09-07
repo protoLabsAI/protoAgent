@@ -164,10 +164,11 @@ def _dropped(rounds: Sequence[Sequence[Mapping]]) -> set[str]:
     Deliberately blind to ``error_kind``, including the "still running after Ns — the
     peer may still be working" timeout, even though the outcome carries the class and
     ``server/chat.py`` reads it for a different decision. Re-dispatching a
-    still-working peer cannot rejoin its work: the room passes no resume handle and
-    ``conversation_key`` is ACP-only, so an ``a2a`` retry opens a SECOND
-    ``SendMessage`` task on a peer already busy with the first, waits the same
-    ``poll_timeout_s`` again, and still returns nothing. The operator would pay N
+    still-working peer cannot rejoin its work: the room passes no resume handle, and the
+    ``conversation_key`` an ``a2a`` member now gets (#3360) only GROUPS the retry with the
+    first task under one ``contextId`` — it does not join the running task — so the retry
+    opens a SECOND ``SendMessage`` task on a peer already busy with the first, waits the
+    same ``poll_timeout_s`` again, and still returns nothing. The operator would pay N
     timeouts and N duplicate tasks to be told the same thing N times. The member is not
     silently declared dead either way — its failure is written onto the thread as a
     ``(could not be reached: …)`` room message and the adapter's own "the peer may still

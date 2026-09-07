@@ -86,6 +86,29 @@ def _extract_text(result) -> str | None:
     return text or None
 
 
+def _extract_context_id(result) -> str:
+    """The A2A ``contextId`` off a ``SendMessage`` / ``GetTask`` result, or ``""``.
+
+    ``contextId`` is the protocol's grouping key for "these messages are one
+    conversation" — the value a client echoes back to keep talking to the same peer
+    context (#3360). The server owns it, so this only ever READS one; a peer that
+    assigns none yields ``""`` and the caller sends none, which is the wire as it was.
+
+    Tolerant of the same envelope variety as ``_extract_text``: the ``{"task": …}``
+    ``SendMessage`` envelope, the bare task a ``GetTask`` answers with, and a peer that
+    replies with a bare Message instead of a task (its id rides the message itself, or
+    the terminal status message).
+    """
+    if not isinstance(result, dict):
+        return ""
+    task = _task_of(result)
+    candidates = (task, result.get("message"), (task.get("status") or {}).get("message"))
+    for envelope in candidates:
+        if isinstance(envelope, dict) and envelope.get("contextId"):
+            return str(envelope["contextId"])
+    return ""
+
+
 def _extract_cost(result) -> dict | None:
     """The peer's cost-v1 payload off an A2A 1.0 result, or ``None`` (#3016).
 

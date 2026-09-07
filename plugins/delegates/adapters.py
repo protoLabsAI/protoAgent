@@ -145,8 +145,11 @@ class Delegate:
     permissions: str = "auto"
     allow_kinds: list[str] = field(default_factory=list)
     deny_kinds: list[str] = field(default_factory=list)
-    # Per-invocation ACP-only values. The registry sets these on an immutable
-    # dataclass copy; they are never parsed from or persisted to delegate config.
+    # Per-invocation values. The registry sets these on an immutable dataclass copy;
+    # they are never parsed from or persisted to delegate config. ``conversation_key``
+    # names one continuing conversation with this delegate — an ACP session for a coding
+    # agent, the peer-assigned A2A ``contextId`` for an a2a peer (#3360);
+    # ``permissions_ceiling`` stays ACP-only, being the one type that can enforce it.
     conversation_key: str = ""
     permissions_ceiling: str = ""
     confirm: bool = False
@@ -842,7 +845,9 @@ class A2aAdapter(Adapter):
 
         import httpx
 
-        from tools.a2a_parse import _extract_text, _is_input_required, _is_terminal
+        from tools.a2a_parse import _extract_context_id, _extract_text, _is_input_required, _is_terminal
+
+        from . import conversations
 
         # Mark protoAgent-originated peer delegation independently of tracing. The
         # receiver uses this only as operator-visible provenance; authorization is
@@ -890,6 +895,18 @@ class A2aAdapter(Adapter):
         if resume_task_id:
             send_params["message"]["taskId"] = resume_task_id
 
+        # Conversation continuity (#3360): when the caller passed a ``conversation_key``
+        # — the room does, keyed to the thread — re-send the ``contextId`` this peer
+        # assigned the LAST time this conversation addressed it, so the peer answers into
+        # an ongoing conversation instead of a brand-new one on every address. Nothing is
+        # sent until the peer has minted one for us, so a peer that assigns no contextId
+        # sees the byte-identical request it always did. A parked task's own contextId
+        # OVERRIDES this below: that is the HITL chain answering one specific task, and
+        # its context is the one the peer is waiting on.
+        room_context = conversations.remembered(d.conversation_key, d.name, d.url)
+        if room_context:
+            send_params["message"]["contextId"] = room_context
+
         # A *synchronous* peer — protoAgent's own A2A server answers SendMessage INLINE,
         # holding the connection open for the whole delegated turn before returning the final
         # Message — so the initial SendMessage READ must be allowed to run as long as the task
@@ -918,8 +935,21 @@ class A2aAdapter(Adapter):
                         "for input — it can't be resumed with an answer."
                     )
                 if ptask.get("contextId"):
+                    # Wins over any remembered room context (set above): a resume answers
+                    # THIS parked task, and the peer resumes it only under the context it
+                    # parked in. Sending the room's context here would open a new task in
+                    # a different conversation and leave the park waiting forever.
                     send_params["message"]["contextId"] = ptask["contextId"]
             result = await _rpc(client, "SendMessage", send_params)
+            if not resume_task_id:
+                # Learn the context this exchange ran in, for the next address on this
+                # conversation. Read off the peer's own envelope — never assumed to be
+                # what we sent, because the peer assigns it (and on a first address there
+                # was nothing to send). Empty ⇒ nothing remembered, so the next address
+                # sends nothing either. A RESUME is excluded: it answers one parked task
+                # in the context that task parked in, which says nothing about the
+                # context this conversation continues in.
+                conversations.remember(d.conversation_key, d.name, d.url, _extract_context_id(result))
             task = result.get("task", result) or {}
             task_id = task.get("id")
             state = (task.get("status") or {}).get("state")

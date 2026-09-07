@@ -15,6 +15,13 @@ from .adapters import ADAPTERS, Delegate, DelegateError
 
 logger = logging.getLogger("protoagent.plugins.delegates")
 
+# The delegate types that HAVE a continuing conversation to select (#3360): an ``acp``
+# coding agent keeps a session, an ``a2a`` peer groups messages under a ``contextId`` it
+# assigns. ``openai`` is deliberately absent — that adapter posts to a stateless chat
+# endpoint, so a conversation key would name nothing and silently accepting one would
+# promise continuity the wire cannot deliver.
+_CONVERSATIONAL_TYPES = ("acp", "a2a")
+
 
 class DelegateRegistry:
     def __init__(self, raw_delegates: list | None = None):
@@ -85,8 +92,11 @@ class DelegateRegistry:
         ``raw=True`` bypasses
         the managed-git lifecycle for programmatic callers that consume the reply as
         DATA (e.g. the coder ladder's candidate generation, ADR 0064) — no branch, no
-        commit, no PR, no claim; just the coder's text. ``conversation_key`` selects
-        one persistent ACP conversation without mutating the configured roster.
+        commit, no PR, no claim; just the coder's text. ``conversation_key`` names ONE
+        continuing conversation with the delegate without mutating the configured
+        roster — a persistent ACP session, or (#3360) the A2A ``contextId`` an ``a2a``
+        peer assigned that key, so repeated addresses from one chat thread land in one
+        peer-side conversation instead of N unrelated ones.
         ``permissions`` is a per-call ACP ceiling; currently only ``readonly`` is
         accepted, and delegate types that cannot enforce it are refused."""
         d = self._items.get(name)
@@ -94,9 +104,13 @@ class DelegateRegistry:
             raise DelegateError(f"unknown delegate {name!r}. Configured: {', '.join(self._items) or '(none)'}.")
         conversation_key = str(conversation_key or "").strip()
         permissions = str(permissions or "").strip().lower()
-        if conversation_key and d.type != "acp":
+        if conversation_key and d.type not in _CONVERSATIONAL_TYPES:
             raise DelegateError(
-                f"delegate {name!r} is type {d.type!r} — conversation_key only applies to acp delegates."
+                f"delegate {name!r} is type {d.type!r} — conversation_key needs something on the "
+                "other side to continue: an acp session, or the A2A contextId an a2a peer assigns. "
+                "An openai-compat delegate posts to a stateless chat endpoint — every call is a "
+                "fresh completion with no server-side conversation to resume — so there is nothing "
+                "for a key to select. Send the context in the query instead."
             )
         if permissions and permissions != "readonly":
             raise DelegateError("permissions must be 'readonly' when an invocation ceiling is requested.")
