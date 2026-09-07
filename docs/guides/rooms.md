@@ -195,10 +195,15 @@ intend to read the answers yourself. A second round there costs dispatches and b
 agreement noise.
 
 The cost is easy to reason about, which is the point of bounding rounds rather than time:
-**at most `max_rounds` × (participants) dispatches**, minus everyone who passes, and the
-room stops the moment a whole round is silent. Budget for the cap, not for a settle: a
-round only goes quiet if *every* participant emits a bare `pass`, so how often a room
-settles early is a property of your models, not a guarantee. Start at `2` or `3`. If you
+**at most `max_rounds` × (participants) dispatches**, and the room stops the moment a
+whole round is silent. Two things pull the real number below that ceiling — a participant
+that stays silent is not written to the room, and a participant whose address *failed* is
+dropped from every later round (if that leaves fewer than two, the room ends there).
+
+Budget for the cap, not for a settle. A round goes quiet only when **nobody in it spoke**
+— every remaining participant either sent a bare `pass` or returned nothing at all — so
+how often a room settles early is a property of your models, not a guarantee. Start at
+`2` or `3`. If you
 never see the cap note, your rooms are ending by settling — the healthy case, with the cap
 doing its job as a backstop; if you see it every time, the conversation needs more room
 than you gave it (or the participants are talking past each other, which more rounds
