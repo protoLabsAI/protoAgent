@@ -108,9 +108,10 @@ class DelegateRegistry:
             raise DelegateError(
                 f"delegate {name!r} is type {d.type!r} — conversation_key needs something on the "
                 "other side to continue: an acp session, or the A2A contextId an a2a peer assigns. "
-                "An openai-compat delegate posts to a stateless chat endpoint — every call is a "
-                "fresh completion with no server-side conversation to resume — so there is nothing "
-                "for a key to select. Send the context in the query instead."
+                "The type that has neither today is openai: an openai-compat delegate posts to a "
+                "stateless chat endpoint, every call is a fresh completion with no server-side "
+                "conversation to resume, so there is nothing for a key to select. Send the context "
+                "in the query instead."
             )
         if permissions and permissions != "readonly":
             raise DelegateError("permissions must be 'readonly' when an invocation ceiling is requested.")

@@ -45,6 +45,12 @@ class DelegateError(Exception):
 
 
 KIND_UNREACHABLE = "unreachable"
+# The peer TOOK the message and we gave up waiting for the answer — distinct from
+# unreachable, which means it never got one. The difference decides whether an a2a
+# conversation's continuity survives the failure (see ``conversations.forget_one``):
+# a peer that never received the message still describes the conversation we remember;
+# one that is mid-turn has moved it somewhere this side has no record of.
+KIND_TIMEOUT = "timeout"
 
 
 # How much of a JSON-RPC error's free-form ``data`` member survives into the message the
@@ -807,7 +813,14 @@ class A2aAdapter(Adapter):
                     kind=KIND_UNREACHABLE,
                 ) from exc
             except httpx.TimeoutException as exc:
-                raise DelegateError(f"delegate {d.name!r} timed out contacting {d.url}") from exc
+                # A READ timeout (connect timeouts are caught above): the peer accepted the
+                # request and is still working on it. Tagged so ``_dispatch_traced`` can drop
+                # this conversation's continuity — the peer's answer lands in a context this
+                # side will never see, and a protoAgent peer serializes turns per thread, so
+                # the next address would queue behind the turn we just gave up on.
+                raise DelegateError(
+                    f"delegate {d.name!r} timed out contacting {d.url}", kind=KIND_TIMEOUT
+                ) from exc
             except httpx.HTTPError as exc:
                 raise DelegateError(f"delegate {d.name!r} transport error: {str(exc)[:160]}") from exc
             if r.status_code >= 400:
@@ -903,7 +916,12 @@ class A2aAdapter(Adapter):
         # sees the byte-identical request it always did. A parked task's own contextId
         # OVERRIDES this below: that is the HITL chain answering one specific task, and
         # its context is the one the peer is waiting on.
-        room_context = conversations.remembered(d.conversation_key, d.name, d.url)
+        #
+        # The credential joins the name+url in the map's key (see ``conversations``):
+        # rotating a row's token IN PLACE must not hand the new principal the conversation
+        # the old one was having.
+        credential = f"{d.auth_scheme}:{d.auth_token}" if d.auth_token else ""
+        room_context = conversations.remembered(d.conversation_key, d.name, d.url, credential)
         if room_context:
             send_params["message"]["contextId"] = room_context
 
@@ -914,9 +932,40 @@ class A2aAdapter(Adapter):
             address there was nothing to send). Empty ⇒ nothing remembered, so the next
             address sends nothing either. A RESUME is excluded: it answers one parked task
             in the context that task parked in, which says nothing about the context this
-            conversation continues in."""
+            conversation continues in.
+
+            Called ONLY where this dispatch is about to return an ANSWER. A remembered
+            context has to name a conversation that is idle and whose last exchange is on
+            this side's thread; every other way out of the wire block below is ``_drop()``
+            instead."""
             if not resume_task_id:
-                conversations.remember(d.conversation_key, d.name, d.url, _extract_context_id(envelope))
+                conversations.remember(
+                    d.conversation_key, d.name, d.url, _extract_context_id(envelope), credential
+                )
+
+        def _drop() -> None:
+            """The exchange ended leaving the peer holding something this side does not
+            have — a park it cannot be sent a resume for, or a turn still running past the
+            deadline we quit on. Drop the pointer so the next address opens a clean context
+            (the pre-#3360 wire) instead of walking into it; ``conversations.forget_one``
+            carries the full argument. Not on a RESUME, which is not the room's pointer to
+            drop."""
+            if not resume_task_id:
+                conversations.forget_one(d.conversation_key, d.name, d.url, credential)
+
+        async def _rpc_tracked(client, method, params):
+            """``_rpc`` plus the one transport failure that invalidates continuity: a READ
+            timeout means the peer accepted the message and is still working on it, so the
+            conversation we remember has moved on without us (KIND_TIMEOUT, set in
+            ``_rpc``). Unreachable / HTTP / JSON-RPC failures are NOT that — the peer never
+            took the work, so the pointer still describes its side correctly and the room's
+            next address belongs in the same conversation as the last answered one."""
+            try:
+                return await _rpc(client, method, params)
+            except DelegateError as exc:
+                if getattr(exc, "kind", "") == KIND_TIMEOUT:
+                    _drop()
+                raise
 
         # A *synchronous* peer — protoAgent's own A2A server answers SendMessage INLINE,
         # holding the connection open for the whole delegated turn before returning the final
@@ -931,7 +980,7 @@ class A2aAdapter(Adapter):
         t0 = time.monotonic()
         async with httpx.AsyncClient(timeout=httpx.Timeout(read_budget, connect=10.0)) as client:
             if resume_task_id:
-                parked = await _rpc(client, "GetTask", {"id": resume_task_id})
+                parked = await _rpc_tracked(client, "GetTask", {"id": resume_task_id})
                 ptask = parked.get("task", parked) or {}
                 pstate = (ptask.get("status") or {}).get("state")
                 if _is_terminal(pstate):
@@ -951,8 +1000,7 @@ class A2aAdapter(Adapter):
                     # parked in. Sending the room's context here would open a new task in
                     # a different conversation and leave the park waiting forever.
                     send_params["message"]["contextId"] = ptask["contextId"]
-            result = await _rpc(client, "SendMessage", send_params)
-            _learn(result)
+            result = await _rpc_tracked(client, "SendMessage", send_params)
             task = result.get("task", result) or {}
             task_id = task.get("id")
             state = (task.get("status") or {}).get("state")
@@ -963,6 +1011,9 @@ class A2aAdapter(Adapter):
             # resume protocol with it (caught live, 2026-08-20).
             text = _extract_text(result)
             if text and not _is_input_required(state):
+                # An ANSWER: this exchange is on the thread and the peer's conversation is
+                # idle, so it is safe to continue (#3360).
+                _learn(result)
                 # Bill the peer's own cost-v1 telemetry to this turn before returning
                 # the answer (#3016) — the synchronous path a protoAgent peer takes.
                 await _bill_peer_usage(result, d.name)
@@ -977,16 +1028,9 @@ class A2aAdapter(Adapter):
                 # peer rejects/ignores it, so the poll loop could never converge for
                 # an async-style peer (latent: protoAgent peers answer SendMessage
                 # inline, so this path rarely ran).
-                result = await _rpc(client, "GetTask", {"id": task_id})
+                result = await _rpc_tracked(client, "GetTask", {"id": task_id})
                 task = result.get("task", result) or {}
                 state = (task.get("status") or {}).get("state")
-            # An ASYNC-style peer acknowledges SendMessage with a bare accepted task and
-            # only fills the envelope out as it works, so the contextId can arrive on the
-            # poll rather than on the ack. Learn it here too — same value when it was
-            # already on the ack, the only value we ever see when it wasn't. (protoAgent
-            # peers answer inline and never reach this loop, which is exactly why the
-            # gap would have stayed invisible.)
-            _learn(result)
             if _is_input_required(state):
                 # The peer parked on an input interrupt. The HITL delegation chain
                 # (operator decision, 2026-08-20): the QUESTION comes back to the
@@ -996,6 +1040,16 @@ class A2aAdapter(Adapter):
                 # ask_human parks ITS task, which bubbles another hop), so a chain
                 # x→y→z ends at whichever console has a human. Never poll a park to
                 # the deadline, and never bury the question in an error.
+                #
+                # And the ROOM's continuity ends here (#3360). A park leaves the peer's
+                # thread holding a pending interrupt, and only the LEAD can answer it
+                # (``delegate_to(..., resume_task_id=…)``, which bypasses the room). A room
+                # address re-sent into that context is not a resume: a protoAgent peer
+                # queues it as steering and re-yields the SAME interrupt, so the room would
+                # get the identical question back once per address, forever, each one
+                # parking another task. Dropping the pointer restores the pre-#3360
+                # outcome — the next address opens a clean context and is answered.
+                _drop()
                 question = _extract_text(result) or ""
                 if not task_id:
                     raise DelegateError(
@@ -1014,6 +1068,13 @@ class A2aAdapter(Adapter):
                 )
             text = _extract_text(result)
             if text:
+                # An ANSWER (the async-peer path). Learn here rather than on the ack: an
+                # async-style peer acks SendMessage with a bare accepted task and only fills
+                # the envelope out as it works, so the contextId can arrive on the poll —
+                # the same value when it was already on the ack, the only value we ever see
+                # when it wasn't. (protoAgent peers answer inline and never reach this loop,
+                # which is exactly why the gap would have stayed invisible.)
+                _learn(result)
                 # Same billing as the inline path (#3016), for the peer that made us
                 # poll. Deliberately NOT done on the two branches above. A park emits no
                 # terminal artifact — only a status message — so its leg's spend is not
@@ -1025,6 +1086,14 @@ class A2aAdapter(Adapter):
                 await _bill_peer_usage(result, d.name)
                 _warn_if_suspiciously_short(d.name, text, time.monotonic() - t0)
                 return text
+            # Neither terminus produced an answer for the room, so neither may pin this
+            # conversation to the peer's context (#3360): "still running" leaves the peer
+            # mid-turn in it — the room records the address as FAILED and drops the member,
+            # so whatever the peer writes next is history this side never sees, and a
+            # protoAgent peer would make the next address queue behind that same turn — and
+            # a terminal task we could read no text out of is an exchange the peer has and
+            # the thread does not. Both drop to the pre-#3360 wire: a fresh context next time.
+            _drop()
             if task_id and not _is_terminal(state):
                 raise DelegateError(
                     f"delegate {d.name!r} still running after {int(poll_timeout)}s — the peer may "

@@ -455,6 +455,14 @@ async def dispatch_into_room(
     # raises for a type that has neither (a stateless `openai` endpoint), so it rides
     # only where it is accepted — and the attributed catch-up goes to everyone either
     # way, because a peer is free to ignore the key and remember nothing.
+    #
+    # This is both entry points, not just `@`. The `delegate_to` TOOL routes here too
+    # (`plugins/delegates/_dispatch_into_room`) with the same thread id, so the lead's
+    # delegations and the operator's addresses to one participant are ONE conversation on
+    # its side — which is the point of #3102 calling a delegation a room address, and is
+    # exactly how `acp` has behaved since `conversation_key` existed. `delegate_to` with
+    # an `item_id`/`resume_task_id`, and `background=True`, bypass this function entirely
+    # and so keep opening conversations of their own.
     delegate = registry.get(target)
     if delegate is None:
         return {

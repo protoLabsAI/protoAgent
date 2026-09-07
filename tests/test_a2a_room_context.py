@@ -17,7 +17,9 @@ ours, sees exactly the wire it saw before.
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json as _json
+import time as _time
 
 import httpx
 import pytest
@@ -101,6 +103,15 @@ def wire(monkeypatch):
     return _install
 
 
+@pytest.fixture
+def fast_clock(monkeypatch):
+    """A monotonic clock that jumps 1000s per read, so the adapter's poll deadline is
+    already blown on the first check — the "still running after Ns" terminus without a
+    real wait."""
+    ticks = itertools.count(0.0, 1000.0)
+    monkeypatch.setattr(_time, "monotonic", lambda: next(ticks))
+
+
 @pytest.fixture(autouse=True)
 def _forget_contexts():
     conversations.reset()
@@ -147,8 +158,14 @@ async def test_a_third_address_still_carries_the_same_context(wire):
 
 
 async def test_different_threads_do_not_collide(wire):
-    """A second chat thread is a second conversation — it must not inherit the first's
-    context, or two unrelated rooms would be spliced together on the peer's side."""
+    """A second chat thread is a second conversation on OUR side of the map: it must not
+    inherit the first's context, or we would splice two unrelated rooms together.
+
+    That is all this can prove, and all the map can promise. The id is the PEER's, so a
+    peer that answers with one constant ``contextId`` (its authenticated session, say)
+    hands the same id to both threads; both learn it, both send it, and the peer merges
+    the two rooms on its own side. Nothing on the wire lets a client detect or prevent
+    that — see the guide's "a best effort the peer owns"."""
     bodies = wire(_always(context_id="ctx-room"))
     reg = _registry()
 
@@ -205,8 +222,14 @@ async def test_a_peer_that_returns_no_context_id_degrades_to_todays_behavior(wir
 
 
 async def test_a_dispatch_without_a_conversation_key_never_sends_a_context(wire):
-    """``delegate_to`` passes no conversation key; that path is untouched — no contextId
-    sent, and nothing remembered that a later room address could pick up."""
+    """No key ⇒ no continuity, in both directions: nothing sent, and nothing remembered
+    that a later keyed address could pick up.
+
+    This is the registry seam, not ``delegate_to``. The foreground ``delegate_to`` tool
+    goes through the room helper and DOES get this thread's key — see
+    ``tests/test_delegate_to_room.py``; the key-less callers are
+    ``delegate_to(background=True)``, a parked-task resume, a managed-git ``item_id``
+    claim, and a plugin calling ``host.invoke_delegate`` directly."""
     bodies = wire(_always(context_id="ctx-room"))
     reg = _registry()
 
@@ -579,3 +602,188 @@ async def test_a_fork_clears_the_destination_and_never_inherits_the_source(monke
     await fork_session("src", "dst")
     assert conversations.remembered("a2a:dst", "peer", PEER_URL) == ""  # cleared
     assert conversations.remembered("a2a:src", "peer", PEER_URL) == "ctx-source"  # untouched
+
+
+# ── continuity must not outlive the EXCHANGE either ───────────────────────────
+#
+# A remembered context has to name a peer-side conversation that is idle and whose last
+# exchange is on this thread. Every terminus that breaks that invariant drops the pointer,
+# which is the pre-#3360 wire: the next address opens a fresh conversation and just runs.
+
+
+def _parks(*, context_id="ctx-room", task_id="parked-9"):
+    """A peer that parks on an input interrupt (its ``ask_human`` / a tool approval)."""
+    return _always(context_id=context_id, task_id=task_id, state="TASK_STATE_INPUT_REQUIRED", text="which branch?")
+
+
+async def test_a_park_drops_the_rooms_continuity_instead_of_re_parking_forever(wire):
+    """THE livelock this closes. A park leaves the peer's thread holding a pending
+    interrupt, and a room address is not a resume — a protoAgent peer queues a fresh
+    message on such a thread as steering and re-yields the SAME interrupt (origin ``a2a``
+    is deliberately not autonomous, ``server.chat._hold_if_hitl_pending``). So re-sending
+    the room's context would hand the room the identical question back on every later
+    address, parking another task each time, with no escape but a rewind or a restart:
+    only ``delegate_to(..., resume_task_id=…)`` can answer a park, and that bypasses the
+    room. Drop the pointer and the operator's next ``@`` is answered normally."""
+    bodies = wire(_always(context_id="ctx-room"))
+    reg = _registry()
+    await reg.dispatch("peer", "hi", conversation_key="thread-1")
+    await reg.dispatch("peer", "and now?", conversation_key="thread-1")
+    assert _sends(bodies)[-1]["contextId"] == "ctx-room"
+
+    wire(_parks(context_id="ctx-room"))
+    reply = await reg.dispatch("peer", "fix the build", conversation_key="thread-1")
+    assert "needs input" in reply and "parked-9" in reply
+    assert conversations.remembered("thread-1", "peer", PEER_URL) == ""
+
+    wire(_always(context_id="ctx-after"))
+    assert await reg.dispatch("peer", "yes, the main branch", conversation_key="thread-1") == "ok"
+    assert "contextId" not in _sends(bodies)[-1]
+
+
+async def test_a_park_on_a_first_address_is_never_remembered(wire):
+    """Nothing to drop, and nothing to learn either — the parked context must not become
+    the room's, or the very next address walks into the hold."""
+    bodies = wire(_parks(context_id="ctx-parked"))
+    reg = _registry()
+
+    assert "needs input" in await reg.dispatch("peer", "deploy X", conversation_key="thread-1")
+    assert conversations.snapshot() == {}
+
+    wire(_always(context_id="ctx-after"))
+    await reg.dispatch("peer", "never mind, just the version", conversation_key="thread-1")
+    assert all("contextId" not in m for m in _sends(bodies))
+
+
+async def test_a_peer_still_working_past_the_deadline_loses_the_pointer(wire, fast_clock):
+    """The room records this address as FAILED and drops the member for the rest of the
+    turn, so whatever the peer eventually writes into that context is history this side
+    never sees. Keeping the pointer would give the next address that invisible history —
+    and queue it behind the very turn the room gave up on, since a protoAgent peer
+    serializes turns per thread."""
+    bodies = wire(_always(context_id="ctx-room"))
+    reg = _registry()
+    await reg.dispatch("peer", "hi", conversation_key="thread-1")
+
+    working = {"jsonrpc": "2.0", "result": {"task": {"id": "t9", "contextId": "ctx-room", "status": {"state": "TASK_STATE_WORKING"}}}}
+    wire(lambda _u, _b: _Resp(working))
+    with pytest.raises(DelegateError, match="still running"):
+        await reg.dispatch("peer", "run the migration", conversation_key="thread-1")
+    assert conversations.remembered("thread-1", "peer", PEER_URL) == ""
+
+    wire(_always(context_id="ctx-after"))
+    await reg.dispatch("peer", "how did it go?", conversation_key="thread-1")
+    assert "contextId" not in _sends(bodies)[-1]
+
+
+async def test_a_read_timeout_loses_the_pointer_but_unreachable_keeps_it(wire):
+    """The two transport failures are not the same event. A READ timeout means the peer
+    TOOK the message and is still working on it — the protoAgent case, since our own
+    server answers SendMessage inline, so the read budget blows before any poll loop. An
+    unreachable peer never got the message at all, so its conversation is exactly as the
+    map describes it and the next address belongs in it."""
+    wire(_always(context_id="ctx-room"))
+    reg = _registry()
+    await reg.dispatch("peer", "hi", conversation_key="thread-1")
+    await reg.dispatch("peer", "hi again", conversation_key="thread-2")
+
+    def _read_timeout(_url, _body):
+        raise httpx.ReadTimeout("peer still thinking")
+
+    wire(_read_timeout)
+    with pytest.raises(DelegateError, match="timed out"):
+        await reg.dispatch("peer", "slow one", conversation_key="thread-1")
+    assert conversations.remembered("thread-1", "peer", PEER_URL) == ""
+
+    def _unreachable(_url, _body):
+        raise httpx.ConnectError("no route")
+
+    wire(_unreachable)
+    with pytest.raises(DelegateError, match="unreachable"):
+        await reg.dispatch("peer", "anyone home?", conversation_key="thread-2")
+    assert conversations.remembered("thread-2", "peer", PEER_URL) == "ctx-room"
+
+
+async def test_a_terminal_task_with_no_readable_answer_loses_the_pointer(wire):
+    """The peer has an exchange the thread does not. Same divergence, same fallback."""
+    wire(_always(context_id="ctx-room"))
+    reg = _registry()
+    await reg.dispatch("peer", "hi", conversation_key="thread-1")
+
+    silent = {"jsonrpc": "2.0", "result": {"task": {"id": "t9", "contextId": "ctx-room", "status": {"state": "TASK_STATE_COMPLETED"}}}}
+    wire(lambda _u, _b: _Resp(silent))
+    with pytest.raises(DelegateError, match="returned no text"):
+        await reg.dispatch("peer", "?", conversation_key="thread-1")
+    assert conversations.remembered("thread-1", "peer", PEER_URL) == ""
+
+
+async def test_a_resume_never_drops_the_rooms_pointer(wire):
+    """A resume is the LEAD answering one parked task; it says nothing about the context
+    the room continues in, so neither its learn nor its drop is the room's to make."""
+    bodies = wire(_always(context_id="ctx-room"))
+    reg = _registry()
+    await reg.dispatch("peer", "hi", conversation_key="thread-1")
+
+    wire(_park_and_resume_handler(parked_context="ctx-parked"))
+    await reg.dispatch("peer", "the main one", conversation_key="thread-1", resume_task_id="parked-1")
+
+    wire(_always(context_id="ctx-room"))
+    await reg.dispatch("peer", "and now?", conversation_key="thread-1")
+    assert _sends(bodies)[-1]["contextId"] == "ctx-room"
+
+
+def test_forget_one_drops_a_single_participant():
+    """The per-participant half of ``forget()``: the adapter's own cleanup must not
+    evict the rest of the cast, or a park by one member would reset everyone."""
+    conversations.remember("thread-1", "alpha", PEER_URL, "a1")
+    conversations.remember("thread-1", "beta", OTHER_URL, "b1")
+
+    assert conversations.forget_one("thread-1", "alpha", PEER_URL) is True
+    assert conversations.forget_one("thread-1", "alpha", PEER_URL) is False  # idempotent
+    assert conversations.remembered("thread-1", "alpha", PEER_URL) == ""
+    assert conversations.remembered("thread-1", "beta", OTHER_URL) == "b1"
+    assert conversations.forget_one("", "alpha", PEER_URL) is False
+
+
+# ── the credential is part of the key ─────────────────────────────────────────
+
+
+def _authed(token: str, *, name="peer", url=PEER_URL) -> DelegateRegistry:
+    return DelegateRegistry([{"name": name, "type": "a2a", "url": url, "auth": {"scheme": "bearer", "token": token}}])
+
+
+async def test_rotating_a_delegates_credential_starts_a_fresh_conversation(wire):
+    """The map's docstring justifies keying on the delegate NAME because two rows can
+    carry two different credentials and merging them would cross that boundary. Editing
+    ONE row's token in place (same name, same url) crosses exactly that boundary unless
+    the credential is in the key too."""
+    bodies = wire(_always(context_id="ctx-room"))
+
+    await _authed("old-token").dispatch("peer", "hi", conversation_key="thread-1")
+    await _authed("new-token").dispatch("peer", "hi", conversation_key="thread-1")
+    # And the ORIGINAL credential still continues its own conversation.
+    await _authed("old-token").dispatch("peer", "still me", conversation_key="thread-1")
+
+    assert [m.get("contextId") for m in _sends(bodies)] == [None, None, "ctx-room"]
+
+
+def test_a_credential_is_never_stored_in_the_key():
+    """It rides as a one-way digest — the map is a debugging surface (``snapshot()``)."""
+    conversations.remember("thread-1", "peer", PEER_URL, "ctx-room", "bearer:hunter2")
+    assert not any("hunter2" in part for key in conversations.snapshot() for part in key)
+    assert conversations.remembered("thread-1", "peer", PEER_URL, "bearer:hunter2") == "ctx-room"
+    assert conversations.remembered("thread-1", "peer", PEER_URL, "bearer:other") == ""
+
+
+def test_a_non_string_context_id_is_read_as_absent():
+    """The id is ECHOED onto the next request, and an a2a-sdk peer's ParseDict rejects a
+    non-string ``contextId`` — so coercing one out-of-spec reply would turn every later
+    address in that conversation into a JSON-RPC error with no fallback. Reading nothing
+    degrades to the pre-#3360 wire; echoing junk breaks the conversation outright."""
+    from tools.a2a_parse import _extract_context_id
+
+    assert _extract_context_id({"task": {"contextId": 12345}}) == ""
+    assert _extract_context_id({"task": {"contextId": {"id": "c"}}}) == ""
+    assert _extract_context_id({"task": {"contextId": None}}) == ""
+    # A well-formed sibling envelope still wins over an out-of-spec task-level one.
+    assert _extract_context_id({"task": {"contextId": 1}, "message": {"contextId": "c"}}) == "c"

@@ -3053,11 +3053,16 @@ async def rewind_session(
             occurrence=occurrence,
             before=before,
         )
-    if result.get("found") and result.get("removed"):
-        # Only when messages were actually discarded: a "that's already the last message"
-        # rewind erased nothing, so throwing away a participant's continuity would be a
-        # pure loss with no leak to close.
-        forget_delegate_conversations(tid)
+        if result.get("found") and result.get("removed"):
+            # Only when messages were actually discarded: a "that's already the last
+            # message" rewind erased nothing, so throwing away a participant's continuity
+            # would be a pure loss with no leak to close.
+            #
+            # INSIDE the lock, with the rewrite: outside it, a concurrent `@` dispatch can
+            # take the thread between the two and either re-learn a context for the thread
+            # this forget is about to clear, or learn one just after it — which is the leak
+            # this call exists to close, reopened by a race.
+            forget_delegate_conversations(tid)
     return {**result, "message": _rewind_message(result)}
 
 
@@ -3104,14 +3109,17 @@ async def fork_session(
                 target_content=content,
                 occurrence=occurrence,
             )
-    if result.get("found"):
-        # The destination thread's history is now the source's prefix, so any peer
-        # continuity a PREVIOUS occupant of this id left behind points at a conversation
-        # that has nothing to do with it. The fork does not inherit the source's context
-        # either — that falls out of keying on the thread id, and it must not change:
-        # two threads writing into one peer conversation would splice two divergent
-        # rooms together on the peer's side.
-        forget_delegate_conversations(dst_tid)
+            if result.get("found"):
+                # The destination thread's history is now the source's prefix, so any peer
+                # continuity a PREVIOUS occupant of this id left behind points at a
+                # conversation that has nothing to do with it. Both retired prefixes, so a
+                # destination that previously served non-streaming turns (`chat:`) does not
+                # keep the pointer the delete route would have dropped. The fork does not
+                # inherit the source's context either — that falls out of keying on the
+                # thread id, and it must not change: two threads writing into one peer
+                # conversation would splice two divergent rooms together on the peer's side.
+                # Inside the destination's lock, for the same reason the rewind is.
+                forget_delegate_conversations(dst_tid, f"chat:{new_session_id}")
     return {**result, "message": _fork_message(result)}
 
 

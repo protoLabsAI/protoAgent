@@ -280,12 +280,34 @@ depends on who you addressed —
 - **A peer that assigns no `contextId`, or ignores the one we send**, remembers nothing —
   exactly as before. Nothing fails and nothing is retried; the room simply carries on
   sending the catch-up.
+- **A peer that answers every conversation with the *same* `contextId`** (its
+  authenticated session, say) merges your rooms on its side. Two of your chats become one
+  conversation to it. Nothing on the wire lets a client detect that, which is what "the
+  peer owns it" costs: the room keeps its threads apart, the peer need not.
 
 Which is why **the catch-up window is still sent to everyone, every time**. It is the
 floor, not an optimization to be skipped once continuity exists — and for an `openai`
 delegate (a stateless chat endpoint: every call is a fresh completion, so a conversation
 key would name nothing and it is refused rather than silently accepted) it remains the
 participant's *entire* picture of the room.
+
+### The conversation is the chat, not the `@`
+
+Continuity is keyed to *this chat thread and this participant* — not to how the
+participant was reached. Your `@name` addresses and the lead's own `delegate_to` calls to
+the same participant in the same chat are turns of **one** conversation on its side, which
+is what it means for [a delegation to be a room address](#who-decides-who-speaks-next). That
+is how `acp` has always worked, and `a2a` now matches it. Two consequences worth knowing:
+
+- Ask a peer something unrelated with `delegate_to` and it answers *inside* the room's
+  conversation, with the room's history behind it. That is usually what you want from a
+  participant; it is not what you want from a one-off lookup.
+- **`delegate_to(background=True)`, a parked-task resume, and a managed-git `item_id`
+  claim all bypass the room helper**, so each dispatches with no conversation key and
+  opens a conversation of its own. A background delegation to a participant that is also
+  in the room is therefore a *second* conversation with it, not a continuation.
+
+There is no per-call switch for this; the lever is *which* call you make.
 
 ### What that changes about tuning the caps
 
@@ -328,26 +350,52 @@ behavior every address had before this existed, which is why none of it fails lo
   the participant's voice. (An `acp` participant's session is a live subprocess and is
   **not** torn down by either gesture — a coding agent addressed in a rewound thread still
   remembers.)
-- **Re-pointing a delegate's `url`, or renaming it.** A context id only means anything to
-  the peer that minted it.
-- **Being addressed under a second delegate name.** Each name keeps its own
-  conversation, so one fleet member on two roster rows holds two half-rooms. Two roster rows can carry two different credentials,
-  and merging them on a matching url would cross that boundary — address a member under
-  one name.
+- **Re-pointing a delegate's `url`, renaming it, or editing its credential.** A context id
+  only means anything to the peer that minted it — and to the principal it minted it for.
+- **Being addressed under a second delegate name.** Each name keeps its own conversation,
+  so one fleet member on two roster rows holds two half-rooms. Two roster rows can carry
+  two different credentials, and merging them on a matching url would cross that boundary
+  — address a member under one name.
+- **The participant asking a question it cannot be sent the answer to.** When an addressed
+  peer pauses for input (`ask_human`, a tool approval), the room shows you the `⏸ … needs
+  input` handle and the peer's thread is left holding that question. A room address is not
+  a resume — a peer that is paused would queue your next message behind the pause and hand
+  back the *same* question — so the room drops the pointer instead: your next `@` opens a
+  clean conversation and is answered normally, exactly as it was before continuity
+  existed. Only the lead can actually answer a pause, with
+  `delegate_to(target=…, resume_task_id=…)`, and that goes straight to the parked task.
+- **An address that failed with the peer still working.** "Still running after Ns", or a
+  read that timed out on a peer answering inline: the room writes `(could not be reached:
+  …)` and moves on, so whatever that turn eventually produced is in a conversation this
+  side has no record of. The pointer goes with it — otherwise the next address would both
+  inherit that invisible history and queue behind the turn the room already gave up on. An
+  address that failed because the peer was *unreachable* keeps its continuity: nothing
+  happened on the peer, so nothing about its conversation changed.
 
 **Compaction is the exception that keeps it.** `/compact` shortens *your* side to save
 your window; it is not a claim that anything was unsaid, and the peer manages its own
 context. Dropping continuity there would throw away the thing that makes a long room
 affordable.
 
+That list doubles as the **reset**: there is no "forget this room" button, so if you want
+a participant to start clean, rewind or delete the chat, or restart the instance. And
+note what none of it does — nothing is *ended* on the peer. It keeps its session and its
+content; what goes away is this side's ability to rejoin it. An incognito message that
+opens with `@name` is the same story: the peer stores the exchange the way it stores any
+other, exactly as it did before continuity existed.
+
 ### What continuity is not
 
-It is not a way to rejoin work already in flight. A room passes no resume handle, so a
-shared `contextId` groups a re-dispatch with the earlier task without joining it — which
-is why [a failed address is not retried](#multi-round-rooms), even the failure that says
-the peer is still working. Sharing a context also shares the peer's *thread*, and a
-protoAgent peer runs one turn per thread at a time: a re-address lands behind the turn it
-was meant to chase rather than beside it.
+It is not a way to rejoin work already in flight. A room passes no resume handle, so
+re-addressing a peer that is still working starts a *second* task beside the first rather
+than joining it — which is why [a failed address is not retried](#multi-round-rooms), even
+the failure that says the peer may still be working. That failure also drops the
+conversation, so your next address opens a clean one: it will be answered, but it will
+know nothing about whatever the abandoned turn eventually produced.
+
+It is not a *record*, either. The room's transcript is this thread, and that is the only
+copy you can read, search, export or rewind. What continuity buys is that the participant
+does not have to be re-told the room from scratch every time you address it.
 
 ## See also
 

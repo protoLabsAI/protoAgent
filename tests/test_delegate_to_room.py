@@ -17,7 +17,8 @@ from plugins.delegates import _build_delegate_to, _dispatch_into_room
 
 
 class _Delegate:
-    type = "acp"
+    def __init__(self, dtype="acp"):
+        self.type = dtype
 
 
 class _ToolFake(GenericFakeChatModel):
@@ -35,11 +36,12 @@ class _ToolFake(GenericFakeChatModel):
 
 
 class _Registry:
-    def __init__(self):
+    def __init__(self, dtype="acp"):
         self.calls = []
+        self._dtype = dtype
 
     def get(self, name):
-        return _Delegate() if name == "proto" else None
+        return _Delegate(self._dtype) if name == "proto" else None
 
     def listing(self):
         return "proto"
@@ -133,3 +135,46 @@ async def test_delegate_to_reads_the_operators_catchup_bounds(monkeypatch):
     query = registry.calls[0]["query"]
     assert "[operator] m9" in query and "[operator] m7" not in query
     assert "earlier messages omitted" in query
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dtype", ["acp", "a2a"])
+async def test_delegate_to_shares_the_rooms_conversation_with_the_participant(dtype):
+    """A foreground ``delegate_to`` IS a room address (#3102), so it carries the room's
+    conversation key: the thread id. The lead's delegations and the operator's ``@``
+    addresses to one participant are turns of ONE conversation on its side — an ACP
+    session for a coding agent, the A2A ``contextId`` for an ``a2a`` peer (#3360).
+
+    Pinned for both types because the two entry points share ``dispatch_into_room``: the
+    PR that widened the room to ``a2a`` widened this path with it, and nothing else in the
+    suite would have noticed."""
+    registry = _Registry(dtype=dtype)
+    await _dispatch_into_room(
+        registry,
+        "proto",
+        "inspect auth",
+        {"session_id": "room-key", "messages": [HumanMessage(content="please investigate auth")]},
+        tool_call_id="call-key",
+    )
+
+    assert registry.calls[0]["conversation_key"] == "a2a:room-key"
+
+
+@pytest.mark.asyncio
+async def test_a_managed_git_claim_and_a_parked_resume_keep_their_own_conversation():
+    """The two identities the room helper deliberately does not own fall back to
+    ``plain()`` — no room record, and so no conversation key either. A managed-git claim
+    is scoped to a work ITEM, and a resume answers ONE parked task in the context that task
+    parked in; neither is the thread's continuing conversation."""
+    for kwargs in ({"item_id": "issue-7"}, {"resume_task_id": "task-9"}):
+        registry = _Registry(dtype="a2a")
+        out = await _dispatch_into_room(
+            registry,
+            "proto",
+            "carry on",
+            {"session_id": "room-plain", "messages": [HumanMessage(content="hi")]},
+            tool_call_id="call-plain",
+            **kwargs,
+        )
+        assert isinstance(out, str), kwargs
+        assert registry.calls[0]["conversation_key"] is None, kwargs

@@ -98,14 +98,20 @@ def _extract_context_id(result) -> str:
     ``SendMessage`` envelope, the bare task a ``GetTask`` answers with, and a peer that
     replies with a bare Message instead of a task (its id rides the message itself, or
     the terminal status message).
+
+    A non-string ``contextId`` is treated as absent rather than coerced. The value is
+    ECHOED onto the next request, and an a2a-sdk peer's ``ParseDict`` rejects a request
+    whose ``contextId`` is not a string — so ``str()``-ing a number or an object here
+    would turn one out-of-spec reply into a JSON-RPC error on every later address in that
+    conversation. Reading nothing degrades; echoing junk breaks.
     """
     if not isinstance(result, dict):
         return ""
     task = _task_of(result)
     candidates = (task, result.get("message"), (task.get("status") or {}).get("message"))
     for envelope in candidates:
-        if isinstance(envelope, dict) and envelope.get("contextId"):
-            return str(envelope["contextId"])
+        if isinstance(envelope, dict) and isinstance(envelope.get("contextId"), str) and envelope["contextId"]:
+            return envelope["contextId"]
     return ""
 
 

@@ -382,8 +382,11 @@ def register_chat_routes(app, ui: str) -> None:
         # Same argument as the session-summary purge below: leaving the pointer alive
         # would let the next address rejoin the deleted conversation on the peer, so the
         # history the dialog promised to remove comes back in the participant's voice.
-        # Both prefixes, and the resolver's own answer for a fork that scopes threads
-        # off request metadata (#571).
+        # Both retired prefixes, plus whatever the installed thread-id resolver answers
+        # for this session (#571) — that last one is the template default's `a2a:` id
+        # again, and for a fork with a custom resolver it is a best effort: a resolver that
+        # scopes threads off REQUEST METADATA cannot be replayed from a DELETE route, which
+        # carries none. (rewind/fork forget the metadata-resolved id, because they have it.)
         forget_delegate_conversations(
             f"a2a:{session_id}", f"chat:{session_id}", _resolve_thread_id(None, session_id)
         )

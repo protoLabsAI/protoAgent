@@ -29,9 +29,12 @@ many threads cannot grow it without limit.
 The delegate's **url** is part of the key on purpose: re-pointing a delegate at a
 different peer must not send that peer a context id the old one minted. Its **name** is
 too, which is the conservative half of the same rule: one fleet member configured under
-two delegate names keeps two peer-side conversations rather than one, because two rows can
-carry two different credentials and merging them would cross that boundary on the strength
-of a matching url.
+two delegate names keeps two peer-side conversations rather than one. And so is a digest
+of its **credential**, which is what actually makes that second sentence true: the reason
+two names must not merge is that two rows can carry two different credentials — so editing
+one row's token IN PLACE (same name, same url) crosses exactly the boundary the name was
+there to protect. A rotated or re-pointed credential starts a fresh conversation; the
+digest is one-way and never leaves this process.
 
 **What continuity must not outlive.** Everything here is a pointer at a conversation the
 PEER holds, so anything that rewrites this side's history has to drop the pointer or the
@@ -51,55 +54,118 @@ peer keeps answering from what the operator just erased:
 **Compaction deliberately keeps its context.** ``/compact`` summarizes to save OUR window;
 it is not a claim that anything was unsaid, and the peer manages its own context. Dropping
 continuity there would throw away exactly the thing that makes a long room affordable.
+
+**A pointer is only as good as the exchange that minted it.** ``forget_one()`` is the
+per-participant half of the same rule, called by the A2A adapter when an exchange ends
+leaving the peer holding something this side does NOT have. The invariant the two halves
+buy: *a remembered context names a peer-side conversation that is idle, and whose last
+exchange is on this thread.* Without it, a peer that parked on a HITL interrupt swallows
+every later address into the same hold — the room passes no resume handle, so the peer
+re-parks with the same question and the room livelocks — and a peer still working past the
+poll deadline makes the next address queue behind the very turn the room gave up on.
 """
 
 from __future__ import annotations
 
+import hashlib
+import threading
 from collections import OrderedDict
 
-# One entry is three short strings; the cap exists so a long-lived instance that has
+# One entry is four short strings; the cap exists so a long-lived instance that has
 # addressed many threads can't accumulate them forever. Evicted least-recently-used,
 # which for a room means the conversations nobody is having any more.
 _MAX_ENTRIES = 512
 
-# (conversation_key, delegate name, delegate url) -> contextId
-_CONTEXTS: OrderedDict[tuple[str, str, str], str] = OrderedDict()
+# (conversation_key, delegate name, delegate url, credential digest) -> contextId
+_CONTEXTS: OrderedDict[tuple[str, str, str, str], str] = OrderedDict()
+
+# Guards every mutation of _CONTEXTS as a GROUP: `__setitem__` + `move_to_end` + the LRU
+# eviction loop are three statements, and `forget()` deletes while it walks the mapping.
+# One event loop makes that safe today, but background delegations and the scheduler
+# dispatch from elsewhere, and the failure mode of getting it wrong is a `RuntimeError:
+# dictionary changed size during iteration` raised inside a cleanup path that swallows
+# exceptions — i.e. a forget that silently does nothing.
+_LOCK = threading.Lock()
 
 
-def _key(conversation_key: str, delegate: str, url: str) -> tuple[str, str, str]:
-    return (str(conversation_key or ""), str(delegate or ""), str(url or ""))
+def _digest(credential: str) -> str:
+    """A short one-way digest of a delegate row's auth material (never the material itself)."""
+    credential = str(credential or "")
+    return hashlib.sha256(credential.encode("utf-8", "replace")).hexdigest()[:16] if credential else ""
 
 
-def remembered(conversation_key: str, delegate: str, url: str) -> str:
+def _key(conversation_key: str, delegate: str, url: str, credential: str = "") -> tuple[str, str, str, str]:
+    return (str(conversation_key or ""), str(delegate or ""), str(url or ""), _digest(credential))
+
+
+def remembered(conversation_key: str, delegate: str, url: str, credential: str = "") -> str:
     """The ``contextId`` this peer assigned this conversation, or ``""``.
 
     ``""`` for anything unknown — no conversation key, a peer we have never heard a
-    context from, a delegate that has since been re-pointed at another url. Every one of
-    those is "send no contextId", i.e. the pre-#3360 wire.
+    context from, a delegate that has since been re-pointed at another url or had its
+    credential rotated. Every one of those is "send no contextId", i.e. the pre-#3360 wire.
     """
     if not conversation_key:
         return ""
-    key = _key(conversation_key, delegate, url)
-    context_id = _CONTEXTS.get(key, "")
-    if context_id:
-        _CONTEXTS.move_to_end(key)
+    key = _key(conversation_key, delegate, url, credential)
+    with _LOCK:
+        context_id = _CONTEXTS.get(key, "")
+        if context_id:
+            _CONTEXTS.move_to_end(key)
     return context_id
 
 
-def remember(conversation_key: str, delegate: str, url: str, context_id: str) -> None:
+def remember(conversation_key: str, delegate: str, url: str, context_id: str, credential: str = "") -> None:
     """Record the ``contextId`` a peer just used for this conversation.
 
     A no-op without both a conversation key and a context id: a peer that answers
     without one has told us nothing to remember, and storing an empty string would make
     the next lookup look like a hit.
+
+    Called only for an exchange that ANSWERED — see the module docstring's invariant and
+    ``forget_one`` for the other half.
     """
     if not (conversation_key and context_id):
         return
-    key = _key(conversation_key, delegate, url)
-    _CONTEXTS[key] = str(context_id)
-    _CONTEXTS.move_to_end(key)
-    while len(_CONTEXTS) > _MAX_ENTRIES:
-        _CONTEXTS.popitem(last=False)
+    key = _key(conversation_key, delegate, url, credential)
+    with _LOCK:
+        _CONTEXTS[key] = str(context_id)
+        _CONTEXTS.move_to_end(key)
+        while len(_CONTEXTS) > _MAX_ENTRIES:
+            _CONTEXTS.popitem(last=False)
+
+
+def forget_one(conversation_key: str, delegate: str, url: str, credential: str = "") -> bool:
+    """Drop ONE participant's pointer in one conversation; returns whether we held one.
+
+    The per-participant counterpart to ``forget()``, and the one the A2A adapter itself
+    calls: ``forget()`` answers a thread-lifecycle event about the whole conversation,
+    this answers "that exchange left this peer somewhere the next address must not go".
+
+    Two of those, both of which the room has no way to recover from on its own:
+
+    * **The peer PARKED** on a HITL interrupt (``input_required``). Its thread now holds a
+      pending interrupt, and a protoAgent peer holds a *fresh* message on such a thread in
+      its steering queue and re-yields the same interrupt (``server.chat._hold_if_hitl_pending``
+      — origin ``a2a`` is deliberately not autonomous). So a later ``@member`` sent into
+      that context is never answered: it parks a second task with the identical question,
+      and the round after that a third. Only the lead's ``delegate_to(..., resume_task_id=…)``
+      can answer a park, and that path bypasses the room. Dropping the pointer restores
+      exactly the pre-#3360 outcome — the next address opens a clean context and just runs.
+    * **The peer is still WORKING** past the poll deadline (or its inline answer outran our
+      read budget). The dispatch raises, the room records the address as failed and drops
+      the member for the rest of the turn — so whatever the peer eventually writes into that
+      context is in a conversation this side has no record of, and the next address would
+      both inherit that invisible history and queue behind the still-running turn (a
+      protoAgent peer serializes turns per thread) for the whole read budget.
+
+    A transport failure is NOT one of these: the peer never accepted the message, so its
+    conversation is unchanged and the pointer still describes it correctly.
+    """
+    if not conversation_key:
+        return False
+    with _LOCK:
+        return _CONTEXTS.pop(_key(conversation_key, delegate, url, credential), None) is not None
 
 
 def forget(conversation_key: str) -> int:
@@ -119,17 +185,20 @@ def forget(conversation_key: str) -> int:
     if not conversation_key:
         return 0
     key = str(conversation_key)
-    gone = [k for k in _CONTEXTS if k[0] == key]
-    for k in gone:
-        _CONTEXTS.pop(k, None)
+    with _LOCK:
+        gone = [k for k in _CONTEXTS if k[0] == key]
+        for k in gone:
+            _CONTEXTS.pop(k, None)
     return len(gone)
 
 
-def snapshot() -> dict[tuple[str, str, str], str]:
+def snapshot() -> dict[tuple[str, str, str, str], str]:
     """Everything remembered (copy) — for tests and debugging, never the wire."""
-    return dict(_CONTEXTS)
+    with _LOCK:
+        return dict(_CONTEXTS)
 
 
 def reset() -> None:
     """Forget everything (tests)."""
-    _CONTEXTS.clear()
+    with _LOCK:
+        _CONTEXTS.clear()
