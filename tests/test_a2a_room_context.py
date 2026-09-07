@@ -787,3 +787,46 @@ def test_a_non_string_context_id_is_read_as_absent():
     assert _extract_context_id({"task": {"contextId": None}}) == ""
     # A well-formed sibling envelope still wins over an out-of-spec task-level one.
     assert _extract_context_id({"task": {"contextId": 1}, "message": {"contextId": "c"}}) == "c"
+
+
+async def test_a_pool_timeout_keeps_the_conversation_a_read_timeout_drops_it(wire):
+    """``PoolTimeout`` is OUR connection pool stalling, not the peer timing out.
+
+    Nothing was sent, so the peer's conversation is exactly where we left it and the
+    remembered context is still good — dropping it would throw a live room away over a
+    local resource stall. A READ timeout is the opposite: bytes went out, the peer may be
+    working, and its answer lands in a context this side will never see, so that one must
+    drop. ``httpx.TimeoutException`` covers both, which is why they are caught separately.
+    """
+    import pytest
+
+    from plugins.delegates.adapters import KIND_TIMEOUT, KIND_UNREACHABLE
+
+    # Establish a remembered context the timeouts can threaten.
+    wire(_always(context_id="ctx-room"))
+    reg = _registry()
+    await reg.dispatch("peer", "hello", conversation_key="thread-1")
+    await reg.dispatch("peer", "again", conversation_key="thread-1")
+    assert conversations.remembered("thread-1", "peer", PEER_URL) == "ctx-room"
+
+    def _pool_timeout(*_a, **_kw):
+        raise httpx.PoolTimeout("no connection available")
+
+    wire(_pool_timeout)
+    with pytest.raises(Exception) as caught:
+        await reg.dispatch("peer", "…", conversation_key="thread-1")
+    assert getattr(caught.value, "kind", "") == KIND_UNREACHABLE
+    assert conversations.remembered("thread-1", "peer", PEER_URL) == "ctx-room", (
+        "a local pool stall must not cost the room its conversation"
+    )
+
+    def _read_timeout(*_a, **_kw):
+        raise httpx.ReadTimeout("peer is still working")
+
+    wire(_read_timeout)
+    with pytest.raises(Exception) as caught:
+        await reg.dispatch("peer", "…", conversation_key="thread-1")
+    assert getattr(caught.value, "kind", "") == KIND_TIMEOUT
+    assert conversations.remembered("thread-1", "peer", PEER_URL) == "", (
+        "the peer may have the request; its answer lands where we cannot see it"
+    )

@@ -812,12 +812,25 @@ class A2aAdapter(Adapter):
                     f"delegate {d.name!r} unreachable at {d.url} ({type(exc).__name__})",
                     kind=KIND_UNREACHABLE,
                 ) from exc
+            except httpx.PoolTimeout as exc:
+                # NOT a peer timeout: we never got a connection out of the pool, so nothing
+                # was sent and the peer saw nothing. Deliberately separated from the read /
+                # write timeouts below — tagging this KIND_TIMEOUT would drop a conversation
+                # the peer is still perfectly able to continue, throwing continuity away over
+                # a purely local resource stall.
+                raise DelegateError(
+                    f"delegate {d.name!r} unreachable at {d.url} (PoolTimeout: no connection available)",
+                    kind=KIND_UNREACHABLE,
+                ) from exc
             except httpx.TimeoutException as exc:
-                # A READ timeout (connect timeouts are caught above): the peer accepted the
-                # request and is still working on it. Tagged so ``_dispatch_traced`` can drop
-                # this conversation's continuity — the peer's answer lands in a context this
-                # side will never see, and a protoAgent peer serializes turns per thread, so
-                # the next address would queue behind the turn we just gave up on.
+                # A READ or WRITE timeout (connect and pool timeouts are caught above): bytes
+                # went out, so the peer may well have accepted the request and be working on
+                # it. Tagged so ``_dispatch_traced`` can drop this conversation's continuity —
+                # the peer's answer lands in a context this side will never see, and a
+                # protoAgent peer serializes turns per thread, so the next address would queue
+                # behind the turn we just gave up on. Uncertainty resolves toward dropping:
+                # losing continuity costs a re-send, reusing a context whose state we cannot
+                # reason about costs the room.
                 raise DelegateError(
                     f"delegate {d.name!r} timed out contacting {d.url}", kind=KIND_TIMEOUT
                 ) from exc
