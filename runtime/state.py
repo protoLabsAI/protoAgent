@@ -64,6 +64,11 @@ class AppState:
     mcp_tools: list = field(default_factory=list)
     mcp_meta: list = field(default_factory=list)
     plugin_tools: list = field(default_factory=list)
+    # The last successful PluginLoadResult (#3365). A rebuild that only needs to
+    # re-render the system prompt — edit_soul — reuses this instead of re-running
+    # load_plugins() and _build_mcp(), which re-imports every plugin and respawns
+    # every MCP server subprocess for a change that touched neither.
+    plugin_bundle: Any = None
     # tool name -> owning plugin display name (Tools tab grouping); mirrors plugin_tools.
     plugin_tool_owner: dict = field(default_factory=dict)
     plugin_skill_dirs: list = field(default_factory=list)

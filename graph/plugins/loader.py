@@ -134,6 +134,24 @@ def _plugin_module_name(plugin_id: str) -> str:
     return "protoagent_plugin_" + re.sub(r"\W", "_", plugin_id)
 
 
+# ── Re-exec avoidance (#3365) ─────────────────────────────────────────────────
+# plugin id → (source fingerprint, entry module) for the generation currently
+# live in ``sys.modules``. Re-executing a plugin's module tree does NOT free the
+# previous generation: every function handed to ``register(registry)`` carries
+# ``__globals__`` — the old module's ``__dict__`` — and third-party registries
+# (pydantic model classes, SQLAlchemy annotation types) key off the classes each
+# exec creates. Dropping the name from ``sys.modules`` frees none of that, so a
+# process that rebuilt its graph on a cadence grew by a full copy of every plugin
+# every time — ~6.4 MB per rebuild in a trimmed config, linear and unbounded,
+# until the host ran out of memory.
+#
+# So: only re-exec a plugin whose sources actually moved. The fingerprint is the
+# same one the code-drift banner uses, which is what makes this safe — a reload
+# after an edit still re-execs, and the devkit's "edit then reload_plugins" loop
+# is unaffected.
+_LOADED_MODULES: dict[str, tuple[str, object]] = {}
+
+
 def purge_plugin_modules(plugin_id: str) -> None:
     """Drop a plugin's module subtree from ``sys.modules`` so the next reload
     re-execs every file from disk. The loader re-execs the entry ``__init__`` each
@@ -141,6 +159,9 @@ def purge_plugin_modules(plugin_id: str) -> None:
     through ``sys.modules`` — which still holds the OLD code after a force
     re-install. Scoped to the plugin's own prefix; the reload rebuilds it. Shared by
     the console Update route and the auto-update loop (#1720)."""
+    # Drop the re-exec cache too (#3365): a force re-install/update calls this to
+    # guarantee fresh code, and must not be answered from the cache afterwards.
+    _LOADED_MODULES.pop(plugin_id, None)
     prefix = _plugin_module_name(plugin_id)
     for name in [n for n in list(sys.modules) if n == prefix or n.startswith(prefix + ".")]:
         sys.modules.pop(name, None)
@@ -150,8 +171,26 @@ def _load_plugin_module(manifest: PluginManifest, entry: Path):
     """Import a plugin's entry ``__init__.py`` as a **package** so it can have
     sibling modules and use relative imports (``from .tools import …``). The
     module is registered in ``sys.modules`` BEFORE exec — relative imports resolve
-    the parent package there — and the name is sanitized to a valid identifier."""
+    the parent package there — and the name is sanitized to a valid identifier.
+
+    Re-exec is SKIPPED when the plugin's sources are byte-for-byte what they were
+    at the last import (#3365) — see ``_LOADED_MODULES``. Re-running unchanged code
+    leaked a full copy of the plugin and bought nothing.
+    """
     mod_name = _plugin_module_name(manifest.id)
+    # Same stamp the drift banner uses. Empty (unreadable tree) → never a cache hit,
+    # so an unstampable plugin behaves exactly as it did before.
+    fingerprint = _source_fingerprint(manifest.path)
+    cached = _LOADED_MODULES.get(manifest.id)
+    if (
+        fingerprint
+        and cached is not None
+        and cached[0] == fingerprint
+        # The live module must still be OURS: anything that purged or replaced it
+        # out from under us invalidates the cache by definition.
+        and sys.modules.get(mod_name) is cached[1]
+    ):
+        return cached[1]
     # Reload-safety: drop any cached modules for this plugin — the entry AND its sibling
     # submodules (``mod_name.*``) — so a hot-reload re-execs EVERY file, not just
     # __init__.py. Without this, ``from .tools import x`` resolves a stale cached
@@ -170,6 +209,8 @@ def _load_plugin_module(manifest: PluginManifest, entry: Path):
     except Exception:
         sys.modules.pop(mod_name, None)
         raise
+    if fingerprint:
+        _LOADED_MODULES[manifest.id] = (fingerprint, module)
     return module
 
 
