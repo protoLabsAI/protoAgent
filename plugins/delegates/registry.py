@@ -80,6 +80,7 @@ class DelegateRegistry:
         raw: bool = False,
         resume_task_id: str | None = None,
         conversation_key: str | None = None,
+        origin_session_id: str | None = None,
         permissions: str | None = None,
         timeout: float | None = None,
     ) -> str:
@@ -97,12 +98,22 @@ class DelegateRegistry:
         roster — a persistent ACP session, or (#3360) the A2A ``contextId`` an ``a2a``
         peer assigned that key, so repeated addresses from one chat thread land in one
         peer-side conversation instead of N unrelated ones.
+        ``origin_session_id`` is the chat SESSION this dispatch came from, recorded beside
+        the resolved ``conversation_key`` so a delete that knows only the session can forget
+        the a2a context later (#3362). Explicit when a caller knows it; the room path can't
+        pass it through the host-free ``graph/mention_op``, so it falls back to the session
+        bound by ``recording_session`` (a ContextVar). Blank when neither supplies one.
         ``permissions`` is a per-call ACP ceiling; currently only ``readonly`` is
         accepted, and delegate types that cannot enforce it are refused."""
+        from . import conversations
+
         d = self._items.get(name)
         if d is None:
             raise DelegateError(f"unknown delegate {name!r}. Configured: {', '.join(self._items) or '(none)'}.")
         conversation_key = str(conversation_key or "").strip()
+        # Explicit wins; otherwise the room's ``recording_session`` block bound one on a
+        # ContextVar because it reaches here through host-free code that can't carry it.
+        origin_session_id = str(origin_session_id or "").strip() or conversations.current_origin_session()
         permissions = str(permissions or "").strip().lower()
         if conversation_key and d.type not in _CONVERSATIONAL_TYPES:
             raise DelegateError(
@@ -117,12 +128,15 @@ class DelegateRegistry:
             raise DelegateError("permissions must be 'readonly' when an invocation ceiling is requested.")
         if permissions and d.type != "acp":
             raise DelegateError(f"delegate {name!r} is type {d.type!r} and cannot enforce a permissions ceiling.")
-        if conversation_key or permissions or (raw and d.manage_git):
+        if conversation_key or origin_session_id or permissions or (raw and d.manage_git):
             import dataclasses
 
             d = dataclasses.replace(
                 d,
                 conversation_key=conversation_key,
+                # Rides beside the resolved key so an answered a2a exchange records it
+                # (adapters ``_learn`` → ``conversations.remember(session_id=…)``, #3362).
+                origin_session_id=origin_session_id,
                 permissions_ceiling=permissions,
                 # A read-only invocation ceiling covers host-managed side effects
                 # too, not only ACP permission requests from the child.
@@ -154,6 +168,23 @@ class DelegateRegistry:
         status.record_success(d.name)
         return reply
 
+    def recording_session(self, session_id: str):
+        """Context manager binding the originating chat session for the a2a continuity that
+        delegations dispatched inside it record (#3362).
+
+        The chat-room dispatch boundary opens it — the server ``@`` dispatch and
+        ``delegate_to``'s room helper — and ``dispatch`` reads it (via ``conversations``)
+        to fill ``remember``'s ``session_id``, storing the origin BESIDE the resolved
+        conversation key. It rides a ContextVar, not a dispatch argument, because both
+        boundaries reach ``dispatch`` through ``graph/mention_op``, which is host-free and
+        never imports this plugin. Core reaches this duck-typed through
+        ``STATE.delegate_registry`` — the same seam as ``forget_conversation`` — so a fork
+        without it (or a blank session) simply records no origin.
+        """
+        from . import conversations
+
+        return conversations.origin_session(str(session_id or ""))
+
     def forget_conversation(self, conversation_key: str) -> int:
         """Drop the transport continuity this process holds for one conversation (#3360).
 
@@ -176,4 +207,28 @@ class DelegateRegistry:
             return conversations.forget(str(conversation_key or ""))
         except Exception:  # noqa: BLE001 — best-effort cleanup, never the caller's problem
             logger.exception("[delegates] forgetting conversation %r failed", conversation_key)
+            return 0
+
+    def forget_conversations_for_session(self, session_id: str) -> int:
+        """Drop the transport continuity this process holds for one CHAT SESSION (#3362).
+
+        The origin-scoped companion to ``forget_conversation``: that one takes the resolved
+        conversation KEY a room dispatched under (which rewind/fork know, because they
+        resolve it); this one takes the chat SESSION id, and drops every remembered A2A
+        context whose recorded origin is that session. It never infers membership from the
+        *shape* of a resolved key — a custom thread-id resolver (ADR 0029 §D4 / #571) can
+        mint one to anything and the map is one-way — so a caller that knows only the
+        session can still reach every context it minted.
+
+        Same contract as ``forget_conversation``: best-effort, never raises, returns how
+        many were dropped. Scoped to the A2A ``contextId`` map only; a persistent ACP
+        session is not torn down here, for the reasons ``forget_conversation`` gives. No
+        route calls this yet — the DELETE wiring lands in a following slice.
+        """
+        from . import conversations
+
+        try:
+            return conversations.forget_by_session(str(session_id or ""))
+        except Exception:  # noqa: BLE001 — best-effort cleanup, never the caller's problem
+            logger.exception("[delegates] forgetting session %r conversations failed", session_id)
             return 0

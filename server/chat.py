@@ -14,6 +14,7 @@ import cycle. ``server/__init__.py`` re-exports every public name so
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -1343,29 +1344,41 @@ async def _at_delegate_exchange(
     # flat `outcomes` the caller wants is derived from it at the end rather than kept in
     # parallel, so there is only one place a round can be recorded.
     rounds: list[list[dict]] = []
-    plan = plan_round(targets, rounds, max_rounds=max_rounds)
-    while not plan.done:
-        this_round: list[dict] = []
-        for name in plan.speakers:
-            outcome = await run_mention(
-                STATE.graph,
-                reg,
-                tid,
-                name,
-                rest,
-                session_id=session_id,
-                # Both levers come off the PLAN, not from re-deriving them here: they are
-                # the room's policy (`RoundPlan.record_address` / `.drop_silence`), and
-                # `drop_silence` in particular is what makes `room.max_rounds: 1` byte-
-                # identical to the single pass this used to be.
-                record_address=plan.record_address,
-                drop_silence=plan.drop_silence,
-                **caps,
-            )
-            outcome["round"] = plan.round_index
-            this_round.append(outcome)
-        rounds.append(this_round)
+    # Bind the originating chat session for the whole exchange so the delegates plugin
+    # records every a2a continuity this room mints against it (#3362) — the session then
+    # scopes a later session-DELETE cleanup. It rides a ContextVar the registry reads
+    # (`recording_session`), because run_mention reaches DelegateRegistry.dispatch through
+    # host-free `graph/mention_op`, which can't carry a new argument. Reached duck-typed
+    # through the roster like `forget_delegate_conversations`, and gated on a real session,
+    # so a fork without the plugin (or a session-less caller) is exactly today's behaviour.
+    _record_session = getattr(reg, "recording_session", None)
+    session_scope = (
+        _record_session(session_id) if _record_session is not None and session_id else contextlib.nullcontext()
+    )
+    with session_scope:
         plan = plan_round(targets, rounds, max_rounds=max_rounds)
+        while not plan.done:
+            this_round: list[dict] = []
+            for name in plan.speakers:
+                outcome = await run_mention(
+                    STATE.graph,
+                    reg,
+                    tid,
+                    name,
+                    rest,
+                    session_id=session_id,
+                    # Both levers come off the PLAN, not from re-deriving them here: they are
+                    # the room's policy (`RoundPlan.record_address` / `.drop_silence`), and
+                    # `drop_silence` in particular is what makes `room.max_rounds: 1` byte-
+                    # identical to the single pass this used to be.
+                    record_address=plan.record_address,
+                    drop_silence=plan.drop_silence,
+                    **caps,
+                )
+                outcome["round"] = plan.round_index
+                this_round.append(outcome)
+            rounds.append(this_round)
+            plan = plan_round(targets, rounds, max_rounds=max_rounds)
     outcomes: list[dict] = [outcome for one_round in rounds for outcome in one_round]
 
     # A stopped member can already be started, with consent, by the lead agent's
@@ -2997,6 +3010,35 @@ def forget_delegate_conversations(*thread_ids: str) -> int:
             dropped += int(reg.forget_conversation(tid) or 0)
         except Exception as exc:  # noqa: BLE001 — best-effort, see docstring
             log.warning("[chat] delegate-continuity cleanup failed for %s: %s", tid, exc)
+    return dropped
+
+
+def forget_delegate_conversations_for_session(*session_ids: str) -> int:
+    """Drop delegate transport continuity recorded as ORIGINATING from these chat sessions
+    (#3362).
+
+    The origin-scoped companion to ``forget_delegate_conversations``: that seam drops by
+    the resolved thread KEY a room dispatched under (the id rewind/fork already hold, because
+    they resolve it); this one drops by the chat SESSION a context was recorded against. A
+    custom thread-id resolver (ADR 0029 §D4 / #571) can map a session to any key and the map
+    is one-way, so a caller that knows only the session id — a DELETE route carries no request
+    metadata to re-resolve — can still reach every context that session minted, without a
+    prefix/substring guess at which keys belong to it.
+
+    Reached through ``STATE.delegate_registry`` and ``hasattr``-guarded, exactly like its
+    sibling, so a fork pinned to an older delegates plugin degrades to 'dropped nothing'; it
+    swallows because a cleanup must never fail the gesture it cleans up after. No route calls
+    it yet — this is the plumbing a following slice wires into the delete path.
+    """
+    reg = getattr(STATE, "delegate_registry", None)
+    if reg is None or not hasattr(reg, "forget_conversations_for_session"):
+        return 0
+    dropped = 0
+    for sid in dict.fromkeys(s for s in session_ids if s):
+        try:
+            dropped += int(reg.forget_conversations_for_session(sid) or 0)
+        except Exception as exc:  # noqa: BLE001 — best-effort, see docstring
+            log.warning("[chat] delegate-continuity session cleanup failed for %s: %s", sid, exc)
     return dropped
 
 
