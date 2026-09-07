@@ -30,17 +30,11 @@ async function flush() {
   });
 }
 
-// A condition-driven settle: drive React inside `act` (so a resolving query or Radix's deferred
-// menu render actually commits) and re-check `predicate` after each pass, returning the instant it
-// holds. This replaces counting `setTimeout(0)` flushes — the wait ends when the observable state
-// is ready, not after a guessed number of ticks — and is bounded so a stuck condition fails fast
-// with a useful message instead of hanging the run.
-async function waitUntil(predicate: () => boolean, description: string) {
-  for (let i = 0; i < 50; i++) {
-    if (predicate()) return;
+async function waitForAct(assertion: () => void) {
+  await vi.waitFor(async () => {
     await flush();
-  }
-  throw new Error(`Timed out waiting for ${description}`);
+    assertion();
+  });
 }
 
 beforeEach(() => {
@@ -223,13 +217,33 @@ const openLaneMenu = (label: string) => {
 
 const laneItems = () => [...document.querySelectorAll<HTMLElement>('[role="menuitemradio"]')];
 
-// The repoint DropdownSelect is disabled with a "Loading models…" placeholder until the dialog's
-// settings-schema query resolves — both flip from the same `lanesLoading` flag in the component.
-// Treat the lane as ready only once neither "still loading" signal remains, so the menu can
-// actually be opened (a disabled Radix trigger swallows the `pointerdown`).
-const laneReady = (label: string) => {
-  const trigger = document.querySelector(`[aria-label="New target for ${label}"]`);
-  return !!trigger && !trigger.hasAttribute("disabled") && !trigger.textContent?.includes("Loading models");
+const laneTrigger = (label: string) =>
+  document.querySelector(`[aria-label="New target for ${label}"]`) as HTMLButtonElement | null;
+
+const laneOptionText = () => laneItems().map((option) => option.textContent ?? "").join(" ");
+
+// The schema-backed repoint DropdownSelect is disabled until its cross-provider lanes are loaded.
+// Radix swallows `pointerdown` while disabled, so wait on the trigger before opening the menu.
+const waitForLaneTrigger = (label: string) =>
+  waitForAct(() => {
+    const trigger = laneTrigger(label);
+    expect(trigger).toBeTruthy();
+    expect(trigger?.disabled).toBe(false);
+    expect(trigger?.textContent).not.toContain("Loading models");
+  });
+
+const waitForLaneOptions = (contains: string) =>
+  waitForAct(() => {
+    expect(laneOptionText()).toContain(contains);
+  });
+
+const waitForPrimaryEnabled = () =>
+  waitForAct(() => {
+    expect(primary()?.disabled).toBe(false);
+  });
+
+const expectNoLaneOption = (contains: string) => {
+  expect(laneOptionText()).not.toContain(contains);
 };
 
 const chooseLane = (contains: string) => {
@@ -397,28 +411,22 @@ describe("Resolve-references dialog (bd-v6xy)", () => {
     // No target chosen yet for the non-clearable lead model → the destructive primary is off.
     expect(primary()?.disabled).toBe(true);
 
-    // Wait for the schema query to resolve — that is what enables the repoint dropdown and makes
-    // its lane options selectable — instead of assuming a single `setTimeout(0)` settles it.
-    await waitUntil(() => laneReady("Lead model"), "the repoint dropdown to enable once lanes load");
+    await waitForLaneTrigger("Lead model");
     openLaneMenu("Lead model");
-    // Radix commits the menu content on a later tick; wait for the options to exist, not a flush.
-    await waitUntil(() => laneItems().length > 0, "the repoint lane options to render");
+    await waitForLaneOptions("qwen3-32b");
 
-    const options = laneItems();
     // The other connection's lane is offered; the connection being removed (its `gpt-x`) is not.
-    expect(options.map((option) => option.textContent).join(" ")).toContain("qwen3-32b");
-    expect(options.map((option) => option.textContent).join(" ")).not.toContain("gpt-x");
+    expectNoLaneOption("gpt-x");
     chooseLane("qwen3-32b");
-    // The chosen target resolves the non-clearable lead model → wait for the primary to enable.
-    await waitUntil(() => primary()?.disabled === false, "the destructive primary to enable");
+    await waitForPrimaryEnabled();
 
-    expect(primary()?.disabled).toBe(false);
     await act(async () => {
       primary()!.click();
       await Promise.resolve();
     });
-    // Wait for the repoint mutation to fire rather than assuming it settles within one flush.
-    await waitUntil(() => remove.mock.calls.length > 0, "the repoint release to be submitted");
+    await waitForAct(() => {
+      expect(remove).toHaveBeenCalled();
+    });
 
     expect(remove).toHaveBeenCalledWith("gateway", false, { "model.name": "local-vllm:qwen3-32b" });
   });
