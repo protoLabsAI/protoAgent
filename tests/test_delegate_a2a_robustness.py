@@ -9,7 +9,6 @@ version-incompatible).
 from __future__ import annotations
 
 import asyncio
-import itertools
 import json as _json
 import logging
 import time as _time
@@ -171,9 +170,26 @@ def _task_resp(*, state="TASK_STATE_WORKING", task_id="t1", context_id=None, tex
     return _Resp({"jsonrpc": "2.0", "result": {"task": task}})
 
 
-def _clock(monkeypatch, *values):
-    ticks = itertools.chain(values, itertools.repeat(values[-1]))
-    monkeypatch.setattr(_time, "monotonic", lambda: next(ticks))
+def _clock(monkeypatch, step=0.3):
+    """A fake ``time.monotonic`` that ADVANCES by ``step`` on every read.
+
+    It must never stop advancing. The adapter reads the clock an
+    implementation-defined number of times per dispatch — ``_rpc_tracked`` alone reads
+    it twice per RPC — so a script that freezes on a final value can leave the poll
+    deadline permanently ahead of the clock. Combined with the ``patched`` fixture's
+    no-op ``asyncio.sleep``, that is not a slow test but an infinite spin (it timed out
+    a 15-minute CI job). An always-increasing clock guarantees every deadline is
+    eventually crossed, so a miscounted read fails the assertion instead of hanging.
+
+    Returns the list of values handed out, so a test can assert on elapsed time."""
+    reads: list[float] = []
+
+    def _monotonic() -> float:
+        reads.append(step * len(reads))
+        return reads[-1]
+
+    monkeypatch.setattr(_time, "monotonic", _monotonic)
+    return reads
 
 
 def test_progress_fingerprint_distinguishes_material_task_advancement():
@@ -216,7 +232,7 @@ def test_dispatch_deadline_exceeded_reports_still_running(patched):
 
 def test_identical_working_polls_timeout_without_a_second_send(patched):
     patched.setattr("tools.a2a_parse._extract_text", lambda *_a, **_k: "")
-    _clock(patched, 0.0, 0.0, 0.5, 1.1)
+    _clock(patched, step=0.3)
     running = _task_resp(state="TASK_STATE_WORKING")
     bodies = _install_capture_client(patched, send_resp=running, get_resp=running)
 
@@ -224,11 +240,15 @@ def test_identical_working_polls_timeout_without_a_second_send(patched):
         asyncio.run(A.dispatch(_parse(poll_timeout_s=1), "hi"))
 
     assert "without observable progress" in str(ei.value)
-    assert [b.get("method") for b in bodies] == ["SendMessage", "GetTask"]
+    methods = [b.get("method") for b in bodies]
+    # The invariant that matters: a heartbeat that never changes is not progress, so the
+    # bound still trips — and the timeout opens NO second task (room_rounds._dropped).
+    assert methods.count("SendMessage") == 1
+    assert methods.count("GetTask") >= 1
 
 
 def test_material_progress_resets_poll_timeout_until_completion(patched):
-    _clock(patched, 0.0, 0.0, 9.0, 9.5, 18.0, 18.5)
+    reads = _clock(patched, step=1.0)
     bodies = _install_capture_client(
         patched,
         send_resp=_task_resp(state="TASK_STATE_WORKING"),
@@ -239,7 +259,13 @@ def test_material_progress_resets_poll_timeout_until_completion(patched):
     )
 
     assert asyncio.run(A.dispatch(_parse(poll_timeout_s=10), "hi")) == "done"
-    assert [b.get("method") for b in bodies] == ["SendMessage", "GetTask", "GetTask"]
+    methods = [b.get("method") for b in bodies]
+    assert methods.count("SendMessage") == 1
+    assert methods.count("GetTask") == 2
+    # The point of the change: an advancing task runs past the nominal poll_timeout_s
+    # total and still returns its answer, because each material observation reset the
+    # inactivity deadline rather than the whole turn being capped at 10s.
+    assert reads[-1] - reads[0] >= 10
 
 
 def test_dispatch_returns_immediate_text(patched):
