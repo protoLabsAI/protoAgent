@@ -907,6 +907,17 @@ class A2aAdapter(Adapter):
         if room_context:
             send_params["message"]["contextId"] = room_context
 
+        def _learn(envelope) -> None:
+            """The other half of the map: note the context this exchange ran in, for the
+            next address on this conversation. Read off the peer's OWN envelope — never
+            assumed to be what we sent, because the peer assigns it (and on a first
+            address there was nothing to send). Empty ⇒ nothing remembered, so the next
+            address sends nothing either. A RESUME is excluded: it answers one parked task
+            in the context that task parked in, which says nothing about the context this
+            conversation continues in."""
+            if not resume_task_id:
+                conversations.remember(d.conversation_key, d.name, d.url, _extract_context_id(envelope))
+
         # A *synchronous* peer — protoAgent's own A2A server answers SendMessage INLINE,
         # holding the connection open for the whole delegated turn before returning the final
         # Message — so the initial SendMessage READ must be allowed to run as long as the task
@@ -941,15 +952,7 @@ class A2aAdapter(Adapter):
                     # a different conversation and leave the park waiting forever.
                     send_params["message"]["contextId"] = ptask["contextId"]
             result = await _rpc(client, "SendMessage", send_params)
-            if not resume_task_id:
-                # Learn the context this exchange ran in, for the next address on this
-                # conversation. Read off the peer's own envelope — never assumed to be
-                # what we sent, because the peer assigns it (and on a first address there
-                # was nothing to send). Empty ⇒ nothing remembered, so the next address
-                # sends nothing either. A RESUME is excluded: it answers one parked task
-                # in the context that task parked in, which says nothing about the
-                # context this conversation continues in.
-                conversations.remember(d.conversation_key, d.name, d.url, _extract_context_id(result))
+            _learn(result)
             task = result.get("task", result) or {}
             task_id = task.get("id")
             state = (task.get("status") or {}).get("state")
@@ -977,6 +980,13 @@ class A2aAdapter(Adapter):
                 result = await _rpc(client, "GetTask", {"id": task_id})
                 task = result.get("task", result) or {}
                 state = (task.get("status") or {}).get("state")
+            # An ASYNC-style peer acknowledges SendMessage with a bare accepted task and
+            # only fills the envelope out as it works, so the contextId can arrive on the
+            # poll rather than on the ack. Learn it here too — same value when it was
+            # already on the ack, the only value we ever see when it wasn't. (protoAgent
+            # peers answer inline and never reach this loop, which is exactly why the
+            # gap would have stayed invisible.)
+            _learn(result)
             if _is_input_required(state):
                 # The peer parked on an input interrupt. The HITL delegation chain
                 # (operator decision, 2026-08-20): the QUESTION comes back to the

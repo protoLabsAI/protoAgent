@@ -152,3 +152,27 @@ class DelegateRegistry:
             raise
         status.record_success(d.name)
         return reply
+
+    def forget_conversation(self, conversation_key: str) -> int:
+        """Drop the transport continuity this process holds for one conversation (#3360).
+
+        The seam a thread-lifecycle event calls when this side's history is rewritten —
+        ``server.chat.forget_delegate_conversations`` wires the rewind, delete and fork
+        gestures to it through ``STATE.delegate_registry``, so core never imports this
+        plugin. Returns how many peer contexts were dropped, and never raises: a cleanup
+        path must not be able to fail the gesture it is cleaning up after.
+
+        **Scope: the A2A ``contextId`` map, and only that.** A persistent ACP session is
+        *not* torn down here, deliberately — it is a pooled subprocess holding a coding
+        agent's live working state (``plugins/coding_agent._client_for``), so ending one
+        is an operator-visible action with its own consequences, and it has behaved this
+        way since ``conversation_key`` existed rather than being something #3360
+        introduced. Widening this to ACP is a separate decision, not a follow-through.
+        """
+        from . import conversations
+
+        try:
+            return conversations.forget(str(conversation_key or ""))
+        except Exception:  # noqa: BLE001 — best-effort cleanup, never the caller's problem
+            logger.exception("[delegates] forgetting conversation %r failed", conversation_key)
+            return 0

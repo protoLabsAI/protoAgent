@@ -342,3 +342,240 @@ def test_an_empty_context_id_is_never_remembered():
     conversations.remember("thread-1", "peer", PEER_URL, "")
     assert conversations.remembered("thread-1", "peer", PEER_URL) == ""
     assert conversations.snapshot() == {}
+
+
+# ── reading the id off whatever envelope the peer used ────────────────────────
+
+
+def test_extract_context_id_reads_every_envelope_the_adapter_can_see():
+    """``_extract_context_id`` claims the same envelope tolerance as ``_extract_text``;
+    pin it, because the only shape a protoAgent peer produces is the first one and the
+    rest would rot unnoticed behind it."""
+    from tools.a2a_parse import _extract_context_id
+
+    assert _extract_context_id({"task": {"contextId": "c"}}) == "c"  # SendMessage
+    assert _extract_context_id({"id": "t1", "contextId": "c"}) == "c"  # bare GetTask task
+    assert _extract_context_id({"message": {"contextId": "c"}}) == "c"  # bare Message reply
+    assert _extract_context_id({"task": {"status": {"message": {"contextId": "c"}}}}) == "c"
+    # Nothing to learn ⇒ "", which is "send no contextId", never an invented one.
+    assert _extract_context_id({"task": {"id": "t1"}}) == ""
+    assert _extract_context_id({}) == ""
+    assert _extract_context_id(None) == ""
+    assert _extract_context_id("not a dict") == ""
+
+
+async def test_the_context_can_arrive_on_the_poll_rather_than_the_ack(wire):
+    """An ASYNC-style peer acknowledges SendMessage with a bare accepted task and fills
+    the envelope out as it works, so the contextId shows up on ``GetTask``. protoAgent
+    peers answer inline and never reach the poll loop — which is exactly why learning
+    only off the ack would have been an invisible gap for everyone else."""
+    acked = {"jsonrpc": "2.0", "result": {"task": {"id": "t1", "status": {"state": "TASK_STATE_WORKING"}}}}
+
+    def _handler(_url, body):
+        if body.get("method") == "GetTask":
+            return _result(context_id="ctx-late")
+        return _Resp(acked)
+
+    bodies = wire(_handler)
+    reg = _registry()
+
+    assert await reg.dispatch("peer", "slow one", conversation_key="thread-1") == "ok"
+    assert await reg.dispatch("peer", "and now?", conversation_key="thread-1") == "ok"
+
+    assert [m.get("contextId") for m in _sends(bodies)] == [None, "ctx-late"]
+
+
+async def test_a_failed_address_neither_learns_nor_forgets(wire):
+    """A transport failure never reaches the learn step, so it can't pin the conversation
+    to a context we were never answered in — and it must not drop the one we had either:
+    the room writes the failure onto the thread and carries on, and the next address
+    belongs in the same conversation as the last successful one."""
+    bodies = wire(_always(context_id="ctx-room"))
+    reg = _registry()
+    await reg.dispatch("peer", "hi", conversation_key="thread-1")
+
+    def _refuse(_url, _body):
+        raise httpx.ConnectError("no route")
+
+    wire(_refuse)
+    with pytest.raises(DelegateError):
+        await reg.dispatch("peer", "boom", conversation_key="thread-1")
+
+    wire(_always(context_id="ctx-room"))
+    await reg.dispatch("peer", "still here?", conversation_key="thread-1")
+    assert _sends(bodies)[-1]["contextId"] == "ctx-room"
+
+
+async def test_one_member_under_two_delegate_names_keeps_two_conversations(wire):
+    """The conservative half of the key. Two roster rows can carry two different
+    credentials, so a matching url is not licence to merge their conversations — the
+    member holds two half-rooms instead, which the rooms guide says out loud."""
+    reg = DelegateRegistry(
+        [
+            {"name": "alpha", "type": "a2a", "url": PEER_URL},
+            {"name": "beta", "type": "a2a", "url": PEER_URL},
+        ]
+    )
+    bodies = wire(_always(context_id="ctx-room"))
+
+    for name in ("alpha", "beta", "alpha", "beta"):
+        await reg.dispatch(name, "hi", conversation_key="thread-1")
+
+    assert [m.get("contextId") for m in _sends(bodies)] == [None, None, "ctx-room", "ctx-room"]
+    assert len(conversations.snapshot()) == 2
+
+
+def test_a_second_context_for_one_conversation_replaces_the_first():
+    """Addresses racing on one (thread, delegate) both find nothing remembered, so the
+    peer mints two contexts and both are learned. The map holds exactly ONE — the last —
+    so the cost is a lost conversation, never a mixed or spliced id. (The room dispatches
+    sequentially and never does this; ``host.invoke_delegate`` is a public seam and
+    nothing stops a plugin from it.)"""
+    conversations.remember("thread-1", "peer", PEER_URL, "ctx-a")
+    conversations.remember("thread-1", "peer", PEER_URL, "ctx-b")
+
+    assert conversations.remembered("thread-1", "peer", PEER_URL) == "ctx-b"
+    assert len(conversations.snapshot()) == 1
+
+
+# ── continuity must not outlive the history it points at ──────────────────────
+
+
+def test_forget_drops_one_conversation_whole_and_nothing_else():
+    """A rewind is about the CONVERSATION, not about whichever participant happened to
+    be addressed last — every member of the cast loses the erased exchange, and the
+    room next door loses nothing."""
+    conversations.remember("thread-1", "alpha", PEER_URL, "a1")
+    conversations.remember("thread-1", "beta", OTHER_URL, "b1")
+    conversations.remember("thread-2", "alpha", PEER_URL, "a2")
+
+    assert conversations.forget("thread-1") == 2
+    assert conversations.remembered("thread-1", "alpha", PEER_URL) == ""
+    assert conversations.remembered("thread-1", "beta", OTHER_URL) == ""
+    assert conversations.remembered("thread-2", "alpha", PEER_URL) == "a2"
+
+
+def test_forgetting_something_we_never_held_is_a_no_op():
+    """Called from best-effort cleanup paths, so it has to be safe on every input."""
+    assert conversations.forget("never-seen") == 0
+    assert conversations.forget("") == 0
+
+
+async def test_a_forgotten_conversation_opens_a_fresh_context(wire):
+    """The whole point of forgetting: the next address is the pre-#3360 wire again, so
+    the peer starts a new conversation instead of resuming the one that was erased."""
+    bodies = wire(_always(context_id="ctx-room"))
+    reg = _registry()
+    await reg.dispatch("peer", "hi", conversation_key="thread-1")
+    await reg.dispatch("peer", "again", conversation_key="thread-1")
+    assert _sends(bodies)[-1]["contextId"] == "ctx-room"
+
+    assert reg.forget_conversation("thread-1") == 1
+    await reg.dispatch("peer", "after the rewind", conversation_key="thread-1")
+    assert "contextId" not in _sends(bodies)[-1]
+
+
+def test_the_registry_seam_never_raises(monkeypatch):
+    """It is called from cleanup paths that must not be able to fail the gesture they
+    are cleaning up after."""
+    reg = _registry()
+
+    def _boom(_key):
+        raise RuntimeError("store on fire")
+
+    monkeypatch.setattr(conversations, "forget", _boom)
+    assert reg.forget_conversation("thread-1") == 0
+
+
+# ── the core-side wiring: rewind / fork / delete ──────────────────────────────
+
+
+def test_the_core_seam_is_duck_typed_and_swallowing(monkeypatch):
+    """``server.chat`` reaches the plugin through ``STATE.delegate_registry`` — the same
+    roster the ``@`` dispatch already reads — so core keeps its distance from
+    ``plugins/``. Every way that can be absent or broken degrades to 'dropped nothing'."""
+    from runtime.state import STATE
+    from server.chat import forget_delegate_conversations
+
+    class _Older:
+        """A fork pinned to a delegates plugin from before this seam existed."""
+
+    class _Broken:
+        def forget_conversation(self, _key):
+            raise RuntimeError("nope")
+
+    for roster in (None, _Older(), _Broken()):
+        monkeypatch.setattr(STATE, "delegate_registry", roster, raising=False)
+        assert forget_delegate_conversations("a2a:s1") == 0
+
+    monkeypatch.setattr(STATE, "delegate_registry", _registry(), raising=False)
+    conversations.remember("a2a:s1", "peer", PEER_URL, "ctx-room")
+    assert forget_delegate_conversations("", "a2a:s1") == 1  # blanks skipped, not counted
+
+
+def _core_state(monkeypatch):
+    from runtime.state import STATE
+
+    monkeypatch.setattr(STATE, "graph", object(), raising=False)
+    monkeypatch.setattr(STATE, "checkpointer", None, raising=False)
+    monkeypatch.setattr(STATE, "thread_id_resolver", None, raising=False)
+    monkeypatch.setattr(STATE, "delegate_registry", _registry(), raising=False)
+
+
+async def test_rewinding_a_room_forgets_its_peer_contexts(monkeypatch):
+    """Rewind is destructive by design, and before continuity existed it was TOTAL —
+    the participant remembered nothing. Keep it total: leave the pointer alive and the
+    next address rejoins the peer's copy, so the discarded exchange comes back in the
+    participant's voice."""
+    import graph.rewind_op as rop
+    from server.chat import rewind_session
+
+    _core_state(monkeypatch)
+
+    async def _rewound(_graph, _cp, _tid, **_kw):
+        return {"found": True, "kept": 2, "removed": 3, "reason": ""}
+
+    monkeypatch.setattr(rop, "rewind_thread", _rewound)
+    conversations.remember("a2a:s1", "peer", PEER_URL, "ctx-room")
+
+    await rewind_session("s1")
+    assert conversations.snapshot() == {}
+
+
+async def test_a_rewind_that_discarded_nothing_keeps_continuity(monkeypatch):
+    """"That's already the last message" erased nothing, so dropping the participant's
+    continuity would be a pure loss with no leak to close."""
+    import graph.rewind_op as rop
+    from server.chat import rewind_session
+
+    _core_state(monkeypatch)
+
+    async def _noop(_graph, _cp, _tid, **_kw):
+        return {"found": True, "kept": 5, "removed": 0, "reason": "noop"}
+
+    monkeypatch.setattr(rop, "rewind_thread", _noop)
+    conversations.remember("a2a:s1", "peer", PEER_URL, "ctx-room")
+
+    await rewind_session("s1")
+    assert conversations.remembered("a2a:s1", "peer", PEER_URL) == "ctx-room"
+
+
+async def test_a_fork_clears_the_destination_and_never_inherits_the_source(monkeypatch):
+    """Two threads writing into one peer conversation would splice two divergent rooms
+    together on the peer's side. The destination gets a clean slate — including from
+    whatever previously occupied that session id."""
+    import graph.rewind_op as rop
+    from server.chat import fork_session
+
+    _core_state(monkeypatch)
+
+    async def _forked(_graph, _cp, _src, _dst, **_kw):
+        return {"found": True, "kept": 4, "discarded": 0, "reason": ""}
+
+    monkeypatch.setattr(rop, "fork_thread", _forked)
+    conversations.remember("a2a:src", "peer", PEER_URL, "ctx-source")
+    conversations.remember("a2a:dst", "peer", PEER_URL, "ctx-stale")
+
+    await fork_session("src", "dst")
+    assert conversations.remembered("a2a:dst", "peer", PEER_URL) == ""  # cleared
+    assert conversations.remembered("a2a:src", "peer", PEER_URL) == "ctx-source"  # untouched

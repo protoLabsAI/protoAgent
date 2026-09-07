@@ -168,8 +168,11 @@ def _dropped(rounds: Sequence[Sequence[Mapping]]) -> set[str]:
     ``conversation_key`` an ``a2a`` member now gets (#3360) only GROUPS the retry with the
     first task under one ``contextId`` — it does not join the running task — so the retry
     opens a SECOND ``SendMessage`` task on a peer already busy with the first, waits the
-    same ``poll_timeout_s`` again, and still returns nothing. The operator would pay N
-    timeouts and N duplicate tasks to be told the same thing N times. The member is not
+    same ``poll_timeout_s`` again, and still returns nothing. Continuity makes that
+    strictly worse rather than better: sharing a context is sharing the peer's THREAD, and
+    a protoAgent peer serializes turns on one thread, so the retry does not even start
+    until the turn it was meant to chase has finished. The operator would pay N timeouts
+    and N duplicate tasks to be told the same thing N times. The member is not
     silently declared dead either way — its failure is written onto the thread as a
     ``(could not be reached: …)`` room message and the adapter's own "the peer may still
     be working; raise its poll timeout" text is quoted straight to the operator — and

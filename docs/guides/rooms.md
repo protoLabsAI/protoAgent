@@ -285,13 +285,69 @@ Which is why **the catch-up window is still sent to everyone, every time**. It i
 floor, not an optimization to be skipped once continuity exists — and for an `openai`
 delegate (a stateless chat endpoint: every call is a fresh completion, so a conversation
 key would name nothing and it is refused rather than silently accepted) it remains the
-participant's *entire* picture of the room. That is why the caps are worth tuning, and why
-truncation is surfaced rather than swallowed.
+participant's *entire* picture of the room.
 
-One thing continuity is not: a way to rejoin work already in flight. A room passes no
-resume handle, so a shared `contextId` groups a re-dispatch with the earlier task without
-joining it — which is why [a failed address is not retried](#multi-round-rooms), even the
-failure that says the peer is still working.
+### What that changes about tuning the caps
+
+It changes what a wide window is *for*, and it splits the advice by who is in the room.
+
+Before, the window had to carry the participant's whole world, so the honest instinct was
+to widen it — a truncation note meant a participant answered on a partial view of a room
+it could not otherwise see. For a participant that resumes, the same content is now paid
+for **twice**: once in its own thread, and again in the catch-up you ship on top. Widening
+the caps for a room of protoAgent peers buys re-transmission, not knowledge.
+
+So:
+
+- **A room of resuming peers** — the window's job shrinks to *"what did I miss while I
+  wasn't the one being addressed"*, which the since-you-last-spoke watermark already
+  scopes. The defaults are generous for that, and a truncation note is worth much less
+  alarm: the clipped tail is mostly a re-send of what the peer already has. Reach for the
+  caps only when the note keeps naming the *same* participant, which means the room really
+  is outrunning it.
+- **A room with any `openai` participant, or any peer that assigns no `contextId`** —
+  nothing has changed. The window is still that participant's entire picture, truncation
+  still means it answered on a partial view, and the caps are still the only lever.
+- **Mixed rooms take the second rule**, because the caps are per-room, not per-participant.
+
+That is also why truncation is surfaced rather than swallowed: the note names *which*
+participant was clipped, which is exactly what you need to tell the two cases apart.
+
+### What continuity does not survive
+
+Deliberately, in each case — the fallback is always "open a fresh context", i.e. the
+behavior every address had before this existed, which is why none of it fails loudly:
+
+- **A restart.** The map from thread to peer context is in-memory and process-local. An
+  upgrade or a desktop relaunch ends every room's continuity, silently, and the next
+  address starts a new conversation on the peer.
+- **Rewind, and deleting the chat.** These are the ones that would otherwise be a *leak*
+  rather than a loss: rewind means "discard everything after this" and delete promises the
+  history is removed, so both drop the pointer. Without that, the next address would
+  rejoin the peer's copy of the conversation and the erased exchange would come back in
+  the participant's voice. (An `acp` participant's session is a live subprocess and is
+  **not** torn down by either gesture — a coding agent addressed in a rewound thread still
+  remembers.)
+- **Re-pointing a delegate's `url`, or renaming it.** A context id only means anything to
+  the peer that minted it.
+- **Being addressed under a second delegate name.** Each name keeps its own
+  conversation, so one fleet member on two roster rows holds two half-rooms. Two roster rows can carry two different credentials,
+  and merging them on a matching url would cross that boundary — address a member under
+  one name.
+
+**Compaction is the exception that keeps it.** `/compact` shortens *your* side to save
+your window; it is not a claim that anything was unsaid, and the peer manages its own
+context. Dropping continuity there would throw away the thing that makes a long room
+affordable.
+
+### What continuity is not
+
+It is not a way to rejoin work already in flight. A room passes no resume handle, so a
+shared `contextId` groups a re-dispatch with the earlier task without joining it — which
+is why [a failed address is not retried](#multi-round-rooms), even the failure that says
+the peer is still working. Sharing a context also shares the peer's *thread*, and a
+protoAgent peer runs one turn per thread at a time: a re-address lands behind the turn it
+was meant to chase rather than beside it.
 
 ## See also
 
