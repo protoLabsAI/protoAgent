@@ -81,10 +81,10 @@ is — see [the limitation](#the-conversation-key-limitation) below.
 
 The window is bounded twice, and whichever bound trips first wins:
 
-| Knob | Default | Bounds |
-|---|---|---|
-| `room.catchup_max_messages` | `40` | how many **thread messages** are replayed |
-| `room.catchup_max_chars` | `8000` | the total size of that replay |
+| Knob | Default | Max | Bounds |
+|---|---|---|---|
+| `room.catchup_max_messages` | `40` | `500` | how many **thread messages** are replayed |
+| `room.catchup_max_chars` | `8000` | `200000` | the total size of that replay |
 
 "Thread messages", not "room messages": the window counts every authored message since
 the participant last spoke — your own turns and the lead agent's replies as well as room
@@ -242,7 +242,13 @@ room:
 ```
 
 A zero or negative value on any of them is read as "leave it at the default", never as
-"send nothing" or "address nobody".
+"send nothing" or "address nobody". Each also has a ceiling — `500` messages, `200000`
+characters, `10` rounds — and a larger value is clamped to it rather than obeyed. These
+are per-dispatch cost knobs: an unbounded catch-up ships the whole thread as the prompt
+on every address, and because an addressed run holds the thread lock from start to
+finish, an unbounded round count parks your own thread behind every one of those
+dispatches. The Settings form will not offer a value above the ceiling; a hand-edited
+`langgraph-config.yaml` is kept as written and clamped when the room reads it.
 
 ## The `conversation_key` limitation
 

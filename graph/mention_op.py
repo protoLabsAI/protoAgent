@@ -47,6 +47,15 @@ log = logging.getLogger(__name__)
 _CATCHUP_MAX_MESSAGES = 40
 _CATCHUP_MAX_CHARS = 8000
 
+# Ceilings for the same three knobs. These MIRROR the ``maximum=`` on the matching
+# ``graph.settings_schema`` fields — `tests/test_room_catchup_bounds.py` pins them to it,
+# because a schema ceiling that drifts from the one actually enforced is a bound nobody
+# is applying. Kept as literals rather than imported so ``mention_op`` stays importable
+# without the schema module in a host that has none.
+_CATCHUP_MAX_MESSAGES_CEILING = 500
+_CATCHUP_MAX_CHARS_CEILING = 200000
+_MAX_ROUNDS_CEILING = 10
+
 # Marks a message this module wrote onto the thread. `lc_source` mirrors the compaction
 # convention; `room` carries authorship STRUCTURALLY so later readers (catch-up windowing
 # here, the console, chat_bundle, export) recover who spoke without parsing the envelope
@@ -58,8 +67,8 @@ _SOURCE = "room"
 _ENVELOPE_RE = re.compile(r"^<room-message\b[^>]*>\n(.*)\n</room-message>$", re.DOTALL)
 
 
-def _positive(value, fallback: int) -> int:
-    """``value`` as a positive int, or ``fallback`` for anything else (0, negative, junk).
+def _positive(value, fallback: int, ceiling: int) -> int:
+    """``value`` as a positive int within ``ceiling``, or ``fallback`` for anything else.
 
     A non-positive bound means "the operator zeroed the knob", which is a request not to
     bound the window — never a request to send an EMPTY one. An empty catch-up silently
@@ -69,12 +78,22 @@ def _positive(value, fallback: int) -> int:
     ``OverflowError`` is in the tuple because ``max_rounds: .inf`` is a legal YAML float
     that ``int()`` refuses. Without it, one hand-edited line makes every `@` address in
     the instance raise mid-turn — the exact failure this guard exists to prevent.
+
+    The ceiling is clamped HERE rather than in ``LangGraphConfig.from_dict``, because
+    ``from_dict`` assigns what the YAML said and the settings schema's ``maximum=`` only
+    fences the Settings UI — a hand-edited ``room.max_rounds: 500`` reaches the dataclass
+    untouched, and every one of these is a per-dispatch COST knob. Clamping at the read
+    keeps the dataclass a faithful record of what the operator wrote while the room
+    declines to act on a value the schema calls out of range, and it covers the
+    programmatic construction path the schema never sees at all. Silent on purpose: the
+    ceilings are documented and a warning here would fire on every address of a
+    long-running instance.
     """
     try:
         number = int(value or 0)
     except (TypeError, ValueError, OverflowError):
         return fallback
-    return number if number > 0 else fallback
+    return min(number, ceiling) if number > 0 else fallback
 
 
 def catchup_caps(config=None) -> dict:
@@ -86,8 +105,16 @@ def catchup_caps(config=None) -> dict:
     all — silently gets the module defaults instead of an AttributeError mid-dispatch.
     """
     return {
-        "max_messages": _positive(getattr(config, "room_catchup_max_messages", None), _CATCHUP_MAX_MESSAGES),
-        "max_chars": _positive(getattr(config, "room_catchup_max_chars", None), _CATCHUP_MAX_CHARS),
+        "max_messages": _positive(
+            getattr(config, "room_catchup_max_messages", None),
+            _CATCHUP_MAX_MESSAGES,
+            _CATCHUP_MAX_MESSAGES_CEILING,
+        ),
+        "max_chars": _positive(
+            getattr(config, "room_catchup_max_chars", None),
+            _CATCHUP_MAX_CHARS,
+            _CATCHUP_MAX_CHARS_CEILING,
+        ),
     }
 
 
@@ -98,8 +125,13 @@ def round_cap(config=None) -> int:
     through one guarded place, so a missing config, an old host, or a hand-edited
     ``max_rounds: lots`` degrades to a single round instead of raising ``ValueError``
     halfway through an operator's `@`.
+
+    Clamped to ``_MAX_ROUNDS_CEILING``. This one matters most of the three: the chat
+    driver holds ``_thread_lock`` for the whole addressed run, so an unclamped
+    ``max_rounds: 500`` parks the operator's own thread behind 500 sequential delegate
+    dispatches with no way to steer out of it.
     """
-    return _positive(getattr(config, "room_max_rounds", None), 1)
+    return _positive(getattr(config, "room_max_rounds", None), 1, _MAX_ROUNDS_CEILING)
 
 
 def _room_meta(message) -> dict:
@@ -166,8 +198,8 @@ def catchup_window(
     threads the operator's configured values in (``room.catchup_max_*``) while the
     function itself stays pure and callable from a test with nothing wired.
     """
-    max_messages = _positive(max_messages, _CATCHUP_MAX_MESSAGES)
-    max_chars = _positive(max_chars, _CATCHUP_MAX_CHARS)
+    max_messages = _positive(max_messages, _CATCHUP_MAX_MESSAGES, _CATCHUP_MAX_MESSAGES_CEILING)
+    max_chars = _positive(max_chars, _CATCHUP_MAX_CHARS, _CATCHUP_MAX_CHARS_CEILING)
     start = 0
     for i in range(len(messages) - 1, -1, -1):
         if _room_meta(messages[i]).get("from") == target:

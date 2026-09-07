@@ -107,3 +107,67 @@ def test_the_config_defaults_are_the_module_defaults():
     assert cfg.room_catchup_max_messages == mop._CATCHUP_MAX_MESSAGES
     assert cfg.room_catchup_max_chars == mop._CATCHUP_MAX_CHARS
     assert cfg.room_max_rounds == 1
+
+
+# --- the ceilings are ENFORCED, not just declared ------------------------------
+#
+# `settings_schema` puts a `maximum=` on each of the three room knobs, but that only
+# fences the Settings UI: `LangGraphConfig.from_dict` assigns whatever the YAML said, and
+# nothing on the programmatic path sees the schema at all. Every one of these is a
+# per-dispatch COST knob, and `max_rounds` is the sharp one — the chat driver holds the
+# per-thread lock for the whole addressed run, so an unclamped `max_rounds: 500` parks
+# the operator's own thread behind 500 sequential dispatches with no way to steer out.
+
+
+def _schema_maximum(key: str) -> int:
+    """The `maximum=` the settings schema declares for one `room.*` field."""
+    from graph.settings_schema import FIELDS
+
+    field = next(f for f in FIELDS if f.key == key)
+    return field.maximum
+
+
+def test_the_enforced_ceilings_match_the_ones_the_schema_declares():
+    """A schema ceiling that drifts from the enforced one is a bound nobody applies.
+
+    The constants are literals in `mention_op` (so it imports without the schema module),
+    which is exactly why they need pinning to their source of truth.
+    """
+    assert mop._CATCHUP_MAX_MESSAGES_CEILING == _schema_maximum("room.catchup_max_messages")
+    assert mop._CATCHUP_MAX_CHARS_CEILING == _schema_maximum("room.catchup_max_chars")
+    assert mop._MAX_ROUNDS_CEILING == _schema_maximum("room.max_rounds")
+
+
+def test_a_hand_edited_yaml_above_the_ceiling_is_clamped_not_obeyed():
+    """`from_dict` assigns what the YAML said; the READ is what declines to act on it."""
+    config = LangGraphConfig.from_dict(
+        {"room": {"catchup_max_messages": 99999, "catchup_max_chars": 9999999, "max_rounds": 500}}
+    )
+    # The dataclass stays a faithful record of what the operator wrote...
+    assert config.room_max_rounds == 500
+    # ...and the room declines to act on it.
+    assert mop.catchup_caps(config) == {
+        "max_messages": mop._CATCHUP_MAX_MESSAGES_CEILING,
+        "max_chars": mop._CATCHUP_MAX_CHARS_CEILING,
+    }
+    assert mop.round_cap(config) == mop._MAX_ROUNDS_CEILING
+
+
+def test_a_value_inside_the_ceiling_is_untouched():
+    """The clamp is a ceiling, not a rewrite — ordinary tuning still tunes."""
+    config = LangGraphConfig.from_dict(
+        {"room": {"catchup_max_messages": 120, "catchup_max_chars": 30000, "max_rounds": 3}}
+    )
+    assert mop.catchup_caps(config) == {"max_messages": 120, "max_chars": 30000}
+    assert mop.round_cap(config) == 3
+
+
+def test_the_window_itself_clamps_a_caller_that_passes_an_absurd_cap():
+    """`catchup_window` is a public seam a second host calls directly with its own caps."""
+    window, truncated = mop.catchup_window(
+        _history(mop._CATCHUP_MAX_MESSAGES_CEILING + 50),
+        "proto",
+        max_messages=10**9,
+        max_chars=10**9,
+    )
+    assert len(window) == mop._CATCHUP_MAX_MESSAGES_CEILING and truncated is True
