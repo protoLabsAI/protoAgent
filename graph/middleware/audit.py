@@ -4,12 +4,79 @@ Wraps every tool execution with timing, success/failure tracking,
 and observability integration. Reuses existing audit/tracing/metrics modules.
 """
 
+import logging
 import time
 
 from langchain.agents.middleware import AgentMiddleware
 
 
 from graph.middleware.redaction import redact
+
+log = logging.getLogger(__name__)
+
+# Warn once, not once per tool call: the failure mode this guards against is a
+# retry storm, and a per-call traceback would be the loudest thing in the log.
+_OBS_UNAVAILABLE_LOGGED = False
+
+
+class _NoopAudit:
+    """Stand-in for ``observability.audit.audit_logger`` — drops the row."""
+
+    @staticmethod
+    def log(**_kwargs) -> None:
+        pass
+
+
+class _NoopTracing:
+    """Stand-in for ``observability.tracing``."""
+
+    @staticmethod
+    def current_session_id() -> str:
+        return ""
+
+    @staticmethod
+    def trace_tool_call(**_kwargs) -> None:
+        pass
+
+
+class _NoopMetrics:
+    """Stand-in for ``observability.metrics``."""
+
+    @staticmethod
+    def record_tool_call(*_args, **_kwargs) -> None:
+        pass
+
+
+def _observability():
+    """Resolve ``(audit_logger, tracing, metrics)``, degrading to no-ops.
+
+    Observability is NOT load-bearing: when these can't be resolved the tool call
+    still has to run. They were imported unguarded in both tool-call paths, so a
+    momentarily unresolvable ``observability.audit`` killed the tool call and
+    failed the whole turn — for a logging concern (#3366). That happens in the
+    wild: the host is often run out of a live checkout, and a lazy import landing
+    mid-edit or mid-branch-switch resolves against a tree that doesn't have the
+    file yet (the #2298 hazard — eagerly imported modules are immune, lazily
+    imported ones are not).
+
+    This matches the guard the other two audit call sites already use
+    (``plugins/execute_code/engine.py``, ``graph/plugins/installer.py``); this
+    middleware was the one place missing it, and the hottest of the three.
+
+    Nothing is cached. The failure is transient by nature, so the next call
+    re-imports and self-heals; on the happy path this is a ``sys.modules`` hit.
+    """
+    global _OBS_UNAVAILABLE_LOGGED
+    try:
+        from observability import metrics, tracing
+        from observability.audit import audit_logger
+
+        return audit_logger, tracing, metrics
+    except Exception:  # noqa: BLE001 — observability must never break a tool call
+        if not _OBS_UNAVAILABLE_LOGGED:
+            _OBS_UNAVAILABLE_LOGGED = True
+            log.exception("[audit] observability unavailable — tool calls run unaudited until it resolves")
+        return _NoopAudit, _NoopTracing, _NoopMetrics
 
 
 class AuditMiddleware(AgentMiddleware):
@@ -26,9 +93,7 @@ class AuditMiddleware(AgentMiddleware):
 
     def _handle_tool_call(self, request, handler):
         """Sync wrapper — times and logs tool execution."""
-        from observability.audit import audit_logger
-        from observability import tracing
-        from observability import metrics
+        audit_logger, tracing, metrics = _observability()
 
         tool_name = request.tool_call.get("name", "unknown")
         args = request.tool_call.get("args", {})
@@ -111,9 +176,7 @@ class AuditMiddleware(AgentMiddleware):
 
     async def _ahandle_tool_call(self, request, handler):
         """Async wrapper — same logic, async execution."""
-        from observability.audit import audit_logger
-        from observability import tracing
-        from observability import metrics
+        audit_logger, tracing, metrics = _observability()
 
         tool_name = request.tool_call.get("name", "unknown")
         args = request.tool_call.get("args", {})
