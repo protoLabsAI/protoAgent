@@ -200,6 +200,11 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # hot-reloads untouched (like tasks_store / background_mgr) — and it is never
     # threaded into the graph build, so the #1630 reload-drop class doesn't apply.
     STATE.metrics_store = _build_metrics_store()
+    # Delegation ledger — the durable record of who handed what work to whom
+    # (graph/ledger.py is the single writer). Wired here, beside the metric store and for
+    # the same reasons: not config-dependent, needed before any plugin's register() runs,
+    # and never threaded into the graph build, so a hot-reload leaves it untouched.
+    STATE.ledger_store = _build_ledger_store()
 
     if not is_setup_complete():
         if headless_setup:
@@ -1968,6 +1973,30 @@ def _build_metrics_store():
         return store
     except Exception:
         log.exception("[metrics] failed to build plugin metric store at %s; sdk metrics disabled", db)
+        return None
+
+
+def _build_ledger_store():
+    """Per-instance delegation ledger (``ledger.db``).
+
+    Always on, no config gate. It records the EDGE — which agent handed work to which
+    delegate, and how that turned out — which nothing else stores: turn telemetry has no
+    actor column, the in-flight delegation registry is an in-memory dict, and orgChart's
+    topology is a live crawl that persists nothing. Without it "what did this fleet
+    actually do" has no answer at all, so it is not something to make optional.
+    """
+    from observability.ledger_store import LedgerStore
+
+    db = instance_paths().store("ledger.db")
+    try:
+        db.parent.mkdir(parents=True, exist_ok=True)
+        store = LedgerStore(str(db))
+        log.info("[ledger] store ready at %s", db)
+        return store
+    except Exception:
+        # Best-effort, exactly like the writer: a fleet that cannot record its delegations
+        # must still be able to make them.
+        log.exception("[ledger] failed to build store at %s; delegation ledger disabled", db)
         return None
 
 

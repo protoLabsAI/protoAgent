@@ -157,6 +157,30 @@ class BackgroundManager:
         self._fire_tasks.add(t)
         t.add_done_callback(self._fire_tasks.discard)
         log.info("[background] spawned %s (%s): %s", job_id, subagent_type, description)
+        # Record the edge HERE, not in `_run_subagent`. A background subagent job does NOT
+        # pass through that funnel: `_fire` sends it as a self-directed A2A turn, so a
+        # ledger bolted onto the in-process path alone would miss every backgrounded
+        # delegation — the same shape of blind spot that made CLI coding-agent runs
+        # invisible to turn telemetry for months (#3015).
+        #
+        # Recorded at SPAWN with outcome "ok" meaning "dispatched", not "succeeded": the
+        # job is detached and settles later in its own store. Waiting for the outcome
+        # would mean no edge at all for a job still running, and "what is this fleet doing
+        # right now" is exactly the question a spawn-time row can answer.
+        try:
+            from graph import ledger
+
+            ledger.record_delegation(
+                to_kind="subagent",
+                to_name=subagent_type,
+                what=description,
+                session_id=origin_session or "",
+                parent_task_id=batch_id or "",
+                task_id=job_id,
+                origin="background",
+            )
+        except Exception:  # noqa: BLE001 — the record must never break the spawn
+            log.exception("[background] ledger record failed for %s", job_id)
         # Live push so a still-open spawning chat shows the job starting (ADR 0050).
         self._publish_started(job_id, subagent_type, description, origin_session or "")
         return job_id
