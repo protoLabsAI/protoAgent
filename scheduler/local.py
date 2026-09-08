@@ -172,6 +172,59 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+# ── Fire outcome (#3376) ──────────────────────────────────────────────────────
+# A fire used to be judged solely on its HTTP status. But the A2A endpoint answers
+# 200 for a turn that FAILED — the failure rides in the body as a failed task state
+# — so a job whose every run died looked perfectly healthy. One ran broken for six
+# days, logging "fired job …" each time, and nothing anywhere said otherwise.
+#
+# The scheduler must not import `server`, so the response is read here rather than
+# through `server.a2a`'s helpers (import contract: scheduler never reaches up into
+# the server bootstrap).
+_A2A_FAILED_STATES = {"TASK_STATE_FAILED", "TASK_STATE_REJECTED", "TASK_STATE_CANCELED", "FAILED", "REJECTED"}
+
+# Start backing off only after a job has failed this many times in a row. Two is
+# noise (a restart mid-turn, a gateway blip); three is a pattern.
+BACKOFF_AFTER_FAILURES = 3
+# Never skip more than this many scheduled slots, however long the streak — an
+# hourly job must not drift into firing once a fortnight, and a job that quietly
+# stops retrying is its own kind of silent failure.
+MAX_BACKOFF_SLOTS = 16
+
+
+def _a2a_turn_failure(payload: object) -> str:
+    """The failure this A2A response reports, or ``""`` when the turn succeeded.
+
+    Reads the JSON-RPC envelope error first, then the task's terminal state. A
+    body we can't parse is treated as SUCCESS: this feeds a backoff, and guessing
+    "failed" from an unfamiliar shape would throttle healthy jobs.
+    """
+    if not isinstance(payload, dict):
+        return ""
+    err = payload.get("error")
+    if err:
+        if isinstance(err, dict):
+            return str(err.get("message") or err)[:500]
+        return str(err)[:500]
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        return ""
+    status = result.get("status")
+    if not isinstance(status, dict):
+        return ""
+    state = str(status.get("state") or "")
+    if state.upper() not in _A2A_FAILED_STATES:
+        return ""
+    # Prefer the agent's own error text over the bare state name — "No module named
+    # 'observability.audit'" is actionable, "TASK_STATE_FAILED" is not.
+    message = status.get("message")
+    if isinstance(message, dict):
+        for part in message.get("parts") or []:
+            if isinstance(part, dict) and part.get("text"):
+                return str(part["text"])[:500]
+    return state
+
+
 def _compute_next_fire(
     schedule: str,
     *,
@@ -216,7 +269,14 @@ CREATE TABLE IF NOT EXISTS jobs (
     origin_session TEXT,
     ttl         TEXT,
     max_fires   INTEGER,
-    fire_count  INTEGER NOT NULL DEFAULT 0
+    fire_count  INTEGER NOT NULL DEFAULT 0,
+    -- Outcome tracking (#3376). `fire_count` counts DELIVERIES; these count
+    -- whether the turn actually worked. A job whose every run fails looked
+    -- perfectly healthy before this: the fire path checked only the HTTP status,
+    -- and a failed turn answers 200 with a failed task in the body.
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+    last_error  TEXT,
+    last_ok     TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_next_fire   ON jobs(next_fire);
@@ -310,6 +370,16 @@ class LocalScheduler:
                 "ALTER TABLE jobs ADD COLUMN ttl TEXT",
                 "ALTER TABLE jobs ADD COLUMN max_fires INTEGER",
                 "ALTER TABLE jobs ADD COLUMN fire_count INTEGER NOT NULL DEFAULT 0",
+            ):
+                try:
+                    db.execute(ddl)
+                except sqlite3.OperationalError:
+                    pass  # column already present
+            # …and before outcome tracking (#3376 — failures were invisible).
+            for ddl in (
+                "ALTER TABLE jobs ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE jobs ADD COLUMN last_error TEXT",
+                "ALTER TABLE jobs ADD COLUMN last_ok TEXT",
             ):
                 try:
                     db.execute(ddl)
@@ -633,6 +703,61 @@ class LocalScheduler:
         finally:
             self._inflight_ids.discard(job.id)
 
+    def _record_fire_outcome(self, job: Job, *, failure: str) -> None:
+        """Record whether the turn worked, and back a failing job off (#3376).
+
+        Success resets the streak — a job that recovers is immediately back on its
+        normal cadence, and the operator surface stops flagging it.
+
+        Failure increments it and, past ``BACKOFF_AFTER_FAILURES``, pushes the next
+        fire out by skipping scheduled slots (doubling, capped at
+        ``MAX_BACKOFF_SLOTS``). The job is never disabled: the failure that prompted
+        this was a transient backend outage, and silently switching off a job the
+        operator depends on is worse than a slow retry. Backoff stops the daily burn
+        of a whole turn on a broken job while keeping it self-healing.
+
+        Best-effort — scheduling bookkeeping must never break a fire.
+        """
+        db = self._connect()
+        try:
+            if not failure:
+                db.execute(
+                    "UPDATE jobs SET consecutive_failures = 0, last_error = NULL, last_ok = ? WHERE id = ?",
+                    (datetime.now(UTC).isoformat(), job.id),
+                )
+                db.commit()
+                return
+            db.execute(
+                "UPDATE jobs SET consecutive_failures = consecutive_failures + 1, last_error = ? WHERE id = ?",
+                (failure, job.id),
+            )
+            db.commit()
+            row = db.execute("SELECT consecutive_failures FROM jobs WHERE id = ?", (job.id,)).fetchone()
+            streak = int(row[0]) if row else 1
+            if streak < BACKOFF_AFTER_FAILURES or not is_cron(job.schedule):
+                return
+            slots = min(2 ** (streak - BACKOFF_AFTER_FAILURES), MAX_BACKOFF_SLOTS)
+            try:
+                nxt = datetime.fromisoformat(job.next_fire)
+            except ValueError:
+                return
+            for _ in range(slots):
+                nxt = datetime.fromisoformat(_compute_next_fire(job.schedule, after=nxt, tz=job.timezone))
+            db.execute("UPDATE jobs SET next_fire = ? WHERE id = ?", (nxt.isoformat(), job.id))
+            db.commit()
+            log.error(
+                "[scheduler] job %s has failed %d times in a row — backing off %d slot(s) to %s. Last error: %s",
+                job.id,
+                streak,
+                slots,
+                nxt.isoformat(),
+                failure,
+            )
+        except (sqlite3.DatabaseError, ValueError):
+            log.exception("[scheduler] could not record the fire outcome for job %s", job.id)
+        finally:
+            db.close()
+
     def _settle_cron_expiry(self, job: Job) -> None:
         """Post-fire bookkeeping for a recurring job (#2992): increment its
         ``fire_count`` and auto-cancel it once it reaches ``max_fires`` or its
@@ -908,8 +1033,25 @@ class LocalScheduler:
                     r.text[:200],
                 )
                 return False
-            log.info("[scheduler] fired job %s", job.id)
-            ok = True
+            # Delivered — but "delivered" is not "worked" (#3376). A failed turn
+            # answers 200 with a failed task in the body, so read the outcome before
+            # calling this a success.
+            try:
+                failure = _a2a_turn_failure(r.json())
+            except Exception:  # noqa: BLE001 — an unreadable body must not fail the fire
+                failure = ""
+            self._record_fire_outcome(job, failure=failure)
+            if failure:
+                # INFO would bury it: this is the line that was missing while a job
+                # ran broken for six days.
+                log.error("[scheduler] job %s fired but the turn FAILED: %s", job.id, failure)
+            else:
+                log.info("[scheduler] fired job %s", job.id)
+            # `ok` rides the turn.finished event the console renders. It used to mean
+            # "delivered", which drew a successful turn over a failed one; it now means
+            # what it says. Delivery is still True — the cron row settles normally, and
+            # backoff (not the return value) is what throttles a failing job.
+            ok = not failure
             return True
         except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             # The agent's own HTTP server isn't accepting connections yet — common
@@ -954,4 +1096,9 @@ def _row_to_job(row: Any) -> Job:
         ttl=row["ttl"] if "ttl" in keys else None,
         max_fires=row["max_fires"] if "max_fires" in keys else None,
         fire_count=int(row["fire_count"] or 0) if "fire_count" in keys else 0,
+        consecutive_failures=(
+            int(row["consecutive_failures"] or 0) if "consecutive_failures" in keys else 0
+        ),
+        last_error=row["last_error"] if "last_error" in keys else None,
+        last_ok=row["last_ok"] if "last_ok" in keys else None,
     )

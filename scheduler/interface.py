@@ -56,6 +56,12 @@ class Job:
     ttl: str | None = None
     max_fires: int | None = None
     fire_count: int = 0
+    # Outcome tracking (#3376). `fire_count` counts deliveries; these say whether
+    # the turns actually worked, so a job failing every run is visible instead of
+    # looking healthy. `consecutive_failures` resets the moment one succeeds.
+    consecutive_failures: int = 0
+    last_error: str | None = None
+    last_ok: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
