@@ -32,6 +32,7 @@ against fakes with no server.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import re
 
@@ -105,6 +106,20 @@ def _positive(value, fallback: int, ceiling: int) -> int:
     except (TypeError, ValueError, OverflowError):
         return fallback
     return min(number, ceiling) if number > 0 else fallback
+
+
+def _accepts_kw(callable_obj, name: str) -> bool:
+    """Whether a registry-shaped dispatch accepts a keyword.
+
+    Tests and host forks pass narrow fakes into this host-free module. The real
+    ``DelegateRegistry.dispatch`` accepts ``origin_session_id``; older registry-shaped
+    objects should keep behaving as they did.
+    """
+    try:
+        params = inspect.signature(callable_obj).parameters
+    except (TypeError, ValueError):
+        return False
+    return name in params or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
 
 
 def catchup_caps(config=None) -> dict:
@@ -371,6 +386,7 @@ async def run_mention(
         message,
         history,
         thread_id=thread_id,
+        origin_session_id=session_id,
         lead_name=lead_name,
         permissions=permissions,
         speaker=speaker,
@@ -399,6 +415,7 @@ async def dispatch_into_room(
     history: list,
     *,
     thread_id: str,
+    origin_session_id: str = "",
     lead_name: str = "assistant",
     permissions: str | None = None,
     speaker: str = "operator",
@@ -483,6 +500,8 @@ async def dispatch_into_room(
             "conversation_key": conversation_key,
             "permissions": permissions,
         }
+        if origin_session_id and _accepts_kw(getattr(registry, "dispatch", None), "origin_session_id"):
+            dispatch_kwargs["origin_session_id"] = origin_session_id
         if timeout is not None:
             dispatch_kwargs["timeout"] = timeout
         reply = str(

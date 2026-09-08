@@ -41,6 +41,7 @@ from server.chat import (
     compact_session,
     export_session,
     forget_delegate_conversations,
+    forget_delegate_conversations_for_session,
     fork_session,
     publish_preview,
     publish_session,
@@ -382,14 +383,25 @@ def register_chat_routes(app, ui: str) -> None:
         # Same argument as the session-summary purge below: leaving the pointer alive
         # would let the next address rejoin the deleted conversation on the peer, so the
         # history the dialog promised to remove comes back in the participant's voice.
-        # Both retired prefixes, plus whatever the installed thread-id resolver answers
-        # for this session (#571) — that last one is the template default's `a2a:` id
-        # again, and for a fork with a custom resolver it is a best effort: a resolver that
-        # scopes threads off REQUEST METADATA cannot be replayed from a DELETE route, which
-        # carries none. (rewind/fork forget the metadata-resolved id, because they have it.)
+        #
+        # Two cleanups, because a room's continuity is reachable two independent ways:
+        #
+        # * KEY-scoped (unchanged, #571/#3360): both retired prefixes, plus whatever the
+        #   installed thread-id resolver answers for this session. For the template default
+        #   that last one is the `a2a:` id again; for a fork whose resolver derives the key
+        #   from the SESSION id it is the only handle that reaches an entry recorded WITHOUT
+        #   an origin (a pre-#3362 row, or any caller that never knew the session). It stays
+        #   best effort: a resolver that scopes threads off REQUEST METADATA cannot be
+        #   replayed from a DELETE route, which carries none — and closing THAT gap is what
+        #   the origin cleanup below is for. (rewind/fork forget the metadata-resolved id
+        #   directly, because they hold it.)
+        # * ORIGIN-scoped (#3362): drops every context an answered room dispatch recorded as
+        #   originating from this session, under whatever arbitrary key the resolver minted
+        #   it — matched on the recorded origin EXACTLY, never inferred from a key's shape.
         forget_delegate_conversations(
             f"a2a:{session_id}", f"chat:{session_id}", _resolve_thread_id(None, session_id)
         )
+        forget_delegate_conversations_for_session(session_id)
         # The session-summary memory (#2482) — without this, a digest of the
         # deleted conversation kept riding <prior_sessions> into future prompts,
         # violating the delete dialog's "its history will be removed".
