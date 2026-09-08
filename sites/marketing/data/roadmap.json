@@ -3,13 +3,6 @@
     "status": "Planned",
     "items": [
       {
-        "title": "Federation token follow-ups",
-        "detail": "management UI, peer rotation, and fleet integration for ADR 0066 tokens.",
-        "refs": [
-          "#1504"
-        ]
-      },
-      {
         "title": "Ollama & Hugging Face listings",
         "detail": "register protoAgent as an Ollama community integration and a Hugging Face \"Use this model\" local app.",
         "refs": [
@@ -31,6 +24,13 @@
   {
     "status": "Shipped",
     "items": [
+      {
+        "title": "Federation token follow-ups",
+        "detail": "management UI, peer rotation, and fleet integration for ADR 0066 tokens.",
+        "refs": [
+          "v0.160.0"
+        ]
+      },
       {
         "title": "Multi-window desktop chat",
         "detail": "\"Open in New Window\" spawns a real second desktop window with its own chat surface.",
