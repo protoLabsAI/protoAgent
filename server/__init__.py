@@ -783,6 +783,15 @@ def _main():
 
     @fastapi_app.on_event("shutdown")
     async def _scheduler_shutdown() -> None:
+        # FIRST, before anything awaits: the memory guard is the one background task
+        # that can end the process outright (os._exit on a breach, #3365). Every
+        # cleanup below yields to the loop — fleet members, mDNS withdrawal, surface
+        # stops — so a guard left running through them could exit mid-teardown and
+        # skip the rest. Shutdown is also exactly when a long-lived process sits
+        # closest to its ceiling, so this is not a theoretical race. Its siblings
+        # below only stop work; they can wait their turn.
+        if STATE.memory_guard_task is not None:
+            STATE.memory_guard_task.cancel()
         # Drop the co-location heartbeat (#706). Best-effort.
         try:
             from infra import paths as _paths
@@ -838,8 +847,7 @@ def _main():
             STATE.watch_task.cancel()
         if STATE.plugin_autoupdate_task is not None:
             STATE.plugin_autoupdate_task.cancel()
-        if STATE.memory_guard_task is not None:
-            STATE.memory_guard_task.cancel()
+        # (memory_guard_task was cancelled at the top — it can os._exit.)
         # Close the long-lived A2A push-notification client (created below in
         # _main) so its connection pool doesn't leak on shutdown/reload — matters
         # in the desktop-sidecar restart loop. Best-effort; NameError if boot

@@ -134,3 +134,36 @@ def test_a_breach_with_a_junk_exit_flag_only_warns() -> None:
     """End to end: the fail-safe parse must actually keep os._exit out of reach."""
     guard = MemoryCeiling(100, exit_on_breach="false")
     assert guard.evaluate(500 * _MB)[0] == "warn"
+
+
+def test_guard_is_cancelled_before_shutdown_awaits_anything() -> None:
+    """The memory guard must be cancelled before the first await in shutdown (#3365).
+
+    It is the only background task that can end the process outright (`os._exit` on
+    breach). Every cleanup step in `_scheduler_shutdown` yields to the loop — fleet
+    members, mDNS withdrawal, surface stops, scheduler, cache warmer — so a guard
+    still running through them can exit mid-teardown and skip the rest. Shutdown is
+    also when a long-lived process sits closest to its ceiling, so the race is real.
+
+    Source inspection rather than behavior: the ordering is the invariant, and it
+    would otherwise regress silently the next time someone tidies that function
+    (this test exists because it already did once). Same approach as
+    `tests/test_tracing.py`'s boot-order assertion.
+    """
+    import inspect
+    import re
+
+    import server
+
+    src = inspect.getsource(server._main)
+    body = src[src.index("async def _scheduler_shutdown"):]
+    body = body[: body.index("\n    @app.on_event") if "\n    @app.on_event" in body else len(body)]
+
+    cancel = body.index("STATE.memory_guard_task.cancel()")
+    first_await = re.search(r"\bawait\b", body)
+    assert first_await, "shutdown no longer awaits anything — re-check this invariant"
+    assert cancel < first_await.start(), (
+        "memory_guard_task must be cancelled BEFORE the first await in "
+        "_scheduler_shutdown — otherwise a breach mid-teardown os._exit()s and "
+        "skips the remaining cleanup."
+    )
