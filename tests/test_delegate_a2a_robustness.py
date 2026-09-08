@@ -24,6 +24,15 @@ from plugins.delegates.adapters import (
     _a2a_progress_fingerprint,
     _warn_if_suspiciously_short,
 )
+from tools.a2a_parse import (
+    ANSWER_BARE_MESSAGE,
+    ANSWER_COMPLETED,
+    ANSWER_FAILED,
+    ANSWER_INPUT_REQUIRED,
+    ANSWER_PENDING,
+    classify_answer,
+    state_name,
+)
 
 A = A2aAdapter()
 
@@ -763,3 +772,215 @@ def test_dispatch_does_not_warn_on_a_full_length_reply(patched, caplog, monkeypa
         out = asyncio.run(A.dispatch(_parse(), "do the whole thing"))
     assert out == long
     assert not any("#3085" in m for m in caplog.messages)
+
+
+# ── #3362: answer eligibility — a result's text is an answer only from a COMPLETED task ─
+#
+# ``_extract_text`` reads whatever text a result carries; whether that text is the
+# delegate's ANSWER is a SEPARATE question, decided by ``classify_answer`` off the task
+# state. A WORKING task's status message and a FAILED task's error message are text the
+# adapter must never hand back as the reply. ``_is_terminal`` stays a poll-STOP predicate
+# only — never an answer-eligibility predicate.
+
+
+def _completed_resp(text="the answer", *, task_id="t1", context_id=None):
+    task = {"id": task_id, "status": {"state": "TASK_STATE_COMPLETED"}, "artifacts": [{"parts": [{"text": text}]}]}
+    if context_id:
+        task["contextId"] = context_id
+    return _Resp({"jsonrpc": "2.0", "result": {"task": task}})
+
+
+def _status_resp(state, *, task_id="t1", msg_text=None):
+    status: dict = {"state": state}
+    if msg_text is not None:
+        status["message"] = {"parts": [{"text": msg_text}]}
+    return _Resp({"jsonrpc": "2.0", "result": {"task": {"id": task_id, "status": status}}})
+
+
+# the pure classifier ----------------------------------------------------------
+
+
+def test_classifier_completed_task_is_answerable():
+    v = classify_answer(
+        {"task": {"id": "t1", "status": {"state": "TASK_STATE_COMPLETED"}, "artifacts": [{"parts": [{"text": "a"}]}]}}
+    )
+    assert v.kind == ANSWER_COMPLETED and v.completed and v.answerable
+
+
+def test_classifier_legacy_completed_spelling_is_answerable():
+    """v0.3 lowercase ``completed`` must classify the same as 1.0 ``TASK_STATE_COMPLETED``."""
+    assert classify_answer({"id": "t", "status": {"state": "completed"}}).completed
+
+
+def test_classifier_working_task_with_status_text_is_pending_not_answerable():
+    """The core bug: a WORKING task's status message is progress narration, NOT the answer."""
+    v = classify_answer(
+        {
+            "task": {
+                "id": "t1",
+                "status": {"state": "TASK_STATE_WORKING", "message": {"parts": [{"text": "working on it"}]}},
+            }
+        }
+    )
+    assert v.kind == ANSWER_PENDING and not v.answerable and not v.completed
+
+
+@pytest.mark.parametrize(
+    "state,word",
+    [
+        ("TASK_STATE_FAILED", "failed"),
+        ("TASK_STATE_CANCELED", "canceled"),
+        ("TASK_STATE_CANCELLED", "canceled"),
+        ("TASK_STATE_REJECTED", "rejected"),
+        ("canceled", "canceled"),  # v0.3 spelling
+    ],
+)
+def test_classifier_failure_states_are_diagnostics_not_answers(state, word):
+    v = classify_answer({"id": "t", "status": {"state": state}})
+    assert v.kind == ANSWER_FAILED and v.failed and not v.answerable, state
+    assert state_name(state) == word
+
+
+def test_classifier_input_required_is_a_park():
+    v = classify_answer(
+        {"task": {"status": {"state": "TASK_STATE_INPUT_REQUIRED", "message": {"parts": [{"text": "which?"}]}}}}
+    )
+    assert v.kind == ANSWER_INPUT_REQUIRED and v.input_required and not v.answerable
+
+
+def test_classifier_bare_message_stays_compatible():
+    """A genuine bare Message (no task envelope) is answerable — pre-task compatibility.
+    A status-less reply that merely carries artifacts degrades to the same path."""
+    assert classify_answer({"parts": [{"text": "hi"}], "messageId": "m1", "role": "ROLE_AGENT"}).kind == ANSWER_BARE_MESSAGE
+    assert classify_answer({"artifacts": [{"parts": [{"text": "hi"}]}]}).answerable
+
+
+def test_classifier_task_envelope_without_state_is_not_a_bare_message():
+    """r6: a ``{"task": …}`` envelope with text but no usable state must NOT be treated as
+    a bare Message just because it carries text — it is pending, never an answer."""
+    v = classify_answer({"task": {"id": "t1", "artifacts": [{"parts": [{"text": "partial"}]}]}})
+    assert v.kind == ANSWER_PENDING and not v.answerable
+
+
+def test_state_name_normalizes_for_diagnostics():
+    assert state_name("TASK_STATE_COMPLETED") == "completed"
+    assert state_name("TASK_STATE_FAILED") == "failed"
+    assert state_name("TASK_STATE_CANCELLED") == "canceled"
+    assert state_name("input-required") == "input_required"
+    assert state_name(None) == "unknown"
+
+
+# the dispatch paths -----------------------------------------------------------
+
+
+def test_inline_working_status_text_is_not_returned_a_later_completed_is(patched):
+    """r1: a WORKING task whose status message carries narration is never returned as the
+    answer — the poll continues and the subsequent COMPLETED result is what comes back."""
+    working = _status_resp("TASK_STATE_WORKING", msg_text="starting the migration…")
+    bodies = _install_capture_client(patched, send_resp=working, get_resps=[_completed_resp("the real answer")])
+
+    out = asyncio.run(A.dispatch(_parse(poll_timeout_s=10), "hi"))
+
+    assert out == "the real answer"
+    methods = [b.get("method") for b in bodies]
+    assert methods.count("SendMessage") == 1 and methods.count("GetTask") >= 1
+
+
+def test_completed_artifact_text_is_returned(patched):
+    """r2: a terminal COMPLETED task's artifact text returns successfully."""
+    _install_client(patched, send_resp=_completed_resp("done and dusted"))
+    assert asyncio.run(A.dispatch(_parse(poll_timeout_s=10), "hi")) == "done and dusted"
+
+
+def test_completed_status_message_only_text_is_returned(patched):
+    """r2: a COMPLETED task carrying its text only on the status message (no artifact) is
+    still a valid answer."""
+    _install_client(patched, send_resp=_status_resp("TASK_STATE_COMPLETED", msg_text="answer via status"))
+    assert asyncio.run(A.dispatch(_parse(poll_timeout_s=10), "hi")) == "answer via status"
+
+
+def test_failed_task_raises_a_state_bearing_diagnostic_never_returns_its_text(patched):
+    """r3: a FAILED task's status message is the peer's error, not the reply. Raise a
+    normalized state-bearing DelegateError carrying a bounded slice of the diagnostic."""
+    _install_client(patched, send_resp=_status_resp("TASK_STATE_FAILED", msg_text="OOM killed the worker"))
+    with pytest.raises(DelegateError) as ei:
+        asyncio.run(A.dispatch(_parse(poll_timeout_s=10), "hi"))
+    msg = str(ei.value)
+    assert "failed" in msg and "state=TASK_STATE_FAILED" in msg and "OOM killed the worker" in msg
+
+
+@pytest.mark.parametrize(
+    "state,word",
+    [("TASK_STATE_CANCELED", "canceled"), ("TASK_STATE_CANCELLED", "canceled"), ("TASK_STATE_REJECTED", "rejected")],
+)
+def test_canceled_and_rejected_tasks_also_raise(patched, state, word):
+    """r3: CANCELED / CANCELLED / REJECTED are diagnostics too, never answers."""
+    _install_client(patched, send_resp=_status_resp(state, msg_text="stopped"))
+    with pytest.raises(DelegateError) as ei:
+        asyncio.run(A.dispatch(_parse(poll_timeout_s=10), "hi"))
+    assert word in str(ei.value)
+
+
+def test_completed_task_with_no_text_raises_rather_than_returning_empty(patched):
+    """r4: a COMPLETED task we can read no answer text out of raises a state-bearing error
+    rather than handing back an empty string."""
+    _install_client(patched, send_resp=_status_resp("TASK_STATE_COMPLETED"))
+    with pytest.raises(DelegateError) as ei:
+        asyncio.run(A.dispatch(_parse(poll_timeout_s=10), "hi"))
+    assert "returned no text" in str(ei.value) and "TASK_STATE_COMPLETED" in str(ei.value)
+
+
+def test_bare_message_reply_still_returns_its_text(patched):
+    """r6: a peer that answers with a status-less reply (no task envelope) stays
+    compatible — its text is the answer, unchanged from before this fix."""
+    bare = _Resp({"jsonrpc": "2.0", "result": {"artifacts": [{"parts": [{"kind": "text", "text": "bare reply"}]}]}})
+    _install_client(patched, send_resp=bare)
+    assert asyncio.run(A.dispatch(_parse(), "hi")) == "bare reply"
+
+
+def test_bare_message_reply_with_context_keeps_room_continuity(patched):
+    """A direct Message reply can carry ``contextId`` without a task envelope. It is still
+    a genuine bare Message answer, so the next address in the same room must reuse that
+    peer-assigned context instead of starting over."""
+    from plugins.delegates import conversations
+
+    conversations.reset()
+    bare = _Resp(
+        {
+            "jsonrpc": "2.0",
+            "result": {
+                "contextId": "ctx-bare",
+                "messageId": "m1",
+                "role": "ROLE_AGENT",
+                "parts": [{"kind": "text", "text": "bare reply"}],
+            },
+        }
+    )
+    bodies = _install_capture_client(patched, send_resp=bare)
+    d = _parse()
+    d.conversation_key = "thread-1"
+
+    try:
+        assert asyncio.run(A.dispatch(d, "first")) == "bare reply"
+        assert asyncio.run(A.dispatch(d, "second")) == "bare reply"
+    finally:
+        conversations.reset()
+
+    first, second = [b["params"]["message"] for b in bodies if b.get("method") == "SendMessage"]
+    assert "contextId" not in first
+    assert second["contextId"] == "ctx-bare"
+
+
+def test_task_envelope_without_state_is_not_answered_as_a_bare_message(patched):
+    """r6: a ``{"task": …}`` envelope with artifacts but no usable state is a pending /
+    malformed task, not a bare Message — its text is never returned; the dispatch reports
+    "still running" once the poll deadline passes instead."""
+    _clock(patched, step=0.3)
+    stateless = _Resp(
+        {"jsonrpc": "2.0", "result": {"task": {"id": "t1", "artifacts": [{"parts": [{"text": "not an answer"}]}]}}}
+    )
+    _install_capture_client(patched, send_resp=stateless, get_resp=stateless)
+    with pytest.raises(DelegateError) as ei:
+        asyncio.run(A.dispatch(_parse(poll_timeout_s=1), "hi"))
+    assert "not an answer" not in str(ei.value)
+    assert "still running" in str(ei.value)
