@@ -967,11 +967,14 @@ def test_the_session_scoped_core_seam_is_duck_typed_and_swallowing(monkeypatch):
 
 
 async def test_delete_route_forgets_metadata_resolved_room_contexts(wire, monkeypatch):
-    """r2/r3/r4: a DELETE route has only the chat session id, not the request metadata a
+    """r2/r3: a DELETE route has only the chat session id, not the request metadata a
     registered resolver needs. Address one peer from two sessions whose room keys come from
     metadata, then delete one session through the actual route: the deleted session's
-    remembered A2A context is gone by recorded origin, the other survives, and the resolver
-    is never replayed with empty metadata."""
+    metadata-derived A2A context is gone by RECORDED ORIGIN — the resolver replay can't
+    reproduce a metadata-keyed id (it raises without a project and falls back) — while the
+    other session's survives. The preserved key-scoped best-effort still runs beside the
+    origin cleanup, which is also what clears the built-in `a2a:` entry recorded with no
+    origin."""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -1029,7 +1032,57 @@ async def test_delete_route_forgets_metadata_resolved_room_contexts(wire, monkey
     assert resolver_calls == [
         ({"project": "red"}, "s-red"),
         ({"project": "blue"}, "s-blue"),
+        # DELETE has no request metadata, so its preserved key-scoped best-effort replays
+        # the resolver with none (#571/#3360). This metadata-dependent resolver raises and
+        # falls back to `a2a:s-red`, so the replay reaches only the built-in id — the
+        # metadata-derived room key is cleared by the recorded ORIGIN above, not by this.
+        ({}, "s-red"),
     ]
+
+
+async def test_delete_route_still_clears_originless_resolvable_keys(wire, monkeypatch):
+    """The removed-behavior regression (#3362a.2): DELETE must keep its key-scoped resolver
+    best-effort, not only the new origin cleanup. A fork whose resolver derives the thread
+    key from the SESSION id alone (no request metadata) can hold an entry under that custom
+    key with NO recorded origin — a pre-#3362 row, or any caller that never knew the session.
+    Origin-scoped cleanup can't see it (no origin) and it sits under no built-in prefix, so
+    only replaying the resolver from the session id reaches it. Prove the delete still clears
+    the deleted session's such entry and leaves another session's alone."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import operator_api.chat_routes as cr
+    import runtime.state as rs
+
+    def _resolver(_metadata, session_id):
+        # Deterministic from the session id, IGNORING metadata — so `resolve(None, sid)`
+        # reproduces the room's key. The metadata arg is accepted (the resolver contract)
+        # but unused, which is exactly the fork shape the key-scoped replay can serve.
+        return f"custom:{session_id}"
+
+    async def _fake_retire(_thread_id, *, harvest=False, cascade=True):
+        return None
+
+    monkeypatch.setattr(cr, "_retire_thread", _fake_retire)
+    monkeypatch.setattr(rs.STATE, "delegate_registry", _registry(), raising=False)
+    monkeypatch.setattr(rs.STATE, "graph", None, raising=False)
+    monkeypatch.setattr(rs.STATE, "graph_config", None, raising=False)
+    monkeypatch.setattr(rs.STATE, "knowledge_store", None, raising=False)
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", None, raising=False)
+    monkeypatch.setattr(rs.STATE, "thread_id_resolver", _resolver, raising=False)
+
+    # Origin-less entries under a resolver-minted key (neither `a2a:` nor `chat:`).
+    conversations.remember("custom:s-red", "peer", PEER_URL, "ctx-legacy", session_id="")
+    conversations.remember("custom:s-keep", "peer", PEER_URL, "ctx-keep", session_id="")
+
+    app = FastAPI()
+    cr.register_chat_routes(app, ui="none")
+    assert TestClient(app).delete("/api/chat/sessions/s-red").json()["deleted"] is True
+
+    # Reached only by the preserved key-scoped replay — its origin is blank, so the origin
+    # cleanup never matched it, and its key is not a built-in prefix.
+    assert conversations.remembered("custom:s-red", "peer", PEER_URL) == ""
+    assert conversations.remembered("custom:s-keep", "peer", PEER_URL) == "ctx-keep"
 
 
 # ── the real dispatch path actually POPULATES the origin session (#3362a.1) ────
