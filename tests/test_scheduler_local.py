@@ -1255,14 +1255,26 @@ class TestFireOutcomeTracking:
             httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200, payload=_failed_body()))
         )
 
-        start = parse_iso_to_utc(self._row(s, job.id)["next_fire"])
-        for _ in range(25):  # far past the cap
+        # Drive the streak far past the cap, then measure ONE more step. The cap bounds a
+        # SINGLE backoff, so a single step is the only thing that can demonstrate it.
+        for _ in range(25):
             job = s.get_job(job.id) or job
             await s._fire(job)
 
-        gap = parse_iso_to_utc(self._row(s, job.id)["next_fire"]) - start
-        # Daily cron: the cap bounds any single backoff to MAX_BACKOFF_SLOTS days.
-        assert gap.days <= MAX_BACKOFF_SLOTS * 25, f"backoff ran away: {gap}"
+        before = parse_iso_to_utc(self._row(s, job.id)["next_fire"])
+        job = s.get_job(job.id) or job
+        await s._fire(job)
+        step = parse_iso_to_utc(self._row(s, job.id)["next_fire"]) - before
+
+        # Daily cron ⇒ one slot is one day. Both bounds matter and neither is free:
+        # without `min(..., MAX_BACKOFF_SLOTS)` the 26th failure would advance
+        # 2**23 days, and a job that stops moving has quietly stopped retrying.
+        assert step.days <= MAX_BACKOFF_SLOTS, f"backoff ran away: {step}"
+        assert step > timedelta(0), "a backed-off job must still retry"
+
+        # (The previous version asserted a CUMULATIVE gap against `MAX_BACKOFF_SLOTS * 25`
+        # — the per-call bound times the loop count — which restates the loop and holds
+        # however large the cap is. It could not fail, so it protected nothing.)
 
     @pytest.mark.asyncio
     async def test_a_failing_job_is_never_disabled(self, tmp_path, monkeypatch):
