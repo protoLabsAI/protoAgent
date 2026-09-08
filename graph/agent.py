@@ -630,6 +630,56 @@ async def _run_subagent(
     usage_sink: list[dict] | None = None,
     session_id: str = "",
 ) -> str:
+    """Run a subagent delegation, recording the edge in the delegation ledger.
+
+    The ledger wrapper lives on this seam because this is the ONE funnel every
+    in-process delegation goes through — ``task``, ``task_batch``, and
+    ``sdk.run_subagent`` (via ``run_manual_subagent``). Recording at the call sites
+    instead would leave the next one that forgets unmeasured, which is precisely how
+    CLI coding-agent runs stayed invisible to turn telemetry (#3015).
+
+    ``cost_usd`` is deliberately left unset. A subagent's spend is already billed to the
+    PARENT turn's telemetry through ``usage_sink`` (#2872), so putting a number here too
+    would double-count it against the same work. The cost of a subagent edge is recovered
+    by joining the ledger to ``turns`` on ``parent_task_id`` — not by storing it twice.
+    """
+    from graph import ledger
+
+    with ledger.dispatch(
+        to_kind="subagent",
+        to_name=subagent_type,
+        what=description,
+        session_id=session_id,
+        parent_task_id=parent_task_id or "",
+        origin="task",
+    ):
+        return await _run_subagent_inner(
+            config=config,
+            tool_map=tool_map,
+            available_subagents=available_subagents,
+            description=description,
+            prompt=prompt,
+            subagent_type=subagent_type,
+            truncate=truncate,
+            parent_task_id=parent_task_id,
+            usage_sink=usage_sink,
+            session_id=session_id,
+        )
+
+
+async def _run_subagent_inner(
+    *,
+    config,
+    tool_map: dict,
+    available_subagents: str,
+    description: str,
+    prompt: str,
+    subagent_type: str,
+    truncate: int | None = None,
+    parent_task_id: str | None = None,
+    usage_sink: list[dict] | None = None,
+    session_id: str = "",
+) -> str:
     """Run a single subagent delegation and return its output text.
 
     Shared by the single ``task`` tool and the concurrent ``task_batch`` tool.

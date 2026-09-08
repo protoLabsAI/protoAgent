@@ -1138,3 +1138,55 @@ def metric_last(name: str, *, plugin_id: str) -> tuple[float, float] | None:
     if store is None or series is None:
         return None
     return store.last(series)
+
+
+# ── delegation ledger (who handed what work to whom) ────────────────────────────
+
+
+def record_delegation(
+    *,
+    to_kind: str,
+    to_name: str,
+    to_instance: str = "",
+    what: str = "",
+    session_id: str = "",
+    parent_task_id: str = "",
+    task_id: str = "",
+    outcome: str = "ok",
+    error: str = "",
+    duration_ms: int = 0,
+    cost_usd: float | None = None,
+    origin: str = "",
+) -> int | None:
+    """Record one delegation edge in the instance ledger — who handed what work to whom.
+
+    The seam a plugin uses to put its own dispatches on the org's record. A plugin that
+    hands work to an agent or a coder outside the built-in funnels (a bespoke scheduler,
+    a board loop of its own) is otherwise invisible: turn telemetry has no actor column
+    and no edge, so its work would show up as spend with no explanation of who asked for
+    it.
+
+    ``cost_usd=None`` means UNKNOWN, not free — pass a number only where one is actually
+    measured. A confident zero makes an unmeasured delegate look free and silently
+    understates every rollup built on the column.
+
+    Best-effort and never raises: a ledger failure must not break a dispatch.
+
+    Returns the new ``edge_id``, or None when no store is wired or the write failed.
+    """
+    from graph import ledger
+
+    return ledger.record_delegation(
+        to_kind=to_kind,
+        to_name=to_name,
+        to_instance=to_instance,
+        what=what,
+        session_id=session_id,
+        parent_task_id=parent_task_id,
+        task_id=task_id,
+        outcome=outcome,
+        error=error,
+        duration_ms=duration_ms,
+        cost_usd=cost_usd,
+        origin=origin,
+    )

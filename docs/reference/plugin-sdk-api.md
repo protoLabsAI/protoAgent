@@ -39,6 +39,8 @@ the module's own.
 
 **Plugin metric timeseries (#1632)** — [`metric_history()`](#sdk-metric-history), [`metric_last()`](#sdk-metric-last), [`record_metric()`](#sdk-record-metric)
 
+**Delegation ledger (who handed what work to whom)** — [`record_delegation()`](#sdk-record-delegation)
+
 ## Agent + model access (the plugin↔agent channel, ADR 0043)
 
 ### `sdk.config` {#sdk-config}
@@ -585,3 +587,27 @@ The most recent `(ts, value)` of the plugin metric series `name`, or
 unavailable). The cheap read for "what did I last see?" checks — e.g. a verifier
 comparing the live reading against the last recorded one. Same namespacing +
 `plugin_id` contract as `record_metric`.
+
+## Delegation ledger (who handed what work to whom)
+
+### `sdk.record_delegation` {#sdk-record-delegation}
+
+```python
+sdk.record_delegation(*, to_kind: str, to_name: str, to_instance: str = '', what: str = '', session_id: str = '', parent_task_id: str = '', task_id: str = '', outcome: str = 'ok', error: str = '', duration_ms: int = 0, cost_usd: float | None = None, origin: str = '') -> int | None
+```
+
+Record one delegation edge in the instance ledger — who handed what work to whom.
+
+The seam a plugin uses to put its own dispatches on the org's record. A plugin that
+hands work to an agent or a coder outside the built-in funnels (a bespoke scheduler,
+a board loop of its own) is otherwise invisible: turn telemetry has no actor column
+and no edge, so its work would show up as spend with no explanation of who asked for
+it.
+
+`cost_usd=None` means UNKNOWN, not free — pass a number only where one is actually
+measured. A confident zero makes an unmeasured delegate look free and silently
+understates every rollup built on the column.
+
+Best-effort and never raises: a ledger failure must not break a dispatch.
+
+Returns the new `edge_id`, or None when no store is wired or the write failed.

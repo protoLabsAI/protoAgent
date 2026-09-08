@@ -156,17 +156,36 @@ class DelegateRegistry:
         # so the panel's picture doesn't depend on which surface triggered the dispatch.
         # A cancellation is deliberately not a failure: an operator stopping a turn says
         # nothing about the delegate (see status.py).
-        try:
-            reply = await ADAPTERS[d.type].dispatch(
-                d, query, timeout=timeout, item_id=item_id, resume_task_id=resume_task_id
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            status.record_failure(d.name, str(exc) or type(exc).__name__)
-            raise
-        status.record_success(d.name)
-        return reply
+        # The DURABLE half of the same funnel. `status` is an in-memory last-outcome
+        # cache for the panel's dot; the ledger is the record that survives the process
+        # and answers "what work actually flowed along this edge" (graph/ledger.py). Both
+        # sit here for the same reason the comment above gives: this is the one funnel,
+        # so neither depends on which surface triggered the dispatch.
+        #
+        # Reached through graph.sdk rather than imported directly — a plugin may never
+        # import `server`, and the SDK is the seam that keeps this side of the layering
+        # contract honest.
+        from graph import ledger
+
+        with ledger.dispatch(
+            to_kind=d.type,
+            to_name=d.name,
+            to_instance=str(getattr(d, "url", "") or ""),
+            what=query,
+            session_id=origin_session_id or "",
+            origin="delegate_to",
+        ):
+            try:
+                reply = await ADAPTERS[d.type].dispatch(
+                    d, query, timeout=timeout, item_id=item_id, resume_task_id=resume_task_id
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                status.record_failure(d.name, str(exc) or type(exc).__name__)
+                raise
+            status.record_success(d.name)
+            return reply
 
     def recording_session(self, session_id: str):
         """Context manager binding the originating chat session for the a2a continuity that
