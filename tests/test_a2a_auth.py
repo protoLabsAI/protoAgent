@@ -345,6 +345,22 @@ def test_error_path_response_does_not_leak_the_bearer(monkeypatch):
     assert _A_TOKEN not in r403.text and _FED_TOKEN not in r403.text
 
 
+def test_origin_denied_request_forwards_no_tier_and_leaks_no_bearer(monkeypatch):
+    """An authenticated request rejected on Origin returns 403 BEFORE the telemetry scope:
+    its handler never runs, so no tier is forwarded, and the 403 body never echoes the
+    bearer. Locks in that surfacing the tier did not move or widen the Origin denial (r3/r5)."""
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token=_A_TOKEN, api_key="", allowed_origins_raw="https://app.example")
+    calls = _tier_calls(monkeypatch)
+    r = _client_multi().post(
+        "/api/config",
+        headers={"Authorization": f"Bearer {_A_TOKEN}", "Origin": "https://evil.example"},
+    )
+    assert r.status_code == 403
+    assert calls == []  # rejected before the telemetry scope → nothing recorded
+    assert _A_TOKEN not in r.text
+
+
 def _in_fresh_context(fn):
     """Run ``fn`` in an isolated copy of the current context so the trust-tier
     contextvar can't bleed across assertions."""

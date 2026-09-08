@@ -510,6 +510,24 @@ def _record_trust_tier_telemetry(request):
         return None
 
 
+def _clear_trust_tier_telemetry(token) -> None:
+    """Undo ``_record_trust_tier_telemetry``'s contextvar set once the request finishes.
+
+    Its exact mirror: reset the telemetry trust-tier context so a classified tier can
+    never bleed into a later, unrelated request handled on the same context. Best-effort
+    and silent — telemetry cleanup, like the record side, must never surface as an
+    auth-path failure. ``None`` (nothing was recorded) is a no-op.
+    """
+    if token is None:
+        return
+    try:
+        from observability import tracing
+
+        tracing.reset_trust_tier(token)
+    except Exception:  # noqa: BLE001 — telemetry cleanup must not break auth
+        pass
+
+
 class A2AAuthMiddleware(BaseHTTPMiddleware):
     """Default-deny auth: everything except the public allowlist requires auth."""
 
@@ -586,12 +604,7 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
                 try:
                     return await call_next(request)
                 finally:
-                    try:
-                        from observability import tracing
-
-                        tracing.reset_trust_tier(_trust_tier_token)
-                    except Exception:  # noqa: BLE001 — telemetry cleanup must not break auth
-                        pass
+                    _clear_trust_tier_telemetry(_trust_tier_token)
             # Fall through to the normal bearer/X-API-Key check below — a
             # server-to-server caller with an Authorization header still passes.
 
@@ -608,27 +621,26 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
         if tier == "federation" and _requires_operator(path):
             return JSONResponse({"detail": "Forbidden: operator credential required"}, status_code=403)
         request.state.trust_tier = tier
+
+        # Origin — enforced only when an allowlist is set AND an Origin is
+        # present. Origin is a browser-only header; server-to-server callers
+        # (the hub, the LocalScheduler loopback) send none and must not be
+        # rejected for it.
+        allowed = _ALLOWED_ORIGINS[0]
+        if allowed is not None:
+            origin = request.headers.get("Origin")
+            if origin is not None and origin.lower() not in allowed:
+                return JSONResponse({"detail": "Forbidden: origin not allowed"}, status_code=403)
+
+        # Surface the ALREADY-decided trust tier to structured request telemetry for the
+        # span of the downstream handler only — recorded here, immediately before call_next,
+        # and always cleared after. The auth decision (including the Origin denial above) is
+        # untouched: a rejected request returns before this scope and records nothing.
         _trust_tier_token = _record_trust_tier_telemetry(request)
-
         try:
-            # Origin — enforced only when an allowlist is set AND an Origin is
-            # present. Origin is a browser-only header; server-to-server callers
-            # (the hub, the LocalScheduler loopback) send none and must not be
-            # rejected for it.
-            allowed = _ALLOWED_ORIGINS[0]
-            if allowed is not None:
-                origin = request.headers.get("Origin")
-                if origin is not None and origin.lower() not in allowed:
-                    return JSONResponse({"detail": "Forbidden: origin not allowed"}, status_code=403)
-
             return await call_next(request)
         finally:
-            try:
-                from observability import tracing
-
-                tracing.reset_trust_tier(_trust_tier_token)
-            except Exception:  # noqa: BLE001 — telemetry cleanup must not break auth
-                pass
+            _clear_trust_tier_telemetry(_trust_tier_token)
 
 
 def _credential_error() -> str:
