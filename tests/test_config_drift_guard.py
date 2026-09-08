@@ -267,6 +267,10 @@ HOST_SCOPED_KEYS = {
     "fleet.discovery.mdns",
     "fleet.warm.max",
     "fleet.warm.grace_seconds",
+    # The memory ceiling bounds THIS PROCESS (#3365), so it belongs to the box, not
+    # to an agent leaf — every co-located agent shares the process it would stop.
+    "runtime.memory_ceiling_mb",
+    "runtime.memory_ceiling_exit",
 }
 
 

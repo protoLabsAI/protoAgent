@@ -458,6 +458,14 @@ sites (`server.__init__` uvicorn bind, `manager._pick_port`, `fleet.discovery`, 
 `PROTOAGENT_AUTO_SCOPE` is intentionally NOT promoted (it resolves where `host-config.yaml`
 itself lives — chicken-and-egg; stays env/CLI).
 
+**Later addition — `runtime.memory_ceiling_mb` / `runtime.memory_ceiling_exit`
+(`scope="host"`, section "Runtime", #3365).** The ceiling bounds *the process*, and
+every co-located agent shares that process — so it is a box property, not an agent-leaf
+one, and a leaf override would be a silent no-op like the other Host knobs. It carries no
+env fallback: unlike the slice-3 knobs it is new surface rather than a promoted
+`PROTOAGENT_*` read, so there is nothing to stay compatible with. Both default to off, so
+the Host layer stays empty until an operator opts in.
+
 ## 4. Migration / back-compat
 
 **ZERO migration. Zero new bytes on disk for any existing deployment.**

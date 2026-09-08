@@ -29,6 +29,7 @@ class AppState:
     checkpoint_prune_task: Any = None
     monitor_goals_task: Any = None  # ADR 0030 monitor-goal cadence loop
     watch_task: Any = None  # ADR 0067 watch cadence loop
+    memory_guard_task: Any = None  # #3365 RSS ceiling loop (off unless configured)
     plugin_autoupdate_task: Any = None  # #1720 opt-in plugin auto-update loop
     secrets_refresh_task: Any = None  # ADR 0080 external secrets-manager refresh loop
     # Stores / registries bound into the active graph.

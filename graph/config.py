@@ -1609,6 +1609,15 @@ class LangGraphConfig:
     # whether the plist should exist.
     autostart_on_boot: bool = False
 
+    # Process memory ceiling (#3365). No OS-level RSS ceiling exists to lean on —
+    # Darwin refuses setrlimit(RLIMIT_RSS) outright (so launchd's resource-limit
+    # keys can't express one) and Linux ignores it — so a leak has no backstop
+    # below the host running out of memory. 0 = off, the repo's convention for a
+    # threshold knob. Exiting on breach is a SECOND, explicit opt-in: a server
+    # that kills itself mid-turn drops that turn, which is the operator's call.
+    memory_ceiling_mb: int = 0
+    memory_ceiling_exit: bool = False
+
     # Box runtime (Host layer, ADR 0047 D8) — box-wide knobs promoted out of
     # scattered env/CLI reads into the Host cascade layer (scope="host" in FIELDS).
     # Each pairs with an env-var fallback in ``from_dict`` (file > env > default), so
@@ -2301,6 +2310,8 @@ class LangGraphConfig:
                 publish.get("revoke_endpoint_url", cls.publish_revoke_endpoint_url) or ""
             ),
             autostart_on_boot=runtime.get("autostart_on_boot", cls.autostart_on_boot),
+            memory_ceiling_mb=runtime.get("memory_ceiling_mb", cls.memory_ceiling_mb),
+            memory_ceiling_exit=runtime.get("memory_ceiling_exit", cls.memory_ceiling_exit),
             # Box runtime (Host layer, ADR 0047 D8) — file > env > default. The env
             # fallback only fires when the merged dict omits the key (zero-migration).
             bind_host=network.get("bind", _env_default("PROTOAGENT_HOST", cls.bind_host)),

@@ -324,6 +324,7 @@ from server.agent_init import (  # noqa: E402,F401 — re-export of the extracte
     _build_telemetry_store,
     _checkpoint_prune_loop,
     _init_langgraph_agent,
+    _memory_guard_loop,
     _plugin_autoupdate_loop,
     _secrets_refresh_loop,
     _watch_loop,
@@ -649,6 +650,11 @@ def _main():
         import asyncio
 
         STATE.watch_task = asyncio.create_task(_watch_loop())
+
+        # Memory ceiling (#3365). Started unconditionally like the loops above: it
+        # idles at one attribute read a minute while the ceiling is 0 (the default),
+        # so turning it on in Settings takes effect without a restart.
+        STATE.memory_guard_task = asyncio.create_task(_memory_guard_loop())
 
         # Opt-in plugin auto-update (#1720) — only sweeps plugins the operator lists
         # in ``plugins.update_policy``; the loop self-guards each pass (empty policy

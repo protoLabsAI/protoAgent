@@ -96,6 +96,8 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "api_base": "http://gateway:4000/v1",
     "audit_middleware": True,
     "autostart_on_boot": False,
+    "memory_ceiling_exit": False,
+    "memory_ceiling_mb": 0,
     "aux_model": "",
     "background_auto_resume": True,
     "bind_host": "127.0.0.1",

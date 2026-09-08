@@ -1235,6 +1235,32 @@ FIELDS: list[Field] = [
         ),
         restart=True,
     ),
+    Field(
+        "runtime.memory_ceiling_mb",
+        "memory_ceiling_mb",
+        "Memory ceiling (MB)",
+        "number",
+        "Runtime",
+        "Warn when this process's resident memory crosses this (0 = off). There is no "
+        "OS-level RSS ceiling to fall back on — macOS refuses to set one at all — so a "
+        "leak otherwise has no backstop below the whole machine running out of memory.",
+        minimum=0,
+        restart=True,
+        scope="host",
+    ),
+    Field(
+        "runtime.memory_ceiling_exit",
+        "memory_ceiling_exit",
+        "Exit when the memory ceiling is crossed",
+        "bool",
+        "Runtime",
+        "Off by default: crossing the ceiling only warns. Turn this on when something "
+        "supervises the process and will restart it — it exits 75 (EX_TEMPFAIL) on breach. "
+        "A server that exits mid-turn drops that turn, so this is deliberately your call.",
+        depends_on={"key": "runtime.memory_ceiling_mb"},
+        restart=True,
+        scope="host",
+    ),
     # ── Host box-runtime knobs (Host layer, ADR 0047 D8) ─────────────────────
     # Box-wide runtime knobs promoted out of env/CLI into the Host cascade layer.
     # All scope="host": the box default every co-located agent inherits (file > env
