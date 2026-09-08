@@ -257,3 +257,67 @@ def test_the_writer_stamps_this_agent_as_the_source(wired, monkeypatch):
     ledger.record_delegation(to_kind="a2a", to_name="hermes")
 
     assert wired.recent()[0]["from_agent"] == "gina"
+
+
+# --- the plugin seam ------------------------------------------------------------------
+
+
+def test_the_sdk_seam_writes_a_durable_row(wired):
+    """`sdk.record_delegation` is the PUBLIC plugin API — the seam a plugin uses to put
+    its own dispatches on the org's record — so it needs its own test rather than
+    inheriting confidence from `graph.ledger`.
+
+    A thin passthrough is exactly the kind of thing that breaks silently: one renamed
+    keyword and every plugin's edges vanish with no error, because the writer is
+    best-effort by design and swallows the failure.
+    """
+    from graph import sdk
+
+    edge_id = sdk.record_delegation(
+        to_kind="a2a",
+        to_name="hermes",
+        to_instance="http://127.0.0.1:7903",
+        what="ask a peer",
+        session_id="s1",
+        parent_task_id="p1",
+        task_id="t1",
+        outcome="ok",
+        duration_ms=42,
+        cost_usd=0.5,
+        origin="my-plugin",
+    )
+
+    assert edge_id is not None
+    row = wired.recent()[0]
+    # Every field the seam accepts must survive to the row — a passthrough that drops one
+    # silently is the failure this guards.
+    assert row["to_kind"] == "a2a"
+    assert row["to_name"] == "hermes"
+    assert row["to_instance"] == "http://127.0.0.1:7903"
+    assert row["what"] == "ask a peer"
+    assert row["session_id"] == "s1"
+    assert row["parent_task_id"] == "p1"
+    assert row["task_id"] == "t1"
+    assert row["duration_ms"] == 42
+    assert row["cost_usd"] == 0.5
+    assert row["origin"] == "my-plugin"
+
+
+def test_the_sdk_seam_records_a_failed_dispatch(wired):
+    from graph import sdk
+
+    sdk.record_delegation(to_kind="acp", to_name="coder", outcome="failed", error="boom")
+
+    row = wired.recent()[0]
+    assert row["outcome"] == "failed"
+    assert "boom" in row["error"]
+
+
+def test_the_sdk_seam_never_raises_into_a_plugin(monkeypatch):
+    # A plugin's dispatch must not die because the ledger did.
+    import runtime.state as rs
+
+    from graph import sdk
+
+    monkeypatch.setattr(rs.STATE, "ledger_store", None, raising=False)
+    assert sdk.record_delegation(to_kind="a2a", to_name="hermes") is None
