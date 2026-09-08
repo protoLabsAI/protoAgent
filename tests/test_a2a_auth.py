@@ -9,7 +9,9 @@ Acceptance criteria: AC1–AC14 from the #870 spec.
 
 from __future__ import annotations
 
+import contextvars
 import time
+from types import SimpleNamespace
 
 import pytest
 from starlette.applications import Starlette
@@ -18,6 +20,7 @@ from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from a2a_impl import auth
+from observability import tracing
 
 
 @pytest.fixture(autouse=True)
@@ -221,6 +224,219 @@ def test_plugin_public_prefix_exempts_only_namespaced(monkeypatch):
     finally:
         auth.set_public_prefixes([])  # reset module state for other tests
         assert _client_multi().get("/plugins/example/status").status_code == 401
+
+
+# ── trust-tier request telemetry (#1504) ─────────────────────────────────────
+#
+# Successful auth already classifies request.state.trust_tier as operator or
+# federation. This slice surfaces that ALREADY-derived label into the structured
+# request telemetry (a bounded, non-secret dimension) without touching the auth
+# decision itself, reading only request.state and never a credential.
+
+_A_TOKEN = "op-super-secret-value"
+_FED_TOKEN = "fed-super-secret-value"
+
+
+def _tier_echo_client(paths=("/a2a", "/api/config")) -> TestClient:
+    """A client whose handlers echo tracing.current_trust_tier() — proving the
+    classified tier actually reaches the telemetry contextvar for the live request."""
+
+    def echo(r):
+        return PlainTextResponse(tracing.current_trust_tier() or "<none>")
+
+    app = Starlette(routes=[Route(p, echo, methods=["GET", "POST"]) for p in paths])
+    app.add_middleware(auth.A2AAuthMiddleware)
+    return TestClient(app)
+
+
+def test_operator_request_surfaces_operator_tier(monkeypatch):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token=_A_TOKEN, api_key="", allowed_origins_raw="")
+    r = _tier_echo_client().post("/api/config", headers={"Authorization": f"Bearer {_A_TOKEN}"})
+    assert r.status_code == 200
+    assert r.text == "operator"
+    assert _A_TOKEN not in r.text  # the dimension is the label, never the credential
+
+
+def test_federation_request_surfaces_federation_tier(monkeypatch):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(
+        bearer_token=_A_TOKEN, api_key="", allowed_origins_raw="", federation_token=_FED_TOKEN
+    )
+    # /a2a is a consumer surface — the federation credential is accepted there.
+    r = _tier_echo_client().post("/a2a", headers={"Authorization": f"Bearer {_FED_TOKEN}"})
+    assert r.status_code == 200
+    assert r.text == "federation"
+    assert _FED_TOKEN not in r.text
+
+
+def test_sse_token_request_surfaces_operator_tier(monkeypatch):
+    # The SSE-token branch admits before the bearer classifier; it still surfaces its tier.
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token=_A_TOKEN, api_key="", allowed_origins_raw="")
+    tok = auth.generate_sse_token()
+    r = _tier_echo_client(paths=("/api/events",)).get("/api/events", params={"token": tok})
+    assert r.status_code == 200
+    assert r.text == "operator"
+
+
+def _tier_calls(monkeypatch) -> list:
+    """Capture every tier the auth middleware forwards to the telemetry sink."""
+    calls: list = []
+    monkeypatch.setattr(tracing, "set_trust_tier", lambda tier: calls.append(tier))
+    return calls
+
+
+def test_classified_requests_forward_tier_to_telemetry(monkeypatch):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(
+        bearer_token=_A_TOKEN, api_key="", allowed_origins_raw="", federation_token=_FED_TOKEN
+    )
+    calls = _tier_calls(monkeypatch)
+    c = _client_multi()
+    assert c.post("/api/config", headers={"Authorization": f"Bearer {_A_TOKEN}"}).status_code == 200
+    assert c.post("/a2a", headers={"Authorization": f"Bearer {_FED_TOKEN}"}).status_code == 200
+    assert calls == ["operator", "federation"]
+
+
+def test_unclassified_requests_do_not_touch_telemetry(monkeypatch):
+    """Public / preflight / denied requests are never classified, so prior telemetry
+    behavior is preserved — set_trust_tier is not called for any of them (r4)."""
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(
+        bearer_token=_A_TOKEN, api_key="", allowed_origins_raw="", federation_token=_FED_TOKEN
+    )
+    calls = _tier_calls(monkeypatch)
+    c = _client_multi()
+    # public allowlist path
+    assert c.get("/healthz").status_code == 200
+    # missing credential → 401 (error path)
+    assert c.post("/api/config").status_code == 401
+    # wrong credential → 401 (error path)
+    assert c.post("/api/config", headers={"Authorization": "Bearer nope"}).status_code == 401
+    # federation credential denied on the /api operator surface → 403 (r3, unchanged)
+    assert c.post("/api/config", headers={"Authorization": f"Bearer {_FED_TOKEN}"}).status_code == 403
+    assert calls == []  # none of these were classified → telemetry untouched
+
+
+def test_error_path_response_does_not_leak_the_bearer(monkeypatch):
+    """A 401/403 body must never echo the configured or presented credential."""
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(
+        bearer_token=_A_TOKEN, api_key="", allowed_origins_raw="", federation_token=_FED_TOKEN
+    )
+    c = _client_multi()
+    presented = "presented-token-should-not-appear"
+    r401 = c.post("/api/config", headers={"Authorization": f"Bearer {presented}"})
+    assert r401.status_code == 401
+    assert _A_TOKEN not in r401.text and _FED_TOKEN not in r401.text and presented not in r401.text
+    r403 = c.post("/api/config", headers={"Authorization": f"Bearer {_FED_TOKEN}"})
+    assert r403.status_code == 403
+    assert _A_TOKEN not in r403.text and _FED_TOKEN not in r403.text
+
+
+def _in_fresh_context(fn):
+    """Run ``fn`` in an isolated copy of the current context so the trust-tier
+    contextvar can't bleed across assertions."""
+    return contextvars.copy_context().run(fn)
+
+
+def test_record_trust_tier_reads_only_state_never_credentials():
+    """The telemetry helper reads request.state.trust_tier and nothing else — a request
+    whose headers would explode if touched still records the tier (r2)."""
+
+    class _ExplodingHeaders:
+        def get(self, *a, **k):  # pragma: no cover — must never be reached
+            raise AssertionError("telemetry must not read request headers")
+
+        def __getitem__(self, k):  # pragma: no cover — must never be reached
+            raise AssertionError("telemetry must not read request headers")
+
+    req = SimpleNamespace(
+        state=SimpleNamespace(trust_tier="operator"),
+        headers=_ExplodingHeaders(),
+    )
+
+    def run():
+        auth._record_trust_tier_telemetry(req)
+        return tracing.current_trust_tier()
+
+    assert _in_fresh_context(run) == "operator"
+
+
+def test_record_trust_tier_never_raises_into_request_path():
+    """A broken request object degrades to a no-op — telemetry never breaks auth."""
+
+    class _BadReq:
+        @property
+        def state(self):
+            raise RuntimeError("state blew up")
+
+    auth._record_trust_tier_telemetry(_BadReq())  # must not raise
+
+
+def test_set_trust_tier_bounds_to_known_labels():
+    """set_trust_tier stores only operator/federation; anything else — including an
+    unclassified request — collapses to the empty (dimension-absent) string."""
+
+    def run(value):
+        def _inner():
+            tracing.set_trust_tier(value)
+            return tracing.current_trust_tier()
+
+        return _in_fresh_context(_inner)
+
+    assert run("operator") == "operator"
+    assert run("federation") == "federation"
+    assert run("root") == ""  # an unexpected label can never become a dimension
+    assert run(None) == ""
+    assert run("") == ""
+
+
+class _FakeSpan:
+    trace_id = "0" * 32
+
+
+class _FakeObservation:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+    def __enter__(self):
+        return _FakeSpan()
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _FakeLangfuse:
+    def __init__(self):
+        self.calls: list = []
+
+    def start_as_current_observation(self, **kwargs):
+        self.calls.append(kwargs)
+        return _FakeObservation(**kwargs)
+
+
+async def test_trace_session_carries_trust_tier_when_classified(monkeypatch):
+    fake = _FakeLangfuse()
+    monkeypatch.setattr(tracing, "_langfuse", fake)
+    monkeypatch.setattr(tracing, "_enabled", True)
+
+    tracing.set_trust_tier("federation")
+    async with tracing.trace_session("sess-1", name="a2a-stream"):
+        pass
+    assert fake.calls[-1]["metadata"]["trust_tier"] == "federation"
+
+
+async def test_trace_session_omits_trust_tier_when_unclassified(monkeypatch):
+    fake = _FakeLangfuse()
+    monkeypatch.setattr(tracing, "_langfuse", fake)
+    monkeypatch.setattr(tracing, "_enabled", True)
+
+    tracing.set_trust_tier(None)  # unclassified — prior telemetry shape must be preserved
+    async with tracing.trace_session("sess-2", name="a2a-stream"):
+        pass
+    assert "trust_tier" not in fake.calls[-1]["metadata"]
 
 
 def test_set_public_prefixes_rejects_core_route_prefix(monkeypatch):

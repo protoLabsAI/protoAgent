@@ -102,6 +102,21 @@ _session_id_ctx: contextvars.ContextVar[str] = contextvars.ContextVar(
     default="",
 )
 
+# Holds the request's ALREADY-classified trust tier (a2a_impl.auth sets this from
+# request.state.trust_tier) so the structured request telemetry can carry it as a
+# bounded, non-secret dimension. Default "" = unclassified — the dimension is then
+# omitted so an unclassified request keeps its prior telemetry shape.
+_trust_tier_ctx: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "_protoagent_trust_tier",
+    default="",
+)
+
+#: The only trust tiers ever surfaced in telemetry (#1504). A closed vocabulary keeps
+#: the dimension bounded and guarantees a credential value can never ride into a span
+#: even if a caller hands ``set_trust_tier`` something unexpected — anything outside
+#: this set collapses to "" (unclassified).
+_TELEMETRY_TRUST_TIERS = frozenset({"operator", "federation"})
+
 
 def resolve_credentials(config: Any = None) -> tuple[str, str, str, str]:
     """The Langfuse credentials to connect with: ``(public_key, secret_key, host, source)``.
@@ -237,6 +252,27 @@ def current_session_id() -> str:
     return _session_id_ctx.get()
 
 
+def current_trust_tier() -> str:
+    """The classified trust tier of the active request — ``operator``/``federation`` — or
+    empty when the request was never classified (#1504).
+
+    A bounded, non-secret dimension: it is one of two fixed labels, never a credential.
+    """
+    return _trust_tier_ctx.get()
+
+
+def set_trust_tier(tier: str | None) -> None:
+    """Record the request's already-classified trust tier for structured telemetry (#1504).
+
+    Fed the label ``a2a_impl.auth`` derived from the matched credential (via
+    ``request.state.trust_tier``) — never any credential material itself. Only the two known
+    labels are stored; every other value, including ``None`` and any unclassified request,
+    collapses to ``""`` so an unexpected string can never become a telemetry dimension and an
+    unclassified request keeps its prior (dimension-absent) behavior.
+    """
+    _trust_tier_ctx.set(tier if tier in _TELEMETRY_TRUST_TIERS else "")
+
+
 def current_trace_context() -> dict | None:
     """The active trace context as ``{"trace_id": ..., "span_id": ...}``, or None.
 
@@ -345,10 +381,16 @@ async def trace_session(
     token = None
     try:
         trace_context = _caller_trace_context(metadata)
+        # Surface the request's classified trust tier as a bounded, non-secret dimension
+        # (#1504). Absent (unclassified) → the key is omitted, so prior telemetry is
+        # unchanged; an explicit metadata value from the caller still wins.
+        tier = _trust_tier_ctx.get()
+        tier_meta = {"trust_tier": tier} if tier else {}
         ctx = _langfuse.start_as_current_observation(
             trace_context=trace_context,
             name=name,
             metadata={
+                **tier_meta,
                 **(metadata or {}),
                 "session_id": session_id,
                 "tags": [os.environ.get("AGENT_NAME", "protoagent")],
