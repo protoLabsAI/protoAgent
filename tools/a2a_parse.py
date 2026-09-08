@@ -13,6 +13,8 @@ peer's result must not have to import from ``plugins/``.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import protolabs_a2a as pa
 
 # The name a peer's spend travels under once it has been read off the wire (#3016).
@@ -156,5 +158,139 @@ def _is_input_required(state) -> bool:
 
 def _is_terminal(state) -> bool:
     """True for A2A 1.0 terminal task states (``TASK_STATE_COMPLETED`` / ``FAILED``
-    / ``CANCELLED`` / ``REJECTED``) and their v0.3 lowercase spellings."""
+    / ``CANCELLED`` / ``REJECTED``) and their v0.3 lowercase spellings.
+
+    A polling-STOP predicate ONLY — it answers "has the peer stopped working on this
+    task", never "is this response's text the delegate's answer". Those are different
+    questions (#3362): a FAILED task is terminal but its status message is a diagnostic,
+    not an answer. Answer eligibility lives in :func:`classify_answer` below and MUST NOT
+    be re-derived from this.
+    """
     return str(state or "").upper().endswith(("COMPLETED", "FAILED", "CANCELED", "CANCELLED", "REJECTED"))
+
+
+# ── answer eligibility (#3362) ────────────────────────────────────────────────
+#
+# ``_is_terminal`` stops the poll loop; it does NOT decide whether a result's text is the
+# delegate's ANSWER. Conflating the two is the bug this section corrects — a WORKING
+# task's status message, or a FAILED task's error message, is text the adapter must never
+# hand back as the reply. Only a terminal COMPLETED task (1.0 ``TASK_STATE_COMPLETED`` /
+# v0.3 ``completed``) yields an answer, plus a genuine bare Message reply — a peer that
+# answers SendMessage with a Message and no task envelope, the pre-task compatibility
+# shape. Everything else (WORKING/SUBMITTED, FAILED/CANCELED/REJECTED, INPUT_REQUIRED, or
+# a task envelope whose state we cannot read) is not an answer.
+
+#: The classes :func:`classify_answer` returns via ``AnswerClass.kind``.
+ANSWER_COMPLETED = "completed"  # a terminal COMPLETED task — its text IS the answer
+ANSWER_BARE_MESSAGE = "bare_message"  # no task envelope — a genuine Message reply (compat)
+ANSWER_INPUT_REQUIRED = "input_required"  # parked on a human-input interrupt (the HITL park)
+ANSWER_FAILED = "failed"  # terminal FAILED / CANCELED / REJECTED — a diagnostic, never an answer
+ANSWER_PENDING = "pending"  # a task envelope not (yet) answerable — WORKING / unknown state
+
+
+def _has_task_envelope(result) -> bool:
+    """True when ``result`` carries an A2A task envelope — SendMessage's ``{"task": …}``
+    or a bare ``GetTask`` task — as opposed to a genuine bare Message reply.
+
+    The distinction gates answer eligibility (#3362): a bare Message's text is a valid
+    answer (pre-task compatibility), but a task envelope whose state we cannot read is NOT
+    — it is an in-flight or malformed task, and must never be mistaken for a bare Message
+    just because it happens to carry text.
+
+    Keys on the state-bearing markers ONLY — the ``{"task": …}`` wrapper, an explicit
+    ``kind: task``, or a ``status`` object — deliberately NOT on ``artifacts`` alone: a
+    status-less reply that carries artifacts (no task wrapper, no status) is the
+    compatibility shape a pre-1.0 / minimal peer sends, and it degrades to the bare-Message
+    answer path exactly as it did before this change."""
+    if not isinstance(result, dict):
+        return False
+    if isinstance(result.get("task"), dict):
+        return True
+    if str(result.get("kind") or "").lower() == "task":
+        return True
+    return isinstance(result.get("status"), dict)
+
+
+def _is_completed(state) -> bool:
+    """True for A2A 1.0 ``TASK_STATE_COMPLETED`` and its v0.3 ``completed`` spelling —
+    the ONLY terminal state whose text is eligible to be returned as an answer."""
+    return str(state or "").upper().endswith("COMPLETED")
+
+
+def _is_failed(state) -> bool:
+    """True for the terminal FAILURE states — 1.0 ``TASK_STATE_FAILED`` / ``CANCELLED`` /
+    ``REJECTED`` (and v0.3 ``canceled``). These are DIAGNOSTIC terminals, never answers."""
+    return str(state or "").upper().endswith(("FAILED", "CANCELED", "CANCELLED", "REJECTED"))
+
+
+def state_name(state) -> str:
+    """A short, lowercase, legible name for a task state, for DIAGNOSTIC messages — not a
+    wire value. ``TASK_STATE_FAILED`` → ``failed``; ``CANCELLED`` normalizes to
+    ``canceled``; absent → ``unknown``; anything unrecognized is lowercased as-is."""
+    s = str(state or "").upper().replace("-", "_")
+    if not s:
+        return "unknown"
+    for name in ("COMPLETED", "FAILED", "CANCELLED", "CANCELED", "REJECTED", "INPUT_REQUIRED", "WORKING", "SUBMITTED"):
+        if s.endswith(name):
+            return "canceled" if name in ("CANCELLED", "CANCELED") else name.lower()
+    return s.lower()
+
+
+@dataclass(frozen=True)
+class AnswerClass:
+    """How :func:`classify_answer` reads an A2A result for ANSWER eligibility (#3362).
+
+    ``kind`` is one of the ``ANSWER_*`` constants; ``state`` is the raw task-state string
+    (``""`` for a bare Message). ``answerable`` is the single question the adapter asks
+    before it may return ``_extract_text`` as the delegate's reply.
+    """
+
+    kind: str
+    state: str
+
+    @property
+    def answerable(self) -> bool:
+        """True only where this response's text may be RETURNED as the answer: a terminal
+        COMPLETED task, or a genuine bare Message. Never WORKING / FAILED / INPUT_REQUIRED
+        / a task envelope with no usable state."""
+        return self.kind in (ANSWER_COMPLETED, ANSWER_BARE_MESSAGE)
+
+    @property
+    def completed(self) -> bool:
+        """A terminal COMPLETED task — the only class that learns room continuity (#3360)."""
+        return self.kind == ANSWER_COMPLETED
+
+    @property
+    def failed(self) -> bool:
+        """A terminal FAILED / CANCELED / REJECTED task — surface as a diagnostic error."""
+        return self.kind == ANSWER_FAILED
+
+    @property
+    def input_required(self) -> bool:
+        """Parked on a human-input interrupt — hand back the question + resume handle."""
+        return self.kind == ANSWER_INPUT_REQUIRED
+
+
+def classify_answer(result) -> AnswerClass:
+    """Classify an A2A 1.0 SendMessage / GetTask ``result`` for answer eligibility (#3362).
+
+    Deliberately kept apart from :func:`_is_terminal` (a polling-stop predicate): the
+    adapter calls this to decide whether the observed result is the delegate's ANSWER, an
+    error to raise, a park to hand back, or a task still worth polling.
+
+    Order is load-bearing. An INPUT_REQUIRED park is recognized FIRST, before the
+    bare-Message fallback, so a synchronous inline park is never mistaken for a Message. A
+    task envelope with no usable state then falls to PENDING rather than masquerading as a
+    bare Message — that is the whole point of ``_has_task_envelope`` sitting between the two.
+    """
+    state = (_task_of(result).get("status") or {}).get("state")
+    raw = str(state or "")
+    if _is_input_required(state):
+        return AnswerClass(ANSWER_INPUT_REQUIRED, raw)
+    if not _has_task_envelope(result):
+        return AnswerClass(ANSWER_BARE_MESSAGE, raw)
+    if _is_completed(state):
+        return AnswerClass(ANSWER_COMPLETED, raw)
+    if _is_failed(state):
+        return AnswerClass(ANSWER_FAILED, raw)
+    return AnswerClass(ANSWER_PENDING, raw)

@@ -942,7 +942,14 @@ class A2aAdapter(Adapter):
 
         import httpx
 
-        from tools.a2a_parse import _extract_context_id, _extract_text, _is_input_required, _is_terminal
+        from tools.a2a_parse import (
+            _extract_context_id,
+            _extract_text,
+            _is_input_required,
+            _is_terminal,
+            classify_answer,
+            state_name,
+        )
 
         from . import conversations
 
@@ -1099,21 +1106,14 @@ class A2aAdapter(Adapter):
             task = result.get("task", result) or {}
             task_id = task.get("id")
             state = (task.get("status") or {}).get("state")
-            # A park can come back INLINE: a synchronous peer answers SendMessage with
-            # the task already in INPUT_REQUIRED, its question in status.message. The
-            # text early-return must not swallow that — _extract_text would hand back
-            # the bare question as if it were the ANSWER, losing the task id and the
-            # resume protocol with it (caught live, 2026-08-20).
-            text = _extract_text(result)
-            if text and not _is_input_required(state):
-                # An ANSWER: this exchange is on the thread and the peer's conversation is
-                # idle, so it is safe to continue (#3360).
-                _learn(result)
-                # Bill the peer's own cost-v1 telemetry to this turn before returning
-                # the answer (#3016) — the synchronous path a protoAgent peer takes.
-                await _bill_peer_usage(result, d.name)
-                _warn_if_suspiciously_short(d.name, text, time.monotonic() - t0)
-                return text
+            # Answer eligibility is decided by STATE, not by "is there text" (#3362). A
+            # synchronous peer answers SendMessage INLINE, and its result can be a terminal
+            # COMPLETED task (the answer), a FAILED task (a diagnostic), an inline
+            # INPUT_REQUIRED park (its question — which _extract_text must NOT hand back as
+            # the answer, losing the task id and the resume protocol with it, caught live
+            # 2026-08-20), or a still-WORKING task to poll. A terminal / parked / bare
+            # result skips the poll loop below (its guard already stops on those) and is
+            # resolved by the classification block AFTER it; only a non-terminal task polls.
             progress_fingerprint = _a2a_progress_fingerprint(result)
             deadline = time.monotonic() + poll_timeout
             while task_id and not _is_terminal(state) and not _is_input_required(state) and time.monotonic() < deadline:
@@ -1167,33 +1167,56 @@ class A2aAdapter(Adapter):
                     "operator (ask_human) if you have one; your question bubbles up the same "
                     "way — then resume with it."
                 )
-            text = _extract_text(result)
-            if text:
-                # An ANSWER (the async-peer path). Learn here rather than on the ack: an
-                # async-style peer acks SendMessage with a bare accepted task and only fills
-                # the envelope out as it works, so the contextId can arrive on the poll —
-                # the same value when it was already on the ack, the only value we ever see
-                # when it wasn't. (protoAgent peers answer inline and never reach this loop,
-                # which is exactly why the gap would have stayed invisible.)
-                _learn(result)
-                # Same billing as the inline path (#3016), for the peer that made us
-                # poll. Deliberately NOT done on the two branches above. A park emits no
-                # terminal artifact — only a status message — so its leg's spend is not
-                # on the wire at all; the peer keeps its own row for it (#2943) and this
-                # side undercounts a HITL chain by that much, documented in ADR 0006. And
-                # the "already finished, nothing to resume" branch reports work an EARLIER
-                # dispatch caused — billing it here would double-count it into a second
-                # turn.
+            # STATE decides whether this result is an ANSWER, a diagnostic, or nothing for
+            # the room — never "is there text" (#3362). ``classify_answer`` keeps that
+            # decision apart from ``_is_terminal`` (the poll-stop predicate): a terminal
+            # COMPLETED task and a genuine bare Message are answers; FAILED/CANCELED/REJECTED
+            # is a diagnostic; a still-working or stateless task is neither.
+            verdict = classify_answer(result)
+            if verdict.answerable:
+                text = _extract_text(result)
+                if text:
+                    if verdict.completed:
+                        # Only a COMPLETED task names a conversation the room may continue
+                        # (#3360): the exchange is on this thread and the peer's context is
+                        # idle. Learn here rather than on the ack — an async-style peer acks
+                        # SendMessage with a bare accepted task and fills the envelope out as
+                        # it works, so the contextId can arrive on the poll. A genuine bare
+                        # Message carries no task context to pin, so it learns nothing (#3362).
+                        _learn(result)
+                    # Bill the peer's own cost-v1 telemetry to this turn before returning
+                    # (#3016) — the terminal artifact carries it on both the inline and the
+                    # polled path; a bare Message has none, so this is a no-op there.
+                    await _bill_peer_usage(result, d.name)
+                    _warn_if_suspiciously_short(d.name, text, time.monotonic() - t0)
+                    return text
+                # A COMPLETED (or bare) terminus we could read NO answer text out of: an
+                # exchange the peer has and this thread does not (#3360/#3362). Drop the
+                # pointer, bill the terminal telemetry once if it rode the result, and raise
+                # a state-bearing error rather than returning empty.
+                _drop()
                 await _bill_peer_usage(result, d.name)
-                _warn_if_suspiciously_short(d.name, text, time.monotonic() - t0)
-                return text
-            # Neither terminus produced an answer for the room, so neither may pin this
-            # conversation to the peer's context (#3360): "still running" leaves the peer
-            # mid-turn in it — the room records the address as FAILED and drops the member,
-            # so whatever the peer writes next is history this side never sees, and a
-            # protoAgent peer would make the next address queue behind that same turn — and
-            # a terminal task we could read no text out of is an exchange the peer has and
-            # the thread does not. Both drop to the pre-#3360 wire: a fresh context next time.
+                raise DelegateError(f"delegate {d.name!r} returned no text (state={state})")
+            if verdict.failed:
+                # A FAILED / CANCELED / REJECTED task is the peer's DIAGNOSTIC, never an
+                # answer (#3362) — its status message is the error, not the reply. Drop
+                # continuity (the peer moved the conversation somewhere this side has no
+                # answer in), bill the terminal telemetry once if present, and surface the
+                # normalized state plus a bounded slice of the diagnostic.
+                _drop()
+                await _bill_peer_usage(result, d.name)
+                diag = " ".join((_extract_text(result) or "").split())[:_A2A_ERROR_DETAIL_LIMIT]
+                raise DelegateError(
+                    f"delegate {d.name!r} {state_name(state)} its task without an answer (state={state})"
+                    + (f": {diag}" if diag else "")
+                )
+            # PENDING: a non-terminal task we stopped polling (deadline), or a task envelope
+            # with no usable state. Neither is an answer for the room, so neither may pin
+            # this conversation to the peer's context (#3360): "still running" leaves the
+            # peer mid-turn in it — the room records the address as FAILED and drops the
+            # member, so whatever the peer writes next is history this side never sees, and a
+            # protoAgent peer would make the next address queue behind that same turn. Drop
+            # to the pre-#3360 wire: a fresh context next time.
             _drop()
             if task_id and not _is_terminal(state):
                 raise DelegateError(
