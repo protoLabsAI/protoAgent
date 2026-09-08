@@ -82,6 +82,10 @@ def _extract_text(result) -> str | None:
     ]
     if any(chunks):
         return "".join(chunks)
+    parts = [p.get("text", "") for p in (task.get("parts") or []) if p.get("text")]
+    text = "".join(parts)
+    if text:
+        return text
     msg = (task.get("status") or {}).get("message") or {}
     parts = [p.get("text", "") for p in (msg.get("parts") or []) if p.get("text")]
     text = "".join(parts)
@@ -257,7 +261,8 @@ class AnswerClass:
 
     @property
     def completed(self) -> bool:
-        """A terminal COMPLETED task — the only class that learns room continuity (#3360)."""
+        """A terminal COMPLETED task — the only task class that can learn room continuity
+        (#3360/#3362). Genuine bare Message answers may also carry a peer ``contextId``."""
         return self.kind == ANSWER_COMPLETED
 
     @property

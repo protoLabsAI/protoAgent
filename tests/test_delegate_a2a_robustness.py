@@ -938,6 +938,39 @@ def test_bare_message_reply_still_returns_its_text(patched):
     assert asyncio.run(A.dispatch(_parse(), "hi")) == "bare reply"
 
 
+def test_bare_message_reply_with_context_keeps_room_continuity(patched):
+    """A direct Message reply can carry ``contextId`` without a task envelope. It is still
+    a genuine bare Message answer, so the next address in the same room must reuse that
+    peer-assigned context instead of starting over."""
+    from plugins.delegates import conversations
+
+    conversations.reset()
+    bare = _Resp(
+        {
+            "jsonrpc": "2.0",
+            "result": {
+                "contextId": "ctx-bare",
+                "messageId": "m1",
+                "role": "ROLE_AGENT",
+                "parts": [{"kind": "text", "text": "bare reply"}],
+            },
+        }
+    )
+    bodies = _install_capture_client(patched, send_resp=bare)
+    d = _parse()
+    d.conversation_key = "thread-1"
+
+    try:
+        assert asyncio.run(A.dispatch(d, "first")) == "bare reply"
+        assert asyncio.run(A.dispatch(d, "second")) == "bare reply"
+    finally:
+        conversations.reset()
+
+    first, second = [b["params"]["message"] for b in bodies if b.get("method") == "SendMessage"]
+    assert "contextId" not in first
+    assert second["contextId"] == "ctx-bare"
+
+
 def test_task_envelope_without_state_is_not_answered_as_a_bare_message(patched):
     """r6: a ``{"task": …}`` envelope with artifacts but no usable state is a pending /
     malformed task, not a bare Message — its text is never returned; the dispatch reports

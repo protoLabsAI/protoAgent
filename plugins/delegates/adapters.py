@@ -1176,14 +1176,13 @@ class A2aAdapter(Adapter):
             if verdict.answerable:
                 text = _extract_text(result)
                 if text:
-                    if verdict.completed:
-                        # Only a COMPLETED task names a conversation the room may continue
-                        # (#3360): the exchange is on this thread and the peer's context is
-                        # idle. Learn here rather than on the ack — an async-style peer acks
-                        # SendMessage with a bare accepted task and fills the envelope out as
-                        # it works, so the contextId can arrive on the poll. A genuine bare
-                        # Message carries no task context to pin, so it learns nothing (#3362).
-                        _learn(result)
+                    # Learn continuity only on an ANSWER the caller will actually receive
+                    # (#3360/#3362). For task envelopes, ``answerable`` means COMPLETED; a
+                    # WORKING / FAILED / parked / malformed task still cannot pin the room.
+                    # A genuine bare Message is also an answer by compatibility, and may
+                    # carry the peer's contextId directly, so it must teach the next address
+                    # too.
+                    _learn(result)
                     # Bill the peer's own cost-v1 telemetry to this turn before returning
                     # (#3016) — the terminal artifact carries it on both the inline and the
                     # polled path; a bare Message has none, so this is a no-op there.
