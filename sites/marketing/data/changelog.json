@@ -1,5 +1,31 @@
 [
   {
+    "version": "v0.160.0",
+    "date": "2026-09-08",
+    "changes": [
+      "Structured request telemetry now carries the caller's federation trust tier (#1504).",
+      "Diagnostics session inventory is available to operators (#3171).",
+      "RAG-stage projection provenance on the injection log (#3259).",
+      "Rooms are now bounded by configuration instead of by constants, and can run more than one round (#3359).",
+      "An a2a room participant now keeps one conversation across addresses instead of starting over every time (#3361).",
+      "The lead's delegate_to shares that conversation with your @ addresses (#3361).",
+      "Rewinding, deleting or forking a chat now drops the room's pointer into the peer's copy (#3361).",
+      "A participant that pauses for input, or is still working when the room gives up, no longer poisons the room (#3361).",
+      "An optional memory ceiling so a runaway process degrades one service instead of the whole box (#3365).",
+      "Deterministic ProvidersPanel repoint test (#3357).",
+      "A2A continuity cleanup (#3362).",
+      "Review at head fails closed on incomplete or standing-blocked QA reviews (#3334).",
+      "A2A delegate polling now times out only after no visible task progress (#3360).",
+      "A2A delegates accept an answer only from completed task states (#3362).",
+      "A2A room cleanup (#3362).",
+      "A long-running agent no longer leaks a full copy of every plugin on each graph rebuild (#3365).",
+      "A persona self-edit no longer re-imports every plugin and respawns every MCP server (#3365).",
+      "A tool call no longer dies because the audit logger couldn't be imported (#3366).",
+      "A scheduled job that fails every single run is no longer indistinguishable from a healthy one (#3376).",
+      "A repeatedly failing job now backs off instead of burning a turn every cycle (#3376)."
+    ]
+  },
+  {
     "version": "v0.159.0",
     "date": "2026-09-05",
     "changes": [

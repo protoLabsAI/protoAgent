@@ -15,6 +15,207 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.160.0] - 2026-09-08
+
+### Added
+- **Structured request telemetry now carries the caller's federation trust tier (#1504).**
+  Successful auth already classifies every request as `operator` or `federation` (from the
+  matched credential) and stamps it on `request.state.trust_tier`. That label is now surfaced
+  as a bounded, non-secret dimension on the request's trace span and audit-log records, so an
+  operator can tell a local-console turn from a federated peer's without cross-referencing
+  anything. It reads only the classification the guard already made — never a header or token —
+  and the two known labels are the only values that can ever land; anything else, including an
+  unclassified request (a public path, a preflight, or a denied 401/403), keeps its prior
+  telemetry shape. Authentication, federation denial on `/api`, the Origin check, and every
+  other auth behavior are unchanged — this slice only observes.
+
+- **Diagnostics session inventory is available to operators (#3171).** `GET /api/diagnostics/sessions` returns bounded, redacted A2A context summaries without exposing raw task history or checkpoint content.
+
+- **RAG-stage projection provenance on the injection log (#3259).** Every per-turn
+  injection-log row now also records the effective knowledge `top_k` and the bounded
+  candidate counts retained at each RAG stage — retrieved, trust-filtered, and finally
+  injected — plus the final `rag_chunk_ids` count, all taken from the same context-projection
+  call. This is diagnostic/forensic provenance for the projection audit ONLY: it stores
+  counts (never chunk or prompt text, credentials, or config), changes nothing about what is
+  retrieved, how it is ordered, the `top_k` cap, or the composed prompt, and legacy rows keep
+  decoding with explicit defaults. It does not reproduce or fix the reported 26-chunk
+  over-injection incident.
+
+- **Rooms are now bounded by configuration instead of by constants, and can run more than one round (#3359).**
+  The catch-up window an addressed delegate receives was fixed at 40 messages / 8000
+  characters in the source, an `@` address was always exactly one pass over the targets,
+  and when the window truncated only the delegate was told — the operator saw a confident
+  answer given on a partial view of the room with no way to know. `room.catchup_max_messages`,
+  `room.catchup_max_chars` and `room.max_rounds` are now config (Settings ▸ Behavior ▸ Room),
+  a truncated catch-up says so in the reply and names the knob that widens it, and
+  `room.max_rounds` above 1 re-runs the addressed set in written order so participants can
+  answer each other. Above 1, an addressed participant is also told — in its prompt — that
+  it may reply with just `pass`; a reply that is empty or a bare `pass` is silence, not
+  written to the transcript and not counted as speaking, so a round where nobody speaks
+  settles the room early; the cap is the backstop and announces itself rather than trimming
+  quietly. Rounds are bounded, wall-clock time deliberately is not, and the cap is a
+  ceiling rather than a count — a single addressee (or a single survivor after failures)
+  runs one round however high it is set, because there is nobody for it to react to.
+  `room.max_rounds: 1` is the default and
+  is exactly the previous behavior. The room is also documented for the first time:
+  [Rooms (`@name` group chat)](https://docs.protolabs.ai/guides/rooms).
+
+- **An `a2a` room participant now keeps one conversation across addresses instead of starting over every time (#3361).**
+  Addressing a fleet member or a peer protoAgent with `@name` opened a brand-new conversation on
+  its side on every single address, so the bounded catch-up window was that member's entire
+  picture of the room — and multi-round rooms re-shipped that window once per round for exactly
+  the participants that could not resume. The room now hands an `a2a` delegate the thread as its
+  conversation key, and the A2A dispatch carries the `contextId` the peer itself assigned that
+  conversation, so a protoAgent peer picks the same thread back up. The id is echoed, never
+  invented: a peer that assigns no `contextId`, or ignores the one we send, behaves exactly as
+  before. Answering a parked task still uses that task's own context, and an `openai` model
+  endpoint is still refused a conversation key — it posts to a stateless chat endpoint, and the
+  refusal now says so.
+- **The lead's `delegate_to` shares that conversation with your `@` addresses (#3361).**
+  Continuity is keyed to the chat thread and the participant, not to how the participant was
+  reached, so a foreground `delegate_to` to an `a2a` peer continues the same peer-side
+  conversation the room is having with it — which is how `acp` coding agents have behaved since
+  `conversation_key` existed, now matched by `a2a`. `delegate_to(background=True)`, a parked-task
+  resume and a managed-git `item_id` claim bypass the room helper and still open a conversation
+  of their own.
+- **Rewinding, deleting or forking a chat now drops the room's pointer into the peer's copy (#3361).**
+  Continuity means a participant holds its own copy of the room, so a gesture whose whole point is
+  that something is *gone* has to drop the pointer to it — otherwise the next `@` rejoins the
+  peer's copy and the discarded exchange comes back in the participant's voice. Nothing is ended
+  on the peer, which keeps its own session and its content; what goes away is this side's ability
+  to rejoin it. Rewind stays as total as it was before continuity existed, delete keeps the "its
+  history will be removed" promise the attachment and session-summary purges already make, and a
+  fork's destination starts clean instead of inheriting whatever last occupied that session id.
+  Compaction deliberately keeps its continuity: it shortens your side of the room, not the peer's.
+- **A participant that pauses for input, or is still working when the room gives up, no longer poisons the room (#3361).**
+  A paused peer's thread holds its question, and a room address is not a resume — so re-sending
+  the room's context would have handed back the same `⏸ needs input` question on every later
+  address, parking a task each time with no way out but a rewind or a restart. Continuity is now
+  dropped whenever an exchange leaves the peer holding something this side does not have: a
+  pause, a turn still running past the poll deadline, a read that timed out on a peer answering
+  inline, or a terminal task with no readable answer. Each of those falls back to opening a fresh
+  conversation on the next address — the behavior every address had before continuity existed. An
+  address that failed because the peer was *unreachable* keeps its continuity: nothing happened on
+  the peer, so nothing about its conversation changed.
+
+- **An optional memory ceiling so a runaway process degrades one service instead of the whole box (#3365).**
+  There is no OS-level RSS ceiling to fall back on: macOS refuses `setrlimit(RLIMIT_RSS)`
+  outright — so launchd's `SoftResourceLimits`/`HardResourceLimits`, a thin wrapper over
+  `setrlimit`, cannot express one either — and Linux has ignored `RLIMIT_RSS` since 2.4. A
+  leaking agent therefore had no backstop below *the host runs out of memory*, which is how
+  the leak above took a 32 GB machine down for the better part of a day rather than just
+  taking itself down. `runtime.memory_ceiling_mb` samples this process's own resident memory
+  on a one-minute cadence and warns when it crosses the ceiling, once per episode rather than
+  once per sample, re-arming if it recovers. Exiting is a second, deliberate opt-in
+  (`runtime.memory_ceiling_exit`, exit code 75 / `EX_TEMPFAIL` for a supervisor to restart):
+  a server that kills itself mid-turn drops that turn, and whether that trade is worth making
+  depends on what's supervising the process — so it isn't a default anyone inherits. Both
+  knobs default to off, and the ceiling reads the live config each pass, so it can be turned
+  on from Settings without a restart. Host-scoped (ADR 0047): the ceiling bounds the process,
+  and every co-located agent shares it.
+
+### Changed
+- **Deterministic ProvidersPanel repoint test (#3357).** The resolve-references UI test now waits on the observable dropdown/schema and menu state before reading repoint lane options, instead of assuming a fixed number of `setTimeout(0)` microtask flushes — hardening it against timing flakes under repeated Vitest runs. Test-only; no product behavior changed.
+
+- **A2A continuity cleanup (#3362).** Remembered delegate contexts now carry their originating chat session alongside the resolved conversation key, and the lower-level cleanup seam can forget entries by exact recorded session without prefix or substring inference.
+
+### Fixed
+- **`Review at head` fails closed on incomplete or standing-blocked QA reviews (#3334).**
+  A promotable panel verdict is no longer sufficient on its own: the gate now consumes two
+  independent producer-owned marker attributes — `coverage` (must be `complete`) and
+  `standing_block` (must be `false`) — and refuses a head whose review coverage is incomplete
+  or that retains a standing block, even when the verdict is PASS and CI is green. Coverage
+  and the standing block each get their own status reason. These are read only from the
+  machine-readable marker, never from the review prose, and the gate still does not re-judge
+  code (ADR 0078). Missing/unknown attributes fail closed once `REQUIRE_COVERAGE_CONTRACT` is
+  enabled; it stays off until the out-of-repo QA-panel emitter ships the attributes, so
+  today's legacy markers keep passing and no open PR is blocked by the rollout.
+
+- **A2A delegate polling now times out only after no visible task progress (#3360).**
+  `poll_timeout_s` still defaults to 300 seconds and still fails closed with the existing
+  "peer may still be working" message, but it now measures inactivity rather than total
+  delegated turn duration. Material `SendMessage` or `GetTask` updates for the same task
+  reset the clock, while repeated identical `TASK_STATE_WORKING` polls do not run forever.
+  Rooms still drop timed-out participants from later rounds instead of opening duplicate
+  tasks or implying a slow-peer rejoin/resume contract.
+
+- **A2A delegates accept an answer only from completed task states (#3362).** A delegated
+  reply's text is now returned as the answer only for a terminal `TASK_STATE_COMPLETED`
+  task (including the legacy `completed` spelling) or a genuine bare Message; a
+  still-`WORKING` or otherwise non-terminal status message is never mistaken for the
+  answer, and a subsequent completed result is what comes back. `FAILED` / `CANCELED` /
+  `REJECTED` tasks and terminal no-text outcomes now raise a normalized state-bearing
+  `DelegateError` with a bounded diagnostic instead of leaking a diagnostic (or empty
+  string) as the reply. A new pure classifier in `tools/a2a_parse.py` decides answer
+  eligibility separately from the polling-stop predicate, so `_is_terminal` stays a
+  poll-loop bound only. Room continuity is learned for completed task answers and genuine
+  bare Message answers that carry a peer `contextId`, and dropped for parks,
+  non-completed terminals, timeouts, and no-text results; the peer's cost-v1 telemetry is
+  still billed exactly once on each terminal exit, with detached background delegations
+  excluded. `INPUT_REQUIRED`'s resumable park protocol is unchanged.
+
+- **A2A room cleanup (#3362).** Deleting a chat session now also forgets remembered A2A room continuity by its originating chat session, in addition to the preserved key-scoped cleanup (both retired prefixes plus the thread-id resolver's answer). A room dispatch records the originating session beside the peer-assigned context, so a fork whose resolver mints thread keys from request metadata no longer leaves that room's context reachable after DELETE.
+
+- **A long-running agent no longer leaks a full copy of every plugin on each graph rebuild (#3365).**
+  `load_plugins()` re-executed every plugin's whole module tree on every rebuild, and the
+  previous generation was never released — functions handed to `register(registry)` carry
+  `__globals__`, which *is* the old module's `__dict__`, and third-party registries (pydantic
+  model classes, SQLAlchemy annotation types) key off the classes each exec creates. Dropping
+  the name from `sys.modules` frees none of that, so the purge looked like it was working while
+  the process grew by a complete copy of every plugin, every rebuild: ~6.4 MB a rebuild in a
+  trimmed config, linear and unbounded. Three instances on one 32 GB host reached ~183 GB of
+  combined footprint over two days and took the machine down with them. The loader now skips the
+  re-exec when a plugin's sources are byte-for-byte what they were at the last import, using the
+  same fingerprint the code-drift banner already computes — so an edit still goes live (the
+  devkit's "edit then `reload_plugins`" loop is unaffected) and a force re-install still re-execs,
+  but reloading unchanged code costs nothing. Measured over ten rebuilds: was +6.4 MB each and
+  climbing, now flat.
+- **A persona self-edit no longer re-imports every plugin and respawns every MCP server (#3365).**
+  `edit_soul` was wired to the full graph reload, so each time the agent rewrote its own SOUL.md
+  it re-ran the entire plugin load and tore down and restarted every MCP server subprocess — on
+  its own turn, for a change that touches only the system prompt. It now takes a prompt-only
+  rebuild that reuses the live plugin bundle and MCP clients; plugin middleware and late-tool
+  factories are still re-resolved, so the rebuilt graph gets fresh instances either way. Settings
+  saves and `/api/config/reload` still do the full rebuild — those can change the plugin set.
+
+- **A tool call no longer dies because the audit logger couldn't be imported (#3366).**
+  `AuditMiddleware` resolved `observability.audit`, `observability.tracing` and
+  `observability.metrics` with unguarded function-local imports on *every* tool call, in
+  both the sync and async paths. When that import failed the exception raised straight out
+  of the middleware, killing the tool call and failing the whole turn — for a logging
+  concern that should never be load-bearing. It failed in the wild: a host run out of a
+  live git checkout hits a lazy import mid-edit or mid-branch-switch and resolves against a
+  tree that momentarily lacks the file (the #2298 hazard — modules imported eagerly at boot
+  are immune, lazily imported ones are not), which surfaced as repeated
+  `**A2A turn failed:** No module named 'observability.audit'`. Observability now degrades
+  to no-ops: the tool call runs, the audit/trace/metric row is dropped, and the reason is
+  logged once rather than once per call, so a retry storm doesn't bury the log in
+  tracebacks. Nothing is cached — the failure is transient by nature, so the next call
+  re-imports and auditing resumes on its own. This is the guard the other two audit call
+  sites (`plugins/execute_code/engine.py`, `graph/plugins/installer.py`) already had; the
+  middleware was the one place missing it, and the hottest of the three.
+
+- **A scheduled job that fails every single run is no longer indistinguishable from a healthy one (#3376).**
+  The scheduler judged a fire on its HTTP status alone and never read the response body — but
+  `/a2a` answers 200 for a turn that *failed*, carrying the failure as a failed task state. So a
+  broken job logged `[scheduler] fired job …` on every cycle and looked fine from every surface.
+  A drift-check job ran broken for six consecutive days on one box, burning a whole agent turn a
+  day, and nothing anywhere disagreed; it would have continued indefinitely. Fires are now judged
+  on the turn outcome: a 200 carrying a failed task is a failure, it logs at ERROR naming the job
+  and its actual error text (`No module named 'observability.audit'`, not `TASK_STATE_FAILED`),
+  and `consecutive_failures` / `last_error` / `last_ok` persist on the job and reach
+  `/api/scheduler`. A response we can't parse counts as SUCCESS on purpose — this feeds a backoff,
+  and guessing "failed" from an unfamiliar shape would throttle healthy jobs.
+- **A repeatedly failing job now backs off instead of burning a turn every cycle (#3376).**
+  Past three consecutive failures the next fire is pushed out by skipping scheduled slots,
+  doubling each time and capped at 16 — a broken daily job stops costing a turn a day, and a
+  capped backoff can't drift an hourly job into firing once a fortnight. A single success resets
+  the streak immediately, so a recovered job is straight back on its normal cadence. The job is
+  **never auto-disabled**: the failure that motivated this was a transient backend outage, and
+  silently switching off a job the operator depends on is worse than a slow retry. The
+  `turn.finished` event's `ok` flag now reports whether the turn actually succeeded rather than
+  whether it was delivered, so the console stops drawing a successful turn over a failed one.
+
 ## [0.159.0] - 2026-09-05
 
 ### Added
