@@ -470,3 +470,141 @@ def test_reload_restamps_a_members_fleet_display_name(tmp_path, monkeypatch):
     # THE regression: the hub-visible display name now follows the member's own identity.
     assert yaml.safe_load((ws / "workspace.yaml").read_text())["name"] == "ranger"
     assert yaml.safe_load((ws / "workspace.yaml").read_text())["id"] == "scout-1a2b"  # id immutable
+
+
+def test_soul_edit_reload_reuses_plugins_and_mcp(tmp_path, monkeypatch):
+    """A persona edit must not re-import plugins or respawn MCP servers (#3365).
+
+    `edit_soul` is handed `_reload_for_soul_edit`, which rebuilds the graph from the
+    live plugin bundle. Before this, every persona self-edit ran `load_plugins()` over
+    every installed plugin — leaking a full module generation each time — and tore down
+    and respawned every MCP server subprocess, for a change that touched neither.
+    """
+    import graph.config_io as cio
+    import server.agent_init as ai
+    from runtime.state import STATE
+
+    leaf = tmp_path / "langgraph-config.yaml"
+    leaf.write_text("scheduler:\n  enabled: false\n")
+    monkeypatch.setattr(cio, "config_yaml_path", lambda: leaf)
+    monkeypatch.setattr(cio, "ensure_live_config", lambda: None)
+    monkeypatch.setattr(cio, "is_setup_complete", lambda: True)
+
+    monkeypatch.setattr(ai, "_build_knowledge_store", lambda cfg: None)
+    monkeypatch.setattr(ai, "_apply_plugin_knowledge_backend", lambda cfg, store, plugins: store)
+    monkeypatch.setattr(ai, "_register_plugin_subagents", lambda subagents: None)
+    monkeypatch.setattr(ai, "_apply_config_subagents", lambda cfg: None)
+    monkeypatch.setattr(ai, "_build_skills_index", lambda cfg, extra_skill_dirs=None: None)
+    monkeypatch.setattr(ai, "_build_inbox_store", lambda cfg: None)
+
+    # The two builders this reload must NOT reach.
+    calls: list[str] = []
+    monkeypatch.setattr(ai, "_build_plugins", lambda *a, **k: calls.append("plugins"))
+    monkeypatch.setattr(ai, "_build_mcp", lambda *a, **k: calls.append("mcp") or ([], [], []))
+    # ...and the live clients it must not close.
+    monkeypatch.setattr(ai, "_close_mcp_clients", lambda clients: calls.append("close"))
+
+    live_bundle = SimpleNamespace(
+        mcp_servers=[],
+        tools=[object()],
+        tool_plugins={},
+        skill_dirs=[],
+        meta=[],
+        surfaces=[],
+        chat_commands={},
+        subagents=[],
+        middleware=[],
+        late_tool_factories=[],
+        routers=[],
+    )
+    live_clients = [object()]
+    monkeypatch.setattr(STATE, "plugin_bundle", live_bundle, raising=False)
+    monkeypatch.setattr(STATE, "mcp_clients", live_clients, raising=False)
+    monkeypatch.setattr(STATE, "mcp_tools", [], raising=False)
+    monkeypatch.setattr(STATE, "mcp_meta", [], raising=False)
+    monkeypatch.setattr(STATE, "checkpointer", object(), raising=False)
+    monkeypatch.setattr(STATE, "tasks_store", object(), raising=False)
+    monkeypatch.setattr(STATE, "background_mgr", object(), raising=False)
+    monkeypatch.setattr(STATE, "scheduler", None, raising=False)
+    monkeypatch.setattr(STATE, "workflow_registry", None, raising=False)
+    monkeypatch.setattr(STATE, "workflow_run", None, raising=False)
+
+    import graph.agent as ga
+
+    captured: dict = {}
+
+    def _capture(config, **kwargs):
+        captured.update(kwargs)
+        raise RuntimeError("stop before commit")
+
+    monkeypatch.setattr(ga, "create_agent_graph", _capture)
+
+    ok, msg = ai._reload_for_soul_edit()
+
+    assert ok is False and "rebuild failed" in msg  # our abort — nothing committed
+    assert captured, "create_agent_graph was never reached"
+    # THE regression: neither heavy builder ran, and the live MCP clients survived the
+    # failure path — closing them would kill working servers over an unrelated rebuild.
+    assert calls == [], f"a prompt-only reload rebuilt: {calls}"
+    # The rebuilt graph still gets the plugin's tools, from the reused bundle.
+    assert captured["extra_tools"] == live_bundle.tools
+
+
+def test_full_reload_still_rebuilds_plugins_and_mcp(tmp_path, monkeypatch):
+    """The scope reduction is opt-in: a settings save / config reload still does the
+    full rebuild, because those CAN change the plugin set."""
+    import graph.config_io as cio
+    import server.agent_init as ai
+    from runtime.state import STATE
+
+    leaf = tmp_path / "langgraph-config.yaml"
+    leaf.write_text("scheduler:\n  enabled: false\n")
+    monkeypatch.setattr(cio, "config_yaml_path", lambda: leaf)
+    monkeypatch.setattr(cio, "ensure_live_config", lambda: None)
+    monkeypatch.setattr(cio, "is_setup_complete", lambda: True)
+
+    monkeypatch.setattr(ai, "_build_knowledge_store", lambda cfg: None)
+    monkeypatch.setattr(ai, "_apply_plugin_knowledge_backend", lambda cfg, store, plugins: store)
+    monkeypatch.setattr(ai, "_register_plugin_subagents", lambda subagents: None)
+    monkeypatch.setattr(ai, "_apply_config_subagents", lambda cfg: None)
+    monkeypatch.setattr(ai, "_resolve_plugin_middleware", lambda cfg, mw: [])
+    monkeypatch.setattr(ai, "_build_skills_index", lambda cfg, extra_skill_dirs=None: None)
+    monkeypatch.setattr(ai, "_build_inbox_store", lambda cfg: None)
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        ai,
+        "_build_plugins",
+        lambda *a, **k: calls.append("plugins")
+        or SimpleNamespace(
+            mcp_servers=[],
+            tools=[],
+            tool_plugins={},
+            skill_dirs=[],
+            meta=[],
+            surfaces=[],
+            chat_commands={},
+            subagents=[],
+            middleware=[],
+            late_tool_factories=[],
+            routers=[],
+        ),
+    )
+    monkeypatch.setattr(ai, "_build_mcp", lambda *a, **k: calls.append("mcp") or ([], [], []))
+
+    # A stale bundle is present and must be IGNORED by the full path.
+    monkeypatch.setattr(STATE, "plugin_bundle", object(), raising=False)
+    monkeypatch.setattr(STATE, "checkpointer", object(), raising=False)
+    monkeypatch.setattr(STATE, "tasks_store", object(), raising=False)
+    monkeypatch.setattr(STATE, "background_mgr", object(), raising=False)
+    monkeypatch.setattr(STATE, "scheduler", None, raising=False)
+    monkeypatch.setattr(STATE, "workflow_registry", None, raising=False)
+    monkeypatch.setattr(STATE, "workflow_run", None, raising=False)
+
+    import graph.agent as ga
+
+    monkeypatch.setattr(ga, "create_agent_graph", lambda config, **kw: (_ for _ in ()).throw(RuntimeError("stop")))
+
+    ai._reload_langgraph_agent()
+
+    assert calls == ["plugins", "mcp"], f"full reload skipped a builder: {calls}"

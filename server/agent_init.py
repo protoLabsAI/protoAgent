@@ -356,8 +356,9 @@ def _init_langgraph_agent(headless_setup: bool = False):
                 background_mgr=STATE.background_mgr,
                 # Lets the guarded edit_soul tool (ADR 0079/0081) reload the graph so a
                 # persona self-edit is live on the next turn — injected, so tools/ never
-                # imports server/.
-                reload_callback=_reload_langgraph_agent,
+                # imports server/. The prompt-only variant: a persona edit must not
+                # re-import plugins or respawn MCP servers (#3365).
+                reload_callback=_reload_for_soul_edit,
             )
     except OAuthCredentialError as exc:
         # Signed-out is an intentional state, not a boot failure (#2458): the user
@@ -2271,9 +2272,31 @@ def _apply_plugin_registries(plugins) -> None:
     _lifecycle_hooks.set_lifecycle_hooks(plugins.lifecycle_hooks)  # ADR 0074
 
 
+def _reload_for_soul_edit() -> tuple[bool, str]:
+    """The reload ``edit_soul`` gets: re-render the prompt, keep the plugins (#3365).
+
+    A persona edit rewrites SOUL.md — the system prompt — and changes nothing about
+    the plugin set or the MCP roster. Rebuilding those anyway cost a full re-import
+    of every plugin (which leaked a whole generation per rebuild until the loader
+    learned to skip unchanged sources) plus a teardown-and-respawn of every MCP
+    server subprocess — on the agent's own turn, every time it edited its persona.
+
+    Kept as a named function rather than a lambda so the graph can re-thread it
+    into the next generation of ``edit_soul`` by name. Deliberately NOT decorated
+    with ``@_serialized_config_write``: it takes that lock through the call below,
+    which is where the write actually happens.
+    """
+    return _reload_langgraph_agent(reload_plugins=False)
+
+
 @_serialized_config_write
-def _reload_langgraph_agent() -> tuple[bool, str]:
+def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
     """Rebuild the compiled graph from the latest config YAML.
+
+    ``reload_plugins=False`` reuses the live plugin bundle and MCP clients instead
+    of rebuilding them (#3365) — for a caller that only changed the prompt. Plugin
+    middleware and late-tool factories are still re-resolved from the cached
+    bundle, so the rebuilt graph gets fresh instances either way.
 
     Called by the drawer's Save & Reload action and the
     ``/api/config/reload`` endpoint. Preserves the existing
@@ -2346,6 +2369,9 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
     # `new_plugins` there raised UnboundLocalError on the setup-pending branch, which never
     # builds plugins — the same trap the `new_middleware = []` below already guards against.
     new_plugin_surfaces: list = []
+    # Pre-seeded for the same reason as its siblings: the setup-pending branch never
+    # builds plugins, and the commit below publishes unconditionally.
+    new_plugin_bundle = None
     if is_setup_complete():
         try:
             new_store = _build_knowledge_store(new_config)
@@ -2354,18 +2380,35 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
             STATE.workflow_registry = STATE.workflow_run = None
             # Plugins before MCP — a plugin's managed MCP server (e.g. Google)
             # is injected into the MCP discovery below (matches _main ordering).
-            new_plugins = _build_plugins(
-                new_config,
-                existing_tools=get_all_tools(
-                    new_store,
-                    scheduler=next_scheduler,
-                    goal_enabled=getattr(new_config, "goal_enabled", True),
-                    watches_enabled=getattr(new_config, "watches_enabled", False),
-                ),
-            )
-            new_mcp_clients, new_mcp_tools, new_mcp_meta = _build_mcp(
-                new_config, plugin_servers=[s["factory"] for s in new_plugins.mcp_servers]
-            )
+            # Prompt-only rebuild (#3365): reuse the live bundle + MCP clients. Only
+            # when we actually have one — a reuse request before the first successful
+            # build (or after a failed one) falls through to a full build rather than
+            # committing an empty plugin surface.
+            reused_bundle = None if reload_plugins else STATE.plugin_bundle
+            if reused_bundle is not None:
+                new_plugins = reused_bundle
+                # These clients are LIVE and stay live: the commit below skips the
+                # close because the list is identical, and the failure path below
+                # must not close them either.
+                new_mcp_clients, new_mcp_tools, new_mcp_meta = (
+                    STATE.mcp_clients,
+                    STATE.mcp_tools,
+                    STATE.mcp_meta,
+                )
+            else:
+                new_plugins = _build_plugins(
+                    new_config,
+                    existing_tools=get_all_tools(
+                        new_store,
+                        scheduler=next_scheduler,
+                        goal_enabled=getattr(new_config, "goal_enabled", True),
+                        watches_enabled=getattr(new_config, "watches_enabled", False),
+                    ),
+                )
+                new_mcp_clients, new_mcp_tools, new_mcp_meta = _build_mcp(
+                    new_config, plugin_servers=[s["factory"] for s in new_plugins.mcp_servers]
+                )
+            new_plugin_bundle = new_plugins
             new_plugin_tools = new_plugins.tools
             new_plugin_tool_owner = new_plugins.tool_plugins
             new_plugin_skill_dirs = new_plugins.skill_dirs
@@ -2400,14 +2443,19 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
                 background_mgr=STATE.background_mgr,
                 # Re-thread the reload hook so the rebuilt graph's edit_soul can reload again
                 # (self-referential: this IS the reload path). Missing it would make the
-                # persona editor a one-shot after the first hot-reload.
-                reload_callback=_reload_langgraph_agent,
+                # persona editor a one-shot after the first hot-reload. Threads the
+                # prompt-only variant, so the scope reduction survives a reload too (#3365).
+                reload_callback=_reload_for_soul_edit,
             )
         except Exception as e:
             log.exception("[reload] graph rebuild failed")
             # The freshly-built MCP clients were never committed — close them or
             # their persistent sessions (subprocesses) leak on every failed reload.
-            _close_mcp_clients(new_mcp_clients)
+            # A REUSED set is the live one still serving the current graph, though:
+            # closing it here would kill working MCP servers because an unrelated
+            # prompt rebuild failed (#3365).
+            if new_mcp_clients is not STATE.mcp_clients:
+                _close_mcp_clients(new_mcp_clients)
             # Scheduler state hasn't been committed yet — caller's
             # running scheduler keeps polling, no orphaned tasks.
             return False, f"graph rebuild failed: {e}"
@@ -2470,6 +2518,7 @@ def _reload_langgraph_agent() -> tuple[bool, str]:
         new_plugin_meta,
     )
     STATE.plugin_tool_owner = new_plugin_tool_owner
+    STATE.plugin_bundle = new_plugin_bundle  # what a prompt-only rebuild reuses (#3365)
     try:
         from security import egress
         from security import policy
