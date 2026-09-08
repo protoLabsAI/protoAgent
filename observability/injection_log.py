@@ -2,10 +2,12 @@
 
 One append-only row per model call that had memory auto-injected: which
 prior-session digest entries, hot-memory chunks, and RAG hits entered the
-prompt, when, for which session, at what approximate token cost. This is the
-forensics substrate for "why did it say that?" and for detecting
-SpAIware-class memory poisoning — the store row → source session → turns it
-was injected into chain ends here.
+prompt, when, for which session, at what approximate token cost, and — for the
+projection audit (#3259) — the effective knowledge ``top_k`` with the bounded
+candidate counts retained at each RAG stage (retrieved → trust-filtered →
+finally injected). This is the forensics substrate for "why did it say that?"
+and for detecting SpAIware-class memory poisoning — the store row → source
+session → turns it was injected into chain ends here.
 
 Written best-effort from ``KnowledgeMiddleware.before_model`` (a write failure
 never breaks a turn); read by the operator console via
@@ -28,6 +30,30 @@ log = logging.getLogger(__name__)
 
 # The id-list columns, stored as JSON arrays (TEXT) and decoded on read.
 _JSON_COLUMNS = ("digest_session_ids", "hot_chunk_ids", "rag_chunk_ids")
+
+# Bounded per-stage RAG provenance (#3259), stored as one JSON object (TEXT)
+# under a FIXED key set — counts ONLY, so the audit stays bounded and carries
+# no chunk/prompt text, credentials, or config. Legacy rows (and any value that
+# won't parse) read back exactly these explicit defaults, so an old log stays
+# decodable. ``final`` is the injected RAG count the projection reports;
+# ``rag_chunk_ids`` is the length of the stored id array — the two agree by
+# construction, and a row where they don't is itself the #3259 signature.
+_STAGE_COUNT_DEFAULTS: dict[str, int] = {
+    "effective_top_k": 0,
+    "retrieved": 0,
+    "trust_filtered": 0,
+    "final": 0,
+    "rag_chunk_ids": 0,
+}
+
+
+def _as_int(value, default: int) -> int:
+    """A stored count coerced to int (``default`` when it is None or garbage) —
+    the reader stays bounded to integers even if the blob was tampered with."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 class InjectionLog:
@@ -58,11 +84,19 @@ class InjectionLog:
                     digest_session_ids TEXT NOT NULL DEFAULT '[]',
                     hot_chunk_ids      TEXT NOT NULL DEFAULT '[]',
                     rag_chunk_ids      TEXT NOT NULL DEFAULT '[]',
-                    approx_tokens      INTEGER NOT NULL DEFAULT 0
+                    approx_tokens      INTEGER NOT NULL DEFAULT 0,
+                    rag_stage_counts   TEXT NOT NULL DEFAULT '{}'
                 )
                 """
             )
             db.execute("CREATE INDEX IF NOT EXISTS ix_injections_session ON injections(session_id)")
+            # #3259: the RAG-stage provenance column rides the same row. An
+            # existing (legacy) DB predates it — add it in place so an upgraded
+            # instance keeps its history and old rows decode to the explicit
+            # defaults (the '{}' default → _STAGE_COUNT_DEFAULTS, see _decode).
+            have = {r["name"] for r in db.execute("PRAGMA table_info(injections)").fetchall()}
+            if "rag_stage_counts" not in have:
+                db.execute("ALTER TABLE injections ADD COLUMN rag_stage_counts TEXT NOT NULL DEFAULT '{}'")
             db.commit()
         finally:
             db.close()
@@ -75,26 +109,47 @@ class InjectionLog:
         hot_chunk_ids: list[int] | None = None,
         rag_chunk_ids: list[int] | None = None,
         approx_tokens: int = 0,
+        effective_top_k: int = 0,
+        rag_retrieved: int = 0,
+        rag_trust_filtered: int = 0,
+        rag_final: int = 0,
     ) -> None:
         """Append one injection row. Best-effort — never raises (a telemetry
-        write must not break the model call that triggered it)."""
+        write must not break the model call that triggered it).
+
+        The ``rag_*``/``effective_top_k`` counts are the bounded per-stage
+        RAG provenance (#3259): the knowledge ``top_k`` in force and how many
+        candidates survived retrieval, the trust rank, and delivery. They are
+        stored as one fixed-key JSON object of integer COUNTS — never chunk or
+        prompt text — so the audit stays bounded and free of injected content.
+        The stored ``rag_chunk_ids`` count is derived here from the id array so
+        it can never disagree with what was persisted."""
         try:
             db = self._connect()
         except sqlite3.DatabaseError:
             log.warning("[injection-log] connect failed at %s", self.path)
             return
         try:
+            rag_ids = list(rag_chunk_ids or [])
+            stage_counts = {
+                "effective_top_k": max(0, int(effective_top_k)),
+                "retrieved": max(0, int(rag_retrieved)),
+                "trust_filtered": max(0, int(rag_trust_filtered)),
+                "final": max(0, int(rag_final)),
+                "rag_chunk_ids": len(rag_ids),
+            }
             db.execute(
                 "INSERT INTO injections "
-                "(ts, session_id, digest_session_ids, hot_chunk_ids, rag_chunk_ids, approx_tokens) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "(ts, session_id, digest_session_ids, hot_chunk_ids, rag_chunk_ids, approx_tokens, rag_stage_counts) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     datetime.now(UTC).isoformat(),
                     session_id or "",
                     json.dumps(list(digest_session_ids or [])),
                     json.dumps(list(hot_chunk_ids or [])),
-                    json.dumps(list(rag_chunk_ids or [])),
+                    json.dumps(rag_ids),
                     int(approx_tokens),
+                    json.dumps(stage_counts),
                 ),
             )
             db.commit()
@@ -105,13 +160,27 @@ class InjectionLog:
 
     @staticmethod
     def _decode(row: sqlite3.Row) -> dict:
-        """One row → dict with the JSON id-columns decoded to Python lists."""
+        """One row → dict with the JSON id-columns decoded to Python lists and
+        the RAG-stage provenance decoded to a fixed-key int dict.
+
+        Legacy rows (no ``rag_stage_counts`` column, a NULL/empty value, or an
+        unparseable one) read back exactly ``_STAGE_COUNT_DEFAULTS`` — the audit
+        is a NEW field, so an old row honestly reports zeros rather than failing
+        to decode. Only the known keys survive, coerced to int, so a
+        hand-tampered blob can't smuggle extra content through the reader."""
         d = dict(row)
         for col in _JSON_COLUMNS:
             try:
                 d[col] = json.loads(d.get(col) or "[]")
             except (json.JSONDecodeError, TypeError):
                 d[col] = []
+        try:
+            parsed = json.loads(d.get("rag_stage_counts") or "{}")
+            if not isinstance(parsed, dict):
+                parsed = {}
+        except (json.JSONDecodeError, TypeError):
+            parsed = {}
+        d["rag_stage_counts"] = {k: _as_int(parsed.get(k), default) for k, default in _STAGE_COUNT_DEFAULTS.items()}
         return d
 
     def recent(self, session_id: str | None = None, limit: int = 50) -> list[dict]:

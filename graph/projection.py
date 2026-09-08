@@ -34,6 +34,7 @@ delivery is unbounded — byte-identical to the pre-D6 composer.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -92,6 +93,36 @@ _INERT_BUDGET_LOGGED = False
 DigestLoader = Callable[..., object]
 # How a caller records an injection: ``(state, memory_parts, digest_ids, hot_ids, rag_ids)``.
 InjectionRecorder = Callable[[dict, list[str], list[str], list[int], list[int]], None]
+
+
+@dataclass(frozen=True)
+class _RagStageCounts:
+    """Bounded per-stage RAG cardinality for one projection (#3259).
+
+    COUNTS only — the effective ``knowledge.top_k`` in force and how many RAG
+    candidates were retained at each stage of THIS projection. Never chunk or
+    prompt text, ids, credentials, or config: this is the provenance the
+    injection-log row records so the 26-chunk-under-top_k:5 class of drift is
+    audit-visible on the same row, without changing what is retrieved or
+    injected.
+    """
+
+    effective_top_k: int = 0  # knowledge.top_k for this projection (0 = auto-injection off)
+    retrieved: int = 0  # candidates from search_scoped (namespace + deliverable filtered)
+    trust_filtered: int = 0  # retained after rank_by_trust (trust floor + top_k cap)
+    final: int = 0  # RAG hits in the delivered projection (after budget shedding)
+
+
+# The recorder callback contract — ``(state, memory_parts, digest_ids, hot_ids,
+# rag_ids)`` — is depended on by both runtimes, the native middleware wrapper,
+# and tests, so it is NOT widened for the provenance. The counts ride to the
+# recorder out-of-band through this contextvar instead: ``compose_projected_context``
+# sets it for the single synchronous record call and resets it in a finally, so
+# the same value reaches ``record_injection`` on every path (native wrapper
+# included) and never leaks past the call.
+_RAG_STAGE_COUNTS: contextvars.ContextVar[_RagStageCounts | None] = contextvars.ContextVar(
+    "rag_stage_counts", default=None
+)
 
 
 # ---------------------------------------------------------------------------
@@ -365,7 +396,9 @@ def compose_projected_context(
     Delivery is bounded by ``options.budget_chars`` (ADR 0108 D6) — see
     :func:`_fit_to_budget` for the priority and shed order. The injection log
     records what was DELIVERED (ids after shedding), never what was merely
-    retrieved.
+    retrieved, plus bounded RAG-stage provenance (#3259): the effective
+    ``top_k`` and the retained-candidate counts at each RAG stage (retrieved →
+    trust-filtered → finally injected), counts only, on the same row.
     """
     state = state or {}
     opts = options or ProjectionOptions()
@@ -414,9 +447,14 @@ def compose_projected_context(
 
     # 3. RAG hits on the turn's query — trust-ranked, namespace-scoped, deliverable-only
     #    (ADR 0069 D3a/D8, ADR 0108 D6). Ranked best-first: the budget sheds from the end.
+    #    ``retrieved`` (the store's deliverable candidates) is kept alongside the ranked
+    #    ``results`` only for the RAG-stage provenance (#3259) — the two calls, their order,
+    #    and their outputs are exactly what the single-expression form produced.
+    retrieved: list[dict] = []
     results: list[dict] = []
     if query and not incognito and knowledge_store is not None:
-        results = rank_by_trust(search_scoped(knowledge_store, query, opts), opts)
+        retrieved = search_scoped(knowledge_store, query, opts)
+        results = rank_by_trust(retrieved, opts)
 
     # 4/5. Skills (capability, not memory) and the agent's own live commitments
     #      (ADR 0079 — the "Observe" step) are gathered even on goal turns and
@@ -441,9 +479,25 @@ def compose_projected_context(
         summaries,
     )
     if delivered.memory_parts and record:
-        (record_fn or record_injection)(
-            state, delivered.memory_parts, delivered.digest_ids, delivered.hot_ids, delivered.rag_ids
+        # Bounded RAG-stage provenance (#3259) computed from THIS call, handed to
+        # the recorder through the contextvar (set for exactly this synchronous
+        # record, reset in the finally). ``final`` is what actually shipped after
+        # the budget; ``retrieved``/``trust_filtered`` are unmutated (the budget
+        # only ever pops the private copy inside ``_Candidates``).
+        token = _RAG_STAGE_COUNTS.set(
+            _RagStageCounts(
+                effective_top_k=opts.top_k,
+                retrieved=len(retrieved),
+                trust_filtered=len(results),
+                final=len(delivered.rag_ids),
+            )
         )
+        try:
+            (record_fn or record_injection)(
+                state, delivered.memory_parts, delivered.digest_ids, delivered.hot_ids, delivered.rag_ids
+            )
+        finally:
+            _RAG_STAGE_COUNTS.reset(token)
     return delivered.projected
 
 
@@ -1114,7 +1168,8 @@ def record_injection(
     rag_ids: list[int],
 ) -> None:
     """Append this model call's injected-memory row to the per-instance
-    injection log (ADR 0069 D6). Best-effort — never breaks a turn."""
+    injection log (ADR 0069 D6), including the bounded RAG-stage provenance
+    (#3259) the composer set for this call. Best-effort — never breaks a turn."""
     try:
         from observability.injection_log import injection_log
 
@@ -1126,12 +1181,19 @@ def record_injection(
             from observability import tracing
 
             session_id = tracing.current_session_id() or ""
+        # The composer set this for exactly this call; a direct caller that
+        # didn't go through the composer falls back to ``final = len(rag_ids)``.
+        counts = _RAG_STAGE_COUNTS.get() or _RagStageCounts(final=len(rag_ids))
         injection_log().record(
             session_id=session_id,
             digest_session_ids=digest_ids,
             hot_chunk_ids=hot_ids,
             rag_chunk_ids=rag_ids,
             approx_tokens=max(1, len("\n\n".join(memory_parts)) // 4),
+            effective_top_k=counts.effective_top_k,
+            rag_retrieved=counts.retrieved,
+            rag_trust_filtered=counts.trust_filtered,
+            rag_final=counts.final,
         )
     except Exception as exc:  # noqa: BLE001 — forensics must never break the loop
         log.debug("[projection] injection record failed: %s", exc)

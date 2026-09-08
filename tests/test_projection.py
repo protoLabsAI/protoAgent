@@ -726,3 +726,134 @@ def test_knowledge_top_k_default_is_the_documented_five():
     assert LangGraphConfig.knowledge_top_k == 5
     assert ProjectionOptions.top_k == 5
     assert ProjectionOptions.from_config(LangGraphConfig.from_dict({})).top_k == 5
+
+
+# ---------------------------------------------------------------------------
+# RAG-stage projection provenance (#3259) — diagnostic counts on the SAME
+# injection-log row: the effective top_k and how many candidates survived each
+# RAG stage (retrieved → trust-filtered → finally injected). Provenance only —
+# it records nothing new about content, and does not change what is injected.
+# ---------------------------------------------------------------------------
+
+
+def test_projection_records_effective_top_k_and_rag_stage_counts(monkeypatch):
+    """The recorded row carries the effective top_k and three DISTINCT stage
+    counts from the same projection call: 8 deliverable candidates reach a
+    top_k=5 projection, the trust rank caps to 5, and all 5 ship."""
+    import observability.injection_log as il
+    from graph.projection import compose_projected_context
+
+    rows: list[dict] = []
+    monkeypatch.setattr(il, "injection_log", lambda: SimpleNamespace(record=lambda **kw: rows.append(kw)))
+    _clear_working_state(monkeypatch)
+    results = [{"id": i, "preview": f"hit {i}", "domain": "fact", "source_type": "operator"} for i in range(8)]
+    store = _FakeStore(results=results)
+
+    compose_projected_context(
+        _QUERY, store, None, {"session_id": "sess-1"},
+        record=True, options=ProjectionOptions(top_k=5), prior_sessions=lambda **kw: ("", []),
+    )
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["effective_top_k"] == 5
+    assert row["rag_retrieved"] == 8  # the store handed back all 8 deliverable candidates
+    assert row["rag_trust_filtered"] == 5  # rank_by_trust capped to top_k
+    assert row["rag_final"] == 5  # all 5 shipped (no budget)
+    assert row["rag_chunk_ids"] == [0, 1, 2, 3, 4]  # the ids agree with the final count
+
+
+def test_top_k_five_records_final_rag_count_within_cap(tmp_path, monkeypatch):
+    """A deterministic top_k=5 projection over a real store whose every row
+    matches records a final RAG count of at most 5 — the normal capped path —
+    and the row is internally consistent (ids length == recorded final)."""
+    import observability.injection_log as il
+    from graph.projection import compose_projected_context
+
+    rows: list[dict] = []
+    monkeypatch.setattr(il, "injection_log", lambda: SimpleNamespace(record=lambda **kw: rows.append(kw)))
+    _clear_working_state(monkeypatch)
+    store = _seeded_store(tmp_path)  # 12 rows, each matches "gravity note"
+
+    compose_projected_context(
+        "gravity note", store, None, {"session_id": "s-1"},
+        record=True, options=ProjectionOptions(top_k=5), prior_sessions=lambda **kw: ("", []),
+    )
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["effective_top_k"] == 5
+    assert row["rag_final"] <= 5  # never more than top_k on the normal capped path
+    assert len(row["rag_chunk_ids"]) == row["rag_final"]
+
+
+def test_injection_log_persists_and_decodes_rag_stage_counts(tmp_path):
+    """Through the real store: record() stores the bounded counts and recent()/get()
+    decode them to a fixed-key int dict, with the rag_chunk_ids count derived from
+    the persisted id array (so it can never disagree with what was stored)."""
+    from observability.injection_log import InjectionLog
+
+    log = InjectionLog(str(tmp_path / "inj.db"))
+    log.record(
+        session_id="s-1", rag_chunk_ids=[10, 11, 12], approx_tokens=42,
+        effective_top_k=5, rag_retrieved=9, rag_trust_filtered=6, rag_final=3,
+    )
+    row = log.recent()[0]
+    assert row["rag_stage_counts"] == {
+        "effective_top_k": 5, "retrieved": 9, "trust_filtered": 6, "final": 3, "rag_chunk_ids": 3,
+    }
+    assert log.get(row["id"])["rag_stage_counts"] == row["rag_stage_counts"]
+
+
+def test_injection_log_migrates_legacy_db_and_decodes_defaults(tmp_path):
+    """A pre-#3259 DB (no rag_stage_counts column) is migrated in place on open;
+    its legacy rows read back the EXPLICIT defaults with their original content
+    intact, and a fresh write on the upgraded DB carries the new provenance."""
+    import sqlite3
+
+    from observability.injection_log import InjectionLog
+
+    p = tmp_path / "legacy.db"
+    db = sqlite3.connect(str(p))
+    db.execute(
+        "CREATE TABLE injections ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, session_id TEXT NOT NULL DEFAULT '', "
+        "digest_session_ids TEXT NOT NULL DEFAULT '[]', hot_chunk_ids TEXT NOT NULL DEFAULT '[]', "
+        "rag_chunk_ids TEXT NOT NULL DEFAULT '[]', approx_tokens INTEGER NOT NULL DEFAULT 0)"
+    )
+    db.execute(
+        "INSERT INTO injections (ts, session_id, rag_chunk_ids, approx_tokens) VALUES (?, ?, ?, ?)",
+        ("2026-01-01T00:00:00+00:00", "s-old", "[1, 2, 3]", 7),
+    )
+    db.commit()
+    db.close()
+
+    log = InjectionLog(str(p))  # opening runs the ALTER migration
+    legacy = log.recent(session_id="s-old")[0]
+    assert legacy["rag_stage_counts"] == {
+        "effective_top_k": 0, "retrieved": 0, "trust_filtered": 0, "final": 0, "rag_chunk_ids": 0,
+    }
+    assert legacy["rag_chunk_ids"] == [1, 2, 3]  # legacy content preserved
+    assert legacy["approx_tokens"] == 7
+
+    log.record(session_id="s-new", rag_chunk_ids=[4, 5], effective_top_k=5, rag_retrieved=8, rag_trust_filtered=5, rag_final=2)
+    fresh = log.recent(session_id="s-new")[0]
+    assert fresh["rag_stage_counts"] == {
+        "effective_top_k": 5, "retrieved": 8, "trust_filtered": 5, "final": 2, "rag_chunk_ids": 2,
+    }
+
+
+def test_injection_log_decodes_unparseable_stage_counts_to_defaults(tmp_path):
+    """A NULL, empty, or garbage blob decodes to the explicit defaults rather than
+    raising — a hand-edited or partially-written row stays readable."""
+    import sqlite3
+
+    from observability.injection_log import InjectionLog
+
+    log = InjectionLog(str(tmp_path / "inj.db"))
+    log.record(session_id="s", rag_chunk_ids=[1], effective_top_k=5, rag_final=1)
+    db = sqlite3.connect(log.path)
+    db.execute("UPDATE injections SET rag_stage_counts = 'not json' WHERE session_id = 's'")
+    db.commit()
+    db.close()
+    assert log.recent(session_id="s")[0]["rag_stage_counts"] == {
+        "effective_top_k": 0, "retrieved": 0, "trust_filtered": 0, "final": 0, "rag_chunk_ids": 0,
+    }
