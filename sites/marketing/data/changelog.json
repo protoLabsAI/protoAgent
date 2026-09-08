@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.161.0",
+    "date": "2026-09-08",
+    "changes": [
+      "A durable delegation ledger — the record of who handed what work to whom (#3378).",
+      "Written through one seam, wired to every dispatch funnel (#3378).",
+      "An unknown cost is stored as NULL, never as zero (#3378)."
+    ]
+  },
+  {
     "version": "v0.160.0",
     "date": "2026-09-08",
     "changes": [
