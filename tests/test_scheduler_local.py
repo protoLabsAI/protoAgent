@@ -34,9 +34,20 @@ def _make_scheduler(tmp_path: Path, agent: str = "gina-test", **kw) -> LocalSche
 
 
 class _FakeResponse:
-    def __init__(self, status_code: int = 200, text: str = ""):
+    def __init__(self, status_code: int = 200, text: str = "", payload: dict | None = None):
         self.status_code = status_code
         self.text = text
+        # A2A answers 200 for a turn that FAILED — the outcome is in the body (#3376),
+        # so the fire path reads this. Defaults to a completed task so every existing
+        # test keeps meaning "this fire succeeded".
+        self._payload = (
+            payload
+            if payload is not None
+            else {"result": {"status": {"state": "TASK_STATE_COMPLETED"}}}
+        )
+
+    def json(self):
+        return self._payload
 
 
 class _FakeClient:
@@ -1108,3 +1119,167 @@ class TestRenameDoesNotOrphanJobs:
         assert [j.prompt for j in renamed.list_jobs()] == ["weekly margin review"]
         # …and addressable, not merely listed: cancel filters on agent_name too.
         assert renamed.cancel_job(job.id) is True
+
+
+# ── Fire outcome + backoff (#3376) ──────────────────────────────────────────
+# A fire used to be judged on its HTTP status alone, but A2A answers 200 for a
+# turn that FAILED. A real job ran broken for six days logging "fired job …"
+# every time, and nothing anywhere disagreed.
+
+
+def _failed_body(text: str = "No module named 'observability.audit'") -> dict:
+    """The shape a genuinely failed turn comes back as — taken from a real
+    a2a-tasks row, not invented."""
+    return {
+        "result": {
+            "status": {
+                "state": "TASK_STATE_FAILED",
+                "message": {"role": "ROLE_AGENT", "parts": [{"text": f"**Error:** {text}"}]},
+            }
+        }
+    }
+
+
+class TestA2ATurnFailure:
+    def test_completed_task_is_success(self):
+        from scheduler.local import _a2a_turn_failure
+
+        assert _a2a_turn_failure({"result": {"status": {"state": "TASK_STATE_COMPLETED"}}}) == ""
+
+    def test_failed_task_reports_the_agents_own_error_text(self):
+        """"TASK_STATE_FAILED" is not actionable; the error inside it is."""
+        from scheduler.local import _a2a_turn_failure
+
+        assert "observability.audit" in _a2a_turn_failure(_failed_body())
+
+    def test_failed_task_without_a_message_falls_back_to_the_state(self):
+        from scheduler.local import _a2a_turn_failure
+
+        assert _a2a_turn_failure({"result": {"status": {"state": "TASK_STATE_FAILED"}}}) == "TASK_STATE_FAILED"
+
+    def test_jsonrpc_envelope_error_is_a_failure(self):
+        from scheduler.local import _a2a_turn_failure
+
+        assert "boom" in _a2a_turn_failure({"error": {"code": -32000, "message": "boom"}})
+
+    @pytest.mark.parametrize("body", [None, "", [], {}, {"result": "not-a-dict"}, {"result": {}}])
+    def test_unparseable_bodies_count_as_SUCCESS(self, body):
+        """This feeds a backoff. Guessing "failed" from an unfamiliar shape would
+        throttle healthy jobs, so anything we can't read is treated as fine."""
+        from scheduler.local import _a2a_turn_failure
+
+        assert _a2a_turn_failure(body) == ""
+
+
+class TestFireOutcomeTracking:
+    def _job(self, s: LocalScheduler, schedule: str = "0 14 * * *"):
+        return s.add_job(prompt="drift check", schedule=schedule)
+
+    def _row(self, s: LocalScheduler, job_id: str):
+        db = sqlite3.connect(str(s.path))
+        db.row_factory = sqlite3.Row
+        try:
+            return db.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        finally:
+            db.close()
+
+    @pytest.mark.asyncio
+    async def test_a_200_with_a_failed_task_is_recorded_as_a_failure(self, tmp_path, monkeypatch):
+        """THE regression: six broken runs were logged as successes."""
+        import httpx
+
+        s = _make_scheduler(tmp_path)
+        job = self._job(s)
+        monkeypatch.setattr(
+            httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200, payload=_failed_body()))
+        )
+
+        assert await s._fire(job) is True  # still DELIVERED — the POST worked
+        row = self._row(s, job.id)
+        assert row["consecutive_failures"] == 1
+        assert "observability.audit" in row["last_error"]
+
+    @pytest.mark.asyncio
+    async def test_success_resets_the_streak(self, tmp_path, monkeypatch):
+        """A job that recovers is immediately back on its normal cadence."""
+        import httpx
+
+        s = _make_scheduler(tmp_path)
+        job = self._job(s)
+        monkeypatch.setattr(
+            httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200, payload=_failed_body()))
+        )
+        await s._fire(job)
+        await s._fire(job)
+        assert self._row(s, job.id)["consecutive_failures"] == 2
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200)))
+        await s._fire(job)
+        row = self._row(s, job.id)
+        assert row["consecutive_failures"] == 0
+        assert row["last_error"] is None
+        assert row["last_ok"]
+
+    @pytest.mark.asyncio
+    async def test_backoff_pushes_the_next_fire_out_after_a_streak(self, tmp_path, monkeypatch):
+        """Past the threshold a broken job stops burning a whole turn every day."""
+        import httpx
+
+        from scheduler.local import BACKOFF_AFTER_FAILURES
+
+        s = _make_scheduler(tmp_path)
+        job = self._job(s, schedule="0 14 * * *")
+        monkeypatch.setattr(
+            httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200, payload=_failed_body()))
+        )
+
+        for _ in range(BACKOFF_AFTER_FAILURES - 1):
+            await s._fire(job)
+        before = self._row(s, job.id)["next_fire"]
+
+        await s._fire(job)  # crosses the threshold
+        after = self._row(s, job.id)["next_fire"]
+        assert parse_iso_to_utc(after) > parse_iso_to_utc(before), "the streak must delay the next fire"
+
+    @pytest.mark.asyncio
+    async def test_backoff_is_capped(self, tmp_path, monkeypatch):
+        """A long outage must not drift a daily job into firing once a year — and a
+        job that quietly stops retrying is its own kind of silent failure."""
+        import httpx
+
+        from scheduler.local import MAX_BACKOFF_SLOTS
+
+        s = _make_scheduler(tmp_path)
+        job = self._job(s, schedule="0 14 * * *")
+        monkeypatch.setattr(
+            httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200, payload=_failed_body()))
+        )
+
+        start = parse_iso_to_utc(self._row(s, job.id)["next_fire"])
+        for _ in range(25):  # far past the cap
+            job = s.get_job(job.id) or job
+            await s._fire(job)
+
+        gap = parse_iso_to_utc(self._row(s, job.id)["next_fire"]) - start
+        # Daily cron: the cap bounds any single backoff to MAX_BACKOFF_SLOTS days.
+        assert gap.days <= MAX_BACKOFF_SLOTS * 25, f"backoff ran away: {gap}"
+
+    @pytest.mark.asyncio
+    async def test_a_failing_job_is_never_disabled(self, tmp_path, monkeypatch):
+        """Backoff, not a circuit breaker: the failure that motivated this was a
+        transient backend outage, and silently switching off a job the operator
+        depends on is worse than a slow retry."""
+        import httpx
+
+        s = _make_scheduler(tmp_path)
+        job = self._job(s)
+        monkeypatch.setattr(
+            httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200, payload=_failed_body()))
+        )
+        for _ in range(10):
+            job = s.get_job(job.id) or job
+            await s._fire(job)
+
+        row = self._row(s, job.id)
+        assert row is not None, "the job must still exist"
+        assert bool(row["enabled"]) is True
