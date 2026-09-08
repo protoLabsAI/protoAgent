@@ -73,10 +73,12 @@ class AuditLogger:
         success: bool,
     ) -> None:
         trace_id = None
+        trust_tier = None
         try:
             from observability import tracing
 
             trace_id = tracing.current_trace_id() or None
+            trust_tier = tracing.current_trust_tier() or None
         except Exception:
             pass
 
@@ -91,6 +93,8 @@ class AuditLogger:
         }
         if trace_id:
             entry["trace_id"] = trace_id
+        if trust_tier:
+            entry["trust_tier"] = trust_tier
 
         path = self._ensure_path()
         if path is not None:

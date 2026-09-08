@@ -492,6 +492,42 @@ def _unauthorized(detail: str) -> JSONResponse:
     return JSONResponse({"detail": detail}, status_code=401)
 
 
+def _record_trust_tier_telemetry(request):
+    """Surface the ALREADY-classified trust tier as bounded telemetry (#1504).
+
+    Reads ONLY ``request.state.trust_tier`` — the operator/federation label dispatch
+    derived from the matched credential — and forwards it to structured request
+    telemetry. It never parses, reads, or logs credential material (no header, no token),
+    and it never raises into the request path. Returns a context reset token when
+    telemetry accepted the label; callers reset it after the downstream request finishes
+    so no tier leaks into later unclassified work.
+    """
+    try:
+        from observability import tracing
+
+        return tracing.set_trust_tier(getattr(request.state, "trust_tier", None))
+    except Exception:  # noqa: BLE001 — telemetry must never break auth
+        return None
+
+
+def _clear_trust_tier_telemetry(token) -> None:
+    """Undo ``_record_trust_tier_telemetry``'s contextvar set once the request finishes.
+
+    Its exact mirror: reset the telemetry trust-tier context so a classified tier can
+    never bleed into a later, unrelated request handled on the same context. Best-effort
+    and silent — telemetry cleanup, like the record side, must never surface as an
+    auth-path failure. ``None`` (nothing was recorded) is a no-op.
+    """
+    if token is None:
+        return
+    try:
+        from observability import tracing
+
+        tracing.reset_trust_tier(token)
+    except Exception:  # noqa: BLE001 — telemetry cleanup must not break auth
+        pass
+
+
 class A2AAuthMiddleware(BaseHTTPMiddleware):
     """Default-deny auth: everything except the public allowlist requires auth."""
 
@@ -564,7 +600,11 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
                 # member, which validates the token against ITS bearer (the fleet token, not the
                 # hub's that signed it), rejects the hub-signed token → 401 on every live stream.
                 request.state.trust_tier = "operator"
-                return await call_next(request)
+                _trust_tier_token = _record_trust_tier_telemetry(request)
+                try:
+                    return await call_next(request)
+                finally:
+                    _clear_trust_tier_telemetry(_trust_tier_token)
             # Fall through to the normal bearer/X-API-Key check below — a
             # server-to-server caller with an Authorization header still passes.
 
@@ -592,7 +632,15 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
             if origin is not None and origin.lower() not in allowed:
                 return JSONResponse({"detail": "Forbidden: origin not allowed"}, status_code=403)
 
-        return await call_next(request)
+        # Surface the ALREADY-decided trust tier to structured request telemetry for the
+        # span of the downstream handler only — recorded here, immediately before call_next,
+        # and always cleared after. The auth decision (including the Origin denial above) is
+        # untouched: a rejected request returns before this scope and records nothing.
+        _trust_tier_token = _record_trust_tier_telemetry(request)
+        try:
+            return await call_next(request)
+        finally:
+            _clear_trust_tier_telemetry(_trust_tier_token)
 
 
 def _credential_error() -> str:
