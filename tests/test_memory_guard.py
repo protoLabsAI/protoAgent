@@ -98,3 +98,39 @@ def test_config_knob_defaults_to_off() -> None:
     assert cfg.memory_ceiling_mb == 0
     assert cfg.memory_ceiling_exit is False
     assert MemoryCeiling(cfg.memory_ceiling_mb, exit_on_breach=cfg.memory_ceiling_exit).enabled is False
+
+
+# ── Config values arrive from YAML, so "anything at all" is the input domain ──
+# (#3373 review). Both knobs must fail SAFE: the ceiling disables, and the exit
+# flag stays off, rather than raising into the loop or arming a process kill.
+
+
+@pytest.mark.parametrize("bad", [float("inf"), float("-inf"), float("nan")])
+def test_non_finite_ceiling_disables_rather_than_raising(bad) -> None:
+    """int(float('inf')) raises OverflowError — which the guard must absorb."""
+    assert MemoryCeiling(bad).enabled is False
+
+
+@pytest.mark.parametrize("truthy_string", ["true", "True", " TRUE "])
+def test_quoted_true_is_honored(truthy_string) -> None:
+    """A quoted YAML bool is the one realistic mistake worth accepting."""
+    assert MemoryCeiling(100, exit_on_breach=truthy_string).exit_on_breach is True
+
+
+@pytest.mark.parametrize("falsey", ["false", "False", " false ", "", None, 0])
+def test_quoted_false_and_absent_stay_off(falsey) -> None:
+    """`bool("false")` is True — which would arm a process kill from a config that
+    plainly reads false. This is the whole reason the flag isn't parsed with bool()."""
+    assert MemoryCeiling(100, exit_on_breach=falsey).exit_on_breach is False
+
+
+@pytest.mark.parametrize("junk", ["yes", "1", "on", 1, 2.5, [], {"a": 1}, object()])
+def test_unrecognized_exit_values_fail_safe(junk) -> None:
+    """Anything not plainly a boolean leaves the process-killing switch OFF."""
+    assert MemoryCeiling(100, exit_on_breach=junk).exit_on_breach is False
+
+
+def test_a_breach_with_a_junk_exit_flag_only_warns() -> None:
+    """End to end: the fail-safe parse must actually keep os._exit out of reach."""
+    guard = MemoryCeiling(100, exit_on_breach="false")
+    assert guard.evaluate(500 * _MB)[0] == "warn"

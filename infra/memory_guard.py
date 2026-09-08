@@ -76,6 +76,32 @@ def read_rss_bytes() -> int | None:
     return None
 
 
+def _parse_exit_flag(value: object) -> bool:
+    """Strictly: does the operator want this process to exit on breach?
+
+    ``bool()`` is the wrong tool here. This value comes from YAML, where quoting
+    is easy to get wrong, and ``bool("false")`` is ``True`` — so a config that
+    plainly reads ``memory_ceiling_exit: "false"`` would start killing the
+    process. For a knob whose whole job is to end the process, an unrecognized
+    value has to fail safe rather than fail loud-and-armed.
+
+    Real booleans win. The one realistic mistake — a quoted ``"true"`` /
+    ``"false"`` — is honored. Everything else is off.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        token = value.strip().lower()
+        if token in {"true", "false"}:
+            return token == "true"
+    if value not in (None, "", False):
+        log.warning(
+            "[memory] ignoring runtime.memory_ceiling_exit=%r (not a boolean) — leaving exit-on-breach OFF",
+            value,
+        )
+    return False
+
+
 class MemoryCeiling:
     """Decides what a given RSS reading means. Never logs, never exits.
 
@@ -84,13 +110,15 @@ class MemoryCeiling:
     reported again.
     """
 
-    def __init__(self, ceiling_mb: int | float | None, *, exit_on_breach: bool = False) -> None:
+    def __init__(self, ceiling_mb: int | float | None, *, exit_on_breach: object = False) -> None:
         try:
             mb = int(ceiling_mb or 0)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
+            # OverflowError is float("inf"), which int() refuses. Both values arrive
+            # straight from YAML, so "anything at all" is the real input domain.
             mb = 0
         self.ceiling_bytes = max(0, mb) * _MB
-        self.exit_on_breach = bool(exit_on_breach)
+        self.exit_on_breach = _parse_exit_flag(exit_on_breach)
         self._breached = False
 
     @property

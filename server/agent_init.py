@@ -1030,20 +1030,27 @@ async def _memory_guard_loop() -> None:
     Exiting on breach is opt-in (``runtime.memory_ceiling_exit``) — see
     ``infra/memory_guard.py`` for why that isn't the default.
     """
-    from infra.memory_guard import MemoryCeiling, read_rss_bytes
+    from infra.memory_guard import EXIT_CODE, MemoryCeiling, read_rss_bytes
 
     await asyncio.sleep(30)  # let boot settle; a cold process is at its noisiest
-    guard: MemoryCeiling | None = None
+    guard = MemoryCeiling(0)
     while True:
         cfg = STATE.graph_config
-        ceiling_mb = getattr(cfg, "memory_ceiling_mb", 0) if cfg else 0
-        exit_on_breach = bool(getattr(cfg, "memory_ceiling_exit", False)) if cfg else False
-        # Rebuild on any config change so the breach latch resets with the knob.
-        if guard is None or guard.ceiling_bytes != int(ceiling_mb or 0) * 1024 * 1024 or guard.exit_on_breach != exit_on_breach:
-            guard = MemoryCeiling(ceiling_mb, exit_on_breach=exit_on_breach)
+        # Build a candidate from the live config and compare its NORMALIZED fields.
+        # Never coerce the raw YAML values here: `int()` raises on float("inf") and
+        # `bool("false")` is True — for a knob that ends the process, parsing has to
+        # happen in exactly one place, and that place is MemoryCeiling.
+        candidate = MemoryCeiling(
+            getattr(cfg, "memory_ceiling_mb", 0) if cfg else 0,
+            exit_on_breach=getattr(cfg, "memory_ceiling_exit", False) if cfg else False,
+        )
+        if (candidate.ceiling_bytes, candidate.exit_on_breach) != (guard.ceiling_bytes, guard.exit_on_breach):
+            guard = candidate  # config changed → adopt it, and the breach latch resets with it
         if guard.enabled:
             try:
-                action, message = guard.evaluate(read_rss_bytes())
+                # Off the event loop: the macOS reader shells out to `ps`, and this
+                # loop shares a thread with every request the server is serving.
+                action, message = guard.evaluate(await asyncio.to_thread(read_rss_bytes))
                 if action == "warn":
                     log.warning("%s", message)
                 elif action == "exit":
@@ -1051,8 +1058,6 @@ async def _memory_guard_loop() -> None:
                     # os._exit, not sys.exit: this runs on the event loop, where a
                     # SystemExit would be swallowed as a task exception and the
                     # process would sail past its own ceiling.
-                    from infra.memory_guard import EXIT_CODE
-
                     os._exit(EXIT_CODE)
             except Exception:  # noqa: BLE001 — the guard must never take down the loop it guards
                 log.exception("[memory] guard check failed")

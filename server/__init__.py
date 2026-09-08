@@ -838,6 +838,8 @@ def _main():
             STATE.watch_task.cancel()
         if STATE.plugin_autoupdate_task is not None:
             STATE.plugin_autoupdate_task.cancel()
+        if STATE.memory_guard_task is not None:
+            STATE.memory_guard_task.cancel()
         # Close the long-lived A2A push-notification client (created below in
         # _main) so its connection pool doesn't leak on shutdown/reload — matters
         # in the desktop-sidecar restart loop. Best-effort; NameError if boot
