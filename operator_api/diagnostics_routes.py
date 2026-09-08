@@ -1,4 +1,4 @@
-"""Member-local diagnostics reads — bounded logs and exact A2A task inspection (#3168).
+"""Member-local diagnostics reads — bounded logs, A2A session inventory, and task inspection.
 
 Built-in infrastructure rather than a plugin, because **every** member must serve the
 same contract: the console drawer (#3169) and the guarded PM tool (#3170) reach a local
@@ -20,8 +20,8 @@ credentials, so this is sensitive **operator** data:
 
 Failure containment. A member that is stopped, unreachable, or slow is the **proxy's**
 case and already resolved there (``graph/fleet/proxy.py`` → 409 / 502 / 504, never a
-500). What is left to this module is its own local failure modes — a nonsense ``lines``,
-an unknown task id, and a malformed store row — each of which returns a structured
+500). What is left to this module is its own local failure modes — nonsense limits,
+an unknown task id, and malformed store rows — each of which returns a structured
 non-500 body.
 """
 
@@ -44,6 +44,10 @@ _MAX_LINES = 1000
 _MAX_HISTORY = 50
 _MAX_ARTIFACTS = 20
 _MAX_TEXT_CHARS = 20_000
+_DEFAULT_SESSIONS = 50
+_MAX_SESSIONS = 200
+_MAX_SESSION_SCAN_ROWS = 1000
+_MAX_MALFORMED_ROWS = 20
 
 
 def _clamp_lines(lines: Any) -> tuple[int, str | None]:
@@ -64,6 +68,49 @@ def _clamp_lines(lines: Any) -> tuple[int, str | None]:
     if value > _MAX_LINES:
         return _MAX_LINES, f"lines={value} above maximum; using {_MAX_LINES}"
     return value, None
+
+
+def _clamp_sessions(limit: Any) -> tuple[int, str | None]:
+    """Coerce a caller's session inventory limit into range."""
+    if limit is None:
+        return _DEFAULT_SESSIONS, None
+    try:
+        value = int(limit)
+    except (TypeError, ValueError):
+        return _DEFAULT_SESSIONS, f"invalid limit={limit!r}; using {_DEFAULT_SESSIONS}"
+    if value < 1:
+        return 1, "limit below minimum; using 1"
+    if value > _MAX_SESSIONS:
+        return _MAX_SESSIONS, f"limit above maximum; using {_MAX_SESSIONS}"
+    return value, None
+
+
+def _iso(value: Any) -> Any:
+    return value.isoformat() if hasattr(value, "isoformat") else value
+
+
+def _normalized_state(state: Any) -> str | None:
+    if not isinstance(state, str):
+        return None
+    out = state.strip()
+    if not out:
+        return None
+    if out.startswith("TASK_STATE_"):
+        out = out.removeprefix("TASK_STATE_")
+    return out.lower().replace("-", "_")
+
+
+def _derived_session_status(state: Any) -> str:
+    normalized = _normalized_state(state)
+    if normalized in {"submitted", "working"}:
+        return "working"
+    if normalized == "input_required":
+        return "input_required"
+    if normalized == "auth_required":
+        return "auth_required"
+    if normalized == "failed":
+        return "failed"
+    return "idle"
 
 
 def _truncate(text: str, limit: int | None = None) -> tuple[str, bool]:
@@ -176,20 +223,60 @@ def _summarize_task(row: Any) -> dict[str, Any]:
             }
         )
 
-    last_updated = getattr(row, "last_updated", None)
-
     return {
         "task_id": getattr(row, "id", None),
         "context_id": getattr(row, "context_id", None),
         "state": state,
         "status_message": status_message,
-        "last_updated": last_updated.isoformat() if hasattr(last_updated, "isoformat") else last_updated,
+        "last_updated": _iso(getattr(row, "last_updated", None)),
         "history": trimmed_history,
         "artifacts": trimmed_artifacts,
         "accumulated_text": accumulated,
         "truncated": sorted(set(truncated)),
         "malformed": sorted(set(malformed)),
     }
+
+
+def _summarize_session(row: Any) -> tuple[dict[str, Any] | None, list[str]]:
+    """Shape one task row into the session inventory view.
+
+    This deliberately reads only the task-store columns needed for the inventory.
+    History, artifacts, status messages, metadata, checkpoints, and prompts are absent
+    from both the SQL projection and the response shape.
+    """
+    malformed: list[str] = []
+    task_id = getattr(row, "id", None)
+    context_id = getattr(row, "context_id", None)
+    status = getattr(row, "status", None)
+
+    if not isinstance(context_id, str) or not context_id.strip():
+        malformed.append("context_id")
+    if task_id is not None and not isinstance(task_id, str):
+        malformed.append("id")
+    if status is None:
+        status = {}
+    elif not isinstance(status, dict):
+        malformed.append("status")
+        status = {}
+
+    state = status.get("state") if isinstance(status, dict) else None
+    if state is not None and not isinstance(state, str):
+        malformed.append("status.state")
+        state = None
+
+    if "context_id" in malformed:
+        return None, sorted(set(malformed))
+
+    session = {
+        "session_id": context_id,
+        "context_id": context_id,
+        "latest_task_id": task_id,
+        "latest_task_state": state,
+        "last_activity": _iso(getattr(row, "last_updated", None)),
+        "status": _derived_session_status(state),
+        "malformed": sorted(set(malformed)),
+    }
+    return session, session["malformed"]
 
 
 def register_diagnostics_routes(app) -> None:
@@ -243,6 +330,93 @@ def register_diagnostics_routes(app) -> None:
         if note:
             payload["note"] = note
         return payload
+
+    @app.get("/api/diagnostics/sessions")
+    async def _api_diagnostics_sessions(limit: str | None = None):
+        """Newest-first A2A context/session inventory from durable task-store fields."""
+        from graph.middleware.redaction import redact
+        from runtime.state import STATE
+
+        response_limit, note = _clamp_sessions(limit)
+        empty = {
+            "sessions": [],
+            "returned": 0,
+            "limit": response_limit,
+            "truncated": False,
+            "scanned": 0,
+            "scan_limit": _MAX_SESSION_SCAN_ROWS,
+            "malformed_rows": [],
+            "malformed_count": 0,
+        }
+        if note:
+            empty["note"] = note
+
+        engine = getattr(STATE, "a2a_task_engine", None)
+        if engine is None:
+            body = dict(empty)
+            body["detail"] = "task store is not configured on this member"
+            return JSONResponse(body, status_code=503)
+
+        try:
+            from a2a.server.tasks.database_task_store import TaskModel
+            from sqlalchemy import select
+
+            stmt = (
+                select(TaskModel.id, TaskModel.context_id, TaskModel.status, TaskModel.last_updated)
+                .order_by(TaskModel.last_updated.desc(), TaskModel.id.desc())
+                .limit(_MAX_SESSION_SCAN_ROWS + 1)
+            )
+            async with engine.connect() as conn:
+                rows = (await conn.execute(stmt)).mappings().all()
+        except Exception:  # noqa: BLE001 — a store read failure is a diagnostics answer, not a 500
+            log.exception("[diagnostics] session inventory read failed")
+            body = dict(empty)
+            body["detail"] = "task store read failed"
+            return JSONResponse(body, status_code=503)
+
+        scan_truncated = len(rows) > _MAX_SESSION_SCAN_ROWS
+        rows = rows[:_MAX_SESSION_SCAN_ROWS]
+        if not rows:
+            body = dict(empty)
+            body["note"] = f"{note}; task store is empty" if note else "task store is empty"
+            return body
+
+        sessions: list[dict[str, Any]] = []
+        seen_contexts: set[str] = set()
+        malformed_rows: list[dict[str, Any]] = []
+        malformed_count = 0
+        unique_contexts = 0
+
+        for raw in rows:
+            row = _Row(dict(raw))
+            summary, malformed = _summarize_session(row)
+            if malformed:
+                malformed_count += 1
+                if len(malformed_rows) < _MAX_MALFORMED_ROWS:
+                    malformed_rows.append({"task_id": getattr(row, "id", None), "fields": malformed})
+            if summary is None:
+                continue
+            context_id = summary["context_id"]
+            if context_id in seen_contexts:
+                continue
+            seen_contexts.add(context_id)
+            unique_contexts += 1
+            if len(sessions) < response_limit:
+                sessions.append(summary)
+
+        body = {
+            "sessions": sessions,
+            "returned": len(sessions),
+            "limit": response_limit,
+            "truncated": scan_truncated or unique_contexts > response_limit,
+            "scanned": len(rows),
+            "scan_limit": _MAX_SESSION_SCAN_ROWS,
+            "malformed_rows": malformed_rows,
+            "malformed_count": malformed_count,
+        }
+        if note:
+            body["note"] = note
+        return redact(body)
 
     @app.get("/api/diagnostics/tasks/{task_id}")
     async def _api_diagnostics_task(task_id: str):

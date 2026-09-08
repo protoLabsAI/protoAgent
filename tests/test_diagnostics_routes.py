@@ -11,6 +11,7 @@ A stopped/unreachable/slow MEMBER is the proxy's containment case, not this modu
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -169,6 +170,170 @@ async def _insert(eng, **overrides):
         await conn.execute(insert(TaskModel.__table__).values(**row))
 
 
+# ── sessions ─────────────────────────────────────────────────────────────────
+
+
+async def test_sessions_returns_newest_first_context_summaries(engine):
+    await _insert(
+        engine,
+        id="task-old",
+        context_id="ctx-1",
+        last_updated=datetime(2026, 8, 28, 12, 0, tzinfo=timezone.utc),
+        status={"state": "TASK_STATE_COMPLETED", "message": {"parts": [{"kind": "text", "text": "old prompt"}]}},
+        history=[{"role": "user", "messageId": "m1", "parts": [{"kind": "text", "text": "raw question"}]}],
+        artifacts=[{"artifactId": "a1", "parts": [{"kind": "text", "text": "raw answer"}]}],
+    )
+    await _insert(
+        engine,
+        id="task-latest",
+        context_id="ctx-1",
+        last_updated=datetime(2026, 8, 28, 12, 5, tzinfo=timezone.utc),
+        status={"state": "TASK_STATE_COMPLETED", "message": {"parts": [{"kind": "text", "text": "latest prompt"}]}},
+    )
+    await _insert(
+        engine,
+        id="task-newest",
+        context_id="ctx-2",
+        last_updated=datetime(2026, 8, 28, 12, 10, tzinfo=timezone.utc),
+        status={"state": "TASK_STATE_COMPLETED"},
+    )
+
+    body = _client().get("/api/diagnostics/sessions").json()
+
+    assert body["returned"] == 2
+    assert body["truncated"] is False
+    assert [row["context_id"] for row in body["sessions"]] == ["ctx-2", "ctx-1"]
+    assert body["sessions"][0]["session_id"] == "ctx-2"
+    assert body["sessions"][0]["latest_task_id"] == "task-newest"
+    assert body["sessions"][0]["latest_task_state"] == "TASK_STATE_COMPLETED"
+    assert body["sessions"][0]["last_activity"].startswith("2026-08-28T12:10")
+    assert body["sessions"][0]["status"] == "idle"
+    assert body["sessions"][0]["malformed"] == []
+    assert body["sessions"][1]["latest_task_id"] == "task-latest"
+    assert "history" not in body["sessions"][1]
+    assert "artifacts" not in body["sessions"][1]
+    assert "status_message" not in body["sessions"][1]
+    assert "raw question" not in json.dumps(body)
+    assert "raw answer" not in json.dumps(body)
+    assert "latest prompt" not in json.dumps(body)
+
+
+async def test_sessions_empty_store_is_explicit(engine):
+    body = _client().get("/api/diagnostics/sessions").json()
+    assert body == {
+        "sessions": [],
+        "returned": 0,
+        "limit": 50,
+        "truncated": False,
+        "scanned": 0,
+        "scan_limit": 1000,
+        "malformed_rows": [],
+        "malformed_count": 0,
+        "note": "task store is empty",
+    }
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        ("TASK_STATE_WORKING", "working"),
+        ("TASK_STATE_SUBMITTED", "working"),
+        ("TASK_STATE_INPUT_REQUIRED", "input_required"),
+        ("TASK_STATE_AUTH_REQUIRED", "auth_required"),
+        ("TASK_STATE_FAILED", "failed"),
+    ],
+)
+async def test_sessions_derive_operational_statuses(engine, state, expected):
+    await _insert(engine, status={"state": state})
+    row = _client().get("/api/diagnostics/sessions").json()["sessions"][0]
+    assert row["latest_task_state"] == state
+    assert row["status"] == expected
+
+
+async def test_sessions_malformed_row_degrades_without_exposing_status_payload(engine):
+    await _insert(
+        engine,
+        id="task-bad",
+        context_id="ctx-bad",
+        status="raw status with prompt and token ghp_" + "a" * 36,
+        history=[{"role": "user", "parts": [{"kind": "text", "text": "raw prompt"}]}],
+    )
+
+    resp = _client().get("/api/diagnostics/sessions")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["sessions"]) == 1
+    row = body["sessions"][0]
+    assert row["session_id"] == "ctx-bad"
+    assert row["context_id"] == "ctx-bad"
+    assert row["latest_task_id"] == "task-bad"
+    assert row["latest_task_state"] is None
+    assert row["last_activity"].startswith("2026-08-28T12:00")
+    assert row["status"] == "idle"
+    assert row["malformed"] == ["status"]
+    assert body["malformed_rows"] == [{"task_id": "task-bad", "fields": ["status"]}]
+    assert body["malformed_count"] == 1
+    dumped = json.dumps(body)
+    assert "raw status" not in dumped
+    assert "raw prompt" not in dumped
+    assert "ghp_" + "a" * 36 not in dumped
+
+
+async def test_sessions_unavailable_store_is_503_not_500(monkeypatch):
+    import runtime.state as rs
+
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", None, raising=False)
+    resp = _client().get("/api/diagnostics/sessions")
+    assert resp.status_code == 503
+    assert resp.json() == {
+        "sessions": [],
+        "returned": 0,
+        "limit": 50,
+        "truncated": False,
+        "scanned": 0,
+        "scan_limit": 1000,
+        "malformed_rows": [],
+        "malformed_count": 0,
+        "detail": "task store is not configured on this member",
+    }
+
+
+async def test_sessions_read_failure_is_503_not_500(monkeypatch):
+    import runtime.state as rs
+
+    class BrokenEngine:
+        def connect(self):
+            raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", BrokenEngine(), raising=False)
+    resp = _client().get("/api/diagnostics/sessions")
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == "task store read failed"
+    assert resp.json()["sessions"] == []
+
+
+async def test_sessions_limit_is_bounded_and_truncation_is_explicit(engine, monkeypatch):
+    from operator_api import diagnostics_routes
+
+    monkeypatch.setattr(diagnostics_routes, "_MAX_SESSIONS", 2)
+    for i in range(4):
+        await _insert(
+            engine,
+            id=f"task-{i}",
+            context_id=f"ctx-{i}",
+            last_updated=datetime(2026, 8, 28, 12, i, tzinfo=timezone.utc),
+        )
+
+    body = _client().get("/api/diagnostics/sessions?limit=99").json()
+
+    assert body["limit"] == 2
+    assert body["returned"] == 2
+    assert body["truncated"] is True
+    assert "note" in body
+    assert [row["context_id"] for row in body["sessions"]] == ["ctx-3", "ctx-2"]
+
+
 async def test_task_lookup_returns_full_shape(engine):
     await _insert(engine)
     body = _client().get("/api/diagnostics/tasks/task-1").json()
@@ -298,8 +463,10 @@ def test_federation_credential_is_denied_diagnostics():
     app = Starlette(
         routes=[
             Route("/api/diagnostics/logs", _ok),
+            Route("/api/diagnostics/sessions", _ok),
             Route("/api/diagnostics/tasks/{task_id}", _ok),
             Route("/agents/{slug}/api/diagnostics/logs", _ok),
+            Route("/agents/{slug}/api/diagnostics/sessions", _ok),
         ]
     )
     app.add_middleware(auth.A2AAuthMiddleware)
@@ -307,10 +474,14 @@ def test_federation_credential_is_denied_diagnostics():
 
     fed = {"Authorization": "Bearer fed-secret"}
     assert c.get("/api/diagnostics/logs", headers=fed).status_code == 403
+    assert c.get("/api/diagnostics/sessions", headers=fed).status_code == 403
     assert c.get("/api/diagnostics/tasks/t1", headers=fed).status_code == 403
     assert c.get("/agents/slug/api/diagnostics/logs", headers=fed).status_code == 403
+    assert c.get("/agents/slug/api/diagnostics/sessions", headers=fed).status_code == 403
 
     op = {"Authorization": "Bearer op-secret"}
     assert c.get("/api/diagnostics/logs", headers=op).status_code == 200
+    assert c.get("/api/diagnostics/sessions", headers=op).status_code == 200
     # …and no credential at all is refused outright.
     assert c.get("/api/diagnostics/logs").status_code == 401
+    assert c.get("/api/diagnostics/sessions").status_code == 401
