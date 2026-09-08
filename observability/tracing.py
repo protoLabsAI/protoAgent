@@ -261,7 +261,7 @@ def current_trust_tier() -> str:
     return _trust_tier_ctx.get()
 
 
-def set_trust_tier(tier: str | None) -> None:
+def set_trust_tier(tier: str | None) -> contextvars.Token[str]:
     """Record the request's already-classified trust tier for structured telemetry (#1504).
 
     Fed the label ``a2a_impl.auth`` derived from the matched credential (via
@@ -270,7 +270,17 @@ def set_trust_tier(tier: str | None) -> None:
     collapses to ``""`` so an unexpected string can never become a telemetry dimension and an
     unclassified request keeps its prior (dimension-absent) behavior.
     """
-    _trust_tier_ctx.set(tier if tier in _TELEMETRY_TRUST_TIERS else "")
+    return _trust_tier_ctx.set(tier if tier in _TELEMETRY_TRUST_TIERS else "")
+
+
+def reset_trust_tier(token: contextvars.Token[str] | None) -> None:
+    """Reset the request trust-tier context after the authenticated request exits."""
+    if token is None:
+        return
+    try:
+        _trust_tier_ctx.reset(token)
+    except ValueError:
+        pass
 
 
 def current_trace_context() -> dict | None:
@@ -382,16 +392,18 @@ async def trace_session(
     try:
         trace_context = _caller_trace_context(metadata)
         # Surface the request's classified trust tier as a bounded, non-secret dimension
-        # (#1504). Absent (unclassified) → the key is omitted, so prior telemetry is
-        # unchanged; an explicit metadata value from the caller still wins.
+        # (#1504). The value comes only from the auth middleware's contextvar, not caller
+        # metadata; absent (unclassified) → the key is omitted, so prior telemetry is
+        # unchanged.
         tier = _trust_tier_ctx.get()
         tier_meta = {"trust_tier": tier} if tier else {}
+        safe_metadata = {k: v for k, v in (metadata or {}).items() if k != "trust_tier"}
         ctx = _langfuse.start_as_current_observation(
             trace_context=trace_context,
             name=name,
             metadata={
+                **safe_metadata,
                 **tier_meta,
-                **(metadata or {}),
                 "session_id": session_id,
                 "tags": [os.environ.get("AGENT_NAME", "protoagent")],
             },

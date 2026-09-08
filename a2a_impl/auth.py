@@ -492,22 +492,22 @@ def _unauthorized(detail: str) -> JSONResponse:
     return JSONResponse({"detail": detail}, status_code=401)
 
 
-def _record_trust_tier_telemetry(request) -> None:
-    """Surface the request's ALREADY-classified trust tier as a bounded telemetry dimension (#1504).
+def _record_trust_tier_telemetry(request):
+    """Surface the ALREADY-classified trust tier as bounded telemetry (#1504).
 
-    Reads ONLY ``request.state.trust_tier`` — the operator/federation label dispatch derived
-    from the matched credential — and forwards it to the structured request telemetry. It never
-    parses, reads, or logs credential material (no header, no token), and it never raises into
-    the request path: telemetry is best-effort, so a lookup failure is swallowed and the request
-    proceeds unchanged. An unclassified request (no tier set) is simply not surfaced, preserving
-    prior telemetry behavior.
+    Reads ONLY ``request.state.trust_tier`` — the operator/federation label dispatch
+    derived from the matched credential — and forwards it to structured request
+    telemetry. It never parses, reads, or logs credential material (no header, no token),
+    and it never raises into the request path. Returns a context reset token when
+    telemetry accepted the label; callers reset it after the downstream request finishes
+    so no tier leaks into later unclassified work.
     """
     try:
         from observability import tracing
 
-        tracing.set_trust_tier(getattr(request.state, "trust_tier", None))
+        return tracing.set_trust_tier(getattr(request.state, "trust_tier", None))
     except Exception:  # noqa: BLE001 — telemetry must never break auth
-        pass
+        return None
 
 
 class A2AAuthMiddleware(BaseHTTPMiddleware):
@@ -582,8 +582,16 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
                 # member, which validates the token against ITS bearer (the fleet token, not the
                 # hub's that signed it), rejects the hub-signed token → 401 on every live stream.
                 request.state.trust_tier = "operator"
-                _record_trust_tier_telemetry(request)
-                return await call_next(request)
+                _trust_tier_token = _record_trust_tier_telemetry(request)
+                try:
+                    return await call_next(request)
+                finally:
+                    try:
+                        from observability import tracing
+
+                        tracing.reset_trust_tier(_trust_tier_token)
+                    except Exception:  # noqa: BLE001 — telemetry cleanup must not break auth
+                        pass
             # Fall through to the normal bearer/X-API-Key check below — a
             # server-to-server caller with an Authorization header still passes.
 
@@ -600,19 +608,27 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
         if tier == "federation" and _requires_operator(path):
             return JSONResponse({"detail": "Forbidden: operator credential required"}, status_code=403)
         request.state.trust_tier = tier
-        _record_trust_tier_telemetry(request)
+        _trust_tier_token = _record_trust_tier_telemetry(request)
 
-        # Origin — enforced only when an allowlist is set AND an Origin is
-        # present. Origin is a browser-only header; server-to-server callers
-        # (the hub, the LocalScheduler loopback) send none and must not be
-        # rejected for it.
-        allowed = _ALLOWED_ORIGINS[0]
-        if allowed is not None:
-            origin = request.headers.get("Origin")
-            if origin is not None and origin.lower() not in allowed:
-                return JSONResponse({"detail": "Forbidden: origin not allowed"}, status_code=403)
+        try:
+            # Origin — enforced only when an allowlist is set AND an Origin is
+            # present. Origin is a browser-only header; server-to-server callers
+            # (the hub, the LocalScheduler loopback) send none and must not be
+            # rejected for it.
+            allowed = _ALLOWED_ORIGINS[0]
+            if allowed is not None:
+                origin = request.headers.get("Origin")
+                if origin is not None and origin.lower() not in allowed:
+                    return JSONResponse({"detail": "Forbidden: origin not allowed"}, status_code=403)
 
-        return await call_next(request)
+            return await call_next(request)
+        finally:
+            try:
+                from observability import tracing
+
+                tracing.reset_trust_tier(_trust_tier_token)
+            except Exception:  # noqa: BLE001 — telemetry cleanup must not break auth
+                pass
 
 
 def _credential_error() -> str:

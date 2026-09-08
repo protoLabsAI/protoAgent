@@ -10,6 +10,7 @@ Acceptance criteria: AC1–AC14 from the #870 spec.
 from __future__ import annotations
 
 import contextvars
+import json
 import time
 from types import SimpleNamespace
 
@@ -280,6 +281,15 @@ def test_sse_token_request_surfaces_operator_tier(monkeypatch):
     assert r.text == "operator"
 
 
+def test_trust_tier_context_resets_after_authenticated_request(monkeypatch):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token=_A_TOKEN, api_key="", allowed_origins_raw="")
+    r = _tier_echo_client().post("/api/config", headers={"Authorization": f"Bearer {_A_TOKEN}"})
+    assert r.status_code == 200
+    assert r.text == "operator"
+    assert tracing.current_trust_tier() == ""
+
+
 def _tier_calls(monkeypatch) -> list:
     """Capture every tier the auth middleware forwards to the telemetry sink."""
     calls: list = []
@@ -428,6 +438,24 @@ async def test_trace_session_carries_trust_tier_when_classified(monkeypatch):
     assert fake.calls[-1]["metadata"]["trust_tier"] == "federation"
 
 
+async def test_trace_session_trust_tier_ignores_caller_metadata(monkeypatch):
+    fake = _FakeLangfuse()
+    monkeypatch.setattr(tracing, "_langfuse", fake)
+    monkeypatch.setattr(tracing, "_enabled", True)
+
+    tracing.set_trust_tier("operator")
+    async with tracing.trace_session(
+        "sess-override",
+        name="a2a-stream",
+        metadata={"trust_tier": _FED_TOKEN, "caller": "peer"},
+    ):
+        pass
+    metadata = fake.calls[-1]["metadata"]
+    assert metadata["trust_tier"] == "operator"
+    assert metadata["caller"] == "peer"
+    assert _FED_TOKEN not in json.dumps(metadata)
+
+
 async def test_trace_session_omits_trust_tier_when_unclassified(monkeypatch):
     fake = _FakeLangfuse()
     monkeypatch.setattr(tracing, "_langfuse", fake)
@@ -437,6 +465,72 @@ async def test_trace_session_omits_trust_tier_when_unclassified(monkeypatch):
     async with tracing.trace_session("sess-2", name="a2a-stream"):
         pass
     assert "trust_tier" not in fake.calls[-1]["metadata"]
+
+
+async def test_trace_session_drops_caller_trust_tier_when_unclassified(monkeypatch):
+    fake = _FakeLangfuse()
+    monkeypatch.setattr(tracing, "_langfuse", fake)
+    monkeypatch.setattr(tracing, "_enabled", True)
+
+    tracing.set_trust_tier(None)
+    async with tracing.trace_session(
+        "sess-unclassified",
+        name="a2a-stream",
+        metadata={"trust_tier": _A_TOKEN},
+    ):
+        pass
+    metadata = fake.calls[-1]["metadata"]
+    assert "trust_tier" not in metadata
+    assert _A_TOKEN not in json.dumps(metadata)
+
+
+def test_request_audit_entries_carry_bounded_tier_without_tokens(tmp_path, monkeypatch):
+    from observability.audit import AuditLogger
+
+    logger = AuditLogger(path=tmp_path / "audit.jsonl")
+
+    def log_route(_request):
+        logger.log(
+            session_id="sess-audit",
+            tool="tool-a",
+            args={"input": "safe"},
+            result_summary="ok",
+            duration_ms=1,
+            success=True,
+        )
+        return PlainTextResponse("ok")
+
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(
+        bearer_token=_A_TOKEN, api_key="", allowed_origins_raw="", federation_token=_FED_TOKEN
+    )
+    app = Starlette(
+        routes=[
+            Route("/api/config", log_route, methods=["POST"]),
+            Route("/a2a", log_route, methods=["POST"]),
+            Route("/healthz", log_route, methods=["GET"]),
+        ]
+    )
+    app.add_middleware(auth.A2AAuthMiddleware)
+    c = TestClient(app)
+
+    assert (
+        c.post("/api/config", headers={"Authorization": f"Bearer {_A_TOKEN}"}).status_code
+        == 200
+    )
+    assert (
+        c.post("/a2a", headers={"Authorization": f"Bearer {_FED_TOKEN}"}).status_code
+        == 200
+    )
+    assert c.get("/healthz").status_code == 200
+
+    entries = logger.get_recent(3)
+    assert entries[0]["trust_tier"] == "operator"
+    assert entries[1]["trust_tier"] == "federation"
+    assert "trust_tier" not in entries[2]
+    dumped = json.dumps(entries)
+    assert _A_TOKEN not in dumped
+    assert _FED_TOKEN not in dumped
 
 
 def test_set_public_prefixes_rejects_core_route_prefix(monkeypatch):
