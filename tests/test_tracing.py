@@ -33,6 +33,8 @@ def _reload_tracing():
     import importlib.util
     from pathlib import Path
 
+    import observability
+
     if "tracing" in sys.modules:
         del sys.modules["observability.tracing"]
     real_path = Path(__file__).parents[1] / "observability" / "tracing.py"
@@ -40,7 +42,34 @@ def _reload_tracing():
     module = importlib.util.module_from_spec(spec)
     sys.modules["observability.tracing"] = module
     spec.loader.exec_module(module)
+    # Keep the package attribute in lock-step with sys.modules. `from observability
+    # import tracing` binds the attribute, while `import observability.tracing` and
+    # `mock.patch("observability.tracing.<attr>")` resolve via sys.modules — if the
+    # two diverge, a sibling test that patches an attribute patches one module object
+    # while the code under test resolves the other (protoAgent#176 — the exact hazard
+    # that breaks the audit-redaction suite's patch of tracing.trace_tool_call).
+    observability.tracing = module
     return module
+
+
+@pytest.fixture(autouse=True)
+def _restore_tracing_module():
+    """Each test here reloads a fresh tracing module (and may enable it with a fake
+    Langfuse client) into sys.modules. Snapshot the ORIGINAL module object up front
+    and put it back afterward — in BOTH sys.modules and the package attribute — so a
+    sibling test file that captured `from observability import tracing` at import time
+    keeps resolving the same, pristine (disabled) module (protoAgent#176)."""
+    import observability
+
+    orig_mod = sys.modules.get("observability.tracing")
+    orig_attr = getattr(observability, "tracing", None)
+    try:
+        yield
+    finally:
+        if orig_mod is not None:
+            sys.modules["observability.tracing"] = orig_mod
+        if orig_attr is not None:
+            observability.tracing = orig_attr
 
 
 def _enable_with_fake_client(tracing):
