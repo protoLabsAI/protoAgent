@@ -41,6 +41,7 @@ from server.chat import (
     compact_session,
     export_session,
     forget_delegate_conversations,
+    forget_delegate_conversations_for_session,
     fork_session,
     publish_preview,
     publish_session,
@@ -382,14 +383,13 @@ def register_chat_routes(app, ui: str) -> None:
         # Same argument as the session-summary purge below: leaving the pointer alive
         # would let the next address rejoin the deleted conversation on the peer, so the
         # history the dialog promised to remove comes back in the participant's voice.
-        # Both retired prefixes, plus whatever the installed thread-id resolver answers
-        # for this session (#571) — that last one is the template default's `a2a:` id
-        # again, and for a fork with a custom resolver it is a best effort: a resolver that
-        # scopes threads off REQUEST METADATA cannot be replayed from a DELETE route, which
-        # carries none. (rewind/fork forget the metadata-resolved id, because they have it.)
-        forget_delegate_conversations(
-            f"a2a:{session_id}", f"chat:{session_id}", _resolve_thread_id(None, session_id)
-        )
+        # Keep the old key-scoped cleanup for the two built-in keys DELETE retires, and
+        # add the origin-scoped cleanup for rooms whose resolved key came from request
+        # metadata. DELETE carries no request metadata, so it must not replay the resolver
+        # to guess another key; answered room dispatches record the originating session
+        # explicitly beside the arbitrary resolved key (#3362).
+        forget_delegate_conversations(f"a2a:{session_id}", f"chat:{session_id}")
+        forget_delegate_conversations_for_session(session_id)
         # The session-summary memory (#2482) — without this, a digest of the
         # deleted conversation kept riding <prior_sessions> into future prompts,
         # violating the delete dialog's "its history will be removed".

@@ -966,18 +966,70 @@ def test_the_session_scoped_core_seam_is_duck_typed_and_swallowing(monkeypatch):
     assert forget_delegate_conversations_for_session("", "s1") == 1  # blanks skipped, not counted
 
 
-def test_the_delete_route_still_uses_key_scoped_forget_unchanged():
-    """This preparatory slice adds the origin-scoped plumbing but does NOT rewire DELETE —
-    the route still reaches ``forget_delegate_conversations`` (key-scoped), so its behaviour
-    is byte-for-byte what it was. The origin-scoped seam ships alongside, wired by a
-    following slice."""
-    import inspect
+async def test_delete_route_forgets_metadata_resolved_room_contexts(wire, monkeypatch):
+    """r2/r3/r4: a DELETE route has only the chat session id, not the request metadata a
+    registered resolver needs. Address one peer from two sessions whose room keys come from
+    metadata, then delete one session through the actual route: the deleted session's
+    remembered A2A context is gone by recorded origin, the other survives, and the resolver
+    is never replayed with empty metadata."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
 
-    from operator_api import chat_routes
+    import operator_api.chat_routes as cr
+    import runtime.state as rs
+    from server.chat import _at_delegate_exchange
 
-    src = inspect.getsource(chat_routes)
-    assert "forget_delegate_conversations(" in src
-    assert "forget_delegate_conversations_for_session(" not in src
+    class _RoomGraph:
+        def __init__(self):
+            self.messages: dict[str, list] = {}
+
+        async def aget_state(self, config):
+            tid = config["configurable"]["thread_id"]
+            return type("_Snapshot", (), {"values": {"messages": list(self.messages.get(tid, []))}})()
+
+        async def aupdate_state(self, config, values, as_node=None):
+            tid = config["configurable"]["thread_id"]
+            self.messages.setdefault(tid, []).extend(values.get("messages") or [])
+
+    resolver_calls: list[tuple[dict, str]] = []
+
+    def _resolver(metadata, session_id):
+        resolver_calls.append((dict(metadata or {}), session_id))
+        project = (metadata or {}).get("project")
+        if not project:
+            raise RuntimeError("project metadata required")
+        return f"project:{project}:{session_id}"
+
+    async def _fake_retire(_thread_id, *, harvest=False, cascade=True):
+        return None
+
+    wire(_always(context_id="ctx-room"))
+    monkeypatch.setattr(cr, "_retire_thread", _fake_retire)
+    monkeypatch.setattr(rs.STATE, "delegate_registry", _registry(), raising=False)
+    monkeypatch.setattr(rs.STATE, "graph", _RoomGraph(), raising=False)
+    monkeypatch.setattr(rs.STATE, "graph_config", None, raising=False)
+    monkeypatch.setattr(rs.STATE, "knowledge_store", None, raising=False)
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", None, raising=False)
+    monkeypatch.setattr(rs.STATE, "thread_id_resolver", _resolver, raising=False)
+
+    assert (await _at_delegate_exchange("@peer hi", "s-red", {"project": "red"}))[0] == "ok"
+    assert (await _at_delegate_exchange("@peer hi", "s-blue", {"project": "blue"}))[0] == "ok"
+    conversations.remember("a2a:s-red", "peer", PEER_URL, "ctx-template", session_id="")
+    assert conversations.remembered("project:red:s-red", "peer", PEER_URL) == "ctx-room"
+    assert conversations.remembered("project:blue:s-blue", "peer", PEER_URL) == "ctx-room"
+    assert conversations.remembered("a2a:s-red", "peer", PEER_URL) == "ctx-template"
+
+    app = FastAPI()
+    cr.register_chat_routes(app, ui="none")
+    assert TestClient(app).delete("/api/chat/sessions/s-red").json()["deleted"] is True
+
+    assert conversations.remembered("project:red:s-red", "peer", PEER_URL) == ""
+    assert conversations.remembered("project:blue:s-blue", "peer", PEER_URL) == "ctx-room"
+    assert conversations.remembered("a2a:s-red", "peer", PEER_URL) == ""
+    assert resolver_calls == [
+        ({"project": "red"}, "s-red"),
+        ({"project": "blue"}, "s-blue"),
+    ]
 
 
 # ── the real dispatch path actually POPULATES the origin session (#3362a.1) ────
@@ -1002,11 +1054,9 @@ async def test_a_real_dispatch_records_the_origin_session_passed_explicitly(wire
     assert conversations.remembered("resolved-thread-key", "peer", PEER_URL) == "ctx-room"
 
 
-async def test_the_recording_session_block_supplies_the_origin_to_a_real_dispatch(wire):
-    """The room path can't pass ``origin_session_id`` through host-free ``graph/mention_op``,
-    so the chat-room boundary binds it with ``recording_session`` and ``dispatch`` reads it
-    off the ContextVar. Proven here without the room stack by dispatching inside the block —
-    exactly what ``server.chat`` and the ``delegate_to`` helper do around theirs."""
+async def test_the_recording_session_block_still_supplies_the_origin_to_a_real_dispatch(wire):
+    """The ambient room binding remains a compatibility fallback for callers that reach
+    the registry without the new explicit ``origin_session_id`` argument."""
     wire(_always(context_id="ctx-room"))
     reg = _registry()
 
@@ -1083,14 +1133,14 @@ async def test_forget_by_session_after_a_real_dispatch_drops_arbitrary_resolver_
 
 
 def test_both_room_boundaries_bind_the_origin_session():
-    """The mechanism only helps if the real dispatch boundaries actually open the block.
-    Neither can be reached here without the whole room stack, so pin it at the source (the
-    way the delete-route slice boundary is pinned above): the ``delegate_to`` room helper
-    binds via ``origin_session`` and the ``@`` path via the registry's ``recording_session``."""
+    """The mechanism only helps if the real room dispatch boundaries provide the session:
+    the ``@`` path passes it explicitly through host-free ``graph/mention_op`` and the
+    ``delegate_to`` room helper keeps its ambient fallback."""
     import inspect
 
+    from graph.mention_op import dispatch_into_room, run_mention
     from plugins.delegates import _dispatch_into_room
-    from server.chat import _at_delegate_exchange
 
+    assert "origin_session_id=session_id" in inspect.getsource(run_mention)
+    assert 'dispatch_kwargs["origin_session_id"] = origin_session_id' in inspect.getsource(dispatch_into_room)
     assert "origin_session(session_id)" in inspect.getsource(_dispatch_into_room)
-    assert "recording_session" in inspect.getsource(_at_delegate_exchange)

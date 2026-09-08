@@ -1034,7 +1034,7 @@ class A2aAdapter(Adapter):
             via ``DelegateRegistry.dispatch``), stored BESIDE the resolved key so a delete
             that knows only the session can forget this context later (#3362). ``""`` when the
             caller didn't know it — the entry is still keyed and remembered, just unreachable
-            by ``forget_by_session``."""
+            by the route's session-scoped cleanup."""
             if not resume_task_id:
                 conversations.remember(
                     d.conversation_key,
