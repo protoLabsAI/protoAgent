@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.162.0",
+    "date": "2026-09-09",
+    "changes": [
+      "orgChart now shows the work that actually happened, not only the work that could (#3386).",
+      "Subagents appear on the chart for the first time (#3386).",
+      "A detached delegation is now closed out when it lands (#3386).",
+      "A read API for the ledger (#3386).",
+      "Plugin setup gaps can carry a bounded, declarative remediation action (#3389).",
+      "Interjecting mid-turn no longer renders the agent's answer twice (#3387).",
+      "Expanding a tool chip mid-turn no longer collapses the moment the turn finishes (#3390)."
+    ]
+  },
+  {
     "version": "v0.161.0",
     "date": "2026-09-08",
     "changes": [
