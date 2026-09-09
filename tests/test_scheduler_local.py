@@ -1295,3 +1295,122 @@ class TestFireOutcomeTracking:
         row = self._row(s, job.id)
         assert row is not None, "the job must still exist"
         assert bool(row["enabled"]) is True
+
+
+class TestBackoffFromPostClaimNextFire:
+    """#3381: a cron row is advanced to its next slot at CLAIM time (``_tick`` calls
+    ``_reschedule_or_delete`` before firing), so the failure backoff must base its delay
+    on the PERSISTED post-claim ``next_fire`` — not the stale pre-claim snapshot the fire
+    carries. Basing it on the snapshot made the first eligible backoff a no-op (it
+    recomputed the slot the claim had already scheduled) and every later delay one slot
+    short, so the deferred-slot count never matched the log.
+
+    These cases drive the production sequence claim → reschedule → fire → settle against a
+    persisted DB row. The ``#3376`` backoff tests above call ``_fire(job)`` in isolation,
+    which skips the claim-time advance and so can never surface this timing bug.
+    """
+
+    HOURLY = "0 * * * *"  # top of every hour ⇒ one slot == one hour
+
+    def _row(self, s: LocalScheduler, job_id: str):
+        db = sqlite3.connect(str(s.path))
+        db.row_factory = sqlite3.Row
+        try:
+            return db.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        finally:
+            db.close()
+
+    def _pin_next_fire(self, s: LocalScheduler, job_id: str, when: datetime) -> None:
+        db = sqlite3.connect(str(s.path))
+        try:
+            db.execute("UPDATE jobs SET next_fire = ? WHERE id = ?", (when.isoformat(), job_id))
+            db.commit()
+        finally:
+            db.close()
+
+    async def _claim_fire_settle(self, s: LocalScheduler, now: datetime) -> None:
+        """One production tick at a fixed ``now``: claim due jobs, advance cron rows at
+        claim time, then fire + settle — exactly what ``_tick`` does, minus the poll
+        loop's wall clock and off-loop task spawn (awaited inline so the settle lands)."""
+        for job in s._claim_due_jobs(now):
+            s._inflight_ids.add(job.id)
+            cron = is_cron(job.schedule)
+            if cron:
+                s._reschedule_or_delete(job, fired_at=now)
+            await s._fire_and_settle(job, cron)
+
+    @pytest.mark.asyncio
+    async def test_streak_defers_the_exact_logged_slots_beyond_the_claimed_slot(self, tmp_path, monkeypatch):
+        """The 3rd consecutive failure (first past ``BACKOFF_AFTER_FAILURES``) must defer
+        ONE slot beyond the already-claimed next slot, and the 4th must defer TWO."""
+        import httpx
+
+        from scheduler.local import BACKOFF_AFTER_FAILURES
+
+        # The hour-by-hour timeline below assumes the 3rd fire is the first to back off.
+        assert BACKOFF_AFTER_FAILURES == 3
+
+        s = _make_scheduler(tmp_path)
+        s.add_job("hourly sweep", self.HOURLY, job_id="hb")
+        # Pin the row to a known slot so every claim timestamp below is deterministic.
+        self._pin_next_fire(s, "hb", datetime(2026, 1, 1, 0, 0, tzinfo=UTC))
+        monkeypatch.setattr(
+            httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200, payload=_failed_body()))
+        )
+
+        # Rounds 1 & 2 fail below the threshold — no backoff, so each claim just rolls the
+        # row to the next hourly slot (00:00 → 01:00 → 02:00).
+        await self._claim_fire_settle(s, datetime(2026, 1, 1, 0, 0, tzinfo=UTC))
+        await self._claim_fire_settle(s, datetime(2026, 1, 1, 1, 0, tzinfo=UTC))
+        assert self._row(s, "hb")["consecutive_failures"] == 2
+        assert self._row(s, "hb")["next_fire"] == "2026-01-01T02:00:00+00:00"
+
+        # Round 3: claim at 02:00 advances the row to 03:00 (the already-claimed next slot),
+        # then the fire fails with streak 3 ⇒ 1 backoff slot. The delay must land BEYOND
+        # 03:00, at 04:00 — the stale-base bug recomputed 03:00 and deferred nothing.
+        await self._claim_fire_settle(s, datetime(2026, 1, 1, 2, 0, tzinfo=UTC))
+        row = self._row(s, "hb")
+        assert row["consecutive_failures"] == 3
+        assert row["next_fire"] == "2026-01-01T04:00:00+00:00", "1-slot backoff must defer past the claimed slot"
+
+        # Round 4: claim at 04:00 advances to 05:00, fire fails with streak 4 ⇒ 2 backoff
+        # slots. Deferring the EXACT logged count past the claimed slot lands at 07:00.
+        await self._claim_fire_settle(s, datetime(2026, 1, 1, 4, 0, tzinfo=UTC))
+        row = self._row(s, "hb")
+        assert row["consecutive_failures"] == 4
+        assert row["next_fire"] == "2026-01-01T07:00:00+00:00", "2-slot backoff must defer exactly two slots"
+
+    @pytest.mark.asyncio
+    async def test_successful_cron_claim_advances_exactly_one_slot(self, tmp_path, monkeypatch):
+        """A cron fire that SUCCEEDS still lands on the ordinary next slot — the backoff
+        path (and its post-claim base) must not touch a healthy job's cadence."""
+        import httpx
+
+        s = _make_scheduler(tmp_path)
+        s.add_job("hourly sweep", self.HOURLY, job_id="ok")
+        self._pin_next_fire(s, "ok", datetime(2026, 1, 1, 0, 0, tzinfo=UTC))
+        # Default payload is a COMPLETED task ⇒ a successful turn.
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200)))
+
+        await self._claim_fire_settle(s, datetime(2026, 1, 1, 0, 0, tzinfo=UTC))
+
+        row = self._row(s, "ok")
+        assert row["consecutive_failures"] == 0
+        assert row["next_fire"] == "2026-01-01T01:00:00+00:00"  # one slot, no backoff
+
+    @pytest.mark.asyncio
+    async def test_one_shot_deleted_through_the_claim_path(self, tmp_path, monkeypatch):
+        """One-shot behaviour is untouched by the cron backoff fix: a delivered one-shot
+        is deleted through the same claim → fire → settle path — no reschedule, no
+        backoff (the ``is_cron`` guard keeps the post-claim base out of the one-shot
+        path entirely)."""
+        import httpx
+
+        s = _make_scheduler(tmp_path)
+        past = datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
+        s.add_job("one and done", past.isoformat(), job_id="os")
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200)))
+
+        await self._claim_fire_settle(s, datetime(2026, 1, 1, 0, 0, tzinfo=UTC))
+
+        assert self._row(s, "os") is None  # fired once, removed

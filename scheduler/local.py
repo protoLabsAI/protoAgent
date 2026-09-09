@@ -709,12 +709,16 @@ class LocalScheduler:
         Success resets the streak — a job that recovers is immediately back on its
         normal cadence, and the operator surface stops flagging it.
 
-        Failure increments it and, past ``BACKOFF_AFTER_FAILURES``, pushes the next
-        fire out by skipping scheduled slots (doubling, capped at
-        ``MAX_BACKOFF_SLOTS``). The job is never disabled: the failure that prompted
-        this was a transient backend outage, and silently switching off a job the
-        operator depends on is worse than a slow retry. Backoff stops the daily burn
-        of a whole turn on a broken job while keeping it self-healing.
+        Failure increments it and, past ``BACKOFF_AFTER_FAILURES``, defers the next
+        fire past the already-scheduled next slot by skipping scheduled slots
+        (doubling, capped at ``MAX_BACKOFF_SLOTS``). The base is the PERSISTED
+        post-claim ``next_fire`` (#3381): a cron row is rolled forward one slot at
+        claim time, so basing the delay on the stale in-memory pre-claim snapshot
+        made the first eligible backoff a no-op and every later delay one slot short.
+        The job is never disabled: the failure that prompted this was a transient
+        backend outage, and silently switching off a job the operator depends on is
+        worse than a slow retry. Backoff stops the daily burn of a whole turn on a
+        broken job while keeping it self-healing.
 
         Best-effort — scheduling bookkeeping must never break a fire.
         """
@@ -732,13 +736,21 @@ class LocalScheduler:
                 (failure, job.id),
             )
             db.commit()
-            row = db.execute("SELECT consecutive_failures FROM jobs WHERE id = ?", (job.id,)).fetchone()
-            streak = int(row[0]) if row else 1
+            row = db.execute("SELECT consecutive_failures, next_fire FROM jobs WHERE id = ?", (job.id,)).fetchone()
+            streak = int(row["consecutive_failures"]) if row else 1
             if streak < BACKOFF_AFTER_FAILURES or not is_cron(job.schedule):
                 return
             slots = min(2 ** (streak - BACKOFF_AFTER_FAILURES), MAX_BACKOFF_SLOTS)
+            # Base the backoff on the PERSISTED post-claim next_fire, not the stale
+            # pre-claim `job.next_fire` this fire carries (#3381). `_tick` already rolled
+            # the row forward one slot via `_reschedule_or_delete` at claim time, so
+            # computing from the in-memory pre-claim value made the first eligible backoff
+            # a no-op (it recomputed the very slot the claim had already scheduled) and
+            # every later delay one slot short. Fall back to the snapshot only if the row
+            # somehow carries no next_fire.
+            base = (row["next_fire"] if row else None) or job.next_fire
             try:
-                nxt = datetime.fromisoformat(job.next_fire)
+                nxt = datetime.fromisoformat(base)
             except ValueError:
                 return
             for _ in range(slots):
