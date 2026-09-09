@@ -185,6 +185,17 @@ def build_onboard_tools(config) -> list:
         # (1) allow globs — same fnmatch semantics as plugins.sources.allow. Empty
         #     allowlist matches nothing, so onboarding is opt-in by declaration.
         allow = list(getattr(config, "onboarding_allow", []) or [])
+        if not allow:
+            # The stock state now that `enabled` defaults on (#3396), so this is the
+            # FIRST thing most operators see. "does not match any allowed source
+            # pattern ()" — an empty paren — describes the state without naming the
+            # remedy; say what to set and where, since being unconfigured is normal
+            # here rather than a mistake.
+            return (
+                "Refused: no allowed clone sources are configured, so nothing can be "
+                "onboarded — add a pattern under Settings ▸ Capabilities ▸ Project "
+                "onboarding ▸ Allowed sources (e.g. github.com/your-org/*)."
+            )
         if not any(fnmatch.fnmatch(normalized, pat) for pat in allow):
             return (
                 f"Refused: {normalized} does not match any allowed source pattern "

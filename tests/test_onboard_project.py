@@ -114,7 +114,10 @@ async def test_default_config_refuses_every_source(mocks):
     refusal names the (empty) pattern set rather than failing silently."""
     out = await _tool(LangGraphConfig()).ainvoke({"github_repo": "acme/widgets"})
     assert out.startswith("Refused:")
-    assert "allowed source pattern" in out
+    # Names the remedy, not just the state: being unconfigured is the NORMAL stock
+    # condition now that `enabled` defaults on, so the refusal has to teach.
+    assert "no allowed clone sources are configured" in out
+    assert "Allowed sources" in out
     assert mocks.clone_calls == [] and mocks.apply_calls == []
 
 
