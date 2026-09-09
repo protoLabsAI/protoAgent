@@ -367,11 +367,14 @@ room:
   # the only workaround, which fragments the conversation.
   catchup_max_messages: 40
   catchup_max_chars: 8000
-  # Serial round-robin rounds one address may take. 1 = each addressee answers once
-  # (the shipped behavior). Above 1 the addressed set re-runs in the same order so
-  # participants can answer each other; a round where everyone passes settles the room
-  # early, and this cap is the backstop.
-  max_rounds: 1
+  # Serial round-robin rounds one address may take. 3 (the default) lets the addressed
+  # set answer each other: it re-runs in the same order so each participant sees what
+  # the others just said. A round where everyone passes settles the room early, and this
+  # cap is the backstop — which means a cast with nothing more to say still costs ONE
+  # EXTRA round to discover that, on every multi-addressee address. Set 1 for a single
+  # pass (each addressee answers you once and never each other). A lone addressee runs
+  # one round however high this is set.
+  max_rounds: 3
 
 # Persona — the agent's own SOUL.md. `self_edit_enabled` (OFF by default) gives the
 # LEAD agent the `edit_soul` tool so it can rewrite SECTIONS of its own persona
