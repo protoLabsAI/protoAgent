@@ -4,6 +4,7 @@ to the A2A layer / console (generalizing `ask_human`)."""
 
 from __future__ import annotations
 
+from a2a_impl.executor import _hitl_prompt
 import server
 from tools.lg_tools import DEFERRED_BASE_TOOL_NAMES, get_all_tools
 
@@ -394,3 +395,63 @@ async def test_answered_interrupt_does_not_resurface(monkeypatch):
     cfg = {"configurable": {"thread_id": "t"}}
     assert await chat_mod._pending_interrupt(cfg) == ("bbb", "second")
     assert await chat_mod._resume_payload(cfg, "us-east-1") == {"bbb": "us-east-1"}
+
+# ── #3414: the pause text must be answerable on its own ──────────────────────────────
+#
+# Every DELEGATE CALLER reads the TEXT part of an input-required pause — a peer that parks
+# bubbles the question back to whoever called it, and that caller has no hitl-v1 parser. So
+# this string is the entire question as far as an agent chain is concerned. It used to be
+# `question or title`, so a form or approval (neither carries `question`) arrived as a bare
+# title: observed live, a delegate parked on a form and its caller got only "protoContent
+# readiness gate" — no fields, no options, nothing to answer.
+
+
+
+def test_a_plain_ask_still_uses_its_question():
+    assert _hitl_prompt({"question": "Staging or production?"}) == "Staging or production?"
+
+
+def test_an_approval_carries_the_action_being_approved():
+    out = _hitl_prompt({"kind": "approval", "title": "Run migration", "detail": "alembic upgrade head"})
+    assert "Run migration" in out and "alembic upgrade head" in out
+
+
+def test_a_form_renders_its_fields_choices_and_which_are_required():
+    out = _hitl_prompt(
+        {
+            "kind": "form",
+            "title": "protoContent readiness gate",
+            "description": "Confirm the release can proceed.",
+            "steps": [
+                {
+                    "title": "Gate",
+                    "schema": {
+                        "type": "object",
+                        "required": ["decision"],
+                        "properties": {
+                            "decision": {"title": "Proceed?", "enum": ["ship", "hold"]},
+                            "note": {"type": "string"},
+                        },
+                    },
+                }
+            ],
+        }
+    )
+    # The title alone is what the bug delivered — everything else here is the fix.
+    assert "protoContent readiness gate" in out
+    assert "Confirm the release can proceed." in out
+    assert "decision" in out and "Proceed?" in out
+    assert "ship" in out and "hold" in out
+    assert "required" in out
+    assert "note" in out
+
+
+def test_a_malformed_step_is_skipped_rather_than_raising():
+    """A pause must never fail because its schema is odd — the caller still gets the title."""
+    out = _hitl_prompt({"title": "Something", "steps": ["not-a-dict", {"schema": "also-not"}, {}]})
+    assert out.startswith("Something")
+
+
+def test_an_empty_payload_still_says_something():
+    assert _hitl_prompt({}) == "Input required."
+    assert _hitl_prompt(None) == "Input required."

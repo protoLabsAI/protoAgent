@@ -56,6 +56,11 @@ logger = logging.getLogger(__name__)
 # with the same ``data_part`` wire primitive as the fleet extensions, so it
 # rides the 1.0 envelope identically — it's just not on the shared card.
 HITL_MIME = "application/vnd.protolabs.hitl-v1+json"
+# Bounds on the rendered form prompt (#3414). A pause must never turn into a wall of
+# schema, and the delegate caller truncates what it forwards anyway.
+_HITL_MAX_FORM_STEPS = 5
+_HITL_MAX_FORM_FIELDS = 12
+_HITL_MAX_FORM_CHOICES = 8
 # Streamed scratch_pad reasoning ("thinking") — carried on WORKING status frames as
 # a DataPart, distinct from the answer artifact, so the console can show a
 # collapsible reasoning view. Plain consumers ignore it.
@@ -289,11 +294,80 @@ def _ext_data_part(emit_dict: dict[str, Any]) -> Part:
 
 def _hitl_prompt(payload: Any) -> str:
     """A human-readable prompt for an ``input-required`` pause, for consumers
-    that don't parse the hitl-v1 DataPart. Forms/approvals fall back to their
-    title; a plain ask uses its question."""
-    if isinstance(payload, dict):
-        return str(payload.get("question") or payload.get("title") or "Input required.")
-    return str(payload) if payload is not None else "Input required."
+    that don't parse the hitl-v1 DataPart.
+
+    That set includes every DELEGATE CALLER: a peer that parks bubbles the pause back
+    to whoever called it (``plugins/delegates/adapters.py``), and the caller reads the
+    TEXT part — it has no hitl-v1 parser. So this string is the whole question as far
+    as an agent chain is concerned, and it has to be answerable on its own.
+
+    It used to be ``question or title``, which meant a form or approval — neither of
+    which carries ``question`` — reached the caller as a bare TITLE with the substance
+    left behind in the DataPart (#3414). Observed live: a delegate parked on a form and
+    its caller received only "protoContent readiness gate", with no fields, no options
+    and nothing to answer. A plain ``ask_human`` has ``question``, so it worked, which
+    is why the gap read as intermittent.
+
+    Now every kind renders what a human (or a calling agent) needs to reply: the ask's
+    question, an approval's action, a form's fields with their choices and which are
+    required."""
+    if not isinstance(payload, dict):
+        return str(payload) if payload is not None else "Input required."
+    question = str(payload.get("question") or "").strip()
+    detail = str(payload.get("detail") or "").strip()
+    if question:
+        # A plain ask (and an approval that also phrased one) — the detail is the
+        # command or action being approved, which the answer turns on.
+        return f"{question}\n\n{detail}" if detail else question
+    lines: list[str] = []
+    title = str(payload.get("title") or "").strip()
+    description = str(payload.get("description") or "").strip()
+    if title:
+        lines.append(title)
+    if description:
+        lines.append(description)
+    if detail:
+        lines.append(detail)
+    lines.extend(_hitl_field_lines(payload.get("steps")))
+    return "\n\n".join(lines) if lines else "Input required."
+
+
+def _hitl_field_lines(steps: Any) -> list[str]:
+    """One readable line per form field: name, label, whether it is required, and the
+    allowed values when the schema constrains them.
+
+    Rendered from the JSON Schema the form is built from, so a caller answering a
+    delegate's form knows what to send back without a schema parser of its own. Bounded
+    and defensive — a malformed step is skipped rather than raising into a pause."""
+    out: list[str] = []
+    if not isinstance(steps, list):
+        return out
+    for step in steps[:_HITL_MAX_FORM_STEPS]:
+        if not isinstance(step, dict):
+            continue
+        schema = step.get("schema")
+        if not isinstance(schema, dict):
+            continue
+        properties = schema.get("properties")
+        if not isinstance(properties, dict):
+            continue
+        required = schema.get("required")
+        required_names = set(required) if isinstance(required, list) else set()
+        step_title = str(step.get("title") or "").strip()
+        if step_title:
+            out.append(step_title)
+        for name, spec in list(properties.items())[:_HITL_MAX_FORM_FIELDS]:
+            if not isinstance(spec, dict):
+                continue
+            label = str(spec.get("title") or name).strip()
+            bits = [f"- {name}: {label}" if label != name else f"- {name}"]
+            choices = spec.get("enum")
+            if isinstance(choices, list) and choices:
+                bits.append("one of " + ", ".join(str(c) for c in choices[:_HITL_MAX_FORM_CHOICES]))
+            if name in required_names:
+                bits.append("required")
+            out.append(" — ".join(bits))
+    return out
 
 
 class ProtoAgentExecutor(AgentExecutor):
