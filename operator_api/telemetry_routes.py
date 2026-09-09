@@ -355,6 +355,35 @@ def register_telemetry_routes(app) -> None:
             "tracing_enabled": _tracing_enabled(),
         }
 
+    # --- delegation ledger (who handed what work to whom) ------------------------------
+    # Sits beside telemetry deliberately: telemetry answers "how much did this agent
+    # spend", the ledger answers "who asked whom to do what, and how did it go". Neither
+    # can answer the other's question — the turns table has no actor column and no edge.
+
+    @app.get("/api/ledger")
+    async def _api_ledger(limit: int = 100, session: str = ""):
+        """Recent delegation edges, newest first; optionally one originating session."""
+        store = getattr(STATE, "ledger_store", None)
+        if store is None:
+            return {"enabled": False, "edges": []}
+        return {
+            "enabled": True,
+            "edges": store.recent(limit=min(max(1, limit), 1000), session_id=session.strip()),
+        }
+
+    @app.get("/api/ledger/edges")
+    async def _api_ledger_edges(days: int | None = None):
+        """Edges aggregated per target — the shape a graph draws.
+
+        ``cost_usd`` sums only rows that HAVE a cost and ``priced`` says how many those
+        were, so a caller can tell "cheap" from "mostly unmeasured" instead of reading a
+        partial sum as a total.
+        """
+        store = getattr(STATE, "ledger_store", None)
+        if store is None:
+            return {"enabled": False, "edges": []}
+        return {"enabled": True, "edges": store.edges(since_days=days)}
+
     @app.get("/api/telemetry/export")
     async def _api_telemetry_export(since: str | None = None):
         """Download every recorded turn as CSV, streamed in chunks from a

@@ -279,6 +279,93 @@ def _targets(dlist, *, owner: str, via: str = "delegate", cfg: dict | None = Non
     return out
 
 
+def _ledger_edges() -> list[dict]:
+    """Aggregated delegation edges from this instance's ledger — what work ACTUALLY
+    flowed, as opposed to what the roster says could.
+
+    Read defensively and lazily: an older host has no ledger store, and the chart must
+    still draw the capability graph it always drew rather than failing shut.
+    """
+    try:
+        from runtime.state import STATE
+
+        store = getattr(STATE, "ledger_store", None)
+        if store is None:
+            return []
+        return store.edges()
+    except Exception:  # noqa: BLE001 — the overlay is additive; never break the chart
+        log.debug("[orgchart] ledger unavailable", exc_info=True)
+        return []
+
+
+def _work_index(rows: list[dict]) -> dict[tuple[str, str], dict]:
+    """``(to_kind, to_name)`` → work stats, normalized for matching against node names."""
+    out: dict[tuple[str, str], dict] = {}
+    for r in rows:
+        kind = str(r.get("to_kind") or "").lower()
+        name = str(r.get("to_name") or "").strip().lower()
+        if not kind or not name:
+            continue
+        out[(kind, name)] = {
+            "dispatches": int(r.get("dispatches") or 0),
+            "ok": int(r.get("ok") or 0),
+            "failed": int(r.get("failed") or 0),
+            "cancelled": int(r.get("cancelled") or 0),
+            # Sums only PRICED rows; `priced` says how many those were, so the view can
+            # tell "cheap" from "mostly unmeasured" instead of reading a partial as a total.
+            "cost_usd": r.get("cost_usd"),
+            "priced": int(r.get("priced") or 0),
+            "duration_ms": int(r.get("duration_ms") or 0),
+            "last_at": r.get("last_at"),
+        }
+    return out
+
+
+def _apply_work(nodes: dict[str, dict], edges: list[dict], self_base: str, rows: list[dict]) -> None:
+    """Overlay real delegation volume onto the capability graph, and add the subagent
+    nodes the graph has never had.
+
+    Two things this makes visible that the capability graph alone cannot:
+
+    - A delegate that is configured but has never been used, next to one used constantly —
+      the difference between a wiring diagram and a record.
+    - A delegate failing every dispatch while its health dot stays green, because a probe
+      answers "can I reach it?" and a dispatch answers "did the work go through?".
+
+    Subagents are drawn from the LEDGER, never from config, because a subagent definition
+    is a job title rather than a worker — a node per definition would populate the chart
+    with roles nobody has ever delegated to. For many agents this is the whole picture:
+    an agent whose delegation is all in-process shows an empty chart without it.
+    """
+    index = _work_index(rows)
+    for node in nodes.values():
+        key = (str(node.get("kind") or "").lower(), str(node.get("name") or "").strip().lower())
+        # a2a peers are drawn with kind "agent"/"self"; the ledger calls them "a2a".
+        work = index.get(key) or index.get(("a2a", key[1]))
+        if work:
+            node["work"] = work
+
+    for (kind, name), work in index.items():
+        if kind != "subagent":
+            continue
+        nid = f"subagent:{name}"
+        if nid in nodes:
+            continue
+        nodes[nid] = {
+            "id": nid,
+            "name": name,
+            "role": "subagent",
+            # In-process: it runs inside its owner, so there is nothing to probe and
+            # "up" would be a claim about a thing that has no independent liveness.
+            "up": None,
+            "version": "",
+            "kind": "subagent",
+            "url": "",
+            "work": work,
+        }
+        edges.append({"from": self_base, "to": nid, "kind": "task"})
+
+
 def _make_client(cfg: dict) -> httpx.AsyncClient:
     # No verify=False: OS/private-CA trust is handled once at boot via truststore
     # (see tests/test_os_trust_store.py — fail closed on genuinely untrusted certs).
@@ -464,6 +551,9 @@ async def _build(cfg: dict) -> dict:
                 for b, pl in zip(crawlable, peer_lists)
                 if isinstance(pl, list) and pl
             ]
+
+    # Overlay what actually happened on top of what is merely possible (the ledger).
+    _apply_work(nodes, edges, self_base, _ledger_edges())
 
     return {
         "self": self_base,

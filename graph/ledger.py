@@ -104,6 +104,33 @@ def record_delegation(
         return None
 
 
+def settle_delegation(
+    task_id: str,
+    *,
+    outcome: str,
+    duration_ms: int | None = None,
+    error: str = "",
+    cost_usd: float | None = None,
+) -> bool:
+    """Close out an edge recorded at dispatch. Never raises.
+
+    Detached work — a background subagent job — is recorded when it is handed off, so
+    in-flight delegations are visible, and closed out here when it lands. Without this
+    every background edge reads ``ok`` with a zero duration forever, which is a claim
+    about an outcome nobody observed.
+    """
+    store = _store()
+    if store is None:
+        return False
+    try:
+        return store.settle(
+            task_id, outcome=outcome, duration_ms=duration_ms, error=error, cost_usd=cost_usd
+        )
+    except Exception:  # noqa: BLE001 — settling must never break a job's completion
+        log.exception("[ledger] settle_delegation failed")
+        return False
+
+
 @contextmanager
 def dispatch(
     *,

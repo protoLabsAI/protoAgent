@@ -183,6 +183,59 @@ class LedgerStore:
         finally:
             db.close()
 
+    def settle(
+        self,
+        task_id: str,
+        *,
+        outcome: str,
+        duration_ms: int | None = None,
+        error: str = "",
+        cost_usd: float | None = None,
+    ) -> bool:
+        """Update an edge that was recorded at DISPATCH once its work finishes.
+
+        A detached delegation has to be written twice: once when it is handed off, so
+        "what is this fleet doing right now" has an answer while the work is still in
+        flight, and again when it lands, so the edge reflects what actually happened
+        rather than only that it started. Recording just the first leaves every
+        background edge permanently reading ``ok`` with a zero duration; recording just
+        the second means in-flight work is invisible.
+
+        Idempotent-safe: only edges still marked ``ok`` with no duration are updated, so
+        a redundant settle (``mark_complete`` is itself idempotent, and both the manager
+        and the A2A terminal hook call it) cannot overwrite a real outcome with a later
+        no-op one.
+
+        Returns True if a row was updated.
+        """
+        if not task_id:
+            return False
+        sets = ["outcome = :outcome"]
+        args: dict[str, object] = {"task_id": task_id, "outcome": outcome}
+        if duration_ms is not None:
+            sets.append("duration_ms = :duration_ms")
+            args["duration_ms"] = int(duration_ms)
+        if error:
+            sets.append("error = :error")
+            args["error"] = _clip(error, _ERROR_LIMIT)
+        if cost_usd is not None:
+            sets.append("cost_usd = :cost_usd")
+            args["cost_usd"] = float(cost_usd)
+        db = self._connect()
+        try:
+            cur = db.execute(
+                f"UPDATE delegations SET {', '.join(sets)} "
+                "WHERE task_id = :task_id AND outcome = 'ok' AND duration_ms = 0",
+                args,
+            )
+            db.commit()
+            return int(cur.rowcount or 0) > 0
+        except sqlite3.Error:
+            log.exception("[ledger] settle failed")
+            return False
+        finally:
+            db.close()
+
     def recent(self, limit: int = 100, *, session_id: str = "") -> list[dict]:
         """Newest edges first, optionally scoped to one originating session."""
         limit = max(1, min(int(limit), 1000))
