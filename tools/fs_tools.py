@@ -26,6 +26,7 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any
@@ -197,6 +198,34 @@ def _platform_shell_argv(command: str, shell: str = "default", *, windows: bool 
         [exe, "-NoProfile", "-NonInteractive", "-EncodedCommand", _encoded_powershell(command)],
         f"{exe} -NoProfile -NonInteractive -EncodedCommand <the command above, UTF-16LE Base64>",
     )
+
+
+# ── in-place edits are serialised per file (#3400) ───────────────────────────────────
+# `edit_file` is a read-modify-write, and the harness runs independent tool calls in
+# PARALLEL. Two edits to one file both read the ORIGINAL text, each applies its own
+# replacement to that snapshot, and the second write wins — silently discarding the
+# first while BOTH return "Edited". The uniqueness and not-found guards don't help:
+# they ran against a snapshot that was still current when checked. Non-overlapping
+# edits are the worst case, because they are exactly what a model expects to be safe
+# to parallelise; the reported incident ended with the agent telling its operator a
+# claim had been removed from a CV while it was still in the file.
+#
+# Keyed by resolved path, so edits to DIFFERENT files still run concurrently. The
+# guarantee is per-process: another process (an editor, a coder in a worktree) writing
+# the same file is unchanged by this, and unchanged from today.
+_EDIT_LOCKS: dict[str, threading.Lock] = {}
+_EDIT_LOCKS_GUARD = threading.Lock()
+
+
+def _edit_lock(target: Path) -> threading.Lock:
+    """The lock guarding in-place edits of ``target``. Created on first use and kept —
+    a Lock is tiny, and an agent's edited-file set is bounded by the work it does."""
+    key = str(target)
+    with _EDIT_LOCKS_GUARD:
+        lock = _EDIT_LOCKS.get(key)
+        if lock is None:
+            lock = _EDIT_LOCKS[key] = threading.Lock()
+        return lock
 
 
 @dataclass
@@ -813,21 +842,25 @@ def build_fs_tools(config) -> list:
             return f"Error: project {project!r} is read-only (write:false)."
         if not target.is_file():
             return f"Error: no such file: {path}"
-        text = _read_text_verbatim(target)
-        needle, replacement = old, new
-        if needle not in text and "\r\n" in text:
-            # A CRLF file and an LF needle (what a model almost always sends). Match in the
-            # file's own convention rather than normalizing the file, so a one-line edit
-            # doesn't rewrite every line ending in it.
-            needle, replacement = _to_crlf(old), _to_crlf(new)
-        if needle not in text:
-            return f"Error: `old` not found in {path}."
-        if text.count(needle) > 1:
-            return f"Error: `old` is not unique in {path} ({text.count(needle)} matches) — add context."
-        try:
-            _write_text_verbatim(target, text.replace(needle, replacement, 1))
-        except OSError as exc:
-            return f"Error: cannot write {path}: {exc}"
+        # Read→check→write is ONE critical section (#3400): a concurrent edit that lands
+        # between the read and the write would be silently overwritten, and both calls
+        # would report success.
+        with _edit_lock(target):
+            text = _read_text_verbatim(target)
+            needle, replacement = old, new
+            if needle not in text and "\r\n" in text:
+                # A CRLF file and an LF needle (what a model almost always sends). Match in the
+                # file's own convention rather than normalizing the file, so a one-line edit
+                # doesn't rewrite every line ending in it.
+                needle, replacement = _to_crlf(old), _to_crlf(new)
+            if needle not in text:
+                return f"Error: `old` not found in {path}."
+            if text.count(needle) > 1:
+                return f"Error: `old` is not unique in {path} ({text.count(needle)} matches) — add context."
+            try:
+                _write_text_verbatim(target, text.replace(needle, replacement, 1))
+            except OSError as exc:
+                return f"Error: cannot write {path}: {exc}"
         return f"Edited {path}."
 
     @tool

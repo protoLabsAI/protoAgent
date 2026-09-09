@@ -45,6 +45,7 @@ def _save_nudge(art_id: str) -> str:
 
 
 @tool
+@_store.serialized
 def save_file_artifact(path: str, title: str = "", artifact_id: str = "") -> str:
     """Save a GENERATED FILE (a .docx / .xlsx / .pptx / .pdf / image / text file you already
     wrote to disk) into the Artifact panel as a VERSIONED download artifact — so the file gets
@@ -133,6 +134,7 @@ def save_file_artifact(path: str, title: str = "", artifact_id: str = "") -> str
 
 
 @tool
+@_store.serialized
 def show_artifact(kind: str, code: str, title: str = "") -> str:
     """CREATE a new generative-UI artifact in the console's Artifact panel.
 
@@ -189,6 +191,7 @@ def show_artifact(kind: str, code: str, title: str = "") -> str:
 
 
 @tool
+@_store.serialized
 def update_artifact(old_string: str, new_string: str, artifact_id: str = "") -> str:
     """Make a TARGETED edit to an existing artifact: replace ``old_string`` with ``new_string``
     in its current source, creating a new version. ``old_string`` must match the current source
@@ -222,6 +225,7 @@ def update_artifact(old_string: str, new_string: str, artifact_id: str = "") -> 
 
 
 @tool
+@_store.serialized
 def rewrite_artifact(code: str, title: str = "", artifact_id: str = "") -> str:
     """Replace an artifact's ENTIRE source with ``code``, creating a new version (the kind is
     kept). Use this for a large change where a targeted ``update_artifact`` would be awkward;
@@ -317,6 +321,7 @@ def check_artifact(artifact_id: str = "") -> str:
 
 
 @tool
+@_store.serialized
 def delete_artifact(artifact_id: str) -> str:
     """Delete an artifact (all its versions) from the panel — for cleanup. The user can also
     delete from the panel's trash button. Pass the ``artifact_id`` (see ``list_artifacts``)."""

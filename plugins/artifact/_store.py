@@ -7,11 +7,13 @@ the main process, so the two only share state through disk.
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import os
 import secrets
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -121,6 +123,46 @@ def _migrate_legacy(it: dict) -> dict:
         "created": ts,
         "updated": ts,
     }
+
+
+# ── store mutations are serialised (#3401) ───────────────────────────────────────────
+# Every mutating path is read-whole-store → change → write-whole-store, and the harness
+# runs independent tool calls in PARALLEL. Two updates to one artifact both read the same
+# snapshot, each appends version N+1 to its own copy, and the second whole-store write
+# overwrites the first — losing an edit AND its version while both report success. Two
+# writes reporting the SAME new version is the tell (observed live: both said "version 2").
+#
+# `_write_store` is already atomic at the file level (tempfile + os.replace), so nothing is
+# ever torn; what was missing is atomicity ACROSS the read and the write. Reentrant because
+# a mutating path may call another helper that takes it.
+_MUTATION_LOCK = threading.RLock()
+
+
+def serialized(fn):
+    """Run ``fn`` holding the store-mutation lock — for any path that reads the store,
+    changes it, and writes it back. Read-only paths don't need it."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _MUTATION_LOCK:
+            return fn(*args, **kwargs)
+
+    return wrapper
+
+
+def serialized_async(fn):
+    """``serialized`` for the panel's async route handlers, which mutate the same store
+    and can race a tool call. Safe to hold a threading lock across these particular
+    bodies because they contain NO awaits — the work is synchronous file I/O, so the
+    lock is never held across a yield to the event loop. Keep it that way: an ``await``
+    added inside one of these would make this hold the lock across a suspension."""
+
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        with _MUTATION_LOCK:
+            return await fn(*args, **kwargs)
+
+    return wrapper
 
 
 def _read_store() -> dict:
