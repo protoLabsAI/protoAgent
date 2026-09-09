@@ -391,6 +391,99 @@ async def test_runtime_status_carries_plugin_setup_gaps(monkeypatch):
         setup_gaps.reset()
 
 
+async def test_runtime_status_publishes_structured_setup_gaps(monkeypatch):
+    """Beside the legacy `warnings[]` strings, runtime status carries a typed list of
+    the active setup gaps — plugin id, key, display label, message, and the already-
+    validated declarative actions — in the store's stable (plugin, key) order."""
+    from graph.plugins import setup_gaps
+
+    setup_gaps.reset()
+    try:
+        setup_gaps.report(
+            "project_board",
+            "br",
+            "beads CLI 'br' not found on PATH",
+            label="Project Board",
+            action={"kind": "plugin_config", "label": "Open Project Board settings", "fields": ["br_path"]},
+        )
+        setup_gaps.report("acme", "gh", "gh is not authenticated", label="Acme")
+        status = await ch._operator_runtime_status()
+
+        gaps = status["setup_gaps"]
+        # Stable (plugin, key) ordering derives from the store — "acme" < "project_board".
+        assert [(g["plugin"], g["key"]) for g in gaps] == [("acme", "gh"), ("project_board", "br")]
+
+        board = next(g for g in gaps if g["plugin"] == "project_board")
+        assert board["label"] == "Project Board"
+        assert board["message"] == "beads CLI 'br' not found on PATH"
+        # The action is exposed exactly as the host validated it — `plugin_config` is
+        # scoped to the reporting plugin, so `target` is the plugin id.
+        assert board["actions"] == [
+            {
+                "kind": "plugin_config",
+                "target": "project_board",
+                "label": "Open Project Board settings",
+                "fields": ["br_path"],
+            }
+        ]
+        # A gap with no action carries no `actions` key (faithful pass-through).
+        acme = next(g for g in gaps if g["plugin"] == "acme")
+        assert "actions" not in acme
+
+        # Both projections agree on the same active gaps in the same read.
+        assert "Project Board: beads CLI 'br' not found on PATH" in status["warnings"]
+        assert "Acme: gh is not authenticated" in status["warnings"]
+    finally:
+        setup_gaps.reset()
+
+
+async def test_runtime_status_setup_gaps_empty_when_none(monkeypatch):
+    """No gaps → the structured field is present and empty, never absent/None."""
+    from graph.plugins import setup_gaps
+
+    setup_gaps.reset()
+    status = await ch._operator_runtime_status()
+    assert status["setup_gaps"] == []
+
+
+async def test_runtime_status_setup_gaps_clear_retain_unload_reflected(monkeypatch):
+    """Clearing a gap, retaining across a reload, and unloading a plugin each drop the
+    affected gaps from BOTH the structured list and the legacy warnings on the next read."""
+    from graph.plugins import setup_gaps
+
+    setup_gaps.reset()
+    try:
+        setup_gaps.report("project_board", "br", "install br", label="Project Board")
+        setup_gaps.report("project_board", "delegate", "add a coder delegate", label="Project Board")
+        setup_gaps.report("goner", "g", "will be uninstalled", label="Goner")
+        status = await ch._operator_runtime_status()
+        assert {(g["plugin"], g["key"]) for g in status["setup_gaps"]} == {
+            ("project_board", "br"),
+            ("project_board", "delegate"),
+            ("goner", "g"),
+        }
+
+        # Clear one gap (message=None) → gone from both projections; the sibling remains.
+        setup_gaps.report("project_board", "br", None)
+        status = await ch._operator_runtime_status()
+        assert ("project_board", "br") not in {(g["plugin"], g["key"]) for g in status["setup_gaps"]}
+        assert not [w for w in status["warnings"] if "install br" in w]
+
+        # Retain across a reload → a plugin no longer present is dropped from both.
+        setup_gaps.retain({"project_board"})
+        status = await ch._operator_runtime_status()
+        assert "goner" not in {g["plugin"] for g in status["setup_gaps"]}
+        assert not [w for w in status["warnings"] if w.startswith("Goner:")]
+
+        # Unload the plugin → its remaining gap disappears from both projections.
+        setup_gaps.clear_plugin("project_board")
+        status = await ch._operator_runtime_status()
+        assert status["setup_gaps"] == []
+        assert not [w for w in status["warnings"] if w.startswith("Project Board:")]
+    finally:
+        setup_gaps.reset()
+
+
 async def test_runtime_status_warns_when_self_improvement_has_no_scheduler(monkeypatch):
     from graph.config import LangGraphConfig
     from runtime.state import STATE

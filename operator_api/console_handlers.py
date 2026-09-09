@@ -123,13 +123,22 @@ async def _operator_runtime_status():
     # enabled but can't do its job — no `br` binary, no coder delegate, gh not
     # authenticated — says so HERE, where the operator looks, instead of only in
     # agent.log. Live + self-clearing: the plugin clears its gap when it recovers.
+    structured_gaps: list[dict] = []
     try:
         from graph.plugins import setup_gaps as _setup_gaps
 
         warnings.extend(_setup_gaps.warnings())
+        # bd-ai7x: publish the SAME active gaps as a typed list BESIDE the legacy
+        # string `warnings[]` — each record carries the plugin id, gap key, display
+        # label, operator-facing message, and the already-validated declarative
+        # actions, in the store's stable (plugin, key) order. `warnings[]` stays the
+        # legacy projection indefinitely; this field is purely additive. `active()`
+        # already returns a defensive copy, so it's safe to embed as-is, and it's
+        # `[]` (never absent) when there are no gaps or the seam is missing.
+        structured_gaps = _setup_gaps.active()
     except Exception:  # noqa: BLE001 — status must never raise
         pass
-    return _build_operator_status(
+    status = _build_operator_status(
         config=STATE.graph_config,
         setup_complete=_operator_setup_complete(),
         graph_loaded=STATE.graph is not None,
@@ -156,6 +165,10 @@ async def _operator_runtime_status():
         # with setup complete — the console offers reconnect instead of an error.
         graph_auth_error=getattr(STATE, "graph_auth_error", None),
     )
+    # Structured setup-gap projection (bd-ai7x) — additive; `warnings[]` above is
+    # untouched. Present in both the pre-setup (config is None) and full status shapes.
+    status["setup_gaps"] = structured_gaps
+    return status
 
 
 def _operator_subagent_list():
