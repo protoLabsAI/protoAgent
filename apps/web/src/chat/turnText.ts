@@ -198,30 +198,50 @@ export function settleTurnBubbles(messages: ChatMessage[], assistantId: string):
     .filter((_, index) => index !== tail);
 }
 
-/** One-time repair of transcripts persisted before this fix.
+/** One-time repair of transcripts persisted BEFORE this fix.
  *
  *  A split turn whose continuation was handed the whole canonical answer shows the
- *  earlier bubble's prose a second time, and nothing heals it: the duplicate is in
- *  `localStorage`, `dedupeMessages` only collapses colliding IDS (the split mints
- *  two on purpose), and boot hydration skips a session that already has messages.
+ *  earlier half's prose a second time, and nothing heals it: the duplicate is in
+ *  `localStorage`, `dedupeMessages` only collapses colliding IDS (the split mints two
+ *  on purpose), and boot hydration skips a session that already has messages.
  *
- *  The signature is exact rather than heuristic — two bubbles of the SAME turn where
- *  the later one's text begins with the whole of the earlier one's — so the repair
- *  is the same distribution the live path now does: the earlier bubble keeps its
- *  prose, the later one keeps only what followed. Applied at load, message statuses
- *  untouched. */
+ *  This groups by `taskId`, which `turnBubbleIndexes` deliberately refuses to do — so
+ *  be clear about why the two differ rather than reading one as a violation of the
+ *  other. They answer different questions:
+ *
+ *  - `turnBubbleIndexes` decides where to WRITE new canonical text. Reaching across a
+ *    turn boundary there would overwrite an unrelated turn's good text, so it needs
+ *    exact turn identity and takes it from the explicit `splitOf` link.
+ *  - this decides whether text ALREADY RENDERED is being shown twice. Its condition —
+ *    a later bubble of the same task whose rendered text begins with the whole of an
+ *    earlier one's — is itself the proof: that prose is on screen twice, and the
+ *    second copy should go whatever seam produced it. Pre-fix data carries no
+ *    `splitOf` to group by, so the task is the only handle it has.
+ *
+ *  Two further guards keep it off anything it shouldn't touch. A group containing a
+ *  `splitOf` bubble was written by the fixed code and is correct by construction, so
+ *  it is skipped — which also makes this migration self-limiting, inert once history
+ *  has turned over. And the prefix must be whole and non-empty; a turn that merely
+ *  opens the way an earlier one did is left alone.
+ *
+ *  (Console turns get their own task id today — 27 unique across the 27-turn session
+ *  that surfaced #3387, HITL park included — so "several rendered turns in one task"
+ *  is not a shape this can currently meet. The guards hold if that ever changes.)
+ *
+ *  Applied at load; message statuses untouched. */
 export function repairDuplicatedTurnText(messages: ChatMessage[]): ChatMessage[] {
-  const turns = new Map<string, number[]>();
-  messages.forEach((message, index) => {
-    if (message.role !== "assistant" || !message.taskId || message.author) return;
-    const bubbles = turns.get(message.taskId) ?? [];
+  const byTask = new Map<string, number[]>();
+  for (const [index, message] of messages.entries()) {
+    if (message.role !== "assistant" || !message.taskId || message.author) continue;
+    const bubbles = byTask.get(message.taskId) ?? [];
     bubbles.push(index);
-    turns.set(message.taskId, bubbles);
-  });
+    byTask.set(message.taskId, bubbles);
+  }
   const repaired = new Map<number, ChatMessage>();
   const dropped = new Set<number>();
-  for (const bubbles of turns.values()) {
+  for (const bubbles of byTask.values()) {
     if (bubbles.length < 2) continue;
+    if (bubbles.some((index) => messages[index].splitOf)) continue; // written by the fixed path
     const tail = bubbles[bubbles.length - 1];
     const shown = bubbles
       .slice(0, -1)
@@ -236,7 +256,9 @@ export function repairDuplicatedTurnText(messages: ChatMessage[]): ChatMessage[]
     const next: ChatMessage = {
       ...message,
       content: remainder,
-      parts: remainder ? withoutText(message.parts).concat({ kind: "text", text: remainder }) : withoutText(message.parts),
+      parts: remainder
+        ? withoutText(message.parts).concat({ kind: "text", text: remainder })
+        : withoutText(message.parts),
     };
     if (carriesNothing(next)) dropped.add(tail);
     else repaired.set(tail, next);

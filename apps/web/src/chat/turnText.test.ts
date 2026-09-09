@@ -279,6 +279,44 @@ describe("repairDuplicatedTurnText", () => {
     ];
     expect(repairDuplicatedTurnText(messages)).toBe(messages);
   });
+
+  it("leaves same-task bubbles alone unless one wholly repeats the other", () => {
+    // Everything this repair has to go on is the task id, so pin what it does with
+    // several bubbles in one task that are NOT a duplication: nothing.
+    const messages = [
+      live({ id: "A1", content: "Here is the plan.", status: "done" }),
+      user("staging", "answer"),
+      live({ id: "A2", content: "Deploying to staging now.", status: "done" }),
+    ];
+    expect(repairDuplicatedTurnText(messages)).toBe(messages);
+  });
+
+  it("acts on a same-task duplicate whatever seam produced it — the prose IS on screen twice", () => {
+    // The condition is its own proof: the later bubble renders the whole of the
+    // earlier one's text before adding its own. See the function's docstring for why
+    // that differs from turnBubbleIndexes' refusal to group by task.
+    const messages = [
+      live({ id: "A1", content: "Here is the plan.", status: "done" }),
+      user("staging", "answer"),
+      live({ id: "A2", content: "Here is the plan. Deploying now.", status: "done" }),
+    ];
+    expect(repairDuplicatedTurnText(messages).map((m) => m.content)).toEqual([
+      "Here is the plan.",
+      "staging",
+      "Deploying now.",
+    ]);
+  });
+
+  it("skips a turn the FIXED path wrote — `splitOf` present means it is already correct", () => {
+    // Self-limiting: once history has turned over, this migration is inert. Without
+    // the guard the repair would keep re-inspecting transcripts it can only harm.
+    const messages = [
+      frozen({ content: "Before." }),
+      user("steer", "s"),
+      live({ content: "Before. After.", status: "done" }),
+    ];
+    expect(repairDuplicatedTurnText(messages)).toBe(messages);
+  });
 });
 
 describe("the split → terminal replace round trip", () => {
