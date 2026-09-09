@@ -1608,3 +1608,115 @@ async def test_acp_adapter_dispatch_tapped_forwards_and_attributes_failures(fake
     )
     with pytest.raises(DelegateError, match="boom"):
         await adapter.dispatch_tapped(bad, "go", timeout=10.0)
+
+
+# ── #3407 / #3408: a delegate's reply must read as prose, not a wall ─────────────────
+
+
+def _chunk(text):
+    return {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}}}
+
+
+def _tool(title="read_file"):
+    return {"update": {"sessionUpdate": "tool_call", "title": title, "toolCallId": "t1"}}
+
+
+def _fresh_client():
+    """A client with per-turn state initialised, without a live ACP process."""
+    from plugins.coding_agent import acp_client
+
+    c = acp_client.AcpClient.__new__(acp_client.AcpClient)
+    c.name = "sonnet"
+    c._loading = False
+    c._answer = ""
+    c._text_after_tool = False
+    c._last_chunk = ""
+    c._turn_tool_calls = 0
+    c._turn_session_id = None
+    c._progress = None
+    c._on_tool = None
+    c._emit_text = _noop
+    c._emit_thought = _noop
+    c._emit_tool = _noop
+    c._narrate = _noop
+    return c
+
+
+async def _noop(*args, **kwargs):
+    return None
+
+
+@pytest.mark.asyncio
+async def test_narration_after_a_tool_starts_a_new_paragraph():
+    """The reported wall (#3408): every run between tool calls arrives as its own chunk,
+    and bare concatenation glued them — "…both PRs first.Both PRs are open…". Same fix the
+    executor's durable artifact got in #3210."""
+    c = _fresh_client()
+    await c._handle_update(_chunk("Let me check the current state of both PRs first."))
+    await c._handle_update(_tool())
+    await c._handle_update(_chunk("Both PRs are open and mergeable."))
+    await c._handle_update(_tool())
+    await c._handle_update(_chunk("Merged."))
+
+    assert c._answer == (
+        "Let me check the current state of both PRs first.\n\nBoth PRs are open and mergeable.\n\nMerged."
+    )
+
+
+@pytest.mark.asyncio
+async def test_chunks_within_one_run_still_concatenate_bare():
+    """Token-ish chunks of ONE narration run must not gain paragraph breaks — only a tool
+    call between them is a boundary."""
+    c = _fresh_client()
+    await c._handle_update(_chunk("Let me "))
+    await c._handle_update(_chunk("check the "))
+    await c._handle_update(_chunk("state."))
+    assert c._answer == "Let me check the state."
+
+
+@pytest.mark.asyncio
+async def test_an_adjacent_repeated_chunk_is_dropped():
+    """The partial doubling (#3407): only the FIRST chunk repeats, which `_collapse_doubled`'s
+    whole-message halving test cannot catch, so it reached transcripts and PR bodies."""
+    c = _fresh_client()
+    line = "Let me check the current state of both PRs first."
+    await c._handle_update(_chunk(line))
+    await c._handle_update(_chunk(line))
+    await c._handle_update(_tool())
+    await c._handle_update(_chunk("Both PRs are open."))
+
+    assert c._answer == f"{line}\n\nBoth PRs are open."
+
+
+@pytest.mark.asyncio
+async def test_a_short_repeat_is_left_alone():
+    """Below the floor a verbatim repeat is plausibly deliberate, so it survives."""
+    c = _fresh_client()
+    await c._handle_update(_chunk("..."))
+    await c._handle_update(_chunk("..."))
+    assert c._answer == "......"
+
+
+@pytest.mark.asyncio
+async def test_a_repeat_that_is_not_adjacent_survives():
+    """Only an IMMEDIATE repeat is the emit-side signature; the same sentence returning
+    later in a reply is the agent legitimately restating it."""
+    c = _fresh_client()
+    line = "Let me check the current state of both PRs first."
+    await c._handle_update(_chunk(line))
+    await c._handle_update(_chunk("Something else entirely happened here."))
+    await c._handle_update(_chunk(line))
+    assert c._answer.count(line) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_repeat_across_a_tool_call_survives():
+    """"Adjacent" must mean back-to-back. The same sentence either side of a tool call is
+    the agent restating where it got to — real narration, not the emit-side stutter — so
+    the guard resets at the boundary. (QA panel finding on the #3407 PR.)"""
+    c = _fresh_client()
+    line = "Checking the current state of both PRs."
+    await c._handle_update(_chunk(line))
+    await c._handle_update(_tool())
+    await c._handle_update(_chunk(line))
+    assert c._answer == f"{line}\n\n{line}"

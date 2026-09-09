@@ -43,6 +43,10 @@ from typing import Awaitable, Callable
 
 from infra.proc import group_kwargs, signal_tree
 
+# A repeated chunk shorter than this is plausibly deliberate ("...", a bullet, a short
+# chant), so only a substantial verbatim repeat is treated as the emit-side doubling.
+_DUPLICATE_CHUNK_FLOOR = 24
+
 logger = logging.getLogger("protoagent.plugins.coding_agent")
 
 ProgressCallback = Callable[[str], Awaitable[None]]
@@ -493,6 +497,11 @@ class AcpClient:
 
         # Per-turn state (one turn at a time).
         self._answer = ""
+        # A tool call ran since the last narration chunk, so the next one starts a NEW
+        # paragraph rather than being glued to the previous sentence (#3408).
+        self._text_after_tool = False
+        # The previous chunk verbatim, for the adjacent-duplicate guard (#3407).
+        self._last_chunk = ""
         # How many tool calls the coder made this turn — counted in ``_handle_update``
         # off the wire, NOT off ``tool_callback``, because the delegates adapter wires
         # no callback at all and its runs would otherwise all record zero (#3015).
@@ -837,6 +846,31 @@ class AcpClient:
                 logger.debug(
                     "[acp/%s] chunk len=%d sess=%s head=%r", self.name, len(text), params.get("sessionId"), text[:32]
                 )
+                # An ADJACENT byte-identical repeat is the emit-side doubling (#3407),
+                # now seen partially — only the first chunk repeating, which
+                # `_collapse_doubled`'s whole-message halving test cannot catch. Same
+                # bargain that method already makes: a length floor so a legitimate short
+                # repeat survives, and a WARN so occurrences stay countable rather than
+                # silently swallowed.
+                if text == self._last_chunk and len(text) >= _DUPLICATE_CHUNK_FLOOR:
+                    logger.warning(
+                        "[acp/%s] dropped a repeated chunk (%d chars, session=%s) — the agent "
+                        "delivered the same message chunk twice in a row: %r",
+                        self.name,
+                        len(text),
+                        params.get("sessionId"),
+                        text[:48],
+                    )
+                    return
+                self._last_chunk = text
+                # Narration resumed after a tool call: start a paragraph instead of gluing
+                # it to the previous sentence (#3408). Without this the reply reads as one
+                # wall — "…both PRs first.Both PRs are open…" — because every run between
+                # tool calls arrives as its own chunk and was concatenated bare. Same fix
+                # the executor's durable artifact got in #3210.
+                if self._text_after_tool and self._answer and not self._answer.endswith("\n"):
+                    self._answer += "\n\n"
+                self._text_after_tool = False
                 self._answer += text
                 await self._emit_text(text)  # stream the delta (token-ish) to the UI
         elif kind == "agent_thought_chunk":
@@ -847,6 +881,13 @@ class AcpClient:
                 await self._emit_thought(text)
         elif kind == "tool_call":
             self._turn_tool_calls += 1
+            # Next narration starts a new paragraph (#3408) — and the adjacent-duplicate
+            # guard resets here too: "adjacent" must mean two chunks BACK TO BACK. The same
+            # sentence either side of a tool call is the agent deliberately restating where
+            # it got to, not the emit-side stutter (#3407), and dropping it would lose real
+            # narration. (QA panel finding on this PR.)
+            self._text_after_tool = True
+            self._last_chunk = ""
             # A tool call STARTED — narrate its title + emit a structured start event so the
             # UI can render a card (parity with the native runtime's tool_start). The card
             # NAME is a short label; the verbose args (structured rawInput, else the title's
@@ -1344,6 +1385,8 @@ class AcpClient:
         # there books the last successful run's tool calls and session id as its own
         # (#3040); the clearing has to happen before the first await that can fail.
         self._answer = ""
+        self._text_after_tool = False
+        self._last_chunk = ""
         self._turn_tool_calls = 0
         self._turn_session_id = None
         self._progress = progress_callback
