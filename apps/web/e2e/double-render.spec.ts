@@ -118,6 +118,20 @@ test("sibling tab reloading mid-turn (double-boot): reply still renders exactly 
 // which used to land on that continuation in full, drawing the frozen prose a
 // second time. Two different ids, so `dedupeMessages` never collapsed them and the
 // duplicate persisted to localStorage for good.
+/** Every persisted bubble as `role:content`, for polling the store past its trailing
+ *  300ms persist timer. */
+async function persistedBubbles(page: Page): Promise<string[]> {
+  return page.evaluate(
+    ([key]) => {
+      const raw = window.localStorage.getItem(key);
+      if (!raw) return [];
+      const state = JSON.parse(raw) as { sessions: { messages: { role: string; content: string }[] }[] };
+      return state.sessions.flatMap((s) => s.messages).map((m) => `${m.role}:${m.content}`);
+    },
+    [STORAGE_KEY] as const,
+  );
+}
+
 const PREAMBLE = "Let me look that up.";
 const PREAMBLE_ANSWER = "Found it — Agent Client Protocol.";
 const STEER = "also check the version";
@@ -140,20 +154,16 @@ test("interjecting mid-turn: the answer renders once, with the steer inline", as
   await composer.press("Enter");
 
   await expect(page.getByText(PREAMBLE_ANSWER)).toBeVisible({ timeout: 15_000 });
-  await page.waitForTimeout(700); // debounced persist
 
   // The split really happened: two assistant bubbles for the one turn, the operator's
   // interjection between them — and the narration in exactly one of them.
-  const bubbles = await page.evaluate(
-    ([key]) => {
-      const raw = window.localStorage.getItem(key);
-      if (!raw) return [];
-      const state = JSON.parse(raw) as { sessions: { messages: { role: string; content: string }[] }[] };
-      return state.sessions.flatMap((s) => s.messages).map((m) => `${m.role}:${m.content}`);
-    },
-    [STORAGE_KEY] as const,
-  );
-  expect(bubbles).toEqual([
+  //
+  // POLLED, not slept on: persistence is a trailing 300ms timer, so the answer can be on
+  // screen before the store has it. The ORDER is what proves the steer was consumed
+  // INLINE — a steer the agent never folded in settles through the turn-end fallback,
+  // which places it BEFORE the assistant bubble, so this assertion cannot pass on a
+  // dropped or merely-queued steer (verified by making the mock drop it).
+  await expect.poll(() => persistedBubbles(page), { timeout: 10_000 }).toEqual([
     "user:PREAMBLE, STEER ME: look it up",
     `assistant:${PREAMBLE} `,
     `user:${STEER}`,
@@ -179,20 +189,12 @@ test("interjecting after the agent has finished: no blank bubble under the answe
 
   await composer.fill(STEER);
   await composer.press("Enter");
-  await page.waitForTimeout(1500); // the turn finishes, then the debounced persist
 
-  const bubbles = await page.evaluate(
-    ([key]) => {
-      const raw = window.localStorage.getItem(key);
-      if (!raw) return [];
-      const state = JSON.parse(raw) as { sessions: { messages: { role: string; content: string }[] }[] };
-      return state.sessions.flatMap((s) => s.messages).map((m) => `${m.role}:${m.content}`);
-    },
-    [STORAGE_KEY] as const,
-  );
-  // The whole answer in ONE bubble, the interjection after it — and crucially no
-  // third, empty assistant bubble left holding the turn open.
-  expect(bubbles).toEqual([
+  // The whole answer in ONE bubble, the interjection after it — and crucially no third,
+  // empty assistant bubble left holding the turn open. Same ordering proof as above: the
+  // steer sits AFTER the answer only because the agent consumed it inline, so this cannot
+  // pass on a dropped steer.
+  await expect.poll(() => persistedBubbles(page), { timeout: 15_000 }).toEqual([
     "user:PREAMBLE, STEER LATE: look it up",
     `assistant:${PREAMBLE} ${PREAMBLE_ANSWER}`,
     `user:${STEER}`,
