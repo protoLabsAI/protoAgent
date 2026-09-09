@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 
 import type { ChatMessage } from "../lib/types";
-import { replaceText } from "./parts";
+import { applyCanonicalTurnText, repairDuplicatedTurnText, turnBubbleIndexes } from "./turnText";
 
 export const MAX_SESSIONS = 50;
 export const MAX_ACTIVE_SESSIONS = 5;
@@ -167,27 +167,40 @@ export function needsDurableHydration(session: ChatSession): boolean {
 }
 
 function repairHydratedMessages(local: ChatMessage[], recovered: ChatMessage[]): ChatMessage[] | null {
-  let changed = false;
   const recoveredByTask = new Map<string, ChatMessage>();
   for (const message of recovered) {
     if (message.role === "assistant" && message.status !== "streaming" && message.taskId && message.content.trim()) {
       recoveredByTask.set(message.taskId, message);
     }
   }
-  const messages = local.map((message) => {
-    if (!hydrationCanRepairMessage(message) || !message.taskId) return message;
-    const recoveredMessage = recoveredByTask.get(message.taskId);
-    if (!recoveredMessage) return message;
-    const text = recoveredMessage.content.trim();
-    const orderedText = assistantTextFromParts(message);
-    if (orderedText.trim() === text) return message;
+  if (!recoveredByTask.size) return null;
+  // A recovered turn is the WHOLE answer, and one local turn can render as SEVERAL
+  // bubbles sharing its taskId once a consumed steer / delegation split it. Anchor
+  // the repair on each turn's trailing bubble and DISTRIBUTE the recovered text
+  // across the turn (turnText.ts) — writing it onto every bubble that matches the
+  // taskId, which this repair used to do, renders the earlier bubbles' prose twice.
+  const turns: { anchorId: string; taskId: string }[] = [];
+  const seen = new Set<string>();
+  for (const message of local) {
+    if (message.role !== "assistant" || !message.taskId || !message.id || message.author) continue;
+    const anchorId = message.splitOf ?? message.id; // the turn's continuation owns it
+    if (seen.has(anchorId)) continue;
+    seen.add(anchorId);
+    turns.push({ anchorId, taskId: message.taskId });
+  }
+  let messages = local;
+  let changed = false;
+  for (const { anchorId, taskId } of turns) {
+    const recoveredMessage = recoveredByTask.get(taskId);
+    if (!recoveredMessage) continue;
+    const indexes = turnBubbleIndexes(messages, anchorId);
+    if (!indexes.some((index) => hydrationCanRepairMessage(messages[index]))) continue;
+    if (indexes.some((index) => messages[index].status === "streaming")) continue;
+    const orderedText = indexes.map((index) => assistantTextFromParts(messages[index])).join("");
+    if (orderedText.trim() === recoveredMessage.content.trim()) continue;
+    messages = applyCanonicalTurnText(messages, anchorId, recoveredMessage.content);
     changed = true;
-    return {
-      ...message,
-      content: recoveredMessage.content,
-      parts: replaceText(message.parts, recoveredMessage.content, orderedText),
-    };
-  });
+  }
   return changed ? messages : null;
 }
 
@@ -282,9 +295,12 @@ export function sanitizePersisted(parsed: unknown): PersistedChatState | null {
   const sessions = (Array.isArray(p.sessions) ? p.sessions : [])
     .filter(isValidSession)
     .slice(0, MAX_SESSIONS)
-    // A duplicate entry that made it into a persisted blob (#1938) collapses on load.
+    // A duplicate entry that made it into a persisted blob (#1938) collapses on load,
+    // and a turn whose split bubbles were each handed the whole canonical answer —
+    // written before the fix, so `dedupeMessages` never saw colliding ids — has its
+    // duplicated prose stripped back to one copy (turnText.ts).
     .map((s) => {
-      const messages = dedupeMessages(s.messages);
+      const messages = repairDuplicatedTurnText(dedupeMessages(s.messages));
       return messages === s.messages ? s : { ...s, messages };
     });
   if (!sessions.length) return null;

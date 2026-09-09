@@ -41,7 +41,10 @@ export function insertConversationBubbles(
   if (isEmptyPlaceholder(placeholder)) {
     return [...messages.slice(0, at), ...bubbles, ...messages.slice(at)];
   }
-  const frozen: ChatMessage = { ...placeholder, id: newId, status: "done" };
+  // `splitOf` links the frozen half back to the continuation: one server turn now
+  // renders as two bubbles, and everything that lands the turn's canonical text has
+  // to see them as one (turnText.ts).
+  const frozen: ChatMessage = { ...placeholder, id: newId, status: "done", splitOf: assistantId };
   const reset: ChatMessage = {
     id: assistantId,
     role: "assistant",

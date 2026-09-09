@@ -54,6 +54,7 @@ import {
   WORKFLOW_RUN_RESULT,
   WORKFLOW_RUN_SUMMARIES,
   WORKFLOWS,
+  steerConsumedFrame,
 } from "./fixtures.mjs";
 
 const PORT = Number(process.argv[2] || process.env.E2E_PORT || 4319);
@@ -164,6 +165,12 @@ let eventSeq = 0;
 // already-drained branch (bubble restored, not dropped). Populated by the POST handler
 // from a "too late" sentinel in the steer text — see the steer routes below (#3214).
 const drainedSteers = new Set();
+// Set only while a "STEER ME" turn is PARKED waiting to be interjected into; the steer
+// POST drops the operator's message here so that turn can announce it as consumed.
+// Scoped this narrowly on purpose: this mock is shared by every parallel worker, and the
+// ✕-cancel / drained-steer specs post steers of their own that must never ride into a
+// stream they have nothing to do with.
+let parkedTurn = null;
 
 // Per-plugin update fixtures, keyed by id — seeds non-default freshness states
 // (behind / pinned / errored) for any pre-seeded plugin. After a successful
@@ -630,7 +637,32 @@ async function handleA2AStream(req, res, body) {
   // mid-stream (reload a sibling tab, fire the self-heal) — the #1938 repro shape:
   // a 20–60s image-tool turn, scaled down to CI time.
   const gap = /SLOW/i.test(prompt) ? 300 : 40;
-  for (const frame of frames) {
+  // "STEER ME": a turn that WAITS for the operator to interject. It streams its
+  // opening narration, parks until a steer arrives, announces it as CONSUMED — which
+  // is what makes the console split its live bubble to place the interjection inline
+  // (#3150) — then finishes normally, terminal full-turn frame and all. That whole
+  // sequence in ONE turn is the shape behind the doubled-answer regression the
+  // double-render specs guard, and parking is what makes it raceless: the spec never
+  // has to land a keystroke inside a frame gap.
+  const parkBefore = /STEER ME/i.test(prompt) ? 3 : -1;
+  for (const [index, frame] of frames.entries()) {
+    if (index === parkBefore) {
+      parkedTurn = { items: [] };
+      const until = Date.now() + 10_000;
+      while (!parkedTurn.items.length && Date.now() < until) await new Promise((r) => setTimeout(r, 25));
+      const { items } = parkedTurn;
+      parkedTurn = null;
+      if (items.length) {
+        const marker = steerConsumedFrame({
+          rpcId: body.id ?? "1",
+          contextId: frame.result.contextId,
+          taskId: frame.result.taskId ?? frame.result.id,
+          items,
+        });
+        res.write(`data: ${JSON.stringify(marker)}\r\n\r\n`);
+        await new Promise((r) => setTimeout(r, gap));
+      }
+    }
     // CRLF frame separator — the a2a-sdk emits SSE with `\r\n\r\n`, not `\n\n`.
     // The mock must mirror that so this e2e exercises the real wire shape: an
     // LF-only mock hid a browser-blanking CRLF parse bug in the client.
@@ -1064,6 +1096,9 @@ const server = createServer(async (req, res) => {
     if (/^\/api\/chat\/sessions\/[^/]+\/steer$/.test(pathname) && req.method === "POST") {
       const body = await readBody(req);
       if (body.id && /too late/i.test(String(body.text ?? ""))) drainedSteers.add(String(body.id));
+      // Remembered so an in-flight turn can announce it as CONSUMED mid-stream
+      // (handleA2AStream) — the only way to drive the console's inline split.
+      else if (parkedTurn && body.id && body.text) parkedTurn.items.push({ id: String(body.id), text: String(body.text) });
       return sendJson(res, { ok: true, id: body.id ?? null, pending: 0 });
     }
     // Mid-turn steering cancel (the ✕ on a queued bubble, or ↑ pulling it back to edit) —

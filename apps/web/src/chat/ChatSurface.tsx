@@ -50,9 +50,10 @@ import { registerChatEscapeHandler, resolveEscapeAction } from "./escapeStop";
 import { registerSlashDispatcher } from "./slashDispatch";
 import { resolveComposerUp } from "./queuedRecall";
 import { finalizeStoppedMessages, resolveStopTarget } from "./stopTurn";
-import { lastOperatorAssistantId, rewindableTailId, replaceText } from "./parts";
+import { lastOperatorAssistantId, rewindableTailId } from "./parts";
 import { createRevealQueue } from "./revealQueue";
 import { applyComponent, applyReasoning, applyText, applyToolEvent } from "./turnReducers";
+import { applyCanonicalTurnText, settleTurnBubbles } from "./turnText";
 import { reattachKeyForMessages, reattachTurn } from "./reattach";
 import { loadDraft, loadScroll, loadSteers, saveDraft, saveScroll, saveSteers } from "./scratchState";
 import { createStreamWatchdog } from "./streamWatchdog";
@@ -1885,23 +1886,24 @@ function ChatSessionSlot({
       const latest = chatStore.getSnapshot().sessions.find((s) => s.id === session.id);
       if (latest) {
         const now = Date.now();
+        // The task's text is the whole TURN's canonical answer, and a turn can span
+        // several bubbles once a steer/delegation split it — so distribute it across
+        // them rather than re-landing all of it on the live one (turnText.ts).
+        const reconciled = text ? applyCanonicalTurnText(latest.messages, assistantId, text) : latest.messages;
         chatStore.updateMessages(
           session.id,
-          latest.messages.map((m) => {
-            if (m.id !== assistantId) return m;
-            const toolCalls = m.toolCalls?.map((c) =>
-              c.status === "running"
-                ? { ...c, status: "done" as const, durationMs: c.durationMs ?? (c.startedAt !== undefined ? now - c.startedAt : undefined) }
-                : c,
-            );
-            return {
-              ...m,
-              content: text || m.content,
-              parts: text ? replaceText(m.parts, text, m.content) : m.parts,
-              status: failed ? "error" : "done",
-              toolCalls,
-            };
-          }),
+          settleTurnBubbles(
+            reconciled.map((m) => {
+              if (m.id !== assistantId) return m;
+              const toolCalls = m.toolCalls?.map((c) =>
+                c.status === "running"
+                  ? { ...c, status: "done" as const, durationMs: c.durationMs ?? (c.startedAt !== undefined ? now - c.startedAt : undefined) }
+                  : c,
+              );
+              return { ...m, status: failed ? "error" : "done", toolCalls };
+            }),
+            assistantId,
+          ),
         );
       }
       chatStore.setSessionStatus(session.id, failed ? "error" : "idle");
@@ -1916,8 +1918,8 @@ function ChatSessionSlot({
       onTerminal: (task) => {
         if (settledByWatchdog || controller.signal.aborted) return;
         settledByWatchdog = true;
-        // Reveal the withheld tail first so the finalize's replaceText compares
-        // the task text against the COMPLETE client accumulation.
+        // Reveal the withheld tail first so the finalize compares the task text
+        // against the COMPLETE client accumulation.
         reveal.flush();
         finalizeFromTask(task.state, task.text);
         controller.abort(); // release the stalled socket; unwinds via catch → finally
@@ -1988,17 +1990,16 @@ function ChatSessionSlot({
           }
           // A REPLACE (the turn's first frame, or the terminal canonical
           // re-send, #1709) is authoritative: reveal anything still queued
-          // first — so replaceText compares against the complete accumulation
+          // first — so the canonical compare sees the complete accumulation
           // instead of "diverging" and rebuilding — then land it instantly.
           // The final answer is never delayed by the queue.
           sawAuthoritativeText = true;
           reveal.flush();
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
-          chatStore.updateMessages(
-            session.id,
-            latest.messages.map((message) => (message.id === assistantId ? applyText(message, text, append) : message)),
-          );
+          // Spans the whole TURN, which may already have been split into several
+          // bubbles to place a consumed steer / delegation (turnText.ts).
+          chatStore.updateMessages(session.id, applyCanonicalTurnText(latest.messages, assistantId, text));
         },
         onReasoning: (delta) => {
           bumpWatchdog();
@@ -2199,11 +2200,7 @@ function ChatSessionSlot({
             if (latest) {
               chatStore.updateMessages(
                 session.id,
-                latest.messages.map((m) =>
-                  m.id === assistantId
-                    ? { ...m, content: res.text, parts: replaceText(m.parts, res.text, m.content) }
-                    : m,
-                ),
+                settleTurnBubbles(applyCanonicalTurnText(latest.messages, assistantId, res.text), assistantId),
               );
             }
           }

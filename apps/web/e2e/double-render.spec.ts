@@ -109,3 +109,60 @@ test("sibling tab reloading mid-turn (double-boot): reply still renders exactly 
   expect(siblingCount + reconciled, "sibling tab total answer copies").toBeLessThanOrEqual(1);
   expect(await persistedAnswerCount(sibling), "persisted store after sibling settles").toBeLessThanOrEqual(1);
 });
+
+// A SECOND way one turn rendered twice, on a layer #1938's id-dedupe cannot see.
+// Interjecting mid-turn makes the console SPLIT its live assistant bubble to place
+// the interjection where the agent consumed it (#3150): the prose so far freezes
+// into a bubble with a FRESH id, and an emptied continuation keeps the original.
+// The A2A terminal frame then re-sends the WHOLE turn's canonical text (#1717) —
+// which used to land on that continuation in full, drawing the frozen prose a
+// second time. Two different ids, so `dedupeMessages` never collapsed them and the
+// duplicate persisted to localStorage for good.
+const PREAMBLE = "Let me look that up.";
+const PREAMBLE_ANSWER = "Found it — Agent Client Protocol.";
+const STEER = "also check the version";
+
+test("interjecting mid-turn: the answer renders once, with the steer inline", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  // NOT getByPlaceholder: mid-turn the composer's placeholder flips to "Steer the
+  // agent…", and a placeholder-bound locator would sit waiting for the very turn it
+  // is supposed to interrupt to finish first.
+  const composer = page.locator("textarea").first();
+  await composer.waitFor({ state: "visible" });
+  // PREAMBLE streams narration BEFORE the tool, so there is prose to freeze; STEER ME
+  // parks the turn there until the interjection lands, then folds it in and finishes
+  // — split and terminal frame in one turn, with no keystroke to land in a frame gap.
+  await composer.fill("PREAMBLE, STEER ME: look it up");
+  await composer.press("Enter");
+  await expect(page.getByText(PREAMBLE)).toBeVisible({ timeout: 15_000 });
+
+  await composer.fill(STEER);
+  await composer.press("Enter");
+
+  await expect(page.getByText(PREAMBLE_ANSWER)).toBeVisible({ timeout: 15_000 });
+  await page.waitForTimeout(700); // debounced persist
+
+  // The split really happened: two assistant bubbles for the one turn, the operator's
+  // interjection between them — and the narration in exactly one of them.
+  const bubbles = await page.evaluate(
+    ([key]) => {
+      const raw = window.localStorage.getItem(key);
+      if (!raw) return [];
+      const state = JSON.parse(raw) as { sessions: { messages: { role: string; content: string }[] }[] };
+      return state.sessions.flatMap((s) => s.messages).map((m) => `${m.role}:${m.content}`);
+    },
+    [STORAGE_KEY] as const,
+  );
+  expect(bubbles).toEqual([
+    "user:PREAMBLE, STEER ME: look it up",
+    `assistant:${PREAMBLE} `,
+    `user:${STEER}`,
+    `assistant:${PREAMBLE_ANSWER}`,
+  ]);
+
+  // …and once on screen, in that order.
+  const rendered = await page.locator(".chat-session-slot:not([hidden])").innerText();
+  expect(rendered.split(PREAMBLE).length - 1, "narration copies on screen").toBe(1);
+  expect(rendered.split(PREAMBLE_ANSWER).length - 1, "answer copies on screen").toBe(1);
+  expect(rendered.indexOf(PREAMBLE)).toBeLessThan(rendered.indexOf(STEER));
+});
