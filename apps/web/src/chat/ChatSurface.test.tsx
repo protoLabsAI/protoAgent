@@ -7,6 +7,7 @@ import {
   resolveComposerStopTarget,
   serverTurnRestoreAfterFailedCancel,
 } from "./ChatSurface";
+import { isDuplicateRiskActive, nextDuplicateRisk, type DuplicateRisk } from "./duplicateRisk";
 
 describe("ChatSurface server-turn controls", () => {
   const control = { taskId: "task-server" };
@@ -119,5 +120,63 @@ describe("Stop whose cancel RPC fails (#3092 review finding)", () => {
     // correctly settled and there is no server-side task left to reach.
     expect(serverTurnRestoreAfterFailedCancel(null, "streaming…")).toBeNull();
     expect(serverTurnRestoreAfterFailedCancel(undefined, null)).toBeNull();
+  });
+});
+
+describe("consumed ↑-recall duplicate-risk marker (#3413)", () => {
+  const SID = "sess-1";
+  const risk: DuplicateRisk = { sessionId: SID, text: "actually, do X" };
+
+  describe("isDuplicateRiskActive", () => {
+    it("is inactive when there is no marker (the removed:true path never sets one — r1)", () => {
+      expect(isDuplicateRiskActive(null, SID, "")).toBe(false);
+      expect(isDuplicateRiskActive(null, SID, "anything")).toBe(false);
+    });
+
+    it("is active while the marker's exact recalled text is still the draft in its session (r2)", () => {
+      expect(isDuplicateRiskActive(risk, SID, "actually, do X")).toBe(true);
+    });
+
+    it("goes inactive the moment the draft is edited into a follow-up or cleared (r3, r5)", () => {
+      expect(isDuplicateRiskActive(risk, SID, "actually, do X instead")).toBe(false);
+      expect(isDuplicateRiskActive(risk, SID, "")).toBe(false);
+    });
+
+    it("never leaks onto another session's composer — it cannot survive a session switch (r5)", () => {
+      expect(isDuplicateRiskActive(risk, "other-session", "actually, do X")).toBe(false);
+      expect(isDuplicateRiskActive(risk, null, "actually, do X")).toBe(false);
+    });
+  });
+
+  describe("nextDuplicateRisk transitions", () => {
+    it("pins a marker to the recalled text + session on a consumed recall (r2)", () => {
+      expect(nextDuplicateRisk(null, { type: "recall-consumed", sessionId: SID, text: "hi there" })).toEqual({
+        sessionId: SID,
+        text: "hi there",
+      });
+    });
+
+    it("drops the marker on a subsequent clean removed recall (r5)", () => {
+      expect(nextDuplicateRisk(risk, { type: "recall-removed" })).toBeNull();
+    });
+
+    it("drops the marker on a deliberate send and on an explicit clear (r3, r4)", () => {
+      expect(nextDuplicateRisk(risk, { type: "sent" })).toBeNull();
+      expect(nextDuplicateRisk(risk, { type: "clear" })).toBeNull();
+    });
+
+    it("drops the marker when the draft diverges, is cleared, or the session changes (r3, r5)", () => {
+      expect(nextDuplicateRisk(risk, { type: "draft", sessionId: SID, draft: "edited follow-up" })).toBeNull();
+      expect(nextDuplicateRisk(risk, { type: "draft", sessionId: SID, draft: "" })).toBeNull();
+      expect(nextDuplicateRisk(risk, { type: "draft", sessionId: "other", draft: "actually, do X" })).toBeNull();
+    });
+
+    it("keeps the SAME marker reference while the draft is still the recalled text (no render churn)", () => {
+      // The clearing effect dispatches `draft` on every keystroke; returning the same object
+      // while the marker still applies lets React bail out of the state update.
+      expect(nextDuplicateRisk(risk, { type: "draft", sessionId: SID, draft: "actually, do X" })).toBe(risk);
+      // And a no-op draft event against no marker stays null (also a bail-out).
+      expect(nextDuplicateRisk(null, { type: "draft", sessionId: SID, draft: "typing…" })).toBeNull();
+    });
   });
 });

@@ -772,6 +772,38 @@
   font-size: 13px;
 }
 
+/* Known-duplicate warning strip (#3413): a persistent inline notice above the composer when a
+   consumed ↑-recall left the recalled text in the draft — an unchanged re-send would deliver a
+   second copy. Warning-tinted (not error: nothing is broken, and the operator can still send it
+   deliberately) and carries its own clear / send-anyway actions, so the state and the choice
+   both persist instead of riding a transient toast. Sits just above the PromptInput. */
+.composer-dup-risk {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--pl-color-status-warning);
+  border-radius: var(--pl-radius);
+  background: color-mix(in srgb, var(--pl-color-status-warning) 12%, var(--pl-color-bg-raised));
+  color: var(--pl-color-fg-muted);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.composer-dup-risk-copy {
+  min-width: 0;
+}
+.composer-dup-risk-copy strong {
+  color: var(--pl-color-fg);
+}
+.composer-dup-risk-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
 /* Provider heading inside the composer's model menu. Rows under it are bare model
    names, so the account they belong to has to live somewhere — a heading beats a badge
    on every row when the rows are the thing you're comparing.

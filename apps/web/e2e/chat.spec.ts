@@ -178,3 +178,89 @@ test("right-click a chat tab → New chat / Rename / Close, and New chat adds a 
   await menu.getByText("New chat", { exact: true }).click();
   await expect(tabs).toHaveCount(2);
 });
+
+// #3413 — the consumed ↑-recall's known-duplicate affordance. When ↑ pulls a queued steer the
+// agent had ALREADY read (DELETE …/steer/{id} → removed:false), the recalled text stays in the
+// composer and a PERSISTENT inline warning replaces the old transient toast: it names the state
+// ("already delivered in this turn") and the consequence (an unchanged send makes a second
+// copy), and gives deliberate clear / send-anyway actions. A cleanly removed recall
+// (removed:true) stays ordinary editable recall with NO warning. The mock remembers a steer
+// whose text says "too late" as already drained (#3214), so the spec picks the branch by what
+// it types. The placeholder flips between three strings, so the field is addressed by class.
+const STEER_FIELD = ".chat-session-slot:not([hidden]) .pl-prompt__field";
+const DUP_RISK = ".chat-session-slot:not([hidden]) .composer-dup-risk";
+
+async function holdTurnAndQueue(page, text: string) {
+  const composer = page.locator(STEER_FIELD);
+  await expect(composer).toBeVisible();
+  await composer.fill("hold the turn open"); // the mock holds this turn open → steering state
+  await composer.press("Enter");
+  await expect(page.getByPlaceholder(/Steer the agent/i)).toBeVisible();
+  await composer.fill(text);
+  await composer.press("Enter");
+  await expect(page.locator(".pl-message--queued")).toHaveText(new RegExp(text));
+  return composer;
+}
+
+test("↑-recall of a cleanly removed steer stays ordinary editable recall — no duplicate warning (#3413)", async ({ page }) => {
+  const composer = await holdTurnAndQueue(page, "revise this normally");
+  // removed:true — the agent had NOT read it, so it pulls cleanly out of the turn.
+  await composer.press("ArrowUp");
+  await expect(composer).toHaveValue("revise this normally");
+  await expect(page.locator(".pl-message--queued")).toHaveCount(0);
+  await expect(page.locator(DUP_RISK)).toHaveCount(0);
+});
+
+test("↑-recall of an already-read steer shows a persistent duplicate warning and keeps the text (#3413)", async ({ page }) => {
+  const composer = await holdTurnAndQueue(page, "too late to change this");
+  const deleted = page.waitForResponse(
+    (r) => r.request().method() === "DELETE" && /\/steer\/[^/]+$/.test(r.url()),
+  );
+  await composer.press("ArrowUp");
+  expect(await (await deleted).json()).toMatchObject({ removed: false });
+
+  // The bubble comes back (the steer still shaped the reply), the pulled text stays in the
+  // composer, and the warning is a DURABLE strip with its own actions — not a fading toast.
+  await expect(page.locator(".pl-message--queued")).toHaveCount(1);
+  await expect(composer).toHaveValue("too late to change this");
+  const warn = page.locator(DUP_RISK);
+  await expect(warn).toBeVisible();
+  await expect(warn).toContainText(/already delivered in this turn/i);
+  await expect(warn).toContainText(/second copy/i);
+  // The defining difference from a toast: it persists and carries deliberate actions.
+  await expect(page.getByRole("button", { name: "Clear draft" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Send anyway" })).toBeVisible();
+});
+
+test("Clear on the duplicate warning empties only the draft; the consumed steer stays in the turn (#3413)", async ({ page }) => {
+  const composer = await holdTurnAndQueue(page, "too late to clear me");
+  await composer.press("ArrowUp");
+  await expect(page.locator(DUP_RISK)).toBeVisible();
+  await expect(page.locator(".pl-message--queued")).toHaveCount(1);
+
+  await page.getByRole("button", { name: "Clear draft" }).click();
+  await expect(composer).toHaveValue("");
+  await expect(page.locator(DUP_RISK)).toHaveCount(0);
+  // Clear touches ONLY the composer draft + risk state: the already-consumed steer is still
+  // honestly represented in the turn (no "unsend").
+  await expect(page.locator(".pl-message--queued")).toHaveCount(1);
+  await expect(page.locator(".pl-message--queued")).toHaveText(/too late to clear me/);
+});
+
+test("Send anyway delivers the recalled text once, clears the warning, and never unsends the consumed steer (#3413)", async ({ page }) => {
+  const composer = await holdTurnAndQueue(page, "too late to send me");
+  await composer.press("ArrowUp");
+  await expect(page.locator(DUP_RISK)).toBeVisible();
+  await expect(page.locator(".pl-message--queued")).toHaveCount(1);
+
+  const posted = page.waitForRequest(
+    (r) => r.method() === "POST" && /\/api\/chat\/sessions\/[^/]+\/steer$/.test(r.url()),
+  );
+  await page.getByRole("button", { name: "Send anyway" }).click();
+  await posted; // the send happened — a fresh steer is queued (the turn is still running)
+  await expect(page.locator(DUP_RISK)).toHaveCount(0);
+  await expect(composer).toHaveValue("");
+  // Exactly one new copy joins the restored consumed one — the send occurs once and there is
+  // no affordance that pretends to unsend the message the agent already read.
+  await expect(page.locator(".pl-message--queued")).toHaveCount(2);
+});

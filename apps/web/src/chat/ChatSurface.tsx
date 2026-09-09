@@ -49,6 +49,7 @@ import { dismissedToolCallSet, rememberDismissedToolCall } from "./dismissedTool
 import { registerChatEscapeHandler, resolveEscapeAction } from "./escapeStop";
 import { registerSlashDispatcher } from "./slashDispatch";
 import { resolveComposerUp } from "./queuedRecall";
+import { isDuplicateRiskActive, nextDuplicateRisk, type DuplicateRisk } from "./duplicateRisk";
 import { finalizeStoppedMessages, resolveStopTarget } from "./stopTurn";
 import { lastOperatorAssistantId, rewindableTailId } from "./parts";
 import { createRevealQueue } from "./revealQueue";
@@ -699,6 +700,19 @@ function ChatSessionSlot({
     setSteerQueueState(next);
     saveSteers(sessionId, next); // scratch state survives a swap (S3)
   };
+  // A consumed ↑-recall's known-duplicate marker (#3413): set when editQueuedSteer's dequeue
+  // resolves `consumed`, pinned to the exact recalled text + this session. Drives the inline
+  // duplicate-risk warning below and its clear/send-anyway actions; all transitions run
+  // through the pure reducer in duplicateRisk.ts so the race/clear rules stay testable.
+  const [duplicateRisk, setDuplicateRisk] = useState<DuplicateRisk | null>(null);
+  // Deterministically retire the marker the moment the draft stops being the exact recalled
+  // text (edited into a follow-up, cleared) or the session no longer matches — so the warning
+  // never lingers on an unrelated draft and never survives a session change (#3413). The
+  // functional dispatch returns the same reference while the marker still applies, so this
+  // can run on every keystroke without churning renders.
+  useEffect(() => {
+    setDuplicateRisk((risk) => nextDuplicateRisk(risk, { type: "draft", sessionId, draft }));
+  }, [draft, sessionId]);
   const [serverInterjectionQueue, setServerInterjectionQueueState] = useState<{ id: string; text: string }[]>([]);
   const serverInterjectionQueueRef = useRef<{ id: string; text: string }[]>([]);
   const setServerInterjectionQueue = (next: { id: string; text: string }[]) => {
@@ -1303,6 +1317,10 @@ function ChatSessionSlot({
     [draft, attachments, serverTurnControl, serverTurnLabel, status, signedOut],
   );
 
+  // The consumed ↑-recall warning shows only while the marker still applies to this session's
+  // untouched recalled draft — the pure guard keeps the state and the UI from disagreeing (#3413).
+  const showDuplicateRisk = isDuplicateRiskActive(duplicateRisk, sessionId, draft);
+
   async function send() {
     if (!session || signedOut) return;
     // A HITL form/question/approval is open (#1560): a fresh send would race the
@@ -1456,8 +1474,41 @@ function ChatSessionSlot({
       ta.selectionStart = ta.selectionEnd = item.text.length; // readline: edit from the end
       refreshSlash(); // the recalled text may itself start with a "/" or "@" token
     });
-    if ((await dequeueSteer(id)) === "consumed") {
+    const outcome = await dequeueSteer(id);
+    if (outcome === "consumed") {
+      // Too late — the agent already read it (dequeueSteer restored its bubble). Pin the
+      // known-duplicate marker to the exact recalled text so the inline warning below makes
+      // the state + consequence plain and offers clear / send-anyway; the toast stays as an
+      // immediate (screen-reader) announcement, but the operator no longer RELIES on it —
+      // the persistent affordance is what carries the state until they resolve it (#3413).
+      setDuplicateRisk((risk) => nextDuplicateRisk(risk, { type: "recall-consumed", sessionId, text: item.text }));
       onError("The agent already read that message, so it stays in this turn. Your copy is in the composer — edit and send it as a follow-up, or clear it.");
+    } else if (outcome === "removed") {
+      // A clean recall is ordinary editable recall — clear any stale marker so a fresh ↑
+      // never inherits a prior consumed recall's duplicate warning (#3413).
+      setDuplicateRisk((risk) => nextDuplicateRisk(risk, { type: "recall-removed" }));
+    }
+  }
+
+  // "Clear" on the duplicate-risk warning: drop only the recalled draft and the marker. The
+  // already-consumed steer stays in the turn (its restored bubble is untouched), so it remains
+  // honestly represented — this clears the composer, it does NOT unsend anything (#3413).
+  function clearDuplicateRisk() {
+    setDraft("");
+    setDuplicateRisk((risk) => nextDuplicateRisk(risk, { type: "clear" }));
+    textareaRef.current?.focus();
+  }
+
+  // "Send anyway" on the duplicate-risk warning: deliver the recalled text ONCE via the exact
+  // path the composer's Enter would take — queue a steer while a turn is interruptible, a fresh
+  // send when idle — and drop the marker. It never touches the already-consumed steer, so the
+  // UI can't imply it can unsend it (#3413).
+  function sendDespiteDuplicate() {
+    setDuplicateRisk((risk) => nextDuplicateRisk(risk, { type: "sent" }));
+    if (turnInterruptible) {
+      void (serverTurnControl ? queueServerInterjection() : queueSteer());
+    } else {
+      void send();
     }
   }
 
@@ -2460,6 +2511,29 @@ function ChatSessionSlot({
             )}
           </div>
         )}
+        {/* Known-duplicate warning for a consumed ↑-recall (#3413): a persistent inline strip
+            (mirrors the .composer-signed-out send-area pattern), not a transient toast. It
+            names the state ("already delivered in this turn") and the consequence (an unchanged
+            send would deliver a second copy), and offers deliberate actions — clear the draft,
+            or send it anyway once. It deliberately offers no "unsend": the consumed steer
+            already shaped the reply and stays in the turn. */}
+        {showDuplicateRisk ? (
+          <div className="composer-dup-risk" aria-label="Duplicate message warning">
+            <div className="composer-dup-risk-copy">
+              <strong>Already delivered in this turn.</strong> The agent already read this
+              message, so it stays in the turn. Sending it again unchanged would deliver a
+              second copy.
+            </div>
+            <div className="composer-dup-risk-actions">
+              <Button size="sm" variant="ghost" onClick={clearDuplicateRisk}>
+                Clear draft
+              </Button>
+              <Button size="sm" variant="primary" onClick={sendDespiteDuplicate}>
+                Send anyway
+              </Button>
+            </div>
+          </div>
+        ) : null}
         {signedOut ? (
           /* Deliberate OAuth signed-out state (#2513): the composer is out of
              service — an enabled Send would only fail locally. Reconnect opens
