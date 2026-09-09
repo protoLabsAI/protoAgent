@@ -15,6 +15,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.162.0] - 2026-09-09
+
+### Added
+- **orgChart now shows the work that actually happened, not only the work that could (#3386).**
+  The chart has always drawn the *capability* graph — a node per delegate, an edge wherever
+  one agent can delegate to another. It now overlays the delegation ledger on top, so each
+  node carries how many dispatches it actually received, how they ended, and when it was
+  last used. Two things become visible that a wiring diagram cannot show: a delegate that
+  is configured but has never once been used, sitting beside one used constantly; and a
+  delegate failing every dispatch while its health dot stays green, because a probe answers
+  "can I reach it?" and a dispatch answers "did the work go through?".
+- **Subagents appear on the chart for the first time (#3386).**
+  They are drawn from the ledger, never from config: a subagent definition is a job title
+  rather than a worker, so a node per definition would fill the chart with roles nobody has
+  ever delegated to. For an agent whose delegation is all in-process this is the entire
+  picture — its chart was previously empty of its own work. A subagent node reports no
+  liveness, because it runs inside its owner and there is nothing to probe.
+- **A detached delegation is now closed out when it lands (#3386).**
+  A background job's edge was recorded at dispatch and left reading `ok` with a zero
+  duration forever — a claim about an outcome nobody observed. The edge is now settled with
+  its real outcome and duration when the job completes, hooked at `mark_complete` because
+  that is the one funnel every settle path goes through (the background manager's own
+  completion and cancel paths, and the A2A terminal hook). A redundant settle cannot
+  restate an outcome already recorded, and a cancellation is still not a failure.
+- **A read API for the ledger (#3386).**
+  `GET /api/ledger` returns recent edges, newest first, optionally scoped to one
+  originating chat session; `GET /api/ledger/edges` returns them aggregated per target —
+  the shape a graph draws. The aggregate reports `priced` alongside `cost_usd`, so a
+  partial sum over the rows that had a measurable cost is never mistaken for a total.
+
+- **Plugin setup gaps can carry a bounded, declarative remediation action (#3389).** `registry.report_setup_gap()` (and the underlying `setup_gaps.report()`) now accept an optional `action` — a single hint or a list — that a future console can map to a "fix this" affordance. Actions are closed, server-validated data, never behavior: a fixed `kind` vocabulary (`plugin_config`, which is scoped to the reporting plugin, plus a reserved `global_settings` target) with bounded plain-text `label`/`fields`. Any unknown kind, callback, arbitrary URL, HTML, or oversized payload is dropped rather than stored, and a malformed action never raises into plugin loading. Legacy `report_setup_gap(key, message)` calls are untouched — identical storage, `warnings()` output, and clear behavior — and the runtime HTTP status response is unchanged for now.
+
+### Fixed
+- **Interjecting mid-turn no longer renders the agent's answer twice (#3387).**
+  Sending a second message while a turn streams makes the console split its live
+  assistant bubble, so the interjection lands where the agent actually consumed it:
+  what had been said freezes into its own bubble, and an emptied continuation keeps
+  streaming below. The A2A terminal frame then re-sends the *whole* turn's canonical
+  text — which landed on that continuation in full, drawing the frozen prose a second
+  time. The two halves carry different ids by design, so the existing id-dedupe never
+  saw it and the duplicate persisted to local history for good.
+  A turn's canonical text is now distributed across the bubbles that render it,
+  exactly once (`apps/web/src/chat/turnText.ts`), on every path that carries it: the
+  live terminal frame, reattach after an agent switch or reload, the post-stream task
+  reconcile, and boot hydration. Transcripts already holding a duplicate are repaired
+  when they load. Delegation exchanges, which split a turn the same way, were exposed
+  to the same bug and are covered by the same fix.
+
+- **Expanding a tool chip mid-turn no longer collapses the moment the turn finishes (#3390).**
+  `ToolCalls` renders its summary chips from several branches that hold different numbers of
+  children — a live turn has a spotlight slot, a settled one doesn't — and the chips carried no
+  React key. React matches unkeyed children by position, so on settle a chip shifted index,
+  landed in a slot that had held something else, and was rebuilt from scratch; the DS
+  `ToolCardSummary` keeps its open state internally, so the rebuild silently threw away whatever
+  the operator had expanded. Both the "N background jobs" chip and the "N tools" fold chip now
+  keep their identity across the transition, so an expansion made while the agent is still
+  working survives it.
+  This was also reddening unrelated PRs: the console e2e suite failed roughly one random spec per
+  parallel run, and this chip was one of two causes (the other, an SSE delivery race in the
+  server-turn spec, is fixed alongside it).
+
 ## [0.161.0] - 2026-09-08
 
 ### Added
