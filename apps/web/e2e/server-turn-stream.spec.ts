@@ -23,6 +23,18 @@ const NARRATION_A = "Three dice and all Push Back.";
 const NARRATION_B = "Ball secured at (8,17).";
 const FINAL = "Turn complete: the ball is secured and the cage is set.";
 
+/** Block a route handler until `ready`, but never past `budgetMs`.
+ *
+ *  The bound is what keeps a FAILING run from hanging: the flags below are test-locals, so
+ *  an assertion that throws before one is set can never set it, and an unbounded poll would
+ *  leave a 25ms timer running against a torn-down page. Timing out just fulfils the request
+ *  — the spec has already failed for its own reason by then, and it fails with its own
+ *  assertion rather than a mystery timeout. */
+async function until(ready: () => boolean, budgetMs = 15_000): Promise<void> {
+  const deadline = Date.now() + budgetMs;
+  while (!ready() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+}
+
 function sse(frames: { topic: string; data: Record<string, unknown> }[]) {
   return frames.map((f) => `data: ${JSON.stringify(f)}\n\n`).join("");
 }
@@ -85,14 +97,14 @@ test("a server-fired turn streams its narration and tools, then settles into a c
   let terminalReleased = false;
   await page.route("**/api/events**", async (route) => {
     if (phase++ === 0) {
-      while (!liveReleased) await new Promise((r) => setTimeout(r, 25));
+      await until(() => liveReleased);
       return route.fulfill({
         status: 200,
         headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
         body: sse(live),
       });
     }
-    while (!terminalReleased) await new Promise((r) => setTimeout(r, 25));
+    await until(() => terminalReleased);
     // The terminal event carries the trigger `origin` (#3028) so the settled turn renders
     // as a result card.
     route.fulfill({
