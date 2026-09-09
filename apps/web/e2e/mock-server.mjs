@@ -644,7 +644,11 @@ async function handleA2AStream(req, res, body) {
   // sequence in ONE turn is the shape behind the doubled-answer regression the
   // double-render specs guard, and parking is what makes it raceless: the spec never
   // has to land a keystroke inside a frame gap.
-  const parkBefore = /STEER ME/i.test(prompt) ? 3 : -1;
+  // "STEER LATE" parks at the last moment instead — after the whole answer has
+  // streamed, just before the terminal frame — so the split freezes EVERYTHING and
+  // the continuation opens for text that never comes. That turn has to settle
+  // without leaving a blank bubble under the answer.
+  const parkBefore = /STEER LATE/i.test(prompt) ? frames.length - 2 : /STEER ME/i.test(prompt) ? 3 : -1;
   for (const [index, frame] of frames.entries()) {
     if (index === parkBefore) {
       parkedTurn = { items: [] };

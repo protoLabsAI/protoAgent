@@ -166,3 +166,37 @@ test("interjecting mid-turn: the answer renders once, with the steer inline", as
   expect(rendered.split(PREAMBLE_ANSWER).length - 1, "answer copies on screen").toBe(1);
   expect(rendered.indexOf(PREAMBLE)).toBeLessThan(rendered.indexOf(STEER));
 });
+
+test("interjecting after the agent has finished: no blank bubble under the answer", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  const composer = page.locator("textarea").first();
+  await composer.waitFor({ state: "visible" });
+  // STEER LATE parks the turn after its whole answer has streamed, so the split
+  // freezes everything and the continuation is opened for text that never arrives.
+  await composer.fill("PREAMBLE, STEER LATE: look it up");
+  await composer.press("Enter");
+  await expect(page.getByText(PREAMBLE_ANSWER)).toBeVisible({ timeout: 15_000 });
+
+  await composer.fill(STEER);
+  await composer.press("Enter");
+  await page.waitForTimeout(1500); // the turn finishes, then the debounced persist
+
+  const bubbles = await page.evaluate(
+    ([key]) => {
+      const raw = window.localStorage.getItem(key);
+      if (!raw) return [];
+      const state = JSON.parse(raw) as { sessions: { messages: { role: string; content: string }[] }[] };
+      return state.sessions.flatMap((s) => s.messages).map((m) => `${m.role}:${m.content}`);
+    },
+    [STORAGE_KEY] as const,
+  );
+  // The whole answer in ONE bubble, the interjection after it — and crucially no
+  // third, empty assistant bubble left holding the turn open.
+  expect(bubbles).toEqual([
+    "user:PREAMBLE, STEER LATE: look it up",
+    `assistant:${PREAMBLE} ${PREAMBLE_ANSWER}`,
+    `user:${STEER}`,
+  ]);
+  const rendered = await page.locator(".chat-session-slot:not([hidden])").innerText();
+  expect(rendered.split(PREAMBLE_ANSWER).length - 1, "answer copies on screen").toBe(1);
+});

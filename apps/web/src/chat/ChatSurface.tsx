@@ -2149,23 +2149,31 @@ function ChatSessionSlot({
           const now = Date.now();
           chatStore.updateMessages(
             session.id,
-            latest.messages.map((message) => {
-              if (message.id !== assistantId) return message;
-              // A completed turn can't have tools still running: a tool_end frame
-              // that races with the terminal `done` (e.g. a workflow card whose
-              // end arrives in the same tick) would otherwise leave the card
-              // spinning forever. Flip any lingering `running` cards to `done`.
-              const toolCalls = message.toolCalls?.map((c) =>
-                c.status === "running"
-                  ? {
-                      ...c,
-                      status: "done" as const,
-                      durationMs: c.durationMs ?? (c.startedAt !== undefined ? now - c.startedAt : undefined),
-                    }
-                  : c,
-              );
-              return { ...message, status: "done", toolCalls };
-            }),
+            // A turn split to place a steer/delegation can end with NOTHING after the
+            // split — the agent said everything before it consumed the interjection —
+            // leaving a continuation that opened for text which never came. Settling
+            // that draws a blank row under the answer, so fold it away (turnText.ts).
+            // Same move as the pure-fan-out drop above, for the same reason.
+            settleTurnBubbles(
+              latest.messages.map((message) => {
+                if (message.id !== assistantId) return message;
+                // A completed turn can't have tools still running: a tool_end frame
+                // that races with the terminal `done` (e.g. a workflow card whose
+                // end arrives in the same tick) would otherwise leave the card
+                // spinning forever. Flip any lingering `running` cards to `done`.
+                const toolCalls = message.toolCalls?.map((c) =>
+                  c.status === "running"
+                    ? {
+                        ...c,
+                        status: "done" as const,
+                        durationMs: c.durationMs ?? (c.startedAt !== undefined ? now - c.startedAt : undefined),
+                      }
+                    : c,
+                );
+                return { ...message, status: "done", toolCalls };
+              }),
+              assistantId,
+            ),
           );
         },
       }, {
