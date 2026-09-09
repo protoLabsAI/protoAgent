@@ -3,6 +3,8 @@ operator looks (``/api/runtime/status`` warnings), and the notice self-clears.""
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from graph.plugins import setup_gaps
@@ -58,7 +60,7 @@ def test_caps_message_length_and_gaps_per_plugin():
     assert any(g["message"] == "updated" for g in setup_gaps.active())
 
 
-# ── Declarative actions (foundation for a future console mapper) ─────────────────────────
+# -- Declarative actions (foundation for a future console mapper) --
 
 
 def test_old_signature_stores_no_actions_key_and_is_byte_identical():
@@ -98,6 +100,16 @@ def test_a_list_of_actions_is_kept_in_order():
     assert [a["kind"] for a in setup_gaps.active()[0]["actions"]] == ["plugin_config", "global_settings"]
 
 
+def test_action_records_are_json_serializable():
+    setup_gaps.report(
+        "p",
+        "k",
+        "m",
+        action={"kind": "global_settings", "target": "security.auth", "fields": ["token"]},
+    )
+    assert json.loads(json.dumps(setup_gaps.active())) == setup_gaps.active()
+
+
 def test_unknown_action_kind_is_dropped():
     # r2: an unrecognized (potentially executable) kind is never retained.
     setup_gaps.report("p", "k", "m", action={"kind": "run_shell", "cmd": "rm -rf /"})
@@ -118,22 +130,32 @@ def test_arbitrary_url_target_is_rejected():
     assert setup_gaps.active()[0]["actions"] == [{"kind": "global_settings"}]
 
 
-def test_html_in_label_is_stripped():
+def test_html_in_label_is_omitted():
     # r2: a plugin string never carries markup through.
     setup_gaps.report("p", "k", "m", action={"kind": "plugin_config", "label": "<script>alert(1)</script>Fix"})
-    label = setup_gaps.active()[0]["actions"][0]["label"]
-    assert "<" not in label and ">" not in label
-    assert label == "scriptalert(1)/scriptFix"
+    assert setup_gaps.active()[0]["actions"][0] == {"kind": "plugin_config", "target": "p"}
 
 
-def test_action_bounds_cap_count_label_length_and_field_count():
+def test_urlish_label_and_field_are_omitted():
+    setup_gaps.report(
+        "p",
+        "k",
+        "m",
+        action={"kind": "plugin_config", "label": "https://evil.example", "fields": ["token", "file://secret"]},
+    )
+    assert setup_gaps.active()[0]["actions"] == [{"kind": "plugin_config", "target": "p", "fields": ["token"]}]
+
+
+def test_action_bounds_cap_count_and_omit_oversized_text():
     # r3: oversized input is bounded, not stored whole.
     setup_gaps.report("p", "many", "m", action=[{"kind": "plugin_config"}] * (setup_gaps.MAX_ACTIONS + 3))
     assert len(setup_gaps.active()[0]["actions"]) == setup_gaps.MAX_ACTIONS
 
     setup_gaps.report("p", "label", "m", action={"kind": "plugin_config", "label": "x" * 500})
-    long = next(g for g in setup_gaps.active() if g["key"] == "label")["actions"][0]["label"]
-    assert len(long) == setup_gaps.MAX_ACTION_STR_CHARS
+    assert next(g for g in setup_gaps.active() if g["key"] == "label")["actions"][0] == {
+        "kind": "plugin_config",
+        "target": "p",
+    }
 
     setup_gaps.report(
         "p",

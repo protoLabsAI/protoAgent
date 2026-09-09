@@ -28,7 +28,7 @@ MAX_GAPS_PER_PLUGIN = 16
 #                      optional "actions": [sanitized declarative action, …]}
 _GAPS: dict[tuple[str, str], dict] = {}
 
-# ── Declarative remediation actions (foundation for a future console mapper) ──────────────
+# -- Declarative remediation actions (foundation for a future console mapper) --
 # A gap MAY carry one or more *actions* — a bounded, declarative hint the console can later
 # map to a "fix this" affordance ("Open plugin settings"). They are deliberately CLOSED,
 # server-validated DATA, never behavior: a fixed ``kind`` vocabulary, bounded plain-text
@@ -43,14 +43,22 @@ MAX_ACTION_FIELDS = 8
 # A config/settings target is an IDENTIFIER (a section slug / dotted path), never a URL:
 # the char class excludes ``:`` so no ``scheme://`` can survive, and ``//`` is rejected too.
 _TARGET_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-/]{0,119}$")
+_URLISH_RE = re.compile(r"(^|[^\w])(?:[A-Za-z][A-Za-z0-9+.-]*:|//)")
 
 
-def _scrub(value) -> str:
-    """A bounded plain-text fragment: collapse whitespace, strip the angle brackets that
-    would let markup ride through, and cap the length. Never raises."""
-    text = re.sub(r"\s+", " ", re.sub(r"[<>]", "", str(value))).strip()
-    if len(text) > MAX_ACTION_STR_CHARS:
-        text = text[: MAX_ACTION_STR_CHARS - 1] + "…"
+def _safe_text(value: str) -> str | None:
+    """Project a caller-supplied string onto the safe display-text subset.
+
+    HTML-ish and URL-ish values are omitted instead of transformed into retained text:
+    the future console mapper owns navigation/actions, and plugin-provided strings never
+    become markup, links, or callbacks. Oversized values are also omitted; callers may
+    retry with a concise label/field instead of storing a truncated surprise.
+    """
+    if "<" in value or ">" in value or _URLISH_RE.search(value):
+        return None
+    text = re.sub(r"\s+", " ", value).strip()
+    if not text or len(text) > MAX_ACTION_STR_CHARS:
+        return None
     return text
 
 
@@ -75,17 +83,25 @@ def _sanitize_action(action, plugin_id: str) -> dict | None:
             target = target.strip()
             if target and "//" not in target and _TARGET_RE.match(target):
                 out["target"] = target
-    # label — optional display text; a string only, bounded, markup stripped.
+    # label — optional display text; a string only, bounded, no markup/URLs.
     label = action.get("label")
     if isinstance(label, str):
-        label = _scrub(label)
+        label = _safe_text(label)
         if label:
             out["label"] = label
     # fields — optional config keys to highlight; bounded in count and length, non-strings
     # dropped.
     fields = action.get("fields")
     if isinstance(fields, (list, tuple)):
-        clean = [f for f in (_scrub(x) for x in fields if isinstance(x, str)) if f][:MAX_ACTION_FIELDS]
+        clean = []
+        for candidate in fields:
+            if len(clean) >= MAX_ACTION_FIELDS:
+                break
+            if not isinstance(candidate, str):
+                continue
+            field = _safe_text(candidate)
+            if field:
+                clean.append(field)
         if clean:
             out["fields"] = clean
     return out
@@ -96,9 +112,11 @@ def _sanitize_actions(action, plugin_id: str) -> list[dict]:
     bounded list of safe actions. Any bad entry is skipped; the whole thing never raises."""
     if action is None:
         return []
-    raw = list(action) if isinstance(action, (list, tuple)) else [action]
+    raw = action if isinstance(action, (list, tuple)) else [action]
     out: list[dict] = []
-    for candidate in raw[:MAX_ACTIONS]:
+    for index, candidate in enumerate(raw):
+        if index >= MAX_ACTIONS:
+            break
         try:
             safe = _sanitize_action(candidate, plugin_id)
         except Exception:  # noqa: BLE001 — a hostile payload must degrade, not crash loading

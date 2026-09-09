@@ -72,6 +72,20 @@ export type RuntimeStatus = {
   /** User-facing operational alerts (e.g. a live co-located instance sharing
    *  this data root, #706) — the shell banners them under the topbar. */
   warnings?: string[];
+  /** Structured plugin-reported setup gaps. `warnings[]` remains the legacy
+   *  display projection; this block is declarative data for future fix controls. */
+  setup_gaps?: {
+    plugin: string;
+    label: string;
+    key: string;
+    message: string;
+    actions?: {
+      kind: "plugin_config" | "global_settings";
+      target?: string;
+      label?: string;
+      fields?: string[];
+    }[];
+  }[];
   /** Stable per-data-root uid — the TenantGuard keys per-origin client state on it
    *  (a different backend reusing this address must not render this one's chats). */
   instance_uid?: string;

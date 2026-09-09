@@ -61,7 +61,28 @@ def test_runtime_status_handles_missing_config() -> None:
     # No config yet (booting) → initializing, not "disabled".
     assert status["knowledge"]["status"] == "initializing"
     assert status["project"]["allowed_dirs"] == []
+    assert status["setup_gaps"] == []
     assert status["version"] == ""  # not passed — defaults empty, key still present
+
+
+def test_runtime_status_carries_structured_setup_gaps_without_touching_warnings() -> None:
+    gap = {
+        "plugin": "project_board",
+        "label": "Project Board",
+        "key": "br",
+        "message": "beads CLI missing",
+        "actions": [{"kind": "plugin_config", "target": "project_board"}],
+    }
+    status = build_runtime_status(
+        config=None,
+        setup_complete=False,
+        graph_loaded=False,
+        warnings=["Project Board: beads CLI missing", ""],
+        setup_gaps=[gap],
+    )
+
+    assert status["warnings"] == ["Project Board: beads CLI missing"]
+    assert status["setup_gaps"] == [gap]
 
 
 def test_runtime_status_carries_version() -> None:
