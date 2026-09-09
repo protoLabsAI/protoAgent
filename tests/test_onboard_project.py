@@ -95,6 +95,40 @@ def test_enabled_returns_tool(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# the stock default (#3396)
+# ---------------------------------------------------------------------------
+#
+# `onboarding.enabled` defaults ON so the surface is discoverable — the tool exists
+# and can NAME what is missing, and the settings fields stop hiding. These pin the
+# claim that pays for that: the switch is not the consent, the bounds are, and a
+# stock install can still onboard exactly nothing.
+
+
+def test_default_config_surfaces_the_tool():
+    assert [t.name for t in onboard_tools.build_onboard_tools(LangGraphConfig())] == ["onboard_project"]
+
+
+@pytest.mark.asyncio
+async def test_default_config_refuses_every_source(mocks):
+    """Empty `allow` matches nothing — so a stock install clones nothing, and the
+    refusal names the (empty) pattern set rather than failing silently."""
+    out = await _tool(LangGraphConfig()).ainvoke({"github_repo": "acme/widgets"})
+    assert out.startswith("Refused:")
+    assert "allowed source pattern" in out
+    assert mocks.clone_calls == [] and mocks.apply_calls == []
+
+
+@pytest.mark.asyncio
+async def test_default_config_has_no_space_to_clone_into(mocks):
+    """Even with a source allowed, an unset root leaves nowhere consented to write."""
+    config = LangGraphConfig(onboarding_allow=["github.com/acme/*"])
+    assert config.onboarding_root == ""
+    out = await _tool(config).ainvoke({"github_repo": "acme/widgets"})
+    assert out.startswith(("Refused:", "Error:"))
+    assert mocks.clone_calls == [] and mocks.apply_calls == []
+
+
+# ---------------------------------------------------------------------------
 # refusal paths
 # ---------------------------------------------------------------------------
 

@@ -254,7 +254,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "prompt_cache_force": False,
     "prompt_cache_ttl": "5m",
     "projects": [],  # managed projects registry (ADR 0095) — top-level list of dicts
-    "onboarding_enabled": False,
+    "onboarding_enabled": True,
     "onboarding_root": "",
     "onboarding_allow": [],
     "onboarding_write_default": False,

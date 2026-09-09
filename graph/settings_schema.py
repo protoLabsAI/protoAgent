@@ -1574,8 +1574,10 @@ FIELDS: list[Field] = [
         "Enable project onboarding",
         "bool",
         "Project onboarding",
-        "Let the agent clone and register managed projects within the pre-consented "
-        "space (root + allow globs). Off by default — the operator opts in.",
+        "Surfaces the onboarding tools and the fields below. The CONSENT is those "
+        "fields, not this switch: with no allowed sources nothing can be cloned, and "
+        "with no root nothing can be registered — so a stock install onboards nothing. "
+        "Turn this off to remove the onboarding surface entirely.",
     ),
     Field(
         "onboarding.root",
