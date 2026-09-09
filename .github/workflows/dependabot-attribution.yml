@@ -1,0 +1,99 @@
+# Regenerate THIRD_PARTY_LICENSES.md for a dependabot PR (#3393).
+#
+# Why this exists: dependabot updates uv.lock / package-lock.json but never regenerates
+# the attribution manifest, so `gen_attribution --check` inside `scripts/gate.py
+# --lint-only` fails and EVERY dependency PR arrives red. It has been hand-fixed at least
+# five times in four months, and the red check is named "Lint (ruff + import contracts)" —
+# both of which pass — so the failure points away from its own cause.
+#
+# ── Why this is split across two workflows ──────────────────────────────────────────────
+#
+# Regenerating correctly REQUIRES installing the bumped dependency. The manifest back-fills
+# licenses from its own committed copy (a pinned name==version's license is immutable), but
+# a BUMPED version is a new key with no cached entry, so without the install it lands as
+# `UNKNOWN` — verified by simulating a bump in a bare env. So this job must run `uv sync`,
+# which can execute build hooks from an unreviewed dependency.
+#
+# That is acceptable on its own — CI already installs these same packages to run the test
+# suite. What must NOT happen is the same job holding a write-capable token while doing it.
+# So the split is deliberate:
+#
+#   THIS workflow      installs deps, regenerates, uploads the result. No secrets. On a
+#                      dependabot `pull_request` run GitHub grants a read-only token and
+#                      no secrets anyway — this relies on that rather than fighting it.
+#   ...-commit.yml     picks the artifact up via `workflow_run` (base-repo context, so it
+#                      HAS secrets) and commits it. It installs nothing and runs no
+#                      dependency code.
+#
+# Collapsing these into one job would hand a PAT to a process that just executed a
+# stranger's setup.py.
+
+name: Dependabot attribution
+
+on:
+  pull_request:
+    paths:
+      - "uv.lock"
+      - "package-lock.json"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependabot-attribution-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  regenerate:
+    # Only bot bumps. A human touching the lock is expected to run the documented
+    # `scripts/gate.py --lint-only` and fix the manifest themselves.
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          # MUST match checks.yml and prepare-release.yml. uv's lock output is
+          # version-dependent, so a different uv here would rewrite uv.lock and the
+          # lockfile gate would then fail on a file this workflow itself churned.
+          version: "0.11.29"
+
+      - name: Install the bumped dependencies
+        # Required for correctness, not speed: a bumped version has no cached license in
+        # the committed manifest, so without the install it regenerates as UNKNOWN.
+        run: uv sync
+
+      - name: Regenerate the attribution manifest
+        run: uv run python scripts/gen_attribution.py
+
+      - name: Stop if nothing changed
+        id: diff
+        run: |
+          if git diff --quiet -- THIRD_PARTY_LICENSES.md; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "attribution already in sync — nothing to commit"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git diff --stat -- THIRD_PARTY_LICENSES.md
+          fi
+
+      - name: Stage the regenerated manifest for the commit workflow
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          mkdir -p _attribution
+          cp THIRD_PARTY_LICENSES.md _attribution/
+          # The commit workflow runs in the BASE repo context and does not know which PR
+          # triggered it, so the head ref travels with the artifact.
+          printf '%s\n' "${{ github.event.pull_request.number }}" > _attribution/pr
+          printf '%s\n' "${{ github.event.pull_request.head.ref }}" > _attribution/head-ref
+
+      - uses: actions/upload-artifact@v4
+        if: steps.diff.outputs.changed == 'true'
+        with:
+          name: attribution
+          path: _attribution/
+          retention-days: 1
