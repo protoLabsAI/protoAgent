@@ -993,6 +993,14 @@ export type ChatMessage = {
   /** A2A task id for this turn — persisted so a stuck `streaming` message can be
    *  reconciled against the server's task state on reload (self-heal). */
   taskId?: string;
+  /** Set on a bubble FROZEN out of a longer turn by an inline split — the console
+   *  cuts its live assistant message in two to place a consumed mid-turn steer
+   *  (#3150) or a delegation exchange (#3042) where it actually happened. Holds the
+   *  id of the turn's continuation (the still-live bubble), which is what makes the
+   *  pieces addressable as ONE turn: the authoritative frames carry the WHOLE turn's
+   *  text, so it is distributed across them rather than re-landed on each
+   *  (`turnText.ts`). Persisted — the split outlives the stream that made it. */
+  splitOf?: string;
   /** Trigger origin of a SERVER-INITIATED turn (#3028): a scheduled fire ("scheduler"), a
    *  watch reaction ("watch" / "watch-<id>"), a background push-resume ("background-resume"),
    *  or another autonomous wake. Set by ChatResumeWatch on the SETTLED message (never the live

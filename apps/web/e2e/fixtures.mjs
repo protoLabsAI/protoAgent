@@ -12,6 +12,7 @@ export const COST_EXT_URI = "https://proto-labs.ai/a2a/ext/cost-v1";
 export const CONTEXT_MIME = "application/vnd.protolabs.context-v1+json";
 export const COMPONENT_MIME = "application/vnd.protolabs.component-v1+json";
 export const HITL_MIME = "application/vnd.protolabs.hitl-v1+json";
+export const STEER_CONSUMED_MIME = "application/vnd.protolabs.steer-consumed-v1+json";
 
 export const RUNTIME_STATUS = {
   setup_complete: true,
@@ -1591,3 +1592,29 @@ export const VERIFIERS = {
     { name: "careercoach:new_matches", plugin_id: "careercoach", description: "", source: "plugin" },
   ],
 };
+
+/** A mid-turn steer the agent has FOLDED IN: a working status frame carrying the
+ *  steer-consumed-v1 DataPart, exactly as a2a_impl emits it when the graph reads a
+ *  queued message. The console splits its live assistant bubble at this frame to
+ *  place the operator's interjection where the agent actually consumed it (#3150) —
+ *  after which the terminal frame's FULL-turn text must not re-land the prose the
+ *  frozen half already shows (turnText.ts). */
+export function steerConsumedFrame({ rpcId, contextId, taskId, items }) {
+  return {
+    jsonrpc: "2.0",
+    id: rpcId,
+    result: {
+      kind: "status-update",
+      taskId,
+      contextId,
+      status: {
+        state: "working",
+        message: {
+          role: "agent",
+          parts: [{ kind: "data", data: { items }, metadata: { mimeType: STEER_CONSUMED_MIME } }],
+        },
+      },
+      final: false,
+    },
+  };
+}

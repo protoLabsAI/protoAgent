@@ -27,8 +27,8 @@
 import { api, type TurnStreamHandlers } from "../lib/api";
 import type { ChatMessage, HitlPayload } from "../lib/types";
 import { chatStore } from "./chat-store";
-import { replaceText } from "./parts";
 import { applyComponent, applyReasoning, applyText, applyToolEvent, applyUsage } from "./turnReducers";
+import { applyCanonicalTurnText, resetTurnForSnapshot, settleTurnBubbles } from "./turnText";
 
 // Kept in sync with streamWatchdog.ts TERMINAL_RE.
 const TERMINAL = /completed|failed|canceled|cancelled|rejected/i;
@@ -72,30 +72,32 @@ function updateMessage(sessionId: string, assistantId: string, fn: (m: any) => a
 
 function finalize(sessionId: string, assistantId: string, state: string, text: string) {
   const failed = /fail|cancel/i.test(state);
-  updateMessage(sessionId, assistantId, (m) => {
-    const toolCalls = m.toolCalls?.map((c: { status: string }) =>
-      c.status === "running" ? { ...c, status: "done" as const } : c,
+  const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
+  if (cur) {
+    // Reconcile the ORDERED parts against the authoritative full-turn text, not
+    // just the flat `content`. ChatMessageView renders a parts-bearing bubble FROM
+    // its parts (foldPlan) and only falls back to `content` when there are none —
+    // so a completed MULTI-PART turn whose trailing prose frame was stranded on the
+    // wire (the resubscribe stream closed after the tool cards but before the answer
+    // artifact-update) would otherwise render only the last tool card: the GetTask
+    // text landed in `content`, which a parts-bearing message never shows (#3082
+    // sibling). That text is the whole TURN's answer and the turn may span several
+    // bubbles (a consumed steer / delegation split it), so it is distributed across
+    // them — landing all of it on the live bubble would draw the earlier bubble's
+    // prose a second time. Mirrors the live path's finalizeFromTask.
+    const reconciled = text ? applyCanonicalTurnText(cur.messages, assistantId, text) : cur.messages;
+    chatStore.updateMessages(
+      sessionId,
+      settleTurnBubbles(
+        reconciled.map((m) => {
+          if (m.id !== assistantId) return m;
+          const toolCalls = m.toolCalls?.map((c) => (c.status === "running" ? { ...c, status: "done" as const } : c));
+          return { ...m, status: failed ? "error" : "done", toolCalls, durableSnapshotFallback: undefined };
+        }),
+        assistantId,
+      ),
     );
-    return {
-      ...m,
-      content: text || m.content,
-      // Reconcile the ORDERED parts against the authoritative full-turn text, not
-      // just the flat `content`. ChatMessageView renders a parts-bearing bubble
-      // FROM its parts (foldPlan) and only falls back to `content` when there are
-      // none — so a completed MULTI-PART turn whose trailing prose frame was
-      // stranded on the wire (the resubscribe stream closed after the tool cards
-      // but before the answer artifact-update) would otherwise render only the
-      // last tool card: the GetTask text landed in `content`, which a parts-bearing
-      // message never shows (#3082 sibling). replaceText lands the canonical answer
-      // as the trailing text run (dropping any partial preamble run so it isn't
-      // doubled); with no parts yet (a bare / history-loaded bubble) the content
-      // fallback still renders it. Mirrors the live path's finalizeFromTask.
-      parts: text ? replaceText(m.parts, text, m.content) : m.parts,
-      status: failed ? "error" : "done",
-      toolCalls,
-      durableSnapshotFallback: undefined,
-    };
-  });
+  }
   chatStore.setSessionStatus(sessionId, failed ? "error" : "idle");
 }
 
@@ -112,19 +114,35 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
     // snapshot and then fail, after which retry/GetTask replays the same history.
     // If no Task frame arrives this hook never runs, preserving the hydrated
     // durable partial as the cold/failure fallback.
-    onTaskSnapshot: () => updateMessage(sessionId, assistantId, (m) => ({
-      ...m,
-      content: "",
-      reasoning: undefined,
-      components: undefined,
-      toolCalls: undefined,
-      parts: undefined,
-      usage: undefined,
-      contextWindow: undefined,
-      durableSnapshotFallback: undefined,
-    })),
+    onTaskSnapshot: () => {
+      // A snapshot is authoritative for the WHOLE turn, so a turn the console had
+      // split to place a consumed steer / delegation folds back to one bubble first
+      // (resetTurnForSnapshot) — the snapshot flattens every text frame into one
+      // accumulation and cannot honestly re-derive where the split belonged.
+      const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
+      if (cur) chatStore.updateMessages(sessionId, resetTurnForSnapshot(cur.messages, assistantId));
+      updateMessage(sessionId, assistantId, (m) => ({
+        ...m,
+        content: "",
+        reasoning: undefined,
+        components: undefined,
+        toolCalls: undefined,
+        parts: undefined,
+        usage: undefined,
+        contextWindow: undefined,
+        durableSnapshotFallback: undefined,
+      }));
+    },
     onStatus: (status) => hooks.onStatus?.(status),
-    onText: (text, append) => updateMessage(sessionId, assistantId, (m) => applyText(m, text, append)),
+    onText: (text, append) => {
+      if (append) {
+        updateMessage(sessionId, assistantId, (m) => applyText(m, text, true));
+        return;
+      }
+      // A replace carries the whole turn — distribute it (turnText.ts).
+      const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
+      if (cur) chatStore.updateMessages(sessionId, applyCanonicalTurnText(cur.messages, assistantId, text));
+    },
     onReasoning: (delta) => updateMessage(sessionId, assistantId, (m) => applyReasoning(m, delta)),
     onToolCall: (evt) => {
       if (evt.name === "show_component") return; // rendered via onComponent — no card noise
