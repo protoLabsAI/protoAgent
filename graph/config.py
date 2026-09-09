@@ -1120,7 +1120,8 @@ class LangGraphConfig:
     #     bound trips first wins, and the window is taken from the END. Raising them buys
     #     continuity at the cost of every addressed dispatch's prompt.
     #   ``room_max_rounds`` — how many serial round-robin rounds one addressed run may
-    #     take. ``1`` (the default) is exactly today's behavior: each addressee answers
+    #     take. ``3`` (the default) lets an addressed cast actually answer each other;
+    #     ``1`` restores the original one-pass behavior, where each addressee answers
     #     once and the exchange ends. Above 1 the addressed set re-runs, in the same
     #     order, so each participant sees what the others just said; a round in which
     #     nobody spoke (empty, or a `pass` token) settles the room early, and the cap is
@@ -1132,7 +1133,13 @@ class LangGraphConfig:
     #     with an empty catch-up. See ``graph/room_rounds.plan_round``.
     room_catchup_max_messages: int = 40
     room_catchup_max_chars: int = 8000
-    room_max_rounds: int = 1
+    # Default 3, not 1. A single pass makes every participant answer the OPERATOR and
+    # never each other, which is the thing a room is for. The cost is real and paid on
+    # every multi-addressee address: early settle is discovered by RUNNING a round in
+    # which everyone passes, so a cast with nothing more to say costs two rounds of
+    # dispatches rather than one. A single addressee is capped at one round regardless,
+    # so a plain `@name` is unaffected.
+    room_max_rounds: int = 3
 
     # Self-authored persona (guarded, default OFF). When on, the lead agent gets the
     # ``edit_soul`` tool — it can rewrite SECTIONS of its own ``SOUL.md`` (persona /

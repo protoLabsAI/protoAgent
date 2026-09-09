@@ -10,6 +10,10 @@ by `room.catchup_max_messages` / `room.catchup_max_chars`.
 
 from __future__ import annotations
 
+import inspect
+
+from graph import room_rounds as rr
+
 from langchain_core.messages import HumanMessage
 
 import graph.mention_op as mop
@@ -101,12 +105,21 @@ def test_catchup_caps_ignores_a_junk_value():
 
 
 def test_the_config_defaults_are_the_module_defaults():
-    """The two must not drift: a fresh config has to reproduce the constants exactly, or
-    turning the feature "off" would still change every existing room."""
+    """The catch-up bounds must not drift from the constants: a fresh config has to
+    reproduce them exactly, or the shipped window would silently differ from the one the
+    module documents.
+
+    `max_rounds` is deliberately NOT one of those. The config default is 3 — a room whose
+    participants never answer each other is not a room — while `plan_round`'s own
+    parameter default stays 1, the conservative fallback for a direct programmatic caller
+    that passes nothing. The two are different questions: what the product does, versus
+    what a bare call does.
+    """
     cfg = LangGraphConfig()
     assert cfg.room_catchup_max_messages == mop._CATCHUP_MAX_MESSAGES
     assert cfg.room_catchup_max_chars == mop._CATCHUP_MAX_CHARS
-    assert cfg.room_max_rounds == 1
+    assert cfg.room_max_rounds == 3
+    assert inspect.signature(rr.plan_round).parameters["max_rounds"].default == 1
 
 
 # --- the ceilings are ENFORCED, not just declared ------------------------------

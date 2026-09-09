@@ -269,7 +269,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     ),
     "room_catchup_max_chars": 8000,
     "room_catchup_max_messages": 40,
-    "room_max_rounds": 1,
+    "room_max_rounds": 3,
     "routing_fallback_models": [],
     "scheduler_enabled": True,
     "security_callback_allowlist": [],

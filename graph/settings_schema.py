@@ -432,10 +432,13 @@ FIELDS: list[Field] = [
         "Max rounds per address",
         "number",
         "Room",
-        "How many serial round-robin rounds one `@` address may take. 1 (the default) = "
-        "each addressee answers once. Above 1, the addressed set re-runs in the same order "
-        "so participants can answer each other; a round in which nobody speaks (a `pass`) "
-        "settles the room early, and this cap is the backstop.",
+        "How many serial round-robin rounds one `@` address may take. 3 (the default) lets "
+        "the addressed set answer each other: it re-runs in the same order so each "
+        "participant sees what the others just said. A round in which nobody speaks (a "
+        "`pass`) settles the room early, and this cap is the backstop — so a cast with "
+        "nothing more to say still costs one extra round to discover that. Set 1 for a "
+        "single pass, where each addressee answers you once and never each other. A lone "
+        "addressee runs one round however high this is.",
         minimum=1,
         maximum=10,
     ),
