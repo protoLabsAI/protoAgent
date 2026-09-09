@@ -262,3 +262,115 @@ async def test_a_ledger_failure_cannot_break_a_background_spawn(ledger_db, tmp_p
         origin_session="s1", subagent_type="researcher", description="d", prompt="p"
     )
     assert job_id
+
+
+# --- settling a detached edge -----------------------------------------------------------
+
+
+async def test_a_background_edge_is_closed_out_when_the_job_lands(ledger_db, tmp_path, monkeypatch):
+    """A detached delegation is written twice: at dispatch so in-flight work is visible,
+    and again at completion so the edge says what actually happened.
+
+    Recording only the dispatch leaves every background edge reading `ok` with a zero
+    duration forever — a claim about an outcome nobody observed.
+    """
+    from background.manager import BackgroundManager
+    from background.store import BackgroundStore
+
+    store = BackgroundStore(str(Path(tmp_path) / "bg.db"))
+    mgr = BackgroundManager(
+        agent_name="a", invoke_url="http://127.0.0.1:7870", store=store, api_key="k", bearer_token="b"
+    )
+
+    async def _fire(*_a, **_kw):
+        return None
+
+    monkeypatch.setattr(mgr, "_fire", _fire)
+    job_id = await mgr.spawn(
+        origin_session="s1", subagent_type="researcher", description="dig", prompt="go"
+    )
+
+    # At dispatch: recorded, but the outcome is "dispatched", not "succeeded".
+    assert ledger_db.recent()[0]["duration_ms"] == 0
+
+    store.mark_complete(job_id, "completed", "found it")
+
+    row = ledger_db.recent()[0]
+    assert row["outcome"] == "ok"
+    assert row["duration_ms"] > 0, "a settled edge must carry the work's real duration"
+
+
+async def test_a_failed_background_job_settles_the_edge_as_failed(ledger_db, tmp_path, monkeypatch):
+    from background.manager import BackgroundManager
+    from background.store import BackgroundStore
+
+    store = BackgroundStore(str(Path(tmp_path) / "bg.db"))
+    mgr = BackgroundManager(
+        agent_name="a", invoke_url="http://127.0.0.1:7870", store=store, api_key="k", bearer_token="b"
+    )
+
+    async def _fire(*_a, **_kw):
+        return None
+
+    monkeypatch.setattr(mgr, "_fire", _fire)
+    job_id = await mgr.spawn(
+        origin_session="s1", subagent_type="researcher", description="doomed", prompt="go"
+    )
+    store.mark_complete(job_id, "failed", "the subagent exploded")
+
+    row = ledger_db.recent()[0]
+    assert row["outcome"] == "failed"
+    assert "exploded" in row["error"]
+
+
+async def test_a_canceled_background_job_is_not_recorded_as_a_failure(
+    ledger_db, tmp_path, monkeypatch
+):
+    # Same rule the dispatch path follows: an operator stopping work says nothing about
+    # the delegate.
+    from background.manager import BackgroundManager
+    from background.store import BackgroundStore
+
+    store = BackgroundStore(str(Path(tmp_path) / "bg.db"))
+    mgr = BackgroundManager(
+        agent_name="a", invoke_url="http://127.0.0.1:7870", store=store, api_key="k", bearer_token="b"
+    )
+
+    async def _fire(*_a, **_kw):
+        return None
+
+    monkeypatch.setattr(mgr, "_fire", _fire)
+    job_id = await mgr.spawn(
+        origin_session="s1", subagent_type="researcher", description="stopped", prompt="go"
+    )
+    store.mark_complete(job_id, "canceled", "Canceled.")
+
+    assert ledger_db.recent()[0]["outcome"] == "cancelled"
+
+
+async def test_a_redundant_settle_cannot_restate_a_recorded_outcome(
+    ledger_db, tmp_path, monkeypatch
+):
+    """`mark_complete` is idempotent and BOTH the manager and the A2A terminal hook call
+    it, so a second settle must not overwrite the outcome the first one recorded."""
+    from background.manager import BackgroundManager
+    from background.store import BackgroundStore
+
+    store = BackgroundStore(str(Path(tmp_path) / "bg.db"))
+    mgr = BackgroundManager(
+        agent_name="a", invoke_url="http://127.0.0.1:7870", store=store, api_key="k", bearer_token="b"
+    )
+
+    async def _fire(*_a, **_kw):
+        return None
+
+    monkeypatch.setattr(mgr, "_fire", _fire)
+    job_id = await mgr.spawn(
+        origin_session="s1", subagent_type="researcher", description="d", prompt="p"
+    )
+    assert store.mark_complete(job_id, "failed", "real failure") is True
+    assert store.mark_complete(job_id, "completed", "late no-op") is False
+
+    row = ledger_db.recent()[0]
+    assert row["outcome"] == "failed"
+    assert "real failure" in row["error"]

@@ -12,11 +12,14 @@ jobs and flips it atomically, so a completion is announced to the model exactly 
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+
+log = logging.getLogger("protoagent.background")
 
 STATUSES = ("running", "completed", "failed", "canceled")
 _TERMINAL = ("completed", "failed", "canceled")
@@ -275,9 +278,42 @@ class BackgroundStore:
                 (status, result or "", completed, job_id),
             )
             db.commit()
-            return cur.rowcount > 0
+            transitioned = cur.rowcount > 0
         finally:
             db.close()
+
+        # Close out the delegation ledger edge this job opened at spawn. Hooked HERE, in
+        # the store, because `mark_complete` is the one funnel every settle path goes
+        # through — the manager's own completion and cancel paths AND the A2A terminal
+        # hook in server/a2a.py all land on it. Hooking a caller instead would leave the
+        # next settle path silently unsettled, the same way a dispatch surface that
+        # bypasses graph/ledger never records an edge at all.
+        #
+        # Only on a real transition: `mark_complete` is idempotent, and a redundant call
+        # must not restate an outcome that has already been recorded.
+        if transitioned:
+            try:
+                from graph import ledger
+
+                row = self.get(job_id)
+                elapsed = None
+                if row is not None and getattr(row, "created_at", None):
+                    try:
+                        started = datetime.fromisoformat(row.created_at)
+                        elapsed = max(0, int((datetime.fromisoformat(completed) - started).total_seconds() * 1000))
+                    except ValueError:
+                        elapsed = None
+                ledger.settle_delegation(
+                    job_id,
+                    # `canceled` is not a failure: an operator stopping work says nothing
+                    # about the delegate (the same rule the dispatch path follows).
+                    outcome={"completed": "ok", "failed": "failed"}.get(status, "cancelled"),
+                    duration_ms=elapsed,
+                    error=result if status == "failed" else "",
+                )
+            except Exception:  # noqa: BLE001 — the ledger must never break a completion
+                log.exception("[background] ledger settle failed for %s", job_id)
+        return transitioned
 
     def drain_pending(self, origin_session: str) -> list[BackgroundJob]:
         """Return completed/failed jobs for a session not yet announced, flipping
