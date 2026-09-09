@@ -115,6 +115,13 @@ describe("turnBubbleIndexes", () => {
     expect(turnBubbleIndexes(messages, "A")).toEqual([0, 2]);
   });
 
+  it("still finds the turn after its continuation was folded away", () => {
+    // settleTurnBubbles removes a spent continuation, but callers still hold its id and
+    // may have more to reconcile. The surviving half names it, so the turn stays findable.
+    const messages = [user("hi"), frozen({ content: "the answer" }), user("steer", "s")];
+    expect(turnBubbleIndexes(messages, "A")).toEqual([1]);
+  });
+
   it("is empty when the anchor is gone (a cleared transcript)", () => {
     expect(turnBubbleIndexes([user("hi")], "A")).toEqual([]);
   });
@@ -174,6 +181,17 @@ describe("applyCanonicalTurnText", () => {
     expect(out[0].parts).toEqual([{ kind: "tools", ids: ["t"] }]);
   });
 
+  it("divergence: drops an earlier half left with nothing, rather than a blank row", () => {
+    const messages = [
+      frozen({ content: "prose only", parts: [{ kind: "text", text: "prose only" }] }),
+      user("steer", "s"),
+      live({ content: "tail", parts: [{ kind: "text", text: "tail" }] }),
+    ];
+    const out = applyCanonicalTurnText(messages, "A", "an entirely different answer");
+    expect(out.map((m) => m.id)).toEqual(["s", "A"]);
+    expect(rendered(out)).toBe("an entirely different answer");
+  });
+
   it("is a no-op when the anchor is gone", () => {
     const messages = [user("hi")];
     expect(applyCanonicalTurnText(messages, "A", "x")).toBe(messages);
@@ -190,6 +208,19 @@ describe("settleTurnBubbles", () => {
     const out = settleTurnBubbles(messages, "A");
     expect(out.map((m) => m.id)).toEqual(["F", "s"]);
     expect(out[0].usage).toEqual({ costUsd: 0.02 });
+  });
+
+  it("carries a FAILED continuation's status to the half it folds into", () => {
+    // Otherwise a failed turn renders as a clean answer: the frozen half was stamped
+    // "done" at split time and never learns the turn went wrong.
+    const messages = [
+      frozen({ content: "the answer" }),
+      user("steer", "s"),
+      live({ status: "error" }),
+    ];
+    const out = settleTurnBubbles(messages, "A");
+    expect(out.map((m) => m.id)).toEqual(["F", "s"]);
+    expect(out[0].status).toBe("error");
   });
 
   it("keeps a continuation that carries anything of its own", () => {

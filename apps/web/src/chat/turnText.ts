@@ -79,7 +79,14 @@ function landText(message: ChatMessage, text: string): ChatMessage {
  *  Returns [] when the anchor is gone (a cleared/rewound transcript), and a single
  *  index for the ordinary un-split turn — the overwhelmingly common case. */
 export function turnBubbleIndexes(messages: ChatMessage[], assistantId: string): number[] {
-  const anchor = messages.find((message) => message.id === assistantId);
+  // The continuation may already be GONE — `settleTurnBubbles` folds one away when the
+  // canonical text left it empty — while callers still hold its id and have more to
+  // reconcile (the post-stream durable-task heal, hydration repair). A surviving half
+  // still names it in `splitOf`, so the turn is findable from either end; without this
+  // those callers silently no-op on exactly the turns that were split.
+  const anchor =
+    messages.find((message) => message.id === assistantId) ??
+    messages.find((message) => message.splitOf === assistantId);
   if (!anchor) return [];
   const liveId = anchor.splitOf ?? assistantId;
   const indexes: number[] = [];
@@ -145,12 +152,17 @@ export function applyCanonicalTurnText(
     const remainder = canonical.slice(at).replace(/^\s+/, "");
     return messages.map((message, index) => (index === tail ? landText(message, remainder) : message));
   }
+  // Stripping a PROSE-ONLY earlier half leaves a bubble with nothing in it, and the
+  // transcript draws a row for every message — so drop the ones that end up empty,
+  // the same way a spent continuation is folded. Halves that still carry tool cards
+  // or reasoning stay: they are the record of what the turn did.
   const diverged = new Set(lead);
-  return messages.map((message, index) => {
+  const stripped = messages.map((message, index) => {
     if (index === tail) return landText(message, canonical);
     if (!diverged.has(index)) return message;
     return { ...message, content: "", parts: withoutText(message.parts) };
   });
+  return stripped.filter((message, index) => !diverged.has(index) || !carriesNothing(message));
 }
 
 /** Collapse a split turn back to its anchor before an authoritative Task snapshot
@@ -190,6 +202,11 @@ export function settleTurnBubbles(messages: ChatMessage[], assistantId: string):
       index === lead
         ? {
             ...message,
+            // The continuation is where the turn's OUTCOME was stamped: a failed turn
+            // settles it "error", and folding it away without carrying that would
+            // render the failure as a clean answer, with no Dismiss. The half being
+            // folded into was frozen "done" at split time and knows nothing of it.
+            status: footer.status === "error" ? "error" : message.status,
             usage: message.usage ?? footer.usage,
             contextWindow: message.contextWindow ?? footer.contextWindow,
           }
