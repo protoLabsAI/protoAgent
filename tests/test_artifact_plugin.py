@@ -1342,6 +1342,32 @@ def test_every_view_subresource_is_auth_exempt(monkeypatch, tmp_path):
 
 
 # ── #3401: parallel store mutations must not clobber each other ──────────────────────
+def _same_snapshot_gate(monkeypatch, module, attr):
+    """Force two callers to read the SAME snapshot before either writes.
+
+    A plain start-barrier only releases both threads before the call — it does not stop
+    one from finishing entirely before the other reads, so an unlocked implementation
+    could still pass by luck. Gating INSIDE the read removes that luck: with no lock both
+    readers meet at the barrier holding identical text, so the second write must clobber
+    the first. With the lock, the second reader can't arrive (the first still holds it),
+    the barrier times out, and the edit proceeds correctly — which is why the timeout is
+    short and a broken barrier is not an error here.
+    """
+    import threading
+
+    real = getattr(module, attr)
+    barrier = threading.Barrier(2)
+
+    def gated(*args, **kwargs):
+        out = real(*args, **kwargs)
+        try:
+            barrier.wait(timeout=0.3)
+        except threading.BrokenBarrierError:
+            pass  # serialised: the other caller can't be here, which is the point
+        return out
+
+    monkeypatch.setattr(module, attr, gated)
+
 
 
 def test_parallel_update_artifact_calls_both_land(monkeypatch, tmp_path):
@@ -1357,6 +1383,7 @@ def test_parallel_update_artifact_calls_both_land(monkeypatch, tmp_path):
 
     art = _load(monkeypatch, tmp_path)
     art.show_artifact.invoke({"kind": "html", "code": "<h1>Title</h1>\n<p>Body</p>"})
+    _same_snapshot_gate(monkeypatch, art._store, "_read_store")
 
     start = threading.Barrier(2)
     results: list[str] = []

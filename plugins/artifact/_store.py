@@ -140,27 +140,18 @@ _MUTATION_LOCK = threading.RLock()
 
 def serialized(fn):
     """Run ``fn`` holding the store-mutation lock — for any path that reads the store,
-    changes it, and writes it back. Read-only paths don't need it."""
+    changes it, and writes it back. Read-only paths don't need it.
+
+    Deliberately SYNC-only. An async wrapper that acquired this lock would block the
+    event-loop thread for as long as a tool call held it, stalling unrelated requests —
+    so the panel's mutating routes are plain ``def`` handlers, which FastAPI already runs
+    in a worker thread. Keep them that way: making one ``async def`` would put the wait
+    back on the event loop."""
 
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
         with _MUTATION_LOCK:
             return fn(*args, **kwargs)
-
-    return wrapper
-
-
-def serialized_async(fn):
-    """``serialized`` for the panel's async route handlers, which mutate the same store
-    and can race a tool call. Safe to hold a threading lock across these particular
-    bodies because they contain NO awaits — the work is synchronous file I/O, so the
-    lock is never held across a yield to the event loop. Keep it that way: an ``await``
-    added inside one of these would make this hold the lock across a suspension."""
-
-    @functools.wraps(fn)
-    async def wrapper(*args, **kwargs):
-        with _MUTATION_LOCK:
-            return await fn(*args, **kwargs)
 
     return wrapper
 

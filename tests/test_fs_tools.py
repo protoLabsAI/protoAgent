@@ -1380,9 +1380,35 @@ def test_live_getter_returning_none_falls_back_to_build_config(workspace, monkey
 
 
 # ── #3400: parallel edits must not clobber each other ────────────────────────────────
+def _same_snapshot_gate(monkeypatch, module, attr):
+    """Force two callers to read the SAME snapshot before either writes.
+
+    A plain start-barrier only releases both threads before the call — it does not stop
+    one from finishing entirely before the other reads, so an unlocked implementation
+    could still pass by luck. Gating INSIDE the read removes that luck: with no lock both
+    readers meet at the barrier holding identical text, so the second write must clobber
+    the first. With the lock, the second reader can't arrive (the first still holds it),
+    the barrier times out, and the edit proceeds correctly — which is why the timeout is
+    short and a broken barrier is not an error here.
+    """
+    import threading
+
+    real = getattr(module, attr)
+    barrier = threading.Barrier(2)
+
+    def gated(*args, **kwargs):
+        out = real(*args, **kwargs)
+        try:
+            barrier.wait(timeout=0.3)
+        except threading.BrokenBarrierError:
+            pass  # serialised: the other caller can't be here, which is the point
+        return out
+
+    monkeypatch.setattr(module, attr, gated)
 
 
-def test_parallel_edit_file_calls_both_land(workspace):
+
+def test_parallel_edit_file_calls_both_land(workspace, monkeypatch):
     """Two edits to ONE file from different threads must both survive.
 
     `edit_file` is a read-modify-write and the harness runs independent tool calls in
@@ -1395,8 +1421,11 @@ def test_parallel_edit_file_calls_both_land(workspace):
     """
     import threading
 
+    from tools import fs_tools
+
     _, a, _ = workspace
     (a / "cv.md").write_text("SUMMARY: 8+ years of experience.\n\nEXPERIENCE\n- one\n")
+    _same_snapshot_gate(monkeypatch, fs_tools, "_read_text_verbatim")
     t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
 
     start = threading.Barrier(2)

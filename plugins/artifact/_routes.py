@@ -133,8 +133,8 @@ def _build_data_router():
         return JSONResponse(_store._read_store(), headers={"ETag": etag})
 
     @router.post("/render-status")
-    @_store.serialized_async
-    async def _render_status_route(body: dict = Body(...)) -> dict:
+    @_store.serialized
+    def _render_status_route(body: dict = Body(...)) -> dict:
         # Named *_route: a bare `_render_status` here would shadow the module import
         # for every sibling closure in this builder (the #2817 split's one collision).
         """The sandbox's render verdict for a version, relayed by the shell (#1458): the
@@ -192,8 +192,8 @@ def _build_data_router():
         return {"text": text}
 
     @router.put("/artifact/{art_id}")
-    @_store.serialized_async
-    async def _save_edit(art_id: str, body: dict = Body(...)) -> dict:
+    @_store.serialized
+    def _save_edit(art_id: str, body: dict = Body(...)) -> dict:
         """Save a USER edit (the panel's in-panel code editor) as a new version. Like the
         agent's rewrite, but tagged ``by: user`` so the provenance is visible — and, like
         every edit, it APPENDS a version rather than overwriting (no silent clobber)."""
@@ -244,8 +244,8 @@ def _build_data_router():
         )
 
     @router.delete("/artifact/{art_id}")
-    @_store.serialized_async
-    async def _delete(art_id: str) -> dict:
+    @_store.serialized
+    def _delete(art_id: str) -> dict:
         """Delete an artifact (the panel's trash button). Gated like the rest."""
         store = _store._read_store()
         if _store._find(store, art_id) is None:
