@@ -381,30 +381,12 @@ async def test_runtime_status_carries_plugin_setup_gaps(monkeypatch):
 
     setup_gaps.reset()
     try:
-        setup_gaps.report(
-            "project_board",
-            "br",
-            "beads CLI 'br' not found on PATH",
-            label="Project Board",
-            action={"kind": "plugin_config", "label": "Configure Project Board"},
-        )
+        setup_gaps.report("project_board", "br", "beads CLI 'br' not found on PATH", label="Project Board")
         status = await ch._operator_runtime_status()
         assert "Project Board: beads CLI 'br' not found on PATH" in status["warnings"]
-        assert status["setup_gaps"] == [
-            {
-                "plugin": "project_board",
-                "label": "Project Board",
-                "key": "br",
-                "message": "beads CLI 'br' not found on PATH",
-                "actions": [
-                    {"kind": "plugin_config", "target": "project_board", "label": "Configure Project Board"}
-                ],
-            }
-        ]
         setup_gaps.report("project_board", "br", None)
         status = await ch._operator_runtime_status()
         assert not [w for w in status["warnings"] if w.startswith("Project Board:")]
-        assert status["setup_gaps"] == []
     finally:
         setup_gaps.reset()
 

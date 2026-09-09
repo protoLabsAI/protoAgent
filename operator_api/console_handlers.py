@@ -126,10 +126,8 @@ async def _operator_runtime_status():
     try:
         from graph.plugins import setup_gaps as _setup_gaps
 
-        setup_gaps = _setup_gaps.active()
         warnings.extend(_setup_gaps.warnings())
     except Exception:  # noqa: BLE001 — status must never raise
-        setup_gaps = []
         pass
     return _build_operator_status(
         config=STATE.graph_config,
@@ -150,7 +148,6 @@ async def _operator_runtime_status():
         telemetry_store=STATE.telemetry_store,
         checkpoint_path=STATE.checkpoint_path,
         warnings=warnings,
-        setup_gaps=setup_gaps,
         instance_uid=instance_uid(),
         # App version (pyproject [project].version) — the hub↔remote version
         # handshake (ADR 0042 §I) needs skew between consoles + agents visible.

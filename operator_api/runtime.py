@@ -21,7 +21,6 @@ def build_runtime_status(
     telemetry_store: Any = None,
     checkpoint_path: str = "",
     warnings: list[str] | None = None,
-    setup_gaps: list[dict[str, Any]] | None = None,
     instance_uid: str = "",
     version: str = "",
     graph_auth_error: dict[str, Any] | None = None,
@@ -48,7 +47,6 @@ def build_runtime_status(
     reconnect instead of reading the agent as broken.
     """
     warnings_block = [w for w in (warnings or []) if w]
-    setup_gaps_block = [gap for gap in (setup_gaps or []) if gap]
     project = {"path": project_path, "allowed_dirs": list(allowed_dirs or [])}
 
     skill_count = 0
@@ -78,7 +76,6 @@ def build_runtime_status(
             "scheduler": {"enabled": False, "backend": "disabled"},
             "cache_warmer": {"enabled": False, "loaded": False},
             "warnings": warnings_block,
-            "setup_gaps": setup_gaps_block,
             "instance_uid": instance_uid,
             "version": version,
         }
@@ -160,7 +157,6 @@ def build_runtime_status(
             "telemetry_retention_days": getattr(config, "telemetry_retention_days", None),
         },
         "warnings": warnings_block,
-        "setup_gaps": setup_gaps_block,
         # Stable per-data-root uid — the console keys per-origin client state on it
         # (a different backend on the same address must not render this one's chats).
         "instance_uid": instance_uid,
