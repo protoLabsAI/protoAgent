@@ -17,11 +17,9 @@ import type { ToolCall } from "../lib/types";
 let root: Root | null = null;
 let host: HTMLElement | null = null;
 
-async function render(props: {
-  calls: ToolCall[];
-  streaming?: boolean;
-  spotlight?: boolean;
-}): Promise<HTMLElement> {
+type ToolCallsProps = { calls: ToolCall[]; streaming?: boolean; spotlight?: boolean };
+
+async function render(props: ToolCallsProps): Promise<HTMLElement> {
   host = document.createElement("div");
   document.body.appendChild(host);
   await act(async () => {
@@ -29,6 +27,14 @@ async function render(props: {
     root.render(createElement(ToolCalls, props));
   });
   return host;
+}
+
+/** Re-render the SAME root with new props — the streaming→settled transition as React
+ *  actually performs it, which is the only way to observe a remount. */
+async function rerender(props: ToolCallsProps): Promise<void> {
+  await act(async () => {
+    root!.render(createElement(ToolCalls, props));
+  });
 }
 
 afterEach(async () => {
@@ -164,5 +170,50 @@ describe("background delegation chip (#2896)", () => {
     });
     expect(el.querySelector(".tool-bg-summary")).toBeNull();
     expect(summaryTexts(el)).toEqual(["3 tools"]); // the normal settled fan-out fold
+  });
+});
+
+// #3390 — the chips must SURVIVE the streaming→settled transition, not be rebuilt by it.
+//
+// `ToolCalls` renders its chips from branches holding different numbers of children (a live
+// turn has a spotlight slot, a settled one doesn't). React matches unkeyed children by
+// POSITION, so an unkeyed chip that shifts index lands in a slot that held something else
+// and is remounted — and `ToolCardSummary`'s `open` is uncontrolled, so a remount silently
+// throws away whatever the operator had expanded, exactly when their turn finishes.
+//
+// Node identity is the honest assertion here: same DOM node across the transition ⇒ React
+// updated it in place ⇒ its disclosure state is intact. Checking "is it still open?" would
+// pass on a remount that happened to default open.
+describe("chips survive the settle (#3390)", () => {
+  it("keeps the background chip's DOM node across streaming → settled", async () => {
+    const calls = [bgDelegate(1), bgDelegate(2), bgDelegate(3)];
+    const el = await render({ calls, streaming: true });
+    const live = el.querySelector(".tool-bg-summary");
+    expect(live).not.toBeNull();
+
+    await rerender({ calls, streaming: false });
+    expect(el.querySelector(".tool-bg-summary")).toBe(live);
+  });
+
+  it("keeps it across the transition when a foreground tool is present too", async () => {
+    // The mixed turn takes a different settled branch (a lone foreground card renders
+    // inline), so the chip's index shifts differently — same invariant, other path.
+    const calls = [fgSearch(), bgDelegate(1)];
+    const el = await render({ calls, streaming: true });
+    const live = el.querySelector(".tool-bg-summary");
+    expect(live).not.toBeNull();
+
+    await rerender({ calls, streaming: false });
+    expect(el.querySelector(".tool-bg-summary")).toBe(live);
+  });
+
+  it("keeps the foreground fold chip's node when a fan-out settles", async () => {
+    const calls = [fgSearch(), fgSearch(), fgSearch()];
+    const el = await render({ calls, streaming: true });
+    const live = el.querySelector(".pl-toolcard-summary");
+    expect(live).not.toBeNull();
+
+    await rerender({ calls, streaming: false });
+    expect(el.querySelector(".pl-toolcard-summary")).toBe(live);
   });
 });

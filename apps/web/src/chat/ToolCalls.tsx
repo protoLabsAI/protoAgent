@@ -13,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { Fragment } from "react";
 import type { ReactNode } from "react";
 
 import { ToolCard, ToolCardList, ToolCardSummary, ToolSection } from "@protolabsai/ui/tool-card";
@@ -172,8 +173,15 @@ export function ToolCalls({
   );
 
   // The folded summary chip — the block's running total, with the given finished cards inside.
+  //
+  // KEYED, like every other slot below: the branches under this render different numbers of
+  // children (a live turn has a spotlight, a settled one doesn't), so React — which matches
+  // unkeyed children by POSITION — would see a chip arrive where a spotlight used to be and
+  // remount it. `ToolCardSummary`'s `open` is uncontrolled, so a remount silently collapses
+  // whatever the operator had expanded, at the moment their turn finished (#3390).
   const chip = (count: number, folded: ToolCall[]) => (
     <ToolCardSummary
+      key="fold"
       count={count}
       label={count === 1 ? "tool" : "tools"}
       status={failedCount > 0 ? "error" : "done"}
@@ -189,7 +197,7 @@ export function ToolCalls({
   const bgFailedCount = bg.filter((c) => c.status === "error").length;
   const bgChip =
     bg.length > 0 ? (
-      <div className="tool-bg-summary">
+      <div className="tool-bg-summary" key="bg">
         <ToolCardSummary
           count={bg.length}
           label={bg.length === 1 ? "background job" : "background jobs"}
@@ -218,7 +226,7 @@ export function ToolCalls({
     return (
       <ToolCardList className="tool-calls">
         {current ? (
-          <div className="tool-spotlight">
+          <div className="tool-spotlight" key="spotlight">
             <ToolGroup
               key="__spotlight__"
               call={current}
@@ -247,7 +255,7 @@ export function ToolCalls({
         {/* Stable key: the slot updates in place as the current tool advances (no remount
             strobe — see the `spotlight` prop note). */}
         {current ? (
-          <div className="tool-spotlight">
+          <div className="tool-spotlight" key="spotlight">
             <ToolGroup
               key="__spotlight__"
               call={current}
@@ -275,7 +283,10 @@ export function ToolCalls({
   }
   return (
     <ToolCardList className="tool-calls">
-      {fg.map(group)}
+      {/* Fragment-keyed for the same reason as the chips: this slot holds an ARRAY in one
+          branch and nothing in another, and an unkeyed neighbour shifting position is what
+          remounts the chip beside it. */}
+      <Fragment key="cards">{fg.map(group)}</Fragment>
       {bgChip}
     </ToolCardList>
   );

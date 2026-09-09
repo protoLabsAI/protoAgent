@@ -23,6 +23,18 @@ const NARRATION_A = "Three dice and all Push Back.";
 const NARRATION_B = "Ball secured at (8,17).";
 const FINAL = "Turn complete: the ball is secured and the cage is set.";
 
+/** Block a route handler until `ready`, but never past `budgetMs`.
+ *
+ *  The bound is what keeps a FAILING run from hanging: the flags below are test-locals, so
+ *  an assertion that throws before one is set can never set it, and an unbounded poll would
+ *  leave a 25ms timer running against a torn-down page. Timing out just fulfils the request
+ *  — the spec has already failed for its own reason by then, and it fails with its own
+ *  assertion rather than a mystery timeout. */
+async function until(ready: () => boolean, budgetMs = 15_000): Promise<void> {
+  const deadline = Date.now() + budgetMs;
+  while (!ready() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+}
+
 function sse(frames: { topic: string; data: Record<string, unknown> }[]) {
   return frames.map((f) => `data: ${JSON.stringify(f)}\n\n`).join("");
 }
@@ -67,31 +79,60 @@ test("a server-fired turn streams its narration and tools, then settles into a c
   ];
 
   let phase = 0;
-  await page.route("**/api/events**", (route) => {
-    // First connection streams the in-flight turn; the EventSource reconnect then delivers
-    // the terminal event, which is also how a real long turn lands. The terminal event now
-    // carries the trigger `origin` (#3028) so the settled turn renders as a result card.
-    const body = phase++ === 0 ? sse(live) : sse([
-      {
-        topic: "chat.resumed",
-        data: { session_id: SESSION, task_id: TASK, text: FINAL, state: "completed", origin: "scheduler" },
-      },
-      { topic: "turn.finished", data: { session_id: SESSION, origin: "scheduler" } },
-    ]);
+  // Both connections are released by the SPEC, not by the browser (#3390). Two races
+  // otherwise, and the suite hit both:
+  //
+  // 1. The bus dispatches to whoever is subscribed AT DELIVERY TIME and keeps no replay for
+  //    a late subscriber (events.ts). A canned SSE body arrives in one burst the instant the
+  //    route is fulfilled, so on a slow boot the whole live turn can land before
+  //    `ServerTurnWatch` has mounted its `chat.progress` listener — the frames are gone, and
+  //    the spec waits out its timeout for narration that was never rendered.
+  // 2. The terminal event arrives on the RECONNECT and DESTROYS what phase 1 asserts on (it
+  //    supersedes the streamed narration), so a quick reconnect can settle the turn before
+  //    Playwright ever sees the live view.
+  //
+  // Holding each until its precondition is observable keeps the real two-connection shape
+  // while removing the guesswork about machine speed.
+  let liveReleased = false;
+  let terminalReleased = false;
+  await page.route("**/api/events**", async (route) => {
+    if (phase++ === 0) {
+      await until(() => liveReleased);
+      return route.fulfill({
+        status: 200,
+        headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
+        body: sse(live),
+      });
+    }
+    await until(() => terminalReleased);
+    // The terminal event carries the trigger `origin` (#3028) so the settled turn renders
+    // as a result card.
     route.fulfill({
       status: 200,
       headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
-      body,
+      body: sse([
+        {
+          topic: "chat.resumed",
+          data: { session_id: SESSION, task_id: TASK, text: FINAL, state: "completed", origin: "scheduler" },
+        },
+        { topic: "turn.finished", data: { session_id: SESSION, origin: "scheduler" } },
+      ]),
     });
   });
 
   await page.goto("/app/", { waitUntil: "load" });
+  // The composer being on screen means the chat shell has mounted and its effects have run,
+  // so `ServerTurnWatch` is subscribed and the burst below has somewhere to land.
+  await page.getByPlaceholder(/Message protoAgent/i).waitFor({ state: "visible" });
+  liveReleased = true;
 
   // THE #2361 BUG: this content was invisible until the turn ended. It must be on screen now.
   await expect(page.getByText(NARRATION_A)).toBeVisible();
   await expect(page.getByText(NARRATION_B)).toBeVisible();
   // …and the tool it ran between them.
   await expect(page.locator(".pl-toolcard").filter({ hasText: "roll_block" }).first()).toBeVisible();
+
+  terminalReleased = true; // phase 1 observed — let the reconnect deliver the terminal event
 
   // Phase 2 — the terminal event settles the turn into a COMPACT, collapsed result card (#3028):
   // a scheduled/watch/autonomous result is visually secondary to an operator's own answer.
