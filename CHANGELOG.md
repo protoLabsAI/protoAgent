@@ -15,6 +15,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.163.0] - 2026-09-09
+
+### Changed
+- **Addressed participants now answer each other by default (#3395).**
+  `room.max_rounds` ships at **3** instead of 1. At 1 every addressee answered the operator
+  and never the other participants, which is the thing a room is for — a multi-agent
+  exchange behaved like several parallel one-shot delegations that happened to share a
+  prompt. The addressed set now re-runs in written order, so each participant sees what the
+  others just said. Set `room.max_rounds: 1` to restore the previous single-pass behavior.
+  The cost is real and paid on every multi-addressee address: early settle is discovered by
+  RUNNING a round in which everyone passes, so a cast with nothing more to say now costs two
+  rounds of dispatches rather than one. A single addressee is still capped at one round
+  however high the setting, so a plain `@name` is unchanged.
+
+- **Project onboarding is on by default, so you can find it (#3396).**
+  Onboarding let an agent clone and register a managed project inside a space the
+  operator consented to — but the switch that turned it on was also the switch that
+  made it *visible*, so the feature hid exactly when you needed it: the
+  `onboard_project` tool was absent from the toolset (so the agent couldn't even tell
+  you what to configure), the board's **Add project** button was dead, and the root and
+  allow-list fields stayed hidden behind the toggle. The example config never mentioned
+  the section at all.
+  `enabled` now defaults on and is documented as what it always was — a surface switch,
+  not the consent. The consent is the two bounds, and both are still empty by default:
+  no source matches an empty allow-list, so nothing can be cloned, and there is no root,
+  so nothing can be registered. A stock install gains no new capability, only a surface
+  that names what to set. Turn it off to remove the onboarding tools entirely.
+
+### Fixed
+- **Scheduler failure backoff no longer loses a slot (#3381).** Cron jobs are advanced to their next slot at claim time, but the failure backoff computed its delay from the stale pre-claim `next_fire` the fire carried — so the first eligible backoff was a no-op (it recomputed the slot the claim had already scheduled) and every later delay landed one slot short. The backoff now bases its retry on the persisted post-claim `next_fire`, so a backed-off cron defers the exact number of slots the log reports.
+
+- **`onboard_project` no longer clones into the server's working directory when no root is set (#3397).**
+  With onboarding enabled but `onboarding.root` unset, the tool cloned the repo to a
+  *relative* path — `Path("")` is `Path(".")`, so the root silently became the server
+  process's current directory and the containment check passed trivially — then
+  registered that relative path into the managed-projects registry the filesystem fence
+  projects from. That half-configured state is the natural one, because the root field
+  only appears in Settings once the toggle is on. An unset root is now refused by name,
+  matching the board registry's existing behaviour for the same bound.
+
+- **Parallel `edit_file` calls no longer discard each other's edits (#3400).**
+  `edit_file` reads a file, replaces one string, and writes it back — and the agent runs
+  independent tool calls in parallel. Two edits to the same file both read the original,
+  each applied its change to that snapshot, and the second write won: one edit vanished
+  while **both calls reported "Edited"**. Non-overlapping edits were the worst case,
+  because they are exactly what a model expects to be safe to run at once. The reported
+  incident ended with an agent telling its operator it had removed a claim from a CV that
+  was still in the file. Edits are now serialised per file, so both land — and edits to
+  different files still run concurrently.
+
+- **Parallel artifact updates no longer lose one of the edits (#3401).**
+  Every artifact mutation reads the whole store, changes it, and writes it back. Run two
+  at once and both read the same snapshot, each appended version N+1 to its own copy, and
+  the second write overwrote the first — losing an edit and its version while both
+  reported success. Two updates reporting the *same* new version was the tell. Store
+  mutations are now serialised, including the artifact panel's own edit, revert and
+  delete, which share the store with the tools.
+
+- **A delegate's reply reads as prose again, not one unbroken wall (#3408, #3407).**
+  Everything an ACP delegate narrates between tool calls arrives as a separate chunk, and
+  the adapter concatenated them bare — so a multi-minute job came back as a single
+  paragraph with every sentence fused at the period ("…both PRs first.Both PRs are
+  open…"). Narration that resumes after a tool call now starts a new paragraph, the same
+  fix the executor's durable artifact got in #3210; chunks within one run still join
+  seamlessly. A chunk delivered twice in a row is also dropped now, with a warning: the
+  known emit-side doubling turned out to repeat only the FIRST chunk, which the existing
+  whole-message collapse could not catch, so it was reaching transcripts, rooms and PR
+  bodies.
+
 ## [0.162.0] - 2026-09-09
 
 ### Added

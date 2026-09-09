@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.163.0",
+    "date": "2026-09-09",
+    "changes": [
+      "Addressed participants now answer each other by default (#3395).",
+      "Project onboarding is on by default, so you can find it (#3396).",
+      "Scheduler failure backoff no longer loses a slot (#3381).",
+      "onboard_project no longer clones into the server's working directory when no root is set (#3397).",
+      "Parallel edit_file calls no longer discard each other's edits (#3400).",
+      "Parallel artifact updates no longer lose one of the edits (#3401).",
+      "A delegate's reply reads as prose again, not one unbroken wall (#3408, #3407)."
+    ]
+  },
+  {
     "version": "v0.162.0",
     "date": "2026-09-09",
     "changes": [
