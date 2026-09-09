@@ -1377,3 +1377,92 @@ def test_live_getter_returning_none_falls_back_to_build_config(workspace, monkey
     t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
 
     assert "hello" in t["read_file"].invoke({"project": "a", "path": "src/main.py"})
+
+
+# ── #3400: parallel edits must not clobber each other ────────────────────────────────
+def _same_snapshot_gate(monkeypatch, module, attr):
+    """Force two callers to read the SAME snapshot before either writes.
+
+    A plain start-barrier only releases both threads before the call — it does not stop
+    one from finishing entirely before the other reads, so an unlocked implementation
+    could still pass by luck. Gating INSIDE the read removes that luck: with no lock both
+    readers meet at the barrier holding identical text, so the second write must clobber
+    the first. With the lock, the second reader can't arrive (the first still holds it),
+    the barrier times out, and the edit proceeds correctly — which is why the timeout is
+    short and a broken barrier is not an error here.
+    """
+    import threading
+
+    real = getattr(module, attr)
+    barrier = threading.Barrier(2)
+
+    def gated(*args, **kwargs):
+        out = real(*args, **kwargs)
+        try:
+            barrier.wait(timeout=0.3)
+        except threading.BrokenBarrierError:
+            pass  # serialised: the other caller can't be here, which is the point
+        return out
+
+    monkeypatch.setattr(module, attr, gated)
+
+
+
+def test_parallel_edit_file_calls_both_land(workspace, monkeypatch):
+    """Two edits to ONE file from different threads must both survive.
+
+    `edit_file` is a read-modify-write and the harness runs independent tool calls in
+    PARALLEL. Unserialised, both read the original, each applies its own replacement to
+    that snapshot, and the second write wins — silently discarding the first while BOTH
+    return "Edited". Non-overlapping edits are the worst case, because they're exactly
+    what a model expects to be safe to parallelise: the reported incident ended with the
+    agent telling its operator a claim had been removed from a CV while it was still
+    there. The barrier makes the interleaving deterministic rather than hoping for it.
+    """
+    import threading
+
+    from tools import fs_tools
+
+    _, a, _ = workspace
+    (a / "cv.md").write_text("SUMMARY: 8+ years of experience.\n\nEXPERIENCE\n- one\n")
+    _same_snapshot_gate(monkeypatch, fs_tools, "_read_text_verbatim")
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
+
+    start = threading.Barrier(2)
+    results: list[str] = []
+    lock = threading.Lock()
+
+    def edit(old: str, new: str):
+        start.wait(timeout=5)
+        out = t["edit_file"].invoke({"project": "a", "path": "cv.md", "old": old, "new": new})
+        with lock:
+            results.append(out)
+
+    threads = [
+        threading.Thread(target=edit, args=("8+ years of experience", "experience")),
+        threading.Thread(target=edit, args=("- one\n", "- one\n\nEDUCATION\n- degree\n")),
+    ]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join(timeout=10)
+
+    assert all("Edited" in r for r in results), results
+    final = (a / "cv.md").read_text()
+    # Both edits present — the whole point. Before the fix one of these was gone while
+    # both calls reported success.
+    assert "8+ years" not in final
+    assert "EDUCATION" in final
+
+
+def test_edit_file_serialises_per_path_not_globally(workspace):
+    """Different files must still edit concurrently — the lock is keyed by path, so a
+    slow edit to one file can't serialise the whole agent's filesystem work."""
+    from tools.fs_tools import _edit_lock
+
+    _, a, _ = workspace
+    one, two = a / "one.txt", a / "two.txt"
+    one.write_text("x")
+    two.write_text("x")
+    assert _edit_lock(one) is not _edit_lock(two)
+    assert _edit_lock(one) is _edit_lock(one)

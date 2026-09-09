@@ -1339,3 +1339,74 @@ def test_every_view_subresource_is_auth_exempt(monkeypatch, tmp_path):
         url = src if src.startswith("/") else f"/plugins/artifact/{src}"
         assert any(url.startswith(p) for p in public), f"{url} is auth-gated but fetched tokenless"
     assert "/plugins/artifact/shell.js" in public  # the concrete regression
+
+
+# ── #3401: parallel store mutations must not clobber each other ──────────────────────
+def _same_snapshot_gate(monkeypatch, module, attr):
+    """Force two callers to read the SAME snapshot before either writes.
+
+    A plain start-barrier only releases both threads before the call — it does not stop
+    one from finishing entirely before the other reads, so an unlocked implementation
+    could still pass by luck. Gating INSIDE the read removes that luck: with no lock both
+    readers meet at the barrier holding identical text, so the second write must clobber
+    the first. With the lock, the second reader can't arrive (the first still holds it),
+    the barrier times out, and the edit proceeds correctly — which is why the timeout is
+    short and a broken barrier is not an error here.
+    """
+    import threading
+
+    real = getattr(module, attr)
+    barrier = threading.Barrier(2)
+
+    def gated(*args, **kwargs):
+        out = real(*args, **kwargs)
+        try:
+            barrier.wait(timeout=0.3)
+        except threading.BrokenBarrierError:
+            pass  # serialised: the other caller can't be here, which is the point
+        return out
+
+    monkeypatch.setattr(module, attr, gated)
+
+
+
+def test_parallel_update_artifact_calls_both_land(monkeypatch, tmp_path):
+    """Two updates to ONE artifact from different threads must both survive.
+
+    Every mutating path is read-whole-store → change → write-whole-store, and the harness
+    runs independent tool calls in PARALLEL. Unserialised, both read the same snapshot,
+    each appends version N+1 to its own copy, and the second whole-store write overwrites
+    the first — losing an edit AND its version while both report success. Both reporting
+    the SAME new version is the tell: observed live, two updates each said "version 2".
+    """
+    import threading
+
+    art = _load(monkeypatch, tmp_path)
+    art.show_artifact.invoke({"kind": "html", "code": "<h1>Title</h1>\n<p>Body</p>"})
+    _same_snapshot_gate(monkeypatch, art._store, "_read_store")
+
+    start = threading.Barrier(2)
+    results: list[str] = []
+    lock = threading.Lock()
+
+    def update(old: str, new: str):
+        start.wait(timeout=5)
+        out = art.update_artifact.invoke({"old_string": old, "new_string": new})
+        with lock:
+            results.append(out)
+
+    threads = [
+        threading.Thread(target=update, args=("<h1>Title</h1>", "<h1>Title</h1>\n<nav>links</nav>")),
+        threading.Thread(target=update, args=("<p>Body</p>", "<p>Body text</p>")),
+    ]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join(timeout=10)
+
+    assert all("Updated artifact" in r for r in results), results
+    code = _arts(art)[0]["versions"][-1]["code"]
+    assert "<nav>links</nav>" in code
+    assert "<p>Body text</p>" in code
+    # Two sequential commits, so two new versions — never the same number twice.
+    assert sorted(r.split("version ")[1].rstrip(".") for r in results) == ["2", "3"]
