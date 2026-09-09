@@ -1729,8 +1729,15 @@ class LangGraphConfig:
     projects: list[dict] = field(default_factory=list)
 
     # Project onboarding — bounded clone + register within operator-consented space (#2555).
-    # Off by default; the operator opts in by setting enabled: true and declaring a root + allow globs.
-    onboarding_enabled: bool = False
+    #
+    # ``enabled`` is ON by default (#3396) and is a DISCOVERABILITY switch, not the consent:
+    # the bounds below carry that, and both are empty by default, so a stock install can
+    # onboard exactly nothing. ``allow: []`` matches no source, so every clone is refused;
+    # ``root: ""`` is no consented space, so every registration is refused. Turning this off
+    # additionally removes ``onboard_project`` from the toolset — which is why it defaulted
+    # off and why that was wrong: an absent tool and a hidden settings section left the
+    # operator with a dead "Add project" button and nothing naming what to configure.
+    onboarding_enabled: bool = True
     onboarding_root: str = ""            # e.g. ~/dev — clones land here; registrations must resolve UNDER it
     onboarding_allow: list[str] = field(default_factory=list)  # e.g. [github.com/protoLabsAI/*]
     onboarding_write_default: bool = False  # registered read-only unless overridden per-call
@@ -2335,7 +2342,7 @@ class LangGraphConfig:
             lifecycle_hooks=list(data.get("lifecycle_hooks", []) or []),
             # Managed projects registry (ADR 0095) — top-level ``projects:`` list.
             projects=list(data.get("projects", []) or []),
-            onboarding_enabled=bool((data.get("onboarding") or {}).get("enabled", False)),
+            onboarding_enabled=bool((data.get("onboarding") or {}).get("enabled", True)),
             onboarding_root=str((data.get("onboarding") or {}).get("root", "") or ""),
             onboarding_allow=list((data.get("onboarding") or {}).get("allow") or []),
             onboarding_write_default=bool((data.get("onboarding") or {}).get("write_default", False)),

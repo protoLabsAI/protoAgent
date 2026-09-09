@@ -9,8 +9,16 @@ INSIDE the space the operator consented to. The bounds are the whole point:
 - ``onboarding.root`` — every checkout lands here and every registration must
   RESOLVE under it. A ``../`` or a symlink that would escape the root is refused
   before anything is written.
-- ``onboarding.enabled`` — off by default. When off the tool is ABSENT from the
-  toolset entirely (the factory returns ``[]``), not present-but-refusing.
+- ``onboarding.enabled`` — ON by default (#3396), and a DISCOVERABILITY switch
+  rather than the consent: the two bounds above carry that, and both are empty by
+  default, so a stock install can onboard exactly nothing. Turning it off removes
+  the tool from the toolset entirely (the factory returns ``[]``).
+
+  It defaulted off, which was wrong for the problem #2555 set out to solve: an
+  absent tool plus a settings section nobody thinks to look for left the operator
+  with a dead "Add project" button and no statement of what to configure. Present
+  and refusing BY NAME is the useful shape — it is how the agent tells the
+  operator what to set, which is the request that started #2555 in the first place.
 
 The factory closes over the live ``LangGraphConfig`` (the ``config_tools.py``
 precedent) so the tool reads the resolved onboarding config the graph was built
@@ -114,12 +122,14 @@ def _same_path(a, b: Path) -> bool:
 def build_onboard_tools(config) -> list:
     """Bind ``onboard_project`` against the LIVE config — or return ``[]``.
 
-    When ``onboarding.enabled`` is False the tool is absent from the toolset
-    entirely: an operator who didn't opt in gets no onboarding surface, and the
-    refusal for "disabled" is that absence plus the system prompt naming the
-    config key — not a tool that exists only to say no.
+    ``onboarding.enabled`` is on by default, so the tool is normally PRESENT and
+    refuses by naming the bound it hit (no allowed sources / no root). That refusal
+    is the point: it is how the agent tells the operator what to configure.
+
+    Setting it False removes the tool from the toolset entirely — for an operator
+    who wants no onboarding surface at all, not as the default posture.
     """
-    if not getattr(config, "onboarding_enabled", False):
+    if not getattr(config, "onboarding_enabled", True):
         return []
 
     @tool
@@ -175,6 +185,17 @@ def build_onboard_tools(config) -> list:
         # (1) allow globs — same fnmatch semantics as plugins.sources.allow. Empty
         #     allowlist matches nothing, so onboarding is opt-in by declaration.
         allow = list(getattr(config, "onboarding_allow", []) or [])
+        if not allow:
+            # The stock state now that `enabled` defaults on (#3396), so this is the
+            # FIRST thing most operators see. "does not match any allowed source
+            # pattern ()" — an empty paren — describes the state without naming the
+            # remedy; say what to set and where, since being unconfigured is normal
+            # here rather than a mistake.
+            return (
+                "Refused: no allowed clone sources are configured, so nothing can be "
+                "onboarded — add a pattern under Settings ▸ Capabilities ▸ Project "
+                "onboarding ▸ Allowed sources (e.g. github.com/your-org/*)."
+            )
         if not any(fnmatch.fnmatch(normalized, pat) for pat in allow):
             return (
                 f"Refused: {normalized} does not match any allowed source pattern "
@@ -185,6 +206,18 @@ def build_onboard_tools(config) -> list:
         #     collapses .. and follows symlinks, so an escape is caught here — before
         #     git or the config writer touches anything.
         root_raw = getattr(config, "onboarding_root", "") or ""
+        # An UNSET root is not "anywhere" — it is nowhere. `Path("")` is `Path(".")`,
+        # so without this an empty root silently means the server's working directory
+        # and the containment check below passes trivially: the clone lands in the
+        # process CWD and gets registered. Refuse and name it instead, matching the
+        # board registry's wording for the same bound. (#3397 — latent before
+        # #3396; reachable once `enabled` defaults on, which is what surfaced it.)
+        if not root_raw.strip():
+            return (
+                "Refused: onboarding.root isn't set, so there is no consented space to "
+                "clone into — set Settings ▸ Capabilities ▸ Project onboarding ▸ "
+                "Onboarding root first."
+            )
         root = Path(root_raw).expanduser()
         target = root / repo_name
         if not target.resolve().is_relative_to(root.resolve()):

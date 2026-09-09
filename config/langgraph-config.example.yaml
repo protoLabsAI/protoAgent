@@ -453,6 +453,22 @@ operator:
 #     github: them/theirs
 #     fs: false                         # tracked for github/board only — no fs reach
 
+# Project onboarding (#2555) — how a repo BECOMES one of the managed projects above,
+# without an operator hand-editing this file and restarting.
+#
+# `enabled` surfaces the tools and the fields below; it is not the consent. The consent
+# is `root` and `allow`, and both are empty here, so out of the box this onboards
+# NOTHING: no source matches an empty allowlist, and there is no space to clone into.
+# Fill them in and the agent can clone + register within exactly that space — a `../`
+# or a symlink that would escape the root is refused before anything is written.
+onboarding:
+  enabled: true
+  root: ""                              # e.g. /home/kj/dev — clones land here, and every
+                                        # registration must resolve UNDER it
+  allow: []                             # e.g. [github.com/protoLabsAI/*] — clone-source globs,
+                                        # same semantics as plugins.sources.allow. Empty allows nothing
+  write_default: false                  # onboarded projects are read-only unless a call asks for write
+
 # Box runtime (Host layer, ADR 0047 D8) — box-wide knobs every agent this machine
 # owns inherits. These are HOST defaults: best set once in host-config.yaml or the
 # Settings ▸ Host / App home (a per-agent value here is a silent no-op — the host
