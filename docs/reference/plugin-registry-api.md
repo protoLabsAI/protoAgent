@@ -441,7 +441,7 @@ call; use it for a non-standard location.
 ### `registry.report_setup_gap` {#registry-report-setup-gap}
 
 ```python
-registry.report_setup_gap(key: str, message: str | None, *, label: str | None = None) -> None
+registry.report_setup_gap(key: str, message: str | None, *, label: str | None = None, action=None) -> None
 ```
 
 Tell the operator this plugin can't do its job until something is fixed
@@ -452,6 +452,19 @@ live, so a plugin that re-checks each tick heals the banner without a restart.
 `key` namespaces one gap per concern (`"br"`, `"auth"`); `label` is the
 display name for the banner (defaults to the plugin id). Plugins that also run
 on older hosts guard with `getattr(registry, "report_setup_gap", None)`.
+
+`action` (optional, backward-compatible — omit it and storage/warnings are
+byte-for-byte what they always were) attaches a bounded, DECLARATIVE remediation
+hint the console can later map to a "fix this" affordance: a single action dict or
+a list of them. An action is closed, server-validated DATA, never behavior — a
+fixed `kind` from `setup_gaps.ACTION_KINDS` (`"plugin_config"` opens THIS
+plugin's config section — the target is forced to this plugin, it can't aim at
+another; `"global_settings"` is a reserved safe global target) plus optional
+bounded `label`/`fields` plain text. The host sanitizes on the way in: an
+unknown kind, a callback, an arbitrary URL, HTML, or an oversized payload is
+dropped, not stored, and a malformed action never raises into plugin loading. It
+is the console's job to turn a `kind` into a known control — never a plugin
+string into a URL or callback.
 
 ### `registry.save_media` {#registry-save-media}
 
