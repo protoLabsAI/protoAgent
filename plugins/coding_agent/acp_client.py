@@ -881,7 +881,13 @@ class AcpClient:
                 await self._emit_thought(text)
         elif kind == "tool_call":
             self._turn_tool_calls += 1
-            self._text_after_tool = True  # next narration starts a new paragraph (#3408)
+            # Next narration starts a new paragraph (#3408) — and the adjacent-duplicate
+            # guard resets here too: "adjacent" must mean two chunks BACK TO BACK. The same
+            # sentence either side of a tool call is the agent deliberately restating where
+            # it got to, not the emit-side stutter (#3407), and dropping it would lose real
+            # narration. (QA panel finding on this PR.)
+            self._text_after_tool = True
+            self._last_chunk = ""
             # A tool call STARTED — narrate its title + emit a structured start event so the
             # UI can render a card (parity with the native runtime's tool_start). The card
             # NAME is a short label; the verbose args (structured rawInput, else the title's
