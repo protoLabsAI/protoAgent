@@ -421,11 +421,14 @@ def test_context_overflow_classifier():
         "qwen2.5",
     ],
 )
-def test_the_gateway_client_pins_chat_completions_whatever_the_model_is_called(model):
+def test_the_gateway_client_pins_chat_completions_whatever_the_model_is_called(model, monkeypatch):
     # langchain-openai 1.6.2 flips to `/v1/responses` for any name containing "codex" and
     # for a list of prefixes. Our LiteLLM gateway, a local vLLM and Ollama serve
     # `/v1/chat/completions` and nothing else, so a name-shaped inference silently points
     # the request at an endpoint that 404s.
+    #
+    # Cleared so the assertion is about the default, not about the runner's environment.
+    monkeypatch.delenv("PROTOAGENT_GATEWAY_RESPONSES_API", raising=False)
     llm = _ReasoningChatOpenAI(model=model, api_key="sk-test", base_url="http://localhost:1/v1")
     assert llm.use_responses_api is False
 
@@ -455,18 +458,32 @@ def test_an_operator_can_hand_the_wire_choice_back_to_langchain(monkeypatch):
     assert _build().use_responses_api is None
 
 
-def test_the_native_codex_builder_still_asks_for_the_responses_wire():
-    """Reads the value the Codex builder actually passes, not a copy of it.
+def test_the_native_codex_builder_still_asks_for_the_responses_wire(monkeypatch):
+    """Runs the production builder rather than constructing the client with the value.
 
-    The pinned default lives on the shared base class, so "did the native path keep its
-    opt-in?" is exactly the question a subclass default can silently answer wrong.
+    The pinned default lives on the base class `CodexChatOpenAI` inherits, so the native
+    ChatGPT path now depends on `openai_codex.build_codex_llm` passing
+    `use_responses_api=True` explicitly. Drop that one line and the native path falls
+    silently onto the chat-completions default — against a backend that only speaks
+    Responses. Handing the value to the constructor ourselves would stay green through
+    exactly that regression, which is why it goes through the builder.
     """
-    from graph.providers.codex_client import CodexChatOpenAI
+    import graph.providers.openai_codex as codex_mod
+    from graph.providers import build_native_oauth_llm
+    from graph.providers.oauth import CodexOAuthCreds
 
-    client = CodexChatOpenAI(
-        model="gpt-5.3-codex",
-        api_key="sk-test",
-        base_url="https://chatgpt.com/backend-api/codex",
-        use_responses_api=True,
+    monkeypatch.delenv("PROTOAGENT_GATEWAY_RESPONSES_API", raising=False)
+    monkeypatch.setattr(
+        codex_mod,
+        "resolve_codex_oauth",
+        lambda: CodexOAuthCreds(
+            access_token="tok",
+            account_id="acct",
+            base_url="https://chatgpt.com/backend-api/codex",
+            source="instance_store",
+        ),
     )
+
+    llm = build_native_oauth_llm("openai-codex", LangGraphConfig(), model_name="gpt-5.3-codex")
+    client = getattr(llm, "bound", llm)
     assert client.use_responses_api is True
