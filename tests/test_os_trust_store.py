@@ -181,6 +181,24 @@ def test_injection_makes_ssl_context_os_backed():
 
 # ── behavior: fail-closed is preserved ────────────────────────────────────────────
 
+# What "fails closed" actually asserts: the request must not get an HTTP response.
+#
+# These four sites used to demand `httpx.ConnectError` specifically, and that made them
+# flaky on the Windows runner — a TLS handshake to a cert the trust store rejects can
+# exceed the client timeout there, and httpx then raises `ConnectTimeout` instead
+# ("_ssl.c:993: The handshake operation timed out"). The security property was never
+# violated; the assertion was just narrower than the property.
+#
+# Deliberately NOT `httpx.TransportError`, which would be the tidier-looking parent: it
+# also covers `ReadTimeout`, which happens AFTER a successful handshake, so a real
+# `verify=False` regression could satisfy it. Both members here are connection-phase
+# failures that a verified connection cannot produce — a regression returns 200.
+FAILS_CLOSED = (httpx.ConnectError, httpx.ConnectTimeout)
+# Long enough that a timeout means something is wrong rather than that the runner was
+# busy; ConnectError stays the expected path. Shared with the success-path requests below
+# so a slow runner cannot flake those either.
+TLS_TIMEOUT = 15
+
 
 def test_untrusted_self_signed_cert_still_fails_closed(tmp_path):
     """No ``verify=False`` regression: a chain the OS doesn't trust either must
@@ -195,8 +213,8 @@ def test_untrusted_self_signed_cert_still_fails_closed(tmp_path):
     server._ensure_os_trust_store()  # the CA above was never installed anywhere
 
     with _serve_tls(str(cert_path), str(key_path)) as port:
-        with pytest.raises(httpx.ConnectError):
-            httpx.get(f"https://localhost:{port}/", timeout=5)
+        with pytest.raises(FAILS_CLOSED):
+            httpx.get(f"https://localhost:{port}/", timeout=TLS_TIMEOUT)
 
 
 # ── behavior: an OS-trusted private CA is honored (Windows — where #2643 was filed) ──
@@ -273,12 +291,12 @@ def test_a_ca_trusted_in_the_windows_store_is_trusted_after_injection(tmp_path):
         with _serve_tls(str(cert_path), str(key_path)) as port:
             # Reproduces the reported bug: installed in the OS store, but plain
             # certifi-only httpx (pre-injection) still fails closed.
-            with pytest.raises(httpx.ConnectError):
-                httpx.get(f"https://localhost:{port}/", timeout=5)
+            with pytest.raises(FAILS_CLOSED):
+                httpx.get(f"https://localhost:{port}/", timeout=TLS_TIMEOUT)
 
             server._ensure_os_trust_store()
 
-            resp = httpx.get(f"https://localhost:{port}/", timeout=5)
+            resp = httpx.get(f"https://localhost:{port}/", timeout=TLS_TIMEOUT)
             assert resp.status_code == 200
     finally:
         remove_script = tmp_path / "remove_trust.ps1"
@@ -343,8 +361,8 @@ def test_a_ca_trusted_in_the_linux_system_store_is_trusted_after_injection(tmp_p
     with _serve_tls(str(cert_path), str(key_path)) as port:
         # Reproduces the reported bug (Linux analog): installed in the system store,
         # but plain certifi-only httpx (pre-injection) still fails closed.
-        with pytest.raises(httpx.ConnectError):
-            httpx.get(f"https://localhost:{port}/", timeout=5)
+        with pytest.raises(FAILS_CLOSED):
+            httpx.get(f"https://localhost:{port}/", timeout=TLS_TIMEOUT)
 
         subprocess.run(
             ["sudo", "cp", str(generated_ca_path), installed_ca_path],
@@ -356,12 +374,12 @@ def test_a_ca_trusted_in_the_linux_system_store_is_trusted_after_injection(tmp_p
         try:
             subprocess.run(["sudo", "update-ca-certificates"], check=True, capture_output=True, text=True, timeout=30)
 
-            with pytest.raises(httpx.ConnectError):  # still fails — the CA install alone isn't enough
-                httpx.get(f"https://localhost:{port}/", timeout=5)
+            with pytest.raises(FAILS_CLOSED):  # still fails — the CA install alone isn't enough
+                httpx.get(f"https://localhost:{port}/", timeout=TLS_TIMEOUT)
 
             server._ensure_os_trust_store()
 
-            resp = httpx.get(f"https://localhost:{port}/", timeout=5)
+            resp = httpx.get(f"https://localhost:{port}/", timeout=TLS_TIMEOUT)
             assert resp.status_code == 200
         finally:
             subprocess.run(

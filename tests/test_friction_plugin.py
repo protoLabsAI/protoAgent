@@ -828,6 +828,7 @@ def test_the_working_state_provider_stays_far_inside_its_inline_budget(wired):
     """It runs inline on EVERY turn. `graph.work_providers.SLOW_PROVIDER_S` is the line;
     measured ~6.5ms cold at the ledger's 2000-entry cap, so this asserts an order of
     magnitude of headroom rather than the exact number."""
+    import os
     import time
 
     from graph.work_providers import SLOW_PROVIDER_S
@@ -843,12 +844,36 @@ def test_the_working_state_provider_stays_far_inside_its_inline_budget(wired):
                 "detail": "d" * 400,
             }) + "\n")
 
+    # Reference: the irreducible work — read every line and parse it. The projection
+    # cannot be faster than this, so it isolates the provider's OWN cost from how fast
+    # the machine is. A bare wall-clock ceiling cannot: this took 621ms on a Windows CI
+    # runner against a ~6.5ms local measurement, ~95x, with nothing wrong in the code —
+    # a shared runner's file I/O is simply that variable, and a flake on an unrelated PR
+    # is worse than no guard.
+    ref_started = time.perf_counter()
+    with path.open(encoding="utf-8") as fh:
+        for line in fh:
+            json.loads(line)
+    reference = max(time.perf_counter() - ref_started, 1e-6)
+
     _WORK_CACHE["stamp"] = None
     started = time.perf_counter()
     open_friction_work()
     cold = time.perf_counter() - started
 
-    assert cold < SLOW_PROVIDER_S / 5, f"cold projection took {cold * 1000:.0f}ms"
+    # The regression this actually guards is ALGORITHMIC — someone making the projection
+    # quadratic over the ledger, or re-reading it per entry. That shows up as a blown
+    # RATIO on any machine; it does not need an absolute number to be visible.
+    assert cold < reference * 8, (
+        f"cold projection took {cold * 1000:.0f}ms vs a {reference * 1000:.0f}ms "
+        f"read+parse reference ({cold / reference:.1f}x) — the provider is doing "
+        f"substantially more than one pass over the ledger"
+    )
+    # Absolute ceiling kept as a backstop, but only where wall clock means something.
+    # `SLOW_PROVIDER_S / 5` is the real target and holds locally; CI runners get the
+    # full threshold, which is the line the runtime actually logs against.
+    ceiling = SLOW_PROVIDER_S if os.environ.get("CI") else SLOW_PROVIDER_S / 5
+    assert cold < ceiling, f"cold projection took {cold * 1000:.0f}ms (ceiling {ceiling * 1000:.0f}ms)"
 
 
 def test_the_api_serves_its_own_namespace_and_keeps_the_documented_alias(monkeypatch, tmp_path):
