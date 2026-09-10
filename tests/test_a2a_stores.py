@@ -524,6 +524,122 @@ def test_reaper_default_windows_clear_the_stall_guard():
     assert stores._DEFAULT_REAP_IDLE_S > stall_window
 
 
+# ── a NULL last_updated must not make a row unreapable (review finding, #3418) ──────
+
+
+@pytest.mark.asyncio
+async def test_reaper_ages_a_null_last_updated_row_by_its_status_timestamp(tmp_path):
+    """The reaper used to `continue` past any row whose `last_updated` was NULL, leaving
+    it "for restart reconciliation" — and a restart is the one event this reaper exists
+    NOT to depend on. So a producer that died without one left the task WORKING forever
+    and the console spinner never settled.
+
+    NULL is not rare: `_seed_task`'s own docstring records that `store.save` leaves the
+    column null when the status carries no timestamp. The A2A TaskStatus does carry its
+    own `timestamp`, so the row still has a real age.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from a2a.server.models import TaskModel
+    from a2a.types import a2a_pb2
+    from sqlalchemy import update as _update
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    now = datetime.now(UTC)
+    store, engine = await _fresh_task_store(tmp_path)
+    ctx = _ctx()
+    await _seed_task(store, engine, ctx, "nullts", state="TASK_STATE_WORKING", age_s=0, now=now)
+
+    # NULL the column and put the age in the status timestamp instead — the shape a row
+    # saved without an explicit last_updated actually has.
+    stamp = (now - timedelta(seconds=4000)).isoformat().replace("+00:00", "Z")
+    sm = async_sessionmaker(engine, expire_on_commit=False)
+    async with sm() as sess:
+        await sess.execute(
+            _update(TaskModel)
+            .where(TaskModel.id == "nullts")
+            .values(last_updated=None, status={"state": "TASK_STATE_WORKING", "timestamp": stamp})
+        )
+        await sess.commit()
+
+    n = await reap_orphaned_working_tasks(engine, birth_grace_s=300, idle_after_s=1800, now=now)
+    assert n == 1
+    got = await store.get("nullts", ctx)
+    assert got.status.state == a2a_pb2.TASK_STATE_FAILED
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_reaper_still_declines_a_row_with_no_timestamp_anywhere(tmp_path):
+    """The narrow case that remains. With neither `last_updated` nor a status timestamp
+    there is genuinely no age, and inventing one risks failing a task created
+    milliseconds ago — so this still declines rather than guessing."""
+    from datetime import UTC, datetime
+
+    from a2a.server.models import TaskModel
+    from a2a.types import a2a_pb2
+    from sqlalchemy import update as _update
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    now = datetime.now(UTC)
+    store, engine = await _fresh_task_store(tmp_path)
+    ctx = _ctx()
+    await _seed_task(store, engine, ctx, "nots", state="TASK_STATE_WORKING", age_s=0, now=now)
+
+    sm = async_sessionmaker(engine, expire_on_commit=False)
+    async with sm() as sess:
+        await sess.execute(
+            _update(TaskModel)
+            .where(TaskModel.id == "nots")
+            .values(last_updated=None, status={"state": "TASK_STATE_WORKING"})
+        )
+        await sess.commit()
+
+    n = await reap_orphaned_working_tasks(engine, birth_grace_s=1, idle_after_s=1, now=now)
+    assert n == 0
+    got = await store.get("nots", ctx)
+    assert got.status.state == a2a_pb2.TASK_STATE_WORKING
+    await engine.dispose()
+
+
+# ── the thresholds must track the CONFIGURED stall window (review finding) ───────────
+
+
+def test_reap_thresholds_scale_with_a_longer_configured_stall_window():
+    """An operator who raises `turn_stall_timeout_seconds` past the reaper's fixed 20m/30m
+    would otherwise have their own setting silently overridden — the reaper would fail
+    turns they had explicitly allowed to run. The invariant is "the stall guard fires
+    first", and only a ratio holds it at every setting."""
+    birth, idle = stores.reap_thresholds_for(3600)
+    assert birth > 3600 and idle > birth
+
+
+def test_reap_thresholds_never_go_below_their_documented_floor():
+    """A SHORTER stall window must not buy earlier reaping: 20m/30m are floors. Lowering
+    the stall timeout tightens the guard that owns live streams, not this backstop."""
+    assert stores.reap_thresholds_for(60) == (
+        stores._DEFAULT_REAP_BIRTH_GRACE_S,
+        stores._DEFAULT_REAP_IDLE_S,
+    )
+    # An unset/zero/None config falls back to the shipped defaults rather than reaping at 0.
+    for missing in (None, 0):
+        assert stores.reap_thresholds_for(missing) == (
+            stores._DEFAULT_REAP_BIRTH_GRACE_S,
+            stores._DEFAULT_REAP_IDLE_S,
+        )
+
+
+def test_reap_thresholds_at_the_default_match_the_shipped_constants():
+    """The ratio is derived FROM the 900s default, so feeding that default back must
+    reproduce the constants exactly — otherwise the refactor moved the shipped behavior."""
+    from graph.config import LangGraphConfig
+
+    assert stores.reap_thresholds_for(LangGraphConfig.turn_stall_timeout_seconds) == (
+        stores._DEFAULT_REAP_BIRTH_GRACE_S,
+        stores._DEFAULT_REAP_IDLE_S,
+    )
+
+
 @pytest.mark.asyncio
 async def test_reaper_default_birth_grace_keeps_live_slow_first_frame(tmp_path):
     """A WORKING orphan-at-birth still inside the stall window is left WORKING under the

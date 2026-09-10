@@ -540,8 +540,51 @@ async def reconcile_interrupted_tasks(engine: AsyncEngine, *, now: datetime | No
 #  - IDLE — a task that DID record history/artifacts but has since gone silent. Longer than
 #    the stall window for the same reason: the stall guard owns the live stream; this only
 #    backstops a producer that vanished WITHOUT tripping it.
-_DEFAULT_REAP_BIRTH_GRACE_S = 20 * 60  # 20m — safely above the 900s stall window
+_DEFAULT_REAP_BIRTH_GRACE_S = 20 * 60  # 20m — safely above the 900s DEFAULT stall window
 _DEFAULT_REAP_IDLE_S = 30 * 60  # 30m
+# Both defaults encode a RATIO to the stall window, not two magic numbers: 20m and 30m are
+# 1.33x and 2x the 900s default. `turn_stall_timeout_seconds` is configurable, so an
+# operator who raises it past 20m would otherwise have this reaper fail turns they had
+# explicitly allowed to run — the fixed constants would silently override their setting,
+# which is the opposite of a backstop.
+_REAP_BIRTH_GRACE_RATIO = _DEFAULT_REAP_BIRTH_GRACE_S / 900
+_REAP_IDLE_RATIO = _DEFAULT_REAP_IDLE_S / 900
+
+
+def reap_thresholds_for(stall_timeout_s: float | None) -> tuple[int, int]:
+    """``(birth_grace_s, idle_after_s)`` scaled to the configured stall window.
+
+    The defaults are floors, so a SHORTER configured stall window never shortens the
+    reaper below its documented minimum — reaping earlier than 20m/30m is not something
+    lowering the stall timeout should buy. A LONGER one does move both up, because the
+    invariant that matters is "the stall guard fires first", and only the ratio preserves
+    it at any setting.
+    """
+    if not stall_timeout_s or stall_timeout_s <= 0:
+        return _DEFAULT_REAP_BIRTH_GRACE_S, _DEFAULT_REAP_IDLE_S
+    return (
+        max(_DEFAULT_REAP_BIRTH_GRACE_S, int(stall_timeout_s * _REAP_BIRTH_GRACE_RATIO)),
+        max(_DEFAULT_REAP_IDLE_S, int(stall_timeout_s * _REAP_IDLE_RATIO)),
+    )
+
+
+def _row_age_anchor(last_updated, status_json) -> datetime | None:
+    """The timestamp a WORKING row should be aged against, or None when it has none.
+
+    Prefers the SDK's ``last_updated`` column and falls back to the A2A TaskStatus's own
+    ``timestamp``. Both are normalised to aware UTC: SQLite hands back a naive datetime
+    and the SDK writes it from a UTC proto timestamp, so a missing tzinfo means UTC.
+    """
+    if last_updated is not None:
+        return last_updated if last_updated.tzinfo else last_updated.replace(tzinfo=UTC)
+    raw = (status_json or {}).get("timestamp") if isinstance(status_json, dict) else None
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:  # a malformed timestamp is no timestamp
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 async def reap_orphaned_working_tasks(
@@ -601,15 +644,26 @@ async def reap_orphaned_working_tasks(
                     TaskModel.history,
                     TaskModel.artifacts,
                     TaskModel.last_updated,
+                    TaskModel.status,
                 ).where(state == "TASK_STATE_WORKING")
             )
         ).all()
-        for task_id, history, artifacts, last_updated in rows:
-            if last_updated is None:
-                continue  # no timestamp to age against — leave it for restart reconciliation
-            # SQLite hands back a naive datetime; the SDK writes it from a UTC proto
-            # timestamp, so treat a missing tzinfo as UTC before differencing.
-            lu = last_updated if last_updated.tzinfo else last_updated.replace(tzinfo=UTC)
+        for task_id, history, artifacts, last_updated, status_json in rows:
+            # A NULL `last_updated` used to be skipped outright, which made this reaper
+            # unable to do its own job on exactly the rows most likely to need it: a task
+            # whose producer died is not more likely to have written that column. It was
+            # left "for restart reconciliation", and a restart is the one event this
+            # reaper exists to not depend on — so without a restart the row stayed
+            # WORKING forever and the console spinner never settled.
+            #
+            # The A2A TaskStatus carries its own `timestamp`, written by the SDK whenever
+            # the status is set, so it is a real age for the row even when the column is
+            # NULL. Only when BOTH are missing is there genuinely nothing to age against,
+            # and inventing an age there would risk failing a task created milliseconds
+            # ago — so that (now much narrower) case still declines.
+            lu = _row_age_anchor(last_updated, status_json)
+            if lu is None:
+                continue
             age_s = (now - lu).total_seconds()
             if history or artifacts:
                 # Productive: the stall guard owns the live stream; only reap a producer

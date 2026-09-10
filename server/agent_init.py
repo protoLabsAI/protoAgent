@@ -1043,13 +1043,23 @@ async def _a2a_reaper_loop() -> None:
     Started unconditionally like ``_watch_loop`` / ``_memory_guard_loop`` and self-guards
     on ``STATE.a2a_task_engine`` (no-op until the durable stores exist, or when A2A is off).
     """
-    from a2a_impl.stores import reap_orphaned_working_tasks
+    from a2a_impl.stores import reap_orphaned_working_tasks, reap_thresholds_for
 
     await asyncio.sleep(45)  # let boot settle (and boot reconciliation run) before the first sweep
     while True:
         if STATE.a2a_task_engine is not None:
             try:
-                n = await reap_orphaned_working_tasks(STATE.a2a_task_engine)
+                # Read per sweep, not once: the stall timeout is live-reloadable, and a
+                # value captured at boot would keep reaping on the old window after a
+                # settings change. Passing the DERIVED pair rather than the raw timeout
+                # keeps the ratio rule in one place (stores.reap_thresholds_for).
+                stall = getattr(STATE.graph_config, "turn_stall_timeout_seconds", None)
+                birth_grace_s, idle_after_s = reap_thresholds_for(stall)
+                n = await reap_orphaned_working_tasks(
+                    STATE.a2a_task_engine,
+                    birth_grace_s=birth_grace_s,
+                    idle_after_s=idle_after_s,
+                )
                 if n:
                     log.info("[a2a-reaper] failed %d orphaned WORKING task(s) (#3418)", n)
             except Exception:
