@@ -36,11 +36,14 @@ const CODER_GAP = {
 };
 
 async function routeWarnings(page: import("@playwright/test").Page, warnings: unknown[]) {
+  // Snapshot the real runtime-status body ONCE, before routing, then fulfill synthetically.
+  // Proxying via `route.fetch()` inside the handler holds an APIResponse bound to the page
+  // lifecycle; a `page.reload()` that supersedes an in-flight status poll disposes it mid-read
+  // ("Response has been disposed"). A pre-read plain object has no such lifecycle, so the
+  // reload-driven dismissal specs below stay deterministic.
+  const base = await (await page.request.get("/api/runtime/status")).json();
   await page.route("**/api/runtime/status", async (route) => {
-    const response = await route.fetch();
-    const json = await response.json();
-    json.warnings = warnings;
-    await route.fulfill({ json });
+    await route.fulfill({ json: { ...base, warnings } });
   });
 }
 
@@ -113,12 +116,14 @@ test("a setup gap dismisses for the session only, and returns on a new session",
 test("a dismissed gap stays hidden across a transient empty runtime status in the same session", async ({ page }) => {
   // The status endpoint's `warnings` payload is mutable across reloads, so we can simulate a
   // transient/null runtime status (reload catching an unresolved poll) between two live polls.
+  // Same synthetic-fulfill pattern as routeWarnings (base snapshotted up front) so the repeated
+  // reloads can't hit the "Response has been disposed" proxy race; the handler reads
+  // `currentWarnings` from the closure at call time, so mutating it between reloads still drives
+  // the response.
   let currentWarnings: unknown[] = [CODER_GAP];
+  const base = await (await page.request.get("/api/runtime/status")).json();
   await page.route("**/api/runtime/status", async (route) => {
-    const response = await route.fetch();
-    const json = await response.json();
-    json.warnings = currentWarnings;
-    await route.fulfill({ json });
+    await route.fulfill({ json: { ...base, warnings: currentWarnings } });
   });
   await page.goto("/app/", { waitUntil: "load" });
 
