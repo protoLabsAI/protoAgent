@@ -11,6 +11,8 @@ BOUNDS, so most of these are refusal paths:
   - happy path → subprocess git clone (no shell=True) + a merged registration
   - existing checkout → reused as-is (no re-clone), still registered
   - clone failure → the git stderr is surfaced
+  - reuse drift (#3402) → local ahead/behind vs the tracking branch is reported
+    (or a bounded not-comparable note), and NO clone/fetch/reset/checkout runs
 
 git and the ``HOST.apply_settings`` seam are mocked, so no real clone or config
 write happens; ``tmp_path`` is the onboarding root so the directory checks are real.
@@ -47,21 +49,56 @@ def _tool(config: LangGraphConfig):
 
 
 class _Mocks:
-    """Records git clone + config-apply calls without performing either."""
+    """Records git clone + config-apply calls without performing either.
 
-    def __init__(self, returncode: int = 0, stderr: str = "") -> None:
+    The read-only probes (``git symbolic-ref`` for the default branch, and the
+    ``git rev-parse``/``git rev-list`` tracking-drift probes of #3402) are answered
+    from configurable canned values and recorded as probes — never as clones. Every
+    git argv is also captured in ``git_calls`` so a test can prove that no clone,
+    fetch, reset, or checkout-mutating command was ever issued on a reuse path.
+    """
+
+    def __init__(
+        self,
+        returncode: int = 0,
+        stderr: str = "",
+        *,
+        upstream: str = "origin/main",
+        upstream_rc: int = 0,
+        upstream_stderr: str = "",
+        counts: str = "0\t0",
+        counts_rc: int = 0,
+    ) -> None:
         self.clone_calls: list[tuple[tuple, dict]] = []
         self.probe_calls: list[tuple[tuple, dict]] = []
         self.apply_calls: list[dict] = []
+        self.git_calls: list[list[str]] = []
         self._returncode = returncode
         self._stderr = stderr
+        self._upstream = upstream
+        self._upstream_rc = upstream_rc
+        self._upstream_stderr = upstream_stderr
+        self._counts = counts
+        self._counts_rc = counts_rc
 
     def fake_run(self, *args, **kwargs):
-        argv = args[0] if args else kwargs.get("args") or []
-        if list(argv[:2]) == ["git", "symbolic-ref"]:
+        argv = list(args[0] if args else kwargs.get("args") or [])
+        self.git_calls.append(argv)
+        head = argv[:2]
+        if head == ["git", "symbolic-ref"]:
             # the default-branch probe (origin/HEAD) — answered, never counted as a clone
             self.probe_calls.append((args, kwargs))
             return SimpleNamespace(returncode=0, stdout="origin/develop\n", stderr="")
+        if head == ["git", "rev-parse"]:
+            # the tracking-branch resolution (@{upstream}) — read-only
+            self.probe_calls.append((args, kwargs))
+            stdout = f"{self._upstream}\n" if self._upstream_rc == 0 else ""
+            return SimpleNamespace(returncode=self._upstream_rc, stdout=stdout, stderr=self._upstream_stderr)
+        if head == ["git", "rev-list"]:
+            # the ahead/behind count against @{upstream} — read-only
+            self.probe_calls.append((args, kwargs))
+            stdout = f"{self._counts}\n" if self._counts_rc == 0 else ""
+            return SimpleNamespace(returncode=self._counts_rc, stdout=stdout, stderr="")
         self.clone_calls.append((args, kwargs))
         return SimpleNamespace(returncode=self._returncode, stdout="", stderr=self._stderr)
 
@@ -258,6 +295,10 @@ async def test_reuse_existing_checkout(tmp_path, mocks):
     assert mocks.clone_calls == []  # no re-clone, no fetch/reset
     assert len(mocks.apply_calls) == 1  # but registration still proceeds
     assert "Reused existing checkout" in out
+    # #3402: the reuse result now names the tracking drift, read from local Git
+    # metadata only, and always states the checkout was not fetched.
+    assert "it was not fetched" in out
+    assert "origin/main" in out
 
 
 async def test_already_registered_is_idempotent(tmp_path, mocks):
@@ -282,6 +323,213 @@ async def test_already_registered_in_both_registry_and_override_is_idempotent(tm
 
     assert mocks.apply_calls == []
     assert "already registered" in out
+
+
+# ---------------------------------------------------------------------------
+# tracking-branch drift on reuse (#3402)
+# ---------------------------------------------------------------------------
+#
+# On every reuse path we inspect ONLY local Git metadata against the checkout's
+# configured upstream and report ahead/behind divergence — never fetching,
+# resetting, or otherwise mutating the checkout. When the drift can't be told
+# (no upstream, not a git checkout, git unavailable, unparseable count) the
+# result says so instead of inventing a count. Registration is unchanged.
+
+
+def _mutating_git(argv: list[str]) -> bool:
+    """True if a git argv would clone/fetch/reset or mutate the working tree."""
+    if not argv or argv[0] != "git":
+        return False
+    return any(sub in argv[1:] for sub in ("clone", "fetch", "pull", "reset", "checkout", "merge", "rebase"))
+
+
+async def test_reuse_reports_behind_count_and_tracking_branch(tmp_path, monkeypatch):
+    """r1: behind its tracking ref → the success output names the exact behind
+    count and tracking branch and explicitly says it was not fetched."""
+    m = _Mocks(upstream="origin/main", counts="2\t0")  # 2 behind, 0 ahead
+    monkeypatch.setattr(onboard_tools.subprocess, "run", m.fake_run)
+    monkeypatch.setattr(HOST, "apply_settings", m.fake_apply)
+
+    target = tmp_path / "widget"
+    target.mkdir()
+    out = await _tool(_cfg(tmp_path)).ainvoke({"github_repo": "acme/widget"})
+
+    assert "2 commits behind origin/main" in out
+    assert "it was not fetched" in out
+    assert m.clone_calls == []
+    assert len(m.apply_calls) == 1  # registration semantics unchanged
+
+
+async def test_reuse_reports_ahead_and_diverged(tmp_path, monkeypatch):
+    """r2: ahead / diverged → the applicable local divergence is reported, and no
+    Git state is mutated."""
+    m = _Mocks(upstream="origin/main", counts="3\t1")  # 3 behind, 1 ahead → diverged
+    monkeypatch.setattr(onboard_tools.subprocess, "run", m.fake_run)
+    monkeypatch.setattr(HOST, "apply_settings", m.fake_apply)
+
+    target = tmp_path / "widget"
+    target.mkdir()
+    out = await _tool(_cfg(tmp_path)).ainvoke({"github_repo": "acme/widget"})
+
+    assert "1 commit ahead of and 3 commits behind origin/main" in out
+    assert "it was not fetched" in out
+    assert not any(_mutating_git(c) for c in m.git_calls)
+
+
+async def test_reuse_reports_ahead_only(tmp_path, monkeypatch):
+    m = _Mocks(upstream="origin/trunk", counts="0\t5")  # 0 behind, 5 ahead
+    monkeypatch.setattr(onboard_tools.subprocess, "run", m.fake_run)
+    monkeypatch.setattr(HOST, "apply_settings", m.fake_apply)
+
+    target = tmp_path / "widget"
+    target.mkdir()
+    out = await _tool(_cfg(tmp_path)).ainvoke({"github_repo": "acme/widget"})
+
+    assert "5 commits ahead of origin/trunk" in out
+    assert "behind" not in out  # ahead-only: nothing behind to report
+    assert "it was not fetched" in out
+
+
+async def test_reuse_up_to_date_is_reported(tmp_path, monkeypatch):
+    m = _Mocks(upstream="origin/main", counts="0\t0")
+    monkeypatch.setattr(onboard_tools.subprocess, "run", m.fake_run)
+    monkeypatch.setattr(HOST, "apply_settings", m.fake_apply)
+
+    target = tmp_path / "widget"
+    target.mkdir()
+    out = await _tool(_cfg(tmp_path)).ainvoke({"github_repo": "acme/widget"})
+
+    assert "up to date with origin/main" in out
+    assert "it was not fetched" in out
+
+
+async def test_reuse_no_upstream_reports_not_comparable(tmp_path, monkeypatch):
+    """r3: a branch with no upstream → a bounded not-checked note, and registration
+    still proceeds normally (no invented count)."""
+    m = _Mocks(upstream_rc=128, upstream_stderr="fatal: no upstream configured for branch 'main'")
+    monkeypatch.setattr(onboard_tools.subprocess, "run", m.fake_run)
+    monkeypatch.setattr(HOST, "apply_settings", m.fake_apply)
+
+    target = tmp_path / "widget"
+    target.mkdir()
+    out = await _tool(_cfg(tmp_path)).ainvoke({"github_repo": "acme/widget"})
+
+    assert "no upstream" in out
+    assert "it was not fetched" in out
+    assert len(m.apply_calls) == 1  # registration is unchanged
+
+
+async def test_reuse_non_git_dir_reports_not_comparable(tmp_path, monkeypatch):
+    """r3: a reused directory that isn't a git checkout → a bounded not-determined
+    note rather than a crash or a fabricated count."""
+    m = _Mocks(upstream_rc=128, upstream_stderr="fatal: not a git repository (or any parent up to /)")
+    monkeypatch.setattr(onboard_tools.subprocess, "run", m.fake_run)
+    monkeypatch.setattr(HOST, "apply_settings", m.fake_apply)
+
+    target = tmp_path / "widget"
+    target.mkdir()
+    out = await _tool(_cfg(tmp_path)).ainvoke({"github_repo": "acme/widget"})
+
+    assert "not a git checkout" in out
+    assert "could not be determined" in out
+    assert len(m.apply_calls) == 1
+
+
+async def test_reuse_unparseable_count_reports_not_comparable(tmp_path, monkeypatch):
+    """r3: rev-list SUCCEEDS but its output does not parse as two counts → drift is
+    reported as not-determined, naming no count.
+
+    Split from the nonzero-exit case below, which is a different branch: this one
+    reaches the parse, that one never gets there. The test used to carry this name
+    while passing `counts_rc=128`, so the parse fallback was named but never executed.
+    """
+    m = _Mocks(upstream="origin/main", counts="not-a-count")
+    monkeypatch.setattr(onboard_tools.subprocess, "run", m.fake_run)
+    monkeypatch.setattr(HOST, "apply_settings", m.fake_apply)
+
+    target = tmp_path / "widget"
+    target.mkdir()
+    out = await _tool(_cfg(tmp_path)).ainvoke({"github_repo": "acme/widget"})
+
+    assert "could not be determined" in out
+    assert "origin/main" in out
+    assert len(m.apply_calls) == 1
+
+
+async def test_reuse_failed_count_command_reports_not_comparable(tmp_path, monkeypatch):
+    """r3: rev-list EXITS NONZERO (e.g. the upstream ref vanished between probes) →
+    the same not-determined report, reached by a different path than the parse
+    fallback above. Both branches converge on one message, so only separate inputs
+    can prove both are wired."""
+    m = _Mocks(upstream="origin/main", counts_rc=128)
+    monkeypatch.setattr(onboard_tools.subprocess, "run", m.fake_run)
+    monkeypatch.setattr(HOST, "apply_settings", m.fake_apply)
+
+    target = tmp_path / "widget"
+    target.mkdir()
+    out = await _tool(_cfg(tmp_path)).ainvoke({"github_repo": "acme/widget"})
+
+    assert "could not be determined" in out
+    assert "origin/main" in out
+    assert len(m.apply_calls) == 1
+
+
+async def test_reuse_git_unavailable_reports_not_comparable(tmp_path, monkeypatch):
+    """r3: git can't even be spawned (e.g. not installed) → a bounded note; the
+    reuse + registration still complete without raising into the turn."""
+
+    def _raise(*args, **kwargs):
+        raise FileNotFoundError("git: command not found")
+
+    apply_calls: list[dict] = []
+    monkeypatch.setattr(onboard_tools.subprocess, "run", _raise)
+    monkeypatch.setattr(HOST, "apply_settings", lambda patch: (apply_calls.append(patch), (True, ["ok"]))[1])
+
+    target = tmp_path / "widget"
+    target.mkdir()
+    out = await _tool(_cfg(tmp_path)).ainvoke({"github_repo": "acme/widget"})
+
+    assert "git was unavailable" in out
+    assert "could not be determined" in out
+    assert len(apply_calls) == 1  # registration is unchanged
+
+
+async def test_idempotent_path_also_reports_drift(tmp_path, monkeypatch):
+    """r1: drift is reported even on the already-registered idempotent path (where
+    feasible) — the checkout is on disk, so the local comparison is made and named
+    without writing any config."""
+    m = _Mocks(upstream="origin/main", counts="4\t0")  # 4 behind
+    monkeypatch.setattr(onboard_tools.subprocess, "run", m.fake_run)
+    monkeypatch.setattr(HOST, "apply_settings", m.fake_apply)
+
+    target = tmp_path / "widget"
+    target.mkdir()
+    entry = {"name": "widget", "path": str(target), "write": False, "github": "acme/widget"}
+    out = await _tool(_cfg(tmp_path, projects=[entry])).ainvoke({"github_repo": "acme/widget"})
+
+    assert "already registered" in out  # idempotency preserved
+    assert m.apply_calls == []  # nothing written
+    assert "4 commits behind origin/main" in out
+    assert "it was not fetched" in out
+
+
+async def test_reuse_issues_no_clone_fetch_reset_or_checkout(tmp_path, monkeypatch):
+    """r4: prove that a reuse path issues ONLY read-only git commands — no clone,
+    fetch, pull, reset, checkout, merge, or rebase touches the checkout."""
+    m = _Mocks(upstream="origin/main", counts="1\t2")
+    monkeypatch.setattr(onboard_tools.subprocess, "run", m.fake_run)
+    monkeypatch.setattr(HOST, "apply_settings", m.fake_apply)
+
+    target = tmp_path / "widget"
+    target.mkdir()
+    await _tool(_cfg(tmp_path)).ainvoke({"github_repo": "acme/widget"})
+
+    assert m.clone_calls == []
+    assert m.git_calls  # some git ran (the read-only probes)
+    assert not any(_mutating_git(c) for c in m.git_calls)
+    # every git subcommand issued is one of the known read-only probes
+    subcommands = {c[1] for c in m.git_calls if len(c) > 1}
+    assert subcommands <= {"symbolic-ref", "rev-parse", "rev-list"}
 
 
 # ---------------------------------------------------------------------------

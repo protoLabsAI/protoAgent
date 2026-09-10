@@ -111,6 +111,81 @@ def _default_branch(checkout: Path) -> str:
     return ref or "main"
 
 
+def _tracking_drift(checkout: Path) -> str:
+    """Describe how a REUSED ``checkout`` diverges from its configured upstream,
+    using ONLY local Git metadata — no network, no mutation (#3402).
+
+    We never fetch/reset a reused checkout (an operator may have work in progress),
+    so the compared refs are whatever is already on disk; the returned clause says
+    so with "it was not fetched". The comparison is a read-only ``git rev-list``
+    count against ``@{upstream}`` — the branch's configured tracking ref.
+
+    Every path is best-effort and bounded: a directory that isn't a git checkout,
+    a branch with no upstream, git being unavailable, or an unparseable count all
+    resolve to a note that the drift COULD NOT be determined, rather than inventing
+    a number. Returns a single sentence to append to the reuse message.
+    """
+
+    def _git(*argv: str):
+        return subprocess.run(
+            ["git", *argv],
+            cwd=str(checkout),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+    # (a) Resolve the tracking branch (e.g. ``origin/main``). Read-only; failure
+    #     here means no upstream, not a git checkout, or git can't run.
+    try:
+        up = _git("rev-parse", "--abbrev-ref", "@{upstream}")
+    except Exception:  # noqa: BLE001 — git missing / cannot spawn; never a failure path
+        return "Tracking drift could not be determined — git was unavailable; it was not fetched."
+    if up.returncode != 0:
+        detail = (up.stderr or "").lower()
+        if "not a git repository" in detail or "not a git repo" in detail:
+            return "Tracking drift could not be determined — not a git checkout; it was not fetched."
+        if "no upstream" in detail:
+            return (
+                "Tracking drift was not checked — the current branch has no upstream "
+                "tracking branch; it was not fetched."
+            )
+        return (
+            "Tracking drift could not be determined — the tracking branch could not be "
+            "resolved; it was not fetched."
+        )
+    upstream = (up.stdout or "").strip()
+    if not upstream:
+        return (
+            "Tracking drift was not checked — the current branch has no upstream "
+            "tracking branch; it was not fetched."
+        )
+
+    # (b) Count ahead/behind against that ref. ``--left-right --count A...HEAD``
+    #     emits "<left> <right>": left = commits in the upstream not in HEAD
+    #     (behind), right = commits in HEAD not in the upstream (ahead). Purely a
+    #     read of local objects — no fetch, no working-tree change.
+    try:
+        counts = _git("rev-list", "--left-right", "--count", f"{upstream}...HEAD")
+    except Exception:  # noqa: BLE001
+        return f"Tracking drift vs {upstream} could not be determined — git was unavailable; it was not fetched."
+    if counts.returncode != 0:
+        return f"Tracking drift vs {upstream} could not be determined; it was not fetched."
+    fields = (counts.stdout or "").split()
+    if len(fields) != 2 or not all(f.lstrip("-").isdigit() for f in fields):
+        return f"Tracking drift vs {upstream} could not be determined; it was not fetched."
+    behind, ahead = int(fields[0]), int(fields[1])
+
+    if behind == 0 and ahead == 0:
+        return f"It is up to date with {upstream}; it was not fetched."
+    parts: list[str] = []
+    if ahead:
+        parts.append(f"{ahead} commit{'' if ahead == 1 else 's'} ahead of")
+    if behind:
+        parts.append(f"{behind} commit{'' if behind == 1 else 's'} behind")
+    return f"It is {' and '.join(parts)} {upstream}; it was not fetched."
+
+
 def _same_path(a, b: Path) -> bool:
     """True when config entry path ``a`` names the same location as ``b``."""
     try:
@@ -162,7 +237,10 @@ def build_onboard_tools(config) -> list:
           refused, naming the root bound.
         - A failed ``git clone`` → the git error is surfaced verbatim.
         - Already checked out → the existing checkout is REUSED as-is (no
-          re-clone, no fetch, no reset — your uncommitted work is safe).
+          re-clone, no fetch, no reset — your uncommitted work is safe). The
+          result reports how far the checkout has drifted from its tracking
+          branch (e.g. "2 commits behind origin/main; it was not fetched"),
+          read from local Git metadata only, or notes that it couldn't be told.
         - Already registered → success with a note; onboarding is idempotent.
 
         Onboarding being disabled means this tool isn't available at all; if you
@@ -261,6 +339,16 @@ def build_onboard_tools(config) -> list:
         project_name = name or target.name
         default_branch = await asyncio.to_thread(_default_branch, target)
 
+        # On any REUSE path we inspect local Git metadata only and report how the
+        # checkout has drifted from its tracking branch (#3402). We do NOT fetch,
+        # reset, or otherwise touch the checkout — the contract for a directory we
+        # find is that it stays exactly as the operator left it — so the clause is
+        # a read-only ahead/behind count that always states it was not fetched.
+        # Only meaningful when there is a checkout on disk to compare.
+        drift = ""
+        if reused_checkout:
+            drift = " " + await asyncio.to_thread(_tracking_drift, target)
+
         # Merge against the LIVE registry — the same ``HOST.config`` seam the fs
         # tools resolve through (#2836) — so a second onboarding in one turn sees
         # the first instead of silently dropping it from filesystem.projects.
@@ -285,7 +373,7 @@ def build_onboard_tools(config) -> list:
         if in_registry and (in_fence or not fence):
             return (
                 f"{project_name} is already registered at {target} ({rw}). "
-                "Reused the existing checkout — nothing changed."
+                f"Reused the existing checkout — nothing changed.{drift}"
             )
 
         github = f"{owner}/{repo_name}"
@@ -351,7 +439,7 @@ def build_onboard_tools(config) -> list:
         )
         return (
             f"{verb} {project_name} ({rw}) at {target} in {where} — GitHub {github}, "
-            f"default branch {default_branch}. The GitHub plugin's repo picker and the project board "
+            f"default branch {default_branch}.{drift} The GitHub plugin's repo picker and the project board "
             "read that registry; no further registration is needed."
         )
 
