@@ -186,7 +186,8 @@ jobs:
           # /culsans), so an unpinned `latest` rewrites uv.lock whenever uv ships — the
           # file then thrashes based on whose uv ran last, and the lockfile check inside
           # the gate is the thing that notices. 0.11.29 produced the lock currently on main.
-          # To bump: change BOTH here and in prepare-release.yml (they must match), then
+          # To bump: change EVERY pin together — here, prepare-release.yml, and
+          # dependabot-attribution.yml (they must all match), then
           # run `uv lock` once and commit the result.
           version: "0.11.29"
       - name: Fast gate (lint only)

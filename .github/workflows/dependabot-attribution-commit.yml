@@ -1,0 +1,147 @@
+# Commit the regenerated attribution manifest onto a dependabot PR (#3393).
+#
+# The privileged half of the pair. `dependabot-attribution.yml` installs the bumped
+# dependency and regenerates THIRD_PARTY_LICENSES.md with NO secrets; this workflow picks
+# the result up and writes it, installing nothing and running no dependency code. See that
+# file's header for why the two are separate.
+#
+# `workflow_run` is what makes it possible: a workflow triggered by a dependabot
+# `pull_request` gets a read-only token and no secrets, but a `workflow_run` runs in the
+# BASE repo context, where `secrets.GH_PAT` is available.
+#
+# The PAT is not a convenience. A push made with the default GITHUB_TOKEN does not trigger
+# workflows, so the commit would land and the PR would keep its stale red check forever —
+# the same reason prepare-release.yml checks out with GH_PAT.
+
+name: Dependabot attribution (commit)
+
+on:
+  workflow_run:
+    workflows: ["Dependabot attribution"]
+    types: [completed]
+
+permissions:
+  contents: read
+  # Listing and downloading another run's artifacts is the `actions` scope, not
+  # `contents` — both the probe's `gh api .../actions/runs/<id>/artifacts` and
+  # `actions/download-artifact` 403 without it, and this job's whole purpose is to
+  # collect the producer's artifact. Read-only: nothing here re-runs or cancels a
+  # workflow. (The PAT below is what does the writing, and it is scoped separately.)
+  actions: read
+
+jobs:
+  commit:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free; this job only commits, it installs nothing
+    timeout-minutes: 8
+    steps:
+      # The producer uploads NOTHING when the manifest was already in sync, so a missing
+      # artifact is a legitimate no-op — but only that. `continue-on-error` alone cannot
+      # tell "no artifact" from "the download failed", and collapsing the two would let a
+      # transient API error or a revoked token report success while the manifest stays
+      # stale, with no retry and nothing red to notice.
+      - name: Is there an artifact to fetch?
+        id: probe
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          names="$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}/artifacts" \
+            --jq '.artifacts[].name')"
+          if printf '%s\n' "$names" | grep -qx attribution; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "no attribution artifact — the regenerate job found nothing to change"
+          fi
+
+      # No `continue-on-error`: past the probe, a failure here IS a failure.
+      - name: Fetch the regenerated manifest
+        id: fetch
+        if: steps.probe.outputs.present == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: attribution
+          path: _attribution
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read what the producer staged
+        id: gate
+        if: steps.probe.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          # The artifact was present, so the file must be too — a download that lands
+          # without it is corruption, not a no-op.
+          test -f _attribution/THIRD_PARTY_LICENSES.md
+          {
+            echo "go=true"
+            echo "pr=$(cat _attribution/pr)"
+            echo "head_ref=$(cat _attribution/head-ref)"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        if: steps.gate.outputs.go == 'true'
+        with:
+          # `head_ref` resolves in THIS repo: dependabot pushes its branches to the base
+          # repository, it does not fork. Every dependabot PR here is same-repo —
+          # #3382/#3372/#3371 all carry `isCrossRepository: false` and
+          # `headRepositoryOwner: protoLabsAI`. (Noted because a review flagged the
+          # opposite; the fork model is how a HUMAN contributor's PR behaves, not a
+          # bot-pushed branch, and `pull_request` withholding a write token from
+          # dependabot is a permissions decision, not evidence of a fork.)
+          ref: ${{ steps.gate.outputs.head_ref }}
+          # Pushing with the default token would not re-trigger the PR's checks, leaving
+          # a green commit under a red check. See the header.
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Commit the regenerated manifest
+        if: steps.gate.outputs.go == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PR: ${{ steps.gate.outputs.pr }}
+        run: |
+          set -euo pipefail
+          # The manifest was generated FOR a specific lockfile revision. If dependabot
+          # force-pushed a rebase after the producer ran, this checkout is a newer tip and
+          # committing here would attach an older lockfile's attribution to it — and the
+          # stale result would persist, because a manifest-only push does not match the
+          # producer's `paths:` filter and so never re-triggers a regeneration.
+          # Diffing the file is not enough to catch that: a manifest can be byte-identical
+          # across two different lockfiles.
+          if [ "$(git rev-parse HEAD)" != "${{ github.event.workflow_run.head_sha }}" ]; then
+            echo "branch moved since the manifest was generated"
+            echo "  generated for: ${{ github.event.workflow_run.head_sha }}"
+            echo "  checked out:   $(git rev-parse HEAD)"
+            echo "the newer head re-triggers the producer on its own — nothing to commit"
+            exit 0
+          fi
+          cp _attribution/THIRD_PARTY_LICENSES.md THIRD_PARTY_LICENSES.md
+          if git diff --quiet -- THIRD_PARTY_LICENSES.md; then
+            echo "already in sync on this head — nothing to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add THIRD_PARTY_LICENSES.md
+          git commit -m "chore(deps): regenerate THIRD_PARTY_LICENSES for the lock bump
+
+          dependabot updates the lockfile but not the attribution manifest, so
+          gen_attribution --check inside scripts/gate.py --lint-only fails and the PR
+          arrives red on a check named for two gates that both passed (#3393)."
+          git push origin "HEAD:${{ steps.gate.outputs.head_ref }}"
+          # The commit turns a lock-only PR into one touching a tracked file, which trips
+          # the changelog gate. A dependency bump plus regenerated attribution is exactly
+          # what that label is for, and applying it re-triggers changelog.yml by itself.
+          # NOT `|| true`: the commit has already landed, so swallowing a label failure
+          # leaves the PR red on the changelog gate with the job reporting success and no
+          # path back. Retry the transient case, then fail loudly.
+          for attempt in 1 2 3; do
+            if gh pr edit "$PR" --add-label skip-changelog; then
+              exit 0
+            fi
+            echo "label attempt $attempt failed; retrying in $((attempt * 5))s"
+            sleep $((attempt * 5))
+          done
+          echo "::error::committed the manifest but could not apply skip-changelog to #$PR — the changelog gate will stay red until the label is added by hand"
+          exit 1
