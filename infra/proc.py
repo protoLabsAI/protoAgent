@@ -323,8 +323,9 @@ _PENDING_FORGETS: set[asyncio.Task] = set()
 
 def untrack_when_reaped(proc: asyncio.subprocess.Process) -> None:
     """For an owner that stops waiting on a child that is still running — a cancelled
-    turn. It stays tracked while it runs (so an exit still reaches it) and is forgotten
-    once it's actually reaped. Call from inside the event loop. Never raises.
+    turn. It stays tracked while its group has anything in it (so an exit still reaches
+    it) and is forgotten once the group is gone — not merely once the root is reaped.
+    Call from inside the event loop. Never raises.
 
     Leaving it tracked forever instead is not harmless: once the group is gone its pgid
     is free for reuse, and the exit sweep would then signal whichever unrelated group
@@ -336,7 +337,7 @@ def untrack_when_reaped(proc: asyncio.subprocess.Process) -> None:
         # shutting down) the child is still running, so it must stay tracked.
         with contextlib.suppress(Exception):
             await proc.wait()
-            untrack_tree(proc.pid)
+            _untrack_if_group_gone(proc.pid)
 
     try:
         task = asyncio.get_running_loop().create_task(_forget_once_reaped())
@@ -344,6 +345,28 @@ def untrack_when_reaped(proc: asyncio.subprocess.Process) -> None:
         return  # no running loop — leave it tracked; the exit sweep still covers it
     _PENDING_FORGETS.add(task)
     task.add_done_callback(_PENDING_FORGETS.discard)
+
+
+def _untrack_if_group_gone(pid: int) -> None:
+    """Forget ``pid`` only if its whole group is gone. The ROOT being reaped is not
+    enough: an abandoned ``sh -c`` often exits while the ``pnpm install`` it started
+    runs on in the same group, and that surviving group is exactly the orphan the exit
+    sweep exists to reach. It stays tracked; ``_prune_dead_locked`` drops it once the
+    group is really gone."""
+    with _TRACKED_LOCK:
+        key = _TRACKED.get(pid)
+        if key is None:
+            return
+        if _WINDOWS:
+            # taskkill /T can't walk from a dead root anyway (see _signal_tracked).
+            _TRACKED.pop(pid, None)
+            return
+        try:
+            os.killpg(key, 0)
+        except ProcessLookupError:
+            _TRACKED.pop(pid, None)
+        except (PermissionError, OSError):
+            pass
 
 
 def _prune_dead_locked() -> None:

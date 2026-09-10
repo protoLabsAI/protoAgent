@@ -434,6 +434,40 @@ async def test_a_cancelled_shell_command_is_forgotten_once_it_finishes_on_its_ow
 
 
 @posix_only
+async def test_a_cancelled_command_whose_grandchild_outlives_it_stays_owned(tmp_path):
+    """The root being reaped is not the tree being gone. A cancelled `sh -c` exits while
+    the long job it started runs on in its group — the orphan shape #3428 found — and
+    forgetting it at the root's exit would hand that job its ppid=1 after all."""
+    from tools.shell import run_command
+
+    pidfile = tmp_path / "grandchild.pid"
+    # The grandchild must NOT inherit the pipes: asyncio's `Process.wait()` resolves only
+    # once the process has exited AND every pipe is closed, so an inheriting grandchild
+    # would hold `wait()` open forever and this test would never reach the path under test.
+    task = asyncio.create_task(
+        run_command(["sh", "-c", f"sleep 300 >/dev/null 2>&1 </dev/null & echo $! > {pidfile}; sleep 0.4"])
+    )
+    for _ in range(200):
+        if tracked_trees() and pidfile.exists() and pidfile.read_text().strip():
+            break
+        await asyncio.sleep(0.01)
+    [root] = tracked_trees()
+    grandchild = int(pidfile.read_text().strip())
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    for _ in range(200):  # the root exits on its own and is reaped
+        if not _alive(root):
+            break
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.2)  # give the reap-then-forget its turn
+    assert not _alive(root) and _alive(grandchild)
+    assert tracked_trees() == [root], "the group is still running — the exit must still reach it"
+    reap_tracked_trees(grace=0.2)
+    assert _wait_dead(grandchild, 2.0)
+
+
+@posix_only
 def test_tracking_a_tree_drops_groups_that_are_already_gone():
     # Whatever an owner failed to untrack (a hard kill whose close() never ran) must
     # not wait for the exit sweep with a pgid someone else may have been handed.
