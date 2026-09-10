@@ -312,6 +312,7 @@ from server.a2a import (  # noqa: E402,F401 — re-export of the extracted A2A s
 # AGENT_NAME_ENV / _event_bus / _bundle_root from this module — all defined above
 # this line — so the import is not a cycle.
 from server.agent_init import (  # noqa: E402,F401 — re-export of the extracted agent-init backend
+    _a2a_reaper_loop,
     _apply_settings_changes,
     _build_activity_log,
     _build_checkpointer,
@@ -656,6 +657,13 @@ def _main():
         # so turning it on in Settings takes effect without a restart.
         STATE.memory_guard_task = asyncio.create_task(_memory_guard_loop())
 
+        # Orphaned-WORKING A2A task reaper (#3418). Started unconditionally like the
+        # loops above; it self-guards on STATE.a2a_task_engine (no-op until the durable
+        # stores exist, or when A2A is off). Covers the hole between boot reconciliation
+        # and the executor stall guard — a producer that vanished without either firing —
+        # so a WORKING task can't leave the console spinner permanent.
+        STATE.a2a_reaper_task = asyncio.create_task(_a2a_reaper_loop())
+
         # Opt-in plugin auto-update (#1720) — only sweeps plugins the operator lists
         # in ``plugins.update_policy``; the loop self-guards each pass (empty policy
         # or interval 0 ⇒ idle). Start it unconditionally so a later config reload
@@ -847,6 +855,8 @@ def _main():
             STATE.watch_task.cancel()
         if STATE.plugin_autoupdate_task is not None:
             STATE.plugin_autoupdate_task.cancel()
+        if STATE.a2a_reaper_task is not None:
+            STATE.a2a_reaper_task.cancel()
         # (memory_guard_task was cancelled at the top — it can os._exit.)
         # Close the long-lived A2A push-notification client (created below in
         # _main) so its connection pool doesn't leak on shutdown/reload — matters

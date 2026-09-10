@@ -1022,6 +1022,41 @@ async def _watch_loop() -> None:
         await asyncio.sleep(max(MIN_WATCH_INTERVAL_S, float(interval or DEFAULT_WATCH_INTERVAL_S)))
 
 
+# A2A orphaned-WORKING-task reaper cadence (#3418). Deliberately far shorter than the
+# checkpoint-prune hour, and finite (the console waits INDEFINITELY on a WORKING durable
+# record): a producer that vanished without tripping boot reconciliation or the executor
+# stall guard settles the spinner within minutes, not never.
+A2A_REAPER_INTERVAL_S = 300.0
+
+
+async def _a2a_reaper_loop() -> None:
+    """Periodically fail orphaned WORKING A2A tasks (#3418).
+
+    Boot reconciliation (``reconcile_interrupted_tasks``) covers a restart and the
+    executor stall guard (``_stall_guarded``) covers an alive-but-silent stream; this
+    loop covers the hole between them — a producer that vanished without tripping
+    either, leaving a task stuck in ``TASK_STATE_WORKING`` and the console spinner
+    permanent. The discriminator (orphan-at-birth vs. idle-productive) and the terminal
+    transition live in ``reap_orphaned_working_tasks``; here we just tick on a fixed
+    cadence and isolate failures so a reaper error can never harm chat service.
+
+    Started unconditionally like ``_watch_loop`` / ``_memory_guard_loop`` and self-guards
+    on ``STATE.a2a_task_engine`` (no-op until the durable stores exist, or when A2A is off).
+    """
+    from a2a_impl.stores import reap_orphaned_working_tasks
+
+    await asyncio.sleep(45)  # let boot settle (and boot reconciliation run) before the first sweep
+    while True:
+        if STATE.a2a_task_engine is not None:
+            try:
+                n = await reap_orphaned_working_tasks(STATE.a2a_task_engine)
+                if n:
+                    log.info("[a2a-reaper] failed %d orphaned WORKING task(s) (#3418)", n)
+            except Exception:
+                log.exception("[a2a-reaper] sweep failed")
+        await asyncio.sleep(A2A_REAPER_INTERVAL_S)
+
+
 MEMORY_GUARD_INTERVAL_S = 60.0
 
 

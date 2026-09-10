@@ -24,6 +24,7 @@ from a2a_impl.stores import (
     initialize_a2a_stores,
     is_safe_webhook_url,
     make_sqlite_engine,
+    reap_orphaned_working_tasks,
     reconcile_interrupted_tasks,
     sweep_expired_tasks,
     sweep_orphaned_push_configs,
@@ -265,6 +266,248 @@ async def test_initialize_reconciles_before_sweep(tmp_path):
 
     assert (await store.get("submitted", ctx)).status.state == a2a_pb2.TASK_STATE_FAILED
     assert (await store.get("working", ctx)).status.state == a2a_pb2.TASK_STATE_FAILED
+    await engine.dispose()
+
+
+# ── (a3) orphaned-WORKING reaper: producer vanished without a trace (#3418) ──────
+
+
+async def _fresh_task_store(tmp_path):
+    """A fresh DatabaseTaskStore + its engine over a real sqlite file."""
+    engine = make_sqlite_engine(str(tmp_path / "a2a-tasks.db"))
+    store = DatabaseTaskStore(engine)
+    await store.initialize()
+    return store, engine
+
+
+def _agent_msg():
+    """A plain (non-reasoning) agent message — recorded 'history' for the reaper."""
+    from a2a.types import a2a_pb2
+
+    return a2a_pb2.Message(role=a2a_pb2.ROLE_AGENT, parts=[a2a_pb2.Part(text="working")])
+
+
+def _artifact():
+    """A recorded artifact — the other 'productive' discriminator for the reaper."""
+    from a2a.types import a2a_pb2
+
+    return a2a_pb2.Artifact(artifact_id="a1", parts=[a2a_pb2.Part(text="partial")])
+
+
+async def _seed_task(store, engine, ctx, tid, *, state, age_s, now, history=(), artifacts=()):
+    """Save a task in ``state`` with optional recorded history/artifacts, then backdate
+    its ``last_updated`` to ``now - age_s`` (store.save leaves it null without a status
+    timestamp, so age is controlled here)."""
+    from datetime import timedelta
+
+    from a2a.server.models import TaskModel
+    from a2a.types import a2a_pb2
+    from sqlalchemy import update as _update
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    task = a2a_pb2.Task(
+        id=tid,
+        context_id="c",
+        status=a2a_pb2.TaskStatus(state=getattr(a2a_pb2, state)),
+        history=list(history),
+        artifacts=list(artifacts),
+    )
+    await store.save(task, ctx)
+    sm = async_sessionmaker(engine, expire_on_commit=False)
+    async with sm() as s:
+        await s.execute(
+            _update(TaskModel).where(TaskModel.id == tid).values(last_updated=now - timedelta(seconds=age_s))
+        )
+        await s.commit()
+
+
+@pytest.mark.asyncio
+async def test_reaper_fails_orphan_at_birth_past_grace(tmp_path):
+    """r1: a WORKING task with NO history and NO artifacts, older than the birth grace,
+    becomes FAILED with an orphaned-before-progress diagnosis."""
+    from datetime import UTC, datetime
+
+    from a2a.types import a2a_pb2
+
+    now = datetime.now(UTC)
+    store, engine = await _fresh_task_store(tmp_path)
+    ctx = _ctx()
+    await _seed_task(store, engine, ctx, "orphan", state="TASK_STATE_WORKING", age_s=400, now=now)
+
+    n = await reap_orphaned_working_tasks(engine, birth_grace_s=300, idle_after_s=1800, now=now)
+    assert n == 1
+    got = await store.get("orphan", ctx)
+    assert got.status.state == a2a_pb2.TASK_STATE_FAILED
+    text = got.status.message.parts[0].text
+    assert "never produced" in text and "startup grace" in text
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_reaper_keeps_orphan_within_grace(tmp_path):
+    """r1 boundary: a just-started WORKING task with no output yet is left WORKING while
+    it is still inside the birth grace (a slow first frame must not be reaped)."""
+    from datetime import UTC, datetime
+
+    from a2a.types import a2a_pb2
+
+    now = datetime.now(UTC)
+    store, engine = await _fresh_task_store(tmp_path)
+    ctx = _ctx()
+    await _seed_task(store, engine, ctx, "fresh-orphan", state="TASK_STATE_WORKING", age_s=100, now=now)
+
+    n = await reap_orphaned_working_tasks(engine, birth_grace_s=300, idle_after_s=1800, now=now)
+    assert n == 0
+    assert (await store.get("fresh-orphan", ctx)).status.state == a2a_pb2.TASK_STATE_WORKING
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_reaper_keeps_productive_task_within_idle(tmp_path):
+    """r2: a WORKING task that recorded history and whose last update is newer than the
+    idle threshold stays WORKING — even though it is already older than the birth grace
+    (this is the whole discriminator: productive tasks use the LONGER window)."""
+    from datetime import UTC, datetime
+
+    from a2a.types import a2a_pb2
+
+    now = datetime.now(UTC)
+    store, engine = await _fresh_task_store(tmp_path)
+    ctx = _ctx()
+    # age 600s: past the 300s birth grace, but well under the 1800s idle threshold.
+    await _seed_task(
+        store, engine, ctx, "productive", state="TASK_STATE_WORKING", age_s=600, now=now, history=[_agent_msg()]
+    )
+
+    n = await reap_orphaned_working_tasks(engine, birth_grace_s=300, idle_after_s=1800, now=now)
+    assert n == 0
+    assert (await store.get("productive", ctx)).status.state == a2a_pb2.TASK_STATE_WORKING
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_reaper_fails_idle_productive_task(tmp_path):
+    """r3: a once-productive WORKING task (here: recorded an artifact) idle past the idle
+    threshold becomes FAILED with an idle/producer-lost diagnosis."""
+    from datetime import UTC, datetime
+
+    from a2a.types import a2a_pb2
+
+    now = datetime.now(UTC)
+    store, engine = await _fresh_task_store(tmp_path)
+    ctx = _ctx()
+    await _seed_task(
+        store, engine, ctx, "stalled", state="TASK_STATE_WORKING", age_s=2000, now=now, artifacts=[_artifact()]
+    )
+
+    n = await reap_orphaned_working_tasks(engine, birth_grace_s=300, idle_after_s=1800, now=now)
+    assert n == 1
+    got = await store.get("stalled", ctx)
+    assert got.status.state == a2a_pb2.TASK_STATE_FAILED
+    text = got.status.message.parts[0].text
+    assert "went silent" in text and "idle threshold" in text
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_reaper_never_touches_protected_states(tmp_path):
+    """r4: SUBMITTED / COMPLETED / FAILED / CANCELED / INPUT_REQUIRED / AUTH_REQUIRED are
+    never reaped, however stale — only WORKING is eligible."""
+    from datetime import UTC, datetime
+
+    from a2a.types import a2a_pb2
+
+    now = datetime.now(UTC)
+    store, engine = await _fresh_task_store(tmp_path)
+    ctx = _ctx()
+    protected = [
+        "TASK_STATE_SUBMITTED",
+        "TASK_STATE_COMPLETED",
+        "TASK_STATE_FAILED",
+        "TASK_STATE_CANCELED",
+        "TASK_STATE_INPUT_REQUIRED",
+        "TASK_STATE_AUTH_REQUIRED",
+    ]
+    for i, state in enumerate(protected):
+        # Very stale, and a mix of produced/not-produced, to prove state (not age or
+        # history shape) is the gate.
+        await _seed_task(
+            store,
+            engine,
+            ctx,
+            state,
+            state=state,
+            age_s=99_999,
+            now=now,
+            history=[_agent_msg()] if i % 2 else [],
+        )
+
+    n = await reap_orphaned_working_tasks(engine, birth_grace_s=1, idle_after_s=1, now=now)
+    assert n == 0
+    for state in protected:
+        assert (await store.get(state, ctx)).status.state == getattr(a2a_pb2, state)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_reaper_is_idempotent_and_deletes_nothing(tmp_path):
+    """r5: the sweep is idempotent (a second pass reaps nothing) and never deletes a row —
+    a reaped task stays fetchable so the console's terminal watchdog can settle the spinner."""
+    from datetime import UTC, datetime
+
+    from a2a.server.models import TaskModel
+    from a2a.types import a2a_pb2
+    from sqlalchemy import func, select
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    now = datetime.now(UTC)
+    store, engine = await _fresh_task_store(tmp_path)
+    ctx = _ctx()
+    await _seed_task(store, engine, ctx, "orphan", state="TASK_STATE_WORKING", age_s=400, now=now)
+    await _seed_task(
+        store, engine, ctx, "stalled", state="TASK_STATE_WORKING", age_s=2000, now=now, history=[_agent_msg()]
+    )
+    await _seed_task(
+        store, engine, ctx, "live", state="TASK_STATE_WORKING", age_s=10, now=now, history=[_agent_msg()]
+    )
+    await _seed_task(store, engine, ctx, "done", state="TASK_STATE_COMPLETED", age_s=99_999, now=now)
+
+    sm = async_sessionmaker(engine, expire_on_commit=False)
+    async with sm() as s:
+        before = (await s.execute(select(func.count()).select_from(TaskModel))).scalar()
+
+    assert await reap_orphaned_working_tasks(engine, birth_grace_s=300, idle_after_s=1800, now=now) == 2
+    assert await reap_orphaned_working_tasks(engine, birth_grace_s=300, idle_after_s=1800, now=now) == 0
+
+    async with sm() as s:
+        after = (await s.execute(select(func.count()).select_from(TaskModel))).scalar()
+    assert after == before  # nothing deleted
+
+    # Reaped rows are terminal but still fetchable; the live/protected rows are untouched.
+    assert (await store.get("orphan", ctx)).status.state == a2a_pb2.TASK_STATE_FAILED
+    assert (await store.get("stalled", ctx)).status.state == a2a_pb2.TASK_STATE_FAILED
+    assert (await store.get("live", ctx)).status.state == a2a_pb2.TASK_STATE_WORKING
+    assert (await store.get("done", ctx)).status.state == a2a_pb2.TASK_STATE_COMPLETED
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_reaper_disabled_windows_are_bounded(tmp_path):
+    """A non-positive window disables that arm (bounded input validation): with the birth
+    grace off, an ancient orphan is left WORKING instead of being reaped at age 0."""
+    from datetime import UTC, datetime
+
+    from a2a.types import a2a_pb2
+
+    now = datetime.now(UTC)
+    store, engine = await _fresh_task_store(tmp_path)
+    ctx = _ctx()
+    await _seed_task(store, engine, ctx, "orphan", state="TASK_STATE_WORKING", age_s=99_999, now=now)
+
+    # birth grace disabled → orphan arm is off; idle arm doesn't apply (no history/artifacts).
+    n = await reap_orphaned_working_tasks(engine, birth_grace_s=0, idle_after_s=1800, now=now)
+    assert n == 0
+    assert (await store.get("orphan", ctx)).status.state == a2a_pb2.TASK_STATE_WORKING
     await engine.dispose()
 
 
