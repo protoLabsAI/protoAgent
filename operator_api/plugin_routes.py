@@ -46,6 +46,20 @@ log = logging.getLogger(__name__)
 _ACK_RMW_LOCK = asyncio.Lock()
 
 
+def _current_plugin_lists(current) -> dict:
+    """The live `plugins.enabled`/`disabled`, UNCHANGED — the write the sync and update
+    routes use purely as the reload trigger. Passed to the applier as a callable so it
+    reads `current` inside the config write lock (#2743): a copy read before the lock
+    wrote whatever landed in between back out. Order is kept as the operator wrote it
+    (the loader treats the list as a set, so there's nothing to gain by reshuffling)."""
+    return {
+        "plugins": {
+            "enabled": list(getattr(current, "plugins_enabled", []) or []),
+            "disabled": list(getattr(current, "plugins_disabled", []) or []),
+        }
+    }
+
+
 def _sources_allowlist() -> list[str] | None:
     """`plugins.sources.allow` from config, if a fork locked installs down (PR3
     wires the config field; None = open)."""
@@ -576,20 +590,9 @@ def register_plugin_routes(app) -> None:
         if fetched & set(getattr(STATE.graph_config, "plugins_enabled", []) or []):
             from server.agent_init import _apply_settings_changes
 
-            def _rewrite_current(current) -> dict:
-                # This write changes nothing — it's the reload trigger. So it must be the
-                # CURRENT lists, read inside the config write lock (#2743): a copy read
-                # before it wrote any toggle or install that landed in between back out.
-                return {
-                    "plugins": {
-                        "enabled": sorted(getattr(current, "plugins_enabled", []) or []),
-                        "disabled": list(getattr(current, "plugins_disabled", []) or []),
-                    }
-                }
-
             # Off the event loop — config write + full graph rebuild (2734 review;
             # the D9 rule every reload call site follows).
-            ok, messages = await asyncio.to_thread(_apply_settings_changes, config=_rewrite_current)
+            ok, messages = await asyncio.to_thread(_apply_settings_changes, config=_current_plugin_lists)
             if not ok:
                 # The fetch itself succeeded — surface the reload failure per row
                 # semantics rather than 500ing (mirrors the install route).
@@ -651,18 +654,8 @@ def register_plugin_routes(app) -> None:
             # hot-mounts (router re-mount, tools/middleware/MCP rebuild — #822).
             from server.agent_init import _apply_settings_changes
 
-            def _rewrite_current(current) -> dict:
-                # The reload trigger rewrites the lists unchanged — read inside the config
-                # write lock (#2743), or it writes a stale copy over a concurrent change.
-                return {
-                    "plugins": {
-                        "enabled": list(getattr(current, "plugins_enabled", []) or []),
-                        "disabled": list(getattr(current, "plugins_disabled", []) or []),
-                    }
-                }
-
             # Off the event loop — full graph rebuild (2734 review, D9 rule).
-            ok, messages = await asyncio.to_thread(_apply_settings_changes, config=_rewrite_current)
+            ok, messages = await asyncio.to_thread(_apply_settings_changes, config=_current_plugin_lists)
             if not ok:
                 raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
             reloaded = True

@@ -3117,7 +3117,14 @@ def _apply_settings_changes(
 
     messages: list[str] = []
     if callable(config):
-        config = config(STATE.graph_config)
+        try:
+            config = config(STATE.graph_config)
+        except Exception as e:  # noqa: BLE001 — keep the (ok, messages) contract
+            # Nothing is written yet, so there is nothing to roll back. Raising instead
+            # would turn e.g. an install whose code is already on disk into a bare 500,
+            # where the caller's contract is "installed; enabling failed: <why>".
+            log.exception("[config] computing the config update failed")
+            return False, [f"config update: {e}"]
     # Snapshot BEFORE the first write so a failed reload can undo it (see _ROLLBACK_NOTE).
     # Only when there's a config write to undo: a pure reload / SOUL-only save has no YAML
     # change to revert, and SOUL is deliberately outside the rollback — it's authored prose,

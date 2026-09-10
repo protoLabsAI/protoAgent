@@ -52,18 +52,32 @@ def held_first_reload(monkeypatch, live_config):
 
     inside = threading.Event()
     release = threading.Event()
-    calls = {"n": 0}
+    second_calling = threading.Event()
+    calls = {"reload": 0, "apply": 0}
 
     def _reload(*_a, **_k):
-        calls["n"] += 1
-        if calls["n"] == 1:
+        calls["reload"] += 1
+        if calls["reload"] == 1:
             inside.set()
             assert release.wait(10), "test never released the first writer"
         rs.STATE.graph_config = LangGraphConfig.from_yaml(str(live_config))
         return True, "reloaded"
 
+    real_apply = ai._apply_settings_changes
+
+    def _apply_spy(*a, **k):
+        # The sync point: the second writer is about to call the applier. Everything a
+        # writer does BEFORE that call — where the old code read the stale list — has
+        # happened, so releasing the first writer now can't let a stale read slip in
+        # after the commit and pass by luck.
+        calls["apply"] += 1
+        if calls["apply"] == 2:
+            second_calling.set()
+        return real_apply(*a, **k)
+
     monkeypatch.setattr(ai, "_reload_langgraph_agent", _reload)
-    return inside, release
+    monkeypatch.setattr(ai, "_apply_settings_changes", _apply_spy)
+    return inside, release, second_calling
 
 
 def _enabled_on_disk(leaf: Path) -> list[str]:
@@ -73,20 +87,16 @@ def _enabled_on_disk(leaf: Path) -> list[str]:
 async def _wait_for(event: threading.Event, timeout: float = 10.0) -> None:
     deadline = time.monotonic() + timeout
     while not event.is_set():
-        assert time.monotonic() < deadline, "the first writer never reached the lock"
+        assert time.monotonic() < deadline, "a writer never reached its sync point"
         await asyncio.sleep(0.01)
 
 
-async def _second_writer_parks_on_the_lock() -> None:
-    # Long enough for the second request to do everything it does BEFORE the lock
-    # (where the old code read the stale list) and block on the lock itself.
-    await asyncio.sleep(0.3)
 
 
 async def test_two_concurrent_enables_through_the_route_both_survive(live_config, held_first_reload):
     from operator_api.plugin_routes import register_plugin_routes
 
-    inside, release = held_first_reload
+    inside, release, second_calling = held_first_reload
     app = FastAPI()
     register_plugin_routes(app)
     transport = httpx.ASGITransport(app=app)
@@ -94,7 +104,7 @@ async def test_two_concurrent_enables_through_the_route_both_survive(live_config
         first = asyncio.create_task(client.post("/api/plugins/x/enabled", json={"enabled": True}))
         await _wait_for(inside)  # x's write is on disk; its reload holds the lock
         second = asyncio.create_task(client.post("/api/plugins/y/enabled", json={"enabled": True}))
-        await _second_writer_parks_on_the_lock()
+        await _wait_for(second_calling)
         release.set()
         r1, r2 = await first, await second
 
@@ -125,14 +135,14 @@ async def test_a_side_effect_rewrite_does_not_undo_a_concurrent_enable(
     monkeypatch.setattr(installer, "install", lambda *a, **_k: {"id": "base", "version": "1", "resolved_sha": "abc"})
     monkeypatch.setattr(installer, "uninstall", lambda pid, purge=False: {"id": pid, "removed": ["dir"]})
 
-    inside, release = held_first_reload
+    inside, release, second_calling = held_first_reload
     app = FastAPI()
     register_plugin_routes(app)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as client:
         first = asyncio.create_task(client.post("/api/plugins/x/enabled", json={"enabled": True}))
         await _wait_for(inside)
         second = asyncio.create_task(second_request(client))
-        await _second_writer_parks_on_the_lock()
+        await _wait_for(second_calling)
         release.set()
         r1, r2 = await first, await second
 
@@ -146,10 +156,10 @@ async def test_two_concurrent_installs_both_end_up_enabled(monkeypatch, live_con
     """The issue's literal case: two plugin installs at once, each auto-enabling."""
     from graph.plugins import installer, loader
     from ops import OpContext
+    import server.agent_init as ai
     from ops.plugins import install_and_activate
-    from server.agent_init import _apply_settings_changes
 
-    inside, release = held_first_reload
+    inside, release, second_calling = held_first_reload
     monkeypatch.setattr(installer, "install", lambda url, ref=None, **_k: {"id": url.rsplit("/", 1)[-1]})
     monkeypatch.setattr(loader, "purge_plugin_modules", lambda _pid: None)
 
@@ -157,13 +167,13 @@ async def test_two_concurrent_installs_both_end_up_enabled(monkeypatch, live_con
         return install_and_activate(
             f"https://example.test/{name}",
             ctx=OpContext.from_state(),
-            apply_settings=lambda updates: _apply_settings_changes(config=updates),
+            apply_settings=lambda updates: ai._apply_settings_changes(config=updates),
         )
 
     first = asyncio.create_task(_install("x"))
     await _wait_for(inside)
     second = asyncio.create_task(_install("y"))
-    await _second_writer_parks_on_the_lock()
+    await _wait_for(second_calling)
     release.set()
     a, b = await first, await second
 
@@ -200,3 +210,44 @@ def test_the_server_lock_is_the_config_layer_lock():
     from graph.config_io import CONFIG_WRITE_LOCK
 
     assert ai._CONFIG_WRITE_LOCK is CONFIG_WRITE_LOCK
+
+
+def test_the_purge_secrets_scrub_waits_for_an_in_flight_write(live_config):
+    """`_clean_secrets` (uninstall --purge) rewrites secrets.yaml, which the applier's
+    `save_secrets` also read-modify-writes under the lock. Interleaved, one drops the
+    other's secret update or brings the purged section back."""
+    from graph.config_io import CONFIG_WRITE_LOCK, secrets_yaml_path
+    from graph.plugins.installer import _clean_secrets
+
+    secrets_yaml_path().write_text("doomed:\n  token: x\nkept:\n  token: y\n", encoding="utf-8")
+    done = threading.Event()
+
+    def _scrub():
+        _clean_secrets("doomed")
+        done.set()
+
+    with CONFIG_WRITE_LOCK:
+        t = threading.Thread(target=_scrub)
+        t.start()
+        assert not done.wait(0.3), "the secrets scrub rewrote the file while another write held the lock"
+    t.join(5)
+    assert done.is_set()
+    assert yaml.safe_load(secrets_yaml_path().read_text(encoding="utf-8")) == {"kept": {"token": "y"}}
+
+
+def test_a_failing_update_callable_is_a_failed_apply_not_an_exception(monkeypatch, live_config):
+    # The (ok, messages) contract: an install whose code is already on disk must come back
+    # as "installed; enabling failed: <why>", not a bare 500 from an escaping exception.
+    import server.agent_init as ai
+
+    monkeypatch.setattr(ai, "_reload_langgraph_agent", lambda *a, **k: pytest.fail("nothing to reload"))
+    before = live_config.read_text(encoding="utf-8")
+
+    def _boom(_current):
+        raise RuntimeError("the live YAML is unreadable")
+
+    ok, messages = ai._apply_settings_changes(config=_boom)
+
+    assert ok is False
+    assert any("the live YAML is unreadable" in m for m in messages)
+    assert live_config.read_text(encoding="utf-8") == before, "nothing may be written"

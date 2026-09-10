@@ -1107,16 +1107,19 @@ def _clean_config_refs(plugin_id: str, section: str, purge: bool) -> bool:
 
 def _clean_secrets(section: str) -> bool:
     """Remove the plugin's section from the live secrets.yaml overlay (purge only)."""
-    from graph.config_io import load_yaml_doc, save_yaml_doc, secrets_yaml_path
+    from graph.config_io import CONFIG_WRITE_LOCK, load_yaml_doc, save_yaml_doc, secrets_yaml_path
 
     sec = secrets_yaml_path()
     if not sec.exists():
         return False
-    doc = load_yaml_doc(sec)
-    if isinstance(doc, dict) and section in doc:
-        del doc[section]
-        save_yaml_doc(doc, sec)
-        return True
+    # Same lock as the applier's `save_secrets` read-modify-write (#2743): interleaved,
+    # one drops the other's secret update or brings the purged section back.
+    with CONFIG_WRITE_LOCK:
+        doc = load_yaml_doc(sec)
+        if isinstance(doc, dict) and section in doc:
+            del doc[section]
+            save_yaml_doc(doc, sec)
+            return True
     return False
 
 

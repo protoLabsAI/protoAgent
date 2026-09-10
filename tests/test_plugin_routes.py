@@ -31,11 +31,17 @@ def _wire(monkeypatch, *, enabled, disabled, meta, router_keys=(), official=(), 
     def _apply(config=None, soul=None):
         # Resolve a read-modify-write callable the way the real applier does — against
         # the config the last write committed, STATE.graph_config (#2743).
-        if callable(config):
-            import runtime.state as _rs
+        import runtime.state as _rs
 
+        if callable(config):
             config = config(_rs.STATE.graph_config)
         captured["config"] = config
+        # What the real reload does: the saved lists become the committed config, so a
+        # later write in the same test reads them, not the pre-write copy.
+        plugins = (config or {}).get("plugins") or {}
+        for key in ("enabled", "disabled"):
+            if key in plugins:
+                setattr(_rs.STATE.graph_config, f"plugins_{key}", list(plugins[key]))
         return True, ["reloaded"]
 
     fake._apply_settings_changes = _apply
