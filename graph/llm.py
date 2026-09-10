@@ -13,6 +13,7 @@ import httpcore
 import httpx
 from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from pydantic import Field
 
 from graph.config import PROVIDER_TYPE_OPENAI_COMPAT, LangGraphConfig, Provider
 from graph.providers.identity import tag_model_provider
@@ -159,6 +160,18 @@ async def _stream_with_reconnect(
             delay *= 2
 
 
+def _gateway_wire_default() -> bool | None:
+    """The `use_responses_api` default for the OpenAI-compatible gateway client.
+
+    ``False`` pins `/v1/chat/completions`. ``None`` hands the choice back to
+    langchain-openai's own per-call inference, which is what the escape hatch buys — not
+    "always Responses", since the operator wanting it has a mix of models. Read per
+    instantiation rather than at import so a test can flip it."""
+    if os.environ.get("PROTOAGENT_GATEWAY_RESPONSES_API", "").strip().lower() in ("1", "true", "yes", "on"):
+        return None
+    return False
+
+
 class _ReasoningChatOpenAI(ChatOpenAI):
     """ChatOpenAI that surfaces the gateway's NATIVE reasoning stream.
 
@@ -168,6 +181,28 @@ class _ReasoningChatOpenAI(ChatOpenAI):
     message's ``additional_kwargs`` so the chat stream can render the model's REAL thinking
     in real time, instead of a prompted ``<scratch_pad>`` narration.
     """
+
+    # This client talks to OpenAI-COMPATIBLE endpoints — our LiteLLM gateway, a local
+    # vLLM, LM Studio, Ollama — and `/v1/chat/completions` is the only wire all of them
+    # are guaranteed to speak. `/v1/responses` is an OpenAI-specific surface most of them
+    # do not implement at all.
+    #
+    # Left as `None`, langchain-openai decides per call, and as of 1.6.2 it decides from
+    # the MODEL NAME: `_model_prefers_responses_api()` returns True for a handful of
+    # prefixes and for any name merely CONTAINING "codex". Gateway aliases are names WE
+    # choose (`protolabs/codex`, `gateway:codex`) and say nothing about the wire the
+    # endpoint behind them speaks, so that inference reads a property of the model off a
+    # string that describes our routing — and silently re-points the request at an
+    # endpoint that 404s. It also empties `payload["messages"]`, which quietly disarms the
+    # `reasoning_content` round-trip below (#2642) down to a log line.
+    #
+    # So the wire is pinned here rather than inferred. The native ChatGPT/Codex backend
+    # genuinely does speak Responses and opts IN explicitly — `graph.providers.openai_codex`
+    # passes `use_responses_api=True`, and an explicit constructor kwarg still wins over
+    # this default. Set PROTOAGENT_GATEWAY_RESPONSES_API=1 to hand the decision back to
+    # langchain (an openai-compat connection pointed straight at api.openai.com with a
+    # Responses-only model is the case that wants it).
+    use_responses_api: bool | None = Field(default_factory=_gateway_wire_default)
 
     def _convert_chunk_to_generation_chunk(self, chunk, default_chunk_class, base_generation_info):
         gen = super()._convert_chunk_to_generation_chunk(chunk, default_chunk_class, base_generation_info)
