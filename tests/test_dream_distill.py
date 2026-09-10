@@ -340,6 +340,183 @@ def test_load_skill_no_index(monkeypatch):
     assert "not available" in load_skill.invoke({"name": "anything"})
 
 
+# ── load_skill "Unavailable in this context" annotation (#3403) ────────────────
+#
+# The skill's advisory `Relevant tools` is reconciled up front against (a) the tools
+# bound to the graph EXECUTING the call — `STATE.graph.bound_tools`, the committed
+# graph's authoritative assembled surface, NOT a duplicated static list nor the
+# process-global `tool_delta` set that any later build overwrites — and (b) the small
+# explicit set of host-config gates that guarantee a named tool refuses
+# (onboarding.enabled → the project-registration tool). Progressive disclosure is
+# preserved: the body still loads.
+
+
+class _StubTool:
+    """Minimal stand-in for a bound tool object — ``bound_tools`` holds tool objects
+    and the availability check reads only their ``.name``."""
+
+    def __init__(self, name):
+        self.name = name
+
+
+class _FakeGraph:
+    """Stands in for the committed ``STATE.graph``; carries only the ``bound_tools``
+    attribute ``create_agent_graph`` stamps (``list(all_tools)``) — the seam load_skill
+    now reconciles against."""
+
+    def __init__(self, bound_tools):
+        self.bound_tools = list(bound_tools)
+
+
+def _bind_graph(monkeypatch, names):
+    """Commit a graph whose ``bound_tools`` are exactly ``names`` — the authoritative
+    per-invocation surface load_skill reconciles against (``STATE.graph.bound_tools``)."""
+    monkeypatch.setattr(STATE, "graph", _FakeGraph(_StubTool(n) for n in names))
+
+
+def _save_skill_with_tools(idx, name, tools):
+    _by_name(_build_curation_tools())["save_skill"].invoke(
+        {"name": name, "description": "d", "body": "1. do the thing", "tools": tools}
+    )
+
+
+def _unavailable_line(out: str) -> str | None:
+    return next((ln for ln in out.splitlines() if ln.startswith("Unavailable in this context:")), None)
+
+
+def test_load_skill_flags_tool_absent_from_bound_set(tmp_path, monkeypatch):
+    """r1: a declared tool absent from the committed graph's bound toolset is named
+    under an upfront unavailable annotation, and the procedure still loads."""
+    idx = SkillsIndex(str(tmp_path / "s.db"))
+    monkeypatch.setattr(STATE, "skills_index", idx)
+    monkeypatch.setattr(STATE, "graph_config", None)
+    # The authoritative runtime seam: `calculator` is bound this invocation, `ghost_tool` isn't.
+    _bind_graph(monkeypatch, ["load_skill", "calculator"])
+    _save_skill_with_tools(idx, "Haul run", ["calculator", "ghost_tool"])
+    out = load_skill.invoke({"name": "Haul run"})
+    assert "Relevant tools: calculator, ghost_tool" in out
+    # Only the genuinely-absent tool is flagged (calculator is bound, so it isn't).
+    assert _unavailable_line(out) == "Unavailable in this context: ghost_tool (not bound in this context)."
+    assert "## Procedure" in out and "1. do the thing" in out  # body preserved
+    assert out.index("Unavailable in this context:") < out.index("## Procedure")  # before the procedure
+
+
+def test_load_skill_no_annotation_when_all_bound_and_no_gate(tmp_path, monkeypatch):
+    """r2: all declared tools bound and no hard gate → no annotation; output intact."""
+    idx = SkillsIndex(str(tmp_path / "s.db"))
+    monkeypatch.setattr(STATE, "skills_index", idx)
+    monkeypatch.setattr(STATE, "graph_config", None)
+    _bind_graph(monkeypatch, ["load_skill", "calculator", "current_time"])
+    _save_skill_with_tools(idx, "Simple run", ["calculator", "current_time"])
+    out = load_skill.invoke({"name": "Simple run"})
+    assert "Unavailable in this context:" not in out
+    assert "Relevant tools: calculator, current_time" in out
+    assert "## Procedure" in out
+
+
+def test_load_skill_names_onboarding_gate_when_disabled(tmp_path, monkeypatch):
+    """r3: onboarding disabled + a skill requiring the registration tool → the
+    configuration-gated refusal is NAMED (not a bare "not bound") before the procedure."""
+    from graph.config import LangGraphConfig
+
+    idx = SkillsIndex(str(tmp_path / "s.db"))
+    monkeypatch.setattr(STATE, "skills_index", idx)
+    # Real config seam: onboarding.enabled=false unbinds the registration tool entirely,
+    # and the committed graph's bound_tools reflect exactly what get_all_tools assembled.
+    cfg = LangGraphConfig.from_dict({"onboarding": {"enabled": False}})
+    monkeypatch.setattr(STATE, "graph_config", cfg)
+    _bind_graph(monkeypatch, [t.name for t in get_all_tools(knowledge_store=None, graph_config=cfg)])
+    _save_skill_with_tools(idx, "Register repo", ["board_register_project"])
+    out = load_skill.invoke({"name": "Register repo"})
+    line = _unavailable_line(out)
+    assert line is not None and "board_register_project" in line
+    assert "onboarding is disabled" in line  # the config reason, not just absence
+    assert "not bound in this context" not in line
+    assert out.index(line) < out.index("## Procedure")
+
+
+def test_load_skill_does_not_falsely_flag_bound_registration_tool(tmp_path, monkeypatch):
+    """r4: onboarding enabled and the registration tool bound → the reported tool name
+    (`board_register_project`) is NOT marked unavailable."""
+    from graph.config import LangGraphConfig
+
+    idx = SkillsIndex(str(tmp_path / "s.db"))
+    monkeypatch.setattr(STATE, "skills_index", idx)
+    monkeypatch.setattr(STATE, "graph_config", LangGraphConfig.from_dict({"onboarding": {"enabled": True}}))
+    _bind_graph(monkeypatch, ["load_skill", "board_register_project"])
+    _save_skill_with_tools(idx, "Register", ["board_register_project"])
+    out = load_skill.invoke({"name": "Register"})
+    assert "Unavailable in this context:" not in out
+
+
+def test_load_skill_onboarding_gate_tracks_the_real_toolset(tmp_path, monkeypatch):
+    """r5: the check consults the REAL assembled toolset, not a stale duplicated list.
+
+    Enabled → `onboard_project` is genuinely bound (`get_all_tools` returns it) and is
+    NOT flagged. Disabled → `get_all_tools` omits it, and the annotation names the
+    config gate — so if someone re-introduced a static inventory this would diverge."""
+    from graph.config import LangGraphConfig
+
+    idx = SkillsIndex(str(tmp_path / "s.db"))
+    monkeypatch.setattr(STATE, "skills_index", idx)
+
+    cfg_on = LangGraphConfig.from_dict({"onboarding": {"enabled": True}})
+    on_names = {t.name for t in get_all_tools(knowledge_store=None, graph_config=cfg_on)}
+    assert "onboard_project" in on_names  # the real binding seam, enabled
+
+    cfg_off = LangGraphConfig.from_dict({"onboarding": {"enabled": False}})
+    off_names = {t.name for t in get_all_tools(knowledge_store=None, graph_config=cfg_off)}
+    assert "onboard_project" not in off_names  # disabled → genuinely unbound
+
+    _save_skill_with_tools(idx, "Onboard", ["onboard_project"])
+
+    monkeypatch.setattr(STATE, "graph_config", cfg_on)
+    _bind_graph(monkeypatch, on_names)
+    assert "Unavailable in this context:" not in load_skill.invoke({"name": "Onboard"})
+
+    monkeypatch.setattr(STATE, "graph_config", cfg_off)
+    _bind_graph(monkeypatch, off_names)
+    assert "onboarding is disabled" in load_skill.invoke({"name": "Onboard"})
+
+
+def test_load_skill_reads_committed_graph_not_the_process_global(tmp_path, monkeypatch):
+    """Regression (#3403 review): the check reads the COMMITTED graph's bound_tools, not
+    the process-global ``tool_delta`` set that ANY later build overwrites. A cache-warmer,
+    test, or reload build that records a different toolset must not flip load_skill's
+    answer — the bug was labelling tools against a set bound to another invocation."""
+    from graph import tool_delta
+
+    idx = SkillsIndex(str(tmp_path / "s.db"))
+    monkeypatch.setattr(STATE, "skills_index", idx)
+    monkeypatch.setattr(STATE, "graph_config", None)
+    # This invocation's graph binds `calculator` (and NOT `ghost_tool`).
+    _bind_graph(monkeypatch, ["load_skill", "calculator"])
+    # A *different* graph build happens in the same process and records a toolset that
+    # DOES include `ghost_tool`; reading that process-global would wrongly clear the flag.
+    tool_delta.reset_for_tests()
+    tool_delta.record_toolset(["load_skill", "calculator", "ghost_tool"])
+    try:
+        _save_skill_with_tools(idx, "Haul run", ["calculator", "ghost_tool"])
+        out = load_skill.invoke({"name": "Haul run"})
+        # Answer tracks STATE.graph.bound_tools, so ghost_tool is still flagged absent.
+        assert _unavailable_line(out) == "Unavailable in this context: ghost_tool (not bound in this context)."
+    finally:
+        tool_delta.reset_for_tests()
+
+
+def test_load_skill_makes_no_absence_claim_without_a_committed_graph(tmp_path, monkeypatch):
+    """Conservative by design: with no committed graph (bound toolset unknown) and no
+    config gate, load_skill does not guess a tool is missing — no false guarantee."""
+    idx = SkillsIndex(str(tmp_path / "s.db"))
+    monkeypatch.setattr(STATE, "skills_index", idx)
+    monkeypatch.setattr(STATE, "graph_config", None)
+    monkeypatch.setattr(STATE, "graph", None)  # no committed graph → bound set unknown
+    _save_skill_with_tools(idx, "Mystery", ["ghost_tool"])
+    out = load_skill.invoke({"name": "Mystery"})
+    assert "Unavailable in this context:" not in out
+    assert "## Procedure" in out
+
+
 # ── forget_memory + memory_list id surfacing (dream's prune half) ──────────────
 
 

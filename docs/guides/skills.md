@@ -67,7 +67,7 @@ tools: [web_search, fetch_url]   # optional, advisory
 |---|---|---|
 | `name` | ✅ | Unique, lowercase-with-hyphens. |
 | `description` | ✅ | ≤ 1024 chars. This is the **trigger signal** — write it "pushy": say plainly *when* the agent should reach for this skill, or it under-triggers. |
-| `tools` (or `metadata.tools`) | — | Advisory list of tool names the skill uses. When the agent loads the skill (`load_skill`), these are surfaced to it as `Relevant tools:` so it knows which of its (already-bound) tools this skill relies on — a hint, not a gate. See [ADR 0005](/adr/0005-tool-pollution-and-progressive-disclosure). |
+| `tools` (or `metadata.tools`) | — | Advisory list of tool names the skill uses. When the agent loads the skill (`load_skill`), these are surfaced to it as `Relevant tools:` so it knows which of its (already-bound) tools this skill relies on — a hint, not a gate. Any that turn out to be unbound in that invocation, or gated shut by config (e.g. the project-registration tool when `onboarding.enabled` is off), are named as `Unavailable in this context:` before the procedure so the agent doesn't plan around a tool it can't call. See [ADR 0005](/adr/0005-tool-pollution-and-progressive-disclosure). |
 | `user_facing` | — | `true` makes the skill directly invokable as a `/<slash>` command in the chat composer (ADR 0052). Off by default. |
 | `user_only` | — | `true` makes it an **operator-only** skill: a `/<slash>` command **withheld from the agent's `<available_skills>` index** (the agent never sees or loads it). Implies `user_facing`. Off by default. |
 | `slash` | — | The trigger token for a `user_facing` skill (whitespace-free); blank → slug of `name`. e.g. `slash: web-research` → `/web-research`. |
