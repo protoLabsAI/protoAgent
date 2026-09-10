@@ -402,3 +402,71 @@ def test_context_overflow_classifier():
 
     for text in ("rate limited", "connection reset", "invalid api key", "prompt injection detected"):
         assert not is_context_overflow_error(ValueError(text)), text
+
+
+# ── the wire the gateway client speaks (#3392) ────────────────────────────────────────
+#
+# These assert the DECISION (`use_responses_api`), not the payload shape. A payload-shape
+# assertion is inert on the locked langchain-openai, which has no model-name heuristic to
+# trip — it would go green on the very code that breaks a fresh install.
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "protolabs/codex",  # a gateway ALIAS we chose; says nothing about the endpoint
+        "gpt-5.3-codex",
+        "gpt-5.6-sol",
+        "gpt-5-pro",
+        "qwen2.5",
+    ],
+)
+def test_the_gateway_client_pins_chat_completions_whatever_the_model_is_called(model):
+    # langchain-openai 1.6.2 flips to `/v1/responses` for any name containing "codex" and
+    # for a list of prefixes. Our LiteLLM gateway, a local vLLM and Ollama serve
+    # `/v1/chat/completions` and nothing else, so a name-shaped inference silently points
+    # the request at an endpoint that 404s.
+    llm = _ReasoningChatOpenAI(model=model, api_key="sk-test", base_url="http://localhost:1/v1")
+    assert llm.use_responses_api is False
+
+
+def test_an_explicit_kwarg_still_wins_over_the_pinned_default():
+    # `graph.providers.openai_codex` builds the NATIVE ChatGPT backend client, which does
+    # speak Responses and passes `use_responses_api=True`. Pinning the default must not
+    # disarm that path.
+    llm = _ReasoningChatOpenAI(
+        model="gpt-5.3-codex", api_key="sk-test", base_url="https://chatgpt.com/backend-api/codex", use_responses_api=True
+    )
+    assert llm.use_responses_api is True
+
+
+def test_an_operator_can_hand_the_wire_choice_back_to_langchain(monkeypatch):
+    # The escape hatch for an openai-compat connection pointed straight at api.openai.com
+    # with a Responses-only model. `None` — not `True` — because the operator has a MIX of
+    # models and wants the per-call inference back, not Responses forced on all of them.
+    def _build():
+        return _ReasoningChatOpenAI(model="gpt-5.6-sol", api_key="sk-test", base_url="http://localhost:1/v1")
+
+    # The contrast is the assertion. `is None` alone would also hold on the unpinned
+    # default this fix replaced, so the test would pass on the broken code.
+    monkeypatch.delenv("PROTOAGENT_GATEWAY_RESPONSES_API", raising=False)
+    assert _build().use_responses_api is False
+    monkeypatch.setenv("PROTOAGENT_GATEWAY_RESPONSES_API", "1")
+    assert _build().use_responses_api is None
+
+
+def test_the_native_codex_builder_still_asks_for_the_responses_wire():
+    """Reads the value the Codex builder actually passes, not a copy of it.
+
+    The pinned default lives on the shared base class, so "did the native path keep its
+    opt-in?" is exactly the question a subclass default can silently answer wrong.
+    """
+    from graph.providers.codex_client import CodexChatOpenAI
+
+    client = CodexChatOpenAI(
+        model="gpt-5.3-codex",
+        api_key="sk-test",
+        base_url="https://chatgpt.com/backend-api/codex",
+        use_responses_api=True,
+    )
+    assert client.use_responses_api is True
