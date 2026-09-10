@@ -27,6 +27,7 @@
 import { api, type TurnStreamHandlers } from "../lib/api";
 import type { ChatMessage, HitlPayload } from "../lib/types";
 import { chatStore } from "./chat-store";
+import { isLiveServerTurn, serverTurnLabel } from "./server-turn-store";
 import { applyComponent, applyReasoning, applyText, applyToolEvent, applyUsage } from "./turnReducers";
 import { applyCanonicalTurnText, resetTurnForSnapshot, settleTurnBubbles } from "./turnText";
 
@@ -50,6 +51,45 @@ export type ReattachHooks = {
   onHitl?: (payload: HitlPayload) => void;
   onStatus?: (status: string) => void;
 };
+
+// ── one producer per bubble ─────────────────────────────────────────────────────────
+//
+// A server-fired turn (background push-resume, scheduled fire, watch reaction) has a
+// second live producer the browser didn't start: the bus's `chat.progress` frames, which
+// ServerTurnWatch folds into a preview bubble (#2361). That preview is `streaming` with a
+// `taskId` — exactly what the reattach effect looks for — so once #3178 made the effect
+// re-run on `reattachKey`, the preview's first frame triggered a resubscribe to the SAME
+// still-running task, and the stream and the bus both wrote every chunk into one bubble.
+// The duplication vanished only when the final answer replaced the bubble wholesale.
+//
+// So exactly one of them drives a given bubble:
+//   * a server turn this console is WATCHING LIVE keeps its bus feed — no reattach;
+//   * a reattach that does run (a reload or a mid-turn open, where the console never saw
+//     the turn start) owns its bubble, and the bus feed stands aside for it.
+
+/** Messages a reattach is currently driving → the token of the reattach that owns each.
+ *  A token, not a flag: an earlier reattach finishing late must not release a newer one. */
+const driving = new Map<string, symbol>();
+
+/** True while a reattach is streaming into `messageId` — any other producer must stand
+ *  aside, or the two write the same chunks into one bubble. */
+export function isReattaching(messageId: string): boolean {
+  return driving.has(messageId);
+}
+
+/** Whether the slot's reattach effect should resubscribe to `last`'s task: a `streaming`
+ *  assistant message with a task, EXCEPT a live server-turn preview while this console
+ *  is watching that turn — the bus already feeds it, and `chat.resumed` settles it. A
+ *  preview whose turn this console did NOT see running (a reload, a mid-turn open) or
+ *  one stranded after it ended still reattaches: that is the self-heal it exists for. */
+export function shouldReattach(
+  last: ChatMessage | undefined,
+  sessionId: string,
+): last is ChatMessage & { id: string; taskId: string } {
+  if (!last || last.status !== "streaming" || !last.taskId || !last.id) return false;
+  if (isLiveServerTurn(last, last.taskId, sessionId) && serverTurnLabel(sessionId) !== null) return false;
+  return true;
+}
 
 /** Stable dependency key for the session slot's reattach effect. Hydration can
  * fill an already-mounted empty fixed-id tab, so sessionId alone is not enough
@@ -106,6 +146,11 @@ function finalize(sessionId: string, assistantId: string, state: string, text: s
 export function reattachTurn(sessionId: string, assistantId: string, taskId: string, hooks: ReattachHooks = {}) {
   let cancelled = false;
   const controller = new AbortController();
+  const token = Symbol(assistantId);
+  driving.set(assistantId, token);
+  const release = () => {
+    if (driving.get(assistantId) === token) driving.delete(assistantId);
+  };
 
   const handlers: TurnStreamHandlers = {
     signal: controller.signal,
@@ -220,12 +265,15 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
     if (!cancelled) await fallbackPoll();
   }
 
-  void run().catch(() => {
-    /* reattach is best-effort — never crash the surface */
-  });
+  void run()
+    .catch(() => {
+      /* reattach is best-effort — never crash the surface */
+    })
+    .finally(release);
 
   return () => {
     cancelled = true;
     controller.abort();
+    release();
   };
 }

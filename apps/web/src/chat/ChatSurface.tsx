@@ -55,7 +55,7 @@ import { lastOperatorAssistantId, rewindableTailId } from "./parts";
 import { createRevealQueue } from "./revealQueue";
 import { applyComponent, applyReasoning, applyText, applyToolEvent } from "./turnReducers";
 import { applyCanonicalTurnText, settleTurnBubbles } from "./turnText";
-import { reattachKeyForMessages, reattachTurn } from "./reattach";
+import { reattachKeyForMessages, reattachTurn, shouldReattach } from "./reattach";
 import { loadDraft, loadScroll, loadSteers, saveDraft, saveScroll, saveSteers } from "./scratchState";
 import { createStreamWatchdog } from "./streamWatchdog";
 import { ADD_SELECTOR, isIncognitoAddClick, trackShiftHeld } from "./shiftCue";
@@ -1278,7 +1278,9 @@ function ChatSessionSlot({
     if (abortRef.current) return; // a live turn in this slot owns the stream
     const snap = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
     const last = [...(snap?.messages || [])].reverse().find((m) => m.role === "assistant");
-    if (!last || last.status !== "streaming" || !last.taskId || !last.id) return;
+    // Not a server-fired turn this console is watching live: the bus already feeds that
+    // preview, and a second producer wrote every chunk twice (see shouldReattach).
+    if (!shouldReattach(last, sessionId)) return;
     return reattachTurn(sessionId, last.id, last.taskId, {
       onStatus: (m) => setStatusMessage(m),
       onHitl: (payload) => {

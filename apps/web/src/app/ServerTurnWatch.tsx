@@ -1,9 +1,16 @@
 import { useEffect } from "react";
 
 import { chatStore, type ServerTurnControlState } from "../chat/chat-store";
-import { labelForOrigin, noteTurnFinished, noteTurnStarted, rememberOrigin } from "../chat/server-turn-store";
+import { isReattaching } from "../chat/reattach";
+import {
+  labelForOrigin,
+  liveMessageId,
+  noteTurnFinished,
+  noteTurnStarted,
+  rememberOrigin,
+} from "../chat/server-turn-store";
 import { onTopic } from "../lib/events";
-import { applyProgressFrame, parseProgress } from "./serverTurnProgress";
+import { applyProgressFrame, type ChatProgressEvent, parseProgress } from "./serverTurnProgress";
 
 // Bridges the #1767 `turn.started` / `turn.finished` bus events into the server-turn store,
 // so ChatSurface can show its typing indicator during a server-initiated turn (background
@@ -69,6 +76,22 @@ function emitServerTurnControl(value: unknown) {
   window.dispatchEvent(new CustomEvent("protoagent:server-turn-control", { detail: control }));
 }
 
+/** Fold one `chat.progress` bus event into the open session's live preview. Exported so
+ *  the one-producer rule is testable against the real reattach, without mounting. */
+export function foldProgressEvent(data: ChatProgressEvent): void {
+  const frame = parseProgress(data);
+  if (!frame) return;
+  // One producer per bubble. When a reattach is driving this turn's preview — the console
+  // reloaded or opened the chat mid-turn, so it never saw the turn start — its resubscribe
+  // stream is authoritative and replays everything, so the bus copy must not also land:
+  // both writing the same chunks is what doubled the text. Room replies are their own
+  // bubbles, which no reattach drives.
+  if (frame.kind !== "room" && isReattaching(liveMessageId(frame.taskId, frame.session))) return;
+  const target = chatStore.getSnapshot().sessions.find((s) => s.id === frame.session);
+  if (!target) return; // chat not open in this window — nothing to surface here
+  chatStore.updateMessages(frame.session, applyProgressFrame(target.messages, frame));
+}
+
 export function ServerTurnWatch() {
   useEffect(() => {
     const offStarted = onTopic("turn.started", (data) => {
@@ -92,11 +115,7 @@ export function ServerTurnWatch() {
     });
     const offProgress = onTopic("chat.progress", (data) => {
       emitServerTurnControl(data.control);
-      const frame = parseProgress(data);
-      if (!frame) return;
-      const target = chatStore.getSnapshot().sessions.find((s) => s.id === frame.session);
-      if (!target) return; // chat not open in this window — nothing to surface here
-      chatStore.updateMessages(frame.session, applyProgressFrame(target.messages, frame));
+      foldProgressEvent(data);
     });
     return () => {
       offStarted();

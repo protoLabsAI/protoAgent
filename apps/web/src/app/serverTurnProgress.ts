@@ -17,6 +17,7 @@
 // against the durable task via `tasks/get` and settles it. A live view that can strand a
 // bubble is worse than no live view, so this failure mode is covered by construction.
 
+import { liveMessageId } from "../chat/server-turn-store";
 import type { ChatMessage, ChatPart, ToolCall } from "../lib/types";
 
 export type ChatProgressEvent = {
@@ -99,17 +100,9 @@ export function parseProgress(data: ChatProgressEvent): ProgressFrame | null {
   return null;
 }
 
-/** The id given to a session's live server-turn message. Deterministic, so a frame arriving
- *  after a re-render still finds the same bubble, and so the resume can replace it. */
-export function liveMessageId(taskId: string, session: string): string {
-  return `server-turn-${taskId || session}`;
-}
-
-/** True when `msg` is the live preview for this server-fired turn — the message
- *  `chat.resumed` should REPLACE rather than append a second bubble beside. */
-export function isLiveServerTurn(msg: ChatMessage, taskId: string, session: string): boolean {
-  return !!msg.id && msg.id === liveMessageId(taskId, session);
-}
+// The preview's id convention lives with the server-turn store (the chat surface needs it
+// too); re-exported here so existing importers keep working.
+export { isLiveServerTurn, liveMessageId } from "../chat/server-turn-store";
 
 /**
  * Fold one frame into a session's message list, returning the new list.
