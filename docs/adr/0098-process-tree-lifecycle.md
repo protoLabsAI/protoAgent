@@ -46,6 +46,43 @@ failure mode (orphaned grandchildren on timeout/stop). If tree-escape via
 re-parenting shows up in practice, upgrade this module in place — consumers
 don't change.
 
+### Amendment — trees you own are torn down when the process exits (#3428, 2026-09-10)
+
+A `group_kwargs()` tree leads its own process group, so signalling the owning
+process's group never reaches it; its only teardown was the owner's cleanup path.
+Two exits pre-empt that path entirely:
+
+- the hub SIGKILLs a member 3s after SIGTERM (`supervisor.shutdown_all`), while the
+  member's uvicorn drain alone can take `timeout_graceful_shutdown` (5s), so the
+  lifespan teardown that closed its shell / ACP / `execute_code` trees never starts;
+- on the desktop, the Tauri shell SIGKILLs the sidecar and the parent-death
+  watchdog `os._exit(0)`s — no lifespan, no atexit — in the hub **and in every
+  member**, which inherit `PROTOAGENT_PARENT_PID`.
+
+Both left owned trees running at ppid=1. So `infra/proc` also owns a registry:
+
+- **`track_tree(pid)` after spawning a `group_kwargs()` tree, `untrack_tree(pid)`
+  once the owner has reaped it** — not before: a cancelled command the owner
+  abandoned stays tracked, which is exactly what lets the exit reach it. A pid in
+  this process's own group (or this process itself, on Windows) is refused.
+- **`begin_tree_teardown()` at exit-signal receipt**, before the drain: SIGTERM
+  every tracked tree now, SIGKILL survivors after `TEARDOWN_GRACE` (1.5s — inside
+  the hub's 3s, so a SIGTERM-ignoring tree is dead before its member can be
+  SIGKILLed). Non-blocking, idempotent, never raises. `server.build_uvicorn_server`
+  calls it from `handle_exit`.
+- **`reap_tracked_trees()` as the blocking final sweep** — at the end of lifespan
+  shutdown (the last chance before the restart route's `os.execv`), in the
+  watchdog before `os._exit`, and `atexit`.
+
+Groups are killed by the pgid recorded at track time, not looked up from the root
+at teardown: the root is often the first to die (`sh -c` under a long `pnpm
+install`), and a group outlives its leader. `shutdown_all`'s 3s is unchanged — it
+is bounded by the hub's own graceful window, and owned trees no longer depend on
+the member's lifespan finishing.
+
+Plugins that spawn their own trees use the same seam (projectBoard's gate/test
+children are the first candidate, once this is in a release).
+
 ## Consequences
 
 - Direct `os.killpg` / `start_new_session=True` / signal-escalation code
@@ -62,4 +99,5 @@ don't change.
 ## Refs
 
 #2412 (phase 2) · #2416 (shell repair this extracts) · #2413 review (bounded
-taskkill wait) · #1678/#1679 (`pid_alive`) · ADR 0065 (infra tier layering)
+taskkill wait) · #1678/#1679 (`pid_alive`) · ADR 0065 (infra tier layering) ·
+#3428 (owned-tree registry — exit-time teardown)

@@ -43,6 +43,8 @@ from runtime.state import STATE, get_state
 from graph.output_format import extract_output
 
 if TYPE_CHECKING:
+    import uvicorn
+
     from scheduler.interface import SchedulerBackend
 
 # ---------------------------------------------------------------------------
@@ -221,11 +223,44 @@ def _install_parent_death_watchdog() -> None:
             try:
                 if not pid_alive(ppid):
                     log.info("[watchdog] launcher pid %d gone — exiting sidecar", ppid)
+                    # os._exit skips the lifespan teardown AND atexit, so this is the
+                    # only chance to take down the trees this process owns (#3428).
+                    # Fleet members inherit PROTOAGENT_PARENT_PID, so on a desktop
+                    # quit every member exits down this same path.
+                    from infra.proc import reap_tracked_trees
+
+                    reap_tracked_trees()
                     os._exit(0)
             except Exception:  # noqa: BLE001 — never let the watchdog crash the server
                 return
 
     threading.Thread(target=_watch, daemon=True, name="parent-death-watchdog").start()
+
+
+def build_uvicorn_server(config: "uvicorn.Config") -> "uvicorn.Server":
+    """The ``uvicorn.Server`` this process runs, with one change: an exit signal
+    starts tearing down the process trees this process owns (#3428) BEFORE the
+    graceful drain, instead of leaving them to the lifespan teardown.
+
+    That ordering is the fix. The hub SIGKILLs a member 3s after SIGTERM, and the
+    drain alone can take ``timeout_graceful_shutdown`` (5s), so the member's
+    lifespan teardown — the only thing that closed its shell/ACP/execute_code
+    trees — was pre-empted, and those trees survived at ppid=1. Tearing down at
+    receipt makes them independent of the drain: SIGTERM now, SIGKILL after
+    ``infra.proc.TEARDOWN_GRACE`` (inside the hub's 3s), whatever the drain does.
+    """
+    import uvicorn
+
+    from infra.proc import begin_tree_teardown
+
+    class _TreeReapingServer(uvicorn.Server):
+        def handle_exit(self, sig: int, frame: Any) -> None:
+            # Before super(): the state change it makes is what starts the drain.
+            # begin_tree_teardown never raises and never blocks.
+            begin_tree_teardown()
+            super().handle_exit(sig, frame)
+
+    return _TreeReapingServer(config)
 
 
 # Chat backend (ADR 0023 phase 2) — the turn loop, tool/interrupt shaping, and
@@ -876,6 +911,20 @@ def _main():
             await asyncio.to_thread(tracing.flush)
         except Exception:  # noqa: BLE001 — shutdown teardown is best-effort
             log.exception("[tracing] flush on shutdown failed")
+        # The final sweep of owned process trees (#3428), after every owner above has
+        # had its turn to close its own. Anything still tracked here is a tree whose
+        # owner never got to it — and on the restart route this is the last chance
+        # before os.execv replaces the image that knew about it. Off the loop: it
+        # sleeps its grace when there is something to reap, and returns at once when
+        # there isn't.
+        try:
+            from infra.proc import reap_tracked_trees
+
+            reaped = await asyncio.to_thread(reap_tracked_trees)
+            if reaped:
+                log.info("[lifecycle] reaped %d owned process tree(s) on shutdown", reaped)
+        except Exception:  # noqa: BLE001 — shutdown teardown is best-effort
+            log.exception("[lifecycle] owned-tree sweep on shutdown failed")
 
     # Chat / goal / health / OpenAI-compat HTTP surface. Extracted to
     # operator_api/chat_routes.py (ADR 0023 phase 3); ``ui`` is passed in
@@ -1381,7 +1430,7 @@ def _main():
     # TerminateProcess, so the server died where it should have drained and the re-exec
     # below never ran (#2585). Same drain semantics on every platform now.
     uvicorn_config = uvicorn.Config(app, host=args.host, port=args.port, timeout_graceful_shutdown=5)
-    uvicorn_server = uvicorn.Server(uvicorn_config)
+    uvicorn_server = build_uvicorn_server(uvicorn_config)
     STATE.uvicorn_server = uvicorn_server
     uvicorn_server.run()
 
