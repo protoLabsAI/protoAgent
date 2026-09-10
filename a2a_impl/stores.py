@@ -463,9 +463,10 @@ _INTERRUPTED_STATES = ("TASK_STATE_SUBMITTED", "TASK_STATE_WORKING")
 _PRESERVED_STATES = ("TASK_STATE_INPUT_REQUIRED", "TASK_STATE_AUTH_REQUIRED")
 
 
-def _interrupted_status_blob(now: datetime) -> dict:
-    """A serialized ``failed`` ``TaskStatus`` carrying a restart error, in the
-    same proto-JSON shape the SDK store writes (``MessageToDict``)."""
+def _failed_status_blob(now: datetime, text: str) -> dict:
+    """A serialized ``failed`` ``TaskStatus`` carrying ``text`` as the agent-visible
+    diagnosis, in the same proto-JSON shape the SDK store writes (``MessageToDict``).
+    Shared by the restart reconciler and the orphaned-WORKING-task reaper (#3418)."""
     import uuid
 
     from google.protobuf.json_format import MessageToDict
@@ -478,10 +479,16 @@ def _interrupted_status_blob(now: datetime) -> dict:
     msg = Message(
         message_id=str(uuid.uuid4()),
         role=Role.ROLE_AGENT,
-        parts=[Part(text="Task interrupted by an agent restart; its runner did not survive.")],
+        parts=[Part(text=text)],
     )
     status = TaskStatus(state=TaskState.TASK_STATE_FAILED, message=msg, timestamp=ts)
     return MessageToDict(status)
+
+
+def _interrupted_status_blob(now: datetime) -> dict:
+    """A serialized ``failed`` ``TaskStatus`` carrying a restart error, in the
+    same proto-JSON shape the SDK store writes (``MessageToDict``)."""
+    return _failed_status_blob(now, "Task interrupted by an agent restart; its runner did not survive.")
 
 
 async def reconcile_interrupted_tasks(engine: AsyncEngine, *, now: datetime | None = None) -> int:
@@ -508,6 +515,195 @@ async def reconcile_interrupted_tasks(engine: AsyncEngine, *, now: datetime | No
         )
         await session.commit()
         return result.rowcount or 0
+
+
+# ── Orphaned-WORKING-task reaper (#3418) ─────────────────────────────────────────
+
+# Two discriminated grace windows for ``reap_orphaned_working_tasks``, both keyed on
+# the SDK ``last_updated`` column. Deliberately named constants (the store owns the
+# defaults; the loop validates/clamps whatever it passes) rather than config fields.
+#
+# Both defaults sit ABOVE ``model.turn_stall_timeout_seconds`` (900s default) on purpose:
+# the executor's own ``_stall_guarded`` owns a live-but-silent stream — including a turn
+# that has NOT yet streamed its first frame — and fails it via ``TurnStalled`` after the
+# stall window. This reaper is only a backstop for a producer that vanished WITHOUT a live
+# stream for the stall guard to trip. Keeping both windows longer than the stall timeout
+# guarantees the stall guard gets first crack: an alive task is already terminal (or has
+# streamed a frame and bumped ``last_updated``) before either window elapses, so the reaper
+# never preempts it. It only reaps a task whose producer is truly gone.
+#
+#  - BIRTH GRACE — a task still WORKING with EMPTY history AND EMPTY artifacts never
+#    produced anything: an orphan-at-birth whose producer died before streaming its first
+#    frame. Kept above the stall window so a genuinely-alive turn that is merely slow to its
+#    first frame is failed by the stall guard, not clobbered here. Shorter than IDLE (there
+#    is nothing productive to lose) but never shorter than the stall timeout.
+#  - IDLE — a task that DID record history/artifacts but has since gone silent. Longer than
+#    the stall window for the same reason: the stall guard owns the live stream; this only
+#    backstops a producer that vanished WITHOUT tripping it.
+_DEFAULT_REAP_BIRTH_GRACE_S = 20 * 60  # 20m — safely above the 900s DEFAULT stall window
+_DEFAULT_REAP_IDLE_S = 30 * 60  # 30m
+# Both defaults encode a RATIO to the stall window, not two magic numbers: 20m and 30m are
+# 1.33x and 2x the 900s default. `turn_stall_timeout_seconds` is configurable, so an
+# operator who raises it past 20m would otherwise have this reaper fail turns they had
+# explicitly allowed to run — the fixed constants would silently override their setting,
+# which is the opposite of a backstop.
+_REAP_BIRTH_GRACE_RATIO = _DEFAULT_REAP_BIRTH_GRACE_S / 900
+_REAP_IDLE_RATIO = _DEFAULT_REAP_IDLE_S / 900
+
+
+def reap_thresholds_for(stall_timeout_s: float | None) -> tuple[int, int]:
+    """``(birth_grace_s, idle_after_s)`` scaled to the configured stall window.
+
+    The defaults are floors, so a SHORTER configured stall window never shortens the
+    reaper below its documented minimum — reaping earlier than 20m/30m is not something
+    lowering the stall timeout should buy. A LONGER one does move both up, because the
+    invariant that matters is "the stall guard fires first", and only the ratio preserves
+    it at any setting.
+    """
+    if not stall_timeout_s or stall_timeout_s <= 0:
+        return _DEFAULT_REAP_BIRTH_GRACE_S, _DEFAULT_REAP_IDLE_S
+    return (
+        max(_DEFAULT_REAP_BIRTH_GRACE_S, int(stall_timeout_s * _REAP_BIRTH_GRACE_RATIO)),
+        max(_DEFAULT_REAP_IDLE_S, int(stall_timeout_s * _REAP_IDLE_RATIO)),
+    )
+
+
+def _row_age_anchor(last_updated, status_json) -> datetime | None:
+    """The timestamp a WORKING row should be aged against, or None when it has none.
+
+    Prefers the SDK's ``last_updated`` column and falls back to the A2A TaskStatus's own
+    ``timestamp``. Both are normalised to aware UTC: SQLite hands back a naive datetime
+    and the SDK writes it from a UTC proto timestamp, so a missing tzinfo means UTC.
+    """
+    if last_updated is not None:
+        return last_updated if last_updated.tzinfo else last_updated.replace(tzinfo=UTC)
+    raw = (status_json or {}).get("timestamp") if isinstance(status_json, dict) else None
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:  # a malformed timestamp is no timestamp
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+async def reap_orphaned_working_tasks(
+    engine: AsyncEngine,
+    *,
+    birth_grace_s: int = _DEFAULT_REAP_BIRTH_GRACE_S,
+    idle_after_s: int = _DEFAULT_REAP_IDLE_S,
+    now: datetime | None = None,
+) -> int:
+    """Fail WORKING durable tasks whose producer disappeared without a trace (#3418).
+
+    Covers the hole between boot reconciliation (``reconcile_interrupted_tasks`` —
+    restart-only) and the executor stall guard (``_stall_guarded`` — an alive-but-
+    silent stream): a producer that vanishes without EITHER path firing leaves a task
+    stuck in ``TASK_STATE_WORKING``, and the console spinner — which waits indefinitely
+    on a non-terminal durable record — never settles.
+
+    The issue's discriminator, keyed on the persisted ``history``/``artifacts`` shape
+    and the SDK ``last_updated`` column:
+
+      - a task still WORKING with NO history AND NO artifacts is an *orphan-at-birth*;
+        fail it once its age exceeds ``birth_grace_s``. Both defaults sit ABOVE the
+        executor stall window so ``_stall_guarded`` fails a genuinely-alive slow-first-frame
+        turn first; this only reaps a producer that left no live stream to trip the guard.
+      - a task that recorded history or artifacts is *productive*; fail it only once it
+        has been idle longer than ``idle_after_s`` (also longer than the stall window).
+
+    Only ``TASK_STATE_WORKING`` rows are considered. Terminal states and the resumable
+    ``TASK_STATE_INPUT_REQUIRED`` / ``TASK_STATE_AUTH_REQUIRED`` pauses are never touched.
+    Eligible rows transition to a visible ``failed`` status carrying an actionable
+    diagnosis; NOTHING is deleted, so a reaped row stays fetchable for the console's
+    terminal watchdog. Idempotent: a reaped row is no longer WORKING, so a second pass
+    changes nothing. Each row is classified from a scan and then failed under a
+    compare-and-swap on its scanned ``last_updated`` (see below), so a task that revives
+    and streams a frame after the scan is never clobbered to FAILED. Returns the number
+    of rows actually reaped.
+
+    Bounded input validation: ``birth_grace_s`` / ``idle_after_s`` are clamped to ``>= 0``
+    and a non-positive window disables that arm, so a misconfigured value can never reap
+    prematurely (a birth grace of 0 would fail every just-created task).
+    """
+    now = now or datetime.now(UTC)
+    birth_grace_s = max(0, int(birth_grace_s))
+    idle_after_s = max(0, int(idle_after_s))
+    if not birth_grace_s and not idle_after_s:
+        return 0
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    state = TaskModel.status["state"].as_string()
+    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    reaped = 0
+    async with session_maker() as session:
+        rows = (
+            await session.execute(
+                select(
+                    TaskModel.id,
+                    TaskModel.history,
+                    TaskModel.artifacts,
+                    TaskModel.last_updated,
+                    TaskModel.status,
+                ).where(state == "TASK_STATE_WORKING")
+            )
+        ).all()
+        for task_id, history, artifacts, last_updated, status_json in rows:
+            # A NULL `last_updated` used to be skipped outright, which made this reaper
+            # unable to do its own job on exactly the rows most likely to need it: a task
+            # whose producer died is not more likely to have written that column. It was
+            # left "for restart reconciliation", and a restart is the one event this
+            # reaper exists to not depend on — so without a restart the row stayed
+            # WORKING forever and the console spinner never settled.
+            #
+            # The A2A TaskStatus carries its own `timestamp`, written by the SDK whenever
+            # the status is set, so it is a real age for the row even when the column is
+            # NULL. Only when BOTH are missing is there genuinely nothing to age against,
+            # and inventing an age there would risk failing a task created milliseconds
+            # ago — so that (now much narrower) case still declines.
+            lu = _row_age_anchor(last_updated, status_json)
+            if lu is None:
+                continue
+            age_s = (now - lu).total_seconds()
+            if history or artifacts:
+                # Productive: the stall guard owns the live stream; only reap a producer
+                # that vanished and left the task idle past the (longer) idle threshold.
+                if not idle_after_s or age_s < idle_after_s:
+                    continue
+                reason = (
+                    "Task failed: its producer went silent and could not be recovered "
+                    f"(no update for {int(age_s)}s, past the {idle_after_s}s idle threshold)."
+                )
+            else:
+                # Orphan-at-birth: WORKING but never persisted a single history/artifact.
+                if not birth_grace_s or age_s < birth_grace_s:
+                    continue
+                reason = (
+                    "Task failed: it never produced any output "
+                    f"(no history or artifacts after {int(age_s)}s, past the {birth_grace_s}s "
+                    "startup grace) — its producer did not survive."
+                )
+            # Compare-and-swap against the value we scanned, NOT just "still WORKING":
+            # a task that became productive between the scan and here (its producer
+            # revived and streamed a frame) is still WORKING but has moved on. The SDK
+            # rewrites ``last_updated`` from ``status.timestamp`` on every ``save`` — so
+            # appended history/artifacts and any status transition all bump it. Predicating
+            # on the exact scanned ``last_updated`` (plus WORKING) fails the UPDATE to zero
+            # rows if ANYTHING changed under us, so a re-productive turn is never clobbered
+            # to FAILED. ``last_updated`` is the raw scanned value (not the tz-normalized
+            # ``lu``) so it round-trips to the same stored representation. None rows are
+            # skipped above, so this never compares against NULL.
+            res = await session.execute(
+                update(TaskModel)
+                .where(TaskModel.id == task_id)
+                .where(state == "TASK_STATE_WORKING")
+                .where(TaskModel.last_updated == last_updated)
+                .values(status=_failed_status_blob(now, reason), last_updated=now)
+            )
+            reaped += res.rowcount or 0
+        if reaped:
+            await session.commit()
+    return reaped
 
 
 async def drop_legacy_task_table(engine: AsyncEngine) -> bool:
