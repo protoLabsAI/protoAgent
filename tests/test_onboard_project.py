@@ -436,8 +436,31 @@ async def test_reuse_non_git_dir_reports_not_comparable(tmp_path, monkeypatch):
 
 
 async def test_reuse_unparseable_count_reports_not_comparable(tmp_path, monkeypatch):
-    """r3: an indeterminate rev-list result → drift is reported as not-determined,
-    naming no count."""
+    """r3: rev-list SUCCEEDS but its output does not parse as two counts → drift is
+    reported as not-determined, naming no count.
+
+    Split from the nonzero-exit case below, which is a different branch: this one
+    reaches the parse, that one never gets there. The test used to carry this name
+    while passing `counts_rc=128`, so the parse fallback was named but never executed.
+    """
+    m = _Mocks(upstream="origin/main", counts="not-a-count")
+    monkeypatch.setattr(onboard_tools.subprocess, "run", m.fake_run)
+    monkeypatch.setattr(HOST, "apply_settings", m.fake_apply)
+
+    target = tmp_path / "widget"
+    target.mkdir()
+    out = await _tool(_cfg(tmp_path)).ainvoke({"github_repo": "acme/widget"})
+
+    assert "could not be determined" in out
+    assert "origin/main" in out
+    assert len(m.apply_calls) == 1
+
+
+async def test_reuse_failed_count_command_reports_not_comparable(tmp_path, monkeypatch):
+    """r3: rev-list EXITS NONZERO (e.g. the upstream ref vanished between probes) →
+    the same not-determined report, reached by a different path than the parse
+    fallback above. Both branches converge on one message, so only separate inputs
+    can prove both are wired."""
     m = _Mocks(upstream="origin/main", counts_rc=128)
     monkeypatch.setattr(onboard_tools.subprocess, "run", m.fake_run)
     monkeypatch.setattr(HOST, "apply_settings", m.fake_apply)
