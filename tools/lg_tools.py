@@ -1980,6 +1980,33 @@ def _config_gated_tool_reasons(config) -> dict[str, str]:
 _MAX_UNAVAILABLE_LISTED = 20
 
 
+def _invocation_bound_tool_names() -> frozenset[str] | None:
+    """The tool names bound to the graph EXECUTING this call, or ``None`` when no graph
+    is committed (boot, or the operator-MCP skills path, where there is no running graph).
+
+    Reads ``STATE.graph.bound_tools`` — the set ``create_agent_graph`` stamps on the
+    compiled graph as the single source of truth for "what tools the model has" (derived
+    from the real assembled surface after every filter/append/deferral pass), the same
+    attribute ``/api/tools`` and the capability-contract audit read. This is deliberately
+    NOT ``tool_delta.current_toolset``: that module global is re-recorded by EVERY graph
+    build in the process — a cache-warmer build, a ``create_simple_agent``, a test graph,
+    an in-progress reload — so a build that never becomes the running graph could overwrite
+    the set another invocation reconciles against. The committed ``STATE.graph`` is the one
+    this tool call actually runs inside, so its ``bound_tools`` is the invocation's own
+    surface. Read-only and error-safe: any surprise degrades to ``None`` (no absence claim)."""
+    try:
+        from runtime.state import STATE
+
+        bound = getattr(STATE.graph, "bound_tools", None)
+        if bound is None:
+            return None
+        # ``bound_tools`` is a list of tool OBJECTS (each with ``.name``); mirror the
+        # reader in ``server/agent_init`` so a stray non-tool entry can't raise here.
+        return frozenset(getattr(t, "name", None) or str(t) for t in bound)
+    except Exception:  # noqa: BLE001 — advisory annotation must never break a skill load
+        return None
+
+
 def _skill_tools_unavailable_note(tools_used) -> str:
     """Reconcile a skill's advisory ``Relevant tools`` against what is ACTUALLY reachable
     in this invocation, returning a one-line ``Unavailable in this context:`` annotation
@@ -1987,23 +2014,19 @@ def _skill_tools_unavailable_note(tools_used) -> str:
 
     Two sources, both authoritative — never a duplicated static inventory:
 
-    - the FINAL bound toolset recorded at graph build (``tool_delta.current_toolset``),
-      used to report PROVEN absence — a tool the model simply does not have; and
+    - the tools bound to the graph executing this call (``STATE.graph.bound_tools`` via
+      ``_invocation_bound_tool_names``), used to report PROVEN absence — a tool the model
+      simply does not have; and
     - the small explicit set of host-config gates (``_config_gated_tool_reasons``) that
       guarantee a named tool refuses, used to name the *reason* (e.g. onboarding disabled).
 
-    Deliberately conservative: with no recorded toolset (no graph built) we make no
+    Deliberately conservative: with no committed graph (nothing built yet) we make no
     absence claim, and we never predict runtime/network failure. Error-safe (never
     raises) and bounded (``_MAX_UNAVAILABLE_LISTED``)."""
     names = [n for n in ((tools_used or []) if not isinstance(tools_used, str) else tools_used.split())]
     if not names:
         return ""
-    try:
-        from graph.tool_delta import current_toolset
-
-        bound = current_toolset()
-    except Exception:  # noqa: BLE001 — advisory annotation must never break a skill load
-        bound = None
+    bound = _invocation_bound_tool_names()
     try:
         from runtime.state import STATE
 
@@ -2047,10 +2070,10 @@ def load_skill(name: str) -> str:
     is unavailable.
 
     The skill's advisory ``Relevant tools`` are reconciled up front against the tools
-    actually bound to this invocation plus the known host-config gates; any that are
-    missing or configuration-refused are called out under ``Unavailable in this
-    context:`` before the procedure. The annotation is advisory — the full body still
-    loads (progressive disclosure is preserved).
+    actually bound to the graph executing this call (``STATE.graph.bound_tools``) plus
+    the known host-config gates; any that are missing or configuration-refused are called
+    out under ``Unavailable in this context:`` before the procedure. The annotation is
+    advisory — the full body still loads (progressive disclosure is preserved).
     """
     from runtime.state import STATE
 

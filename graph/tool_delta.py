@@ -70,20 +70,6 @@ def record_toolset(names) -> dict[str, list[str]] | None:
     return delta
 
 
-def current_toolset() -> frozenset[str] | None:
-    """The FINAL bound tool names recorded for this process, or ``None`` if no graph
-    has been built yet.
-
-    This is the authoritative runtime representation of the toolset the model
-    actually sees — ``create_agent_graph`` calls ``record_toolset`` once, after every
-    filter/append/deferral pass, so it reflects the real assembled surface rather than
-    any statically duplicated inventory. Read-only; callers that need to reason about
-    what a tool CAN reach (e.g. ``load_skill`` reconciling a skill's advisory tool list)
-    should consult this instead of re-deriving the set."""
-    with _lock:
-        return _known
-
-
 def take_pending_delta() -> dict[str, list[str]] | None:
     """Return the un-announced delta and clear it. One-shot by construction."""
     global _pending
