@@ -72,6 +72,15 @@ export type RuntimeStatus = {
   /** User-facing operational alerts (e.g. a live co-located instance sharing
    *  this data root, #706) — the shell banners them under the topbar. */
   warnings?: string[];
+  /** Structured setup gaps (bd-ai7x) — the typed projection that sits BESIDE
+   *  `warnings[]`. Each entry is an active gap a plugin reported via
+   *  `report_setup_gap`: its plugin id, the gap key, a display label, the
+   *  operator-facing message, and any bounded, server-validated declarative
+   *  remediation actions. The setup-gap store's stable (plugin, key) ordering is
+   *  preserved, so the console needn't parse `warnings[]`; absent/`[]` when there
+   *  are no gaps. `warnings[]` remains the legacy string projection indefinitely —
+   *  existing callers that read it are unaffected. */
+  setup_gaps?: SetupGap[];
   /** Stable per-data-root uid — the TenantGuard keys per-origin client state on it
    *  (a different backend reusing this address must not render this one's chats). */
   instance_uid?: string;
@@ -115,6 +124,31 @@ export type RuntimeStatus = {
     // disabled plugin contributes no rows at all.
     commands?: PluginCommand[];
   }[];
+};
+
+// A server-validated, declarative remediation action attached to a setup gap
+// (#3389). DATA, never behavior: `kind` is a CLOSED vocabulary the console maps to
+// a known "fix this" affordance — a plugin string is never turned into a URL, HTML,
+// or a callback. `target` is an identifier (the reporting plugin's id for
+// `plugin_config`, or a settings-section slug for `global_settings`), never a URL.
+// `label`/`fields` are bounded plain text. The host sanitizes all of this on the way
+// in (graph/plugins/setup_gaps.py), so anything unrecognized/unsafe is already gone.
+export type SetupGapAction = {
+  kind: "plugin_config" | "global_settings";
+  target?: string;
+  label?: string;
+  fields?: string[];
+};
+
+// One active plugin-reported setup gap in the runtime-status structured projection
+// (bd-ai7x): a plugin is installed and enabled but can't do its job until the
+// operator fixes something. `actions` is omitted when the gap carries none.
+export type SetupGap = {
+  plugin: string;
+  key: string;
+  label: string;
+  message: string;
+  actions?: SetupGapAction[];
 };
 
 export type PluginSettingsTabDescriptor = {
