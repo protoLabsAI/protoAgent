@@ -511,6 +511,59 @@ async def test_reaper_disabled_windows_are_bounded(tmp_path):
     await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_reaper_cas_skips_task_that_revived_after_scan(tmp_path, monkeypatch):
+    """Concurrency guard: a WORKING orphan classified as reap-eligible at scan time that
+    becomes productive *before* the UPDATE lands — its producer revives, streams a frame,
+    and bumps ``last_updated`` — must NOT be clobbered to FAILED. The reaper fails a row
+    under a compare-and-swap on the exact ``last_updated`` it scanned (not a blind "still
+    WORKING" write), so a row that moved on under it matches zero rows. Regression for a
+    review finding: predicating only on id + WORKING overwrites a re-productive turn."""
+    import sqlite3
+    from datetime import UTC, datetime
+
+    from a2a.types import a2a_pb2
+
+    now = datetime.now(UTC)
+    db = str(tmp_path / "a2a-tasks.db")
+    store, engine = await _fresh_task_store(tmp_path)
+    ctx = _ctx()
+    # Orphan-at-birth already past the birth grace → eligible for reaping when scanned.
+    await _seed_task(store, engine, ctx, "orphan", state="TASK_STATE_WORKING", age_s=400, now=now)
+
+    original = stores._failed_status_blob
+    fired = {"n": 0}
+
+    def _revive_then_blob(ts, text):
+        # Fire once, in the window between the reaper's scan and its UPDATE: simulate a
+        # concurrent productive save committing on a separate connection — bump last_updated
+        # (what every SDK save rewrites) and record history, so the row is now productive
+        # but STILL WORKING (proving the CAS, not the state predicate, is what protects it).
+        if fired["n"] == 0:
+            fired["n"] += 1
+            conn = sqlite3.connect(db)
+            conn.execute(
+                "UPDATE tasks SET last_updated = ?, history = ? WHERE id = 'orphan'",
+                (
+                    now.strftime("%Y-%m-%d %H:%M:%S.%f"),
+                    '[{"role": "ROLE_AGENT", "parts": [{"text": "revived"}]}]',
+                ),
+            )
+            conn.commit()
+            conn.close()
+        return original(ts, text)
+
+    monkeypatch.setattr(stores, "_failed_status_blob", _revive_then_blob)
+
+    n = await reap_orphaned_working_tasks(engine, birth_grace_s=300, idle_after_s=1800, now=now)
+    assert fired["n"] == 1  # the reaper DID classify it as reap-eligible and reach the UPDATE
+    assert n == 0  # ...but the CAS matched zero rows — the revived turn was not clobbered
+    got = await store.get("orphan", ctx)
+    assert got.status.state == a2a_pb2.TASK_STATE_WORKING  # still WORKING, not FAILED
+    assert len(got.history) == 1  # the revived producer's frame survived intact
+    await engine.dispose()
+
+
 # ── (b) SSRF guard: reject private/loopback, accept public ──────────────────────
 
 

@@ -563,7 +563,10 @@ async def reap_orphaned_working_tasks(
     Eligible rows transition to a visible ``failed`` status carrying an actionable
     diagnosis; NOTHING is deleted, so a reaped row stays fetchable for the console's
     terminal watchdog. Idempotent: a reaped row is no longer WORKING, so a second pass
-    changes nothing. Returns the number of rows reaped.
+    changes nothing. Each row is classified from a scan and then failed under a
+    compare-and-swap on its scanned ``last_updated`` (see below), so a task that revives
+    and streams a frame after the scan is never clobbered to FAILED. Returns the number
+    of rows actually reaped.
 
     Bounded input validation: ``birth_grace_s`` / ``idle_after_s`` are clamped to ``>= 0``
     and a non-positive window disables that arm, so a misconfigured value can never reap
@@ -615,13 +618,24 @@ async def reap_orphaned_working_tasks(
                     f"(no history or artifacts after {int(age_s)}s, past the {birth_grace_s}s "
                     "startup grace) — its producer did not survive."
                 )
-            await session.execute(
+            # Compare-and-swap against the value we scanned, NOT just "still WORKING":
+            # a task that became productive between the scan and here (its producer
+            # revived and streamed a frame) is still WORKING but has moved on. The SDK
+            # rewrites ``last_updated`` from ``status.timestamp`` on every ``save`` — so
+            # appended history/artifacts and any status transition all bump it. Predicating
+            # on the exact scanned ``last_updated`` (plus WORKING) fails the UPDATE to zero
+            # rows if ANYTHING changed under us, so a re-productive turn is never clobbered
+            # to FAILED. ``last_updated`` is the raw scanned value (not the tz-normalized
+            # ``lu``) so it round-trips to the same stored representation. None rows are
+            # skipped above, so this never compares against NULL.
+            res = await session.execute(
                 update(TaskModel)
                 .where(TaskModel.id == task_id)
-                .where(state == "TASK_STATE_WORKING")  # idempotent guard against a concurrent transition
+                .where(state == "TASK_STATE_WORKING")
+                .where(TaskModel.last_updated == last_updated)
                 .values(status=_failed_status_blob(now, reason), last_updated=now)
             )
-            reaped += 1
+            reaped += res.rowcount or 0
         if reaped:
             await session.commit()
     return reaped
