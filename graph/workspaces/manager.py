@@ -345,11 +345,24 @@ identity:
 instance:
   id: {id}
 
+# Model connections (ADR 0106) — one entry per endpoint this agent can reach.
+# `model.name` below names a model within one of them: a bare alias routes to
+# `gateway`, and `<id>:<model>` picks a specific connection, so an agent can mix a
+# gateway with a Claude/ChatGPT subscription across its slots.
+#
+# Leave `base_url` / `label` UNSET to inherit this box's connection (Settings ▸ Host).
+# An entry here is merged field-by-field over the host's entry with the same id, so
+# even an empty `base_url: ""` would REPLACE the box's endpoint rather than defer to
+# it. Set them only to point this one agent somewhere else. The key belongs in this
+# workspace's secrets.yaml (`providers: {{gateway: sk-...}}`), which wins over an
+# inline `api_key`.
+providers:
+  - id: gateway
+    type: openai-compat
+    # base_url: https://your-gateway.example/v1
+
 model:
-  provider: openai
   name: protolabs/reasoning
-  api_base: ""        # set your gateway / OpenAI-compat base URL
-  api_key: ""         # or set OPENAI_API_KEY in this workspace's secrets.yaml
 
 plugins:
   # `delegates` is on by default for fleet agents (ADR 0042 + 0025) so they can delegate to
@@ -1180,6 +1193,17 @@ def _overlay_model(cfg: Path, ws: Path, src: str) -> None:
             new["providers"] = sanitized
             if inline_provider_keys:
                 inherited_secrets["providers"] = inline_provider_keys
+            changed = True
+        elif "providers" in new:
+            # The source is a pre-ADR-0106 config: its connection lives in the legacy
+            # `model.provider` / `model.api_base` fields we just copied above, and the
+            # runtime rebuilds a registry from those (`config._migrated_providers`) —
+            # but ONLY when `providers:` is absent. Leaving the blank template entry in
+            # place would satisfy that "already has a registry" test with a connection
+            # that has no endpoint, so the inherited gateway would silently resolve to
+            # nothing. Drop it and let the migration do its job, exactly as it did
+            # before the template carried a registry at all.
+            new.pop("providers", None)
             changed = True
         if changed:
             save_yaml_doc(new, cfg)  # save_yaml_doc(doc, path) — doc first

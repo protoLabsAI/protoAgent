@@ -1462,3 +1462,82 @@ def test_copy_host_delegates_treats_a_fleet_shared_pick_as_inherited(root, tmp_p
     assert manager.copy_host_delegates(cfg, lock, {"board.coder": "cc"}, str(host)) == ["cc"]
     assert "delegates" not in yaml.safe_load(cfg.read_text())  # inherited, not copied
     assert manager._uncopied_required_delegates(lock, {"board.coder": "cc"}, ["cc"]) == []
+
+
+# ── the shape a new workspace is CREATED in (#3128) ───────────────────────────────────
+#
+# ADR 0106's removal of `model.provider` / `model.api_base` / `model.api_key` is blocked
+# on no shipped path still PRODUCING configs without a `providers:` registry. Loading one
+# is not evidence: `LangGraphConfig.from_dict` migrates in memory and never rewrites the
+# file, so these assert the persisted YAML.
+
+
+def test_a_new_workspace_is_created_with_an_explicit_provider_registry(root):
+    rec = manager.create("fresh")
+    cfg = yaml.safe_load((root / rec["id"] / "config" / "langgraph-config.yaml").read_text())
+
+    assert cfg["providers"] == [{"id": "gateway", "type": "openai-compat"}]
+    # The three retired fields are what the registry replaces; a template that emits them
+    # is why the deprecation cannot complete.
+    assert cfg["model"] == {"name": "protolabs/reasoning"}
+
+
+def test_a_new_workspace_on_a_hosted_box_inherits_the_box_gateway(root, tmp_path, monkeypatch):
+    """The template's registry entry must DEFER to the box's, not replace it.
+
+    `_merge_provider_lists` overlays an agent entry on the host entry with the same id
+    field by field, so an agent-side `base_url: ""` wins over the box's real endpoint.
+    A template that spelled its blanks out would have handed every workspace created on
+    a hosted box a gateway with nowhere to send requests — while looking, in the file,
+    like a perfectly ordinary empty placeholder.
+    """
+    from graph.config import LangGraphConfig
+
+    host_cfg = tmp_path / "host-config.yaml"
+    host_cfg.write_text(
+        "providers:\n"
+        "  - id: gateway\n    type: openai-compat\n    label: protoLabs.studio\n"
+        "    base_url: https://api.proto-labs.ai/v1\n"
+        "model:\n  api_base: https://api.proto-labs.ai/v1\n"
+    )
+    monkeypatch.setenv("PROTOAGENT_HOST_CONFIG", str(host_cfg))
+
+    rec = manager.create("hosted")
+    loaded = LangGraphConfig.from_yaml(str(root / rec["id"] / "config" / "langgraph-config.yaml"))
+
+    gateway = [p for p in loaded.providers if p.id == "gateway"]
+    assert [(p.base_url, p.label) for p in gateway] == [("https://api.proto-labs.ai/v1", "protoLabs.studio")]
+    # The legacy field too: the old template's `api_base: ""` shadowed this one, which
+    # the registry happened to mask on the routes that consult it.
+    assert loaded.api_base == "https://api.proto-labs.ai/v1"
+
+
+def test_inheriting_from_a_legacy_agent_does_not_strand_its_gateway(root, tmp_path):
+    """A pre-ADR-0106 source keeps its connection in `model.api_base`, and the runtime
+    rebuilds a registry from that — but only when `providers:` is ABSENT.
+
+    Now that the template ships a blank `gateway` entry, leaving it behind would answer
+    "does this config already have a registry?" with yes, using a connection that has no
+    endpoint. The inherited gateway would resolve to nothing, with nothing to read that
+    says so.
+    """
+    from graph.config import LangGraphConfig
+
+    host = tmp_path / "legacy"
+    host.mkdir()
+    (host / "langgraph-config.yaml").write_text(
+        "identity:\n  name: Legacy\n"
+        "model:\n  provider: openai\n  name: protolabs/smart\n"
+        "  api_base: https://legacy.example/v1\n  api_key: sk-legacy-inline\n"
+    )
+
+    rec = manager.create("heir", inherit_model=str(host))
+    cfg_path = root / rec["id"] / "config" / "langgraph-config.yaml"
+    cfg = yaml.safe_load(cfg_path.read_text())
+
+    assert "providers" not in cfg, "the blank template registry must not outlive a legacy inherit"
+    assert cfg["model"]["api_base"] == "https://legacy.example/v1"
+
+    # The property that actually matters: the endpoint survives to a resolved connection.
+    loaded = LangGraphConfig.from_dict(cfg)
+    assert [p.base_url for p in loaded.providers if p.id == "gateway"] == ["https://legacy.example/v1"]

@@ -6,6 +6,32 @@
 # entry in ``graph/subagents/config.py`` (for subagents) or a tool
 # registered in ``tools/lg_tools.py``.
 
+# Model connections (ADR 0106) — the registry that replaces `model.provider`,
+# `model.api_base` and `model.api_key` (all three are retiring, #3128). One entry per
+# endpoint; a slot names a model within one of them — a bare alias routes to
+# `gateway`, and `<id>:<model>` picks a connection, so slots can mix a gateway with a
+# Claude / ChatGPT subscription. Manage them in Settings ▸ Model ▸ Connections.
+#
+# Like `model.api_base` below, this is box-shared: set it on the Host and every agent
+# on the box inherits it. An agent entry is merged FIELD BY FIELD over the host entry
+# with the same id, so an agent-side `base_url: ""` REPLACES the box endpoint rather
+# than deferring to it — leave a field out to inherit it. Keys belong in secrets.yaml
+# (`providers: {gateway: sk-...}`), which wins over an inline `api_key`; the Host file
+# cannot hand one out.
+#
+# providers:
+#   - id: gateway
+#     type: openai-compat
+#     label: LiteLLM gateway
+#     base_url: http://gateway:4000/v1
+#   - id: local
+#     type: openai-compat
+#     base_url: http://127.0.0.1:8080/v1   # a local vLLM / Ollama / LM Studio
+#   - id: anthropic-oauth
+#     type: anthropic-oauth                # Claude Pro/Max — no endpoint, no key
+#   - id: openai-codex
+#     type: openai-codex                   # ChatGPT/Codex plan — no endpoint, no key
+
 model:
   # provider / name / api_base are HOST-scoped (ADR 0047) — box-wide defaults set
   # on the Host console (Settings ▸ Host ▸ Model & Routing) or in host-config.yaml,
