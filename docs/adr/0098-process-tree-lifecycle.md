@@ -76,7 +76,13 @@ Both left owned trees running at ppid=1. So `infra/proc` also owns a registry:
 
 Groups are killed by the pgid recorded at track time, not looked up from the root
 at teardown: the root is often the first to die (`sh -c` under a long `pnpm
-install`), and a group outlives its leader. `shutdown_all`'s 3s is unchanged — it
+install`), and a group outlives its leader. A recorded pgid is only safe while the
+group exists — once it's gone the id can be handed to someone else's group — so
+tracking a new tree prunes dead groups, and an owner that stops waiting on a
+still-running child (a cancelled turn) forgets it once it's reaped
+(`untrack_when_reaped`). **Windows gap:** `taskkill /T` walks from the root, so
+descendants that outlive their root are out of reach there — the case that would
+justify the Job Object upgrade this ADR already defers. `shutdown_all`'s 3s is unchanged — it
 is bounded by the hub's own graceful window, and owned trees no longer depend on
 the member's lifespan finishing.
 

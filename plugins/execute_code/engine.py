@@ -53,7 +53,7 @@ from typing import Annotated, Any
 
 from langgraph.prebuilt import InjectedState
 
-from infra.proc import akill_tree, group_kwargs, track_tree, untrack_tree
+from infra.proc import akill_tree, group_kwargs, track_tree, untrack_tree, untrack_when_reaped
 
 log = logging.getLogger(__name__)
 
@@ -341,8 +341,11 @@ async def run_code(
             out = out[:truncate] + f"\n\n…[truncated to {truncate} chars]"
         return out
     finally:
-        if proc is not None and proc.returncode is not None:
-            untrack_tree(proc.pid)
+        if proc is not None:
+            if proc.returncode is not None:
+                untrack_tree(proc.pid)
+            else:
+                untrack_when_reaped(proc)  # cancelled mid-run: forget it once it finishes
         server.close()
         with contextlib.suppress(Exception):
             await server.wait_closed()
