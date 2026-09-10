@@ -20,7 +20,7 @@ import asyncio
 import os
 from dataclasses import dataclass
 
-from infra.proc import akill_tree, group_kwargs, track_tree, untrack_tree
+from infra.proc import akill_tree, group_kwargs, track_tree, untrack_tree, untrack_when_reaped
 
 
 @dataclass
@@ -92,10 +92,13 @@ async def run_command(
             pass
         return ShellResult(1, "", "", timed_out=True, error=f"timed out after {timeout:g}s")
     finally:
-        # Only once it's actually reaped. A cancelled turn leaves the command running,
-        # and it stays tracked so the process's exit still reaches it.
+        # Only once it's actually reaped. A cancelled turn leaves the command running:
+        # it stays tracked while it runs, so the process's exit still reaches it, and is
+        # forgotten when it finishes on its own.
         if proc.returncode is not None:
             untrack_tree(proc.pid)
+        else:
+            untrack_when_reaped(proc)
 
     return ShellResult(
         returncode=proc.returncode or 0,
