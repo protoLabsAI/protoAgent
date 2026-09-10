@@ -22,6 +22,12 @@ on:
 
 permissions:
   contents: read
+  # Listing and downloading another run's artifacts is the `actions` scope, not
+  # `contents` — both the probe's `gh api .../actions/runs/<id>/artifacts` and
+  # `actions/download-artifact` 403 without it, and this job's whole purpose is to
+  # collect the producer's artifact. Read-only: nothing here re-runs or cancels a
+  # workflow. (The PAT below is what does the writing, and it is scoped separately.)
+  actions: read
 
 jobs:
   commit:
@@ -77,6 +83,13 @@ jobs:
       - uses: actions/checkout@v7
         if: steps.gate.outputs.go == 'true'
         with:
+          # `head_ref` resolves in THIS repo: dependabot pushes its branches to the base
+          # repository, it does not fork. Every dependabot PR here is same-repo —
+          # #3382/#3372/#3371 all carry `isCrossRepository: false` and
+          # `headRepositoryOwner: protoLabsAI`. (Noted because a review flagged the
+          # opposite; the fork model is how a HUMAN contributor's PR behaves, not a
+          # bot-pushed branch, and `pull_request` withholding a write token from
+          # dependabot is a permissions decision, not evidence of a fork.)
           ref: ${{ steps.gate.outputs.head_ref }}
           # Pushing with the default token would not re-trigger the PR's checks, leaving
           # a green commit under a red check. See the header.
