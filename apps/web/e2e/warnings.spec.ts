@@ -109,3 +109,35 @@ test("a setup gap dismisses for the session only, and returns on a new session",
   await page.reload({ waitUntil: "load" });
   await expect(page.locator(".setup-gap-banner")).toBeVisible();
 });
+
+test("a dismissed gap stays hidden across a transient empty runtime status in the same session", async ({ page }) => {
+  // The status endpoint's `warnings` payload is mutable across reloads, so we can simulate a
+  // transient/null runtime status (reload catching an unresolved poll) between two live polls.
+  let currentWarnings: unknown[] = [CODER_GAP];
+  await page.route("**/api/runtime/status", async (route) => {
+    const response = await route.fetch();
+    const json = await response.json();
+    json.warnings = currentWarnings;
+    await route.fulfill({ json });
+  });
+  await page.goto("/app/", { waitUntil: "load" });
+
+  const banner = page.locator(".setup-gap-banner");
+  await expect(banner).toBeVisible();
+  await banner.getByRole("button", { name: /Dismiss/ }).click();
+  await expect(banner).toHaveCount(0);
+
+  // Status blips to empty (a reload catching an unresolved status) — the strip clears, but the
+  // session dismissal must NOT be pruned just because the live gap set is momentarily empty.
+  currentWarnings = [];
+  await page.reload({ waitUntil: "load" });
+  await expect(page.locator(".pl-rail").first()).toBeVisible();
+  await expect(page.locator(".setup-gap-banner")).toHaveCount(0);
+
+  // The unchanged gap returns on the next poll/reload → it stays hidden for the rest of the
+  // session (the regression the review caught: it must NOT reappear).
+  currentWarnings = [CODER_GAP];
+  await page.reload({ waitUntil: "load" });
+  await expect(page.locator(".pl-rail").first()).toBeVisible();
+  await expect(page.locator(".setup-gap-banner")).toHaveCount(0);
+});

@@ -239,17 +239,44 @@ describe("useSetupGapDismissals — session-scoped dismissal lifecycle (r4)", ()
     expect(visibleIds()).toEqual([gapIdentity(after)]);
   });
 
-  it("stops tracking a dismissal once the gap clears (prunes stale storage)", async () => {
+  it("preserves a dismissal across a transient/empty runtime status and keeps the gap hidden when it returns", async () => {
     const a = pbGap();
     act(() => root.render(h(GapList, { gaps: [a] })));
     await flush();
     act(() => container.querySelector<HTMLButtonElement>('[data-testid="dismiss-projectBoard-coder"]')!.click());
     await flush();
+    expect(visibleIds()).toEqual([]);
     expect(JSON.parse(window.sessionStorage.getItem("protoagent.setupGapDismissals") || "[]")).toHaveLength(1);
 
-    // Server clears the gap → its stale dismissal signature is pruned from storage.
+    // Runtime status blips to empty (reload / poll gap / null status). This is NOT the server
+    // clearing the gap — so the dismissal must survive, not be pruned.
     act(() => root.render(h(GapList, { gaps: [] })));
     await flush();
-    expect(JSON.parse(window.sessionStorage.getItem("protoagent.setupGapDismissals") || "[]")).toHaveLength(0);
+    expect(JSON.parse(window.sessionStorage.getItem("protoagent.setupGapDismissals") || "[]")).toHaveLength(1);
+
+    // The unchanged gap comes back → it stays hidden for the rest of the session.
+    act(() => root.render(h(GapList, { gaps: [a] })));
+    await flush();
+    expect(visibleIds()).toEqual([]);
+  });
+
+  it("prunes a stale dismissal once its gap clears while another gap stays live", async () => {
+    const a = pbGap({ key: "coder" });
+    const b = pbGap({ key: "repo", message: "No repository is bound." });
+    act(() => root.render(h(GapList, { gaps: [a, b] })));
+    await flush();
+    act(() => container.querySelector<HTMLButtonElement>('[data-testid="dismiss-projectBoard-coder"]')!.click());
+    await flush();
+    act(() => container.querySelector<HTMLButtonElement>('[data-testid="dismiss-projectBoard-repo"]')!.click());
+    await flush();
+    expect(JSON.parse(window.sessionStorage.getItem("protoagent.setupGapDismissals") || "[]")).toHaveLength(2);
+
+    // `a` clears but `b` stays live → we have a real live set to compare against, so a's stale
+    // signature is pruned (storage hygiene) while b's dismissal is retained.
+    act(() => root.render(h(GapList, { gaps: [b] })));
+    await flush();
+    expect(JSON.parse(window.sessionStorage.getItem("protoagent.setupGapDismissals") || "[]")).toEqual([
+      gapSignature(b),
+    ]);
   });
 });

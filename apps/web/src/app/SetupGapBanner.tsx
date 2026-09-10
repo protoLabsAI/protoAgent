@@ -88,8 +88,10 @@ function writeDismissed(sigs: Set<string>): void {
  *  - hides ONLY that exact, unchanged gap for the rest of the browser session;
  *  - resets for a new browser session (sessionStorage is per-session);
  *  - resets when the server changes the gap's message or actions (the signature moves);
- *  - stops being tracked when the gap clears or changes (stale signatures are pruned to the
- *    live set), so the store never accumulates orphaned keys.
+ *  - stops being tracked when a gap clears or changes WHILE other gaps are live (its stale
+ *    signature is pruned against the live set), so the store never accumulates orphaned keys —
+ *    but a transient/empty runtime status never prunes, so a reload can't resurrect a dismissed
+ *    gap.
  *
  * It NEVER mutates server-side configuration and never clears the underlying blocker — it's a
  * purely client-side "I've seen this" acknowledgement.
@@ -106,6 +108,15 @@ export function useSetupGapDismissals(gaps: SetupGap[]): {
   const liveKey = useMemo(() => JSON.stringify([...liveSignatures].sort()), [liveSignatures]);
 
   useEffect(() => {
+    // Prune stale dismissals ONLY when we have live gaps to compare against. An empty live
+    // set is ambiguous — it's produced just as much by a transient/null runtime status during
+    // a reload or poll gap as by the server genuinely clearing every gap — so pruning on it
+    // would erase a still-valid session dismissal and make an unchanged gap reappear when the
+    // data returns. When gaps ARE present, any stored signature absent from them belongs to a
+    // gap that truly changed or cleared, so dropping it is safe housekeeping. A leftover
+    // signature from a fully-empty poll is harmless: it's session-scoped, and the same gap
+    // returning unchanged should stay dismissed anyway (returning changed moves its signature).
+    if (liveSignatures.size === 0) return;
     setDismissed((prev) => {
       const next = new Set([...prev].filter((sig) => liveSignatures.has(sig)));
       if (next.size === prev.size) return prev; // unchanged → keep the stable reference
