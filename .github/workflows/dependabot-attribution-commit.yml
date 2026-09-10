@@ -29,29 +29,50 @@ jobs:
     runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free; this job only commits, it installs nothing
     timeout-minutes: 8
     steps:
+      # The producer uploads NOTHING when the manifest was already in sync, so a missing
+      # artifact is a legitimate no-op — but only that. `continue-on-error` alone cannot
+      # tell "no artifact" from "the download failed", and collapsing the two would let a
+      # transient API error or a revoked token report success while the manifest stays
+      # stale, with no retry and nothing red to notice.
+      - name: Is there an artifact to fetch?
+        id: probe
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          names="$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}/artifacts" \
+            --jq '.artifacts[].name')"
+          if printf '%s\n' "$names" | grep -qx attribution; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "no attribution artifact — the regenerate job found nothing to change"
+          fi
+
+      # No `continue-on-error`: past the probe, a failure here IS a failure.
       - name: Fetch the regenerated manifest
         id: fetch
+        if: steps.probe.outputs.present == 'true'
         uses: actions/download-artifact@v4
-        continue-on-error: true
         with:
           name: attribution
           path: _attribution
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Nothing to do when the manifest was already in sync
+      - name: Read what the producer staged
         id: gate
+        if: steps.probe.outputs.present == 'true'
         run: |
-          if [ ! -f _attribution/THIRD_PARTY_LICENSES.md ]; then
-            echo "go=false" >> "$GITHUB_OUTPUT"
-            echo "no artifact — the regenerate job found nothing to change"
-          else
-            {
-              echo "go=true"
-              echo "pr=$(cat _attribution/pr)"
-              echo "head_ref=$(cat _attribution/head-ref)"
-            } >> "$GITHUB_OUTPUT"
-          fi
+          set -euo pipefail
+          # The artifact was present, so the file must be too — a download that lands
+          # without it is corruption, not a no-op.
+          test -f _attribution/THIRD_PARTY_LICENSES.md
+          {
+            echo "go=true"
+            echo "pr=$(cat _attribution/pr)"
+            echo "head_ref=$(cat _attribution/head-ref)"
+          } >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v7
         if: steps.gate.outputs.go == 'true'
@@ -68,11 +89,23 @@ jobs:
           PR: ${{ steps.gate.outputs.pr }}
         run: |
           set -euo pipefail
+          # The manifest was generated FOR a specific lockfile revision. If dependabot
+          # force-pushed a rebase after the producer ran, this checkout is a newer tip and
+          # committing here would attach an older lockfile's attribution to it — and the
+          # stale result would persist, because a manifest-only push does not match the
+          # producer's `paths:` filter and so never re-triggers a regeneration.
+          # Diffing the file is not enough to catch that: a manifest can be byte-identical
+          # across two different lockfiles.
+          if [ "$(git rev-parse HEAD)" != "${{ github.event.workflow_run.head_sha }}" ]; then
+            echo "branch moved since the manifest was generated"
+            echo "  generated for: ${{ github.event.workflow_run.head_sha }}"
+            echo "  checked out:   $(git rev-parse HEAD)"
+            echo "the newer head re-triggers the producer on its own — nothing to commit"
+            exit 0
+          fi
           cp _attribution/THIRD_PARTY_LICENSES.md THIRD_PARTY_LICENSES.md
-          # Re-check against the branch as it is NOW: the regenerate job ran against an
-          # earlier head, and dependabot may have force-pushed a rebase since.
           if git diff --quiet -- THIRD_PARTY_LICENSES.md; then
-            echo "already in sync on the current head — nothing to commit"
+            echo "already in sync on this head — nothing to commit"
             exit 0
           fi
           git config user.name "github-actions[bot]"
@@ -87,4 +120,15 @@ jobs:
           # The commit turns a lock-only PR into one touching a tracked file, which trips
           # the changelog gate. A dependency bump plus regenerated attribution is exactly
           # what that label is for, and applying it re-triggers changelog.yml by itself.
-          gh pr edit "$PR" --add-label skip-changelog || true
+          # NOT `|| true`: the commit has already landed, so swallowing a label failure
+          # leaves the PR red on the changelog gate with the job reporting success and no
+          # path back. Retry the transient case, then fail loudly.
+          for attempt in 1 2 3; do
+            if gh pr edit "$PR" --add-label skip-changelog; then
+              exit 0
+            fi
+            echo "label attempt $attempt failed; retrying in $((attempt * 5))s"
+            sleep $((attempt * 5))
+          done
+          echo "::error::committed the manifest but could not apply skip-changelog to #$PR — the changelog gate will stay red until the label is added by hand"
+          exit 1
