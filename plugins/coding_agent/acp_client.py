@@ -41,7 +41,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Awaitable, Callable
 
-from infra.proc import group_kwargs, signal_tree
+from infra.proc import group_kwargs, signal_tree, track_tree, untrack_tree
 
 # A repeated chunk shorter than this is plausibly deliberate ("...", a bullet, a short
 # chant), so only a substantial verbatim repeat is treated as the emit-side doubling.
@@ -607,6 +607,10 @@ class AcpClient:
             )
         except FileNotFoundError as exc:
             raise AcpError(_missing_binary_message(self.command)) from exc
+        # Owned until close() reaps it (#3428): if this process starts to exit before
+        # the pool's teardown gets here — a member SIGKILLed mid-drain, a desktop quit
+        # through the watchdog — the adapter and its backend go down with it.
+        track_tree(self._proc.pid)
 
         # The subprocess now exists. If the handshake raises OR the caller's wait_for
         # cancels us mid-initialize (the health prober's 45s probe timeout), reap the
@@ -686,6 +690,8 @@ class AcpClient:
                 # cancellation propagate (don't swallow it).
                 self._signal_group(proc, force=True)
                 raise
+        if proc and proc.returncode is not None:
+            untrack_tree(proc.pid)
         # Close the subprocess transport too, so its pipe transports don't linger to
         # a post-loop-close GC — reaping the process (above) leaves the stdin write-
         # pipe transport open, whose __del__ then fires "Event loop is closed".

@@ -82,6 +82,12 @@ def test_main_registers_the_server_so_the_route_can_reach_it():
     # Comments legitimately mention uvicorn.run when explaining why it isn't used, so
     # judge the CODE — a naive substring check reads those and fails on the prose.
     code = "\n".join(line.split("#", 1)[0] for line in src.splitlines())
-    assert "uvicorn.Server(" in code, "_main must build a Server it can hand to the route"
+    # Built through the factory (#3428 — the subclass that tears owned trees down on
+    # the exit signal), so check what the factory actually returns rather than the
+    # constructor spelling: the route needs a uvicorn.Server whatever builds it.
+    assert "build_uvicorn_server(" in code, "_main must build a Server it can hand to the route"
+    import uvicorn
+
+    assert isinstance(server_pkg.build_uvicorn_server(uvicorn.Config(lambda *a: None)), uvicorn.Server)
     assert "STATE.uvicorn_server" in code, "_main must publish it for request_server_exit()"
     assert "uvicorn.run(" not in code, "uvicorn.run() hides the Server — the route needs it"

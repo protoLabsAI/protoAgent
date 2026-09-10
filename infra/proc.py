@@ -17,6 +17,10 @@ The contract:
 - **Kill by tree**, never by PID alone: :func:`kill_tree` (sync),
   :func:`akill_tree` (asyncio children), :func:`terminate_tree` (graceful
   term → wait → hard-kill escalation).
+- **Track what you own** (#3428): :func:`track_tree` a ``group_kwargs()`` tree
+  once it's spawned, :func:`untrack_tree` it once it's reaped. Whatever is still
+  tracked when this process starts to exit is torn down by the process, not by
+  the owner's cleanup path — which an exit may never reach.
 
 POSIX primitives are process groups (``setsid``/``killpg``); Windows uses
 ``taskkill /T`` — the built-in tree walker — with every wait BOUNDED so a
@@ -29,10 +33,13 @@ stays stdlib-only. Revisit in ADR 0098 if tree-escape shows up in practice.
 from __future__ import annotations
 
 import asyncio
+import atexit
 import contextlib
 import os
 import signal
 import subprocess
+import threading
+import time
 from typing import Any
 
 # The #1679 liveness probe (Windows: OpenProcess + STILL_ACTIVE — never
@@ -237,12 +244,162 @@ def terminate_tree(pid: int, *, grace: float = 5.0, poll: float = 0.1) -> bool:
     return _gone()
 
 
+# ── owned-tree registry (#3428) ──────────────────────────────────────────────
+#
+# A tree anchored with group_kwargs() lives in its OWN process group, so signalling
+# this process's group never reaches it. Its only teardown is the owner's cleanup
+# path (the shell tool's timeout kill, the ACP client's close(), a lifespan-shutdown
+# pool teardown) — and an exit can pre-empt every one of those:
+#
+#   * the hub SIGKILLs a member 3s after SIGTERM, while the member's uvicorn drain
+#     alone may take 5s, so its lifespan teardown never starts;
+#   * on the desktop, the Tauri shell SIGKILLs the sidecar and the parent-death
+#     watchdog `os._exit(0)`s — no lifespan shutdown, no atexit, in the hub AND in
+#     every member (they inherit PROTOAGENT_PARENT_PID).
+#
+# Each left the trees running at ppid=1. So the process keeps its own list of the
+# trees it owns and tears them down when the exit STARTS, not at the end of a
+# teardown that may never run.
+
+#: root pid -> the process group it leads (POSIX), or the pid itself (Windows).
+_TRACKED: dict[int, int] = {}
+# Reentrant: the signal-receipt path runs on the main thread, BETWEEN bytecodes, and
+# can land while the main thread is itself inside track_tree(). A plain Lock would
+# deadlock the process on the way out.
+_TRACKED_LOCK = threading.RLock()
+_escalation: threading.Timer | None = None
+_atexit_armed = False
+
+#: How long a SIGTERMed tree gets before the SIGKILL, on the signal-receipt path.
+#: Deliberately inside the hub's 3s straggler window (`supervisor.shutdown_all`), so
+#: a tree that ignores SIGTERM is dead before its member can be SIGKILLed.
+TEARDOWN_GRACE = 1.5
+
+
+def track_tree(pid: int) -> None:
+    """Record ``pid`` — the root of a tree spawned with :func:`group_kwargs` — as a
+    tree this process OWNS, so an exit can take it down (#3428). Never raises.
+
+    Refuses a pid that shares this process's group: a tree that isn't anchored in
+    its own group can't be killed by group without killing us, and the registry's
+    whole reason to exist is signalling other groups.
+    """
+    global _atexit_armed
+    if pid <= 0 or pid == os.getpid():
+        return
+    if _WINDOWS:
+        # No groups to compare: `taskkill /T` walks from the root, so the guard is
+        # simply "not us" — tracking our own pid would have the sweep kill this
+        # process's whole tree, the server included.
+        key = pid
+    else:
+        try:
+            key = os.getpgid(pid)
+        except OSError:
+            return  # already gone — nothing to own
+        if key <= 1 or key == os.getpgrp():
+            return
+    with _TRACKED_LOCK:
+        _TRACKED[pid] = key
+        if not _atexit_armed:
+            # Armed on first use, so a process that never owns a tree gets no hook.
+            # Covers an ordinary interpreter exit; `os._exit` bypasses atexit, which
+            # is why the watchdog calls reap_tracked_trees() itself.
+            atexit.register(reap_tracked_trees)
+            _atexit_armed = True
+
+
+def untrack_tree(pid: int) -> None:
+    """Forget ``pid`` — call once the owner has reaped the tree itself. Never raises."""
+    with _TRACKED_LOCK:
+        _TRACKED.pop(pid, None)
+
+
+def tracked_trees() -> list[int]:
+    """The root pids currently tracked (diagnostics and tests)."""
+    with _TRACKED_LOCK:
+        return list(_TRACKED)
+
+
+def _signal_tracked(*, force: bool) -> int:
+    """Signal every tracked tree once, without waiting. Returns how many were still
+    there to signal; prunes the ones that are gone. Never raises."""
+    with _TRACKED_LOCK:
+        items = list(_TRACKED.items())
+    signalled = 0
+    for pid, key in items:
+        if _WINDOWS:
+            if pid_alive(pid):
+                signal_tree(pid, force=force)
+                signalled += 1
+            else:
+                untrack_tree(pid)
+            continue
+        try:
+            # By the stored GROUP, not by getpgid(pid): the root is often the first to
+            # die (a `sh -c` whose grandchild is the long-running `pnpm install`), and
+            # a group outlives its leader. That surviving group is the orphan.
+            os.killpg(key, signal.SIGKILL if force else signal.SIGTERM)
+            signalled += 1
+        except ProcessLookupError:
+            untrack_tree(pid)  # the whole group is gone
+        except (PermissionError, OSError):
+            pass
+    return signalled
+
+
+def begin_tree_teardown(*, grace: float = TEARDOWN_GRACE) -> None:
+    """The signal-receipt half: SIGTERM every tracked tree NOW, then SIGKILL what's
+    left after ``grace`` on a daemon timer. Non-blocking, idempotent, never raises —
+    safe to call from a signal handler.
+
+    Runs before the uvicorn drain, so the trees no longer depend on the lifespan
+    teardown finishing — or starting.
+    """
+    global _escalation
+    try:
+        if not _signal_tracked(force=False):
+            return
+        with _TRACKED_LOCK:
+            if _escalation is not None:
+                return  # a second Ctrl-C re-sends TERM above; one KILL timer is enough
+            timer = threading.Timer(grace, _signal_tracked, kwargs={"force": True})
+            timer.daemon = True
+            _escalation = timer
+        timer.start()
+    except Exception:  # noqa: BLE001 — a signal handler must never raise into the main thread
+        pass
+
+
+def reap_tracked_trees(*, grace: float = 1.0) -> int:
+    """The blocking final sweep: SIGTERM every tracked tree, give them ``grace``
+    seconds, SIGKILL whatever remains. Returns how many trees were signalled.
+
+    For the points where the process is about to be gone and may block briefly:
+    the end of lifespan shutdown, the parent-death watchdog before ``os._exit``,
+    and ``atexit``. Returns at once when nothing is tracked. Never raises.
+    """
+    try:
+        n = _signal_tracked(force=False)
+        if n:
+            time.sleep(grace)
+            _signal_tracked(force=True)
+        return n
+    except Exception:  # noqa: BLE001 — exit-path teardown is best-effort
+        return 0
+
+
 __all__ = [
     "akill_tree",
+    "begin_tree_teardown",
     "detached_kwargs",
     "group_kwargs",
     "kill_tree",
     "pid_alive",
+    "reap_tracked_trees",
     "signal_tree",
     "terminate_tree",
+    "track_tree",
+    "tracked_trees",
+    "untrack_tree",
 ]

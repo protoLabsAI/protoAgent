@@ -20,7 +20,7 @@ import asyncio
 import os
 from dataclasses import dataclass
 
-from infra.proc import akill_tree, group_kwargs
+from infra.proc import akill_tree, group_kwargs, track_tree, untrack_tree
 
 
 @dataclass
@@ -74,6 +74,9 @@ async def run_command(
     except OSError as exc:
         return ShellResult(1, "", "", error=f"failed to launch {argv[0]!r}: {exc}")
 
+    # Owned until reaped (#3428): if this process starts to exit mid-command, the
+    # tree is torn down with it rather than left running at ppid=1.
+    track_tree(proc.pid)
     try:
         out, err = await asyncio.wait_for(
             proc.communicate(stdin.encode() if stdin is not None else None),
@@ -88,6 +91,11 @@ async def run_command(
         except Exception:  # noqa: BLE001 — process already killed; draining is best-effort
             pass
         return ShellResult(1, "", "", timed_out=True, error=f"timed out after {timeout:g}s")
+    finally:
+        # Only once it's actually reaped. A cancelled turn leaves the command running,
+        # and it stays tracked so the process's exit still reaches it.
+        if proc.returncode is not None:
+            untrack_tree(proc.pid)
 
     return ShellResult(
         returncode=proc.returncode or 0,
