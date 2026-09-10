@@ -39,6 +39,7 @@ import { ActivityWidget } from "../activity/ActivityWidget";
 import { ConfirmDialog, Tooltip } from "@protolabsai/ui/overlays";
 import { AgentDownBanner } from "./AgentDownBanner";
 import { SignedOutBanner } from "./SignedOutBanner";
+import { SetupGapBanner, gapIdentity, isSetupGap, useSetupGapDismissals, type SetupGap } from "./SetupGapBanner";
 import { ChatSlot, chatSlotProvider } from "./ChatSlot";
 import { chatStore, useAnyChatStreaming } from "../chat/chat-store";
 import { KnowledgeStore } from "../knowledge/KnowledgeStore";
@@ -329,6 +330,18 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   const [sessionSheetOpen, setSessionSheetOpen] = useState(false);
   const [projectPath, setProjectPath] = useLocalStorageState("protoagent.projectPath", "");
   const queryClient = useQueryClient();
+
+  // Runtime status `warnings[]` carries two shapes now: legacy operational strings (#706
+  // co-located instances etc.) that render as plain warning alerts exactly as before, and
+  // structured plugin setup gaps (graph/plugins/setup_gaps.py) that render as actionable,
+  // dismissible banners. Split by shape so each renders through its own path — additive over
+  // the old string-only strip. A malformed object is neither, so it's simply dropped.
+  const runtimeWarnings: Array<string | SetupGap> = runtime?.warnings ?? [];
+  const stringWarnings = runtimeWarnings.filter((w): w is string => typeof w === "string");
+  const setupGaps = runtimeWarnings.filter(isSetupGap);
+  // Session-scoped, signature-keyed dismissal (client-only; never mutates server config). One
+  // source of truth feeds both the desktop strip and the mobile banner stack below.
+  const { visibleGaps: visibleSetupGaps, dismiss: dismissSetupGap } = useSetupGapDismissals(setupGaps);
 
   // Installed inventory + freshness — feed the rail context-menu plugin actions
   // (#1521 / #1522) so a plugin icon's menu can show its version and offer Update /
@@ -896,10 +909,13 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
           onSessionSheetChange={setSessionSheetOpen}
           banners={
             <>
-              {(runtime?.warnings ?? []).map((w) => (
+              {stringWarnings.map((w) => (
                 <Alert status="warning" className="shell-warning-banner" key={w}>
                   {w}
                 </Alert>
+              ))}
+              {visibleSetupGaps.map((gap) => (
+                <SetupGapBanner key={gapIdentity(gap)} gap={gap} onDismiss={() => dismissSetupGap(gap)} />
               ))}
               <AgentDownBanner />
               <SignedOutBanner runtime={runtime} />
@@ -936,10 +952,17 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
       {/* Operational warnings from the runtime status (#706 co-located instances etc.) —
           a slim alert strip under the topbar. Server-driven: appears/clears with the poll.
           DS Alert owns the visuals; the class is placement + the e2e hook. */}
-      {(runtime?.warnings ?? []).map((w) => (
+      {stringWarnings.map((w) => (
         <Alert status="warning" className="shell-warning-banner" key={w}>
           {w}
         </Alert>
+      ))}
+
+      {/* Structured plugin setup gaps (setup_gaps.py) — same strip, but actionable +
+          dismissible: an allowlisted action opens its plugin-config dialog, and a
+          session-scoped dismiss hides the unchanged gap without touching server config. */}
+      {visibleSetupGaps.map((gap) => (
+        <SetupGapBanner key={gapIdentity(gap)} gap={gap} onDismiss={() => dismissSetupGap(gap)} />
       ))}
 
       {/* Focused fleet member stopped mid-session (the boot gate only catches boot-time
