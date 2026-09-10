@@ -190,7 +190,7 @@ class _ReasoningChatOpenAI(ChatOpenAI):
     # Left as `None`, langchain-openai decides per call, and it decides from the MODEL
     # NAME: `_model_prefers_responses_api()` returns True for a handful of prefixes and
     # for any name merely CONTAINING "codex". That clause is already in the locked 1.6.0,
-    # so a `protolabs/codex` gateway slot was misrouted on the shipped version; 1.6.2
+    # so a `protolabs/codex` gateway slot was misrouted on the shipped version; 1.6.1
     # only added `gpt-5.6-sol` to the prefixes, which is what the canary caught (#3392).
     # Gateway aliases are names WE
     # choose (`protolabs/codex`, `gateway:codex`) and say nothing about the wire the
