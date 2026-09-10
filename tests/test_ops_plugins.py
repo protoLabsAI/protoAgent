@@ -14,8 +14,15 @@ from ops import OpContext, registry
 from ops.plugins import install_and_activate
 
 
+#: The config the op's context carries — in production `OpContext.from_state()`, i.e.
+#: the config the last locked write committed. `_capture_apply`'s applier resolves the
+#: op's update callable against it, as the real applier does inside its lock (#2743).
+_CURRENT: dict = {}
+
+
 def _ctx(enabled=(), disabled=()):
     cfg = types.SimpleNamespace(plugins_enabled=list(enabled), plugins_disabled=list(disabled))
+    _CURRENT["cfg"] = cfg
     return OpContext(knowledge_store=None, graph_config=cfg)
 
 
@@ -23,6 +30,8 @@ def _capture_apply():
     captured: dict = {}
 
     def _apply(updates):
+        if callable(updates):
+            updates = updates(_CURRENT.get("cfg"))
         captured["updates"] = updates
         return True, ["reloaded"]
 

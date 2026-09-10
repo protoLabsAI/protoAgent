@@ -357,6 +357,12 @@ def _wire_state(monkeypatch, *, enabled, disabled, meta):
     fake = types.ModuleType("server.agent_init")
 
     def _apply(config=None, soul=None):
+        # Resolve a read-modify-write callable the way the real applier does — against
+        # the config the last write committed, STATE.graph_config (#2743).
+        if callable(config):
+            import runtime.state as _rs
+
+            config = config(_rs.STATE.graph_config)
         captured["config"] = config
         return True, ["reloaded"]
 

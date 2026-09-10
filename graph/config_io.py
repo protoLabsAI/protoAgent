@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import re
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,16 @@ from graph.config import LangGraphConfig, _deep_merge_dicts
 from infra.paths import atomic_write, harden_private_file, instance_paths
 
 log = logging.getLogger("protoagent.config_io")
+
+#: The one lock for every in-process read-modify-write of the LIVE config files and
+#: the graph reload that follows it (#2743). It lives here, with the writes, because
+#: the graph layer writes those files too — a plugin uninstall scrubs
+#: `plugins.enabled` itself (installer._clean_config_refs) — and could not reach a
+#: lock defined in server/. `server.agent_init._CONFIG_WRITE_LOCK` IS this object.
+#: Reentrant: the applier takes it and then calls the reload, which takes it again.
+#: Hold it across the READ as well as the write — a lock around the save alone is
+#: exactly the lost update it exists to prevent.
+CONFIG_WRITE_LOCK = threading.RLock()
 
 # Absent-key sentinel for the three-way merge — distinct from a key explicitly set
 # to None, which is a real operator value the merge must respect.

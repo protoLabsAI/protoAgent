@@ -1076,28 +1076,32 @@ def _clean_config_refs(plugin_id: str, section: str, purge: bool) -> bool:
     always the `plugins.enabled`/`disabled` entry (a dangling enabled entry is just
     broken); with ``purge`` also the plugin's `config_section` block. Comment-safe
     (ruamel). Returns True if anything changed."""
-    from graph.config_io import config_yaml_path, load_yaml_doc, save_yaml_doc
+    from graph.config_io import CONFIG_WRITE_LOCK, config_yaml_path, load_yaml_doc, save_yaml_doc
 
     cfg = config_yaml_path()
     if not cfg.exists():
         return False
-    doc = load_yaml_doc(cfg)
-    if not isinstance(doc, dict):
-        return False
-    changed = False
-    plugins = doc.get("plugins")
-    if isinstance(plugins, dict):
-        for key in ("enabled", "disabled"):
-            lst = plugins.get(key)
-            if isinstance(lst, list) and plugin_id in lst:
-                while plugin_id in lst:
-                    lst.remove(plugin_id)
-                changed = True
-    if purge and section in doc:
-        del doc[section]
-        changed = True
-    if changed:
-        save_yaml_doc(doc, cfg)
+    # Across the read AND the write (#2743): the server's applier rewrites this file
+    # under the same lock, so a scrub interleaved with it either resurrects the
+    # uninstalled id or drops an enable that landed in between.
+    with CONFIG_WRITE_LOCK:
+        doc = load_yaml_doc(cfg)
+        if not isinstance(doc, dict):
+            return False
+        changed = False
+        plugins = doc.get("plugins")
+        if isinstance(plugins, dict):
+            for key in ("enabled", "disabled"):
+                lst = plugins.get(key)
+                if isinstance(lst, list) and plugin_id in lst:
+                    while plugin_id in lst:
+                        lst.remove(plugin_id)
+                    changed = True
+        if purge and section in doc:
+            del doc[section]
+            changed = True
+        if changed:
+            save_yaml_doc(doc, cfg)
     return changed
 
 
