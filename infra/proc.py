@@ -300,6 +300,7 @@ def track_tree(pid: int) -> None:
         if key <= 1 or key == os.getpgrp():
             return
     with _TRACKED_LOCK:
+        _prune_dead_locked()
         _TRACKED[pid] = key
         if not _atexit_armed:
             # Armed on first use, so a process that never owns a tree gets no hook.
@@ -313,6 +314,54 @@ def untrack_tree(pid: int) -> None:
     """Forget ``pid`` — call once the owner has reaped the tree itself. Never raises."""
     with _TRACKED_LOCK:
         _TRACKED.pop(pid, None)
+
+
+#: Strong refs to the pending reap-then-forget waits — an unreferenced task can be
+#: garbage-collected before it ever runs.
+_PENDING_FORGETS: set[asyncio.Task] = set()
+
+
+def untrack_when_reaped(proc: asyncio.subprocess.Process) -> None:
+    """For an owner that stops waiting on a child that is still running — a cancelled
+    turn. It stays tracked while it runs (so an exit still reaches it) and is forgotten
+    once it's actually reaped. Call from inside the event loop. Never raises.
+
+    Leaving it tracked forever instead is not harmless: once the group is gone its pgid
+    is free for reuse, and the exit sweep would then signal whichever unrelated group
+    took that id.
+    """
+
+    async def _forget_once_reaped() -> None:
+        # `Exception`, not BaseException: if THIS wait is cancelled too (the loop is
+        # shutting down) the child is still running, so it must stay tracked.
+        with contextlib.suppress(Exception):
+            await proc.wait()
+            untrack_tree(proc.pid)
+
+    try:
+        task = asyncio.get_running_loop().create_task(_forget_once_reaped())
+    except RuntimeError:
+        return  # no running loop — leave it tracked; the exit sweep still covers it
+    _PENDING_FORGETS.add(task)
+    task.add_done_callback(_PENDING_FORGETS.discard)
+
+
+def _prune_dead_locked() -> None:
+    """Drop entries whose whole group is gone. Caller holds ``_TRACKED_LOCK``.
+
+    A group that outlived its leader is still alive here (``killpg(pgid, 0)`` reaches
+    any member), which is exactly the tree that must stay tracked."""
+    for pid, key in list(_TRACKED.items()):
+        if _WINDOWS:
+            if not pid_alive(pid):
+                _TRACKED.pop(pid, None)
+            continue
+        try:
+            os.killpg(key, 0)
+        except ProcessLookupError:
+            _TRACKED.pop(pid, None)
+        except (PermissionError, OSError):
+            pass
 
 
 def tracked_trees() -> list[int]:
@@ -329,6 +378,11 @@ def _signal_tracked(*, force: bool) -> int:
     signalled = 0
     for pid, key in items:
         if _WINDOWS:
+            # `taskkill /T` walks parent links FROM the root, so once the root has
+            # exited its surviving descendants are unreachable here. That is ADR 0098's
+            # deliberate "taskkill, not Job Objects — for now": a Job Object is the
+            # airtight fix and the trigger to adopt one. (POSIX has no such gap — the
+            # group is killed by its recorded pgid, root or no root.)
             if pid_alive(pid):
                 signal_tree(pid, force=force)
                 signalled += 1
@@ -402,4 +456,5 @@ __all__ = [
     "track_tree",
     "tracked_trees",
     "untrack_tree",
+    "untrack_when_reaped",
 ]
