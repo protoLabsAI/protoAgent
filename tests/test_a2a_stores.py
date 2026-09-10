@@ -511,6 +511,44 @@ async def test_reaper_disabled_windows_are_bounded(tmp_path):
     await engine.dispose()
 
 
+def test_reaper_default_windows_clear_the_stall_guard():
+    """Regression (#3418 review): both default reap windows must sit ABOVE the executor's
+    silent-stream stall window, so a genuinely-alive turn that is merely slow to its first
+    frame (empty history/artifacts, so it lands in the orphan-at-birth arm) is failed by
+    ``_stall_guarded`` FIRST and never preempted by the reaper. A birth grace shorter than
+    ``turn_stall_timeout_seconds`` would clobber a live task waiting on its first frame."""
+    from graph.config import LangGraphConfig
+
+    stall_window = LangGraphConfig.turn_stall_timeout_seconds  # 900s default
+    assert stores._DEFAULT_REAP_BIRTH_GRACE_S > stall_window
+    assert stores._DEFAULT_REAP_IDLE_S > stall_window
+
+
+@pytest.mark.asyncio
+async def test_reaper_default_birth_grace_keeps_live_slow_first_frame(tmp_path):
+    """A WORKING orphan-at-birth still inside the stall window is left WORKING under the
+    DEFAULT birth grace — the executor's stall guard, not the reaper, owns a slow-first-frame
+    turn. Runs the reaper with its shipped defaults (no explicit windows) to prove the
+    default is safe, not just an explicitly-passed large value."""
+    from datetime import UTC, datetime
+
+    from a2a.types import a2a_pb2
+    from graph.config import LangGraphConfig
+
+    now = datetime.now(UTC)
+    store, engine = await _fresh_task_store(tmp_path)
+    ctx = _ctx()
+    # Age just past the stall window but well under the default birth grace: a turn the
+    # stall guard is still responsible for must survive the reaper's default sweep.
+    age = int(LangGraphConfig.turn_stall_timeout_seconds) + 60
+    await _seed_task(store, engine, ctx, "slow-first-frame", state="TASK_STATE_WORKING", age_s=age, now=now)
+
+    n = await reap_orphaned_working_tasks(engine, now=now)  # shipped defaults
+    assert n == 0
+    assert (await store.get("slow-first-frame", ctx)).status.state == a2a_pb2.TASK_STATE_WORKING
+    await engine.dispose()
+
+
 @pytest.mark.asyncio
 async def test_reaper_cas_skips_task_that_revived_after_scan(tmp_path, monkeypatch):
     """Concurrency guard: a WORKING orphan classified as reap-eligible at scan time that

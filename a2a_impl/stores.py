@@ -521,17 +521,26 @@ async def reconcile_interrupted_tasks(engine: AsyncEngine, *, now: datetime | No
 
 # Two discriminated grace windows for ``reap_orphaned_working_tasks``, both keyed on
 # the SDK ``last_updated`` column. Deliberately named constants (the store owns the
-# defaults; the loop validates/clamps whatever it passes) rather than config fields:
+# defaults; the loop validates/clamps whatever it passes) rather than config fields.
+#
+# Both defaults sit ABOVE ``model.turn_stall_timeout_seconds`` (900s default) on purpose:
+# the executor's own ``_stall_guarded`` owns a live-but-silent stream — including a turn
+# that has NOT yet streamed its first frame — and fails it via ``TurnStalled`` after the
+# stall window. This reaper is only a backstop for a producer that vanished WITHOUT a live
+# stream for the stall guard to trip. Keeping both windows longer than the stall timeout
+# guarantees the stall guard gets first crack: an alive task is already terminal (or has
+# streamed a frame and bumped ``last_updated``) before either window elapses, so the reaper
+# never preempts it. It only reaps a task whose producer is truly gone.
 #
 #  - BIRTH GRACE — a task still WORKING with EMPTY history AND EMPTY artifacts never
-#    produced anything: an orphan-at-birth whose producer died before streaming its
-#    first frame. Short, but generous enough to tolerate a turn that just started and
-#    hasn't persisted its first status frame yet.
-#  - IDLE — a task that DID record history/artifacts but has since gone silent. Longer
-#    than ``model.turn_stall_timeout_seconds`` (900s default) on purpose: the executor's
-#    own ``_stall_guarded`` owns the live-but-silent stream and gets first crack; this
-#    only backstops a producer that vanished WITHOUT tripping the stall guard.
-_DEFAULT_REAP_BIRTH_GRACE_S = 5 * 60  # 5m
+#    produced anything: an orphan-at-birth whose producer died before streaming its first
+#    frame. Kept above the stall window so a genuinely-alive turn that is merely slow to its
+#    first frame is failed by the stall guard, not clobbered here. Shorter than IDLE (there
+#    is nothing productive to lose) but never shorter than the stall timeout.
+#  - IDLE — a task that DID record history/artifacts but has since gone silent. Longer than
+#    the stall window for the same reason: the stall guard owns the live stream; this only
+#    backstops a producer that vanished WITHOUT tripping it.
+_DEFAULT_REAP_BIRTH_GRACE_S = 20 * 60  # 20m — safely above the 900s stall window
 _DEFAULT_REAP_IDLE_S = 30 * 60  # 30m
 
 
@@ -554,9 +563,11 @@ async def reap_orphaned_working_tasks(
     and the SDK ``last_updated`` column:
 
       - a task still WORKING with NO history AND NO artifacts is an *orphan-at-birth*;
-        fail it once its age exceeds ``birth_grace_s``.
+        fail it once its age exceeds ``birth_grace_s``. Both defaults sit ABOVE the
+        executor stall window so ``_stall_guarded`` fails a genuinely-alive slow-first-frame
+        turn first; this only reaps a producer that left no live stream to trip the guard.
       - a task that recorded history or artifacts is *productive*; fail it only once it
-        has been idle longer than ``idle_after_s``.
+        has been idle longer than ``idle_after_s`` (also longer than the stall window).
 
     Only ``TASK_STATE_WORKING`` rows are considered. Terminal states and the resumable
     ``TASK_STATE_INPUT_REQUIRED`` / ``TASK_STATE_AUTH_REQUIRED`` pauses are never touched.
