@@ -1951,6 +1951,89 @@ def _build_watch_tools():
     return [create_watch, list_watches, update_watch, clear_watch]
 
 
+def _config_gated_tool_reasons(config) -> dict[str, str]:
+    """The small, EXPLICIT set of host-config gates that guarantee a named tool is
+    absent or would refuse, evaluated against the live ``config`` — tool name → reason.
+
+    Only UNCONDITIONAL gates belong here: a disabled subsystem or an empty allowlist
+    that refuses regardless of arguments. Per-call/network refusals (a bad URL, an
+    offline remote) are NOT guarantees and must never be reported as one. Keyed by
+    tool name so ``load_skill`` can turn a bare "not bound" into an actionable reason.
+    """
+    reasons: dict[str, str] = {}
+    if config is None:
+        return reasons
+    # Project onboarding (#2555): ``onboarding.enabled: false`` makes
+    # ``build_onboard_tools`` return ``[]`` — the registration tool is removed from the
+    # toolset entirely rather than bound-and-refusing. Name the config, not just the
+    # absence, so the agent can tell the operator what to turn on. Both the current
+    # tool name and the reported historical alias (see ``graph/tool_delta``) are covered.
+    if not getattr(config, "onboarding_enabled", True):
+        reason = "project onboarding is disabled — set onboarding.enabled to bind it"
+        for tool_name in ("board_register_project", "onboard_project"):
+            reasons[tool_name] = reason
+    return reasons
+
+
+#: Cap on tools listed in the load_skill unavailable annotation — keeps the note bounded
+#: even if a skill declares an unusually long advisory tool list.
+_MAX_UNAVAILABLE_LISTED = 20
+
+
+def _skill_tools_unavailable_note(tools_used) -> str:
+    """Reconcile a skill's advisory ``Relevant tools`` against what is ACTUALLY reachable
+    in this invocation, returning a one-line ``Unavailable in this context:`` annotation
+    (or ``""`` when everything declared is reachable).
+
+    Two sources, both authoritative — never a duplicated static inventory:
+
+    - the FINAL bound toolset recorded at graph build (``tool_delta.current_toolset``),
+      used to report PROVEN absence — a tool the model simply does not have; and
+    - the small explicit set of host-config gates (``_config_gated_tool_reasons``) that
+      guarantee a named tool refuses, used to name the *reason* (e.g. onboarding disabled).
+
+    Deliberately conservative: with no recorded toolset (no graph built) we make no
+    absence claim, and we never predict runtime/network failure. Error-safe (never
+    raises) and bounded (``_MAX_UNAVAILABLE_LISTED``)."""
+    names = [n for n in ((tools_used or []) if not isinstance(tools_used, str) else tools_used.split())]
+    if not names:
+        return ""
+    try:
+        from graph.tool_delta import current_toolset
+
+        bound = current_toolset()
+    except Exception:  # noqa: BLE001 — advisory annotation must never break a skill load
+        bound = None
+    try:
+        from runtime.state import STATE
+
+        gated = _config_gated_tool_reasons(STATE.graph_config)
+    except Exception:  # noqa: BLE001
+        gated = {}
+
+    entries: list[str] = []
+    seen: set[str] = set()
+    for raw in names:
+        tool_name = (raw or "").strip()
+        if not tool_name or tool_name in seen:
+            continue
+        seen.add(tool_name)
+        # A known fail-closed config gate is the most specific, actionable reason —
+        # prefer it over a bare "not bound" even though the gate also unbinds the tool.
+        if tool_name in gated:
+            entries.append(f"{tool_name} ({gated[tool_name]})")
+        # Otherwise report ONLY proven absence: without an authoritative bound set we
+        # cannot say a tool is missing, and the card forbids guessing.
+        elif bound is not None and tool_name not in bound:
+            entries.append(f"{tool_name} (not bound in this context)")
+
+    if not entries:
+        return ""
+    shown = entries[: _MAX_UNAVAILABLE_LISTED]
+    more = f" (+{len(entries) - len(shown)} more)" if len(entries) > len(shown) else ""
+    return f"Unavailable in this context: {', '.join(shown)}{more}."
+
+
 @tool
 def load_skill(name: str) -> str:
     """Load the full step-by-step procedure for a skill.
@@ -1962,6 +2045,12 @@ def load_skill(name: str) -> str:
     a skill's contents from its summary. ``name`` must match a ``<skill name="…">``
     exactly. Returns an error string (it never raises) when the skill or the index
     is unavailable.
+
+    The skill's advisory ``Relevant tools`` are reconciled up front against the tools
+    actually bound to this invocation plus the known host-config gates; any that are
+    missing or configuration-refused are called out under ``Unavailable in this
+    context:`` before the procedure. The annotation is advisory — the full body still
+    loads (progressive disclosure is preserved).
     """
     from runtime.state import STATE
 
@@ -1992,6 +2081,9 @@ def load_skill(name: str) -> str:
         lines.append(desc)
     if tools_used:
         lines.append(f"\nRelevant tools: {', '.join(tools_used)}")
+        note = _skill_tools_unavailable_note(tools_used)
+        if note:
+            lines.append(note)
     lines.append(f"\n## Procedure\n{body}" if body else "\n(This skill has no recorded procedure.)")
     return "\n".join(lines)
 

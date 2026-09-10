@@ -340,6 +340,168 @@ def test_load_skill_no_index(monkeypatch):
     assert "not available" in load_skill.invoke({"name": "anything"})
 
 
+# ── load_skill "Unavailable in this context" annotation (#3403) ────────────────
+#
+# The skill's advisory `Relevant tools` is reconciled up front against (a) the FINAL
+# bound toolset recorded at graph build — the authoritative runtime representation,
+# NOT a duplicated static list — and (b) the small explicit set of host-config gates
+# that guarantee a named tool refuses (onboarding.enabled → the project-registration
+# tool). Progressive disclosure is preserved: the body still loads.
+
+
+def _save_skill_with_tools(idx, name, tools):
+    _by_name(_build_curation_tools())["save_skill"].invoke(
+        {"name": name, "description": "d", "body": "1. do the thing", "tools": tools}
+    )
+
+
+def _unavailable_line(out: str) -> str | None:
+    return next((ln for ln in out.splitlines() if ln.startswith("Unavailable in this context:")), None)
+
+
+def test_load_skill_flags_tool_absent_from_bound_set(tmp_path, monkeypatch):
+    """r1: a declared tool absent from the FINAL bound toolset is named under an
+    upfront unavailable annotation, and the procedure still loads."""
+    from graph import tool_delta
+
+    idx = SkillsIndex(str(tmp_path / "s.db"))
+    monkeypatch.setattr(STATE, "skills_index", idx)
+    monkeypatch.setattr(STATE, "graph_config", None)
+    tool_delta.reset_for_tests()
+    # The authoritative runtime seam: `calculator` is bound this invocation, `ghost_tool` isn't.
+    tool_delta.record_toolset(["load_skill", "calculator"])
+    try:
+        _save_skill_with_tools(idx, "Haul run", ["calculator", "ghost_tool"])
+        out = load_skill.invoke({"name": "Haul run"})
+        assert "Relevant tools: calculator, ghost_tool" in out
+        # Only the genuinely-absent tool is flagged (calculator is bound, so it isn't).
+        assert _unavailable_line(out) == "Unavailable in this context: ghost_tool (not bound in this context)."
+        assert "## Procedure" in out and "1. do the thing" in out  # body preserved
+        assert out.index("Unavailable in this context:") < out.index("## Procedure")  # before the procedure
+    finally:
+        tool_delta.reset_for_tests()
+
+
+def test_load_skill_no_annotation_when_all_bound_and_no_gate(tmp_path, monkeypatch):
+    """r2: all declared tools bound and no hard gate → no annotation; output intact."""
+    from graph import tool_delta
+
+    idx = SkillsIndex(str(tmp_path / "s.db"))
+    monkeypatch.setattr(STATE, "skills_index", idx)
+    monkeypatch.setattr(STATE, "graph_config", None)
+    tool_delta.reset_for_tests()
+    tool_delta.record_toolset(["load_skill", "calculator", "current_time"])
+    try:
+        _save_skill_with_tools(idx, "Simple run", ["calculator", "current_time"])
+        out = load_skill.invoke({"name": "Simple run"})
+        assert "Unavailable in this context:" not in out
+        assert "Relevant tools: calculator, current_time" in out
+        assert "## Procedure" in out
+    finally:
+        tool_delta.reset_for_tests()
+
+
+def test_load_skill_names_onboarding_gate_when_disabled(tmp_path, monkeypatch):
+    """r3: onboarding disabled + a skill requiring the registration tool → the
+    configuration-gated refusal is NAMED (not a bare "not bound") before the procedure."""
+    from graph import tool_delta
+    from graph.config import LangGraphConfig
+
+    idx = SkillsIndex(str(tmp_path / "s.db"))
+    monkeypatch.setattr(STATE, "skills_index", idx)
+    # Real config seam: onboarding.enabled=false unbinds the registration tool entirely.
+    cfg = LangGraphConfig.from_dict({"onboarding": {"enabled": False}})
+    monkeypatch.setattr(STATE, "graph_config", cfg)
+    tool_delta.reset_for_tests()
+    tool_delta.record_toolset(t.name for t in get_all_tools(knowledge_store=None, graph_config=cfg))
+    try:
+        _save_skill_with_tools(idx, "Register repo", ["board_register_project"])
+        out = load_skill.invoke({"name": "Register repo"})
+        line = _unavailable_line(out)
+        assert line is not None and "board_register_project" in line
+        assert "onboarding is disabled" in line  # the config reason, not just absence
+        assert "not bound in this context" not in line
+        assert out.index(line) < out.index("## Procedure")
+    finally:
+        tool_delta.reset_for_tests()
+
+
+def test_load_skill_does_not_falsely_flag_bound_registration_tool(tmp_path, monkeypatch):
+    """r4: onboarding enabled and the registration tool bound → the reported tool name
+    (`board_register_project`) is NOT marked unavailable."""
+    from graph import tool_delta
+    from graph.config import LangGraphConfig
+
+    idx = SkillsIndex(str(tmp_path / "s.db"))
+    monkeypatch.setattr(STATE, "skills_index", idx)
+    monkeypatch.setattr(STATE, "graph_config", LangGraphConfig.from_dict({"onboarding": {"enabled": True}}))
+    tool_delta.reset_for_tests()
+    tool_delta.record_toolset(["load_skill", "board_register_project"])
+    try:
+        _save_skill_with_tools(idx, "Register", ["board_register_project"])
+        out = load_skill.invoke({"name": "Register"})
+        assert "Unavailable in this context:" not in out
+    finally:
+        tool_delta.reset_for_tests()
+
+
+def test_load_skill_onboarding_gate_tracks_the_real_toolset(tmp_path, monkeypatch):
+    """r5: the check consults the REAL assembled toolset, not a stale duplicated list.
+
+    Enabled → `onboard_project` is genuinely bound (`get_all_tools` returns it) and is
+    NOT flagged. Disabled → `get_all_tools` omits it, and the annotation names the
+    config gate — so if someone re-introduced a static inventory this would diverge."""
+    from graph import tool_delta
+    from graph.config import LangGraphConfig
+
+    idx = SkillsIndex(str(tmp_path / "s.db"))
+    monkeypatch.setattr(STATE, "skills_index", idx)
+
+    cfg_on = LangGraphConfig.from_dict({"onboarding": {"enabled": True}})
+    on_names = {t.name for t in get_all_tools(knowledge_store=None, graph_config=cfg_on)}
+    assert "onboard_project" in on_names  # the real binding seam, enabled
+
+    cfg_off = LangGraphConfig.from_dict({"onboarding": {"enabled": False}})
+    off_names = {t.name for t in get_all_tools(knowledge_store=None, graph_config=cfg_off)}
+    assert "onboard_project" not in off_names  # disabled → genuinely unbound
+
+    _save_skill_with_tools(idx, "Onboard", ["onboard_project"])
+
+    monkeypatch.setattr(STATE, "graph_config", cfg_on)
+    tool_delta.reset_for_tests()
+    tool_delta.record_toolset(on_names)
+    try:
+        assert "Unavailable in this context:" not in load_skill.invoke({"name": "Onboard"})
+    finally:
+        tool_delta.reset_for_tests()
+
+    monkeypatch.setattr(STATE, "graph_config", cfg_off)
+    tool_delta.reset_for_tests()
+    tool_delta.record_toolset(off_names)
+    try:
+        assert "onboarding is disabled" in load_skill.invoke({"name": "Onboard"})
+    finally:
+        tool_delta.reset_for_tests()
+
+
+def test_load_skill_makes_no_absence_claim_without_a_recorded_toolset(tmp_path, monkeypatch):
+    """Conservative by design: with no graph built (no recorded toolset) and no config
+    gate, load_skill does not guess a tool is missing — no false guarantee."""
+    from graph import tool_delta
+
+    idx = SkillsIndex(str(tmp_path / "s.db"))
+    monkeypatch.setattr(STATE, "skills_index", idx)
+    monkeypatch.setattr(STATE, "graph_config", None)
+    tool_delta.reset_for_tests()  # current_toolset() -> None
+    try:
+        _save_skill_with_tools(idx, "Mystery", ["ghost_tool"])
+        out = load_skill.invoke({"name": "Mystery"})
+        assert "Unavailable in this context:" not in out
+        assert "## Procedure" in out
+    finally:
+        tool_delta.reset_for_tests()
+
+
 # ── forget_memory + memory_list id surfacing (dream's prune half) ──────────────
 
 
