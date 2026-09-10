@@ -48,7 +48,7 @@ jobs:
     # Only bot bumps. A human touching the lock is expected to run the documented
     # `scripts/gate.py --lint-only` and fix the manifest themselves.
     if: github.actor == 'dependabot[bot]'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free, and this job runs no owned-runner work
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v7

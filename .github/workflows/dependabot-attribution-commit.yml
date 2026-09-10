@@ -26,7 +26,7 @@ permissions:
 jobs:
   commit:
     if: github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free; this job only commits, it installs nothing
     timeout-minutes: 8
     steps:
       - name: Fetch the regenerated manifest
