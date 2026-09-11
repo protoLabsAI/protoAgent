@@ -107,13 +107,19 @@ export function statusCounts(rows: InstalledRow[]): Record<InstalledStatus, numb
  *  plugin stays on, so "this deletes its code" would be a false warning there. */
 export function uninstallConfirmText(
   name: string,
-  row?: { superseded?: boolean; bundled_version?: string },
+  row?: { superseded?: boolean; bundled_version?: string; copy_on_disk?: boolean },
 ): string {
   if (row?.superseded) {
     const version = row.bundled_version ? ` v${row.bundled_version}` : "";
+    // `copy_on_disk: false` = someone already deleted the folder, so only the stale
+    // plugins.lock entry is left — promising to remove a copy would be a lie.
+    const what =
+      row.copy_on_disk === false
+        ? "This clears the stale plugins.lock entry left by the old copy (its files are already gone)"
+        : "This removes the old installed copy it replaced and its plugins.lock entry";
     return (
-      `"${name}" now ships with protoAgent${version}. This removes the old installed copy it replaced ` +
-      "and its plugins.lock entry; the built-in keeps running with its settings. To turn it off, Disable it instead."
+      `"${name}" now ships with protoAgent${version}. ${what}; the built-in keeps running with its ` +
+      "settings. To turn it off, Disable it instead."
     );
   }
   return `"${name}" — this deletes its code from disk and removes it from plugins.lock. To keep it installed, Disable it instead.`;

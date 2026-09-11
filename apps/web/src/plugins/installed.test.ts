@@ -162,6 +162,13 @@ describe("uninstall wording for a plugin that now ships with protoAgent (#3445)"
     expect(text).not.toContain("deletes its code");
   });
 
+  it("promises only the lock entry when the old copy's files are already gone", () => {
+    const text = uninstallConfirmText("Cowork", { superseded: true, bundled_version: "0.4.0", copy_on_disk: false });
+    expect(text).toContain("clears the stale plugins.lock entry");
+    expect(text).toContain("files are already gone");
+    expect(text).not.toContain("removes the old installed copy");
+  });
+
   it("keeps the delete warning for an ordinary installed plugin", () => {
     expect(uninstallConfirmText("Board", undefined)).toContain("deletes its code from disk");
     expect(uninstallConfirmText("Board", { superseded: false })).toContain("deletes its code from disk");

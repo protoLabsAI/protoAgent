@@ -127,26 +127,79 @@ def superseding_plugin(url: str) -> PluginManifest | None:
     return next((m for m in _bundled_index().values() if m.supersedes and supersedes_source(m, url)), None)
 
 
+def configured_plugins_dir() -> str:
+    """``plugins.dir`` from the live config file — the operator's override of the live
+    plugins root — read without a config object (the ``configured_allowlist`` pattern).
+    ``""`` when unset or unreadable."""
+    try:
+        import yaml
+
+        from graph.config_io import config_yaml_path
+
+        cfg_path = config_yaml_path()
+        if not cfg_path.exists():
+            return ""
+        data = yaml.safe_load(cfg_path.read_text()) or {}
+        return str((data.get("plugins") or {}).get("dir") or "")
+    except Exception:  # noqa: BLE001 — a config read must never break resolution
+        return ""
+
+
+def _loader_roots() -> list[Path]:
+    """The roots the LOADER discovers, in its order: bundled tree first, then the live
+    plugins dir — honouring the ``plugins.dir`` config override, exactly as
+    ``loader._plugin_roots`` and ``pconfig.plugin_roots_from`` do.
+
+    Deliberately not ``live_plugins_dir()`` alone: that is the installer's install
+    TARGET and ignores the override, so resolving against it would answer about a folder
+    the loader never reads."""
+    override = configured_plugins_dir()
+    live = Path(override).expanduser() if override else live_plugins_dir()
+    return [bundled_plugins_dir(), live]
+
+
+def _same_dir(a: Path, b: Path) -> bool:
+    """Same directory, as spelled or after following symlinks (either match counts, so a
+    live root symlinked at the bundled tree is recognised as the same place)."""
+    forms = []
+    for p in (a, b):
+        variants = {os.path.normcase(os.path.abspath(str(p)))}
+        try:
+            variants.add(os.path.normcase(str(Path(p).resolve())))
+        except OSError:
+            pass
+        forms.append(variants)
+    return bool(forms[0] & forms[1])
+
+
 def effective_copies() -> dict[str, PluginManifest]:
-    """``{plugin id: the copy the loader runs}`` across the bundled tree and the live
-    plugins dir — computed by the loader's own ``discover_plugins``, so ``supersedes``,
-    tracked overrides and the #1574 untracked rule all apply exactly as at load. Use it
-    for anything that acts on "the plugin" rather than on a particular folder: its deps,
-    its description, its version."""
+    """``{plugin id: the copy the loader runs}`` across the loader's own roots — computed
+    by the loader's own ``discover_plugins``, so ``supersedes``, tracked overrides and the
+    #1574 untracked rule all apply exactly as at load. Use it for anything that acts on
+    "the plugin" rather than on a particular folder: its deps, its description, its
+    version."""
     from graph.plugins.loader import discover_plugins
 
-    return {m.id: m for m in discover_plugins([bundled_plugins_dir(), live_plugins_dir()])}
+    return {m.id: m for m in discover_plugins(_loader_roots())}
 
 
 def effective_source_url(plugin_id: str) -> str:
     """Where the copy that RUNS came from: ``""`` when that is the bundled copy — nothing
     was fetched for it, so there is no source to re-check or ask consent for, even if an
     ignored, superseded git copy is still recorded — else the ``plugins.lock`` origin
-    (``""`` for an untracked folder). Fails closed: an id the resolver can't place keeps
-    its recorded origin, so a consent or allowlist gate still applies."""
+    (``""`` for an untracked folder).
+
+    Fails closed in every ambiguous case, because this waives a consent/allowlist gate:
+    an id the resolver can't place keeps its recorded origin, and a copy is only "the
+    bundled one" when it sits in the bundled tree AND that tree is not itself the live
+    plugins root (with ``plugins.dir`` or ``PROTOAGENT_PLUGINS_DIR`` aimed at the app's
+    own tree, a git-installed plugin lands there too, and a parent-dir comparison alone
+    would call it bundled)."""
     running = effective_copies().get(plugin_id)
-    if running is not None and running.path.parent == bundled_plugins_dir():
-        return ""
+    if running is not None:
+        bundled_root, live_root = _loader_roots()[0], _loader_roots()[-1]
+        if _same_dir(running.path.parent, bundled_root) and not _same_dir(bundled_root, live_root):
+            return ""
     return recorded_source_url(plugin_id)
 
 
@@ -1762,6 +1815,16 @@ def list_installed() -> list[dict]:
             row["bundled_version"] = bundled.version
             row["copy_on_disk"] = bool(row.get("present"))
             row["present"] = True
+    # Same answer for a row that was never an install: the ADR 0093 wheel-deps pins a
+    # BUNDLED plugin gets are a lock row with no source_url and no folder of their own.
+    # Nothing was fetched and nothing can be re-fetched (``sync`` says "present" too), so
+    # the row must not read as "missing on disk — sync" forever.
+    for row in out:
+        if row.get("present") or row.get("source_url"):
+            continue
+        if _bundled_manifest(str(row.get("id") or "")) is not None:
+            row["copy_on_disk"] = False
+            row["present"] = True
 
     out.sort(key=lambda e: e.get("id", ""))
     return out
@@ -1916,8 +1979,7 @@ def check_plugin_update(entry: dict) -> dict:
     # offer an update that can't apply — report it, skip the network.
     bundled = bundled_superseding(str(pid), str(source_url))
     if bundled is not None:
-        result["superseded"] = True
-        result["bundled_version"] = bundled.version
+        result["superseded"] = True  # the bundled version rides the inventory row, not here
         return result
     if pinned or not source_url:
         if not source_url:
@@ -1965,8 +2027,12 @@ def check_plugin_update(entry: dict) -> dict:
 def check_updates() -> list[dict]:
     """Per-plugin update status for every locked plugin (see ``check_plugin_update``).
     Pinned-to-SHA plugins skip the network; the rest ls-remote their ref (TTL-cached,
-    timeout-bounded) and report ``behind``. Network errors are non-fatal per entry."""
-    return [check_plugin_update(e) for e in _read_lock()["plugins"]]
+    timeout-bounded) and report ``behind``. Network errors are non-fatal per entry.
+
+    One row per id (``_lock_rows_by_id``), like every other reader: a lock that lists an
+    id twice used to yield two update rows for one plugin — and the row the loader does
+    NOT use could report an update the operator can't apply."""
+    return [check_plugin_update(e) for e in _lock_rows_by_id().values()]
 
 
 # ── Bundle-level lifecycle (ADR 0049 D4, #2718) ────────────────────────────────

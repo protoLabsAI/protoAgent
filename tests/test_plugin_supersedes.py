@@ -791,6 +791,7 @@ def test_duplicate_lock_rows_never_delete_a_running_fork_as_superseded(host):
     with pytest.raises(installer.InstallError, match="built-in"):
         installer.uninstall("cowork")
     assert (host.live / "cowork").exists()
+    assert _winner(host)["cowork"].path == host.live / "cowork"  # still the operator's override
 
 
 # ── a superseded row is never "missing on disk" ─────────────────────────────────────
@@ -1086,3 +1087,189 @@ def test_cli_reports_every_superseded_outcome(host, monkeypatch, capsys):
     assert cli.run_plugin_cli(["uninstall", "cowork"]) == 0
     out = capsys.readouterr().out
     assert "that was the superseded copy" in out and "may still be running the removed copy" in out
+
+
+# ═══ Round-2 review follow-ups ════════════════════════════════════════════════════
+# The consent/allowlist waiver is the security-relevant branch of the resolver, so both
+# directions are pinned: GIVEN for a copy that really is the bundled one, WITHHELD for
+# anything else — including the two ways the live root and the bundled tree can coincide.
+
+
+def _pip_recorder(monkeypatch) -> list[list[str]]:
+    monkeypatch.setattr(installer, "_frozen_like", lambda: False)
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        installer.subprocess,
+        "run",
+        lambda argv, **kw: calls.append(list(argv)) or types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+    return calls
+
+
+def test_waiver_is_refused_for_a_fork_override(host):
+    """A tracked fork copy RUNS, so its origin still gates deps (the #2743 re-check)."""
+    _write_plugin(host.live / "cowork", "cowork", "0.9.0")
+    host.lock.write_text(json.dumps({"plugins": [{"id": "cowork", "source_url": FORK}]}))
+    _ship_bundled(host)
+    _write_config(host, {"plugins": {"sources": {"allow": []}}})  # deny-all
+    assert installer.effective_source_url("cowork") == FORK
+    with pytest.raises(installer.InstallError, match="no longer on"):
+        installer.install_deps("cowork")
+
+
+def test_waiver_is_refused_for_a_live_copy_symlinked_into_the_bundled_tree(host):
+    """A live-dir entry POINTING at a bundled folder is still an installed copy."""
+    _ship_bundled(host, version="0.4.0")
+    host.live.mkdir(parents=True, exist_ok=True)
+    try:
+        (host.live / "other").symlink_to(host.bundled / "cowork", target_is_directory=True)
+    except OSError:
+        pytest.skip("this platform can't create directory symlinks here")
+    host.lock.write_text(json.dumps({"plugins": [{"id": "cowork", "source_url": FORK}]}))
+    assert _winner(host)["cowork"].path == host.live / "other"  # tracked override
+    assert installer.effective_source_url("cowork") == FORK
+
+
+def test_waiver_follows_the_configured_plugins_dir(host):
+    """``plugins.dir`` moves the loader's live root — so the resolver has to read it too,
+    or it answers about a folder the loader never looks at."""
+    alt = host.home / "alt-plugins"
+    _write_plugin(alt / "cowork", "cowork", "0.9.0")
+    host.lock.write_text(json.dumps({"plugins": [{"id": "cowork", "source_url": FORK}]}))
+    _ship_bundled(host)
+    _write_config(host, {"plugins": {"dir": str(alt), "sources": {"allow": []}}})
+    assert {m.id: m.path for m in discover_plugins([host.bundled, alt])}["cowork"] == alt / "cowork"
+    assert installer.effective_copies()["cowork"].path == alt / "cowork"
+    assert installer.effective_source_url("cowork") == FORK
+    with pytest.raises(installer.InstallError, match="no longer on"):
+        installer.install_deps("cowork")
+
+
+def test_waiver_is_refused_when_the_live_dir_is_the_bundled_dir(host, monkeypatch):
+    """``PROTOAGENT_PLUGINS_DIR`` aimed at the app's own plugins tree: every installed
+    copy then sits in the bundled tree, so "is it the bundled copy?" can't be a parent-dir
+    comparison alone."""
+    monkeypatch.setattr(installer, "live_plugins_dir", lambda: host.bundled)
+    _write_plugin(host.bundled / "randoplug", "randoplug", "1.0.0")
+    rando = f"{REMOTE}/rando/randoplug"
+    host.lock.write_text(json.dumps({"plugins": [{"id": "randoplug", "source_url": rando}]}))
+    _write_config(host, {"plugins": {"sources": {"allow": []}}})  # deny-all
+    assert installer.effective_source_url("randoplug") == rando
+    with pytest.raises(installer.InstallError, match="no longer on"):
+        installer.install_deps("randoplug")
+
+
+def test_waived_deps_are_always_the_bundled_manifests(host, monkeypatch):
+    """The security shape when the gate IS waived: the pip list can only be the bundled
+    manifest's — the ignored copy's deps are never what an unchecked install installs."""
+    _superseded_pair(
+        host,
+        installed_extra="requires_pip:\n  - oldpkg==1.0\n",
+        bundled_extra="requires_pip:\n  - newpkg==2.0\n",
+    )
+    _write_config(host, {"plugins": {"sources": {"allow": []}}})  # deny-all
+    calls = _pip_recorder(monkeypatch)
+    assert installer.effective_source_url("cowork") == ""
+    assert installer.install_deps("cowork") == ["newpkg==2.0"]
+    assert [c[-1] for c in calls] == ["newpkg==2.0"]
+
+
+def test_a_bundled_plugins_deps_pin_row_is_not_reported_missing(host):
+    """A wheel-deps pin (ADR 0093) for a BUNDLED plugin is a lock row with no source_url
+    and no folder. ``sync`` says "present"; the inventory has to agree, or the console's
+    "in plugins.lock but missing on disk — Sync plugins" alert can never clear."""
+    _write_plugin(host.bundled / "cowork", "cowork", "0.4.0")
+    host.lock.write_text(json.dumps({"plugins": [{"id": "cowork", "deps": [{"name": "pypdf", "version": "1.0"}]}]}))
+    assert installer.sync() == [{"id": "cowork", "status": "present"}]
+    [row] = [r for r in installer.list_installed() if r["id"] == "cowork"]
+    assert row["present"] is True and row["copy_on_disk"] is False
+
+
+def test_check_updates_returns_one_row_per_id(host):
+    """Every plugin-level reader picks one lock row per id — the update check included, or
+    a duplicated lock reports an update from the row the loader doesn't use."""
+    _write_plugin(host.live / "cowork", "cowork", "0.3.1")
+    host.lock.write_text(
+        json.dumps({"plugins": [{"id": "cowork", "source_url": FORK}, {"id": "cowork", "source_url": UPSTREAM}]})
+    )
+    _ship_bundled(host)
+    assert [r["id"] for r in installer.check_updates()] == ["cowork"]
+
+
+def test_not_older_warning_stays_quiet_when_the_bundled_copy_is_newer(host, monkeypatch, caplog):
+    """Control: in a correctly versioned move the extra warning never fires, so it can't
+    become per-load noise."""
+    from graph.config import LangGraphConfig
+
+    _remote(host, "protoLabsAI", "cowork-plugin", "cowork", "0.3.1", tags=["v0.3.1"])
+    _old_host_install(host)
+    _ship_bundled(host, version="0.4.0")
+    monkeypatch.setattr(loader, "_plugin_roots", lambda config: [host.bundled, host.live])
+    with caplog.at_level(logging.WARNING, logger="protoagent.plugins"):
+        load_plugins(LangGraphConfig(plugins_enabled=["cowork"]))
+    assert "not older than the bundled one" not in caplog.text
+
+
+# ── unloading a superseded member THIS process was running (all three call sites) ───
+
+
+def _loaded_from_the_installed_copy(monkeypatch, host, pid: str = "cowork") -> types.ModuleType:
+    """Stand in for a process that imported the INSTALLED copy — what a server that was
+    upgraded without a restart is still running."""
+    mod = types.ModuleType(MODULE)
+    mod.__path__ = [str(host.live / pid)]
+    mod.__file__ = str(host.live / pid / "__init__.py")
+    monkeypatch.setitem(sys.modules, MODULE, mod)
+    return mod
+
+
+async def test_uninstall_bundle_unloads_a_superseded_member_it_was_running(host, monkeypatch):
+    from ops import OpContext
+    from ops.plugins import uninstall_bundle
+
+    bundle = _bundle_repo(host, enabled=["cowork", "google"])
+    installer.install(bundle)
+    _write_config(host, {"plugins": {"enabled": ["cowork", "google"]}})
+    _ship_bundled(host)
+    _loaded_from_the_installed_copy(monkeypatch, host)
+    reloads: list = []
+
+    rep = await uninstall_bundle(
+        "cowork-archetype",
+        ctx=OpContext(knowledge_store=None, graph_config=None),
+        apply_settings=lambda updates: reloads.append(updates) or (True, []),
+    )
+    assert rep["superseded"] == ["cowork"] and rep["superseded_was_loaded"] == ["cowork"]
+    assert MODULE not in sys.modules  # the copy it was running went — so it was unloaded
+    assert reloads and "cowork" in _read_config(host)["plugins"]["enabled"]
+
+
+async def test_update_bundle_unloads_a_superseded_member_it_was_running(host, monkeypatch):
+    from ops import OpContext
+    from ops.plugins import update_bundle
+
+    bundle = _bundle_repo(host, enabled=["cowork", "google"])
+    installer.install(bundle)
+    _write_config(host, {"plugins": {"enabled": ["cowork", "google"]}})
+    _ship_bundled(host)
+    _loaded_from_the_installed_copy(monkeypatch, host)
+    cfg = types.SimpleNamespace(plugins_enabled=["cowork", "google"], plugins_disabled=[])
+
+    res = await update_bundle(
+        "cowork-archetype",
+        ctx=OpContext(knowledge_store=None, graph_config=cfg),
+        apply_settings=lambda updates: (True, []),
+    )
+    assert res.removed_members == ["cowork"] and res.retire_error is None
+    assert MODULE not in sys.modules
+
+
+async def test_devkit_uninstall_unloads_a_superseded_copy_it_was_running(host, monkeypatch):
+    mod, applied = _devkit(monkeypatch)
+    _remote(host, "protoLabsAI", "cowork-plugin", "cowork", "0.3.1", tags=["v0.3.1"])
+    _old_host_install(host)
+    _ship_bundled(host)
+    _loaded_from_the_installed_copy(monkeypatch, host)
+    out = await mod.uninstall_plugin.ainvoke({"plugin_id": "cowork"})
+    assert "removed the superseded copy" not in out and out.startswith("✓ uninstalled cowork")
+    assert MODULE not in sys.modules and applied == [None]  # purged + reloaded
