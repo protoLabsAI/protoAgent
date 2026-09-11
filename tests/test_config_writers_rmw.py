@@ -10,7 +10,12 @@ writers had the same bug:
 * the provider routes (add / patch / delete) built the connection registry from a stale
   copy;
 * the delegates store read-modified-wrote the live config without the lock at all, and
-  its API routes called it on the event loop.
+  its API routes called it on the event loop;
+* promote / forget wrote the box commons file and this agent's config as two separate
+  steps, so a failed reload rolled back one and not the other;
+* the delegate create/edit routes checked "is the name free / does it still exist"
+  before the lock, so two creates both passed, and an edit brought back a delegate a
+  concurrent delete had just removed.
 
 These drive the REAL `_apply_settings_changes` against tmp config files, the way the
 plugin-state race tests do: the reload is patched only to commit STATE from the file and
@@ -87,7 +92,9 @@ def held_first_reload(monkeypatch, live_config):
     monkeypatch.setattr(ai, "_reload_langgraph_agent", _reload)
     monkeypatch.setattr(ai, "_apply_settings_changes", _apply_spy)
     # The provider routes reach the applier through the host seam, as in the server.
-    monkeypatch.setattr("graph.plugins.host.HOST.apply_settings", lambda patch: ai._apply_settings_changes(config=patch))
+    monkeypatch.setattr(
+        "graph.plugins.host.HOST.apply_settings", lambda patch: ai._apply_settings_changes(config=patch)
+    )
     return inside, release, second_calling
 
 
@@ -99,6 +106,14 @@ async def _wait_for(event: threading.Event, timeout: float = 10.0) -> None:
     deadline = time.monotonic() + timeout
     while not event.is_set():
         assert time.monotonic() < deadline, "a writer never reached its sync point"
+        await asyncio.sleep(0.01)
+
+
+async def _settle(event: threading.Event, timeout: float) -> None:
+    """Like `_wait_for`, for a writer that — fixed — never reaches the sync point: give
+    it `timeout` to get there (the broken code does, in milliseconds), then move on."""
+    deadline = time.monotonic() + timeout
+    while not event.is_set() and time.monotonic() < deadline:
         await asyncio.sleep(0.01)
 
 
@@ -191,6 +206,141 @@ def test_a_delegate_save_waits_for_an_in_flight_config_write(live_config):
     assert [d["name"] for d in _on_disk(live_config)["delegates"]] == ["coder"]
 
 
+# ── promote / forget: two writes, one unit ────────────────────────────────────────────
+
+
+@pytest.fixture
+def commons(live_config, tmp_path: Path) -> Path:
+    """A box commons dir holding one shared server, pointed at from the leaf."""
+    import json
+
+    base = tmp_path / "commons"
+    base.mkdir()
+    (base / "mcp-servers.json").write_text(
+        json.dumps({"servers": [{"name": "shared", "transport": "stdio", "command": "s"}]}), encoding="utf-8"
+    )
+    live_config.write_text(LEAF + f"commons:\n  path: {base}\n", encoding="utf-8")
+    rs.STATE.graph_config = LangGraphConfig.from_yaml(str(live_config))
+    return base / "mcp-servers.json"
+
+
+def _commons_names(path: Path) -> list[str]:
+    import json
+
+    return sorted(s["name"] for s in json.loads(path.read_text(encoding="utf-8"))["servers"])
+
+
+@pytest.mark.parametrize(("name", "action"), [("shared", "forget"), ("base", "promote")])
+async def test_a_failed_move_between_tiers_leaves_both_tiers_as_they_were(
+    monkeypatch, live_config, commons, name, action
+):
+    """The applier rolls this agent's config back when the reload fails; the commons
+    write used to stay. A failed forget left the server in NEITHER tier (gone from the
+    commons, rolled out of the config); a failed promote left it in both."""
+    import server.agent_init as ai
+
+    monkeypatch.setattr(ai, "_reload_langgraph_agent", lambda *_a, **_k: (False, "rebuild failed"))
+    before_commons = _commons_names(commons)
+    before_leaf = sorted(s["name"] for s in _on_disk(live_config)["mcp"]["servers"])
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=_app()), base_url="http://t") as client:
+        r = await client.post(f"/api/mcp/servers/{name}/{action}")
+    assert r.status_code == 500, r.text
+    assert _commons_names(commons) == before_commons, "the commons write survived a rolled-back apply"
+    assert sorted(s["name"] for s in _on_disk(live_config)["mcp"]["servers"]) == before_leaf
+
+
+async def test_a_promote_does_not_resurrect_a_server_a_concurrent_remove_deleted(
+    live_config, commons, held_first_reload
+):
+    """Promote read the server from a copy taken before the lock: racing a remove, it
+    copied the just-deleted server into the box commons — every layered agent on the box
+    started running a server the operator had removed."""
+    inside, release, second_calling = held_first_reload
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=_app()), base_url="http://t") as client:
+        remove = asyncio.create_task(client.delete("/api/mcp/servers/base"))
+        await _wait_for(inside)
+        promote = asyncio.create_task(client.post("/api/mcp/servers/base/promote"))
+        # Fixed, the promote waits on the lock and never reaches the applier.
+        await _settle(second_calling, 0.5)
+        release.set()
+        r_remove, r_promote = await remove, await promote
+    assert r_remove.status_code == 200, r_remove.text
+    assert r_promote.status_code == 404, r_promote.text
+    assert _commons_names(commons) == ["shared"], "the removed server was promoted into the commons"
+    assert "base" not in [s["name"] for s in _on_disk(live_config)["mcp"]["servers"]]
+
+
+# ── delegate create / edit: the precondition is checked under the lock ─────────────────
+
+
+@pytest.fixture
+def delegates_app(monkeypatch, live_config):
+    import plugins.delegates.api as dapi
+
+    async def _noreload():
+        return True, "reloaded"
+
+    monkeypatch.setattr(dapi, "_reload", _noreload)
+    app = FastAPI()
+    app.include_router(dapi.build_router())
+    return app
+
+
+def _count_upserts(monkeypatch, n: int) -> threading.Event:
+    """An event set once `n` saves have reached the store (each then waits on the lock)."""
+    from plugins.delegates import store
+
+    real, seen, reached = store.upsert_delegate, [], threading.Event()
+
+    def _spy(entry, **kw):
+        seen.append(entry)
+        if len(seen) == n:
+            reached.set()
+        return real(entry, **kw)
+
+    monkeypatch.setattr(store, "upsert_delegate", _spy)
+    return reached
+
+
+async def test_two_creates_of_one_delegate_name_one_wins_one_is_refused(
+    monkeypatch, delegates_app, live_config, tmp_path
+):
+    from graph.config_io import CONFIG_WRITE_LOCK
+
+    reached = _count_upserts(monkeypatch, 2)
+    body = {"type": "acp", "command": "echo", "workdir": str(tmp_path)}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=delegates_app), base_url="http://t") as client:
+        with CONFIG_WRITE_LOCK:  # both creates past the route's checks, waiting on a write
+            a = asyncio.create_task(client.post("/api/delegates", json={"name": "coder", **body, "command": "first"}))
+            b = asyncio.create_task(client.post("/api/delegates", json={"name": "coder", **body, "command": "second"}))
+            await _wait_for(reached)
+        r_a, r_b = await a, await b
+    assert sorted([r_a.status_code, r_b.status_code]) == [200, 409], (r_a.text, r_b.text)
+    winner = "first" if r_a.status_code == 200 else "second"
+    on_disk = _on_disk(live_config).get("delegates", [])
+    assert [(d["name"], d["command"]) for d in on_disk] == [("coder", winner)], "the losing create replaced the winner"
+
+
+async def test_an_edit_does_not_resurrect_a_delegate_deleted_meanwhile(
+    monkeypatch, delegates_app, live_config, tmp_path
+):
+    from graph.config_io import CONFIG_WRITE_LOCK
+    from plugins.delegates import store
+
+    store.upsert_delegate({"name": "coder", "type": "acp", "command": "echo", "workdir": str(tmp_path)})
+    reached = _count_upserts(monkeypatch, 1)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=delegates_app), base_url="http://t") as client:
+        with CONFIG_WRITE_LOCK:
+            edit = asyncio.create_task(
+                client.put("/api/delegates/coder", json={"type": "acp", "command": "edited", "workdir": str(tmp_path)})
+            )
+            await _wait_for(reached)  # the edit saw it exist; now it's waiting to write
+            store.delete_delegate("coder")  # a delete commits first (the lock is re-entrant here)
+        r = await edit
+    assert r.status_code == 404, r.text
+    assert not _on_disk(live_config).get("delegates"), "the edit brought the deleted delegate back"
+
+
 # ── nothing here blocks the event loop ───────────────────────────────────────────────
 
 
@@ -246,7 +396,7 @@ async def test_saving_a_delegate_does_not_freeze_the_server(monkeypatch, live_co
     async def _noreload():
         return True, "reloaded"
 
-    def _slow_upsert(entry):
+    def _slow_upsert(entry, **_kw):
         time.sleep(0.6)  # waiting on a lock a reload holds
         return []
 

@@ -30,6 +30,14 @@ SCOPE_AGENT = "agent"
 SCOPE_HOST = "host"
 
 
+class DelegateConflictError(Exception):
+    """A create found the name already taken — checked under the config lock."""
+
+
+class DelegateNotFoundError(Exception):
+    """An update found the delegate gone — deleted meanwhile, checked under the lock."""
+
+
 class DelegateScopeError(ValueError):
     """A write to the host (fleet-shared) layer from an instance that may not write it."""
 
@@ -409,18 +417,37 @@ def _under_config_lock(fn):
 
 
 @_under_config_lock
-def upsert_delegate(entry: dict) -> list:
+def upsert_delegate(entry: dict, *, expect: str | None = None) -> list:
     """Add or replace a delegate by name in its layer (``scope: host`` = fleet-shared,
     default ``agent``); route its secret to that layer's overlay; persist. Moving an
     entry between layers (re-saving with the other scope) removes it from the old one
     — a name lives in one layer at a time as far as the writer is concerned. Returns
-    the EFFECTIVE roster (secret-free, scope-stamped)."""
+    the EFFECTIVE roster (secret-free, scope-stamped).
+
+    ``expect="absent"`` makes it a create (raises ``DelegateConflictError`` if the name is
+    taken), ``expect="present"`` an update (``DelegateNotFoundError`` if it's gone); both
+    checked under the config lock. ``None`` keeps the plain add-or-replace."""
     entry = dict(entry)
     name = str(entry.get("name", "")).strip()
     scope = _scope_of(entry)
     entry.pop("scope", None)
     if scope == SCOPE_HOST and not can_write_host_layer():
         raise DelegateScopeError("fleet-shared delegates are managed on the hub — this agent can't edit them")
+    # `expect` is the caller's precondition, re-checked HERE, under the lock, against the
+    # roster as it is now (#2743 follow-up). Checked before the lock, two creates of one
+    # name both passed and the second silently replaced the first, and an edit could
+    # bring back a delegate a concurrent delete had just removed.
+    if expect is not None:
+        clash = next((e for e in read_delegates_raw() if isinstance(e, dict) and e.get("name") == name), None)
+        # Same rule the create route always applied: a member may shadow a fleet-shared
+        # entry with its own; a hub may not double-register.
+        if expect == "absent" and clash is not None and (clash.get("scope") == scope or can_write_host_layer()):
+            where = "fleet-shared" if clash.get("scope") == SCOPE_HOST else "this agent's"
+            raise DelegateConflictError(
+                f"delegate {name!r} already exists in {where} list — edit it and toggle 'Share with fleet' to move it"
+            )
+        if expect == "present" and clash is None:
+            raise DelegateNotFoundError(f"delegate {name!r} not found")
     # Which env vars remain SECRET-routed after this save — captured BEFORE
     # _route_secret pops the form's env_secret marker list.
     marked = {str(k) for k in (entry.get("env_secret") or [])}

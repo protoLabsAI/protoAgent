@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from functools import partial
 
 from . import store
 from .adapters import ADAPTERS, DelegateError, delegate_types, is_secretish
@@ -188,17 +189,13 @@ def build_router():
         # Same-name collision is checked within the target layer; a member may shadow a
         # fleet-shared entry with its own (agent wins at read time), a hub may not
         # double-register — it would silently move the entry between layers instead.
-        scope = store._scope_of(entry)
-        existing = store.read_delegates_raw()
-        clash = next((e for e in existing if isinstance(e, dict) and e.get("name") == name), None)
-        if clash is not None and (clash.get("scope") == scope or store.can_write_host_layer()):
-            where = "fleet-shared" if clash.get("scope") == store.SCOPE_HOST else "this agent's"
-            raise HTTPException(
-                409, f"delegate {name!r} already exists in {where} list — edit it and toggle 'Share with fleet' to move it"
-            )
+        # Checked by the store UNDER the config lock (`expect="absent"`): checked here, two
+        # creates at once both passed and the second replaced the first.
         try:
             # Off the loop: it waits on the config write lock a reload can hold.
-            await asyncio.to_thread(store.upsert_delegate, entry)
+            await asyncio.to_thread(partial(store.upsert_delegate, entry, expect="absent"))
+        except store.DelegateConflictError as e:
+            raise HTTPException(409, str(e))
         except store.DelegateScopeError as e:
             raise HTTPException(403, str(e))
         ok, msg = await _reload()
@@ -223,8 +220,11 @@ def build_router():
         if current.get("scope") == store.SCOPE_HOST and not store.can_write_host_layer():
             raise HTTPException(403, "fleet-shared delegates are managed on the hub — this agent can't edit them")
         try:
-            # Off the loop: it waits on the config write lock a reload can hold.
-            await asyncio.to_thread(store.upsert_delegate, entry)
+            # Off the loop; `expect="present"` re-checks under the lock that a concurrent
+            # delete hasn't removed it — an edit must not bring a deleted delegate back.
+            await asyncio.to_thread(partial(store.upsert_delegate, entry, expect="present"))
+        except store.DelegateNotFoundError as e:
+            raise HTTPException(404, str(e))
         except store.DelegateScopeError as e:
             raise HTTPException(403, str(e))
         ok, msg = await _reload()
