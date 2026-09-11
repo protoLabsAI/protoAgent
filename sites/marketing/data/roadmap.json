@@ -1,19 +1,12 @@
 [
   {
-    "status": "Planned",
+    "status": "In progress",
     "items": [
       {
         "title": "Ollama & Hugging Face listings",
-        "detail": "register protoAgent as an Ollama community integration and a Hugging Face \"Use this model\" local app.",
-        "refs": [
-          "#1990"
-        ]
-      }
-    ]
-  },
-  {
-    "status": "In progress",
-    "items": [
+        "detail": "protoAgent's Ollama community-integration entry and Hugging Face \"Use this model\" local-app snippet are submitted to both projects and waiting on their maintainers' review.",
+        "refs": []
+      },
       {
         "title": "Design-system alignment",
         "detail": "migrating the remaining bespoke console surfaces onto DS primitives as the design system grows (bottom sheet for the mobile session sheet, dense icon buttons — tracked in protoContent).",
