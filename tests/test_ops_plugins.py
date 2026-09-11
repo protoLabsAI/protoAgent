@@ -14,8 +14,31 @@ from ops import OpContext, registry
 from ops.plugins import install_and_activate
 
 
+#: The COMMITTED config — in production the one `STATE.graph_config` every locked write
+#: commits before releasing. `_ctx()` declares it for a test; `_capture_apply`'s applier
+#: resolves the op's update callable against it and then commits the result, as the real
+#: applier + reload do (#2743). One committed state, not one per op: that IS production.
+_CURRENT: dict = {}
+
+
+@pytest.fixture(autouse=True)
+def _fresh_committed_state():
+    _CURRENT.clear()  # never let one test's committed config reach the next
+    yield
+    _CURRENT.clear()
+
+
+def _commit(cfg, updates) -> None:
+    """What the real reload does to the config: the saved lists become current."""
+    plugins = (updates or {}).get("plugins") or {}
+    for key in ("enabled", "disabled"):
+        if cfg is not None and key in plugins:
+            setattr(cfg, f"plugins_{key}", list(plugins[key]))
+
+
 def _ctx(enabled=(), disabled=()):
     cfg = types.SimpleNamespace(plugins_enabled=list(enabled), plugins_disabled=list(disabled))
+    _CURRENT["cfg"] = cfg
     return OpContext(knowledge_store=None, graph_config=cfg)
 
 
@@ -23,7 +46,11 @@ def _capture_apply():
     captured: dict = {}
 
     def _apply(updates):
+        cfg = _CURRENT.get("cfg")
+        if callable(updates):
+            updates = updates(cfg)
         captured["updates"] = updates
+        _commit(cfg, updates)
         return True, ["reloaded"]
 
     return captured, _apply

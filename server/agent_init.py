@@ -20,8 +20,8 @@ import functools
 import logging
 import os
 import re
-import threading
 import time
+from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -44,8 +44,9 @@ log = logging.getLogger("protoagent.server")
 # de-sync the reload path's build-then-commit choreography assumes can't
 # happen. RLock because _apply_settings_changes/_reset_settings_keys call
 # _reload_langgraph_agent, which is also lockable on its own (plugin routes
-# call it directly).
-_CONFIG_WRITE_LOCK = threading.RLock()
+# call it directly). It is graph.config_io.CONFIG_WRITE_LOCK — defined with the
+# writes so the graph layer's own config writers share it (#2743).
+from graph.config_io import CONFIG_WRITE_LOCK as _CONFIG_WRITE_LOCK  # noqa: E402
 _INBOX_NOW_RECOVERY_STARTED = False
 _INBOX_NOW_RECOVERY_BATCH_LIMIT = 8
 _INBOX_NOW_RECOVERY_RETRY_AFTER_S = 60 * 60
@@ -3076,7 +3077,7 @@ def _drop_undone_write_messages(messages: list[str]) -> list[str]:
 
 @_serialized_config_write
 def _apply_settings_changes(
-    config: dict | None = None,
+    config: dict | Callable[[Any], dict | None] | None = None,
     soul: str | None = None,
     layer: str = "agent",
 ) -> tuple[bool, list[str]]:
@@ -3085,6 +3086,15 @@ def _apply_settings_changes(
     Passing ``None`` for either argument skips that write — a bare
     call with both None acts as a pure reload (useful for picking up
     external file edits).
+
+    ``config`` may be a CALLABLE ``(current_config) -> updates`` for a
+    read-modify-write (#2743). It runs here, INSIDE ``_CONFIG_WRITE_LOCK``,
+    against ``STATE.graph_config`` — which every locked write commits before
+    releasing — so the merge sees every earlier writer's change. Computing the
+    merge from a config read BEFORE the lock is the lost update: two
+    concurrent plugin installs both read ``[a]``, write ``[a, x]`` and
+    ``[a, y]``, and ``x``'s enable silently vanishes. Returning ``None`` makes
+    it a pure reload.
 
     ``layer`` selects the cascade file the config write lands in (ADR 0047 slice 3):
 
@@ -3106,6 +3116,15 @@ def _apply_settings_changes(
     )
 
     messages: list[str] = []
+    if callable(config):
+        try:
+            config = config(STATE.graph_config)
+        except Exception as e:  # noqa: BLE001 — keep the (ok, messages) contract
+            # Nothing is written yet, so there is nothing to roll back. Raising instead
+            # would turn e.g. an install whose code is already on disk into a bare 500,
+            # where the caller's contract is "installed; enabling failed: <why>".
+            log.exception("[config] computing the config update failed")
+            return False, [f"config update: {e}"]
     # Snapshot BEFORE the first write so a failed reload can undo it (see _ROLLBACK_NOTE).
     # Only when there's a config write to undo: a pure reload / SOUL-only save has no YAML
     # change to revert, and SOUL is deliberately outside the rollback — it's authored prose,

@@ -79,7 +79,7 @@ async def install_and_activate(
     activate: bool = True,
     respect_disabled: bool = False,
     ctx: OpContext,
-    apply_settings: Callable[[dict], tuple[bool, list]] | None = None,
+    apply_settings: Callable[..., tuple[bool, list]] | None = None,
     mcp_inputs: dict | None = None,
     bundle_secrets: list | None = None,
     config_inputs: dict | None = None,
@@ -94,7 +94,12 @@ async def install_and_activate(
     merge-not-clobber); ``config_inputs`` (``{dotted_key: value}``, #2934) writes the
     operator's answers to the bundle's declared ``config_inputs:`` prompts into the
     HOST config at the declared dotted key paths. Raises ``installer.InstallError``
-    on a failed install (the adapter maps it to its surface)."""
+    on a failed install (the adapter maps it to its surface).
+
+    ``apply_settings`` receives a CALLABLE ``(current_config) -> updates``, not a dict
+    (#2743): the enable merge must run inside the applier's config write lock, against
+    the config the previous write committed. ``server.agent_init._apply_settings_changes``
+    resolves it there; an applier that doesn't route through it must do the same."""
     from graph.plugins import installer
     from graph.plugins.loader import purge_plugin_modules
 
@@ -110,21 +115,14 @@ async def install_and_activate(
     if not (activate and ids and apply_settings):
         return InstallResult(summary=summary, installed_ids=installed_ids, enabled=[], reloaded=False)
 
-    cfg = ctx.graph_config
-    enabled = list(getattr(cfg, "plugins_enabled", []) or [])
-    currently_disabled = list(getattr(cfg, "plugins_disabled", []) or [])
-    if respect_disabled:
-        # UPDATE semantics (#2718): re-installing a bundle must not undo an operator's
-        # explicit disable — ids sitting in plugins.disabled stay there; only ids with
-        # no recorded state (new members) get the fresh-install enable treatment.
-        ids = [p for p in ids if p not in currently_disabled]
-        disabled = currently_disabled
-    else:
-        disabled = [p for p in currently_disabled if p not in ids]
-    for pid in ids:
-        if pid not in enabled:
-            enabled.append(pid)
-    config_updates: dict = {"plugins": {"enabled": enabled, "disabled": disabled}}
+    from graph.config_io import CONFIG_WRITE_LOCK
+
+    def _locked(fn, *args):
+        # A bundle helper's own read-modify-write of the live config, serialized with
+        # the applier's (#2743) — a whole-file save interleaved with it drops whichever
+        # write landed in between, plugins.enabled included.
+        with CONFIG_WRITE_LOCK:
+            return fn(*args)
 
     # Operator answers to the bundle's declared config_inputs prompts (#2934) — written
     # to the HOST config at the declared dotted keys, same lock-anchored helper as the
@@ -136,7 +134,7 @@ async def install_and_activate(
         from graph.workspaces.manager import apply_bundle_config_inputs
 
         config_written = await asyncio.to_thread(
-            apply_bundle_config_inputs, config_yaml_path(), installer.lock_path(), config_inputs or {}
+            _locked, apply_bundle_config_inputs, config_yaml_path(), installer.lock_path(), config_inputs or {}
         )
         # Same refusal as the workspace-create path: a `required` config input with no
         # answer means the bundle can't do its job — refuse to ACTIVATE (the plugins stay
@@ -155,19 +153,12 @@ async def install_and_activate(
                 f"the bundle needs these Configure answers before it can be activated: {labels}"
             )
         # A path input flagged `project: true` is a repo the agent manages — register it.
-        await asyncio.to_thread(register_project_inputs, config_yaml_path(), installer.lock_path())
+        await asyncio.to_thread(_locked, register_project_inputs, config_yaml_path(), installer.lock_path())
 
     # Seed the bundle's recommended per-plugin config defaults (#1350), same trust gate as
     # auto-enable — defaults only, reduced against the live YAML so an operator value is
     # never clobbered.
     bundle_config = summary.get("config") if "bundle" in summary else None
-    if bundle_config:
-        from graph.config_io import config_yaml_path, load_yaml_doc
-        from graph.plugins.installer import bundle_config_overlay
-
-        current = load_yaml_doc(config_yaml_path())
-        overlay = bundle_config_overlay(bundle_config, current if isinstance(current, dict) else {})
-        config_updates.update(overlay)
 
     # Bundle services (#2118): the workspace-create path seeds a bundle's declared
     # `mcp:` templates + supplied `secrets:` values — the HOST path silently dropped
@@ -184,14 +175,51 @@ async def install_and_activate(
 
         cfg_path = config_yaml_path()
         lock = installer.lock_path()
-        mcp_seeded = await asyncio.to_thread(apply_bundle_mcp_servers, cfg_path, lock, mcp_inputs or {})
+        mcp_seeded = await asyncio.to_thread(_locked, apply_bundle_mcp_servers, cfg_path, lock, mcp_inputs or {})
         if bundle_secrets:
-            await asyncio.to_thread(apply_bundle_secrets, cfg_path, lock, list(bundle_secrets))
+            await asyncio.to_thread(_locked, apply_bundle_secrets, cfg_path, lock, list(bundle_secrets))
+
+    requested = list(ids)
+
+    def _activation_updates(current) -> dict:
+        """The enable merge + bundle-default overlay — run by the applier INSIDE the
+        config write lock, against the config every earlier write committed (#2743).
+        Merged from ``ctx.graph_config`` instead, it was computed before the lock:
+        two concurrent installs both read ``[a]``, one wrote ``[a, x]``, the other
+        ``[a, y]``, and ``x`` was installed but silently never enabled."""
+        enabled = list(getattr(current, "plugins_enabled", []) or [])
+        currently_disabled = list(getattr(current, "plugins_disabled", []) or [])
+        if respect_disabled:
+            # UPDATE semantics (#2718): re-installing a bundle must not undo an operator's
+            # explicit disable — ids sitting in plugins.disabled stay there; only ids with
+            # no recorded state (new members) get the fresh-install enable treatment.
+            chosen = [p for p in requested if p not in currently_disabled]
+            disabled = currently_disabled
+        else:
+            chosen = list(requested)
+            disabled = [p for p in currently_disabled if p not in chosen]
+        for pid in chosen:
+            if pid not in enabled:
+                enabled.append(pid)
+        ids[:] = chosen  # what actually got enabled — reported below
+        updates: dict = {"plugins": {"enabled": enabled, "disabled": disabled}}
+        # Seed the bundle's recommended per-plugin config defaults (#1350), same trust
+        # gate as auto-enable — defaults only, reduced against the live YAML so an
+        # operator value is never clobbered. Read here, under the lock, for the same
+        # reason as the merge: a value set between an early read and this write would
+        # otherwise be clobbered by the default it was meant to outrank.
+        if bundle_config:
+            from graph.config_io import config_yaml_path, load_yaml_doc
+            from graph.plugins.installer import bundle_config_overlay
+
+            current = load_yaml_doc(config_yaml_path())
+            updates.update(bundle_config_overlay(bundle_config, current if isinstance(current, dict) else {}))
+        return updates
 
     # Off the event loop: the applier does a full config write + graph rebuild —
     # inline it stalls every other request for the duration (2732/2735 reviews;
     # same D9 rule the devkit's reload_plugins already follows).
-    ok, messages = await asyncio.to_thread(apply_settings, config_updates)
+    ok, messages = await asyncio.to_thread(apply_settings, _activation_updates)
     if ok:
         # The reload "succeeding" only means the graph rebuilt — the loader SKIPS a
         # plugin whose import/registration fails and records the failure on its meta
