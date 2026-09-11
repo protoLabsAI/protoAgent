@@ -56,7 +56,9 @@ puts it on the initial Task it enqueues: the SDK records the request message its
 only when an agent's first event is a status update, and drops it when the agent
 supplies its own Task. (Through v0.164.0 that Task was bare, so those rows carry no
 prompt and rebuild as answers only. They leave with the store's normal 24-hour
-retention — except a turn still paused on a form or approval, which is never swept.)
+retention — except a turn that paused on a form or approval: nothing settles its row
+(the console sends the answer as a fresh task) and paused rows are never swept, so it
+stays until the chat is deleted or cleared.)
 
 What is stored is the transcript's view of the message, not the model-facing request
 (that is the live request, and the checkpoint): the SDK re-serializes the whole task
@@ -69,19 +71,28 @@ on every frame, and every console — an older one included — renders what it 
   incognito stamp a rebuilt tab recovers.
 - A server-fired turn (scheduler, watch, background-resume…) stores none: its prompt
   is machine text that was never a bubble.
-- Every stored copy elides inline attachment payloads (`raw` bytes, `data:` URLs;
-  filename, media type and `omittedBytes` are kept) and caps its text at 16,000
-  characters.
+- The stored message is built field by field, never copied: ids and role, only the
+  metadata the transcript reads back (`incognito`, `hidden`, `hitl_resume`,
+  `origin`), its text capped at 16,000 characters, and a shell per attachment — name,
+  type, a plain link; an inline payload (`raw` bytes, a `data:` URL, a data blob) is
+  recorded as `omittedBytes`. So it is bounded and always serializable, whatever the
+  client sent; a message the executor cannot shape is not stored, and the turn runs.
+
+This covers the message that OPENS a task. A message the SDK itself appends — an A2A
+client resuming a parked task on its id — is stored as that client sent it; the
+console answers a form with a fresh task and never takes that path.
 
 The route still returns `history` untransformed — the above is what the executor puts
 there. The console also skips a prompt stamped `origin` or `hidden` and prefers
 `display`, for rows another writer stored.
 
-The answer text's paragraph breaks between model calls are made by the producer,
-inside the streamed delta, and only for the lead's own calls — never for a model call
-made from inside a tool, detached or not. So for an ordinary turn the live stream and
-the stored text are the same string; a goal-driven or autonomous auto-answer turn runs
-several passes and stores only its final pass's text, as it always has.
+The answer text is the lead's own model calls, nothing else: never a call made under
+a tool — its body, a graph it runs (a workflow step), work it detached — nor a
+middleware's internal call (the compaction summary; langchain marks those). Paragraph
+breaks between the lead's calls are made by the producer, inside the streamed delta,
+so for an ordinary turn the live stream and the stored text are the same string; a
+goal-driven or autonomous auto-answer turn runs several passes and stores only its
+final pass's text, as it always has.
 
 The console consumes the index opportunistically at boot. `localStorage` stays
 the primary store (it holds client-side niceties the task store doesn't —

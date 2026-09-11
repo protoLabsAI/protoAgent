@@ -282,6 +282,102 @@ async def test_a_data_url_attachment_is_elided_but_a_link_is_kept(monkeypatch, t
     assert linked["url"] == link and "omittedBytes" not in (linked.get("metadata") or {})
 
 
+def test_the_server_mounts_its_executor_with_the_server_fired_predicate():
+    """``_main`` builds the A2A executor only through ``server._a2a_executor``, which must
+    hand it ``is_autonomous_origin`` — drop that and every scheduled/watch/background-resume
+    turn's machine prompt is stored as though the operator had typed it."""
+    import inspect
+
+    import server
+    from server.chat import is_autonomous_origin
+
+    executor = server._a2a_executor()
+    assert executor._server_fired_origin is is_autonomous_origin
+    assert executor._server_fired("scheduler") and not executor._server_fired("a2a")
+    assert "_a2a_executor(" in inspect.getsource(server._main)
+    assert inspect.getsource(server).count("ProtoAgentExecutor(") == 1, "build it only via _a2a_executor"
+
+
+async def _send_raw(client, body: str) -> dict:
+    # Bounded: an in-process ASGI transport ignores httpx timeouts, and the failure this
+    # guards (the executor raising before its first event) leaves the request waiting.
+    try:
+        r = await asyncio.wait_for(
+            client.post("/a2a", headers={**A2A_HEADERS, "content-type": "application/json"}, content=body), 10
+        )
+    except TimeoutError:
+        raise AssertionError("SendMessage never answered: the turn did not run") from None
+    payload = r.json()
+    assert "result" in payload, payload
+    return await _poll_terminal(client, payload["result"]["task"]["id"])
+
+
+@pytest.mark.asyncio
+async def test_a_non_finite_metadata_number_neither_fails_the_turn_nor_is_stored(monkeypatch, tmp_path):
+    """Python's ``json`` writes ``Infinity``, the JSON-RPC layer parses it into the metadata
+    Struct, and serializing that Struct raises. The turn must still run, and the stored
+    prompt keeps only the metadata the transcript reads — never the unserializable rest."""
+    ran: list[str] = []
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        ran.append(text)
+        yield ("done", "ok")
+
+    store = await _durable_store(tmp_path)
+    app = _build_app(stream, task_store=store)
+    body = (
+        '{"jsonrpc": "2.0", "id": "r1", "method": "SendMessage", "params": {"message": '
+        '{"messageId": "m-1", "role": "ROLE_USER", "contextId": "chat-inf", "parts": [{"text": "hi"}], '
+        '"metadata": {"incognito": true, "scroll": Infinity}}}}'
+    )
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:
+        final = await _send_raw(c, body)
+    assert ran == ["hi"]
+    assert final["status"]["state"] == "TASK_STATE_COMPLETED"
+    [turn] = await _read_turns(monkeypatch, store.engine, "chat-inf")
+    assert _texts(turn["history"][0]) == ["hi"]
+    assert turn["history"][0]["metadata"] == {"incognito": True}
+    await store.engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_bulky_metadata_and_data_parts_stay_out_of_the_transcript(monkeypatch, tmp_path):
+    """The text cap alone left a client's metadata and ``data`` parts stored whole and
+    re-saved every frame. The transcript copy keeps the metadata keys it reads and a shell
+    for every non-text part."""
+    rows = [{"id": i, "value": "x" * 100} for i in range(1000)]
+    turn, seen = await _one_turn(
+        monkeypatch,
+        tmp_path,
+        _message(
+            "Analyse this dataset",
+            "chat-bulky",
+            parts=[{"data": {"rows": rows}, "mediaType": "application/json", "filename": "rows.json"}],
+            metadata={"incognito": True, "context": "y" * 200_000, "a2a.trace": {"traceId": "t"}, "display": 7},
+        ),
+    )
+    assert seen["text"] == "Analyse this dataset"
+    prompt = turn["history"][0]
+    assert _texts(prompt) == ["Analyse this dataset"]  # a non-string `display` is no bubble text
+    assert prompt["metadata"] == {"incognito": True}
+    shell = prompt["parts"][1]
+    assert "data" not in shell and shell["filename"] == "rows.json"
+    assert shell["metadata"]["omittedBytes"] > 100_000
+    assert len(json.dumps(prompt)) < 1024
+
+
+@pytest.mark.asyncio
+async def test_a_prompt_the_transcript_cannot_shape_is_not_stored_and_the_turn_runs(monkeypatch, tmp_path):
+    def _boom(message):
+        raise RuntimeError("unshapeable")
+
+    monkeypatch.setattr("a2a_impl.executor._transcript_copy", _boom)
+    turn, seen = await _one_turn(monkeypatch, tmp_path, _message("still answer me", "chat-boom"))
+    assert seen["text"] == "still answer me"
+    assert turn["state"] == "TASK_STATE_COMPLETED"
+    assert not [m for m in turn["history"] if m.get("role") == "ROLE_USER"]
+
+
 @pytest.mark.asyncio
 async def test_a_giant_paste_is_capped_in_the_transcript_not_in_the_turn(monkeypatch, tmp_path):
     from a2a_impl.executor import _TRANSCRIPT_PROMPT_MAX_CHARS as cap

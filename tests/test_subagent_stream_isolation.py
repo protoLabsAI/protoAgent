@@ -266,3 +266,165 @@ async def test_a_model_call_detached_from_a_tool_never_enters_the_lead_answer(mo
     await asyncio.gather(*spawned)
     assert raw == _ANSWER, f"the lead's answer was altered by a call a tool made: {raw!r}"
     assert streamed == _ANSWER
+
+
+def _word_streamer(messages, *, delay=0.0):
+    """A scripted model that streams each reply word by word AND reports every token to its
+    callbacks — the shape a graph run from inside a tool needs for its tokens to surface on
+    the lead's astream_events (the leak these tests pin shut)."""
+
+    class _Streamer(GenericFakeChatModel):
+        def bind_tools(self, tools, **kwargs):
+            return self
+
+        async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
+            import asyncio
+
+            msg = next(self.messages)
+            calls = getattr(msg, "tool_calls", None) or []
+            for i, word in enumerate(msg.content.split(" ") if msg.content else []):
+                await asyncio.sleep(delay)
+                token = word if i == 0 else f" {word}"
+                chunk = ChatGenerationChunk(message=AIMessageChunk(content=token))
+                if run_manager:
+                    await run_manager.on_llm_new_token(token, chunk=chunk)
+                yield chunk
+            if calls:
+                yield ChatGenerationChunk(
+                    message=AIMessageChunk(
+                        content="",
+                        tool_call_chunks=[
+                            {"name": tc["name"], "args": json.dumps(tc["args"]), "id": tc["id"], "index": i}
+                            for i, tc in enumerate(calls)
+                        ],
+                    )
+                )
+
+    return _Streamer(messages=itertools.chain(iter(messages), itertools.repeat(AIMessage(content="(extra step)"))))
+
+
+def _install_lead(monkeypatch, lead, *, tools=(), config=None):
+    import runtime.state as rs
+    from graph.config import LangGraphConfig
+    from langgraph.checkpoint.memory import MemorySaver
+
+    cfg = config or LangGraphConfig()
+    monkeypatch.setattr("graph.agent.create_llm", lambda *a, **k: lead)
+    from graph.agent import create_agent_graph
+
+    graph = create_agent_graph(cfg, include_subagents=False, checkpointer=MemorySaver(), extra_tools=list(tools))
+    monkeypatch.setattr(rs.STATE, "graph", graph, raising=False)
+    monkeypatch.setattr(rs.STATE, "goal_controller", None, raising=False)
+    monkeypatch.setattr(rs.STATE, "graph_config", cfg, raising=False)
+
+
+async def _raw_answer(message, session):
+    from server.chat import _run_turn_stream
+
+    streamed, raw = "", None
+    async for kind, payload in _run_turn_stream(message, session, {"configurable": {"thread_id": session}}):
+        if kind == "text":
+            streamed += payload
+        elif kind == "__raw__":
+            raw = payload
+    assert streamed == raw, "the stream and the canonical text must be one string"
+    return raw
+
+
+def _call(tool_name, **args):
+    return AIMessage(content="", tool_calls=[{"name": tool_name, "args": args, "id": "c1", "type": "tool_call"}])
+
+
+@pytest.mark.parametrize("detached", [False, True])
+@pytest.mark.asyncio
+async def test_a_graph_a_tool_runs_never_enters_the_lead_answer(monkeypatch, detached):
+    """A graph a tool runs reports its OWN node ("model") and carries no parent_task_id —
+    only the checkpoint namespace (``tools:<id>|model:<id>``) says it ran under a tool."""
+    import asyncio
+
+    from langchain.agents import create_agent
+    from langchain_core.messages import HumanMessage
+    from langchain_core.tools import tool
+
+    inner = create_agent(model=_word_streamer([AIMessage(content="STEP-INTERNAL-NOTES")], delay=0.03), tools=[])
+    spawned: list = []
+
+    @tool
+    async def run_steps(goal: str) -> str:
+        """Run a recipe over an inner agent."""
+        if not detached:
+            result = await inner.ainvoke({"messages": [HumanMessage(goal)]})
+            return str(result["messages"][-1].content)
+
+        async def _work():
+            await asyncio.sleep(0.2)  # lands while the lead is mid-sentence
+            await inner.ainvoke({"messages": [HumanMessage(goal)]})
+
+        spawned.append(asyncio.create_task(_work()))
+        return "started"
+
+    _install_lead(
+        monkeypatch,
+        _SlowLead(messages=itertools.chain([_call("run_steps", goal="g"), AIMessage(content=_ANSWER)], itertools.repeat(AIMessage(content="(extra)")))),
+        tools=[run_steps],
+    )
+    raw = await _raw_answer("go", f"nested-{detached}")
+    await asyncio.gather(*spawned)
+    assert raw == _ANSWER
+
+
+@pytest.mark.asyncio
+async def test_parallel_workflow_steps_never_enter_the_lead_answer(monkeypatch):
+    """The workflows plugin's shape: a tool runs steps through ``sdk.run_subagent`` (no
+    parent_task_id), two of them concurrently. Their tokens used to interleave into the
+    answer — and, with a paragraph per model run, every alternation opened a paragraph."""
+    import asyncio
+
+    from graph import agent as agent_mod
+    from graph import sdk
+    from graph.subagents.config import SUBAGENT_REGISTRY, SubagentConfig
+    from langchain_core.tools import tool
+
+    monkeypatch.setitem(
+        SUBAGENT_REGISTRY, "wfstep", SubagentConfig(name="wfstep", description="a step", system_prompt="Do it.", tools=[])
+    )
+
+    @tool
+    async def run_workflow(name: str) -> str:
+        """Run a two-step parallel workflow."""
+        a, b = await asyncio.gather(
+            sdk.run_subagent("wfstep", "step a", description=f"{name}:a", extra_tools=[]),
+            sdk.run_subagent("wfstep", "step b", description=f"{name}:b", extra_tools=[]),
+        )
+        return f"{a}\n{b}"
+
+    _install_lead(
+        monkeypatch,
+        _word_streamer([_call("run_workflow", name="w"), AIMessage(content="The workflow finished.")], delay=0.001),
+        tools=[run_workflow],
+    )
+    monkeypatch.setattr(agent_mod, "get_all_tools", lambda *a, **k: [])
+    steps = iter(
+        [
+            _word_streamer([AIMessage(content="AAA1 AAA2 AAA3 AAA4 AAA5")], delay=0.01),
+            _word_streamer([AIMessage(content="BBB1 BBB2 BBB3 BBB4 BBB5")], delay=0.01),
+        ]
+    )
+    monkeypatch.setattr(agent_mod, "create_llm", lambda *a, **k: next(steps))
+    assert await _raw_answer("run it", "wf-steps") == "The workflow finished."
+
+
+@pytest.mark.asyncio
+async def test_the_compaction_summary_never_enters_the_answer(monkeypatch):
+    """Compaction (on by default) summarizes old history with its own model call, in a
+    middleware node — neither a tool nor a subagent. langchain marks it internal; its text
+    used to stream into the answer and the stored turn."""
+    from graph.config import LangGraphConfig
+
+    cfg = LangGraphConfig(compaction_enabled=True, compaction_trigger="messages:3", compaction_keep_messages=1)
+    shared = _word_streamer(
+        [AIMessage(content="First answer."), AIMessage(content="SUMMARY-OF-OLD-HISTORY"), AIMessage(content="Second answer.")]
+    )
+    _install_lead(monkeypatch, shared, config=cfg)
+    assert await _raw_answer("hello", "compact") == "First answer."
+    assert await _raw_answer("again", "compact") == "Second answer."

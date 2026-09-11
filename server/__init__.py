@@ -382,6 +382,17 @@ from server.agent_init import (  # noqa: E402,F401 — re-export of the extracte
 )
 
 
+def _a2a_executor(**providers):
+    """The A2A executor as ``_main`` mounts it — the ONE place its wiring lives, so a test
+    can hold it to the contract. Besides the providers ``_main`` supplies, it always gets
+    ``server_fired_origin``: without it a scheduler/watch/background-resume turn's machine
+    prompt is stored in the durable transcript as though the operator had typed it
+    (ADR 0104)."""
+    from a2a_impl.executor import ProtoAgentExecutor
+
+    return ProtoAgentExecutor(_chat_langgraph_stream, server_fired_origin=is_autonomous_origin, **providers)
+
+
 # ---------------------------------------------------------------------------
 # Main — FastAPI + React console + A2A + OpenAI-compat + Prometheus
 # ---------------------------------------------------------------------------
@@ -1061,7 +1072,7 @@ def _main():
     from a2a.server.routes.jsonrpc_routes import create_jsonrpc_routes
 
     from a2a_impl import auth
-    from a2a_impl.executor import ProtoAgentExecutor, set_progress_hook, set_terminal_hook
+    from a2a_impl.executor import set_progress_hook, set_terminal_hook
     from a2a_impl.registry import harden_active_task_registry
     from a2a_impl.stores import (
         build_a2a_stores,
@@ -1244,14 +1255,10 @@ def _main():
 
     _a2a_push_client = httpx.AsyncClient(timeout=30)
     a2a_request_handler = DefaultRequestHandler(
-        agent_executor=ProtoAgentExecutor(
-            _chat_langgraph_stream,
+        agent_executor=_a2a_executor(
             structured_finalizer=_structured_finalizer,
             context_meta_provider=_context_meta,
             stall_timeout_provider=_stall_timeout,
-            # A scheduler/watch/background-resume turn's prompt is machine text that was
-            # never a chat bubble; the durable transcript keeps none (ADR 0104).
-            server_fired_origin=is_autonomous_origin,
         ),
         task_store=task_store,
         agent_card=a2a_card,

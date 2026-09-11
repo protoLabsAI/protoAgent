@@ -15,6 +15,7 @@ import cycle. ``server/__init__.py`` re-exports every public name so
 
 import asyncio
 import contextlib
+import functools
 import json
 import logging
 import re
@@ -783,10 +784,48 @@ def _vision_human_message(
     return HumanMessage(content=f"{message}\n\n{note}".strip() if note else message)
 
 
-# The node langchain's `create_agent` runs tool calls in. A chat-model event whose
-# `langgraph_node` is this one was made by a tool (or by work a tool detached), never by
-# the lead answering — see `_run_turn_stream`.
+# The node langchain's `create_agent` runs tool calls in — see `_speaks_for_the_lead`.
 _TOOL_NODE = "tools"
+
+
+@functools.cache
+def _lc_internal_call_marker() -> tuple[str, str] | None:
+    """langchain's (key, token) marking a middleware-INTERNAL model call, or None on a
+    langchain that predates it. The token is process-local, so user metadata cannot forge
+    it; ``lc_source`` (below) is the older, purpose-naming marker."""
+    try:
+        from langchain.agents.middleware.internal_call_transformer import (
+            INTERNAL_CALL_METADATA_KEY,
+            internal_call_metadata,
+        )
+    except ImportError:
+        return None
+    return INTERNAL_CALL_METADATA_KEY, internal_call_metadata()[INTERNAL_CALL_METADATA_KEY]
+
+
+def _speaks_for_the_lead(metadata: dict) -> bool:
+    """Whether a chat-model event with this metadata is the LEAD answering, so its tokens
+    belong in the turn's answer text. (A subagent's are ruled out before this: they carry
+    ``parent_task_id``.)
+
+    Not a call made anywhere under the lead's TOOL node. The checkpoint namespace's first
+    segment names the node of the lead graph a run belongs to, however deep it nests: the
+    tool body itself, a graph a tool runs (``sdk.run_subagent`` — a workflow step — is
+    ``tools:<id>|model:<id>``, its own node reads "model"), or work a tool detached into
+    a copy of its context, which keeps reporting into this stream while the lead answers.
+
+    And not a middleware's own internal call — the compaction summary, tool selection —
+    which langchain marks (``internal_call_metadata()``; ``lc_source`` names its purpose).
+
+    Deliberately an exclusion, not "only the model node": a graph whose answering node is
+    named differently still streams its answer, where an inclusion would silence it."""
+    ns = str(metadata.get("langgraph_checkpoint_ns") or metadata.get("checkpoint_ns") or "")
+    if ns.split("|", 1)[0].split(":", 1)[0] == _TOOL_NODE:
+        return False
+    marker = _lc_internal_call_marker()
+    if marker is not None and metadata.get(marker[0]) == marker[1]:
+        return False
+    return not metadata.get("lc_source")
 
 
 def _paragraph_break(before: str, after: str) -> str:
@@ -1024,14 +1063,13 @@ async def _run_turn_stream(
             # (subagent tokens still bill). Only the lead's own tokens reach the answer.
             if parent_tool_id:
                 continue
-            # Nor does any OTHER model call made while a tool runs — its node is the tool
-            # node: an aux call inside a tool body, or work a tool DETACHED (a background
-            # ingest's describe/enrich calls, a plugin's spawn_work running sdk.complete),
-            # which runs in a copy of the tool's context and so keeps reporting into this
-            # stream while the lead is answering. None of it is the lead speaking; its
-            # tokens used to land mid-sentence in the answer ("I started the
-            # IMAGE-DESCRIPTIONingest…"). Billing below is untouched.
-            if (event.get("metadata") or {}).get("langgraph_node") == _TOOL_NODE:
+            # Nor does any other model call that is not the lead answering: one made under
+            # a tool — its body, a graph it runs (a workflow step), work it detached (a
+            # background ingest's describe/enrich, a plugin's spawn_work) — or a
+            # middleware's own call (the compaction summary). Those tokens used to land in
+            # the middle of the answer ("I started the IMAGE-DESCRIPTIONingest…") and in
+            # the stored text. Billing below is untouched.
+            if not _speaks_for_the_lead(event.get("metadata") or {}):
                 continue
             # Native reasoning: the model's REAL thinking, streamed on its own channel.
             # `_ReasoningChatOpenAI` lifts the gateway's `reasoning_content` into

@@ -1075,6 +1075,13 @@ def _extract_image_parts(context: RequestContext) -> list[tuple[str, str]]:
 # unbounded paste would be rewritten that many times; past this the rebuilt bubble ends
 # with a note. Far above anything typed — what it bounds is the pasted log.
 _TRANSCRIPT_PROMPT_MAX_CHARS = 16_000
+# The metadata the transcript reads back — a rebuilt tab's incognito, the no-bubble mark,
+# a form answer, where the message came from — and nothing else of the request's. Kept as
+# short bools/strings only, so a client's bulky (or non-finite: Python's json writes
+# Infinity) metadata can neither bloat every save nor fail it.
+_TRANSCRIPT_METADATA_KEYS = ("incognito", "hidden", "hitl_resume", "origin")
+_TRANSCRIPT_SHORT_MAX_CHARS = 256  # a kept metadata string, a filename, a media type
+_TRANSCRIPT_URL_MAX_CHARS = 2048  # a plain link is kept; anything longer is a payload
 
 
 def _transcript_opening(message: Message | None, *, server_fired: bool) -> list[Message]:
@@ -1089,72 +1096,94 @@ def _transcript_opening(message: Message | None, *, server_fired: bool) -> list[
       carries the per-message incognito stamp a rebuilt tab recovers.
     - The bubble text for a send marked with ``display`` — the console prepended
       attachment context for the model; the bubble showed the typed text + a 📎 list.
-    - Otherwise the message as sent.
+    - Otherwise the message's text as sent.
 
-    Every kept copy drops inline attachment payloads (``_elide_inline_payloads``) and caps
-    its text (``_TRANSCRIPT_PROMPT_MAX_CHARS``) — the SDK re-saves the whole task on every
-    frame, and storing the model-facing dump had 2.5x'd what a long turn wrote."""
+    Never raises: a message it cannot shape is simply not stored — the transcript must
+    never break a turn."""
     if message is None or server_fired:
         return []
-    kept = Message()
-    kept.CopyFrom(message)
-    hints = json_format.MessageToDict(kept.metadata) if kept.HasField("metadata") else {}
+    try:
+        return [_transcript_copy(message)]
+    except Exception:  # noqa: BLE001 — the transcript must never break a turn
+        logger.warning("[a2a] could not shape the turn's durable prompt; storing none", exc_info=True)
+        return []
+
+
+def _hint(message: Message, key: str) -> bool | str | None:
+    """A bool or string from ``message``'s metadata, read without serializing it — one
+    non-finite number anywhere in the Struct makes ``MessageToDict`` raise."""
+    value = message.metadata.fields.get(key) if message.HasField("metadata") else None
+    if value is None:
+        return None
+    kind = value.WhichOneof("kind")
+    if kind == "bool_value":
+        return value.bool_value
+    if kind == "string_value":
+        return value.string_value
+    return None
+
+
+def _transcript_copy(message: Message) -> Message:
+    """The transcript's copy of ``message``, built field by field rather than copied, so
+    it is bounded and serializable whatever the client sent: ids and role, the metadata
+    keys the transcript reads, the (capped) text the operator saw, and a shell for each
+    attachment."""
+    kept = Message(
+        message_id=message.message_id,
+        context_id=message.context_id,
+        task_id=message.task_id,
+        role=message.role,
+    )
+    hints: dict[str, bool | str] = {}
+    for key in _TRANSCRIPT_METADATA_KEYS:
+        value = _hint(message, key)
+        if isinstance(value, bool):
+            hints[key] = value
+        elif isinstance(value, str) and value:
+            hints[key] = value[:_TRANSCRIPT_SHORT_MAX_CHARS]
+    if hints:
+        kept.metadata.update(hints)
     if hints.get("hidden") is True:
-        del kept.parts[:]
-        return [kept]
-    display = hints.get("display")
-    if isinstance(display, str):
-        attachments = [_copy_part(p) for p in kept.parts if p.WhichOneof("content") != "text"]
-        del kept.parts[:]
-        kept.parts.append(Part(text=display))
-        kept.parts.extend(attachments)
-        del kept.metadata.fields["display"]  # the text IS the display now — not twice
-    _elide_inline_payloads(kept)
-    _cap_transcript_text(kept)
-    return [kept]
-
-
-def _copy_part(part: Part) -> Part:
-    copy = Part()
-    copy.CopyFrom(part)
-    return copy
-
-
-def _elide_inline_payloads(message: Message) -> None:
-    """Drop every INLINE attachment payload (proto ``raw`` bytes, or a ``data:`` URL)
-    from ``message``, in place.
-
-    An image kept inline would be rewritten megabytes at a time on every save, then
-    retained with the row — and nothing reads it back: the turn takes attachments off
-    the live request (``_extract_image_parts``), never off the stored copy. An elided
-    part keeps its filename and media type and records ``omittedBytes``, so the history
-    still says what was attached. A plain ``http(s)`` URL is only a reference and is
-    kept."""
-    for part in message.parts:
-        kind = part.WhichOneof("content")
-        if kind == "raw":
-            omitted = len(part.raw)
-        elif kind == "url" and part.url.startswith("data:"):
-            omitted = len(part.url)
-        else:
-            continue
-        part.ClearField(kind)
-        part.metadata.update({"omittedBytes": omitted})
-
-
-def _cap_transcript_text(message: Message) -> None:
-    """Bound ``message``'s text to ``_TRANSCRIPT_PROMPT_MAX_CHARS``, in place, ending a
-    cut part with a note of how much was left out."""
+        return kept
+    display = _hint(message, "display")
+    texts = [display] if isinstance(display, str) else []
     budget = _TRANSCRIPT_PROMPT_MAX_CHARS
     for part in message.parts:
-        if part.WhichOneof("content") != "text":
-            continue
-        if len(part.text) > budget:
-            omitted = len(part.text) - budget
-            part.text = f"{part.text[:budget]}\n\n… [{omitted:,} more characters not kept]"
+        if part.WhichOneof("content") == "text":
+            if isinstance(display, str):
+                continue  # the bubble text stands in for every text the model was sent
+            texts.append(part.text)
+    for text in texts:
+        if len(text) > budget:
+            text = f"{text[:budget]}\n\n… [{len(text) - budget:,} more characters not kept]"
             budget = 0
         else:
-            budget -= len(part.text)
+            budget -= len(text)
+        kept.parts.append(Part(text=text))
+    kept.parts.extend(_attachment_shell(p) for p in message.parts if p.WhichOneof("content") != "text")
+    return kept
+
+
+def _attachment_shell(part: Part) -> Part:
+    """An attachment as the transcript keeps it: its name, its type and a plain link —
+    never an inline payload (``raw`` bytes, a ``data:`` URL, a data blob). The SDK would
+    rewrite that on every save and nothing reads it back: the turn takes attachments off
+    the live request (``_extract_image_parts``), never off the stored copy. An elided
+    payload is recorded as ``omittedBytes``, so the history still says what was sent."""
+    shell = Part(
+        filename=part.filename[:_TRANSCRIPT_SHORT_MAX_CHARS],
+        media_type=part.media_type[:_TRANSCRIPT_SHORT_MAX_CHARS],
+    )
+    kind = part.WhichOneof("content")
+    if kind == "url" and not part.url.startswith("data:") and len(part.url) <= _TRANSCRIPT_URL_MAX_CHARS:
+        shell.url = part.url
+    elif kind == "raw":
+        shell.metadata.update({"omittedBytes": len(part.raw)})
+    elif kind == "url":
+        shell.metadata.update({"omittedBytes": len(part.url)})
+    elif kind == "data":
+        shell.metadata.update({"omittedBytes": part.data.ByteSize()})
+    return shell
 
 
 def _extract_skill_hint(context: RequestContext) -> str:
