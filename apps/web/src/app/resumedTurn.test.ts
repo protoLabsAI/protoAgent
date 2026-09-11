@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ChatMessage } from "../lib/types";
-import { resumedTurnRender, settleResumedTurn } from "./resumedTurn";
+import { resumedTurnRender, settleResumedTurn, streamedTextIsFinal } from "./resumedTurn";
 import { applyProgressFrame, liveMessageId, type ProgressFrame } from "./serverTurnProgress";
 
 describe("resumedTurnRender", () => {
@@ -172,5 +172,33 @@ describe("settleResumedTurn", () => {
     expect(last.status).toBe("error");
     expect(last.content).toContain("gateway timeout");
     expect(out.filter((m) => m.content.includes("Started.")).length).toBe(1);
+  });
+});
+
+describe("streamedTextIsFinal — keep the live layout when the words didn't change", () => {
+  const parts = [
+    { kind: "text" as const, text: "Three dice and all Push Back." },
+    { kind: "tools" as const, ids: ["tc1"] },
+    { kind: "text" as const, text: "Ball secured at (8,17)." },
+  ];
+
+  it("matches when the durable answer only joins the streamed segments differently", () => {
+    // The preview splits text at tool boundaries; the durable answer joins them with
+    // paragraph breaks (#3210). Same words → the settled message keeps the live order.
+    expect(streamedTextIsFinal(parts, "Three dice and all Push Back.\n\nBall secured at (8,17).")).toBe(true);
+  });
+
+  it("lets the authoritative content win when the words differ", () => {
+    expect(streamedTextIsFinal(parts, "Turn complete: the ball is secured.")).toBe(false);
+    // …including a failure note appended to the partial narration.
+    expect(
+      streamedTextIsFinal(parts, "Three dice and all Push Back. Ball secured at (8,17).\n\n---\n\n**Turn failed:** x"),
+    ).toBe(false);
+  });
+
+  it("has nothing to keep without streamed text", () => {
+    expect(streamedTextIsFinal(undefined, "anything")).toBe(false);
+    expect(streamedTextIsFinal([], "anything")).toBe(false);
+    expect(streamedTextIsFinal([{ kind: "tools", ids: ["tc1"] }], "")).toBe(false);
   });
 });

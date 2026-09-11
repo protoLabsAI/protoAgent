@@ -63,12 +63,16 @@ function progress(session: string, data: Record<string, unknown>): Frame {
   return { topic: "chat.progress", data: { session_id: session, task_id: TASK, ...data, control: control(session) } };
 }
 
-/** The turn is running: indicator, the attended control contract, and narration so far. */
+/** The turn is running: indicator, the attended control contract, narration, and the tool it
+ *  ran — the tool matters because #3443 settles this turn IN PLACE, keeping the streamed
+ *  order, and a split must not undo that. */
 function liveFrames(session: string): Frame[] {
   return [
     { topic: "turn.started", data: { session_id: session, origin: ORIGIN, trigger: "bg-1" } },
     progress(session, { phase: "turn_started" }),
     progress(session, { phase: "text", text: PRE }),
+    progress(session, { phase: "tool_start", tool: "github_pr_diff", tool_call_id: "tc1" }),
+    progress(session, { phase: "tool_end", tool: "github_pr_diff", tool_call_id: "tc1", output: "clean" }),
   ];
 }
 
@@ -213,6 +217,19 @@ function indexOf(list: string[], needle: string): number {
   return list.findIndex((row) => row.includes(needle));
 }
 
+/** Document order of the narration, the tool card it ran, and the operator's message — the
+ *  #3443 no-reflow check, which a split turn has to keep too. */
+async function documentOrder(page: Page, texts: string[]): Promise<number[]> {
+  return page.evaluate((needles) => {
+    const all = [...document.querySelectorAll("*")];
+    return needles.map((needle) =>
+      needle === "@tool"
+        ? all.findIndex((el) => el.classList.contains("pl-toolcard") && (el.textContent ?? "").includes("github_pr_diff"))
+        : all.findIndex((el) => el.children.length === 0 && (el.textContent ?? "").includes(needle)),
+    );
+  }, texts);
+}
+
 /** User messages carrying the interjection in the persisted store (display state only). */
 async function persistedInterjections(page: Page, session: string): Promise<number> {
   return page.evaluate(
@@ -249,23 +266,40 @@ test("the server's consumed marker settles a queued interjection at the boundary
   expect(indexOf(live, PRE)).toBeLessThan(indexOf(live, INTERJECTION));
   expect(indexOf(live, INTERJECTION)).toBeLessThan(indexOf(live, POST));
 
-  // The turn settles. The operator's message stays exactly where it was, exactly once —
-  // the authoritative final text is distributed across the split, not landed twice.
+  // The turn settles. A reply to background reports settles IN PLACE (#3443) — no card, no
+  // re-flow — and the split has to keep that: the operator's message stays exactly where it
+  // was, exactly once, with the authoritative text distributed across the split rather than
+  // landed twice, and the tool card still above the narration that followed it.
+  const liveOrder = await documentOrder(page, [PRE, "@tool", INTERJECTION, POST]);
   h.release(terminalFrames(session));
+  await expect(page.locator(".pl-toast", { hasText: "Task resumed" })).toBeVisible();
   await expect(page.getByText(/responding to background reports/i)).toHaveCount(0);
-  const cards = page.locator(`${SLOT} .chat-server-result`);
-  await expect(cards).toHaveCount(2);
-  await expect(cards.first().locator(".chat-server-result-preview")).toContainText(PRE);
-  await expect(cards.last().locator(".chat-server-result-preview")).toContainText(POST);
-  await expect(cards.last().locator(".chat-server-result-preview")).not.toContainText(PRE);
+  await expect(page.locator(`${SLOT} .chat-server-result`)).toHaveCount(0);
+  await expect(page.locator(SLOT).getByText(PRE)).toBeVisible();
+  await expect(page.locator(SLOT).getByText(POST)).toBeVisible();
+  await expect(page.locator(".pl-toolcard").filter({ hasText: "github_pr_diff" }).first()).toBeVisible();
   await expect(user).toHaveCount(1);
+  const settledOrder = await documentOrder(page, [PRE, "@tool", INTERJECTION, POST]);
+  expect(settledOrder.every((i) => i > -1)).toBe(true);
+  expect(settledOrder).toEqual([...settledOrder].sort((a, b) => a - b));
+  expect(liveOrder.every((i) => i > -1)).toBe(true); // the live view had the same order
   const settled = await rows(page);
+  expect(settled.filter((row) => row.includes(PRE))).toHaveLength(1); // landed once, not twice
   expect(indexOf(settled, PRE)).toBeLessThan(indexOf(settled, INTERJECTION));
   expect(indexOf(settled, INTERJECTION)).toBeLessThan(indexOf(settled, POST));
   await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(0);
   await expect.poll(() => persistedInterjections(page, session)).toBe(1);
   // Nothing was re-sent: the agent already had it.
   expect(h.a2aSends.filter((body) => body.includes(INTERJECTION))).toEqual([]);
+
+  // The settled message is a normal message now, so the slot must have retired it from the
+  // queue itself — not merely stopped rendering it. ↑ on an empty composer is the probe: a
+  // still-queued item takes the pull-it-back-out path (a DELETE) instead of history recall.
+  // (The recalled TEXT can't tell them apart — the input-history ring holds it either way.)
+  await page.locator(`${SLOT} .pl-prompt__field`).press("ArrowUp");
+  await page.waitForTimeout(300);
+  expect(h.deletes, "↑ must not try to dequeue a message that already landed").toEqual([]);
+  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(0);
 });
 
 test("a missed consumed marker still settles the interjection when the turn ends", async ({ page }) => {
@@ -283,9 +317,9 @@ test("a missed consumed marker still settles the interjection when the turn ends
   await expect(user).toHaveCount(1);
   // No boundary to honor, so it lands on the conservative side: above the reply it shaped.
   const settled = await rows(page);
-  const card = settled.findIndex((row) => /background report/i.test(row));
-  expect(card).toBeGreaterThan(-1);
-  expect(indexOf(settled, INTERJECTION)).toBeLessThan(card);
+  const reply = indexOf(settled, POST);
+  expect(reply).toBeGreaterThan(-1);
+  expect(indexOf(settled, INTERJECTION)).toBeLessThan(reply);
   await expect.poll(() => persistedInterjections(page, session)).toBe(1);
   expect(h.a2aSends.filter((body) => body.includes(INTERJECTION))).toEqual([]);
 });
@@ -302,7 +336,7 @@ test("✕ on a pending interjection takes it back out of the server queue", asyn
 
   // The turn ends. A cancelled message is not delivered late, and not re-sent either.
   h.release(terminalFrames(session));
-  await expect(page.locator(`${SLOT} .chat-server-result`)).toHaveCount(1);
+  await expect(page.locator(SLOT).getByText(POST)).toBeVisible();
   await expect(page.locator(`${SLOT} .pl-message--user`).filter({ hasText: INTERJECTION })).toHaveCount(0);
   await page.waitForTimeout(500);
   expect(h.a2aSends.filter((body) => body.includes(INTERJECTION))).toEqual([]);
@@ -327,8 +361,9 @@ test("an interjection the server turn never reached is sent as a normal message 
   expect(h.order).toEqual(["dequeue", "send"]);
   const user = page.locator(`${SLOT} .pl-message--user`).filter({ hasText: INTERJECTION });
   await expect(user).toHaveCount(1);
+  // It is a fresh message, so it reads BELOW the reply that never included it.
   const settled = await rows(page);
-  const card = settled.findIndex((row) => /background report/i.test(row));
-  expect(card).toBeGreaterThan(-1);
-  expect(indexOf(settled, INTERJECTION)).toBeGreaterThan(card);
+  const reply = indexOf(settled, POST);
+  expect(reply).toBeGreaterThan(-1);
+  expect(indexOf(settled, INTERJECTION)).toBeGreaterThan(reply);
 });

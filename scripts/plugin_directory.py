@@ -6,8 +6,9 @@ Two files are derived from it (the same source→derived pattern as ROADMAP.md �
 roadmap.json, see scripts/roadmap.py):
 
   config/plugin-catalog.json          — the in-app Discover catalog (GET /api/plugins/catalog,
-                                        ADR 0059); schema unchanged: id/name/category/official/
-                                        repo/tagline per entry
+                                        ADR 0059): id/name/category/official/repo/tagline, plus
+                                        the site card's `adds` chips and an absolute `docs` link
+                                        so a Discover card says what the website card says
   sites/marketing/data/plugins.json   — the marketing plugins page's editorial overlay
                                         (sites/marketing/src/pages/plugins.astro merges it over
                                         the auto-discovered bundled + topic-scraped cards)
@@ -47,6 +48,7 @@ MARKETING_JSON = ROOT / "sites" / "marketing" / "data" / "plugins.json"
 
 ORG = "https://github.com/protoLabsAI"
 TREE = f"{ORG}/protoAgent/tree/main/plugins"
+SITE = "https://agent.protolabs.studio"  # where the site's root-relative docs links live
 
 _APP_COMMENT = (
     "GENERATED from config/plugin-directory.yaml by scripts/plugin_directory.py — do not "
@@ -93,8 +95,19 @@ def _source_url(e: dict) -> str:
     return f"{TREE}/{e['id']}" if e.get("bundled") else e["repo"]
 
 
+def _docs_link(e: dict) -> str:
+    """The card's docs link, as the website writes it (root-relative for site docs)."""
+    return e.get("docs") or ("/docs/guides/plugins" if e.get("bundled") else f"{e['repo']}#readme")
+
+
+def _absolute(link: str) -> str:
+    """The console runs on the operator's own host, where a root-relative site link
+    points nowhere — anchor it to the website."""
+    return f"{SITE}{link}" if link.startswith("/") else link
+
+
 def render_app(entries: list[dict]) -> str:
-    """Active app entries → the exact plugin-catalog.json text (schema unchanged)."""
+    """Active app entries → the exact plugin-catalog.json text."""
     plugins = [
         {
             "id": e["id"],
@@ -103,6 +116,10 @@ def render_app(entries: list[dict]) -> str:
             "official": bool(e.get("official", True)),
             "repo": _source_url(e),
             "tagline": e["tagline"],
+            # The same chips and docs link as the website card (#2910), so Discover
+            # doesn't describe a plugin less than the site does.
+            "adds": list(e.get("adds") or []),
+            "docs": _absolute(_docs_link(e)),
         }
         for e in entries
         if e.get("app", True) and _status(e) in _APP_STATUSES
@@ -150,10 +167,7 @@ def render_site(entries: list[dict]) -> str:
             entry["install"] = e["repo"]
             if e.get("enable"):
                 entry["enable"] = e["enable"]
-        entry["links"] = {
-            "source": _source_url(e),
-            "docs": e.get("docs") or ("/docs/guides/plugins" if bundled else f"{e['repo']}#readme"),
-        }
+        entry["links"] = {"source": _source_url(e), "docs": _docs_link(e)}
         out.append(entry)
     return json.dumps(out, indent=2, ensure_ascii=False) + "\n"
 

@@ -6,11 +6,11 @@ this catalog shipped `@modelcontextprotocol/server-sequentialthinking` for weeks
 upstream renamed the package to `server-sequential-thinking`, i.e. a 404 behind a
 button, found only by auditing it by hand.
 
-Whether a package still EXISTS needs the network and can't be a unit test — that stays
-a periodic manual audit (the `_comment` records when it was last done). What is checked
-here is everything that can go stale *offline*, in particular the failure mode with no
-other backstop: a `${placeholder}` with no matching input, which renders an entry
-permanently unfillable.
+Whether a package still EXISTS needs the network and can't be a unit test — that is
+scripts/check_mcp_catalog.py, run weekly and on catalog PRs by
+.github/workflows/mcp-catalog-drift.yml (#2910). What is checked here is everything that
+can go stale *offline*, in particular the failure mode with no other backstop: a
+`${placeholder}` with no matching input, which renders an entry permanently unfillable.
 """
 
 from __future__ import annotations

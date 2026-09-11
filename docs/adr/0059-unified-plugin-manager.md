@@ -56,7 +56,8 @@ keeps managing settings there — its row links to the view.
 ### D3 — Host-served catalog (the curated index)
 
 The host ships **`config/plugin-catalog.json`** (`id`, `name`, `repo`, `tagline`,
-`category`, `official`, `latest_tag`, `install_url`) and serves **`GET
+`category`, `official`, `latest_tag`, `install_url`; since #2910 also the website card's
+`adds` chips and an absolute `docs` link) and serves **`GET
 /api/plugins/catalog`**; it may refresh from a remote when online. This is
 **offline-safe and frozen-desktop-safe** — browsing the directory needs no external
 service. **Single official source:** the host catalog stays in sync with

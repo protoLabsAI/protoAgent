@@ -348,6 +348,10 @@ export type CatalogPlugin = {
   category?: string;
   official?: boolean;
   repo: string;
+  // What the plugin contributes (tool / skill / view / …) and its docs — the same as the
+  // website card (#2910). Optional: a fork's own plugin-catalog.json may omit both.
+  adds?: string[];
+  docs?: string;
   bundled: boolean;
   installed: boolean;
   enabled: boolean;

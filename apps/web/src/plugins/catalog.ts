@@ -7,7 +7,7 @@ export function filterCatalog(plugins: CatalogPlugin[], q: string, category: str
   return plugins.filter((p) => {
     if (category !== "All" && (p.category || "Other") !== category) return false;
     if (!needle) return true;
-    return `${p.name} ${p.tagline ?? ""} ${p.id}`.toLowerCase().includes(needle);
+    return `${p.name} ${p.tagline ?? ""} ${p.id} ${(p.adds ?? []).join(" ")}`.toLowerCase().includes(needle);
   });
 }
 
