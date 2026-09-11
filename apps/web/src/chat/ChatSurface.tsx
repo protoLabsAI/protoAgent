@@ -1551,6 +1551,9 @@ function ChatSessionSlot({
   // (serverInterjections.ts). Serialised — the triggers can fire together — and re-run if
   // one arrives mid-flight.
   const interjectReconcileRef = useRef<{ running: boolean; again: boolean }>({ running: false, again: false });
+  // Its own-stream sibling's guard (reconcileSteer): one reconcile per turn-end, whichever
+  // caller gets there first.
+  const steerReconcileRef = useRef(false);
   // Nothing here is a one-shot: a transient failure, or a turn whose task hasn't settled
   // yet, re-checks on this ladder. A one-shot reconcile strands the very bubble it exists
   // to retire — and the message stays in the server's queue for some later turn, unseen.
@@ -1893,6 +1896,20 @@ function ChatSessionSlot({
   async function reconcileSteer() {
     const queued = steerQueueRef.current.filter((q) => !q.serverTaskId);
     if (!session || !queued.length) return;
+    // Two callers can land on the same turn-end: the send loop when its own stream closes,
+    // and the idle effect for a turn this slot didn't run. Both re-sending the same
+    // un-consumed steer would deliver it twice, so only one runs.
+    if (steerReconcileRef.current) return;
+    steerReconcileRef.current = true;
+    try {
+      await reconcileSteerOnce(queued);
+    } finally {
+      steerReconcileRef.current = false;
+    }
+  }
+
+  async function reconcileSteerOnce(queued: QueuedSteer[]) {
+    if (!session) return;
     let remaining: { id: string; text: string }[];
     try {
       remaining = (await api.pendingSteer(session.id)).pending;
