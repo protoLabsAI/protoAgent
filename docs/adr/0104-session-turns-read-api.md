@@ -50,6 +50,21 @@ same shapes the console's A2A frame dispatcher already decodes, so a client
 replays a turn through the exact code path the live stream uses (no second
 mapping to drift). `text` is the joined artifact text for cheap consumers.
 
+Each turn's `history` **opens with the message that started it** (`ROLE_USER`).
+The executor puts it on the initial Task it enqueues: the SDK records the
+request message itself only when an agent's first event is a status update, and
+drops it when the agent supplies its own Task. Until v0.164.0 that Task was bare,
+so every stored turn lacked its prompt — those rows rebuild as answers only until
+retention ages them out. Inline attachment payloads (`raw` bytes, `data:` URLs)
+are elided from the stored copy, keeping filename/media type plus
+`omittedBytes`: the SDK re-saves the whole task on every frame. The console draws
+the operator bubble from that message except for a server-fired turn (its
+`origin` metadata) or a send marked `hidden`, and uses the message's `display`
+metadata — the bubble text, recorded when it differs from the sent text
+(attachment context prepended) — when present. The answer text's paragraph
+breaks between model calls are made by the producer inside the streamed delta,
+so the live stream and the stored text are the same string.
+
 The console consumes the index opportunistically at boot. `localStorage` stays
 the primary store (it holds client-side niceties the task store doesn't —
 ordered parts, per-message usage pins): a non-empty local session always wins,

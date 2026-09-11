@@ -10,7 +10,8 @@ protoAgent's existing ``_chat_langgraph_stream`` event generator
 
 The producer-event contract (unchanged from the hand-rolled handler) is::
 
-    text            accumulated answer text (streamed)
+    text            answer text, streamed + accumulated verbatim (a producer puts
+                    any paragraph break between model calls INSIDE the delta)
     tool_start      a tool began      (dict {id,name,input} | str)
     tool_end        a tool finished   (dict {id,name,output} | str)
     delta           a worldstate-delta {domain,path,op,value}
@@ -41,7 +42,7 @@ from typing import Any
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.server.tasks import TaskUpdater
-from a2a.types import Part, Task, TaskState, TaskStatus
+from a2a.types import Message, Part, Task, TaskState, TaskStatus
 from google.protobuf import json_format, struct_pb2
 
 import protolabs_a2a as pa
@@ -452,6 +453,16 @@ class ProtoAgentExecutor(AgentExecutor):
                     id=context.task_id,
                     context_id=context.context_id,
                     status=TaskStatus(state=TaskState.TASK_STATE_SUBMITTED),
+                    # The operator's message OPENS the task's durable history. The SDK
+                    # records the request message itself only when an agent's first
+                    # event is a status/artifact update; when the agent enqueues its own
+                    # Task, as this one must, the SDK saves that Task verbatim and drops
+                    # the message — assuming the Task already carries it, the way a2a's
+                    # `new_task(message)` helper builds one. A bare Task therefore stored
+                    # every turn without its prompt, and the session-turns reader (ADR
+                    # 0104) rebuilt chats as answers with no questions. (A HITL resume
+                    # skips this branch; the SDK appends that message on its own.)
+                    history=[_durable_prompt(context.message)] if context.message else [],
                 )
             )
         text = context.get_user_input()
@@ -496,7 +507,6 @@ class ProtoAgentExecutor(AgentExecutor):
 
         started = time.monotonic()
         accumulated = ""
-        _text_after_tool = False
         deltas: list[dict] = []
         usage = {
             "input_tokens": 0,
@@ -746,9 +756,13 @@ class ProtoAgentExecutor(AgentExecutor):
                     await _flush_reasoning()
 
                 if event_type == "text":
-                    if _text_after_tool and accumulated:
-                        accumulated += "\n\n"
-                    _text_after_tool = False
+                    # Verbatim, never re-punctuated here: `accumulated` must stay the
+                    # exact string the stream carried. The console keeps a turn's
+                    # text-to-tool interleaving only while its own accumulation of these
+                    # frames matches the terminal text, so the executor adding a break
+                    # the stream never had would collapse it. Paragraph breaks between
+                    # model calls are the producer's to make, inside the delta itself
+                    # (server.chat._run_turn_stream).
                     accumulated += payload
                     _text_buf += payload
                     if _should_flush(_text_buf, _text_flushed_at):
@@ -787,7 +801,6 @@ class ProtoAgentExecutor(AgentExecutor):
                         # is the on_tool_start-had-no-run_id fallback, not a real
                         # sub-millisecond call (there's always at least async/model-loop
                         # overhead) — treated the same as "unmeasured", not "instant".
-                        _text_after_tool = True
                         if isinstance(payload, dict):
                             end_name = payload.get("name")
                             duration_ms = payload.get("duration_ms")
@@ -1037,6 +1050,33 @@ def _extract_image_parts(context: RequestContext) -> list[tuple[str, str]]:
         elif getattr(p, "url", ""):
             out.append((mt, p.url))
     return out
+
+
+def _durable_prompt(message: Message) -> Message:
+    """``message`` as the task's durable history keeps it: a copy with every INLINE
+    attachment payload (proto ``raw`` bytes, or a ``data:`` URL) elided.
+
+    The SDK re-serializes the WHOLE task on every save — each status frame and each
+    streamed answer chunk, hundreds of times a turn — so an image kept inline would be
+    rewritten megabytes at a time for the life of the turn, then retained with the row.
+    Nothing reads it back: the turn takes attachments off the live request
+    (``_extract_image_parts``), never off this copy, and the console rebuilds a prompt
+    bubble from text alone. An elided part keeps its filename and media type and
+    records ``omittedBytes``, so the history still says what was attached. A plain
+    ``http(s)`` URL is only a reference and is kept."""
+    kept = Message()
+    kept.CopyFrom(message)
+    for part in kept.parts:
+        kind = part.WhichOneof("content")
+        if kind == "raw":
+            omitted = len(part.raw)
+        elif kind == "url" and part.url.startswith("data:"):
+            omitted = len(part.url)
+        else:
+            continue
+        part.ClearField(kind)
+        part.metadata.update({"omittedBytes": omitted})
+    return kept
 
 
 def _extract_skill_hint(context: RequestContext) -> str:

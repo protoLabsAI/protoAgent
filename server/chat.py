@@ -783,6 +783,13 @@ def _vision_human_message(
     return HumanMessage(content=f"{message}\n\n{note}".strip() if note else message)
 
 
+def _paragraph_break(before: str, after: str) -> str:
+    """The newlines to put between ``before`` and ``after`` so ``after`` opens a new
+    paragraph: one blank line, counting any newlines either side already carries."""
+    have = (len(before) - len(before.rstrip("\n"))) + (len(after) - len(after.lstrip("\n")))
+    return "\n" * max(0, 2 - have)
+
+
 async def _run_turn_stream(
     message: str,
     session_id: str,
@@ -846,6 +853,14 @@ async def _run_turn_stream(
     from observability import pricing
 
     accumulated_raw = ""  # the answer text so far (the model's content; no protocol tags)
+    # Each lead model call is its own message: "I'll check the time first." → tool →
+    # "It is noon." must not be glued into "first.It is". So the first text of every new
+    # lead call opens a paragraph — and the break rides the streamed delta itself, not
+    # just this accumulator, so the live stream, the executor's accumulation and the
+    # canonical `done` text stay ONE string. (The console keeps a turn's text-to-tool
+    # interleaving only while they agree; #3210 separated only the executor's copy, which
+    # the `done` text below overrode on this path, so durable turns stayed crammed.)
+    _new_model_call = False
     _llm_started: dict[str, float] = {}  # run_id → monotonic start (per-call latency)
     _tool_started: dict[str, float] = {}  # run_id → monotonic start (per-call latency, #2697)
     _delegate_targets: dict[str, str] = {}  # run_id → delegate name, for delegate_to → room bubble (#3042)
@@ -870,6 +885,10 @@ async def _run_turn_stream(
             rid = event.get("run_id")
             if rid:
                 _llm_started[rid] = time.monotonic()
+            # A subagent's calls never reach the answer (see on_chat_model_stream), so
+            # only a LEAD call starts a new answer segment.
+            if not parent_tool_id:
+                _new_model_call = True
         elif kind == "on_tool_start":
             # No frame here: the tool card is surfaced earlier — on the model's first
             # streamed tool-call token (on_chat_model_stream) and finalized with full
@@ -1038,6 +1057,9 @@ async def _run_turn_stream(
                             len(text.split()),
                             text[:40],
                         )
+                    if _new_model_call and accumulated_raw.strip():
+                        text = _paragraph_break(accumulated_raw, text) + text
+                    _new_model_call = False
                     accumulated_raw += text
                     yield ("text", text)
         elif kind == "on_chat_model_end":

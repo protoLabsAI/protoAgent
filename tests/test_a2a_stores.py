@@ -344,6 +344,35 @@ async def test_reaper_fails_orphan_at_birth_past_grace(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_reaper_counts_a_prompt_only_history_as_orphan_at_birth(tmp_path):
+    """r1 × ADR 0104: every task's history now OPENS with the operator's prompt (the
+    executor puts it on the initial Task so the durable turn can be rebuilt). A producer
+    that died before its first frame therefore leaves that prompt behind and nothing
+    else — "empty history" can no longer be the signal. Only AGENT-authored history or
+    an artifact makes a task productive; otherwise it is reaped on the birth grace, with
+    the never-produced diagnosis, and the prompt stays on the row."""
+    from datetime import UTC, datetime
+
+    from a2a.types import a2a_pb2
+
+    now = datetime.now(UTC)
+    store, engine = await _fresh_task_store(tmp_path)
+    ctx = _ctx()
+    prompt = a2a_pb2.Message(role=a2a_pb2.ROLE_USER, parts=[a2a_pb2.Part(text="list the workspace")])
+    await _seed_task(
+        store, engine, ctx, "orphan", state="TASK_STATE_WORKING", age_s=400, now=now, history=[prompt]
+    )
+
+    n = await reap_orphaned_working_tasks(engine, birth_grace_s=300, idle_after_s=1800, now=now)
+    assert n == 1
+    got = await store.get("orphan", ctx)
+    assert got.status.state == a2a_pb2.TASK_STATE_FAILED
+    assert "never produced" in got.status.message.parts[0].text
+    assert [m.parts[0].text for m in got.history] == ["list the workspace"]  # nothing deleted
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_reaper_keeps_orphan_within_grace(tmp_path):
     """r1 boundary: a just-started WORKING task with no output yet is left WORKING while
     it is still inside the birth grace (a slow first frame must not be reaped)."""

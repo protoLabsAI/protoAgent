@@ -28,22 +28,39 @@ function timestamp(value: string | null): number {
   return Number.isFinite(parsed) ? parsed : Date.now();
 }
 
-function isUserRole(role: string | undefined): boolean {
-  const normalized = (role ?? "").toLowerCase();
-  return normalized === "user" || normalized.includes("role_user");
+type DurableMessage = NonNullable<DurableChatTurn["history"]>[number];
+
+/** A durable user frame the OPERATOR sent — the console's own send. A server-fired
+ *  turn (scheduler / watch / background-resume) also starts with a user-role message,
+ *  but it carries machine text and the `origin` that fired it. */
+function isOperatorMessage(message: DurableMessage): boolean {
+  const role = (message.role ?? "").toLowerCase();
+  if (role !== "user" && !role.includes("role_user")) return false;
+  const origin = message.metadata?.origin;
+  return !(typeof origin === "string" && origin);
 }
 
-function firstUserText(turn: DurableChatTurn): string {
-  const user = (turn.history ?? []).find((message) => isUserRole(message.role));
-  return textFromParts(user?.parts);
+/** The operator bubble this turn showed live, or "" for none. The server opens each
+ *  turn's durable history with the message that started it, but a `hidden` send (an
+ *  approval or dismissal resume, a regenerate, a goal kickoff) deliberately drew no
+ *  bubble, and where the sent text differs from the bubble (attachment context
+ *  prepended) the console recorded the bubble as `display`. A turn stored before the
+ *  server kept prompts has no user message at all and rebuilds as its answer alone. */
+function operatorPrompt(turn: DurableChatTurn): string {
+  const user = (turn.history ?? []).find(isOperatorMessage);
+  if (!user || user.metadata?.hidden === true) return "";
+  const display = user.metadata?.display;
+  return typeof display === "string" ? display : textFromParts(user.parts);
 }
 
 /** Incognito is per operator message and therefore must be recovered from the
- * newest durable user frame. Defaulting a recovered private tab to ordinary
- * would let its next send participate in memory without the operator opting in. */
+ * newest durable OPERATOR frame — hidden sends included (the console stamps every
+ * send), server-fired ones not (they never carry the flag). Defaulting a recovered
+ * private tab to ordinary would let its next send participate in memory without the
+ * operator opting in. */
 function durableIncognito(turns: DurableChatTurn[]): boolean {
   for (const turn of [...turns].reverse()) {
-    const user = [...(turn.history ?? [])].reverse().find((message) => isUserRole(message.role));
+    const user = [...(turn.history ?? [])].reverse().find(isOperatorMessage);
     if (user) return user.metadata?.incognito === true;
   }
   return false;
@@ -58,7 +75,7 @@ function titleFromPrompt(prompt: string): string {
 /** Pure conversion of one task into the local prompt/answer pair. */
 export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
   const at = timestamp(turn.last_updated);
-  const prompt = firstUserText(turn);
+  const prompt = operatorPrompt(turn);
   const messages: ChatMessage[] = prompt
     ? [{ id: `durable-${turn.task_id}-user`, role: "user", content: prompt, createdAt: at, status: "done" }]
     : [];

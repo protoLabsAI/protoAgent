@@ -826,14 +826,17 @@ function scenarioFor(prompt) {
     // Pre-tool narration (`preText`) streams as an answer artifact BEFORE the tool —
     // it must render ABOVE the tool card, with the final answer BELOW it (ordering fix).
     return {
-      preText: "Let me look that up. ",
+      preText: "Let me look that up.",
       name: "web_search",
       input: { query: "agent client protocol" },
       output: "1 result(s): Agent Client Protocol — https://agentclientprotocol.com",
-      // The executor streams the post-tool answer as deltas too — the terminal
-      // replace then matches the client's accumulation and keeps interleaving.
-      streamChunks: ["Found it — Agent Client Protocol."],
-      answer: "Found it — Agent Client Protocol.",
+      // The post-tool answer is the NEXT model call, so the server opens its first delta
+      // with a paragraph break (server/chat.py _run_turn_stream) and the terminal replace
+      // — the whole turn's text — carries the same break. The client's parts drop a
+      // run's leading whitespace, so that replace must still read as "nothing diverged"
+      // and keep the interleaving (parts.ts replaceText).
+      streamChunks: ["\n\nFound it — Agent Client Protocol."],
+      answer: "\n\nFound it — Agent Client Protocol.",
     };
   if (t.includes("SUBAGENT"))
     return {

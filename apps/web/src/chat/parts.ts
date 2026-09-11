@@ -30,6 +30,11 @@ export function appendText(parts: ChatPart[] | undefined, text: string, append: 
   return next;
 }
 
+/** Same non-whitespace characters, in the same order. */
+function sameIgnoringWhitespace(a: string, b: string): boolean {
+  return a.replace(/\s+/g, "") === b.replace(/\s+/g, "");
+}
+
 /** REPLACE the turn's text with the canonical full-turn `text` (an A2A
  *  artifact-update with `append` absent/false — e.g. the terminal frame, which always
  *  re-sends the whole answer, #1709). The replacement spans EVERY text run — for a
@@ -37,14 +42,23 @@ export function appendText(parts: ChatPart[] | undefined, text: string, append: 
  *  only the trailing run would render the preamble twice.
  *
  *  `streamed` is the client's OWN accumulation of this turn's text deltas (the flat
- *  `content` string). When it already equals the replacement, the streamed parts ARE
- *  canonical: keep them untouched, preserving the text↔tool interleaving. Only on a
- *  real divergence (frames lost/duplicated en route) do we rebuild — drop every prior
- *  text run and land the canonical text as one trailing run. That trades the (already
- *  unreliable) interleaving for the guarantee the answer renders exactly once. */
+ *  `content` string, or the text its ordered parts render). When it already says what
+ *  the replacement says, the streamed parts ARE canonical: keep them untouched,
+ *  preserving the text↔tool interleaving. Only on a real divergence (frames
+ *  lost/duplicated en route) do we rebuild — drop every prior text run and land the
+ *  canonical text as one trailing run. That trades the (already unreliable)
+ *  interleaving for the guarantee the answer renders exactly once.
+ *
+ *  "Says the same" ignores whitespace, because that is where the two legitimately
+ *  differ: the server opens each model call's narration with a paragraph break, and
+ *  `appendText` drops a new run's leading whitespace, so a [text → tools → text] turn's
+ *  parts render "A" + "B" while the canonical text reads "A\n\nB". Compared
+ *  byte-for-byte, every such healthy turn read as diverged and its prose collapsed
+ *  below the tool cards at turn end. (`canonicalRemainderIndex` makes the same
+ *  allowance for a turn split across bubbles.) */
 export function replaceText(parts: ChatPart[] | undefined, text: string, streamed: string): ChatPart[] {
   const next = [...(parts ?? [])];
-  if (streamed.trim() === text.trim()) return next;
+  if (sameIgnoringWhitespace(streamed, text)) return next;
   const kept = next.filter((p) => p.kind !== "text");
   const trimmed = text.replace(/^\s+/, "");
   if (!trimmed) return kept;

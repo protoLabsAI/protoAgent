@@ -2408,6 +2408,13 @@ export const api = {
       // fresh turn. Unmarked messages sent while a form is pending are held server-side
       // until the form resolves.
       hitlResume?: boolean;
+      // How this message showed in the transcript, when that is not simply its text. The
+      // server ignores both; they ride the message into the task's durable history so a
+      // chat rebuilt from it (ADR 0104) draws the same user bubble: `hidden` = none (an
+      // approval/dismissal resume, a regenerate, a goal kickoff), `display` = the bubble
+      // text when the sent text differs from it (attachment context prepended).
+      hidden?: boolean;
+      display?: string;
       // Stream to a SPECIFIC fleet member (Fleet Room DM) instead of THIS window's agent:
       // the turn runs on that member via the hub proxy (/agents/<slug>/a2a). "host" = this
       // instance. Omitted → normal chat with the focused agent (apiUrl slug-routing).
@@ -2437,7 +2444,14 @@ export const api = {
           // Per-turn overrides ride the A2A message metadata (server/chat.py reads them):
           // the tab's chosen model + the /effort reasoning level + incognito (ADR 0069 D3b —
           // per-message server-side, stamped on every send while the thread toggle is on).
-          ...((opts.model || opts.reasoningEffort || opts.bypassPermissions || opts.incognito || opts.hitlResume)
+          // `hidden` / `display` are for the durable transcript only (see opts above).
+          ...((opts.model ||
+            opts.reasoningEffort ||
+            opts.bypassPermissions ||
+            opts.incognito ||
+            opts.hitlResume ||
+            opts.hidden ||
+            opts.display !== undefined)
             ? {
                 metadata: {
                   ...(opts.model ? { model: opts.model } : {}),
@@ -2445,6 +2459,8 @@ export const api = {
                   ...(opts.bypassPermissions ? { bypass_permissions: true } : {}),
                   ...(opts.incognito ? { incognito: true } : {}),
                   ...(opts.hitlResume ? { hitl_resume: true } : {}),
+                  ...(opts.hidden ? { hidden: true } : {}),
+                  ...(opts.display !== undefined ? { display: opts.display } : {}),
                 },
               }
             : {}),

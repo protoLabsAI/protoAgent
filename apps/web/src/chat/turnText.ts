@@ -100,11 +100,12 @@ export function turnBubbleIndexes(messages: ChatMessage[], assistantId: string):
  *  `prefix` is not a prefix of it.
  *
  *  Compared whitespace-INSENSITIVELY on purpose. The two strings are accumulated by
- *  different sides: the server injects a blank line between pre- and post-tool
- *  narration (#3210) that the client's own delta accumulation never had, and
- *  `appendText` drops a run's leading whitespace. A byte-exact test would call those
+ *  different sides: the server opens each model call's narration with a blank line
+ *  (inside the streamed delta), and `appendText` drops a run's leading whitespace, so
+ *  the text the bubbles render never has it. A byte-exact test would call those
  *  healthy turns "diverged" and rebuild them, throwing away the interleaving for
- *  nothing. Non-whitespace characters must still match exactly, in order. */
+ *  nothing. Non-whitespace characters must still match exactly, in order. (The
+ *  single-bubble `replaceText` makes the same allowance.) */
 export function canonicalRemainderIndex(canonical: string, prefix: string): number {
   const space = /\s/;
   let at = 0;

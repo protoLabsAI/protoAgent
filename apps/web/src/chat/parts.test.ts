@@ -83,6 +83,22 @@ describe("replaceText — the terminal full-turn replace (#1709 companion)", () 
     ]);
   });
 
+  it("keeps the interleaving when the canonical text puts a paragraph break at a tool boundary", () => {
+    // The server opens the post-tool narration with "\n\n" inside the delta; appendText
+    // drops it from the run it starts, so the parts render "…first." + "It is noon."
+    // while the canonical text reads "…first.\n\nIt is noon.". Same words — no rebuild.
+    let p: ChatPart[] | undefined;
+    p = appendText(p, "I'll check the time first.", true);
+    p = addToolRef(p, "t1");
+    p = appendText(p, "\n\nIt is noon.", true);
+    const shown = "I'll check the time first.It is noon.";
+    expect(replaceText(p, "I'll check the time first.\n\nIt is noon.", shown)).toEqual([
+      { kind: "text", text: "I'll check the time first." },
+      { kind: "tools", ids: ["t1"] },
+      { kind: "text", text: "It is noon." },
+    ]);
+  });
+
   it("tolerates leading/trailing whitespace differences between streamed and canonical text", () => {
     const p: ChatPart[] = [{ kind: "text", text: "answer" }];
     expect(replaceText(p, "answer\n", "answer")).toEqual([{ kind: "text", text: "answer" }]);

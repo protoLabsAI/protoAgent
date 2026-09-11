@@ -920,15 +920,32 @@ const server = createServer(async (req, res) => {
         pathname === "/api/chat/sessions/chat-recovered/turns"
       ) {
         return sendJson(res, {
-          turns: [{
-            task_id: "task-recovered",
-            state: "TASK_STATE_COMPLETED",
-            last_updated: "2026-08-20T12:00:00Z",
-            text: "The durable answer is back.",
-            status: { state: "TASK_STATE_COMPLETED" },
-            artifacts: [{ parts: [{ text: "The durable answer is back." }] }],
-            history: [{ role: "ROLE_USER", parts: [{ text: "Recover this conversation" }] }],
-          }],
+          turns: [
+            {
+              task_id: "task-recovered",
+              state: "TASK_STATE_COMPLETED",
+              last_updated: "2026-08-20T12:00:00Z",
+              text: "The durable answer is back.",
+              status: { state: "TASK_STATE_COMPLETED" },
+              artifacts: [{ parts: [{ text: "The durable answer is back." }] }],
+              history: [{ role: "ROLE_USER", parts: [{ text: "Recover this conversation" }] }],
+            },
+            {
+              // A server-fired turn into the same chat: its opening user-role message is
+              // the scheduler's machine prompt, which the live console never showed.
+              task_id: "task-scheduled",
+              state: "TASK_STATE_COMPLETED",
+              last_updated: "2026-08-20T12:05:00Z",
+              text: "Scheduled check: the deploy is green.",
+              status: { state: "TASK_STATE_COMPLETED" },
+              artifacts: [{ parts: [{ text: "Scheduled check: the deploy is green." }] }],
+              history: [{
+                role: "ROLE_USER",
+                parts: [{ text: "[Autonomous wake — scheduled run. Orient from <working_state>, then:]\n\ncheck the deploy" }],
+                metadata: { origin: "scheduler", scheduler_job_id: "job-e2e" },
+              }],
+            },
+          ],
         });
       }
       // Mid-turn steering: turn-end reconcile reads the still-queued items.

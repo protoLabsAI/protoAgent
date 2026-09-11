@@ -165,7 +165,7 @@ test("interjecting mid-turn: the answer renders once, with the steer inline", as
   // dropped or merely-queued steer (verified by making the mock drop it).
   await expect.poll(() => persistedBubbles(page), { timeout: 10_000 }).toEqual([
     "user:PREAMBLE, STEER ME: look it up",
-    `assistant:${PREAMBLE} `,
+    `assistant:${PREAMBLE}`,
     `user:${STEER}`,
     `assistant:${PREAMBLE_ANSWER}`,
   ]);
@@ -196,7 +196,8 @@ test("interjecting after the agent has finished: no blank bubble under the answe
   // pass on a dropped steer.
   await expect.poll(() => persistedBubbles(page), { timeout: 15_000 }).toEqual([
     "user:PREAMBLE, STEER LATE: look it up",
-    `assistant:${PREAMBLE} ${PREAMBLE_ANSWER}`,
+    // Narration either side of the tool is two model calls: one paragraph each.
+    `assistant:${PREAMBLE}\n\n${PREAMBLE_ANSWER}`,
     `user:${STEER}`,
   ]);
   const rendered = await page.locator(".chat-session-slot:not([hidden])").innerText();

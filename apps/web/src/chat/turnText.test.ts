@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ChatMessage } from "../lib/types";
 import { placeConsumedSteers } from "./steerPlacement";
-import { applyText } from "./turnReducers";
+import { applyText, applyToolEvent } from "./turnReducers";
 import {
   applyCanonicalTurnText,
   canonicalRemainderIndex,
@@ -132,6 +132,25 @@ describe("applyCanonicalTurnText", () => {
     const messages = [user("hi"), live({ content: "partial" })];
     const out = applyCanonicalTurnText(messages, "A", "the whole answer");
     expect(out[1]).toEqual(applyText(messages[1], "the whole answer", false));
+  });
+
+  it("un-split tool turn: the terminal replace keeps narration above AND below the card", () => {
+    // Built from the frames the server streams for "narrate → tool → narrate": the
+    // post-tool delta opens with the paragraph break the canonical text also carries.
+    // The live terminal frame lands through here, and a byte compare against the text
+    // the parts render ("…first." + "It is noon.") moved all prose below the card.
+    let bubble = live();
+    bubble = applyText(bubble, "I'll check the time first.", true);
+    bubble = applyToolEvent(bubble, { id: "t1", name: "current_time", phase: "start" });
+    bubble = applyToolEvent(bubble, { id: "t1", name: "current_time", phase: "end", output: "12:00" });
+    bubble = applyText(bubble, "\n\nIt is noon.", true);
+    const out = applyCanonicalTurnText([user("hi"), bubble], "A", "I'll check the time first.\n\nIt is noon.");
+    expect(out[1].parts).toEqual([
+      { kind: "text", text: "I'll check the time first." },
+      { kind: "tools", ids: ["t1"] },
+      { kind: "text", text: "It is noon." },
+    ]);
+    expect(out[1].content).toBe("I'll check the time first.\n\nIt is noon.");
   });
 
   it("split turn: the continuation takes only what followed the split", () => {

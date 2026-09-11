@@ -20,6 +20,7 @@ const COST = "https://proto-labs.ai/a2a/ext/cost-v1";
 const REASONING = "application/vnd.protolabs.reasoning-v1+json";
 const COMPONENT = "application/vnd.protolabs.component-v1+json";
 const CONTEXT = "application/vnd.protolabs.context-v1+json";
+const STEER = "application/vnd.protolabs.steer-consumed-v1+json";
 
 function turn(overrides: Partial<DurableChatTurn> = {}): DurableChatTurn {
   return {
@@ -200,6 +201,107 @@ describe("durable turn conversion", () => {
   it("falls back to the default title when a server turn has no visible user text", () => {
     const session = sessionFromDurableTurns(summary(), [turn({ history: [] })]);
     expect(session?.title).toBe(DEFAULT_SESSION_TITLE);
+  });
+
+  it("rebuilds a turn stored before the server kept prompts as its answer alone", () => {
+    // The exact row shape the v0.164.0 hub returned (QA 2026-09-11): agent frames only —
+    // tool-call metadata on part-less messages and a steer marker — and no ROLE_USER.
+    // Those rows age out with the task store's retention; until then they must still
+    // render the answer and its tool cards, and the tab falls back to the default title.
+    const legacy = turn({
+      text: "The workspace root contained two entries.",
+      artifacts: [{ parts: [{ text: "The workspace root contained two entries." }] }],
+      history: [
+        {
+          role: "ROLE_AGENT",
+          metadata: { [TOOL]: { toolCallId: "call-1", name: "list_dir", phase: "started", args: "" } },
+        },
+        {
+          role: "ROLE_AGENT",
+          metadata: { [TOOL]: { toolCallId: "call-1", name: "list_dir", phase: "completed", result: "AGENTS.md" } },
+        },
+        {
+          role: "ROLE_AGENT",
+          parts: [{ data: { items: [{ id: "msg-1", text: "Also count them." }] }, metadata: { mimeType: STEER } }],
+        },
+      ],
+    });
+    const session = sessionFromDurableTurns(summary(), [legacy]);
+    expect(session?.title).toBe(DEFAULT_SESSION_TITLE);
+    expect(session?.messages).toHaveLength(1);
+    expect(session?.messages[0]).toMatchObject({
+      role: "assistant",
+      content: "The workspace root contained two entries.",
+      status: "done",
+      toolCalls: [{ id: "call-1", name: "list_dir", status: "done" }],
+    });
+  });
+
+  it("draws no operator bubble for a hidden send and titles the tab from the first visible prompt", () => {
+    // A dismissal/approval resume, a regenerate or a goal kickoff is sent `hidden`: the
+    // live transcript never showed it, so the rebuilt one must not invent it — least of
+    // all as the tab's title.
+    const dismissed = turn({
+      task_id: "task-dismissed",
+      history: [{
+        role: "ROLE_USER",
+        parts: [{ text: "[dismissed] The operator dismissed this request without providing input." }],
+        metadata: { hitl_resume: true, hidden: true },
+      }],
+    });
+    const visible = turn({
+      task_id: "task-visible",
+      last_updated: "2026-08-20T12:01:00Z",
+      history: [{ role: "ROLE_USER", parts: [{ text: "Ship the release" }] }],
+    });
+    const session = sessionFromDurableTurns(summary(), [dismissed, visible]);
+    expect(session?.messages.map((message) => message.role)).toEqual(["assistant", "user", "assistant"]);
+    expect(session?.messages[1]).toMatchObject({ role: "user", content: "Ship the release" });
+    expect(session?.title).toBe("Ship the release");
+  });
+
+  it("rebuilds a server-fired turn as its answer, without the machine prompt that fired it", () => {
+    const fired = turn({
+      history: [{
+        role: "ROLE_USER",
+        parts: [{ text: "[Autonomous wake — a wait you scheduled has elapsed. Continue:]\n\ncheck the deploy" }],
+        metadata: { origin: "scheduler", scheduler_job_id: "job-1" },
+      }],
+    });
+    const messages = messagesFromDurableTurn(fired);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({ role: "assistant", content: "answer" });
+    expect(sessionFromDurableTurns(summary(), [fired])?.title).toBe(DEFAULT_SESSION_TITLE);
+  });
+
+  it("shows an attachment send as the bubble it was, not the document context it carried", () => {
+    // The model receives the pipeline context prepended; the bubble only ever showed the
+    // typed text + 📎 list ("never a raw doc/data dump"). The console records that bubble.
+    const attached = turn({
+      history: [{
+        role: "ROLE_USER",
+        parts: [{ text: "[Attached file: notes.txt]\nline one\nline two\n[end of notes.txt]\n\nSummarize it" }],
+        metadata: { display: "Summarize it\n\nAttached: notes.txt" },
+      }],
+    });
+    const [user] = messagesFromDurableTurn(attached);
+    expect(user).toMatchObject({ role: "user", content: "Summarize it\n\nAttached: notes.txt" });
+    expect(sessionFromDurableTurns(summary(), [attached])?.title).toBe("Summarize it\n\nAttached: notes.txt");
+  });
+
+  it("recovers incognito from the newest OPERATOR message, not a later server-fired one", () => {
+    // A scheduled fire into a private chat carries no incognito flag of its own; reading
+    // it as the newest "user" frame would reopen the recovered tab as ordinary.
+    const privateTurn = turn({
+      task_id: "task-private",
+      history: [{ role: "ROLE_USER", parts: [{ text: "private" }], metadata: { incognito: true } }],
+    });
+    const scheduled = turn({
+      task_id: "task-scheduled",
+      last_updated: "2026-08-20T12:05:00Z",
+      history: [{ role: "ROLE_USER", parts: [{ text: "[Autonomous wake]" }], metadata: { origin: "scheduler" } }],
+    });
+    expect(sessionFromDurableTurns(summary(), [privateTurn, scheduled])?.incognito).toBe(true);
   });
 
   it("restores incognito from the newest durable operator message", () => {

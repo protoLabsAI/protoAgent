@@ -2242,6 +2242,11 @@ function ChatSessionSlot({
         incognito: chatStore.getSnapshot().sessions.find((s) => s.id === session.id)?.incognito,
         // Marks this message as the answer to the pending HITL interrupt (#1560).
         hitlResume: opts.hitlResume,
+        // What this send looked like in the transcript, carried into the durable turn so
+        // a rebuilt chat (ADR 0104) draws the same user bubble — none for a hidden send,
+        // the typed text + 📎 list rather than the prepended attachment context.
+        hidden: opts.hidden,
+        display: !opts.hidden && content !== sent ? content : undefined,
       });
       // Stream returned: reveal any withheld tail NOW, before the reconcile
       // below — flushing after it would append the tail on top of the
