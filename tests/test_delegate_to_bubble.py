@@ -245,6 +245,7 @@ async def test_a_background_delegation_is_one_ask_with_its_job_and_summary(monke
         _RECEIPT,
     )
     rooms = [p for k, p in frames if k == "room_reply"]
+    assert len(rooms) == 1 and rooms[0].pop("id"), "the ask carries its own run id"
     assert rooms == [
         {
             "addressed_to": "sonnet",
@@ -294,5 +295,6 @@ async def test_a_foreground_ask_carries_its_summary_too(monkeypatch):
         "bgd5", monkeypatch, {"target": "proto", "query": _PROMPT, "summary": "Land PR #13"}, "done, merged"
     )
     ask, reply = [p for k, p in frames if k == "room_reply"]
+    assert ask.pop("id"), "the ask carries its own run id"
     assert ask == {"addressed_to": "proto", "text": _PROMPT, "summary": "Land PR #13", "ok": True}
     assert reply["author"] == "proto" and reply["text"] == "done, merged"

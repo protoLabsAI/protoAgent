@@ -995,6 +995,7 @@ class TestChatProgress:
                 "origin": "background-resume",
             },
         )
+        assert len(published) == 1, "one frame in, one chat.progress out"
         _, data, kw = published[0]
         assert data == {
             "session_id": "chat-7",
@@ -1010,7 +1011,18 @@ class TestChatProgress:
         }
         assert kw == {"retain": False}
 
-    def test_a_foreground_ask_gets_a_stable_content_id(self, monkeypatch):
+    def test_each_delegation_gets_its_own_id_even_when_two_asks_are_identical(self, monkeypatch):
+        """The client dedupes rows by this id, so two identical asks — same target, same
+        words — must not collapse into one. The emitter's run id is what separates them."""
+        a2a, published = self._capture(monkeypatch)
+        frame = {"phase": "room_reply", "addressed_to": "proto", "text": "look", "ok": True, "origin": "scheduler"}
+        a2a._a2a_progress("chat-7", "task-9", {**frame, "id": "run-1"})
+        a2a._a2a_progress("chat-7", "task-9", {**frame, "id": "run-2"})
+        assert [d["message_id"] for _, d, _ in published] == ["ask-run-1", "ask-run-2"]
+
+    def test_an_ask_from_an_emitter_with_no_id_still_gets_one(self, monkeypatch):
+        """A pre-#3447 emitter sends no id: fall back to the ask's content, which at least
+        dedupes the live bus copy of THAT ask."""
         a2a, published = self._capture(monkeypatch)
         frame = {"phase": "room_reply", "addressed_to": "proto", "text": "look", "ok": True, "origin": "scheduler"}
         a2a._a2a_progress("chat-7", "task-9", dict(frame))

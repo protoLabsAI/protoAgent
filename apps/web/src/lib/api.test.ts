@@ -371,13 +371,19 @@ describe("roomReplyFromParts", () => {
           summary: " Land PR #13 ",
           background: true,
           job_id: "bg-4109c71161eb",
-          ok: true,
+          error: "Error: unknown delegate 'sonet'.",
+          ok: false,
         },
       },
     ]);
     expect(got?.addressedTo).toBe("sonnet");
     expect(got?.text).toBe("the whole brief");
-    expect(got?.delegation).toEqual({ summary: "Land PR #13", background: true, jobId: "bg-4109c71161eb" });
+    expect(got?.delegation).toEqual({
+      summary: "Land PR #13",
+      background: true,
+      jobId: "bg-4109c71161eb",
+      error: "Error: unknown delegate 'sonet'.",
+    });
     // An older server's ask carries none of it — the row falls back to the prompt.
     const bare = roomReplyFromParts([{ metadata: { mimeType: ROOM_MIME }, data: { addressed_to: "proto", text: "x" } }]);
     expect(bare?.delegation).toBeUndefined();

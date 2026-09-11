@@ -17,6 +17,11 @@ export type JobStatus = BackgroundJobDTO["status"];
 export type JobLite = Pick<BackgroundJobDTO, "id" | "status" | "subagent_type" | "description" | "origin_session">;
 
 let jobs: Record<string, JobLite> = {};
+// When each job last changed from a LIVE event. A `GET /api/background` that started before
+// a `background.completed` landed would otherwise overlay the newer terminal status with the
+// "running" row it read — so a hydration never overwrites a job a live event touched while
+// its request was in flight.
+const liveAt = new Map<string, number>();
 const listeners = new Set<() => void>();
 const fetched = new Set<string>(); // single-job lookups already requested (no refetch loop)
 let started = false;
@@ -26,7 +31,8 @@ function emit() {
   for (const l of listeners) l();
 }
 
-function upsert(id: string, patch: Partial<JobLite>) {
+function upsert(id: string, patch: Partial<JobLite>, fromLiveEvent = false) {
+  if (fromLiveEvent) liveAt.set(id, Date.now());
   const prev = jobs[id];
   jobs = {
     ...jobs,
@@ -47,11 +53,14 @@ function statusOf(raw: unknown): JobStatus {
 }
 
 function hydrate() {
+  const startedAt = Date.now();
   api
     .background()
     .then((d) => {
       const next = { ...jobs };
       for (const j of d.jobs || []) {
+        // A live event beat this response home: it saw the job LATER than the API did.
+        if ((liveAt.get(j.id) ?? 0) >= startedAt) continue;
         next[j.id] = {
           id: j.id,
           status: j.status,
@@ -86,22 +95,30 @@ function start() {
   const offStart = onTopic("background.started", (d) => {
     const id = String(d.job_id || "");
     if (!id) return;
-    upsert(id, {
-      status: "running",
-      subagent_type: String(d.subagent_type || ""),
-      description: String(d.description || ""),
-      origin_session: String(d.origin_session || "") || undefined,
-    });
+    upsert(
+      id,
+      {
+        status: "running",
+        subagent_type: String(d.subagent_type || ""),
+        description: String(d.description || ""),
+        origin_session: String(d.origin_session || "") || undefined,
+      },
+      true,
+    );
   });
   const offDone = onTopic("background.completed", (d) => {
     const id = String(d.job_id || "");
     if (!id) return;
-    upsert(id, {
-      status: statusOf(d.status),
-      subagent_type: String(d.subagent_type || ""),
-      description: String(d.description || ""),
-      origin_session: String(d.origin_session || "") || undefined,
-    });
+    upsert(
+      id,
+      {
+        status: statusOf(d.status),
+        subagent_type: String(d.subagent_type || ""),
+        description: String(d.description || ""),
+        origin_session: String(d.origin_session || "") || undefined,
+      },
+      true,
+    );
   });
   stop = () => {
     offConn();
@@ -168,6 +185,15 @@ export function useSessionsWithBackgroundWork(): Set<string> {
   }, [all]);
 }
 
+/** Test seams: drive the store's wiring (subscribe starts it) and read it, without React. */
+export function subscribeForTest(l: () => void) {
+  return subscribe(l);
+}
+
+export function snapshotForTest(): Record<string, JobLite> {
+  return jobs;
+}
+
 /** Test seam: seed / reset the store without the bus or the API. */
 export function __setJobsForTest(next: Record<string, JobLite>) {
   jobs = next;
@@ -179,6 +205,7 @@ export function __resetForTest() {
   stop?.();
   stop = null;
   jobs = {};
+  liveAt.clear();
   fetched.clear();
   started = false;
   emit();

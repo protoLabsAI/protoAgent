@@ -884,10 +884,15 @@ def _publish_chat_progress(context_id: str, task_id: str, frame: dict) -> None:
         elif addressed_to:
             # The lead's outgoing delegation ask — a delegation made DURING a server-fired
             # turn (answering background reports by delegating again) gets the same row a
-            # browser-streamed one does. Ids dedupe the live bus copy: the job id when the
-            # delegation ran in the background, else the ask's own content.
+            # browser-streamed one does. Ids dedupe the live bus copy, so they must be per
+            # DELEGATION: the emitter's run id, else its background job, and only then the
+            # ask's content (a pre-#3447 emitter, where two identical asks would collapse).
             job_id = str(frame.get("job_id") or "")
-            ask_key = job_id or hashlib.sha1(f"{addressed_to}\0{text}".encode()).hexdigest()[:12]
+            ask_key = (
+                str(frame.get("id") or "")
+                or job_id
+                or hashlib.sha1(f"{addressed_to}\0{text}".encode()).hexdigest()[:12]
+            )
             data = {
                 "phase": "room_reply",
                 "message_id": f"ask-{ask_key}",

@@ -414,8 +414,11 @@ async def _spawn_background_delegation(
         )
 
     # The job's title everywhere it's listed (the Background panel, the console's delegation
-    # row): the agent's one-line summary when it wrote one, else the query's opening words.
-    label = " ".join(str(summary or "").split())[:120] or " ".join(query.split())[:80]
+    # row): the agent's one-line summary when it wrote one, else the query's first sentence —
+    # the SAME fallback the chat row uses, so a title and its row can't read differently.
+    from infra.text import first_sentence
+
+    label = " ".join(str(summary or "").split())[:120] or first_sentence(query)
     job_id = await mgr.spawn_work(
         origin_session=session,
         kind="delegate",

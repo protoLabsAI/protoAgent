@@ -557,12 +557,14 @@ def _delegation_summary(summary: object, query: str) -> str:
     """The one line the console shows for a delegation instead of its full query.
 
     The agent's own ``summary`` argument when it wrote one; else the query's first sentence
-    (or line), clipped — a delegation prompt restates everything the delegate needs, so the
-    whole thing is a wall of text the operator didn't write and rarely needs to read."""
+    — a delegation prompt restates everything the delegate needs, so the whole thing is a
+    wall of text the operator didn't write and rarely needs to read. Same fallback the job's
+    title uses (``infra.text.first_sentence``), so the row and the Background panel agree."""
+    from infra.text import first_sentence
+
     line = " ".join(str(summary or "").split())
     if not line:
-        first = re.split(r"(?<=[.!?])\s|\n", str(query or "").strip(), maxsplit=1)[0]
-        line = " ".join(first.split())
+        return first_sentence(query)
     return line if len(line) <= 120 else f"{line[:119].rstrip()}…"
 
 
@@ -918,7 +920,7 @@ async def _run_turn_stream(
                     # as the delegate's words it read as the delegate's thought process),
                     # and the ask waits for on_tool_end too, to carry the job id the
                     # console tracks the delegation's status by.
-                    _bg_delegations[rid] = {"target": _target, "query": _q, "summary": _summary}
+                    _bg_delegations[rid] = {"id": rid, "target": _target, "query": _q, "summary": _summary}
                 elif _target:
                     _delegate_targets[rid] = _target
                     # Surface the lead's OUTGOING ask, so the operator sees what was
@@ -930,7 +932,9 @@ async def _run_turn_stream(
                     if _q:
                         yield (
                             "room_reply",
-                            {"addressed_to": _target, "text": _q, "summary": _summary, "ok": True},
+                            # `id` is this delegation's run — two identical asks (same target,
+                            # same words) are still two rows, not one deduped away.
+                            {"id": rid, "addressed_to": _target, "text": _q, "summary": _summary, "ok": True},
                         )
         elif kind == "on_tool_end":
             output = event.get("data", {}).get("output", "")
@@ -953,6 +957,7 @@ async def _run_turn_stream(
                     yield (
                         "room_reply",
                         {
+                            "id": _bg["id"],
                             "addressed_to": _bg["target"],
                             "text": _bg["query"],
                             "summary": _bg["summary"],
@@ -968,7 +973,13 @@ async def _run_turn_stream(
                 # it as the foreground exchange it turned into.
                 yield (
                     "room_reply",
-                    {"addressed_to": _bg["target"], "text": _bg["query"], "summary": _bg["summary"], "ok": True},
+                    {
+                        "id": _bg["id"],
+                        "addressed_to": _bg["target"],
+                        "text": _bg["query"],
+                        "summary": _bg["summary"],
+                        "ok": True,
+                    },
                 )
                 yield (
                     "room_reply",
