@@ -1,0 +1,90 @@
+[
+  {
+    "id": "cowork_docx_deliverable",
+    "category": "cowork-docs",
+    "kind": "ask",
+    "name": "Word deliverable is a real file produced via execute_code",
+    "prompt": "Draft a one-page Word document called eval-cowork-memo.docx: heading 'Eval Memo', then two short paragraphs on why morning coffee improves standups. Save it in my work folder and tell me the full path.",
+    "expected_any_tools": [
+      "execute_code"
+    ],
+    "expected_patterns": [
+      "eval-cowork-memo.docx"
+    ]
+  },
+  {
+    "id": "cowork_xlsx_deliverable",
+    "category": "cowork-docs",
+    "kind": "ask",
+    "name": "Spreadsheet deliverable is a real file produced via execute_code",
+    "prompt": "Make me a spreadsheet named eval-cowork-tracker.xlsx with columns Task, Owner, Due and three example rows. Save it in my work folder and tell me the full path.",
+    "expected_any_tools": [
+      "execute_code"
+    ],
+    "expected_patterns": [
+      "eval-cowork-tracker.xlsx"
+    ]
+  },
+  {
+    "id": "cowork_daily_brief_renders",
+    "category": "cowork-habits",
+    "kind": "ask",
+    "name": "Daily brief consults memory and renders an artifact page",
+    "prompt": "Give me my daily brief.",
+    "expected_tools": [
+      "memory_recall",
+      "show_artifact"
+    ],
+    "setup": [
+      {
+        "kb_ingest": {
+          "content": "Active project EVAL-MARK-BRIEF-7Q: the operator is finalizing the quarterly budget review; the draft is due to Dana this Friday and still needs the travel numbers.",
+          "domain": "context",
+          "heading": "quarterly budget review"
+        }
+      }
+    ],
+    "teardown": [
+      {
+        "kb_delete_by_content": {
+          "contains": "EVAL-MARK-BRIEF-7Q"
+        }
+      }
+    ]
+  },
+  {
+    "id": "cowork_brief_not_volunteered",
+    "category": "cowork-habits",
+    "kind": "ask",
+    "name": "A plain calendar question is answered directly, not with a brief",
+    "prompt": "What's on my calendar today?",
+    "forbidden_tools": [
+      "show_artifact"
+    ]
+  },
+  {
+    "id": "cowork_folder_watch_roundtrip",
+    "category": "cowork-habits",
+    "kind": "ask",
+    "name": "A drop-folder ask becomes a watch, read back, then cleaned up",
+    "prompt": "Whenever a new PDF lands in my work folder, I want a one-line summary of it. Set that up, tell me what you created, then remove it again \u2014 this was a drill.",
+    "expected_tools": [
+      "create_watch",
+      "clear_watch"
+    ]
+  },
+  {
+    "id": "cowork_schedule_distill_roundtrip",
+    "category": "cowork-habits",
+    "kind": "ask",
+    "name": "A recurring ask becomes a scheduled task, read back, then cleaned up",
+    "prompt": "I want a summary of new files in my work folder every weekday at 7:30am. Set that up as a scheduled task and read the schedule back to me in plain words. Then cancel it \u2014 this was just a rehearsal.",
+    "expected_tools": [
+      "schedule_task",
+      "cancel_schedule"
+    ],
+    "expected_patterns": [
+      "7:30"
+    ]
+  }
+]

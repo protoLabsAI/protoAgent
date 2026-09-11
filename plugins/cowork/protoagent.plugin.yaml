@@ -1,0 +1,60 @@
+id: cowork
+name: Cowork (knowledge-work skill pack)
+# Bundled into core (#3450) from the retired cowork-plugin repo, whose last release was
+# v0.3.1. The bundled version MUST stay above every release of a superseded repo: a copy
+# that loses its plugins.lock row becomes untracked, and an untracked copy that isn't
+# older than the bundled one wins (#1574). 0.4.0 is that floor.
+version: 0.4.0
+description: >-
+  The skill pack behind protoAgent's Cowork archetype (ADR 0083): original,
+  clean-room office-document skills (Word, Excel, PowerPoint, PDF) that produce
+  real files via execute_code and the standard Python libraries, plus
+  knowledge-work habits — a /daily-brief (schedule + waiting-on-you + ongoing
+  work as a styled HTML artifact, schedulable on any cron), distill recurring
+  work into scheduled tasks, consolidate memory, learn the operator's writing
+  voice, a /drop-folder habit (watch a fenced folder and process what lands
+  there, via the cowork:folder_changed watch verifier), and a guided
+  /setup-cowork onboarding. Ships skills plus that one verifier: no tools,
+  routes, or surfaces.
+  Document skills require the execute_code plugin and the pip packages declared
+  below (already bundled into the desktop app; elsewhere, install them via the
+  console's install-deps action).
+# Bundled but OPT-IN, unlike notes/docs/artifact/craft: this pack contributes TEN skills,
+# and an on-by-default pack would push them into every agent's skill index whether or not
+# that agent does knowledge work. The Cowork archetype (and any agent that wants the pack)
+# turns it on explicitly — `plugins: { enabled: [cowork] }`.
+enabled: false
+# The standalone repo this bundled copy retires (#3445). An installed copy that
+# plugins.lock records as fetched from it stands down in favour of this one — at any
+# version — and installing/updating from that URL (directly or as a bundle member, which
+# is how cowork-archetype still lists it) is skipped rather than refused. Enabled state,
+# the `cowork` config section and every archetype's enable list keep working because the
+# id did not change.
+supersedes:
+  - https://github.com/protoLabsAI/cowork-plugin
+
+config_section: cowork
+config:
+  # Where document deliverables are written. Empty = the skills tell the agent
+  # to use the operator's fenced project folder (or ask once and remember).
+  output_dir: ""
+
+requires_pip:
+  # Optional tier (protoAgent #1954): the document skills lazy-import these and degrade with a
+  # readable error when a lib is absent, so a missing dep WARNS instead of refusing the whole
+  # plugin. That lets cowork run on the frozen desktop app — where pip-installing deps isn't
+  # possible (ADR 0058) — and the dep-free skills (writing-voice, schedule, daily-brief,
+  # consolidate-memory, setup-cowork) still work. On desktop the whole stack is already frozen
+  # in (apps/desktop/sidecar/requirements-docs.txt, which is also the ADR 0094 managed-runtime
+  # baseline), so these are simply satisfied there; on a server/Docker build they install
+  # normally. No `scope:`, deliberately: the skills import them inside execute_code, which on
+  # desktop is the managed runtime child, not the host.
+  - { pkg: python-docx, optional: true }
+  - { pkg: openpyxl,    optional: true }
+  - { pkg: python-pptx, optional: true }
+  - { pkg: pypdf,       optional: true }
+  - { pkg: reportlab,   optional: true }
+
+capabilities:
+  network: []
+  filesystem: scoped   # folder_changed verifier LISTS files (name/mtime/size, never contents) inside the operator's fenced work folders only

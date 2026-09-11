@@ -176,11 +176,13 @@ Two negative assertions (added for the `memory-regression` probes, usable on any
 
 ## Plugin-owned suites (`--tasks-file`)
 
-A plugin repo can ship its own eval cases (same JSON shape) and run them with
-this runner against an instance that has the plugin installed:
+A plugin ships its own eval cases (same JSON shape) and runs them with this
+runner against an instance that has the plugin enabled — a bundled plugin from
+in-tree, an external one from its own checkout:
 
 ```bash
-python -m evals.runner --tasks-file ../cowork-plugin/evals/tasks.json
+python -m evals.runner --tasks-file plugins/cowork/evals/tasks.json
+python -m evals.runner --tasks-file ../some-plugin/evals/tasks.json
 ```
 
 The file **replaces** the built-in suite for that run — compose with `--tasks`
