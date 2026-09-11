@@ -9,9 +9,10 @@ In-progress ref points at a closed issue — rotate shipped work into `## Shippe
 
 ## Planned
 
+- **Ollama & Hugging Face listings** — register protoAgent as an Ollama community integration and a Hugging Face "Use this model" local app. (#1990)
+
 ## In progress
 
-- **Ollama & Hugging Face listings** — protoAgent's Ollama community-integration entry and Hugging Face "Use this model" local-app snippet are submitted to both projects and waiting on their maintainers' review.
 - **Design-system alignment** — migrating the remaining bespoke console surfaces onto DS primitives as the design system grows (bottom sheet for the mobile session sheet, dense icon buttons — tracked in protoContent).
 
 
