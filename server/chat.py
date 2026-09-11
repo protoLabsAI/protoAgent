@@ -551,6 +551,11 @@ def _coerce_tool_output(value) -> str:
 
 # The job handle a background `delegate_to` returns in its receipt ("… (job `bg-…`) …").
 _BG_JOB_ID = re.compile(r"\(job `(bg-[a-f0-9]{12})`\)")
+# The ONE refusal a background dispatch answers with instead of a job handle. Matched
+# exactly: a bare `startswith("Error")` also catches a delegate whose own reply opens with
+# that word (the no-manager inline fallback returns the reply here), and calling that a
+# failed dispatch would hide the answer behind an error row.
+_BG_DISPATCH_REFUSED = re.compile(r"^Error: unknown delegate\b")
 
 
 def _delegation_summary(summary: object, query: str) -> str:
@@ -952,7 +957,7 @@ async def _run_turn_stream(
                 # reply frame: the delegate's answer arrives on its own through the drain.
                 _receipt = _coerce_room_text(output)
                 _job = _BG_JOB_ID.search(_receipt)
-                _failed = getattr(output, "status", None) == "error" or _receipt.startswith("Error")
+                _failed = getattr(output, "status", None) == "error" or bool(_BG_DISPATCH_REFUSED.match(_receipt))
                 if _job or _failed:
                     yield (
                         "room_reply",

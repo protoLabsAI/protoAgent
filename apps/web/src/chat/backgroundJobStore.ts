@@ -165,7 +165,8 @@ export function useBackgroundJob(id?: string): JobLite | undefined {
   return id ? all[id] : undefined;
 }
 
-/** The session's background jobs that are still running, oldest first. */
+/** The session's background jobs that are still running, in the order the store learned
+ *  of them (a hydration keeps the keys it already had, so the strip doesn't reshuffle). */
 export function runningJobsFor(all: Record<string, JobLite>, sessionId: string): JobLite[] {
   return Object.values(all).filter((j) => j.status === "running" && j.origin_session === sessionId);
 }
@@ -194,13 +195,7 @@ export function snapshotForTest(): Record<string, JobLite> {
   return jobs;
 }
 
-/** Test seam: seed / reset the store without the bus or the API. */
-export function __setJobsForTest(next: Record<string, JobLite>) {
-  jobs = next;
-  started = true; // keep subscribe() from wiring the real bus/API in unit tests
-  emit();
-}
-
+/** Test seam: reset the store between cases. */
 export function __resetForTest() {
   stop?.();
   stop = null;

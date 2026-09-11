@@ -290,6 +290,18 @@ async def test_background_without_a_manager_renders_as_the_exchange_it_became(mo
 
 
 @pytest.mark.asyncio
+async def test_an_inline_reply_that_opens_with_error_is_still_a_reply(monkeypatch):
+    """The no-manager fallback returns the DELEGATE'S words here. A reply that happens to
+    start with "Error" is the delegate reporting one, not the dispatch refusing — calling it
+    a failed dispatch would hide the answer behind an error row."""
+    reply = "Error budget for the month is spent; I'd hold the release."
+    frames = await _frames_for("bgd6", monkeypatch, {"target": "sonnet", "query": "how are we?", "background": True}, reply)
+    ask, authored = [p for k, p in frames if k == "room_reply"]
+    assert ask["ok"] is True and "error" not in ask
+    assert authored["author"] == "sonnet" and authored["text"] == reply
+
+
+@pytest.mark.asyncio
 async def test_a_foreground_ask_carries_its_summary_too(monkeypatch):
     frames = await _frames_for(
         "bgd5", monkeypatch, {"target": "proto", "query": _PROMPT, "summary": "Land PR #13"}, "done, merged"

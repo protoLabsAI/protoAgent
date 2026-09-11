@@ -125,3 +125,63 @@ test("a background delegation is one row that tracks its job, and the chat shows
   await expect(page.getByText(/PR #13 merged\. PR #12 closed\./)).toHaveCount(0);
   await expect(page.locator(".chat-note, .chat-report")).toHaveCount(0);
 });
+
+test("a FAILED delegation keeps its reason in the chat", async ({ page }) => {
+  // The row's ✕ says it failed; only the note says why — so a failure keeps the note a
+  // successful delegation no longer needs.
+  await page.addInitScript(
+    ([session]) => {
+      window.localStorage.setItem(
+        "protoagent.chat.sessions",
+        JSON.stringify({
+          version: 1,
+          currentSessionId: session,
+          sessions: [{ id: session, title: "lead", createdAt: 1, updatedAt: 2, messages: [] }],
+        }),
+      );
+    },
+    [SESSION],
+  );
+  await page.route("**/api/background", (route) => route.fulfill({ json: { enabled: true, jobs: [] } }));
+  await page.route("**/api/background/bg-*", (route) => route.fulfill({ status: 404, json: { detail: "no job" } }));
+
+  let conn = 0;
+  let failReleased = false;
+  await page.route("**/api/events**", async (route) => {
+    const headers = { "content-type": "text/event-stream", "cache-control": "no-cache" };
+    if (conn++ === 0) {
+      await until(() => failReleased);
+      return route.fulfill({
+        status: 200,
+        headers,
+        body: sse([
+          {
+            topic: "background.completed",
+            data: {
+              job_id: JOB,
+              status: "failed",
+              subagent_type: "delegate",
+              origin_session: SESSION,
+              description: DESCRIPTION,
+              result: "claude-agent-acp exited 1: no network in the sandbox",
+            },
+          },
+        ]),
+      });
+    }
+    await new Promise((r) => setTimeout(r, 5_000));
+    return route.fulfill({ status: 200, headers, body: "" });
+  });
+
+  await page.goto("/app/", { waitUntil: "load" });
+  const composer = page.getByPlaceholder(/Message protoAgent/i);
+  await composer.waitFor({ state: "visible" });
+  await composer.fill("DELEGATE_BG hand the portfolio work to sonnet");
+  await composer.press("Enter");
+  const row = page.locator(".chat-delegation-row");
+  await expect(row).toHaveCount(1);
+
+  failReleased = true;
+  await expect(row.getByRole("img", { name: "failed" })).toBeVisible();
+  await expect(page.getByText(/no network in the sandbox/)).toBeVisible();
+});
