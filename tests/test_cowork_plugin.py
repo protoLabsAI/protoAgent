@@ -203,12 +203,14 @@ HOST_PACKAGES = frozenset({"graph", "knowledge", "server", "operator_api", "tool
 
 def _isolated_bundled_root(tmp_path, monkeypatch) -> Path:
     """A plugin root holding ONLY this pack, so the real loader discovers it without
-    booting every other bundled plugin."""
+    booting every other bundled plugin. A copy, not a symlink: creating one needs a
+    privilege on Windows, where this suite also runs."""
+    import shutil
+
     from graph.plugins import loader
 
     root = tmp_path / "bundled"
-    root.mkdir()
-    (root / "cowork").symlink_to(ROOT)
+    shutil.copytree(ROOT, root / "cowork")
     monkeypatch.setattr(loader, "_plugin_roots", lambda config: [root])
     return root
 
