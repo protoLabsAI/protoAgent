@@ -8,6 +8,8 @@
 // partial narration, rendering as an ordinary bubble that trailed off mid-sentence, while
 // the reason sat unread in the task's terminal `status.message`.
 
+import type { ChatPart } from "../lib/types";
+
 export type ResumedTurnEvent = {
   session_id?: unknown;
   text?: unknown;
@@ -80,4 +82,22 @@ export function resumedTurnRender(data: ResumedTurnEvent): ResumedTurnRender | n
       body: (failed ? error || content : text).slice(0, 80),
     },
   };
+}
+
+/**
+ * Whether the live view's streamed text IS the settled answer, so the settled message can keep
+ * the live `parts` — and with them the order the reader was reading (narration, the tool card
+ * it ran, more narration). Otherwise the settled message falls back to the grouped layout
+ * (tools above all the text), which re-flows the bubble under the reader at the worst moment.
+ *
+ * Compared with all whitespace removed: the live preview splits text at tool boundaries and
+ * the durable answer joins those segments with paragraph breaks (#3210), so spacing differs
+ * while the words don't. Any real difference — a terminal replace, a failure note appended —
+ * returns false and the authoritative `content` wins, exactly as before.
+ */
+export function streamedTextIsFinal(parts: ChatPart[] | undefined, content: string): boolean {
+  if (!parts?.length) return false;
+  const squash = (s: string) => s.replace(/\s+/g, "");
+  const streamed = squash(parts.map((p) => (p.kind === "text" ? p.text : "")).join(""));
+  return streamed !== "" && streamed === squash(content);
 }

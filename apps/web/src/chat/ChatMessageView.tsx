@@ -28,7 +28,7 @@ import { ReasoningCard } from "./ReasoningCard";
 import { ToolCalls } from "./ToolCalls";
 import { WorkBlock } from "./WorkBlock";
 import { foldPlan, toolsForGroup } from "./parts";
-import { serverResultLabel, serverResultPreview } from "./server-turn-store";
+import { rendersAsResultCard, serverResultLabel, serverResultPreview } from "./server-turn-store";
 
 // Optional per-message action row (copy / fork / regenerate). Omit it (e.g. the palette
 // chat) and no actions render. Each callback is independently optional.
@@ -116,7 +116,9 @@ export function ChatMessageView({
   // wake carries an `origin` tag (set by ChatResumeWatch — the live streaming preview does NOT,
   // so an in-flight turn still renders full-size). These are visually secondary to the operator's
   // own turns, so they collapse into a compact, expandable card instead of a full-size bubble.
-  if (message.role === "assistant" && message.origin && message.status !== "streaming") {
+  // Not a turn answering background reports or a delegate's result: that is the conversation
+  // itself, and it settles in place as the message the reader was already reading.
+  if (message.role === "assistant" && rendersAsResultCard(message.origin) && message.status !== "streaming") {
     return <ServerResultCard message={message} onCancelDelegation={onCancelDelegation} onDismissToolCall={onDismissToolCall} />;
   }
   return (

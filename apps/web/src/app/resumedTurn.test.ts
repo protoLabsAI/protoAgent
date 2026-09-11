@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { resumedTurnRender } from "./resumedTurn";
+import { resumedTurnRender, streamedTextIsFinal } from "./resumedTurn";
 
 describe("resumedTurnRender", () => {
   it("renders an ordinary resume as a completed answer", () => {
@@ -87,5 +87,33 @@ describe("resumedTurnRender", () => {
     // A pre-#3028 server that never sets the field → "" (ChatResumeWatch falls back to the
     // origin the server-turn store captured at turn.started).
     expect(resumedTurnRender({ session_id: "chat-1", text: "hi" })!.origin).toBe("");
+  });
+});
+
+describe("streamedTextIsFinal — keep the live layout when the words didn't change", () => {
+  const parts = [
+    { kind: "text" as const, text: "Three dice and all Push Back." },
+    { kind: "tools" as const, ids: ["tc1"] },
+    { kind: "text" as const, text: "Ball secured at (8,17)." },
+  ];
+
+  it("matches when the durable answer only joins the streamed segments differently", () => {
+    // The preview splits text at tool boundaries; the durable answer joins them with
+    // paragraph breaks (#3210). Same words → the settled message keeps the live order.
+    expect(streamedTextIsFinal(parts, "Three dice and all Push Back.\n\nBall secured at (8,17).")).toBe(true);
+  });
+
+  it("lets the authoritative content win when the words differ", () => {
+    expect(streamedTextIsFinal(parts, "Turn complete: the ball is secured.")).toBe(false);
+    // …including a failure note appended to the partial narration.
+    expect(
+      streamedTextIsFinal(parts, "Three dice and all Push Back. Ball secured at (8,17).\n\n---\n\n**Turn failed:** x"),
+    ).toBe(false);
+  });
+
+  it("has nothing to keep without streamed text", () => {
+    expect(streamedTextIsFinal(undefined, "anything")).toBe(false);
+    expect(streamedTextIsFinal([], "anything")).toBe(false);
+    expect(streamedTextIsFinal([{ kind: "tools", ids: ["tc1"] }], "")).toBe(false);
   });
 });
