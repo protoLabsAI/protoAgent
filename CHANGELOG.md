@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.164.0] - 2026-09-11
 
 ### Added
-- **Runtime status now publishes structured setup gaps beside `warnings[]` (#3392).** `GET /api/runtime/status` gains a typed `setup_gaps` list alongside the existing `warnings[]` strings — one record per active plugin-reported gap carrying the plugin id, gap key, display label, operator-facing message, and any bounded, server-validated declarative remediation actions (the ones added in #3389). Ordering derives from the setup-gap store (stable `(plugin, key)`), so the console no longer has to parse `warnings[]`, and the field is `[]` (never absent) when there are no gaps. `warnings[]` is untouched — same content and ordering — so every current consumer keeps working; the change is purely additive. The console `RuntimeStatus` TypeScript model gains an optional `setup_gaps?: SetupGap[]` with matching `SetupGap`/`SetupGapAction` types, without weakening existing callers.
+- **Runtime status now publishes structured setup gaps beside `warnings[]` (#3395).** `GET /api/runtime/status` gains a typed `setup_gaps` list alongside the existing `warnings[]` strings — one record per active plugin-reported gap carrying the plugin id, gap key, display label, operator-facing message, and any bounded, server-validated declarative remediation actions (the ones added in #3389). Ordering derives from the setup-gap store (stable `(plugin, key)`), so the console no longer has to parse `warnings[]`, and the field is `[]` (never absent) when there are no gaps. `warnings[]` is untouched — same content and ordering — so every current consumer keeps working; the change is purely additive. The console `RuntimeStatus` TypeScript model gains an optional `setup_gaps?: SetupGap[]` with matching `SetupGap`/`SetupGapAction` types, without weakening existing callers.
 
 - **Plugin setup gaps now render as actionable, dismissible console banners (#3421).** Structured setup gaps delivered on runtime status `warnings[]` (a plugin that's installed and enabled but can't do its job — no coder delegate, no bound repo) now render as accessible warning banners in the shell strip instead of only as flattened strings. An allowlisted `plugin_config` action opens the reporting plugin's existing Configure dialog via `useUI.openPluginConfig`; a `global_settings` action opens global settings at its section. Anything else — an unknown or malformed action kind — renders no interactive control and never becomes a link, so a plugin string can't turn into navigation. Each gap can be dismissed for the current browser session only: the dismissal is keyed by the gap's identity plus its message/action signature, so it hides only that unchanged gap, resets when the server changes or clears the gap or on a new session, and never mutates server configuration. Legacy string warnings keep rendering exactly as before, and desktop and mobile share the one component.
 
@@ -174,7 +174,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.163.0] - 2026-09-09
 
 ### Changed
-- **Addressed participants now answer each other by default (#3395).**
+- **Addressed participants now answer each other by default (#3404).**
   `room.max_rounds` ships at **3** instead of 1. At 1 every addressee answered the operator
   and never the other participants, which is the thing a room is for — a multi-agent
   exchange behaved like several parallel one-shot delegations that happened to share a

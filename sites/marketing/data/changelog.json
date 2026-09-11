@@ -3,7 +3,7 @@
     "version": "v0.164.0",
     "date": "2026-09-11",
     "changes": [
-      "Runtime status now publishes structured setup gaps beside warnings[] (#3392).",
+      "Runtime status now publishes structured setup gaps beside warnings[] (#3395).",
       "Plugin setup gaps now render as actionable, dismissible console banners (#3421).",
       "Two settings changes at the same moment no longer silently drop one of them (#2743).",
       "Adding, importing or removing an MCP server no longer freezes the agent while it reloads (#2743).",
@@ -27,7 +27,7 @@
     "version": "v0.163.0",
     "date": "2026-09-09",
     "changes": [
-      "Addressed participants now answer each other by default (#3395).",
+      "Addressed participants now answer each other by default (#3404).",
       "Project onboarding is on by default, so you can find it (#3396).",
       "Scheduler failure backoff no longer loses a slot (#3381).",
       "onboard_project no longer clones into the server's working directory when no root is set (#3397).",
