@@ -15,6 +15,7 @@ until then), so the gate is the delegate, not a plugin toggle.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import os
 from typing import Annotated, Any
@@ -529,9 +530,17 @@ def _build_propose_delegate():
             note = response.get("note") if isinstance(response, dict) else response
             suffix = f" Operator note: {note}" if note else ""
             return f"Declined — delegate {name!r} was NOT registered.{suffix}"
+        # Any layer, deliberately stricter than the create route: the agent is proposing a
+        # NEW delegate, so it must not shadow even a fleet-shared one.
         if any(isinstance(e, dict) and e.get("name") == name for e in store.read_delegates_raw()):
             return f"Error: delegate {name!r} was registered by someone else while parked — nothing written."
-        store.upsert_delegate(entry)
+        # …and re-checked by the store under the config lock (`expect="absent"`), so a name
+        # taken between that read and the write is refused too.
+        try:
+            # Off the loop: it waits on the config write lock a reload can hold.
+            await asyncio.to_thread(functools.partial(store.upsert_delegate, entry, expect="absent"))
+        except store.DelegateConflictError:
+            return f"Error: delegate {name!r} was registered by someone else while parked — nothing written."
         ok, msg = await _reload()
         names = ", ".join(str(e.get("name")) for e in _list_payload().get("delegates", []) if isinstance(e, dict))
         reload_note = "roster reloaded" if ok else f"reload FAILED ({msg}) — a restart may be needed"

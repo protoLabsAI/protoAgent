@@ -20,6 +20,7 @@ tries gets :class:`DelegateScopeError`.
 from __future__ import annotations
 
 import copy
+import functools
 
 from .adapters import ADAPTERS, is_secretish
 
@@ -27,6 +28,14 @@ SECRETS_SECTION = "delegate_secrets"
 
 SCOPE_AGENT = "agent"
 SCOPE_HOST = "host"
+
+
+class DelegateConflictError(Exception):
+    """A create found the name already taken — checked under the config lock."""
+
+
+class DelegateNotFoundError(Exception):
+    """An update found the delegate gone — deleted meanwhile, checked under the lock."""
 
 
 class DelegateScopeError(ValueError):
@@ -387,18 +396,58 @@ def _remove_from_layer(name: str, scope: str) -> bool:
     return True
 
 
-def upsert_delegate(entry: dict) -> list:
+def _under_config_lock(fn):
+    """Run a roster write as ONE unit under the config write lock (#2743).
+
+    A save here is a read-modify-write of the live config: load the layer's roster, route
+    and prune its secrets, write the roster back, maybe move the entry out of the other
+    layer. The server's settings applier rewrites the same file under
+    ``graph.config_io.CONFIG_WRITE_LOCK``; without taking it here, the two interleave and
+    one side's change — a delegate, a secret, an unrelated setting — silently vanishes.
+    Blocking by nature: call from a worker thread, never the event loop."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        from graph.config_io import CONFIG_WRITE_LOCK
+
+        with CONFIG_WRITE_LOCK:
+            return fn(*args, **kwargs)
+
+    return wrapper
+
+
+@_under_config_lock
+def upsert_delegate(entry: dict, *, expect: str | None = None) -> list:
     """Add or replace a delegate by name in its layer (``scope: host`` = fleet-shared,
     default ``agent``); route its secret to that layer's overlay; persist. Moving an
     entry between layers (re-saving with the other scope) removes it from the old one
     — a name lives in one layer at a time as far as the writer is concerned. Returns
-    the EFFECTIVE roster (secret-free, scope-stamped)."""
+    the EFFECTIVE roster (secret-free, scope-stamped).
+
+    ``expect="absent"`` makes it a create (raises ``DelegateConflictError`` if the name is
+    taken), ``expect="present"`` an update (``DelegateNotFoundError`` if it's gone); both
+    checked under the config lock. ``None`` keeps the plain add-or-replace."""
     entry = dict(entry)
     name = str(entry.get("name", "")).strip()
     scope = _scope_of(entry)
     entry.pop("scope", None)
     if scope == SCOPE_HOST and not can_write_host_layer():
         raise DelegateScopeError("fleet-shared delegates are managed on the hub — this agent can't edit them")
+    # `expect` is the caller's precondition, re-checked HERE, under the lock, against the
+    # roster as it is now (#2743 follow-up). Checked before the lock, two creates of one
+    # name both passed and the second silently replaced the first, and an edit could
+    # bring back a delegate a concurrent delete had just removed.
+    if expect is not None:
+        clash = next((e for e in read_delegates_raw() if isinstance(e, dict) and e.get("name") == name), None)
+        # Same rule the create route always applied: a member may shadow a fleet-shared
+        # entry with its own; a hub may not double-register.
+        if expect == "absent" and clash is not None and (clash.get("scope") == scope or can_write_host_layer()):
+            where = "fleet-shared" if clash.get("scope") == SCOPE_HOST else "this agent's"
+            raise DelegateConflictError(
+                f"delegate {name!r} already exists in {where} list — edit it and toggle 'Share with fleet' to move it"
+            )
+        if expect == "present" and clash is None:
+            raise DelegateNotFoundError(f"delegate {name!r} not found")
     # Which env vars remain SECRET-routed after this save — captured BEFORE
     # _route_secret pops the form's env_secret marker list.
     marked = {str(k) for k in (entry.get("env_secret") or [])}
@@ -425,6 +474,7 @@ def upsert_delegate(entry: dict) -> list:
     return read_delegates_raw()
 
 
+@_under_config_lock
 def delete_delegate(name: str) -> list:
     """Remove ``name`` from whichever layer holds it (agent first — a member deleting
     a name that exists only in the host layer is refused). Secrets go with it,

@@ -46,6 +46,9 @@ _SLOT_ATTRS = (
 # and the `in_use_by` strings have always labelled it `soul.drift_judge_model`. A release
 # writes through the settings key so `apply_settings` addresses the right node.
 _SLOT_WRITE_KEYS = {"soul.drift_judge_model": "soul.drift.judge.model"}
+# Stands in for "this connection's favorites dropped from the CURRENT list" until the
+# delete's write runs inside the config lock (see _delete_provider).
+_FAVORITES_OF_CURRENT = object()
 
 
 class ProviderCreate(BaseModel):
@@ -178,21 +181,31 @@ def _write_providers(
     single save — so removing a connection and repointing/clearing the slots that named
     it land in one atomic write, not two.
     """
-    from graph.config_io import apply_updates_to_yaml, load_yaml_doc, save_secrets, save_yaml_doc
+    from graph.config_io import CONFIG_WRITE_LOCK, apply_updates_to_yaml, load_yaml_doc, save_secrets, save_yaml_doc
 
-    doc = load_yaml_doc()
-    doc["providers"] = entries
-    if extra_updates:
-        apply_updates_to_yaml(doc, extra_updates)
-    save_yaml_doc(doc)
-    if secret_updates:
-        save_secrets({"providers": secret_updates})
+    with CONFIG_WRITE_LOCK:  # across the read AND the write (#2743)
+        doc = load_yaml_doc()
+        doc["providers"] = entries
+        if extra_updates:
+            apply_updates_to_yaml(doc, extra_updates)
+        save_yaml_doc(doc)
+        if secret_updates:
+            save_secrets({"providers": secret_updates})
 
 
 async def _apply_providers(
-    entries: list[dict], secret_updates: dict[str, str], extra_updates: dict | None = None
+    build,
+    secret_updates: dict[str, str],
+    extra_updates=None,
 ) -> None:
     """Persist the registry and make it the live registry before returning.
+
+    ``build(current_config) -> entries`` produces the new registry, and ``extra_updates``
+    may likewise be a ``(current_config) -> dotted updates`` callable. Both run inside
+    the config write lock against the config the previous write committed (#2743):
+    built from a copy read BEFORE the lock, two connection edits at once — an add in one
+    tab, a delete in another — each wrote its own list and one edit silently vanished.
+    Raise ``ValueError`` from either to refuse; it comes back as a 400.
 
     The server wires ``HOST.apply_settings`` to the transactional config writer: it
     validates, persists, rebuilds, and rolls back on a failed rebuild. Route-only unit
@@ -206,17 +219,35 @@ async def _apply_providers(
     """
     from graph.plugins.host import HOST
 
-    nested = _nest_updates(extra_updates or {})
+    def _extra(current) -> dict:
+        extra = extra_updates(current) if callable(extra_updates) else (extra_updates or {})
+        return _nest_updates(extra)
+
     if HOST.apply_settings is None:
-        await asyncio.to_thread(_write_providers, entries, secret_updates, nested)
+        # Route-only tests: the narrow disk writer, under the same lock.
+        from graph.config_io import CONFIG_WRITE_LOCK
+
+        def _write_current() -> None:
+            with CONFIG_WRITE_LOCK:
+                current = _config()
+                try:
+                    entries, nested = build(current), _extra(current)
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                _write_providers(entries, secret_updates, nested)
+
+        await asyncio.to_thread(_write_current)
         return
 
-    updates = [dict(entry) for entry in entries]
-    for entry in updates:
-        secret = secret_updates.get(str(entry.get("id", "")))
-        if secret:
-            entry["api_key"] = secret
-    ok, messages = await asyncio.to_thread(HOST.apply_settings, {"providers": updates, **nested})
+    def _patch(current) -> dict:
+        updates = [dict(entry) for entry in build(current)]
+        for entry in updates:
+            secret = secret_updates.get(str(entry.get("id", "")))
+            if secret:
+                entry["api_key"] = secret
+        return {"providers": updates, **_extra(current)}
+
+    ok, messages = await asyncio.to_thread(HOST.apply_settings, _patch)
     if not ok:
         raise HTTPException(status_code=400, detail=" · ".join(messages or ["connection update failed"]))
 
@@ -301,14 +332,18 @@ def register_provider_routes(app) -> None:
         if ptype not in PROVIDER_TYPES:
             raise HTTPException(status_code=400, detail=f"unknown provider type {req.type!r}")
 
-        entries = _entries_from_config(cfg)
         entry = {"id": pid, "type": ptype}
         if req.label.strip():
             entry["label"] = req.label.strip()
         if req.base_url.strip():
             entry["base_url"] = req.base_url.strip()
-        entries.append(entry)
-        await _apply_providers(entries, {pid: req.api_key} if req.api_key.strip() else {})
+
+        def _with_new(current) -> list[dict]:
+            if current.provider_by_id(pid) is not None:  # added in another tab meanwhile
+                raise ValueError(f"a provider named {pid!r} already exists")
+            return _entries_from_config(current) + [entry]
+
+        await _apply_providers(_with_new, {pid: req.api_key} if req.api_key.strip() else {})
         return {"ok": True, "id": pid, "restart_required": False}
 
     @app.patch("/api/config/providers/{pid}")
@@ -317,22 +352,27 @@ def register_provider_routes(app) -> None:
         pid = (pid or "").strip().lower()
         if cfg.provider_by_id(pid) is None:
             raise HTTPException(status_code=404, detail=f"no provider named {pid!r}")
-        entries = _entries_from_config(cfg)
-        for entry in entries:
-            if entry["id"] != pid:
-                continue
-            if req.label is not None:
-                entry["label"] = req.label.strip()
-                if not entry["label"]:
-                    entry.pop("label")
-            if req.base_url is not None:
-                entry["base_url"] = req.base_url.strip()
-                if not entry["base_url"]:
-                    entry.pop("base_url", None)
+        def _patched(current) -> list[dict]:
+            if current.provider_by_id(pid) is None:  # deleted in another tab meanwhile
+                raise ValueError(f"no provider named {pid!r}")
+            entries = _entries_from_config(current)
+            for entry in entries:
+                if entry["id"] != pid:
+                    continue
+                if req.label is not None:
+                    entry["label"] = req.label.strip()
+                    if not entry["label"]:
+                        entry.pop("label")
+                if req.base_url is not None:
+                    entry["base_url"] = req.base_url.strip()
+                    if not entry["base_url"]:
+                        entry.pop("base_url", None)
+            return entries
+
         # A blank/absent api_key leaves the stored one in place — the console is never
         # shown a key, so it cannot echo one back.
         secret = {pid: req.api_key} if (req.api_key or "").strip() else {}
-        await _apply_providers(entries, secret)
+        await _apply_providers(_patched, secret)
         return {"ok": True, "id": pid}
 
     @app.delete("/api/config/providers/{pid}")
@@ -364,9 +404,10 @@ def register_provider_routes(app) -> None:
                         detail="model.favorites can only be cleared (send null); a favorite list is not a routed slot to repoint.",
                     )
                 # Drop only THIS connection's favorites; keep every other operator favorite.
-                write_updates[write_key] = [
-                    f for f in (getattr(cfg, "model_favorites", []) or []) if not str(f).lower().startswith(f"{pid}:")
-                ]
+                # A marker, filled in against the CURRENT favorites inside the lock below —
+                # filtered from this request-time copy, it would write out a favorite added
+                # meanwhile.
+                write_updates[write_key] = _FAVORITES_OF_CURRENT
                 continue
             if target is None:
                 if key == "model.name":
@@ -403,8 +444,20 @@ def register_provider_routes(app) -> None:
                     "without a configured model source. Confirm that explicitly to continue."
                 ),
             )
-        entries = [e for e in _entries_from_config(cfg) if e["id"] != pid]
-        await _apply_providers(entries, {}, write_updates)
+        def _without(current) -> list[dict]:
+            return [e for e in _entries_from_config(current) if e["id"] != pid]
+
+        def _releases(current) -> dict:
+            return {
+                key: (
+                    [f for f in (getattr(current, "model_favorites", []) or []) if not str(f).lower().startswith(f"{pid}:")]
+                    if value is _FAVORITES_OF_CURRENT
+                    else value
+                )
+                for key, value in write_updates.items()
+            }
+
+        await _apply_providers(_without, {}, _releases)
         return {"ok": True, "removed": pid, "released": sorted(releases)}
 
     @app.post("/api/config/providers/{pid}/models")

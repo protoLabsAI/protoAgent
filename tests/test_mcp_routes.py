@@ -19,14 +19,21 @@ def _wire(monkeypatch, *, servers):
     captured: dict = {}
     fake = types.ModuleType("server.agent_init")
 
+    import runtime.state as rs
+
     def _apply(config=None, soul=None):
+        # Resolve a read-modify-write callable the way the real applier does — against
+        # the committed config — then commit what it wrote, as the reload would (#2743).
+        if callable(config):
+            config = config(rs.STATE.graph_config)
         captured["config"] = config
+        servers = ((config or {}).get("mcp") or {}).get("servers")
+        if servers is not None:
+            rs.STATE.graph_config.mcp_servers = list(servers)
         return True, ["reloaded"]
 
     fake._apply_settings_changes = _apply
     monkeypatch.setitem(sys.modules, "server.agent_init", fake)
-
-    import runtime.state as rs
 
     monkeypatch.setattr(rs.STATE, "graph_config", types.SimpleNamespace(mcp_servers=list(servers)), raising=False)
     return captured

@@ -8,6 +8,7 @@ gitignored, so ``env`` values stay local.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 
@@ -39,22 +40,98 @@ def _entries_from_blob(data: object) -> list[dict]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def _current_servers(current) -> list[dict]:
+    return [s for s in (getattr(current, "mcp_servers", []) or []) if isinstance(s, dict)]
+
+
+async def _apply_servers(build, *, enable: bool) -> list[dict]:
+    """Rewrite ``mcp.servers`` from the CURRENT list and hot-reload. Returns the list written.
+
+    ``build(current_servers) -> new_servers`` runs inside the config write lock, against
+    the config the previous write committed (#2743's mechanism). Every route here used to
+    build its list from a copy read BEFORE the lock, so two edits at once — an add racing
+    an import, a promote racing a remove — each wrote its own version and one server
+    silently vanished. And it runs off the event loop: these routes called the applier
+    inline, freezing the whole server for the length of the reload."""
+    from server.agent_init import _apply_settings_changes
+
+    written: list[dict] = []
+    ok, messages = await asyncio.to_thread(_apply_settings_changes, config=_servers_patch(build, enable, written))
+    if not ok:
+        raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
+    return written
+
+
+def _servers_patch(build, enable: bool, written: list[dict]):
+    """The `(current_config) -> updates` callable the applier resolves inside its lock;
+    records the list it wrote into ``written``."""
+
+    def _updates(current) -> dict:
+        written[:] = build(_current_servers(current))
+        mcp: dict = {"servers": list(written)}
+        if enable:
+            mcp["enabled"] = True
+        return {"mcp": mcp}
+
+    return _updates
+
+
+def _move_between_tiers(name: str, *, to_commons: bool) -> tuple[bool, list[str]]:
+    """Promote (this agent → the box commons) or forget (commons → this agent) as ONE unit.
+
+    It is two writes — the commons file and this agent's `mcp.servers` — and the applier
+    rolls the agent's config back when the reload fails. Done as two separate steps, the
+    commons write stayed while the config rolled back: a failed forget left the server in
+    NEITHER tier. So both run under the config write lock, from state read inside it (the
+    source-tier check included), and a failed apply restores the commons file too.
+    Blocking: run it in a worker thread. Raises LookupError when `name` isn't in the
+    source tier. (The commons file is box-wide, so another agent PROCESS editing it at
+    the same moment is outside what an in-process lock can cover.)"""
+    from graph.config_io import CONFIG_WRITE_LOCK
+    from server.agent_init import _apply_settings_changes
+    from tools.mcp_tools import read_mcp_commons, write_mcp_commons
+
+    with CONFIG_WRITE_LOCK:
+        cfg = STATE.graph_config
+        commons_before = read_mcp_commons(cfg)
+        if to_commons:
+            entry = next((s for s in _current_servers(cfg) if s.get("name") == name), None)
+            if entry is None:
+                raise LookupError(f"no configured server named {name!r}")
+            commons_after = [s for s in commons_before if s.get("name") != name] + [entry]
+
+            def build(cur):
+                return [s for s in cur if s.get("name") != name]
+        else:
+            entry = next((s for s in commons_before if s.get("name") == name), None)
+            if entry is None:
+                raise LookupError(f"no commons server named {name!r}")
+            commons_after = [s for s in commons_before if s.get("name") != name]
+
+            def build(cur):
+                return [s for s in cur if s.get("name") != name] + [entry]
+
+        write_mcp_commons(cfg, commons_after)
+        try:
+            ok, messages = _apply_settings_changes(config=_servers_patch(build, not to_commons, []))
+        except BaseException:
+            write_mcp_commons(cfg, commons_before)
+            raise
+        if not ok:
+            write_mcp_commons(cfg, commons_before)  # the agent's config rolled back; so does this
+        return ok, messages
+
+
 def register_mcp_routes(app) -> None:
     """Register add / import / delete for `mcp.servers`."""
 
     @app.post("/api/mcp/servers")
     async def _add(body: dict | None = None):
         entry = _clean_entry(body or {})
-        cfg = STATE.graph_config
-        servers = [s for s in (getattr(cfg, "mcp_servers", []) or []) if s.get("name") != entry["name"]]
-        servers.append(entry)
-
-        from server.agent_init import _apply_settings_changes
-
         # enabling MCP + replacing the servers list; _build_mcp reconnects on reload.
-        ok, messages = _apply_settings_changes(config={"mcp": {"enabled": True, "servers": servers}})
-        if not ok:
-            raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
+        servers = await _apply_servers(
+            lambda cur: [s for s in cur if s.get("name") != entry["name"]] + [entry], enable=True
+        )
         return {"ok": True, "name": entry["name"], "servers": [s["name"] for s in servers]}
 
     @app.post("/api/mcp/servers/import")
@@ -72,15 +149,7 @@ def register_mcp_routes(app) -> None:
 
         entries = _entries_from_blob(data)
         names = {e["name"] for e in entries}
-        cfg = STATE.graph_config
-        servers = [s for s in (getattr(cfg, "mcp_servers", []) or []) if s.get("name") not in names]
-        servers.extend(entries)
-
-        from server.agent_init import _apply_settings_changes
-
-        ok, messages = _apply_settings_changes(config={"mcp": {"enabled": True, "servers": servers}})
-        if not ok:
-            raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
+        servers = await _apply_servers(lambda cur: [s for s in cur if s.get("name") not in names] + entries, enable=True)
         return {"ok": True, "added": sorted(names), "servers": [s["name"] for s in servers]}
 
     @app.get("/api/mcp/catalog")
@@ -155,14 +224,7 @@ def register_mcp_routes(app) -> None:
 
     @app.delete("/api/mcp/servers/{name}")
     async def _remove(name: str):
-        cfg = STATE.graph_config
-        servers = [s for s in (getattr(cfg, "mcp_servers", []) or []) if s.get("name") != name]
-
-        from server.agent_init import _apply_settings_changes
-
-        ok, messages = _apply_settings_changes(config={"mcp": {"servers": servers}})
-        if not ok:
-            raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
+        servers = await _apply_servers(lambda cur: [s for s in cur if s.get("name") != name], enable=False)
         return {"ok": True, "servers": [s["name"] for s in servers]}
 
     @app.post("/api/mcp/servers/{name}/promote")
@@ -171,22 +233,10 @@ def register_mcp_routes(app) -> None:
         agent's ``mcp.servers`` into ``commons/mcp-servers.json``. With ``mcp.scope:
         layered`` the agent keeps running it (now as the commons tier) and every other
         layered agent on the box picks it up."""
-        from tools.mcp_tools import read_mcp_commons, write_mcp_commons
-
-        cfg = STATE.graph_config
-        private = [s for s in (getattr(cfg, "mcp_servers", []) or []) if isinstance(s, dict)]
-        entry = next((s for s in private if s.get("name") == name), None)
-        if entry is None:
-            raise HTTPException(status_code=404, detail=f"no configured server named {name!r}")
-
-        commons = [s for s in read_mcp_commons(cfg) if s.get("name") != name]
-        commons.append(entry)
-        write_mcp_commons(cfg, commons)
-
-        remaining = [s for s in private if s.get("name") != name]
-        from server.agent_init import _apply_settings_changes
-
-        ok, messages = _apply_settings_changes(config={"mcp": {"servers": remaining}})
+        try:
+            ok, messages = await asyncio.to_thread(_move_between_tiers, name, to_commons=True)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         if not ok:
             raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
         return {"ok": True, "promoted": True, "name": name}
@@ -196,21 +246,10 @@ def register_mcp_routes(app) -> None:
         """Unshare a commons server (the inverse of promote): MOVE it out of the box
         commons back into this agent's ``mcp.servers``. No other agent on the box will
         run it after this."""
-        from tools.mcp_tools import read_mcp_commons, write_mcp_commons
-
-        cfg = STATE.graph_config
-        commons = read_mcp_commons(cfg)
-        entry = next((s for s in commons if s.get("name") == name), None)
-        if entry is None:
-            raise HTTPException(status_code=404, detail=f"no commons server named {name!r}")
-
-        write_mcp_commons(cfg, [s for s in commons if s.get("name") != name])
-
-        private = [s for s in (getattr(cfg, "mcp_servers", []) or []) if isinstance(s, dict) and s.get("name") != name]
-        private.append(entry)
-        from server.agent_init import _apply_settings_changes
-
-        ok, messages = _apply_settings_changes(config={"mcp": {"enabled": True, "servers": private}})
+        try:
+            ok, messages = await asyncio.to_thread(_move_between_tiers, name, to_commons=False)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         if not ok:
             raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
         return {"ok": True, "forgotten": True, "name": name}

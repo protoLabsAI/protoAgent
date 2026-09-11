@@ -1336,7 +1336,7 @@ async def test_propose_delegate_declines_unless_approve_is_exactly_true(monkeypa
 
     monkeypatch.setattr(dstore, "read_delegates_raw", lambda: [])
     writes = []
-    monkeypatch.setattr(dstore, "upsert_delegate", lambda e: writes.append(e))
+    monkeypatch.setattr(dstore, "upsert_delegate", lambda e, **_kw: writes.append(e))
 
     async def _probe(d):
         return {"ok": True}
@@ -1358,7 +1358,7 @@ async def test_propose_delegate_registers_on_explicit_approval(monkeypatch):
 
     monkeypatch.setattr(dstore, "read_delegates_raw", lambda: [])
     writes = []
-    monkeypatch.setattr(dstore, "upsert_delegate", lambda e: writes.append(e))
+    monkeypatch.setattr(dstore, "upsert_delegate", lambda e, **_kw: writes.append(e))
 
     async def _probe(d):
         return {"ok": True, "detail": "handshake fine"}
@@ -1389,3 +1389,39 @@ async def test_propose_delegate_registers_on_explicit_approval(monkeypatch):
     assert "/abs/claude-agent-acp" in seen["description"]  # command path front and center
     assert "handshake fine" in seen["description"]  # probe result shown
     assert "the board needs a coder" in seen["description"]  # the agent's why
+
+
+async def test_propose_delegate_refuses_a_name_taken_after_the_pre_check(monkeypatch):
+    """The pre-check reads the roster before the config lock; a name registered between
+    that read and the write is refused by the store (`expect="absent"`, under the lock)
+    — the approval never overwrites someone else's delegate, and nothing reloads."""
+    from plugins.delegates import store as dstore
+
+    monkeypatch.setattr(dstore, "read_delegates_raw", lambda: [])
+    expects = []
+
+    def _taken(e, **kw):
+        expects.append(kw.get("expect"))
+        raise dstore.DelegateConflictError("taken")
+
+    monkeypatch.setattr(dstore, "upsert_delegate", _taken)
+
+    async def _probe(d):
+        return {"ok": True}
+
+    monkeypatch.setattr(ADAPTERS["acp"], "probe", _probe)
+    reloads = []
+
+    async def _fake_reload():
+        reloads.append(1)
+        return True, "reloaded"
+
+    import plugins.delegates.api as dapi
+
+    monkeypatch.setattr(dapi, "_reload", _fake_reload)
+    monkeypatch.setattr("langgraph.types.interrupt", lambda _p: {"approve": True})
+    out = await _propose_tool().ainvoke({"entry": _acp_entry(), "reason": "r"})
+
+    assert expects == ["absent"]
+    assert "registered by someone else while parked" in out and "nothing written" in out
+    assert reloads == []
