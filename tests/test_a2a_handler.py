@@ -466,18 +466,25 @@ async def test_room_reply_fires_progress_frame_for_server_turn_bridge():
 async def test_consumed_steer_fires_progress_frame_after_the_text_it_follows():
     """A server-fired turn's stream is held by the server itself, so the console that
     interjected into it never sees the inline steer-consumed frame. The boundary must
-    also reach the host progress hook — AFTER the text that preceded it, so a bus
-    consumer can split its live preview at the same point a stream consumer does."""
+    also reach the host progress hook — after the text that preceded it, so a bus
+    consumer can split its live preview at the same point a stream consumer does.
+
+    The tail is deliberately SHORT: text is batched to `_FLUSH_CHARS`, so a long
+    pre-boundary chunk flushes on arrival and would make this pass wherever the
+    republish sat. Only a chunk still sitting in the buffer proves the marker's handler
+    flushes it FIRST — which is what makes the bus order the stream order."""
     frames: list = []
     set_progress_hook(lambda ctx, task, frame: frames.append(frame))
 
-    before = "Work emitted before the operator interjected. " * 8
+    head = "First words, long enough to flush on their own. "
+    tail = "and a short tail"  # under _FLUSH_CHARS: still buffered when the marker lands
 
     async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
-        yield ("text", before)
+        yield ("text", head)
+        yield ("text", tail)
         yield ("steer_consumed", {"items": [{"id": "msg-1", "text": "yes 2024 as proposed"}]})
         yield ("text", "Locked in.")
-        yield ("done", before + "Locked in.")
+        yield ("done", head + tail + "Locked in.")
 
     app = _build_app(stream)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:
@@ -485,8 +492,12 @@ async def test_consumed_steer_fires_progress_frame_after_the_text_it_follows():
         final = await _poll_terminal(c, task["id"])
 
     assert final["status"]["state"] == "TASK_STATE_COMPLETED"
-    phases = [frame["phase"] for frame in frames if frame.get("phase") in ("text", "steer_consumed")]
-    assert phases.index("steer_consumed") > phases.index("text")
+    ordered = [(f["phase"], f.get("text", "")) for f in frames if f.get("phase") in ("text", "steer_consumed")]
+    marker = [phase for phase, _ in ordered].index("steer_consumed")
+    before = "".join(text for phase, text in ordered[:marker] if phase == "text")
+    after = "".join(text for phase, text in ordered[marker + 1 :] if phase == "text")
+    assert before.endswith(tail), ordered  # the buffered tail was flushed BEFORE the marker
+    assert "Locked in." in after and "Locked in." not in before, ordered
     steer = next(frame for frame in frames if frame.get("phase") == "steer_consumed")
     assert steer == {
         "phase": "steer_consumed",
@@ -1435,3 +1446,19 @@ async def test_terminal_hook_fires_on_park_and_again_on_resume():
     assert final["status"]["state"] == "TASK_STATE_COMPLETED"
     assert [o.state for o in outcomes] == ["input_required", "completed"]
     assert outcomes[1].usage["input_tokens"] == 70  # the resumed leg's own spend
+
+
+def test_task_id_from_response_reads_both_wire_shapes():
+    """The self-POST callers learn their turn's task id from the SendMessage reply, and
+    that is what makes the turn-lifecycle events they publish addressable. A2A 1.0 puts
+    the task flat on `result`; some responses nest it under `result.task`. Anything
+    unreadable degrades to "" — a missing id is the old un-addressed behavior, never a
+    raised exception inside a fire."""
+    from a2a_impl.wire import task_id_from_response
+
+    assert task_id_from_response({"result": {"id": "task-1"}}) == "task-1"
+    assert task_id_from_response({"result": {"task": {"id": "task-2"}}}) == "task-2"
+    assert task_id_from_response({"result": {"status": {"state": "TASK_STATE_COMPLETED"}}}) == ""
+    assert task_id_from_response({"error": {"message": "nope"}}) == ""
+    assert task_id_from_response(None) == ""
+    assert task_id_from_response("not a dict") == ""

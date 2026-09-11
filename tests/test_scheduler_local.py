@@ -399,6 +399,27 @@ class TestFireTurnEvents:
     indicator, labelled by trigger, during the agent's longest turns."""
 
     @pytest.mark.asyncio
+    async def test_scheduler_finish_carries_the_task_id_it_fired(self, tmp_path, monkeypatch):
+        """``turn.finished`` must name the turn that ended (#3446): a console holding a
+        DIFFERENT live turn's control keeps it, instead of clearing whichever one it had —
+        which is what dropped an operator's queued interjection."""
+        import httpx
+
+        payload = {"result": {"id": "task-99", "status": {"state": "TASK_STATE_COMPLETED"}}}
+        monkeypatch.setattr(
+            httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200, payload=payload))
+        )
+        events: list = []
+        s = _make_scheduler(tmp_path, event_publish=lambda t, d: events.append((t, d)))
+        job = s.add_job("sweep the inbox", _FUTURE_ISO, job_id="job-1", context_id="chat-42")
+
+        assert await s._fire(job) is True
+
+        assert next(d for (t, d) in events if t == "turn.finished")["task_id"] == "task-99"
+        # The fire publishes `turn.started` before the task exists, so it carries no id.
+        assert "task_id" not in next(d for (t, d) in events if t == "turn.started")
+
+    @pytest.mark.asyncio
     async def test_scheduler_fire_emits_started_then_finished(self, tmp_path, monkeypatch):
         import httpx
 

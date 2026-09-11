@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Request } from "@playwright/test";
+import { expect, test, type Page, type Request, type Route } from "@playwright/test";
 
 // An interjection typed into an ATTENDED server-fired turn (a background push-resume, a
 // scheduled fire, a watch reaction) must behave like the steer it is.
@@ -91,6 +91,15 @@ type Harness = {
   interjected: () => { id: string; text: string } | null;
   /** What `GET …/steer` answers — the server's still-queued items. */
   setPending: (items: { id: string; text: string }[]) => void;
+  /** Hold interject POSTs unanswered (the slow-link / turn-end race window). */
+  holdInterject: (on: boolean) => void;
+  heldInterjects: () => number;
+  releaseInterjects: (reply: (body: { id: string; text: string }) => Record<string, unknown>) => Promise<void>;
+  /** Hold `GET …/steer` so the reconcile can't resolve anything while a test acts. */
+  holdSteerReads: (on: boolean) => void;
+  /** Force every `DELETE …/steer/{id}` to answer `removed: false` (the agent got there
+   *  first), whatever the mock's own queue says. */
+  forceDeleteNotRemoved: (on: boolean) => void;
   deletes: string[];
   a2aSends: string[];
   /** Dequeues and sends, in the order the console made them. */
@@ -145,22 +154,31 @@ async function openAttendedServerTurn(page: Page, session: string): Promise<Harn
       })
       .catch(() => {});
   });
+  let holdI = false;
+  const heldI: { route: Route; body: { id: string; text: string } }[] = [];
+  let holdReads = false;
+  let denyRemoval = false;
   await page.route("**/api/chat/sessions/*/server-turns/*/interject", async (route) => {
     const body = route.request().postDataJSON() as { id: string; text: string };
     posted = { id: body.id, text: body.text };
-    pending = [...pending, posted];
+    if (holdI) {
+      heldI.push({ route, body });
+      return;
+    }
+    pending = [...pending, { id: body.id, text: body.text }];
     await route.fulfill({ json: { ok: true, id: body.id, pending: pending.length } });
   });
   await page.route("**/api/chat/sessions/*/steer", async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
-    await route.fulfill({ json: { pending } });
+    await until(() => !holdReads, 20_000);
+    await route.fulfill({ json: { pending } }).catch(() => {});
   });
   await page.route("**/api/chat/sessions/*/steer/*", async (route) => {
     if (route.request().method() !== "DELETE") return route.fallback();
     const id = decodeURIComponent(route.request().url().split("/").pop() ?? "");
     deletes.push(id);
     order.push("dequeue");
-    const removed = pending.some((item) => item.id === id);
+    const removed = !denyRemoval && pending.some((item) => item.id === id);
     pending = pending.filter((item) => item.id !== id);
     await route.fulfill({ json: { removed, pending: pending.length } });
   });
@@ -189,6 +207,23 @@ async function openAttendedServerTurn(page: Page, session: string): Promise<Harn
     interjected: () => posted,
     setPending: (items) => {
       pending = items;
+    },
+    holdInterject: (on) => {
+      holdI = on;
+    },
+    heldInterjects: () => heldI.length,
+    releaseInterjects: async (reply) => {
+      for (const { route, body } of heldI.splice(0)) {
+        const answer = reply(body);
+        if (answer.ok) pending = [...pending, { id: body.id, text: body.text }];
+        await route.fulfill({ json: answer }).catch(() => {});
+      }
+    },
+    holdSteerReads: (on) => {
+      holdReads = on;
+    },
+    forceDeleteNotRemoved: (on) => {
+      denyRemoval = on;
     },
     deletes,
     a2aSends,
@@ -266,6 +301,17 @@ test("the server's consumed marker settles a queued interjection at the boundary
   expect(indexOf(live, PRE)).toBeLessThan(indexOf(live, INTERJECTION));
   expect(indexOf(live, INTERJECTION)).toBeLessThan(indexOf(live, POST));
 
+  // Retired from the slot's QUEUE, not merely hidden from the rendered list — and while the
+  // turn is still running, the slot's own retire is the only thing that can have done it. ↑
+  // on an empty composer is the probe: a still-queued item takes the pull-it-back-out path
+  // (a DELETE) instead of history recall, so anything that still thought this message was
+  // pending — ↑, Escape — would be acting on one the agent has already read. (The recalled
+  // TEXT can't tell them apart: the input-history ring holds it either way.)
+  await page.locator(`${SLOT} .pl-prompt__field`).press("ArrowUp");
+  await page.waitForTimeout(300);
+  expect(h.deletes, "↑ must not try to dequeue a message that already landed").toEqual([]);
+  await page.locator(`${SLOT} .pl-prompt__field`).fill("");
+
   // The turn settles. A reply to background reports settles IN PLACE (#3443) — no card, no
   // re-flow — and the split has to keep that: the operator's message stays exactly where it
   // was, exactly once, with the authoritative text distributed across the split rather than
@@ -292,14 +338,6 @@ test("the server's consumed marker settles a queued interjection at the boundary
   // Nothing was re-sent: the agent already had it.
   expect(h.a2aSends.filter((body) => body.includes(INTERJECTION))).toEqual([]);
 
-  // The settled message is a normal message now, so the slot must have retired it from the
-  // queue itself — not merely stopped rendering it. ↑ on an empty composer is the probe: a
-  // still-queued item takes the pull-it-back-out path (a DELETE) instead of history recall.
-  // (The recalled TEXT can't tell them apart — the input-history ring holds it either way.)
-  await page.locator(`${SLOT} .pl-prompt__field`).press("ArrowUp");
-  await page.waitForTimeout(300);
-  expect(h.deletes, "↑ must not try to dequeue a message that already landed").toEqual([]);
-  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(0);
 });
 
 test("a missed consumed marker still settles the interjection when the turn ends", async ({ page }) => {
@@ -366,4 +404,113 @@ test("an interjection the server turn never reached is sent as a normal message 
   const reply = indexOf(settled, POST);
   expect(reply).toBeGreaterThan(-1);
   expect(indexOf(settled, INTERJECTION)).toBeGreaterThan(reply);
+});
+
+test("an interjection still in flight when the turn ends is left alone until the server answers", async ({ page }) => {
+  const session = "chat-interject-inflight";
+  const h = await openAttendedServerTurn(page, session);
+  // The POST is slow (a remote member, a loaded box). The turn ends underneath it.
+  h.holdInterject(true);
+  const field = page.locator(`${SLOT} .pl-prompt__field`);
+  await field.fill(INTERJECTION);
+  await field.press("Enter");
+  await expect.poll(() => h.heldInterjects()).toBe(1);
+  h.release(terminalFrames(session));
+  await expect(page.getByText(/responding to background reports/i)).toHaveCount(0);
+
+  // The server has not said whether it queued it, so its absence from the queue means
+  // NOTHING yet: settling it would claim the agent read it, re-sending could double it,
+  // and handing the words back would deny a message the agent is about to read. Waited out
+  // past the reconcile's own re-check ladder — an in-flight submission is not "unresolved",
+  // it is unanswered, and the two must not be confused however long it takes.
+  await page.waitForTimeout(6_000);
+  expect(h.deletes, "nothing may be dequeued while the submission is unanswered").toEqual([]);
+  expect(h.a2aSends.filter((body) => body.includes(INTERJECTION))).toEqual([]);
+  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(1);
+  expect(await page.locator(`${SLOT} .pl-prompt__field`).inputValue()).toBe("");
+
+  // Answered at last, and accepted: now it can be resolved — the turn is over and nothing
+  // else will drain it, so it goes as the operator's next message.
+  await h.releaseInterjects((body) => ({ ok: true, id: body.id, pending: 1 }));
+  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(0);
+  await expect.poll(() => h.deletes.length).toBe(1);
+  await expect.poll(() => h.a2aSends.filter((body) => body.includes(INTERJECTION)).length).toBe(1);
+});
+
+test("a refused interjection is never lost: its words come back, and nothing is delivered", async ({ page }) => {
+  const session = "chat-interject-refused";
+  const h = await openAttendedServerTurn(page, session);
+  h.holdInterject(true);
+  const field = page.locator(`${SLOT} .pl-prompt__field`);
+  await field.fill(INTERJECTION);
+  await field.press("Enter");
+  await expect.poll(() => h.heldInterjects()).toBe(1);
+  // The operator keeps typing while it is in flight — their in-hand draft must survive too.
+  await field.fill("and fix the résumé date as well");
+  // The turn ended between its last control frame and this POST, so the server refuses it:
+  // nothing was queued, and nothing will ever settle this bubble.
+  await h.releaseInterjects(() => ({ ok: false, reason: "not_live", pending: 0 }));
+
+  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(0);
+  await expect(page.locator(".pl-toast--error")).toContainText(/wasn't sent/i);
+  const draft = await field.inputValue();
+  expect(draft).toContain(INTERJECTION); // the refused words
+  expect(draft).toContain("and fix the résumé date as well"); // and the in-hand ones
+  expect(h.a2aSends.filter((body) => body.includes(INTERJECTION))).toEqual([]);
+  // The composer is back to ordinary sending: the server said that task is gone.
+  await expect(page.getByPlaceholder(/Message protoAgent/i)).toBeVisible();
+});
+
+test("Stop settles what the agent had already read and hands back what it hadn't", async ({ page }) => {
+  const session = "chat-interject-stop";
+  const h = await openAttendedServerTurn(page, session);
+  const sent = await interject(page, h);
+
+  await page.locator(SLOT).getByRole("button", { name: /stop/i }).first().click();
+  // The bubble goes at once, but the SERVER's copy is not left behind to ride the next turn.
+  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(0);
+  await expect.poll(() => h.deletes).toEqual([sent.id]);
+  // It was never read, so the words are the operator's again — not silently discarded.
+  await expect.poll(() => page.locator(`${SLOT} .pl-prompt__field`).inputValue()).toContain(INTERJECTION);
+  await expect(page.locator(".pl-toast--error")).toContainText(/never sent/i);
+});
+
+test("✕ after the turn ended settles an interjection the agent had already read", async ({ page }) => {
+  const session = "chat-interject-cancel-late";
+  const h = await openAttendedServerTurn(page, session);
+  await interject(page, h);
+
+  // The turn ends; hold the reconcile's queue read so the ✕ is what resolves this.
+  h.holdSteerReads(true);
+  h.release(terminalFrames(session));
+  await expect(page.getByText(/responding to background reports/i)).toHaveCount(0);
+  // The agent had drained it, so the dequeue answers `removed: false`.
+  h.setPending([]);
+  await page.locator(SLOT).getByRole("button", { name: "Cancel queued message" }).click();
+
+  // There is no marker left to wait for — restoring the bubble would park it "queued"
+  // forever, and dropping it would deny a message that shaped the reply.
+  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(0);
+  await expect(page.locator(`${SLOT} .pl-message--user`).filter({ hasText: INTERJECTION })).toHaveCount(1);
+  h.holdSteerReads(false);
+  await page.waitForTimeout(500);
+  expect(h.a2aSends.filter((body) => body.includes(INTERJECTION))).toEqual([]);
+});
+
+test("a re-send whose dequeue lost the race settles instead of sending a duplicate", async ({ page }) => {
+  const session = "chat-interject-dequeue-race";
+  const h = await openAttendedServerTurn(page, session);
+  await interject(page, h);
+
+  // The turn ends with the message still queued, so the reconcile goes to re-send it — but
+  // between the read and the dequeue, a turn drained it after all (`removed: false`). The
+  // exactly-once guard IS that answer: sending anyway would give the agent it twice.
+  h.forceDeleteNotRemoved(true);
+  h.release(terminalFrames(session));
+
+  await expect.poll(() => h.deletes.length).toBe(1);
+  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(0);
+  await expect(page.locator(`${SLOT} .pl-message--user`).filter({ hasText: INTERJECTION })).toHaveCount(1);
+  await page.waitForTimeout(1_000);
+  expect(h.a2aSends.filter((body) => body.includes(INTERJECTION)), "no duplicate send").toEqual([]);
 });

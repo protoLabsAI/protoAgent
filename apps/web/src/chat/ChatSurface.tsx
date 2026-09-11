@@ -1344,9 +1344,23 @@ function ChatSessionSlot({
   const liveServerTaskId = serverTurnControl?.taskId ?? "";
   const sessionReady = Boolean(session);
   useEffect(() => {
-    if (sessionReady) void reconcileServerInterjections();
+    if (sessionReady) {
+      resetInterjectRecheck();
+      void reconcileServerInterjections();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the reconcile reads live store state
   }, [liveServerTaskId, serverTurnLabel, sessionReady]);
+
+  // A turn this slot did NOT run can also end: a reattached turn (reload / agent switch)
+  // settles through reattach.ts, which never reaches runTurn's turn-end reconcile — so a
+  // steer queued before the reload sat "queued" until the operator's next turn. Reconcile
+  // when the session goes idle with no locally-owned stream; it is a no-op with nothing
+  // queued, and a parked HITL turn keeps its steers (reconcileSteer's own rule).
+  useEffect(() => {
+    if (status !== "idle" || abortRef.current) return;
+    if (steerQueueRef.current.some((queued) => !queued.serverTaskId)) void reconcileSteer();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reconcileSteer reads live store state
+  }, [status, sessionReady]);
 
   // Sendable with text OR at least one ready attachment (file-only send, e.g.
   // "describe this image" with no caption). Matches the DS PromptInput gate,
@@ -1452,33 +1466,58 @@ function ChatSessionSlot({
     histStashRef.current = "";
     const id = messageId();
     setDraft("");
-    setSteerQueue([...steerQueueRef.current, { id, text, serverTaskId: control.taskId }]);
+    // Queued UNCONFIRMED until the server answers: persisted that way too, so a reload
+    // mid-flight (or a request that never answers) comes back knowing the console never
+    // learned whether the server has it — see QueuedSteer.unconfirmed.
+    setSteerQueue([...steerQueueRef.current, { id, text, serverTaskId: control.taskId, unconfirmed: true }]);
     interjectInFlightRef.current.add(id);
     try {
       const res = await api.serverTurnInterject(session.id, control.taskId, id, text);
-      if (!res.ok && res.reason !== "duplicate") {
+      if (res.ok || res.reason === "duplicate") {
+        // Acknowledged: the server has it, so its absence from the queue later can be read
+        // as "drained" rather than "never arrived".
+        setSteerQueue(steerQueueRef.current.map((x) => (x.id === id ? { id, text, serverTaskId: control.taskId } : x)));
+      } else {
         // Refused, and answered 200: the turn ended (or stopped taking interjections)
-        // between its last control frame and this POST. Nothing was queued, so nothing
-        // will ever settle this bubble — it used to sit "queued" regardless. Take it back,
-        // hand the words back, and drop the control the server just said is stale, so the
-        // next Enter sends a normal message instead of being refused again.
-        setSteerQueue(steerQueueRef.current.filter((x) => x.id !== id));
-        setDraft((current) => (current.trim() ? current : text));
-        chatStore.clearServerTurnControl(sessionId, control.taskId);
-        onError(
+        // between its last control frame and this POST. Nothing was queued, so nothing will
+        // ever settle this bubble — it used to sit "queued" regardless. Take it back, give
+        // the operator the words (never silently — this is the most reachable window there
+        // is: interjecting while the final answer streams), and drop the control the server
+        // just called stale so the next Enter sends a normal message instead of being
+        // refused again.
+        handBackQueued(
+          [{ id, text }],
           res.reason === "not_live"
-            ? "That server task had already finished, so your message wasn't sent. It's back in the composer."
-            : "That server task isn't taking messages right now, so yours wasn't sent. It's back in the composer.",
+            ? "That server task had already finished, so your message wasn't sent — its text is in the composer."
+            : "That server task isn't taking messages right now, so yours wasn't sent — its text is in the composer.",
         );
+        chatStore.clearServerTurnControl(sessionId, control.taskId);
       }
     } catch (e) {
-      setSteerQueue(steerQueueRef.current.filter((x) => x.id !== id));
-      onError(`Couldn't queue interjection: ${errMsg(e)}`);
+      // No answer at all. The server may well have queued it, so the bubble STAYS (dropping
+      // it while the agent goes on to read the message is what invites a duplicate send);
+      // it keeps `unconfirmed`, and the reconcile resolves it from the steering queue and
+      // the durable marker — handing the words back only once nothing can account for them.
+      onError(`Couldn't confirm your message reached the turn: ${errMsg(e)}`);
     } finally {
       interjectInFlightRef.current.delete(id);
       // The turn may have ended while this was in flight; the reconcile skipped it then.
+      resetInterjectRecheck();
       void reconcileServerInterjections();
     }
+  }
+
+  /** Give the operator back words that were never delivered: out of the queue, into the
+   *  composer (APPENDED — an in-hand draft is never destroyed to undo our own optimism,
+   *  #3413), and said out loud. The one place that hands text back, so the toast can't
+   *  promise something a caller forgot to do. */
+  function handBackQueued(items: { id: string; text: string }[], message: string) {
+    if (!items.length) return;
+    const ids = new Set(items.map((item) => item.id));
+    setSteerQueue(steerQueueRef.current.filter((q) => !ids.has(q.id)));
+    const text = items.map((item) => item.text).join("\n\n");
+    setDraft((current) => (current.trim() ? `${current.replace(/\s+$/, "")}\n\n${text}` : text));
+    onError(message);
   }
 
   // Settle interjections a server turn consumed but whose boundary marker this console
@@ -1507,10 +1546,57 @@ function ChatSessionSlot({
   }
 
   // The server-turn counterpart of reconcileSteer: interjections sent to a server turn
-  // that is no longer the live one are settled, left, re-targeted or re-sent, decided
-  // from the server's own queue and the turn's durable task (serverInterjections.ts).
-  // Serialised — the triggers can fire together — and re-run if one arrives mid-flight.
+  // that is no longer the live one are settled, left, re-targeted, re-sent or handed back,
+  // decided from the server's own steering queue and the turn's DURABLE task
+  // (serverInterjections.ts). Serialised — the triggers can fire together — and re-run if
+  // one arrives mid-flight.
   const interjectReconcileRef = useRef<{ running: boolean; again: boolean }>({ running: false, again: false });
+  // Nothing here is a one-shot: a transient failure, or a turn whose task hasn't settled
+  // yet, re-checks on this ladder. A one-shot reconcile strands the very bubble it exists
+  // to retire — and the message stays in the server's queue for some later turn, unseen.
+  // The ladder only runs while an unresolved interjection is queued (so it is bounded by
+  // something the operator can see), and any explicit trigger restarts it from the top.
+  const interjectRetryRef = useRef<{ timer: number | null; attempts: number }>({ timer: null, attempts: 0 });
+  const INTERJECT_RECHECK_MS = [1000, 2000, 4000, 8000, 15000, 30000];
+
+  function scheduleInterjectRecheck() {
+    const retry = interjectRetryRef.current;
+    if (retry.timer !== null) return;
+    const delay = INTERJECT_RECHECK_MS[Math.min(retry.attempts, INTERJECT_RECHECK_MS.length - 1)];
+    retry.attempts += 1;
+    retry.timer = window.setTimeout(() => {
+      retry.timer = null;
+      void reconcileServerInterjections();
+    }, delay);
+  }
+
+  function resetInterjectRecheck() {
+    const retry = interjectRetryRef.current;
+    if (retry.timer !== null) window.clearTimeout(retry.timer);
+    retry.timer = null;
+    retry.attempts = 0;
+  }
+
+  useEffect(() => resetInterjectRecheck, []); // never leave a timer behind on unmount
+
+  // A tab that was asleep (or offline) may have missed the live-only frames entirely, so
+  // coming back is itself a reason to re-check rather than wait out the ladder.
+  useEffect(() => {
+    if (!visible) return;
+    const recheck = () => {
+      if (document.visibilityState === "hidden") return;
+      resetInterjectRecheck();
+      void reconcileServerInterjections();
+    };
+    window.addEventListener("focus", recheck);
+    document.addEventListener("visibilitychange", recheck);
+    return () => {
+      window.removeEventListener("focus", recheck);
+      document.removeEventListener("visibilitychange", recheck);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the reconcile reads live store state
+  }, [visible, sessionId]);
+
   async function reconcileServerInterjections() {
     const guard = interjectReconcileRef.current;
     if (guard.running) {
@@ -1532,17 +1618,25 @@ function ChatSessionSlot({
     if (!session) return;
     const liveTaskId = () => chatStore.getSnapshot().serverTurnControls[sessionId]?.taskId ?? "";
     const stale = staleInterjections(steerQueueRef.current, liveTaskId(), interjectInFlightRef.current);
-    if (!stale.length) return;
+    if (!stale.length) {
+      resetInterjectRecheck();
+      return;
+    }
     let pendingIds: Set<string>;
     try {
       pendingIds = new Set((await api.pendingSteer(session.id)).pending.map((item) => item.id));
     } catch {
-      return; // can't tell consumed from not — leave them rather than guess
+      scheduleInterjectRecheck(); // transient: ask again, never guess from a failed read
+      return;
     }
     const phases = new Map<string, ServerTurnPhase>();
-    for (const taskId of new Set(stale.filter((q) => pendingIds.has(q.id)).map((q) => q.serverTaskId ?? ""))) {
-      const state = await api.getTask(taskId).then((task) => task.state, () => "");
-      phases.set(taskId, serverTurnPhase(state));
+    const consumedIds = new Map<string, Set<string>>();
+    for (const taskId of new Set(stale.map((q) => q.serverTaskId ?? ""))) {
+      const read = await api
+        .taskSteerState(taskId)
+        .catch(() => ({ state: "", consumed: [] as string[] }));
+      phases.set(taskId, serverTurnPhase(read.state));
+      consumedIds.set(taskId, new Set(read.consumed));
     }
     // The awaits above yield: decide against the queue and turn state as they are NOW —
     // an item may have been cancelled or settled by a marker meanwhile.
@@ -1552,9 +1646,11 @@ function ChatSessionSlot({
       {
         pendingIds,
         phases,
+        consumedIds,
         ownStreamLive: chatStore.getSnapshot().sessionStatusMap[sessionId] === "streaming",
         liveServerTaskId: liveTaskId(),
         hitlPending: Boolean(hitlRef.current),
+        attempts: interjectRetryRef.current.attempts,
       },
     );
     if (plan.settle.length) settleServerInterjections(plan.settle);
@@ -1562,7 +1658,24 @@ function ChatSessionSlot({
       const next = new Map(plan.retarget.map((item) => [item.id, item]));
       setSteerQueue(steerQueueRef.current.map((q) => next.get(q.id) ?? q));
     }
+    if (plan.handBack.length) {
+      // Make sure the SERVER isn't holding it before saying it was never sent: the read
+      // that concluded "not queued" could have raced a submission that landed a moment
+      // later, and a message the operator was told to re-send must not also ride the next
+      // turn. The dequeue is the only way to be sure, and it is safe — a message the agent
+      // had already read would have shown up as a durable marker above, not here.
+      for (const item of plan.handBack) {
+        await api.cancelSteer(session.id, item.id).catch(() => undefined);
+      }
+      handBackQueued(
+        plan.handBack,
+        "That message never reached the agent, and the turn it was waiting for is gone — its text is in the composer.",
+      );
+    }
     if (plan.resend.length) await resendInterjections(plan.resend);
+    // Anything unresolved gets another look; a clean sweep stops the ladder.
+    if (plan.keep.length) scheduleInterjectRecheck();
+    else resetInterjectRecheck();
   }
 
   // An interjection its server turn never reached, with nothing left to drain it: take it
@@ -1580,14 +1693,55 @@ function ChatSessionSlot({
         const { removed } = await api.cancelSteer(session.id, item.id);
         (removed ? send : consumed).push(item);
       } catch {
-        /* still (maybe) queued server-side — leave its bubble for the next reconcile */
+        scheduleInterjectRecheck(); // still (maybe) queued server-side — ask again later
       }
     }
     if (consumed.length) settleServerInterjections(consumed);
     if (!send.length) return;
+    // Those dequeues yielded. If a turn started in this slot meanwhile — the operator sent
+    // something, or another server turn came up — a fresh `runTurn` here would be a SECOND
+    // concurrent stream in one slot: two live bubbles, one abort controller, and a Stop that
+    // reaches only one of them. Hand the text to the turn that is running instead; it drains
+    // the same queue, and its consumed marker settles these bubbles.
+    const snap = chatStore.getSnapshot();
+    const live = snap.serverTurnControls[sessionId];
+    if (snap.sessionStatusMap[sessionId] === "streaming" || live || hitlRef.current) {
+      await requeueIntoLiveTurn(send, live?.taskId);
+      return;
+    }
     const ids = new Set(send.map((item) => item.id));
     setSteerQueue(steerQueueRef.current.filter((q) => !ids.has(q.id)));
     void runTurn(send.map((item) => item.text).join("\n\n"));
+  }
+
+  /** Put dequeued interjections back on the steering queue for the turn that is running
+   *  NOW, keeping their bubbles queued so that turn's marker settles them. Their text is
+   *  already out of the server's queue, so a failure here would lose it — hand it back. */
+  async function requeueIntoLiveTurn(items: QueuedSteer[], serverTaskId: string | undefined) {
+    if (!session) return;
+    const lost = "Your message couldn't be handed to the running turn — its text is in the composer.";
+    for (const item of items) {
+      try {
+        // An attended server turn takes it through its control task (the same guarded path
+        // Enter uses); this browser's own stream takes it as an ordinary steer.
+        if (serverTaskId) {
+          const res = await api.serverTurnInterject(session.id, serverTaskId, item.id, item.text);
+          if (!res.ok && res.reason !== "duplicate") {
+            handBackQueued([item], lost);
+            continue;
+          }
+        } else {
+          await api.steerChat(session.id, item.id, item.text);
+        }
+        setSteerQueue(
+          steerQueueRef.current.map((q) =>
+            q.id === item.id ? { id: q.id, text: q.text, ...(serverTaskId ? { serverTaskId } : {}) } : q,
+          ),
+        );
+      } catch {
+        handBackQueued([item], lost);
+      }
+    }
   }
 
   // Take a still-queued steer back out of the running turn — the shared body behind the ✕
@@ -2530,12 +2684,12 @@ function ChatSessionSlot({
     }
     chatStore.setSessionStatus(sessionId, "idle");
     setStatusMessage("stopped");
-    // Drop any optimistic queued-steer bubbles; the user chose to stop. Take them out of
-    // the server's steering queue too (best-effort): left there, the next turn in this
-    // chat would fold in a message the operator just watched disappear.
+    // Clear the optimistic queued bubbles; the user chose to stop. Their TEXT is not
+    // discarded, and the server's copy is not left behind — see dropQueuedOnStop.
     const dropped = steerQueueRef.current;
     setSteerQueue([]);
-    for (const queued of dropped) void api.cancelSteer(sessionId, queued.id).catch(() => undefined);
+    resetInterjectRecheck();
+    void dropQueuedOnStop(dropped);
     if (cancelId) {
       try {
         await api.cancelTask(cancelId);
@@ -2552,6 +2706,40 @@ function ChatSessionSlot({
           if (restore.label) noteTurnStarted(sessionId, restore.label);
         }
       }
+    }
+  }
+
+  /** Settle Stop's account with the server for every message that was still queued.
+   *
+   *  Stop clears those bubbles instantly, but the SERVER's copy has to be dealt with or the
+   *  next turn in this chat folds in a message the operator just watched disappear. The
+   *  dequeue answers which it was: `removed` means the agent never saw it, so the words go
+   *  back to the operator rather than nowhere; `removed: false` means it had already been
+   *  read, so it settles into the transcript instead of vanishing. Best-effort by nature —
+   *  an unreachable server hands the words back too, which loses nothing. */
+  async function dropQueuedOnStop(items: QueuedSteer[]) {
+    if (!items.length) return;
+    const back: QueuedSteer[] = [];
+    const consumed: QueuedSteer[] = [];
+    for (const item of items) {
+      try {
+        const { removed } = await api.cancelSteer(sessionId, item.id);
+        (removed ? back : consumed).push(item);
+      } catch {
+        back.push(item);
+      }
+    }
+    const serverTurn = consumed.filter((item) => item.serverTaskId);
+    const ownStream = consumed.filter((item) => !item.serverTaskId);
+    if (serverTurn.length) settleServerInterjections(serverTurn);
+    if (ownStream.length) settleConsumed(ownStream);
+    if (back.length) {
+      handBackQueued(
+        back,
+        back.length > 1
+          ? "Those queued messages were never sent — their text is in the composer."
+          : "That queued message was never sent — its text is in the composer.",
+      );
     }
   }
 

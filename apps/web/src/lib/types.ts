@@ -1011,7 +1011,15 @@ export type ConsumedSteer = { id: string; text: string };
  *  this browser's own stream, and an interjection into an attended SERVER-fired turn —
  *  which carries that turn's durable task id, so the console can tell when the turn it
  *  was sent to is over and settle or re-send whatever the turn never reached. */
-export type QueuedSteer = ConsumedSteer & { serverTaskId?: string };
+export type QueuedSteer = ConsumedSteer & {
+  serverTaskId?: string;
+  /** The submission never got an answer (the request failed, or the tab reloaded while it
+   *  was in flight), so the console does NOT know whether the server queued it. Absence
+   *  from the steering queue then means "never arrived", not "the agent read it" — which is
+   *  the difference between handing the operator their words back and settling a bubble the
+   *  agent never saw. */
+  unconfirmed?: boolean;
+};
 
 export type ChatMessage = {
   id?: string;

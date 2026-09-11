@@ -2695,6 +2695,33 @@ export const api = {
     return { state, text: textFromTerminalTask(task) };
   },
 
+  /** A turn's state plus the interjection ids its DURABLE history records as folded in.
+   *
+   *  The steering queue is in-memory (graph/steering.py), so "no longer queued" cannot tell
+   *  a message the agent read from one a restart dropped. The executor's steer-consumed
+   *  marker is written into the task's history, which survives both — so this is what lets
+   *  the console settle an interjection on proof instead of inference. One GetTask, because
+   *  the reconcile needs the state anyway. */
+  async taskSteerState(taskId: string): Promise<{ state: string; consumed: string[] }> {
+    const res = await request<A2AFrame>("/a2a", {
+      method: "POST",
+      headers: { "A2A-Version": "1.0" },
+      body: { jsonrpc: "2.0", id: `steer-get-${Date.now()}`, method: "GetTask", params: { id: taskId } },
+    });
+    const result = res.result;
+    const task = (result?.task ?? (result?.kind === "task" ? result : result)) as
+      | NonNullable<A2AFrame["result"]>
+      | undefined;
+    if (!task) return { state: "", consumed: [] };
+    const history = ((task as { history?: Array<{ parts?: RawPart[] }> }).history || []) as Array<{
+      parts?: RawPart[];
+    }>;
+    return {
+      state: (task.status?.state || "").toString(),
+      consumed: history.flatMap((entry) => consumedSteersFromParts(entry.parts) ?? []).map((item) => item.id),
+    };
+  },
+
   // Reattach to an IN-FLIGHT turn after an agent switch / reload (Swap & Resume
   // S1): A2A `SubscribeToTask` — served by the backend and forwarded by the
   // fleet proxy all along; the console just never called it. The server replays

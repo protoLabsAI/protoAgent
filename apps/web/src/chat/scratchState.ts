@@ -54,11 +54,14 @@ export function loadSteers(sessionId: string): QueuedSteer[] {
           .filter((s) => s && typeof s.id === "string" && typeof s.text === "string")
           // An interjection keeps the server turn it was sent to, so a reload can still
           // tell whether that turn is over (ChatSurface's server-turn reconcile).
-          .map((s) =>
-            typeof s.serverTaskId === "string" && s.serverTaskId
-              ? { id: s.id, text: s.text, serverTaskId: s.serverTaskId }
-              : { id: s.id, text: s.text },
-          )
+          .map((s) => ({
+            id: s.id,
+            text: s.text,
+            ...(typeof s.serverTaskId === "string" && s.serverTaskId ? { serverTaskId: s.serverTaskId } : {}),
+            // A reload is itself a lost answer: an item whose POST was in flight comes back
+            // unconfirmed, so the reconcile can't read its absence as "the agent read it".
+            ...(s.unconfirmed === true ? { unconfirmed: true } : {}),
+          }))
       : [];
   } catch {
     return [];
