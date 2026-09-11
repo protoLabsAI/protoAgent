@@ -30,9 +30,42 @@ export function appendText(parts: ChatPart[] | undefined, text: string, append: 
   return next;
 }
 
-/** Same non-whitespace characters, in the same order. */
-function sameIgnoringWhitespace(a: string, b: string): boolean {
-  return a.replace(/\s+/g, "") === b.replace(/\s+/g, "");
+/** The text runs these ordered parts render, in order. */
+export function textRuns(parts: ChatPart[] | undefined): string[] {
+  return (parts ?? []).flatMap((part) => (part.kind === "text" ? [part.text] : []));
+}
+
+/** How far `runs`, rendered in order, reproduce `canonical`: the index just past the
+ *  last run, or -1 when they are not a rendering of its beginning.
+ *
+ *  THE one test of "the bubble already shows this text". The terminal replace
+ *  (`replaceText`), a split turn's remainder (turnText.ts) and hydration's repair check
+ *  (chat-store.ts) all ask it, so they cannot drift into different answers.
+ *
+ *  A run's content must match VERBATIM: whitespace inside a run is text — a list's line
+ *  break, a code block's indentation — so a whitespace-only frame lost there
+ *  (#1709/#1938) is a real divergence the replace has to heal. The only whitespace a
+ *  rendering may lack is at a run's EDGES, which is exactly what the parts drop:
+ *  `appendText` starts every new run (after a tool, reasoning or component block)
+ *  without its leading whitespace, and a split trims each bubble's text. That is where
+ *  the server puts its paragraph break between model calls, so a healthy
+ *  narrate → tool → narrate turn renders "A" + "B" for "A\n\nB" and still matches. */
+export function renderedPrefixEnd(canonical: string, runs: string[]): number {
+  let at = 0;
+  for (const run of runs) {
+    const body = run.trim();
+    if (!body) continue;
+    while (at < canonical.length && /\s/.test(canonical[at])) at += 1;
+    if (!canonical.startsWith(body, at)) return -1;
+    at += body.length;
+  }
+  return at;
+}
+
+/** Do `runs` render all of `canonical` — nothing but edge whitespace left over? */
+export function rendersText(runs: string[], canonical: string): boolean {
+  const end = renderedPrefixEnd(canonical, runs);
+  return end >= 0 && !canonical.slice(end).trim();
 }
 
 /** REPLACE the turn's text with the canonical full-turn `text` (an A2A
@@ -41,24 +74,19 @@ function sameIgnoringWhitespace(a: string, b: string): boolean {
  *  [preamble → tools → answer] turn it includes the pre-tool preamble — so rewriting
  *  only the trailing run would render the preamble twice.
  *
- *  `streamed` is the client's OWN accumulation of this turn's text deltas (the flat
- *  `content` string, or the text its ordered parts render). When it already says what
- *  the replacement says, the streamed parts ARE canonical: keep them untouched,
- *  preserving the text↔tool interleaving. Only on a real divergence (frames
- *  lost/duplicated en route) do we rebuild — drop every prior text run and land the
- *  canonical text as one trailing run. That trades the (already unreliable)
- *  interleaving for the guarantee the answer renders exactly once.
+ *  When the parts already render the replacement (`rendersText`), they ARE canonical:
+ *  keep them untouched, preserving the text↔tool interleaving. Only on a real
+ *  divergence (frames lost/duplicated en route) do we rebuild — drop every prior text
+ *  run and land the canonical text as one trailing run. That trades the (already
+ *  unreliable) interleaving for the guarantee the answer renders exactly once.
  *
- *  "Says the same" ignores whitespace, because that is where the two legitimately
- *  differ: the server opens each model call's narration with a paragraph break, and
- *  `appendText` drops a new run's leading whitespace, so a [text → tools → text] turn's
- *  parts render "A" + "B" while the canonical text reads "A\n\nB". Compared
- *  byte-for-byte, every such healthy turn read as diverged and its prose collapsed
- *  below the tool cards at turn end. (`canonicalRemainderIndex` makes the same
- *  allowance for a turn split across bubbles.) */
-export function replaceText(parts: ChatPart[] | undefined, text: string, streamed: string): ChatPart[] {
+ *  Judged from the parts themselves, not from the flat `content`: the two disagree
+ *  exactly where it matters — `content` keeps the server's paragraph break between
+ *  model calls, the parts drop it at the run boundary — and it is the parts that
+ *  render. */
+export function replaceText(parts: ChatPart[] | undefined, text: string): ChatPart[] {
   const next = [...(parts ?? [])];
-  if (sameIgnoringWhitespace(streamed, text)) return next;
+  if (rendersText(textRuns(next), text)) return next;
   const kept = next.filter((p) => p.kind !== "text");
   const trimmed = text.replace(/^\s+/, "");
   if (!trimmed) return kept;

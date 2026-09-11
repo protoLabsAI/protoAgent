@@ -8,12 +8,15 @@ import {
   needsDurableHydration,
   type ChatSession,
 } from "./chat-store";
+import type { ChatMessage } from "../lib/types";
 import {
   HYDRATION_CONCURRENCY,
   hydrateDurableChatSessions,
   messagesFromDurableTurn,
   sessionFromDurableTurns,
 } from "./sessionHydration";
+import { applyText, applyToolEvent } from "./turnReducers";
+import { applyCanonicalTurnText } from "./turnText";
 
 const TOOL = "https://proto-labs.ai/a2a/ext/tool-call-v1";
 const COST = "https://proto-labs.ai/a2a/ext/cost-v1";
@@ -633,6 +636,43 @@ describe("boot hydration", () => {
     expect(earlier?.parts?.slice(-1)[0]).toMatchObject({ kind: "text", text: "v1 is live." });
     // Later turn was already whole — untouched.
     expect(later?.parts).toEqual([{ kind: "text", text: "v2 is live." }]);
+  });
+
+  it("never flags — or rewrites — a HEALTHY narrate → tool → narrate turn (#3439 review)", () => {
+    // Built from the frames the server streams: the post-tool narration opens with the
+    // paragraph break inside its delta, so the settled bubble's flat `content` reads
+    // "A\n\nB" while its parts render "A" + "B". Compared byte-for-byte, every such turn
+    // looked stripped, so each boot re-downloaded up to 50 sessions and rewrote them.
+    let bubble: ChatMessage = { id: "a1", role: "assistant", content: "", createdAt: 1, status: "streaming", taskId: "task-1" };
+    bubble = applyText(bubble, "I'll check the time first.", true);
+    bubble = applyToolEvent(bubble, { id: "t1", name: "current_time", phase: "start" });
+    bubble = applyToolEvent(bubble, { id: "t1", name: "current_time", phase: "end", output: "12:00" });
+    bubble = applyText(bubble, "\n\nIt is noon.", true);
+    const canonical = "I'll check the time first.\n\nIt is noon.";
+    const [, settled] = applyCanonicalTurnText([{ id: "u", role: "user", content: "hi" } as ChatMessage, bubble], "a1", canonical);
+    const healthy = {
+      id: "chat-healthy",
+      title: "hi",
+      messages: [{ id: "u", role: "user", content: "hi", status: "done" }, { ...settled, status: "done" }],
+      createdAt: 1,
+      updatedAt: 1,
+    } as ChatSession;
+    expect(needsDurableHydration(healthy)).toBe(false);
+
+    // And when a durable read does come back for it, nothing is rewritten.
+    const current = {
+      version: 1,
+      sessions: [healthy],
+      currentSessionId: healthy.id,
+      activeSessions: [healthy.id],
+      sessionStatusMap: {},
+      pendingDeleteRequest: null,
+      pendingClearRequest: null,
+      serverTurnControls: {},
+    };
+    const recovered = sessionFromDurableTurns(summary(healthy.id), [turn({ text: canonical })]);
+    if (!recovered) throw new Error("durable turn should produce a recovered session");
+    expect(mergeHydratedSessions(current, [recovered]).sessions[0]).toBe(healthy);
   });
 
   it("fetches only missing/empty sessions, tolerates one failure, and commits successful siblings", async () => {

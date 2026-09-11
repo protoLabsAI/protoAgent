@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ChatPart, ToolCall } from "../lib/types";
-import { lastOperatorAssistantId, rewindableTailId, addComponent, addToolRef, appendReasoning, appendText, foldPlan, replaceText, splitRevealChunks, toolsForGroup } from "./parts";
+import { lastOperatorAssistantId, rewindableTailId, addComponent, addToolRef, appendReasoning, appendText, foldPlan, renderedPrefixEnd, rendersText, replaceText, splitRevealChunks, textRuns, toolsForGroup } from "./parts";
 
 describe("addComponent", () => {
   it("appends a component part at its emission point (before the answer text streams in)", () => {
@@ -65,18 +65,17 @@ describe("appendText", () => {
 
 describe("replaceText — the terminal full-turn replace (#1709 companion)", () => {
   // The terminal A2A frame re-sends the WHOLE turn's canonical text as a replace.
-  // These lock the two behaviors: no-op when the client's own accumulation already
-  // matches (keep the interleaving), rebuild-once on real divergence.
+  // These lock the two behaviors: no-op when the parts already render it (keep the
+  // interleaving), rebuild-once on real divergence.
 
-  it("keeps the streamed interleaving when the client's accumulation matches — the preamble is NOT doubled", () => {
+  it("keeps the streamed interleaving when the parts already render it — the preamble is NOT doubled", () => {
     // [preamble → tools → answer]: rewriting only the trailing run would yield
     // [preamble, tools, preamble+answer] — the doubled-preamble regression.
     let p: ChatPart[] | undefined;
     p = appendText(p, "Let me check. ", true);
     p = addToolRef(p, "t1");
     p = appendText(p, "The answer.", true);
-    const streamed = "Let me check. The answer.";
-    expect(replaceText(p, "Let me check. The answer.", streamed)).toEqual([
+    expect(replaceText(p, "Let me check. The answer.")).toEqual([
       { kind: "text", text: "Let me check. " },
       { kind: "tools", ids: ["t1"] },
       { kind: "text", text: "The answer." },
@@ -86,22 +85,37 @@ describe("replaceText — the terminal full-turn replace (#1709 companion)", () 
   it("keeps the interleaving when the canonical text puts a paragraph break at a tool boundary", () => {
     // The server opens the post-tool narration with "\n\n" inside the delta; appendText
     // drops it from the run it starts, so the parts render "…first." + "It is noon."
-    // while the canonical text reads "…first.\n\nIt is noon.". Same words — no rebuild.
+    // while the canonical text reads "…first.\n\nIt is noon.". Same text — no rebuild.
     let p: ChatPart[] | undefined;
     p = appendText(p, "I'll check the time first.", true);
     p = addToolRef(p, "t1");
     p = appendText(p, "\n\nIt is noon.", true);
-    const shown = "I'll check the time first.It is noon.";
-    expect(replaceText(p, "I'll check the time first.\n\nIt is noon.", shown)).toEqual([
+    expect(replaceText(p, "I'll check the time first.\n\nIt is noon.")).toEqual([
       { kind: "text", text: "I'll check the time first." },
       { kind: "tools", ids: ["t1"] },
       { kind: "text", text: "It is noon." },
     ]);
   });
 
+  it("heals a whitespace frame lost INSIDE a run — a list's line break (#1709 class)", () => {
+    // The executor flushes a lone "\n" as its own frame after a model pause; lost en
+    // route, the run reads "- one- two". Whitespace inside a run is content, so the
+    // canonical replace must land — a whitespace-blind compare kept the broken list.
+    let p = appendText(undefined, "Steps:\n\n- one", true);
+    p = appendText(p, "- two", true);
+    expect(textRuns(replaceText(p, "Steps:\n\n- one\n- two"))).toEqual(["Steps:\n\n- one\n- two"]);
+  });
+
+  it("heals a code block whose indentation frame was lost", () => {
+    let p = appendText(undefined, "```python\ndef f():\n", true);
+    p = appendText(p, "return 1\n```", true);
+    const canonical = "```python\ndef f():\n    return 1\n```";
+    expect(textRuns(replaceText(p, canonical))).toEqual([canonical]);
+  });
+
   it("tolerates leading/trailing whitespace differences between streamed and canonical text", () => {
     const p: ChatPart[] = [{ kind: "text", text: "answer" }];
-    expect(replaceText(p, "answer\n", "answer")).toEqual([{ kind: "text", text: "answer" }]);
+    expect(replaceText(p, "answer\n")).toEqual([{ kind: "text", text: "answer" }]);
   });
 
   it("collapses a DOUBLY-delivered stream to a single copy (#1938 shape)", () => {
@@ -112,7 +126,7 @@ describe("replaceText — the terminal full-turn replace (#1709 companion)", () 
     p = addToolRef(p, "t1");
     p = appendText(p, "Here's your image. ", true);
     p = appendText(p, "Here's your image. ", true); // the doubled delivery
-    expect(replaceText(p, "Here's your image.", "Here's your image. Here's your image. ")).toEqual([
+    expect(replaceText(p, "Here's your image.")).toEqual([
       { kind: "tools", ids: ["t1"] },
       { kind: "text", text: "Here's your image." },
     ]);
@@ -125,7 +139,7 @@ describe("replaceText — the terminal full-turn replace (#1709 companion)", () 
       { kind: "tools", ids: ["t1"] },
       { kind: "text", text: "The an" }, // truncated answer
     ];
-    expect(replaceText(p, "Let me check. The answer.", "Let me chThe an")).toEqual([
+    expect(replaceText(p, "Let me check. The answer.")).toEqual([
       { kind: "tools", ids: ["t1"] },
       { kind: "text", text: "Let me check. The answer." },
     ]);
@@ -137,7 +151,7 @@ describe("replaceText — the terminal full-turn replace (#1709 companion)", () 
       { kind: "text", text: "old" },
       { kind: "component", spec: { component: "table", props: {} } },
     ];
-    expect(replaceText(p, "new answer", "old-diverged")).toEqual([
+    expect(replaceText(p, "new answer")).toEqual([
       { kind: "reasoning", text: "thinking" },
       { kind: "component", spec: { component: "table", props: {} } },
       { kind: "text", text: "new answer" },
@@ -145,7 +159,39 @@ describe("replaceText — the terminal full-turn replace (#1709 companion)", () 
   });
 
   it("a non-streamed turn (nothing accumulated) lands the full text as one run", () => {
-    expect(replaceText(undefined, "full answer", "")).toEqual([{ kind: "text", text: "full answer" }]);
+    expect(replaceText(undefined, "full answer")).toEqual([{ kind: "text", text: "full answer" }]);
+  });
+});
+
+describe("renderedPrefixEnd — the one test of \"already shown\"", () => {
+  it("returns where the canonical answer continues past what the runs render", () => {
+    expect(renderedPrefixEnd("one two three", ["one two"])).toBe(7);
+    // The index lands just past the last matched character; the caller trims the
+    // whitespace that separated it from what follows.
+    expect("one two three".slice(7).trimStart()).toBe("three");
+  });
+
+  it("allows whitespace to differ only at a run's edges (the server's break, a trimmed run)", () => {
+    expect(renderedPrefixEnd("Checking.\n\nHere it is.", ["Checking."])).toBe(9);
+    expect(renderedPrefixEnd("  Checking. Here", ["Checking."])).toBe(11);
+    expect(renderedPrefixEnd("A\n\nB", ["A", "B"])).toBe(4);
+    expect(rendersText(["A", "B"], "A\n\nB\n")).toBe(true);
+  });
+
+  it("treats whitespace INSIDE a run as content", () => {
+    expect(renderedPrefixEnd("- one\n- two", ["- one- two"])).toBe(-1);
+    expect(rendersText(["a b"], "ab")).toBe(false);
+  });
+
+  it("is -1 when the runs are not a rendering of its beginning", () => {
+    expect(renderedPrefixEnd("a totally different answer", ["Checking."])).toBe(-1);
+    expect(renderedPrefixEnd("short", ["a much longer prefix"])).toBe(-1);
+  });
+
+  it("consumes the whole canonical answer when nothing followed", () => {
+    expect(renderedPrefixEnd("all of it", ["all of it"])).toBe(9);
+    expect(rendersText([], "")).toBe(true);
+    expect(rendersText([], "something")).toBe(false);
   });
 });
 

@@ -783,6 +783,12 @@ def _vision_human_message(
     return HumanMessage(content=f"{message}\n\n{note}".strip() if note else message)
 
 
+# The node langchain's `create_agent` runs tool calls in. A chat-model event whose
+# `langgraph_node` is this one was made by a tool (or by work a tool detached), never by
+# the lead answering — see `_run_turn_stream`.
+_TOOL_NODE = "tools"
+
+
 def _paragraph_break(before: str, after: str) -> str:
     """The newlines to put between ``before`` and ``after`` so ``after`` opens a new
     paragraph: one blank line, counting any newlines either side already carries."""
@@ -853,14 +859,16 @@ async def _run_turn_stream(
     from observability import pricing
 
     accumulated_raw = ""  # the answer text so far (the model's content; no protocol tags)
-    # Each lead model call is its own message: "I'll check the time first." → tool →
-    # "It is noon." must not be glued into "first.It is". So the first text of every new
-    # lead call opens a paragraph — and the break rides the streamed delta itself, not
-    # just this accumulator, so the live stream, the executor's accumulation and the
-    # canonical `done` text stay ONE string. (The console keeps a turn's text-to-tool
-    # interleaving only while they agree; #3210 separated only the executor's copy, which
-    # the `done` text below overrode on this path, so durable turns stayed crammed.)
-    _new_model_call = False
+    # The model call the answer's latest text came from. Each lead model call is its own
+    # message: "I'll check the time first." → tool → "It is noon." must not be glued into
+    # "first.It is". So text arriving from a DIFFERENT call than the last text opens a
+    # paragraph — keyed on the text's own run, never on a model merely STARTING, because
+    # work a tool detached keeps reporting into this stream mid-answer (see below). The
+    # break rides the streamed delta itself, not just this accumulator, so the live
+    # stream, the executor's accumulation and the canonical `done` text stay ONE string.
+    # (The console keeps a turn's text-to-tool interleaving only while they agree; #3210
+    # separated only the executor's copy, which the `done` text overrode on this path.)
+    _answer_run: object = None
     _llm_started: dict[str, float] = {}  # run_id → monotonic start (per-call latency)
     _tool_started: dict[str, float] = {}  # run_id → monotonic start (per-call latency, #2697)
     _delegate_targets: dict[str, str] = {}  # run_id → delegate name, for delegate_to → room bubble (#3042)
@@ -885,10 +893,6 @@ async def _run_turn_stream(
             rid = event.get("run_id")
             if rid:
                 _llm_started[rid] = time.monotonic()
-            # A subagent's calls never reach the answer (see on_chat_model_stream), so
-            # only a LEAD call starts a new answer segment.
-            if not parent_tool_id:
-                _new_model_call = True
         elif kind == "on_tool_start":
             # No frame here: the tool card is surfaced earlier — on the model's first
             # streamed tool-call token (on_chat_model_stream) and finalized with full
@@ -1020,6 +1024,15 @@ async def _run_turn_stream(
             # (subagent tokens still bill). Only the lead's own tokens reach the answer.
             if parent_tool_id:
                 continue
+            # Nor does any OTHER model call made while a tool runs — its node is the tool
+            # node: an aux call inside a tool body, or work a tool DETACHED (a background
+            # ingest's describe/enrich calls, a plugin's spawn_work running sdk.complete),
+            # which runs in a copy of the tool's context and so keeps reporting into this
+            # stream while the lead is answering. None of it is the lead speaking; its
+            # tokens used to land mid-sentence in the answer ("I started the
+            # IMAGE-DESCRIPTIONingest…"). Billing below is untouched.
+            if (event.get("metadata") or {}).get("langgraph_node") == _TOOL_NODE:
+                continue
             # Native reasoning: the model's REAL thinking, streamed on its own channel.
             # `_ReasoningChatOpenAI` lifts the gateway's `reasoning_content` into
             # additional_kwargs; reasoning chunks carry NO `content`, so this is checked
@@ -1057,9 +1070,10 @@ async def _run_turn_stream(
                             len(text.split()),
                             text[:40],
                         )
-                    if _new_model_call and accumulated_raw.strip():
+                    run = event.get("run_id")
+                    if run != _answer_run and accumulated_raw.strip():
                         text = _paragraph_break(accumulated_raw, text) + text
-                    _new_model_call = False
+                    _answer_run = run
                     accumulated_raw += text
                     yield ("text", text)
         elif kind == "on_chat_model_end":

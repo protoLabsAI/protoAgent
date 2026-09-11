@@ -173,7 +173,145 @@ async def test_durable_prompt_keeps_attachment_names_but_not_their_bytes(monkeyp
     await store.engine.dispose()
 
 
+# ── The transcript keeps what the OPERATOR saw, not what the model was handed ───────
+
+
+async def _one_turn(monkeypatch, tmp_path, message: dict, **executor_kwargs) -> tuple[dict, dict]:
+    """Run one real turn for ``message``; return (the durable turn, what the model got)."""
+    seen: dict = {}
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, images=None, **kwargs):
+        seen["text"] = text
+        seen["images"] = images
+        yield ("done", "ok")
+
+    store = await _durable_store(tmp_path)
+    app = _build_app(stream, task_store=store, **executor_kwargs)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:
+        await _send(c, message)
+    [turn] = await _read_turns(monkeypatch, store.engine, message["contextId"])
+    await store.engine.dispose()
+    return turn, seen
+
+
+@pytest.mark.asyncio
+async def test_an_attachment_send_stores_the_bubble_not_the_document_dump(monkeypatch, tmp_path):
+    """The console prepends each attachment's extracted text for the MODEL (up to the
+    inline budget per file, any number of files) but the bubble shows the typed text + a
+    📎 list, and records that bubble as ``display``. Storing the model-facing text had the
+    SDK rewrite ~32KB of it on every save of a long turn (60% of everything written)."""
+    dumps = [f"[Attached file: f{i}.md]\n{'lorem ipsum ' * 700}\n[end of f{i}.md]" for i in range(4)]
+    sent = "\n\n".join([*dumps, "Summarize these."])
+    bubble = "Summarize these.\n\nAttached: f0.md, f1.md, f2.md, f3.md"
+    image = {"raw": base64.b64encode(b"\x89PNG" + b"\x00" * 512).decode(), "mediaType": "image/png", "filename": "a.png"}
+    turn, seen = await _one_turn(
+        monkeypatch, tmp_path, _message(sent, "chat-att", parts=[image], metadata={"display": bubble, "incognito": True})
+    )
+
+    assert seen["text"] == sent  # the model still gets every document
+    prompt = turn["history"][0]
+    assert _texts(prompt) == [bubble]
+    assert prompt["parts"][1]["filename"] == "a.png" and "raw" not in prompt["parts"][1]
+    assert prompt["metadata"] == {"incognito": True}  # the text IS the display — not stored twice
+    assert len(json.dumps(prompt)) < 1024
+
+
+@pytest.mark.asyncio
+async def test_a_hidden_send_keeps_its_metadata_but_no_text(monkeypatch, tmp_path):
+    """A dismissal/approval resume, a regenerate or a goal kickoff drew no bubble, so the
+    transcript keeps no text for it — but keeps the message, because its metadata carries
+    the per-message incognito stamp a rebuilt tab recovers."""
+    dismissal = "[dismissed] The operator dismissed this request without providing input."
+    turn, seen = await _one_turn(
+        monkeypatch,
+        tmp_path,
+        _message(dismissal, "chat-hidden", metadata={"hidden": True, "hitl_resume": True, "incognito": True}),
+    )
+    assert seen["text"] == dismissal
+    [prompt] = [m for m in turn["history"] if m.get("role") == "ROLE_USER"]
+    assert not prompt.get("parts")
+    assert prompt["metadata"] == {"hidden": True, "hitl_resume": True, "incognito": True}
+
+
+@pytest.mark.parametrize(
+    ("origin", "kept"),
+    [
+        ("scheduler", False),  # server-fired: machine text, never a bubble
+        ("background-resume", False),
+        ("a2a", True),  # a peer agent delegating: its request IS the conversation
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_server_fired_turn_stores_no_prompt(monkeypatch, tmp_path, origin, kept):
+    from server.chat import is_autonomous_origin  # the predicate production wires in
+
+    prompt = "[Autonomous wake — scheduled run. Orient from <working_state>, then:]\n\ncheck the deploy"
+    turn, seen = await _one_turn(
+        monkeypatch,
+        tmp_path,
+        _message(prompt, "chat-fired", metadata={"origin": origin}),
+        server_fired_origin=is_autonomous_origin,
+    )
+    assert seen["text"] == prompt
+    users = [m for m in turn["history"] if m.get("role") == "ROLE_USER"]
+    assert [_texts(m) for m in users] == ([[prompt]] if kept else [])
+
+
+@pytest.mark.asyncio
+async def test_a_data_url_attachment_is_elided_but_a_link_is_kept(monkeypatch, tmp_path):
+    """An image can also ride inline as a ``data:`` URL — the same payload, just spelled as
+    a URL — while an ``http(s)`` URL is only a reference."""
+    data_url = "data:image/png;base64," + base64.b64encode(b"\x89PNG" + b"\x01" * 2048).decode()
+    link = "https://example.com/diagram.png"
+    turn, seen = await _one_turn(
+        monkeypatch,
+        tmp_path,
+        _message(
+            "Compare these",
+            "chat-urls",
+            parts=[
+                {"url": data_url, "mediaType": "image/png", "filename": "inline.png"},
+                {"url": link, "mediaType": "image/png", "filename": "linked.png"},
+            ],
+        ),
+    )
+    assert [uri for _, uri in seen["images"]] == [data_url, link]  # the turn sees both
+    inline, linked = turn["history"][0]["parts"][1:]
+    assert "url" not in inline and inline["metadata"]["omittedBytes"] == len(data_url)
+    assert inline["filename"] == "inline.png"
+    assert linked["url"] == link and "omittedBytes" not in (linked.get("metadata") or {})
+
+
+@pytest.mark.asyncio
+async def test_a_giant_paste_is_capped_in_the_transcript_not_in_the_turn(monkeypatch, tmp_path):
+    from a2a_impl.executor import _TRANSCRIPT_PROMPT_MAX_CHARS as cap
+
+    pasted = "".join(f"line {i:05d} of a pasted log\n" for i in range(1500))
+    assert len(pasted) > cap
+    turn, seen = await _one_turn(monkeypatch, tmp_path, _message(pasted, "chat-paste"))
+    assert seen["text"] == pasted
+    [stored] = _texts(turn["history"][0])
+    assert stored.startswith(pasted[:cap])
+    assert stored.endswith(f"… [{len(pasted) - cap:,} more characters not kept]")
+
+
 # ── Paragraphs between model calls: the real native turn, end to end ──────────────
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "expected"),
+    [
+        ("a.", "b", "\n\n"),
+        ("a.\n", "b", "\n"),
+        ("a.", "\nb", "\n"),
+        ("a.\n\n", "b", ""),
+        ("a.\n", "\nb", ""),
+    ],
+)
+def test_paragraph_break_counts_the_newlines_already_there(before, after, expected):
+    from server.chat import _paragraph_break
+
+    assert _paragraph_break(before, after) == expected
 
 
 class _ScriptedModel:
@@ -270,8 +408,19 @@ def _console_text(frames: list[dict]) -> tuple[str, str]:
     return streamed, canonical
 
 
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        ("I'll check the time first.", "It is noon."),
+        # A model that already ends or opens its narration with a newline must still get
+        # exactly ONE blank line — not a second break stacked on its own.
+        ("I'll check the time first.\n", "It is noon."),
+        ("I'll check the time first.", "\nIt is noon."),
+        ("I'll check the time first.", "\n\nIt is noon."),
+    ],
+)
 @pytest.mark.asyncio
-async def test_narration_around_a_tool_call_stays_separate_paragraphs(monkeypatch, tmp_path):
+async def test_narration_around_a_tool_call_stays_separate_paragraphs(monkeypatch, tmp_path, before, after):
     """The model says one thing, calls a tool, then says the next thing — two model calls.
     Durable and live text must read "first.\\n\\nIt is", never "first.It is", and the
     live stream must carry the SAME break the stored text does."""
@@ -283,10 +432,10 @@ async def test_narration_around_a_tool_call_stays_separate_paragraphs(monkeypatc
         monkeypatch,
         [
             AIMessage(
-                content="I'll check the time first.",
+                content=before,
                 tool_calls=[{"name": "current_time", "args": {"timezone": "UTC"}, "id": "c1", "type": "tool_call"}],
             ),
-            AIMessage(content="It is noon."),
+            AIMessage(content=after),
         ],
     )
     store = await _durable_store(tmp_path)

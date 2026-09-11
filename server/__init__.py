@@ -288,6 +288,7 @@ from server.chat import (  # noqa: E402,F401 — re-export of the extracted chat
     attendance_stream,
     chat,
     finish_live_server_turn,
+    is_autonomous_origin,
     is_session_attended,
     live_server_turn_control,
     mark_session_attended,
@@ -1248,6 +1249,9 @@ def _main():
             structured_finalizer=_structured_finalizer,
             context_meta_provider=_context_meta,
             stall_timeout_provider=_stall_timeout,
+            # A scheduler/watch/background-resume turn's prompt is machine text that was
+            # never a chat bubble; the durable transcript keeps none (ADR 0104).
+            server_fired_origin=is_autonomous_origin,
         ),
         task_store=task_store,
         agent_card=a2a_card,

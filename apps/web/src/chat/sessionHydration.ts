@@ -17,7 +17,7 @@ import {
   type ChatSession,
   type HydrationEligibility,
 } from "./chat-store";
-import { replaceText } from "./parts";
+import { rendersText, replaceText, textRuns } from "./parts";
 import { applyComponent, applyReasoning, applyText, applyToolEvent, applyUsage } from "./turnReducers";
 
 const TERMINAL = /completed|failed|canceled|cancelled|rejected/i;
@@ -40,12 +40,12 @@ function isOperatorMessage(message: DurableMessage): boolean {
   return !(typeof origin === "string" && origin);
 }
 
-/** The operator bubble this turn showed live, or "" for none. The server opens each
- *  turn's durable history with the message that started it, but a `hidden` send (an
- *  approval or dismissal resume, a regenerate, a goal kickoff) deliberately drew no
- *  bubble, and where the sent text differs from the bubble (attachment context
- *  prepended) the console recorded the bubble as `display`. A turn stored before the
- *  server kept prompts has no user message at all and rebuilds as its answer alone. */
+/** The operator bubble this turn showed live, or "" for none. The server already stores
+ *  each turn's opening message that way (ADR 0104): the bubble text for a `display`
+ *  send, no text for a `hidden` one (an approval or dismissal resume, a regenerate, a
+ *  goal kickoff), nothing for a server-fired turn. The same rules apply here to any row,
+ *  whoever wrote it. A turn stored before the server kept prompts has no user message at
+ *  all and rebuilds as its answer alone. */
 function operatorPrompt(turn: DurableChatTurn): string {
   const user = (turn.history ?? []).find(isOperatorMessage);
   if (!user || user.metadata?.hidden === true) return "";
@@ -125,17 +125,8 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
     // reconcile it in as the trailing run — the same seam reattach.finalize closes
     // on the live resubscribe path, applied here to durable hydration. A turn that
     // already surfaced the full ordered text is left untouched.
-    const hasOrderedParts = Boolean(assistant.parts?.length);
-    const orderedText = (assistant.parts ?? [])
-      .filter((part) => part.kind === "text")
-      .map((part) => part.text)
-      .join("");
-    if (turn.text && hasOrderedParts && orderedText.trim() !== turn.text.trim()) {
-      assistant = {
-        ...assistant,
-        content: turn.text,
-        parts: replaceText(assistant.parts, turn.text, orderedText),
-      };
+    if (turn.text && assistant.parts?.length && !rendersText(textRuns(assistant.parts), turn.text)) {
+      assistant = { ...assistant, content: turn.text, parts: replaceText(assistant.parts, turn.text) };
     }
   } else {
     // Keep the durable partial visible if a cold/failed reattach cannot produce

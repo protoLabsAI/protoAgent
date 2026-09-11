@@ -133,3 +133,136 @@ async def test_subagent_content_does_not_leak_into_lead_stream(monkeypatch):
     assert any(sub_secret in out for out in tool_outputs), (
         f"subagent result should return via the task tool card; tool outputs: {tool_outputs}"
     )
+
+
+# ── A model call a TOOL makes — detached or not — never speaks for the lead (#3439) ──
+#
+# Work a tool spawns runs in a copy of the tool's context (plugins/delegates, #3016:
+# "LangChain run context and all"), so its model calls — a background ingest's
+# describe/enrich passes, a plugin's spawn_work running sdk.complete — keep reporting
+# into the spawning turn's astream_events while the lead is still answering. Their
+# events run in the TOOL node. Two ways that reached the answer:
+#   - a streaming one leaked its tokens mid-sentence ("I started the
+#     IMAGE-DESCRIPTIONingest…") — pre-existing;
+#   - a quiet one merely STARTING made the lead's next delta open a paragraph break
+#     mid-sentence, once #3439 separated each model call's narration.
+
+_ANSWER = "I started the ingest and it will be searchable in a minute or two once indexed."
+
+
+class _SlowLead(GenericFakeChatModel):
+    """The lead: a tool call as one chunk, then its answer word by word, slowly — so a
+    detached call lands mid-sentence."""
+
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+    async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
+        import asyncio
+
+        msg = next(self.messages)
+        calls = getattr(msg, "tool_calls", None) or []
+        if calls:
+            yield ChatGenerationChunk(
+                message=AIMessageChunk(
+                    content="",
+                    tool_call_chunks=[
+                        {"name": tc["name"], "args": json.dumps(tc["args"]), "id": tc["id"], "index": i}
+                        for i, tc in enumerate(calls)
+                    ],
+                )
+            )
+            return
+        for i, word in enumerate(msg.content.split(" ")):
+            await asyncio.sleep(0.05)
+            yield ChatGenerationChunk(message=AIMessageChunk(content=word if i == 0 else f" {word}"))
+
+
+def _aux_model(*, streams: bool):
+    """An in-process helper model (describe/enrich/complete), quiet or token-streaming."""
+    from langchain_core.language_models.chat_models import BaseChatModel
+    from langchain_core.outputs import ChatGeneration, ChatResult
+
+    class _Aux(BaseChatModel):
+        @property
+        def _llm_type(self) -> str:
+            return "aux-fake"
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            return ChatResult(generations=[ChatGeneration(message=AIMessage(content="IMAGE-DESCRIPTION"))])
+
+    class _StreamingAux(_Aux):
+        def _stream(self, messages, stop=None, run_manager=None, **kwargs):
+            for token in ("IMAGE-", "DESCRIPTION"):
+                chunk = ChatGenerationChunk(message=AIMessageChunk(content=token))
+                if run_manager:
+                    run_manager.on_llm_new_token(token, chunk=chunk)
+                yield chunk
+
+    return _StreamingAux() if streams else _Aux()
+
+
+@pytest.mark.parametrize(
+    ("how", "streams"),
+    [("on-the-loop", False), ("in-a-thread", False), ("in-a-thread", True)],
+)
+@pytest.mark.asyncio
+async def test_a_model_call_detached_from_a_tool_never_enters_the_lead_answer(monkeypatch, how, streams):
+    import asyncio
+
+    import runtime.state as rs
+    from graph.config import LangGraphConfig
+    from langchain_core.messages import HumanMessage
+    from langchain_core.tools import tool
+    from langgraph.checkpoint.memory import MemorySaver
+
+    from server.chat import _run_turn_stream
+
+    aux = _aux_model(streams=streams)
+    spawned: list = []
+
+    @tool
+    async def ingest_in_background(source: str) -> str:
+        """Start a background ingest."""
+
+        async def _work():
+            await asyncio.sleep(0.2)  # lands while the lead is mid-sentence
+            if how == "on-the-loop":
+                await aux.ainvoke([HumanMessage("situate this chunk")])
+            else:
+                await asyncio.to_thread(aux.invoke, [HumanMessage("situate this chunk")])
+
+        spawned.append(asyncio.create_task(_work()))  # the spawn_work shape
+        return "Ingest started in the background."
+
+    lead = _SlowLead(
+        messages=itertools.chain(
+            [
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": "ingest_in_background", "args": {"source": "x"}, "id": "c1", "type": "tool_call"}],
+                ),
+                AIMessage(content=_ANSWER),
+            ],
+            itertools.repeat(AIMessage(content="(extra step)")),
+        )
+    )
+    monkeypatch.setattr("graph.agent.create_llm", lambda *a, **k: lead)
+    from graph.agent import create_agent_graph
+
+    graph = create_agent_graph(
+        LangGraphConfig(), include_subagents=False, checkpointer=MemorySaver(), extra_tools=[ingest_in_background]
+    )
+    monkeypatch.setattr(rs.STATE, "graph", graph, raising=False)
+    monkeypatch.setattr(rs.STATE, "goal_controller", None, raising=False)
+    monkeypatch.setattr(rs.STATE, "graph_config", LangGraphConfig(), raising=False)
+
+    streamed, raw = "", None
+    async for kind, payload in _run_turn_stream("ingest x", f"det-{how}", {"configurable": {"thread_id": f"det-{how}"}}):
+        if kind == "text":
+            streamed += payload
+        elif kind == "__raw__":
+            raw = payload
+    await asyncio.gather(*spawned)
+    assert raw == _ANSWER, f"the lead's answer was altered by a call a tool made: {raw!r}"
+    assert streamed == _ANSWER
