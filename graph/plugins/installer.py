@@ -53,6 +53,64 @@ def _is_builtin(plugin_id: str) -> bool:
     return (d / MANIFEST_FILENAME).exists() or (d / BUNDLE_FILENAME).exists()
 
 
+# ── Supersession: an external plugin that moved into core (``supersedes``) ─────────
+# A bundled plugin can declare the git URLs of the standalone repo(s) it replaces
+# (PluginManifest.supersedes). A URL listed there is "superseded": installing from it
+# fetches nothing (the plugin already ships with protoAgent), updating a copy installed
+# from it is refused with a clear reason instead of a 400 from the built-in guard, and
+# uninstalling that copy removes only the ignored files — never the enable state the
+# bundled copy runs on. The loader's half (the bundled copy wins) is in
+# ``loader.discover_plugins``.
+
+
+def _bundled_manifest(plugin_id: str) -> PluginManifest | None:
+    """The bundled copy of ``plugin_id`` (``plugins/<id>/``), or ``None`` if there is none."""
+    d = bundled_plugins_dir() / plugin_id
+    manifest = load_manifest(d) if (d / MANIFEST_FILENAME).exists() else None
+    return manifest if manifest is not None and manifest.id == plugin_id else None
+
+
+def bundled_superseding(plugin_id: str, source_url: str) -> PluginManifest | None:
+    """The bundled copy of ``plugin_id`` when it supersedes ``source_url`` — i.e. a copy
+    of that id installed from that URL is retired — else ``None``."""
+    if not source_url:
+        return None
+    from graph.plugins.manifest import supersedes_source
+
+    bundled = _bundled_manifest(plugin_id)
+    return bundled if bundled is not None and supersedes_source(bundled, source_url) else None
+
+
+def superseding_plugin(url: str) -> PluginManifest | None:
+    """The bundled plugin whose ``supersedes`` names ``url``, or ``None``.
+
+    Answered from the bundled tree alone — no fetch — so an install or an archetype
+    member listing a retired repo resolves even when that repo is archived, deleted,
+    or unreachable."""
+    from graph.plugins.manifest import supersedes_source
+
+    root = bundled_plugins_dir()
+    if not root.is_dir():
+        return None
+    for child in sorted(root.iterdir()):
+        if not (child / MANIFEST_FILENAME).exists():
+            continue
+        manifest = load_manifest(child)
+        if manifest is not None and manifest.supersedes and supersedes_source(manifest, url):
+            return manifest
+    return None
+
+
+def superseded_reason(plugin_id: str, source_url: str, bundled: PluginManifest) -> str:
+    """One sentence an operator can act on: why a copy is ignored and what to do."""
+    return (
+        f"{plugin_id!r} now ships with protoAgent (bundled v{bundled.version}), which supersedes "
+        f"{source_url} — the copy installed from there is ignored and has nothing to update. The "
+        f"bundled copy updates with protoAgent itself; uninstall the old copy to clean it up "
+        f"(your settings and enabled state are kept)."
+    )
+
+
 def lock_path() -> Path:
     """The ``plugins.lock`` for THIS instance — ``instance_paths().plugins_lock``
     (honors ``PROTOAGENT_PLUGINS_LOCK``)."""
@@ -643,10 +701,27 @@ def install(
 ) -> dict:
     """Clone a plugin from ``url`` (at ``ref``) into the live plugins dir, pinned
     to its resolved SHA, and record it in ``plugins.lock``. Does NOT enable it or
-    install its deps. Returns the install summary."""
+    install its deps. Returns the install summary.
+
+    A ``url`` a bundled plugin ``supersedes`` fetches nothing: that plugin ships with
+    protoAgent now, so the summary describes the bundled copy and carries
+    ``superseded: True`` (``--force`` doesn't change that — override a bundled plugin
+    from a fork URL instead). Checked before the allowlist and the fetch: no code comes
+    from that source, and the retired repo may no longer be reachable."""
     _validate_url(url)
     if ref:
         _validate_ref(ref)  # before it reaches git or the GitHub API URL (PR #1140 QA)
+    bundled = superseding_plugin(url)
+    if bundled is not None:
+        log.info(
+            "[plugins] %s ships with protoAgent (bundled v%s, supersedes %s) — nothing to fetch",
+            bundled.id,
+            bundled.version,
+            url,
+        )
+        summary = _summary(bundled, source=url, ref=ref or "", sha="")
+        summary["superseded"] = True
+        return summary
     if not _source_allowed(url, allow):
         detail = (
             "plugins.sources.allow is an explicit empty list (deny-all) — list the origins you trust, "
@@ -958,6 +1033,7 @@ def _install_bundle(
     config_inputs = normalize_config_inputs(bid, bundle.get("config_inputs"))
     installed: list[dict] = []
     skipped: list[str] = []
+    superseded: list[str] = []
     for entry in bundle.get("plugins") or []:
         if not isinstance(entry, dict):
             continue
@@ -967,6 +1043,22 @@ def _install_bundle(
         purl = entry.get("url")
         if not purl:
             raise InstallError(f"bundle {bid!r}: plugin {entry.get('id', '?')!r} has no url")
+        # A member listed by a URL a bundled plugin supersedes moved into core: treat it
+        # like `builtin: true` (skip, don't fetch), so an archetype repo that still lists
+        # the old URL installs unchanged on hosts old and new. Bundles carry no
+        # min-version, so the repo can't be re-pointed at `builtin: true` without
+        # breaking every host that predates the move.
+        moved = superseding_plugin(str(purl))
+        if moved is not None:
+            log.info(
+                "[plugins] bundle %s: member %s ships with protoAgent now (bundled v%s supersedes %s) — skipped",
+                bid,
+                entry.get("id", moved.id),
+                moved.version,
+                purl,
+            )
+            superseded.append(moved.id)
+            continue
 
         member_ref = entry.get("ref")
         # Independent member semver chase (#2960): a release-tag pin in the bundle
@@ -1018,6 +1110,12 @@ def _install_bundle(
             "requested_ref": ref or "",
             "resolved_sha": bundle_sha,
             "plugins": [s["id"] for s in installed],
+            # Members this bundle names by a URL a bundled plugin supersedes — not fetched
+            # (the bundled copy is the member now), so not in `plugins`, which stays "the
+            # code this bundle installed" for ownership/uninstall. Kept so the no-`enabled`
+            # fallback ("turn on every member") still turns them on, as it did before the
+            # plugin moved into core.
+            "superseded": superseded,
             # The bundle's curated turn-on list (a subset of `plugins`). Cached here so a
             # consumer that only sees the lock — e.g. the fleet new-agent path, which
             # installs via a CLI subprocess and never sees the live install summary — can
@@ -1065,6 +1163,8 @@ def _install_bundle(
         "resolved_sha": bundle_sha,
         "installed": installed,
         "skipped_builtin": skipped,
+        # Members listed by a URL a bundled plugin supersedes — skipped like builtins.
+        "skipped_superseded": superseded,
         "enabled": list(bundle.get("enabled") or []),
         "config": bundle.get("config") or {},
         "config_inputs": config_inputs,
@@ -1128,9 +1228,15 @@ def uninstall(plugin_id: str, *, purge: bool = False) -> dict:
     dir, the `plugins.lock` entry, and the `plugins.enabled`/`disabled` reference.
     With ``purge=True`` ALSO removes the plugin's config section + its secrets.
     Built-ins are refused; pip deps are NEVER auto-removed (shared venv) — they're
-    returned for the operator to remove. Returns a report dict."""
+    returned for the operator to remove. Returns a report dict.
+
+    The one built-in id that IS accepted: a copy installed from a URL the bundled plugin
+    ``supersedes`` — see ``_uninstall_superseded``."""
     if _is_builtin(plugin_id):
-        raise InstallError(f"{plugin_id!r} is a built-in plugin — not removable via uninstall.")
+        bundled = bundled_superseding(plugin_id, recorded_source_url(plugin_id))
+        if bundled is None:
+            raise InstallError(f"{plugin_id!r} is a built-in plugin — not removable via uninstall.")
+        return _uninstall_superseded(plugin_id, bundled, purge=purge)
     target = live_plugins_dir() / plugin_id
     # Read the manifest BEFORE deleting — purge needs the config section + we report
     # the declared deps.
@@ -1187,6 +1293,61 @@ def uninstall(plugin_id: str, *, purge: bool = False) -> dict:
         "deps_left": deps_left,
         "purged": purge,
         "jobs_cancelled": jobs_cancelled,
+    }
+
+
+def _uninstall_superseded(plugin_id: str, bundled: PluginManifest, *, purge: bool) -> dict:
+    """Remove the IGNORED installed copy of a plugin that now ships with protoAgent.
+
+    Only that copy's files and its ``plugins.lock`` entry go. Everything keyed by the
+    plugin id belongs to the bundled copy that is actually running, so it all stays —
+    even under ``purge``: the ``plugins.enabled``/``disabled`` entry (dropping it would
+    switch the bundled plugin off), the config section and secrets, its scheduler jobs,
+    and its own setup gaps (only the loader's "superseded" banner is cleared). Declared
+    deps aren't reported for removal either — the bundled copy may import the same ones.
+    ``superseded_by_bundled`` in the report tells callers there is nothing to unload."""
+    source_url = recorded_source_url(plugin_id)
+    target = live_plugins_dir() / plugin_id
+    removed: list[str] = []
+    if target.exists():
+        # Same rename-aside-then-delete as a normal uninstall (#3075).
+        backup = target.parent / (target.name + ".bak")
+        shutil.rmtree(backup, ignore_errors=True)
+        os.rename(target, backup)
+        shutil.rmtree(backup, ignore_errors=True)
+        removed.append("code")
+    lock = _read_lock()
+    before = len(lock["plugins"])
+    lock["plugins"] = [e for e in lock["plugins"] if not (isinstance(e, dict) and e.get("id") == plugin_id)]
+    if len(lock["plugins"]) != before:
+        _write_lock(lock)
+        removed.append("lock")
+    try:
+        from graph.plugins import setup_gaps as _setup_gaps
+        from graph.plugins.loader import SUPERSEDED_GAP_KEY
+
+        _setup_gaps.report(plugin_id, SUPERSEDED_GAP_KEY, None)
+    except Exception:  # noqa: BLE001 — banner hygiene must never fail the uninstall
+        pass
+    _audit(
+        "uninstall",
+        {"id": plugin_id, "purge": purge, "superseded_by_bundled": bundled.version, "source_url": source_url},
+        f"removed the superseded copy of {plugin_id} ({', '.join(removed)}); bundled v{bundled.version} kept",
+    )
+    log.info(
+        "[plugins] removed the superseded copy of %s from %s (%s) — the bundled v%s keeps running",
+        plugin_id,
+        source_url,
+        ", ".join(removed),
+        bundled.version,
+    )
+    return {
+        "id": plugin_id,
+        "removed": removed,
+        "deps_left": [],
+        "purged": False,
+        "jobs_cancelled": 0,
+        "superseded_by_bundled": bundled.version,
     }
 
 
@@ -1435,6 +1596,14 @@ def list_installed() -> list[dict]:
         if pid not in on_disk:
             out.append({**locked, "present": False, "tracked": True})
 
+    # A copy installed from a URL the bundled plugin now supersedes is ignored by the
+    # loader — flag it, so an update path skips it and a UI can say why it's inert.
+    for row in out:
+        bundled = bundled_superseding(str(row.get("id") or ""), str(row.get("source_url") or ""))
+        if bundled is not None:
+            row["superseded"] = True
+            row["bundled_version"] = bundled.version
+
     out.sort(key=lambda e: e.get("id", ""))
     return out
 
@@ -1584,6 +1753,13 @@ def check_plugin_update(entry: dict) -> dict:
         "pinned": pinned,
         "error": None,
     }
+    # Superseded by a bundled copy: the installed copy is ignored, so "behind" would
+    # offer an update that can't apply — report it, skip the network.
+    bundled = bundled_superseding(str(pid), str(source_url))
+    if bundled is not None:
+        result["superseded"] = True
+        result["bundled_version"] = bundled.version
+        return result
     if pinned or not source_url:
         if not source_url:
             result["error"] = "no source_url recorded — cannot check for updates"
@@ -1764,13 +1940,18 @@ def uninstall_bundle(bundle_id: str, *, purge: bool = False) -> dict:
 
 def sync(*, allow: list[str] | None = None) -> list[dict]:
     """Re-clone every locked plugin at its pinned SHA (reproducible install set).
-    Missing ones are fetched; present ones are left as-is."""
+    Missing ones are fetched; present ones are left as-is. A missing one whose source a
+    bundled plugin now supersedes isn't fetched (``status: superseded``) — the bundled
+    copy is what would load anyway."""
     results = []
     root = live_plugins_dir()
     for e in _read_lock()["plugins"]:
         pid = e["id"]
         if (root / pid).exists():
             results.append({"id": pid, "status": "present"})
+            continue
+        if bundled_superseding(pid, str(e.get("source_url") or "")) is not None:
+            results.append({"id": pid, "status": "superseded"})
             continue
         try:
             install(

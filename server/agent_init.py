@@ -1500,6 +1500,18 @@ async def _plugin_autoupdate_sweep(cfg, policy: dict) -> int:
         if entry is None:
             log.info("[plugin-autoupdate] %s in policy but not installed — skipping", plugin_id)
             continue
+        if entry.get("superseded"):
+            # Moved into core: the bundled copy runs and updates with protoAgent, and the
+            # installed copy is ignored — pulling it would only trip the built-in guard,
+            # which used to log an install failure on every sweep.
+            log.info(
+                "[plugin-autoupdate] %s ships with protoAgent now (bundled v%s supersedes %s) — skipping; "
+                "uninstall the ignored copy and drop it from plugins.update_policy",
+                plugin_id,
+                entry.get("bundled_version"),
+                entry.get("source_url"),
+            )
+            continue
         when = str(pol.get("when") or "idle").strip().lower()
         if when != "always" and not _server_is_idle():
             log.info("[plugin-autoupdate] %s deferred — server busy (when=%s)", plugin_id, when)

@@ -2995,10 +2995,11 @@ export const api = {
   },
   // Re-clone every locked plugin that's missing on disk (fresh clone / restored
   // data dir). Fetches at the lock's resolved_sha; already-enabled plugins come
-  // up live via the same hot-reload the enable toggle uses.
+  // up live via the same hot-reload the enable toggle uses. "superseded" = the locked
+  // copy's source is retired by a bundled plugin of the same id — nothing to fetch.
   syncPlugins() {
     return request<{
-      plugins: { id: string; status: "present" | "installed" | "failed"; error?: string }[];
+      plugins: { id: string; status: "present" | "installed" | "failed" | "superseded"; error?: string }[];
       reloaded: boolean;
       reload_error: string | null;
     }>("/api/plugins/sync", { method: "POST" });

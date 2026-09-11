@@ -188,6 +188,11 @@ def run_plugin_cli(argv: list[str]) -> int:
                     print(f"  ✓ {p['id']} v{p['version']} @ {p['resolved_sha'][:10]}")
                 if s["skipped_builtin"]:
                     print(f"  · built-in (already ships with protoAgent): {', '.join(s['skipped_builtin'])}")
+                if s.get("skipped_superseded"):
+                    print(
+                        "  · moved into protoAgent (listed by a URL a bundled plugin supersedes — not fetched): "
+                        f"{', '.join(s['skipped_superseded'])}"
+                    )
                 deps = sorted({d for p in s["installed"] for d in p.get("requires_pip", [])})
                 if deps:
                     print(
@@ -200,6 +205,10 @@ def run_plugin_cli(argv: list[str]) -> int:
                     )
                 if s["config"]:
                     print(f"  recommended config: {s['config']}")
+                return 0
+            if s.get("superseded"):
+                print(f"· {s['id']} ships with protoAgent now (bundled v{s['version']}) — nothing fetched from {args.url}.")
+                print(f"  To turn it on, add '{s['id']}' to plugins.enabled in your config, then restart.")
                 return 0
             print(f"✓ installed {s['id']} v{s['version']} @ {s['resolved_sha'][:10]}")
             if s["description"]:
@@ -225,7 +234,12 @@ def run_plugin_cli(argv: list[str]) -> int:
                 print("(no git-installed plugins)")
                 return 0
             for e in rows:
-                if not e.get("present"):
+                if e.get("superseded"):
+                    print(
+                        f"  {e['id']:20} {e['resolved_sha'][:10]}  {e['source_url']}  [SUPERSEDED — ships with "
+                        f"protoAgent v{e.get('bundled_version')}; this copy is ignored, `plugin uninstall {e['id']}`]"
+                    )
+                elif not e.get("present"):
                     print(f"  {e['id']:20} {e['resolved_sha'][:10]}  {e['source_url']}  [MISSING — run `plugin sync`]")
                 elif not e.get("tracked", True):
                     print(f"  {e['id']:20} {'local':10}  (on disk, not in plugins.lock — not update-tracked)")
@@ -236,6 +250,15 @@ def run_plugin_cli(argv: list[str]) -> int:
             was_enabled = _enabled_in_live_config(args.id)
             rep = installer.uninstall(args.id, purge=args.purge)
             print(f"✓ uninstalled {args.id} — removed: {', '.join(rep['removed'])}")
+            if rep.get("superseded_by_bundled"):
+                # Only the ignored copy went — the bundled one keeps running, and nothing
+                # keyed by the id was touched (so no "still loaded" server warning either).
+                print(
+                    f"  that was the superseded copy — {args.id} ships with protoAgent (bundled "
+                    f"v{rep['superseded_by_bundled']}) and keeps running; its enabled state, config "
+                    "and secrets are unchanged" + (" (--purge doesn't apply to them)." if args.purge else ".")
+                )
+                return 0
             if rep["deps_left"]:
                 print(
                     f"  declared deps left installed (shared venv — remove manually if unused): {', '.join(rep['deps_left'])}"
@@ -276,8 +299,11 @@ def run_plugin_cli(argv: list[str]) -> int:
             for p in s.get("installed") or []:
                 print(f"  ✓ {p['id']} v{p['version']} @ {p['resolved_sha'][:10]}")
             for pid in installer.orphaned_bundle_members(args.id, before):
-                installer.uninstall(pid)
-                print(f"  − retired {pid} (dropped from the bundle manifest)")
+                rep = installer.uninstall(pid)
+                if isinstance(rep, dict) and rep.get("superseded_by_bundled"):
+                    print(f"  − removed the superseded copy of {pid} (it ships with protoAgent now; still enabled)")
+                else:
+                    print(f"  − retired {pid} (dropped from the bundle manifest)")
             for inst in _live_servers():
                 where = f"pid {inst['pid']}" + (f", port {inst['port']}" if inst.get("port") else "")
                 print(f"  ⚠ a protoAgent server is RUNNING ({where}) — new code goes live on its next restart/reload.")

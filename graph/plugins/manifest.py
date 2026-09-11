@@ -206,6 +206,22 @@ class PluginManifest:
     repository: str = ""
     homepage: str = ""
     min_protoagent_version: str = ""
+    # The standalone repo(s) this BUNDLED plugin replaces — how an external plugin moves
+    # into core under the SAME id (so ``plugins.enabled``, its config section and every
+    # archetype's enable list keep working). Honored only on the copy shipped in
+    # protoAgent's own ``plugins/`` tree; inert anywhere else. Each entry is the git URL
+    # of a retired repo. When ``plugins.lock`` records the installed copy of this id as
+    # fetched from one of them, the bundled copy wins over it — at any version — and the
+    # operator gets a setup gap saying the installed copy can be removed. Installing or
+    # updating from a listed URL (directly, or as a bundle/archetype member) is skipped
+    # rather than refused, so archetype repos that still list the old URL keep working on
+    # old and new hosts alike. A copy installed from any OTHER URL (a fork) still wins as
+    # a deliberate override. Matching ignores the transport spelling (``https://``,
+    # ``ssh://``, ``git@host:path``), userinfo, port, letter case, and a trailing
+    # ``.git`` or slash. An entry that isn't a remote git URL naming a repo (a local
+    # path, ``file://``, a glob) is dropped with a warning; a bare string is read as a
+    # one-entry list.
+    supersedes: list[str] = field(default_factory=list)
 
 
 # A view path that carries a scheme/host instead of being a same-origin relative
@@ -1085,6 +1101,99 @@ def _parse_requires_pip(entries, plugin_id: str) -> tuple[list[str], list[str], 
     return hard, optional, scopes
 
 
+# A remote git source in URL form (``https://host/owner/repo``) or scp form
+# (``git@host:owner/repo``). Local paths and ``file://`` are deliberately not remote
+# sources: nothing a bundled copy could retire, so ``supersedes`` rejects them.
+_SOURCE_URL_RE = re.compile(r"^(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*)://(?P<rest>.*)$")
+_SOURCE_SCP_RE = re.compile(r"^(?:[^@/\s]+@)?(?P<host>[^:/\\\s]+):(?P<path>[^\\]+)$")
+_SUPERSEDES_SCHEMES = ("https", "http", "ssh", "git", "git+ssh")
+# `supersedes` is an exact claim about ONE repo: no glob, no whitespace, no control chars.
+_GLOB_OR_SPACE = re.compile(r"[*?\[\]\s\x00-\x1f\x7f]")
+
+
+def canonical_source(url: object) -> str:
+    """The identity of a git source: ``host/owner/repo``, lowercased.
+
+    Two spellings of one repository compare equal — ``https://github.com/o/r``,
+    ``https://GitHub.com/o/r.git/``, ``git@github.com:o/r.git``,
+    ``ssh://git@github.com/o/r``, ``https://token@github.com:443/o/r`` — so a
+    ``supersedes`` entry matches however the operator typed the install URL. The
+    whole string is case-folded: the hosts plugins live on (GitHub, GitLab) resolve
+    owner/repo case-insensitively, and a miss here would leave the stale copy
+    shadowing the bundled one — the exact failure ``supersedes`` exists to end.
+
+    Returns ``""`` for anything that isn't a remote source (a local path,
+    ``file://``, an empty value), which never matches anything.
+    """
+    text = str(url or "").strip()
+    match = _SOURCE_URL_RE.match(text)
+    if match:
+        authority, _, path = match.group("rest").partition("/")
+        host = re.sub(r":\d*$", "", authority.rsplit("@", 1)[-1])  # userinfo + port
+    else:
+        match = _SOURCE_SCP_RE.match(text)
+        if not match:
+            return ""
+        host, path = match.group("host"), match.group("path")
+    path = path.strip("/")
+    if path.lower().endswith(".git"):
+        path = path[:-4].rstrip("/")
+    if not host or not path:
+        return ""
+    return f"{host}/{path}".lower()
+
+
+def _parse_supersedes(raw, plugin_id: str) -> list[str]:
+    """Validate ``supersedes:`` → the declared URLs worth keeping (stripped, deduped).
+
+    Every entry must be a remote git URL that names a repository — ``https://``,
+    ``http://``, ``ssh://``, ``git://`` or scp-style ``git@host:owner/repo``. Dropped
+    with a warning: a local path or ``file://`` (not a source a bundled copy retires), a
+    glob (``supersedes`` is an exact claim — a pattern would let one manifest retire a
+    whole org's copies of its id), a bare host, and non-strings. A bare string is taken
+    as a one-entry list, since that is the one shape an author gets wrong by default.
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, (list, tuple)):
+        log.warning("[plugins] %s: supersedes must be a list of git URLs — ignored", plugin_id)
+        return []
+    kept: list[str] = []
+    seen: set[str] = set()
+    for entry in raw:
+        url = str(entry).strip() if isinstance(entry, str) else ""
+        scheme = _SOURCE_URL_RE.match(url)
+        reason = ""
+        if not url:
+            reason = "is empty or not a string"
+        elif _GLOB_OR_SPACE.search(url):
+            reason = "carries a glob character or whitespace (it must name one exact repo)"
+        elif scheme and scheme.group("scheme").lower() not in _SUPERSEDES_SCHEMES:
+            reason = f"uses {scheme.group('scheme')}:// (expected https, http, ssh or git)"
+        elif not canonical_source(url):
+            reason = "is not a remote git URL naming a repository"
+        if reason:
+            log.warning("[plugins] %s: supersedes entry %r %s — ignored", plugin_id, entry, reason)
+            continue
+        key = canonical_source(url)
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(url)
+    return kept
+
+
+def supersedes_source(manifest: PluginManifest, url: object) -> bool:
+    """True when ``manifest`` declares (``supersedes``) that it replaces the repo at ``url``.
+
+    Pure data, no disk: callers decide whether ``manifest`` is the bundled copy — the
+    only place the declaration is honored."""
+    target = canonical_source(url)
+    return bool(target) and any(canonical_source(u) == target for u in manifest.supersedes)
+
+
 def _pip_pkg_name(spec: str) -> str:
     """Distribution name out of a PEP 508 spec — ``"pillow>=10,<11"`` → ``"pillow"``.
 
@@ -1195,4 +1304,5 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
         repository=str(data.get("repository", "")).strip(),
         homepage=str(data.get("homepage", "")).strip(),
         min_protoagent_version=str(data.get("min_protoagent_version", "")).strip(),
+        supersedes=_parse_supersedes(data.get("supersedes"), pid),
     )

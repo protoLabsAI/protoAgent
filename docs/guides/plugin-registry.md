@@ -84,6 +84,53 @@ The freshness check runs `git ls-remote` against the recorded `source_url` and i
 timeout-bounded + briefly cached, so it never hangs the panel. Pinned plugins skip
 the network entirely.
 
+## When a plugin moves into core (`supersedes`)
+
+A standalone plugin can graduate into protoAgent's own `plugins/` tree. Keep its
+**id** when it does: `plugins.enabled`, the plugin's config section and every
+archetype's `enabled:` list are keyed by it, and a new id would orphan all three.
+Then name the retired repo in the bundled manifest:
+
+```yaml
+# plugins/cowork/protoagent.plugin.yaml
+id: cowork
+name: Cowork
+version: 0.4.0
+supersedes:
+  - https://github.com/protoLabsAI/cowork-plugin
+```
+
+On every host that upgrades, that one field changes the lifecycle above:
+
+- **The bundled copy loads.** An installed copy that `plugins.lock` records as fetched
+  from a listed URL stops shadowing it, at any version, and the operator gets a
+  banner saying the old copy can be removed. Enabled state and settings carry over
+  untouched, because the id didn't change.
+- **Installs and archetypes keep working.** Installing from the old URL fetches
+  nothing (the plugin already ships). An archetype bundle that still lists the member
+  by URL treats it like `builtin: true`: skipped, not refused. So archetype repos need
+  no change and keep working on older hosts too. (Bundles have no min-version, which
+  is why they can't simply switch to `builtin: true`.)
+- **Update stands down.** The freshness check reports the copy as `superseded`
+  instead of *update available*, `POST /api/plugins/<id>/update` answers 409 with the
+  reason, and the auto-update loop skips it with an info line instead of logging a
+  failure on every sweep.
+- **Uninstall removes only the leftover.** `plugin uninstall <id>` (or the console's
+  Uninstall) deletes the ignored copy and its lock entry, and keeps the id in
+  `plugins.enabled` along with its config section and secrets, even with `--purge`.
+  They belong to the bundled copy now.
+
+Two rules hold throughout. **A fork still wins**: a copy installed from any URL
+*not* listed is a deliberate override, exactly as before. And **matching is exact
+about the repo but not its spelling**: `https://`, `ssh://` and `git@host:` forms,
+letter case, userinfo, port, and a trailing `.git` or `/` all compare equal, while
+globs, local paths and `file://` are rejected.
+
+The move PR: vendor the plugin into `plugins/<id>/` under the same id (with
+`enabled: false` unless it should be on by default), add `supersedes:`, and port its
+test suite into `tests/`. Archive the old repo afterwards rather than deleting it,
+because hosts that predate `supersedes` still clone it through archetype bundles.
+
 ## Keep a bundle fresh (the pin lifecycle)
 
 A **bundle** (ADR 0040) pins each member so the combo it installs is the combo that

@@ -622,6 +622,15 @@ def register_plugin_routes(app) -> None:
                 status_code=400,
                 detail=f"plugin {plugin_id!r} has no source_url — cannot update",
             )
+        # The plugin moved into core (a bundled copy supersedes this source): the
+        # installed copy is ignored, so there is nothing to pull. 409 with the reason and
+        # the fix — before, this reached the installer's built-in guard and 400'd with
+        # "cannot install over it", which read as a broken update.
+        bundled = installer.bundled_superseding(plugin_id, source_url)
+        if bundled is not None:
+            raise HTTPException(
+                status_code=409, detail=installer.superseded_reason(plugin_id, source_url, bundled)
+            )
         ref = entry.get("requested_ref", "") or None
         if ref and installer.is_release_tag(ref):
             # A release-tag pin is immutable — the update target is the newest
@@ -685,6 +694,13 @@ def register_plugin_routes(app) -> None:
             report = await asyncio.to_thread(installer.uninstall, plugin_id, purge=purge)
         except installer.InstallError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if report.get("superseded_by_bundled"):
+            # Only the IGNORED copy of a plugin that now ships with protoAgent went. The
+            # running code is the bundled copy: its modules, its enable entry and its
+            # mounts are untouched, so there is nothing to purge, scrub, or reload —
+            # dropping the id from plugins.enabled here would switch the bundled plugin off.
+            return {"ok": True, **report, "reloaded": False, "restart_recommended": False}
 
         # Teardown, mirroring _update (#1955): the files are gone, so stale module
         # objects must not survive to the next import, and an ENABLED plugin must

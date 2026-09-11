@@ -1083,6 +1083,11 @@ async def update_plugin(plugin_id: str) -> str:
     entry = next((e for e in installer.list_installed() if e.get("id") == plugin_id), None)
     if entry is None:
         return f"✗ {plugin_id!r} is not an installed plugin or bundle (see plugins.lock)"
+    bundled = installer.bundled_superseding(plugin_id, str(entry.get("source_url") or ""))
+    if bundled is not None:
+        # Moved into core — the installed copy is ignored; nothing to pull (the same
+        # answer the console's Update route gives, as a 409).
+        return f"✗ nothing to update: {installer.superseded_reason(plugin_id, str(entry.get('source_url')), bundled)}"
     ref = entry.get("requested_ref", "") or None
     if ref and installer.is_release_tag(ref):
         try:
@@ -1161,9 +1166,16 @@ async def uninstall_plugin(plugin_id: str, purge: bool = False) -> str:
         )
 
     try:
-        await asyncio.to_thread(installer.uninstall, plugin_id, purge=purge)
+        report = await asyncio.to_thread(installer.uninstall, plugin_id, purge=purge)
     except installer.InstallError as exc:
         return f"✗ uninstall failed: {exc}"
+    if isinstance(report, dict) and report.get("superseded_by_bundled"):
+        # Only the ignored copy of a plugin that now ships with protoAgent went; the
+        # bundled copy is the one running and keeps its enabled state — nothing to unload.
+        return (
+            f"✓ removed the superseded copy of {plugin_id} — the bundled "
+            f"v{report['superseded_by_bundled']} keeps running (enabled state and config unchanged)"
+        )
     purge_plugin_modules(plugin_id)
     ok, detail = await asyncio.to_thread(_live_apply, None)
     return f"✓ uninstalled {plugin_id} ({detail if ok else 'reload failed: ' + detail})"
