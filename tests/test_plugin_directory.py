@@ -45,12 +45,28 @@ def test_derived_marketing_overlay_is_in_sync() -> None:
 
 # ── schema contracts the consumers rely on ──────────────────────────────────────────
 
-def test_app_catalog_schema_is_unchanged() -> None:
+def test_app_catalog_schema() -> None:
     """The Discover UI + /api/plugins/catalog expect exactly these entry keys."""
     doc = json.loads(pd.render_app(pd.load()))
     assert set(doc) == {"_comment", "plugins"}
     for p in doc["plugins"]:
-        assert set(p) == {"id", "name", "category", "official", "repo", "tagline"}, p["id"]
+        assert set(p) == {"id", "name", "category", "official", "repo", "tagline", "adds", "docs"}, p["id"]
+        # The console runs on the operator's own host: a root-relative link would 404 there.
+        assert p["docs"].startswith("https://"), f"{p['id']}: docs link {p['docs']!r} is not absolute"
+
+
+def test_discover_says_what_the_website_card_says() -> None:
+    """#2910 / census F3: Discover used to drop the site card's contribution chips and
+    docs link, so the same plugin read thinner in-app than on the website."""
+    entries = pd.load()
+    app = {p["id"]: p for p in json.loads(pd.render_app(entries))["plugins"]}
+    site = {s["id"]: s for s in json.loads(pd.render_site(entries)) if not s.get("hidden")}
+    shared = [e for e in entries if e["id"] in app and (e.get("site_id") or e["id"]) in site]
+    assert shared, "no plugin is listed on both surfaces"
+    for e in shared:
+        a, s = app[e["id"]], site[e.get("site_id") or e["id"]]
+        assert a["adds"] == s["adds"], e["id"]
+        assert a["docs"] == pd._absolute(s["links"]["docs"]), e["id"]
 
 
 def test_bundled_entries_link_the_in_tree_plugin() -> None:
