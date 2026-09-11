@@ -1,0 +1,92 @@
+name: MCP catalog drift
+
+# config/mcp-catalog.json is the one hand-edited catalog, and an entry only runs when an
+# operator clicks it in Settings ▸ MCP ▸ Browse — so a package that upstream renamed,
+# deprecated or pulled fails in front of a user and nowhere else. It happened: the
+# catalog pointed at `server-sequentialthinking` for weeks after the package moved.
+# tests/test_mcp_catalog.py covers what can go stale offline; this checks upstream
+# (scripts/check_mcp_catalog.py: npm / PyPI resolution, remote endpoints, docs links).
+#
+# Weekly on main it files ONE tracking issue when an entry stops resolving, and closes
+# it once they all resolve again. On a PR that edits the catalog it simply fails, so a
+# mistyped package never merges. Inconclusive answers (network, 5xx, rate limits) only
+# warn — a flaky registry never files an issue or reddens a PR. Nothing here is a
+# required check.
+
+on:
+  schedule:
+    # Mondays 09:43 UTC — off the hour, so it isn't queued behind everyone's cron.
+    - cron: "43 9 * * 1"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - config/mcp-catalog.json
+      - scripts/check_mcp_catalog.py
+      - .github/workflows/mcp-catalog-drift.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mcp-catalog-drift-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ISSUE_TITLE: "MCP catalog drift: a quick-add entry no longer resolves upstream"
+
+jobs:
+  check:
+    name: Catalog entries resolve upstream
+    runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Check every entry against npm / PyPI / its endpoint and docs
+        id: check
+        # The issue steps below run after a failure, so this one must not stop the job.
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python scripts/check_mcp_catalog.py --markdown | tee report.md
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open or update the tracking issue
+        if: steps.check.outcome == 'failure' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          { cat report.md; echo; echo "_Updated by [\`mcp-catalog-drift\`]($RUN_URL)._"; } > body.md
+          EXISTING=$(gh issue list --state open --search "\"$ISSUE_TITLE\" in:title" \
+            --json number,title --jq ".[] | select(.title == \"$ISSUE_TITLE\") | .number" | head -1)
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body-file body.md
+          else
+            gh issue create --title "$ISSUE_TITLE" --body-file body.md
+          fi
+
+      - name: Close the tracking issue once every entry resolves again
+        if: steps.check.outcome == 'success' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          EXISTING=$(gh issue list --state open --search "\"$ISSUE_TITLE\" in:title" \
+            --json number,title --jq ".[] | select(.title == \"$ISSUE_TITLE\") | .number" | head -1)
+          if [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --comment \
+              "Every MCP catalog entry resolves upstream again ([run]($RUN_URL)). Closing; the weekly check reopens this if one drifts."
+          fi
+
+      - name: Fail the run when an entry drifted
+        # Reported as a failed run so the Actions tab (and a PR) shows it — after the
+        # issue has been written, which is why the check step used continue-on-error.
+        if: steps.check.outcome == 'failure'
+        run: exit 1
