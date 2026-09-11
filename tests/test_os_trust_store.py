@@ -198,6 +198,11 @@ FAILS_CLOSED = (httpx.ConnectError, httpx.ConnectTimeout)
 # busy; ConnectError stays the expected path. Shared with the success-path requests below
 # so a slow runner cannot flake those either.
 TLS_TIMEOUT = 15
+# The cert-store helpers below each start a cold `powershell`; on a busy hosted Windows
+# runner that alone took more than the old 30s once (main, 2026-09-11) while the same
+# tree passed on its PR and on the re-run. The LocalMachine store shows no confirmation
+# dialog (see below), so a genuine hang isn't the expected failure here — slowness is.
+PS_TIMEOUT = 120
 
 
 def test_untrusted_self_signed_cert_still_fails_closed(tmp_path):
@@ -285,7 +290,7 @@ def test_a_ca_trusted_in_the_windows_store_is_trusted_after_injection(tmp_path):
         check=True,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=PS_TIMEOUT,
     )
     try:
         with _serve_tls(str(cert_path), str(key_path)) as port:
@@ -316,7 +321,7 @@ def test_a_ca_trusted_in_the_windows_store_is_trusted_after_injection(tmp_path):
             check=False,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=PS_TIMEOUT,
         )
 
 
