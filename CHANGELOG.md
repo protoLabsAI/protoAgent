@@ -15,6 +15,162 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.164.0] - 2026-09-11
+
+### Added
+- **Runtime status now publishes structured setup gaps beside `warnings[]` (#3392).** `GET /api/runtime/status` gains a typed `setup_gaps` list alongside the existing `warnings[]` strings — one record per active plugin-reported gap carrying the plugin id, gap key, display label, operator-facing message, and any bounded, server-validated declarative remediation actions (the ones added in #3389). Ordering derives from the setup-gap store (stable `(plugin, key)`), so the console no longer has to parse `warnings[]`, and the field is `[]` (never absent) when there are no gaps. `warnings[]` is untouched — same content and ordering — so every current consumer keeps working; the change is purely additive. The console `RuntimeStatus` TypeScript model gains an optional `setup_gaps?: SetupGap[]` with matching `SetupGap`/`SetupGapAction` types, without weakening existing callers.
+
+- **Plugin setup gaps now render as actionable, dismissible console banners (#3421).** Structured setup gaps delivered on runtime status `warnings[]` (a plugin that's installed and enabled but can't do its job — no coder delegate, no bound repo) now render as accessible warning banners in the shell strip instead of only as flattened strings. An allowlisted `plugin_config` action opens the reporting plugin's existing Configure dialog via `useUI.openPluginConfig`; a `global_settings` action opens global settings at its section. Anything else — an unknown or malformed action kind — renders no interactive control and never becomes a link, so a plugin string can't turn into navigation. Each gap can be dismissed for the current browser session only: the dismissal is keyed by the gap's identity plus its message/action signature, so it hides only that unchanged gap, resets when the server changes or clears the gap or on a new session, and never mutates server configuration. Legacy string warnings keep rendering exactly as before, and desktop and mobile share the one component.
+
+### Fixed
+- **Two settings changes at the same moment no longer silently drop one of them (#2743).**
+  Plugin install/enable/update/sync/uninstall, MCP server add/import/remove/share, model
+  connection add/edit/remove, and delegate saves each read their list from the live config,
+  changed it, and only then took the config write lock — or never took it. Two at once (two
+  installs, a connection added in one tab while another is removed, an MCP server added
+  while one is removed) both started from the same list, and the second save wrote the
+  first one's change back out: a plugin installed but never enabled, a connection or MCP
+  server gone, with nothing saying so. Each change is now worked out inside the lock
+  against what the previous save committed, and the lock moved to the config layer so the
+  plugin uninstaller's and the delegates store's own edits of the file take it too.
+- **Adding, importing or removing an MCP server no longer freezes the agent while it
+  reloads (#2743).** Those routes ran the whole config reload directly on the server's
+  request loop, so every other request — chat included — waited it out. It now runs on a
+  worker thread, as the other settings routes already did; delegate saves moved off the
+  loop the same way.
+- **A failed share/unshare of an MCP server no longer loses the server, and two creates of
+  one delegate name no longer overwrite each other (#2743).** Sharing a server with the box
+  (or taking it back) writes the box's shared-server file and this agent's config; a failed
+  reload rolled the config back but kept the shared-file change, so a failed unshare left
+  the server in neither place. Both now roll back together, and a share racing a remove of
+  the same server can no longer copy the removed server into the box. Creating a delegate
+  checked that the name was free before taking the lock, so two creates at once both
+  succeeded and the second replaced the first; an edit racing a delete brought the deleted
+  delegate back. Both checks now run inside the lock — the second create gets "already
+  exists", the late edit "not found".
+
+- **Dependency PRs no longer arrive red because the attribution manifest is stale (#3393).**
+  dependabot updates `uv.lock` / `package-lock.json` but never regenerates
+  `THIRD_PARTY_LICENSES.md`, so `gen_attribution --check` inside `scripts/gate.py
+  --lint-only` failed on every dependency PR — hand-fixed at least five times in four
+  months. Worse, the red check is named `Lint (ruff + import contracts)` and *both of those
+  pass*, so the failure points away from its own cause and reproduces as green for anyone
+  who runs those two gates individually instead of the documented `gate.py` command. A pair
+  of workflows now regenerates the manifest on the branch and applies `skip-changelog`,
+  which the attribution commit itself trips.
+- **The regeneration is split in two so a write token never meets unreviewed dependency code (#3393).**
+  Regenerating correctly *requires* installing the bumped package: the manifest back-fills
+  licenses from its own committed copy, but a bumped version is a new key with no cached
+  entry and lands as `UNKNOWN` without the install. So one workflow installs and
+  regenerates with no secrets (a dependabot `pull_request` run gets a read-only token
+  anyway), and a second picks the result up via `workflow_run` — where secrets exist — and
+  commits it, installing nothing. The commit needs a PAT rather than the default token
+  because a push made with `GITHUB_TOKEN` does not re-trigger workflows, which would leave
+  a fixed branch sitting under a stale red check.
+
+- **`onboard_project` now reports tracking-branch drift when it reuses a checkout (#3402).**
+  When a repo is already checked out, onboarding still reuses it untouched — no re-clone, no
+  fetch, no reset — but the result now inspects local Git metadata only and names how far the
+  checkout has drifted from its configured upstream, e.g. "2 commits behind origin/main; it was
+  not fetched". Ahead, behind, and diverged states are all reported, and the same clause is added
+  on the already-registered idempotent path. When there is no upstream, the directory isn't a git
+  checkout, Git is unavailable, or the comparison can't be made, it says the drift could not be
+  determined rather than inventing a count. Registration semantics, idempotency, and the
+  live-config merge are unchanged, and no clone/fetch/reset/checkout-mutating command is issued on
+  any reuse path.
+
+- **`load_skill` now flags a skill's unavailable required tools (#3403).** When you load a skill, its advisory `Relevant tools` are reconciled up front against the tools actually bound to the graph executing the call (`STATE.graph.bound_tools`, the committed graph's authoritative assembled surface — not the process-global toolset record that any later build overwrites) plus the known host-config gates, and any that are missing or configuration-refused — the onboarding-disabled project-registration tool included — are called out under an `Unavailable in this context:` annotation before the procedure. Progressive disclosure is preserved: the body still loads and the tool list stays advisory; the annotation reports only proven absence or an unconditional configuration refusal, never a runtime/network prediction.
+
+- **Narrow markdown-table columns no longer collapse to one character per line in the console (#3412).**
+  Bumps `@protolabsai/ui` to 0.60.2, which carries `@protolabsai/ui-css@0.60.2`: the shared
+  stylesheet was inheriting `overflow-wrap: anywhere` into markdown `<table>` cells, so a narrow
+  column wrapped every word mid-character and squeezed the whole table into an unreadable sliver.
+  The upstream CSS fix scopes the wrapping so table columns size to their content again. On the
+  console side this is a dependency bump only — no component or local CSS changed.
+
+- **Consumed queued-message recall is now visibly duplicate-safe (#3413).** When ↑ recalls a queued steer the agent had already read (the cancel endpoint answers `removed:false`), the composer keeps your recalled text and now shows a persistent inline warning — "already delivered in this turn", an unchanged send would deliver a second copy — with deliberate **Clear draft** and **Send anyway** actions, instead of relying on a transient toast. Clearing empties only your draft (the consumed message stays honestly in the turn); sending delivers it once. The warning is scoped to the exact recalled text and session, so it clears the moment you edit it into a follow-up, and never leaks onto another draft. A cleanly removed recall stays ordinary editable recall with no warning.
+
+- **A delegate's HITL question reaches its caller intact (#3414).**
+  When a delegate paused for input, the calling agent received only the pause's *title* —
+  no body, no fields, no options — and could not answer it. The human-readable text a pause
+  carries was built as `question or title`, but a form and an approval have no `question`:
+  everything answerable stayed in the structured payload that only the console parses. That
+  is fine for a console and wrong for a delegation chain, where the caller has no such
+  parser and the text *is* the whole question. A plain `ask_human` does carry a `question`,
+  which is why the gap looked intermittent rather than structural. Every kind now renders
+  something answerable — the ask's question, an approval's action, a form's fields with
+  their choices and which are required — bounded so a pause never becomes a wall of schema.
+
+- **A2A: reap orphaned WORKING tasks without timing out productive turns (#3418).** Added a bounded, periodic server-side reaper over durable A2A tasks that covers the hole between boot-time restart reconciliation and the executor's stall guard: a producer that vanishes without tripping either used to leave a task stuck in `WORKING`, so the console spinner spun forever. The reaper fails a `WORKING` task with no history and no artifacts once it passes a birth grace (orphan-at-birth), and a `WORKING` task that did record history/artifacts only after a separate, longer idle threshold — so a long, productive turn is never cut off. Both grace windows sit above the executor's stall-timeout window, so a genuinely-alive turn that is merely slow to its first frame is failed by the stall guard, never preempted by the reaper. Terminal states and resumable `INPUT_REQUIRED`/`AUTH_REQUIRED` pauses are never touched, reaped rows transition to a visible `FAILED` with an actionable diagnosis (nothing is deleted), and every sweep is best-effort/logged so a reaper failure can't harm chat service.
+
+- **Two environment-dependent test assertions no longer flake the Windows shard (#3422).**
+  Both reddened PRs that never touched the code under test. `test_os_trust_store.py` asserted
+  `httpx.ConnectError` specifically at four "must fail closed" sites, but a handshake against a
+  cert the trust store rejects can exceed the 5s client timeout on that runner and httpx raises
+  `ConnectTimeout` instead — the security property held, the assertion was narrower than the
+  property. Deliberately not relaxed to `httpx.TransportError`, which also covers `ReadTimeout`:
+  that happens *after* a successful handshake, so a real `verify=False` regression could satisfy
+  it. The friction working-state provider's budget asserted a bare wall clock (`SLOW_PROVIDER_S / 5`,
+  50ms) and took 621ms on the same runner against a ~6.5ms local measurement — ~95x, with nothing
+  wrong in the code. It now measures a read-and-parse reference on the same machine and asserts a
+  ratio against it, which is what an algorithmic regression actually looks like; the absolute
+  ceiling stays as a backstop where wall clock means something.
+
+- **The gateway client no longer lets a model's NAME choose its wire protocol (#3424).**
+  `_ReasoningChatOpenAI` talks to OpenAI-*compatible* endpoints — the LiteLLM gateway, a
+  local vLLM, LM Studio, Ollama — where `/v1/chat/completions` is the only wire all of
+  them are guaranteed to serve. It left the choice to langchain-openai, which infers it
+  from the model name: any name merely *containing* `codex`, plus a handful of
+  `gpt-5.x-pro` prefixes, silently switch to `/v1/responses`. That was already true on
+  the version this release pins, so a gateway slot aliased `protolabs/codex` was being
+  sent to a path a LiteLLM gateway, vLLM or Ollama does not serve — a gateway alias is a
+  name *we* choose and says nothing about the endpoint behind it. langchain-openai 1.6.1
+  adds `gpt-5.6-sol` to the list, which is how the upstream canary surfaced it. The
+  quieter half: a Responses payload has no `messages` key, so the `reasoning_content`
+  round-trip (#2642) fell into its count-mismatch branch and degraded to a log line —
+  bringing back the DeepSeek-style 400 it exists to prevent, with nothing in the console
+  to explain it. The wire is now pinned rather than inferred. The native ChatGPT/Codex
+  backend, which genuinely does speak Responses, opts in explicitly and is unchanged; set
+  `PROTOAGENT_GATEWAY_RESPONSES_API=1` to hand the choice back to langchain for an
+  openai-compat connection pointed straight at api.openai.com.
+
+- **A bare `workspace create` on a hosted box can reach a model again, and new agents are created in the provider-registry shape (#3425).**
+  The blank workspace template wrote `model.api_base: ""`, which shadowed the box's
+  endpoint in the host ⊕ agent cascade — and the unqualified default route reads exactly
+  that field, so the agent's model client was built with an empty endpoint. It went
+  unnoticed because the fleet default, `--inherit-model`, overwrites `model:` wholesale.
+  The template now emits a `providers:` registry entry and a `model:` that only names a
+  model, clearing the first of the paths that blocked retiring `model.provider` /
+  `model.api_base` / `model.api_key` (#3128). The entry deliberately carries only `id`
+  and `type`: provider entries merge field by field over the host's, so even an empty
+  `base_url: ""` would replace the box endpoint rather than defer to it. Inheriting from
+  a pre-registry agent still works — the template's entry is dropped so the runtime
+  rebuilds the registry from the inherited `model.api_base`, as it always did.
+
+- **Quitting no longer leaves agents' shell commands, coding delegates and scripts running (#3428).**
+  A shell command, ACP delegate or `execute_code` script runs in its own process group,
+  so only its owner's cleanup could stop it — and two exits never reached that cleanup.
+  The hub SIGKILLs a fleet member 3s after asking it to stop, while the member's
+  graceful drain can take 5s; and on the desktop, quitting SIGKILLs the server, whose
+  watchdog then exits immediately — in the hub and in every member, since members
+  inherit the desktop's PID. Either way those trees kept running at ppid=1 (one box had
+  ~15 `pnpm install`s left over, the oldest 19.5h). A process now records the trees it
+  owns and tears them down the moment it starts to exit: SIGTERM at the exit signal,
+  before the drain, and SIGKILL 1.5s later for anything that ignored it — inside the
+  hub's 3s — plus a final sweep before the watchdog's exit, at the end of shutdown, and
+  at interpreter exit. A command abandoned by a cancelled turn stays owned while it
+  runs and is forgotten once it finishes, so its process-group id — free for reuse by
+  then — is never signalled on a later exit.
+
+- **A turn the agent runs off a background result no longer streams duplicated text (#3432).**
+  The console showed such a turn through two producers at once: the event bus's live
+  preview, and a resubscribe to the same still-running task that the chat surface started
+  the moment that preview appeared. Both wrote every chunk into one bubble, so the text
+  came out doubled and interleaved until the final answer replaced the bubble and made it
+  look fine. A server turn the console is watching live now keeps its bus feed only; a
+  resubscribe still happens when it's actually needed — after a reload, or when the chat is
+  opened mid-turn — and then it owns the bubble while the bus stands aside.
+
 ## [0.163.0] - 2026-09-09
 
 ### Changed
