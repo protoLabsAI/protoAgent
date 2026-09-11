@@ -2250,6 +2250,11 @@ def _mount_plugin_routers(routers: list[dict]) -> None:
             )
         try:
             _install_error_envelope(r["router"], plugin_id)
+            # Probe BEFORE including: FastAPI >= 0.141 builds an included router's served
+            # routes on the first request that reaches them and snapshots `include_in_schema`
+            # then. Reloads run in a worker thread while the app keeps serving, so a request
+            # landing between include and probe would cache a broken route as documented.
+            _exclude_unschemable_routes(r["router"], plugin_id, prefix)
             before = len(app.router.routes)
             app.include_router(r["router"], prefix=prefix)
             fresh = list(app.router.routes[before:])
@@ -2283,6 +2288,74 @@ def _mount_plugin_routers(routers: list[dict]) -> None:
                 pass
         STATE.plugin_router_keys.discard(key)
         log.info("[plugins] unmounted router from %s at %s (disabled/removed)", key[0], key[1] or "/")
+    # FastAPI caches the schema against a routes version that `include_router` bumps but the
+    # list surgery above doesn't, so a remount or an unmount could leave /openapi.json
+    # documenting routes that just left (the version sums can even come out equal). Mark the
+    # change where FastAPI tracks one — a schema build racing this reload then rebuilds rather
+    # than keeping what it saw — and drop the cache for FastAPI versions that don't.
+    mark_changed = getattr(app.router, "_mark_routes_changed", None)
+    if callable(mark_changed):
+        mark_changed()
+    app.openapi_schema = None
+
+
+def _plugin_api_routes(router, prefix: str = ""):
+    """Yield ``(path, APIRoute)`` for every HTTP route a plugin router carries, nested
+    includes included, with the path as it will serve under ``prefix``.
+
+    FastAPI >= 0.141 includes a router LAZILY: the parent's route list holds a wrapper whose
+    ``original_router`` carries the real APIRoutes (and further wrappers for deeper includes),
+    and the served routes are built from those on first use. Older FastAPI copies nested
+    APIRoutes into the parent directly. Either way these are the objects the served routes are
+    built from, so a change made here before the router is mounted is the one that serves."""
+    from fastapi.routing import APIRoute
+
+    for entry in getattr(router, "routes", ()):
+        inner = getattr(entry, "original_router", None)
+        if inner is not None:
+            nested = getattr(getattr(entry, "include_context", None), "prefix", "")
+            yield from _plugin_api_routes(inner, prefix + nested)
+        elif isinstance(entry, APIRoute):
+            yield prefix + entry.path, entry
+
+
+def _exclude_unschemable_routes(router, plugin_id: str, prefix: str = "") -> None:
+    """Leave a plugin route out of ``/openapi.json`` when its schema can't be built.
+
+    One route whose schema fails takes the WHOLE schema down: ``/openapi.json`` and
+    ``/docs`` answered 500 on every agent running orgChart, the portfolio plugin or the
+    learning-wiki plugin. Each wrote a page route as ``-> HTMLResponse`` with the import
+    inside the router-builder function under ``from __future__ import annotations``, so
+    FastAPI resolved the string against the module's globals, couldn't, and inferred a
+    response model from an unresolved forward reference that pydantic then refused.
+
+    Probing each route on its own before it mounts keeps a plugin's mistake local: that
+    route still SERVES, it is only left out of the documented schema, and the warning names
+    the plugin, the route and the fix. It covers the routes the plugin hands over; schema
+    arguments given to a nested ``include_router`` call itself are not probed. Best-effort —
+    a probe that can't run changes nothing."""
+    try:
+        from fastapi.openapi.utils import get_openapi
+    except Exception:  # noqa: BLE001 — no schema tooling, nothing to protect
+        return
+
+    for path, route in _plugin_api_routes(router, prefix):
+        if not route.include_in_schema:
+            continue
+        try:
+            get_openapi(title="plugin-route-probe", version="0", routes=[route])
+        except Exception as exc:  # noqa: BLE001 — any schema failure is the plugin's, not ours
+            route.include_in_schema = False
+            log.warning(
+                "[plugins] %s: %s %s is left out of /openapi.json — its schema can't be built "
+                "(%s). The route still serves. Usual cause: a return annotation naming a class "
+                "imported inside a function under `from __future__ import annotations`; declare "
+                "`response_class=` on the decorator instead of annotating the return type.",
+                plugin_id,
+                ",".join(sorted(route.methods or ())),
+                path,
+                type(exc).__name__,
+            )
 
 
 def _install_error_envelope(router, plugin_id: str) -> None:
@@ -2301,16 +2374,14 @@ def _install_error_envelope(router, plugin_id: str) -> None:
     ``HTTPException(400, …)`` itself — those pass through untouched, as do the
     ``HTTPException``s FastAPI raises for request validation.
 
-    ``include_router`` rebuilds each route from ``route.endpoint``, so wrapping the
-    endpoint before inclusion is enough. Websocket routes are left alone (an HTTP error
+    FastAPI builds each served route from ``route.endpoint`` when the router is included
+    (or, from 0.141, on first use), so wrapping the endpoint before inclusion is enough —
+    for routes in nested sub-routers too, which 0.141 no longer flattens into the plugin's
+    route list (they answered a bare 500). Websocket routes are left alone (an HTTP error
     body is meaningless once a socket is upgraded), and the wrapper is idempotent so the
     hot-reload path can re-mount the same router object without stacking wrappers.
     """
-    from fastapi.routing import APIRoute
-
-    for route in getattr(router, "routes", []):
-        if not isinstance(route, APIRoute):
-            continue
+    for _path, route in _plugin_api_routes(router):
         route.endpoint = _wrap_plugin_endpoint(route.endpoint, plugin_id)
 
 
