@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import secrets
 
 from fastapi import File, Form, UploadFile
 from fastapi.responses import JSONResponse
@@ -151,6 +152,7 @@ _PREVIEW_SNIPPET_CHARS = 1500
 _INGEST_STATUS = {
     "missing_dependency": 501,
     "unsupported": 415,
+    "too_large": 413,
     "no_source": 400,
     "not_found": 400,
     "extraction": 400,
@@ -170,6 +172,38 @@ async def _source_from_form(file, url: str, text: str, title: str):
     if text:
         return IngestSource.from_text(text, title=title or None, label="console")
     return None
+
+
+# ── chat attachment framing ──────────────────────────────────────────────────
+# An attachment's extracted text is UNTRUSTED (a candidate's résumé, a web page, a
+# transcript) and rides at the top of the operator's own message. With guessable
+# delimiters (``[end of resume.docx]``) the document could close its own block and open a
+# forged ``[Attached file: policy.txt]`` beneath it. So every block's delimiters carry a
+# random id the document can't know, and delimiter-shaped text in the body is escaped.
+_ATTACH_DELIMITER_RE = re.compile(r"\[(?=\s*(?:attached file\b|end of\b))", re.IGNORECASE)
+
+
+def _attachment_label(name: str) -> str:
+    """An upload's filename, safe inside a delimiter: one line, no brackets, bounded."""
+    flat = " ".join((name or "").split()).replace("[", "(").replace("]", ")")
+    return flat[:200] or "attachment"
+
+
+def _neutralize_delimiters(text: str) -> str:
+    return _ATTACH_DELIMITER_RE.sub(r"\\[", text)
+
+
+def _attachment_context(name: str, text: str, *, budget: int | None = None) -> str:
+    """The fenced block the composer prepends to the message. Whole text when ``budget``
+    is None; otherwise an opening excerpt of ``budget`` chars for an indexed attachment."""
+    label, fence = _attachment_label(name), secrets.token_hex(4)
+    if budget is None:
+        return f"[Attached file: {label} · id {fence}]\n{_neutralize_delimiters(text)}\n[end of {label} · id {fence}]"
+    return (
+        f"[Attached file: {label} · id {fence} — large ({len(text)} chars), indexed for retrieval. "
+        f"Opening excerpt:]\n{_neutralize_delimiters(text[:budget])}\n"
+        f"[end of excerpt · id {fence} — ask about its contents to retrieve more from {label}.]"
+    )
 
 
 def _ingest_error_response(exc):
@@ -651,10 +685,10 @@ def register_knowledge_routes(app) -> None:
         Returns the ready-to-prepend ``context`` block + a descriptor for the
         composer chip. A format whose optional library is absent (``.docx`` without
         python-docx) is a 501 naming the install; an unknown or legacy one (``.doc``)
-        is a 415."""
+        is a 415; one over the extraction budget (a zip bomb) is a 413."""
         if STATE.knowledge_store is None:
             return {"enabled": False}
-        from ingestion import MissingDependency, UnsupportedSource, extract_bytes
+        from ingestion import MissingDependency, SourceTooLarge, UnsupportedSource, extract_bytes
         from knowledge import add_document
 
         sid = (session_id or "").strip()
@@ -684,6 +718,8 @@ def register_knowledge_routes(app) -> None:
             return JSONResponse({"detail": str(exc)}, status_code=501)
         except UnsupportedSource as exc:
             return JSONResponse({"detail": str(exc)}, status_code=415)
+        except SourceTooLarge as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=413)
         except Exception as exc:  # noqa: BLE001 — surface extraction failure, never 500
             log.warning("[knowledge] attach extraction failed: %s", exc)
             return JSONResponse({"detail": f"extraction failed: {exc}"}, status_code=400)
@@ -692,7 +728,7 @@ def register_knowledge_routes(app) -> None:
         budget = int(getattr(STATE.graph_config, "knowledge_attach_inline_budget", 8000) or 8000)
 
         if len(text) <= budget:
-            context = f"[Attached file: {name}]\n{text}\n[end of {name}]"
+            context = _attachment_context(name, text)
             return {
                 "enabled": True,
                 "mode": "inline",
@@ -714,12 +750,7 @@ def register_knowledge_routes(app) -> None:
                 source_type=result.source_type,
             )
         )
-        lede = text[:budget]
-        context = (
-            f"[Attached file: {name} — large ({len(text)} chars), indexed for retrieval. "
-            f"Opening excerpt:]\n{lede}\n"
-            f"[Ask about its contents to retrieve more from {name}.]"
-        )
+        context = _attachment_context(name, text, budget=budget)
         return {
             "enabled": True,
             "mode": "indexed",

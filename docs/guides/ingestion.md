@@ -74,8 +74,13 @@ the detected `source_type`, and `chars`.
 Format is detected from the file extension, then the content-type, then a UTF-8
 heuristic. The `pypdf` / `python-docx` / `youtube-transcript-api` deps are lazy-imported —
 a missing one fails *that* source with a clear message, never the server. Legacy binary
-Word (`.doc`) isn't readable: re-save it as `.docx` or export it to PDF. A `.docx` is a
-zip, so its declared uncompressed size is capped (100 MB) before anything inflates it.
+Word (`.doc`) isn't readable: re-save it as `.docx` or export it to PDF, and the same goes
+for a macro-enabled `.docm` or a password-protected file. A `.docx` is a zip of XML, and
+nothing in it can be trusted about its own size, so the engine unpacks the text parts
+itself in bounded steps and refuses (**413**) a document whose XML runs past ~12 MB or
+~1M elements and attributes — roughly three times a 300-page report. Parts that carry no
+text (images, fonts, embedded objects) are never unpacked at all.
+
 Audio/video always transcribe **through the gateway** (no local ASR); leave
 `transcribe_model` blank to disable media ingestion.
 
