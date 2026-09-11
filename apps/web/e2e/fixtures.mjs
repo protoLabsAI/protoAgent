@@ -13,6 +13,13 @@ export const CONTEXT_MIME = "application/vnd.protolabs.context-v1+json";
 export const COMPONENT_MIME = "application/vnd.protolabs.component-v1+json";
 export const HITL_MIME = "application/vnd.protolabs.hitl-v1+json";
 export const STEER_CONSUMED_MIME = "application/vnd.protolabs.steer-consumed-v1+json";
+export const ROOM_MIME = "application/vnd.protolabs.room-v1+json";
+
+// The brief a DELEGATE_BG turn hands to `sonnet` — long on purpose: it is the wall of text the
+// delegation row keeps behind "Show brief" instead of rendering as a chat bubble.
+export const DELEGATE_BRIEF =
+  "Repo: protoLabsAI/joshmabry-portfolio at /Users/kj/dev/joshmabry-portfolio (Vite + React 19).\n\n" +
+  "THREE PHASES. Do them in order. Merge PR #13 into main, then close PR #12 with a comment explaining it was superseded.";
 
 export const RUNTIME_STATUS = {
   setup_complete: true,
@@ -717,6 +724,24 @@ const DEFAULT_SEARCH_OUTPUT = [
 // matches the real starter-tool string format the per-tool renderer expects.
 function scenarioFor(prompt) {
   const t = (prompt || "").toUpperCase();
+  if (t.includes("DELEGATE_BG"))
+    // A BACKGROUND delegate_to: the server emits ONE outgoing-ask room frame carrying the
+    // lead's summary, the full brief and the job id — no tool card, no reply (that arrives
+    // later through the background drain, #3051).
+    return {
+      events: [],
+      room: [
+        {
+          addressed_to: "sonnet",
+          text: DELEGATE_BRIEF,
+          summary: "Land PR #13 and close #12",
+          background: true,
+          job_id: "bg-4109c71161eb",
+          ok: true,
+        },
+      ],
+      answer: "Started it — sonnet will report back.",
+    };
   if (t.includes("HITL_ASK"))
     // ask_human free-text interrupt: the turn parks input-required with a hitl-v1
     // DataPart carrying a plain `question` — the console shows the floating
@@ -1013,6 +1038,22 @@ export function buildFrames({ rpcId, contextId, taskId, prompt }) {
   for (const ev of toolEvents) {
     const text = ev.phase === "start" ? `🔧 ${ev.name}: ${ev.input ?? ""}` : `✅ ${ev.name} → ${ev.output ?? ""}`;
     frames.push(statusFrame(text, ev));
+  }
+  // Room frames (room-v1, #3042): a delegation's outgoing ask / a participant's reply, each
+  // its own status frame carrying the room DataPart — decoded by roomReplyFromParts.
+  for (const room of scenario.room || []) {
+    frames.push(
+      wrap({
+        kind: "status-update",
+        taskId,
+        contextId,
+        status: {
+          state: "working",
+          message: { role: "agent", parts: [{ kind: "data", data: room, metadata: { mimeType: ROOM_MIME } }] },
+        },
+        final: false,
+      }),
+    );
   }
   // Inline component (component-v1, #1323): a status frame carrying the {component,props}
   // DataPart — decoded by componentFromParts → rendered by the console registry.

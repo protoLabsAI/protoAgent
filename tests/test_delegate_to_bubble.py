@@ -188,3 +188,111 @@ async def test_wire_order_is_leadtext_then_ask_then_reply(monkeypatch):
     # The lead's text must reach the client BEFORE the delegation bubbles, so the console
     # can commit it into the placeholder and split after it — not below.
     assert order == ["lead-text", "ask", "reply"], f"wire order was {order}"
+
+
+# ── background delegations and the one-line summary ─────────────────────────────────
+#
+# A BACKGROUND delegate_to returns a receipt, not the delegate's answer — "Started a
+# background delegation to 'sonnet' (job `bg-…`). … I should END my turn now …", written
+# for the MODEL. The stream used to treat it like a foreground exchange: the whole prompt as
+# a bubble, then that receipt as a message signed by the delegate. The real reply arrives
+# later through the background drain (#3051).
+
+_RECEIPT = (
+    "Started a background delegation to 'sonnet' (job `bg-4109c71161eb`). It runs detached — "
+    "its reply comes back to me automatically on a later turn, so I should END my turn now and "
+    "NOT wait or re-delegate this."
+)
+_PROMPT = "Repo: protoLabsAI/joshmabry-portfolio. Land PR #13, then close #12.\nThen THREE more phases…"
+
+
+def _bg_tool(result: str):
+    @tool("delegate_to")
+    async def bg_delegate_to(target: str, query: str, summary: str = "", background: bool = False) -> str:
+        """Fake background-capable delegate_to."""
+        return result
+
+    return bg_delegate_to
+
+
+async def _frames_for(session, monkeypatch, args, result):
+    import runtime.state as rs
+    from graph.agent import create_agent_graph
+    from graph.config import LangGraphConfig
+    from langgraph.checkpoint.memory import MemorySaver
+    from server.chat import _run_turn_stream
+
+    stream = itertools.chain(
+        [_call(**args), AIMessage(content="started it")],
+        itertools.repeat(AIMessage(content="<output>done</output>")),
+    )
+    monkeypatch.setattr("graph.agent.create_llm", lambda *a, **k: _ToolFake(messages=stream))
+    g = create_agent_graph(
+        LangGraphConfig(), include_subagents=False, extra_tools=[_bg_tool(result)], checkpointer=MemorySaver()
+    )
+    monkeypatch.setattr(rs.STATE, "graph", g, raising=False)
+    monkeypatch.setattr(rs.STATE, "goal_controller", None, raising=False)
+    monkeypatch.setattr(rs.STATE, "graph_config", LangGraphConfig(), raising=False)
+    return [(k, p) async for k, p in _run_turn_stream("go", session, {"configurable": {"thread_id": session}})]
+
+
+@pytest.mark.asyncio
+async def test_a_background_delegation_is_one_ask_with_its_job_and_summary(monkeypatch):
+    frames = await _frames_for(
+        "bgd1",
+        monkeypatch,
+        {"target": "sonnet", "query": _PROMPT, "summary": "Land PR #13 and close #12", "background": True},
+        _RECEIPT,
+    )
+    rooms = [p for k, p in frames if k == "room_reply"]
+    assert rooms == [
+        {
+            "addressed_to": "sonnet",
+            "text": _PROMPT,  # the full brief rides along, behind "Show brief"
+            "summary": "Land PR #13 and close #12",
+            "background": True,
+            "ok": True,
+            "job_id": "bg-4109c71161eb",
+        }
+    ], rooms
+    # Nothing the operator sees carries the model-facing receipt — no fake reply signed
+    # "sonnet", no tool card.
+    assert not [p for k, p in frames if k == "room_reply" and p.get("author")]
+    assert "END my turn" not in json.dumps([p for k, p in frames if k != "done"])
+    assert not [p for k, p in frames if k in ("tool_start", "tool_end") and p.get("name") == "delegate_to"]
+
+
+@pytest.mark.asyncio
+async def test_without_a_summary_the_row_gets_the_prompts_first_sentence(monkeypatch):
+    frames = await _frames_for("bgd2", monkeypatch, {"target": "sonnet", "query": _PROMPT, "background": True}, _RECEIPT)
+    [ask] = [p for k, p in frames if k == "room_reply"]
+    assert ask["summary"] == "Repo: protoLabsAI/joshmabry-portfolio."
+
+
+@pytest.mark.asyncio
+async def test_a_background_dispatch_that_failed_says_why(monkeypatch):
+    err = "Error: unknown delegate 'sonet'. Available: sonnet."
+    frames = await _frames_for("bgd3", monkeypatch, {"target": "sonet", "query": "hi there", "background": True}, err)
+    [ask] = [p for k, p in frames if k == "room_reply"]
+    assert ask["ok"] is False and ask["error"] == err and "job_id" not in ask
+
+
+@pytest.mark.asyncio
+async def test_background_without_a_manager_renders_as_the_exchange_it_became(monkeypatch):
+    # No BackgroundManager → the tool dispatched INLINE and returned the delegate's reply.
+    frames = await _frames_for(
+        "bgd4", monkeypatch, {"target": "sonnet", "query": "quick q", "background": True}, "the answer is 4"
+    )
+    ask, reply = [p for k, p in frames if k == "room_reply"]
+    assert ask["addressed_to"] == "sonnet" and "background" not in ask
+    assert reply["author"] == "sonnet" and reply["text"] == "the answer is 4"
+
+
+@pytest.mark.asyncio
+async def test_a_foreground_ask_carries_its_summary_too(monkeypatch):
+    frames = await _frames_for(
+        "bgd5", monkeypatch, {"target": "proto", "query": _PROMPT, "summary": "Land PR #13"}, "done, merged"
+    )
+    ask, reply = [p for k, p in frames if k == "room_reply"]
+    assert ask == {"addressed_to": "proto", "text": _PROMPT, "summary": "Land PR #13", "ok": True}
+    assert reply["author"] == "proto" and reply["text"] == "done, merged"

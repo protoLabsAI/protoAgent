@@ -977,6 +977,47 @@ class TestChatProgress:
         }
         assert kw == {"retain": False}
 
+    def test_a_delegation_made_during_a_server_turn_republishes_its_ask(self, monkeypatch):
+        """The lead answering background reports by delegating again: the ask (no author)
+        used to be dropped here, so that delegation had no row in the open chat."""
+        a2a, published = self._capture(monkeypatch)
+        a2a._a2a_progress(
+            "chat-7",
+            "task-9",
+            {
+                "phase": "room_reply",
+                "addressed_to": "sonnet",
+                "text": "the whole brief",
+                "summary": "Land PR #13",
+                "background": True,
+                "job_id": "bg-4109c71161eb",
+                "ok": True,
+                "origin": "background-resume",
+            },
+        )
+        _, data, kw = published[0]
+        assert data == {
+            "session_id": "chat-7",
+            "task_id": "task-9",
+            "phase": "room_reply",
+            "message_id": "ask-bg-4109c71161eb",  # the job id dedupes the live copy
+            "addressed_to": "sonnet",
+            "text": "the whole brief",
+            "ok": True,
+            "summary": "Land PR #13",
+            "background": True,
+            "job_id": "bg-4109c71161eb",
+        }
+        assert kw == {"retain": False}
+
+    def test_a_foreground_ask_gets_a_stable_content_id(self, monkeypatch):
+        a2a, published = self._capture(monkeypatch)
+        frame = {"phase": "room_reply", "addressed_to": "proto", "text": "look", "ok": True, "origin": "scheduler"}
+        a2a._a2a_progress("chat-7", "task-9", dict(frame))
+        a2a._a2a_progress("chat-7", "task-9", dict(frame))
+        ids = [d["message_id"] for _, d, _ in published]
+        assert ids[0] == ids[1] and ids[0].startswith("ask-") and len(ids[0]) == len("ask-") + 12
+
     def test_published_unretained(self, monkeypatch):
         """Live-only: the 128-event replay ring must not fill with one turn's progress,
         and a reconnecting tab must not render frames from a turn that already ended."""

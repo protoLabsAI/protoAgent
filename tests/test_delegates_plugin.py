@@ -431,6 +431,28 @@ async def test_delegate_to_background_spawns_detached_job(monkeypatch):
     assert await call["work"]() == "dispatched:build the thing"
 
 
+async def test_background_job_is_titled_by_the_agents_summary(monkeypatch):
+    """The job's description is its title everywhere it's listed (the Background panel,
+    the chat's delegation row). The agent's one-line `summary` beats the prompt's opening
+    words — a prompt that starts "Repo: …" made every job look the same."""
+    r = _register([{"name": "sonnet", "type": "openai", "url": "https://g/v1", "model": "m"}], monkeypatch)
+    tool = r.tools[0]
+    import runtime.state as rs
+
+    fake = _FakeBgManager()
+    monkeypatch.setattr(rs.STATE, "background_mgr", fake, raising=False)
+    monkeypatch.setattr(DelegateRegistry, "dispatch", _unexpected_dispatch)
+    query = "Repo: protoLabsAI/x at /Users/kj/dev/x (Vite + React 19). THREE PHASES. Do them in order."
+    await _invoke_delegate(
+        tool, {"target": "sonnet", "query": query, "summary": "Land PR #13, fix the resume dates", "background": True}
+    )
+    await _invoke_delegate(tool, {"target": "sonnet", "query": query, "background": True})
+    titled, untitled = fake.calls
+    assert titled["description"] == "delegate → sonnet: Land PR #13, fix the resume dates"
+    assert titled["detail"] == query  # the full prompt is still the job's record
+    assert untitled["description"] == f"delegate → sonnet: {query[:80]}"  # the fallback, unchanged
+
+
 async def test_delegate_to_background_unknown_fails_fast(monkeypatch):
     r = _register([{"name": "opus", "type": "openai", "url": "https://g/v1", "model": "m"}], monkeypatch)
     tool = r.tools[0]

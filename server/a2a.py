@@ -15,6 +15,7 @@ imports from ``server`` (``agent_name``, ``_event_bus``) are all defined in
 """
 
 import asyncio
+import hashlib
 import logging
 import os
 from datetime import UTC, datetime
@@ -866,20 +867,37 @@ def _publish_chat_progress(context_id: str, task_id: str, frame: dict) -> None:
         }
     elif phase == "room_reply":
         author = str(frame.get("author") or "")
+        addressed_to = str(frame.get("addressed_to") or "")
         text = str(frame.get("text") or "")
-        if not author:
+        if author:
+            data = {
+                "phase": "room_reply",
+                "message_id": str(frame.get("id") or ""),
+                "author": author,
+                "from": str(frame.get("from") or "assistant"),
+                # A delegate deliverable is intentionally whole (#2363), just like the
+                # foreground room-reply frame. Background transport must not silently
+                # turn an authored answer back into a preview.
+                "text": text,
+                "ok": bool(frame.get("ok")),
+            }
+        elif addressed_to:
+            # The lead's outgoing delegation ask — a delegation made DURING a server-fired
+            # turn (answering background reports by delegating again) gets the same row a
+            # browser-streamed one does. Ids dedupe the live bus copy: the job id when the
+            # delegation ran in the background, else the ask's own content.
+            job_id = str(frame.get("job_id") or "")
+            ask_key = job_id or hashlib.sha1(f"{addressed_to}\0{text}".encode()).hexdigest()[:12]
+            data = {
+                "phase": "room_reply",
+                "message_id": f"ask-{ask_key}",
+                "addressed_to": addressed_to,
+                "text": text,
+                "ok": frame.get("ok") is not False,
+                **{k: frame[k] for k in ("summary", "background", "job_id", "error") if frame.get(k) not in (None, "")},
+            }
+        else:
             return
-        data = {
-            "phase": "room_reply",
-            "message_id": str(frame.get("id") or ""),
-            "author": author,
-            "from": str(frame.get("from") or "assistant"),
-            # A delegate deliverable is intentionally whole (#2363), just like the
-            # foreground room-reply frame. Background transport must not silently
-            # turn an authored answer back into a preview.
-            "text": text,
-            "ok": bool(frame.get("ok")),
-        }
     else:
         return
     _event_bus.publish(

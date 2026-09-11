@@ -86,7 +86,7 @@ export function foldProgressEvent(data: ChatProgressEvent): void {
   // stream is authoritative and replays everything, so the bus copy must not also land:
   // both writing the same chunks is what doubled the text. Room replies are their own
   // bubbles, which no reattach drives.
-  if (frame.kind !== "room" && isReattaching(liveMessageId(frame.taskId, frame.session))) return;
+  if (frame.kind !== "room" && frame.kind !== "ask" && isReattaching(liveMessageId(frame.taskId, frame.session))) return;
   const target = chatStore.getSnapshot().sessions.find((s) => s.id === frame.session);
   if (!target) return; // chat not open in this window — nothing to surface here
   chatStore.updateMessages(frame.session, applyProgressFrame(target.messages, frame));

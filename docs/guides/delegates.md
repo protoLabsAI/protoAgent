@@ -156,6 +156,23 @@ The configured delegate names + descriptions appear in the tool's description, s
 the model knows what it can reach. Each delegate is stateless from the caller's
 view — the `query` must be self-contained (the delegate doesn't see this chat).
 
+### What the operator sees
+
+A delegation shows in the chat as **one row**: the delegate, `background` when it runs
+detached, a one-line summary, and — for a background delegation — its live status (a
+spinner while it runs, ✓ or ✕ when it lands). The full `query` is behind **Show brief**;
+it's written for the delegate, so it isn't printed into the conversation. The delegate's
+reply follows as its own message, signed by the delegate. While a chat has background
+work running, a strip above the composer lists it and the chat's tab reads busy.
+
+The summary is the tool's `summary` argument — one line the lead writes for the operator:
+
+```
+delegate_to(target="sonnet", summary="Land PR #13 and close #12", query="Repo: …", background=True)
+```
+
+Leave it out and the row uses the query's first sentence instead.
+
 ### Foreground vs background
 
 `delegate_to(..., background=True)` runs the delegation detached: the tool returns
