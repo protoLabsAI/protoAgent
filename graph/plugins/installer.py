@@ -94,6 +94,8 @@ def _bundled_index() -> dict[str, PluginManifest]:
     from graph.plugins.loader import discover_plugins
 
     index = {m.id: m for m in discover_plugins([root], tracked_sources={})}
+    if len(_BUNDLED_INDEX_CACHE) > 8:
+        _BUNDLED_INDEX_CACHE.clear()  # one root per process in the field; a test suite makes many
     _BUNDLED_INDEX_CACHE[str(root)] = (stamp, index)
     return index
 
