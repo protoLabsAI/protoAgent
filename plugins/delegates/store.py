@@ -20,6 +20,7 @@ tries gets :class:`DelegateScopeError`.
 from __future__ import annotations
 
 import copy
+import functools
 
 from .adapters import ADAPTERS, is_secretish
 
@@ -387,6 +388,27 @@ def _remove_from_layer(name: str, scope: str) -> bool:
     return True
 
 
+def _under_config_lock(fn):
+    """Run a roster write as ONE unit under the config write lock (#2743).
+
+    A save here is a read-modify-write of the live config: load the layer's roster, route
+    and prune its secrets, write the roster back, maybe move the entry out of the other
+    layer. The server's settings applier rewrites the same file under
+    ``graph.config_io.CONFIG_WRITE_LOCK``; without taking it here, the two interleave and
+    one side's change — a delegate, a secret, an unrelated setting — silently vanishes.
+    Blocking by nature: call from a worker thread, never the event loop."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        from graph.config_io import CONFIG_WRITE_LOCK
+
+        with CONFIG_WRITE_LOCK:
+            return fn(*args, **kwargs)
+
+    return wrapper
+
+
+@_under_config_lock
 def upsert_delegate(entry: dict) -> list:
     """Add or replace a delegate by name in its layer (``scope: host`` = fleet-shared,
     default ``agent``); route its secret to that layer's overlay; persist. Moving an
@@ -425,6 +447,7 @@ def upsert_delegate(entry: dict) -> list:
     return read_delegates_raw()
 
 
+@_under_config_lock
 def delete_delegate(name: str) -> list:
     """Remove ``name`` from whichever layer holds it (agent first — a member deleting
     a name that exists only in the host layer is refused). Secrets go with it,

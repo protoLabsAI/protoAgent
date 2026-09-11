@@ -37,6 +37,12 @@ def client(monkeypatch):
     return c
 
 
+def _resolve(updates):
+    """The live applier resolves a read-modify-write callable against the committed
+    config, inside its lock (#2743) — a fake applier must do the same."""
+    return updates(STATE.graph_config) if callable(updates) else updates
+
+
 def _install(monkeypatch, **doc):
     cfg = LangGraphConfig.from_dict(doc)
     monkeypatch.setattr(STATE, "graph_config", cfg, raising=False)
@@ -96,6 +102,7 @@ def test_add_uses_the_live_transactional_applier_when_the_server_wires_it(client
     seen: dict = {}
 
     def _apply(updates):
+        updates = _resolve(updates)
         seen.update(updates)
         return True, ["reloaded"]
 
@@ -113,6 +120,7 @@ def test_add_is_visible_to_an_immediate_get_after_the_live_apply(client, monkeyp
     _install(monkeypatch, **BASE)
 
     def _apply(updates):
+        updates = _resolve(updates)
         # Model the server's successful reload contract: STATE is swapped before the
         # route returns. This is the regression v0.150 missed — POST said success while
         # the following GET still read the old registry and the new row vanished.
@@ -254,6 +262,7 @@ def test_delete_sees_a_reference_from_favorites(client, monkeypatch):
 
 def _apply_spy(monkeypatch, seen):
     def _apply(updates):
+        updates = _resolve(updates)
         seen["calls"] = seen.get("calls", 0) + 1
         seen["updates"] = updates
         return True, ["reloaded"]

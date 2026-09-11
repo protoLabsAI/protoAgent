@@ -9,6 +9,7 @@ new roster is live on the next turn.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from . import store
@@ -196,7 +197,8 @@ def build_router():
                 409, f"delegate {name!r} already exists in {where} list — edit it and toggle 'Share with fleet' to move it"
             )
         try:
-            store.upsert_delegate(entry)
+            # Off the loop: it waits on the config write lock a reload can hold.
+            await asyncio.to_thread(store.upsert_delegate, entry)
         except store.DelegateScopeError as e:
             raise HTTPException(403, str(e))
         ok, msg = await _reload()
@@ -221,7 +223,8 @@ def build_router():
         if current.get("scope") == store.SCOPE_HOST and not store.can_write_host_layer():
             raise HTTPException(403, "fleet-shared delegates are managed on the hub — this agent can't edit them")
         try:
-            store.upsert_delegate(entry)
+            # Off the loop: it waits on the config write lock a reload can hold.
+            await asyncio.to_thread(store.upsert_delegate, entry)
         except store.DelegateScopeError as e:
             raise HTTPException(403, str(e))
         ok, msg = await _reload()
@@ -230,7 +233,7 @@ def build_router():
     @router.delete("/api/delegates/{name}")
     async def _delete(name: str):
         try:
-            store.delete_delegate(name)
+            await asyncio.to_thread(store.delete_delegate, name)
         except store.DelegateScopeError as e:
             raise HTTPException(403, str(e))
         ok, msg = await _reload()

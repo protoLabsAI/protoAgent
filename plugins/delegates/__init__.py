@@ -531,7 +531,8 @@ def _build_propose_delegate():
             return f"Declined — delegate {name!r} was NOT registered.{suffix}"
         if any(isinstance(e, dict) and e.get("name") == name for e in store.read_delegates_raw()):
             return f"Error: delegate {name!r} was registered by someone else while parked — nothing written."
-        store.upsert_delegate(entry)
+        # Off the loop: it waits on the config write lock a reload can hold.
+        await asyncio.to_thread(store.upsert_delegate, entry)
         ok, msg = await _reload()
         names = ", ".join(str(e.get("name")) for e in _list_payload().get("delegates", []) if isinstance(e, dict))
         reload_note = "roster reloaded" if ok else f"reload FAILED ({msg}) — a restart may be needed"

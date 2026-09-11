@@ -8,6 +8,7 @@ gitignored, so ``env`` values stay local.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 
@@ -39,22 +40,46 @@ def _entries_from_blob(data: object) -> list[dict]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def _current_servers(current) -> list[dict]:
+    return [s for s in (getattr(current, "mcp_servers", []) or []) if isinstance(s, dict)]
+
+
+async def _apply_servers(build, *, enable: bool) -> list[dict]:
+    """Rewrite ``mcp.servers`` from the CURRENT list and hot-reload. Returns the list written.
+
+    ``build(current_servers) -> new_servers`` runs inside the config write lock, against
+    the config the previous write committed (#2743's mechanism). Every route here used to
+    build its list from a copy read BEFORE the lock, so two edits at once — an add racing
+    an import, a promote racing a remove — each wrote its own version and one server
+    silently vanished. And it runs off the event loop: these routes called the applier
+    inline, freezing the whole server for the length of the reload."""
+    from server.agent_init import _apply_settings_changes
+
+    written: list[dict] = []
+
+    def _updates(current) -> dict:
+        written[:] = build(_current_servers(current))
+        mcp: dict = {"servers": list(written)}
+        if enable:
+            mcp["enabled"] = True
+        return {"mcp": mcp}
+
+    ok, messages = await asyncio.to_thread(_apply_settings_changes, config=_updates)
+    if not ok:
+        raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
+    return written
+
+
 def register_mcp_routes(app) -> None:
     """Register add / import / delete for `mcp.servers`."""
 
     @app.post("/api/mcp/servers")
     async def _add(body: dict | None = None):
         entry = _clean_entry(body or {})
-        cfg = STATE.graph_config
-        servers = [s for s in (getattr(cfg, "mcp_servers", []) or []) if s.get("name") != entry["name"]]
-        servers.append(entry)
-
-        from server.agent_init import _apply_settings_changes
-
         # enabling MCP + replacing the servers list; _build_mcp reconnects on reload.
-        ok, messages = _apply_settings_changes(config={"mcp": {"enabled": True, "servers": servers}})
-        if not ok:
-            raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
+        servers = await _apply_servers(
+            lambda cur: [s for s in cur if s.get("name") != entry["name"]] + [entry], enable=True
+        )
         return {"ok": True, "name": entry["name"], "servers": [s["name"] for s in servers]}
 
     @app.post("/api/mcp/servers/import")
@@ -72,15 +97,7 @@ def register_mcp_routes(app) -> None:
 
         entries = _entries_from_blob(data)
         names = {e["name"] for e in entries}
-        cfg = STATE.graph_config
-        servers = [s for s in (getattr(cfg, "mcp_servers", []) or []) if s.get("name") not in names]
-        servers.extend(entries)
-
-        from server.agent_init import _apply_settings_changes
-
-        ok, messages = _apply_settings_changes(config={"mcp": {"enabled": True, "servers": servers}})
-        if not ok:
-            raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
+        servers = await _apply_servers(lambda cur: [s for s in cur if s.get("name") not in names] + entries, enable=True)
         return {"ok": True, "added": sorted(names), "servers": [s["name"] for s in servers]}
 
     @app.get("/api/mcp/catalog")
@@ -155,14 +172,7 @@ def register_mcp_routes(app) -> None:
 
     @app.delete("/api/mcp/servers/{name}")
     async def _remove(name: str):
-        cfg = STATE.graph_config
-        servers = [s for s in (getattr(cfg, "mcp_servers", []) or []) if s.get("name") != name]
-
-        from server.agent_init import _apply_settings_changes
-
-        ok, messages = _apply_settings_changes(config={"mcp": {"servers": servers}})
-        if not ok:
-            raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
+        servers = await _apply_servers(lambda cur: [s for s in cur if s.get("name") != name], enable=False)
         return {"ok": True, "servers": [s["name"] for s in servers]}
 
     @app.post("/api/mcp/servers/{name}/promote")
@@ -183,12 +193,7 @@ def register_mcp_routes(app) -> None:
         commons.append(entry)
         write_mcp_commons(cfg, commons)
 
-        remaining = [s for s in private if s.get("name") != name]
-        from server.agent_init import _apply_settings_changes
-
-        ok, messages = _apply_settings_changes(config={"mcp": {"servers": remaining}})
-        if not ok:
-            raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
+        await _apply_servers(lambda cur: [s for s in cur if s.get("name") != name], enable=False)
         return {"ok": True, "promoted": True, "name": name}
 
     @app.post("/api/mcp/servers/{name}/forget")
@@ -206,11 +211,5 @@ def register_mcp_routes(app) -> None:
 
         write_mcp_commons(cfg, [s for s in commons if s.get("name") != name])
 
-        private = [s for s in (getattr(cfg, "mcp_servers", []) or []) if isinstance(s, dict) and s.get("name") != name]
-        private.append(entry)
-        from server.agent_init import _apply_settings_changes
-
-        ok, messages = _apply_settings_changes(config={"mcp": {"enabled": True, "servers": private}})
-        if not ok:
-            raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
+        await _apply_servers(lambda cur: [s for s in cur if s.get("name") != name] + [entry], enable=True)
         return {"ok": True, "forgotten": True, "name": name}
