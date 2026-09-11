@@ -206,11 +206,11 @@ describe("durable turn conversion", () => {
     expect(session?.title).toBe(DEFAULT_SESSION_TITLE);
   });
 
-  it("rebuilds a turn stored before the server kept prompts as its answer alone", () => {
+  it("rebuilds a turn stored before the server kept prompts — answer and interjection, no prompt", () => {
     // The exact row shape the v0.164.0 hub returned (QA 2026-09-11): agent frames only —
     // tool-call metadata on part-less messages and a steer marker — and no ROLE_USER.
     // Those rows age out with the task store's retention; until then they must still
-    // render the answer and its tool cards, and the tab falls back to the default title.
+    // render the answer, its tool cards and the interjection the agent read.
     const legacy = turn({
       text: "The workspace root contained two entries.",
       artifacts: [{ parts: [{ text: "The workspace root contained two entries." }] }],
@@ -230,14 +230,119 @@ describe("durable turn conversion", () => {
       ],
     });
     const session = sessionFromDurableTurns(summary(), [legacy]);
-    expect(session?.title).toBe(DEFAULT_SESSION_TITLE);
-    expect(session?.messages).toHaveLength(1);
+    expect(session?.messages.map((message) => [message.role, message.content])).toEqual([
+      ["assistant", ""],
+      ["user", "Also count them."],
+      ["assistant", "The workspace root contained two entries."],
+    ]);
     expect(session?.messages[0]).toMatchObject({
-      role: "assistant",
-      content: "The workspace root contained two entries.",
       status: "done",
       toolCalls: [{ id: "call-1", name: "list_dir", status: "done" }],
     });
+    // No prompt survives in such a row, so the tab is named after what does.
+    expect(session?.title).toBe("Also count them.");
+  });
+
+  it("rebuilds a mid-turn interjection as a user message where the agent read it", () => {
+    // A steered turn: the agent worked, the operator interjected, the agent read it and
+    // carried on. #3446 settles that into the LIVE transcript as a user bubble at the
+    // split; a rebuilt transcript has to agree, or the interjection vanishes on a new
+    // device. The flattened answer lands on the trailing bubble — the durable artifacts
+    // cannot say how much of the prose came before the interjection.
+    const steered = turn({
+      task_id: "task-steered",
+      text: "Two entries, and the time is noon.",
+      artifacts: [{ parts: [{ text: "Two entries, and the time is noon." }] }],
+      history: [
+        { role: "ROLE_USER", parts: [{ text: "List the workspace" }] },
+        {
+          role: "ROLE_AGENT",
+          metadata: { [TOOL]: { toolCallId: "call-1", name: "list_dir", phase: "completed", result: "AGENTS.md" } },
+        },
+        {
+          role: "ROLE_AGENT",
+          parts: [{ data: { items: [{ id: "msg-steer-1", text: "Also tell me the time." }] }, metadata: { mimeType: STEER } }],
+        },
+        {
+          role: "ROLE_AGENT",
+          metadata: { [TOOL]: { toolCallId: "call-2", name: "current_time", phase: "completed", result: "12:00" } },
+        },
+      ],
+    });
+    const messages = messagesFromDurableTurn(steered);
+    expect(messages.map((message) => [message.id, message.role, message.content])).toEqual([
+      ["durable-task-steered-user", "user", "List the workspace"],
+      ["durable-task-steered-assistant-0", "assistant", ""],
+      ["msg-steer-1", "user", "Also tell me the time."], // the steer's own id — a later live settle is a no-op
+      ["durable-task-steered-assistant", "assistant", "Two entries, and the time is noon."],
+    ]);
+    // The halves are one turn: the frozen one names the trailing bubble (turnText.ts).
+    expect(messages[1]).toMatchObject({ splitOf: "durable-task-steered-assistant", status: "done" });
+    // Work done before the interjection stays above it; work after it, below.
+    expect(messages[1].toolCalls?.map((call) => call.id)).toEqual(["call-1"]);
+    expect(messages[3].toolCalls?.map((call) => call.id)).toEqual(["call-2"]);
+  });
+
+  it("keeps several interjections in the order the agent read them", () => {
+    const messages = messagesFromDurableTurn(
+      turn({
+        task_id: "task-two",
+        history: [
+          { role: "ROLE_USER", parts: [{ text: "Start" }] },
+          { role: "ROLE_AGENT", metadata: { [TOOL]: { toolCallId: "c1", name: "a", phase: "completed", result: "ok" } } },
+          { role: "ROLE_AGENT", parts: [{ data: { items: [{ id: "s1", text: "first aside" }] }, metadata: { mimeType: STEER } }] },
+          { role: "ROLE_AGENT", metadata: { [TOOL]: { toolCallId: "c2", name: "b", phase: "completed", result: "ok" } } },
+          { role: "ROLE_AGENT", parts: [{ data: { items: [{ id: "s2", text: "second aside" }] }, metadata: { mimeType: STEER } }] },
+        ],
+      }),
+    );
+    expect(messages.map((message) => message.content)).toEqual([
+      "Start",
+      "",
+      "first aside",
+      "",
+      "second aside",
+      "answer",
+    ]);
+  });
+
+  it("adds no blank bubble around an interjection that opened or closed the turn", () => {
+    // Read before the agent did anything: nothing to freeze above it. And when the agent
+    // says nothing after the last one, the trailing bubble is dropped rather than settled
+    // as a blank row (the live path's settleTurnBubbles folds the same case).
+    const opening = messagesFromDurableTurn(
+      turn({
+        task_id: "task-open",
+        history: [
+          { role: "ROLE_USER", parts: [{ text: "Go" }] },
+          { role: "ROLE_AGENT", parts: [{ data: { items: [{ id: "s1", text: "wait — also this" }] }, metadata: { mimeType: STEER } }] },
+        ],
+      }),
+    );
+    expect(opening.map((message) => [message.role, message.content])).toEqual([
+      ["user", "Go"],
+      ["user", "wait — also this"],
+      ["assistant", "answer"],
+    ]);
+
+    const closing = messagesFromDurableTurn(
+      turn({
+        task_id: "task-close",
+        text: "",
+        artifacts: [],
+        history: [
+          { role: "ROLE_USER", parts: [{ text: "Go" }] },
+          { role: "ROLE_AGENT", metadata: { [TOOL]: { toolCallId: "c1", name: "a", phase: "completed", result: "ok" } } },
+          { role: "ROLE_AGENT", parts: [{ data: { items: [{ id: "s2", text: "never mind" }] }, metadata: { mimeType: STEER } }] },
+        ],
+      }),
+    );
+    expect(closing.map((message) => [message.role, message.content])).toEqual([
+      ["user", "Go"],
+      ["assistant", ""],
+      ["user", "never mind"],
+    ]);
+    expect(closing[1].toolCalls?.map((call) => call.id)).toEqual(["c1"]);
   });
 
   it("draws no operator bubble for a hidden send and titles the tab from the first visible prompt", () => {

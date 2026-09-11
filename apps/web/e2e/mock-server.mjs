@@ -928,7 +928,18 @@ const server = createServer(async (req, res) => {
               text: "The durable answer is back.",
               status: { state: "TASK_STATE_COMPLETED" },
               artifacts: [{ parts: [{ text: "The durable answer is back." }] }],
-              history: [{ role: "ROLE_USER", parts: [{ text: "Recover this conversation" }] }],
+              history: [
+                { role: "ROLE_USER", parts: [{ text: "Recover this conversation" }] },
+                // The operator interjected mid-turn and the agent read it: the marker the
+                // executor stores carries the text, so the rebuild shows it as a bubble.
+                {
+                  role: "ROLE_AGENT",
+                  parts: [{
+                    data: { items: [{ id: "msg-steer-e2e", text: "Also check the version" }] },
+                    metadata: { mimeType: "application/vnd.protolabs.steer-consumed-v1+json" },
+                  }],
+                },
+              ],
             },
             {
               // A server-fired turn into the same chat, as the server stores it: NO user

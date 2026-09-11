@@ -807,7 +807,11 @@ export type TurnStreamHandlers = {
 // history's tool/reasoning/component frames — everything the agent did while
 // nobody was subscribed. A live SendStreamingMessage's initial Task frame is
 // bare (submitted; no artifacts, no history), so this is a no-op there.
-function replayTaskSnapshot(task: NonNullable<A2AFrame["result"]>, handlers: TurnStreamHandlers): void {
+function replayTaskSnapshot(
+  task: NonNullable<A2AFrame["result"]>,
+  handlers: TurnStreamHandlers,
+  opts: { replaySteers?: boolean } = {},
+): void {
   const arts = (task as { artifacts?: Array<{ parts?: RawPart[]; metadata?: ExtMetadata }> }).artifacts || [];
   const accumulated = arts.map((a) => textFromParts(a.parts)).join("");
   const history = ((task as { history?: Array<{ role?: string; parts?: RawPart[]; metadata?: ExtMetadata }> }).history ||
@@ -820,10 +824,17 @@ function replayTaskSnapshot(task: NonNullable<A2AFrame["result"]>, handlers: Tur
     if (reasoning) handlers.onReasoning?.(reasoning);
     const component = componentFromParts(msg.parts);
     if (component) handlers.onComponent?.(component);
-    // Do not replay steer-consumed markers from task history: snapshot artifacts
-    // flatten all answer text into one accumulation, so the marker's position
-    // relative to that text cannot be reconstructed honestly. Turn-end queue
-    // reconciliation is the compatibility fallback for a client that missed it live.
+    // Steer-consumed markers replay only for a transcript being REBUILT from durable
+    // turns (`replaySteers`), never into a live bubble: a snapshot's artifacts flatten
+    // all answer text into one accumulation, so the marker's position relative to that
+    // TEXT cannot be reconstructed, and a live bubble already shows the interjection
+    // where it happened. A rebuild has no interjection at all unless it replays them, so
+    // it takes the position the history does give — after the work that preceded it —
+    // and lands the flattened answer below (see chat/sessionHydration.ts).
+    if (opts.replaySteers) {
+      const consumed = consumedSteersFromParts(msg.parts);
+      if (consumed) handlers.onSteerConsumed?.(consumed);
+    }
   }
   for (const artifact of arts) {
     const usage = costFromMeta(artifact.metadata);
@@ -841,7 +852,11 @@ function replayTaskSnapshot(task: NonNullable<A2AFrame["result"]>, handlers: Tur
 
 // One A2A frame dispatcher for every streaming consumer — the live turn, the
 // reattach stream, and snapshot replays all decode frames identically.
-function makeA2ADispatcher(sessionId: string, handlers: TurnStreamHandlers): (frame: A2AFrame) => void {
+function makeA2ADispatcher(
+  sessionId: string,
+  handlers: TurnStreamHandlers,
+  opts: { replaySteers?: boolean } = {},
+): (frame: A2AFrame) => void {
   return (frame: A2AFrame) => {
     if (frame.error?.message) throw new Error(frame.error.message);
     const result = frame.result;
@@ -859,7 +874,7 @@ function makeA2ADispatcher(sessionId: string, handlers: TurnStreamHandlers): (fr
       // which for a terminal task IS the final answer. A live stream's initial
       // Task frame is bare (submitted, no artifacts/history), so it's a no-op.
       handlers.onTaskSnapshot?.();
-      replayTaskSnapshot(task, handlers);
+      replayTaskSnapshot(task, handlers, opts);
     }
     if (statusUpdate) {
       const state = statusUpdate.status?.state || "";
@@ -904,7 +919,9 @@ function makeA2ADispatcher(sessionId: string, handlers: TurnStreamHandlers): (fr
 /** Replay one row from ADR 0104's durable-turn reader through the exact same
  * dispatcher as live and reattached A2A tasks. The history hydrator creates
  * the user bubble separately because snapshot replay intentionally ignores
- * ROLE_USER frames while rebuilding the assistant response. */
+ * ROLE_USER frames while rebuilding the assistant response — and, unlike a live
+ * replay, this one surfaces the turn's consumed interjections (`onSteerConsumed`)
+ * so a rebuilt transcript can show them where the agent read them. */
 export function replayDurableChatTurn(
   turn: DurableChatTurn,
   sessionId: string,
@@ -917,7 +934,7 @@ export function replayDurableChatTurn(
     artifacts: turn.artifacts ?? [],
     history: turn.history ?? [],
   };
-  makeA2ADispatcher(sessionId, handlers)({ result: { task } } as A2AFrame);
+  makeA2ADispatcher(sessionId, handlers, { replaySteers: true })({ result: { task } } as A2AFrame);
 }
 
 async function consumeSse(

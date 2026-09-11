@@ -18,6 +18,7 @@ import {
   type HydrationEligibility,
 } from "./chat-store";
 import { rendersText, replaceText, textRuns } from "./parts";
+import { isEmptyPlaceholder } from "./roomBubble";
 import { applyComponent, applyReasoning, applyText, applyToolEvent, applyUsage } from "./turnReducers";
 
 const TERMINAL = /completed|failed|canceled|cancelled|rejected/i;
@@ -72,25 +73,54 @@ function titleFromPrompt(prompt: string): string {
   return text.length > 52 ? `${text.slice(0, 49)}...` : text;
 }
 
-/** Pure conversion of one task into the local prompt/answer pair. */
+/** Pure conversion of one task into the prompt, the interjections the agent read
+ *  mid-turn, and the answer. */
 export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
   const at = timestamp(turn.last_updated);
   const prompt = operatorPrompt(turn);
   const messages: ChatMessage[] = prompt
     ? [{ id: `durable-${turn.task_id}-user`, role: "user", content: prompt, createdAt: at, status: "done" }]
     : [];
-  let assistant: ChatMessage = {
-    id: `durable-${turn.task_id}-assistant`,
+  const anchorId = `durable-${turn.task_id}-assistant`;
+  const fresh = (): ChatMessage => ({
+    id: anchorId,
     role: "assistant",
     content: "",
     createdAt: at,
     status: "streaming",
     taskId: turn.task_id,
-  };
+  });
+  let assistant = fresh();
+  // What the turn had already shown when the agent read an interjection, plus the
+  // interjection itself. The turn's trailing bubble keeps the anchor id, so the halves
+  // frozen ahead of it name it in `splitOf` — one turn, several bubbles (turnText.ts).
+  const settled: ChatMessage[] = [];
   const terminal = TERMINAL.test(turn.state);
   replayDurableChatTurn(turn, "", {
     onText: (text, append) => {
       assistant = applyText(assistant, text, append);
+    },
+    onSteerConsumed: (items) => {
+      // The agent read the operator's interjection HERE — between the work above and
+      // the work below — so the rebuilt transcript splits there, exactly as the live
+      // one does (roomBubble.insertConversationBubbles). The ANSWER lands on the
+      // trailing bubble: the durable artifacts flatten every text frame into one
+      // accumulation, so how much of the prose preceded the interjection is not
+      // recoverable. Ids are the steer's own, so a later live settle is a no-op
+      // (steerPlacement.placeConsumedSteers dedupes on them).
+      if (!isEmptyPlaceholder(assistant)) {
+        settled.push({ ...assistant, id: `${anchorId}-${settled.length}`, status: "done", splitOf: anchorId });
+      }
+      settled.push(
+        ...items.map((item, index) => ({
+          id: item.id,
+          role: "user" as const,
+          content: item.text,
+          createdAt: at + index,
+          status: "done" as const,
+        })),
+      );
+      assistant = fresh();
     },
     onReasoning: (delta) => {
       assistant = applyReasoning(assistant, delta);
@@ -134,7 +164,14 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
     // clears snapshot-derived fields immediately before authoritative replay.
     assistant = { ...assistant, durableSnapshotFallback: true };
   }
-  return [...messages, assistant];
+  // A turn the agent had nothing left to say after — everything it did came before the
+  // last interjection — would otherwise settle as a blank row under it (the live path's
+  // `settleTurnBubbles` folds the same case away). A non-terminal turn keeps its empty
+  // trailing bubble: that is the one a reattach streams into.
+  if (settled.length && terminal && isEmptyPlaceholder(assistant) && !assistant.components?.length) {
+    return [...messages, ...settled];
+  }
+  return [...messages, ...settled, assistant];
 }
 
 /** Build one fixed-id local session from its ordered durable turns. */

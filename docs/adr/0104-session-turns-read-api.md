@@ -86,6 +86,13 @@ The route still returns `history` untransformed — the above is what the execut
 there. The console also skips a prompt stamped `origin` or `hidden` and prefers
 `display`, for rows another writer stored.
 
+An interjection the agent read mid-turn is in that history too: the steer-consumed
+marker carries the operator's text as the producer emitted it (what they typed, so no
+shaping beyond the marker itself). A rebuilt transcript renders it as a user message at
+the marker's position — the work above it, the work below it — which is where the live
+transcript shows it, and lands the flattened answer on the trailing bubble: the
+artifacts cannot say how much of the prose preceded the interjection.
+
 The answer text is the lead's own model calls, nothing else: never a call made under
 a tool — its body, a graph it runs (a workflow step), work it detached — nor a
 middleware's internal call (the compaction summary; langchain marks those). Paragraph
