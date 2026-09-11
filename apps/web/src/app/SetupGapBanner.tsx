@@ -56,7 +56,11 @@ export function gapWarningLine(gap: SetupGap): string {
 /**
  * Split a runtime status into what the shell strip renders:
  *  - `setupGaps` — the well-formed records from `setup_gaps[]` (actionable, dismissible banners);
- *  - `plainWarnings` — the `warnings[]` strings, MINUS each structured gap's own legacy line.
+ *  - `plainWarnings` — the `warnings[]` strings, MINUS each structured gap's own legacy line;
+ *  - `gapsKnown` — whether the status carried the server's `setup_gaps[]` list at all. A current
+ *    server always sends it (`[]` when there are none), so an empty list is a REAL "no gaps"
+ *    that dismissals may reset on; a missing status (not loaded yet) or a missing field (a server
+ *    that predates #3395) is not — `useSetupGapDismissals` must not prune on it.
  *
  * The server sends every gap twice (the record, and its `Label: message` line), so rendering
  * both would double it; rendering only `warnings[]` — what the console did until this — shows a
@@ -68,13 +72,14 @@ export function gapWarningLine(gap: SetupGap): string {
  */
 export function splitRuntimeWarnings(
   status: { warnings?: readonly unknown[] | null; setup_gaps?: readonly unknown[] | null } | null | undefined,
-): { plainWarnings: string[]; setupGaps: SetupGap[] } {
+): { plainWarnings: string[]; setupGaps: SetupGap[]; gapsKnown: boolean } {
+  const gapsKnown = Array.isArray(status?.setup_gaps);
   const setupGaps = Array.isArray(status?.setup_gaps) ? status.setup_gaps.filter(isSetupGap) : [];
   const gapLines = new Set(setupGaps.map(gapWarningLine));
   const plainWarnings = Array.isArray(status?.warnings)
     ? status.warnings.filter((w): w is string => typeof w === "string" && !gapLines.has(w))
     : [];
-  return { plainWarnings, setupGaps };
+  return { plainWarnings, setupGaps, gapsKnown };
 }
 
 /** Stable render/identity key for a gap — its (plugin, key) pair, which the server keys the
@@ -90,11 +95,16 @@ export function gapSignature(gap: SetupGap): string {
   return JSON.stringify([gap.plugin, gap.key, gap.message, gap.actions ?? []]);
 }
 
+// One sessionStorage entry PER AGENT: `protoagent.setupGapDismissals:<agent>`. Runtime status is
+// the focused agent's and switching agents is a full page load in the same tab, so a single
+// shared entry let a dismissal on one agent hide another agent's identical gap, and let one
+// agent's live set prune another's dismissals (#3438 review).
 const DISMISS_KEY = "protoagent.setupGapDismissals";
+const dismissKey = (scope: string) => `${DISMISS_KEY}:${scope}`;
 
-function readDismissed(): Set<string> {
+function readDismissed(scope: string): Set<string> {
   try {
-    const raw = window.sessionStorage.getItem(DISMISS_KEY);
+    const raw = window.sessionStorage.getItem(dismissKey(scope));
     const parsed = raw ? JSON.parse(raw) : [];
     return new Set(Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : []);
   } catch {
@@ -103,9 +113,10 @@ function readDismissed(): Set<string> {
   }
 }
 
-function writeDismissed(sigs: Set<string>): void {
+function writeDismissed(scope: string, sigs: Set<string>): void {
   try {
-    window.sessionStorage.setItem(DISMISS_KEY, JSON.stringify([...sigs]));
+    if (sigs.size) window.sessionStorage.setItem(dismissKey(scope), JSON.stringify([...sigs]));
+    else window.sessionStorage.removeItem(dismissKey(scope));
   } catch {
     // Hardened browser contexts (private mode, disabled storage) — the dismissal is still
     // honored in-memory for this render tree; it just won't survive a reload. Never throw.
@@ -113,26 +124,40 @@ function writeDismissed(sigs: Set<string>): void {
 }
 
 /**
- * Session-scoped dismissal for structured setup gaps.
+ * Session-scoped, per-agent dismissal for structured setup gaps.
  *
- * A dismissal is keyed by the gap's `gapSignature` (identity + message + actions) and stored
- * in sessionStorage, so it:
- *  - hides ONLY that exact, unchanged gap for the rest of the browser session;
+ * A dismissal is keyed by the gap's `gapSignature` (identity + message + actions) and stored in
+ * sessionStorage under the focused agent (`scope` — App passes `currentSlug()`), so it:
+ *  - hides ONLY that exact, unchanged gap, on THAT agent, for the rest of the browser session —
+ *    another agent's identical gap is its own problem and still shows;
  *  - resets for a new browser session (sessionStorage is per-session);
  *  - resets when the server changes the gap's message or actions (the signature moves);
- *  - stops being tracked when a gap clears or changes WHILE other gaps are live (its stale
- *    signature is pruned against the live set), so the store never accumulates orphaned keys —
- *    but a transient/empty runtime status never prunes, so a reload can't resurrect a dismissed
- *    gap.
+ *  - resets when the server CLEARS the gap: whenever the agent's gap list is known
+ *    (`authoritative` — `splitRuntimeWarnings`' `gapsKnown`), stored signatures missing from it
+ *    are pruned, including all of them on a real `setup_gaps: []`. So a gap the operator fixed
+ *    that breaks again later shows again, instead of staying hidden until the app restarts;
+ *  - never prunes while the list is UNKNOWN (status not loaded yet, or a server that predates
+ *    `setup_gaps`), so a reload can't resurrect a dismissed gap.
  *
  * It NEVER mutates server-side configuration and never clears the underlying blocker — it's a
  * purely client-side "I've seen this" acknowledgement.
  */
-export function useSetupGapDismissals(gaps: SetupGap[]): {
+export function useSetupGapDismissals(
+  gaps: SetupGap[],
+  { scope, authoritative }: { scope: string; authoritative: boolean },
+): {
   visibleGaps: SetupGap[];
   dismiss: (gap: SetupGap) => void;
 } {
-  const [dismissed, setDismissed] = useState<Set<string>>(readDismissed);
+  const [state, setState] = useState(() => ({ scope, sigs: readDismissed(scope) }));
+  // A different agent → ITS dismissals, re-read during render (React's pattern for resetting
+  // state on a prop change), so no frame ever filters one agent's gaps by another's set.
+  let current = state;
+  if (state.scope !== scope) {
+    current = { scope, sigs: readDismissed(scope) };
+    setState(current);
+  }
+  const dismissed = current.sigs;
 
   const liveSignatures = useMemo(() => new Set(gaps.map(gapSignature)), [gaps]);
   // A content key so the prune effect only fires when the live gap set actually changes,
@@ -140,33 +165,28 @@ export function useSetupGapDismissals(gaps: SetupGap[]): {
   const liveKey = useMemo(() => JSON.stringify([...liveSignatures].sort()), [liveSignatures]);
 
   useEffect(() => {
-    // Prune stale dismissals ONLY when we have live gaps to compare against. An empty live
-    // set is ambiguous — it's produced just as much by a transient/null runtime status during
-    // a reload or poll gap as by the server genuinely clearing every gap — so pruning on it
-    // would erase a still-valid session dismissal and make an unchanged gap reappear when the
-    // data returns. When gaps ARE present, any stored signature absent from them belongs to a
-    // gap that truly changed or cleared, so dropping it is safe housekeeping. A leftover
-    // signature from a fully-empty poll is harmless: it's session-scoped, and the same gap
-    // returning unchanged should stay dismissed anyway (returning changed moves its signature).
-    if (liveSignatures.size === 0) return;
-    setDismissed((prev) => {
-      const next = new Set([...prev].filter((sig) => liveSignatures.has(sig)));
-      if (next.size === prev.size) return prev; // unchanged → keep the stable reference
-      writeDismissed(next);
-      return next;
+    // Prune only against a KNOWN list (see the doc above): an unknown one — no status yet, or no
+    // `setup_gaps` field — says nothing about what the server cleared.
+    if (!authoritative) return;
+    setState((prev) => {
+      if (prev.scope !== scope) return prev;
+      const next = new Set([...prev.sigs].filter((sig) => liveSignatures.has(sig)));
+      if (next.size === prev.sigs.size) return prev; // unchanged → keep the stable reference
+      writeDismissed(scope, next);
+      return { scope, sigs: next };
     });
     // liveSignatures is derived from liveKey; depending on the string keeps this stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveKey]);
+  }, [liveKey, authoritative, scope]);
 
   const dismiss = useCallback((gap: SetupGap) => {
-    setDismissed((prev) => {
+    setState((prev) => {
       const sig = gapSignature(gap);
-      if (prev.has(sig)) return prev;
-      const next = new Set(prev);
+      if (prev.sigs.has(sig)) return prev;
+      const next = new Set(prev.sigs);
       next.add(sig);
-      writeDismissed(next);
-      return next;
+      writeDismissed(prev.scope, next);
+      return { scope: prev.scope, sigs: next };
     });
   }, []);
 

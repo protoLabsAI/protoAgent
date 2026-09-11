@@ -336,10 +336,15 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   // `setup_gaps[]` (graph/plugins/setup_gaps.py, #3395) as actionable, dismissible banners. The
   // server also projects every gap into `warnings[]` as a plain `Label: message` line, so the
   // split drops those — otherwise a gap renders as a dead plain alert (or twice).
-  const { plainWarnings: stringWarnings, setupGaps } = splitRuntimeWarnings(runtime);
-  // Session-scoped, signature-keyed dismissal (client-only; never mutates server config). One
-  // source of truth feeds both the desktop strip and the mobile banner stack below.
-  const { visibleGaps: visibleSetupGaps, dismiss: dismissSetupGap } = useSetupGapDismissals(setupGaps);
+  const { plainWarnings: stringWarnings, setupGaps, gapsKnown } = splitRuntimeWarnings(runtime);
+  // Session-scoped, signature-keyed dismissal (client-only; never mutates server config), kept
+  // PER AGENT — `runtime` is the focused agent's status, and a fleet switch reloads this same tab.
+  // It resets when the server genuinely clears a gap (a known list), never while the list is
+  // unknown. One source of truth feeds both the desktop strip and the mobile banner stack below.
+  const { visibleGaps: visibleSetupGaps, dismiss: dismissSetupGap } = useSetupGapDismissals(setupGaps, {
+    scope: currentSlug(),
+    authoritative: gapsKnown,
+  });
 
   // Installed inventory + freshness — feed the rail context-menu plugin actions
   // (#1521 / #1522) so a plugin icon's menu can show its version and offer Update /
