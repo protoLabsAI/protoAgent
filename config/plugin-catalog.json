@@ -170,6 +170,22 @@
       "tagline": "A live window into your design system — browse tokens and components in the console (gallery backed by your own published Storybook), play with a component's props, and give the agent the real vocabulary to design against."
     },
     {
+      "id": "social",
+      "name": "Social Studio",
+      "category": "Marketing",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/social-plugin",
+      "tagline": "Organic social marketing that never posts — a brand kit every draft follows, nine platforms' hard limits and dated norms, a content queue, a linter, and a copy-ready export pack, with a writer + editor + researcher crew. The Social Marketing archetype installs it."
+    },
+    {
+      "id": "bloodbowl",
+      "name": "Blood Bowl",
+      "category": "Examples",
+      "official": true,
+      "repo": "https://github.com/protoLabsAI/bloodbowl-plugin",
+      "tagline": "A real 26×15 Blood Bowl pitch in the console — drag positionals onto squares, hover for stats, and set scenarios up by hand or by asking the agent. Ships roster data for 30 teams."
+    },
+    {
       "id": "plugin-devkit",
       "name": "Plugin Devkit",
       "category": "Authoring",

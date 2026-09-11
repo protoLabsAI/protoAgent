@@ -222,6 +222,19 @@ Anyone can install your plugin from its git URL once it's a public repo. To make
    in-app Plugins ▸ Discover catalog (`GET /api/plugins/catalog`). The derived files
    (`config/plugin-catalog.json`, `sites/marketing/data/plugins.json`) are generated —
    don't edit them by hand; CI fails on drift.
+3. **Pick a `status`** (default `active`). It decides where the plugin is listed:
+
+   | status | in-app Discover | website directory |
+   |---|---|---|
+   | `active` | listed | listed |
+   | `incubating` | — | listed, with an *incubating* badge |
+   | `personal`, `archived` | — | hidden |
+   | `deprecated`, `internal` (older values, still accepted) | — | hidden |
+
+   The directory is the full census of the org's plugin repos, so a plugin that's
+   built for one setup or no longer maintained keeps its row with an honest status
+   rather than being removed. A hidden row also drops the card the site would
+   otherwise auto-discover from the repo's topic.
 
 ## Safety
 
