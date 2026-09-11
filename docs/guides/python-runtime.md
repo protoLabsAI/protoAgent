@@ -7,7 +7,7 @@ to run child code with. The **managed Python runtime**
 download of a pinned CPython that the desktop app owns, plus the **document baseline**
 ([ADR 0092](../adr/0092-desktop-document-baseline-and-versioned-file-artifacts.md)) —
 the libraries that let document skills produce real `.docx` / `.xlsx` / `.pptx` / `.pdf`
-files.
+files, and read existing PDFs.
 
 **Source runs never need this.** A `python -m server` / `uv run` instance spawns its own
 interpreter; every status surface reports `needed: false` and stays hidden. This page is
@@ -56,6 +56,14 @@ The runtime records a hash of the `requirements-docs.txt` it installed. When a r
 changes the document pins, the status flips to `baseline_current: false` and the
 surfaces above offer an **update** (re-runs the pip phase only) — the runtime itself
 stays put.
+
+The baseline lists every library a document skill imports *inside* `execute_code` —
+including **`pypdf`**, even though it is also a core dependency. The frozen app's own
+copy lives inside the binary where the child interpreter can't reach it, and the plugin
+dependency check looks at the app first, so without the baseline entry nothing ever
+installs it in the runtime (cowork's `pdf` skill failed to read PDFs on desktop until
+it was added). A desktop provisioned before that change reports a stale baseline;
+one click on **Update runtime** (Settings ▸ Tools) installs it.
 
 ## Status & API
 
