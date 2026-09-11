@@ -100,6 +100,22 @@ def test_wrapping_is_idempotent_across_reloads():
     assert router.routes[0].endpoint is first  # not stacked
 
 
+def test_routes_in_a_nested_sub_router_are_wrapped_too():
+    """FastAPI 0.141 stopped flattening a nested include into the parent's route list, so a
+    plugin's sub-router routes (bloodbowl's game router) answered a bare 500 again."""
+    router, sub = APIRouter(), APIRouter()
+
+    @sub.get("/boom")
+    async def _boom():
+        raise ValueError("nested boom")
+
+    router.include_router(sub, prefix="/api/plugins/x/game")
+
+    r = _client(router, "x").get("/api/plugins/x/game/boom")
+
+    assert r.status_code == 500 and r.json()["detail"]["type"] == "ValueError"
+
+
 def test_websocket_routes_are_left_alone():
     router = APIRouter()
 
