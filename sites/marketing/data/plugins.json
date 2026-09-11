@@ -371,6 +371,44 @@
     }
   },
   {
+    "id": "social",
+    "name": "Social Studio",
+    "category": "Marketing",
+    "official": true,
+    "tagline": "Organic social marketing that never posts — a brand kit every draft follows, nine platforms' hard limits and dated norms, a content queue, a linter, and a copy-ready export pack, with a writer + editor + researcher crew. The Social Marketing archetype installs it.",
+    "adds": [
+      "tool",
+      "skill",
+      "subagent",
+      "view",
+      "settings"
+    ],
+    "bundled": false,
+    "install": "https://github.com/protoLabsAI/social-plugin",
+    "links": {
+      "source": "https://github.com/protoLabsAI/social-plugin",
+      "docs": "https://github.com/protoLabsAI/social-plugin#readme"
+    }
+  },
+  {
+    "id": "bloodbowl",
+    "name": "Blood Bowl",
+    "category": "Examples",
+    "official": true,
+    "tagline": "A real 26×15 Blood Bowl pitch in the console — drag positionals onto squares, hover for stats, and set scenarios up by hand or by asking the agent. Ships roster data for 30 teams.",
+    "adds": [
+      "tool",
+      "skill",
+      "view"
+    ],
+    "bundled": false,
+    "install": "https://github.com/protoLabsAI/bloodbowl-plugin",
+    "links": {
+      "source": "https://github.com/protoLabsAI/bloodbowl-plugin",
+      "docs": "https://github.com/protoLabsAI/bloodbowl-plugin#readme"
+    }
+  },
+  {
     "id": "plugin-devkit",
     "name": "Plugin Devkit",
     "category": "Authoring",
@@ -599,5 +637,80 @@
       "source": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/friction",
       "docs": "/docs/guides/plugins"
     }
+  },
+  {
+    "id": "promptlab",
+    "name": "Prompt Lab",
+    "category": "Engineering",
+    "official": true,
+    "tagline": "A versioned prompt library and a streaming playground view, with agent tools to manage both.",
+    "adds": [
+      "tool",
+      "skill",
+      "view"
+    ],
+    "bundled": false,
+    "status": "incubating",
+    "install": "https://github.com/protoLabsAI/promptlab-plugin",
+    "links": {
+      "source": "https://github.com/protoLabsAI/promptlab-plugin",
+      "docs": "https://github.com/protoLabsAI/promptlab-plugin#readme"
+    }
+  },
+  {
+    "id": "reddit",
+    "name": "Reddit",
+    "category": "Communication",
+    "official": true,
+    "tagline": "A subreddit feed view plus tools to read and interact with Reddit as you.",
+    "adds": [
+      "tool",
+      "skill",
+      "view",
+      "settings",
+      "secrets"
+    ],
+    "bundled": false,
+    "status": "incubating",
+    "install": "https://github.com/protoLabsAI/reddit-plugin",
+    "links": {
+      "source": "https://github.com/protoLabsAI/reddit-plugin",
+      "docs": "https://github.com/protoLabsAI/reddit-plugin#readme"
+    }
+  },
+  {
+    "id": "ebay",
+    "status": "personal",
+    "hidden": true
+  },
+  {
+    "id": "palmier-pro",
+    "status": "personal",
+    "hidden": true
+  },
+  {
+    "id": "gameblocks",
+    "status": "archived",
+    "hidden": true
+  },
+  {
+    "id": "linear",
+    "status": "archived",
+    "hidden": true
+  },
+  {
+    "id": "media-manager",
+    "status": "archived",
+    "hidden": true
+  },
+  {
+    "id": "personal-finance",
+    "status": "archived",
+    "hidden": true
+  },
+  {
+    "id": "mythxengine-protoagent",
+    "status": "archived",
+    "hidden": true
   }
 ]

@@ -18,6 +18,9 @@ const publishDocs = '/docs/guides/plugin-registry';
 // data/plugins.json is now just OPTIONAL editorial polish, keyed by id (nicer category /
 // tagline). It is GENERATED from config/plugin-directory.yaml (scripts/plugin_directory.py,
 // which also derives the in-app Discover catalog) — edit the YAML, not the JSON.
+// The YAML's `status` also decides what shows here (#2910): an `incubating` entry carries
+// `status` and gets a badge; a personal/archived one arrives as `{id, hidden: true}` and
+// drops its card, including one (2) scraped because the repo still has the topic.
 // Everything degrades gracefully: a YAML/FS/GitHub hiccup never breaks the build.
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
@@ -140,7 +143,7 @@ for (const o of overrides as any[]) {
   const k = (o.id || o.name || '').toLowerCase();
   if (!seen.has(k)) { seen.add(k); merged.push(o); }
 }
-const plugins = merged;
+const plugins = merged.filter((p: any) => !p.hidden);
 
 // Category filters (built from the data, with counts) for quick navigation.
 const categories = [...new Set(plugins.map((p: any) => p.category || 'Other'))].sort();
@@ -216,6 +219,7 @@ const counts = Object.fromEntries(
               <div class="plugin-head">
                 <span class="pl-row__name">{p.name}</span>
                 {p.official && <span class="pl-badge">official</span>}
+                {p.status === 'incubating' && <span class="pl-badge pl-badge--info">incubating</span>}
               </div>
               <div class="pl-row__desc">{p.tagline}</div>
               {(p.adds || []).length > 0 && (
