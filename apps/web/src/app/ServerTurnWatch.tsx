@@ -85,8 +85,13 @@ export function foldProgressEvent(data: ChatProgressEvent): void {
   // reloaded or opened the chat mid-turn, so it never saw the turn start — its resubscribe
   // stream is authoritative and replays everything, so the bus copy must not also land:
   // both writing the same chunks is what doubled the text. Room replies are their own
-  // bubbles, which no reattach drives.
-  if (frame.kind !== "room" && isReattaching(liveMessageId(frame.taskId, frame.session))) return;
+  // bubbles, which no reattach drives; and a consumed-interjection marker is one the
+  // reattach stream never places (snapshot replay deliberately skips steer markers), so
+  // the bus copy is the only producer for it and must land either way. Placement dedupes
+  // by id, so it can never settle twice.
+  if (frame.kind !== "room" && frame.kind !== "steer" && isReattaching(liveMessageId(frame.taskId, frame.session))) {
+    return;
+  }
   const target = chatStore.getSnapshot().sessions.find((s) => s.id === frame.session);
   if (!target) return; // chat not open in this window — nothing to surface here
   chatStore.updateMessages(frame.session, applyProgressFrame(target.messages, frame));

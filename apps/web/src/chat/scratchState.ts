@@ -4,6 +4,8 @@
 // draft) and gone when the tab closes (a draft is scratch, not a document).
 // Keys are slug-namespaced like the chat store: sessions are per agent.
 
+import type { QueuedSteer } from "../lib/types";
+
 const SLUG = (() => {
   try {
     const m = window.location.pathname.match(/\/agent\/([^/?#]+)/);
@@ -42,20 +44,28 @@ export function saveDraft(sessionId: string, draft: string): void {
   write("draft", sessionId, draft);
 }
 
-export function loadSteers(sessionId: string): { id: string; text: string }[] {
+export function loadSteers(sessionId: string): QueuedSteer[] {
   const raw = read("steers", sessionId);
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed)
-      ? parsed.filter((s) => s && typeof s.id === "string" && typeof s.text === "string")
+      ? parsed
+          .filter((s) => s && typeof s.id === "string" && typeof s.text === "string")
+          // An interjection keeps the server turn it was sent to, so a reload can still
+          // tell whether that turn is over (ChatSurface's server-turn reconcile).
+          .map((s) =>
+            typeof s.serverTaskId === "string" && s.serverTaskId
+              ? { id: s.id, text: s.text, serverTaskId: s.serverTaskId }
+              : { id: s.id, text: s.text },
+          )
       : [];
   } catch {
     return [];
   }
 }
 
-export function saveSteers(sessionId: string, steers: { id: string; text: string }[]): void {
+export function saveSteers(sessionId: string, steers: QueuedSteer[]): void {
   write("steers", sessionId, steers.length ? JSON.stringify(steers) : null);
 }
 

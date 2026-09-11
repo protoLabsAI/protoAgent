@@ -463,6 +463,39 @@ async def test_room_reply_fires_progress_frame_for_server_turn_bridge():
 
 
 @pytest.mark.asyncio
+async def test_consumed_steer_fires_progress_frame_after_the_text_it_follows():
+    """A server-fired turn's stream is held by the server itself, so the console that
+    interjected into it never sees the inline steer-consumed frame. The boundary must
+    also reach the host progress hook — AFTER the text that preceded it, so a bus
+    consumer can split its live preview at the same point a stream consumer does."""
+    frames: list = []
+    set_progress_hook(lambda ctx, task, frame: frames.append(frame))
+
+    before = "Work emitted before the operator interjected. " * 8
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield ("text", before)
+        yield ("steer_consumed", {"items": [{"id": "msg-1", "text": "yes 2024 as proposed"}]})
+        yield ("text", "Locked in.")
+        yield ("done", before + "Locked in.")
+
+    app = _build_app(stream)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:
+        task = (await _send_msg(c)).json()["result"]["task"]
+        final = await _poll_terminal(c, task["id"])
+
+    assert final["status"]["state"] == "TASK_STATE_COMPLETED"
+    phases = [frame["phase"] for frame in frames if frame.get("phase") in ("text", "steer_consumed")]
+    assert phases.index("steer_consumed") > phases.index("text")
+    steer = next(frame for frame in frames if frame.get("phase") == "steer_consumed")
+    assert steer == {
+        "phase": "steer_consumed",
+        "items": [{"id": "msg-1", "text": "yes 2024 as proposed"}],
+        "origin": "",
+    }
+
+
+@pytest.mark.asyncio
 async def test_resumed_turn_started_frame_carries_resumed_flag():
     """Answering a parked task re-enters execute() with resume=True — the second
     turn_started frame must say so, so a host can flip "needs approval" back to

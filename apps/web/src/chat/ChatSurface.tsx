@@ -16,7 +16,16 @@ import { errMsg } from "../lib/format";
 import { chatCommandsQuery, chatMentionsQuery, goalsQuery, runtimeStatusQuery } from "../lib/queries";
 import { useUI } from "../state/uiStore";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
-import type { ChatMessage, ChatPart, ConsumedSteer, HitlPayload, SlashCommand, SystemNoteTone, ToolCall } from "../lib/types";
+import type {
+  ChatMessage,
+  ChatPart,
+  ConsumedSteer,
+  HitlPayload,
+  QueuedSteer,
+  SlashCommand,
+  SystemNoteTone,
+  ToolCall,
+} from "../lib/types";
 import { HitlForm } from "./HitlForm";
 import { notifyIfHidden } from "../lib/notify";
 import {
@@ -42,7 +51,13 @@ import { useFlag, useFlagPredicate } from "../flags/flags";
 import { registeredComposerActions } from "../ext/composerRegistry";
 import { ChatTranscript } from "./ChatTranscript";
 import { ComposerModelSelect } from "./ComposerModelSelect";
-import { noteTurnFinished, noteTurnStarted, useServerTurn, useServerTurnSessions } from "./server-turn-store";
+import {
+  liveMessageId,
+  noteTurnFinished,
+  noteTurnStarted,
+  useServerTurn,
+  useServerTurnSessions,
+} from "./server-turn-store";
 import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
 import { inputHistory, pushInputHistory } from "./inputHistory";
 import { dismissedToolCallSet, rememberDismissedToolCall } from "./dismissedToolCalls";
@@ -61,7 +76,13 @@ import { createStreamWatchdog } from "./streamWatchdog";
 import { ADD_SELECTOR, isIncognitoAddClick, trackShiftHeld } from "./shiftCue";
 import { composerPlaceholder } from "./composerPlaceholder";
 import { resolveGoalCloseDisposition, sessionsToClose } from "./bulkClose";
-import { placeConsumedSteers } from "./steerPlacement";
+import { placeConsumedSteers, placeServerTurnSteers } from "./steerPlacement";
+import {
+  planInterjectionReconcile,
+  serverTurnPhase,
+  staleInterjections,
+  type ServerTurnPhase,
+} from "./serverInterjections";
 import { canClearSession, retireChatSession } from "./sessionRetirement";
 
 function messageId() {
@@ -619,7 +640,7 @@ export function ChatSurface({
 
 // Steer-queue ref initializer — mirrors the lazy state init (a useRef can't take
 // an initializer function, and re-reading storage per render would be wasteful).
-function steerQueueRef_init(sessionId: string): { id: string; text: string }[] {
+function steerQueueRef_init(sessionId: string): QueuedSteer[] {
   return loadSteers(sessionId);
 }
 
@@ -690,16 +711,24 @@ function ChatSessionSlot({
   // The message a "Rewind to here" is pending confirmation on (null = dialog closed).
   // Rewind is destructive (discards everything below), so it goes through a confirm.
   const [pendingRewind, setPendingRewind] = useState<ChatMessage | null>(null);
-  // Mid-turn steering: user messages queued WHILE a turn streams (optimistic),
-  // reconciled at turn-end. The ref mirrors the state so the post-stream reconcile
-  // (a stale render closure) reads the live queue.
-  const [steerQueue, setSteerQueueState] = useState<{ id: string; text: string }[]>(() => loadSteers(sessionId));
-  const steerQueueRef = useRef<{ id: string; text: string }[]>(steerQueueRef_init(sessionId));
-  const setSteerQueue = (next: { id: string; text: string }[]) => {
+  // Mid-turn steering: user messages queued WHILE a turn runs (optimistic), reconciled
+  // at turn-end. ONE queue for both kinds — steers into this browser's own stream, and
+  // interjections into an attended server turn (tagged `serverTaskId`) — because the
+  // server drains both from one per-session steering queue: the same ✕ (DELETE …/steer)
+  // takes either back, the same consumed marker settles either, and the transcript is
+  // the single record of which ones have landed. The ref mirrors the state so the
+  // post-stream reconcile (a stale render closure) reads the live queue.
+  const [steerQueue, setSteerQueueState] = useState<QueuedSteer[]>(() => loadSteers(sessionId));
+  const steerQueueRef = useRef<QueuedSteer[]>(steerQueueRef_init(sessionId));
+  const setSteerQueue = (next: QueuedSteer[]) => {
     steerQueueRef.current = next;
     setSteerQueueState(next);
     saveSteers(sessionId, next); // scratch state survives a swap (S3)
   };
+  // Interjections whose POST hasn't answered yet: the server hasn't said whether it even
+  // queued them, so the server-turn reconcile must not read "absent from the queue" as
+  // "consumed" for these.
+  const interjectInFlightRef = useRef<Set<string>>(new Set());
   // A consumed ↑-recall's known-duplicate marker (#3413): set when editQueuedSteer's dequeue
   // resolves `consumed`, pinned to the exact recalled text + this session. Drives the inline
   // duplicate-risk warning below and its clear/send-anyway actions; all transitions run
@@ -713,12 +742,6 @@ function ChatSessionSlot({
   useEffect(() => {
     setDuplicateRisk((risk) => nextDuplicateRisk(risk, { type: "draft", sessionId, draft }));
   }, [draft, sessionId]);
-  const [serverInterjectionQueue, setServerInterjectionQueueState] = useState<{ id: string; text: string }[]>([]);
-  const serverInterjectionQueueRef = useRef<{ id: string; text: string }[]>([]);
-  const setServerInterjectionQueue = (next: { id: string; text: string }[]) => {
-    serverInterjectionQueueRef.current = next;
-    setServerInterjectionQueueState(next);
-  };
   // Forwarded into the DS PromptInput (inputRef) — for slash-completion focus and
   // the Ctrl/⌘+Enter caret insert. The DS component owns the auto-grow.
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -766,11 +789,6 @@ function ChatSessionSlot({
   // (Enter queues an interjection through its durable control task). Named for the
   // capability rather than the source: it is not server-specific.
   const turnInterruptible = status === "streaming" || Boolean(serverTurnControl);
-  useEffect(() => {
-    if (!serverTurnControl && serverInterjectionQueueRef.current.length) {
-      setServerInterjectionQueue([]);
-    }
-  }, [serverTurnControl]);
 
   // Pending file attachments. Each is uploaded to /api/knowledge/attach on pick;
   // the backend tiers it (inline small / index large) and returns a `context`
@@ -1303,6 +1321,33 @@ function ChatSessionSlot({
   const rewindTailId = useMemo(() => rewindableTailId(messages), [messages]);
   const cast = useMemo(() => (session ? sessionCast(session) : []), [session]);
 
+  // The transcript is the one record of which queued messages have landed: whatever put a
+  // queued id there — this stream's consumed marker, the bus's marker for a server turn
+  // (ServerTurnWatch, which knows nothing of this queue), a turn-end reconcile — the
+  // pending bubble retires here. Before this, a server-turn interjection had no settle
+  // path at all and sat "queued" under an answer that had already used it.
+  useEffect(() => {
+    const queued = steerQueueRef.current;
+    if (!queued.length) return;
+    const settled = new Set(messages.map((message) => message.id));
+    if (queued.some((item) => settled.has(item.id))) {
+      setSteerQueue(queued.filter((item) => !settled.has(item.id)));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- setSteerQueue is a per-render wrapper over stable state
+  }, [messages]);
+
+  // Reconcile interjections whose server turn is no longer the live one — the turn ended,
+  // was stopped, or this slot mounted with some queued from before a reload. Keyed on the
+  // live control's TASK id, not the control object (every progress frame re-sends it), plus
+  // the turn label (a `turn.finished` this slot saw without ever seeing a control frame).
+  // The reconcile asks the server before it acts, so an extra run is a no-op, never a guess.
+  const liveServerTaskId = serverTurnControl?.taskId ?? "";
+  const sessionReady = Boolean(session);
+  useEffect(() => {
+    if (sessionReady) void reconcileServerInterjections();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the reconcile reads live store state
+  }, [liveServerTaskId, serverTurnLabel, sessionReady]);
+
   // Sendable with text OR at least one ready attachment (file-only send, e.g.
   // "describe this image" with no caption). Matches the DS PromptInput gate,
   // which also enables submit when attachments are present (@protolabsai/ui ≥ 0.34).
@@ -1395,7 +1440,9 @@ function ChatSessionSlot({
   // Interject into an ATTENDED server-initiated turn without starting a competing
   // browser-owned turn. The durable task id comes from bd-v92b control frames, not
   // from local stream ownership, so this also works after remount when the backend
-  // republishes the live control contract.
+  // republishes the live control contract. The server drops the text into the ordinary
+  // steering queue, so it joins the same queue as a steer — tagged with the turn it was
+  // sent to, which is how the reconcile knows when that turn is over.
   async function queueServerInterjection() {
     const text = draft.trim();
     const control = chatStore.getSnapshot().serverTurnControls[sessionId];
@@ -1405,13 +1452,142 @@ function ChatSessionSlot({
     histStashRef.current = "";
     const id = messageId();
     setDraft("");
-    setServerInterjectionQueue([...serverInterjectionQueueRef.current, { id, text }]);
+    setSteerQueue([...steerQueueRef.current, { id, text, serverTaskId: control.taskId }]);
+    interjectInFlightRef.current.add(id);
     try {
-      await api.serverTurnInterject(session.id, control.taskId, id, text);
+      const res = await api.serverTurnInterject(session.id, control.taskId, id, text);
+      if (!res.ok && res.reason !== "duplicate") {
+        // Refused, and answered 200: the turn ended (or stopped taking interjections)
+        // between its last control frame and this POST. Nothing was queued, so nothing
+        // will ever settle this bubble — it used to sit "queued" regardless. Take it back,
+        // hand the words back, and drop the control the server just said is stale, so the
+        // next Enter sends a normal message instead of being refused again.
+        setSteerQueue(steerQueueRef.current.filter((x) => x.id !== id));
+        setDraft((current) => (current.trim() ? current : text));
+        chatStore.clearServerTurnControl(sessionId, control.taskId);
+        onError(
+          res.reason === "not_live"
+            ? "That server task had already finished, so your message wasn't sent. It's back in the composer."
+            : "That server task isn't taking messages right now, so yours wasn't sent. It's back in the composer.",
+        );
+      }
     } catch (e) {
-      setServerInterjectionQueue(serverInterjectionQueueRef.current.filter((x) => x.id !== id));
+      setSteerQueue(steerQueueRef.current.filter((x) => x.id !== id));
       onError(`Couldn't queue interjection: ${errMsg(e)}`);
+    } finally {
+      interjectInFlightRef.current.delete(id);
+      // The turn may have ended while this was in flight; the reconcile skipped it then.
+      void reconcileServerInterjections();
     }
+  }
+
+  // Settle interjections a server turn consumed but whose boundary marker this console
+  // never saw — conservatively above that turn's reply (steerPlacement.ts). Grouped per
+  // turn, because each anchors to its own turn's bubbles.
+  function settleServerInterjections(items: QueuedSteer[]) {
+    if (!session || !items.length) return;
+    const ids = new Set(items.map((item) => item.id));
+    setSteerQueue(steerQueueRef.current.filter((q) => !ids.has(q.id)));
+    const byTask = new Map<string, QueuedSteer[]>();
+    for (const item of items) {
+      const key = item.serverTaskId ?? "";
+      byTask.set(key, [...(byTask.get(key) ?? []), item]);
+    }
+    let next = chatStore.getSnapshot().sessions.find((s) => s.id === session.id)?.messages;
+    if (!next) return;
+    for (const [taskId, group] of byTask) {
+      next = placeServerTurnSteers(next, group, {
+        liveId: liveMessageId(taskId, session.id),
+        exact: false,
+        frozenId: messageId(),
+        createdAt: Date.now(),
+      });
+    }
+    chatStore.updateMessages(session.id, next);
+  }
+
+  // The server-turn counterpart of reconcileSteer: interjections sent to a server turn
+  // that is no longer the live one are settled, left, re-targeted or re-sent, decided
+  // from the server's own queue and the turn's durable task (serverInterjections.ts).
+  // Serialised — the triggers can fire together — and re-run if one arrives mid-flight.
+  const interjectReconcileRef = useRef<{ running: boolean; again: boolean }>({ running: false, again: false });
+  async function reconcileServerInterjections() {
+    const guard = interjectReconcileRef.current;
+    if (guard.running) {
+      guard.again = true;
+      return;
+    }
+    guard.running = true;
+    try {
+      do {
+        guard.again = false;
+        await reconcileServerInterjectionsOnce();
+      } while (guard.again);
+    } finally {
+      guard.running = false;
+    }
+  }
+
+  async function reconcileServerInterjectionsOnce() {
+    if (!session) return;
+    const liveTaskId = () => chatStore.getSnapshot().serverTurnControls[sessionId]?.taskId ?? "";
+    const stale = staleInterjections(steerQueueRef.current, liveTaskId(), interjectInFlightRef.current);
+    if (!stale.length) return;
+    let pendingIds: Set<string>;
+    try {
+      pendingIds = new Set((await api.pendingSteer(session.id)).pending.map((item) => item.id));
+    } catch {
+      return; // can't tell consumed from not — leave them rather than guess
+    }
+    const phases = new Map<string, ServerTurnPhase>();
+    for (const taskId of new Set(stale.filter((q) => pendingIds.has(q.id)).map((q) => q.serverTaskId ?? ""))) {
+      const state = await api.getTask(taskId).then((task) => task.state, () => "");
+      phases.set(taskId, serverTurnPhase(state));
+    }
+    // The awaits above yield: decide against the queue and turn state as they are NOW —
+    // an item may have been cancelled or settled by a marker meanwhile.
+    const stillQueued = new Set(steerQueueRef.current.map((q) => q.id));
+    const plan = planInterjectionReconcile(
+      stale.filter((q) => stillQueued.has(q.id)),
+      {
+        pendingIds,
+        phases,
+        ownStreamLive: chatStore.getSnapshot().sessionStatusMap[sessionId] === "streaming",
+        liveServerTaskId: liveTaskId(),
+        hitlPending: Boolean(hitlRef.current),
+      },
+    );
+    if (plan.settle.length) settleServerInterjections(plan.settle);
+    if (plan.retarget.length) {
+      const next = new Map(plan.retarget.map((item) => [item.id, item]));
+      setSteerQueue(steerQueueRef.current.map((q) => next.get(q.id) ?? q));
+    }
+    if (plan.resend.length) await resendInterjections(plan.resend);
+  }
+
+  // An interjection its server turn never reached, with nothing left to drain it: take it
+  // OUT of the server queue first — left there, the next turn would fold it in on top of
+  // this re-send and the agent would read it twice — then send it as the operator's next
+  // message. A dequeue answering `removed: false` lost a race to some turn that consumed it
+  // after all, so that one settles instead. A dequeue that fails stays queued for the next
+  // reconcile rather than being sent while the server may still hold it.
+  async function resendInterjections(items: QueuedSteer[]) {
+    if (!session) return;
+    const send: QueuedSteer[] = [];
+    const consumed: QueuedSteer[] = [];
+    for (const item of items) {
+      try {
+        const { removed } = await api.cancelSteer(session.id, item.id);
+        (removed ? send : consumed).push(item);
+      } catch {
+        /* still (maybe) queued server-side — leave its bubble for the next reconcile */
+      }
+    }
+    if (consumed.length) settleServerInterjections(consumed);
+    if (!send.length) return;
+    const ids = new Set(send.map((item) => item.id));
+    setSteerQueue(steerQueueRef.current.filter((q) => !ids.has(q.id)));
+    void runTurn(send.map((item) => item.text).join("\n\n"));
   }
 
   // Take a still-queued steer back out of the running turn — the shared body behind the ✕
@@ -1434,7 +1610,16 @@ function ChatSessionSlot({
         // marker and permanently pinned the steer to the legacy top-of-turn slot.
         const snap = chatStore.getSnapshot().sessions.find((row) => row.id === session.id);
         const alreadySettled = snap?.messages.some((message) => message.id === id);
-        if (!alreadySettled && !steerQueueRef.current.some((queued) => queued.id === id)) {
+        if (alreadySettled) return "consumed";
+        // A server-turn interjection whose turn is no longer live has no marker left to
+        // wait for — restoring it would park it "queued" forever. Settle it now, above the
+        // reply it shaped. (While its turn is live, the bus marker is on its way: restore.)
+        const liveTask = chatStore.getSnapshot().serverTurnControls[sessionId]?.taskId;
+        if (item.serverTaskId && item.serverTaskId !== liveTask) {
+          settleServerInterjections([item]);
+          return "consumed";
+        }
+        if (!steerQueueRef.current.some((queued) => queued.id === id)) {
           setSteerQueue([...steerQueueRef.current, item]);
         }
         return "consumed";
@@ -1548,9 +1733,11 @@ function ChatSessionSlot({
 
   // After a turn ends, reconcile any still-queued steers: those the agent folded
   // in settle into the thread; those still queued arrived after the last model
-  // call (never seen) → re-send as a fresh turn so they aren't lost.
+  // call (never seen) → re-send as a fresh turn so they aren't lost. Steers into THIS
+  // stream only — an interjection sent to a server turn answers to that turn's
+  // lifecycle (reconcileServerInterjections), and is left exactly as it is here.
   async function reconcileSteer() {
-    const queued = steerQueueRef.current;
+    const queued = steerQueueRef.current.filter((q) => !q.serverTaskId);
     if (!session || !queued.length) return;
     let remaining: { id: string; text: string }[];
     try {
@@ -1566,11 +1753,13 @@ function ChatSessionSlot({
     // QUEUED — the server keeps holding them and folds them in right after the form
     // response. Re-sending them as a fresh turn here would deliver them BEFORE the
     // form answer (and abandon the pending interrupt).
+    const reconciled = new Set(queued.map((q) => q.id));
     if (unconsumed.length && hitlRef.current) {
-      setSteerQueue(unconsumed);
+      const keep = new Set(unconsumed.map((q) => q.id));
+      setSteerQueue(steerQueueRef.current.filter((q) => !reconciled.has(q.id) || keep.has(q.id)));
       return;
     }
-    setSteerQueue([]);
+    setSteerQueue(steerQueueRef.current.filter((q) => !reconciled.has(q.id)));
     if (unconsumed.length) {
       void runTurn(unconsumed.map((u) => u.text).join("\n\n"));
     }
@@ -2341,9 +2530,12 @@ function ChatSessionSlot({
     }
     chatStore.setSessionStatus(sessionId, "idle");
     setStatusMessage("stopped");
-    // Drop any optimistic queued-steer bubbles; the user chose to stop.
+    // Drop any optimistic queued-steer bubbles; the user chose to stop. Take them out of
+    // the server's steering queue too (best-effort): left there, the next turn in this
+    // chat would fold in a message the operator just watched disappear.
+    const dropped = steerQueueRef.current;
     setSteerQueue([]);
-    setServerInterjectionQueue([]);
+    for (const queued of dropped) void api.cancelSteer(sessionId, queued.id).catch(() => undefined);
     if (cancelId) {
       try {
         await api.cancelTask(cancelId);
@@ -2410,7 +2602,6 @@ function ChatSessionSlot({
         dismissedToolCalls={dismissedToolCalls}
         actions={transcriptActions}
         steerQueue={steerQueue}
-        serverInterjectionQueue={serverInterjectionQueue}
         serverTurnLabel={serverTurnLabel}
         status={status}
         onCancelDelegation={transcriptCancelDelegation}

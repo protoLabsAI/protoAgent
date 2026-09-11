@@ -1042,6 +1042,64 @@ class TestChatProgress:
             chat_mod._LIVE_SERVER_TURNS.clear()
             chat_mod._ATTENDED_SESSIONS.clear()
 
+    def test_consumed_interjection_is_republished_with_its_control(self, monkeypatch):
+        """The steer-consumed boundary is the console's only acknowledgement that an
+        interjection into a server-fired turn reached the agent (the turn's own stream is
+        held by the server). It must ride chat.progress with the operator's exact words and
+        the live control contract, unretained like every other progress frame."""
+        import importlib
+
+        chat_mod = importlib.import_module("server.chat")
+        chat_mod._LIVE_SERVER_TURNS.clear()
+        chat_mod._ATTENDED_SESSIONS.clear()
+        chat_mod.mark_session_attended("chat-7")
+        try:
+            a2a, published = self._capture(monkeypatch)
+            a2a._a2a_progress(
+                "chat-7",
+                "t",
+                {"phase": "turn_started", "origin": "background-resume", "trigger": "bg-1"},
+            )
+            published.clear()
+            words = "yes 2024 as proposed " * 200  # the operator's text travels whole
+            a2a._a2a_progress(
+                "chat-7",
+                "t",
+                {
+                    "phase": "steer_consumed",
+                    "items": [{"id": "msg-1", "text": words}, {"id": "", "text": "no id"}, "junk"],
+                    "origin": "background-resume",
+                },
+            )
+            assert len(published) == 1
+            topic, data, kw = published[0]
+            assert topic == "chat.progress"
+            assert kw == {"retain": False}
+            assert data["phase"] == "steer_consumed"
+            assert data["items"] == [{"id": "msg-1", "text": words}]
+            assert data["control"]["task_id"] == "t" and data["control"]["operator_controllable"] is True
+        finally:
+            chat_mod._LIVE_SERVER_TURNS.clear()
+            chat_mod._ATTENDED_SESSIONS.clear()
+
+    def test_consumed_marker_without_usable_items_is_not_published(self, monkeypatch):
+        a2a, published = self._capture(monkeypatch)
+        a2a._a2a_progress(
+            "chat-7", "t", {"phase": "steer_consumed", "items": [{"id": "x"}], "origin": "scheduler"}
+        )
+        assert published == []
+
+    def test_operator_turn_consumed_marker_is_not_republished(self, monkeypatch):
+        """A browser-owned turn already carries the marker inline on its own stream —
+        republishing it would settle the same interjection twice."""
+        a2a, published = self._capture(monkeypatch)
+        a2a._a2a_progress(
+            "chat-7",
+            "t",
+            {"phase": "steer_consumed", "items": [{"id": "m", "text": "hi"}], "origin": "operator"},
+        )
+        assert published == []
+
     def test_long_tool_output_is_previewed(self, monkeypatch):
         a2a, published = self._capture(monkeypatch)
         a2a._a2a_progress(

@@ -9,8 +9,14 @@ const messageRender = vi.hoisted(() => vi.fn());
 
 vi.mock("@protolabsai/ui/ai", () => ({
   Conversation: ({ children }: { children: unknown }) => children,
-  Message: ({ children, queuedLabel }: { children: ReactNode; queuedLabel?: string }) =>
-    createElement("div", null, queuedLabel ? createElement("span", null, queuedLabel) : null, children),
+  Message: ({ children, queuedLabel, onCancel }: { children: ReactNode; queuedLabel?: string; onCancel?: () => void }) =>
+    createElement(
+      "div",
+      null,
+      queuedLabel ? createElement("span", null, queuedLabel) : null,
+      children,
+      onCancel ? createElement("button", { type: "button", "aria-label": "Cancel queued message", onClick: onCancel }) : null,
+    ),
 }));
 
 vi.mock("./ChatMessageView", () => ({
@@ -35,8 +41,7 @@ const messages: ChatMessage[] = Array.from({ length: 150 }, (_, index) => ({
 const noop = () => {};
 const actions = {};
 const dismissedToolCalls = new Set<string>();
-const steerQueue: { id: string; text: string }[] = [];
-const serverInterjectionQueue: { id: string; text: string }[] = [];
+const steerQueue: { id: string; text: string; serverTaskId?: string }[] = [];
 
 function Harness() {
   const [draft, setDraft] = useState("");
@@ -51,7 +56,6 @@ function Harness() {
       dismissedToolCalls,
       actions,
       steerQueue,
-      serverInterjectionQueue,
       serverTurnLabel: null,
       status: "idle",
       onCancelDelegation: noop,
@@ -96,7 +100,6 @@ function StreamingHarness() {
       dismissedToolCalls: dismissedTask,
       actions,
       steerQueue,
-      serverInterjectionQueue,
       serverTurnLabel: null,
       status: "streaming",
       onCancelDelegation: noop,
@@ -148,7 +151,8 @@ describe("ChatTranscript render isolation", () => {
     ]);
   });
 
-  it("labels queued server-turn interjections distinctly from normal steers", async () => {
+  it("labels queued server-turn interjections distinctly from normal steers — and gives them the same ✕", async () => {
+    const onCancelSteer = vi.fn();
     await act(async () =>
       root.render(
         createElement(ChatTranscript, {
@@ -156,9 +160,36 @@ describe("ChatTranscript render isolation", () => {
           messages: [],
           dismissedToolCalls,
           actions,
-          steerQueue,
-          serverInterjectionQueue: [{ id: "i1", text: "Use the newest inbox item" }],
+          steerQueue: [{ id: "i1", text: "Use the newest inbox item", serverTaskId: "task-9" }],
           serverTurnLabel: "running a scheduled task…",
+          status: "idle",
+          onCancelDelegation: noop,
+          onDismissToolCall: noop,
+          onCancelSteer,
+        }),
+      ),
+    );
+
+    expect(host.textContent).toContain("Use the newest inbox item");
+    expect(host.textContent).toContain("queued interjection");
+    // The live bug: a server-turn interjection rendered with no cancel affordance at all.
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Cancel queued message"]')!.click());
+    expect(onCancelSteer).toHaveBeenCalledWith("i1");
+  });
+
+  it("never renders a message as queued once its id is settled in the transcript", async () => {
+    await act(async () =>
+      root.render(
+        createElement(ChatTranscript, {
+          sessionId: "server-session",
+          messages: [{ id: "i1", role: "user", content: "yes 2024 as proposed", status: "done" }],
+          dismissedToolCalls,
+          actions,
+          steerQueue: [
+            { id: "i1", text: "yes 2024 as proposed", serverTaskId: "task-9" },
+            { id: "i2", text: "and the resume too", serverTaskId: "task-9" },
+          ],
+          serverTurnLabel: "responding to background reports…",
           status: "idle",
           onCancelDelegation: noop,
           onDismissToolCall: noop,
@@ -167,7 +198,9 @@ describe("ChatTranscript render isolation", () => {
       ),
     );
 
-    expect(host.textContent).toContain("Use the newest inbox item");
-    expect(host.textContent).toContain("queued interjection");
+    // i1 is a normal message now (the mocked row prints its content once); only i2 is pending.
+    expect(host.textContent?.split("yes 2024 as proposed").length).toBe(2);
+    expect(host.querySelectorAll('[aria-label="Cancel queued message"]')).toHaveLength(1);
+    expect(host.textContent).toContain("and the resume too");
   });
 });
