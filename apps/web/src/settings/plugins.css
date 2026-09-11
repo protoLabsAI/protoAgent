@@ -69,6 +69,8 @@
 .plugin-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 2px; }
 .plugin-card-repo { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--pl-color-fg-subtle); text-decoration: none; }
 .plugin-card-repo:hover { color: var(--pl-color-fg-muted); }
+.plugin-card-adds { display: flex; flex-wrap: wrap; gap: 4px; }
+.plugin-card-links { display: inline-flex; align-items: center; gap: 10px; }
 
 /* Installed plugins TABLE — the list outgrew the two-section row layout once a box
    could hold dozens of plugins; now one sortable/filterable table (search + status

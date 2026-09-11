@@ -30,6 +30,17 @@ describe("filterCatalog", () => {
     expect(filterCatalog(CAT, "pm", "All").map((p) => p.id)).toEqual(["pm"]);
   });
 
+  it("matches what a plugin adds, as the website search does (#2910)", () => {
+    const withAdds = [
+      mk({ id: "doom", name: "DOOM", tagline: "play it", adds: ["view"] }),
+      mk({ id: "discord", name: "Discord", tagline: "chat bot", adds: ["surface", "tool"] }),
+      mk({ id: "bare", name: "Bare", tagline: "a fork's entry with no adds" }),
+    ];
+    expect(filterCatalog(withAdds, "view", "All").map((p) => p.id)).toEqual(["doom"]);
+    expect(filterCatalog(withAdds, "surface", "All").map((p) => p.id)).toEqual(["discord"]);
+    expect(filterCatalog(withAdds, "", "All")).toHaveLength(3);
+  });
+
   it("filters by category and combines with query", () => {
     expect(filterCatalog(CAT, "", "Product").map((p) => p.id)).toEqual(["pm"]);
     expect(filterCatalog(CAT, "chat", "Communication").map((p) => p.id)).toEqual(["discord"]);

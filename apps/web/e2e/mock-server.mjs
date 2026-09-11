@@ -456,9 +456,11 @@ function handleApiGet(
             id: "artifact", name: "Artifact", category: "Generative UI", official: true,
             repo: "https://github.com/protoLabsAI/artifact-plugin",
             tagline: "Render HTML/SVG/Mermaid/React into a sandboxed iframe.",
+            adds: ["tool", "view"], docs: "https://agent.protolabs.studio/docs/guides/plugins",
             bundled: false, installed: false, enabled: false,
           },
           {
+            // No adds/docs — the shape a fork's own plugin-catalog.json may still have.
             id: "discord", name: "Discord", category: "Communication", official: true,
             repo: "https://github.com/protoLabsAI/discord-plugin",
             tagline: "Run your agent as a Discord bot.",

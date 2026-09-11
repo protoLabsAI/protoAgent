@@ -759,10 +759,24 @@ function DiscoverTab() {
                 {p.category ? <span className="plugin-chip">{p.category}</span> : null}
               </div>
               <p className="plugin-card-tagline">{p.tagline}</p>
+              {p.adds?.length ? (
+                <div className="plugin-card-adds" aria-label="adds">
+                  {p.adds.map((a) => (
+                    <Badge key={a} status="neutral">{a}</Badge>
+                  ))}
+                </div>
+              ) : null}
               <div className="plugin-card-foot">
-                <a className="plugin-card-repo" href={p.repo} target="_blank" rel="noopener noreferrer">
-                  <Github size={13} /> repo <ExternalLink size={11} />
-                </a>
+                <span className="plugin-card-links">
+                  <a className="plugin-card-repo" href={p.repo} target="_blank" rel="noopener noreferrer">
+                    <Github size={13} /> repo <ExternalLink size={11} />
+                  </a>
+                  {p.docs ? (
+                    <a className="plugin-card-repo" href={p.docs} target="_blank" rel="noopener noreferrer">
+                      docs <ExternalLink size={11} />
+                    </a>
+                  ) : null}
+                </span>
                 {p.bundled ? (
                   <StatusPill label="bundled" tone="muted" />
                 ) : p.installed ? (
