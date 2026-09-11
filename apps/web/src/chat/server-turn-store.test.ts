@@ -6,6 +6,7 @@ import {
   noteTurnStarted,
   originForSession,
   rememberOrigin,
+  rendersAsResultCard,
   resetServerTurns,
   serverResultLabel,
   serverResultPreview,
@@ -191,5 +192,26 @@ describe("serverResultPreview (collapsed summary line, #3028)", () => {
 
   it("falls back to the head of the content when there is no summary section", () => {
     expect(serverResultPreview("No heading here, just text.")).toBe("No heading here, just text.");
+  });
+});
+
+describe("rendersAsResultCard — which settled turns collapse into the card", () => {
+  it("collapses side-channel runs the operator didn't start here (#3028)", () => {
+    for (const o of ["scheduler", "watch-job-7", "watch", "inbox", "webhook", "background", "something-new"]) {
+      expect(rendersAsResultCard(o)).toBe(true);
+    }
+  });
+
+  it("keeps the conversation's own continuation as a chat message", () => {
+    // The agent answering its OWN background reports (or a delegate's result) streamed into
+    // the chat full-size; folding it into a tinted card when it settled lost the reader's place.
+    expect(rendersAsResultCard("background-resume")).toBe(false);
+    expect(rendersAsResultCard("delegate-result")).toBe(false);
+    expect(rendersAsResultCard(" Background-Resume ")).toBe(false);
+  });
+
+  it("never carded an operator-initiated turn (no origin)", () => {
+    expect(rendersAsResultCard(undefined)).toBe(false);
+    expect(rendersAsResultCard("")).toBe(false);
   });
 });

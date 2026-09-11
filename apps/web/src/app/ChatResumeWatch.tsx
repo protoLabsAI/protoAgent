@@ -5,7 +5,7 @@ import { chatStore } from "../chat/chat-store";
 import { onTopic } from "../lib/events";
 import { notifyIfHidden } from "../lib/notify";
 import type { ChatMessage } from "../lib/types";
-import { resumedTurnRender } from "./resumedTurn";
+import { resumedTurnRender, streamedTextIsFinal } from "./resumedTurn";
 import { isLiveServerTurn } from "./serverTurnProgress";
 import { originForSession } from "../chat/server-turn-store";
 
@@ -72,10 +72,12 @@ export function ChatResumeWatch() {
         origin: render.origin || originForSession(render.session) || undefined,
         // Keep the tool cards the live view already rendered — the resume payload carries
         // the final TEXT only, so dropping these would erase the turn's visible work.
-        // `parts` is deliberately not carried over: it interleaves the streamed text, which
-        // the authoritative `content` now supersedes, so the message falls back to the
-        // grouped tools→content layout history-loaded messages already use.
         toolCalls: live?.toolCalls,
+        // `parts` interleaves the STREAMED text, so it is kept only when that text is the
+        // settled answer: then the message stays exactly as the reader was reading it. When
+        // they differ, the authoritative `content` supersedes it and the message falls back
+        // to the grouped tools→content layout history-loaded messages already use.
+        ...(live && streamedTextIsFinal(live.parts, render.content) ? { parts: live.parts } : {}),
       };
       const next =
         liveIdx >= 0

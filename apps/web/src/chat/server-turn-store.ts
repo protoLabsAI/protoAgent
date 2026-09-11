@@ -54,6 +54,21 @@ export function originForSession(sessionId: string): string {
   return origins.get(sessionId) ?? "";
 }
 
+// The agent's own conversation continuing, not a side-channel run: its turn in response to its
+// OWN background reports (ADR 0070 push-resume) or to a delegate's result. See rendersAsResultCard.
+const CONVERSATIONAL_ORIGINS = new Set(["background-resume", "delegate-result"]);
+
+/** Whether a SETTLED server-initiated turn collapses into the compact result card (#3028).
+ *  A scheduled fire, a watch reaction or an inbox/webhook trigger is a run the operator didn't
+ *  start in this conversation, and #3028 keeps those visually secondary. A turn answering the
+ *  agent's own background reports or a delegate's result is the conversation continuing: it
+ *  streams into the chat full-size, and folding it into a differently-tinted card the moment
+ *  it settled yanked the text out from under someone reading it. Those stay chat messages. */
+export function rendersAsResultCard(origin: string | undefined): boolean {
+  const o = (origin ?? "").trim().toLowerCase();
+  return o !== "" && !CONVERSATIONAL_ORIGINS.has(o);
+}
+
 /** Short, operator-facing NOUN label for a server-initiated RESULT CARD (#3028) — distinct
  *  from `labelForOrigin`'s in-flight gerund phrasing ("running a scheduled task…"). A watch
  *  reaction arrives as `watch-<id>` (its job id); the rest are the fixed autonomous origins.
