@@ -4,12 +4,13 @@ import { Alert } from "@protolabsai/ui/data";
 import { Button } from "@protolabsai/ui/primitives";
 import { useUI } from "../state/uiStore";
 
-// Structured plugin SETUP GAP delivered on runtime status `warnings[]` (server side:
-// graph/plugins/setup_gaps.py). A gap is "this plugin is installed and enabled but it
-// can't do its job until you do X" — it renders as an actionable, dismissible banner in
-// the same shell strip that legacy string warnings use. Legacy string entries in the
-// same array keep rendering as plain warning alerts (App splits by shape); this component
-// only ever sees the structured objects.
+// Structured plugin SETUP GAP delivered on runtime status `setup_gaps[]` (server side:
+// graph/plugins/setup_gaps.py, published by operator_api/console_handlers.py — #3395). A gap
+// is "this plugin is installed and enabled but it can't do its job until you do X" — it
+// renders as an actionable, dismissible banner in the same shell strip that the operational
+// `warnings[]` strings use. The server ALSO projects every gap into `warnings[]` as a plain
+// `Label: message` line (the legacy projection, kept indefinitely for older consumers);
+// `splitRuntimeWarnings` drops those lines so a gap renders once, as its banner.
 //
 // Actions are CLOSED, server-sanitized DATA — never behavior. Each carries a `kind` from a
 // fixed vocabulary; the console maps ONLY the host-allowlisted kinds to an existing
@@ -31,9 +32,8 @@ export type SetupGap = {
   actions?: SetupGapAction[];
 };
 
-/** True for a well-formed structured setup gap — used to split runtime `warnings[]` into
- *  legacy strings vs structured gaps. A malformed object is neither: it's dropped from both
- *  paths rather than crashing the strip. */
+/** True for a well-formed structured setup gap. A malformed `setup_gaps[]` entry is dropped
+ *  rather than crashing the strip (its legacy `warnings[]` line then still renders plainly). */
 export function isSetupGap(value: unknown): value is SetupGap {
   if (!value || typeof value !== "object") return false;
   const g = value as Record<string, unknown>;
@@ -43,6 +43,38 @@ export function isSetupGap(value: unknown): value is SetupGap {
     typeof g.message === "string" &&
     typeof g.label === "string"
   );
+}
+
+/** The legacy `warnings[]` line the server projects for a gap — `setup_gaps.warnings()` in
+ *  graph/plugins/setup_gaps.py (`f"{label}: {message}"`). Pinned against the real handler by
+ *  tests/test_console_handlers.py::test_runtime_status_setup_gaps_match_the_console_e2e_golden,
+ *  because if the two drift, every gap renders twice (banner + plain alert). */
+export function gapWarningLine(gap: SetupGap): string {
+  return `${gap.label}: ${gap.message}`;
+}
+
+/**
+ * Split a runtime status into what the shell strip renders:
+ *  - `setupGaps` — the well-formed records from `setup_gaps[]` (actionable, dismissible banners);
+ *  - `plainWarnings` — the `warnings[]` strings, MINUS each structured gap's own legacy line.
+ *
+ * The server sends every gap twice (the record, and its `Label: message` line), so rendering
+ * both would double it; rendering only `warnings[]` — what the console did until this — shows a
+ * gap as a plain alert with no Configure button and no dismiss. The dedupe runs against ALL
+ * structured gaps, not just the visible ones, so dismissing a banner can't resurface its line
+ * as a plain alert. A server without `setup_gaps` (pre-#3395) loses nothing: with no records,
+ * every line stays a plain warning. Non-string `warnings[]` entries are not a server shape and
+ * are ignored.
+ */
+export function splitRuntimeWarnings(
+  status: { warnings?: readonly unknown[] | null; setup_gaps?: readonly unknown[] | null } | null | undefined,
+): { plainWarnings: string[]; setupGaps: SetupGap[] } {
+  const setupGaps = Array.isArray(status?.setup_gaps) ? status.setup_gaps.filter(isSetupGap) : [];
+  const gapLines = new Set(setupGaps.map(gapWarningLine));
+  const plainWarnings = Array.isArray(status?.warnings)
+    ? status.warnings.filter((w): w is string => typeof w === "string" && !gapLines.has(w))
+    : [];
+  return { plainWarnings, setupGaps };
 }
 
 /** Stable render/identity key for a gap — its (plugin, key) pair, which the server keys the

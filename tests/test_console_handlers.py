@@ -2,7 +2,9 @@
 register_operator_routes, extracted from _main into operator_api/console_handlers.py.
 These exercise the STATE-driven degradation paths directly (no app needed)."""
 
+import json
 import logging
+from pathlib import Path
 
 import pytest
 
@@ -480,6 +482,41 @@ async def test_runtime_status_setup_gaps_clear_retain_unload_reflected(monkeypat
         status = await ch._operator_runtime_status()
         assert status["setup_gaps"] == []
         assert not [w for w in status["warnings"] if w.startswith("Project Board:")]
+    finally:
+        setup_gaps.reset()
+
+
+_CONSOLE_SETUP_GAPS_GOLDEN = Path(__file__).resolve().parents[1] / "apps" / "web" / "e2e" / "setup-gaps.golden.json"
+
+
+async def test_runtime_status_setup_gaps_match_the_console_e2e_golden(monkeypatch):
+    """The console's setup-gap e2e (apps/web/e2e/warnings.spec.ts) serves the payload in
+    apps/web/e2e/setup-gaps.golden.json — so it has to be what THIS handler really returns.
+
+    #3421 shipped green against a hand-written mock that put gap objects inside `warnings[]`,
+    a shape the server never sends; against the real payload (#3395: records in `setup_gaps[]`,
+    plain `Label: message` lines in `warnings[]`) every gap rendered as a plain alert with no
+    Configure button and no dismiss. Replaying the golden's `reports` through the real seam and
+    asserting its `status` exactly keeps the e2e on the wire shape: change the shape and this
+    fails, pointing at the golden to update — and the e2e then runs against the new shape."""
+    from graph.plugins import setup_gaps
+
+    golden = json.loads(_CONSOLE_SETUP_GAPS_GOLDEN.read_text(encoding="utf-8"))
+    setup_gaps.reset()
+    try:
+        for r in golden["reports"]:
+            setup_gaps.report(r["plugin_id"], r["key"], r["message"], label=r["label"], action=r.get("action"))
+        status = await ch._operator_runtime_status()
+
+        assert status["setup_gaps"] == golden["status"]["setup_gaps"]
+        # Other operational warnings (a co-located instance, …) may share the array on a dev
+        # box; the gap lines are the golden's, in the store's order.
+        gap_lines = set(golden["status"]["warnings"])
+        assert [w for w in status["warnings"] if w in gap_lines] == golden["status"]["warnings"]
+        # The console drops a structured gap's legacy line by exactly this projection
+        # (`gapWarningLine` in apps/web/src/app/SetupGapBanner.tsx) — if it drifts, every gap
+        # renders twice: once actionable, once as a plain alert.
+        assert golden["status"]["warnings"] == [f"{g['label']}: {g['message']}" for g in golden["status"]["setup_gaps"]]
     finally:
         setup_gaps.reset()
 

@@ -39,7 +39,7 @@ import { ActivityWidget } from "../activity/ActivityWidget";
 import { ConfirmDialog, Tooltip } from "@protolabsai/ui/overlays";
 import { AgentDownBanner } from "./AgentDownBanner";
 import { SignedOutBanner } from "./SignedOutBanner";
-import { SetupGapBanner, gapIdentity, isSetupGap, useSetupGapDismissals, type SetupGap } from "./SetupGapBanner";
+import { SetupGapBanner, gapIdentity, splitRuntimeWarnings, useSetupGapDismissals } from "./SetupGapBanner";
 import { ChatSlot, chatSlotProvider } from "./ChatSlot";
 import { chatStore, useAnyChatStreaming } from "../chat/chat-store";
 import { KnowledgeStore } from "../knowledge/KnowledgeStore";
@@ -331,14 +331,12 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   const [projectPath, setProjectPath] = useLocalStorageState("protoagent.projectPath", "");
   const queryClient = useQueryClient();
 
-  // Runtime status `warnings[]` carries two shapes now: legacy operational strings (#706
-  // co-located instances etc.) that render as plain warning alerts exactly as before, and
-  // structured plugin setup gaps (graph/plugins/setup_gaps.py) that render as actionable,
-  // dismissible banners. Split by shape so each renders through its own path — additive over
-  // the old string-only strip. A malformed object is neither, so it's simply dropped.
-  const runtimeWarnings: Array<string | SetupGap> = runtime?.warnings ?? [];
-  const stringWarnings = runtimeWarnings.filter((w): w is string => typeof w === "string");
-  const setupGaps = runtimeWarnings.filter(isSetupGap);
+  // The shell strip renders two things from runtime status: operational `warnings[]` strings
+  // (#706 co-located instances etc.) as plain warning alerts, and plugin setup gaps from
+  // `setup_gaps[]` (graph/plugins/setup_gaps.py, #3395) as actionable, dismissible banners. The
+  // server also projects every gap into `warnings[]` as a plain `Label: message` line, so the
+  // split drops those — otherwise a gap renders as a dead plain alert (or twice).
+  const { plainWarnings: stringWarnings, setupGaps } = splitRuntimeWarnings(runtime);
   // Session-scoped, signature-keyed dismissal (client-only; never mutates server config). One
   // source of truth feeds both the desktop strip and the mobile banner stack below.
   const { visibleGaps: visibleSetupGaps, dismiss: dismissSetupGap } = useSetupGapDismissals(setupGaps);

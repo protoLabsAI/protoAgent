@@ -1,0 +1,40 @@
+{
+  "_about": "The REAL GET /api/runtime/status projection of two plugin setup gaps. `reports` are the setup_gaps.report() calls; `status` is what the server returns for them: each gap as a structured record in `setup_gaps[]` (#3395) AND as its legacy `Label: message` line in `warnings[]`. tests/test_console_handlers.py replays `reports` through the real handler and asserts `status` exactly; apps/web/e2e/warnings.spec.ts serves `status` to the console. #3421 shipped green against a hand-written mock that put gap objects inside `warnings[]` (a shape the server never sends), so real gaps rendered as plain alerts. Server shape changes -> the Python test fails here; update this file and the e2e re-runs against the new shape. The `repo` gap's open_url action is dropped by the host sanitizer, which is why it has no `actions`.",
+  "reports": [
+    {
+      "plugin_id": "boardy",
+      "key": "coder",
+      "message": "No coder delegate is configured, so the board can't run features.",
+      "label": "Project Board",
+      "action": { "kind": "plugin_config", "label": "Configure Project Board", "fields": ["coder"] }
+    },
+    {
+      "plugin_id": "boardy",
+      "key": "repo",
+      "message": "The board can't reach its repository.",
+      "label": "Project Board",
+      "action": { "kind": "open_url", "target": "https://evil.example/pwn", "label": "Fix it" }
+    }
+  ],
+  "status": {
+    "warnings": [
+      "Project Board: No coder delegate is configured, so the board can't run features.",
+      "Project Board: The board can't reach its repository."
+    ],
+    "setup_gaps": [
+      {
+        "plugin": "boardy",
+        "label": "Project Board",
+        "key": "coder",
+        "message": "No coder delegate is configured, so the board can't run features.",
+        "actions": [{ "kind": "plugin_config", "target": "boardy", "label": "Configure Project Board", "fields": ["coder"] }]
+      },
+      {
+        "plugin": "boardy",
+        "label": "Project Board",
+        "key": "repo",
+        "message": "The board can't reach its repository."
+      }
+    ]
+  }
+}

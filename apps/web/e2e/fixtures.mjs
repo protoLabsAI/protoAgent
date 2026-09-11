@@ -5,6 +5,8 @@
 // — no Python, no langgraph, no model, no network. Specs import the same
 // constants to assert against, so the contract can't drift between the two.
 
+import { readFileSync } from "node:fs";
+
 // The two SDK extensions ride the message/artifact METADATA keyed by their extension URI
 // (protolabs-a2a 0.3.0); the template-local ones below stay MIME-typed DataParts.
 export const TOOL_CALL_EXT_URI = "https://proto-labs.ai/a2a/ext/tool-call-v1";
@@ -14,9 +16,22 @@ export const COMPONENT_MIME = "application/vnd.protolabs.component-v1+json";
 export const HITL_MIME = "application/vnd.protolabs.hitl-v1+json";
 export const STEER_CONSUMED_MIME = "application/vnd.protolabs.steer-consumed-v1+json";
 
+// A real runtime status for plugin setup gaps — `{ warnings, setup_gaps }` exactly as
+// GET /api/runtime/status returns them for the golden's `reports`. NOT hand-written:
+// tests/test_console_handlers.py replays the reports through the real handler and asserts
+// this payload, so a spec that serves it serves the wire shape (see the file's `_about`).
+export const SETUP_GAPS_GOLDEN = JSON.parse(
+  readFileSync(new URL("./setup-gaps.golden.json", import.meta.url), "utf8"),
+);
+
 export const RUNTIME_STATUS = {
   setup_complete: true,
   instance_uid: "mock-uid-1", // TenantGuard keys per-origin client state on this
+  // Both always present on the real server (operator_api/console_handlers.py): the legacy
+  // operational strings, and the structured setup-gap records beside them (#3395, `[]`, never
+  // absent). Empty here, so no spec sees a banner unless it serves one.
+  warnings: [],
+  setup_gaps: [],
   graph_loaded: true,
   version: "9.9.9",
   project: { path: "/tmp/e2e-project", allowed_dirs: ["/tmp/e2e-project"] },

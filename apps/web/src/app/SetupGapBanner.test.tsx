@@ -1,18 +1,23 @@
 // Structured setup-gap banners (graph/plugins/setup_gaps.py rendered in the shell strip):
-// legacy string warnings keep rendering elsewhere, this suite covers the STRUCTURED path —
-// CTA navigation into the plugin-config dialog, action safety for unknown/malformed kinds,
-// and the session-scoped dismissal lifecycle. createRoot/act + the real uiStore, like the
-// other console UI suites (FleetRoom.test.tsx) — no testing-library dep.
+// how runtime status splits into banners vs plain alerts, CTA navigation into the
+// plugin-config dialog, action safety for unknown/malformed kinds, and the session-scoped
+// dismissal lifecycle. createRoot/act + the real uiStore, like the other console UI suites
+// (FleetRoom.test.tsx) — no testing-library dep.
 import { act, createElement as h } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+// The REAL runtime-status payload for two reported gaps — asserted against the live handler by
+// tests/test_console_handlers.py, and served by the e2e (see the file's `_about`).
+import golden from "../../e2e/setup-gaps.golden.json";
 import { useUI } from "../state/uiStore";
 import {
   SetupGapBanner,
   gapIdentity,
   gapSignature,
+  gapWarningLine,
   isSetupGap,
+  splitRuntimeWarnings,
   useSetupGapDismissals,
   type SetupGap,
 } from "./SetupGapBanner";
@@ -62,12 +67,79 @@ const dismissButton = () => container.querySelector<HTMLButtonElement>('[data-te
 const ctaButtons = () =>
   buttons().filter((b) => /Configure|Open settings/.test((b.textContent || "").trim()));
 
-describe("isSetupGap — splits structured gaps from legacy strings", () => {
+describe("isSetupGap — well-formed structured gaps only", () => {
   it("accepts a well-formed gap and rejects strings / malformed objects", () => {
     expect(isSetupGap(pbGap())).toBe(true);
     expect(isSetupGap("Another running instance shares this data root")).toBe(false);
     expect(isSetupGap({ plugin: "x" })).toBe(false); // missing key/message/label
     expect(isSetupGap(null)).toBe(false);
+  });
+});
+
+// The runtime-status contract (#3395): each gap arrives as a record in `setup_gaps[]` AND as its
+// `Label: message` line in `warnings[]`. The console used to build banners only from objects
+// inside `warnings[]` — a shape the server never sends — so every real gap rendered as a plain
+// alert with no Configure button and no dismiss (QA of v0.164.0).
+describe("splitRuntimeWarnings — the real runtime-status shape", () => {
+  const OTHER = "Another running instance shares this agent's data.";
+
+  it("turns the real server payload into one banner per gap and no leftover plain lines", () => {
+    const { plainWarnings, setupGaps } = splitRuntimeWarnings(golden.status);
+    expect(setupGaps.map(gapIdentity)).toEqual(["boardy coder", "boardy repo"]);
+    expect(plainWarnings).toEqual([]); // both lines were the gaps' own projection
+  });
+
+  it("keeps genuinely plain operational warnings, in order, beside the gaps", () => {
+    const status = { warnings: [OTHER, ...golden.status.warnings], setup_gaps: golden.status.setup_gaps };
+    const { plainWarnings, setupGaps } = splitRuntimeWarnings(status);
+    expect(plainWarnings).toEqual([OTHER]);
+    expect(setupGaps).toHaveLength(2);
+  });
+
+  it("drops a gap's line by its EXACT projection — a warning that merely mentions the plugin survives", () => {
+    const gap = pbGap();
+    expect(gapWarningLine(gap)).toBe("Project Board: No coder delegate is configured, so the board can't run features.");
+    const near = "Project Board: the board's coder delegate crashed.";
+    const { plainWarnings } = splitRuntimeWarnings({ warnings: [near, gapWarningLine(gap)], setup_gaps: [gap] });
+    expect(plainWarnings).toEqual([near]);
+  });
+
+  it("a server without `setup_gaps` (pre-#3395) keeps every line as a plain warning", () => {
+    const { plainWarnings, setupGaps } = splitRuntimeWarnings({ warnings: golden.status.warnings });
+    expect(setupGaps).toEqual([]);
+    expect(plainWarnings).toEqual(golden.status.warnings);
+  });
+
+  it("a malformed `setup_gaps` entry is dropped, and its line stays visible as a plain alert", () => {
+    const line = "Acme: gh is not authenticated";
+    const { plainWarnings, setupGaps } = splitRuntimeWarnings({
+      warnings: [line],
+      setup_gaps: [{ plugin: "acme", message: "gh is not authenticated" }], // no key/label
+    });
+    expect(setupGaps).toEqual([]);
+    expect(plainWarnings).toEqual([line]);
+  });
+
+  it("ignores gap-shaped OBJECTS inside `warnings[]` — never a server shape", () => {
+    const { plainWarnings, setupGaps } = splitRuntimeWarnings({ warnings: [OTHER, pbGap()] as unknown[] });
+    expect(setupGaps).toEqual([]);
+    expect(plainWarnings).toEqual([OTHER]);
+  });
+
+  it("renders nothing for an absent / empty status", () => {
+    expect(splitRuntimeWarnings(undefined)).toEqual({ plainWarnings: [], setupGaps: [] });
+    expect(splitRuntimeWarnings(null)).toEqual({ plainWarnings: [], setupGaps: [] });
+    expect(splitRuntimeWarnings({ warnings: [], setup_gaps: [] })).toEqual({ plainWarnings: [], setupGaps: [] });
+  });
+
+  it("renders the real payload's gaps with the host-allowlisted CTA (and none where the host dropped it)", () => {
+    const { setupGaps } = splitRuntimeWarnings(golden.status);
+    const [coder, repo] = setupGaps;
+    act(() => root.render(h(SetupGapBanner, { gap: coder, onDismiss: () => {} })));
+    expect(buttonByText("Configure Project Board")).toBeTruthy();
+    act(() => root.render(h(SetupGapBanner, { gap: repo, onDismiss: () => {} })));
+    expect(ctaButtons()).toHaveLength(0); // its open_url action never survived the sanitizer
+    expect(dismissButton()).not.toBeNull();
   });
 });
 
