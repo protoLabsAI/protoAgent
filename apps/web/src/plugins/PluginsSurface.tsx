@@ -768,11 +768,11 @@ function DiscoverTab() {
               ) : null}
               <div className="plugin-card-foot">
                 <span className="plugin-card-links">
-                  <a className="plugin-card-repo" href={p.repo} target="_blank" rel="noopener noreferrer">
+                  <a className="plugin-card-link" href={p.repo} target="_blank" rel="noopener noreferrer">
                     <Github size={13} /> repo <ExternalLink size={11} />
                   </a>
                   {p.docs ? (
-                    <a className="plugin-card-repo" href={p.docs} target="_blank" rel="noopener noreferrer">
+                    <a className="plugin-card-link" href={p.docs} target="_blank" rel="noopener noreferrer">
                       docs <ExternalLink size={11} />
                     </a>
                   ) : null}

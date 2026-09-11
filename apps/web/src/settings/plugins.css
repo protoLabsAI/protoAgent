@@ -67,8 +67,8 @@
 .plugin-chip { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; padding: 1px 7px; border-radius: 999px; background: var(--pl-color-bg-hover); color: var(--pl-color-fg-subtle); white-space: nowrap; }
 .plugin-card-tagline { font-size: 12px; color: var(--pl-color-fg-muted); margin: 0; flex: 1; }
 .plugin-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 2px; }
-.plugin-card-repo { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--pl-color-fg-subtle); text-decoration: none; }
-.plugin-card-repo:hover { color: var(--pl-color-fg-muted); }
+.plugin-card-link { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--pl-color-fg-subtle); text-decoration: none; }
+.plugin-card-link:hover { color: var(--pl-color-fg-muted); }
 .plugin-card-adds { display: flex; flex-wrap: wrap; gap: 4px; }
 .plugin-card-links { display: inline-flex; align-items: center; gap: 10px; }
 
