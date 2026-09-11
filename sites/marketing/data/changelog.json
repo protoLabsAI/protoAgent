@@ -1,9 +1,33 @@
 [
   {
+    "version": "v0.164.0",
+    "date": "2026-09-11",
+    "changes": [
+      "Runtime status now publishes structured setup gaps beside warnings[] (#3395).",
+      "Plugin setup gaps now render as actionable, dismissible console banners (#3421).",
+      "Two settings changes at the same moment no longer silently drop one of them (#2743).",
+      "Adding, importing or removing an MCP server no longer freezes the agent while it reloads (#2743).",
+      "A failed share/unshare of an MCP server no longer loses the server, and two creates of one delegate name no longer overwrite each other (#2743).",
+      "Dependency PRs no longer arrive red because the attribution manifest is stale (#3393).",
+      "The regeneration is split in two so a write token never meets unreviewed dependency code (#3393).",
+      "onboard_project now reports tracking-branch drift when it reuses a checkout (#3402).",
+      "load_skill now flags a skill's unavailable required tools (#3403).",
+      "Narrow markdown-table columns no longer collapse to one character per line in the console (#3412).",
+      "Consumed queued-message recall is now visibly duplicate-safe (#3413).",
+      "A delegate's HITL question reaches its caller intact (#3414).",
+      "A2A: reap orphaned WORKING tasks without timing out productive turns (#3418).",
+      "Two environment-dependent test assertions no longer flake the Windows shard (#3422).",
+      "The gateway client no longer lets a model's NAME choose its wire protocol (#3424).",
+      "A bare workspace create on a hosted box can reach a model again, and new agents are created in the provider-registry shape (#3425).",
+      "Quitting no longer leaves agents' shell commands, coding delegates and scripts running (#3428).",
+      "A turn the agent runs off a background result no longer streams duplicated text (#3432)."
+    ]
+  },
+  {
     "version": "v0.163.0",
     "date": "2026-09-09",
     "changes": [
-      "Addressed participants now answer each other by default (#3395).",
+      "Addressed participants now answer each other by default (#3404).",
       "Project onboarding is on by default, so you can find it (#3396).",
       "Scheduler failure backoff no longer loses a slot (#3381).",
       "onboard_project no longer clones into the server's working directory when no root is set (#3397).",
