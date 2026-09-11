@@ -104,6 +104,11 @@ async def test_delegate_to_emits_ask_then_reply(monkeypatch):
     assert reply["text"].endswith("Do you agree with the tests?")  # FULL reply, not preview-capped
     assert len(reply["text"]) > 800  # #3042: a room bubble is a message, not an 800-char card
     assert reply["ok"] is True
+    # Neither frame claims the turn's answer (#3449). The lead RAN here — it moderated
+    # the delegation and its answer is its own synthesis ("proto handled it"), with the
+    # participant's reply nowhere in it. Claiming it would make the console refuse the
+    # lead's answer, and the turn would render the delegate's words and nothing else.
+    assert "in_answer" not in ask and "in_answer" not in reply
 
 
 @pytest.mark.asyncio

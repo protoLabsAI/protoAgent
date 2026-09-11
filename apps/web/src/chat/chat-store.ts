@@ -2,7 +2,13 @@ import { useSyncExternalStore } from "react";
 
 import type { ChatMessage } from "../lib/types";
 import { rendersText, textRuns } from "./parts";
-import { applyCanonicalTurnText, repairDuplicatedTurnText, shownRuns, turnBubbleIndexes } from "./turnText";
+import {
+  applyCanonicalTurnText,
+  repairAddressedTurnEcho,
+  repairDuplicatedTurnText,
+  shownRuns,
+  turnBubbleIndexes,
+} from "./turnText";
 
 export const MAX_SESSIONS = 50;
 export const MAX_ACTIVE_SESSIONS = 5;
@@ -153,6 +159,14 @@ function hydrationCanRepairMessage(message: ChatMessage | undefined): message is
  *  such sessions were re-downloaded and rewritten on every boot. */
 function messageNeedsDurableHydration(message: ChatMessage): boolean {
   if (!hydrationCanRepairMessage(message)) return false;
+  // An `@`-addressed turn has no prose of its own to be missing (#3449): its answer was
+  // spoken by the participants, whose bubbles carry it, and the durable answer text only
+  // restates them. Left in, this is the shape hydration most wants to "repair" — a
+  // settled, task-bearing bubble holding the work card and no text — and the repair would
+  // land the whole answer a second time on every boot, permanently. `repairHydratedMessages`
+  // refuses it too (via `applyCanonicalTurnText`); this stops the session being re-fetched
+  // and rewritten for nothing.
+  if (message.answeredByParticipants) return false;
   const runs = textRuns(message.parts);
   if (!runs.some((run) => run.trim())) return true;
   return Boolean(message.content.trim()) && !rendersText(runs, message.content);
@@ -302,7 +316,11 @@ export function sanitizePersisted(parsed: unknown): PersistedChatState | null {
     // written before the fix, so `dedupeMessages` never saw colliding ids — has its
     // duplicated prose stripped back to one copy (turnText.ts).
     .map((s) => {
-      const messages = repairDuplicatedTurnText(dedupeMessages(s.messages));
+      // Two one-time repairs, both self-limiting: a split turn handed the whole
+      // canonical answer (#3387), and an ADDRESSED turn whose answer was drawn once
+      // under the participant's byline and once again as the lead's (#3449 — the
+      // shape v0.164.0 persisted, which nothing else heals).
+      const messages = repairAddressedTurnEcho(repairDuplicatedTurnText(dedupeMessages(s.messages)));
       return messages === s.messages ? s : { ...s, messages };
     });
   if (!sessions.length) return null;

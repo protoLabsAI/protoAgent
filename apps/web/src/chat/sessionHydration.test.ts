@@ -949,4 +949,83 @@ describe("boot hydration", () => {
 
     expect(chatStore.getSnapshot().sessions.find((candidate) => candidate.id === session.id)?.messages).toEqual([]);
   });
+
+  it("never re-lands an @-addressed turn's answer on the next boot (#3449 A)", () => {
+    // The shape an addressed turn settles into is exactly what ADR 0104 hydration most
+    // wants to repair: a settled, task-bearing bubble holding the address's work card and
+    // NO text. The answer is there — in the PARTICIPANT's bubble — but participant bubbles
+    // are excluded from turn grouping by design, so the repair's `shown` is empty,
+    // `rendersText` is false, and it lands the whole durable answer on the card half.
+    // That persists, so the next load doubles it again: the pre-fix workaround ("reload
+    // and it's fine") would have become the way the duplicate BECAME permanent.
+    const ANSWER = "The current bundled Artifact plugin version is 0.17.0.";
+    const local: ChatSession = {
+      id: "chat-addressed",
+      title: "t",
+      createdAt: 1,
+      updatedAt: 3,
+      messages: [
+        { id: "msg-user", role: "user", content: "@protoEngineer v?", createdAt: 1, status: "done" },
+        {
+          id: "msg-frozen",
+          role: "assistant",
+          content: "",
+          createdAt: 2,
+          status: "done",
+          taskId: "task-mention",
+          answeredByParticipants: true,
+          toolCalls: [{ id: "mention:protoEngineer", name: "@protoEngineer", output: "1 replied", status: "done" }],
+          parts: [{ kind: "tools", ids: ["mention:protoEngineer"] }],
+          splitOf: "msg-dropped", // the continuation was folded away at `done`
+        },
+        {
+          id: "msg-authored",
+          role: "assistant",
+          content: ANSWER,
+          createdAt: 3,
+          status: "done",
+          author: { name: "protoEngineer" },
+          taskId: "task-mention",
+          answeredByParticipants: true,
+        },
+      ] as ChatMessage[],
+    } as ChatSession;
+
+    // Nothing to fetch: the turn has no prose of its own that could be missing.
+    expect(needsDurableHydration(local)).toBe(false);
+
+    // And even when a boot fetches the session anyway (another turn in it needed
+    // repair), the repair refuses this turn.
+    const recovered = sessionFromDurableTurns(summary(local.id), [
+      turn({
+        task_id: "task-mention",
+        text: ANSWER,
+        artifacts: [{ parts: [{ text: ANSWER }] }],
+        history: [
+          { role: "ROLE_USER", parts: [{ text: "@protoEngineer v?" }] },
+          { role: "ROLE_AGENT", parts: [], metadata: { [TOOL]: { toolCallId: "mention:protoEngineer", name: "@protoEngineer", phase: "started", args: "v?" } } },
+          { role: "ROLE_AGENT", parts: [], metadata: { [TOOL]: { toolCallId: "mention:protoEngineer", name: "@protoEngineer", phase: "completed", result: "1 replied" } } },
+        ],
+      }),
+    ]);
+    if (!recovered) throw new Error("durable turn should produce a recovered session");
+
+    const hydrated = mergeHydratedSessions(
+      {
+        version: 1,
+        sessions: [local],
+        currentSessionId: local.id,
+        activeSessions: [local.id],
+        sessionStatusMap: {},
+        pendingDeleteRequest: null,
+        pendingClearRequest: null,
+        serverTurnControls: {},
+      } as never,
+      [recovered],
+    );
+    const messages = hydrated.sessions.find((candidate) => candidate.id === local.id)?.messages ?? [];
+    expect(
+      messages.filter((m) => m.role === "assistant" && m.content.includes(ANSWER)).map((m) => m.id),
+    ).toEqual(["msg-authored"]);
+  });
 });

@@ -314,6 +314,12 @@ async def test_a_truncated_catchup_is_surfaced_to_the_operator(monkeypatch):
     assert "left out of the catch-up for @proto" in reply
     assert "room.catchup_max_messages" in reply
     assert reply.startswith("line 40")  # the answer still leads
+    # The reply is still CLAIMED (#3449) — the note is prose that exists only in the
+    # answer, so it rides its own `room_note` frame rather than costing the whole turn
+    # its claim. Dropping the claim here was what left the reported symptom alive on
+    # default caps: the operator kept the note AND got the reply twice.
+    assert outcomes[0]["in_answer"] is True
+    assert "left out of the catch-up for @proto" in outcomes[0]["room_note"]
 
 
 @pytest.mark.asyncio
@@ -377,8 +383,12 @@ async def test_an_untruncated_room_gets_no_note(monkeypatch):
     graph = _Graph()
     reg = _Reg(names=("proto",), scripts={"proto": ["line 40"]})
     _wire(monkeypatch, reg, max_rounds=1, graph=graph)
-    reply, _ = await sc._at_delegate_exchange("@proto status?", "t2")
+    reply, outcomes = await sc._at_delegate_exchange("@proto status?", "t2")
     assert reply == "line 40"
+    # …and with nothing added, the answer IS the reply — so it says so (#3449) and there
+    # is no note frame to send: the console renders the participant's bubble alone.
+    assert outcomes[0]["in_answer"] is True
+    assert "room_note" not in outcomes[0]
 
 
 @pytest.mark.asyncio

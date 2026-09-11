@@ -5,9 +5,12 @@ import { placeConsumedSteers } from "./steerPlacement";
 import { applyText, applyToolEvent } from "./turnReducers";
 import {
   applyCanonicalTurnText,
+  markTurnAnsweredByParticipants,
+  repairAddressedTurnEcho,
   repairDuplicatedTurnText,
   resetTurnForSnapshot,
   settleTurnBubbles,
+  turnAnsweredByParticipants,
   turnBubbleIndexes,
 } from "./turnText";
 
@@ -388,5 +391,148 @@ describe("the split → terminal replace round trip", () => {
     expect(rendered(messages)).toBe("Working on it.|Here you go.");
     const answer = messages.filter((m) => m.role === "assistant").map((m) => m.content).join("\n");
     expect(answer.match(/Working on it\./g)).toHaveLength(1);
+  });
+});
+
+
+// ── an addressed turn's answer belongs to the participants (#3449) ───────────────
+//
+// The words are already on screen in the participants' own bubbles; the turn's canonical
+// answer text merely restates them for clients that cannot render bubbles. FIVE producers
+// land that text — the terminal replace, the 45s stranded-turn watchdog, the post-stream
+// `!sawAuthoritativeText` reconcile, reattach (whose handler set has no `onRoomReply` at
+// all), and ADR 0104 boot hydration — and every one of them comes through
+// `applyCanonicalTurnText`. So the refusal lives HERE, off a fact stamped on the
+// transcript, rather than in a ref that dies with the live stream.
+describe("a turn answered by addressed participants", () => {
+  /** The shape an `@name` turn settles into: the work card, frozen out of the turn when
+   *  the participant's bubble was inserted, plus that authored bubble. The continuation
+   *  was folded away at `done`. */
+  const settled = (): ChatMessage[] => [
+    user("@protoEngineer what version?"),
+    frozen({ answeredByParticipants: true, parts: [{ kind: "tools", ids: ["mention:protoEngineer"] }] }),
+    {
+      id: "P",
+      role: "assistant",
+      content: "0.17.0, in-tree at plugins/artifact/.",
+      createdAt: 2,
+      status: "done",
+      author: { name: "protoEngineer" },
+      taskId: TASK,
+    },
+  ];
+
+  it("reads the stamp from whichever bubble of the turn survived", () => {
+    expect(turnAnsweredByParticipants(settled(), "A")).toBe(true);
+    // Findable from the frozen half's own id too — the continuation it names is gone.
+    expect(turnAnsweredByParticipants(settled(), "F")).toBe(true);
+    expect(turnAnsweredByParticipants([user("hi"), live()], "A")).toBe(false);
+  });
+
+  it("stamps every bubble of the turn, so the one that survives the settle carries it", () => {
+    const marked = markTurnAnsweredByParticipants([user("@x hi"), frozen({ content: "" }), live()], "A");
+    expect(marked.filter((m) => m.answeredByParticipants).map((m) => m.id)).toEqual(["F", "A"]);
+    // …and only this turn's: an unrelated earlier turn is untouched.
+    const other: ChatMessage = { id: "Z", role: "assistant", content: "earlier", createdAt: 0, status: "done", taskId: "task-0" };
+    expect(markTurnAnsweredByParticipants([other, live()], "A").find((m) => m.id === "Z")?.answeredByParticipants).toBeUndefined();
+  });
+
+  it("lands NOTHING — the canonical answer is a restatement of what is already shown", () => {
+    const messages = settled();
+    const canonical = "0.17.0, in-tree at plugins/artifact/.";
+    expect(applyCanonicalTurnText(messages, "A", canonical)).toBe(messages); // same ref: no rewrite
+    expect(rendered(applyCanonicalTurnText(messages, "A", canonical)).split("0.17.0").length - 1).toBe(1);
+  });
+
+  it("refuses a MULTI-address answer, which no text compare could ever match", () => {
+    // The join attributes each reply (`**@proto** — line 40`), so the bubbles are not a
+    // prefix of it and `renderedPrefixEnd` returns -1 — the diverged path, which lands
+    // the whole thing. Only the stamp can answer this one.
+    const messages: ChatMessage[] = [
+      user("@proto @reviewer status?"),
+      frozen({ answeredByParticipants: true, parts: [{ kind: "tools", ids: ["mention:proto,reviewer"] }] }),
+      { id: "P1", role: "assistant", content: "line 40", createdAt: 2, status: "done", author: { name: "proto" } },
+      { id: "P2", role: "assistant", content: "agreed", createdAt: 3, status: "done", author: { name: "reviewer" } },
+    ];
+    const canonical = "**@proto** — line 40\n\n**@reviewer** — agreed";
+    expect(applyCanonicalTurnText(messages, "A", canonical)).toBe(messages);
+    expect(rendered(messages)).toBe("|line 40|agreed");
+  });
+
+  it("still lands on an UNSTAMPED turn that merely has an authored bubble near it", () => {
+    // A `delegate_to`-moderated turn: the participant's reply is a bubble, but the lead
+    // RAN and the canonical text is its own synthesis. Nothing is stamped, so it lands —
+    // refusing here would delete the lead's answer.
+    const messages: ChatMessage[] = [
+      user("have proto look at auth"),
+      frozen({ content: "I'll ask proto.", parts: [{ kind: "text", text: "I'll ask proto." }] }),
+      { id: "P", role: "assistant", content: "patched", createdAt: 2, status: "done", author: { name: "proto" } },
+      live(),
+    ];
+    const out = applyCanonicalTurnText(messages, "A", "I'll ask proto.\n\nproto handled it.");
+    expect(rendered(out)).toBe("I'll ask proto.|patched|proto handled it.");
+  });
+});
+
+
+// The one-time repair for what v0.164.0 already wrote to disk (#3449).
+describe("repairAddressedTurnEcho", () => {
+  const ANSWER = "0.17.0, in-tree at plugins/artifact/.";
+  /** Exactly what the released console persisted for `@protoEngineer what version?`. */
+  const releasedShape = (): ChatMessage[] => [
+    user("@protoEngineer what version?"),
+    frozen({ parts: [{ kind: "tools", ids: ["mention:protoEngineer"] }] }),
+    { id: "P", role: "assistant", content: ANSWER, createdAt: 2, status: "done", author: { name: "protoEngineer" } },
+    live({ status: "done", content: ANSWER, parts: [{ kind: "text", text: ANSWER }] }),
+  ];
+
+  it("removes the unattributed second copy and stamps the turn", () => {
+    const out = repairAddressedTurnEcho(releasedShape());
+    expect(rendered(out)).toBe(`|${ANSWER}`); // the card half, then the reply — once
+    expect(out.map((m) => m.id)).toEqual(["u", "F", "P"]); // the echo carried nothing else, so it goes
+    // …and the turn is stamped, so hydration cannot put it back on the next boot.
+    expect(turnAnsweredByParticipants(out, "F")).toBe(true);
+  });
+
+  it("keeps a bubble that still has work to show, minus the duplicated prose", () => {
+    const withCards = releasedShape();
+    withCards[3] = live({
+      status: "done",
+      content: ANSWER,
+      parts: [{ kind: "text", text: ANSWER }, { kind: "tools", ids: ["t1"] }],
+      toolCalls: [{ id: "t1", name: "read_file", status: "done" }],
+    });
+    const out = repairAddressedTurnEcho(withCards);
+    expect(out).toHaveLength(4);
+    expect(out[3].toolCalls).toHaveLength(1); // the record of what the turn did stays
+    expect(rendered(out)).toBe(`|${ANSWER}|`);
+  });
+
+  it("leaves a moderated delegation alone — the lead's answer is its own", () => {
+    // `delegate_to`: the participant's reply, then the lead's SYNTHESIS. Different
+    // words, so nothing is on screen twice and nothing is touched.
+    const moderated: ChatMessage[] = [
+      user("have proto look at auth"),
+      { id: "P", role: "assistant", content: "patched", createdAt: 2, status: "done", author: { name: "proto" } },
+      live({ status: "done", content: "proto handled it.", parts: [{ kind: "text", text: "proto handled it." }] }),
+    ];
+    expect(repairAddressedTurnEcho(moderated)).toBe(moderated);
+  });
+
+  it("is inert on a transcript the fixed code wrote", () => {
+    const fixed = releasedShape().map((m) =>
+      m.role === "assistant" && !m.author ? { ...m, answeredByParticipants: true } : m,
+    );
+    expect(repairAddressedTurnEcho(fixed)).toBe(fixed);
+  });
+
+  it("leaves a mere PREFIX match alone — only an exact echo is proof", () => {
+    const partial = releasedShape();
+    partial[3] = live({
+      status: "done",
+      content: `${ANSWER} I also checked the changelog.`,
+      parts: [{ kind: "text", text: `${ANSWER} I also checked the changelog.` }],
+    });
+    expect(repairAddressedTurnEcho(partial)).toBe(partial);
   });
 });

@@ -57,7 +57,7 @@ import { finalizeStoppedMessages, resolveStopTarget } from "./stopTurn";
 import { lastOperatorAssistantId, rewindableTailId } from "./parts";
 import { createRevealQueue } from "./revealQueue";
 import { applyComponent, applyReasoning, applyText, applyToolEvent } from "./turnReducers";
-import { applyCanonicalTurnText, settleTurnBubbles } from "./turnText";
+import { applyCanonicalTurnText, markTurnAnsweredByParticipants, settleTurnBubbles } from "./turnText";
 import { reattachKeyForMessages, reattachTurn, shouldReattach } from "./reattach";
 import { loadDraft, loadScroll, loadSteers, saveDraft, saveScroll, saveSteers } from "./scratchState";
 import { createStreamWatchdog } from "./streamWatchdog";
@@ -2057,7 +2057,11 @@ function ChatSessionSlot({
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
           // Spans the whole TURN, which may already have been split into several
-          // bubbles to place a consumed steer / delegation (turnText.ts).
+          // bubbles to place a consumed steer / delegation (turnText.ts) — and lands
+          // NOTHING on a turn whose answer the addressed participants already spoke
+          // (#3449). That refusal lives there, not here, because four other producers of
+          // this same text run after the stream is gone (watchdog, reconcile, reattach,
+          // boot hydration) and all five pass through that one function.
           chatStore.updateMessages(session.id, applyCanonicalTurnText(latest.messages, assistantId, text));
         },
         onReasoning: (delta) => {
@@ -2100,6 +2104,13 @@ function ChatSessionSlot({
           // where the delegate_to happened, via insertRoomBubble — which splits the lead's
           // single streaming message so a bubble never floats above the work that preceded
           // it. A `@x @y` fan-out is the same path with an empty placeholder (insert-before).
+          //
+          // A third shape arrives on an addressed turn: the ROOM's own note (#3449) — no
+          // author, no `addressedTo`, just the part of the answer no participant's bubble
+          // carries (a clipped catch-up, the round cap, a failed address's line). It falls
+          // through this handler deliberately and lands as a plain, un-bylined bubble:
+          // it is the room speaking about its own bounds, not a participant, and it must
+          // never claim the answer (it is what the answer has BEYOND the bubbles).
           reveal.flush(); // part ordering (like onToolCall/onComponent): commit the lead's
           // streamed-so-far text into the placeholder BEFORE the split reads it — otherwise
           // the text is still buffered, the placeholder looks empty, every bubble takes the
@@ -2122,6 +2133,19 @@ function ChatSessionSlot({
           if (!reply.text) return; // an ask with no query — nothing to show
 
           roomReplies.current += 1;
+          // Does this bubble render words the turn's canonical answer text also carries
+          // (#3449)? Then the turn is stamped below and no producer of that text will
+          // land it. Three conditions, all load-bearing:
+          //   - a REPLY, not an ask (an ask's text is the question) and not the room's
+          //     own note (which is the part of the answer NO bubble carries);
+          //   - the server claimed it (`inAnswer`);
+          //   - the OPERATOR did the addressing. A reply the LEAD addressed
+          //     (`delegate_to`, `from: "assistant"`) can never be the whole of the
+          //     turn's answer — the lead's answer is its own synthesis — so honouring a
+          //     claim there would delete the lead's words. The mention path is the only
+          //     producer that sets both, and nothing stops a fork or plugin from
+          //     emitting room frames, so this is checked rather than assumed.
+          const claimsAnswer = Boolean(reply.author) && reply.inAnswer === true && reply.from === "operator";
           const authored: ChatMessage = {
             id: messageId(),
             role: "assistant",
@@ -2131,10 +2155,19 @@ function ChatSessionSlot({
             ...(reply.author ? { author: reply.author } : {}),
             ...(reply.addressedTo ? { addressedTo: reply.addressedTo } : {}),
             ...(reply.delegation ? { delegation: reply.delegation } : {}),
+            // Bubbles that carry the turn's own answer carry its task id too, so Copy /
+            // Fork / Rewind / View prompt land on the message that actually shows the
+            // answer (#3449 C). The turn's other half is a work card with no prose, and
+            // the action row needs `content`. Read paths that group a turn by task id
+            // all skip `author`-bearing bubbles by design, so this cannot make one an
+            // anchor for canonical text — `turnBubbleIndexes` keys on `splitOf`, never
+            // on the task.
+            ...(claimsAnswer && turnTaskId ? { taskId: turnTaskId } : {}),
           };
+          const withBubble = insertRoomBubble(latest.messages, assistantId, authored, messageId());
           chatStore.updateMessages(
             session.id,
-            insertRoomBubble(latest.messages, assistantId, authored, messageId()),
+            claimsAnswer ? markTurnAnsweredByParticipants(withBubble, assistantId) : withBubble,
           );
         },
         onSteerConsumed: (consumed) => {
@@ -2200,10 +2233,19 @@ function ChatSessionSlot({
             // #3042/#3114), its synthesis is IN this bubble and must stay: the room
             // bubbles are the participants, this is the lead's own answer. The
             // placeholder-empty guard is exactly that distinction.
-            chatStore.updateMessages(
-              session.id,
-              latest.messages.filter((message) => message.id !== assistantId),
-            );
+            //
+            // It is only ABLE to make it because `applyCanonicalTurnText` refused to land
+            // the answer on a turn the participants answered (#3449). Read against a
+            // bubble that had taken that text, this test answered "not empty" for every
+            // addressed turn — and since #3151 the address's own work card said so too —
+            // which is how a dead guard let the doubled answer through for three weeks.
+            // The stamp is the fact; this is the cleanup the fact makes correct again.
+            //
+            // FOLD, not delete (#3449 C): `onCost`/`onContext` pin this turn's spend and
+            // context-window meter to the live bubble, and a raw filter dropped the whole
+            // footer with it. `settleTurnBubbles` carries usage/context/error status onto
+            // the half that survives — the same move a spent steer continuation gets.
+            chatStore.updateMessages(session.id, settleTurnBubbles(latest.messages, assistantId));
             return;
           }
           const now = Date.now();

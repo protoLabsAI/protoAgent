@@ -995,6 +995,21 @@ export type RoomReply = {
   addressedTo?: string;
   /** The participant who authored a REPLY. Absent on an outgoing ask. */
   author?: MessageAuthor;
+  /** The server declares that the turn's canonical answer text RESTATES this reply
+   *  (#3449): an `@`-addressed turn short-circuits the lead, so its answer artifact is
+   *  composed from these replies purely as the whole for consumers that can't render
+   *  per-exchange frames. Rendering this bubble AND that answer shows the same words
+   *  twice. Absent on every reply that is not in the lead's answer — a `delegate_to`
+   *  exchange the lead then synthesizes, a drained background reply — and absent from
+   *  an older server, which is simply the pre-fix behavior. */
+  inAnswer?: boolean;
+  /** The ROOM's own copy, not a participant's: the part of an addressed turn's answer
+   *  that no bubble carries — a clipped catch-up window, the round cap, a line composed
+   *  for an exchange that produced no reply text (a failed address). Sent as its own
+   *  frame precisely so the console can render the whole answer exactly once without
+   *  having to recognise the server's attribution format (#3449). No author, no
+   *  `addressedTo`; `text` is the copy. */
+  note?: boolean;
   /** Who did the addressing: the operator, or the participant whose reply named this one. */
   from: string;
   text: string;
@@ -1034,6 +1049,13 @@ export type ChatMessage = {
   addressedTo?: string;
   /** On an outgoing ask: the summary / background job / error the delegation row shows. */
   delegation?: Delegation;
+  /** This turn's answer was spoken by ADDRESSED PARTICIPANTS, whose own bubbles carry
+   *  it — so the turn's canonical answer text (which merely restates them for clients
+   *  that cannot render bubbles) must never be landed on this turn, by any of the five
+   *  producers of it: the terminal replace, the stranded-turn watchdog, the post-stream
+   *  reconcile, reattach, or ADR 0104 boot hydration. Stamped on every bubble of the
+   *  turn so whichever survives its settle persists the fact (#3449, `turnText.ts`). */
+  answeredByParticipants?: boolean;
   toolCalls?: ToolCall[];
   components?: ComponentSpec[];
   /** Ordered render blocks (text runs + tool groups) built during streaming so the

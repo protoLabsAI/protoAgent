@@ -1579,7 +1579,73 @@ async def _at_delegate_exchange(
         # A2A or /v1 consumer — which gets no `room_reply` frames — with no byline at all,
         # from a message the operator sent to two participants.
         body = "\n\n".join(f"**@{o.get('author')}** — {_line(o)}" for o in spoken)
-    return _with_room_notes(body, outcomes, plan), outcomes
+    answer = _with_room_notes(body, outcomes, plan)
+    # Split the answer into the part the participants' own bubbles carry and the part
+    # only the answer carries, and say which is which (#3449).
+    #
+    # The address short-circuits the lead, so this answer text is composed out of these
+    # very replies — purely as the whole for consumers that get no `room_reply` frames
+    # (A2A, `/v1`). A console that DOES render those frames has to be told, or it draws
+    # each reply once under its byline and the lot again as the lead's answer: the
+    # doubled answer Josh hit on v0.164.0.
+    #
+    # PER EXCHANGE, because the rendering is per exchange. `in_answer` marks every
+    # exchange the console will draw as a bubble whose text IS what the answer says for
+    # it (`_covered_by_a_bubble`) — the attribution a multi-address join adds is the
+    # byline that bubble already renders, so it changes nothing.
+    #
+    # What no bubble carries goes out as the ROOM's own note frame: a line composed for
+    # an exchange with no reply text of its own (a failed address, an empty reply) and
+    # the room's bound notes (a clipped catch-up, the round cap). Sending it rather than
+    # dropping the claim for the whole turn is the difference between fixing the report
+    # and not: on DEFAULT catch-up caps (40 messages / 8000 chars) an ordinary long chat
+    # truncates, appends a note, and would otherwise keep doubling — which is exactly
+    # the session Josh hit it in.
+    #
+    # The note is emitted only when something was claimed. With nothing claimed the
+    # console lands the answer whole, and a note frame would then be the duplicate.
+    claimed = [o for o in spoken if _covered_by_a_bubble(o)]
+    for o in claimed:
+        o["in_answer"] = True
+    if claimed:
+        note = _room_note(
+            [o for o in spoken if not _covered_by_a_bubble(o)], spoken, targets, _line, outcomes, plan
+        )
+        # A TURN-level field, carried on the first exchange rather than as an extra list
+        # entry: this function returns `(answer, outcomes)` and the note belongs to
+        # neither, while a synthetic outcome would be counted as a participant by every
+        # consumer that sums `ok` over the list. The driver reads it once, after the
+        # per-exchange loop.
+        if note:
+            claimed[0]["room_note"] = note
+    return answer, outcomes
+
+
+def _covered_by_a_bubble(outcome: dict) -> bool:
+    """Will the console render this exchange as a bubble whose text is what the turn's
+    answer says for it?
+
+    Both halves are required. No reply text ⇒ no bubble at all, and the answer's line for
+    it ("@x replied with nothing.") lives only in the answer. Not ``ok`` ⇒ the answer's
+    line is the failure ("Delegate @x failed: …"), not the reply, so even a reply that
+    somehow arrived alongside an error would not be what the answer restates.
+    """
+    return bool(outcome.get("ok")) and bool(str(outcome.get("reply") or "").strip())
+
+
+def _room_note(uncovered: list[dict], spoken: list[dict], targets: list[str], line, outcomes: list[dict], plan) -> str:
+    """The part of the answer no participant's bubble carries, or ``""``.
+
+    Composed out of the same ``_line`` / ``_with_room_notes`` pieces the answer is, and
+    attributed exactly as the answer attributes them, so this text is a subset of the
+    answer rather than a second rendering of it in different words.
+    """
+    from graph.room_rounds import cap_note, catchup_note
+
+    attribute = not (len(targets) == 1 and len(spoken) == 1)
+    lines = [f"**@{o.get('author')}** — {line(o)}" if attribute else line(o) for o in uncovered]
+    lines += [note for note in (catchup_note(outcomes), cap_note(plan)) if note]
+    return "\n\n".join(lines)
 
 
 def _with_room_notes(body: str, outcomes: list[dict], plan) -> str:
@@ -2474,6 +2540,15 @@ async def _chat_langgraph_stream_impl(
                     # per-exchange messages has the words with the byline; consumers that
                     # don't know this kind ignore it (the executor's if/elif has no else)
                     # and still get the whole answer on the `done` frame.
+                    #
+                    # `in_answer` says that the `done` text restates THIS reply, so a
+                    # console rendering the bubble must not render the answer too
+                    # (#3449). Set only where the composer claimed it — see the tail of
+                    # `_at_delegate_exchange` for what disqualifies a turn — and omitted
+                    # rather than sent false, so the key's presence is the claim and
+                    # every other `room_reply` producer (a `delegate_to` exchange, a
+                    # drained background reply) stays untouched: those replies are NOT
+                    # in the lead's answer, which is its own synthesis.
                     yield (
                         "room_reply",
                         {
@@ -2483,8 +2558,22 @@ async def _chat_langgraph_stream_impl(
                             "ok": bool(_exchange.get("ok")),
                             "catchup": int(_exchange.get("catchup") or 0),
                             "truncated": bool(_exchange.get("truncated")),
+                            **({"in_answer": True} if _exchange.get("in_answer") else {}),
                         },
                     )
+                # The part of the answer NO participant's bubble carries (#3449) — a
+                # failed address's line, an empty reply's stand-in, the room's own bound
+                # notes. Its own frame, so a console that renders the bubbles can render
+                # the whole answer exactly once instead of either doubling the replies or
+                # dropping this. Last, because it is a footnote on what was just said, and
+                # only when the composer claimed something (see `_at_delegate_exchange`:
+                # with nothing claimed the console lands the answer whole, and this frame
+                # would be the duplicate).
+                _room_note_text = next(
+                    (str(o.get("room_note") or "") for o in (_at_outcome or []) if o.get("room_note")), ""
+                )
+                if _room_note_text:
+                    yield ("room_reply", {"note": True, "from": "room", "text": _room_note_text, "ok": True})
                 yield ("done", _at_reply)
                 return
 

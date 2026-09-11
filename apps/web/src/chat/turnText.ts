@@ -21,7 +21,7 @@
 // dedupes by ID and so cannot see a split that mints two on purpose.)
 
 import type { ChatMessage, ChatPart } from "../lib/types";
-import { renderedPrefixEnd, replaceText, textRuns } from "./parts";
+import { renderedPrefixEnd, rendersText, replaceText, textRuns } from "./parts";
 import { isEmptyPlaceholder } from "./roomBubble";
 
 /** Nothing of this turn's own to show: no answer text, no ordered parts, no tool
@@ -96,6 +96,40 @@ export function turnBubbleIndexes(messages: ChatMessage[], assistantId: string):
   return indexes;
 }
 
+/** Was this turn's answer spoken by ADDRESSED PARTICIPANTS rather than by the lead?
+ *
+ *  An `@<name>`-addressed turn skips the lead entirely: the server publishes each
+ *  participant's reply as its own room-v1 frame AND composes the turn's canonical
+ *  answer text out of those same replies, purely as the whole for consumers that
+ *  cannot render per-exchange frames (A2A, `/v1`). The console renders the frames, so
+ *  for it that canonical text is a second rendering of words already on screen.
+ *
+ *  The fact is STAMPED on the turn's bubbles (`markTurnAnsweredByParticipants`), not
+ *  merely remembered for the length of the live stream, because five different
+ *  producers land a turn's canonical text and four of them run long after the stream
+ *  is gone: the terminal replace, the 45s stranded-turn watchdog, the post-stream
+ *  `!sawAuthoritativeText` reconcile, reattach (whose handler set has no
+ *  `onRoomReply` at all), and ADR 0104 boot hydration. They share exactly one
+ *  chokepoint — this module — so the transcript is where the fact belongs.
+ *
+ *  Deliberately NOT inferred by comparing text. A multi-address answer is an
+ *  ATTRIBUTED restatement (`**@proto** — line 40`), so `rendersText` can never
+ *  conclude "already shown" from the bubbles, and any comparison that tried would be
+ *  the console reverse-engineering the server's join format. #3449. */
+export function turnAnsweredByParticipants(messages: ChatMessage[], assistantId: string): boolean {
+  return turnBubbleIndexes(messages, assistantId).some((index) => messages[index].answeredByParticipants);
+}
+
+/** Stamp every bubble of this turn as answered by participants, so whichever one
+ *  survives the turn's settle carries the fact into `localStorage` and out again. */
+export function markTurnAnsweredByParticipants(messages: ChatMessage[], assistantId: string): ChatMessage[] {
+  const indexes = new Set(turnBubbleIndexes(messages, assistantId));
+  if (!indexes.size) return messages;
+  return messages.map((message, index) =>
+    indexes.has(index) ? { ...message, answeredByParticipants: true } : message,
+  );
+}
+
 /** Land a turn's canonical full-turn text across its bubbles, exactly once.
  *
  *  Un-split turn: identical to the per-message `applyText(m, text, false)` it
@@ -107,7 +141,11 @@ export function turnBubbleIndexes(messages: ChatMessage[], assistantId: string):
  *  describe a prefix of the canonical answer their placement can't be trusted, so
  *  fall back the same way `replaceText` does within a single bubble: strip their
  *  text (their tool cards and reasoning stay) and land the whole answer on the
- *  trailing bubble. Interleaving degrades; "exactly once" holds. */
+ *  trailing bubble. Interleaving degrades; "exactly once" holds.
+ *
+ *  Turn answered by participants: nothing lands. The canonical text restates bubbles
+ *  the transcript already shows, and this is the one place every producer of that text
+ *  passes through — see `turnAnsweredByParticipants`. */
 export function applyCanonicalTurnText(
   messages: ChatMessage[],
   assistantId: string,
@@ -115,6 +153,7 @@ export function applyCanonicalTurnText(
 ): ChatMessage[] {
   const indexes = turnBubbleIndexes(messages, assistantId);
   if (!indexes.length) return messages;
+  if (indexes.some((index) => messages[index].answeredByParticipants)) return messages;
   const tail = indexes[indexes.length - 1];
   if (indexes.length === 1) {
     return messages.map((message, index) => (index === tail ? landText(message, canonical) : message));
@@ -260,4 +299,57 @@ export function repairDuplicatedTurnText(messages: ChatMessage[]): ChatMessage[]
   return messages
     .map((message, index) => repaired.get(index) ?? message)
     .filter((_, index) => !dropped.has(index));
+}
+
+/** One-time repair of an ADDRESSED turn persisted BEFORE #3449 — the shape v0.164.0
+ *  wrote, which nothing else heals.
+ *
+ *  On that release the console drew the participant's reply under their byline AND
+ *  landed the turn's canonical answer — the same words restated — in the lead's bubble
+ *  directly below it. Both survive in `localStorage`: `dedupeMessages` only collapses
+ *  colliding ids, `repairDuplicatedTurnText` groups by task id and deliberately skips
+ *  `author`-bearing bubbles, and boot hydration leaves the pair alone because the
+ *  second copy IS the durable answer. So the duplicate is permanent until it is removed
+ *  here.
+ *
+ *  The condition is narrow on purpose, and it is its own proof: an un-authored assistant
+ *  bubble whose rendered text is entirely rendered by the `author`-bearing bubble
+ *  IMMEDIATELY above it. That prose is on screen twice, adjacent, with the second copy
+ *  unattributed — the reported symptom, verbatim. The second copy goes, its tool cards
+ *  and reasoning stay, and the turn is stamped so no later producer re-lands it.
+ *
+ *  What it can also catch: a `delegate_to` turn whose lead answered by quoting the
+ *  delegate's reply word for word and nothing else. The outcome there is the same prose
+ *  once, under the byline of whoever wrote it — which is what the operator wanted from
+ *  that turn anyway. Anything less exact is left alone.
+ *
+ *  Self-limiting: post-fix transcripts carry `answeredByParticipants`, which short-
+ *  circuits it, so this goes quiet as history turns over. Applied at load, next to
+ *  `repairDuplicatedTurnText`; message statuses untouched. */
+export function repairAddressedTurnEcho(messages: ChatMessage[]): ChatMessage[] {
+  const dropped = new Set<number>();
+  let out = messages;
+  for (let index = 1; index < out.length; index += 1) {
+    const echo = out[index];
+    const authored = out[index - 1];
+    if (echo.role !== "assistant" || echo.author || echo.answeredByParticipants) continue;
+    if (authored.role !== "assistant" || !authored.author) continue;
+    const shown = shownRuns(echo);
+    if (!shown.some((run) => run.trim())) continue;
+    if (!rendersText(shownRuns(authored), shown.join(""))) continue;
+    const stripped: ChatMessage = {
+      ...echo,
+      content: "",
+      parts: withoutText(echo.parts),
+      answeredByParticipants: true,
+    };
+    out = out.map((message, at) => (at === index ? stripped : message));
+    if (carriesNothing(stripped)) dropped.add(index);
+    // Stamp the whole turn, not just this bubble: the frozen half holding the address's
+    // work card is what hydration resolves the turn to, and it is the bubble that
+    // survives if this one is dropped.
+    if (echo.id) out = markTurnAnsweredByParticipants(out, echo.id);
+  }
+  if (out === messages && !dropped.size) return messages;
+  return out.filter((_, index) => !dropped.has(index));
 }

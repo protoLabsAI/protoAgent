@@ -719,6 +719,23 @@ const DEFAULT_SEARCH_OUTPUT = [
   "   Another snippet.",
 ].join("\n");
 
+// The addressed delegate's reply, verbatim off the live wire that surfaced #3449
+// (jobCoach's `a2a-tasks.db`, task 15561c12) — the answer whose two copies Josh saw.
+const MENTION_ANSWER =
+  "The current bundled Artifact plugin version is **`0.17.0`**.\n\n" +
+  "It is no longer distributed as a standalone plugin release; it ships in-tree with " +
+  "protoAgent at `plugins/artifact/`.";
+
+// The ROOM's own copy about its own bounds (#3449). The catch-up window clipped on the
+// DEFAULT caps (40 messages / 8000 chars), which is what an ordinary long chat does — the
+// case that kept doubling while the claim was per-TURN instead of per-EXCHANGE.
+const MENTION_ROOM_NOTE =
+  "_Older messages were left out of the catch-up for @protoEngineer — the room since they " +
+  "last spoke is longer than the window. Raise `room.catchup_max_messages` to widen it._";
+// A failed address's line: composed by the server for the answer, and in NO bubble — the
+// addressed member said nothing, so there is nothing to attribute to them.
+const MENTION_FAILURE_LINE = "Delegate @protoEngineer failed: connection refused";
+
 // Map a prompt keyword to a tool scenario so specs drive each renderer path.
 // Each scenario's input is an object (rendered as key/value fields) and output
 // matches the real starter-tool string format the per-tool renderer expects.
@@ -816,6 +833,71 @@ function scenarioFor(prompt) {
           },
         ],
       },
+    };
+  if (t.includes("@LONGROOM"))
+    // The SAME addressed turn in a long chat (#3449 B). The catch-up window truncated on
+    // DEFAULT caps, so the answer carries the room's note as well as the reply — and the
+    // note is in NO bubble. The server claims the reply per-exchange anyway and sends the
+    // note as its own `note: true` frame, so the console can render every word of the
+    // answer exactly once. Claiming per TURN dropped the claim here and doubled the reply.
+    return {
+      events: [
+        { id: "mention:protoEngineer", name: "@protoEngineer", phase: "start", input: "what ver?" },
+        { id: "mention:protoEngineer", name: "@protoEngineer", phase: "end", output: "1 replied" },
+      ],
+      room: [
+        { author: "protoEngineer", from: "operator", text: MENTION_ANSWER, ok: true, catchup: 12, truncated: true, in_answer: true },
+        { note: true, from: "room", text: MENTION_ROOM_NOTE, ok: true },
+      ],
+      answer: `${MENTION_ANSWER}\n\n${MENTION_ROOM_NOTE}`,
+    };
+  if (t.includes("@DEADROOM"))
+    // An addressed turn where NOTHING is claimed (#3449): the address failed, so the
+    // participant has no words and gets a byline-only frame. The answer's failure line
+    // exists only in the answer — so the console must land it, exactly as before the fix,
+    // and the server sends no note frame (it would be the duplicate).
+    return {
+      events: [
+        { id: "mention:protoEngineer", name: "@protoEngineer", phase: "start", input: "what ver?" },
+        { id: "mention:protoEngineer", name: "@protoEngineer", phase: "end", output: "1 failed" },
+      ],
+      room: [{ author: "protoEngineer", from: "operator", text: "", ok: false, catchup: 0, truncated: false }],
+      answer: MENTION_FAILURE_LINE,
+    };
+  if (t.includes("@PROTOENGINEER"))
+    // An `@<name>`-ADDRESSED turn (#3042/#3051/#3151), the live shape behind #3449:
+    // jobCoach → protoEngineer over A2A. The address short-circuits the lead — it never
+    // runs the model, so there is no streamed text of its own — and the server
+    //   1. opens ONE work card for the address, so a slow delegate still shows progress,
+    //   2. publishes the participant's reply as a room-v1 authorship frame carrying the
+    //      whole answer AND `in_answer`, its statement that the answer text below
+    //      restates this reply,
+    //   3. finalizes the turn with that same text as the canonical answer artifact —
+    //      the whole for A2A / `/v1` consumers, which get no room frames at all.
+    // Two renderings of one answer on one wire. A console that draws both shows it
+    // twice, verbatim, one copy under the other.
+    return {
+      events: [
+        {
+          id: "mention:protoEngineer",
+          name: "@protoEngineer",
+          phase: "start",
+          input: "what ver is the latest artifact plugin?",
+        },
+        { id: "mention:protoEngineer", name: "@protoEngineer", phase: "end", output: "1 replied" },
+      ],
+      room: [
+        {
+          author: "protoEngineer",
+          from: "operator",
+          text: MENTION_ANSWER,
+          ok: true,
+          catchup: 0,
+          truncated: false,
+          in_answer: true,
+        },
+      ],
+      answer: MENTION_ANSWER,
     };
   if (t.includes("CALC"))
     return { name: "calculator", input: { expression: "19 * 23" }, output: "19 * 23 = 437", answer: "19 × 23 = 437." };
