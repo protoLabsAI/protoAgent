@@ -450,7 +450,9 @@ async def test_background_job_is_titled_by_the_agents_summary(monkeypatch):
     titled, untitled = fake.calls
     assert titled["description"] == "delegate → sonnet: Land PR #13, fix the resume dates"
     assert titled["detail"] == query  # the full prompt is still the job's record
-    assert untitled["description"] == f"delegate → sonnet: {query[:80]}"  # the fallback, unchanged
+    # The fallback is the query's FIRST SENTENCE — the same line the chat row falls back to
+    # (infra.text.first_sentence), so a job's title and its row can't read differently.
+    assert untitled["description"] == "delegate → sonnet: Repo: protoLabsAI/x at /Users/kj/dev/x (Vite + React 19)."
 
 
 async def test_delegate_to_background_unknown_fails_fast(monkeypatch):
