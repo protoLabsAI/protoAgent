@@ -38,6 +38,28 @@ from graph.plugins import installer, loader, setup_gaps
 from graph.plugins.loader import discover_plugins, load_plugins
 from graph.plugins.manifest import load_manifest
 
+
+def _rmtree(path: Path) -> None:
+    """Remove a directory that may hold a git CHECKOUT.
+
+    Git marks a clone's pack files read-only, and Windows refuses to delete a read-only
+    file — a bare ``shutil.rmtree`` over one dies with ``WinError 5`` (it reddened this
+    file's Windows shard). Same handler ``graph/workspaces/manager.py`` uses for the same
+    reason: clear the bit, retry the delete.
+    """
+    import os
+    import shutil as _shutil
+    import stat
+
+    def _clear_readonly(func, target, _exc):
+        os.chmod(target, stat.S_IWRITE)
+        func(target)
+
+    if sys.version_info >= (3, 12):
+        _shutil.rmtree(path, onexc=_clear_readonly)
+    else:  # pragma: no cover - the repo pins 3.12+
+        _shutil.rmtree(path, onerror=lambda f, t, e: _clear_readonly(f, t, e))
+
 REMOTE = "https://git.example.test"
 UPSTREAM = f"{REMOTE}/protoLabsAI/cowork-plugin"  # the retired standalone repo
 FORK = f"{REMOTE}/someone/cowork-plugin"  # an operator's deliberate override
@@ -568,9 +590,7 @@ def test_sync_does_not_refetch_a_superseded_copy(host):
     _remote(host, "protoLabsAI", "cowork-plugin", "cowork", "0.3.1", tags=["v0.3.1"])
     _old_host_install(host)
     _ship_bundled(host)
-    import shutil
-
-    shutil.rmtree(host.live / "cowork")  # fresh checkout / restored data dir
+    _rmtree(host.live / "cowork")  # fresh checkout / restored data dir
     assert installer.sync() == [{"id": "cowork", "status": "superseded"}]
     assert not (host.live / "cowork").exists()
 
@@ -633,7 +653,6 @@ def test_uninstall_of_a_bundled_id_is_still_refused_when_nothing_is_superseded(h
 # the first cut changed is pinned by a test that goes red when that change is reverted.
 
 import importlib.util  # noqa: E402 — grouped with the tests that need it
-import shutil  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 MODULE = "protoagent_plugin_cowork"
@@ -783,7 +802,7 @@ def test_superseded_lock_row_without_files_reads_present_not_missing(host, monke
     _remote(host, "protoLabsAI", "cowork-plugin", "cowork", "0.3.1", tags=["v0.3.1"])
     _old_host_install(host)
     _ship_bundled(host)
-    shutil.rmtree(host.live / "cowork")  # the operator deleted the folder by hand
+    _rmtree(host.live / "cowork")  # the operator deleted the folder by hand
     [row] = [r for r in installer.list_installed() if r["id"] == "cowork"]
     assert row["superseded"] is True and row["present"] is True and row["copy_on_disk"] is False
     _wire_routes(monkeypatch, enabled=["cowork"])
@@ -1009,7 +1028,7 @@ def test_archetype_preview_describes_the_bundled_copy_without_fetching(host):
 
     bundle = _bundle_repo(host, enabled=["cowork", "google"])
     _ship_bundled(host)
-    shutil.rmtree(host.remotes / "protoLabsAI" / "cowork-plugin")  # the retired repo is gone
+    _rmtree(host.remotes / "protoLabsAI" / "cowork-plugin")  # the retired repo is gone
     ops_plugins._peek_cache.clear()
     try:
         preview = ops_plugins._peek_bundle_sync(bundle)
@@ -1061,7 +1080,7 @@ def test_cli_reports_every_superseded_outcome(host, monkeypatch, capsys):
     assert cli.run_plugin_cli(["install", bundle]) == 0
     assert "moved into protoAgent" in capsys.readouterr().out
 
-    shutil.rmtree(host.bundled / "cowork")  # an OLD host installs the member for real…
+    _rmtree(host.bundled / "cowork")  # an OLD host installs the member for real…
     installer.install(UPSTREAM, "v0.3.1")
     _ship_bundled(host)  # …then upgrades
     assert cli.run_plugin_cli(["uninstall", "cowork"]) == 0
