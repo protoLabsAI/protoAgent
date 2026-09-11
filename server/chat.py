@@ -15,6 +15,7 @@ import cycle. ``server/__init__.py`` re-exports every public name so
 
 import asyncio
 import contextlib
+import functools
 import json
 import logging
 import re
@@ -783,6 +784,57 @@ def _vision_human_message(
     return HumanMessage(content=f"{message}\n\n{note}".strip() if note else message)
 
 
+# The node langchain's `create_agent` runs tool calls in — see `_speaks_for_the_lead`.
+_TOOL_NODE = "tools"
+
+
+@functools.cache
+def _lc_internal_call_marker() -> tuple[str, str] | None:
+    """langchain's (key, token) marking a middleware-INTERNAL model call, or None on a
+    langchain that predates it. The token is process-local, so user metadata cannot forge
+    it; ``lc_source`` (below) is the older, purpose-naming marker."""
+    try:
+        from langchain.agents.middleware.internal_call_transformer import (
+            INTERNAL_CALL_METADATA_KEY,
+            internal_call_metadata,
+        )
+    except ImportError:
+        return None
+    return INTERNAL_CALL_METADATA_KEY, internal_call_metadata()[INTERNAL_CALL_METADATA_KEY]
+
+
+def _speaks_for_the_lead(metadata: dict) -> bool:
+    """Whether a chat-model event with this metadata is the LEAD answering, so its tokens
+    belong in the turn's answer text. (A subagent's are ruled out before this: they carry
+    ``parent_task_id``.)
+
+    Not a call made anywhere under the lead's TOOL node. The checkpoint namespace's first
+    segment names the node of the lead graph a run belongs to, however deep it nests: the
+    tool body itself, a graph a tool runs (``sdk.run_subagent`` — a workflow step — is
+    ``tools:<id>|model:<id>``, its own node reads "model"), or work a tool detached into
+    a copy of its context, which keeps reporting into this stream while the lead answers.
+
+    And not a middleware's own internal call — the compaction summary, tool selection —
+    which langchain marks (``internal_call_metadata()``; ``lc_source`` names its purpose).
+
+    Deliberately an exclusion, not "only the model node": a graph whose answering node is
+    named differently still streams its answer, where an inclusion would silence it."""
+    ns = str(metadata.get("langgraph_checkpoint_ns") or metadata.get("checkpoint_ns") or "")
+    if ns.split("|", 1)[0].split(":", 1)[0] == _TOOL_NODE:
+        return False
+    marker = _lc_internal_call_marker()
+    if marker is not None and metadata.get(marker[0]) == marker[1]:
+        return False
+    return not metadata.get("lc_source")
+
+
+def _paragraph_break(before: str, after: str) -> str:
+    """The newlines to put between ``before`` and ``after`` so ``after`` opens a new
+    paragraph: one blank line, counting any newlines either side already carries."""
+    have = (len(before) - len(before.rstrip("\n"))) + (len(after) - len(after.lstrip("\n")))
+    return "\n" * max(0, 2 - have)
+
+
 async def _run_turn_stream(
     message: str,
     session_id: str,
@@ -846,6 +898,16 @@ async def _run_turn_stream(
     from observability import pricing
 
     accumulated_raw = ""  # the answer text so far (the model's content; no protocol tags)
+    # The model call the answer's latest text came from. Each lead model call is its own
+    # message: "I'll check the time first." → tool → "It is noon." must not be glued into
+    # "first.It is". So text arriving from a DIFFERENT call than the last text opens a
+    # paragraph — keyed on the text's own run, never on a model merely STARTING, because
+    # work a tool detached keeps reporting into this stream mid-answer (see below). The
+    # break rides the streamed delta itself, not just this accumulator, so the live
+    # stream, the executor's accumulation and the canonical `done` text stay ONE string.
+    # (The console keeps a turn's text-to-tool interleaving only while they agree; #3210
+    # separated only the executor's copy, which the `done` text overrode on this path.)
+    _answer_run: object = None
     _llm_started: dict[str, float] = {}  # run_id → monotonic start (per-call latency)
     _tool_started: dict[str, float] = {}  # run_id → monotonic start (per-call latency, #2697)
     _delegate_targets: dict[str, str] = {}  # run_id → delegate name, for delegate_to → room bubble (#3042)
@@ -1001,6 +1063,14 @@ async def _run_turn_stream(
             # (subagent tokens still bill). Only the lead's own tokens reach the answer.
             if parent_tool_id:
                 continue
+            # Nor does any other model call that is not the lead answering: one made under
+            # a tool — its body, a graph it runs (a workflow step), work it detached (a
+            # background ingest's describe/enrich, a plugin's spawn_work) — or a
+            # middleware's own call (the compaction summary). Those tokens used to land in
+            # the middle of the answer ("I started the IMAGE-DESCRIPTIONingest…") and in
+            # the stored text. Billing below is untouched.
+            if not _speaks_for_the_lead(event.get("metadata") or {}):
+                continue
             # Native reasoning: the model's REAL thinking, streamed on its own channel.
             # `_ReasoningChatOpenAI` lifts the gateway's `reasoning_content` into
             # additional_kwargs; reasoning chunks carry NO `content`, so this is checked
@@ -1038,6 +1108,10 @@ async def _run_turn_stream(
                             len(text.split()),
                             text[:40],
                         )
+                    run = event.get("run_id")
+                    if run != _answer_run and accumulated_raw.strip():
+                        text = _paragraph_break(accumulated_raw, text) + text
+                    _answer_run = run
                     accumulated_raw += text
                     yield ("text", text)
         elif kind == "on_chat_model_end":

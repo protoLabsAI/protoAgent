@@ -21,7 +21,7 @@
 // dedupes by ID and so cannot see a split that mints two on purpose.)
 
 import type { ChatMessage, ChatPart } from "../lib/types";
-import { replaceText } from "./parts";
+import { renderedPrefixEnd, replaceText, textRuns } from "./parts";
 import { isEmptyPlaceholder } from "./roomBubble";
 
 /** Nothing of this turn's own to show: no answer text, no ordered parts, no tool
@@ -35,18 +35,18 @@ function withoutText(parts: ChatPart[] | undefined): ChatPart[] {
   return (parts ?? []).filter((part) => part.kind !== "text");
 }
 
-/** The text this bubble currently RENDERS: its ordered parts when it has them, the
- *  flat `content` otherwise — the same choice ChatMessageView makes. The two can
- *  disagree: a settled tool/component reply whose prose only ever reached `content`
- *  shows its cards and no answer (#3340). It is the RENDERED text that decides
- *  whether canonical text still has to be landed, and what a later bubble of the
- *  same turn must not repeat. */
+/** The text runs this bubble currently RENDERS: its ordered parts' runs when it has
+ *  parts, the flat `content` otherwise — the same choice ChatMessageView makes. The two
+ *  can disagree: a settled tool/component reply whose prose only ever reached `content`
+ *  shows its cards and no answer (#3340). It is the RENDERED text that decides whether
+ *  canonical text still has to be landed, and what a later bubble of the same turn
+ *  must not repeat — judged by `renderedPrefixEnd`, the one notion of "already shown". */
+export function shownRuns(message: ChatMessage): string[] {
+  return message.parts?.length ? textRuns(message.parts) : [message.content];
+}
+
 function shownText(message: ChatMessage): string {
-  if (!message.parts?.length) return message.content;
-  return message.parts
-    .filter((part) => part.kind === "text")
-    .map((part) => part.text)
-    .join("");
+  return shownRuns(message).join("");
 }
 
 /** Land canonical text on ONE bubble.
@@ -59,7 +59,7 @@ function landText(message: ChatMessage, text: string): ChatMessage {
   return {
     ...message,
     content: text,
-    parts: replaceText(message.parts, text, shownText(message)),
+    parts: replaceText(message.parts, text),
     status: message.status ?? "streaming",
   };
 }
@@ -96,32 +96,6 @@ export function turnBubbleIndexes(messages: ChatMessage[], assistantId: string):
   return indexes;
 }
 
-/** Where `canonical` continues past the text `prefix` already renders, or -1 when
- *  `prefix` is not a prefix of it.
- *
- *  Compared whitespace-INSENSITIVELY on purpose. The two strings are accumulated by
- *  different sides: the server injects a blank line between pre- and post-tool
- *  narration (#3210) that the client's own delta accumulation never had, and
- *  `appendText` drops a run's leading whitespace. A byte-exact test would call those
- *  healthy turns "diverged" and rebuild them, throwing away the interleaving for
- *  nothing. Non-whitespace characters must still match exactly, in order. */
-export function canonicalRemainderIndex(canonical: string, prefix: string): number {
-  const space = /\s/;
-  let at = 0;
-  let want = 0;
-  while (want < prefix.length) {
-    if (space.test(prefix[want])) {
-      want += 1;
-      continue;
-    }
-    while (at < canonical.length && space.test(canonical[at])) at += 1;
-    if (at >= canonical.length || canonical[at] !== prefix[want]) return -1;
-    at += 1;
-    want += 1;
-  }
-  return at;
-}
-
 /** Land a turn's canonical full-turn text across its bubbles, exactly once.
  *
  *  Un-split turn: identical to the per-message `applyText(m, text, false)` it
@@ -146,8 +120,13 @@ export function applyCanonicalTurnText(
     return messages.map((message, index) => (index === tail ? landText(message, canonical) : message));
   }
   const lead = indexes.slice(0, -1);
-  const shown = lead.map((index) => shownText(messages[index])).join("");
-  const at = canonicalRemainderIndex(canonical, shown);
+  // Each earlier bubble ends at a run boundary (the split trims its text), so its
+  // rendered runs are matched with the same edge-only whitespace allowance as within
+  // one bubble — never whitespace-blind, or a lost frame inside them could not heal.
+  const at = renderedPrefixEnd(
+    canonical,
+    lead.flatMap((index) => shownRuns(messages[index])),
+  );
   if (at >= 0) {
     const remainder = canonical.slice(at).replace(/^\s+/, "");
     return messages.map((message, index) => (index === tail ? landText(message, remainder) : message));
@@ -260,14 +239,11 @@ export function repairDuplicatedTurnText(messages: ChatMessage[]): ChatMessage[]
     if (bubbles.length < 2) continue;
     if (bubbles.some((index) => messages[index].splitOf)) continue; // written by the fixed path
     const tail = bubbles[bubbles.length - 1];
-    const shown = bubbles
-      .slice(0, -1)
-      .map((index) => shownText(messages[index]))
-      .join("");
-    if (!shown.trim()) continue;
+    const shown = bubbles.slice(0, -1).flatMap((index) => shownRuns(messages[index]));
+    if (!shown.some((run) => run.trim())) continue;
     const message = messages[tail];
     const duplicated = shownText(message);
-    const at = canonicalRemainderIndex(duplicated, shown);
+    const at = renderedPrefixEnd(duplicated, shown);
     if (at <= 0) continue;
     const remainder = duplicated.slice(at).replace(/^\s+/, "");
     const next: ChatMessage = {
