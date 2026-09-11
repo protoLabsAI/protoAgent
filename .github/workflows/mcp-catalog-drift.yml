@@ -52,10 +52,16 @@ jobs:
         id: check
         # The issue steps below run after a failure, so this one must not stop the job.
         continue-on-error: true
+        # The exit status is captured explicitly rather than left to the shell's errexit:
+        # the report has to reach the step summary on drift too — which is exactly when
+        # it matters — and the step must still end with the checker's status.
         run: |
-          set -o pipefail
-          python scripts/check_mcp_catalog.py --markdown | tee report.md
+          set +e
+          python scripts/check_mcp_catalog.py --markdown > report.md
+          status=$?
+          cat report.md
           cat report.md >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
 
       - name: Open or update the tracking issue
         if: steps.check.outcome == 'failure' && github.event_name != 'pull_request'
