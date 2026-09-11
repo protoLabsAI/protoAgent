@@ -193,6 +193,8 @@ def run_plugin_cli(argv: list[str]) -> int:
                         "  · moved into protoAgent (listed by a URL a bundled plugin supersedes — not fetched): "
                         f"{', '.join(s['skipped_superseded'])}"
                     )
+                for w in s.get("warnings") or []:
+                    print(f"  ⚠ {w}")
                 deps = sorted({d for p in s["installed"] for d in p.get("requires_pip", [])})
                 if deps:
                     print(
@@ -252,12 +254,22 @@ def run_plugin_cli(argv: list[str]) -> int:
             print(f"✓ uninstalled {args.id} — removed: {', '.join(rep['removed'])}")
             if rep.get("superseded_by_bundled"):
                 # Only the ignored copy went — the bundled one keeps running, and nothing
-                # keyed by the id was touched (so no "still loaded" server warning either).
+                # keyed by the id was touched.
                 print(
                     f"  that was the superseded copy — {args.id} ships with protoAgent (bundled "
                     f"v{rep['superseded_by_bundled']}) and keeps running; its enabled state, config "
                     "and secrets are unchanged" + (" (--purge doesn't apply to them)." if args.purge else ".")
                 )
+                # Out-of-process, this CLI can't see what a running server imported. A server
+                # that hasn't restarted since protoAgent began shipping the plugin may still
+                # be running the copy just deleted.
+                for inst in _live_servers():
+                    where = f"pid {inst['pid']}" + (f", port {inst['port']}" if inst.get("port") else "")
+                    print(
+                        f"  ⚠ a protoAgent server is RUNNING ({where}) — if it hasn't restarted since "
+                        f"protoAgent began shipping {args.id}, it may still be running the removed copy: "
+                        "restart it."
+                    )
                 return 0
             if rep["deps_left"]:
                 print(
@@ -317,6 +329,11 @@ def run_plugin_cli(argv: list[str]) -> int:
                 print(f"  kept (shared with another bundle / re-installed directly): {', '.join(rep['kept'])}")
             if rep["skipped_missing"]:
                 print(f"  already gone (uninstalled individually earlier): {', '.join(rep['skipped_missing'])}")
+            if rep.get("superseded"):
+                print(
+                    "  removed the superseded copy of (ships with protoAgent now; the bundled copy keeps "
+                    f"running, still enabled): {', '.join(rep['superseded'])}"
+                )
             for pid, why in (rep.get("failed") or {}).items():
                 print(f"  ✗ {pid} could not be removed: {why}")
             if rep["removed_members"]:

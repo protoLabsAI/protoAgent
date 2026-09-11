@@ -273,6 +273,14 @@ export type InstalledPlugin = {
   // joined server-side from the lock's bundles[] registry. `name` may be empty on locks
   // written before it was persisted; fall back to `id`.
   bundle?: { id: string; name?: string; url?: string };
+  // The plugin now ships with protoAgent and its bundled copy `supersedes` the repo this
+  // copy was installed from: the installed copy is ignored (the bundled one runs, at
+  // `bundled_version`). `present` is true either way; `copy_on_disk` says whether the
+  // ignored copy's files are still there. Uninstall removes only that copy.
+  superseded?: boolean;
+  bundled_version?: string;
+  copy_on_disk?: boolean;
+  // Describes the copy that RUNS (for a superseded row, the bundled one).
   manifest?: {
     name: string;
     version: string;

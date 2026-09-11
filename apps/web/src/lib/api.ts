@@ -2924,7 +2924,12 @@ export const api = {
     return request<BrowseListing>(`/api/fs/browse${q ? `?${q}` : ""}`);
   },
   uninstallPlugin(id: string) {
-    return request<{ ok: boolean }>(`/api/plugins/${encodeURIComponent(id)}`, { method: "DELETE" });
+    // `superseded_by_bundled` (the bundled version) = only the ignored old copy of a
+    // plugin that now ships with protoAgent was removed; the built-in keeps running.
+    return request<{ ok: boolean; superseded_by_bundled?: string; restart_recommended?: boolean }>(
+      `/api/plugins/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    );
   },
   // Pip-install a plugin's declared requires_pip (the code-exec step `install`
   // deliberately skips) — previously CLI-only.

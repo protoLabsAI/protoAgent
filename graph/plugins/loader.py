@@ -21,7 +21,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from graph.plugins.host import timed_lifecycle_phase
-from graph.plugins.manifest import PluginManifest, _iframe_page_route, load_manifest, supersedes_source
+from graph.plugins.manifest import (
+    PluginManifest,
+    _iframe_page_route,
+    display_source,
+    is_swap_leftover,
+    load_manifest,
+    supersedes_source,
+)
 from graph.plugins.registry import PluginRegistry
 
 log = logging.getLogger("protoagent.plugins")
@@ -84,11 +91,9 @@ def _tracked_sources() -> dict[str, str]:
     try:
         from graph.plugins import installer
 
-        return {
-            str(e["id"]): str(e.get("source_url") or "")
-            for e in installer._read_lock().get("plugins", [])
-            if isinstance(e, dict) and e.get("id")
-        }
+        # The installer's one row-per-id accessor, so the loader and uninstall can never
+        # read different rows of a lock that lists an id twice.
+        return {pid: str(e.get("source_url") or "") for pid, e in installer._lock_rows_by_id().items()}
     except Exception:  # noqa: BLE001
         return {}
 
@@ -124,6 +129,9 @@ def discover_plugins(
        at a newer version (0.14.0) would otherwise stay stuck on the old copy forever. A
        same-or-newer untracked copy (a dev override) still wins.
 
+    A ``<id>.bak`` folder is the installer's transient swap copy (#3075), never a plugin,
+    and is skipped — an interrupted install/uninstall must not leave a copy that loads.
+
     ``tracked_sources`` (id → recorded ``source_url``) defaults to ``plugins.lock``;
     ``tracked_ids`` alone marks ids as tracked with no known source (never superseded)."""
     if tracked_sources is None:
@@ -135,7 +143,7 @@ def discover_plugins(
         if not (root and root.exists() and root.is_dir()):
             continue
         for child in sorted(root.iterdir()):
-            if not child.is_dir():
+            if not child.is_dir() or is_swap_leftover(child):
                 continue
             manifest = load_manifest(child)
             if manifest is None:
@@ -167,9 +175,9 @@ def _superseded_message(plugin_id: str, note: dict) -> str:
     action that clears it. Kept under the setup-gap cap (300 chars) for a normal URL."""
     return (
         f"now ships with protoAgent (v{note.get('bundled_version')}); the copy installed from "
-        f"{note.get('source_url')} (v{note.get('installed_version')}) is ignored. Uninstall it in "
-        f"Settings ▸ Plugins or with `protoagent plugin uninstall {plugin_id}` — settings and "
-        "enabled state are kept."
+        f"{display_source(note.get('source_url'))} (v{note.get('installed_version')}) is ignored. "
+        f"Uninstall it in Settings ▸ Plugins or with `protoagent plugin uninstall {plugin_id}` — "
+        "settings and enabled state are kept."
     )
 
 
@@ -690,8 +698,21 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
                 note["bundled_version"],
                 note["installed_path"],
                 note["installed_version"],
-                note["source_url"],
+                display_source(note["source_url"]),
             )
+            if _version_key(note["installed_version"]) >= _version_key(note["bundled_version"]):
+                # The move's contract: the bundled copy is NEWER than every standalone
+                # release. If it isn't, and this copy ever loses its lock row (a hand
+                # edit, a reset lock), the #1574 rule lets it — untracked and not older —
+                # shadow the bundled copy again. Say so while it's still recorded.
+                log.warning(
+                    "[plugins] %s: the superseded installed copy (v%s) is not older than the bundled one "
+                    "(v%s) — a bundled plugin must be versioned above every release of the repo it "
+                    "supersedes; remove the installed copy",
+                    manifest.id,
+                    note["installed_version"],
+                    note["bundled_version"],
+                )
         from graph.plugins import setup_gaps as _setup_gaps
 
         _setup_gaps.report(

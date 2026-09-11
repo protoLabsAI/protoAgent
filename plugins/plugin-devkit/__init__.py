@@ -1151,6 +1151,9 @@ async def uninstall_plugin(plugin_id: str, purge: bool = False) -> str:
         except installer.InstallError as exc:
             return f"✗ uninstall failed: {exc}"
         kept = f"; kept (shared): {', '.join(rep['kept'])}" if rep.get("kept") else ""
+        if rep.get("superseded"):
+            # Moved into core: only the ignored copy went; the bundled one keeps running.
+            kept += f"; superseded copies removed (bundled copy still running): {', '.join(rep['superseded'])}"
         # reloaded=False has THREE honest readings (2741 review): the op skips the
         # reload when nothing was removed (all members shared/kept), the reload
         # itself failed, or there was no live applier at all.
@@ -1169,9 +1172,11 @@ async def uninstall_plugin(plugin_id: str, purge: bool = False) -> str:
         report = await asyncio.to_thread(installer.uninstall, plugin_id, purge=purge)
     except installer.InstallError as exc:
         return f"✗ uninstall failed: {exc}"
-    if isinstance(report, dict) and report.get("superseded_by_bundled"):
+    if isinstance(report, dict) and report.get("superseded_by_bundled") and not report.get("was_loaded"):
         # Only the ignored copy of a plugin that now ships with protoAgent went; the
         # bundled copy is the one running and keeps its enabled state — nothing to unload.
+        # (If THIS process was still running the removed copy — upgraded under it without
+        # a restart — fall through: it lost its files and must be unloaded like any other.)
         return (
             f"✓ removed the superseded copy of {plugin_id} — the bundled "
             f"v{report['superseded_by_bundled']} keeps running (enabled state and config unchanged)"

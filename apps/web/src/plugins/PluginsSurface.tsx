@@ -27,6 +27,7 @@ import {
   needsAttention,
   sortInstalled,
   statusCounts,
+  uninstallConfirmText,
   type InstalledRow,
   type InstalledSort,
   type InstalledSortKey,
@@ -657,9 +658,7 @@ function LocalTab() {
         onConfirm={() => { if (uninstallPending) remove.mutate({ id: uninstallPending.id, name: uninstallPending.name }); setUninstallPending(null); }}
         onClose={() => setUninstallPending(null)}
       >
-        {uninstallPending
-          ? `"${uninstallPending.name}" — this deletes its code from disk and removes it from plugins.lock. To keep it installed, Disable it instead.`
-          : undefined}
+        {uninstallPending ? uninstallConfirmText(uninstallPending.name, installedById.get(uninstallPending.id)) : undefined}
       </ConfirmDialog>
       <ConfirmDialog
         open={restartPending}

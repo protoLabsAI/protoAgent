@@ -100,3 +100,36 @@ export function statusCounts(rows: InstalledRow[]): Record<InstalledStatus, numb
     Attention: rows.filter(needsAttention).length,
   };
 }
+
+/** The Uninstall confirm text for one inventory row. A plugin that now ships with
+ *  protoAgent (`superseded`: its bundled copy replaced the repo this copy came from)
+ *  runs from the bundled copy — Uninstall only removes the ignored old copy and the
+ *  plugin stays on, so "this deletes its code" would be a false warning there. */
+export function uninstallConfirmText(
+  name: string,
+  row?: { superseded?: boolean; bundled_version?: string },
+): string {
+  if (row?.superseded) {
+    const version = row.bundled_version ? ` v${row.bundled_version}` : "";
+    return (
+      `"${name}" now ships with protoAgent${version}. This removes the old installed copy it replaced ` +
+      "and its plugins.lock entry; the built-in keeps running with its settings. To turn it off, Disable it instead."
+    );
+  }
+  return `"${name}" — this deletes its code from disk and removes it from plugins.lock. To keep it installed, Disable it instead.`;
+}
+
+/** The toast after an uninstall. `superseded_by_bundled` in the response means only the
+ *  ignored old copy went and the built-in keeps running — not "removed". */
+export function uninstallToast(
+  name: string,
+  res: { superseded_by_bundled?: string } | undefined,
+): { title: string; message: string } {
+  if (res?.superseded_by_bundled) {
+    return {
+      title: "Old copy removed",
+      message: `${name} keeps running — it ships with protoAgent (v${res.superseded_by_bundled}).`,
+    };
+  }
+  return { title: "Plugin uninstalled", message: `${name} removed.` };
+}

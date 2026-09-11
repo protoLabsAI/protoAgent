@@ -120,16 +120,28 @@ On every host that upgrades, that one field changes the lifecycle above:
   `plugins.enabled` along with its config section and secrets, even with `--purge`.
   They belong to the bundled copy now.
 
-Two rules hold throughout. **A fork still wins**: a copy installed from any URL
-*not* listed is a deliberate override, exactly as before. And **matching is exact
-about the repo but not its spelling**: `https://`, `ssh://` and `git@host:` forms,
-letter case, userinfo, port, and a trailing `.git` or `/` all compare equal, while
-globs, local paths and `file://` are rejected.
+Three rules hold throughout. **A fork still wins**: a copy installed from any URL
+*not* listed is a deliberate override, exactly as before. **Matching is exact about
+the repo but not its spelling**: `https://`, `ssh://` and `git@host:` forms, letter
+case, userinfo, port, a query or fragment, a leading `www.`, and a trailing `.git` or
+`/` all compare equal, while globs, local paths and `file://` are rejected. And
+**everything that acts on "the plugin" follows the copy that runs** — its description
+and declared deps in the Plugins list, `install-deps`, the update check — so the
+ignored copy can't send you after the wrong dependency list.
 
-The move PR: vendor the plugin into `plugins/<id>/` under the same id (with
-`enabled: false` unless it should be on by default), add `supersedes:`, and port its
-test suite into `tests/`. Archive the old repo afterwards rather than deleting it,
-because hosts that predate `supersedes` still clone it through archetype bundles.
+The move PR:
+
+1. Vendor the plugin into `plugins/<id>/` — the folder named exactly for the manifest
+   id (a guard test enforces that) — with `enabled: false` unless it should be on by
+   default.
+2. **Give the bundled copy a version above every release of the repo it supersedes.**
+   That is a real requirement, not bookkeeping: if an installed copy ever loses its
+   `plugins.lock` row (a hand-edited or reset lock), it becomes an untracked copy, and
+   an untracked copy that isn't *older* than the bundled one wins (#1574). The loader
+   warns while the copy is still recorded, so this shows up before it bites.
+3. Add `supersedes:` with the retired repo's URL, and port its test suite into `tests/`.
+4. Archive the old repo afterwards rather than deleting it: hosts that predate
+   `supersedes` still clone it through archetype bundles.
 
 ## Keep a bundle fresh (the pin lifecycle)
 

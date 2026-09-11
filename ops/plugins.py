@@ -339,7 +339,10 @@ async def update_bundle(
             continue
         # A member dropped because it moved into core (a bundled plugin supersedes its
         # URL) only lost its ignored copy — the bundled one is running; leave its modules.
-        if not (isinstance(report, dict) and report.get("superseded_by_bundled")):
+        # Unless this process was still running the removed copy (upgraded under a live
+        # server): then it lost its files and is unloaded like any retired member.
+        report = report if isinstance(report, dict) else {}
+        if not report.get("superseded_by_bundled") or report.get("was_loaded"):
             purge_plugin_modules(pid)
     if dropped and apply_settings is not None:
         # The member uninstalls scrubbed the YAML's enabled refs — a pure reload
@@ -374,11 +377,16 @@ async def uninstall_bundle(
     from graph.plugins.loader import purge_plugin_modules
 
     report = await asyncio.to_thread(installer.uninstall_bundle, bundle_id, purge=purge)
-    for pid in report.get("removed_members") or []:
+    # Unload what actually left: removed members, plus any superseded member this process
+    # was still running from the copy just deleted. A superseded member whose bundled copy
+    # is running is NOT touched — purging it would re-exec a live plugin for nothing (and
+    # split a mounted router from its fresh tools, #942/#3365).
+    unload = [*(report.get("removed_members") or []), *(report.get("superseded_was_loaded") or [])]
+    for pid in unload:
         purge_plugin_modules(pid)
     reloaded = False
     reload_error: str | None = None
-    if apply_settings is not None and report.get("removed_members"):
+    if apply_settings is not None and unload:
         # Off the event loop — full graph rebuild (2732/2735 reviews, D9 rule).
         ok, messages = await asyncio.to_thread(apply_settings, None)
         reloaded = bool(ok)

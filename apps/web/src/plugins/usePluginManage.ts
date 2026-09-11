@@ -3,6 +3,7 @@ import { useToast } from "@protolabsai/ui/overlays";
 
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
+import { uninstallToast } from "./installed";
 import { invalidateChatCommands, queryKeys, runtimeStatusQuery } from "../lib/queries";
 
 // A plugin the actions target — just its id (for the API) + name (for the toast).
@@ -54,9 +55,12 @@ export function usePluginManage() {
   // server-side for in-tree built-ins, so callers only offer it for writable-dir plugins.
   const remove = useMutation({
     mutationFn: (p: PluginRef) => api.uninstallPlugin(p.id),
-    onSuccess: (_res, p) => {
+    onSuccess: (res, p) => {
       refreshAll();
-      toast({ tone: "success", title: "Plugin uninstalled", message: `${p.name} removed.` });
+      // A plugin that now ships with protoAgent: only its ignored old copy went and the
+      // built-in keeps running — say that, not "removed".
+      const { title, message } = uninstallToast(p.name, res);
+      toast({ tone: res?.superseded_by_bundled ? "info" : "success", title, message });
     },
     onError: (err: unknown, p) => toast({ tone: "error", title: "Couldn't uninstall plugin", message: `${p.name}: ${errMsg(err)}` }),
   });

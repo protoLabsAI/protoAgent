@@ -126,6 +126,15 @@ valid plugin, #1644).
 > which a recorded copy always won. A copy recorded from any other URL (a fork) is still
 > a deliberate override, and every other URL still gets the refusal above. See
 > [When a plugin moves into core](/guides/plugin-registry#when-a-plugin-moves-into-core-supersedes).
+>
+> Two consequences of that skip are deliberate. It runs **before the `sources.allow`
+> allowlist** (D3): nothing is fetched from the retired URL, and what ends up enabled is
+> code that shipped inside protoAgent — which the operator already trusts by running it
+> — so installing the old URL under a deny-all allowlist enables the bundled copy rather
+> than failing. And the *deps* half of D4 follows the copy that actually **runs**: with a
+> bundled copy superseding an old install, `install-deps` installs the bundled manifest's
+> `requires_pip`, and the consent/allowlist re-check is skipped because that copy has no
+> fetched origin to re-validate.
 
 ### D9 — Slices
 

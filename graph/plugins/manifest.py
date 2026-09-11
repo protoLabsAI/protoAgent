@@ -16,6 +16,14 @@ log = logging.getLogger("protoagent.plugins")
 MANIFEST_FILENAME = "protoagent.plugin.yaml"
 
 
+def is_swap_leftover(path: Path) -> bool:
+    """A ``<id>.bak`` folder: the transient set-aside copy the installer's install and
+    uninstall swaps make (#3075). Never a plugin — discovery and the installed inventory
+    skip it, so an interrupted swap can't leave a copy that loads (and, being untracked,
+    would shadow a bundled plugin under the #1574 not-older rule)."""
+    return path.name.endswith(".bak")
+
+
 @dataclass
 class PluginManifest:
     """Declared metadata for a plugin. ``id`` + ``name`` are required."""
@@ -1111,36 +1119,85 @@ _SUPERSEDES_SCHEMES = ("https", "http", "ssh", "git", "git+ssh")
 _GLOB_OR_SPACE = re.compile(r"[*?\[\]\s\x00-\x1f\x7f]")
 
 
+def _source_parts(url: object) -> tuple[str, str, str] | None:
+    """``(scheme, host, path)`` of a remote git source, or ``None`` if it isn't one.
+
+    URL form goes through ``urllib.parse`` — the host is the parsed hostname, so userinfo
+    and port drop out and anything after ``?`` or ``#`` can never pose as the host. That
+    matters because a hand-rolled split read ``https://evil.example#@github.com/o/r`` as
+    GitHub. A backslash is refused outright: browsers treat it as a path separator where
+    ``urllib`` doesn't, so the two would disagree about the host. scp form
+    (``[user@]host:path``) has no scheme to parse and is split by hand."""
+    text = str(url or "").strip()
+    if not text or "\\" in text or any(ord(c) < 0x20 or ord(c) == 0x7F for c in text):
+        return None
+    if _SOURCE_URL_RE.match(text):
+        from urllib.parse import urlsplit
+
+        try:
+            parts = urlsplit(text)
+            host = parts.hostname or ""
+        except ValueError:  # e.g. a malformed port
+            return None
+        return parts.scheme.lower(), host, parts.path
+    match = _SOURCE_SCP_RE.match(text)
+    if not match:
+        return None
+    path = re.split(r"[?#]", match.group("path"), maxsplit=1)[0]
+    return "ssh", match.group("host"), path
+
+
 def canonical_source(url: object) -> str:
     """The identity of a git source: ``host/owner/repo``, lowercased.
 
     Two spellings of one repository compare equal — ``https://github.com/o/r``,
     ``https://GitHub.com/o/r.git/``, ``git@github.com:o/r.git``,
-    ``ssh://git@github.com/o/r``, ``https://token@github.com:443/o/r`` — so a
-    ``supersedes`` entry matches however the operator typed the install URL. The
+    ``ssh://git@github.com/o/r``, ``https://token@www.github.com:443/o/r?ref=main#readme``
+    — so a ``supersedes`` entry matches however the operator typed the install URL. The
     whole string is case-folded: the hosts plugins live on (GitHub, GitLab) resolve
     owner/repo case-insensitively, and a miss here would leave the stale copy
     shadowing the bundled one — the exact failure ``supersedes`` exists to end.
 
     Returns ``""`` for anything that isn't a remote source (a local path,
-    ``file://``, an empty value), which never matches anything.
+    ``file://``, an empty value, a URL with no repo path), which never matches anything.
+
+    IDENTITY ONLY. This decides "is this the repo a bundled copy replaced", where a
+    false match merely skips a fetch. Never reuse it for a trust or allowlist decision —
+    those belong to ``graph.plugins.trust.source_matches``, which is built for them.
     """
-    text = str(url or "").strip()
-    match = _SOURCE_URL_RE.match(text)
-    if match:
-        authority, _, path = match.group("rest").partition("/")
-        host = re.sub(r":\d*$", "", authority.rsplit("@", 1)[-1])  # userinfo + port
-    else:
-        match = _SOURCE_SCP_RE.match(text)
-        if not match:
-            return ""
-        host, path = match.group("host"), match.group("path")
+    parts = _source_parts(url)
+    if parts is None:
+        return ""
+    _scheme, host, path = parts
+    host = host.lower().rstrip(".")
+    if host.startswith("www."):
+        host = host[4:]
     path = path.strip("/")
     if path.lower().endswith(".git"):
         path = path[:-4].rstrip("/")
     if not host or not path:
         return ""
     return f"{host}/{path}".lower()
+
+
+def display_source(url: object) -> str:
+    """``url`` safe to show and log: userinfo (a token someone pasted into the install
+    URL), query and fragment stripped. Unparseable values come back unchanged — they
+    carry nothing this could strip reliably, and hiding them would hide the problem."""
+    text = str(url or "").strip()
+    parts = _source_parts(text)
+    if parts is None:
+        return text
+    scheme, host, path = parts
+    if _SOURCE_URL_RE.match(text):
+        from urllib.parse import urlsplit
+
+        try:
+            port = urlsplit(text).port
+        except ValueError:
+            port = None
+        return f"{scheme}://{host}{f':{port}' if port else ''}{path}"
+    return f"{host}:{path}"
 
 
 def _parse_supersedes(raw, plugin_id: str) -> list[str]:

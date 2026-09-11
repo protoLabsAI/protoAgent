@@ -29,7 +29,7 @@ from pathlib import Path
 
 from infra.paths import instance_paths
 
-from graph.plugins.manifest import MANIFEST_FILENAME, PluginManifest, load_manifest
+from graph.plugins.manifest import MANIFEST_FILENAME, PluginManifest, is_swap_leftover, load_manifest
 
 log = logging.getLogger(__name__)
 
@@ -48,9 +48,12 @@ def _is_builtin(plugin_id: str) -> bool:
     A bare directory is NOT a built-in: a ``__pycache__``-only leftover from a
     core→standalone extraction (git doesn't track it, so it survives on every
     machine that ever imported the old plugin) must not block installing or
-    uninstalling the standalone successor of the same id (#1731)."""
+    uninstalling the standalone successor of the same id (#1731).
+
+    Also true for any id a bundled manifest DECLARES, whatever its folder is called — the
+    loader keys plugins by manifest id, so the guard has to as well."""
     d = bundled_plugins_dir() / plugin_id
-    return (d / MANIFEST_FILENAME).exists() or (d / BUNDLE_FILENAME).exists()
+    return (d / MANIFEST_FILENAME).exists() or (d / BUNDLE_FILENAME).exists() or plugin_id in _bundled_index()
 
 
 # ── Supersession: an external plugin that moved into core (``supersedes``) ─────────
@@ -61,13 +64,43 @@ def _is_builtin(plugin_id: str) -> bool:
 # uninstalling that copy removes only the ignored files — never the enable state the
 # bundled copy runs on. The loader's half (the bundled copy wins) is in
 # ``loader.discover_plugins``.
+#
+# "Which copy of <id> runs?" has ONE answer, the loader's: every question here goes
+# through ``_bundled_index`` (bundled copies keyed by MANIFEST id, via the loader's own
+# ``discover_plugins``), ``_lock_entry`` (one lock row per id, the same one the loader
+# reads) and ``effective_copies`` (the loader's full precedence rule).
+
+# bundled-tree path → (manifest stamp, {id: manifest}). Re-read when any manifest moves.
+_BUNDLED_INDEX_CACHE: dict[str, tuple[tuple, dict[str, PluginManifest]]] = {}
+
+
+def _bundled_index() -> dict[str, PluginManifest]:
+    """``{plugin id: bundled copy}`` for the in-tree ``plugins/`` tree — keyed by MANIFEST
+    id exactly as the loader keys it, so a folder named ``agent-browser`` holding id
+    ``agent_browser`` is found under ``agent_browser`` here too. Cached per tree; the
+    cache key is every manifest's (name, mtime, size), so an edit is picked up at once."""
+    root = bundled_plugins_dir()
+    try:
+        children = sorted(c for c in root.iterdir() if (c / MANIFEST_FILENAME).is_file())
+        stamp = tuple(
+            (c.name, (c / MANIFEST_FILENAME).stat().st_mtime_ns, (c / MANIFEST_FILENAME).stat().st_size)
+            for c in children
+        )
+    except OSError:
+        return {}
+    hit = _BUNDLED_INDEX_CACHE.get(str(root))
+    if hit is not None and hit[0] == stamp:
+        return hit[1]
+    from graph.plugins.loader import discover_plugins
+
+    index = {m.id: m for m in discover_plugins([root], tracked_sources={})}
+    _BUNDLED_INDEX_CACHE[str(root)] = (stamp, index)
+    return index
 
 
 def _bundled_manifest(plugin_id: str) -> PluginManifest | None:
-    """The bundled copy of ``plugin_id`` (``plugins/<id>/``), or ``None`` if there is none."""
-    d = bundled_plugins_dir() / plugin_id
-    manifest = load_manifest(d) if (d / MANIFEST_FILENAME).exists() else None
-    return manifest if manifest is not None and manifest.id == plugin_id else None
+    """The bundled copy of ``plugin_id``, or ``None`` if protoAgent doesn't ship one."""
+    return _bundled_index().get(plugin_id)
 
 
 def bundled_superseding(plugin_id: str, source_url: str) -> PluginManifest | None:
@@ -89,25 +122,41 @@ def superseding_plugin(url: str) -> PluginManifest | None:
     or unreachable."""
     from graph.plugins.manifest import supersedes_source
 
-    root = bundled_plugins_dir()
-    if not root.is_dir():
-        return None
-    for child in sorted(root.iterdir()):
-        if not (child / MANIFEST_FILENAME).exists():
-            continue
-        manifest = load_manifest(child)
-        if manifest is not None and manifest.supersedes and supersedes_source(manifest, url):
-            return manifest
-    return None
+    return next((m for m in _bundled_index().values() if m.supersedes and supersedes_source(m, url)), None)
+
+
+def effective_copies() -> dict[str, PluginManifest]:
+    """``{plugin id: the copy the loader runs}`` across the bundled tree and the live
+    plugins dir — computed by the loader's own ``discover_plugins``, so ``supersedes``,
+    tracked overrides and the #1574 untracked rule all apply exactly as at load. Use it
+    for anything that acts on "the plugin" rather than on a particular folder: its deps,
+    its description, its version."""
+    from graph.plugins.loader import discover_plugins
+
+    return {m.id: m for m in discover_plugins([bundled_plugins_dir(), live_plugins_dir()])}
+
+
+def effective_source_url(plugin_id: str) -> str:
+    """Where the copy that RUNS came from: ``""`` when that is the bundled copy — nothing
+    was fetched for it, so there is no source to re-check or ask consent for, even if an
+    ignored, superseded git copy is still recorded — else the ``plugins.lock`` origin
+    (``""`` for an untracked folder). Fails closed: an id the resolver can't place keeps
+    its recorded origin, so a consent or allowlist gate still applies."""
+    running = effective_copies().get(plugin_id)
+    if running is not None and running.path.parent == bundled_plugins_dir():
+        return ""
+    return recorded_source_url(plugin_id)
 
 
 def superseded_reason(plugin_id: str, source_url: str, bundled: PluginManifest) -> str:
     """One sentence an operator can act on: why a copy is ignored and what to do."""
+    from graph.plugins.manifest import display_source
+
     return (
         f"{plugin_id!r} now ships with protoAgent (bundled v{bundled.version}), which supersedes "
-        f"{source_url} — the copy installed from there is ignored and has nothing to update. The "
-        f"bundled copy updates with protoAgent itself; uninstall the old copy to clean it up "
-        f"(your settings and enabled state are kept)."
+        f"{display_source(source_url)} — the copy installed from there is ignored and has nothing to "
+        f"update. The bundled copy updates with protoAgent itself; uninstall the old copy to clean "
+        f"it up (your settings and enabled state are kept)."
     )
 
 
@@ -241,6 +290,24 @@ def _read_lock() -> dict:
         except (json.JSONDecodeError, OSError):
             log.warning("[plugins] %s is unreadable — starting a fresh lock", lock)
     return {"plugins": []}
+
+
+def _lock_rows_by_id(lock: dict | None = None) -> dict[str, dict]:
+    """``{plugin id: its plugins.lock row}`` — THE row choice for every reader. An install
+    rewrites one row per id, but a hand-edited or merged lock can carry two; the LAST one
+    wins (the loader, the inventory and uninstall must agree on which copy is recorded —
+    reading different rows let the banner say "uninstall" while uninstall refused, or
+    deleted a live fork override as "superseded")."""
+    rows: dict[str, dict] = {}
+    for e in (lock if lock is not None else _read_lock()).get("plugins") or []:
+        if isinstance(e, dict) and isinstance(e.get("id"), str) and e["id"]:
+            rows[e["id"]] = e
+    return rows
+
+
+def _lock_entry(plugin_id: str) -> dict | None:
+    """``plugin_id``'s ``plugins.lock`` row (see ``_lock_rows_by_id``), or ``None``."""
+    return _lock_rows_by_id().get(plugin_id)
 
 
 def _write_lock(data: dict) -> None:
@@ -787,7 +854,7 @@ def install(
             # stays the lever for the real conflicts: an id-colliding install from a
             # DIFFERENT source, or a dir the lock doesn't know (a working-tree /
             # hand-copied plugin that a git install must not silently clobber).
-            prior = next((e for e in _read_lock().get("plugins") or [] if e.get("id") == pid), None)
+            prior = _lock_entry(pid)
             same_source = prior is not None and prior.get("source_url") == url
             if not force and not same_source:
                 origin = f"from {prior.get('source_url')!r}" if prior else "untracked (no plugins.lock entry)"
@@ -809,9 +876,9 @@ def install(
         # the staged tree in, and only then drop the backup; any failure renames the old
         # version back. (`plugins.lock` already lands atomically via `_write_lock`.)
         backup = target.parent / (target.name + ".bak")
-        shutil.rmtree(backup, ignore_errors=True)  # leftover from a previously interrupted swap
+        _discard(backup)  # leftover from a previously interrupted swap
         backed_up = False
-        if target.exists():
+        if target.exists() or target.is_symlink():
             try:
                 os.rename(target, backup)
                 backed_up = True
@@ -834,7 +901,7 @@ def install(
                     restored = f" — the previous version was left at {backup}"
             raise InstallError(f"could not move staged plugin {pid!r} into place{restored}: {exc}") from exc
         if backed_up:
-            shutil.rmtree(backup, ignore_errors=True)
+            _discard(backup)
 
         manifest = load_manifest(target) or manifest  # re-read from final path
 
@@ -842,7 +909,7 @@ def install(
     if warnings:
         summary["warnings"] = warnings
     lock = _read_lock()
-    prior_entry = next((e for e in lock["plugins"] if e.get("id") == pid), None)
+    prior_entry = _lock_rows_by_id(lock).get(pid)
     entry = {
         "id": pid,
         "source_url": url,
@@ -1034,6 +1101,7 @@ def _install_bundle(
     installed: list[dict] = []
     skipped: list[str] = []
     superseded: list[str] = []
+    bundle_warnings: list[str] = []
     for entry in bundle.get("plugins") or []:
         if not isinstance(entry, dict):
             continue
@@ -1050,14 +1118,28 @@ def _install_bundle(
         # breaking every host that predates the move.
         moved = superseding_plugin(str(purl))
         if moved is not None:
+            from graph.plugins.manifest import display_source
+
             log.info(
                 "[plugins] bundle %s: member %s ships with protoAgent now (bundled v%s supersedes %s) — skipped",
                 bid,
                 entry.get("id", moved.id),
                 moved.version,
-                purl,
+                display_source(str(purl)),
             )
             superseded.append(moved.id)
+            # The member's pin is a floor (#2960). A pin AHEAD of what protoAgent ships
+            # can't be honoured — the bundled copy is the member now — so say so instead
+            # of silently running an older version than the archetype asked for.
+            pin, shipped = _semver_key(str(entry.get("ref") or "")), _semver_key(moved.version)
+            if pin is not None and shipped is not None and pin > shipped:
+                warn = (
+                    f"{moved.id}: the bundle pins {entry.get('ref')}, but this protoAgent ships "
+                    f"{moved.id} v{moved.version} (it supersedes the git repo) — running the bundled "
+                    f"copy; update protoAgent for the newer version."
+                )
+                bundle_warnings.append(warn)
+                log.warning("[plugins] bundle %s: %s", bid, warn)
             continue
 
         member_ref = entry.get("ref")
@@ -1156,7 +1238,7 @@ def _install_bundle(
         f"installed bundle {bid} ({len(installed)} plugin(s))",
     )
     log.info("[plugins] installed bundle %s@%s (%d plugins) from %s", bid, bundle_sha[:10], len(installed), bundle_url)
-    return {
+    summary = {
         "bundle": bid,
         "name": bundle.get("name", ""),
         "description": bundle.get("description", ""),
@@ -1169,6 +1251,9 @@ def _install_bundle(
         "config": bundle.get("config") or {},
         "config_inputs": config_inputs,
     }
+    if bundle_warnings:
+        summary["warnings"] = bundle_warnings
+    return summary
 
 
 def _clean_config_refs(plugin_id: str, section: str, purge: bool) -> bool:
@@ -1245,18 +1330,15 @@ def uninstall(plugin_id: str, *, purge: bool = False) -> dict:
     deps_left = [*manifest.requires_pip, *manifest.optional_pip] if manifest else []
 
     removed: list[str] = []
-    if target.exists():
+    if target.exists() or target.is_symlink():
         # Rename aside first (atomic, same parent dir), then delete (#3075): an
         # interrupted removal leaves `<id>.bak` — never a half-deleted live plugin
         # dir. A leftover backup is cleared by the next install of the same id.
-        backup = target.parent / (target.name + ".bak")
-        shutil.rmtree(backup, ignore_errors=True)
-        os.rename(target, backup)
-        shutil.rmtree(backup, ignore_errors=True)
+        _remove_installed_copy(target)
         removed.append("code")
     lock = _read_lock()
     before = len(lock["plugins"])
-    lock["plugins"] = [e for e in lock["plugins"] if e.get("id") != plugin_id]
+    lock["plugins"] = [e for e in lock["plugins"] if not (isinstance(e, dict) and e.get("id") == plugin_id)]
     if len(lock["plugins"]) != before:
         _write_lock(lock)
         removed.append("lock")
@@ -1305,16 +1387,23 @@ def _uninstall_superseded(plugin_id: str, bundled: PluginManifest, *, purge: boo
     switch the bundled plugin off), the config section and secrets, its scheduler jobs,
     and its own setup gaps (only the loader's "superseded" banner is cleared). Declared
     deps aren't reported for removal either — the bundled copy may import the same ones.
-    ``superseded_by_bundled`` in the report tells callers there is nothing to unload."""
+
+    ``superseded_by_bundled`` in the report tells callers the bundled copy keeps running.
+    ``was_loaded`` says whether THIS process had imported the copy just removed — true
+    only when protoAgent was upgraded under a running server (it loaded the git copy at
+    boot, before a bundled copy superseded it). Then the running code has lost its files
+    and callers must unload it like any other removal (purge + reload; a mounted router
+    needs a restart); otherwise there is nothing to unload."""
+    from graph.plugins.manifest import display_source
+
     source_url = recorded_source_url(plugin_id)
     target = live_plugins_dir() / plugin_id
+    was_loaded = _running_copy_is(plugin_id, target)
     removed: list[str] = []
-    if target.exists():
-        # Same rename-aside-then-delete as a normal uninstall (#3075).
-        backup = target.parent / (target.name + ".bak")
-        shutil.rmtree(backup, ignore_errors=True)
-        os.rename(target, backup)
-        shutil.rmtree(backup, ignore_errors=True)
+    if target.exists() or target.is_symlink():
+        # Same rename-aside-then-delete as a normal uninstall (#3075); a symlinked copy
+        # (the #2298 live-checkout workflow) is unlinked, never followed.
+        _remove_installed_copy(target)
         removed.append("code")
     lock = _read_lock()
     before = len(lock["plugins"])
@@ -1331,15 +1420,21 @@ def _uninstall_superseded(plugin_id: str, bundled: PluginManifest, *, purge: boo
         pass
     _audit(
         "uninstall",
-        {"id": plugin_id, "purge": purge, "superseded_by_bundled": bundled.version, "source_url": source_url},
+        {
+            "id": plugin_id,
+            "purge": purge,
+            "superseded_by_bundled": bundled.version,
+            "source_url": display_source(source_url),
+        },
         f"removed the superseded copy of {plugin_id} ({', '.join(removed)}); bundled v{bundled.version} kept",
     )
     log.info(
-        "[plugins] removed the superseded copy of %s from %s (%s) — the bundled v%s keeps running",
+        "[plugins] removed the superseded copy of %s from %s (%s) — the bundled v%s keeps running%s",
         plugin_id,
-        source_url,
+        display_source(source_url),
         ", ".join(removed),
         bundled.version,
+        " (this process was still running the removed copy — unload it)" if was_loaded else "",
     )
     return {
         "id": plugin_id,
@@ -1348,7 +1443,69 @@ def _uninstall_superseded(plugin_id: str, bundled: PluginManifest, *, purge: boo
         "purged": False,
         "jobs_cancelled": 0,
         "superseded_by_bundled": bundled.version,
+        "was_loaded": was_loaded,
     }
+
+
+def _discard(path: Path) -> None:
+    """Best-effort removal of an install/uninstall swap leftover (``<id>.bak``). A
+    symlink is unlinked, never followed — ``shutil.rmtree`` refuses symlinks, and with
+    ``ignore_errors`` that refusal used to leave the link behind silently."""
+    try:
+        if path.is_symlink():
+            path.unlink()
+        elif path.exists():
+            shutil.rmtree(path, ignore_errors=True)
+    except OSError:
+        log.warning("[plugins] could not remove %s — delete it by hand", path, exc_info=True)
+
+
+def _remove_installed_copy(target: Path) -> None:
+    """Delete one installed plugin folder. A symlink (the #2298 live-checkout install) is
+    UNLINKED — the checkout it points at is the developer's and is never touched. A real
+    folder is renamed aside and then deleted (#3075), so an interruption leaves
+    ``<id>.bak``, never a half-deleted live plugin — and discovery skips ``*.bak``, so a
+    leftover can never load in place of anything."""
+    if target.is_symlink():
+        target.unlink()
+        return
+    backup = target.parent / (target.name + ".bak")
+    _discard(backup)
+    os.rename(target, backup)
+    _discard(backup)
+    if backup.exists() or backup.is_symlink():
+        log.warning("[plugins] %s could not be fully deleted — it is inert (*.bak is never loaded); remove it by hand", backup)
+
+
+def _running_copy_is(plugin_id: str, target: Path) -> bool:
+    """True when THIS process imported ``plugin_id`` from ``target``: deleting ``target``
+    would pull the files out from under running code, and the next lazy ``from . import x``
+    in it would fail. Compares the live module's ``__path__``/``__file__`` with ``target``
+    both as spelled and resolved (a symlinked copy imports through the link's path)."""
+    import sys
+
+    from graph.plugins.loader import _plugin_module_name
+
+    module = sys.modules.get(_plugin_module_name(plugin_id))
+    if module is None:
+        return False
+
+    def _forms(p: str) -> set[str]:
+        out = {os.path.normcase(os.path.abspath(p))}
+        try:
+            out.add(os.path.normcase(str(Path(p).resolve())))
+        except OSError:
+            pass
+        return out
+
+    roots = _forms(str(target))
+    for loc in [*(getattr(module, "__path__", None) or []), getattr(module, "__file__", None) or ""]:
+        if not loc:
+            continue
+        for form in _forms(str(loc)):
+            if any(form == r or form.startswith(r + os.sep) for r in roots):
+                return True
+    return False
 
 
 def _validate_pip_specs(plugin_id: str, deps: list[str]) -> None:
@@ -1379,27 +1536,21 @@ def recorded_source_url(plugin_id: str) -> str:
 
     Empty for a bundled/built-in plugin and for a hand-copied working-tree dir —
     neither has a recorded origin to re-validate, and both are the operator's own
-    deliberate placement rather than a fetched source."""
-    entry = next(
-        # isinstance guard: _normalize_lock preserves non-dict members of a hand-edited
-        # lock, and a bare .get here would AttributeError before install_deps' own
-        # error handling ever ran (coderabbit on this PR).
-        (e for e in _read_lock().get("plugins") or [] if isinstance(e, dict) and e.get("id") == plugin_id),
-        None,
-    )
-    return str((entry or {}).get("source_url") or "")
+    deliberate placement rather than a fetched source. (``_lock_entry`` skips the
+    non-dict members a hand-edited lock can carry, and picks the same row as the loader.)"""
+    return str((_lock_entry(plugin_id) or {}).get("source_url") or "")
 
 
 def install_deps(plugin_id: str) -> list[str]:
     """Pip-install a plugin's declared ``requires_pip`` — the explicit code-exec
     step that ``install`` deliberately skips (ADR 0027 D4). Optional deps (#1953)
     ride along best-effort: a failed optional install warns instead of failing
-    the command. Returns the deps actually installed/satisfied."""
-    manifest = None
-    for base in (live_plugins_dir(), bundled_plugins_dir()):
-        if (base / plugin_id / "protoagent.plugin.yaml").exists():
-            manifest = load_manifest(base / plugin_id)
-            break
+    the command. Returns the deps actually installed/satisfied.
+
+    Acts on the copy the loader RUNS (``effective_copies``) — not simply whichever
+    folder exists: with a bundled copy superseding an old git install, the git copy's
+    deps list is the wrong one, and installing it leaves the running plugin broken."""
+    manifest = effective_copies().get(plugin_id)
     if manifest is None:
         raise InstallError(f"plugin {plugin_id!r} is not installed.")
     # Allowlist re-check at deps time (#2743): a plugin installed BEFORE the
@@ -1409,8 +1560,9 @@ def install_deps(plugin_id: str) -> list[str]:
     # allowlist; skipped when there is no recorded origin (bundled / working-tree).
     # The CONSENT half (source_trusted) deliberately lives in the operator route,
     # exactly where install's own consent gate lives — the CLI is the operator's
-    # explicit act, and only the console flow can render the ack dialog.
-    source_url = recorded_source_url(plugin_id)
+    # explicit act, and only the console flow can render the ack dialog. The origin is
+    # the RUNNING copy's: a bundled copy (superseding or not) was never fetched.
+    source_url = effective_source_url(plugin_id)
     if source_url and not _source_allowed(source_url, configured_allowlist()):
         raise InstallError(
             f"{plugin_id!r} was installed from {source_url!r}, which is no longer on "
@@ -1561,13 +1713,13 @@ def list_installed() -> list[dict]:
       deleted code; ``sync`` refetches it at its pinned SHA.
     """
     root = live_plugins_dir()
-    lock_by_id = {e["id"]: e for e in _read_lock()["plugins"] if e.get("id")}
+    lock_by_id = _lock_rows_by_id()
     out: list[dict] = []
     on_disk: set[str] = set()
 
     if root.exists():
         for child in sorted(root.iterdir()):
-            if not child.is_dir():
+            if not child.is_dir() or is_swap_leftover(child):
                 continue
             manifest = load_manifest(child)
             if manifest is None:
@@ -1597,12 +1749,17 @@ def list_installed() -> list[dict]:
             out.append({**locked, "present": False, "tracked": True})
 
     # A copy installed from a URL the bundled plugin now supersedes is ignored by the
-    # loader — flag it, so an update path skips it and a UI can say why it's inert.
+    # loader — flag it, so an update path skips it and a UI can say why it's inert. The
+    # PLUGIN is present either way (it ships with protoAgent), so such a row never reads
+    # as "missing on disk — sync": sync can't fetch it, and nothing is missing.
+    # `copy_on_disk` keeps the disk truth about the ignored copy itself.
     for row in out:
         bundled = bundled_superseding(str(row.get("id") or ""), str(row.get("source_url") or ""))
         if bundled is not None:
             row["superseded"] = True
             row["bundled_version"] = bundled.version
+            row["copy_on_disk"] = bool(row.get("present"))
+            row["present"] = True
 
     out.sort(key=lambda e: e.get("id", ""))
     return out
@@ -1894,6 +2051,8 @@ def uninstall_bundle(bundle_id: str, *, purge: bool = False) -> dict:
     #   exclusively ours      → uninstall            → removed_members (or failed{pid: why})
     #   anything else         → shared / re-owned    → kept
     removed_members: list[str] = []
+    superseded: list[str] = []
+    superseded_was_loaded: list[str] = []
     skipped: list[str] = []
     failed: dict[str, str] = {}
     kept: list[str] = []
@@ -1903,8 +2062,16 @@ def uninstall_bundle(bundle_id: str, *, purge: bool = False) -> dict:
             skipped.append(pid)  # provenance row outlived the member — nothing to remove
         elif _exclusively_owned(pid, bundle_id, listed_elsewhere, by_of):
             try:
-                uninstall(pid, purge=purge)
-                removed_members.append(pid)
+                report = uninstall(pid, purge=purge)
+                if isinstance(report, dict) and report.get("superseded_by_bundled"):
+                    # Only the member's IGNORED copy went — the plugin now ships with
+                    # protoAgent and its bundled copy keeps running (still enabled). Not a
+                    # removed member: callers must not unload it or report it gone.
+                    superseded.append(pid)
+                    if report.get("was_loaded"):
+                        superseded_was_loaded.append(pid)
+                else:
+                    removed_members.append(pid)
             except InstallError as exc:
                 # An uninstall that RAISED is not "already gone" — reporting it in
                 # skipped_missing mislabeled a real failure (2740 review nit).
@@ -1921,10 +2088,12 @@ def uninstall_bundle(bundle_id: str, *, purge: bool = False) -> dict:
         f"uninstalled bundle {bundle_id} ({len(removed_members)} member(s), {len(kept)} kept)",
     )
     log.info(
-        "[plugins] uninstalled bundle %s — removed: %s; kept (shared/re-owned): %s",
+        "[plugins] uninstalled bundle %s — removed: %s; kept (shared/re-owned): %s; superseded copies removed "
+        "(bundled copy keeps running): %s",
         bundle_id,
         ", ".join(removed_members) or "none",
         ", ".join(kept) or "none",
+        ", ".join(superseded) or "none",
     )
     return {
         "id": bundle_id,
@@ -1934,6 +2103,11 @@ def uninstall_bundle(bundle_id: str, *, purge: bool = False) -> dict:
         # skipped_missing so callers never label a failure "already gone".
         "failed": failed,
         "kept": kept,
+        # Members that moved into core: their ignored git copy was removed, the bundled
+        # copy keeps running. `superseded_was_loaded` is the subset this process was still
+        # running from the removed copy (upgraded under a live server) — unload those.
+        "superseded": superseded,
+        "superseded_was_loaded": superseded_was_loaded,
         "purged": purge,
     }
 
@@ -1942,20 +2116,30 @@ def sync(*, allow: list[str] | None = None) -> list[dict]:
     """Re-clone every locked plugin at its pinned SHA (reproducible install set).
     Missing ones are fetched; present ones are left as-is. A missing one whose source a
     bundled plugin now supersedes isn't fetched (``status: superseded``) — the bundled
-    copy is what would load anyway."""
+    copy is what would load anyway.
+
+    A row with no ``source_url`` isn't an install at all — e.g. the ADR 0093 wheel-deps
+    pins a BUNDLED plugin gets — so there is nothing to re-clone: ``present`` when
+    protoAgent ships that id, else ``failed`` with the reason (it used to KeyError)."""
     results = []
     root = live_plugins_dir()
-    for e in _read_lock()["plugins"]:
-        pid = e["id"]
+    for pid, e in _lock_rows_by_id().items():
         if (root / pid).exists():
             results.append({"id": pid, "status": "present"})
             continue
-        if bundled_superseding(pid, str(e.get("source_url") or "")) is not None:
+        source_url = str(e.get("source_url") or "")
+        if bundled_superseding(pid, source_url) is not None:
             results.append({"id": pid, "status": "superseded"})
+            continue
+        if not source_url:
+            if _bundled_manifest(pid) is not None:
+                results.append({"id": pid, "status": "present"})
+            else:
+                results.append({"id": pid, "status": "failed", "error": "no source_url recorded — nothing to re-fetch"})
             continue
         try:
             install(
-                e["source_url"],
+                source_url,
                 e.get("resolved_sha") or e.get("requested_ref") or None,
                 force=True,
                 by="sync",
