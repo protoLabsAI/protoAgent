@@ -486,6 +486,38 @@ async def test_runtime_status_setup_gaps_clear_retain_unload_reflected(monkeypat
         setup_gaps.reset()
 
 
+async def test_runtime_status_builds_both_gap_projections_from_one_snapshot(monkeypatch):
+    """`warnings[]` and `setup_gaps[]` must describe the SAME instant. The console drops a gap's
+    legacy line only when its record is in the same payload; built from two separately locked
+    reads, a plugin re-reporting (or clearing) on another thread between them published a line
+    with no record — a plain alert the operator could neither act on nor dismiss (#3438 review).
+
+    Deterministic stand-in for that race: every read of the store AFTER the first sees a
+    re-report that landed in between, so any handler that reads twice publishes a mismatch."""
+    from graph.plugins import setup_gaps
+
+    setup_gaps.reset()
+    real_active = setup_gaps.active
+    reads = {"n": 0}
+
+    def active_with_a_concurrent_rereport():
+        reads["n"] += 1
+        if reads["n"] > 1:
+            setup_gaps.report("boardy", "coder", f"No coder delegate (check #{reads['n']})", label="Project Board")
+        return real_active()
+
+    try:
+        setup_gaps.report("boardy", "coder", "No coder delegate (check #1)", label="Project Board")
+        monkeypatch.setattr(setup_gaps, "active", active_with_a_concurrent_rereport)
+        status = await ch._operator_runtime_status()
+        record_lines = {f"{g['label']}: {g['message']}" for g in status["setup_gaps"]}
+        gap_lines = [w for w in status["warnings"] if w.startswith("Project Board:")]
+        assert gap_lines and set(gap_lines) == record_lines, (gap_lines, record_lines)
+    finally:
+        monkeypatch.undo()
+        setup_gaps.reset()
+
+
 _CONSOLE_SETUP_GAPS_GOLDEN = Path(__file__).resolve().parents[1] / "apps" / "web" / "e2e" / "setup-gaps.golden.json"
 
 
