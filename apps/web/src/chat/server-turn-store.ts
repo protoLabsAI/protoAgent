@@ -1,5 +1,7 @@
 import { useMemo, useSyncExternalStore } from "react";
 
+import type { ChatMessage } from "../lib/types";
+
 // Server-initiated turn indicator (#1767). Background push-resume (ADR 0070), scheduled
 // fires, and watch reactions (ADR 0067) run a turn by self-POSTing into a session — the
 // connection is held open for the WHOLE turn, but the browser only renders turns IT
@@ -166,4 +168,18 @@ export function useServerTurn(sessionId: string | null | undefined): string | nu
 export function useServerTurnSessions(): Set<string> {
   const key = useSyncExternalStore(subscribe, serverTurnSessionsKey, () => "");
   return useMemo(() => new Set(key ? key.split(",") : []), [key]);
+}
+
+/** The id given to a session's live server-turn preview (#2361). Deterministic, so a
+ *  `chat.progress` frame arriving after a re-render still finds the same bubble, and so
+ *  `chat.resumed` can replace it. Lives with the server-turn state it belongs to, so the
+ *  chat surface can recognise a preview without importing the app-level watcher. */
+export function liveMessageId(taskId: string, session: string): string {
+  return `server-turn-${taskId || session}`;
+}
+
+/** True when `msg` is the live preview for this server-fired turn — the message
+ *  `chat.resumed` should REPLACE rather than append a second bubble beside. */
+export function isLiveServerTurn(msg: ChatMessage, taskId: string, session: string): boolean {
+  return !!msg.id && msg.id === liveMessageId(taskId, session);
 }
