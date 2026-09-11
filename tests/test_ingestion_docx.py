@@ -22,6 +22,7 @@ import subprocess
 import sys
 import textwrap
 import types
+import warnings
 import zipfile
 import zlib
 from pathlib import Path
@@ -159,6 +160,31 @@ def _package(document_xml: bytes) -> bytes:
 
 def _body(inner: bytes) -> bytes:
     return f'<?xml version="1.0"?><w:document xmlns:w="{_W_NS}"><w:body>'.encode() + inner + b"</w:body></w:document>"
+
+
+def _worst_accepted_docx() -> bytes:
+    """The costliest package the budgets ACCEPT: every unit of the node budget spent on a
+    text run (the shape with the highest cost per unit), plus the byte budget on text."""
+    filler = b"x<w:i/>" * 493_000
+    text = b"<w:p><w:r><w:t>" + b"x" * (8 * 1024 * 1024) + b"</w:t></w:r></w:p>"
+    return _package(_body(b"<w:p>" + filler + b"</w:p>" + text))
+
+
+def _media_bomb_docx(pad_bytes: int) -> bytes:
+    """A real document whose ``word/media/image1.png`` inflates to ``pad_bytes``. Media
+    parts carry no text and are re-packed EMPTY, so this must cost nothing."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", _CONTENT_TYPES)
+        zf.writestr("_rels/.rels", _ROOT_RELS)
+        zf.writestr("word/document.xml", _HELLO)
+        with zf.open("word/media/image1.png", "w") as part:
+            chunk = b"\0" * (1 << 20)
+            left = pad_bytes
+            while left > 0:
+                part.write(chunk[: min(left, len(chunk))])
+                left -= len(chunk)
+    return buf.getvalue()
 
 
 def _lying_size_docx(pad_bytes: int, method: int) -> bytes:
@@ -394,10 +420,10 @@ def test_attribute_bloat_over_the_node_budget_is_refused(monkeypatch):
             extract_bytes("attrs.docx", data)
 
 
-def _peak_rss_growth_mb(data: bytes, tmp_path) -> tuple[int, str]:
-    """Extract ``data`` in a FRESH interpreter; return (peak RSS growth in MiB, outcome).
-    RSS, not tracemalloc: the tree being bounded is libxml2's C allocation, which Python's
-    allocator never sees."""
+def _peak_rss_growth_mb(data: bytes, tmp_path, *, repeats: int = 1) -> tuple[int, str]:
+    """Extract ``data`` ``repeats`` times in a FRESH interpreter; return (peak RSS growth in
+    MiB, outcome). RSS, not tracemalloc: the tree being bounded is libxml2's C allocation,
+    which Python's allocator never sees."""
     path = tmp_path / "probe.docx"
     path.write_bytes(data)
     program = textwrap.dedent(
@@ -405,12 +431,14 @@ def _peak_rss_growth_mb(data: bytes, tmp_path) -> tuple[int, str]:
         import resource, sys
         import docx  # import cost excluded from the delta
         from ingestion import engine
+        data = open(sys.argv[1], "rb").read()
         base = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        try:
-            engine.extract_bytes("probe.docx", open(sys.argv[1], "rb").read())
-            outcome = "extracted"
-        except engine.IngestionError as exc:
-            outcome = type(exc).__name__
+        for _ in range(int(sys.argv[2])):
+            try:
+                engine.extract_bytes("probe.docx", data)
+                outcome = "extracted"
+            except engine.IngestionError as exc:
+                outcome = type(exc).__name__
         peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         unit = 2**20 if sys.platform == "darwin" else 1024  # macOS bytes, Linux KiB
         print((peak - base) // unit, outcome)
@@ -419,7 +447,11 @@ def _peak_rss_growth_mb(data: bytes, tmp_path) -> tuple[int, str]:
     # PYTHONPATH, not the inherited cwd: the child has to import THIS checkout's engine.
     env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
     done = subprocess.run(
-        [sys.executable, "-c", program, str(path)], capture_output=True, text=True, timeout=300, env=env
+        [sys.executable, "-c", program, str(path), str(repeats)],
+        capture_output=True,
+        text=True,
+        timeout=600,
+        env=env,
     )
     assert done.returncode == 0, f"probe failed: {done.stderr[-800:]}"
     out = done.stdout.split()
@@ -439,7 +471,13 @@ def test_a_hostile_docx_cannot_drive_memory_past_the_budget(tmp_path):
         ("deflate size lie, 1 GiB behind a 5-byte header", _lying_size_docx(1024 * 2**20, zipfile.ZIP_DEFLATED), 64),
         ("bzip2 size lie, 256 MiB from ~1 KB", _lying_size_docx(256 * 2**20, zipfile.ZIP_BZIP2), 64),
         ("honest XML bloat over the budget", _package(_body(b"<w:p/>" * (engine._MAX_DOCX_XML_NODES + 200_000))), 64),
-        ("right at the node budget (accepted)", _package(_body(b"<w:p/>" * (engine._MAX_DOCX_XML_NODES - 10_000))), 256),
+        ("bomb hidden in a media part", _media_bomb_docx(256 * 2**20), 64),
+        ("element-dense, at the node budget (accepted)", _package(_body(b"<w:p/>" * 490_000)), 256),
+        # The costliest ACCEPTED package: text runs cost a node each for the same budget
+        # as an element (~142 B/unit, the worst shape measured), with the byte budget
+        # spent on top. Measured +170 MiB — the element-only shape above is only +70,
+        # which is why it alone was not enough to hold this envelope honest.
+        ("worst accepted: text runs at the budget + 8 MB of text", _worst_accepted_docx(), 256),
     ]
     for label, data, allowed in cases:
         grew, outcome = _peak_rss_growth_mb(data, tmp_path)
@@ -447,6 +485,90 @@ def test_a_hostile_docx_cannot_drive_memory_past_the_budget(tmp_path):
             f"{label}: extraction grew RSS by {grew} MiB (> {allowed}, outcome {outcome}) "
             f"from a {len(data) // 1024} KB upload"
         )
+
+
+def test_repeated_extractions_do_not_accumulate_memory(tmp_path):
+    """python-docx's package graph is cyclic, so a document's tree is only freed by a
+    CYCLIC collection — and CPython's GC counts objects, not the megabytes libxml2 holds
+    behind them, so nothing forced one: six worst-case extractions grew RSS to ~900 MiB
+    and stayed there. Extraction now collects after a big document, so the footprint is
+    flat instead of per-upload."""
+    pytest.importorskip("resource")
+    _docx_lib()
+    grew_once, _ = _peak_rss_growth_mb(_worst_accepted_docx(), tmp_path, repeats=1)
+    grew_six, _ = _peak_rss_growth_mb(_worst_accepted_docx(), tmp_path, repeats=6)
+
+    assert grew_six < grew_once * 2, (
+        f"six extractions grew RSS by {grew_six} MiB vs {grew_once} MiB for one — "
+        "the per-document tree is accumulating again"
+    )
+
+
+def test_an_upload_over_the_wire_ceiling_is_refused_before_unzipping(monkeypatch):
+    data = _package(_HELLO)
+    monkeypatch.setattr(engine, "_MAX_FETCH_BYTES", len(data) - 1)
+    with _docx_must_not_parse(monkeypatch):
+        with pytest.raises(SourceTooLarge, match="document too large"):
+            extract_bytes("big.docx", data)
+
+
+def test_a_duplicated_archive_member_is_refused():
+    """Two members under one name: zipfile resolves reads to the last, so a package like
+    this can show one document to a checker and another to the parser."""
+    buf = io.BytesIO()
+    with warnings.catch_warnings():  # zipfile warns about the duplicate; that IS the input
+        warnings.simplefilter("ignore", UserWarning)
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("[Content_Types].xml", _CONTENT_TYPES)
+            zf.writestr("_rels/.rels", _ROOT_RELS)
+            zf.writestr("word/document.xml", _HELLO)
+            zf.writestr("word/document.xml", _body(b"<w:p><w:r><w:t>second</w:t></w:r></w:p>"))
+
+    with pytest.raises(ExtractionError, match="appears twice"):
+        extract_bytes("dupe.docx", buf.getvalue())
+
+
+def test_a_part_declaring_more_than_the_budget_is_refused_before_it_is_read(monkeypatch):
+    """The declared size is checked BEFORE the member is opened, so an outsized part costs
+    nothing to refuse. (Its stream here is short and its CRC honest, so without that check
+    the read would succeed and the package would extract.)"""
+    data = bytearray(_package(_HELLO))
+    huge = 1024 * 2**20
+    local = zipfile.ZipFile(io.BytesIO(bytes(data))).getinfo("word/document.xml").header_offset
+    struct.pack_into("<I", data, local + 22, huge)  # local header: uncompressed size
+    pos = 0
+    while (pos := data.find(b"PK\x01\x02", pos)) >= 0:
+        length = struct.unpack_from("<H", data, pos + 28)[0]
+        if bytes(data[pos + 46 : pos + 46 + length]) == b"word/document.xml":
+            struct.pack_into("<I", data, pos + 24, huge)
+        pos += 4
+
+    with _docx_must_not_parse(monkeypatch):
+        with pytest.raises(SourceTooLarge, match="too large or too complex"):
+            extract_bytes("declared.docx", bytes(data))
+
+
+def test_a_part_carrying_a_dtd_is_refused(monkeypatch):
+    """Word never writes a DTD; refusing one leaves no entity games to play at all."""
+    doctype = b'<?xml version="1.0"?><!DOCTYPE w:document [<!ENTITY e "x">]>' + _HELLO.split(b"?>", 1)[1]
+    with _docx_must_not_parse(monkeypatch):
+        with pytest.raises(ExtractionError, match="DTD"):
+            extract_bytes("dtd.docx", _package(doctype))
+
+
+def test_a_bomb_in_a_media_part_costs_nothing_and_the_text_still_extracts(tmp_path):
+    """Media parts are re-packed EMPTY and never inflated — the only thing bounding them,
+    since the compression check applies to parts that get read. A future change that
+    copies media through would reopen a gigabyte-scale hole; this is what catches it."""
+    pytest.importorskip("resource")
+    _docx_lib()
+    data = _media_bomb_docx(256 * 2**20)
+    assert len(data) < 512 * 1024  # kilobytes on the wire, 256 MiB inside
+
+    grew, outcome = _peak_rss_growth_mb(data, tmp_path)
+
+    assert grew < 64, f"a bomb in word/media/ grew RSS by {grew} MiB ({outcome})"
+    assert extract_bytes("shot.docx", data).text == "hello"  # and the document still reads
 
 
 def test_supported_types_advertise_docx_but_not_legacy_doc():

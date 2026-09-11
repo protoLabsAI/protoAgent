@@ -27,4 +27,4 @@ python-docx>=1.1     # .docx authoring (imports as `docx`; ships default.docx te
 openpyxl>=3.1        # .xlsx authoring
 python-pptx>=0.6.23  # .pptx authoring (imports as `pptx`; pulls lxml + Pillow)
 reportlab>=4.0       # PDF authoring (compiled _rl_accel + bundled font/AFM data)
-pypdf>=4.0           # PDF reading/splitting/merging in execute_code (core dep in the host — see above)
+pypdf>=6.8           # PDF reading in execute_code (see the security floor note in requirements-core.txt)

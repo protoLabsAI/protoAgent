@@ -7,8 +7,10 @@ parsing helpers (HTML→text, YouTube-id parsing, decode) stay unit-testable off
 
 from __future__ import annotations
 
+import gc
 import logging
 import re
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -78,15 +80,30 @@ _OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 # kept prefix, passes every zipfile check. lxml then builds ~130 bytes of tree per node.
 # So _repack_docx inflates the text parts itself, streaming and capped, and python-docx
 # only ever opens that re-packed copy. Budgets are measured from real documents: a résumé
-# is ~0.1 MiB of XML scoring ~8k on the node budget below; a 300-page report ~4 MiB, ~350k.
+# is ~0.1 MiB of XML scoring ~11k on the node budget below; a 300-page report ~4 MiB, ~560k.
 _MAX_DOCX_XML_BYTES = 12 * 1024 * 1024  # inflated XML, all parts together
-# Tree cost, bounded from the bytes: every element needs a '<' and every attribute an '=',
-# and lxml spends about twice as much on an attribute as on an element — so '<' + 2×'='
-# over-counts the tree without creating a Python object per node (an XML pre-parser would
-# itself materialise a million-attribute tag). A 300-page report scores ~350k.
+# Tree cost, bounded from the bytes — no Python object per node, since an XML pre-parser
+# would itself materialise a million-attribute tag. libxml2 allocates a node per element
+# (~150 B), per attribute (~270 B) AND per non-blank text run (~120 B — remove_blank_text
+# only drops whitespace-only ones). Every element costs a '<' and a '>', every attribute an
+# '=', and every text run follows a '>', so '<' + '>' + 2×'=' over-counts all three. Worst
+# shape measured: `x<w:i/>` filler at ~142 B per unit (+170 MiB for the costliest package
+# these budgets accept). Counting only '<' and '=' undercounted text runs by ~2×.
 _MAX_DOCX_XML_NODES = 1_000_000
 _MAX_DOCX_MEMBERS = 5000
 _DOCX_READ_CHUNK = 64 * 1024
+# Per-document budgets bound ONE extraction. Callers run extraction in a thread pool —
+# `asyncio.to_thread` defaults to min(32, cpu+4), 14 on a typical box — so without a limit
+# the aggregate is that multiple (~1.6 GB measured across 10 concurrent worst-case uploads).
+# Gate the docx path so the aggregate stays ~2× the single-document ceiling; waiting costs
+# a pool thread and nothing else, and every extraction is bounded in time, so the queue
+# always drains. Threading, not asyncio: this runs in worker threads, off the loop.
+_MAX_CONCURRENT_DOCX = 2
+_docx_slots = threading.BoundedSemaphore(_MAX_CONCURRENT_DOCX)
+# A document that built a tree at least this big gets an explicit collect afterwards (see
+# _release_docx_memory) — a tenth of the node budget, ~10× a résumé, so the common path
+# never pays for it.
+_DOCX_GC_NODES = 100_000
 # Audio → transcribed directly via the gateway STT endpoint.
 _AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".oga", ".opus", ".aac", ".wma", ".aiff", ".aif"}
 # Video → audio track extracted with ffmpeg, then transcribed.
@@ -291,8 +308,9 @@ _DOCX_TOO_BIG = (
 
 
 def _repack_docx(data: bytes):
-    """Re-pack an untrusted .docx into an in-memory zip (a ``BytesIO``) that python-docx
-    can open without unbounded work. Nothing python-docx does touches the original.
+    """Re-pack an untrusted .docx into an in-memory zip (a ``BytesIO``) that python-docx can
+    open without unbounded work, with the package's member names and the node budget it
+    spent. Nothing python-docx does touches the original.
 
     Each XML part is inflated here by STREAMING reads: ``ZipExtFile.read(n)`` inflates at
     most ``n`` bytes per step for stored/deflate members and stops at the declared size,
@@ -330,7 +348,11 @@ def _repack_docx(data: bytes):
             if info.is_dir():
                 continue
             if not name.lower().endswith((".xml", ".rels")):
-                dst.writestr(name, b"")  # no text in it — never inflated
+                # LOAD-BEARING: media/fonts/embeddings are never read, so writing them back
+                # empty is the only thing bounding them (the compression check below only
+                # covers parts we inflate). Copying them through would reopen the hole a
+                # bomb in word/media/ exploits — covered by a peak-RSS test.
+                dst.writestr(name, b"")
                 continue
             if info.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED) or info.flag_bits & 0x1:
                 raise ExtractionError(
@@ -344,7 +366,10 @@ def _repack_docx(data: bytes):
                 with src.open(info) as part:
                     while chunk := part.read(_DOCX_READ_CHUNK):
                         bytes_left -= len(chunk)
-                        nodes_left -= chunk.count(b"<") + 2 * chunk.count(b"=")
+                        nodes_left -= chunk.count(b"<") + chunk.count(b">") + 2 * chunk.count(b"=")
+                        # Unreachable by construction — the declared-size pre-check above
+                        # reserves this member's bytes and zipfile stops at that size — so
+                        # it is a backstop for a future zipfile that doesn't truncate.
                         if bytes_left < 0:
                             raise SourceTooLarge(over_bytes)
                         if nodes_left < 0:
@@ -357,7 +382,7 @@ def _repack_docx(data: bytes):
                 raise ExtractionError(f"could not parse DOCX: part {name!r} declares a DTD, which Word never writes")
             dst.writestr(name, body)
     out.seek(0)
-    return out, names
+    return out, names, _MAX_DOCX_XML_NODES - nodes_left
 
 
 def _not_a_word_document(names: set[str], detail: str = "") -> UnsupportedSource:
@@ -533,10 +558,37 @@ def _docx_story(lines: list[str]) -> str:
 
 def _extract_docx(data: bytes) -> str:
     """Word → markdown-ish text: header, body, footer. Headings become ``#`` lines, list
-    items ``- `` (indented by level), tables row by row — all in document order."""
+    items ``- `` (indented by level), tables row by row — all in document order.
+
+    Runs under ``_docx_slots`` so N concurrent uploads can't multiply the per-document
+    memory ceiling by the size of the caller's thread pool."""
     if data[:8] == _OLE2_MAGIC:  # a password-protected .docx, or a legacy .doc renamed
         raise _ole_word_refusal(data)
-    package, names = _repack_docx(data)  # bounded; python-docx never sees the original zip
+    with _docx_slots:
+        text, nodes_used = _extract_docx_bounded(data)
+        # After the inner frame unwinds, so THIS document's tree is collectable too.
+        _release_docx_memory(nodes_used)
+        return text
+
+
+def _release_docx_memory(nodes_used: int) -> None:
+    """Reclaim a big document's tree before returning, instead of leaving it to chance.
+
+    An OPC package's object graph is cyclic (package → rels → part → package, and
+    ``Document`` ↔ ``DocumentPart``), so none of it — including the lxml trees, which are
+    megabytes of C memory behind a handful of Python proxies — is freed by reference
+    counting. CPython's GC triggers on OBJECT COUNTS, not on those megabytes, so a burst of
+    uploads each left a whole tree uncollected: measured +130 MiB per extraction, ~900 MiB
+    over six, and flat (~230 MiB) once collected. A collect costs 30-50 ms after a document
+    that big, so only documents that built a big tree pay it. (Clearing the trees by hand
+    instead is not an option: with the package's own proxies still alive,
+    ``element.clear()`` takes lxml's per-node path — measured 60 SECONDS on that document.)"""
+    if nodes_used >= _DOCX_GC_NODES:
+        gc.collect()
+
+
+def _extract_docx_bounded(data: bytes) -> tuple[str, int]:
+    package, names, nodes_used = _repack_docx(data)  # bounded; python-docx never sees the original
     try:
         import docx  # python-docx
         from docx.opc.constants import RELATIONSHIP_TYPE as RT
@@ -578,7 +630,7 @@ def _extract_docx(data: bytes) -> str:
     except Exception as exc:  # noqa: BLE001 — python-docx / lxml raise a zoo of errors on bad files
         raise ExtractionError(f"could not parse DOCX: {exc}") from exc
     stories = [*margins[RT.HEADER], _docx_story(body_lines), *margins[RT.FOOTER]]
-    return "\n\n".join(s for s in stories if s)
+    return "\n\n".join(s for s in stories if s), nodes_used
 
 
 def _snippet_text(snippet) -> str:
