@@ -548,7 +548,18 @@ def _deps_satisfied(deps: list[str], scopes: dict[str, str] | None = None) -> tu
     the runtime's copy made the gate answer "satisfied" about the wrong interpreter:
     install passed, then every tool call died with ``ModuleNotFoundError``. Host-scoped
     deps are therefore judged by host importability alone. Unscoped deps default to
-    ``runtime`` (the compute-plugin pattern), so existing manifests are unaffected."""
+    ``runtime`` (the compute-plugin pattern), so existing manifests are unaffected.
+
+    Known blind spot, deliberately left in place: an unscoped dep is checked against the
+    HOST first, and anything core or the doc stack bundles into the frozen app (pypdf,
+    python-docx, lxml, httpx, …) is importable there — so it reads "satisfied" even when
+    the plugin only imports it inside ``execute_code``, where the host's PYZ copy is
+    unreachable. Judging unscoped deps by the runtime alone would refuse every plugin
+    whose tools import a bundled lib in-process until the runtime is provisioned, and
+    ``scope: runtime`` isn't recorded (only ``host`` is), so it can't be told apart. What
+    covers the document skills instead is the managed runtime's baseline
+    (``apps/desktop/sidecar/requirements-docs.txt``) listing every library they import —
+    pypdf was missing from it, which is how "read a PDF via execute_code" broke on desktop."""
     runtime_dists = _managed_runtime_dists()
     scopes = scopes or {}
     missing = []

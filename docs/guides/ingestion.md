@@ -2,7 +2,7 @@
 
 Pull files, web pages, and media into the knowledge store so the agent can recall
 them. Ingestion **extracts text, chunks it, embeds it, and indexes it** — one call
-handles plain text, Markdown, HTML, PDF, audio, video, and web/YouTube URLs.
+handles plain text, Markdown, HTML, PDF, Word (`.docx`), audio, video, and web/YouTube URLs.
 
 > This is the *ingest* (write) side. For how recall works and the tuning knobs, see
 > [Tune the knowledge store (RAG)](/guides/knowledge); for the design, see
@@ -11,7 +11,7 @@ handles plain text, Markdown, HTML, PDF, audio, video, and web/YouTube URLs.
 ## From the console
 
 **Knowledge → Store → Add source.** Drop a file, or paste a web/YouTube URL, pick a
-**domain** (defaults to `general`), and import. The form accepts `txt, md, html, pdf`
+**domain** (defaults to `general`), and import. The form accepts `txt, md, html, pdf, docx`
 and audio/video (`mp3, wav, m4a, flac, ogg, opus, aac, mp4, mov, mkv, webm, avi, m4v`).
 You'll see `Added N chunks from "<title>"`.
 
@@ -65,16 +65,19 @@ the detected `source_type`, and `chars`.
 | Text / Markdown | decoded directly | — |
 | HTML | readable text extracted (script/nav/footer stripped) | — |
 | PDF | text extracted per page | `pypdf` |
+| Word (`.docx`) | header, body, footer in document order — headings as `#` lines, list items as `- `, tables row by row | `python-docx` (bundled in the desktop app; not a core dependency — a server without it answers **501** naming the install) |
 | Web URL | fetched, then dispatched by content-type | — |
 | YouTube URL | transcript via the captions API, else gateway STT | `youtube-transcript-api` |
 | Audio | transcribed via the gateway's `/audio/transcriptions` (Whisper) | `knowledge.transcribe_model` set |
 | Video | `ffmpeg` extracts the audio track → gateway STT | `ffmpeg` on PATH + `transcribe_model` |
 
 Format is detected from the file extension, then the content-type, then a UTF-8
-heuristic. The `pypdf` / `youtube-transcript-api` deps are lazy-imported — a missing
-one fails *that* source with a clear message, never the server. Audio/video always
-transcribe **through the gateway** (no local ASR); leave `transcribe_model` blank to
-disable media ingestion.
+heuristic. The `pypdf` / `python-docx` / `youtube-transcript-api` deps are lazy-imported —
+a missing one fails *that* source with a clear message, never the server. Legacy binary
+Word (`.doc`) isn't readable: re-save it as `.docx` or export it to PDF. A `.docx` is a
+zip, so its declared uncompressed size is capped (100 MB) before anything inflates it.
+Audio/video always transcribe **through the gateway** (no local ASR); leave
+`transcribe_model` blank to disable media ingestion.
 
 ## Chunking & enrichment (config)
 

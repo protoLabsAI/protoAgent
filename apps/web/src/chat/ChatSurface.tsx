@@ -12,6 +12,7 @@ import { openContextMenu } from "../contextMenu";
 import { useIsMobile } from "../lib/useIsMobile";
 import { useKbIntents } from "../keybindings/intents";
 import { api } from "../lib/api";
+import { CHAT_ATTACH_ACCEPT } from "../lib/attachTypes";
 import { errMsg } from "../lib/format";
 import { chatCommandsQuery, chatMentionsQuery, goalsQuery, runtimeStatusQuery } from "../lib/queries";
 import { useUI } from "../state/uiStore";
@@ -2695,11 +2696,7 @@ function ChatSessionSlot({
           type="file"
           multiple
           hidden
-          accept={
-            ".txt,.text,.log,.csv,.md,.markdown,.html,.htm,.pdf," +
-            ".png,.jpg,.jpeg,.gif,.webp,.bmp," +
-            ".mp3,.wav,.m4a,.flac,.ogg,.opus,.aac,.mp4,.mov,.mkv,.webm,.avi,.m4v"
-          }
+          accept={CHAT_ATTACH_ACCEPT}
           onChange={(e) => {
             const files = Array.from(e.target.files ?? []);
             files.forEach((f) => void uploadAttachment(f));

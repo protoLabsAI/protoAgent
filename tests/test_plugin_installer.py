@@ -304,8 +304,18 @@ def test_install_deps_missing_plugin(env):
 # ── frozen desktop: deps route into the managed Python runtime (ADR 0094 P2) ──
 
 
+def _host_lacks(monkeypatch, *names: str) -> None:
+    """These scenarios model a frozen host WITHOUT the dep (a lean freeze), so it must read
+    as absent from THIS interpreter — pinned, not assumed. An env that has python-docx
+    installed (CI does, for tests/test_ingestion_docx.py) would otherwise satisfy it from
+    the host, and the managed-runtime path under test would never run."""
+    real = installer._importable
+    monkeypatch.setattr(installer, "_importable", lambda n: n not in names and real(n))
+
+
 def test_deps_satisfied_honors_the_managed_runtime_when_frozen(env, monkeypatch):
     monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
+    _host_lacks(monkeypatch, "python-docx")
     # A dep that's NOT importable in the host is still "satisfied" if it's in the runtime.
     monkeypatch.setattr(installer, "_managed_runtime_dists", lambda: {"python-docx"})
     ok, missing = installer._deps_satisfied(["python-docx>=1.1", "nope-pkg"])
@@ -316,6 +326,7 @@ def test_frozen_install_deps_pips_into_managed_runtime(env, monkeypatch):
     repo = _make_plugin_repo(env, manifest_extra="requires_pip: [python-docx>=1.1]\n")
     installer.install(str(repo))
     monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
+    _host_lacks(monkeypatch, "python-docx")
     monkeypatch.setattr(installer, "_managed_runtime_dists", lambda: set())  # not yet in the runtime
     import runtime.python_install as pi
 
@@ -330,6 +341,7 @@ def test_frozen_install_deps_noop_when_already_in_runtime(env, monkeypatch):
     repo = _make_plugin_repo(env, manifest_extra="requires_pip: [python-docx>=1.1]\n")
     installer.install(str(repo))
     monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
+    _host_lacks(monkeypatch, "python-docx")
     monkeypatch.setattr(installer, "_managed_runtime_dists", lambda: {"python-docx"})
     import runtime.python_install as pi
 
@@ -345,6 +357,7 @@ def test_frozen_install_deps_refuses_when_runtime_unprovisioned(env, monkeypatch
     repo = _make_plugin_repo(env, manifest_extra="requires_pip: [python-docx>=1.1]\n")
     installer.install(str(repo))
     monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
+    _host_lacks(monkeypatch, "python-docx")
     monkeypatch.setattr(installer, "_managed_runtime_dists", lambda: set())
     import runtime.python_install as pi
 
@@ -394,6 +407,7 @@ def test_frozen_install_pips_missing_deps_into_managed_runtime(env, monkeypatch)
     the runtime (the install_deps target) and the install proceeds."""
     repo = _make_plugin_repo(env, manifest_extra="requires_pip: [python-docx>=1.1]\n")
     monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
+    _host_lacks(monkeypatch, "python-docx")
     monkeypatch.setenv("PROTOAGENT_PLUGIN_FETCH", "git")  # frozen forces archive fetch; keep the local-repo clone
     monkeypatch.setattr(installer, "_managed_runtime_dists", lambda: set())  # dep not satisfied anywhere
     import infra.python_runtime as pr
@@ -411,6 +425,7 @@ def test_frozen_install_pips_missing_deps_into_managed_runtime(env, monkeypatch)
 def test_frozen_install_refuses_without_managed_runtime_and_names_the_install_route(env, monkeypatch):
     repo = _make_plugin_repo(env, manifest_extra="requires_pip: [python-docx>=1.1]\n")
     monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
+    _host_lacks(monkeypatch, "python-docx")
     monkeypatch.setenv("PROTOAGENT_PLUGIN_FETCH", "git")
     monkeypatch.setattr(installer, "_managed_runtime_dists", lambda: set())
     import infra.python_runtime as pr
@@ -430,6 +445,7 @@ def test_frozen_install_refuses_without_managed_runtime_and_names_the_install_ro
 def test_frozen_install_surfaces_the_real_error_when_runtime_install_fails(env, monkeypatch):
     repo = _make_plugin_repo(env, manifest_extra="requires_pip: [python-docx>=1.1]\n")
     monkeypatch.setenv("PROTOAGENT_PLUGIN_FROZEN", "1")
+    _host_lacks(monkeypatch, "python-docx")
     monkeypatch.setenv("PROTOAGENT_PLUGIN_FETCH", "git")
     monkeypatch.setattr(installer, "_managed_runtime_dists", lambda: set())
     import infra.python_runtime as pr

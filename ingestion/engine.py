@@ -1,8 +1,8 @@
 """Source → text extractors for the ingestion engine (ADR 0021).
 
 Pure-Python, dependency-light. Network (URL fetch) and optional deps (pypdf,
-youtube-transcript-api) are isolated to their own extractors so the parsing
-helpers (HTML→text, YouTube-id parsing, decode) stay unit-testable offline.
+python-docx, youtube-transcript-api) are isolated to their own extractors so the
+parsing helpers (HTML→text, YouTube-id parsing, decode) stay unit-testable offline.
 """
 
 from __future__ import annotations
@@ -59,6 +59,20 @@ _TEXT_EXTS = {".txt", ".text", ".log", ".rst", ".csv", ".tsv"}
 _MD_EXTS = {".md", ".markdown", ".mdown", ".mkd", ".mdx"}
 _HTML_EXTS = {".html", ".htm", ".xhtml"}
 _PDF_EXTS = {".pdf"}
+# Word → text via python-docx (lazy; NOT a core dep — the desktop bundles it, a bare
+# server may not have it, and a missing lib is a MissingDependency the routes map to 501).
+_DOCX_EXTS = {".docx"}
+_DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+# Legacy binary Word (an OLE2 compound file) — nothing here reads it; refuse with the fix.
+_LEGACY_DOC_EXTS = {".doc"}
+_LEGACY_DOC_MIME = "application/msword"
+_OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+# A .docx is a zip, so its upload size says nothing about what it inflates to. Checked
+# from the central directory BEFORE python-docx opens it (which reads every part into
+# memory). The declared sizes can be trusted as a ceiling: CPython's zipfile never
+# inflates a member past its declared size — a lying header fails the CRC instead.
+_MAX_DOCX_UNCOMPRESSED_BYTES = _MAX_FETCH_BYTES
+_MAX_DOCX_MEMBERS = 5000
 # Audio → transcribed directly via the gateway STT endpoint.
 _AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".oga", ".opus", ".aac", ".wma", ".aiff", ".aif"}
 # Video → audio track extracted with ffmpeg, then transcribed.
@@ -68,8 +82,10 @@ _VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".mpeg", ".mpg",
 # bare extractor without a describe fn still rejects images with a clear message.
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".heic", ".heif"}
 
-SUPPORTED_EXTENSIONS = sorted(_TEXT_EXTS | _MD_EXTS | _HTML_EXTS | _PDF_EXTS | _AUDIO_EXTS | _VIDEO_EXTS)
-SUPPORTED_DESCRIPTION = "text, Markdown, HTML, PDF, audio + video files, and web/YouTube URLs"
+SUPPORTED_EXTENSIONS = sorted(
+    _TEXT_EXTS | _MD_EXTS | _HTML_EXTS | _PDF_EXTS | _DOCX_EXTS | _AUDIO_EXTS | _VIDEO_EXTS
+)
+SUPPORTED_DESCRIPTION = "text, Markdown, HTML, PDF, Word (.docx), audio + video files, and web/YouTube URLs"
 
 
 # ── decoding / parsing helpers (pure) ────────────────────────────────────────
@@ -186,6 +202,276 @@ def _extract_pdf(data: bytes) -> str:
     except Exception as exc:  # noqa: BLE001 — pypdf raises a zoo of errors on bad PDFs
         raise ExtractionError(f"could not parse PDF: {exc}") from exc
     return "\n\n".join(p for p in pages if p)
+
+
+_LEGACY_DOC_HINT = (
+    "legacy Word .doc files aren't supported — re-save it as .docx "
+    "(Word: File ▸ Save As ▸ Word Document) or export it to PDF, then attach that"
+)
+_ENCRYPTED_DOCX_HINT = (
+    "this Word document is password-protected — remove the password "
+    "(Word: File ▸ Info ▸ Protect Document) or export it to PDF, then attach that"
+)
+# A password-protected .docx isn't a zip at all: Office wraps the encrypted package in the
+# same OLE2 container a legacy .doc uses, as a stream with this (UTF-16) name.
+_ENCRYPTED_OOXML_MARKER = "EncryptedPackage".encode("utf-16-le")
+
+
+def _ole_word_refusal(data: bytes) -> UnsupportedSource:
+    """The right refusal for an OLE2 Word file: encrypted .docx, else legacy .doc."""
+    return UnsupportedSource(_ENCRYPTED_DOCX_HINT if _ENCRYPTED_OOXML_MARKER in data else _LEGACY_DOC_HINT)
+_DOCX_MISSING_HINT = (
+    "Word (.docx) files need the 'python-docx' package, which isn't installed in this "
+    "server's Python — install it there (pip install python-docx) and retry, or export "
+    "the document to PDF and attach that instead"
+)
+
+# WordprocessingML tags, in the Clark notation lxml reports (the walk below reads the raw
+# XML so it behaves the same on every python-docx version — 0.8's ``paragraph.text``
+# dropped hyperlink runs, which is where a resume keeps its email address).
+_W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+_W_P, _W_TBL, _W_TR, _W_TC = f"{_W}p", f"{_W}tbl", f"{_W}tr", f"{_W}tc"
+_W_SDT, _W_SDT_CONTENT, _W_CUSTOM_XML = f"{_W}sdt", f"{_W}sdtContent", f"{_W}customXml"
+_W_T, _W_TAB, _W_BR, _W_CR = f"{_W}t", f"{_W}tab", f"{_W}br", f"{_W}cr"
+_W_NB_HYPHEN, _W_TXBX_CONTENT = f"{_W}noBreakHyphen", f"{_W}txbxContent"
+_W_PPR, _W_PSTYLE, _W_NUMPR, _W_ILVL, _W_NUMID, _W_VAL = (
+    f"{_W}pPr",
+    f"{_W}pStyle",
+    f"{_W}numPr",
+    f"{_W}ilvl",
+    f"{_W}numId",
+    f"{_W}val",
+)
+# Subtrees whose text isn't on the page: formatting properties, tracked deletions and the
+# moved-from copy, and a shape's legacy (VML) fallback that repeats its modern rendering.
+_DOCX_SKIP = frozenset(
+    {
+        _W_PPR,
+        f"{_W}rPr",
+        f"{_W}sdtPr",
+        f"{_W}sdtEndPr",
+        f"{_W}del",
+        f"{_W}moveFrom",
+        "{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback",
+    }
+)
+_HEADING_STYLE_RE = re.compile(r"heading\s*([1-9])")
+_LIST_STYLE_RE = re.compile(r"list (?:bullet|number)(?:\s*([1-9]))?")
+
+
+def _guard_docx_zip(data: bytes) -> None:
+    """Refuse a .docx that isn't a sane zip BEFORE anything inflates it: too big on the
+    wire, not a zip at all, too many members, or a declared uncompressed total past the
+    cap (the zip-bomb case — kilobytes that expand to gigabytes of XML)."""
+    import io
+    import zipfile
+
+    if len(data) > _MAX_FETCH_BYTES:
+        raise ExtractionError(f"document too large ({len(data)} bytes > {_MAX_FETCH_BYTES})")
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            members = zf.infolist()
+    except (zipfile.BadZipFile, zipfile.LargeZipFile, ValueError, OSError) as exc:
+        raise ExtractionError(f"not a valid .docx file (a .docx is a zip archive): {exc}") from exc
+    if len(members) > _MAX_DOCX_MEMBERS:
+        raise ExtractionError(f"refusing a .docx with {len(members)} archive members (> {_MAX_DOCX_MEMBERS})")
+    inflated = sum(max(0, m.file_size) for m in members)
+    if inflated > _MAX_DOCX_UNCOMPRESSED_BYTES:
+        raise ExtractionError(
+            f"refusing a .docx that expands to {inflated} bytes (> {_MAX_DOCX_UNCOMPRESSED_BYTES}) uncompressed"
+        )
+
+
+def _docx_style_kinds(document) -> tuple[dict[str, int], dict[str, int]]:
+    """``(headings, lists)``: paragraph style id → heading level (1-9) / list level (0-8).
+    Matched on the style NAME (``Heading 2``, ``List Bullet 2``) — ids are localized in
+    non-English templates, names of built-in styles are not. A custom style that carries
+    its own numbering counts as a list."""
+    headings: dict[str, int] = {}
+    lists: dict[str, int] = {}
+    for style in document.styles:
+        try:
+            sid = style.style_id
+            name = (style.name or "").strip().lower()
+            numbered = style.element.find(f"{_W_PPR}/{_W_NUMPR}") is not None
+        except Exception:  # noqa: BLE001 — one odd style definition never sinks the document
+            continue
+        if not sid:
+            continue
+        heading = _HEADING_STYLE_RE.fullmatch(name)
+        listed = _LIST_STYLE_RE.fullmatch(name)
+        if name == "title":
+            headings[sid] = 1
+        elif heading:
+            headings[sid] = int(heading.group(1))
+        elif listed:
+            lists[sid] = int(listed.group(1) or 1) - 1
+        elif numbered:
+            lists[sid] = 0
+    return headings, lists
+
+
+def _docx_inline_text(el, kinds, spill: list[str]) -> str:
+    """The visible text of one paragraph's runs (hyperlinks, fields, inline content
+    controls and tracked insertions included). A text box anchored in the paragraph is
+    its own little document: its blocks go to ``spill``, emitted after the paragraph."""
+    parts: list[str] = []
+    for child in el:
+        tag = child.tag
+        if not isinstance(tag, str) or tag in _DOCX_SKIP:  # comments/PIs have a non-str tag
+            continue
+        if tag == _W_T:
+            parts.append(child.text or "")
+        elif tag == _W_TAB:
+            parts.append("\t")
+        elif tag in (_W_BR, _W_CR):
+            parts.append("\n")
+        elif tag == _W_NB_HYPHEN:
+            parts.append("-")
+        elif tag == _W_TXBX_CONTENT:
+            _docx_blocks(child, kinds, spill)
+        else:
+            parts.append(_docx_inline_text(child, kinds, spill))
+    return "".join(parts)
+
+
+def _docx_paragraph(p, kinds, out: list[str]) -> None:
+    headings, lists = kinds
+    spill: list[str] = []
+    text = _docx_inline_text(p, kinds, spill).strip()
+    style_id, num_level = "", None
+    ppr = p.find(_W_PPR)
+    if ppr is not None:
+        pstyle = ppr.find(_W_PSTYLE)
+        style_id = (pstyle.get(_W_VAL) if pstyle is not None else "") or ""
+        numpr = ppr.find(_W_NUMPR)
+        if numpr is not None:
+            num_id = numpr.find(_W_NUMID)
+            ilvl = numpr.find(_W_ILVL)
+            # numId 0 is Word's explicit "no numbering here" (overrides a list style).
+            num_level = -1 if num_id is not None and num_id.get(_W_VAL) == "0" else _int_attr(ilvl)
+    if text:
+        list_level = lists.get(style_id) if num_level is None else (num_level if num_level >= 0 else None)
+        if style_id in headings:
+            if out and out[-1]:
+                out.append("")  # a blank line before a heading, as Markdown reads it
+            out.append("#" * min(headings[style_id], 6) + " " + " ".join(text.split()))
+        elif list_level is not None:
+            indent = "  " * min(list_level, 8)
+            out.append(f"{indent}- " + text.replace("\n", f"\n{indent}  "))  # a soft break stays in the item
+        else:
+            out.append(text)
+    out.extend(spill)
+
+
+def _int_attr(el) -> int:
+    try:
+        return max(0, int(el.get(_W_VAL))) if el is not None else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def _docx_children(el, tag: str):
+    """Direct ``tag`` children of ``el``, looking through the content-control / custom-XML
+    wrappers Word may put around rows and cells."""
+    for child in el:
+        if child.tag == tag:
+            yield child
+        elif child.tag == _W_SDT:
+            content = child.find(_W_SDT_CONTENT)
+            if content is not None:
+                yield from _docx_children(content, tag)
+        elif child.tag == _W_CUSTOM_XML:
+            yield from _docx_children(child, tag)
+
+
+def _docx_table(tbl, kinds, out: list[str]) -> None:
+    """A data table reads row by row as ``a | b | c``. A LAYOUT table (resumes: dates in
+    one column, a job's bullets in the next) has multi-paragraph cells that one pipe row
+    would flatten, so such a row is read cell by cell, keeping headings and bullets."""
+    rows = []
+    for tr in _docx_children(tbl, _W_TR):
+        cells = []
+        for tc in _docx_children(tr, _W_TC):
+            lines: list[str] = []
+            _docx_blocks(tc, kinds, lines)
+            cells.append([ln for ln in lines if ln.strip()])
+        rows.append(cells)
+    if out and out[-1]:
+        out.append("")
+    for cells in rows:
+        if not any(cells):
+            continue
+        if all(len(c) <= 1 for c in cells):
+            out.append(" | ".join(" ".join(c[0].split()) if c else "" for c in cells))
+        else:
+            for c in cells:
+                out.extend(c)
+    out.append("")
+
+
+def _docx_blocks(container, kinds, out: list[str]) -> None:
+    """Paragraphs and tables of a story (body, cell, header, footer, text box) in order."""
+    for child in container:
+        tag = child.tag
+        if tag == _W_P:
+            _docx_paragraph(child, kinds, out)
+        elif tag == _W_TBL:
+            _docx_table(child, kinds, out)
+        elif tag == _W_SDT:
+            content = child.find(_W_SDT_CONTENT)
+            if content is not None:
+                _docx_blocks(content, kinds, out)
+        elif tag == _W_CUSTOM_XML:
+            _docx_blocks(child, kinds, out)
+
+
+def _docx_story(lines: list[str]) -> str:
+    """Join a story's lines, collapsing the blank runs tables/headings leave behind."""
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
+def _extract_docx(data: bytes) -> str:
+    """Word → markdown-ish text: header, body, footer. Headings become ``#`` lines, list
+    items ``- `` (indented by level), tables row by row — all in document order."""
+    if data[:8] == _OLE2_MAGIC:  # a password-protected .docx, or a legacy .doc renamed
+        raise _ole_word_refusal(data)
+    _guard_docx_zip(data)
+    try:
+        import docx  # python-docx
+        from docx.opc.constants import RELATIONSHIP_TYPE as RT
+    except ImportError as exc:
+        raise MissingDependency(_DOCX_MISSING_HINT) from exc
+    import io
+
+    try:
+        document = docx.Document(io.BytesIO(data))
+        kinds = _docx_style_kinds(document)
+        body = document.element.find(f"{_W}body")
+        body_lines: list[str] = []
+        if body is not None:
+            _docx_blocks(body, kinds, body_lines)
+        # Headers/footers (resumes keep contact details there) via the document part's
+        # relationships: every variant (default / first-page / even) once, deduped by text.
+        margins: dict[str, list[str]] = {RT.HEADER: [], RT.FOOTER: []}
+        for rel in list(document.part.rels.values()):
+            if rel.is_external or rel.reltype not in margins:
+                continue
+            part = rel.target_part
+            element = getattr(part, "element", None)
+            if element is None:
+                from docx.oxml import parse_xml
+
+                element = parse_xml(part.blob)
+            lines: list[str] = []
+            _docx_blocks(element, kinds, lines)
+            story = _docx_story(lines)
+            if story and story not in margins[rel.reltype]:
+                margins[rel.reltype].append(story)
+    except Exception as exc:  # noqa: BLE001 — python-docx / lxml raise a zoo of errors on bad files
+        raise ExtractionError(f"could not parse DOCX: {exc}") from exc
+    stories = [*margins[RT.HEADER], _docx_story(body_lines), *margins[RT.FOOTER]]
+    return "\n\n".join(s for s in stories if s)
 
 
 def _snippet_text(snippet) -> str:
@@ -312,6 +598,10 @@ def extract_bytes(
 
     if ext in _PDF_EXTS or ct == "application/pdf":
         text, source_type = _extract_pdf(data), "pdf"
+    elif ext in _DOCX_EXTS or ct == _DOCX_MIME:
+        text, source_type = _extract_docx(data), "docx"
+    elif ext in _LEGACY_DOC_EXTS or ct == _LEGACY_DOC_MIME:
+        raise _ole_word_refusal(data)
     elif ext in _HTML_EXTS or "html" in ct:
         text, source_type = html_to_text(data), "html"
     elif ext in _MD_EXTS:
@@ -360,6 +650,10 @@ def extract_url(url: str, *, fetch=None, transcribe=None) -> ExtractResult:
 
     if "pdf" in ct or url_ext in _PDF_EXTS:
         text, source_type, title = _extract_pdf(data), "pdf", url
+    elif ct == _DOCX_MIME or url_ext in _DOCX_EXTS:
+        text, source_type, title = _extract_docx(data), "docx", url
+    elif ct == _LEGACY_DOC_MIME or url_ext in _LEGACY_DOC_EXTS:
+        raise _ole_word_refusal(data)
     elif ct.startswith("audio/") or url_ext in _AUDIO_EXTS:
         name = _media_filename(url, url_ext, ".mp3")
         text, source_type, title = _transcribe_media(data, name, transcribe, video=False), "audio", url

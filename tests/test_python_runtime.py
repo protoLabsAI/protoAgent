@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import os
+import re
 import sys
 import tarfile
 from pathlib import Path
@@ -215,6 +216,62 @@ def test_stale_baseline_repairs_without_redownload(mocked_install):
     st = pi.install_managed_python()
     assert mocked_install["downloads"]["n"] == 1  # no re-download
     assert mocked_install["baseline"]["n"] == 2  # deps-only repair ran
+    assert st["baseline_current"] is True
+
+
+# ── the REAL baseline file (what the execute_code child can import) ──────────
+
+_REPO_BASELINE = Path(__file__).resolve().parents[1] / "apps" / "desktop" / "sidecar" / "requirements-docs.txt"
+
+
+def _baseline_names(text: str) -> set[str]:
+    """Normalized distribution names from a requirements file (comments/blanks skipped)."""
+    names = set()
+    for line in text.splitlines():
+        spec = line.split("#", 1)[0].strip()
+        if spec:
+            names.add(pr.normalize_dist(re.match(r"[A-Za-z0-9._-]+", spec).group(0)))
+    return names
+
+
+def test_doc_baseline_carries_every_library_the_document_skills_import():
+    """The document skills (cowork's docx/xlsx/pptx/pdf) run in the execute_code CHILD,
+    whose only libraries are what this file installs — the frozen host's bundled copies
+    live in the PYZ, unreachable from any external interpreter.
+
+    pypdf is the one that slipped: it's a core dep, so the frozen host can import it and
+    the plugin dep check (``installer._deps_satisfied``, host-first for unscoped deps)
+    reports it satisfied and never offers to install it in the child. The baseline is the
+    only road it has into the runtime, so "read a PDF with pypdf via execute_code" failed
+    on every desktop until it was listed here."""
+    names = _baseline_names(_REPO_BASELINE.read_text(encoding="utf-8"))
+    assert {"python-docx", "openpyxl", "python-pptx", "pypdf", "reportlab"} <= names
+
+
+def test_runtime_provisioned_before_pypdf_is_flagged_stale_and_repaired(box, monkeypatch):
+    """Existing desktops provisioned their runtime from the PREVIOUS baseline and stamped
+    its hash. Shipping the new file must flip them to ``baseline_current: false`` (the
+    Settings ▸ Tools card + nav badge offer the update) and the update must be the
+    deps-only repair against the real file — no interpreter re-download."""
+    assert pi._baseline_requirements_path() == _REPO_BASELINE  # a source run reads the real file
+    current = _REPO_BASELINE.read_text(encoding="utf-8")
+    previous = "".join(ln for ln in current.splitlines(keepends=True) if not ln.lower().startswith("pypdf"))
+    install_dir = pr.managed_python_install_dir()
+    _make_python(install_dir)
+    (install_dir / pi._VERSION_MARKER).write_text(pi.PYTHON_VERSION, encoding="utf-8")
+    (install_dir / pi._BASELINE_MARKER).write_text(hashlib.sha256(previous.encode("utf-8")).hexdigest(), "utf-8")
+
+    st = pi.python_status()
+    assert st["baseline_installed"] is True and st["baseline_current"] is False
+
+    pip_calls: list[list[str]] = []
+    monkeypatch.setattr(pi, "_pip_install", lambda _exe, args, **_kw: pip_calls.append(list(args)))
+    monkeypatch.setattr(pi, "_download_archive", lambda *_a, **_k: pytest.fail("repair re-downloaded CPython"))
+
+    st = pi.install_managed_python()
+
+    assert len(pip_calls) == 1 and pip_calls[0][0] == "-r"
+    assert "pypdf" in _baseline_names(Path(pip_calls[0][1]).read_text(encoding="utf-8"))
     assert st["baseline_current"] is True
 
 

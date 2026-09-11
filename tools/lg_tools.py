@@ -909,8 +909,8 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         "summarize and keep". Do NOT web_search / fetch_url a YouTube or media link
         yourself — this is the only path that gets a transcript or decodes a file.
 
-        Handles URLs (web articles + YouTube transcripts), documents (PDF, text,
-        Markdown), media (audio + video, transcribed via the gateway) and images
+        Handles URLs (web articles + YouTube transcripts), documents (PDF, Word .docx,
+        text, Markdown), media (audio + video, transcribed via the gateway) and images
         (described via the gateway vision model).
 
         **Anything that fetches over the network or transcribes media runs in the
