@@ -151,6 +151,11 @@ type UIState = {
   // would silently keep iframes alive from boot that the operator never opened.
   pluginBackground: Record<string, boolean>;
   setPluginBackground: (key: string, on: boolean) => void;
+  // A request to open the Background jobs dialog from outside the utility-bar widget (the
+  // chat's "background work" strip). A counter, not a flag: the widget opens on each bump
+  // and owns its own open/closed state after that. EPHEMERAL — partialized out.
+  backgroundJobsRequest: number;
+  openBackgroundJobs: () => void;
   // Chat display: show the per-turn token/cost + context-window footer under each answer
   // (#1372). Off by default; operators who want per-turn cost visibility turn it on (this device).
   showChatUsage: boolean;
@@ -524,6 +529,8 @@ export const useUI = create<UIState>()(
           else delete next[key];
           return { pluginBackground: next };
         }),
+      backgroundJobsRequest: 0,
+      openBackgroundJobs: () => set((s) => ({ backgroundJobsRequest: s.backgroundJobsRequest + 1 })),
       showChatUsage: false,
       setShowChatUsage: (showChatUsage) => set({ showChatUsage }),
     }),
@@ -536,7 +543,7 @@ export const useUI = create<UIState>()(
       // (the Global settings overlay, the per-plugin Configure dialog, the pending
       // rail-menu Update/Uninstall action, and the per-session background-delivery set
       // (#1640) — a view's page re-requests it on every load).
-      partialize: ({ globalSettingsOpen: _o, globalSettingsSection: _s, toolsTarget: _tt, configurePlugin: _c, pluginUpdate: _pu, pluginUninstall: _pun, pluginBackground: _pb, ...rest }) => rest,
+      partialize: ({ globalSettingsOpen: _o, globalSettingsSection: _s, toolsTarget: _tt, configurePlugin: _c, pluginUpdate: _pu, pluginUninstall: _pun, pluginBackground: _pb, backgroundJobsRequest: _bjr, ...rest }) => rest,
     },
   ),
 );

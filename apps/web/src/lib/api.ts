@@ -78,6 +78,7 @@ import type {
   VerifierCatalog,
   WorkflowSummary,
 } from "./types";
+import { delegationFromFrame } from "./delegation";
 
 import type { WatchCreateBody } from "../chat/watchForm";
 import { notifyAuthRequired } from "./auth";
@@ -629,7 +630,18 @@ export function componentFromParts(parts?: RawPart[]): ComponentSpec | null {
  *  `null` for every ordinary turn — the lead agent needs no attribution. */
 export function roomReplyFromParts(parts?: RawPart[]): RoomReply | null {
   const d = dataByMime(parts, ROOM_MIME) as
-    | { author?: string; addressed_to?: string; from?: string; text?: string; ok?: boolean; stopped?: string }
+    | {
+        author?: string;
+        addressed_to?: string;
+        from?: string;
+        text?: string;
+        ok?: boolean;
+        stopped?: string;
+        summary?: string;
+        background?: boolean;
+        job_id?: string;
+        error?: string;
+      }
     | undefined;
   if (!d) return null;
   const addressedTo = typeof d.addressed_to === "string" && d.addressed_to ? d.addressed_to : undefined;
@@ -644,8 +656,10 @@ export function roomReplyFromParts(parts?: RawPart[]): RoomReply | null {
     text: typeof d.text === "string" ? d.text : "",
     ok: d.ok !== false,
     stopped: typeof d.stopped === "string" ? d.stopped : undefined,
+    delegation: addressedTo ? delegationFromFrame(d) : undefined,
   };
 }
+
 
 /** Decode the exact model-call boundary where queued operator input was consumed. */
 export function consumedSteersFromParts(parts?: RawPart[]): ConsumedSteer[] | null {

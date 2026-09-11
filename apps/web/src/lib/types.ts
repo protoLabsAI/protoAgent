@@ -1001,6 +1001,21 @@ export type RoomReply = {
   ok: boolean;
   /** Set when a chain stopped here, and why (`self_mention` / `per_target_limit`). */
   stopped?: string;
+  /** On an outgoing ask: the delegation's one-line summary, which the chat shows instead of
+   *  the full query (`text`); a background delegation's job id; the dispatch error. */
+  delegation?: Delegation;
+};
+
+/** What the chat shows for a delegation instead of its whole prompt. */
+export type Delegation = {
+  /** One line, written by the lead for the operator (or the prompt's first sentence). */
+  summary?: string;
+  /** Ran detached: the reply arrives later, through the background drain. */
+  background?: boolean;
+  /** The background job, whose status the row tracks (`bg-…`). */
+  jobId?: string;
+  /** The dispatch itself failed (an unknown delegate, …) — the reason. */
+  error?: string;
 };
 
 /** Operator messages folded into a running turn at one model-call boundary (#2959). */
@@ -1017,6 +1032,8 @@ export type ChatMessage = {
    *  Renders a `→ @name` header on an otherwise-ordinary lead bubble, so the operator
    *  sees what was delegated. Distinct from `author` (a participant's reply). */
   addressedTo?: string;
+  /** On an outgoing ask: the summary / background job / error the delegation row shows. */
+  delegation?: Delegation;
   toolCalls?: ToolCall[];
   components?: ComponentSpec[];
   /** Ordered render blocks (text runs + tool groups) built during streaming so the

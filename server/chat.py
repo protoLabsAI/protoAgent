@@ -550,6 +550,30 @@ def _coerce_tool_output(value) -> str:
     return _coerce_tool_value(_tool_payload(value))
 
 
+# The job handle a background `delegate_to` returns in its receipt ("… (job `bg-…`) …").
+_BG_JOB_ID = re.compile(r"\(job `(bg-[a-f0-9]{12})`\)")
+# The ONE refusal a background dispatch answers with instead of a job handle. Matched
+# exactly: a bare `startswith("Error")` also catches a delegate whose own reply opens with
+# that word (the no-manager inline fallback returns the reply here), and calling that a
+# failed dispatch would hide the answer behind an error row.
+_BG_DISPATCH_REFUSED = re.compile(r"^Error: unknown delegate\b")
+
+
+def _delegation_summary(summary: object, query: str) -> str:
+    """The one line the console shows for a delegation instead of its full query.
+
+    The agent's own ``summary`` argument when it wrote one; else the query's first sentence
+    — a delegation prompt restates everything the delegate needs, so the whole thing is a
+    wall of text the operator didn't write and rarely needs to read. Same fallback the job's
+    title uses (``infra.text.first_sentence``), so the row and the Background panel agree."""
+    from infra.text import first_sentence
+
+    line = " ".join(str(summary or "").split())
+    if not line:
+        return first_sentence(query)
+    return line if len(line) <= 120 else f"{line[:119].rstrip()}…"
+
+
 def _coerce_room_text(value) -> str:
     """A delegate's reply/query as a chat MESSAGE — full text, never preview-capped.
 
@@ -911,6 +935,7 @@ async def _run_turn_stream(
     _llm_started: dict[str, float] = {}  # run_id → monotonic start (per-call latency)
     _tool_started: dict[str, float] = {}  # run_id → monotonic start (per-call latency, #2697)
     _delegate_targets: dict[str, str] = {}  # run_id → delegate name, for delegate_to → room bubble (#3042)
+    _bg_delegations: dict[str, dict] = {}  # run_id → a BACKGROUND delegate_to's ask, emitted once it has a job id
     announced_tools: set[str] = set()  # tool_call ids already surfaced as a start frame
     async for event in STATE.graph.astream_events(
         graph_input,
@@ -951,19 +976,32 @@ async def _run_turn_stream(
             # the latency timing above uses.
             if name == "delegate_to" and rid:
                 _tgt = (event.get("data") or {}).get("input") or {}
-                _target = str((_tgt or {}).get("target") or "").strip() if isinstance(_tgt, dict) else ""
-                if _target:
+                _tgt = _tgt if isinstance(_tgt, dict) else {}
+                _target = str(_tgt.get("target") or "").strip()
+                _q = str(_tgt.get("query") or "").strip()
+                _summary = _delegation_summary(_tgt.get("summary"), _q)
+                if _target and _tgt.get("background") is True:
+                    # A BACKGROUND delegation returns a receipt, not the delegate's answer —
+                    # that arrives later through the background drain (#3051). So no reply
+                    # frame at on_tool_end (the receipt is instructions to the MODEL; shown
+                    # as the delegate's words it read as the delegate's thought process),
+                    # and the ask waits for on_tool_end too, to carry the job id the
+                    # console tracks the delegation's status by.
+                    _bg_delegations[rid] = {"id": rid, "target": _target, "query": _q, "summary": _summary}
+                elif _target:
                     _delegate_targets[rid] = _target
-                    # Surface the lead's OUTGOING ask as a directed bubble, so the operator
-                    # sees what was delegated, not just the reply (#3042) — the console
-                    # analogue of the `operator → proto` half of an `@` exchange, here
-                    # `lead → proto`. `addressed_to` + no `author` = the lead speaking to a
+                    # Surface the lead's OUTGOING ask, so the operator sees what was
+                    # delegated, not just the reply (#3042) — the `lead → proto` half of the
+                    # exchange. `addressed_to` + no `author` = the lead speaking to a
                     # participant; the reply below is `author`-stamped as the participant.
-                    _q = str((_tgt or {}).get("query") or "").strip()
+                    # The console shows `summary` and keeps the full query behind a
+                    # disclosure: the prompt is written for the delegate, not the operator.
                     if _q:
                         yield (
                             "room_reply",
-                            {"addressed_to": _target, "text": _q, "ok": True},
+                            # `id` is this delegation's run — two identical asks (same target,
+                            # same words) are still two rows, not one deduped away.
+                            {"id": rid, "addressed_to": _target, "text": _q, "summary": _summary, "ok": True},
                         )
         elif kind == "on_tool_end":
             output = event.get("data", {}).get("output", "")
@@ -972,8 +1010,56 @@ async def _run_turn_stream(
             # the collaboration the lead moderates then reads as a conversation (proto,
             # reviewer) rather than machinery under one reply (#3042). REPLACES the card —
             # this branch emits a room_reply and continues, so no tool_end frame follows.
-            # Foreground only: a background delegate_to answers via the background manager,
-            # never through on_tool_end, so it is untouched here.
+            # Foreground only: a background delegate_to answers via the background manager —
+            # its on_tool_end is the receipt, handled just above.
+            _bg = _bg_delegations.pop(rid, None) if rid else None
+            if _bg:
+                # A background delegate_to's receipt: surface the ASK — once, with the job id
+                # to track and the summary — and nothing else. No tool card (#3042) and no
+                # reply frame: the delegate's answer arrives on its own through the drain.
+                _receipt = _coerce_room_text(output)
+                _job = _BG_JOB_ID.search(_receipt)
+                _failed = getattr(output, "status", None) == "error" or bool(_BG_DISPATCH_REFUSED.match(_receipt))
+                if _job or _failed:
+                    yield (
+                        "room_reply",
+                        {
+                            "id": _bg["id"],
+                            "addressed_to": _bg["target"],
+                            "text": _bg["query"],
+                            "summary": _bg["summary"],
+                            "background": True,
+                            "ok": not _failed,
+                            **({"job_id": _job.group(1)} if _job else {}),
+                            **({"error": _receipt} if _failed else {}),
+                        },
+                    )
+                    continue
+                # No job handle and no error: no BackgroundManager was wired, so the tool
+                # fell back to an inline dispatch and `output` IS the delegate's reply. Render
+                # it as the foreground exchange it turned into.
+                yield (
+                    "room_reply",
+                    {
+                        "id": _bg["id"],
+                        "addressed_to": _bg["target"],
+                        "text": _bg["query"],
+                        "summary": _bg["summary"],
+                        "ok": True,
+                    },
+                )
+                yield (
+                    "room_reply",
+                    {
+                        "author": _bg["target"],
+                        "from": "assistant",
+                        "text": _receipt,
+                        "ok": True,
+                        "catchup": 0,
+                        "truncated": False,
+                    },
+                )
+                continue
             _dtgt = _delegate_targets.pop(rid, None) if rid else None
             if _dtgt:
                 _dtext = _coerce_room_text(output)
