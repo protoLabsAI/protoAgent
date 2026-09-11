@@ -254,12 +254,13 @@ def test_runtime_provisioned_before_pypdf_is_flagged_stale_and_repaired(box, mon
     Settings ▸ Tools card + nav badge offer the update) and the update must be the
     deps-only repair against the real file — no interpreter re-download."""
     assert pi._baseline_requirements_path() == _REPO_BASELINE  # a source run reads the real file
-    current = _REPO_BASELINE.read_text(encoding="utf-8")
-    previous = "".join(ln for ln in current.splitlines(keepends=True) if not ln.lower().startswith("pypdf"))
+    # Bytes, like _baseline_hash: a CRLF checkout must differ ONLY by the pypdf line.
+    current = _REPO_BASELINE.read_bytes()
+    previous = b"".join(ln for ln in current.splitlines(keepends=True) if not ln.lower().startswith(b"pypdf"))
     install_dir = pr.managed_python_install_dir()
     _make_python(install_dir)
     (install_dir / pi._VERSION_MARKER).write_text(pi.PYTHON_VERSION, encoding="utf-8")
-    (install_dir / pi._BASELINE_MARKER).write_text(hashlib.sha256(previous.encode("utf-8")).hexdigest(), "utf-8")
+    (install_dir / pi._BASELINE_MARKER).write_text(hashlib.sha256(previous).hexdigest(), encoding="utf-8")
 
     st = pi.python_status()
     assert st["baseline_installed"] is True and st["baseline_current"] is False
