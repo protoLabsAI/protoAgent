@@ -2253,6 +2253,7 @@ def _mount_plugin_routers(routers: list[dict]) -> None:
             before = len(app.router.routes)
             app.include_router(r["router"], prefix=prefix)
             fresh = list(app.router.routes[before:])
+            _exclude_unschemable_routes(fresh, plugin_id)
             stale = STATE.plugin_router_routes.pop(key, [])
             for route in stale:
                 try:
@@ -2283,6 +2284,58 @@ def _mount_plugin_routers(routers: list[dict]) -> None:
                 pass
         STATE.plugin_router_keys.discard(key)
         log.info("[plugins] unmounted router from %s at %s (disabled/removed)", key[0], key[1] or "/")
+    # FastAPI builds the schema once and caches it; routes that just mounted, remounted or
+    # left would otherwise be missing from (or linger in) /openapi.json until a restart.
+    app.openapi_schema = None
+
+
+def _exclude_unschemable_routes(routes, plugin_id: str) -> None:
+    """Leave a plugin route out of ``/openapi.json`` when its schema can't be built.
+
+    One route whose schema fails takes the WHOLE schema down: ``/openapi.json`` and
+    ``/docs`` answered 500 on every agent running orgChart, the portfolio plugin or the
+    learning-wiki plugin. Each wrote a page route as ``-> HTMLResponse`` with the import
+    inside the router-builder function under ``from __future__ import annotations``, so
+    FastAPI resolved the string against the module's globals, couldn't, and inferred a
+    response model from an unresolved forward reference that pydantic then refused.
+
+    Probing each route on its own as it mounts keeps a plugin's mistake local: that route
+    still SERVES, it is only left out of the documented schema, and the warning names the
+    plugin, the route and the fix. Best-effort — a probe that can't run changes nothing."""
+    try:
+        from fastapi.openapi.utils import get_openapi
+        from fastapi.routing import APIRoute
+    except Exception:  # noqa: BLE001 — no schema tooling, nothing to protect
+        return
+
+    def _api_routes(entries):
+        # FastAPI >= 0.141 mounts an included router LAZILY: the app's route list holds a
+        # wrapper whose `original_router` carries the plugin's real APIRoutes (and nested
+        # includes as further wrappers). Older FastAPI copies the APIRoutes in directly.
+        for entry in entries:
+            inner = getattr(entry, "original_router", None)
+            if inner is not None:
+                yield from _api_routes(getattr(inner, "routes", ()))
+            elif isinstance(entry, APIRoute):
+                yield entry
+
+    for route in _api_routes(routes):
+        if not route.include_in_schema:
+            continue
+        try:
+            get_openapi(title="plugin-route-probe", version="0", routes=[route])
+        except Exception as exc:  # noqa: BLE001 — any schema failure is the plugin's, not ours
+            route.include_in_schema = False
+            log.warning(
+                "[plugins] %s: %s %s is left out of /openapi.json — its schema can't be built "
+                "(%s). The route still serves. Usual cause: a return annotation naming a class "
+                "imported inside a function under `from __future__ import annotations`; declare "
+                "`response_class=` on the decorator instead of annotating the return type.",
+                plugin_id,
+                ",".join(sorted(route.methods or ())),
+                route.path,
+                type(exc).__name__,
+            )
 
 
 def _install_error_envelope(router, plugin_id: str) -> None:
