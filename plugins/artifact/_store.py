@@ -2,16 +2,20 @@
 
 State is persisted to a FILE (instance-scoped), not module memory — under the ACP
 runtime the tool executes in the operator-MCP process while the route is served by
-the main process, so the two only share state through disk.
+the main process, so the two only share state through disk — and so every mutation
+takes a cross-PROCESS lock, not just a thread lock (see ``serialized``).
 """
 
 from __future__ import annotations
 
+import contextlib
+import errno
 import functools
 import json
 import logging
 import os
 import secrets
+import sys
 import tempfile
 import threading
 import time
@@ -57,6 +61,147 @@ def _store_etag() -> str:
         return 'W/"empty"'
 
 
+# ── store mutations are serialised — across threads (#3401) AND processes ────────────
+# Every mutating path is read-whole-store → change → write-whole-store, and the harness
+# runs independent tool calls in PARALLEL. Two updates to one artifact both read the same
+# snapshot, each appends version N+1 to its own copy, and the second whole-store write
+# overwrites the first — losing an edit AND its version while both report success. Two
+# writes reporting the SAME new version is the tell (observed live: both said "version 2").
+#
+# A thread lock alone only orders callers inside ONE process, and this store is shared by
+# two: under the ACP runtime the tools run in the operator-MCP process while the panel's
+# routes are served by the main one (see the module docstring). The same clobber happened
+# across that boundary — a /render-status stamp that read the store before a pin_artifact in
+# the other process wrote it overwrote the pin, which had already replied "Pinned". So a
+# mutation also holds an OS file lock (flock on POSIX, msvcrt byte-range lock on Windows) on
+# a sidecar beside history.json, for the whole read-modify-write.
+#
+# The thread lock stays and is taken FIRST: it queues this process's own callers, and both
+# OS locks belong to an open file, so two threads each opening the sidecar would block each
+# other forever (POSIX) or fail (Windows) — holding the thread lock is also what makes the
+# depth counter below safe. Reentrant, because a mutating path may call a helper that locks.
+#
+# `_write_store` is atomic at the file level (tempfile + os.replace), so a lock-free READER
+# never sees a torn store; the lock is only for atomicity ACROSS a read and its write-back.
+_MUTATION_LOCK = threading.RLock()
+_FILE_LOCK_DEPTH = 0  # this process's hold depth — only touched while _MUTATION_LOCK is held
+_FILE_LOCK_POLL_S = 0.01  # Windows polls a non-blocking lock (see _os_lock)
+_WIN_LOCK_BUSY = {errno.EACCES, getattr(errno, "EDEADLOCK", errno.EDEADLK)}
+_lock_unavailable_warned = False
+
+
+def _lock_path() -> Path:
+    """The cross-process lock's sidecar, beside history.json. Never deleted: unlinking a
+    lock file another process has open (or is about to open) splits the lock in two."""
+    return _store_path().with_name("history.json.lock")
+
+
+def _os_lock(fd: int) -> None:
+    """Block until this process holds the exclusive OS lock on ``fd``."""
+    if sys.platform == "win32":
+        import msvcrt
+
+        # msvcrt's blocking mode (LK_LOCK) gives up with an error after ~10 s; a writer queued
+        # behind a slow save must wait, not fail, so poll the non-blocking mode instead. The
+        # region is byte 0 — locking past EOF is allowed, and the sidecar stays empty.
+        while True:
+            os.lseek(fd, 0, os.SEEK_SET)
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                return
+            except OSError as e:
+                if e.errno not in _WIN_LOCK_BUSY:
+                    raise
+            time.sleep(_FILE_LOCK_POLL_S)
+    else:
+        import fcntl
+
+        fcntl.flock(fd, fcntl.LOCK_EX)
+
+
+def _os_unlock(fd: int) -> None:
+    if sys.platform == "win32":
+        import msvcrt
+
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+def _acquire_file_lock() -> int | None:
+    """Open the sidecar and take the OS lock; the held fd, or ``None`` when the filesystem
+    refuses locking (e.g. a network mount without lock support). That degrades to the thread
+    lock alone — the behaviour before this lock existed — with one warning, rather than
+    failing every store write."""
+    global _lock_unavailable_warned
+    fd = None
+    try:
+        fd = os.open(_lock_path(), os.O_RDWR | os.O_CREAT, 0o600)
+        _os_lock(fd)
+        return fd
+    except OSError:
+        if fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+        if not _lock_unavailable_warned:
+            _lock_unavailable_warned = True
+            log.warning(
+                "[artifact] cannot take the store's cross-process lock at %s — store writes are "
+                "serialised within this process only",
+                _lock_path(),
+                exc_info=True,
+            )
+        return None
+
+
+def _release_file_lock(fd: int) -> None:
+    try:
+        _os_unlock(fd)
+    except OSError:
+        log.debug("[artifact] store unlock failed (closing the fd releases it)", exc_info=True)
+    finally:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+
+
+@contextlib.contextmanager
+def _store_lock():
+    """Hold the store: this process's thread lock, then the cross-process file lock.
+    Reentrant — a nested hold neither re-opens nor releases the file lock."""
+    global _FILE_LOCK_DEPTH
+    with _MUTATION_LOCK:
+        fd = _acquire_file_lock() if _FILE_LOCK_DEPTH == 0 else None
+        _FILE_LOCK_DEPTH += 1
+        try:
+            yield
+        finally:
+            _FILE_LOCK_DEPTH -= 1
+            if fd is not None:
+                _release_file_lock(fd)
+
+
+def serialized(fn):
+    """Run ``fn`` holding the store lock (``_store_lock``) — for any path that reads the
+    store, changes it, and writes it back. Read-only paths don't need it. Hold it for the
+    read-modify-write and nothing longer: a waiter may be another PROCESS.
+
+    Deliberately SYNC-only. An async wrapper that acquired this lock would block the
+    event-loop thread for as long as a tool call held it, stalling unrelated requests —
+    so the panel's mutating routes are plain ``def`` handlers, which FastAPI already runs
+    in a worker thread. Keep them that way: making one ``async def`` would put the wait
+    back on the event loop."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _store_lock():
+            return fn(*args, **kwargs)
+
+    return wrapper
+
+
 # ── binary blobs (ADR 0092 D2) ───────────────────────────────────────────────
 # A `file` artifact's BYTES live as sidecar files under <artifact-dir>/blobs/<id>/,
 # NOT inlined into history.json — the store is read on every panel poll, so a base64
@@ -77,10 +222,16 @@ def _blob_path(art_id: str, name: str) -> Path:
     return _blob_root() / art_id / safe
 
 
+@serialized
 def _gc_blobs(store: dict) -> None:
     """Delete sidecar blob files/dirs no longer referenced by a surviving version — the
     retention sweep that pairs with _write_store's version/history trim. Best-effort: a
-    filesystem hiccup must never break a store write."""
+    filesystem hiccup must never break a store write.
+
+    Holds the store lock (reentrant — _write_store already does): ``store`` is only the
+    on-disk truth while no other process can write, and every blob write happens inside a
+    locked save, so a blob this sweep sees unreferenced can't be one another process has
+    just written and is about to reference."""
     root = _blob_root()
     if not root.exists():
         return
@@ -134,37 +285,6 @@ def _migrate_legacy(it: dict) -> dict:
     }
 
 
-# ── store mutations are serialised (#3401) ───────────────────────────────────────────
-# Every mutating path is read-whole-store → change → write-whole-store, and the harness
-# runs independent tool calls in PARALLEL. Two updates to one artifact both read the same
-# snapshot, each appends version N+1 to its own copy, and the second whole-store write
-# overwrites the first — losing an edit AND its version while both report success. Two
-# writes reporting the SAME new version is the tell (observed live: both said "version 2").
-#
-# `_write_store` is already atomic at the file level (tempfile + os.replace), so nothing is
-# ever torn; what was missing is atomicity ACROSS the read and the write. Reentrant because
-# a mutating path may call another helper that takes it.
-_MUTATION_LOCK = threading.RLock()
-
-
-def serialized(fn):
-    """Run ``fn`` holding the store-mutation lock — for any path that reads the store,
-    changes it, and writes it back. Read-only paths don't need it.
-
-    Deliberately SYNC-only. An async wrapper that acquired this lock would block the
-    event-loop thread for as long as a tool call held it, stalling unrelated requests —
-    so the panel's mutating routes are plain ``def`` handlers, which FastAPI already runs
-    in a worker thread. Keep them that way: making one ``async def`` would put the wait
-    back on the event loop."""
-
-    @functools.wraps(fn)
-    def wrapper(*args, **kwargs):
-        with _MUTATION_LOCK:
-            return fn(*args, **kwargs)
-
-    return wrapper
-
-
 def _read_store() -> dict:
     """``{"artifacts": [newest-first], "current": id|None}``. Tolerates a
     missing/corrupt file (→ empty) and migrates the legacy flat ``{items:[…]}`` /
@@ -213,7 +333,34 @@ def _evict(arts: list[dict], keep: int) -> list[dict]:
     return pinned + unpinned[:keep]
 
 
+_REPLACE_RETRY_S = 2.0  # Windows: how long a store write rides out a reader holding the file
+
+
+def _replace(tmp: str, path: Path) -> None:
+    """``os.replace(tmp, path)``, riding out Windows sharing violations. Readers don't take
+    the store lock (the panel polls the store continuously), and Windows can't replace a file
+    another handle has open — a reader mid-``read_text``, an AV scanner — so the swap fails
+    with PermissionError instead of waiting. That holder lets go within moments: retry briefly.
+    POSIX replaces an open file without complaint, so it never retries there."""
+    deadline = time.monotonic() + _REPLACE_RETRY_S
+    while True:
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if sys.platform != "win32" or time.monotonic() >= deadline:
+                raise
+        time.sleep(0.005)
+
+
+@serialized
 def _write_store(store: dict) -> None:
+    """Persist ``store`` (evicting + version-trimming first) and sweep orphaned blobs.
+
+    Always runs under the store lock — reentrant, so inside a ``serialized`` path it's
+    free — which keeps the blob sweep from deleting a blob that a writer in another process
+    has just referenced. It does NOT make a caller's read-modify-write atomic: a caller that
+    read the store must hold the lock across that read too (``serialized``)."""
     max_versions = _config._max_versions()
     store["artifacts"] = _evict(store.get("artifacts", []), _config._max_history())
     # Version trimming applies to pinned artifacts too, deliberately: a pin keeps the artifact
@@ -227,7 +374,7 @@ def _write_store(store: dict) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(store, fh)
-        os.replace(tmp, path)
+        _replace(tmp, path)
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
