@@ -125,6 +125,36 @@ export function uninstallConfirmText(
   return `"${name}" — this deletes its code from disk and removes it from plugins.lock. To keep it installed, Disable it instead.`;
 }
 
+/** The toast after an enable/disable toggle. Enabling is the one UI moment to mention a
+ *  plugin's missing Python packages (#3450): the operator is looking at the row that has
+ *  the Install deps button. An enable written to YAML or by an agent has no such moment;
+ *  the row and the log cover those. */
+export function toggleToast(
+  name: string,
+  res: { enabled?: boolean; restart_recommended?: boolean; deps_missing?: string[] },
+): { tone: "success" | "info"; title: string; message: string } {
+  if (res.restart_recommended) {
+    return {
+      tone: "info",
+      title: "Plugin disabled",
+      message: `${name} — restart to fully remove its console view or background surface.`,
+    };
+  }
+  const deps = res.enabled ? (res.deps_missing ?? []) : [];
+  if (deps.length) {
+    return {
+      tone: "info",
+      title: "Plugin enabled",
+      message: `${name} is live, but it's missing Python packages: ${deps.join(", ")}. Use Install deps on its row.`,
+    };
+  }
+  return {
+    tone: "success",
+    title: `Plugin ${res.enabled ? "enabled" : "disabled"}`,
+    message: `${name} is ${res.enabled ? "live" : "off"}.`,
+  };
+}
+
 /** The toast after an uninstall. `superseded_by_bundled` in the response means only the
  *  ignored old copy went and the built-in keeps running — not "removed". */
 export function uninstallToast(

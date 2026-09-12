@@ -647,6 +647,23 @@ def _report_deps_gap(manifest: PluginManifest) -> list[str]:
     return sorted([*hard_missing, *soft_missing])
 
 
+def refresh_plugin_deps(plugin_id: str) -> list[str] | None:
+    """Recompute ONE plugin's deps state — its gap and its missing list — with no reload.
+
+    What the install-deps route runs after pip lands something for a plugin that is
+    already loaded (#3450). A full reload reaches the same answer by rebuilding the whole
+    graph: every plugin re-registered, every MCP client closed and reopened, and every
+    running surface's ``reload(cfg)`` fired (Discord / Telegram gateways reconnect) — to
+    flip one list. Returns the plugin's new ``deps_missing``, or ``None`` when the plugin
+    can't be resolved (the caller then leaves its state alone)."""
+    from graph.plugins import installer
+
+    manifest = installer.effective_copies().get(plugin_id)
+    if manifest is None:
+        return None
+    return _report_deps_gap(manifest)
+
+
 def _missing_required_config(manifest: PluginManifest, resolved: dict) -> list[dict]:
     """Required settings (``settings[].required``) left blank in the resolved config.
     Returns ``[{key, label}]`` — empty ⇒ the plugin has everything it declared it needs.

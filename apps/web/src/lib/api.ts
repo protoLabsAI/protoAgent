@@ -2985,7 +2985,7 @@ export const api = {
     // caller renders the same confirm dialog and retries after POST /api/plugins/ack.
     // `failed` (#3450): optional deps that didn't install — they fail soft, so an empty
     // `installed` alone can't distinguish "nothing to do" from "everything failed".
-    return request<{ ok?: boolean; installed?: string[]; failed?: string[]; reloaded?: boolean; needs_ack?: boolean; source?: string }>("/api/plugins/install-deps", {
+    return request<{ ok?: boolean; installed?: string[]; failed?: string[]; refresh?: "none" | "plugin" | "full"; needs_ack?: boolean; source?: string }>("/api/plugins/install-deps", {
       method: "POST",
       body: { id },
     });
@@ -3068,7 +3068,7 @@ export const api = {
     );
   },
   setPluginEnabled(id: string, enabled: boolean) {
-    return request<{ ok: boolean; enabled: boolean; reloaded: boolean; restart_recommended: boolean }>(
+    return request<{ deps_missing?: string[]; ok: boolean; enabled: boolean; reloaded: boolean; restart_recommended: boolean }>(
       `/api/plugins/${encodeURIComponent(id)}/enabled`,
       { method: "POST", body: { enabled } },
     );

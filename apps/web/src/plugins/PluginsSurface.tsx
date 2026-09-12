@@ -35,6 +35,7 @@ import {
 } from "./installed";
 import { api } from "../lib/api";
 import { mergeDeps } from "../setup/depsReport";
+import { toggleToast } from "./installed";
 import type { CatalogPlugin, PluginUpdate, RuntimeStatus } from "../lib/types";
 
 type Plugin = NonNullable<RuntimeStatus["plugins"]>[number];
@@ -307,11 +308,9 @@ function LocalTab() {
       refreshAll();
       // Enable hot-mounts the plugin's router (#822). Only DISABLE leaves a stale
       // route/surface behind (FastAPI can't unmount) → restart_recommended on OFF.
-      toast(
-        res.restart_recommended
-          ? { tone: "info", title: "Plugin disabled", message: `${p.name} — restart to fully remove its console view or background surface.` }
-          : { tone: "success", title: `Plugin ${res.enabled ? "enabled" : "disabled"}`, message: `${p.name} is ${res.enabled ? "live" : "off"}.` },
-      );
+      // On an enable, the response carries the plugin's missing packages (#3450), and
+      // the toast names them — once, while the operator is looking at its row.
+      toast(toggleToast(p.name, res));
     },
     onError: (err: unknown, p) => toast({ tone: "error", title: "Couldn't toggle plugin", message: `${p.name}: ${errMsg(err)}` }),
   });
@@ -355,8 +354,8 @@ function LocalTab() {
       } else {
         toast({
           tone: "success",
-          title: "Dependencies installed",
-          message: `${p.name}: ${(res.installed ?? []).join(", ") || "nothing to install"}.`,
+          title: (res.installed ?? []).length ? "Dependencies installed" : "Dependencies already installed",
+          message: `${p.name}: ${(res.installed ?? []).join(", ") || "nothing new to install"}.`,
         });
       }
       refreshAll();

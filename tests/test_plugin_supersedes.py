@@ -714,7 +714,7 @@ def test_install_deps_route_asks_no_consent_for_the_bundled_copy(host, monkeypat
     _ship_bundled(host, supersedes=(rando,))
     _wire_routes(monkeypatch, enabled=["cowork"])
     body = _client().post("/api/plugins/install-deps", json={"id": "cowork"}).json()
-    assert body == {"ok": True, "installed": [], "reloaded": False}  # nothing declared → nothing to reload
+    assert body == {"ok": True, "installed": [], "refresh": "none"}  # nothing declared → nothing installed or refreshed
 
 
 # ── bundle uninstall / update never unload the running bundled copy ──────────────────
