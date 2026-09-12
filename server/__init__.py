@@ -237,6 +237,35 @@ def _install_parent_death_watchdog() -> None:
     threading.Thread(target=_watch, daemon=True, name="parent-death-watchdog").start()
 
 
+#: How often a running process re-sweeps for trees left by a dead owner (#3463).
+ORPHAN_SWEEP_INTERVAL_S = 600.0
+_ORPHAN_SWEEP_TASK: "asyncio.Task | None" = None
+
+
+async def _sweep_orphaned_trees_once() -> int:
+    """One orphaned-tree sweep (#3463), off the loop — it shells out to `ps` and waits a
+    grace before SIGKILL. Logs what it reaped; never raises. Returns the count."""
+    try:
+        from infra.proc import sweep_orphaned_trees
+
+        reaped = await asyncio.to_thread(sweep_orphaned_trees)
+    except Exception:  # noqa: BLE001 — housekeeping must never take a caller down
+        log.exception("[lifecycle] orphaned-tree sweep failed")
+        return 0
+    if reaped:
+        log.warning("[lifecycle] reaped %d orphaned process tree(s) a dead owner left running", reaped)
+    return reaped
+
+
+async def _sweep_orphaned_trees_forever(interval: float = ORPHAN_SWEEP_INTERVAL_S) -> None:
+    """Re-run the orphaned-tree sweep every ``interval`` seconds for the life of the
+    process (#3463): the boot sweep only reaches owners that died before this process
+    started. A failing tick is logged and the next one still runs."""
+    while True:
+        await asyncio.sleep(interval)
+        await _sweep_orphaned_trees_once()
+
+
 def build_uvicorn_server(config: "uvicorn.Config") -> "uvicorn.Server":
     """The ``uvicorn.Server`` this process runs, with one change: an exit signal
     starts tearing down the process trees this process owns (#3428) BEFORE the
@@ -800,6 +829,14 @@ def _main():
         except Exception:
             log.exception("[instance] co-location check failed")
 
+        # Orphaned owned trees (#3463). An owner that was SIGKILLed or crashed ran none of
+        # the #3428 teardown, so its ACP / shell trees still run at ppid=1. Sweep the
+        # machine's records now, and keep sweeping — a sibling can die at any time. Off
+        # the loop: the sweep shells out to `ps` and waits a grace before SIGKILL.
+        global _ORPHAN_SWEEP_TASK
+        await _sweep_orphaned_trees_once()
+        _ORPHAN_SWEEP_TASK = asyncio.create_task(_sweep_orphaned_trees_forever())
+
         # First-boot-after-update reconcile (version-coherence P2): stamp this
         # boot's app version beside fleet.json and log the transition when it
         # changed (in-app update, DMG swap, git pull — all land here). The live
@@ -847,6 +884,8 @@ def _main():
         # below only stop work; they can wait their turn.
         if STATE.memory_guard_task is not None:
             STATE.memory_guard_task.cancel()
+        if _ORPHAN_SWEEP_TASK is not None:
+            _ORPHAN_SWEEP_TASK.cancel()
         # Drop the co-location heartbeat (#706). Best-effort.
         try:
             from infra import paths as _paths
