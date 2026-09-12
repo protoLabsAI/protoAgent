@@ -40,13 +40,15 @@ export function serverTurnPhase(state: string): ServerTurnPhase {
   return "live";
 }
 
-/** Re-checks before an item nobody can account for is handed back to the operator. With the
- *  caller's backoff ladder that is ~15s of asking — long enough for a marker or a terminal
- *  state to show up, short enough that a bubble never claims "sent" forever. */
-export const UNRESOLVED_ATTEMPTS = 4;
+/** Successful SERVER READS before an item nobody can account for stops claiming "queued".
+ *  With the caller's backoff ladder that is ~15s of actually asking — long enough for a
+ *  marker, a drain record or a terminal state to show up, short enough that a bubble never
+ *  claims "sent to this server turn" forever. Reads that never reached the server do not
+ *  count: a blip must not spend the grace it exists to give. */
+export const UNRESOLVED_ASKS = 4;
 /** A submission the server never acknowledged needs fewer: if it were queued, the very next
  *  read would list it. */
-export const UNCONFIRMED_ATTEMPTS = 2;
+export const UNCONFIRMED_ASKS = 2;
 
 /** Interjections sent to a server turn that is not the live one now — the reconcile set.
  *  An interjection whose POST is still in flight is never in it: the server hasn't answered
@@ -62,7 +64,9 @@ export function staleInterjections(
 }
 
 export type InterjectionPlan = {
-  /** The agent read it: settle into the transcript as an ordinary user message. */
+  /** The agent read it (or nothing can say otherwise): settle into the transcript as an
+   *  ordinary user message. Never re-offer its words — a duplicate in the composer is the
+   *  one outcome worse than a bubble whose exact boundary we can't name. */
   settle: QueuedSteer[];
   /** Still on its way, or not yet answerable: leave it queued and re-check. */
   keep: QueuedSteer[];
@@ -70,9 +74,11 @@ export type InterjectionPlan = {
   retarget: QueuedSteer[];
   /** Nothing will drain it: pull it out of the queue and send it as a normal message. */
   resend: QueuedSteer[];
-  /** Never delivered, and nothing left that could deliver it: give the operator the words
-   *  back rather than settle a bubble the agent never saw or send one it may have. */
-  handBack: QueuedSteer[];
+  /** The server never acknowledged this submission and can't account for it now. The caller
+   *  DEQUEUES it before deciding: that is what makes handing the words back safe (a copy the
+   *  server still held could otherwise be read after the operator was told it wasn't sent),
+   *  and the dequeue's answer is the only thing allowed to settle it instead. */
+  reclaim: QueuedSteer[];
 };
 
 export function planInterjectionReconcile(
@@ -80,6 +86,9 @@ export function planInterjectionReconcile(
   ctx: {
     /** Ids still in the server's steering queue for this session. */
     pendingIds: ReadonlySet<string>;
+    /** Ids the server says a turn FOLDED IN (`GET …/steer`'s `drained`). Empty from an
+     *  older server, which reads as "can't say", never as "not read". */
+    drainedIds: ReadonlySet<string>;
     /** Phase of each server turn an interjection was sent to. */
     phases: ReadonlyMap<string, ServerTurnPhase>;
     /** Ids each turn's DURABLE history records as folded in (steer-consumed-v1). */
@@ -90,16 +99,17 @@ export function planInterjectionReconcile(
     liveServerTaskId: string;
     /** A HITL form is open in this chat. */
     hitlPending: boolean;
-    /** How many times this set has already been re-checked (the caller's ladder). */
-    attempts: number;
+    /** Successful server reads for this unresolved episode (the caller's ladder). */
+    asks: number;
   },
 ): InterjectionPlan {
-  const plan: InterjectionPlan = { settle: [], keep: [], retarget: [], resend: [], handBack: [] };
+  const plan: InterjectionPlan = { settle: [], keep: [], retarget: [], resend: [], reclaim: [] };
   for (const item of stale) {
     const task = item.serverTaskId ?? "";
     const phase = ctx.phases.get(task) ?? "unknown";
-    // Durable proof first: the agent read this exact id, whatever the queue says.
-    if (ctx.consumedIds.get(task)?.has(item.id)) {
+    // Proof it was read, from either record that can outlive the queue: the turn's durable
+    // history, or the server's own drain log. Whatever the queue says.
+    if (ctx.consumedIds.get(task)?.has(item.id) || ctx.drainedIds.has(item.id)) {
       plan.settle.push(item);
       continue;
     }
@@ -113,26 +123,24 @@ export function planInterjectionReconcile(
       else plan.resend.push(item);
       continue;
     }
-    // Gone from the queue with no durable marker.
+    // Gone from the queue, and nothing says the agent read it.
     if (item.unconfirmed) {
-      // The POST never answered. Queued submissions show up in the read above, so an
-      // absence here says the server never got it — its words are the operator's again.
-      // Never on the first look, whatever the task state: a submission still in flight
-      // across a reload lands in the queue moments later, and the re-check sees it there
-      // (confirmed) instead of telling the operator it was never sent.
-      if (ctx.attempts >= UNCONFIRMED_ATTEMPTS) plan.handBack.push(item);
+      // The POST never answered, so the console doesn't even know the server took it.
+      // Queued submissions show up in the read above and read ones in `drained`, so an
+      // absence from both says it never landed — but that is resolved by DEQUEUEING it
+      // (reclaim), not by assuming. Never on the first look, whatever the task state: a
+      // submission still in flight across a reload lands in the queue moments later, and
+      // the re-check sees it there instead of telling the operator it was never sent.
+      if (ctx.asks >= UNCONFIRMED_ASKS) plan.reclaim.push(item);
       else plan.keep.push(item);
-    } else if (phase === "ended") {
-      // The turn is over and something drained it: the agent read it (the marker rode a
-      // live-only frame, or another turn consumed it and recorded it on ITS task). Settle
-      // it — re-sending risks the agent reading the same message twice, which is worse
-      // than a bubble whose exact boundary we can no longer name.
+    } else if (phase === "ended" || ctx.asks >= UNRESOLVED_ASKS) {
+      // Acknowledged, then gone from the queue, with no record of being read. Something
+      // took it: the live marker is best-effort and the drain log doesn't outlive a
+      // restart, so "delivered but unlocated" is the honest reading — settle it where the
+      // fallback puts it. Its words are NOT re-offered: an operator re-sending a message
+      // the agent already used is worse than a bubble whose exact boundary we can't name,
+      // which is the same call the re-send path makes.
       plan.settle.push(item);
-    } else if (ctx.attempts >= UNRESOLVED_ATTEMPTS) {
-      // Not queued, no marker, and the task never reached a terminal state — the shape a
-      // server restart mid-turn leaves behind. Nothing will ever account for it, so stop
-      // claiming it was sent and give the operator the words back.
-      plan.handBack.push(item);
     } else {
       plan.keep.push(item);
     }

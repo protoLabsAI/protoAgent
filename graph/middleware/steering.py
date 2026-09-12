@@ -37,7 +37,20 @@ class SteeringMiddleware(AgentMiddleware):
     """Inject queued mid-turn user messages before the next model call."""
 
     def before_model(self, state, runtime):  # type: ignore[override]
-        return self._inject(state)
+        update, queued = self._drain(state)
+        if queued:
+            # The SYNC path must announce the boundary too. It used to dispatch nothing,
+            # so a turn taking this path folded the operator's message in and left every
+            # consumer — the console's queued bubble included — with no signal that it had
+            # been read. `steering.drained()` records it either way (below), but the live
+            # marker is what places it at the right point in the reply.
+            try:
+                from langchain_core.callbacks import dispatch_custom_event
+
+                dispatch_custom_event("steer_consumed", {"items": queued})
+            except Exception:  # noqa: BLE001 — a UI marker must never fail the turn
+                logger.debug("steer-consumed boundary was not dispatched (sync)", exc_info=True)
+        return update
 
     async def abefore_model(self, state, runtime):  # type: ignore[override]
         update, queued = self._drain(state)
@@ -52,8 +65,9 @@ class SteeringMiddleware(AgentMiddleware):
                 await adispatch_custom_event("steer_consumed", {"items": queued})
             except Exception:  # noqa: BLE001 — a UI marker must never fail the turn
                 # A graph invoked outside an event-stream callback context cannot
-                # dispatch. The steer is still in `update` and the console's turn-end
-                # queue reconciliation remains the conservative placement fallback.
+                # dispatch. The steer is still in `update`, `steering.drained()` still
+                # records that the agent read it, and the console's turn-end queue
+                # reconciliation remains the conservative placement fallback.
                 logger.debug("steer-consumed boundary was not dispatched", exc_info=True)
         return update
 

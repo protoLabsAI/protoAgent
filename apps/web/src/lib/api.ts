@@ -2686,8 +2686,13 @@ export const api = {
   },
   // Items still queued for the session — read at turn-end: anything here arrived
   // after the turn's last model call and wasn't folded in (re-send as a new turn).
+  // `drained` names ids a turn actually folded in: absence from `pending` alone can't
+  // tell a message the agent READ from one that never arrived (the queue is in-memory,
+  // and the live boundary marker is best-effort), and the console must not guess between
+  // settling a message the agent never saw and re-offering one it already used. Absent
+  // from an older server, which reads as "can't say" rather than "not read".
   pendingSteer(sessionId: string) {
-    return request<{ pending: { id: string; text: string }[] }>(
+    return request<{ pending: { id: string; text: string }[]; drained?: string[] }>(
       `/api/chat/sessions/${encodeURIComponent(sessionId)}/steer`,
     );
   },

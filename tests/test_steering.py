@@ -19,8 +19,10 @@ from graph.middleware.steering import SteeringMiddleware
 @pytest.fixture(autouse=True)
 def _clear_queue():
     steering._QUEUES.clear()
+    steering._DRAINED.clear()
     yield
     steering._QUEUES.clear()
+    steering._DRAINED.clear()
 
 
 # ── the queue ─────────────────────────────────────────────────────────────────
@@ -131,6 +133,67 @@ async def test_async_middleware_emits_the_consumption_boundary(monkeypatch):
         )
     ]
     assert steering.pending("sess") == 0
+
+
+def test_sync_middleware_emits_the_consumption_boundary_too(monkeypatch):
+    """The SYNC path used to dispatch nothing, so a turn taking it folded the operator's
+    message in and left every consumer — the console's queued bubble included — with no
+    signal that it had been read (#3446 review N2)."""
+    seen = []
+    monkeypatch.setattr(
+        "langchain_core.callbacks.dispatch_custom_event",
+        lambda name, data: seen.append((name, data)),
+    )
+    steering.enqueue("sess", "use the 2024 date", msg_id="s9")
+
+    update = SteeringMiddleware().before_model({"session_id": "sess", "messages": []}, None)
+
+    assert update is not None
+    assert seen == [("steer_consumed", {"items": [{"id": "s9", "text": "use the 2024 date"}]})]
+
+
+def test_sync_middleware_keeps_the_steer_when_boundary_dispatch_fails(monkeypatch):
+    def _fail(_name, _data):
+        raise RuntimeError("no callback context")
+
+    monkeypatch.setattr("langchain_core.callbacks.dispatch_custom_event", _fail)
+    steering.enqueue("sess", "change course", msg_id="s1")
+
+    update = SteeringMiddleware().before_model({"session_id": "sess", "messages": []}, None)
+
+    assert update is not None
+    assert update["messages"][0].content.endswith("change course")
+    assert steering.pending("sess") == 0
+    # …and the drain record still answers "did the agent read it?" — which is the whole
+    # point: the marker is best-effort, so absence of a marker must not read as "not read".
+    assert "s1" in steering.drained("sess")
+
+
+def test_drain_records_what_a_turn_folded_in(monkeypatch):
+    """"Gone from the queue" alone cannot tell a message the agent READ from one a restart
+    dropped, and the console must not guess between settling a message the agent never saw
+    and re-offering one it already used. The drain log is the server answering that."""
+    steering.enqueue("s-drain", "one", msg_id="d1")
+    steering.enqueue("s-drain", "two", msg_id="d2")
+    assert steering.drained("s-drain") == []
+
+    assert len(steering.drain("s-drain")) == 2
+    assert steering.drained("s-drain") == ["d1", "d2"]
+    assert steering.drained("other-session") == []
+
+    # A cancelled steer is NOT drained — it never reached the agent.
+    steering.enqueue("s-drain", "three", msg_id="d3")
+    assert steering.dequeue("s-drain", "d3") is True
+    assert "d3" not in steering.drained("s-drain")
+
+    # Bounded: it answers for as long as a console could still be asking, not forever.
+    for i in range(steering._DRAINED_CAP + 10):
+        steering.enqueue("s-drain", "x", msg_id=f"bulk-{i}")
+        steering.drain("s-drain")
+    log = steering.drained("s-drain")
+    assert len(log) == steering._DRAINED_CAP
+    assert log[-1] == f"bulk-{steering._DRAINED_CAP + 9}"
+    assert "d1" not in log
 
 
 @pytest.mark.asyncio

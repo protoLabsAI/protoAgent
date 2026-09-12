@@ -5,8 +5,8 @@ import {
   planInterjectionReconcile,
   serverTurnPhase,
   staleInterjections,
-  UNCONFIRMED_ATTEMPTS,
-  UNRESOLVED_ATTEMPTS,
+  UNCONFIRMED_ASKS,
+  UNRESOLVED_ASKS,
   type ServerTurnPhase,
 } from "./serverInterjections";
 
@@ -21,22 +21,24 @@ function plan(
   stale: QueuedSteer[],
   over: Partial<{
     pending: string[];
+    drained: string[];
     phase: ServerTurnPhase;
     consumed: string[];
     ownStreamLive: boolean;
     liveServerTaskId: string;
     hitlPending: boolean;
-    attempts: number;
+    asks: number;
   }> = {},
 ) {
   return planInterjectionReconcile(stale, {
     pendingIds: new Set(over.pending ?? []),
+    drainedIds: new Set(over.drained ?? []),
     phases: new Map([["task-x", over.phase ?? "ended"]]),
     consumedIds: new Map([["task-x", new Set(over.consumed ?? [])]]),
     ownStreamLive: over.ownStreamLive ?? false,
     liveServerTaskId: over.liveServerTaskId ?? "",
     hitlPending: over.hitlPending ?? false,
-    attempts: over.attempts ?? 0,
+    asks: over.asks ?? 0,
   });
 }
 
@@ -89,10 +91,13 @@ describe("planInterjectionReconcile", () => {
     expect(plan([toX("a")], { pending: [] }).settle).toEqual([toX("a")]);
   });
 
-  it("never re-sends a message that left the queue — a duplicate the agent reads twice is worse", () => {
+  it("never re-sends or re-offers a message that left the queue — a duplicate is worse", () => {
+    // Both failure modes of guessing: sending it again (the agent reads it twice) and
+    // putting the words back in the composer (the operator sends it again).
     const out = plan([toX("a")], { pending: [] });
     expect(out.resend).toEqual([]);
-    expect(out.handBack).toEqual([]);
+    expect(out.reclaim).toEqual([]);
+    expect(out.settle).toEqual([toX("a")]);
   });
 
   it("leaves a still-queued interjection alone while its turn is running — or unknowable", () => {
@@ -128,27 +133,43 @@ describe("planInterjectionReconcile", () => {
     }
   });
 
-  it("waits, then hands back a submission the server never acknowledged", () => {
-    // Unconfirmed + absent from the queue = the POST never landed (a queued one would be
-    // listed). Settling it would claim the agent read words it never saw.
+  it("waits, then RECLAIMS a submission the server never acknowledged", () => {
+    // Unconfirmed + absent from both the queue and the drain log = the POST probably never
+    // landed. It is not settled (that would claim the agent read words it never saw) and
+    // not handed back on trust either: the caller dequeues it first, which is what makes
+    // giving the words back safe.
     const item = toX("a", { unconfirmed: true });
     expect(plan([item], { pending: [], phase: "live" }).keep).toEqual([item]);
-    expect(plan([item], { pending: [], phase: "live", attempts: UNCONFIRMED_ATTEMPTS }).handBack).toEqual([item]);
+    expect(plan([item], { pending: [], phase: "live", asks: UNCONFIRMED_ASKS }).reclaim).toEqual([item]);
     // Not even when the turn is already over: a submission still in flight across a reload
     // lands in the queue moments later, and the re-check must get the chance to see it
     // there. Handing the words back on the first look told operators a message wasn't sent
     // while the server was about to feed it to the agent (R9).
     expect(plan([item], { pending: [] }).keep).toEqual([item]);
-    expect(plan([item], { pending: [], attempts: UNCONFIRMED_ATTEMPTS }).handBack).toEqual([item]);
+    expect(plan([item], { pending: [], asks: UNCONFIRMED_ASKS }).reclaim).toEqual([item]);
     // Confirmed by presence in the queue: the POST did land, so the ordinary rules apply.
     expect(plan([item], { pending: ["a"], phase: "live" }).keep).toEqual([item]);
+    // …and the drain log answers it outright: the agent read it.
+    expect(plan([item], { drained: ["a"], pending: [], asks: UNCONFIRMED_ASKS }).settle).toEqual([item]);
   });
 
-  it("stops claiming 'sent' for an item nothing can account for (a restart mid-turn)", () => {
-    // Not queued, no marker, and the task never reached a terminal state — the shape a
-    // crash leaves. Kept while that could still resolve, handed back once it can't.
+  it("settles — never re-offers — an acknowledged item nothing can account for", () => {
+    // Not queued, no marker, no drain record, and the task never reached a terminal state
+    // (the shape a restart mid-turn leaves). The live marker is best-effort and the drain
+    // log doesn't outlive a restart, so "delivered but unlocated" is the honest reading:
+    // kept while that could still resolve, then settled. Its words are never re-offered —
+    // an operator re-sending a message the agent already used is the worse outcome.
     expect(plan([toX("a")], { pending: [], phase: "live" }).keep).toEqual([toX("a")]);
-    expect(plan([toX("a")], { pending: [], phase: "live", attempts: UNRESOLVED_ATTEMPTS }).handBack).toEqual([toX("a")]);
+    const out = plan([toX("a")], { pending: [], phase: "live", asks: UNRESOLVED_ASKS });
+    expect(out.settle).toEqual([toX("a")]);
+    expect(out.reclaim).toEqual([]);
+  });
+
+  it("settles on the server's drain log even while the turn is still running", () => {
+    // The producer of the live boundary marker is best-effort — the sync middleware path
+    // and a failed dispatch both emit nothing — so the drain log is what keeps a read
+    // message from sitting queued under the answer that used it.
+    expect(plan([toX("a")], { drained: ["a"], pending: [], phase: "live" }).settle).toEqual([toX("a")]);
   });
 
   it("splits a mixed batch item by item, in queue order", () => {

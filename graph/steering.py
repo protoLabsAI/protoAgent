@@ -38,10 +38,42 @@ def enqueue(session_id: str, text: str, msg_id: str | None = None) -> str | None
 
 def drain(session_id: str) -> list[dict]:
     """Return and clear all queued items for ``session_id`` (FIFO). Used by the
-    middleware to fold the messages into the running turn."""
+    middleware to fold the messages into the running turn.
+
+    Each drained id is REMEMBERED (below), so a consumer can still tell "the agent read
+    this" from "this never arrived" after the item has left the queue — a distinction the
+    queue alone cannot make, and the live boundary marker cannot be relied on for (it is a
+    best-effort callback that the sync path, or a graph invoked outside an event-stream
+    context, can fail to emit)."""
     if not session_id:
         return []
-    return _QUEUES.pop(session_id, [])
+    items = _QUEUES.pop(session_id, [])
+    if items:
+        _note_drained(session_id, [str(item.get("id") or "") for item in items])
+    return items
+
+
+# session_id -> the ids most recently folded into a turn, oldest first. Bounded: this
+# answers "did the agent read the message I just sent?" for as long as a console could
+# still be asking, not for the life of the process (the durable record of a consumed
+# interjection is the task history's steer-consumed marker).
+_DRAINED: dict[str, list[str]] = {}
+_DRAINED_CAP = 50
+
+
+def _note_drained(session_id: str, ids: list[str]) -> None:
+    kept = [mid for mid in ids if mid]
+    if not kept:
+        return
+    log = _DRAINED.setdefault(session_id, [])
+    log.extend(kept)
+    if len(log) > _DRAINED_CAP:
+        del log[: len(log) - _DRAINED_CAP]
+
+
+def drained(session_id: str) -> list[str]:
+    """Ids recently folded into a turn for ``session_id`` (oldest first)."""
+    return list(_DRAINED.get(session_id, ()))
 
 
 def dequeue(session_id: str, msg_id: str) -> bool:

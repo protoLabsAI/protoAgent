@@ -1351,7 +1351,11 @@ function ChatSessionSlot({
   const sessionReady = Boolean(session);
   useEffect(() => {
     if (sessionReady) {
-      resetInterjectRecheck();
+      // Re-check NOW (the turn's state just changed) but keep the grace: only a clean sweep
+      // ends an episode. A trigger that refunded it would let an unresolvable message stay
+      // "queued" for as long as anything kept re-triggering — which a reload, a second turn
+      // or a focus change all do.
+      cancelInterjectRecheck();
       void reconcileServerInterjections();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the reconcile reads live store state
@@ -1508,7 +1512,8 @@ function ChatSessionSlot({
     } finally {
       interjectInFlightRef.current.delete(id);
       // The turn may have ended while this was in flight; the reconcile skipped it then.
-      resetInterjectRecheck();
+      // Cancel, don't reset: an OLDER unresolved interjection must keep its grace.
+      cancelInterjectRecheck();
       void reconcileServerInterjections();
     }
   }
@@ -1565,36 +1570,56 @@ function ChatSessionSlot({
   // to retire — and the message stays in the server's queue for some later turn, unseen.
   // The ladder only runs while an unresolved interjection is queued (so it is bounded by
   // something the operator can see), and any explicit trigger restarts it from the top.
-  const interjectRetryRef = useRef<{ timer: number | null; attempts: number }>({ timer: null, attempts: 0 });
+  // `steps` paces the ladder; `asks` counts SUCCESSFUL server reads and is the grace an
+  // unaccounted-for item gets before the console stops calling it queued. They are separate
+  // because the things that may restart the timer (coming back to the tab, a fresh control
+  // frame) must not also restart the grace — churn would make an unresolvable message
+  // unresolvable forever — and because reads that never reached the server must not spend
+  // it. Both zero only on a clean sweep, which is what ends the episode.
+  const interjectRetryRef = useRef<{ timer: number | null; steps: number; asks: number }>({
+    timer: null,
+    steps: 0,
+    asks: 0,
+  });
   const INTERJECT_RECHECK_MS = [1000, 2000, 4000, 8000, 15000, 30000];
 
   function scheduleInterjectRecheck() {
     const retry = interjectRetryRef.current;
     if (retry.timer !== null) return;
-    const delay = INTERJECT_RECHECK_MS[Math.min(retry.attempts, INTERJECT_RECHECK_MS.length - 1)];
-    retry.attempts += 1;
+    const delay = INTERJECT_RECHECK_MS[Math.min(retry.steps, INTERJECT_RECHECK_MS.length - 1)];
+    retry.steps += 1;
     retry.timer = window.setTimeout(() => {
       retry.timer = null;
       void reconcileServerInterjections();
     }, delay);
   }
 
-  function resetInterjectRecheck() {
+  /** Cancel a pending re-check without touching the grace — for a trigger that is about to
+   *  reconcile immediately anyway. */
+  function cancelInterjectRecheck() {
     const retry = interjectRetryRef.current;
     if (retry.timer !== null) window.clearTimeout(retry.timer);
     retry.timer = null;
-    retry.attempts = 0;
   }
 
-  useEffect(() => resetInterjectRecheck, []); // never leave a timer behind on unmount
+  /** Nothing left unresolved: end the episode, ladder and grace both. */
+  function resetInterjectRecheck() {
+    cancelInterjectRecheck();
+    interjectRetryRef.current.steps = 0;
+    interjectRetryRef.current.asks = 0;
+  }
+
+  useEffect(() => cancelInterjectRecheck, []); // never leave a timer behind on unmount
 
   // A tab that was asleep (or offline) may have missed the live-only frames entirely, so
-  // coming back is itself a reason to re-check rather than wait out the ladder.
+  // coming back is itself a reason to re-check now rather than wait out the ladder — but
+  // only the TIMER is dropped: alt-tabbing must not keep an unresolvable message alive by
+  // refunding its grace.
   useEffect(() => {
     if (!visible) return;
     const recheck = () => {
       if (document.visibilityState === "hidden") return;
-      resetInterjectRecheck();
+      cancelInterjectRecheck();
       void reconcileServerInterjections();
     };
     window.addEventListener("focus", recheck);
@@ -1632,8 +1657,14 @@ function ChatSessionSlot({
       return;
     }
     let pendingIds: Set<string>;
+    let drainedIds: Set<string>;
     try {
-      pendingIds = new Set((await api.pendingSteer(session.id)).pending.map((item) => item.id));
+      const queue = await api.pendingSteer(session.id);
+      pendingIds = new Set(queue.pending.map((item) => item.id));
+      drainedIds = new Set(queue.drained ?? []);
+      // Only a read that REACHED the server spends the grace: a blip must not consume the
+      // very budget that exists to survive it.
+      interjectRetryRef.current.asks += 1;
     } catch {
       scheduleInterjectRecheck(); // transient: ask again, never guess from a failed read
       return;
@@ -1654,12 +1685,13 @@ function ChatSessionSlot({
       stale.filter((q) => stillQueued.has(q.id)),
       {
         pendingIds,
+        drainedIds,
         phases,
         consumedIds,
         ownStreamLive: chatStore.getSnapshot().sessionStatusMap[sessionId] === "streaming",
         liveServerTaskId: liveTaskId(),
         hitlPending: Boolean(hitlRef.current),
-        attempts: interjectRetryRef.current.attempts,
+        asks: interjectRetryRef.current.asks,
       },
     );
     if (plan.settle.length) settleServerInterjections(plan.settle);
@@ -1667,24 +1699,42 @@ function ChatSessionSlot({
       const next = new Map(plan.retarget.map((item) => [item.id, item]));
       setSteerQueue(steerQueueRef.current.map((q) => next.get(q.id) ?? q));
     }
-    if (plan.handBack.length) {
-      // Make sure the SERVER isn't holding it before saying it was never sent: the read
-      // that concluded "not queued" could have raced a submission that landed a moment
-      // later, and a message the operator was told to re-send must not also ride the next
-      // turn. The dequeue is the only way to be sure, and it is safe — a message the agent
-      // had already read would have shown up as a durable marker above, not here.
-      for (const item of plan.handBack) {
-        await api.cancelSteer(session.id, item.id).catch(() => undefined);
+    if (plan.reclaim.length) await reclaimInterjections(plan.reclaim);
+    if (plan.resend.length) await resendInterjections(plan.resend);
+    // Re-check while ANY stale interjection is still queued — read from the live queue, not
+    // from the plan: a dequeue or a hand-off can fail inside the steps above and leave an
+    // item behind, and cancelling the ladder then strands exactly what it exists to retire.
+    if (staleInterjections(steerQueueRef.current, liveTaskId(), interjectInFlightRef.current).length) {
+      scheduleInterjectRecheck();
+    } else {
+      resetInterjectRecheck();
+    }
+  }
+
+  /** A submission the server never acknowledged and can't account for. Take it back FIRST:
+   *  that is what makes handing the words over safe — a copy the server still held could
+   *  otherwise be read after the operator was told it wasn't sent. The dequeue's answer is
+   *  also the only thing allowed to overrule the hand-back: `removed: false` with the server
+   *  reporting neither a queued nor a drained copy means it never landed. */
+  async function reclaimInterjections(items: QueuedSteer[]) {
+    if (!session) return;
+    const back: QueuedSteer[] = [];
+    for (const item of items) {
+      try {
+        await api.cancelSteer(session.id, item.id);
+        back.push(item);
+      } catch {
+        scheduleInterjectRecheck(); // couldn't take it back — leave it queued and ask again
       }
+    }
+    if (back.length) {
       handBackQueued(
-        plan.handBack,
-        "That message never reached the agent, and the turn it was waiting for is gone — its text is in the composer.",
+        back,
+        back.length > 1
+          ? "Those messages never reached the agent, and the turn they were waiting for is gone — their text is in the composer."
+          : "That message never reached the agent, and the turn it was waiting for is gone — its text is in the composer.",
       );
     }
-    if (plan.resend.length) await resendInterjections(plan.resend);
-    // Anything unresolved gets another look; a clean sweep stops the ladder.
-    if (plan.keep.length) scheduleInterjectRecheck();
-    else resetInterjectRecheck();
   }
 
   // An interjection its server turn never reached, with nothing left to drain it: take it

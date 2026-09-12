@@ -117,6 +117,11 @@ type Harness = {
   /** Fail the next N `GET …/steer` reads with a 500. */
   failSteerReads: (n: number) => void;
   steerReads: () => number;
+  /** Ids the server reports as FOLDED IN (`GET …/steer`'s `drained`) — the record that
+   *  outlives the queue and tells "the agent read it" from "it never arrived". */
+  setDrained: (ids: string[]) => void;
+  /** Fail the next N `DELETE …/steer/{id}` calls. */
+  failDeletes: (n: number) => void;
   deletes: string[];
   a2aSends: string[];
   /** Dequeues and sends, in the order the console made them. */
@@ -180,6 +185,8 @@ async function openAttendedServerTurn(page: Page, session: string): Promise<Harn
   let denyRemoval = false;
   let steerFailures = 0;
   let steerReads = 0;
+  let deleteFailures = 0;
+  let drained: string[] = [];
   const taskState = new Map<string, string>();
   const taskConsumed = new Map<string, string[]>();
   await page.route("**/api/chat/sessions/*/server-turns/*/interject", async (route) => {
@@ -200,7 +207,7 @@ async function openAttendedServerTurn(page: Page, session: string): Promise<Harn
       steerFailures -= 1;
       return route.fulfill({ status: 500, json: { detail: "transient" } }).catch(() => {});
     }
-    await route.fulfill({ json: { pending } }).catch(() => {});
+    await route.fulfill({ json: { pending, drained } }).catch(() => {});
   });
   // GetTask: the durable task the reconcile consults — its state, and the steer-consumed
   // markers its history carries.
@@ -236,6 +243,10 @@ async function openAttendedServerTurn(page: Page, session: string): Promise<Harn
   await page.route("**/api/chat/sessions/*/steer/*", async (route) => {
     if (route.request().method() !== "DELETE") return route.fallback();
     const id = decodeURIComponent(route.request().url().split("/").pop() ?? "");
+    if (deleteFailures > 0) {
+      deleteFailures -= 1;
+      return route.fulfill({ status: 500, json: { detail: "transient" } }).catch(() => {});
+    }
     deletes.push(id);
     order.push("dequeue");
     const removed = !denyRemoval && pending.some((item) => item.id === id);
@@ -291,6 +302,12 @@ async function openAttendedServerTurn(page: Page, session: string): Promise<Harn
       steerFailures = n;
     },
     steerReads: () => steerReads,
+    setDrained: (ids) => {
+      drained = ids;
+    },
+    failDeletes: (n) => {
+      deleteFailures = n;
+    },
     deletes,
     a2aSends,
     order,
@@ -552,7 +569,13 @@ test("✕ after the turn ended settles an interjection the agent had already rea
   await expect(page.getByText(/responding to background reports/i)).toHaveCount(0);
   // The agent had drained it, so the dequeue answers `removed: false`.
   h.setPending([]);
+  // Nothing has resolved it yet — with the queue read held, the ✕ is the only actor that
+  // can. (Without this the reconcile sometimes wins the race and the test would pass
+  // without exercising the branch at all.)
+  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(1);
+  expect(h.deletes).toEqual([]);
   await page.locator(SLOT).getByRole("button", { name: "Cancel queued message" }).click();
+  await expect.poll(() => h.deletes.length).toBe(1);
 
   // There is no marker left to wait for — restoring the bubble would park it "queued"
   // forever, and dropping it would deny a message that shaped the reply.
@@ -719,9 +742,98 @@ test("a reload mid-submission never leaves the server holding a message nobody t
   await h.releaseInterjects((body) => ({ ok: true, id: body.id, pending: 1 }));
   h.release(terminalFrames(session));
 
-  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(0);
+  // Deliberately multi-step: the re-check ladder has to see the submission land in the
+  // queue before anything can resolve it, so give it room rather than race the budget.
+  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(0, { timeout: 25_000 });
   // Accounted for either way: delivered as the operator's next message, and no copy left
   // in the server's queue to ride a later turn.
-  await expect.poll(() => h.a2aSends.filter((body) => body.includes(INTERJECTION)).length).toBe(1);
+  await expect.poll(() => h.a2aSends.filter((body) => body.includes(INTERJECTION)).length, { timeout: 15_000 }).toBe(1);
+  await expect.poll(() => h.deletes.length, { timeout: 15_000 }).toBe(1);
+});
+
+// ── the ladder itself: it must outlive every kind of missing answer ─────────────────────
+
+test("a failing dequeue on the re-send path keeps the ladder alive", async ({ page }) => {
+  const session = "chat-interject-delete-fails";
+  const h = await openAttendedServerTurn(page, session);
+  await interject(page, h);
+
+  // The turn ends with the message still queued, so the reconcile goes to re-send it — and
+  // the dequeue that must come first keeps failing. Cancelling the ladder here (because
+  // nothing was left in `keep`) strands exactly what it exists to retire: the bubble sits
+  // "sent to this server turn" and the text waits in the server's queue for a later turn.
+  h.failDeletes(3);
+  h.release(terminalFrames(session));
+  await expect.poll(() => h.steerReads(), { timeout: 15_000 }).toBeGreaterThanOrEqual(3);
+  // …and it resolves once the dequeue gets through.
+  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(0);
   await expect.poll(() => h.deletes.length).toBe(1);
+  await expect.poll(() => h.a2aSends.filter((body) => body.includes(INTERJECTION)).length).toBe(1);
+});
+
+test("the server's drain log settles a read message with no marker of any kind", async ({ page }) => {
+  const session = "chat-interject-drain-log";
+  const h = await openAttendedServerTurn(page, session);
+  const sent = await interject(page, h);
+
+  // The agent read it, but nothing announced the boundary: the sync middleware path emits
+  // no marker, and a failed dispatch emits none either. Absence from the queue alone must
+  // not become "never arrived" — the server's drain log is what answers it.
+  h.setPending([]);
+  h.setDrained([sent.id]);
+  h.taskState.set(TASK, "TASK_STATE_WORKING");
+  h.release([{ topic: "turn.finished", data: { session_id: session, origin: ORIGIN, trigger: "bg-1", task_id: TASK } }]);
+
+  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(0);
+  await expect(page.locator(`${SLOT} .pl-message--user`).filter({ hasText: INTERJECTION })).toHaveCount(1);
+  // Never re-offered and never re-sent: the agent already has it.
+  expect(await page.locator(`${SLOT} .pl-prompt__field`).inputValue()).toBe("");
+  expect(h.a2aSends.filter((body) => body.includes(INTERJECTION))).toEqual([]);
+});
+
+test("a message the agent read is never handed back, even with nothing to prove it", async ({ page }) => {
+  const session = "chat-interject-unlocated";
+  const h = await openAttendedServerTurn(page, session);
+  await interject(page, h);
+
+  // The worst case: the queue drained it, no marker frame, no drain log (an older server,
+  // or one that restarted), and the task never reaches a terminal state. The console cannot
+  // tell "read" from "lost" — so it settles the bubble as sent and never re-offers the
+  // words. An operator re-sending a message the agent already used is the worse outcome.
+  h.setPending([]);
+  h.setDrained([]);
+  h.taskState.set(TASK, "TASK_STATE_WORKING");
+  h.release([{ topic: "turn.finished", data: { session_id: session, origin: ORIGIN, trigger: "bg-1", task_id: TASK } }]);
+
+  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(0, { timeout: 25_000 });
+  await expect(page.locator(`${SLOT} .pl-message--user`).filter({ hasText: INTERJECTION })).toHaveCount(1);
+  expect(await page.locator(`${SLOT} .pl-prompt__field`).inputValue()).toBe("");
+  expect(h.a2aSends.filter((body) => body.includes(INTERJECTION))).toEqual([]);
+  expect(h.deletes).toEqual([]);
+});
+
+test("switching windows doesn't refund the grace, and a blip doesn't spend it", async ({ page }) => {
+  const session = "chat-interject-grace";
+  const h = await openAttendedServerTurn(page, session);
+  await interject(page, h);
+
+  // Four reads never reach the server (a link blip across the turn's end). They must not
+  // spend the grace that exists to survive them: after the FIRST successful read the
+  // message is still queued, not resolved on one answer.
+  h.failSteerReads(4);
+  h.setPending([]);
+  h.setDrained([]);
+  h.taskState.set(TASK, "TASK_STATE_WORKING");
+  h.release([{ topic: "turn.finished", data: { session_id: session, origin: ORIGIN, trigger: "bg-1", task_id: TASK } }]);
+  await expect.poll(() => h.steerReads(), { timeout: 25_000 }).toBeGreaterThanOrEqual(5);
+  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(1);
+
+  // And coming back to the tab re-checks NOW without refunding the grace — otherwise
+  // alt-tabbing every couple of seconds keeps an unresolvable message unresolved forever.
+  for (let i = 0; i < 6; i++) {
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await page.waitForTimeout(400);
+  }
+  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(0, { timeout: 15_000 });
+  await expect(page.locator(`${SLOT} .pl-message--user`).filter({ hasText: INTERJECTION })).toHaveCount(1);
 });

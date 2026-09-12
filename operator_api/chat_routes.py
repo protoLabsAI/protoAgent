@@ -770,10 +770,19 @@ def register_chat_routes(app, ui: str) -> None:
         """Items still queued for ``session_id`` — i.e. steering messages that
         arrived after the turn's last model call and weren't folded in. The
         console reads this at turn-end: it settles the consumed ones into the
-        thread and re-sends these un-consumed ones as a fresh turn."""
+        thread and re-sends these un-consumed ones as a fresh turn.
+
+        ``drained`` names the ids a turn actually FOLDED IN (recently). Absence from
+        ``pending`` alone can't tell "the agent read it" from "it never arrived" — the
+        queue is in-memory and the live boundary marker is best-effort — and the console
+        must not guess between settling a message the agent never saw and re-offering one
+        it already used. This is the server answering that question directly."""
         from graph import steering
 
-        return {"pending": steering.pending_items(session_id)}
+        return {
+            "pending": steering.pending_items(session_id),
+            "drained": steering.drained(session_id),
+        }
 
     @app.post("/api/chat/sessions/{session_id}/server-turns/{task_id}/interject")
     async def _api_server_turn_interject(session_id: str, task_id: str, body: dict | None = None):
