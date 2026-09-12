@@ -59,7 +59,7 @@ _FORWARD_HELP = {
     "plugin": "Install / list / update / uninstall drop-in plugins (ADR 0027)",
     "workspace": "Create / list / run / remove isolated workspace agents (ADR 0041)",
     "skills": "Inspect and curate the SKILL.md library (ADR 0041)",
-    "fleet": "Start / stop / list fleet MEMBER agents as background processes (ADR 0042)",
+    "fleet": "Inspect / start / stop fleet MEMBER agents — live via the running hub, from disk when none answers (ADR 0042)",
     "config": "Explain / get / set this instance's config (ADR 0047)",
     "model": "Point at a local / OpenAI-compatible LLM — Ollama, LM Studio, llama.cpp, vLLM (ADR 0075)",
     "reset": "Factory-reset this instance, or the whole machine box for handoff",
