@@ -73,7 +73,8 @@ import { lastOperatorAssistantId, rewindableTailId } from "./parts";
 import { createRevealQueue } from "./revealQueue";
 import { applyComponent, applyReasoning, applyText, applyToolEvent } from "./turnReducers";
 import { applyCanonicalTurnText, markTurnAnsweredByParticipants, settleTurnBubbles } from "./turnText";
-import { leadAssistantMessage, reattachKeyForMessages, reattachTurn, shouldReattach } from "./reattach";
+import { reattachKeyForMessages, reattachOrReconcile } from "./reattach";
+import { beginLocalTurn, reconcileSessionStatus } from "./sessionLiveness";
 import { loadDraft, loadScroll, loadSteers, saveDraft, saveScroll, saveSteers } from "./scratchState";
 import { createStreamWatchdog } from "./streamWatchdog";
 import { ADD_SELECTOR, isIncognitoAddClick, trackShiftHeld } from "./shiftCue";
@@ -1300,13 +1301,9 @@ function ChatSessionSlot({
   const reattachKey = reattachKeyForMessages(session?.messages);
   useEffect(() => {
     if (abortRef.current) return; // a live turn in this slot owns the stream
-    const snap = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
-    // The same bubble `reattachKey` names: a participant's row after the preview is not it.
-    const last = leadAssistantMessage(snap?.messages);
-    // Not a server-fired turn this console is watching live: the bus already feeds that
-    // preview, and a second producer wrote every chunk twice (see shouldReattach).
-    if (!shouldReattach(last, sessionId)) return;
-    return reattachTurn(sessionId, last.id, last.taskId, {
+    // With nothing to reattach, this reconciles instead, which is what an opened sixth
+    // session needs if its turn ended while its slot was not mounted (reattachOrReconcile).
+    return reattachOrReconcile(sessionId, {
       onStatus: (m) => setStatusMessage(m),
       onHitl: (payload) => {
         updateHitl(payload);
@@ -2330,6 +2327,11 @@ function ChatSessionSlot({
 
     const controller = new AbortController();
     abortRef.current = controller;
+    // Until `finally`, this session's "streaming" is this turn's, even while no bubble reads
+    // streaming: onDone settles the bubble before the post-stream GetTask reconcile below,
+    // and a pure fan-out folds the placeholder away. The reconciler must not idle it then:
+    // Send would come back mid-turn and start a second stream in this slot.
+    const endLocalTurn = beginLocalTurn(session.id);
 
     // Whether the stream delivered an AUTHORITATIVE full-turn text (a replace —
     // the terminal artifact's append:false canonical re-send, or a terminal task
@@ -2803,6 +2805,10 @@ function ChatSessionSlot({
       clearWatchdog();
       abortRef.current = null;
       setTaskId("");
+      endLocalTurn();
+      // The stream's end: every exit above settles the status itself, so this is a no-op
+      // unless something left "streaming" behind with nothing live to settle it.
+      reconcileSessionStatus(session.id);
     }
   }
 

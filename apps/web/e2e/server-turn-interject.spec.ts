@@ -847,6 +847,40 @@ test("a reload whose reattach loses the race to the turn's end still hands the s
   expect(h.deletes).toHaveLength(1);
 });
 
+test("another task's answer landing mid-reattach never idles the live turn, and the turn's own end does", async ({ page }) => {
+  const session = "chat-interject-other-task";
+  const h = await openAttendedServerTurn(page, session);
+
+  // The reload reattaches to the turn's still-streaming preview, and the resubscribe is slow.
+  h.holdResubscribe(true);
+  await h.reload();
+  await page.locator(`${SLOT} .pl-prompt__field`).waitFor({ state: "visible" });
+  await expect.poll(() => h.heldResubscribes()).toBe(1);
+  const stop = page.locator(SLOT).getByRole("button", { name: "Stop", exact: true });
+  await expect(stop).toBeVisible();
+
+  // A DIFFERENT task finishes in this chat (a scheduled fire) and has no preview here, so its
+  // answer is appended after the live preview like a participant's row. The slot reads the
+  // settled row as the lead turn and cancels the preview's reattach mid-turn.
+  const OTHER = "Nightly backup finished.";
+  h.release([
+    { topic: "chat.resumed", data: { session_id: session, task_id: TASK2, text: OTHER, state: "completed", origin: "scheduler" } },
+  ]);
+  await expect(page.locator(SLOT).getByText(OTHER)).toBeVisible();
+  await expect.poll(() => h.resubscribeAborts()).toBe(1);
+  // The preview's turn is still live, so the session must stay busy.
+  await page.waitForTimeout(500);
+  await expect(stop).toBeVisible();
+
+  // That turn now ends. Its `chat.resumed` settles the preview, but the slot's key had
+  // already moved on, so no reattach is left to hand the session back. THE BUG: Stop stayed
+  // up and Send stayed disabled for good.
+  h.release(terminalFrames(session));
+  await expect(page.locator(SLOT).getByText(POST)).toBeVisible();
+  await expect(stop).toHaveCount(0);
+  await expect(page.getByPlaceholder(/Message protoAgent/i)).toBeVisible();
+});
+
 // ── the ladder itself: it must outlive every kind of missing answer ─────────────────────
 
 test("a failing dequeue on the re-send path keeps the ladder alive", async ({ page }) => {
