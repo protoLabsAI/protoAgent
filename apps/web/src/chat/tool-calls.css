@@ -178,6 +178,14 @@
     animation: none;
   }
 }
+/* The same slot once a single-tool turn SETTLES (ToolCalls `lead`): the wrapper element is
+   kept so React updates the card in place rather than rebuilding it (which collapsed an
+   operator's expansion), but it must not change the settled layout — `display: contents`
+   lays the card out exactly as the bare list child it used to be. No animation: the card
+   is already on screen, it only changes class. */
+.tool-lead {
+  display: contents;
+}
 
 /* Tier 2: Stop a running subagent delegation. Rides the DS header `actions` slot
    (.pl-toolcard__actions) as a compact, error-toned text button — quiet until

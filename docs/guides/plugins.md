@@ -629,8 +629,12 @@ install **wizard** over those fields is the frontend follow-up (#1719).
 required setting catches a *blank field*; it can't catch a missing binary on PATH, a
 coder delegate the member doesn't have, or a CLI that isn't logged in. For those a
 plugin reports the gap itself and the console shows it as an operator **warning
-banner** (`GET /api/runtime/status` → `warnings[]`, rendered as `"<Plugin>: <message>"`).
-Pass `message=None` to clear it — re-check on each tick or request and the banner
+banner**. `GET /api/runtime/status` carries it as a structured record in `setup_gaps[]`
+(and as the legacy `"<Plugin>: <message>"` line in `warnings[]`); the console renders the
+record as a dismissible banner, with a **Configure** button that opens your plugin's
+settings when you pass `action={"kind": "plugin_config"}` (see
+[`report_setup_gap()`](../reference/plugin-registry-api.md#registry-report-setup-gap) for
+the closed action vocabulary). Pass `message=None` to clear it — re-check on each tick or request and the banner
 self-heals the moment the operator installs the binary / adds the delegate, no
 restart. One key per concern (`"br"`, `"coder"`, `"auth"`); a disabled plugin's gaps
 are dropped on the next reload. Guard it for hosts that predate the seam:

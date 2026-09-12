@@ -5,11 +5,15 @@ import { expect, type Locator, type Page } from "@playwright/test";
 //
 // While a turn is live, `ToolCalls` renders the current card inside a `.tool-spotlight`
 // slot under a deliberately stable `key="__spotlight__"` (so a fast fan-out advances in
-// place instead of strobing). On settle the same call re-renders as `key={call.id}` with
-// no wrapper — different key, different parent — so React **remounts** the DS `ToolCard`.
-// Its `open` state is uncontrolled (`useState(defaultOpen)` in `@protolabsai/ui`
+// place instead of strobing). On settle a FAN-OUT folds every card — the spotlit one
+// included — into the "N tools" chip: a different parent, so React **remounts** that
+// card. Its `open` state is uncontrolled (`useState(defaultOpen)` in `@protolabsai/ui`
 // `tool-card.tsx`), so a remount always lands collapsed: an expansion clicked before that
 // moment is silently thrown away, and the assertion on the body/children then fails.
+// (A SINGLE-tool turn no longer remounts: its card keeps the same slot across the settle
+// and is updated in place — guarded by e2e/toolcard-settle.spec.ts. The helper is still the
+// right gate for any spec that expands a card in a live turn, because it can't know which
+// shape the turn will settle into.)
 //
 // The gates the specs reached for first are both WRONG:
 //   * `.pl-toolcard__status--done` — that's the TOOL finishing, several frames before the
@@ -25,10 +29,10 @@ import { expect, type Locator, type Page } from "@playwright/test";
 // `streaming`) and by no settled one. Zero of them ⇒ the turn has settled and the cards
 // are in their final layout, so the next remount that could eat the click doesn't exist.
 //
-// NOTE: this makes the SPECS deterministic; it does not fix the underlying product
-// behaviour, which is that expanding a card mid-turn loses the expansion when the turn
-// settles. That needs a controlled `open`/`onOpenChange` on the DS ToolCard so the state
-// can outlive the remount — see the PR that added this file.
+// NOTE: this makes the SPECS deterministic. The product behaviour it worked around is
+// fixed for the single-tool case (the lead slot survives the settle); in a fan-out the
+// spotlit card folding into the chip is the fold's design — finished work collapses
+// behind "N tools" — so there the expansion is not expected to survive.
 
 /** Wait until every tool card is in its settled (non-remounting) layout. */
 export async function toolCardsSettled(page: Page): Promise<void> {
