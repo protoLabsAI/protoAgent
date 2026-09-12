@@ -90,6 +90,62 @@ def sup(monkeypatch):
     return calls
 
 
+# ── the deck entry (bare `fleet`, `top`) ──────────────────────────────────────
+
+
+def test_bare_fleet_needs_a_terminal(monkeypatch, capsys):
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    assert cli.run_fleet_cli([]) == 2
+    assert "needs a terminal" in capsys.readouterr().err
+
+
+def test_bare_fleet_without_the_deck_module_prints_a_hint(monkeypatch, capsys):
+    """A frozen build that does not bundle Textual (S6's call) must say so, not traceback."""
+    import importlib
+
+    real = importlib.import_module
+
+    def fake(name, *a, **kw):
+        if name.startswith("deck.app"):
+            raise ModuleNotFoundError("No module named 'textual'", name="textual")
+        return real(name, *a, **kw)
+
+    monkeypatch.setattr(importlib, "import_module", fake)
+    assert cli.run_fleet_cli([]) == 2
+    assert "not available in this build" in capsys.readouterr().err
+
+
+def test_bare_fleet_opens_the_deck_on_the_live_backend(monkeypatch):
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    seen: dict = {}
+    _live(monkeypatch, FakeClient())
+
+    class FakeApp:
+        @staticmethod
+        def run(backend):
+            seen["mode"] = backend.mode
+            return 0
+
+    import importlib
+
+    real = importlib.import_module
+    monkeypatch.setattr(importlib, "import_module", lambda name, *a, **kw: FakeApp if name == "deck.app" else real(name, *a, **kw))
+    assert cli.run_fleet_cli([]) == 0
+    assert seen == {"mode": "live"}
+    assert cli.run_deck_cli(["--json"]) == 0  # `top` strips verbs and opens the deck
+
+
+def test_flags_work_before_and_after_the_verb(monkeypatch, capsys):
+    _live(monkeypatch, FakeClient())
+    assert cli.run_fleet_cli(["--json", "ls"]) == 0
+    assert json.loads(capsys.readouterr().out)["mode"] == "live"
+    assert cli.run_fleet_cli(["ls", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["mode"] == "live"
+    seen = _live(monkeypatch, FakeClient())
+    cli.run_fleet_cli(["--hub", "x:1", "ls", "--token", "t"])
+    assert seen == {"url": "x:1", "token": "t"}
+
+
 # ── presence vocabulary ───────────────────────────────────────────────────────
 
 

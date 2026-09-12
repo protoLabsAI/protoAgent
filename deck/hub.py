@@ -587,6 +587,42 @@ class HubClient:
     def runtime_status(self) -> dict:
         return _expect_dict(self.url, self._request("GET", "/api/runtime/status"), "runtime status")
 
+    def telemetry_fleet(self) -> dict:
+        """The hub-side rollup (spend / turns / flags per member, ADR 0006 fleet extension)."""
+        return self._request("GET", "/api/telemetry/fleet") or {}
+
+    # ── per-member reads through the slug proxy (ADR 0042) ──
+
+    @staticmethod
+    def member_path(slug: str, rel: str) -> str:
+        """The console's rule exactly (apps/web/src/lib/api.ts::memberPath): the reserved
+        ``host`` slug is the hub itself (``/api/…``); any other member rides the proxy at
+        ``/agents/<slug>/…``."""
+        rel = rel if rel.startswith("/") else f"/{rel}"
+        return rel if slug == "host" else f"/agents/{quote(slug, safe='')}{rel}"
+
+    def member_get(self, slug: str, rel: str, **params: Any) -> Any:
+        path = self.member_path(slug, rel)
+        if params:
+            path = f"{path}?{'&'.join(f'{quote(str(k), safe=chr(0))}={quote(str(v), safe=chr(0))}' for k, v in params.items())}"
+        return self._request("GET", path)
+
+    def member_runtime_status(self, slug: str) -> dict:
+        return self.member_get(slug, "/api/runtime/status") or {}
+
+    def diagnostics_logs(self, slug: str, lines: int = 200) -> dict:
+        """A bounded, redacted tail of the member's in-process log ring (#3168)."""
+        return self.member_get(slug, "/api/diagnostics/logs", lines=lines) or {}
+
+    def diagnostics_sessions(self, slug: str, limit: int = 50) -> dict:
+        """Newest-first session inventory from the member's task store (#3171 slice 1)."""
+        return self.member_get(slug, "/api/diagnostics/sessions", limit=limit) or {}
+
+    def console_href(self, slug: str) -> str:
+        """Where the browser console shows this member (slug routing, ADR 0042): the host
+        at ``/app/``, a member at ``/app/agent/<slug>/``."""
+        return f"{self.url}/app/" if slug == "host" else f"{self.url}/app/agent/{quote(slug, safe='')}/"
+
 
 # ── connect: the first hub we can actually read ───────────────────────────────
 
