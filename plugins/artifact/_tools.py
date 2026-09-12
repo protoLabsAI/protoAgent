@@ -49,7 +49,6 @@ def _save_nudge(art_id: str) -> str:
 
 
 @tool
-@_store.serialized
 def save_file_artifact(path: str, title: str = "", artifact_id: str = "") -> str:
     """Save a GENERATED FILE (a .docx / .xlsx / .pptx / .pdf / image / text file you already
     wrote to disk) into the Artifact panel as a VERSIONED download artifact — so the file gets
@@ -83,11 +82,24 @@ def save_file_artifact(path: str, title: str = "", artifact_id: str = "") -> str
             f"File too large ({len(data) // 1024} KB > {limit // 1024} KB). Raise the artifact "
             f"max_blob_kb setting if you really need to store a file this big."
         )
+    # The slow part — reading the file, extracting its preview (up to 50 PDF/DOCX pages),
+    # thumbnailing — happens BEFORE the store lock: it touches no store state, and the lock is
+    # cross-process, so holding it here would stall every other writer in every process (the
+    # panel's /render-status and edits) for as long as a big file takes to parse.
     mime = _preview._guess_mime(p)
     preview = _preview._extract_preview(p, data, mime)
     thumb = _preview._thumbnail(data, mime)
     ext = p.suffix.lower().lstrip(".") or "bin"
+    return _save_file(p.name, data, mime, preview, thumb, ext, title, artifact_id)
 
+
+@_store.serialized
+def _save_file(
+    filename: str, data: bytes, mime: str, preview: str, thumb: str | None, ext: str, title: str, artifact_id: str
+) -> str:
+    """save_file_artifact's store read-modify-write. The blob is written INSIDE the lock on
+    purpose: the blob sweep runs under it too, so it can never see (and delete) a blob that
+    is on disk but not yet referenced by the store."""
     store = _store._read_store()
     art = _store._find(store, artifact_id) if artifact_id else None
     if artifact_id and art is None:
@@ -106,7 +118,7 @@ def save_file_artifact(path: str, title: str = "", artifact_id: str = "") -> str
 
     file_meta = {
         "mime": mime,
-        "filename": p.name,
+        "filename": filename,
         "size": len(data),
         "thumb": thumb or "",
     }
@@ -114,7 +126,7 @@ def save_file_artifact(path: str, title: str = "", artifact_id: str = "") -> str
         nv = _store._new_version(preview, extra={"file": file_meta, "blob": blob_name})
         art = {
             "id": art_id,
-            "title": title or p.name,
+            "title": title or filename,
             "kind": "file",
             "versions": [nv],
             "version_count": 1,
@@ -132,13 +144,29 @@ def save_file_artifact(path: str, title: str = "", artifact_id: str = "") -> str
         v = _store._commit_version(store, art, preview, extra={"file": file_meta, "blob": blob_name})
     kb = len(data) // 1024
     return (
-        f"Saved file artifact {art_id} → v{v}: {p.name} ({mime}, {kb} KB) — now in the "
+        f"Saved file artifact {art_id} → v{v}: {filename} ({mime}, {kb} KB) — now in the "
         f"Artifact panel with a preview and a Download button." + _save_nudge(art_id)
     )
 
 
+# What a locked create/edit hands _then_render: (art_id, reported version, version key). The key
+# (_store._version_key) pins the verdict to the version THIS call wrote — its reported number is a
+# position, and a later commit at the version cap shifts it onto the next edit.
+_RenderTarget = tuple[str, int, tuple[int, int]]
+
+
+def _then_render(result: tuple[str, _RenderTarget | None]) -> str:
+    """A locked create/edit's reply plus the inline render verdict for the version it wrote.
+
+    Called AFTER the store lock is released, on purpose: the verdict is written by the panel's
+    /render-status route, which takes that same lock — so waiting for it while still holding
+    the lock could only ever time out (and would stall every other writer, in any process,
+    for the whole wait)."""
+    msg, target = result
+    return msg + _render_status._render_suffix(*target) if target else msg
+
+
 @tool
-@_store.serialized
 def show_artifact(kind: str, code: str, title: str = "") -> str:
     """CREATE a new generative-UI artifact in the console's Artifact panel.
 
@@ -166,12 +194,17 @@ def show_artifact(kind: str, code: str, title: str = "") -> str:
     a data SHAPE → a component. Prefer either over writing files when the user just wants to
     SEE something rendered. Returns the artifact id.
     """
+    return _then_render(_show(kind, code, title))
+
+
+@_store.serialized
+def _show(kind: str, code: str, title: str) -> tuple[str, _RenderTarget | None]:
     k = (kind or "").strip().lower()
     if k not in _KINDS:
-        return f"Unknown artifact kind {kind!r}. Use one of: {', '.join(sorted(_KINDS))}."
+        return f"Unknown artifact kind {kind!r}. Use one of: {', '.join(sorted(_KINDS))}.", None
     code = code or ""
     if err := _store._too_big(code):
-        return err
+        return err, None
     store = _store._read_store()
     nv = _store._new_version(code)
     art = {
@@ -191,11 +224,10 @@ def show_artifact(kind: str, code: str, title: str = "") -> str:
         f"Created {k} artifact {art['id']} ({len(code)} chars) — now showing in the Artifact "
         f"panel. Edit it with update_artifact(old_string, new_string) or rewrite_artifact(code)."
     )
-    return msg + _render_status._render_suffix(art["id"], 1)
+    return msg, (art["id"], 1, _store._version_key(art))
 
 
 @tool
-@_store.serialized
 def update_artifact(old_string: str, new_string: str, artifact_id: str = "") -> str:
     """Make a TARGETED edit to an existing artifact: replace ``old_string`` with ``new_string``
     in its current source, creating a new version. ``old_string`` must match the current source
@@ -204,32 +236,38 @@ def update_artifact(old_string: str, new_string: str, artifact_id: str = "") -> 
     ``list_artifacts``). Prefer this over ``rewrite_artifact`` for small changes — it's the fast
     path and keeps the version history clean.
     """
+    return _then_render(_update(old_string, new_string, artifact_id))
+
+
+@_store.serialized
+def _update(old_string: str, new_string: str, artifact_id: str) -> tuple[str, _RenderTarget | None]:
     if not old_string:
-        return "old_string must not be empty."
+        return "old_string must not be empty.", None
     store = _store._read_store()
     art = _store._find(store, artifact_id or store["current"])
     if art is None:
-        return "No artifact to update. Create one with show_artifact first."
+        return "No artifact to update. Create one with show_artifact first.", None
     if _store._is_file(art):
-        return _store._file_not_editable(art)
+        return _store._file_not_editable(art), None
     src = art["versions"][-1]["code"]
     n = src.count(old_string)
     if n == 0:
         return (
             "old_string not found in the current source — it must match exactly (whitespace "
             "included). Read the current source with get_artifact, then craft an exact old_string."
-        )
+        ), None
     if n > 1:
-        return f"old_string matches {n} times — it must match exactly once. Add surrounding context to make it unique."
+        return (
+            f"old_string matches {n} times — it must match exactly once. Add surrounding context to make it unique."
+        ), None
     new_code = src.replace(old_string, new_string, 1)
     if err := _store._too_big(new_code):
-        return err
+        return err, None
     v = _store._commit_version(store, art, new_code)
-    return f"Updated artifact {art['id']} → version {v}." + _render_status._render_suffix(art["id"], v)
+    return f"Updated artifact {art['id']} → version {v}.", (art["id"], v, _store._version_key(art))
 
 
 @tool
-@_store.serialized
 def rewrite_artifact(code: str, title: str = "", artifact_id: str = "") -> str:
     """Replace an artifact's ENTIRE source with ``code``, creating a new version (the kind is
     kept). Use this for a large change where a targeted ``update_artifact`` would be awkward;
@@ -238,23 +276,24 @@ def rewrite_artifact(code: str, title: str = "", artifact_id: str = "") -> str:
     rewrite-by-rewrite. Optionally update the ``title``. Defaults to the most-recent artifact;
     pass ``artifact_id`` to target another.
     """
+    return _then_render(_rewrite(code, title, artifact_id))
+
+
+@_store.serialized
+def _rewrite(code: str, title: str, artifact_id: str) -> tuple[str, _RenderTarget | None]:
     code = code or ""
     if err := _store._too_big(code):
-        return err
+        return err, None
     store = _store._read_store()
     art = _store._find(store, artifact_id or store["current"])
     if art is None:
-        return "No artifact to rewrite. Create one with show_artifact first."
+        return "No artifact to rewrite. Create one with show_artifact first.", None
     if _store._is_file(art):
-        return _store._file_not_editable(art)
+        return _store._file_not_editable(art), None
     if title:
         art["title"] = title
     v = _store._commit_version(store, art, code)
-    return (
-        f"Rewrote artifact {art['id']} → version {v}."
-        + _save_nudge(art["id"])
-        + _render_status._render_suffix(art["id"], v)
-    )
+    return f"Rewrote artifact {art['id']} → version {v}." + _save_nudge(art["id"]), (art["id"], v, _store._version_key(art))
 
 
 def _pin_mark(art: dict) -> str:
@@ -323,7 +362,9 @@ def check_artifact(artifact_id: str = "") -> str:
     v = len(art["versions"])
     # An already-recorded verdict reads instantly; otherwise wait briefly IFF a renderer is live
     # (so an immediate post-render check returns the real result, not a premature "no result yet").
-    r = _render_status._version_render(art, v) or _render_status._await_render(art["id"], v)
+    # By identity, not position: an edit committed during the wait must not lend v its verdict.
+    key = _store._version_key(art)
+    r = _render_status._version_render(art, v, key) or _render_status._await_render(art["id"], v, key)
     if r is None:
         return (
             f"Artifact {art['id']} v{v}: no render result yet — the Artifact panel may be "

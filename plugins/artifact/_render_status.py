@@ -34,35 +34,53 @@ def _renderer_live() -> bool:
     return _LAST_POLL_TS > 0 and (_store._now() - _LAST_POLL_TS) <= _RENDER_ACTIVE_MS
 
 
-def _version_render(art: dict, version: int) -> dict | None:
-    """The stored render result for 1-based ``version`` of ``art`` (or None)."""
+def _version_render(art: dict | None, version: int, key: tuple[int, int] | None = None) -> dict | None:
+    """The stored render result for 1-based ``version`` of ``art`` (or None). With ``key``
+    (``_store._version_key``) the version is found by identity instead — so a trim that shifted
+    positions can't hand back ANOTHER version's verdict — and ``version`` is ignored."""
+    if not art:
+        return None  # the artifact is gone (deleted meanwhile) — there's no verdict to report
     vers = art.get("versions") or []
+    if key is not None:
+        version = _store._locate_version(art, key) or 0
     if 1 <= version <= len(vers):
         r = vers[version - 1].get("render")
         return r if isinstance(r, dict) else None
     return None
 
 
-def _await_render(art_id: str, version: int) -> dict | None:
+def _await_render(art_id: str, version: int, key: tuple[int, int] | None = None) -> dict | None:
     """Block up to ``_RENDER_WAIT_MS`` for the sandbox to report version ``version``'s render
     result — but ONLY when a renderer is live, else return immediately. Checks the store
     BEFORE each sleep, so an already-recorded result returns instantly. Runs in the tool's
-    worker thread, so the short sleep is safe (it doesn't block the event loop)."""
+    worker thread, so the short sleep is safe (it doesn't block the event loop).
+
+    With ``key`` it waits for THAT version, and gives up ("no verdict") as soon as it has been
+    trimmed away or superseded by a newer version: the panel renders the newest, so a verdict
+    for this one isn't coming — and borrowing the newer version's would report its errors
+    against this edit."""
     if not art_id or not _renderer_live():
         return None
     deadline = _store._now() + _RENDER_WAIT_MS
     while True:
-        r = _version_render(_store._find(_store._read_store(), art_id), version)
+        art = _store._find(_store._read_store(), art_id)
+        if art is None:
+            return None  # deleted while we waited: no verdict is coming
+        r = _version_render(art, version, key)
         if r is not None:
             return r
+        if key is not None:
+            pos = _store._locate_version(art, key)
+            if pos is None or pos < len(art["versions"]):
+                return None
         if _store._now() >= deadline:
             return None
         time.sleep(_RENDER_POLL_MS / 1000)
 
 
-def _render_suffix(art_id: str, version: int) -> str:
+def _render_suffix(art_id: str, version: int, key: tuple[int, int] | None = None) -> str:
     """The inline render verdict appended to a create/edit reply, or '' when unknown."""
-    r = _await_render(art_id, version)
+    r = _await_render(art_id, version, key)
     if r is None:
         return ""
     if r.get("ok"):
