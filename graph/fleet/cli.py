@@ -47,6 +47,11 @@ def _common(p: argparse.ArgumentParser) -> None:
         help=f"credential for --hub — a fleet token or operator bearer (env: {deckhub.ENV_TOKEN}); never printed",
     )
     p.add_argument("--offline", action="store_true", help="read this instance's fleet.json instead of asking a hub")
+    p.add_argument(
+        "--insecure-http",
+        action="store_true",
+        help="allow sending a credential to a non-loopback http:// hub (only for a link you know is encrypted, e.g. a tailnet)",
+    )
     p.add_argument("--json", dest="as_json", action="store_true", help="emit JSON for scripting")
 
 
@@ -115,7 +120,7 @@ def _open_hub(args: argparse.Namespace) -> deckhub.Connection | None:
     if args.offline:
         return None
     try:
-        return deckhub.connect(url=args.hub, token=args.token)
+        return deckhub.connect(url=args.hub, token=args.token, insecure_http=args.insecure_http)
     except deckhub.NoHub as exc:
         if args.hub or exc.answered:
             raise
@@ -338,6 +343,9 @@ def run_fleet_cli(argv: list[str]) -> int:
         else:
             print(f"✗ {exc}", file=sys.stderr)
         return 1
-    except supervisor.FleetError as exc:
-        print(f"✗ {exc}", file=sys.stderr)
+    except supervisor.FleetError as exc:  # the disk path (offline) — same JSON error shape as the rest
+        if args.as_json:
+            _emit({"mode": "error", "hub": None, "error": str(exc)})
+        else:
+            print(f"✗ {exc}", file=sys.stderr)
         return 1

@@ -58,7 +58,7 @@ def _live(monkeypatch, client: FakeClient, source="heartbeat"):
     conn = deckhub.Connection(client=client, candidate=cand, card={"name": "protoagent"}, roster=list(client.roster))
     seen: dict = {}
 
-    def fake_connect(*, url=None, token=None, candidates=None, transport=None):
+    def fake_connect(*, url=None, token=None, candidates=None, transport=None, insecure_http=False):
         seen["url"], seen["token"] = url, token
         return conn
 
@@ -70,7 +70,7 @@ def _offline(monkeypatch, *, unauthorized=None, failed=None, members=None):
     """Nothing answered (the default) → the CLI may fall back to disk. Pass unauthorized /
     failed / members to simulate a hub that ANSWERED but could not be opened."""
 
-    def fake_connect(*, url=None, token=None, candidates=None, transport=None):
+    def fake_connect(*, url=None, token=None, candidates=None, transport=None, insecure_http=False):
         raise deckhub.NoHub(["http://127.0.0.1:7870"], unauthorized or [], members, failed)
 
     monkeypatch.setattr(deckhub, "connect", fake_connect)
@@ -194,7 +194,7 @@ def test_offline_and_hub_are_mutually_exclusive(capsys):
 
 
 def test_malformed_hub_is_a_clean_exit(monkeypatch, capsys):
-    def fake_connect(*, url=None, token=None, candidates=None, transport=None):
+    def fake_connect(*, url=None, token=None, candidates=None, transport=None, insecure_http=False):
         raise ValueError("invalid hub url: 'http://[::1'")
 
     monkeypatch.setattr(deckhub, "connect", fake_connect)
@@ -218,7 +218,7 @@ def test_unreachable_hub_with_userinfo_never_echoes_the_secret(monkeypatch, caps
     """The NoHub path carries the normalized url (userinfo already stripped); the CLI must
     not reintroduce the raw --hub anywhere."""
 
-    def fake_connect(*, url=None, token=None, candidates=None, transport=None):
+    def fake_connect(*, url=None, token=None, candidates=None, transport=None, insecure_http=False):
         raise deckhub.NoHub([deckhub.normalize_url(url)], [])
 
     monkeypatch.setattr(deckhub, "connect", fake_connect)
@@ -228,11 +228,28 @@ def test_unreachable_hub_with_userinfo_never_echoes_the_secret(monkeypatch, caps
     assert json.loads(captured.out)["hub"] == "http://127.0.0.1:7999"
 
 
-def test_ls_passes_hub_and_token_through(monkeypatch, capsys):
-    seen = _live(monkeypatch, FakeClient())
+def test_ls_passes_hub_token_and_insecure_flag_through(monkeypatch, capsys):
+    seen: dict = {}
+
+    def fake_connect(*, url=None, token=None, candidates=None, transport=None, insecure_http=False):
+        seen.update(url=url, token=token, insecure_http=insecure_http)
+        client = FakeClient()
+        return deckhub.Connection(client=client, candidate=deckhub.HubCandidate(client.url, "flag"), card={}, roster=list(client.roster))
+
+    monkeypatch.setattr(deckhub, "connect", fake_connect)
     cli.run_fleet_cli(["status", "--hub", "ava.tail:7870", "--token", "abc"])
-    assert seen == {"url": "ava.tail:7870", "token": "abc"}
+    assert seen == {"url": "ava.tail:7870", "token": "abc", "insecure_http": False}
     assert "abc" not in capsys.readouterr().out
+    cli.run_fleet_cli(["status", "--hub", "ava.tail:7870", "--token", "abc", "--insecure-http"])
+    assert seen["insecure_http"] is True
+
+
+def test_offline_supervisor_error_is_json_when_asked(monkeypatch, capsys, sup):
+    _offline(monkeypatch)
+    monkeypatch.setattr(cli.supervisor, "status", lambda: (_ for _ in ()).throw(cli.supervisor.FleetError("fleet.json is corrupt")))
+    assert cli.run_fleet_cli(["ls", "--offline", "--json"]) == 1
+    data = json.loads(capsys.readouterr().out)
+    assert data["mode"] == "error" and "corrupt" in data["error"]
 
 
 # ── up ───────────────────────────────────────────────────────────────────────

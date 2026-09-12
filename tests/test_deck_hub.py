@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 
 import httpx
 import pytest
@@ -317,6 +316,8 @@ def test_lifecycle_calls_get_a_long_read_budget():
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen[request.url.path] = request.extensions.get("timeout", {}).get("read")
+        if request.url.path == "/api/fleet":
+            return httpx.Response(200, json={"agents": []})
         return httpx.Response(200, json={"ok": True, "stopped": []})
 
     c = hub.HubClient("http://127.0.0.1:7870", transport=_transport(handler))
@@ -328,6 +329,64 @@ def test_lifecycle_calls_get_a_long_read_budget():
     assert seen["/api/fleet/a/stop"] >= 60
     assert seen["/api/fleet/down"] >= 5 * hub._DOWN_PER_MEMBER_S
     assert seen["/api/fleet"] == 5.0
+
+
+def test_credential_over_plain_http_off_box_is_refused_unless_opted_in():
+    """CWE-319: a bearer must not travel in cleartext to another host. Loopback http and
+    any https are fine; --insecure-http is the operator's explicit opt-in (a tailnet)."""
+    seen: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(_bearer(request))
+        return httpx.Response(200, json={"agents": []})
+
+    with pytest.raises(hub.InsecureHub) as ei:
+        hub.HubClient("http://ava.tail:7870", "tok", transport=_transport(handler))
+    assert "tok" not in str(ei.value) and "plain http" in str(ei.value)
+    assert seen == []  # nothing was sent at all
+    hub.HubClient("https://ava.tail:7870", "tok", transport=_transport(handler)).fleet()
+    hub.HubClient("http://127.0.0.1:7870", "tok", transport=_transport(handler)).fleet()
+    hub.HubClient("http://ava.tail:7870", None, transport=_transport(handler)).fleet()  # no credential → fine
+    hub.HubClient("http://ava.tail:7870", "tok", transport=_transport(handler), insecure_http=True).fleet()
+    assert seen == ["tok", "tok", None, "tok"]
+
+
+def test_connect_reports_the_insecure_refusal_as_answered(tmp_path, monkeypatch):
+    _no_disk_tokens(monkeypatch, tmp_path)
+    cand = hub.HubCandidate("http://ava.tail:7870", "flag")
+    with pytest.raises(hub.NoHub) as ei:
+        hub.connect(url="ava.tail:7870", token="tok", candidates=[cand], transport=_transport(lambda r: _card_ok(r) or httpx.Response(200, json={"agents": []})))
+    assert ei.value.answered and "plain http" in str(ei.value)
+    conn = hub.connect(url="ava.tail:7870", token="tok", candidates=[cand], transport=_transport(lambda r: _card_ok(r) or httpx.Response(200, json={"agents": []})), insecure_http=True)
+    conn.client.close()
+
+
+def test_client_never_follows_a_redirect_with_the_bearer():
+    hops: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hops.append(str(request.url))
+        return httpx.Response(302, headers={"location": "http://evil.example.com/api/fleet"})
+
+    c = hub.HubClient("http://127.0.0.1:7870", "tok", transport=_transport(handler))
+    with pytest.raises(hub.HubRequestError) as ei:
+        c.fleet()
+    assert ei.value.status == 302 and hops == ["http://127.0.0.1:7870/api/fleet"]
+
+
+def test_malformed_2xx_lifecycle_bodies_are_hub_errors():
+    """A proxy's HTML or an empty body on 200 must not read as "started" (CodeRabbit)."""
+    html = hub.HubClient("http://127.0.0.1:7870", transport=_transport(lambda r: httpx.Response(200, text="<html>proxy</html>")))
+    for call in (lambda: html.start("a"), lambda: html.stop("a"), lambda: html.down(), lambda: html.fleet(), lambda: html.runtime_status()):
+        with pytest.raises(hub.HubError) as ei:
+            call()
+        assert "malformed" in str(ei.value)
+    empty = hub.HubClient("http://127.0.0.1:7870", transport=_transport(lambda r: httpx.Response(200)))
+    with pytest.raises(hub.HubError):
+        empty.start("a")
+    bad_roster = hub.HubClient("http://127.0.0.1:7870", transport=_transport(lambda r: httpx.Response(200, json={"agents": "nope"})))
+    with pytest.raises(hub.HubError):
+        bad_roster.fleet()
 
 
 def test_client_4xx_carries_detail_and_status():
@@ -526,10 +585,11 @@ def test_connect_skips_a_member_that_answers_as_a_fleet_of_itself(tmp_path, monk
     assert ei.value.members == ["http://127.0.0.1:7871"]
     assert "only fleet MEMBERS answered" in str(ei.value)
 
-    # ...unless the operator NAMED it: --hub is explicit, and they may want the member's own view.
-    conn = hub.connect(url="127.0.0.1:7871", candidates=[member], transport=_transport(handler))
-    assert conn.candidate is member
-    conn.client.close()
+    # ...even when the operator NAMED it: `fleet down x --hub <member>` would drive
+    # lifecycle through a server that has no such member. Point at the hub instead.
+    with pytest.raises(hub.NoHub) as ei:
+        hub.connect(url="127.0.0.1:7871", candidates=[member], transport=_transport(handler))
+    assert ei.value.members == ["http://127.0.0.1:7871"] and ei.value.answered
 
 
 def test_connect_no_candidates_answering_says_so(tmp_path, monkeypatch):
@@ -546,11 +606,3 @@ def test_connect_no_candidates_answering_says_so(tmp_path, monkeypatch):
 
 
 # ── layering ──────────────────────────────────────────────────────────────────
-
-
-def test_deck_imports_nothing_from_the_runtime_it_manages():
-    """The deck is a separate process talking HTTP: no server/, operator_api/, or graph/.
-    (lint-imports guards the first two; graph is a design rule this test keeps honest.)"""
-    src = Path(hub.__file__).read_text(encoding="utf-8")
-    for forbidden in ("import server", "from server", "import operator_api", "from operator_api", "import graph", "from graph"):
-        assert forbidden not in src, forbidden

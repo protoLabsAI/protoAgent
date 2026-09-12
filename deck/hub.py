@@ -171,7 +171,10 @@ class NoHub(HubError):
             parts = "; ".join(f"{u}: {why}" for u, why in self.failed.items())
             msg = f"a hub answered but could not be read — {parts}"
         elif self.members:
-            msg = f"only fleet MEMBERS answered ({', '.join(self.members)}) — their hub is not running"
+            msg = (
+                f"only fleet MEMBERS answered ({', '.join(self.members)}) — a member is a fleet of itself; "
+                "point at its hub (or start one)"
+            )
         elif self.tried:
             msg = f"no hub answered at {', '.join(self.tried)}"
         else:
@@ -431,9 +434,41 @@ def _slug_of(path: str) -> str | None:
     return rest.split("/", 1)[0] or None
 
 
+class InsecureHub(HubError):
+    """A credential would travel in cleartext: a non-loopback ``http://`` hub with a
+    bearer set. Refused unless the operator opted in (``--insecure-http``, e.g. a tailnet
+    URL that is encrypted underneath but cannot be told apart from a LAN one)."""
+
+
+def credential_allowed(url: str, token: str | None, *, insecure_http: bool) -> None:
+    """Raise :class:`InsecureHub` when sending ``token`` to ``url`` would be cleartext
+    off-box (CWE-319). Loopback ``http://`` and any ``https://`` are always fine; a
+    token-less client never carries anything worth protecting."""
+    if not token or insecure_http:
+        return
+    if is_loopback(url):
+        return
+    if str(httpx.URL(url).scheme).lower() != "https":
+        raise InsecureHub(
+            url,
+            f"refusing to send a credential over plain http to {httpx.URL(url).host} — "
+            "use an https:// hub URL, or pass --insecure-http for a link you know is encrypted (a tailnet)",
+        )
+
+
+def _expect_dict(url: str, value: Any, what: str) -> dict:
+    """Every route the deck calls answers a JSON object. A 2xx with anything else (a
+    proxy's HTML, an empty body where one is required) is a hub error, not a success —
+    ``start`` must never report a member started on missing data."""
+    if isinstance(value, dict):
+        return value
+    raise HubError(url, f"malformed {what} response from {url} ({type(value).__name__})")
+
+
 class HubClient:
     """A thin, synchronous client over the hub routes the deck needs. Bounded timeouts;
-    typed errors; the credential is sent as a Bearer and never surfaced."""
+    typed errors; the credential is sent as a Bearer and never surfaced. Redirects are
+    NOT followed — a 3xx is an error, so a bearer can never be replayed to a third host."""
 
     def __init__(
         self,
@@ -442,10 +477,12 @@ class HubClient:
         *,
         timeout: httpx.Timeout = _TIMEOUT,
         transport: httpx.BaseTransport | None = None,
+        insecure_http: bool = False,
     ):
         self.url = normalize_url(url)
         self._token = token or None
-        self._client = httpx.Client(base_url=self.url, timeout=timeout, transport=transport)
+        credential_allowed(self.url, self._token, insecure_http=insecure_http)
+        self._client = httpx.Client(base_url=self.url, timeout=timeout, transport=transport, follow_redirects=False)
 
     @property
     def authenticated(self) -> bool:
@@ -476,6 +513,8 @@ class HubClient:
             raise HubUnreachable(self.url, f"{self.url} did not answer ({type(exc).__name__})") from exc
         except httpx.HTTPError as exc:  # anything else httpx can raise — never a raw traceback
             raise HubError(self.url, f"{self.url}: {type(exc).__name__}") from exc
+        if 300 <= r.status_code < 400:
+            raise HubRequestError(self.url, r.status_code, f"redirect to {r.headers.get('location', '?')!r} not followed")
         if r.status_code in (401, 403):
             slug = _slug_of(path)
             if slug:
@@ -524,24 +563,29 @@ class HubClient:
     # ── fleet control plane (ADR 0042 §B) ──
 
     def fleet(self) -> list[dict]:
-        data = self._request("GET", "/api/fleet")
-        agents = (data or {}).get("agents") if isinstance(data, dict) else None
-        return list(agents or [])
+        data = _expect_dict(self.url, self._request("GET", "/api/fleet"), "roster")
+        agents = data.get("agents")
+        if not isinstance(agents, list):
+            raise HubError(self.url, f"malformed roster response from {self.url} (no agents list)")
+        return [a for a in agents if isinstance(a, dict)]
 
     def start(self, name: str) -> dict:
-        return self._request("POST", f"/api/fleet/{quote(name, safe='')}/start", timeout=_LIFECYCLE_TIMEOUT) or {}
+        res = self._request("POST", f"/api/fleet/{quote(name, safe='')}/start", timeout=_LIFECYCLE_TIMEOUT)
+        return _expect_dict(self.url, res, "start")
 
     def stop(self, name: str) -> dict:
-        return self._request("POST", f"/api/fleet/{quote(name, safe='')}/stop", timeout=_LIFECYCLE_TIMEOUT) or {}
+        res = self._request("POST", f"/api/fleet/{quote(name, safe='')}/stop", timeout=_LIFECYCLE_TIMEOUT)
+        return _expect_dict(self.url, res, "stop")
 
     def down(self, running: int = 0) -> dict:
         """Stop every running member. The hub stops them one after another, each with
         its own grace window, so the read budget scales with how many are up."""
         budget = max(_LIFECYCLE_TIMEOUT.read or 0.0, _DOWN_PER_MEMBER_S * max(int(running), 0))
-        return self._request("POST", "/api/fleet/down", timeout=httpx.Timeout(budget, connect=2.0)) or {}
+        res = self._request("POST", "/api/fleet/down", timeout=httpx.Timeout(budget, connect=2.0))
+        return _expect_dict(self.url, res, "down")
 
     def runtime_status(self) -> dict:
-        return self._request("GET", "/api/runtime/status") or {}
+        return _expect_dict(self.url, self._request("GET", "/api/runtime/status"), "runtime status")
 
 
 # ── connect: the first hub we can actually read ───────────────────────────────
@@ -571,6 +615,7 @@ def connect(
     token: str | None = None,
     candidates: list[HubCandidate] | None = None,
     transport: httpx.BaseTransport | None = None,
+    insecure_http: bool = False,
 ) -> Connection:
     """Open the first candidate hub whose roster we can read.
 
@@ -585,7 +630,6 @@ def connect(
     unauthorized: list[str] = []
     members: list[str] = []
     failed: dict[str, str] = {}
-    explicit = bool(url)
     for cand in candidates if candidates is not None else discover_hubs(explicit_url=url):
         tried.append(cand.url)
         with HubClient(cand.url, transport=transport) as probe:
@@ -600,7 +644,11 @@ def connect(
             continue
         rejected = False
         for tok in token_chain(cand, explicit=token):
-            client = HubClient(cand.url, tok, transport=transport)
+            try:
+                client = HubClient(cand.url, tok, transport=transport, insecure_http=insecure_http)
+            except InsecureHub as exc:
+                failed[cand.url] = str(exc)
+                break
             try:
                 roster = client.fleet()
             except HubUnauthorized:
@@ -615,10 +663,11 @@ def connect(
             except BaseException:
                 client.close()
                 raise
-            if roster_is_a_member(roster) and not explicit:
+            if roster_is_a_member(roster):
                 # A member answers /api/fleet with a fleet-of-itself. Driving lifecycle
-                # through it would "start"/"stop" members that do not exist there. Only
-                # an operator who NAMED it (--hub) gets to talk to a member directly.
+                # through it would "start"/"stop" members that do not exist there — so a
+                # member is refused for EVERY candidate, an explicit --hub included: the
+                # fleet a member belongs to lives on its hub, and that is what to name.
                 client.close()
                 members.append(cand.url)
                 rejected = False

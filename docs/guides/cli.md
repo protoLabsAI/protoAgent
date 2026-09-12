@@ -84,7 +84,8 @@ protoagent fleet ls                       # live · http://127.0.0.1:7870 · pro
 protoagent fleet ls --json | jq '.agents[] | select(.running) | .name'
 protoagent fleet up protoEngineer         # POST /api/fleet/protoEngineer/start — the hub owns the process
 protoagent fleet down                     # POST /api/fleet/down
-protoagent fleet ls --hub ava.tail:7870 --token "$TOKEN"   # a hub elsewhere (an explicit --hub that fails is an error, not a fallback)
+protoagent fleet ls --hub https://ava.tail:7870 --token "$TOKEN"   # a hub elsewhere (an explicit --hub that fails is an error, not a fallback)
+protoagent fleet ls --hub http://100.119.239.8:7870 --token "$TOKEN" --insecure-http   # a tailnet peer: http, but encrypted underneath
 protoagent fleet ls --offline             # this instance's fleet.json, no probe
 ```
 
@@ -97,7 +98,11 @@ is reported as that member's credential problem, never as the hub's.
 
 This box's fleet service tokens and `A2A_AUTH_TOKEN` are sent to **loopback hubs only**.
 A `--hub` on another host gets `--token` / `PROTOAGENT_HUB_TOKEN` and nothing else, so a
-stray URL can never harvest local credentials. `--json` emits per-member result rows of
+stray URL can never harvest local credentials — and a credential is **never sent in
+cleartext off-box**: a non-loopback `http://` hub is refused unless you pass
+`--insecure-http` for a link you know is encrypted underneath (a tailnet). Redirects are
+never followed. A fleet *member* is refused as a hub even when named explicitly: it is a
+fleet of itself, and lifecycle belongs to its hub. `--json` emits per-member result rows of
 one shape (`{name, ok, …}`) plus `mode` and `hub`.
 
 ### Point at a local model
