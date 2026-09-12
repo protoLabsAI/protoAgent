@@ -202,6 +202,32 @@ def test_malformed_hub_is_a_clean_exit(monkeypatch, capsys):
     assert "invalid hub url" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("flags", [[], ["--json"]])
+def test_malformed_hub_with_userinfo_never_echoes_the_secret(capsys, flags):
+    """Round-2 blocker, through the real entrypoint: the raw --hub reached the error
+    message AND the JSON `hub` field."""
+    assert cli.run_fleet_cli(["ls", "--hub", "ftp://user:s3cret@host", *flags]) == 1
+    captured = capsys.readouterr()
+    assert "s3cret" not in captured.out and "s3cret" not in captured.err
+    if flags:
+        data = json.loads(captured.out)
+        assert data["mode"] == "error" and "***@" in data["hub"] and "s3cret" not in json.dumps(data)
+
+
+def test_unreachable_hub_with_userinfo_never_echoes_the_secret(monkeypatch, capsys):
+    """The NoHub path carries the normalized url (userinfo already stripped); the CLI must
+    not reintroduce the raw --hub anywhere."""
+
+    def fake_connect(*, url=None, token=None, candidates=None, transport=None):
+        raise deckhub.NoHub([deckhub.normalize_url(url)], [])
+
+    monkeypatch.setattr(deckhub, "connect", fake_connect)
+    assert cli.run_fleet_cli(["ls", "--hub", "http://user:s3cret@127.0.0.1:7999", "--json"]) == 1
+    captured = capsys.readouterr()
+    assert "s3cret" not in captured.out and "s3cret" not in captured.err
+    assert json.loads(captured.out)["hub"] == "http://127.0.0.1:7999"
+
+
 def test_ls_passes_hub_and_token_through(monkeypatch, capsys):
     seen = _live(monkeypatch, FakeClient())
     cli.run_fleet_cli(["status", "--hub", "ava.tail:7870", "--token", "abc"])

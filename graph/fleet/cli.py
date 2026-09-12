@@ -326,13 +326,15 @@ def run_fleet_cli(argv: list[str]) -> int:
         return _cmd_ls(args)
     except ValueError as exc:  # a malformed --hub (deck.hub.normalize_url)
         if args.as_json:
-            _emit({"mode": "error", "hub": args.hub, "error": str(exc)})
+            _emit({"mode": "error", "hub": deckhub.redact_url(args.hub) if args.hub else None, "error": str(exc)})
         else:
             print(f"✗ {exc}", file=sys.stderr)
         return 1
     except deckhub.HubError as exc:  # NoHub with something answering, or a mid-call failure
+        # exc.url is already normalized (userinfo stripped); args.hub is raw operator input.
+        hub_url = getattr(exc, "url", "") or (deckhub.redact_url(args.hub) if args.hub else "")
         if args.as_json:
-            _emit({"mode": "error", "hub": getattr(exc, "url", "") or args.hub, "error": str(exc)})
+            _emit({"mode": "error", "hub": hub_url or None, "error": str(exc)})
         else:
             print(f"✗ {exc}", file=sys.stderr)
         return 1

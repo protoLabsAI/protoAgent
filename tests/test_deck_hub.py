@@ -55,6 +55,18 @@ def test_normalize_url_strips_userinfo_and_rejects_garbage():
             hub.normalize_url(bad)
 
 
+def test_normalize_url_reject_path_never_echoes_userinfo():
+    """Round-2 blocker: the reject path formatted the RAW input, so `--hub ftp://user:s3cret@host`
+    printed the secret. Every ValueError message must be redacted."""
+    for bad in ("ftp://user:s3cret@host", "http://user:s3cret@", "user:s3cret@:7870", "http://user:s3cret@[::1"):
+        with pytest.raises(ValueError) as ei:
+            hub.normalize_url(bad)
+        assert "s3cret" not in str(ei.value), bad
+    assert hub.redact_url("http://user:s3cret@host:1/x") == "http://***@host:1/x"
+    assert hub.redact_url("user:s3cret@host") == "http://***@host"
+    assert hub.redact_url("http://host:1") == "http://host:1"
+
+
 def test_is_loopback():
     assert hub.is_loopback("http://127.0.0.1:7870")
     assert hub.is_loopback("http://localhost:7870")
@@ -425,6 +437,27 @@ def test_connect_records_a_hub_that_answered_but_could_not_be_read(tmp_path, mon
         hub.connect(candidates=[cand], transport=_transport(handler_500))
     assert ei.value.answered is True
     assert "task store exploded" in str(ei.value)
+
+
+def test_connect_counts_a_live_pid_with_no_card_as_answered(tmp_path, monkeypatch):
+    """A pidfile/heartbeat candidate whose server is booting or stalled (probe times out)
+    is a RUNNING hub — the CLI must not read it as "nothing answered" and go to disk."""
+    _no_disk_tokens(monkeypatch, tmp_path)
+    monkeypatch.setattr(hub, "pid_alive", lambda pid: pid == 4242)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("stalled", request=request)
+
+    live = hub.HubCandidate("http://127.0.0.1:7871", "heartbeat", pid=4242)
+    dead = hub.HubCandidate("http://127.0.0.1:7872", "heartbeat", pid=4343)  # pid gone → genuinely nothing
+    with pytest.raises(hub.NoHub) as ei:
+        hub.connect(candidates=[live, dead], transport=_transport(handler))
+    assert ei.value.answered is True
+    assert list(ei.value.failed) == ["http://127.0.0.1:7871"]
+    assert "pid 4242" in str(ei.value)
+    with pytest.raises(hub.NoHub) as ei:
+        hub.connect(candidates=[dead], transport=_transport(handler))
+    assert ei.value.answered is False
 
 
 def test_connect_treats_403_as_rejected_credential_and_keeps_walking(tmp_path, monkeypatch):

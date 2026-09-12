@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -198,10 +199,25 @@ class HubCandidate:
     pid: int | None = None
 
 
+_USERINFO_RE = re.compile(r"(?<=://)[^/@\s]*@")
+
+
+def redact_url(url: str | None) -> str:
+    """``scheme://user:secret@host…`` → ``scheme://***@host…``. Applied to every operator-
+    supplied URL before it can reach a message or a JSON field — including the REJECT
+    path of :func:`normalize_url`, where the raw input is all we have."""
+    u = (url or "").strip()
+    if "://" not in u:
+        u = f"http://{u}"
+    return _USERINFO_RE.sub("***@", u)
+
+
 def normalize_url(url: str) -> str:
     """``host:port`` → ``http://host:port``; trailing slash dropped; userinfo STRIPPED (a
     ``--hub http://user:secret@host`` must not echo the secret in any message). Raises
-    ``ValueError`` on anything that is not a usable absolute URL."""
+    ``ValueError`` on anything that is not a usable absolute URL — with the userinfo
+    redacted in the message too, since the reject path is exactly where a mangled
+    credential-bearing URL ends up."""
     u = (url or "").strip()
     if not u.strip("/"):
         raise ValueError("hub url is empty")
@@ -210,9 +226,10 @@ def normalize_url(url: str) -> str:
     try:
         parsed = httpx.URL(u)
     except httpx.InvalidURL as exc:
-        raise ValueError(f"invalid hub url: {exc}") from exc
+        # httpx's message can carry the offending text; keep only its class.
+        raise ValueError(f"invalid hub url: {redact_url(url)!r} ({type(exc).__name__})") from exc
     if parsed.scheme not in ("http", "https") or not parsed.host:
-        raise ValueError(f"invalid hub url: {url!r}")
+        raise ValueError(f"invalid hub url: {redact_url(url)!r}")
     clean = parsed.copy_with(username=None, password=None, path="", query=None, fragment=None)
     return str(clean).rstrip("/")
 
@@ -574,6 +591,12 @@ def connect(
         with HubClient(cand.url, transport=transport) as probe:
             card = probe.agent_card()
         if card is None:
+            # No card — but if the evidence for this candidate is a LIVE server process
+            # (pidfile / heartbeat), something IS running there and is merely stalled or
+            # still booting. That must not read as "nothing answered" or the CLI would
+            # fall back to driving processes from disk beside it.
+            if cand.pid and pid_alive(cand.pid):
+                failed[cand.url] = f"a live server process (pid {cand.pid}) did not answer its agent card"
             continue
         rejected = False
         for tok in token_chain(cand, explicit=token):
