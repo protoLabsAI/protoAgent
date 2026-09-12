@@ -3,6 +3,7 @@ import { expect, test } from "@playwright/test";
 import { requiresToolsNotice } from "../src/lib/archetypeConfig";
 import { CONFIGURE_REQUIRED_COPY, HARD_GATE_HINT_WIZARD, HARD_GATE_HINT_WIZARD_COLLAPSED } from "../src/lib/pickerCopy";
 import { ARCHETYPES } from "./fixtures.mjs";
+import { routeSnapshot } from "./routeSnapshot";
 
 // The first-run Setup Wizard (host path, ADR 0100) — the archetype picker's hard gate
 // (#2977/#2979/#2984) mirrored from the fleet New-agent panel: a required bundle
@@ -13,13 +14,14 @@ import { ARCHETYPES } from "./fixtures.mjs";
 // The mock reports setup_complete:true for every other spec; these flip it per-test so
 // the wizard mounts over the shell. Finishing never flips it back (the override is
 // sticky), which keeps the wizard open for the post-Finish payload assertions.
+//
+// The status is served from a one-time snapshot, never a per-request `route.fetch()` proxy:
+// Finish's blanket refetch (setup/finish.ts) fires just as the last test ends, and teardown
+// disposes a proxied body mid-read ("Response has been disposed") — see routeSnapshot.ts.
 
 async function openWizard(page) {
-  await page.route("**/api/runtime/status", async (route) => {
-    const response = await route.fetch();
-    const json = await response.json();
+  await routeSnapshot(page, "/api/runtime/status", (json) => {
     json.setup_complete = false;
-    await route.fulfill({ json });
   });
   await page.goto("/app/", { waitUntil: "load" });
   const wizard = page.getByRole("dialog", { name: "Setup" });

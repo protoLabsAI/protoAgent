@@ -1,6 +1,6 @@
 import { act, createElement, Fragment, useState, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ChatMessage } from "../lib/types";
 import { CANCELLED_DELEGATION_PREFIX } from "./dismissedToolCalls";
@@ -16,6 +16,21 @@ vi.mock("@protolabsai/ui/ai", () => ({
       queuedLabel ? createElement("span", null, queuedLabel) : null,
       children,
       onCancel ? createElement("button", { type: "button", "aria-label": "Cancel queued message", onClick: onCancel }) : null,
+    ),
+}));
+
+// The DS Tooltip is Radix-backed (portal + hover/focus + open-delay timers): driving it OPEN
+// in jsdom is exactly what hangs a render test. Stub it to render its `label` eagerly so the
+// full sent-time content behind the sent-timestamp widget is assertable without a portal/hover
+// cycle. Only the real ChatMessageView (loaded via vi.importActual below) consumes this; the
+// transcript-isolation suites mock ./ChatMessageView and never touch overlays.
+vi.mock("@protolabsai/ui/overlays", () => ({
+  Tooltip: ({ label, children }: { label: ReactNode; children: ReactNode }) =>
+    createElement(
+      "span",
+      { "data-tip": true },
+      children,
+      createElement("span", { "data-testid": "tip-label" }, label),
     ),
 }));
 
@@ -202,5 +217,109 @@ describe("ChatTranscript render isolation", () => {
     expect(host.textContent?.split("yes 2024 as proposed").length).toBe(2);
     expect(host.querySelectorAll('[aria-label="Cancel queued message"]')).toHaveLength(1);
     expect(host.textContent).toContain("and the resume too");
+  });
+});
+
+// The sent-timestamp footer widget (#3458) lives in the SHARED ChatMessageView renderer, so
+// proving it on that renderer proves it for both consumers (main chat + palette chat). The real
+// renderer is pulled in with vi.importActual because this file mocks ./ChatMessageView for the
+// transcript-isolation suites above.
+describe("ChatMessageView sent-timestamp footer (#3458)", () => {
+  let ChatMessageView: (props: { message: ChatMessage }) => ReactNode;
+  let tsHost: HTMLDivElement | null = null;
+  let tsRoot: Root | null = null;
+
+  beforeAll(async () => {
+    ({ ChatMessageView } = (await vi.importActual("./ChatMessageView")) as {
+      ChatMessageView: (props: { message: ChatMessage }) => ReactNode;
+    });
+  });
+
+  async function render(message: ChatMessage): Promise<HTMLElement> {
+    // Tear down any prior mount so a multi-render test (the invalid-input sweep) doesn't leak
+    // roots or leave a stale host in the query scope.
+    if (tsRoot) await act(async () => tsRoot!.unmount());
+    tsHost?.remove();
+    tsHost = document.createElement("div");
+    document.body.appendChild(tsHost);
+    await act(async () => {
+      tsRoot = createRoot(tsHost!);
+      tsRoot.render(createElement(ChatMessageView, { message }));
+    });
+    return tsHost;
+  }
+
+  /** Re-render the SAME root — a streamed turn settling in place. */
+  async function rerender(message: ChatMessage): Promise<HTMLElement> {
+    await act(async () => tsRoot!.render(createElement(ChatMessageView, { message })));
+    return tsHost!;
+  }
+
+  afterEach(async () => {
+    await act(async () => tsRoot?.unmount());
+    tsHost?.remove();
+    tsRoot = null;
+    tsHost = null;
+  });
+
+  // A FIXED epoch (never the wall clock), formatted with the SAME runtime Intl the widget uses,
+  // so the assertions hold under any CI locale/timezone rather than pinning a literal string.
+  const SENT = 1_700_000_000_000;
+  const sent = new Date(SENT);
+  const shortLabel = sent.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const fullLabel = sent.toLocaleString([], { dateStyle: "full", timeStyle: "medium" });
+
+  const chip = (el: HTMLElement) => el.querySelector<HTMLElement>(".chat-sent-time");
+
+  it("renders the widget for a settled assistant message with a valid createdAt", async () => {
+    const el = await render({ id: "a1", role: "assistant", content: "Done.", status: "done", createdAt: SENT });
+    expect(chip(el)).toBeTruthy();
+    expect(el.querySelector(".chat-sent-time-label")?.textContent).toBe(shortLabel);
+    expect(chip(el)!.querySelector("svg")).toBeTruthy(); // the reused Clock icon
+  });
+
+  it("renders the widget for a settled user message too (shared renderer → both consumers)", async () => {
+    const el = await render({ id: "u1", role: "user", content: "Hi", status: "done", createdAt: SENT });
+    expect(chip(el)).toBeTruthy();
+    expect(el.querySelector(".chat-sent-time-label")?.textContent).toBe(shortLabel);
+  });
+
+  it("exposes the full local date-and-time via the DS Tooltip plus a focusable accessible name", async () => {
+    const el = await render({ id: "a2", role: "assistant", content: "Done.", status: "done", createdAt: SENT });
+    // The full timestamp rides the DS Tooltip's label (no bespoke tooltip).
+    expect(el.querySelector('[data-testid="tip-label"]')?.textContent).toBe(fullLabel);
+    // Keyboard/AT path: the chip is focusable and names the full sent time.
+    expect(chip(el)!.getAttribute("tabindex")).toBe("0");
+    expect(chip(el)!.getAttribute("aria-label")).toBe(`Sent ${fullLabel}`);
+  });
+
+  it("renders NO widget for missing, zero, negative, non-finite, or invalid timestamps", async () => {
+    for (const createdAt of [undefined, 0, -1, Number.NaN, Number.POSITIVE_INFINITY, 8.64e15 + 1]) {
+      const el = await render({ id: "x", role: "assistant", content: "hi", status: "done", createdAt });
+      expect(chip(el)).toBeNull();
+      expect(el.textContent).not.toContain("Invalid Date");
+    }
+  });
+
+  it("hides the widget while streaming, then shows it once the SAME message settles", async () => {
+    const live: ChatMessage = { id: "live", role: "assistant", content: "partial", status: "streaming", createdAt: SENT };
+    let el = await render(live);
+    expect(chip(el)).toBeNull();
+    el = await rerender({ ...live, status: "done", content: "final" });
+    expect(chip(el)).toBeTruthy();
+    expect(el.querySelector(".chat-sent-time-label")?.textContent).toBe(shortLabel);
+  });
+
+  it("leaves a specialized card (background report) untouched — no sent-time footer on it", async () => {
+    const el = await render({
+      id: "r1",
+      role: "system",
+      content: "Report ready",
+      status: "done",
+      createdAt: SENT,
+      report: { jobId: "job-1", title: "Nightly digest" },
+    });
+    expect(el.querySelector(".chat-report-chip")).toBeTruthy();
+    expect(chip(el)).toBeNull();
   });
 });

@@ -127,15 +127,20 @@ async def _operator_runtime_status():
     try:
         from graph.plugins import setup_gaps as _setup_gaps
 
-        warnings.extend(_setup_gaps.warnings())
-        # bd-ai7x: publish the SAME active gaps as a typed list BESIDE the legacy
-        # string `warnings[]` — each record carries the plugin id, gap key, display
-        # label, operator-facing message, and the already-validated declarative
-        # actions, in the store's stable (plugin, key) order. `warnings[]` stays the
-        # legacy projection indefinitely; this field is purely additive. `active()`
-        # already returns a defensive copy, so it's safe to embed as-is, and it's
-        # `[]` (never absent) when there are no gaps or the seam is missing.
+        # bd-ai7x: publish the active gaps as a typed list BESIDE the legacy string
+        # `warnings[]` — each record carries the plugin id, gap key, display label,
+        # operator-facing message, and the already-validated declarative actions, in the
+        # store's stable (plugin, key) order. `warnings[]` stays the legacy projection
+        # indefinitely; this field is purely additive. `active()` already returns a
+        # defensive copy, so it's safe to embed as-is, and it's `[]` (never absent) when
+        # there are no gaps or the seam is missing.
+        #
+        # ONE read feeds both lists. The console drops a gap's `warnings[]` line only when
+        # its record is in the same payload; two separately locked reads could straddle a
+        # plugin re-reporting/clearing on another thread and publish a line with no record —
+        # a plain alert the operator can neither act on nor dismiss.
         structured_gaps = _setup_gaps.active()
+        warnings.extend(_setup_gaps.warnings(structured_gaps))
     except Exception:  # noqa: BLE001 — status must never raise
         pass
     status = _build_operator_status(

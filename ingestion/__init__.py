@@ -17,6 +17,7 @@ Public API:
     extract_url(url) -> ExtractResult
     SUPPORTED_EXTENSIONS, SUPPORTED_DESCRIPTION
     IngestionError / UnsupportedSource / ExtractionError / MissingDependency
+    SourceTooLarge (an ExtractionError: over the engine's extraction budget → 413)
 """
 
 from ingestion.engine import (
@@ -26,6 +27,7 @@ from ingestion.engine import (
     ExtractResult,
     IngestionError,
     MissingDependency,
+    SourceTooLarge,
     UnsupportedSource,
     extract_bytes,
     extract_url,
@@ -38,6 +40,7 @@ __all__ = [
     "UnsupportedSource",
     "ExtractionError",
     "MissingDependency",
+    "SourceTooLarge",
     "extract_bytes",
     "extract_url",
     "youtube_id",

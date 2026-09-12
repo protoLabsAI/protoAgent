@@ -297,10 +297,12 @@ class FakeRegistry:
     def report_setup_gap(self, key: str, message: str | None, *, label: str | None = None, action=None) -> None:
         """Records what the plugin reported (``self.setup_gaps[key]``; ``None`` clears) so a
         smoke test can assert a preflight found — or cleared — its gap. The real
-        registry forwards to the operator-status warnings seam. ``action`` mirrors the host
-        signature (a declarative remediation hint); the raw value is captured on
-        ``self.setup_gap_actions[key]`` so a plugin test can assert it passed one, while the
-        host does the real bounds/allowlist validation."""
+        registry forwards to the setup-gap store behind runtime status ``setup_gaps[]``.
+        ``action`` mirrors the host signature (a declarative remediation hint); the raw
+        value is captured on ``self.setup_gap_actions[key]`` so a plugin test can assert it
+        passed one, while the host does the real bounds/allowlist validation. Driving a
+        plugin through THIS method (not a hand-written fake) is what catches a wrong keyword:
+        its signature is the host's, so an ``actions=`` call raises ``TypeError`` here too."""
         if message is None or not str(message).strip():
             self.setup_gaps.pop(key, None)
             self.setup_gap_actions.pop(key, None)

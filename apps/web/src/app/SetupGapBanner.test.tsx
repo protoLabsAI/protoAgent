@@ -1,18 +1,23 @@
 // Structured setup-gap banners (graph/plugins/setup_gaps.py rendered in the shell strip):
-// legacy string warnings keep rendering elsewhere, this suite covers the STRUCTURED path —
-// CTA navigation into the plugin-config dialog, action safety for unknown/malformed kinds,
-// and the session-scoped dismissal lifecycle. createRoot/act + the real uiStore, like the
-// other console UI suites (FleetRoom.test.tsx) — no testing-library dep.
+// how runtime status splits into banners vs plain alerts, CTA navigation into the
+// plugin-config dialog, action safety for unknown/malformed kinds, and the session-scoped
+// dismissal lifecycle. createRoot/act + the real uiStore, like the other console UI suites
+// (FleetRoom.test.tsx) — no testing-library dep.
 import { act, createElement as h } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+// The REAL runtime-status payload for two reported gaps — asserted against the live handler by
+// tests/test_console_handlers.py, and served by the e2e (see the file's `_about`).
+import golden from "../../e2e/setup-gaps.golden.json";
 import { useUI } from "../state/uiStore";
 import {
   SetupGapBanner,
   gapIdentity,
   gapSignature,
+  gapWarningLine,
   isSetupGap,
+  splitRuntimeWarnings,
   useSetupGapDismissals,
   type SetupGap,
 } from "./SetupGapBanner";
@@ -62,12 +67,92 @@ const dismissButton = () => container.querySelector<HTMLButtonElement>('[data-te
 const ctaButtons = () =>
   buttons().filter((b) => /Configure|Open settings/.test((b.textContent || "").trim()));
 
-describe("isSetupGap — splits structured gaps from legacy strings", () => {
+describe("isSetupGap — well-formed structured gaps only", () => {
   it("accepts a well-formed gap and rejects strings / malformed objects", () => {
     expect(isSetupGap(pbGap())).toBe(true);
     expect(isSetupGap("Another running instance shares this data root")).toBe(false);
     expect(isSetupGap({ plugin: "x" })).toBe(false); // missing key/message/label
     expect(isSetupGap(null)).toBe(false);
+  });
+});
+
+// The runtime-status contract (#3395): each gap arrives as a record in `setup_gaps[]` AND as its
+// `Label: message` line in `warnings[]`. The console used to build banners only from objects
+// inside `warnings[]` — a shape the server never sends — so every real gap rendered as a plain
+// alert with no Configure button and no dismiss (QA of v0.164.0).
+describe("splitRuntimeWarnings — the real runtime-status shape", () => {
+  const OTHER = "Another running instance shares this agent's data.";
+
+  it("turns the real server payload into one banner per gap and no leftover plain lines", () => {
+    const { plainWarnings, setupGaps } = splitRuntimeWarnings(golden.status);
+    expect(setupGaps.map(gapIdentity)).toEqual(["boardy coder", "boardy repo"]);
+    expect(plainWarnings).toEqual([]); // both lines were the gaps' own projection
+  });
+
+  it("keeps genuinely plain operational warnings, in order, beside the gaps", () => {
+    const status = { warnings: [OTHER, ...golden.status.warnings], setup_gaps: golden.status.setup_gaps };
+    const { plainWarnings, setupGaps } = splitRuntimeWarnings(status);
+    expect(plainWarnings).toEqual([OTHER]);
+    expect(setupGaps).toHaveLength(2);
+  });
+
+  it("drops a gap's line by its EXACT projection — a warning that merely mentions the plugin survives", () => {
+    const gap = pbGap();
+    expect(gapWarningLine(gap)).toBe("Project Board: No coder delegate is configured, so the board can't run features.");
+    const near = "Project Board: the board's coder delegate crashed.";
+    const { plainWarnings } = splitRuntimeWarnings({ warnings: [near, gapWarningLine(gap)], setup_gaps: [gap] });
+    expect(plainWarnings).toEqual([near]);
+  });
+
+  it("a server without `setup_gaps` (pre-#3395) keeps every line as a plain warning", () => {
+    const { plainWarnings, setupGaps } = splitRuntimeWarnings({ warnings: golden.status.warnings });
+    expect(setupGaps).toEqual([]);
+    expect(plainWarnings).toEqual(golden.status.warnings);
+  });
+
+  it("a malformed `setup_gaps` entry is dropped, and its line stays visible as a plain alert", () => {
+    const line = "Acme: gh is not authenticated";
+    const { plainWarnings, setupGaps } = splitRuntimeWarnings({
+      warnings: [line],
+      setup_gaps: [{ plugin: "acme", message: "gh is not authenticated" }], // no key/label
+    });
+    expect(setupGaps).toEqual([]);
+    expect(plainWarnings).toEqual([line]);
+  });
+
+  it("ignores gap-shaped OBJECTS inside `warnings[]` — never a server shape", () => {
+    const { plainWarnings, setupGaps } = splitRuntimeWarnings({ warnings: [OTHER, pbGap()] as unknown[] });
+    expect(setupGaps).toEqual([]);
+    expect(plainWarnings).toEqual([OTHER]);
+  });
+
+  it("renders nothing for an absent / empty status", () => {
+    for (const status of [undefined, null, { warnings: [], setup_gaps: [] }]) {
+      const { plainWarnings, setupGaps } = splitRuntimeWarnings(status);
+      expect(plainWarnings).toEqual([]);
+      expect(setupGaps).toEqual([]);
+    }
+  });
+
+  it("says whether the gap list is KNOWN — present (even empty) vs not loaded / pre-#3395", () => {
+    // `setup_gaps` is always present on a current server (`[]` when there are none), so an
+    // empty list is a REAL "no gaps" the dismissals may reset on; a missing status or field is
+    // not — that's a reload before the status arrives, or an older server.
+    expect(splitRuntimeWarnings({ warnings: [], setup_gaps: [] }).gapsKnown).toBe(true);
+    expect(splitRuntimeWarnings(golden.status).gapsKnown).toBe(true);
+    expect(splitRuntimeWarnings({ warnings: golden.status.warnings }).gapsKnown).toBe(false);
+    expect(splitRuntimeWarnings(null).gapsKnown).toBe(false);
+    expect(splitRuntimeWarnings(undefined).gapsKnown).toBe(false);
+  });
+
+  it("renders the real payload's gaps with the host-allowlisted CTA (and none where the host dropped it)", () => {
+    const { setupGaps } = splitRuntimeWarnings(golden.status);
+    const [coder, repo] = setupGaps;
+    act(() => root.render(h(SetupGapBanner, { gap: coder, onDismiss: () => {} })));
+    expect(buttonByText("Configure Project Board")).toBeTruthy();
+    act(() => root.render(h(SetupGapBanner, { gap: repo, onDismiss: () => {} })));
+    expect(ctaButtons()).toHaveLength(0); // its open_url action never survived the sanitizer
+    expect(dismissButton()).not.toBeNull();
   });
 });
 
@@ -157,9 +242,12 @@ describe("SetupGapBanner — dismiss control", () => {
   });
 });
 
-// A tiny harness so the hook can be exercised through a real render tree.
-function GapList({ gaps }: { gaps: SetupGap[] }) {
-  const { visibleGaps, dismiss } = useSetupGapDismissals(gaps);
+// A tiny harness so the hook can be exercised through a real render tree. `scope` is the
+// focused agent (App passes `currentSlug()`); `authoritative` is "the status carried the server's
+// `setup_gaps[]` list" (splitRuntimeWarnings' `gapsKnown`) — false while it isn't loaded yet or
+// on a server that predates the field.
+function GapList({ gaps, scope = "host", authoritative = true }: { gaps: SetupGap[]; scope?: string; authoritative?: boolean }) {
+  const { visibleGaps, dismiss } = useSetupGapDismissals(gaps, { scope, authoritative });
   return h(
     "div",
     null,
@@ -175,6 +263,16 @@ function GapList({ gaps }: { gaps: SetupGap[] }) {
 
 const visibleIds = () =>
   Array.from(container.querySelectorAll('[data-testid="visible-gap"]')).map((el) => el.getAttribute("data-id"));
+/** One agent's stored dismissal signatures (sessionStorage, keyed per agent). */
+const stored = (scope = "host"): string[] =>
+  JSON.parse(window.sessionStorage.getItem(`protoagent.setupGapDismissals:${scope}`) || "[]");
+const clickDismiss = (key: string) =>
+  act(() => container.querySelector<HTMLButtonElement>(`[data-testid="dismiss-projectBoard-${key}"]`)!.click());
+/** Mount a FRESH tree — a page load: the hook's initial state is read back out of storage. */
+function remount() {
+  act(() => root.unmount());
+  root = createRoot(container);
+}
 
 describe("useSetupGapDismissals — session-scoped dismissal lifecycle (r4)", () => {
   it("hides only the dismissed gap and leaves the others", async () => {
@@ -184,7 +282,7 @@ describe("useSetupGapDismissals — session-scoped dismissal lifecycle (r4)", ()
     await flush();
     expect(visibleIds()).toEqual([gapIdentity(a), gapIdentity(b)]);
 
-    act(() => container.querySelector<HTMLButtonElement>('[data-testid="dismiss-projectBoard-coder"]')!.click());
+    clickDismiss("coder");
     await flush();
     expect(visibleIds()).toEqual([gapIdentity(b)]);
   });
@@ -193,14 +291,13 @@ describe("useSetupGapDismissals — session-scoped dismissal lifecycle (r4)", ()
     const a = pbGap();
     act(() => root.render(h(GapList, { gaps: [a] })));
     await flush();
-    act(() => container.querySelector<HTMLButtonElement>('[data-testid="dismiss-projectBoard-coder"]')!.click());
+    clickDismiss("coder");
     await flush();
     expect(visibleIds()).toEqual([]);
 
-    // Tear down and mount a FRESH tree — its initial state reads the dismissal back out of
-    // sessionStorage (same session), so the gap stays hidden.
-    act(() => root.unmount());
-    root = createRoot(container);
+    // A FRESH tree reads the dismissal back out of sessionStorage (same session), so the gap
+    // stays hidden.
+    remount();
     act(() => root.render(h(GapList, { gaps: [a] })));
     await flush();
     expect(visibleIds()).toEqual([]);
@@ -210,14 +307,13 @@ describe("useSetupGapDismissals — session-scoped dismissal lifecycle (r4)", ()
     const a = pbGap();
     act(() => root.render(h(GapList, { gaps: [a] })));
     await flush();
-    act(() => container.querySelector<HTMLButtonElement>('[data-testid="dismiss-projectBoard-coder"]')!.click());
+    clickDismiss("coder");
     await flush();
     expect(visibleIds()).toEqual([]);
 
     // New session: clear sessionStorage AND mount a fresh tree, so nothing is remembered.
-    act(() => root.unmount());
+    remount();
     window.sessionStorage.clear();
-    root = createRoot(container);
     act(() => root.render(h(GapList, { gaps: [a] })));
     await flush();
     expect(visibleIds()).toEqual([gapIdentity(a)]);
@@ -227,7 +323,7 @@ describe("useSetupGapDismissals — session-scoped dismissal lifecycle (r4)", ()
     const before = pbGap({ message: "No coder delegate is configured." });
     act(() => root.render(h(GapList, { gaps: [before] })));
     await flush();
-    act(() => container.querySelector<HTMLButtonElement>('[data-testid="dismiss-projectBoard-coder"]')!.click());
+    clickDismiss("coder");
     await flush();
     expect(visibleIds()).toEqual([]);
 
@@ -239,20 +335,38 @@ describe("useSetupGapDismissals — session-scoped dismissal lifecycle (r4)", ()
     expect(visibleIds()).toEqual([gapIdentity(after)]);
   });
 
-  it("preserves a dismissal across a transient/empty runtime status and keeps the gap hidden when it returns", async () => {
+  it("resets on a REAL clear: the server's list is present and empty, so a recurring gap shows again", async () => {
+    // #3421's stated contract — a dismissal "resets when the server clears the gap". The
+    // operator fixed it (the server now sends `setup_gaps: []`); if it breaks again later with
+    // the same text, that is a NEW problem, and it must not stay hidden for the session.
     const a = pbGap();
     act(() => root.render(h(GapList, { gaps: [a] })));
     await flush();
-    act(() => container.querySelector<HTMLButtonElement>('[data-testid="dismiss-projectBoard-coder"]')!.click());
+    clickDismiss("coder");
     await flush();
-    expect(visibleIds()).toEqual([]);
-    expect(JSON.parse(window.sessionStorage.getItem("protoagent.setupGapDismissals") || "[]")).toHaveLength(1);
+    expect(stored()).toHaveLength(1);
 
-    // Runtime status blips to empty (reload / poll gap / null status). This is NOT the server
-    // clearing the gap — so the dismissal must survive, not be pruned.
-    act(() => root.render(h(GapList, { gaps: [] })));
+    act(() => root.render(h(GapList, { gaps: [], authoritative: true })));
     await flush();
-    expect(JSON.parse(window.sessionStorage.getItem("protoagent.setupGapDismissals") || "[]")).toHaveLength(1);
+    expect(stored()).toEqual([]);
+
+    act(() => root.render(h(GapList, { gaps: [a] })));
+    await flush();
+    expect(visibleIds()).toEqual([gapIdentity(a)]);
+  });
+
+  it("never resets while the gap list is UNKNOWN (status not loaded yet, or a pre-setup_gaps server)", async () => {
+    const a = pbGap();
+    act(() => root.render(h(GapList, { gaps: [a] })));
+    await flush();
+    clickDismiss("coder");
+    await flush();
+    expect(stored()).toHaveLength(1);
+
+    // A reload renders before the status arrives: no list to compare against, so no prune.
+    act(() => root.render(h(GapList, { gaps: [], authoritative: false })));
+    await flush();
+    expect(stored()).toHaveLength(1);
 
     // The unchanged gap comes back → it stays hidden for the rest of the session.
     act(() => root.render(h(GapList, { gaps: [a] })));
@@ -265,18 +379,72 @@ describe("useSetupGapDismissals — session-scoped dismissal lifecycle (r4)", ()
     const b = pbGap({ key: "repo", message: "No repository is bound." });
     act(() => root.render(h(GapList, { gaps: [a, b] })));
     await flush();
-    act(() => container.querySelector<HTMLButtonElement>('[data-testid="dismiss-projectBoard-coder"]')!.click());
+    clickDismiss("coder");
     await flush();
-    act(() => container.querySelector<HTMLButtonElement>('[data-testid="dismiss-projectBoard-repo"]')!.click());
+    clickDismiss("repo");
     await flush();
-    expect(JSON.parse(window.sessionStorage.getItem("protoagent.setupGapDismissals") || "[]")).toHaveLength(2);
+    expect(stored()).toHaveLength(2);
 
-    // `a` clears but `b` stays live → we have a real live set to compare against, so a's stale
-    // signature is pruned (storage hygiene) while b's dismissal is retained.
+    // `a` clears but `b` stays live → a's stale signature is pruned (storage hygiene) while b's
+    // dismissal is retained.
     act(() => root.render(h(GapList, { gaps: [b] })));
     await flush();
-    expect(JSON.parse(window.sessionStorage.getItem("protoagent.setupGapDismissals") || "[]")).toEqual([
-      gapSignature(b),
-    ]);
+    expect(stored()).toEqual([gapSignature(b)]);
+  });
+});
+
+// Runtime status is the FOCUSED agent's, and switching agents is a full page load in the same
+// tab (same sessionStorage). A dismissal is one agent's acknowledgement of one of ITS problems:
+// it must neither hide another agent's identical gap nor be pruned by another agent's live set
+// (#3438 review — both happened with one unscoped key).
+describe("useSetupGapDismissals — scoped to the focused agent", () => {
+  it("dismissing a gap on one agent never hides another agent's identical gap", async () => {
+    const a = pbGap();
+    act(() => root.render(h(GapList, { gaps: [a], scope: "host" })));
+    await flush();
+    clickDismiss("coder");
+    await flush();
+    expect(visibleIds()).toEqual([]);
+
+    remount(); // focus the member: a full page load in the same tab
+    act(() => root.render(h(GapList, { gaps: [a], scope: "ava" })));
+    await flush();
+    expect(visibleIds()).toEqual([gapIdentity(a)]);
+  });
+
+  it("another agent's live gap set never prunes this agent's dismissals", async () => {
+    const a = pbGap({ key: "coder" });
+    const b = pbGap({ key: "repo", message: "No repository is bound." });
+    act(() => root.render(h(GapList, { gaps: [a], scope: "host" })));
+    await flush();
+    clickDismiss("coder");
+    await flush();
+
+    remount();
+    act(() => root.render(h(GapList, { gaps: [b], scope: "ava" }))); // a different, authoritative set
+    await flush();
+    expect(visibleIds()).toEqual([gapIdentity(b)]);
+
+    remount(); // back to the hub: its gap is unchanged and this is the same session
+    act(() => root.render(h(GapList, { gaps: [a], scope: "host" })));
+    await flush();
+    expect(visibleIds()).toEqual([]);
+    expect(stored("host")).toEqual([gapSignature(a)]);
+  });
+
+  it("a mounted hook that changes agent swaps to THAT agent's dismissals", async () => {
+    const a = pbGap();
+    act(() => root.render(h(GapList, { gaps: [a], scope: "host" })));
+    await flush();
+    clickDismiss("coder");
+    await flush();
+
+    act(() => root.render(h(GapList, { gaps: [a], scope: "ava" })));
+    await flush();
+    expect(visibleIds()).toEqual([gapIdentity(a)]);
+
+    act(() => root.render(h(GapList, { gaps: [a], scope: "host" })));
+    await flush();
+    expect(visibleIds()).toEqual([]);
   });
 });

@@ -110,6 +110,21 @@ def atomic_write(path: Path | str, text: str, *, mode: int | None = None) -> Non
 
 _log = logging.getLogger("protoagent.paths")
 
+# The relative PROTOAGENT_PLUGINS_DIR value last warned about: once per breakage, again
+# after a fix-then-rebreak (see `InstancePaths.plugins_dir`).
+_LAST_RELATIVE_PLUGINS_ENV: str | None = None
+
+
+def _warn_relative_plugins_env(raw: str) -> None:
+    global _LAST_RELATIVE_PLUGINS_ENV
+    if raw != _LAST_RELATIVE_PLUGINS_ENV:
+        _LAST_RELATIVE_PLUGINS_ENV = raw
+        _log.warning(
+            "[paths] PROTOAGENT_PLUGINS_DIR %r is not absolute — ignored, using the instance's own "
+            "plugins dir. Set an absolute path.",
+            raw,
+        )
+
 
 def read_text_utf8(path: Path | str) -> str:
     """Read text as UTF-8, degrading to the legacy locale code page (#2521).
@@ -691,8 +706,18 @@ class InstancePaths:
 
     @property
     def plugins_dir(self) -> Path:
+        # A RELATIVE value is refused (the instance default is used): it would resolve
+        # against the working directory of whichever process reads it — the server, a CLI,
+        # a fleet subprocess — so they'd disagree about where plugins live. Same rule as a
+        # relative `plugins.dir` (graph/plugins/pconfig.py); the plugin loader also raises
+        # an operator banner for it.
         raw = os.environ.get("PROTOAGENT_PLUGINS_DIR", "").strip()
-        return Path(raw).expanduser() if raw else self.instance_root / "plugins"
+        if raw:
+            path = Path(raw).expanduser()
+            if path.is_absolute():
+                return path
+            _warn_relative_plugins_env(raw)
+        return self.instance_root / "plugins"
 
     @property
     def plugins_lock(self) -> Path:

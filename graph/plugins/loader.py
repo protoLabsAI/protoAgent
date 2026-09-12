@@ -101,6 +101,9 @@ def _tracked_sources() -> dict[str, str]:
 # The setup-gap key the loader reports a superseded install under (see
 # ``discover_plugins``). Host-owned; the installer clears it when the ignored copy goes.
 SUPERSEDED_GAP_KEY = "superseded-install"
+# The setup-gap owner for a refused plugin-root override. The ':' makes it an id no plugin
+# can have (ids are `[A-Za-z0-9][A-Za-z0-9_-]*`), so it can't collide with a real one.
+PLUGIN_ROOT_GAP_ID = "protoagent:plugin-root"
 
 
 def discover_plugins(
@@ -156,28 +159,69 @@ def discover_plugins(
                 # copy was installed from — the copy is retired, whatever its version.
                 wins = False
                 if superseded is not None:
-                    superseded[manifest.id] = {
-                        "source_url": tracked_sources.get(manifest.id, ""),
-                        "installed_version": manifest.version,
-                        "installed_path": str(manifest.path),
-                        "bundled_version": incumbent.version,
-                    }
+                    superseded[manifest.id] = _ignored_copy(manifest, incumbent, tracked_sources, "supersedes")
             else:
                 wins = manifest.id in tracked or _version_key(manifest.version) >= _version_key(incumbent.version)
+                if not wins and superseded is not None and root_of[manifest.id] < index:
+                    # The #1574 rule just demoted an UNTRACKED copy — no lock row, so nobody
+                    # chose it through the installer; it was dropped in or symlinked by hand
+                    # (the dev-checkout workflow, #2298). It goes quiet otherwise: the
+                    # operator's copy stops being what runs the moment the plugin is bundled
+                    # at a higher version, with nothing on screen and nothing in the log.
+                    superseded[manifest.id] = _ignored_copy(manifest, incumbent, tracked_sources, "older")
             if wins:
                 by_id[manifest.id] = manifest
                 root_of[manifest.id] = index
     return list(by_id.values())
 
 
+def _ignored_copy(installed: PluginManifest, bundled: PluginManifest, sources: dict, reason: str) -> dict:
+    """One record of "the bundled copy runs, this installed one doesn't", with WHY.
+
+    ``reason`` is ``supersedes`` (the bundled manifest retired the repo this copy was
+    installed from) or ``older`` (no lock row, and #1574 demoted it on version). The two
+    need different words to the operator: one has a lock entry to clear and settings that
+    carry over, the other is a hand-placed folder — often a symlinked dev checkout."""
+    return {
+        "reason": reason,
+        "source_url": sources.get(installed.id, ""),
+        "installed_version": installed.version,
+        "installed_path": str(installed.path),
+        "bundled_version": bundled.version,
+    }
+
+
 def _superseded_message(plugin_id: str, note: dict) -> str:
-    """The operator-facing line for a superseded install — what happened, and the one
-    action that clears it. Kept under the setup-gap cap (300 chars) for a normal URL."""
+    """The operator-facing line for an ignored installed copy — what happened, and the one
+    action that clears it. Kept under the setup-gap cap (300 chars) for a normal URL/path."""
+    if note.get("reason") == "older":
+        return (
+            f"now ships with protoAgent (v{note.get('bundled_version')}); the copy at "
+            f"{note.get('installed_path')} (v{note.get('installed_version')}) is older, so it is "
+            f"ignored. It has no plugins.lock entry — remove it with `protoagent plugin uninstall "
+            f"{plugin_id}` (a symlinked checkout is unlinked, never followed)."
+        )
     return (
         f"now ships with protoAgent (v{note.get('bundled_version')}); the copy installed from "
         f"{display_source(note.get('source_url'))} (v{note.get('installed_version')}) is ignored. "
         f"Uninstall it in Settings ▸ Plugins or with `protoagent plugin uninstall {plugin_id}` — "
         "settings and enabled state are kept."
+    )
+
+
+def _report_ignored_copy(manifest: PluginManifest, note: dict | None) -> None:
+    """Raise (or clear) the operator banner for an installed copy the loader ignored.
+
+    Host-owned, unlike the gaps a plugin reports about itself: it describes the
+    operator's disk, so it is raised for a DISABLED bundled plugin too — both first-party
+    moves ship `enabled: false`, and "your copy is inert" is exactly as true then."""
+    from graph.plugins import setup_gaps as _setup_gaps
+
+    _setup_gaps.report(
+        manifest.id,
+        SUPERSEDED_GAP_KEY,
+        _superseded_message(manifest.id, note) if note else None,
+        label=str(manifest.name or manifest.id),
     )
 
 
@@ -372,11 +416,13 @@ def run_plugin_mcp_main(plugin_id: str) -> None:
     the module does NOT call ``register`` — only defines its functions — so this
     is side-effect-free apart from running the server.
     """
-    from infra.paths import instance_paths
+    # The same roots every other reader uses (``installer.loader_roots``) — including the
+    # `plugins.dir` override. Building its own pair here meant the frozen `--mcp-plugin`
+    # shim looked in the instance's default dir: with the override set it found no plugin
+    # and the managed MCP server never started.
+    from graph.plugins.installer import loader_roots
 
-    ip = instance_paths()
-    roots = [ip.app_root / "plugins", ip.plugins_dir]
-    for manifest in discover_plugins(roots):
+    for manifest in discover_plugins(loader_roots()):
         if manifest.id != plugin_id:
             continue
         entry = _entry_file(manifest)
@@ -669,36 +715,21 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
             "emits_schemas": dict(manifest.emits_schemas) if enabled else {},
         }
 
-        if not enabled:
-            # Lifecycle hygiene (#1642): a disabled plugin must not keep a recurring
-            # cadence firing — sweep its `plugin:<id>:*` scheduler jobs on every
-            # (re)load. The console disable toggle and a hand-edited config both
-            # funnel through a (re)load, so this one hook covers both; uninstall is
-            # covered by the installer (the manifest is gone from disk, so this loop
-            # can't see it). Pre-setup loads run before the scheduler is wired
-            # (STATE.scheduler is None → no-op).
-            _sweep_plugin_jobs(manifest.id)
-            # A disabled plugin's setup-gap banners must not outlive it (setup_gaps seam).
-            from graph.plugins import setup_gaps as _setup_gaps
-
-            _setup_gaps.clear_plugin(manifest.id)
-            result.meta.append(entry)
-            continue
-
-        # A retired git-installed copy of a plugin that now ships with protoAgent
-        # (``supersedes``): the bundled copy is what loads, and the operator is told the
-        # leftover can go. Reported (or cleared) on every load, so the banner leaves the
-        # moment the copy does — whoever removed it.
+        # A git-installed copy of a plugin that now ships with protoAgent — retired by
+        # `supersedes`, or simply older (#1574). The bundled copy is what loads, and the
+        # operator is told the leftover can go. Reported (or cleared) on every load, so
+        # the banner leaves the moment the copy does — whoever removed it.
         note = superseded.get(manifest.id)
         if note:
             log.warning(
-                "[plugins] %s: loading the bundled copy (v%s) — the installed copy at %s (v%s, from %s) "
-                "is superseded and ignored; uninstall it to clean up",
+                "[plugins] %s: loading the bundled copy (v%s) — the installed copy at %s (v%s%s) is "
+                "ignored (%s); uninstall it to clean up",
                 manifest.id,
                 note["bundled_version"],
                 note["installed_path"],
                 note["installed_version"],
-                display_source(note["source_url"]),
+                f", from {display_source(note['source_url'])}" if note.get("source_url") else ", untracked",
+                "superseded" if note.get("reason") == "supersedes" else "older than the bundled copy",
             )
             if _version_key(note["installed_version"]) >= _version_key(note["bundled_version"]):
                 # The move's contract: the bundled copy is NEWER than every standalone
@@ -713,14 +744,33 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
                     note["installed_version"],
                     note["bundled_version"],
                 )
-        from graph.plugins import setup_gaps as _setup_gaps
+        if not enabled:
+            # Lifecycle hygiene (#1642): a disabled plugin must not keep a recurring
+            # cadence firing — sweep its `plugin:<id>:*` scheduler jobs on every
+            # (re)load. The console disable toggle and a hand-edited config both
+            # funnel through a (re)load, so this one hook covers both; uninstall is
+            # covered by the installer (the manifest is gone from disk, so this loop
+            # can't see it). Pre-setup loads run before the scheduler is wired
+            # (STATE.scheduler is None → no-op).
+            _sweep_plugin_jobs(manifest.id)
+            # A disabled plugin's setup-gap banners must not outlive it (setup_gaps seam).
+            from graph.plugins import setup_gaps as _setup_gaps
 
-        _setup_gaps.report(
-            manifest.id,
-            SUPERSEDED_GAP_KEY,
-            _superseded_message(manifest.id, note) if note else None,
-            label=str(manifest.name or manifest.id),
-        )
+            _setup_gaps.clear_plugin(manifest.id)
+            # …but an ignored copy on disk is the HOST's finding about the operator's
+            # filesystem, not the plugin's own health, so a plugin that is merely OFF still
+            # gets it — both first-party moves ship `enabled: false`, which made that the
+            # common case: the copy is inert and nothing anywhere said so. An EXPLICIT
+            # `plugins.disabled` entry is the operator's own "leave this alone" and keeps
+            # #3445's rule (a disabled plugin's banners don't outlive it). The log lines
+            # above fire either way: a packaging invariant isn't an operator nag.
+            if manifest.id not in disabled_ids:
+                _report_ignored_copy(manifest, note)
+            result.meta.append(entry)
+            continue
+
+
+        _report_ignored_copy(manifest, note)
 
         missing = [v for v in manifest.requires_env if not os.environ.get(v)]
         if missing:
@@ -922,16 +972,35 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
         _setup_gaps.retain({str(m.get("id")) for m in result.meta})
     except Exception:  # noqa: BLE001 — hygiene must never break plugin loading
         pass
+    # A REFUSED plugin-root override (a relative `plugins.dir` / PROTOAGENT_PLUGINS_DIR)
+    # silently moves the whole root back to the default — the operator's plugins just stop
+    # loading. Say so where they look, not only in the log. Host-owned (an id no plugin can
+    # have), reported after `retain` so the sweep above can't drop it, and self-clearing.
+    try:
+        from graph.plugins import setup_gaps as _setup_gaps
+        from graph.plugins.pconfig import refused_plugins_dir_message
+
+        _setup_gaps.report(
+            PLUGIN_ROOT_GAP_ID,
+            "refused-override",
+            refused_plugins_dir_message(getattr(config, "plugins_dir", "")),
+            label="Plugins",
+        )
+    except Exception:  # noqa: BLE001 — a banner must never break plugin loading
+        pass
     return result
 
 
 def _plugin_roots(config) -> list[Path]:
+    """Bundle first, live overrides — via the shared resolver, so the in-process answer
+    (this config object) and the out-of-process one (the live YAML, read by
+    ``installer.live_plugins_dir``) cannot disagree about where plugins live. The
+    ``plugins.dir`` override is vetted there too (a relative value is refused)."""
     from infra.paths import instance_paths
 
-    ip = instance_paths()
-    live_override = getattr(config, "plugins_dir", "") or ""
-    live_root = Path(live_override).expanduser() if live_override else ip.plugins_dir
-    return [ip.app_root / "plugins", live_root]  # bundle first, live overrides
+    from graph.plugins.pconfig import plugin_roots_from
+
+    return plugin_roots_from(instance_paths().plugins_dir, getattr(config, "plugins_dir", "") or "")
 
 
 def _prepend_plugin_deps_to_syspath() -> None:

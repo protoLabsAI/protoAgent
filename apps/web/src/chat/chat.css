@@ -441,6 +441,38 @@
   max-width: 230px;
 }
 
+/* Sent-time footer widget (#3458) — a quiet clock chip on a settled user/assistant message;
+   the full local sent date-and-time lives in the DS Tooltip on hover/focus. Mirrors the muted,
+   monospace .chat-usage footer tone so it reads as metadata, not content. The ROW is block-level
+   so the chip always starts its own line (the DS Tooltip's trigger wrapper is inline-flex); the
+   chip itself stays tight around the icon+time so the hover/focus target is not the whole row. */
+.chat-sent-time-row {
+  display: flex;
+  margin-top: 6px;
+}
+/* In a user bubble the time sits bottom-right, under the text — where a sent receipt reads. */
+.pl-message--user .chat-sent-time-row {
+  justify-content: flex-end;
+}
+.chat-sent-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--pl-color-fg-muted, var(--pl-color-fg-subtle));
+  font-family: var(--pl-font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  border-radius: 4px;
+  cursor: default;
+}
+.chat-sent-time svg {
+  opacity: 0.8;
+}
+.chat-sent-time:focus-visible {
+  outline: 2px solid var(--pl-color-focus, var(--pl-color-accent));
+  outline-offset: 2px;
+}
+
 /* Quick-delete mode: while Shift is held, the ✕ becomes a red trashcan (Shift+click deletes
    with no confirm + no harvest). Scoped to :hover (#1373) so ONLY the tab whose ✕ you're
    pointing at shows the trash — not every tab at once — for a clearer delete affordance and

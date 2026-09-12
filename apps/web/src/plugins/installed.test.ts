@@ -169,9 +169,22 @@ describe("uninstall wording for a plugin that now ships with protoAgent (#3445)"
     expect(text).not.toContain("removes the old installed copy");
   });
 
+  it("names the untracked case: no lock entry, and a symlinked checkout is only unlinked", () => {
+    const text = uninstallConfirmText("Agent Browser", { superseded: true, bundled_version: "0.7.0", tracked: false });
+    expect(text).toContain("removes the copy in your plugins dir");
+    expect(text).toContain("no plugins.lock entry");
+    expect(text).toContain("unlinked, never followed");
+  });
+
+  it("says what holds either way while the inventory row is still loading", () => {
+    const text = uninstallConfirmText("Cowork", undefined);
+    expect(text).toContain("keeps running from the built-in copy");
+    expect(text).not.toContain("deletes its code");
+  });
+
   it("keeps the delete warning for an ordinary installed plugin", () => {
-    expect(uninstallConfirmText("Board", undefined)).toContain("deletes its code from disk");
     expect(uninstallConfirmText("Board", { superseded: false })).toContain("deletes its code from disk");
+    expect(uninstallConfirmText("Board", { superseded: false, tracked: true })).toContain("deletes its code from disk");
   });
 
   it("toasts 'old copy removed' only when the response says the bundled copy kept running", () => {

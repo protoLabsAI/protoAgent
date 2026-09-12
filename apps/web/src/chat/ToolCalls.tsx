@@ -216,26 +216,39 @@ export function ToolCalls({
     return <ToolCardList className="tool-calls">{top.map(group)}</ToolCardList>;
   }
 
-  // A single, identity-STABLE slot holding only the most-recent tool. The fixed key keeps
-  // React updating one card in place as the current tool changes, so a fast fan-out advances
-  // smoothly instead of remounting (and strobing) on every new tool id. Background
-  // dispatches never take the slot — they go straight into their chip below it.
+  // The LEAD slot: the one foreground card that renders on its own, outside any chip — the
+  // most-recent tool while the turn is live (`.tool-spotlight`), and a lone tool once it
+  // settles (`.tool-lead`, layout-transparent). A single, identity-STABLE slot:
+  //  - live, the fixed key keeps React updating one card in place as the current tool
+  //    changes, so a fast fan-out advances smoothly instead of remounting (and strobing) on
+  //    every new tool id;
+  //  - across the SETTLE, a single-tool turn's card is the same element at the same key in
+  //    both branches, so React updates it in place instead of rebuilding it. It used to be a
+  //    different tree (`key={call.id}`, no wrapper), and since the DS `ToolCard`'s `open` is
+  //    uncontrolled, the rebuild collapsed whatever the operator had expanded mid-turn at the
+  //    moment their turn finished — the single-tool twin of the chips' #3390.
+  // Only the CLASS changes at the settle: `.tool-spotlight` stays the live-only marker that
+  // e2e/toolcard.ts gates on. Background dispatches never take the slot — they go straight
+  // into their chip below it.
+  const lead = (call: ToolCall, live: boolean) => (
+    <div className={live ? "tool-spotlight" : "tool-lead"} key="spotlight">
+      <ToolGroup
+        key="__spotlight__"
+        call={call}
+        childrenByParent={childrenByParent}
+        onCancelDelegation={call.status === "running" ? onCancelDelegation : undefined}
+        onDismissToolCall={onDismissToolCall}
+      />
+    </div>
+  );
+
+  // WorkBlock's live slot: only the most-recent tool (the timeline holds the rest).
   if (spotlight) {
     if (top.length === 0) return null;
     const current = fg[fg.length - 1];
     return (
       <ToolCardList className="tool-calls">
-        {current ? (
-          <div className="tool-spotlight" key="spotlight">
-            <ToolGroup
-              key="__spotlight__"
-              call={current}
-              childrenByParent={childrenByParent}
-              onCancelDelegation={current.status === "running" ? onCancelDelegation : undefined}
-              onDismissToolCall={onDismissToolCall}
-            />
-          </div>
-        ) : null}
+        {current ? lead(current, true) : null}
         {bgChip}
       </ToolCardList>
     );
@@ -253,18 +266,8 @@ export function ToolCalls({
     return (
       <ToolCardList className="tool-calls">
         {/* Stable key: the slot updates in place as the current tool advances (no remount
-            strobe — see the `spotlight` prop note). */}
-        {current ? (
-          <div className="tool-spotlight" key="spotlight">
-            <ToolGroup
-              key="__spotlight__"
-              call={current}
-              childrenByParent={childrenByParent}
-              onCancelDelegation={current.status === "running" ? onCancelDelegation : undefined}
-              onDismissToolCall={onDismissToolCall}
-            />
-          </div>
-        ) : null}
+            strobe — see the `spotlight` prop note) and survives the settle (see `lead`). */}
+        {current ? lead(current, true) : null}
         {folded.length > 0 && chip(fg.length, folded)}
         {bgChip}
       </ToolCardList>
@@ -277,6 +280,16 @@ export function ToolCalls({
     return (
       <ToolCardList className="tool-calls">
         {chip(settled.length, settled)}
+        {bgChip}
+      </ToolCardList>
+    );
+  }
+  // A lone foreground tool keeps the LEAD slot it streamed in, so the card the operator saw
+  // (and maybe expanded) while the turn ran is the card that stays — see `lead`.
+  if (fg.length === 1) {
+    return (
+      <ToolCardList className="tool-calls">
+        {lead(fg[0], false)}
         {bgChip}
       </ToolCardList>
     );
