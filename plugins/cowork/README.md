@@ -19,15 +19,19 @@ Skills plus **one** goal/watch verifier (`cowork:folder_changed`) and one config
 | `writing-voice` | Learn the operator's voice from samples they share; saved as a `my-writing-style` skill |
 | `/setup-cowork` | Guided first-run: folders → import existing Claude Code/Cowork state (via claude-bridge) → connect tools → try a skill → voice → first schedule |
 
-## Enabling it
+## On by default
 
-Bundled but **opt-in** — ten skills in every agent's index is the wrong default, so the
-Cowork archetype (and any agent that wants the pack) turns it on explicitly:
+Bundled and **on by default**, like `notes` / `docs` / `artifact` / `craft`: every agent
+gets the document skills and habits with no setup step. The cost is ten entries in the
+always-on `<available_skills>` index. To turn it off on one instance:
 
 ```yaml
 plugins:
-  enabled: [cowork, execute_code, artifact]
+  disabled: [cowork]
 ```
+
+An explicit disable removes the pack entirely: no skills, no verifier, zero bytes in the
+prompt.
 
 The document skills need [`execute_code`](../execute_code/); on the desktop app that means
 the one-click [managed Python runtime](../../docs/guides/python-runtime.md), whose document

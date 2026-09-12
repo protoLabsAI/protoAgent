@@ -80,9 +80,9 @@ def test_identity_and_trust_defaults():
     # The folder has to be named for the id (guard test in tests/test_plugin_supersedes.py),
     # and this is the plugin that move rule was written for.
     assert ROOT.name == m["id"]
-    # Bundled but OPT-IN, unlike notes/docs/artifact/craft: ten skills in every agent's
-    # index is the wrong default — the Cowork archetype turns the pack on explicitly.
-    assert m["enabled"] is False
+    # ON by default (Josh's call), like notes/docs/artifact/craft — every agent gets the
+    # document skills; `plugins.disabled: [cowork]` is the off switch.
+    assert m["enabled"] is True
     assert isinstance(m["config_section"], str)
     # One config key, declared with a default so Settings can render it.
     assert m["config"] == {"output_dir": ""}
@@ -287,15 +287,39 @@ def test_every_document_dep_is_declared_in_the_optional_tier(tmp_path):
     assert m.pip_scopes == {}
 
 
-def test_the_pack_stays_off_until_it_is_enabled(tmp_path, monkeypatch):
-    """`enabled: false` in the manifest is the whole reason ten skills don't land in
-    every agent's index the moment this version ships."""
+def test_the_pack_loads_by_default(tmp_path, monkeypatch):
+    """On by default: an agent that never mentions cowork gets it."""
     from graph.config import LangGraphConfig
     from graph.plugins import loader
 
     _isolated_bundled_root(tmp_path, monkeypatch)
     res = loader.load_plugins(LangGraphConfig())
+    assert next(m for m in res.meta if m["id"] == "cowork")["loaded"]
+    assert len(res.skill_dirs) == 1 and "cowork:folder_changed" in res.goal_verifiers
+
+
+def test_an_explicit_disable_contributes_nothing(tmp_path, monkeypatch):
+    """`plugins.disabled: [cowork]` is the off switch, and it removes the pack entirely:
+    no skill dir (so zero bytes in `<available_skills>`), no verifier, not loaded."""
+    from graph.config import LangGraphConfig
+    from graph.plugins import loader
+
+    _isolated_bundled_root(tmp_path, monkeypatch)
+    res = loader.load_plugins(LangGraphConfig(plugins_disabled=["cowork"]))
+    meta = next(m for m in res.meta if m["id"] == "cowork")
+    assert not meta["enabled"] and not meta["loaded"]
     assert not res.skill_dirs and not res.goal_verifiers
+
+
+def test_slash_tokens_not_shadowed_by_core_subagents():
+    """On by default, `/daily-brief` and `/setup-cowork` reach every agent — and slash
+    precedence puts subagents above skills, so a same-token core subagent would silently
+    shadow them (the /research lesson; same guard as craft's)."""
+    from graph.subagents.config import SUBAGENT_REGISTRY
+
+    slashes = {a.slash for d in SKILLS.iterdir() if d.is_dir() and (a := parse_skill_md(d / "SKILL.md")) and a.slash}
+    assert slashes == {"daily-brief", "setup-cowork"}
+    assert not (slashes & set(SUBAGENT_REGISTRY)), f"shadowed by core subagents: {slashes & set(SUBAGENT_REGISTRY)}"
 
 
 def test_the_module_imports_host_free():

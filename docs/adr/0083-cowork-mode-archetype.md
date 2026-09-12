@@ -79,7 +79,8 @@ left.
   `requires_pip`. Vendoring Anthropic's skills is prohibited by their
   license; that finding is recorded here so nobody re-litigates it.
   *(Amendment 2026-09, #3450: the pack moved in-tree to `plugins/cowork/` —
-  bundled and off by default — so it is maintained with the host it runs on.
+  bundled and on by default, with `plugins.disabled: [cowork]` to turn it off — so it
+  is maintained with the host it runs on and every agent has its document skills.
   Its manifest `supersedes` the retired `cowork-plugin` repo (#3445), so an
   already-installed copy stands down with its enabled state and config intact,
   and the `cowork-archetype` bundle keeps listing the member by URL. The

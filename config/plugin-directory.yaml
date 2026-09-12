@@ -282,13 +282,12 @@ plugins:
     adds: [skill, subagent]
 
   # Moved in-tree in #3450 from cowork-plugin (now retired; the bundled manifest's
-  # `supersedes` retires an installed copy). Bundled but OFF by default — ten skills
-  # belong in a knowledge-worker's index, not in every agent's.
+  # `supersedes` retires an installed copy). On by default, like notes/docs/craft.
   - id: cowork
     name: Cowork (document skills)
     category: Productivity
     bundled: true
-    tagline: "Office-document skills for the Cowork archetype — Word, Excel, PowerPoint, and PDF as real files — plus a /daily-brief, drop-folder watches over your fenced work folders, schedule, memory-consolidation, and writing-voice habits (ADR 0083). Ships in-tree, off by default."
+    tagline: "Office-document skills for the Cowork archetype — Word, Excel, PowerPoint, and PDF as real files — plus a /daily-brief, drop-folder watches over your fenced work folders, schedule, memory-consolidation, and writing-voice habits (ADR 0083). Ships in-tree, on by default."
     adds: [skill, verifier]
 
   - id: workflows

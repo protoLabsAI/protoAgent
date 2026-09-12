@@ -377,7 +377,7 @@
       "category": "Productivity",
       "official": true,
       "repo": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/cowork",
-      "tagline": "Office-document skills for the Cowork archetype — Word, Excel, PowerPoint, and PDF as real files — plus a /daily-brief, drop-folder watches over your fenced work folders, schedule, memory-consolidation, and writing-voice habits (ADR 0083). Ships in-tree, off by default.",
+      "tagline": "Office-document skills for the Cowork archetype — Word, Excel, PowerPoint, and PDF as real files — plus a /daily-brief, drop-folder watches over your fenced work folders, schedule, memory-consolidation, and writing-voice habits (ADR 0083). Ships in-tree, on by default.",
       "adds": [
         "skill",
         "verifier"

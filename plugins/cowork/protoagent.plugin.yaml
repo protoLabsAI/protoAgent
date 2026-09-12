@@ -19,11 +19,11 @@ description: >-
   Document skills require the execute_code plugin and the pip packages declared
   below (already bundled into the desktop app; elsewhere, install them via the
   console's install-deps action).
-# Bundled but OPT-IN, unlike notes/docs/artifact/craft: this pack contributes TEN skills,
-# and an on-by-default pack would push them into every agent's skill index whether or not
-# that agent does knowledge work. The Cowork archetype (and any agent that wants the pack)
-# turns it on explicitly — `plugins: { enabled: [cowork] }`.
-enabled: false
+# ON by default (Josh's call, 2026-09), like notes/docs/artifact/craft: every agent gets
+# the document skills and habits with no setup step. The cost is ten entries in the
+# always-on `<available_skills>` index (measured in #3450). `plugins: { disabled: [cowork] }`
+# turns it off on an instance and removes it entirely — no skills, no verifier, zero bytes.
+enabled: true
 # The standalone repo this bundled copy retires (#3445). An installed copy that
 # plugins.lock records as fetched from it stands down in favour of this one — at any
 # version — and installing/updating from that URL (directly or as a bundle member, which
