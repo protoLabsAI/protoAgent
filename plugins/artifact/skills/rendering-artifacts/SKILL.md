@@ -133,7 +133,9 @@ guess; read the error and make the targeted edit.
   artifacts are kept, counting everything rendered on this agent, so an unpinned one silently
   disappears after enough unrelated renders — and any id you wrote down then points at nothing.
   Pin it as soon as you know it will outlive the conversation. Pins are capped: if it refuses, unpin
-  one you no longer need (`pinned=False`). A pin keeps the latest versions, not every edit.
+  one you no longer need (`pinned=False`). A cap of 0 means the operator turned new pins off —
+  artifacts already pinned stay protected until unpinned. A pin keeps the latest versions, not
+  every edit.
 - **`delete_artifact(artifact_id)`** — remove one for cleanup. (The user can also delete from the
   panel's trash button.)
 

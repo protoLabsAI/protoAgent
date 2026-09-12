@@ -28,9 +28,13 @@ log = logging.getLogger("protoagent.plugins.artifact")
 # panel with near-duplicates). The file is {"artifacts": [newest-first], "current": id}.
 #
 # An artifact may carry ``"pinned": true`` — it is then exempt from the history eviction in
-# _write_store (see _evict). The key is ABSENT on an unpinned artifact rather than false, so
-# a store that never pinned anything is byte-for-byte the pre-pin format, and an older
-# plugin reading a pinned store just ignores the key (it evicts by plain recency again).
+# _write_store (see _evict), and pinned artifacts are stored FIRST: the list is really
+# [pinned] + [unpinned], each group most-recently-touched first (pinning or unpinning counts as
+# a touch for order, though not for `current`). The key is ABSENT on an unpinned artifact
+# rather than false, so a store that never pinned anything is byte-for-byte the pre-pin format.
+# An older (pre-0.18) plugin reading a pinned store ignores the key and keeps only
+# artifacts[:history] on its next write — pins-first means that keeps them until `history`
+# newer artifacts push them out, rather than evicting them on the very first write.
 
 
 def _store_path() -> Path:
@@ -194,19 +198,19 @@ def _pinned(store: dict) -> list[dict]:
 
 
 def _evict(arts: list[dict], keep: int) -> list[dict]:
-    """Keep every PINNED artifact plus the ``keep`` most-recently-touched unpinned ones, in
-    their existing newest-first order. Pins don't count toward ``keep``: with nothing pinned
-    this is exactly ``arts[:keep]``, the eviction point the store has always had. The number
-    of pins is bounded separately (``_config._max_pinned``, enforced by pin_artifact)."""
-    kept: list[dict] = []
-    unpinned = 0
-    for a in arts:
-        if _is_pinned(a):
-            kept.append(a)
-        elif unpinned < keep:
-            kept.append(a)
-            unpinned += 1
-    return kept
+    """Keep every PINNED artifact plus the ``keep`` most-recently-touched unpinned ones. Pins
+    don't count toward ``keep``: with nothing pinned this is exactly ``arts[:keep]``, the
+    eviction point the store has always had. The number of pins is bounded separately
+    (``_config._max_pinned``, enforced by pin_artifact).
+
+    Pinned artifacts go FIRST (a stable partition, so each group keeps its most-recently-touched-
+    first order; pin_artifact moves a new pin to the front) as a downgrade guard:
+    a pre-0.18 plugin knows nothing of pins and keeps just ``artifacts[:history]``, so pins at
+    the front survive its writes until ``history`` newer artifacts push them out — at the back,
+    where a long-lived artifact usually sits, its first write would evict them."""
+    pinned = [a for a in arts if _is_pinned(a)]
+    unpinned = [a for a in arts if not _is_pinned(a)]
+    return pinned + unpinned[:keep]
 
 
 def _write_store(store: dict) -> None:

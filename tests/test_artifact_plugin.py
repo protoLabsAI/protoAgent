@@ -1455,7 +1455,7 @@ def test_parallel_update_artifact_calls_both_land(monkeypatch, tmp_path):
 
 def _show(art, code, title=""):
     art.show_artifact.invoke({"kind": "html", "code": code, "title": title})
-    return _arts(art)[0]["id"]
+    return art._read_store()["current"]  # not artifacts[0]: pinned artifacts are stored first
 
 
 def _ids(art):
@@ -1517,10 +1517,47 @@ def test_pin_cap_refuses_and_names_the_held_pins(monkeypatch, tmp_path):
     assert "Can't pin" in art.pin_artifact.invoke({"artifact_id": a})
     _show(art, "<p>another write</p>")
     assert {x["id"] for x in art._store._pinned(art._read_store())} == {b, c}
-    # 0 disables pinning; an unknown id is a clean miss.
+    # 0 refuses every NEW pin, but existing pins stay protected; an unknown id is a clean miss.
     monkeypatch.setenv("ARTIFACT_MAX_PINNED", "0")
-    assert "disabled" in art.pin_artifact.invoke({"artifact_id": a})
+    out = art.pin_artifact.invoke({"artifact_id": a})
+    assert "Can't pin" in out and "max_pinned setting is 0" in out and "stay protected" in out
+    _show(art, "<p>a write under cap 0</p>")
+    assert {x["id"] for x in art._store._pinned(art._read_store())} == {b, c}
     assert "No artifact" in art.pin_artifact.invoke({"artifact_id": "nope"})
+
+
+def test_pin_refusal_names_at_most_five_pins(monkeypatch, tmp_path):
+    """At a large pin count the refusal must not list every pin (50 pins was ~740 chars)."""
+    monkeypatch.setenv("ARTIFACT_MAX_PINNED", "8")
+    art = _load(monkeypatch, tmp_path)
+    ids = [_show(art, f"<p>{i}</p>", f"T{i}") for i in range(9)]
+    for aid in ids[:8]:
+        art.pin_artifact.invoke({"artifact_id": aid})
+    out = art.pin_artifact.invoke({"artifact_id": ids[8]})
+    assert "Can't pin" in out and "8/8" in out and "and 3 more (see list_artifacts)" in out
+    assert sum(aid in out for aid in ids[:8]) == 5
+
+
+def test_pinned_artifacts_are_stored_first_so_a_downgrade_keeps_them(monkeypatch, tmp_path):
+    """Downgrade guard. A pre-0.18 plugin knows nothing of pins: every write it makes keeps just
+    ``artifacts[:history]``. A long-lived pinned artifact is usually the OLDEST touched, so in
+    recency order that first old write would evict it (and GC a file artifact's blobs). Stored
+    pins-first, the old slice keeps them until `history` newer artifacts push them out."""
+    art = _load(monkeypatch, tmp_path)  # default history = 20
+    pins = [_show(art, f"<p>pin {i}</p>", f"P{i}") for i in range(3)]
+    for p in pins:
+        art.pin_artifact.invoke({"artifact_id": p})
+    for i in range(25):
+        _show(art, f"<p>{i}</p>")
+    arts = _arts(art)
+    assert {a["id"] for a in arts[:3]} == set(pins) and all(a.get("pinned") is True for a in arts[:3])
+    assert [a["id"] for a in arts[:3]] == list(reversed(pins))  # the pinned group stays newest-first
+
+    # Simulate the OLD plugin's writes: its show_artifact inserts at the front, then [:history].
+    old = arts
+    for k in range(17):  # 17 new artifacts + 3 pins = exactly the 20 it keeps
+        old = ([{"id": f"old-{k}", "versions": [{"code": "x"}]}] + old)[:20]
+        assert set(pins) <= {a["id"] for a in old}, f"a pin was evicted by old write #{k + 1}"
 
 
 def test_max_pinned_config_default_zero_and_bad_values(monkeypatch, tmp_path):
@@ -1551,6 +1588,26 @@ def test_unpin_takes_the_most_recent_slot_instead_of_evicting(monkeypatch, tmp_p
     for i in range(3):  # …and from here it evicts like any other artifact
         _show(art, f"<p>after {i}</p>")
     assert keep not in _ids(art)
+
+
+def test_unpin_survives_a_store_left_by_an_older_plugin(monkeypatch, tmp_path):
+    """This code keeps pins first, but a store last written by a pre-0.18 plugin (a downgrade,
+    then an upgrade) isn't: the old plugin inserted its new artifacts AHEAD of the pin. Unpinning
+    in place there would evict the artifact on that very write — it must take the front slot."""
+    import json
+
+    monkeypatch.setenv("ARTIFACT_HISTORY", "3")
+    art = _load(monkeypatch, tmp_path)
+    keep = _show(art, "<p>keep</p>")
+    art.pin_artifact.invoke({"artifact_id": keep})
+    for i in range(3):
+        _show(art, f"<p>{i}</p>")
+    raw = json.loads(art._store_path().read_text(encoding="utf-8"))
+    pin = next(a for a in raw["artifacts"] if a["id"] == keep)
+    raw["artifacts"] = [a for a in raw["artifacts"] if a["id"] != keep] + [pin]  # the old plugin's order
+    art._store_path().write_text(json.dumps(raw), encoding="utf-8")
+    art.pin_artifact.invoke({"artifact_id": keep, "pinned": False})
+    assert _ids(art)[0] == keep and len(_ids(art)) == 3
 
 
 def test_pin_does_not_exempt_versions_from_max_versions(monkeypatch, tmp_path):

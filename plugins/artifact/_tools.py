@@ -26,6 +26,10 @@ _SAVE_NUDGE_AFTER = 3
 _SAVE_NUDGE_WINDOW_MS = 10 * 60 * 1000
 _recent_full_saves: dict[str, list[int]] = {}
 
+# pin_artifact's at-the-cap refusal names the held pins so the agent can pick one to unpin —
+# but only this many; past it the reply points at list_artifacts instead of growing unbounded.
+_PIN_NAMES_SHOWN = 5
+
 
 def _save_nudge(art_id: str) -> str:
     """Record one full-body write to ``art_id``; the nudge string once the recent
@@ -259,9 +263,9 @@ def _pin_mark(art: dict) -> str:
 
 @tool
 def list_artifacts() -> str:
-    """List the artifacts in the panel (newest first) with id, kind, title, version count and
-    whether each is pinned, so you can target ``update_artifact`` / ``rewrite_artifact`` /
-    ``pin_artifact`` / ``delete_artifact`` at a specific one. Read-only."""
+    """List the artifacts in the panel (pinned first, then newest first) with id, kind, title,
+    version count and whether each is pinned, so you can target ``update_artifact`` /
+    ``rewrite_artifact`` / ``pin_artifact`` / ``delete_artifact`` at a specific one. Read-only."""
     store = _store._read_store()
     if not store["artifacts"]:
         return "No artifacts yet. Create one with show_artifact."
@@ -276,7 +280,7 @@ def list_artifacts() -> str:
         f"(older ones are evicted); pinned artifacts ({len(_store._pinned(store))}/"
         f"{_config._max_pinned()} pins used) are never evicted."
     )
-    return "Artifacts (newest first):\n" + "\n".join(lines) + "\n\n" + retention
+    return "Artifacts (pinned first, then newest first):\n" + "\n".join(lines) + "\n\n" + retention
 
 
 @tool
@@ -370,15 +374,24 @@ def pin_artifact(artifact_id: str, pinned: bool = True) -> str:
     cap = _config._max_pinned()
     held = _store._pinned(store)
     if cap == 0:
-        return "Pinning is disabled on this agent (the artifact max_pinned setting is 0)."
+        return (
+            f"Can't pin {label}: new pins are off on this agent (the artifact max_pinned setting "
+            f"is 0). Existing pins stay protected until unpinned."
+        )
     if len(held) >= cap:
-        names = ", ".join(f"{a['id']} ({a['title'] or 'untitled'})" for a in held)
+        names = ", ".join(f"{a['id']} ({a['title'] or 'untitled'})" for a in held[:_PIN_NAMES_SHOWN])
+        if len(held) > _PIN_NAMES_SHOWN:
+            names += f", …and {len(held) - _PIN_NAMES_SHOWN} more (see list_artifacts)"
         return (
             f"Can't pin {label}: {len(held)}/{cap} artifacts are already pinned — {names}. "
             f"Unpin one with pin_artifact(artifact_id, pinned=False) first, or raise the "
             f"artifact max_pinned setting."
         )
     art["pinned"] = True
+    # A pin counts as a touch for ORDER (not for the panel's current artifact): the pinned group
+    # is stored first and most-recently-touched first, so the new pin leads it — the same rule the
+    # unpin path follows for the unpinned group.
+    store["artifacts"] = [art] + [a for a in store["artifacts"] if a["id"] != art["id"]]
     _store._write_store(store)
     return (
         f"Pinned artifact {label} ({len(held) + 1}/{cap} pins used). It won't be evicted; its "

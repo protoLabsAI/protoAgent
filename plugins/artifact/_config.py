@@ -64,7 +64,8 @@ def _max_versions() -> int:
 
 
 # Pinned artifacts are exempt from the `history` eviction, so the NUMBER of pins has its
-# own cap — otherwise pinning is just unbounded growth. 0 disables pinning outright.
+# own cap — otherwise pinning is just unbounded growth. 0 refuses every NEW pin; existing pins
+# stay protected until unpinned (lowering the cap never unpins anything).
 def _max_pinned() -> int:
     return _cfg_int("max_pinned", "ARTIFACT_MAX_PINNED", 10, minimum=0)
 

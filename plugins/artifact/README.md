@@ -39,7 +39,9 @@ console view.
   - `pin_artifact(artifact_id, pinned?)` — **pin** a long-lived artifact (a master resume, a
     reference doc) so history eviction skips it; `pinned=False` unpins. Pins are capped by
     **Pinned artifacts** below (refused at the cap), don't count toward **Artifacts kept**, and
-    still trim to **Versions per artifact** — a pin keeps the artifact, not every edit.
+    still trim to **Versions per artifact** — a pin keeps the artifact, not every edit. Pinned
+    artifacts are listed first. Downgrading the plugin below 0.18.0 drops pin protection: the
+    older plugin evicts by recency again, so pinned artifacts can be evicted.
   - `list_artifacts()` / `delete_artifact(artifact_id)` — manage them (`list_artifacts` and
     `get_artifact` mark pinned ones).
 - **View** "Artifact" (right rail) — a sandboxed renderer with an **artifact picker**, **version
@@ -86,7 +88,7 @@ environment variable of the same knob overrides the UI for headless / ACP setups
 | **Ask prompt limit (chars)** | `ARTIFACT_ASK_MAX_CHARS` | `4000` | Max prompt length for an `ask()`. |
 | **Artifacts kept** | `ARTIFACT_HISTORY` | `20` | How many unpinned artifacts to keep (oldest evicted; pinned ones don't count). |
 | **Versions per artifact** | `ARTIFACT_MAX_VERSIONS` | `50` | Max versions kept per artifact, pinned or not (oldest edits trimmed). |
-| **Pinned artifacts** | `ARTIFACT_MAX_PINNED` | `10` | Max pinned artifacts; a pin past this is refused. `0` disables pinning. Lowering it doesn't unpin anything — it only refuses new pins. |
+| **Pinned artifacts** | `ARTIFACT_MAX_PINNED` | `10` | Max pinned artifacts; a pin past this is refused. `0` refuses all new pins. Lowering it (to `0` included) doesn't unpin anything: existing pins stay protected until unpinned. |
 | **Max artifact size (KB)** | `ARTIFACT_MAX_CODE_KB` | `512` | Max source size per version (a larger render is rejected). |
 
 `ARTIFACT_DIR` (`~/.protoagent/artifact`) is env-only — where state is stored (instance-scoped by
