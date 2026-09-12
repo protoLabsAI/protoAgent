@@ -342,6 +342,29 @@ test("an addressed turn with nothing claimed still renders its answer", async ({
   expect(after.split(MENTION_FAILURE_LINE).length - 1, "failure line after a reload").toBe(1);
 });
 
+test("a lead-addressed reply claiming the answer cannot suppress the lead's answer", async ({ page }) => {
+  // #3449 G, the LOST-ANSWER direction — the reviewer's spec, and the only one that fails
+  // when `claimsAnswer`'s `reply.from === "operator"` requirement is mutated away (every
+  // other spec in the suite stays green without it). A room reply the LEAD addressed
+  // (`from: "assistant"`) that claims `in_answer` must NOT suppress the turn's answer: the
+  // lead's synthesis is in no bubble, so refusing it would delete the lead's words. Nothing
+  // in-tree emits this shape — but nothing stops a fork or plugin room-frame producer from
+  // doing so, which is why the console checks rather than assumes.
+  const LEAD_ANSWER = "I asked proto to look at it and the parser is fixed now.";
+  const DELEGATE_REPLY = "patched the parser";
+
+  await page.goto("/app/", { waitUntil: "load" });
+  const composer = page.getByPlaceholder(/Message protoAgent/i);
+  await composer.waitFor({ state: "visible" });
+  await composer.fill("FORKCLAIM fix the parser");
+  await composer.press("Enter");
+  await expect(page.getByText(DELEGATE_REPLY).first()).toBeVisible({ timeout: 15_000 });
+  await page.waitForTimeout(700);
+  const rendered = await page.locator(".chat-session-slot:not([hidden])").innerText();
+  expect(rendered.split(DELEGATE_REPLY).length - 1, "delegate reply copies").toBe(1);
+  expect(rendered.split(LEAD_ANSWER).length - 1, "the LEAD's own answer must survive").toBe(1);
+});
+
 test("interjecting after the agent has finished: no blank bubble under the answer", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   const composer = page.locator("textarea").first();

@@ -851,6 +851,20 @@ function scenarioFor(prompt) {
       ],
       answer: `${MENTION_ANSWER}\n\n${MENTION_ROOM_NOTE}`,
     };
+  if (t.includes("FORKCLAIM"))
+    // The LOST-ANSWER direction (#3449 G). A room reply the LEAD addressed
+    // (`delegate_to`, `from: "assistant"`) that nonetheless claims `in_answer` — the shape
+    // a fork or plugin room-frame producer could emit, since nothing stops one. The lead's
+    // answer is its OWN synthesis and is in no bubble, so honouring the claim here would
+    // DELETE it. `claimsAnswer` requires `from === "operator"`, and this is what proves it.
+    return {
+      events: [
+        { id: "run-e2e-1", name: "delegate_to", phase: "start", input: '{"target":"proto"}' },
+        { id: "run-e2e-1", name: "delegate_to", phase: "end", output: "proto replied" },
+      ],
+      room: [{ author: "proto", from: "assistant", text: "patched the parser", ok: true, in_answer: true }],
+      answer: "I asked proto to look at it and the parser is fixed now.",
+    };
   if (t.includes("@DEADROOM"))
     // An addressed turn where NOTHING is claimed (#3449): the address failed, so the
     // participant has no words and gets a byline-only frame. The answer's failure line

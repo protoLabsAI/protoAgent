@@ -323,6 +323,14 @@ export function repairDuplicatedTurnText(messages: ChatMessage[]): ChatMessage[]
  *  once, under the byline of whoever wrote it — which is what the operator wanted from
  *  that turn anyway. Anything less exact is left alone.
  *
+ *  SINGLE-address turns only, deliberately. A pre-fix `@a @b` double is the server's
+ *  ATTRIBUTED JOIN (`**@proto** — line 40\n\n**@reviewer** — agreed`), which no single
+ *  bubble renders — so the exact-echo test cannot fire, and the only way to catch it
+ *  would be to reconstruct the server's join format here. That is precisely the class of
+ *  inference #3449 exists to remove, and a looser "contains each reply" test would also
+ *  match a lead synthesis that quotes both delegates, deleting a real answer. Those
+ *  transcripts keep their duplicate; every turn taken after the fix is correct.
+ *
  *  Self-limiting: post-fix transcripts carry `answeredByParticipants`, which short-
  *  circuits it, so this goes quiet as history turns over. Applied at load, next to
  *  `repairDuplicatedTurnText`; message statuses untouched. */
