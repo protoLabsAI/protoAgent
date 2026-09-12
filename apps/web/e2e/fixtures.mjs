@@ -1679,3 +1679,53 @@ export function steerConsumedFrame({ rpcId, contextId, taskId, items }) {
     },
   };
 }
+
+// ── Artifact panel (artifact-panel.spec.ts) ─────────────────────────────────
+// A canned artifact store for the REAL plugin shell (the mock serves
+// plugins/artifact/shell.html + shell.js). One artifact per srcdoc path the shell
+// builds: a full HTML document (a resume-shaped page — the careercoach field case), a
+// doctype-only document, an HTML fragment, and the other kinds. Every artifact carries
+// a marker element the spec waits for inside the frame.
+const artifact = (id, kind, title, code) => ({
+  id,
+  kind,
+  title,
+  versions: [{ code, ts: 1, by: "agent" }],
+  version_count: 1,
+  created: 1,
+  updated: 1,
+});
+export const ARTIFACT_STORE = {
+  current: "art-doc",
+  artifacts: [
+    artifact(
+      "art-doc",
+      "html",
+      "Resume (full document)",
+      '<!doctype html>\n<html lang="en"><head data-template="resume"><meta charset="utf-8"><title>Resume</title>' +
+        "<style>body{font:15px/1.4 Georgia,serif;padding:0 24px}</style></head>" +
+        '<body><h1 id="resume">Ada Lovelace</h1><p>Analyst &middot; London</p></body></html>',
+    ),
+    artifact(
+      "art-doc-bare",
+      "html",
+      "Doctype-only document",
+      '<!-- generated -->\n<!DOCTYPE html>\n<meta charset="utf-8"><title>Bare</title><p id="bare">No html/head tags.</p>',
+    ),
+    artifact(
+      "art-frag",
+      "html",
+      "Fragment",
+      '<button class="pl-btn" type="button">Go</button><p id="frag">An HTML fragment.</p>',
+    ),
+    artifact("art-md", "markdown", "Markdown", "# Markdown title\n\nSome *prose*."),
+    artifact(
+      "art-svg",
+      "svg",
+      "SVG",
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle id="dot" cx="5" cy="5" r="4"/></svg>',
+    ),
+    artifact("art-mermaid", "mermaid", "Mermaid", "graph TD\n  A-->B"),
+    artifact("art-react", "react", "React", 'function App() { return <h1 id="hello">Hello</h1>; }'),
+  ],
+};

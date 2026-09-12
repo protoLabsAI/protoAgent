@@ -147,8 +147,26 @@
   // Wrap graphic content in the fit-to-window viewport (svg + mermaid share this).
   function viewport(inner){ return VP_CSS + '<body><div id="__vp">' + inner + '</div>'; }
 
+  // An `html` artifact that is a FULL document must keep its own prologue FIRST. Prepending the
+  // DS link + base() ahead of its `<!doctype …>` put content before the doctype, and a doctype —
+  // or a `<head>` tag — that follows content is a parse error the parser DISCARDS: the panel
+  // showed the document with no doctype (document.doctype null) and without its <head>
+  // attributes. (It was never quirks mode: a srcdoc document is always no-quirks.)
+  // A document therefore gets the injection INSIDE its head: right after `<head>`, else after
+  // `<html>`, else after the doctype — still ahead of the author's own styles and scripts, so
+  // they override the base exactly as before. The match is ANCHORED at the start (a BOM,
+  // whitespace, comments or an XML prolog may precede, as the parser allows), so markup a
+  // document merely mentions later is never mistaken for its prologue. A fragment (no leading
+  // doctype or `<html>`) keeps the plain prepend. Unit-tested from Python off this regex source.
+  var DOC_PROLOGUE = /^\uFEFF?(?:\s|<!--[\s\S]*?-->|<\?[^>]*>)*(<!doctype[^>]*>)?(?:\s|<!--[\s\S]*?-->)*(<html(?:\s[^>]*)?>)?(?:\s|<!--[\s\S]*?-->)*(<head(?:\s[^>]*)?>)?/i;
+  function htmlDoc(code, inject){
+    var m = DOC_PROLOGUE.exec(code);
+    if (!m || !(m[1] || m[2])) return inject + code;  // a fragment
+    return m[0] + inject + code.slice(m[0].length);
+  }
+
   function srcdoc(kind, code) {
-    if (kind === "html") return dsLink() + base(kind) + code;
+    if (kind === "html") return htmlDoc(code, dsLink() + base(kind));
     if (kind === "svg") return '<!doctype html>' + base(kind) + viewport(code) + '</body>';
     if (kind === "mermaid") return '<!doctype html>' + base(kind) + viewport('<pre class="mermaid">' + esc(code) + '</pre>') +
       cdn("mermaid") +
