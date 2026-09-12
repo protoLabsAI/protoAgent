@@ -1503,13 +1503,16 @@ async def _plugin_autoupdate_sweep(cfg, policy: dict) -> int:
         if entry.get("superseded"):
             # Moved into core: the bundled copy runs and updates with protoAgent, and the
             # installed copy is ignored — pulling it would only trip the built-in guard,
-            # which used to log an install failure on every sweep.
+            # which used to log an install failure on every sweep. The source is redacted
+            # like every other place it's surfaced: an install URL can carry a token.
+            from graph.plugins.manifest import display_source
+
             log.info(
                 "[plugin-autoupdate] %s ships with protoAgent now (bundled v%s supersedes %s) — skipping; "
                 "uninstall the ignored copy and drop it from plugins.update_policy",
                 plugin_id,
                 entry.get("bundled_version"),
-                entry.get("source_url"),
+                display_source(entry.get("source_url")),
             )
             continue
         when = str(pol.get("when") or "idle").strip().lower()
