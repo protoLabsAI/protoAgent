@@ -15,6 +15,313 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.165.0] - 2026-09-12
+
+### Added
+- **Social Studio and Blood Bowl are in Plugins ▸ Discover, and the plugin directory
+  now covers every protoLabs plugin repo with an honest status (#2910).** Social Studio
+  backs the shipped Social Marketing archetype but wasn't listed anywhere. The directory
+  gains `incubating`, `personal` and `archived` beside `active`: Discover lists `active`
+  plugins only, the website also shows `incubating` ones with a badge, and `personal`
+  and `archived` rows are hidden on both, including the card the site used to
+  auto-discover from a repo's `protoagent-plugin` topic.
+- **Plugins ▸ Discover cards now show what a plugin adds and link its docs, like the
+  website's cards (#2910).** The in-app catalog used to carry only a name, category
+  and tagline, so the same plugin read thinner in the console than online. Each card
+  now shows its contribution chips (tool, skill, view, …) and a docs link beside the
+  repo link, and Discover's search matches those chips as the website's does. A fork's
+  own `plugin-catalog.json` without the new fields still renders as before.
+
+- **Word `.docx` files attach in chat and ingest into Knowledge; the desktop runtime can read PDFs again (#3444).**
+  Drop a resume or any Word document into the chat composer, Knowledge ▸ Add source, or
+  hand one to `knowledge_ingest`: it arrives as markdown-ish text in document order —
+  header/body/footer, headings as `#` lines, bullets as `- `, tables row by row. Legacy
+  `.doc`, macro-enabled `.docm`, password-protected and
+  renamed-spreadsheet files each get a clear hint about what to do instead. Because a
+  `.docx` is a zip whose headers can lie about their own size, the engine unpacks the text
+  parts itself in bounded steps and refuses (413) anything past ~12 MB of XML or ~1M XML
+  nodes — a hostile kilobyte-sized file can no longer drive gigabytes of memory.
+  Separately, `pypdf` joins the
+  managed Python runtime's document baseline: `execute_code` skills that read PDFs (cowork's
+  `pdf` skill) failed on the desktop app because the runtime never had it. Existing desktops
+  see a stale baseline in Settings ▸ Tools, and **Update runtime** installs it.
+
+- **A bundled plugin can supersede a git-installed copy of the same id (#3445).** A new manifest field, `supersedes: [<git URL>]`, lets an external plugin move into protoAgent's own `plugins/` tree without renaming it, so `plugins.enabled`, its config and archetype enable lists keep working. Before, bundling such a plugin left every existing install stuck on its old git copy, Update and Uninstall answered 400, auto-update logged a failure on every sweep, and archetypes that list the plugin by URL failed to install. Now, when the installed copy came from a listed URL, the bundled copy loads and a banner says the old copy can be removed. Installing from that URL, including as an archetype member, is skipped rather than refused. Update explains itself (409), and Uninstall removes only the leftover copy and keeps the plugin enabled — as does removing the archetype that installed it. Everything that acts on "the plugin" — its description and declared deps in the Plugins list, Install deps, the update check — now follows the copy that actually runs, so an ignored copy can't send you after the wrong dependency list. A copy installed from a fork still overrides the bundled one, as before. Nothing ships with the field yet; see [When a plugin moves into core](docs/guides/plugin-registry.md#when-a-plugin-moves-into-core-supersedes).
+
+- **A delegation is one row in the chat, and a chat shows when it still has background
+  work running (#3447).** When the agent delegates, the chat now shows one line: the
+  delegate, whether it runs in the background, a one-line summary the agent writes, and
+  (for a background job) a spinner that becomes ✓ or ✕ when it finishes. The full prompt
+  is behind **Show brief**. Before, the whole prompt appeared as a chat bubble, followed
+  by a message signed by the delegate that was really the agent's own "end my turn"
+  instructions, and a second note repeating the result when it finished. The delegate's
+  reply now arrives as its own message, and nothing else repeats it. While a chat has
+  background jobs running, a strip above the message box lists them and the chat's tab
+  shows it's busy. An agent turn responding to background reports shows one activity
+  spinner, not two.
+
+- **The Cowork knowledge-work skill pack ships with protoAgent (#3450).**
+  `cowork` — clean-room Word/Excel/PowerPoint/PDF skills that produce real files through
+  `execute_code`, plus `/daily-brief`, drop-folder watches, schedule, memory-consolidation
+  and writing-voice habits (ADR 0083) — moved in-tree from its own repo to `plugins/cowork/`,
+  so it is maintained and released with the host it runs on. It is **on by default**, so
+  every agent has the document skills and habits with no setup step; turn it off with
+  `plugins: { disabled: [cowork] }`. An already-installed
+  git copy needs no action — the bundled manifest supersedes the retired repo, so the copy
+  stands down with its enabled state, config and secrets intact, the Plugins panel offers
+  to remove the leftover, and installs from the old URL (including the `cowork-archetype`
+  bundle's own member pin) keep working.
+- **Cowork being on also turns on `execute_code` (#3450).**
+  The four document skills produce Word, Excel, PowerPoint and PDF files by running Python,
+  so with cowork on by default a default agent now has the Python interpreter too. Nothing
+  about the interpreter changes except its default: it still runs in a child process with a
+  scrubbed environment and a hard timeout, which is isolation rather than a true sandbox.
+  `plugins: { disabled: [execute_code] }` always turns it off, and disabling cowork returns it
+  to off unless you enabled it yourself.
+
+- **The Agent Browser plugin ships in-tree, with a setup gap, a fenced capture directory and page→PDF (#3451).** `plugins/agent_browser/` vendors the retired `agent-browser-plugin` repo (squashed import of its `main`, including the unreleased #20/#21 work) at **0.7.0**, `supersedes` the old git URL, and stays **off by default** — so a real browser, the `web-browse` skill, two workflows and the drivable Browser panel are now maintained, tested and released with the host they run on. Four defects the split hid are fixed with the import: a missing `agent-browser` CLI (or a CLI with no Chrome to drive) is now an **operator setup-gap banner**, raised at load and re-checked on every failing or recovering browser command so it clears without a restart, instead of an invisible per-call error; `browser_screenshot` is **fenced** to the plugin's own per-instance capture directory and refuses a traversing or absolute path, which is what `filesystem: scoped` had been claiming without enforcing; a new **`browser_pdf`** tool wraps Chrome's print-to-PDF and hands the path to `save_file_artifact`, so the fleet can finally deliver a real PDF; and #21's `/panel/dash` signed-cookie gate was **removed** rather than vendored — it keyed off a config key nothing ever set, and the public `/panel` sibling served identical bytes, so it could never fire and guarded nothing. The binary is PATH-only for now: a managed, pinned download is a separate slice behind an ADR.
+
+- **Artifacts can be pinned so history eviction never drops them (#3456).** The artifact store keeps only the 20 most recently touched artifacts across the whole instance, so a long-lived one (a master resume, a reference doc) was silently evicted after enough unrelated renders, stranding any id recorded elsewhere. The new `pin_artifact(artifact_id, pinned=True)` tool exempts an artifact from that eviction; pins don't count toward **Artifacts kept**, and pinned artifacts are listed first. A new **Pinned artifacts** setting (`max_pinned`, default 10) caps them, and a pin past the cap is refused rather than silently unpinning another. `0` refuses all new pins, and existing pins stay protected until unpinned. Pinned artifacts still trim to **Versions per artifact**, and `list_artifacts` / `get_artifact` show pinned state. The stored format change is additive, so older stores load unchanged. **Downgrading the artifact plugin below 0.18.0 can evict pinned artifacts:** the older plugin ignores pins and evicts by recency again, although storing pins first keeps them until 20 newer artifacts are created.
+
+- **Chat messages now show when they were sent (#3458).** A settled user or assistant
+  message carries a quiet clock chip in its footer with the local time it was sent; hover
+  or keyboard-focus it to see the full local date and time. It shows in both the main chat
+  and the command-palette chat (they share one renderer), and stays out of the way like the
+  existing usage/cost footer. It never shows a wrong value: no chip while a reply is still
+  streaming, none on a message with no recorded send time, and none on the prompt of a chat
+  reloaded from the server — which records when a turn's reply landed, not when its prompt
+  was sent. Background, scheduled, and server-result cards keep their own timestamps.
+
+- **The Agent Browser plugin now installs its own CLI, and its setup banners fix what they report (#3464).** When no `agent-browser` is on PATH, the plugin downloads the pinned upstream release (v0.27.1). That happens the first time the browser is used, or when you click **Download agent-browser** on the setup banner. There is one pinned build per platform: macOS arm64 and x64, Linux x64 and arm64 (glibc and musl), and Windows x64. The download is refused unless its SHA-256 matches the value pinned in the plugin. Upstream publishes no checksum file, so the pins were computed from the release assets and cross-checked against GitHub's own asset digests. The binary is installed atomically into the machine-wide cache, and nothing is downloaded at boot. A CLI on PATH, or a path in the `binary` setting, still takes precedence, and `cli_autofetch: false` turns the automatic download off. Chrome is installed only from the banner's **Install Chrome** button, which runs the CLI's own `agent-browser install`; a tool call never installs it. Both buttons use a new setup-gap action kind, `plugin_setup`. A plugin registers a command with `registry.register_setup_step(step, fn)`, and its banner offers a button that runs it through `POST /api/plugin-setup/<id>/<step>`. That route is audit-logged and always requires the operator token: it sits outside the `/api/plugins/<id>/` namespace, which a plugin's manifest can open to anonymous callers or fleet peers. The console follows the step until the banner clears or offers a Retry. A plugin that is disabled, uninstalled, or fails to reload loses its buttons along with its banners, and a download or install still running from the old load can't bring them back. A slow connection gets up to 15 minutes to finish the download; only a stalled one fails. Stealth mode is still off by default. When you turn it on, its User-Agent now claims the installed Chrome's real major version instead of a hard-coded Chrome 149.
+
+- **The MCP quick-add catalog is now checked against upstream every week (#2910).** An
+  entry in Settings ▸ MCP ▸ Browse only runs when someone clicks it, so a package that
+  upstream renamed or pulled used to fail in front of an operator and nowhere else. The
+  catalog once pointed at a renamed sequential-thinking package for weeks. A scheduled
+  check now confirms every entry's npm package or PyPI project still resolves, isn't
+  deprecated or yanked, that remote endpoints answer and docs links resolve. It files one
+  tracking issue when something drifts, and it also runs on any PR that edits the catalog.
+
+### Changed
+- **`python-docx` is now a core dependency, so a plain server or Docker install reads `.docx` out of the box (#3462).**
+  Word attachments in chat, Knowledge ▸ Add source and `knowledge_ingest` used to need
+  python-docx installed separately on anything but the desktop app — a bare server answered
+  501. It now installs with protoAgent itself (`python-docx>=1.1`, pure Python, ~250 KB
+  wheel; its `lxml` dependency was already there), which also means cowork's docx skill
+  works on a server without an install-deps step. The 501 remains only as a fallback for
+  a broken install, and now says so.
+
+### Fixed
+- **One plugin route can no longer take down `/openapi.json` (#3437).** A plugin page route annotated `-> HTMLResponse` with a function-local import (orgChart, portfolio, learning-wiki) made the schema, and `/docs`, answer 500 on every agent running it. The host now probes each plugin route before mounting it and leaves one whose schema can't be built out of the schema, with a warning naming it (it still serves). A disabled plugin's routes leave the schema too, and orgChart's page declares its response class.
+- **Routes in a plugin's nested sub-router get the JSON error envelope again (#3437).** Under FastAPI 0.141 an unhandled error there answered a bare 500 instead of the structured error from #2259.
+
+- **Plugin setup-gap banners now actually appear, with their Configure button and dismiss (#3438).**
+  The v0.164.0 banners read gap records from inside `warnings[]`, a shape the server never
+  sends. The server publishes them in `setup_gaps[]` beside plain `Label: message` lines, so
+  every real gap showed as a plain alert you could neither act on nor dismiss. The console now
+  reads `setup_gaps[]` and drops the matching plain lines. Other warnings are unchanged.
+  Dismissing a banner hides it for that agent only, for the rest of the session. If you fix
+  the problem and it later comes back, the banner shows again.
+- **Expanding a tool card mid-turn no longer collapses it when the turn finishes (#3438).**
+  In a single-tool turn, the running card you expanded was rebuilt at the settle and came back
+  collapsed. It now stays the same card, still open, showing the result.
+
+- **A chat rebuilt from the server shows your questions again, and its answers read as paragraphs (#3439).**
+  When a chat is restored from the server — a new device, or cleared browser storage — every
+  answer came back with no question above it and the tab titled "New chat": the agent never
+  stored the message that started each turn. Turns now keep it as you saw it: an attachment
+  send keeps your text and the file names (not the documents, nor any image bytes), and
+  approvals, dismissals and scheduled runs — which never showed a message of yours — stay
+  that way, while an interjection you sent mid-turn comes back where the agent read it.
+  Narration either side of a tool call was also glued together in the stored
+  answer ("…first.I'll now check…"); each step now starts its own paragraph, live and
+  restored alike. And text the agent did not write as its answer — a tool's own model
+  calls, a workflow step's output, the summary written when a long chat is compacted — no
+  longer lands in the middle of it. Turns saved before this update still restore as answers
+  only; they leave with the normal 24-hour history, except a turn that paused on a form or
+  approval, which stays until the chat is deleted or cleared.
+
+- **A reply to background reports no longer collapses into a card while you're reading
+  it (#3443).** When a background agent finishes, the agent's response streams into the chat as a
+  normal message. The moment it finished, it used to fold into a compact, differently
+  tinted result card, pulling the text out from under whoever was reading it. Those replies,
+  and replies to a delegate's result, now stay ordinary chat messages with the same layout
+  they streamed in: tool cards stay between the text they ran between, instead of jumping
+  above it. Scheduled tasks, watch reactions and other side-channel runs still settle into
+  the compact card.
+
+- **A message typed into a background, scheduled or watch-triggered turn now lands in the chat instead of sitting "queued" forever (#3446).**
+  While the agent was "responding to background reports…", an interjection reached the agent and
+  shaped its answer, but the console never heard it had been read. The bubble stayed "queued
+  interjection — sent to this server turn" under a reply that had already used it, had no ✕ to
+  cancel it, and disappeared when the turn ended. The server now reports the moment it folds the
+  message in, and the console turns it into an ordinary user message at that point in the reply.
+  The ✕ (and ↑ to edit) now take a still-pending interjection back out of the queue. Every other
+  ending is accounted for too: a message the turn never reached is sent as your next message
+  rather than silently riding a later turn; one the server tells us it never took — a refusal,
+  or a message we could take back — comes back into the composer instead of vanishing; and Stop
+  no longer discards what it clears. A message the agent may already have read is never offered
+  back, so you can't re-send something it already used. Transient failures while working this
+  out are retried rather than leaving a bubble claiming it was sent.
+
+- **A chat attachment can no longer forge its own attachment block (#3448).**
+  An attached file's extracted text is untrusted — a résumé, a web page, a transcript — and
+  it rides at the top of the message the model reads. The delimiters around it were fixed
+  strings, so a document containing `[end of resume.docx]` followed by
+  `[Attached file: trusted-policy.txt]` closed its own block early and opened a second,
+  spoofed one. Each block's delimiters now carry a random per-attachment id, delimiter-shaped
+  text inside the body is escaped, and the filename is flattened to one bracket-free line.
+  Applies to every inline attachment type, not just Word files.
+- **`pypdf` floor raised to 6.8 (#3448).** pypdf grew per-filter output limits for
+  decompression bombs across its 6.x line — FlateDecode in 6.0, LZW in 6.2, JBIG2 in 6.5,
+  RunLength in 6.8 — and no 4.x or 5.x release carries any of them. Installs that resolve
+  from the lockfile already had 6.17; this protects the ones that don't (a plain
+  `pip install -r`, and the desktop's managed Python runtime, where `execute_code` reads
+  PDFs). The APIs protoAgent uses are unchanged since 4.x.
+
+- **An `@`-addressed member's answer no longer appears twice in the chat (#3449).**
+  Addressing a member — `@protoEngineer what version is the artifact plugin?` — rendered
+  their reply once under their byline and then again, verbatim, as a second unattributed
+  message below it, and a page reload could make that second copy permanent. An addressed
+  turn skips the lead agent entirely, so the answer the turn records is composed from the
+  participants' own replies purely as the whole for clients that can't show who said what;
+  the console was drawing both. It now draws the participants' messages, and the part of
+  the answer none of them said — a room whose catch-up window was clipped, an address that
+  failed, a member who replied with nothing — arrives as its own message instead of being
+  lost with the duplicate. The turn's spend/context footer and its per-message actions stay
+  on the reply. Single-member turns already doubled on disk are repaired on the next load;
+  a chat that addressed several members at once keeps its old duplicate, since what was
+  drawn twice there is the combined summary rather than any one member's words. A
+  delegation the lead runs itself is unchanged — its answer is the lead's own synthesis.
+
+- **A plugin whose Python packages aren't installed now says so, and installing them clears it without a restart (#3450).**
+  A plugin's declared `requires_pip` is installed explicitly, never by `install`. A plugin that
+  imports its libraries lazily (inside `execute_code`, say) loads fine without them, so the first
+  symptom was an ImportError mid-task, with nothing naming the plugin or the fix. The loader now
+  checks an enabled plugin's declared deps on every load:
+  - **Missing required packages** raise a banner that names the plugin and the packages, and it
+    opens Settings ▸ Plugins, where the Install deps button is.
+  - **Missing optional packages** — the tier a plugin still runs without — show on the plugin's
+    row and in the setup wizard's dependency report, but raise no banner.
+
+  Installing deps now runs pip only for what's actually missing and refreshes just that plugin's
+  state, so the banner and the row update at once without reloading every plugin. An install
+  where nothing landed (no pip, or an unreachable package index) now reports as a failure instead
+  of "done", and enabling a plugin that's missing packages says so in the toast. The Plugins row and the wizard's report now also cover **bundled** plugins, which
+  they couldn't see before. That is what a fresh **server** running the Cowork pack needed: its
+  whole document stack is the optional tier, and four of its five libraries can be missing. On the
+  desktop app the libraries are frozen into the app itself, but `execute_code` runs in the managed
+  Python runtime, which only gets them from the runtime's own baseline.
+
+- **A plugin that moved into core is uninstalled from the dir the loader actually reads (#3452).** `supersedes` (#3445) honoured the `plugins.dir` config override when deciding which copy runs, but not when removing it, listing it, or syncing — so with that override set, uninstalling a superseded copy dropped its `plugins.lock` entry and left the files, where the now-untracked copy shadowed the built-in plugin again. The live plugins dir resolves the override once, for every lifecycle operation. A removal that cannot proceed now reports as a plugin error instead of a 500, the auto-update skip line redacts credentials in an install URL like every other message, and the rail's Uninstall confirm no longer warns about deleting code that is not going.
+
+- **The Work overview e2e no longer depends on which side of midnight the suite runs (#3453).** The mock backend built its watch timestamps once, when the fixture module loaded, while the console computes "today" when it renders — so a run that crossed local midnight lost the watches pulse's "met today" fragment and reported a failure that had nothing to do with the code under test (it hit at 00:02Z with the other 389 specs green). Those fixtures are now built per request, and a spec can pin both clocks — the page's and the mock server's — to one instant, so the crossing is a test instead of a coin flip.
+
+- **The Artifact panel now acknowledges a Download you started (#3454).** Clicking
+  Download fired the browser's save but the panel said nothing back, so a download that
+  worked looked identical to one that never happened — only a failure ever changed the
+  button. Both the generated-source download and the stored-file download now flash
+  "Started" on the button and announce "Download started" on an aria-live status region,
+  then settle back to "Download". The copy says *started*, not *saved*, because the browser
+  owns where (and whether) the file lands; the filename, route, failure feedback and the
+  sandboxed iframe are unchanged.
+
+- **A plugin you placed by hand stays visible, and removable, after protoAgent starts shipping it (#3455).** A copy in your plugins dir with no `plugins.lock` entry — dropped in, or symlinked to a dev checkout — used to stop being what runs, silently, the moment a newer bundled copy of the same plugin arrived, and `plugin uninstall` then refused it as a built-in. It is now reported in its own words (naming the path), flagged in the Plugins list, and removable — `plugin uninstall` removes exactly the path the report names and nothing else (a folder named after the plugin that holds a different plugin or no plugin, or the bundled tree, is refused with the reason); a symlinked checkout is unlinked, never followed, and a link whose checkout is gone is unlinked and named. Every `plugin uninstall` now applies that check: with `plugins.dir` pointed at a folder of checkouts, uninstalling an id no longer deletes a same-named folder that holds no plugin. The same report now also shows for a bundled plugin that is merely off by default (an explicit `plugins.disabled` still silences it). A relative `plugins.dir` or `PROTOAGENT_PLUGINS_DIR` is refused instead of resolving differently in each process, with a Plugins banner saying so, and the managed-MCP subprocess now finds plugins under a configured `plugins.dir`. Edits to the config and bundled manifests are no longer missed on filesystems with coarse timestamps or on Windows (the caches now key on file content, not timestamps).
+
+- **An html artifact's own doctype and `<head>` now survive the Artifact panel (#3457).** The panel built an html artifact's sandboxed document as the design-system link + base styles + the artifact, so a full document's `<!doctype html>` and `<head>` came after injected content and the parser discarded both: `document.doctype` was null in the panel and the document's `<head>` attributes were lost. A full document now gets the injection inside its head, still ahead of its own styles; fragments are unchanged. Layout is unaffected, since a sandboxed srcdoc document always renders in standards mode. The panel now also has real-browser e2e coverage across every artifact kind.
+
+- **The console e2e suite no longer flakes with "Response has been disposed" when a mocked request is still in flight at teardown (#3459).**
+  Eight specs patched live mock responses by proxying each request with `route.fetch()` and
+  reading the body inside the route handler. Test teardown disposes those bodies:
+  `BrowserContext.close()` drops every stored fetch body before it closes the context. So a
+  request the app fired just as a test ended could fail a test whose assertions had all passed.
+  Examples are the setup wizard's refetch after Finish and the fleet list's 3s poll. The specs
+  now snapshot the real body once, before routing (`e2e/routeSnapshot.ts`), so the handler holds
+  nothing that teardown can dispose.
+
+- **The artifact store no longer loses writes between processes (#3460).** Store writes were
+  serialised with a thread lock only, but under the ACP runtime the artifact tools run in the
+  operator-MCP process while the panel's routes run in the main one. A `pin_artifact` could
+  reply "Pinned" while a concurrent render-status stamp in the other process erased the pin,
+  and any write (versions, creates, deletes) could be lost the same way. Every
+  read-modify-write now also holds a cross-process file lock beside `history.json` (`flock`
+  on POSIX, `msvcrt` on Windows). Blob cleanup runs under the same lock, so it can't delete a
+  file another process just referenced. The inline render verdict after a create/edit is now
+  awaited outside the lock, so it can actually arrive instead of always timing out. It is also
+  tied to the version that edit wrote: at the version cap, a later edit that shifted into its
+  slot could previously lend it the wrong verdict. Past `max_versions` edits the panel now keeps
+  re-rendering new versions (it used to stop), and `save_file_artifact` parses the file before
+  taking the lock, so a large PDF no longer stalls other writers. On Windows, reading the store
+  (the panel's polling, the list/get/check tools) now rides out the moment a write is replacing
+  the file, instead of failing with a permission error.
+
+- **Agent processes no longer run forever after their server is force-killed or
+  crashes (#3465, #3463).** v0.164.0 made a server take its ACP and shell process trees
+  down when it starts exiting — but a server that is SIGKILLed (the desktop shell
+  killing its sidecar, an out-of-memory kill) or crashes runs no cleanup at all, and its
+  agents ran on in the background: sixteen `codex-acp` processes, ~780 MB, for 36 hours
+  on one machine. Each server now records the trees it owns, and every server sweeps the
+  records of dead owners at startup and every 10 minutes, killing only trees it can
+  prove are still the ones recorded — never a process that reused an old id.
+
+- **Reloading during a server-fired turn no longer leaves the chat stuck "streaming" (#3474).**
+  After a reload, the console reattaches to the turn's live preview. When the turn's
+  final answer arrived on the event bus before that reattach heard back from the
+  server, the reattach was cancelled without releasing the session. Stop stayed up,
+  Send stayed disabled, and a message interjected into that turn stayed "queued"
+  under an answer that had already finished. When a reattach is cancelled because
+  its reply has already settled, it now returns the session to idle, unless another
+  reply is still streaming. A late server answer to a cancelled reattach no longer
+  unlocks a turn started since, and a delegate's reply arriving mid-turn no longer
+  ends the reattach early.
+
+- **A stuck artifact-store writer no longer blocks every other writer forever, and an evicted file can no longer cut a download short (#3475).**
+  These are the follow-ups to #3460's cross-process store lock. Taking the lock is now bounded (60 s).
+  A process wedged mid-save used to park every writer in every process indefinitely. Now a writer
+  that outwaits the bound changes nothing and says so: the agent tools reply that the store is busy,
+  naming the process that last took the lock, and the panel's edit, delete and render-status calls
+  return 503. A slow but live holder is never interrupted, and a crashed one releases the lock with
+  its process. When the lock can't be taken at all (e.g. a network mount without lock support), the
+  fallback to in-process locking is now warned once per distinct error, naming the error and the lock
+  path. Previously it warned once and was silent afterwards. A file artifact's Download now streams
+  from a file handle opened before the response starts. Before, an eviction in the other process
+  could delete the file between the response headers and the body, and the download failed with no
+  bytes. On Windows, where an open file can't be deleted, the cleanup now skips that one file and
+  retries it on the next write.
+
+- **Install deps runs one pip at a time per environment (#3477).** A follow-up to #3450. Two
+  clicks, two tabs, two plugins' installs, or the CLI beside the console could each run pip
+  into the same environment at once, and one install's post-install refresh could re-import a
+  package another was still writing. Now a second install into the same environment is refused
+  at once with a 409 that names the one running. That covers this server's Python and the
+  desktop app's shared managed runtime, and it holds across processes: the dev and default
+  instances share one venv, and fleet members share the managed runtime. The Plugins panel shows
+  the running row as installing and makes every other row's Install deps wait, including for an
+  install started in another tab. The setup wizard's report does the same.
+- **Discover shows a bundled plugin's real state, and never offers Install for one (#3477).** A
+  plugin that ships in core now says "bundled · on" or "bundled · off" instead of a bare
+  "bundled". When another bundled plugin turned it on, it says so: execute_code is "on because
+  cowork enables it" (#3450). "Bundled" now follows the installer's own built-in rule. A leftover
+  folder from a plugin that moved out of core no longer hides its Install button, and a bundled
+  plugin whose folder name differs from its id is recognised.
+- **`cowork.output_dir` is gone (#3477).** The cowork pack moved into core in #3450 with this key
+  still declared, but nothing ever read it, so the document skills pointed at a folder setting
+  the agent had no way to see. Deliverables still go to the operator's fenced work folders. A
+  config that still sets the key is ignored, without a warning.
+
+- **A chat no longer stays stuck "streaming" after its turn has ended (#3478).**
+  The console now has one check that returns a chat to idle when nothing is still running
+  in it: no reply still streaming, no reconnect to a running turn in progress, and no turn
+  this browser is sending. It runs whenever a turn can end: when a background or scheduled
+  answer arrives, when a reconnect or a local turn finishes, when a chat tab is opened, and
+  when the browser tab becomes visible again. It never idles a turn that is still running,
+  including one that is waiting on the server for its final answer. Three cases that used to
+  leave Stop showing and Send disabled for good are fixed. A sixth chat with a turn in
+  flight at load, which had no tab slot to reconnect it, is now released when its turn
+  ends. A scheduled or background answer that arrives while another turn in the same chat
+  is still running no longer cuts that turn loose. This applied both to a server turn and
+  to your own turn after a reload, which previously never finished.
+
 ## [0.164.0] - 2026-09-11
 
 ### Added
