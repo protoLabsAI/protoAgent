@@ -90,6 +90,7 @@ zeroconf>=0.131  # mDNS fleet discovery (ADR 0042 §I)
 # (PdfReader, .pages, extract_text) are unchanged since 4.x.
 pypdf>=6.8                    # PDF → text
 youtube-transcript-api>=1.0   # YouTube captions → text (1.x instance API)
+python-docx>=1.1              # Word (.docx) → text — core so a Docker/server install parses .docx (see pyproject)
 markdown-it-py>=3.0           # Markdown → HTML for the `docs` plugin reader view (server-side, offline)
 
 # search_files(regex=true) (tools/fs_tools.py, #2755) — a model-supplied pattern,

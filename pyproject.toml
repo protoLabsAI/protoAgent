@@ -83,6 +83,13 @@ dependencies = [
   # any of them. The APIs used here (PdfReader, .pages, extract_text) are unchanged.
   "pypdf>=6.8",                  # PDF → text
   "youtube-transcript-api>=1.0", # YouTube captions → text (1.x instance API)
+  # Word (.docx) → text for chat attachments / Knowledge ingest (#3444). Core so a plain
+  # server or Docker install parses .docx out of the box (it was optional: only the desktop
+  # bundled it and a bare server answered 501). Pulls lxml — already locked via ddgs — and
+  # typing_extensions. The 1.1 floor matches the managed runtime's baseline
+  # (apps/desktop/sidecar/requirements-docs.txt); the extractor walks the raw XML, so it
+  # leans on no newer python-docx behaviour.
+  "python-docx>=1.1",
   # Markdown → HTML for the `docs` plugin's reader view (server-side render, offline).
   "markdown-it-py>=3.0",
   # search_files(regex=true) (#2755) compiles a model-supplied pattern — stdlib `re`

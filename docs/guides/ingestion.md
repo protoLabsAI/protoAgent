@@ -65,7 +65,7 @@ the detected `source_type`, and `chars`.
 | Text / Markdown | decoded directly | — |
 | HTML | readable text extracted (script/nav/footer stripped) | — |
 | PDF | text extracted per page | `pypdf` |
-| Word (`.docx`) | header, body, footer in document order — headings as `#` lines, list items as `- `, tables row by row | `python-docx` (bundled in the desktop app; not a core dependency — a server without it answers **501** naming the install) |
+| Word (`.docx`) | header, body, footer in document order — headings as `#` lines, list items as `- `, tables row by row | `python-docx` (a core dependency — every server, Docker and desktop install has it; a broken install missing it answers **501** naming the fix) |
 | Web URL | fetched, then dispatched by content-type | — |
 | YouTube URL | transcript via the captions API, else gateway STT | `youtube-transcript-api` |
 | Audio | transcribed via the gateway's `/audio/transcriptions` (Whisper) | `knowledge.transcribe_model` set |

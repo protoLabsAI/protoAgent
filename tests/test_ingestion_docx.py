@@ -4,11 +4,11 @@ All three surfaces funnel through ``ingestion.extract_bytes``, so the extractor 
 directly and then once per surface (the attach + ingest routes, and the ``ops.knowledge``
 path the agent tool calls with a local file).
 
-Real documents are generated with python-docx. It is NOT a core dependency: the frozen
-desktop app bundles it (ADR 0092 D1) and CI installs it for this file (checks.yml), but a
-plain server install may not have it — so every test that needs the library skips without
-it, while the checks that must hold *without* it (legacy ``.doc`` refusal, the zip guard,
-the missing-library → 501 path) build their inputs by hand and always run.
+Real documents are generated with python-docx, a core dependency (pyproject), so any env
+that installs protoAgent's deps has it — CI's ``uv sync`` included. The tests that need the
+library still go through ``importorskip``, which costs nothing when it's present; the checks
+that must hold *without* it (legacy ``.doc`` refusal, the zip guard, the broken-install →
+501 path) build their inputs by hand and always run.
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
 
 def _docx_lib():
-    return pytest.importorskip("docx")  # python-docx — bundled on desktop, installed in CI
+    return pytest.importorskip("docx")  # python-docx — a core dep, so present wherever deps are installed
 
 
 def _save(document) -> bytes:
