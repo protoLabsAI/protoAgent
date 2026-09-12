@@ -342,9 +342,9 @@ def test_the_inline_render_verdict_is_not_starved_by_the_store_lock(art, monkeyp
     waiting = threading.Event()
     real_await = art._render_status._await_render
 
-    def spy(art_id, version):
+    def spy(*args, **kwargs):
         waiting.set()
-        return real_await(art_id, version)
+        return real_await(*args, **kwargs)
 
     monkeypatch.setattr(art._render_status, "_await_render", spy)
     out: dict[str, str] = {}
@@ -359,6 +359,142 @@ def test_the_inline_render_verdict_is_not_starved_by_the_store_lock(art, monkeyp
     tool.join(10)
     assert r.json()["recorded"] is True
     assert "FAILED to render" in out["reply"] and "Icon is not defined" in out["reply"], out
+
+
+def _data_client(art):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    app.include_router(art._build_data_router(), prefix="/api/plugins/artifact")
+    return TestClient(app)
+
+
+def _at_the_cap(art, monkeypatch, cap=3):
+    """An artifact holding exactly ``cap`` versions (v1..v{cap}), so every further commit trims
+    the front and shifts each surviving version down one position."""
+    monkeypatch.setenv("ARTIFACT_MAX_VERSIONS", str(cap))
+    aid = _show(art, "<p>v1</p>")
+    for i in range(2, cap + 1):
+        art.update_artifact.invoke({"old_string": f"v{i - 1}<", "new_string": f"v{i}<", "artifact_id": aid})
+    assert len(art._find(art._read_store(), aid)["versions"]) == cap
+    return aid
+
+
+def test_a_verdict_is_never_borrowed_from_the_edit_that_shifted_this_one(art, monkeypatch):
+    """At the version cap, edit A commits and waits (outside the lock) for its verdict; a panel
+    edit B lands meanwhile, and the trim moves B into the slot A reported. B's verdict must not
+    come back as A's — A's content is fine. A was superseded, so its reply carries no verdict."""
+    aid = _at_the_cap(art, monkeypatch)
+    client = _data_client(art)
+    monkeypatch.setattr(art._render_status, "_RENDER_WAIT_MS", 5000)
+    monkeypatch.setattr(art._render_status, "_LAST_POLL_TS", art._now())  # a panel is polling
+    waiting = threading.Event()
+    real_await = art._render_status._await_render
+
+    def spy(*args, **kwargs):
+        waiting.set()
+        return real_await(*args, **kwargs)
+
+    monkeypatch.setattr(art._render_status, "_await_render", spy)
+    out: dict[str, str] = {}
+    edit_a = threading.Thread(
+        target=lambda: out.update(
+            reply=art.update_artifact.invoke({"old_string": "v3<", "new_string": "A: fine<", "artifact_id": aid})
+        )
+    )
+    edit_a.start()
+    assert waiting.wait(10)  # A has committed (as "version 3") and is waiting for its verdict
+    assert client.put(f"/api/plugins/artifact/artifact/{aid}", json={"code": "<p>B: throws</p>"}).json()["version"] == 3
+    b = art._find(art._read_store(), aid)["versions"][-1]
+    stamped = client.post(
+        "/api/plugins/artifact/render-status",
+        json={"id": aid, "version": 3, "ts": b["ts"], "ok": False, "error": "B's source threw"},
+    )
+    edit_a.join(10)
+    assert stamped.json()["recorded"] is True
+    assert "version 3" in out["reply"], out
+    assert "B's source threw" not in out["reply"] and "FAILED" not in out["reply"], out
+
+
+def test_a_verdict_posted_after_a_trim_shift_stamps_the_version_that_was_rendered(art, monkeypatch):
+    """The panel renders the newest version (position 3 of 3) and, before its verdict POST lands, a
+    commit at the cap shifts that version to position 2. The verdict must follow the version it was
+    rendered from — by its ts — not stamp the new edit now sitting at position 3; and once the
+    rendered version has been trimmed away entirely, it's dropped rather than pinned on a survivor."""
+    clock = [art._now()]
+
+    def tick():  # strictly increasing: two commits in one real millisecond would share a ts
+        clock[0] += 1
+        return clock[0]
+
+    monkeypatch.setattr(art._store, "_now", tick)
+    aid = _at_the_cap(art, monkeypatch)
+    client = _data_client(art)
+    rendered = art._find(art._read_store(), aid)["versions"][-1]  # what the panel rendered: v3 @ 3
+    art.update_artifact.invoke({"old_string": "v3<", "new_string": "v4<", "artifact_id": aid})
+    r = client.post(
+        "/api/plugins/artifact/render-status",
+        json={"id": aid, "version": 3, "ts": rendered["ts"], "ok": False, "error": "v3 threw"},
+    )
+    assert r.json()["recorded"] is True
+    vers = art._find(art._read_store(), aid)["versions"]
+    assert vers[1]["code"] == "<p>v3</p>" and vers[1]["render"]["error"] == "v3 threw"
+    assert "render" not in vers[2], "the verdict was stamped on the edit that shifted into the slot"
+    for i in (5, 6):  # v3 is trimmed away
+        art.update_artifact.invoke({"old_string": f"v{i - 1}<", "new_string": f"v{i}<", "artifact_id": aid})
+    late = client.post(
+        "/api/plugins/artifact/render-status",
+        json={"id": aid, "version": 3, "ts": rendered["ts"], "ok": False, "error": "v3 threw"},
+    )
+    assert late.json()["recorded"] is False
+    assert all("render" not in v for v in art._find(art._read_store(), aid)["versions"])
+
+
+def test_the_panel_reports_which_version_it_rendered(art):
+    """The shell sends the rendered version's ts with its verdict, and re-renders when the
+    version in a slot changes — at the cap every new version lands in the SAME slot."""
+    js = art._SHELL_JS
+    assert "ts:renderingTs" in js
+    assert 'var key=a.id+"@"+vi+"@"+v.ts;' in js and "renderingTs=v.ts;" in js
+
+
+def test_save_file_artifact_parses_the_file_outside_the_store_lock(art, monkeypatch, tmp_path):
+    """Preview extraction (up to 50 PDF/DOCX pages) and thumbnailing touch no store state. Under a
+    cross-process lock, doing them while holding it stalled every other writer in every process —
+    so a concurrent writer must complete WHILE a slow extraction is still running."""
+    seen: dict = {}
+    writers: list[threading.Thread] = []
+    real_extract, real_thumb = art._preview._extract_preview, art._preview._thumbnail
+
+    def slow_extract(p, data, mime):
+        seen["extract_depth"] = art._store._FILE_LOCK_DEPTH
+        w = threading.Thread(target=lambda: seen.update(other=_show(art, "<p>meanwhile</p>")))
+        writers.append(w)
+        w.start()
+        w.join(3)  # holding the lock, this writer can't finish until the save does
+        seen["other_finished_during_extraction"] = not w.is_alive()
+        return real_extract(p, data, mime)
+
+    def thumb(data, mime):
+        seen["thumb_depth"] = art._store._FILE_LOCK_DEPTH
+        return real_thumb(data, mime)
+
+    monkeypatch.setattr(art._preview, "_extract_preview", slow_extract)
+    monkeypatch.setattr(art._preview, "_thumbnail", thumb)
+    f = tmp_path / "report.txt"
+    f.write_bytes(b"quarterly numbers")
+    reply = art.save_file_artifact.invoke({"path": str(f), "title": "Report"})
+    for w in writers:
+        w.join(10)
+    assert seen["extract_depth"] == 0 and seen["thumb_depth"] == 0, seen
+    assert seen["other_finished_during_extraction"] is True, "a concurrent writer waited on the file parse"
+    fid = reply.split("Saved file artifact ")[1].split(" ")[0]
+    saved = art._find(art._read_store(), fid)
+    assert saved["title"] == "Report" and saved["versions"][-1]["code"] == "quarterly numbers"
+    assert saved["versions"][-1]["file"]["filename"] == "report.txt"
+    assert art._blob_path(fid, saved["versions"][-1]["blob"]).read_bytes() == b"quarterly numbers"
+    assert art._find(art._read_store(), seen["other"]) is not None
 
 
 def test_the_store_lock_is_reentrant_and_released(art):

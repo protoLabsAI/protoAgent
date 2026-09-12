@@ -21,7 +21,7 @@
   // it auto-follows new versions). followNewest jumps to the newest artifact on create
   // unless the user navigated to an older one.
   var arts = [], curId = null, selId = null, selVer = null, followNewest = true, lastRendered = "";
-  var renderingId = null, renderingVer = 0;  // the (id, 1-based version) currently in the frame — for render-status (#1458)
+  var renderingId = null, renderingVer = 0, renderingTs = 0;  // the (id, 1-based version, its ts) in the frame — for render-status (#1458)
   var EXT = { html: "html", svg: "svg", mermaid: "mmd", react: "jsx" };
   function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;"); }
   // The NESTED artifact iframe (sandboxed, no stylesheet access) gets the live theme
@@ -331,8 +331,11 @@
     $vprev.disabled = vi<=0; $vnext.disabled = vi>=a.versions.length-1;
     $empty.style.display="none";
     $edit.style.display = a.kind==="file" ? "none" : "";  // a file's preview isn't user-editable
-    var key=a.id+"@"+vi;  // re-srcdoc only when the shown version actually changes
-    if(key!==lastRendered){ lastRendered=key; renderingId=a.id; renderingVer=vi+1;
+    // Re-srcdoc only when the shown version actually changes. Keyed by ts as well as position: at
+    // the max_versions cap every new version lands in the SAME slot (the trim shifts the rest down),
+    // so a position-only key never re-rendered past the cap.
+    var key=a.id+"@"+vi+"@"+v.ts;
+    if(key!==lastRendered){ lastRendered=key; renderingId=a.id; renderingVer=vi+1; renderingTs=v.ts;
       $frame.srcdoc = a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code); $frame.style.display="block"; }
   }
 
@@ -446,7 +449,7 @@
     // intentionally silent on error (#2885 exempts it): a fire-and-forget status report,
     // not user-facing data, so there's no lying empty state to correct.
     if(m.type==="protoArtifact:render"){
-      if(renderingId){ try{ kit.apiFetch("/api/plugins/artifact/render-status",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:renderingId,version:renderingVer,ok:!!m.ok,error:String(m.error||"").slice(0,2000)})}); }catch(_){} kickPoll(); /* the verdict rewrites the store — pick it up from idle promptly (#2256) */ }
+      if(renderingId){ try{ kit.apiFetch("/api/plugins/artifact/render-status",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:renderingId,version:renderingVer,ts:renderingTs,ok:!!m.ok,error:String(m.error||"").slice(0,2000)})}); }catch(_){} kickPoll(); /* the verdict rewrites the store — pick it up from idle promptly (#2256) */ }
       return;
     }
     if(m.type!=="protoArtifact:ask") return;

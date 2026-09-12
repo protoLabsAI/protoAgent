@@ -141,7 +141,14 @@ def _build_data_router():
         nested artifact frame reports ``{ok}`` once it mounts or ``{ok:false, error}`` when
         it throws / never mounts. Stamped onto the version so check_artifact + the create/edit
         tools can surface render failures back to the agent. Best-effort: unknown id/version
-        is a no-op (the panel may be a version behind), never an error."""
+        is a no-op (the panel may be a version behind), never an error.
+
+        ``version`` is the position the panel rendered; the shell also sends that version's
+        ``ts``, because at the max_versions cap a commit between the render and this POST trims
+        the front and shifts every version down a slot — position N then holds the NEXT edit,
+        which would be stamped with this verdict. With ``ts`` the verdict follows the version it
+        was rendered from (and is dropped if that version is gone); without it (an older shell)
+        it stamps by position as before."""
         art_id = str(body.get("id") or "")
         try:
             version = int(body.get("version") or 0)
@@ -149,9 +156,15 @@ def _build_data_router():
             version = 0
         store = _store._read_store()
         art = _store._find(store, art_id)
-        if art is None or not (1 <= version <= len(art.get("versions") or [])):
+        vers = (art or {}).get("versions") or []
+        idx = version - 1 if 1 <= version <= len(vers) else None
+        ts = body.get("ts")
+        if isinstance(ts, int) and not isinstance(ts, bool) and (idx is None or vers[idx].get("ts") != ts):
+            hits = [i for i, v in enumerate(vers) if v.get("ts") == ts]
+            idx = hits[0] if len(hits) == 1 else None
+        if idx is None:
             return {"ok": True, "recorded": False}
-        art["versions"][version - 1]["render"] = {
+        art["versions"][idx]["render"] = {
             "ok": bool(body.get("ok")),
             "error": str(body.get("error") or "")[: _render_status._RENDER_ERR_MAX],
             "ts": _store._now(),

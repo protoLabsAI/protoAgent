@@ -459,3 +459,30 @@ def _commit_version(store: dict, art: dict, code: str, by: str = "agent", extra:
     v = len(art["versions"])
     _emit("updated", {"id": art["id"], "version": v})
     return v
+
+
+# ── version identity ─────────────────────────────────────────────────────────────────
+# A version NUMBER is a list position, and at the max_versions cap every commit trims the front,
+# shifting every survivor down a slot: the slot "version 5" named a moment ago now holds the next
+# edit. Anything that has to find ONE version again later — a render verdict the tool waits for —
+# identifies it by (lifetime number, ts) instead. The lifetime number needs no stored key: commits
+# only append and trims only drop from the front, so the version at 1-based position p has lifetime
+# number version_count - len(versions) + p. The ts cross-checks it (a store rewritten by something
+# that didn't keep version_count can't make it point at the wrong version).
+
+
+def _version_key(art: dict) -> tuple[int, int]:
+    """The stable identity of ``art``'s LATEST version: ``(lifetime number, ts)``."""
+    vers = art["versions"]
+    return art.get("version_count", len(vers)), vers[-1].get("ts")
+
+
+def _locate_version(art: dict, key: tuple[int, int]) -> int | None:
+    """The CURRENT 1-based position of the version ``key`` names, or ``None`` once it has been
+    trimmed away (or the store no longer agrees about it)."""
+    n, ts = key
+    vers = art.get("versions") or []
+    pos = n - (art.get("version_count", len(vers)) - len(vers))
+    if 1 <= pos <= len(vers) and vers[pos - 1].get("ts") == ts:
+        return pos
+    return None
