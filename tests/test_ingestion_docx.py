@@ -21,6 +21,8 @@ import struct
 import subprocess
 import sys
 import textwrap
+import threading
+import time
 import types
 import warnings
 import zipfile
@@ -485,6 +487,51 @@ def test_a_hostile_docx_cannot_drive_memory_past_the_budget(tmp_path):
             f"{label}: extraction grew RSS by {grew} MiB (> {allowed}, outcome {outcome}) "
             f"from a {len(data) // 1024} KB upload"
         )
+
+
+def test_the_node_budget_counts_text_runs_not_only_elements_and_attributes():
+    """``x<w:i/>`` filler buys libxml2 a TEXT NODE per element for a single '<' of budget.
+    Counting only elements and attributes let a package through with twice the intended
+    tree — measured +269 MiB, over this file's own envelope — so the budget counts '>' too
+    (every text run follows one). This package is exactly the shape that slipped."""
+    data = _package(_body(b"<w:p>" + b"x<w:i/>" * 980_000 + b"</w:p>"))
+    assert len(data) < 32 * 1024  # kilobytes on the wire
+
+    with pytest.raises(SourceTooLarge, match="too large or too complex"):
+        extract_bytes("filler.docx", data)
+
+
+def test_concurrent_extractions_cannot_multiply_the_memory_ceiling(monkeypatch):
+    """The per-document ceiling is a SINGLE-request figure: callers extract in
+    ``asyncio.to_thread``, whose pool is ~14 wide, so 10 concurrent worst-case uploads
+    measured ~1.6 GB. Only a bounded number may be inside the extractor at once."""
+    _docx_lib()
+    data = _package(_HELLO)
+    live, peak, lock = [], [0], threading.Lock()
+    real = engine._repack_docx
+
+    def watched(payload):
+        with lock:
+            live.append(1)
+            peak[0] = max(peak[0], len(live))
+        time.sleep(0.05)  # hold the slot long enough for the others to pile up behind it
+        try:
+            return real(payload)
+        finally:
+            with lock:
+                live.pop()
+
+    monkeypatch.setattr(engine, "_repack_docx", watched)
+    threads = [threading.Thread(target=extract_bytes, args=("r.docx", data)) for _ in range(6)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    # A literal, not engine._MAX_CONCURRENT_DOCX: comparing against the constant would
+    # pass for any value it is raised to, which is the thing under test. Raising the limit
+    # deliberately means re-measuring the aggregate and updating this number.
+    assert peak[0] <= 2, f"{peak[0]} of {len(threads)} extractions ran at once"
 
 
 def test_repeated_extractions_do_not_accumulate_memory(tmp_path):
