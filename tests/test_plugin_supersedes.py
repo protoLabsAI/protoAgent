@@ -1660,6 +1660,46 @@ def test_cache_sees_a_same_size_rewrite_in_one_mtime_tick(host):
     assert installer.configured_plugins_dir() == str(b)
 
 
+def _freeze_stat(monkeypatch, path: Path) -> os.stat_result:
+    """Make `os.stat(path)` keep returning its CURRENT result through later writes — how an
+    in-place same-size save inside one mtime tick looks on Windows, where `st_ctime` is the
+    creation time and the NTFS file index doesn't change. Lets POSIX CI exercise that case."""
+    frozen = os.stat(path)
+    real_stat = os.stat
+    key = os.path.normcase(str(path))
+
+    def fake_stat(target, *args, **kwargs):
+        if isinstance(target, (str, os.PathLike)) and os.path.normcase(os.fspath(target)) == key:
+            return frozen
+        return real_stat(target, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", fake_stat)
+    return frozen
+
+
+def test_cache_sees_a_rewrite_that_leaves_every_stat_field_unchanged(host, monkeypatch):
+    """The Windows CI failure, on any OS: (mtime, size, inode, ctime) all identical across a
+    rewrite. Only the CONTENT changed, and the cache must still see it."""
+    a, b = _two_same_length_dirs(host)
+    _write_config(host, {"plugins": {"dir": str(a)}})
+    frozen = _freeze_stat(monkeypatch, host.config)
+    assert installer.configured_plugins_dir() == str(a)
+    _write_config(host, {"plugins": {"dir": str(b)}})
+    assert os.stat(host.config) == frozen  # every stat field unchanged, as on Windows
+    assert installer.configured_plugins_dir() == str(b)
+
+
+def test_bundled_index_sees_a_manifest_rewrite_that_leaves_every_stat_field_unchanged(host, monkeypatch):
+    """The same Windows blind spot for the bundled tree: a manifest edited in place (a dev
+    checkout, a `git checkout` of a same-size change) must not keep serving the old copy."""
+    manifest = _ship_bundled(host, version="0.4.0") / "protoagent.plugin.yaml"
+    assert installer._bundled_manifest("cowork").version == "0.4.0"
+    frozen = _freeze_stat(monkeypatch, manifest)
+    manifest.write_text(manifest.read_text().replace("0.4.0", "0.5.0"))
+    assert os.stat(manifest) == frozen
+    assert installer._bundled_manifest("cowork").version == "0.5.0"
+
+
 def test_cache_sees_an_atomic_rename_save(host):
     """An `atomic_write`-style save: a new inode renamed over the config, same size and mtime."""
     a, b = _two_same_length_dirs(host)

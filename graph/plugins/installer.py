@@ -13,6 +13,7 @@ For *untrusted* code use MCP (out-of-process), not a git plugin.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import logging
@@ -70,15 +71,7 @@ def _is_builtin(plugin_id: str) -> bool:
 # ``discover_plugins``), ``_lock_entry`` (one lock row per id, the same one the loader
 # reads) and ``effective_copies`` (the loader's full precedence rule).
 
-def _stamp(st: os.stat_result) -> tuple[int, int, int, int]:
-    """A file's identity for a cache key: mtime AND size AND inode AND ctime. mtime is
-    coarse on HFS+ (1 s), FAT/exFAT (2 s) and some network mounts, so a same-size save
-    inside one tick — or an atomic-rename save that keeps the mtime — used to keep the
-    stamp and serve a stale value. A rename changes the inode; any write moves the ctime."""
-    return (st.st_mtime_ns, st.st_size, st.st_ino, st.st_ctime_ns)
-
-
-# bundled-tree path → (manifest stamp, {id: manifest}). Re-read when any manifest moves.
+# bundled-tree path → (manifest stamps, {id: manifest}). Re-read when any manifest changes.
 _BUNDLED_INDEX_CACHE: dict[str, tuple[tuple, dict[str, PluginManifest]]] = {}
 
 
@@ -86,14 +79,15 @@ def _bundled_index() -> dict[str, PluginManifest]:
     """``{plugin id: bundled copy}`` for the in-tree ``plugins/`` tree — keyed by MANIFEST
     id exactly as the loader keys it, so a folder named ``agent-browser`` holding id
     ``agent_browser`` is found under ``agent_browser`` here too. Cached per tree; the
-    cache key is every manifest's name + file identity (``_stamp``), so an edit is picked up at once."""
+    cache key is every manifest's name + CONTENT (``_content_stamp``), so an edit is picked
+    up at once on every filesystem. Measured on the real tree (13 manifests, ~30 KB):
+    hashing adds ~0.25 ms to a ~0.55 ms lookup, against a ~26 ms re-parse on a miss. A
+    stat-only key was cheaper, but it missed a same-size rewrite inside one mtime tick,
+    and on Windows every such rewrite."""
     root = bundled_plugins_dir()
     try:
         children = sorted(c for c in root.iterdir() if (c / MANIFEST_FILENAME).is_file())
-        stamp = tuple(
-            (c.name, *_stamp((c / MANIFEST_FILENAME).stat()))
-            for c in children
-        )
+        stamp = tuple((c.name, *_content_stamp((c / MANIFEST_FILENAME).read_bytes())) for c in children)
     except OSError:
         return {}
     hit = _BUNDLED_INDEX_CACHE.get(str(root))
@@ -135,26 +129,40 @@ def superseding_plugin(url: str) -> PluginManifest | None:
     return next((m for m in _bundled_index().values() if m.supersedes and supersedes_source(m, url)), None)
 
 
-# config path → ((mtime, size), override). `live_plugins_dir()` resolves the override on
+def _content_stamp(data: bytes) -> tuple[int, bytes]:
+    """A cache key from a file's CONTENT: its length and a 128-bit BLAKE2b digest.
+
+    A stat-based key (mtime, size, inode, ctime) can't see every edit. mtime is coarse on
+    HFS+ (1 s), FAT/exFAT (2 s) and some network mounts. On Windows ``st_ctime`` is the
+    CREATION time, and an in-place rewrite keeps the NTFS file index. So a same-size save
+    inside one tick left every stat field identical, and the cache served the old value
+    until a restart (#3455 Windows CI). Hashing the bytes costs ~50 µs for a 30 KB config,
+    against the ~20 ms YAML parse the cache exists to skip."""
+    return (len(data), hashlib.blake2b(data, digest_size=16).digest())
+
+
+# config path → ((size, digest), override). `live_plugins_dir()` resolves the override on
 # every call and a plugins request makes several, so parsing the YAML each time is real
 # work: 11.7 ms per call against a 30 KB config here, ~6 calls on GET /api/plugins/installed.
-_PLUGINS_DIR_CACHE: dict[str, tuple[tuple[int, int, int, int], str]] = {}
+_PLUGINS_DIR_CACHE: dict[str, tuple[tuple[int, bytes], str]] = {}
 
 
 def configured_plugins_dir() -> str:
     """``plugins.dir`` from the live config file — the operator's override of the live
     plugins root — read without a config object (the ``configured_allowlist`` pattern).
     ``""`` when unset, unreadable, or refused (a relative value). Cached per config file
-    and re-read the moment it changes, like ``_bundled_index``."""
+    on its content, so any edit is picked up at once, on every filesystem."""
     try:
         from graph.config_io import config_yaml_path
 
         cfg_path = config_yaml_path()
         try:
-            stat = cfg_path.stat()
+            raw = cfg_path.read_bytes()
         except OSError:
             return ""  # no live config yet — the instance default applies
-        stamp = _stamp(stat)
+        # Keyed on the bytes, not the file's stat (see `_content_stamp`); the same bytes are
+        # what gets parsed on a miss, so the key can never describe a different read.
+        stamp = _content_stamp(raw)
         hit = _PLUGINS_DIR_CACHE.get(str(cfg_path))
         if hit is not None and hit[0] == stamp:
             return hit[1]
@@ -162,7 +170,7 @@ def configured_plugins_dir() -> str:
 
         from graph.plugins.pconfig import valid_plugins_dir_override
 
-        data = yaml.safe_load(cfg_path.read_text()) or {}
+        data = yaml.safe_load(raw) or {}
         # Vetted by the one shared validator (a relative value is refused, with a reason)
         # so the file read and the config-object read can't disagree.
         value = valid_plugins_dir_override((data.get("plugins") or {}).get("dir"))
