@@ -122,12 +122,12 @@ def _op_rewrite_many(art, artifact_id, n, size):
 
 
 def _op_read_raw(art, stop, reading):
-    """Read history.json the way the panel's poll does — no lock — as fast as possible, and
-    parse it STRICTLY (``_read_store`` would swallow a torn file as an empty store)."""
-    path = art._store_path()
+    """Read history.json the way every read-only path does — the plugin's own lock-free read,
+    including its Windows handling — as fast as possible, and parse it STRICTLY
+    (``_read_store`` would swallow a torn file as an empty store)."""
     reads, torn = 0, []
     while not stop.is_set():
-        raw = path.read_bytes()
+        raw = art._store._read_store_text()
         try:
             json.loads(raw)
         except ValueError as e:
@@ -553,8 +553,10 @@ def test_windows_branch_polls_a_busy_lock_rides_out_a_held_file_and_unlocks(art,
     assert fake.calls == [(lk, 1), (lk, 1), (lk, 1), (un, 1)]
 
 
-def test_a_refused_replace_is_not_retried_off_windows(art, monkeypatch):
-    """POSIX replaces an open file fine, so a PermissionError there is real — surface it."""
+def test_a_refused_replace_is_not_retried_off_windows(art, monkeypatch, tmp_path):
+    """POSIX replaces an open file fine, so a PermissionError there is real — surface it.
+    Drives ``_replace`` directly: going through a store write would take the real lock down
+    the simulated platform's branch (``fcntl`` doesn't exist on a Windows runner)."""
     monkeypatch.setattr(art._store, "sys", types.SimpleNamespace(platform="linux"))
     attempts = []
 
@@ -563,9 +565,38 @@ def test_a_refused_replace_is_not_retried_off_windows(art, monkeypatch):
         raise PermissionError(errno.EACCES, "read-only")
 
     monkeypatch.setattr(os, "replace", replace)
+    src = tmp_path / "new.json"
+    src.write_text("{}", encoding="utf-8")
     with pytest.raises(PermissionError):
-        _show(art, "<p>posix</p>")
+        art._store._replace(str(src), tmp_path / "history.json")
     assert len(attempts) == 1
+
+
+@pytest.mark.parametrize("platform", ["win32", "linux"])
+def test_a_denied_store_read_is_retried_on_windows_and_never_read_as_empty(art, monkeypatch, platform):
+    """Every read-only path reads the store without the lock, and Windows refuses to open a file
+    that a write is replacing at that moment (PermissionError, not a wait). Readers must ride that
+    out on Windows — the panel's /history must not 500 because a write landed — and a denial must
+    NEVER be read as an empty store (inside a read-modify-write that would wipe it). POSIX has no
+    such transient, so it raises at once. The real sharing violation is exercised by the
+    cross-process torn-reader test on the Windows CI shards."""
+    aid = _show(art, "<p>x</p>")  # a real write, on this machine's real platform, before the fake one
+    monkeypatch.setattr(art._store, "sys", types.SimpleNamespace(platform=platform))
+    store_path, real_read_text, denied = art._store_path(), Path.read_text, [2]
+
+    def read_text(self, *args, **kwargs):
+        if self == store_path and denied[0]:
+            denied[0] -= 1
+            raise PermissionError(errno.EACCES, "The process cannot access the file")
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    if platform == "win32":
+        assert art._read_store()["current"] == aid and denied == [0]
+    else:
+        with pytest.raises(PermissionError):
+            art._read_store()
+        assert denied == [1]
 
 
 def test_an_unlockable_filesystem_degrades_to_the_thread_lock_not_a_failed_write(art, monkeypatch, caplog):

@@ -290,7 +290,7 @@ def _read_store() -> dict:
     missing/corrupt file (→ empty) and migrates the legacy flat ``{items:[…]}`` /
     ``[…]`` shape into single-version artifacts."""
     try:
-        data = json.loads(_store_path().read_text(encoding="utf-8"))
+        data = json.loads(_read_store_text())
     except (FileNotFoundError, ValueError):
         return {"artifacts": [], "current": None}
     if isinstance(data, dict) and isinstance(data.get("artifacts"), list):
@@ -333,24 +333,49 @@ def _evict(arts: list[dict], keep: int) -> list[dict]:
     return pinned + unpinned[:keep]
 
 
-_REPLACE_RETRY_S = 2.0  # Windows: how long a store write rides out a reader holding the file
+_WIN_DENIED_RETRY_S = 2.0  # Windows: how long a store read/replace rides out a sharing violation
 
 
-def _replace(tmp: str, path: Path) -> None:
-    """``os.replace(tmp, path)``, riding out Windows sharing violations. Readers don't take
-    the store lock (the panel polls the store continuously), and Windows can't replace a file
-    another handle has open — a reader mid-``read_text``, an AV scanner — so the swap fails
-    with PermissionError instead of waiting. That holder lets go within moments: retry briefly.
-    POSIX replaces an open file without complaint, so it never retries there."""
-    deadline = time.monotonic() + _REPLACE_RETRY_S
+def _retry_denied(fn):
+    """``fn()``, riding out Windows sharing violations for up to ``_WIN_DENIED_RETRY_S``.
+
+    Readers don't take the store lock (see ``_read_store_text``), so a read and a write's
+    replace can overlap, and Windows refuses both sides of that overlap with PermissionError
+    rather than waiting: it won't replace a file another handle has open (a reader
+    mid-read, an AV scanner), and it won't open a file mid-replace (the old one is
+    delete-pending). Either way the other side lets go within moments, so retry briefly. POSIX
+    has neither problem, so a PermissionError there is real and is raised at once."""
+    deadline = time.monotonic() + _WIN_DENIED_RETRY_S
     while True:
         try:
-            os.replace(tmp, path)
-            return
+            return fn()
         except PermissionError:
             if sys.platform != "win32" or time.monotonic() >= deadline:
                 raise
         time.sleep(0.005)
+
+
+def _replace(tmp: str, path: Path) -> None:
+    """``os.replace(tmp, path)`` — the atomic swap a lock-free reader relies on — with the
+    Windows sharing-violation retry."""
+    _retry_denied(lambda: os.replace(tmp, path))
+
+
+def _read_store_text() -> str:
+    """history.json's raw text, read WITHOUT the store lock, with the Windows
+    sharing-violation retry.
+
+    Every read-only path reads this way: the panel's ``/current``, ``/history`` and blob routes,
+    the list/get/check tools, the render-verdict poll and ``resolve_for_bundle``. Taking the
+    lock instead would be wrong for the two hottest, the continuously polled ``/history`` and
+    ``/current``, which are ``async`` routes: they would wait on the event loop behind any
+    writer holding the lock, in any process (see ``serialized``). The atomic replace already
+    guarantees they never see a torn file; the retry covers the one thing it doesn't —
+    Windows refusing the open while that replace is in flight — so they don't 500. A denial
+    that outlasts the retry is raised, never read as an empty store: inside a read-modify-write,
+    "empty" would wipe it."""
+    path = _store_path()
+    return _retry_denied(lambda: path.read_text(encoding="utf-8"))
 
 
 @serialized
