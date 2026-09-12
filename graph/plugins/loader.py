@@ -864,8 +864,9 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
             _setup_gaps.clear_plugin(manifest.id)
             # …but an ignored copy on disk is the HOST's finding about the operator's
             # filesystem, not the plugin's own health, so a plugin that is merely OFF still
-            # gets it — both first-party moves ship `enabled: false`, which made that the
-            # common case: the copy is inert and nothing anywhere said so. An EXPLICIT
+            # gets it. A bundled move that ships `enabled: false` (agent_browser does; cowork
+            # ships ON and reports like any enabled plugin) makes that the common case: the
+            # copy is inert and nothing anywhere said so. An EXPLICIT
             # `plugins.disabled` entry is the operator's own "leave this alone" and keeps
             # #3445's rule (a disabled plugin's banners don't outlive it). The log lines
             # above fire either way: a packaging invariant isn't an operator nag.
