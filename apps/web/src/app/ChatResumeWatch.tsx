@@ -2,9 +2,10 @@ import { useToast } from "@protolabsai/ui/overlays";
 import { useEffect } from "react";
 
 import { chatStore } from "../chat/chat-store";
+import { reconcileSessionStatus, watchSessionLiveness } from "../chat/sessionLiveness";
 import { onTopic } from "../lib/events";
 import { notifyIfHidden } from "../lib/notify";
-import { resumedTurnRender, settleResumedTurn } from "./resumedTurn";
+import { resumedTurnRender, settleResumedTurn, type ResumedTurnRender } from "./resumedTurn";
 import { originForSession } from "../chat/server-turn-store";
 
 // Live surfacing of a `wait` / scheduled RESUME (ADR 0053, bd-k02) into the chat tab.
@@ -32,8 +33,47 @@ import { originForSession } from "../chat/server-turn-store";
 
 const seen = new Set<string>();
 
+/**
+ * Land a `chat.resumed` render in its session's transcript. Returns false when that chat is
+ * not open in this window.
+ *
+ * Settling a turn is one of the moments a session's "streaming" can be left with nothing
+ * live to release it, so the session is reconciled right after (sessionLiveness.ts). For a
+ * mounted session, the slot's reattach effect covers it too: settling the preview changes
+ * the reattach key. A session whose slot is not mounted has only this, because only
+ * MAX_ACTIVE_SESSIONS slots mount. A sixth session's turn can end with no slot and no
+ * reattach to hand it back.
+ *
+ * An answer with no preview here (a DIFFERENT task's) is appended as `outOfBand`, so it
+ * never moves the reattach key off a turn that is still running (leadAssistantMessage).
+ */
+export function landResumedTurn(render: ResumedTurnRender): boolean {
+  const target = chatStore.getSnapshot().sessions.find((s) => s.id === render.session);
+  if (!target) return false;
+  // Replace the live preview in place (or append), distributing the answer across a
+  // preview an interjection split — see settleResumedTurn. Tag the settled message with
+  // its trigger origin (#3028) so ChatMessageView renders it as a compact, expandable
+  // result card, not a full-size bubble. The server stamps `origin` on the event; fall
+  // back to what the store captured at `turn.started` for an older server. Persisted on
+  // the message, so the card treatment survives a reload.
+  const next = settleResumedTurn(
+    target.messages,
+    render,
+    render.origin || originForSession(render.session) || undefined,
+    `resume-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  );
+  chatStore.updateMessages(render.session, next);
+  reconcileSessionStatus(render.session);
+  return true;
+}
+
 export function ChatResumeWatch() {
   const toast = useToast();
+
+  // A tab that was hidden can miss whatever ended a turn, so becoming visible again
+  // reconciles every session reading "streaming". Mounted here because this watcher lives
+  // for the app's lifetime, whatever provides the chat slot.
+  useEffect(() => watchSessionLiveness(), []);
 
   useEffect(() => {
     return onTopic("chat.resumed", (data) => {
@@ -41,30 +81,11 @@ export function ChatResumeWatch() {
       if (!render || seen.has(render.key)) return;
       seen.add(render.key);
 
-      const target = chatStore.getSnapshot().sessions.find((s) => s.id === render.session);
-      if (!target) {
-        // Chat not open in this window — there's no transcript to inject into, but
-        // the toast/OS-notification are the only live signal this turn resumed at
-        // all (#2692's same-root-cause sibling: unlike BackgroundWatch, this path
-        // used to drop the event entirely rather than degrade to a toast).
-        toast(render.toast);
-        notifyIfHidden(render.notify.title, render.notify.body);
-        return;
-      }
-
-      // Replace the live preview in place (or append), distributing the answer across a
-      // preview an interjection split — see settleResumedTurn. Tag the settled message with
-      // its trigger origin (#3028) so ChatMessageView renders it as a compact, expandable
-      // result card, not a full-size bubble. The server stamps `origin` on the event; fall
-      // back to what the store captured at `turn.started` for an older server. Persisted on
-      // the message, so the card treatment survives a reload.
-      const next = settleResumedTurn(
-        target.messages,
-        render,
-        render.origin || originForSession(render.session) || undefined,
-        `resume-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      );
-      chatStore.updateMessages(render.session, next);
+      // Chat not open in this window: there's no transcript to inject into, but
+      // the toast/OS-notification are the only live signal this turn resumed at
+      // all (#2692's same-root-cause sibling: unlike BackgroundWatch, this path
+      // used to drop the event entirely rather than degrade to a toast).
+      landResumedTurn(render);
       toast(render.toast);
       notifyIfHidden(render.notify.title, render.notify.body);
     });

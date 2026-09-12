@@ -28,6 +28,7 @@ import { api, type TurnStreamHandlers } from "../lib/api";
 import type { ChatMessage, HitlPayload } from "../lib/types";
 import { chatStore } from "./chat-store";
 import { isLiveServerTurn, serverTurnLabel } from "./server-turn-store";
+import { beginReattach, reconcileSessionStatus } from "./sessionLiveness";
 import { applyComponent, applyReasoning, applyText, applyToolEvent, applyUsage } from "./turnReducers";
 import { applyCanonicalTurnText, resetTurnForSnapshot, settleTurnBubbles } from "./turnText";
 
@@ -96,11 +97,18 @@ export function shouldReattach(
  *  as their own already-settled rows AFTER the live preview while the turn is still
  *  running, so "the last assistant row" named one of them and read the turn as over: the
  *  slot's reattach effect cancelled a live reattach, and when the turn really ended there
- *  was no reattach left to release the session — it sat "streaming" for good. */
+ *  was no reattach left to release the session — it sat "streaming" for good.
+ *
+ *  It also skips another turn's result that `chat.resumed` appended with no preview of its
+ *  own (`outOfBand`). That row lands after a still-running turn too, and naming it cancelled
+ *  that turn's reattach. For an operator turn, which never gets a `chat.resumed` of its
+ *  own, nothing then settled its bubble, and the session stayed "streaming". */
 export function leadAssistantMessage(messages: ChatMessage[] | undefined): ChatMessage | undefined {
   return [...(messages ?? [])]
     .reverse()
-    .find((message) => message.role === "assistant" && !message.author && !message.addressedTo);
+    .find(
+      (message) => message.role === "assistant" && !message.author && !message.addressedTo && !message.outOfBand,
+    );
 }
 
 /** Stable dependency key for the session slot's reattach effect. Hydration can
@@ -157,34 +165,30 @@ function finalize(sessionId: string, assistantId: string, state: string, text: s
  * cancel function (unmount / a new live turn taking over). */
 export function reattachTurn(sessionId: string, assistantId: string, taskId: string, hooks: ReattachHooks = {}) {
   let cancelled = false;
-  // Whether the session's "streaming" is still this reattach's to hand back: claimed when
-  // run() sets it, given up once run() is over (finalize and the paused path settle it).
-  let holdsStatus = false;
   const controller = new AbortController();
   const token = Symbol(assistantId);
   driving.set(assistantId, token);
   const release = () => {
     if (driving.get(assistantId) === token) driving.delete(assistantId);
   };
+  // While this is registered, the session's "streaming" is a live reattach's and the
+  // reconciler leaves it alone (sessionLiveness.ts).
+  const endClaim = beginReattach(sessionId);
 
-  /** Hand back the "streaming" this reattach set when it is cancelled before settling it.
+  /** Let go of the session and hand its "streaming" back if nothing else still holds it.
    *
    *  The slot cancels a reattach whenever its bubble stops being a live one, and the usual
    *  reason is that ANOTHER producer settled it first: the bus's `chat.resumed` replacing a
    *  server turn's preview after a reload, while the resubscribe was still waiting on the
-   *  server. run() then never reaches finalize, nothing else releases the status it set, and
-   *  the session sat "streaming" for good — Stop up, Send disabled, and any interjection
-   *  queued for that turn held back as if this browser's own stream would drain it. Only
-   *  while nothing in the transcript is still live: an unmount mid-turn leaves the status
-   *  to the reattach the next mount starts, and a turn started since keeps its own. */
-  function releaseStatus() {
-    if (!holdsStatus) return;
-    holdsStatus = false;
-    const snap = chatStore.getSnapshot();
-    if (snap.sessionStatusMap[sessionId] !== "streaming") return;
-    const cur = snap.sessions.find((s) => s.id === sessionId);
-    if (!cur || cur.messages.some((m) => m.role === "assistant" && m.status === "streaming")) return;
-    chatStore.setSessionStatus(sessionId, "idle");
+   *  server. run() then never reaches finalize, and before #3474 nothing released the
+   *  status it set: Stop stayed up, Send stayed disabled, and any interjection queued for
+   *  that turn was held back as if this browser's own stream would drain it. The reconciler
+   *  decides. An unmount mid-turn leaves a streaming bubble, so the status stays for the
+   *  reattach the next mount starts, and a turn started since keeps its own. */
+  function letGo() {
+    release();
+    endClaim();
+    reconcileSessionStatus(sessionId);
   }
 
   const handlers: TurnStreamHandlers = {
@@ -269,7 +273,6 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
 
   async function run() {
     chatStore.setSessionStatus(sessionId, "streaming");
-    holdsStatus = true;
     for (let attempt = 0; attempt < MAX_ATTEMPTS && !cancelled; attempt++) {
       try {
         await api.resumeTask(taskId, sessionId, handlers);
@@ -310,15 +313,35 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
     .catch(() => {
       /* reattach is best-effort — never crash the surface */
     })
-    .finally(() => {
-      holdsStatus = false;
-      release();
-    });
+    // The run's own end: finalize or the paused path has usually settled the status already,
+    // and a run that gave up (retries or polls spent) leaves it to the reconciler.
+    .finally(letGo);
 
   return () => {
     cancelled = true;
     controller.abort();
-    release();
-    releaseStatus();
+    letGo();
   };
+}
+
+/** What a chat slot runs on mount and whenever its reattach key changes: resubscribe to the
+ *  lead turn's still-streaming bubble, or, when there is nothing to reattach, reconcile.
+ *
+ *  The reconcile is what an opened session needs when its slot never mounted while its turn
+ *  ran. Boot marks every session with a live turn "streaming", but only
+ *  MAX_ACTIVE_SESSIONS slots mount, so a sixth one's turn can end (its preview settled by
+ *  `chat.resumed`) with no slot and no reattach to hand the status back. Opening it then
+ *  finds no streaming bubble and nothing to reattach. Before, it sat "streaming" for good;
+ *  now the reconciler reads that nothing is live and returns it to idle. */
+export function reattachOrReconcile(sessionId: string, hooks: ReattachHooks = {}): (() => void) | undefined {
+  const snap = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
+  // The same bubble `reattachKey` names: a participant's row after the preview is not it.
+  const last = leadAssistantMessage(snap?.messages);
+  // Not a server-fired turn this console is watching live: the bus already feeds that
+  // preview, and a second producer wrote every chunk twice (see shouldReattach).
+  if (!shouldReattach(last, sessionId)) {
+    reconcileSessionStatus(sessionId);
+    return undefined;
+  }
+  return reattachTurn(sessionId, last.id, last.taskId, hooks);
 }
