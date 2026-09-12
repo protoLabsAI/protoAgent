@@ -1509,3 +1509,65 @@ def test_registry_live_config_reads_state_then_falls_back(monkeypatch) -> None:
     # Section missing from live config → snapshot.
     cfg.plugin_config = {"other": {}}
     assert reg.live_config() == {"repos": ["o/snap"]}
+
+
+# --- `enables:` — a bundled plugin turning another on (#3450) ---
+
+
+def _bundled(monkeypatch, root: Path) -> None:
+    """Make `root` both the loader's only plugin root AND the bundled tree — `enables:` is
+    honored only on protoAgent's own bundled copies."""
+    from graph.plugins import installer
+
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
+    monkeypatch.setattr(installer, "bundled_plugins_dir", lambda: root)
+
+
+def _on(res, pid):
+    return next(m for m in res.meta if m["id"] == pid)
+
+
+def test_manifest_enables_parses_ids_and_drops_the_rest(tmp_path) -> None:
+    _make_plugin(tmp_path, "a1", manifest_extra="enables: [b1, '', a1, 42, 'two words', b1, c1]\n")
+    assert load_manifest(tmp_path / "a1").enables == ["b1", "c1"]  # blank/self/non-str/spaced/dupe dropped
+    _make_plugin(tmp_path, "a2", manifest_extra="enables: b2\n")
+    assert load_manifest(tmp_path / "a2").enables == ["b2"]  # a bare string is one entry
+    _make_plugin(tmp_path, "a3")
+    assert load_manifest(tmp_path / "a3").enables == []
+
+
+def test_a_bundled_plugin_turns_another_on_and_an_explicit_disable_always_wins(tmp_path, monkeypatch) -> None:
+    _make_plugin(tmp_path, "pa", enabled=True, tool="pa_tool", manifest_extra="enables: [pb]\n")
+    _make_plugin(tmp_path, "pb", enabled=False, tool="pb_tool")
+    _bundled(monkeypatch, tmp_path)
+
+    res = load_plugins(_cfg())  # unset: on because pa is on
+    assert _on(res, "pb")["loaded"] and _on(res, "pb")["enabled_by"] == ["pa"]
+    assert _on(res, "pa")["enabled_by"] == []  # on by its own manifest
+
+    assert not _on(load_plugins(_cfg(plugins_disabled=["pb"])), "pb")["enabled"]  # explicit off wins
+    assert not _on(load_plugins(_cfg(plugins_disabled=["pa"])), "pb")["enabled"]  # back to its own default
+    both = load_plugins(_cfg(plugins_disabled=["pa"], plugins_enabled=["pb"]))
+    assert _on(both, "pb")["loaded"] and _on(both, "pb")["enabled_by"] == []  # the operator's own choice
+
+
+def test_enables_on_a_plugin_outside_the_bundled_tree_is_inert(tmp_path, monkeypatch) -> None:
+    """A git-installed plugin must not be able to switch another on (execute_code, say)."""
+    from graph.plugins import installer
+
+    _make_plugin(tmp_path, "pa", enabled=True, tool="pa_tool", manifest_extra="enables: [pb]\n")
+    _make_plugin(tmp_path, "pb", enabled=False, tool="pb_tool")
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [tmp_path])
+    monkeypatch.setattr(installer, "bundled_plugins_dir", lambda: tmp_path / "not-here")
+    assert not _on(load_plugins(_cfg()), "pb")["enabled"]
+
+
+def test_the_config_resolver_applies_the_same_enables_rule(tmp_path, monkeypatch) -> None:
+    """Otherwise an implied plugin binds but its settings group never resolves."""
+    from graph.plugins.pconfig import discover_plugin_config
+
+    _make_plugin(tmp_path, "pa", enabled=True, tool="pa_tool", manifest_extra="enables: [pb]\n")
+    _make_plugin(tmp_path, "pb", enabled=False, tool="pb_tool", manifest_extra="config:\n  knob: 3\n")
+    _bundled(monkeypatch, tmp_path)
+    assert "pb" in {s.plugin_id for s in discover_plugin_config([tmp_path], set(), set())}
+    assert "pb" not in {s.plugin_id for s in discover_plugin_config([tmp_path], set(), {"pa"})}

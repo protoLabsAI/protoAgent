@@ -24,6 +24,13 @@ description: >-
 # always-on `<available_skills>` index (measured in #3450). `plugins: { disabled: [cowork] }`
 # turns it off on an instance and removes it entirely — no skills, no verifier, zero bytes.
 enabled: true
+# Cowork on turns execute_code on too (Josh's call, #3450): the four document skills
+# produce files through it, so a default agent's docx/xlsx/pptx/pdf would otherwise only
+# be able to say what's missing. An explicit `plugins.disabled: [execute_code]` still
+# wins, and disabling cowork returns execute_code to its own default (off) unless the
+# operator enabled it themselves. Only execute_code's DEFAULT changes; every rail of its
+# own (subprocess, scrubbed env, timeout, bridge allowlist, enforcement gate) is untouched.
+enables: [execute_code]
 # The standalone repo this bundled copy retires (#3445). An installed copy that
 # plugins.lock records as fetched from it stands down in favour of this one — at any
 # version — and installing/updating from that URL (directly or as a bundle member, which

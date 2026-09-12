@@ -6,8 +6,9 @@ description: >-
   tool-calling (call several tools, compose the results in code, return only what
   matters). It runs arbitrary model-authored code: a scrubbed-env subprocess with
   a hard timeout is isolation, not a true sandbox (code can reach disk/network as
-  the server user), so it ships disabled — for a trusted model or hardened
-  container only.
+  the server user), so its own manifest ships disabled. The bundled cowork
+  pack (on by default) turns it on for its document skills; turn it off with
+  `plugins.disabled: [execute_code]`, which always wins.
 enabled: false
 
 # Declarative (not yet enforced) — surfaced in the console for transparency.

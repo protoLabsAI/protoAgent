@@ -163,7 +163,7 @@ python -m server plugin uninstall your-plugin --purge                # removes c
 **Browse the directory → [agent.protolabs.studio/plugins](https://agent.protolabs.studio/plugins)**
 
 First-party plugins ship in `plugins/` — `delegates` is a built-in, `notes`, `docs`,
-`artifact`, `craft`, and `cowork` are on by default, and the rest are opt-in (enable via `plugins.enabled`):
+`artifact`, `craft`, and `cowork` are on by default (cowork also turns on `execute_code`), and the rest are opt-in (enable via `plugins.enabled`):
 
 | Plugin | Adds | What it does |
 | --- | --- | --- |
@@ -175,9 +175,9 @@ First-party plugins ship in `plugins/` — `delegates` is a built-in, `notes`, `
 | [`plugin-devkit`](./plugins/plugin-devkit/) | tool · subagent · skill · workflow · view | The authoring kit + reference plugin — the agent can scaffold and build its own plugins |
 | [`workflows`](./plugins/workflows/) | tools · view | Declarative multi-step subagent workflows (DAG recipes) with the **Studio** console surface for authoring and live-watching runs; a step can carry `gate: human`, pausing for operator approval before it runs. Opt-in via `plugins.enabled` |
 | [`telegram`](./plugins/telegram/) | surface | Run the agent as a Telegram bot — the reference [communication plugin](./docs/guides/communication-plugins.md) |
-| [`execute_code`](./plugins/execute_code/) | tool · settings | A Python interpreter the agent runs code in — on desktop, provision the one-click [managed runtime](./docs/guides/python-runtime.md) and the document skills (docx · xlsx · pptx · pdf) light up |
+| [`execute_code`](./plugins/execute_code/) | tool · settings | **On by default via `cowork`** (off with `plugins.disabled: [execute_code]`, which always wins). A Python interpreter the agent runs code in — on desktop, provision the one-click [managed runtime](./docs/guides/python-runtime.md) and the document skills (docx · xlsx · pptx · pdf) light up |
 | [`coder`](./plugins/coder/) | tool · settings | Verifier-grounded code-solve (`coder_solve`) — an execution-grounded search ladder for testable coding tasks ([guide](./docs/guides/coder.md)) |
-| [`cowork`](./plugins/cowork/) | skills · verifier | **On by default** — the knowledge-work pack behind the **Cowork** archetype ([ADR 0083](./docs/adr/0083-cowork-mode-archetype.md)) — clean-room Word/Excel/PowerPoint/PDF skills that produce real files through `execute_code`, plus `/daily-brief`, drop-folder watches (the `cowork:folder_changed` verifier), schedule, memory-consolidation and writing-voice habits. Turn it off with `plugins.disabled: [cowork]` |
+| [`cowork`](./plugins/cowork/) | skills · verifier | **On by default** — the knowledge-work pack behind the **Cowork** archetype ([ADR 0083](./docs/adr/0083-cowork-mode-archetype.md)) — clean-room Word/Excel/PowerPoint/PDF skills that produce real files through `execute_code`, plus `/daily-brief`, drop-folder watches (the `cowork:folder_changed` verifier), schedule, memory-consolidation and writing-voice habits. Being on also turns on `execute_code`, which the document skills run in. Turn it off with `plugins.disabled: [cowork]` |
 | [`agent_browser`](./plugins/agent_browser/) | tools · view · skill · workflows · settings | A real browser for the agent, backed by the native [agent-browser](https://github.com/vercel-labs/agent-browser) CLI — accessibility-tree snapshots + `@eN` refs, page→PDF, and a **drivable** viewport panel you and the agent share ([guide](./docs/guides/browser-automation.md)). Opt-in; needs the `agent-browser` binary on PATH |
 | [`friction`](./plugins/friction/) | tools · view · skill · subagent · settings | Friction log — the agent records its own missing/awkward tooling and confusing errors, and **open friction is projected into its working state** so it acts on the backlog instead of re-reporting it. `/friction` for the operator, a read-only `friction_triage` delegate for filing |
 | [`orgchart`](./plugins/orgchart/) | view | Live diagram of the agent fleet — every agent a node, delegation edges drawn as they happen |

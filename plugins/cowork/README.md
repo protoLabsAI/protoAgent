@@ -33,6 +33,13 @@ plugins:
 An explicit disable removes the pack entirely: no skills, no verifier, zero bytes in the
 prompt.
 
+Being on also turns on [`execute_code`](../execute_code/) (the manifest's
+`enables: [execute_code]`), because the four document skills produce files through it.
+An explicit `plugins.disabled: [execute_code]` still wins, and disabling cowork returns
+execute_code to its own default (off) unless you enabled it yourself. Only its default
+changes: its subprocess, scrubbed environment, timeout, bridge allowlist and enforcement
+gate are exactly as before.
+
 The document skills need [`execute_code`](../execute_code/); on the desktop app that means
 the one-click [managed Python runtime](../../docs/guides/python-runtime.md), whose document
 baseline (`python-docx`, `openpyxl`, `python-pptx`, `reportlab`, `pypdf`) already covers

@@ -81,6 +81,9 @@ left.
   *(Amendment 2026-09, #3450: the pack moved in-tree to `plugins/cowork/` —
   bundled and on by default, with `plugins.disabled: [cowork]` to turn it off — so it
   is maintained with the host it runs on and every agent has its document skills.
+  Cowork being on also turns on `execute_code` (its manifest's `enables:`), since the
+  document skills produce files through it; `plugins.disabled: [execute_code]` still wins,
+  and disabling cowork returns execute_code to its own default, off.
   Its manifest `supersedes` the retired `cowork-plugin` repo (#3445), so an
   already-installed copy stands down with its enabled state and config intact,
   and the `cowork-archetype` bundle keeps listing the member by URL. The

@@ -1,6 +1,7 @@
 ---
 name: pptx
 description: Build or edit slide decks (.pptx) as real files — pitch decks, briefings, status readouts — or extract content from existing ones. Use whenever slides or presentations are the input or the deliverable. Not for documents, spreadsheets, or PDFs.
+tools: [execute_code, save_file_artifact]
 ---
 
 # Slide decks with python-pptx

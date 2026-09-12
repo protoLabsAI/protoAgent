@@ -1,6 +1,7 @@
 ---
 name: xlsx
 description: Produce, edit, or clean spreadsheets (.xlsx/.csv/.tsv) as real files — reconciliations, trackers, budgets, data cleanups, format conversions. Use whenever the deliverable is a spreadsheet or an existing one needs work, including messy tabular data that needs restructuring. Not for Word/PDF/deck outputs.
+tools: [execute_code, save_file_artifact]
 ---
 
 # Spreadsheets with openpyxl

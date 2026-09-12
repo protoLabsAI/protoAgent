@@ -1,6 +1,7 @@
 ---
 name: pdf
 description: Read, extract from, combine, split, watermark, fill, or produce PDF files. Use whenever a .pdf is the input or the deliverable — merging reports, pulling text or tables out, rotating scans, filling forms, or generating a polished PDF from content.
+tools: [execute_code, save_file_artifact]
 ---
 
 # PDFs with pypdf (+ reportlab for generation)

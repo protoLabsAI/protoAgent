@@ -1,6 +1,7 @@
 ---
 name: docx
 description: Produce or modify Word documents (.docx) as real files — reports, memos, letters, proposals, or any deliverable the operator will open in Word. Use when the requested output is a Word file, or when an existing .docx needs content extracted, edited, or restructured. Not for spreadsheets, decks, or PDFs — those have their own skills.
+tools: [execute_code, save_file_artifact]
 ---
 
 # Word documents with python-docx

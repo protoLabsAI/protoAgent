@@ -768,19 +768,34 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
     seen_tool_names = set(core_tool_names or set())
     superseded: dict[str, dict] = {}
 
-    for manifest in discover_plugins(roots, superseded=superseded):
+    manifests = list(discover_plugins(roots, superseded=superseded))
+    # `enables:` (#3450): a BUNDLED plugin can turn another on (cowork turns on execute_code).
+    # One rule, shared with the plugin-config resolver so the two can't disagree about
+    # which plugins are on (an implied plugin with no config group would still bind).
+    from graph.plugins import installer as _installer
+    from graph.plugins.manifest import implied_enabled
+
+    implied = implied_enabled(manifests, enabled_ids, disabled_ids, bundled_dir=_installer.bundled_plugins_dir())
+
+    for manifest in manifests:
         # A builtin (core runtime infrastructure, e.g. the delegate registry) always
         # loads — it ignores the enable gate AND the disabled list, so it can't be
         # turned off. Otherwise plugins.disabled wins: turn off a bundled plugin (e.g.
-        # a first-party surface) without deleting it or editing core.
+        # a first-party surface) without deleting it or editing core. Another bundled
+        # plugin's `enables:` counts as an enable, and plugins.disabled wins over it too.
         enabled = manifest.builtin or (
-            (manifest.enabled or manifest.id in enabled_ids) and manifest.id not in disabled_ids
+            (manifest.enabled or manifest.id in enabled_ids or manifest.id in implied)
+            and manifest.id not in disabled_ids
         )
         entry = {
             "id": manifest.id,
             "name": manifest.name,
             "version": manifest.version,
             "enabled": enabled,
+            # Which plugins' `enables:` turned this one on (#3450) — `[]` when it's on by
+            # its own manifest or the operator's `plugins.enabled`, or when it's off. Lets a
+            # surface say WHY a plugin is on instead of implying the operator chose it.
+            "enabled_by": list(implied.get(manifest.id, [])) if enabled else [],
             # Built-in plugins are filtered out of the Plugins management list (they
             # aren't optional add-ons) — the flag rides along in /api/runtime/status.
             "builtin": manifest.builtin,

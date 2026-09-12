@@ -713,3 +713,108 @@ def test_every_tool_the_eval_cases_assert_exists_in_tree():
     }
     assert named, "no case names a tool — this check would be vacuous"
     assert not (named - in_tree), f"eval cases assert tools that do not exist in-tree: {sorted(named - in_tree)}"
+
+
+# ── cowork on turns execute_code on (#3450, Josh's call) ────────────────────────
+
+
+def _bundled_with_execute_code(tmp_path, monkeypatch) -> Path:
+    """A bundled tree holding copies of cowork AND execute_code — `enables:` is honored
+    only on protoAgent's own bundled copies, so the root is both the loader's root and
+    `bundled_plugins_dir()`."""
+    import shutil
+
+    from graph.plugins import installer, loader
+
+    root = tmp_path / "bundled"
+    for pid in ("cowork", "execute_code"):
+        shutil.copytree(REPO / "plugins" / pid, root / pid)
+    monkeypatch.setattr(loader, "_plugin_roots", lambda config: [root])
+    monkeypatch.setattr(installer, "bundled_plugins_dir", lambda: root)
+    return root
+
+
+def _execute_code_tools(res) -> list:
+    """Run the loaded late-tool factories the way the graph build does; keep execute_code."""
+    from graph.config import LangGraphConfig
+
+    out = []
+    for factory in res.late_tool_factories:
+        fn = factory[-1] if isinstance(factory, tuple) else factory
+        made = fn([], LangGraphConfig())
+        for tool in made if isinstance(made, (list, tuple)) else [made]:
+            if getattr(tool, "name", "") == "execute_code":
+                out.append(tool)
+    return out
+
+
+def _meta(res, pid):
+    return next(m for m in res.meta if m["id"] == pid)
+
+
+def test_the_manifest_declares_that_cowork_turns_execute_code_on():
+    assert _manifest()["enables"] == ["execute_code"]
+
+
+def test_a_default_agent_gets_execute_code_and_the_doc_skills_stop_saying_it_is_missing(tmp_path, monkeypatch):
+    import runtime.state as rs
+    from graph.config import LangGraphConfig
+    from graph.plugins import loader
+    from tools.lg_tools import _skill_tools_unavailable_note
+
+    _bundled_with_execute_code(tmp_path, monkeypatch)
+    res = loader.load_plugins(LangGraphConfig())
+    ec = _meta(res, "execute_code")
+    assert ec["enabled"] and ec["loaded"] and ec["enabled_by"] == ["cowork"]
+    [tool] = _execute_code_tools(res)
+
+    docx_tools = parse_skill_md(SKILLS / "docx" / "SKILL.md").tools_used
+    assert "execute_code" in docx_tools  # the skill names the tool it needs…
+    monkeypatch.setattr(rs.STATE, "graph_config", LangGraphConfig(), raising=False)
+    saver = types.SimpleNamespace(name="save_file_artifact")
+    # …so when it ISN'T bound, load_skill says so — the message a default agent used to get…
+    monkeypatch.setattr(rs.STATE, "graph", types.SimpleNamespace(bound_tools=[saver]), raising=False)
+    assert "execute_code (not bound in this context)" in _skill_tools_unavailable_note(docx_tools)
+    # …and on a default agent now, it's bound and the message is gone.
+    monkeypatch.setattr(rs.STATE, "graph", types.SimpleNamespace(bound_tools=[tool, saver]), raising=False)
+    assert _skill_tools_unavailable_note(docx_tools) == ""
+
+
+def test_an_explicit_execute_code_disable_still_wins(tmp_path, monkeypatch):
+    from graph.config import LangGraphConfig
+    from graph.plugins import loader
+
+    _bundled_with_execute_code(tmp_path, monkeypatch)
+    res = loader.load_plugins(LangGraphConfig(plugins_disabled=["execute_code"]))
+    assert not _meta(res, "execute_code")["enabled"] and not _execute_code_tools(res)
+    assert _meta(res, "cowork")["loaded"]  # cowork itself stays on
+
+
+def test_disabling_cowork_returns_execute_code_to_off(tmp_path, monkeypatch):
+    from graph.config import LangGraphConfig
+    from graph.plugins import loader
+
+    _bundled_with_execute_code(tmp_path, monkeypatch)
+    res = loader.load_plugins(LangGraphConfig(plugins_disabled=["cowork"]))
+    assert not _meta(res, "execute_code")["enabled"] and not _execute_code_tools(res)
+
+
+def test_disabling_cowork_keeps_an_execute_code_the_operator_enabled(tmp_path, monkeypatch):
+    from graph.config import LangGraphConfig
+    from graph.plugins import loader
+
+    _bundled_with_execute_code(tmp_path, monkeypatch)
+    res = loader.load_plugins(LangGraphConfig(plugins_disabled=["cowork"], plugins_enabled=["execute_code"]))
+    ec = _meta(res, "execute_code")
+    assert ec["loaded"] and ec["enabled_by"] == []  # on by the operator's own choice
+    assert _execute_code_tools(res)
+
+
+def test_execute_codes_settings_group_resolves_when_cowork_turns_it_on(tmp_path, monkeypatch):
+    """The Settings group (timeout / truncate / allowlist) must render for the implied
+    plugin — the config resolver applies the loader's rule."""
+    from graph.plugins.pconfig import discover_plugin_config
+
+    root = _bundled_with_execute_code(tmp_path, monkeypatch)
+    assert "execute_code" in {s.plugin_id for s in discover_plugin_config([root], set(), set())}
+    assert "execute_code" not in {s.plugin_id for s in discover_plugin_config([root], set(), {"cowork"})}
