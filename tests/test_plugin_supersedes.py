@@ -1693,3 +1693,49 @@ def test_a_refusal_warns_again_after_a_fix_then_rebreak(host, caplog):
         valid_plugins_dir_override(str(host.home))  # fixed
         valid_plugins_dir_override("./a")  # broken again: said again
     assert caplog.text.count("'./a' is not absolute") == 2
+
+
+def _loader_records(monkeypatch, pid: str, path: Path) -> None:
+    """Make the loader's ignored-copy record name `path`, as a folder swapped between
+    discovery and the delete (or a future loader bug) could. The last guards before the
+    delete must refuse on their own, not lean on the record being right."""
+    real = loader.discover_plugins
+
+    def fake(roots, **kw):
+        out = real(roots, **kw)
+        notes = kw.get("superseded")
+        if notes is not None and pid in notes:
+            notes[pid] = {**notes[pid], "installed_path": str(path)}
+        return out
+
+    monkeypatch.setattr(loader, "discover_plugins", fake)
+
+
+def test_the_delete_guard_checks_the_manifest_id_itself(host, monkeypatch):
+    _untracked_copy(host)
+    other = _write_plugin(host.live / "someone-else", "someone_else", "1.0.0")
+    _loader_records(monkeypatch, "agent_browser", other)
+    with pytest.raises(installer.InstallError, match="does not hold plugin"):
+        installer.uninstall("agent_browser")
+    assert (other / "protoagent.plugin.yaml").exists() and (host.live / "agent_browser").exists()
+
+
+def test_the_delete_guard_refuses_a_path_outside_the_live_root(host, monkeypatch):
+    _untracked_copy(host)
+    outside = _write_plugin(host.home / "elsewhere" / "agent_browser", "agent_browser", "0.6.5")
+    _loader_records(monkeypatch, "agent_browser", outside)
+    with pytest.raises(installer.InstallError, match="outside the live plugins dir"):
+        installer.uninstall("agent_browser")
+    assert (outside / "protoagent.plugin.yaml").exists()
+
+
+def test_a_tracked_superseded_row_whose_files_are_gone_clears_only_the_lock(host):
+    """The operator deleted the folder by hand; the recorded row still reads SUPERSEDED.
+    Uninstall clears the row — there are no files to verify, so none are touched."""
+    _remote(host, "protoLabsAI", "cowork-plugin", "cowork", "0.3.1", tags=["v0.3.1"])
+    _old_host_install(host)
+    _ship_bundled(host)
+    _rmtree(host.live / "cowork")
+    report = installer.uninstall("cowork")
+    assert report["removed"] == ["lock"] and report["was_loaded"] is False
+    assert installer._read_lock()["plugins"] == []
