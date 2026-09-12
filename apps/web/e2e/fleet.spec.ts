@@ -3,6 +3,7 @@ import { expect, test } from "@playwright/test";
 import { requiresToolsNotice } from "../src/lib/archetypeConfig";
 import { CONFIGURE_REQUIRED_COPY, HARD_GATE_HINT, HARD_GATE_HINT_COLLAPSED } from "../src/lib/pickerCopy";
 import { ARCHETYPES } from "./fixtures.mjs";
+import { routeSnapshot } from "./routeSnapshot";
 
 // Fleet manager + archetype picker (Settings → Agents, ADR 0042). Drives the live
 // control-plane endpoints (mocked): list, create from an archetype, stop. The mock
@@ -16,8 +17,10 @@ test.describe.configure({ mode: "serial" });
 // into the next test, a retry, or another spec. The scope is keyed on the parallel
 // worker so even concurrent runners (repeat-each, if mode:serial is ever lifted)
 // stay isolated from each other.
+const fleetScope = (testInfo) => `fleet-spec-${testInfo.parallelIndex}`;
+
 test.beforeEach(async ({ page }, testInfo) => {
-  const scope = `fleet-spec-${testInfo.parallelIndex}`;
+  const scope = fleetScope(testInfo);
   await page.setExtraHTTPHeaders({ "x-e2e-fleet": scope }); // app fetches carry it
   await page.request.post("/api/__test__/fleet/reset", { headers: { "x-e2e-fleet": scope } });
 });
@@ -392,19 +395,24 @@ test("a member that IS a delegate can be unlinked from its row (#2266)", async (
   await expect(ava.getByRole("button", { name: "Add as a delegate of this agent (delegate_to)" })).toBeVisible();
 });
 
-test("host without delegates: add → 404 → Enable delegates → retried add succeeds (#797)", async ({ page }) => {
+test("host without delegates: add → 404 → Enable delegates → retried add succeeds (#797)", async ({ page }, testInfo) => {
   // The focused agent (host) doesn't serve /api/delegates until the plugin is enabled;
   // enabling goes through the dedicated /api/plugins/{id}/enabled endpoint and the reload
   // hot-mounts the routes, so the retry lands without a restart.
   let enabled = false;
   let delegatePosts = 0;
   let enablePosts = 0;
-  await page.route("**/api/fleet", async (route) => {
-    const response = await route.fetch();
-    const json = await response.json();
-    for (const a of json.agents) if (!a.host) a.a2a = `http://127.0.0.1:${a.port}/a2a`;
-    await route.fulfill({ json });
-  });
+  // A snapshot, not a per-request route.fetch() proxy: the switcher polls /api/fleet every 3s,
+  // so a poll is routinely in flight at teardown (see routeSnapshot.ts). Nothing here changes
+  // the fleet itself, and the snapshot reads this test's private scope.
+  await routeSnapshot(
+    page,
+    "/api/fleet",
+    (json) => {
+      for (const a of json.agents) if (!a.host) a.a2a = `http://127.0.0.1:${a.port}/a2a`;
+    },
+    { headers: { "x-e2e-fleet": fleetScope(testInfo) } },
+  );
   await page.route("**/api/delegates", async (route) => {
     if (route.request().method() !== "POST") return route.fallback();
     delegatePosts += 1;
