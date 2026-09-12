@@ -441,7 +441,7 @@
   max-width: 230px;
 }
 
-/* Sent-time footer widget (#3448) — a quiet clock chip on a settled user/assistant message;
+/* Sent-time footer widget (#3458) — a quiet clock chip on a settled user/assistant message;
    the full local sent date-and-time lives in the DS Tooltip on hover/focus. Mirrors the muted,
    monospace .chat-usage footer tone so it reads as metadata, not content. The ROW is block-level
    so the chip always starts its own line (the DS Tooltip's trigger wrapper is inline-flex); the

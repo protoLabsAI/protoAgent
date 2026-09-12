@@ -220,11 +220,11 @@ describe("ChatTranscript render isolation", () => {
   });
 });
 
-// The sent-timestamp footer widget (#3448) lives in the SHARED ChatMessageView renderer, so
+// The sent-timestamp footer widget (#3458) lives in the SHARED ChatMessageView renderer, so
 // proving it on that renderer proves it for both consumers (main chat + palette chat). The real
 // renderer is pulled in with vi.importActual because this file mocks ./ChatMessageView for the
 // transcript-isolation suites above.
-describe("ChatMessageView sent-timestamp footer (#3448)", () => {
+describe("ChatMessageView sent-timestamp footer (#3458)", () => {
   let ChatMessageView: (props: { message: ChatMessage }) => ReactNode;
   let tsHost: HTMLDivElement | null = null;
   let tsRoot: Root | null = null;
