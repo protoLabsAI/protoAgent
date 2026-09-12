@@ -358,6 +358,9 @@ describe("roomReplyFromParts", () => {
       text: "line 40",
       ok: true,
       stopped: undefined,
+      addressedTo: undefined,
+      inAnswer: false,
+      note: false,
     });
   });
 
@@ -390,6 +393,57 @@ describe("roomReplyFromParts", () => {
     // A REPLY never carries delegation fields.
     const reply = roomReplyFromParts([{ metadata: { mimeType: ROOM_MIME }, data: { author: "proto", job_id: "bg-1" } }]);
     expect(reply?.delegation).toBeUndefined();
+  });
+
+  it("reads the server's claim that the turn's answer restates this reply", () => {
+    // #3449 — an `@`-addressed turn publishes ONE answer twice: this bubble, and the
+    // canonical answer artifact composed from it for consumers that can't render
+    // bubbles. `in_answer` is what lets the console render it once.
+    const got = roomReplyFromParts([
+      { metadata: { mimeType: ROOM_MIME }, data: { author: "protoEngineer", text: "0.17.0", in_answer: true } },
+    ]);
+    expect(got?.inAnswer).toBe(true);
+  });
+
+  it("treats an absent or non-true claim as no claim", () => {
+    // A `delegate_to` reply is NOT in the lead's answer (that is the lead's own
+    // synthesis), and an older server sends no key at all — both must keep landing the
+    // canonical text, or the lead's answer would vanish.
+    const delegated = roomReplyFromParts([
+      { metadata: { mimeType: ROOM_MIME }, data: { author: "proto", from: "assistant", text: "patched" } },
+    ]);
+    expect(delegated?.inAnswer).toBe(false);
+    const falsey = roomReplyFromParts([
+      { metadata: { mimeType: ROOM_MIME }, data: { author: "proto", text: "x", in_answer: "yes" } },
+    ]);
+    expect(falsey?.inAnswer).toBe(false);
+  });
+
+  it("decodes the ROOM's own note — the one shape with neither author nor addressee", () => {
+    // #3449: the part of an addressed turn's answer no participant's bubble carries (a
+    // clipped catch-up, the round cap, a failed address's line). Its own frame, so the
+    // console renders the whole answer exactly once without having to recognise the
+    // server's attribution format.
+    const got = roomReplyFromParts([
+      {
+        metadata: { mimeType: ROOM_MIME },
+        data: { note: true, from: "room", text: "_Older messages were left out of the catch-up._", ok: true },
+      },
+    ]);
+    expect(got?.note).toBe(true);
+    expect(got?.text).toBe("_Older messages were left out of the catch-up._");
+    expect(got?.author).toBeUndefined();
+    expect(got?.addressedTo).toBeUndefined();
+    // It is NOT a claim: a note is what the answer has BEYOND the bubbles, so it can
+    // never stand in for the answer.
+    expect(got?.inAnswer).toBe(false);
+  });
+
+  it("still ignores an author-less, addressee-less frame that is not a note", () => {
+    expect(roomReplyFromParts([{ metadata: { mimeType: ROOM_MIME }, data: { text: "orphan", ok: true } }])).toBeNull();
+    expect(
+      roomReplyFromParts([{ metadata: { mimeType: ROOM_MIME }, data: { note: "yes", text: "orphan" } }]),
+    ).toBeNull();
   });
 
   it("reads the flattened proto-JSON form", () => {

@@ -870,6 +870,15 @@ def _publish_chat_progress(context_id: str, task_id: str, frame: dict) -> None:
         addressed_to = str(frame.get("addressed_to") or "")
         text = str(frame.get("text") or "")
         if author:
+            # `message_id` is the emitter's own id and NOTHING synthesises one here, which
+            # is what keeps an `@`-addressed turn safe on this path: the mention exchange
+            # frames carry no `id`, so `parseProgress` drops them and the preview renders
+            # the turn's answer once, from `chat.resumed`. Do not give this branch the
+            # content-hash fallback the ask below has (#3447) without first teaching the
+            # preview about `in_answer` — a scheduled or watch-fired `@name` turn would
+            # then draw the participant's bubble AND the final answer, which is #3449 all
+            # over again on a path that has no room-v1 decoder. Pinned by
+            # test_a2a_handler.py::test_an_addressed_exchange_is_not_republished_as_a_preview_bubble.
             data = {
                 "phase": "room_reply",
                 "message_id": str(frame.get("id") or ""),

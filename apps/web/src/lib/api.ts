@@ -641,14 +641,17 @@ export function roomReplyFromParts(parts?: RawPart[]): RoomReply | null {
         background?: boolean;
         job_id?: string;
         error?: string;
+        in_answer?: boolean;
+        note?: boolean;
       }
     | undefined;
   if (!d) return null;
   const addressedTo = typeof d.addressed_to === "string" && d.addressed_to ? d.addressed_to : undefined;
   const author = typeof d.author === "string" && d.author ? { name: d.author } : undefined;
-  // A frame is either an outgoing ask (addressed_to, no author) or a reply (author). One
-  // of the two must be present, or there is nothing to render.
-  if (!addressedTo && !author) return null;
+  // A frame is either an outgoing ask (addressed_to, no author), a reply (author), or the
+  // ROOM's own note (#3449) — which has neither, and is the one shape allowed to. Without
+  // one of the three there is nothing to render.
+  if (!addressedTo && !author && d.note !== true) return null;
   return {
     addressedTo,
     author,
@@ -657,6 +660,12 @@ export function roomReplyFromParts(parts?: RawPart[]): RoomReply | null {
     ok: d.ok !== false,
     stopped: typeof d.stopped === "string" ? d.stopped : undefined,
     delegation: addressedTo ? delegationFromFrame(d) : undefined,
+    // Both claims are the KEY's presence (#3449) — the server omits them rather than
+    // sending false, and an older server sends nothing at all, so only an explicit
+    // `true` counts. `inAnswer` on a reply: the turn's answer restates it. `note`: this
+    // frame IS the part of the answer no bubble carries.
+    inAnswer: d.in_answer === true,
+    note: d.note === true,
   };
 }
 

@@ -1018,6 +1018,50 @@ class TestChatProgress:
         }
         assert kw == {"retain": False}
 
+    def test_an_addressed_exchange_is_not_republished_as_a_preview_bubble(self, monkeypatch):
+        """#3449 F — the server-turn PREVIEW has no room-v1 decoder, so it cannot tell a
+        participant's bubble from the turn's answer. It is safe today only because the
+        mention exchange frames carry no `id`: `message_id` comes out empty and
+        `parseProgress` drops the frame, leaving `chat.resumed` to render the answer once.
+
+        Pinned deliberately. #3447 gave the ASK branch a content-hash id fallback; giving
+        this branch one would make a scheduled or watch-fired `@name` turn draw the
+        participant's bubble AND the final answer — #3449 again, on the one path with no
+        `in_answer` decoder. Whoever wants that must teach the preview about `in_answer`
+        first, and will land here.
+        """
+        a2a, published = self._capture(monkeypatch)
+        a2a._a2a_progress(
+            "chat-7",
+            "task-9",
+            {
+                "phase": "room_reply",
+                "author": "protoEngineer",
+                "from": "operator",
+                "text": "The bundled Artifact plugin is 0.17.0.",
+                "ok": True,
+                "in_answer": True,
+                "catchup": 0,
+                "truncated": False,
+                "origin": "scheduler",
+            },
+        )
+        _, data, _ = published[0]
+        assert data["message_id"] == "", "no id is synthesised for an authored frame"
+        assert "in_answer" not in data, "the preview has no decoder for the claim"
+
+    def test_the_rooms_own_note_is_not_republished_to_the_preview(self, monkeypatch):
+        """The note frame (#3449) has neither author nor `addressed_to`, so it falls into
+        the existing drop. Same reasoning as above: the preview renders the whole answer
+        from `chat.resumed`, and a note republished beside it would be prose twice."""
+        a2a, published = self._capture(monkeypatch)
+        a2a._a2a_progress(
+            "chat-7",
+            "task-9",
+            {"phase": "room_reply", "note": True, "from": "room", "text": "_clipped._", "ok": True, "origin": "watch"},
+        )
+        assert published == []
+
     def test_a_delegation_made_during_a_server_turn_republishes_its_ask(self, monkeypatch):
         """The lead answering background reports by delegating again: the ask (no author)
         used to be dropped here, so that delegation had no row in the open chat."""
