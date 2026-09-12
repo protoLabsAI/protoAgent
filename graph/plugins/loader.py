@@ -170,87 +170,6 @@ def discover_plugins(
     return list(by_id.values())
 
 
-# The setup-gap key the loader reports unsatisfied declared pip deps under (#3450).
-DEPS_GAP_KEY = "deps-missing"
-_MAX_NAMED_DEPS = 6
-
-
-def _named(names: list[str]) -> str:
-    head = ", ".join(sorted(names)[:_MAX_NAMED_DEPS])
-    extra = len(names) - _MAX_NAMED_DEPS
-    return f"{head} (+{extra} more)" if extra > 0 else head
-
-
-def _deps_gap_message(plugin_id: str, hard: list[str], soft: list[str]) -> str | None:
-    """The operator-facing line for an enabled plugin whose declared pip deps are absent,
-    or ``None`` when nothing is missing. Reads as a continuation of the banner's
-    ``"<Plugin>: "`` prefix, like every other gap message."""
-    if not hard and not soft:
-        return None
-    parts = []
-    if hard:
-        parts.append(f"required: {_named(hard)}")
-    if soft:
-        parts.append(f"optional: {_named(soft)}")
-    lead = (
-        "needs Python packages that aren't installed"
-        if hard
-        else "is missing optional Python packages, so parts of it don't work"
-    )
-    return (
-        f"{lead} — {'; '.join(parts)}. Install them in Settings ▸ Plugins or with "
-        f"`protoagent plugin install-deps {plugin_id}`."
-    )
-
-
-def _report_deps_gap(manifest: PluginManifest) -> list[str]:
-    """Report (or clear) the "declared pip deps aren't installed" gap for an ENABLED
-    plugin, and return the missing dist names.
-
-    Nothing else covers this. ``install`` deliberately doesn't install deps (ADR 0027
-    D4); the ``ModuleNotFoundError`` branch below only fires for a plugin that imports
-    them at MODULE level; and ``/api/plugins/installed`` — what the console's deps report
-    and the wizard's post-install step read — enumerates the live plugins dir, so a
-    BUNDLED plugin has no row there to carry a ``deps_missing`` badge at all.
-
-    cowork (#3450) is both: bundled, and its document skills import the libraries inside
-    ``execute_code`` rather than in-process. On a fresh server a Cowork-archetype first
-    run therefore completed with the plugin enabled and four of five document libraries
-    absent, with no warning on any surface — the first symptom was an ImportError from
-    inside a code run, and the skill text then sent the operator to a console button that
-    had nothing to render. Both tiers are reported for the same reason: cowork's whole
-    stack is the OPTIONAL tier (#1954), so a hard-tier-only check would still say nothing.
-    """
-    from graph.plugins import installer
-    from graph.plugins import setup_gaps
-
-    hard, soft = list(manifest.requires_pip or []), list(manifest.optional_pip or [])
-    if not hard and not soft:
-        setup_gaps.report(manifest.id, DEPS_GAP_KEY, None)
-        return []
-    scopes = getattr(manifest, "pip_scopes", {}) or {}
-    hard_missing = installer._deps_satisfied(hard, scopes)[1] if hard else []
-    soft_missing = installer._deps_satisfied(soft, scopes)[1] if soft else []
-    message = _deps_gap_message(manifest.id, hard_missing, soft_missing)
-    if message:
-        log.warning(
-            "[plugins] %s enabled but declared deps are missing (%s) — run: protoagent plugin install-deps %s",
-            manifest.id,
-            ", ".join(sorted([*hard_missing, *soft_missing])),
-            manifest.id,
-        )
-    setup_gaps.report(
-        manifest.id,
-        DEPS_GAP_KEY,
-        message,
-        label=str(manifest.name or manifest.id),
-        # The one fix, as closed data: the plugin's own Settings section, where
-        # "Install deps" lives. Never a URL or a callback (setup_gaps.ACTION_KINDS).
-        action={"kind": "plugin_config"},
-    )
-    return sorted([*hard_missing, *soft_missing])
-
-
 def _superseded_message(plugin_id: str, note: dict) -> str:
     """The operator-facing line for a superseded install — what happened, and the one
     action that clears it. Kept under the setup-gap cap (300 chars) for a normal URL."""
@@ -642,6 +561,87 @@ def _is_blank(value: object) -> bool:
     if isinstance(value, (list, tuple, set, dict)):
         return len(value) == 0
     return False
+
+
+# The setup-gap key the loader reports unsatisfied declared pip deps under (#3450).
+DEPS_GAP_KEY = "deps-missing"
+_MAX_NAMED_DEPS = 6
+
+
+def _named(names: list[str]) -> str:
+    head = ", ".join(sorted(names)[:_MAX_NAMED_DEPS])
+    extra = len(names) - _MAX_NAMED_DEPS
+    return f"{head} (+{extra} more)" if extra > 0 else head
+
+
+def _deps_gap_message(plugin_id: str, hard: list[str], soft: list[str]) -> str | None:
+    """The operator-facing line for an enabled plugin whose declared pip deps are absent,
+    or ``None`` when nothing is missing. Reads as a continuation of the banner's
+    ``"<Plugin>: "`` prefix, like every other gap message."""
+    if not hard and not soft:
+        return None
+    parts = []
+    if hard:
+        parts.append(f"required: {_named(hard)}")
+    if soft:
+        parts.append(f"optional: {_named(soft)}")
+    lead = (
+        "needs Python packages that aren't installed"
+        if hard
+        else "is missing optional Python packages, so parts of it don't work"
+    )
+    return (
+        f"{lead} — {'; '.join(parts)}. Install them in Settings ▸ Plugins or with "
+        f"`protoagent plugin install-deps {plugin_id}`."
+    )
+
+
+def _report_deps_gap(manifest: PluginManifest) -> list[str]:
+    """Report (or clear) the "declared pip deps aren't installed" gap for an ENABLED
+    plugin, and return the missing dist names.
+
+    Nothing else covers this. ``install`` deliberately doesn't install deps (ADR 0027
+    D4); the ``ModuleNotFoundError`` branch below only fires for a plugin that imports
+    them at MODULE level; and ``/api/plugins/installed`` — what the console's deps report
+    and the wizard's post-install step read — enumerates the live plugins dir, so a
+    BUNDLED plugin has no row there to carry a ``deps_missing`` badge at all.
+
+    cowork (#3450) is both: bundled, and its document skills import the libraries inside
+    ``execute_code`` rather than in-process. On a fresh server a Cowork-archetype first
+    run therefore completed with the plugin enabled and four of five document libraries
+    absent, with no warning on any surface — the first symptom was an ImportError from
+    inside a code run, and the skill text then sent the operator to a console button that
+    had nothing to render. Both tiers are reported for the same reason: cowork's whole
+    stack is the OPTIONAL tier (#1954), so a hard-tier-only check would still say nothing.
+    """
+    from graph.plugins import installer
+    from graph.plugins import setup_gaps
+
+    hard, soft = list(manifest.requires_pip or []), list(manifest.optional_pip or [])
+    if not hard and not soft:
+        setup_gaps.report(manifest.id, DEPS_GAP_KEY, None)
+        return []
+    scopes = getattr(manifest, "pip_scopes", {}) or {}
+    hard_missing = installer._deps_satisfied(hard, scopes)[1] if hard else []
+    soft_missing = installer._deps_satisfied(soft, scopes)[1] if soft else []
+    message = _deps_gap_message(manifest.id, hard_missing, soft_missing)
+    if message:
+        log.warning(
+            "[plugins] %s enabled but declared deps are missing (%s) — run: protoagent plugin install-deps %s",
+            manifest.id,
+            ", ".join(sorted([*hard_missing, *soft_missing])),
+            manifest.id,
+        )
+    setup_gaps.report(
+        manifest.id,
+        DEPS_GAP_KEY,
+        message,
+        label=str(manifest.name or manifest.id),
+        # The one fix, as closed data: the plugin's own Settings section, where
+        # "Install deps" lives. Never a URL or a callback (setup_gaps.ACTION_KINDS).
+        action={"kind": "plugin_config"},
+    )
+    return sorted([*hard_missing, *soft_missing])
 
 
 def _missing_required_config(manifest: PluginManifest, resolved: dict) -> list[dict]:
