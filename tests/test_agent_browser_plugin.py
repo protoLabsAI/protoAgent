@@ -423,12 +423,39 @@ async def test_a_tool_run_refreshes_the_gap_when_the_cli_vanishes(monkeypatch):
     t = _toolmap({"binary": "ab"}, refresh_gaps=lambda: calls.append("refresh"))
     out = await t["browser_snapshot"].ainvoke({})
     assert calls == ["refresh"] and "setup banner" in out
+    await t["browser_snapshot"].ainvoke({})
+    assert calls == ["refresh"]                         # a failing LOOP probes once, not per call
 
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="tree"))
     assert await t["browser_snapshot"].ainvoke({}) == "tree"
     assert calls == ["refresh", "refresh"]              # cleared on the first success
     await t["browser_snapshot"].ainvoke({})
     assert calls == ["refresh", "refresh"]              # …and not re-run every call
+
+
+async def test_a_nonzero_exit_also_refreshes_the_gap_so_chrome_can_self_heal(monkeypatch):
+    """The CLI-present-but-Chrome-missing case never raises FileNotFoundError — it exits
+    non-zero. Keying the re-probe only on FileNotFoundError left that banner stuck up
+    forever (it could only be cleared by a fresh `register()`), while the README and the
+    guide both promised it self-heals."""
+    calls = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(rc=1, err="no Chrome installation found"))
+    t = _toolmap({"binary": "ab"}, refresh_gaps=lambda: calls.append("refresh"))
+    out = await t["browser_open"].ainvoke({"url": "https://x.com"})
+    assert out.startswith("Error:") and calls == ["refresh"]
+
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="ok"))   # operator ran the install
+    await t["browser_open"].ainvoke({"url": "https://x.com"})
+    assert calls == ["refresh", "refresh"]              # the Chrome banner clears on the next call
+
+
+async def test_a_steady_state_success_never_re_probes(monkeypatch):
+    calls = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="ok"))
+    t = _toolmap({"binary": "ab"}, refresh_gaps=lambda: calls.append("refresh"))
+    for _ in range(3):
+        await t["browser_snapshot"].ainvoke({})
+    assert calls == []   # nothing was ever wrong — no preflight subprocesses per call
 
 
 async def test_a_failing_gap_refresh_never_breaks_the_tool(monkeypatch):
@@ -441,6 +468,15 @@ async def test_a_failing_gap_refresh_never_breaks_the_tool(monkeypatch):
     monkeypatch.setattr(tools.subprocess, "Popen", boom)
     out = await _toolmap({"binary": "ab"}, refresh_gaps=explode)["browser_click"].ainvoke({"selector": "x"})
     assert "not on PATH" in out
+
+
+@pytest.mark.parametrize("bad", [-1, 0, "", "nope", None])
+async def test_a_garbage_response_cap_falls_back_instead_of_bricking_every_command(monkeypatch, bad):
+    """`max_response_bytes: -1` made EVERY command fail "output exceeded -1 bytes" —
+    a config typo that silently disables the whole toolset."""
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="hello"))
+    out = await _toolmap({"binary": "ab", "max_response_bytes": bad})["browser_snapshot"].ainvoke({})
+    assert out == "hello"
 
 
 # ── #3451 (c): the capture fence — `filesystem: scoped` is now enforced ────────────
@@ -503,9 +539,22 @@ def test_an_absolute_path_already_inside_the_fence_is_accepted():
     assert storage.resolve_capture_path(str(first), default_name="page.png") == first
 
 
+def _writing_popen(data=b"bytes", record=None, rc=0):
+    """A Popen stand-in that actually WRITES the capture file the CLI was asked for, so
+    the post-run stat sees what a real run would leave behind."""
+    inner = fake_popen(out="(ok)", rc=rc, record=record)
+
+    def _popen(argv, **kw):
+        if data is not None and len(argv) >= 3:
+            Path(argv[2]).write_bytes(data)
+        return inner(argv, **kw)
+
+    return _popen
+
+
 async def test_screenshot_passes_the_fenced_path_to_the_cli(monkeypatch):
     rec = []
-    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="(ok)", record=rec))
+    monkeypatch.setattr(tools.subprocess, "Popen", _writing_popen(record=rec))
     out = await _toolmap({"binary": "ab"})["browser_screenshot"].ainvoke({"path": "shot.png"})
     root = storage.capture_root().resolve()
     assert rec[-1][:2] == ["ab", "screenshot"]
@@ -527,23 +576,94 @@ async def test_a_failed_capture_command_is_not_reported_as_saved(monkeypatch):
     assert out.startswith("Error:") and "Saved to" not in out
 
 
+# The CLI can exit 0 having written nothing — "Saved to" must mean bytes on disk.
+
+
+async def test_a_silent_no_write_is_reported_as_an_error_not_a_save(monkeypatch):
+    """Exit 0, no file. Reporting success sent the agent to save_file_artifact, which
+    answered "No file at … write the file first" — a dead end two tools from the cause."""
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="(ok)"))   # writes nothing
+    out = await _toolmap({"binary": "ab"})["browser_pdf"].ainvoke({"path": "silent.pdf"})
+    assert out.startswith("Error:") and "wrote no file" in out
+    assert "Saved to" not in out and "browser_open" in out
+    assert not (storage.capture_root().resolve() / "silent.pdf").exists()
+
+
+async def test_a_zero_byte_capture_is_refused_and_cleaned_up(monkeypatch):
+    """Worse than nothing: stored, then downloaded as a broken PDF."""
+    monkeypatch.setattr(tools.subprocess, "Popen", _writing_popen(data=b""))
+    out = await _toolmap({"binary": "ab"})["browser_pdf"].ainvoke({"path": "empty.pdf"})
+    assert out.startswith("Error:") and "an empty file" in out
+    assert not (storage.capture_root().resolve() / "empty.pdf").exists()   # partial removed
+
+
+async def test_a_failed_run_does_not_delete_a_pre_existing_file(monkeypatch):
+    """Cleanup removes the partial file this call created — never one that was already
+    there (an earlier good capture the agent may still be holding a path to)."""
+    keep = storage.capture_root().resolve() / "keep.pdf"
+    keep.write_bytes(b"%PDF-1.4 previous")
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(rc=1, err="boom"))
+    out = await _toolmap({"binary": "ab"})["browser_pdf"].ainvoke({"path": "keep.pdf"})
+    assert out.startswith("Error:") and keep.read_bytes() == b"%PDF-1.4 previous"
+
+
+async def test_an_oversized_capture_warns_about_the_artifact_limit(monkeypatch):
+    """A 40 MB PDF writes fine but save_file_artifact refuses it by default — say so here,
+    where the agent can still act on it."""
+    big = b"x" * (storage.ARTIFACT_BLOB_LIMIT_BYTES + 1024)
+    monkeypatch.setattr(tools.subprocess, "Popen", _writing_popen(data=big))
+    out = await _toolmap({"binary": "ab"})["browser_pdf"].ainvoke({"path": "big.pdf"})
+    assert "Saved to" in out and "max_blob_kb" in out and "25 MB limit" in out
+
+
+async def test_captures_are_pruned_to_the_retention_budget(monkeypatch):
+    root = storage.capture_root().resolve()
+    for i in range(6):
+        (root / f"old{i}.png").write_bytes(b"x")
+    monkeypatch.setattr(storage, "MAX_CAPTURE_FILES", 3)
+    monkeypatch.setattr(tools.subprocess, "Popen", _writing_popen(data=b"new"))
+    out = await _toolmap({"binary": "ab"})["browser_screenshot"].ainvoke({"path": "fresh.png"})
+    assert "Saved to" in out
+    remaining = sorted(p.name for p in root.iterdir() if p.is_file())
+    assert len(remaining) == 3 and "fresh.png" in remaining   # oldest-first, newest kept
+
+
+def test_pruning_never_raises_on_an_unreadable_store(monkeypatch):
+    monkeypatch.setattr(storage, "capture_root", lambda: (_ for _ in ()).throw(OSError("gone")))
+    assert storage.prune_captures() == 0
+
+
+def test_an_unnamed_capture_gets_a_unique_filename():
+    """Concurrent `browser_pdf()` calls all defaulted to `page.pdf` and clobbered each
+    other — the second caller handed save_file_artifact the first caller's page."""
+    names = {storage.unique_default_name("page.pdf") for _ in range(20)}
+    assert len(names) == 20
+    for n in names:
+        assert n.startswith("page-") and n.endswith(".pdf")
+
+
 # ── #3451 (d): browser_pdf — the HTML→PDF capability, fenced like screenshots ──────
 
 
 async def test_pdf_wraps_the_cli_pdf_command(monkeypatch):
     rec = []
-    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="(ok)", record=rec))
+    monkeypatch.setattr(tools.subprocess, "Popen", _writing_popen(data=b"%PDF-1.4", record=rec))
     out = await _toolmap({"binary": "ab"})["browser_pdf"].ainvoke({"path": "resume.pdf"})
     assert rec[-1][:2] == ["ab", "pdf"]
     assert Path(rec[-1][2]) == storage.capture_root().resolve() / "resume.pdf"
     assert "Saved to" in out
 
 
-async def test_pdf_defaults_its_filename(monkeypatch):
+async def test_pdf_defaults_to_a_collision_free_filename(monkeypatch):
     rec = []
-    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
-    await _toolmap({"binary": "ab"})["browser_pdf"].ainvoke({})
-    assert Path(rec[-1][2]).name == "page.pdf"
+    monkeypatch.setattr(tools.subprocess, "Popen", _writing_popen(data=b"%PDF", record=rec))
+    t = _toolmap({"binary": "ab"})
+    await t["browser_pdf"].ainvoke({})
+    await t["browser_pdf"].ainvoke({})
+    first, second = Path(rec[-2][2]).name, Path(rec[-1][2]).name
+    assert first != second, "two unnamed captures must not clobber each other"
+    for name in (first, second):
+        assert re.fullmatch(r"page-\d{8}-\d{6}-[0-9a-f]{4}\.pdf", name), name
 
 
 async def test_pdf_is_fenced_exactly_like_screenshot(monkeypatch):
@@ -552,6 +672,47 @@ async def test_pdf_is_fenced_exactly_like_screenshot(monkeypatch):
     out = await _toolmap({"binary": "ab"})["browser_pdf"].ainvoke({"path": "../../out.pdf"})
     assert out.startswith("Error:") and "refusing to write outside" in out
     assert rec == []
+
+
+# ── a model-supplied operand may not read as a CLI option ────────────────────────
+# Verified against the real 0.27.1 (see the live test below): the CLI scans the WHOLE
+# argv for options, so `fill '#q' '--help'` prints help and fills NOTHING. That makes a
+# leading '-' a silent no-op first and a way to set a launch flag second — and the CLI
+# has no `--` end-of-options escape, so refusing is the only lever.
+
+
+@pytest.mark.parametrize(("name", "args"), [
+    ("browser_open", {"url": "--auto-connect"}),
+    ("browser_click", {"selector": "--help"}),
+    ("browser_fill", {"selector": "--help", "text": "hi"}),
+    ("browser_fill", {"selector": "#q", "text": "--allow-file-access"}),
+    ("browser_type", {"selector": "#q", "text": "-x"}),
+    ("browser_press", {"key": "--help"}),
+    ("browser_hover", {"selector": "-a"}),
+    ("browser_get_text", {"selector": "--help"}),
+    ("browser_get_html", {"selector": "--help"}),
+    ("browser_get_value", {"selector": "--help"}),
+    ("browser_eval", {"expression": "--help"}),
+])
+async def test_an_operand_that_reads_as_a_flag_is_refused_before_the_subprocess(monkeypatch, name, args):
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
+    out = await _toolmap({"binary": "ab"})[name].ainvoke(args)
+    assert out.startswith("Error:") and "may not start with '-'" in out
+    assert rec == [], "the refusal must happen before the CLI runs"
+
+
+async def test_ordinary_operands_still_pass_through(monkeypatch):
+    """The guard must not get in the way of real selectors, refs, text or expressions."""
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="ok", record=rec))
+    t = _toolmap({"binary": "ab"})
+    await t["browser_fill"].ainvoke({"selector": "@e2", "text": "a -5% drop"})
+    assert rec[-1] == ["ab", "fill", "@e2", "a -5% drop"]
+    await t["browser_eval"].ainvoke({"expression": "(-1) + 2"})
+    assert rec[-1] == ["ab", "eval", "(-1) + 2"]
+    await t["browser_press"].ainvoke({"key": "Control+a"})
+    assert rec[-1] == ["ab", "press", "Control+a"]
 
 
 def test_pdf_tells_the_model_about_the_artifact_handoff():
@@ -655,8 +816,11 @@ def test_the_import_dropped_the_standalone_repo_scaffolding():
     assert "repository" not in m and "min_protoagent_version" not in m
     for gone in ("pyproject.toml", "requirements.txt", "requirements-dev.txt", ".gitignore",
                  "PROTO.md", "CLAUDE.md", "AGENTS.md", "CHANGELOG.md", ".github", ".beads",
-                 ".ruff_cache", "tests"):
+                 ".ruff_cache", "tests", "conftest.py"):
         assert not (ROOT / gone).exists(), f"{gone} should not be vendored"
+    # the repo's tests/ came across as tests/test_agent_browser_plugin.py, which runs in
+    # the host suite — a vendored tests/ dir would be collected twice and drift
+    assert (REPO / "tests" / "test_agent_browser_plugin.py").is_file()
 
 
 def test_settings_fields_are_valid_and_back_real_config():
@@ -842,6 +1006,16 @@ def test_nav_reports_the_setup_sentence_when_the_cli_is_missing(monkeypatch):
     monkeypatch.setattr(bp.subprocess, "run", _run)
     body = TestClient(_app()).post("/api/plugins/agent_browser/nav", json={"action": "reload"}).json()
     assert body["ok"] is False and "npm i -g agent-browser" in body["error"]
+
+
+def test_the_panel_actually_renders_a_failed_nav_instead_of_swallowing_it():
+    """The route builds a good sentence; the page used to drop it on the floor
+    (`try{ await apiFetch(…) }catch(_){}` never reads the body, and a 200 throws nothing),
+    so the operator clicked Go and watched nothing happen."""
+    from fastapi.testclient import TestClient
+
+    html = TestClient(_app({})).get("/plugins/agent_browser/panel").text
+    assert "b.ok===false" in html and "showStart(b.error)" in html
 
 
 # ── #3451 (b): the /panel/dash cookie gate is GONE, and here is why ───────────────
@@ -1099,10 +1273,13 @@ def test_browser_args_without_stealth_passes_through():
     assert "--user-agent" not in f  # no stealth → no UA injection
 
 
-def test_the_stealth_surface_is_byte_identical_to_the_source_repo():
+def test_the_stealth_surface_is_intact_and_unedited():
     """The anti-detection / UA-spoofing options were vendored VERBATIM pending a
-    drop-or-keep ruling (#3451 "Decision needed"). This pins the exact surface so a
-    later edit is a deliberate answer to that question, not a drive-by."""
+    drop-or-keep ruling (#3451 "Decision needed"). This pins the exact surface — the three
+    config keys, their settings rows, and the two runtime.py mechanisms — so a later edit
+    is a deliberate answer to that question, not a drive-by. (It checks the surface that
+    exists here; byte-identity with the source repo was confirmed by sha at import time,
+    and nothing in-tree can re-verify that.)"""
     m = _manifest()
     assert {"stealth", "user_agent", "browser_args"} <= set(m["config"])
     assert m["config"]["stealth"] is False and m["config"]["user_agent"] == ""
@@ -1259,6 +1436,21 @@ def test_the_real_cli_still_has_every_subcommand_and_flag_the_plugin_sends():
     for flag in ("--headed", "--profile", "--device", "--allowed-domains", "--confirm-actions",
                  "--max-output", "--user-agent", "--args"):
         assert flag in help_text, f"CLI lost {flag} (runtime.launch_flags would fail)"
+
+
+@needs_cli
+def test_the_real_cli_really_does_eat_a_leading_dash_operand():
+    """The premise of the `-` guard, checked against the binary rather than assumed: the
+    CLI scans the WHOLE argv for options, so a third-positional `--help` is consumed as
+    one, and there is no `--` end-of-options escape. If upstream ever fixes that, this
+    test is where we find out (and the guard can relax)."""
+    def run(*args):
+        env = {**os.environ, "AGENT_BROWSER_SESSION": f"protoagent-argv-{os.getpid()}"}
+        return subprocess.run([CLI, *args], capture_output=True, text=True, timeout=60, env=env).stdout
+
+    assert "Usage: agent-browser fill" in run("fill", "#q", "--help"), "no longer eats a 3rd positional"
+    assert "Usage: agent-browser press" in run("press", "--help")
+    assert "Usage: agent-browser open" in run("open", "--", "--help"), "`--` is now honoured?"
 
 
 @needs_cli

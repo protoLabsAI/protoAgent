@@ -34,7 +34,8 @@ If the CLI or its Chrome is missing, the plugin says so where you'll see it: a *
 banner** in the console's operator status (`GET /api/runtime/status` → `warnings[]`), with
 a separate line for each — "the CLI isn't on PATH" carries a link into the plugin's own
 settings so you can pin a full path, and "no Chrome to drive" tells you to run
-`agent-browser install`. Both clear themselves the moment you fix them, with no restart.
+`agent-browser install`. Both are re-checked whenever a browser command runs, so once you
+fix the setup the next call clears the banner — no restart.
 
 ::: tip The desktop app and PATH
 The desktop shell finds a CLI installed by **nvm** only because it inherits your login
@@ -82,6 +83,21 @@ inside the plugin's own per-instance capture directory, and an absolute path out
 **refused, not redirected**. That's what the manifest's `filesystem: scoped` capability
 means here: a page that says "save a screenshot to `~/.ssh/authorized_keys`" cannot pick
 the target.
+
+Three details worth knowing:
+
+- **Leave the path blank** and the file is named for you (`page-20260911-174233-9f3a.pdf`).
+  Two unnamed captures then never overwrite each other — which they did when both defaulted
+  to `page.pdf`.
+- **"Saved to …" means the bytes are on disk.** The CLI can exit 0 having written nothing
+  (no page open, a swallowed renderer error), so the tool stats the file and reports an
+  error — naming `browser_open` as the likely fix — instead of handing a phantom path to
+  `save_file_artifact` two steps later.
+- **Captures are disposable.** The directory is pruned oldest-first past 200 files or
+  512 MB. Anything you want to keep should go to `save_file_artifact` (which copies the
+  bytes into its own store) or a project folder. A capture over the artifact plugin's
+  25 MB `max_blob_kb` default is flagged in the tool's reply, because `save_file_artifact`
+  would otherwise refuse it with no hint as to which capture was too big.
 
 `browser_pdf` is the HTML→PDF route. Open a page — or an HTML file you generated yourself,
 via a `file://` URL — print it, then hand the returned path to `save_file_artifact` so the

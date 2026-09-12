@@ -22,10 +22,28 @@ out are all caught by the same check.
 
 from __future__ import annotations
 
+import logging
+import secrets
+import time
 from pathlib import Path
+
+log = logging.getLogger("protoagent.plugins.agent_browser")
 
 CAPTURE_SUBDIR = "captures"
 PLUGIN_ID = "agent_browser"
+
+# Retention. Captures are disposable by nature — a screenshot the agent took to read a
+# page, a PDF it already handed to save_file_artifact (which copies the bytes into its own
+# blob store). Nothing re-reads them, so an unbounded directory is pure growth: the fence
+# is inside the instance root, which the operator backs up and `config explain` points at.
+# Pruned oldest-first after each successful capture, on BOTH axes.
+MAX_CAPTURE_FILES = 200
+MAX_CAPTURE_BYTES = 512 * 1024 * 1024
+
+# The artifact plugin's default `max_blob_kb` (25 MB, plugins/artifact/_config.py). A
+# capture bigger than this is fine on disk but will be REFUSED by save_file_artifact, so
+# the tool says so up front instead of letting the agent discover it one tool later.
+ARTIFACT_BLOB_LIMIT_BYTES = 25 * 1024 * 1024
 
 
 def capture_root() -> Path:
@@ -33,6 +51,54 @@ def capture_root() -> Path:
     from graph import sdk
 
     return sdk.plugin_store(CAPTURE_SUBDIR, plugin_id=PLUGIN_ID)
+
+
+def unique_default_name(default_name: str) -> str:
+    """``page.pdf`` → ``page-20260911-174233-9f3a.pdf``.
+
+    Used when the caller names no file. Concurrent agents (or one agent in a loop) all
+    calling ``browser_pdf()`` would otherwise resolve to the same ``page.pdf`` and
+    silently clobber each other's output — the second caller hands ``save_file_artifact``
+    the first caller's page.
+    """
+    stem, _, suffix = default_name.rpartition(".")
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    return f"{stem or default_name}-{stamp}-{secrets.token_hex(2)}" + (f".{suffix}" if suffix else "")
+
+
+def prune_captures(*, max_files: int | None = None, max_bytes: int | None = None) -> int:
+    """Drop the oldest captures past either budget. Returns how many were removed.
+
+    Best-effort and never raises: losing a disposable screenshot must not fail the tool
+    call that just succeeded. The budgets are read from the module at CALL time (not bound
+    as defaults) so an operator fork — or a test — can retune them.
+    """
+    max_files = MAX_CAPTURE_FILES if max_files is None else max_files
+    max_bytes = MAX_CAPTURE_BYTES if max_bytes is None else max_bytes
+    try:
+        root = capture_root()
+        files = sorted((p for p in root.rglob("*") if p.is_file()), key=lambda p: p.stat().st_mtime)
+    except OSError:
+        return 0
+    total = 0
+    for p in files:
+        try:
+            total += p.stat().st_size
+        except OSError:
+            pass
+    removed = 0
+    for p in files:
+        if len(files) - removed <= max_files and total <= max_bytes:
+            break
+        try:
+            total -= p.stat().st_size
+            p.unlink()
+            removed += 1
+        except OSError:
+            pass
+    if removed:
+        log.info("[agent_browser] pruned %d old capture(s)", removed)
+    return removed
 
 
 def resolve_capture_path(path: str | None, *, default_name: str) -> Path:

@@ -36,8 +36,9 @@ npm i -g agent-browser && agent-browser install   # the second step downloads Ch
 
 (Homebrew, Cargo, and the upstream standalone binaries work too.) If the CLI or its
 Chrome is missing, the plugin reports a **setup gap** — an operator banner in the
-console's status (`GET /api/runtime/status` → `warnings[]`) that clears itself once you
-fix it, no restart. On the desktop app the Tauri shell inherits your **login shell's**
+console's status (`GET /api/runtime/status` → `warnings[]`), raised at load and re-checked
+on every failing or recovering browser command, so the next call after you fix the setup
+clears it with no restart. On the desktop app the Tauri shell inherits your **login shell's**
 PATH, which is how an nvm-installed CLI is found; a pinned absolute path in the `binary`
 setting is the robust alternative.
 
@@ -49,7 +50,7 @@ A managed, pinned + checksummed download of the binary is deliberately **not** h
 | File | What |
 |---|---|
 | `tools.py` | the 17 browser tools — subprocess wrappers over the CLI, the byte cap, and the fenced captures |
-| `storage.py` | the capture write fence — `browser_screenshot` / `browser_pdf` resolve inside this plugin's instance store, an escape is refused |
+| `storage.py` | the capture write fence — `browser_screenshot` / `browser_pdf` resolve inside this plugin's instance store, an escape is refused; also the collision-free default filename and oldest-first retention (200 files / 512 MB) |
 | `preflight.py` | the setup-gap probe — is the CLI resolvable, and does it have a Chrome to drive |
 | `browser_panel.py` | the Browser panel page + routes — the interactive canvas, the gated nav / stream-ticket / WS-stream routes |
 | `browser_stream.py` | the CDP bridge — screencast frames out, input in, viewport resize + nav re-arm; the WS ticket auth |

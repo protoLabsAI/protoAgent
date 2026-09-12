@@ -66,13 +66,17 @@ are skipped (they ship with the host). `plugin sync` already re-clones the locke
 members re-sync for free — no bundle-specific sync path.
 
 **Amendment (2026-09): a member whose plugin has moved in-tree is skipped like a builtin.**
-The example above is period-accurate, not current: `cowork` (#3450) and `agent_browser`
-(#3451) are now **bundled** plugins, and the bundled manifest's `supersedes:` names the
-retired repo. A `{ id, url, ref }` member pointing at a superseded URL is therefore skipped
-the way `builtin: true` is — on new and old hosts alike, so existing archetype bundles need
-no edit (#3445) — and the pin is surfaced as a warning if it points *past* the bundled
-version. Write new members for those two as `{ id: <id>, builtin: true }`; the worked
-example in `examples/bundles/template/protoagent.bundle.yaml` shows the current shape.
+Some plugins that were standalone repos when this ADR was written have since been vendored
+into `plugins/`, with the bundled manifest's `supersedes:` naming the retired repo — so the
+member line above is period-accurate, not a current recommendation. A `{ id, url, ref }`
+member pointing at a superseded URL is skipped the way `builtin: true` is, on new and old
+hosts alike, so existing archetype bundles need no edit (#3445); a pin *past* the bundled
+version is surfaced as a warning rather than dropped silently. **`agent_browser` is bundled
+as of #3451** — write it as `{ id: agent_browser, builtin: true }`, as the worked example in
+`examples/bundles/template/protoagent.bundle.yaml` now does. Check `plugins/<id>/` (or the
+`bundled: true` rows in `config/plugin-directory.yaml`) before writing any member: whether a
+given plugin is in-tree is a moving target, and a `builtin: true` member for a plugin that
+*isn't* bundled resolves to nothing.
 
 **Amendment (2026-08): install ≠ enable ≠ trust now holds on the CLI only.** As first
 written, the `enabled` list and `config` were *returned as suggestions*, never written to

@@ -249,9 +249,16 @@ const cv=$("cv"), ctx=cv.getContext("2d");
 const HOME=__HOME_URL__;   // configured homepage (blank ⇒ Start opens about:blank, no auto-open)
 
 // ── nav toolbar — reuses the gated HTTP /nav route (agent-browser open/back/…) ──
+// The route answers 200 with {ok:false,error} for a failed command (a missing CLI, a
+// closed session). SHOW it: swallowing the body left the operator clicking Go against a
+// viewport that never changed, with the explanation sitting unread in the response.
 async function nav(action,url){
-  try{ await kit.apiFetch("/api/plugins/agent_browser/nav",{method:"POST",
-    headers:{"Content-Type":"application/json"},body:JSON.stringify({action,url})}); }catch(_){}
+  try{
+    const r=await kit.apiFetch("/api/plugins/agent_browser/nav",{method:"POST",
+      headers:{"Content-Type":"application/json"},body:JSON.stringify({action,url})});
+    const b=await r.json().catch(()=>({}));
+    if(b && b.ok===false && b.error){ setStatus("err","error"); showStart(b.error); return; }
+  }catch(_){ setStatus("err","offline"); }
   if(!connected) connect();   // a just-created session now has a page to stream
 }
 function go(){ let u=$("url").value.trim(); if(!u)return; if(!/^https?:\/\//.test(u))u="https://"+u; nav("open",u); }

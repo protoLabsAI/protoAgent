@@ -135,6 +135,16 @@ def render_site(entries: list[dict]) -> str:
     card via ``<repo-name minus -plugin>`` (plugins.astro, #1772), so ``site_id``
     carries that key whenever it differs from the manifest id. That key is also what
     a ``hidden`` marker must match to drop the card.
+
+    **A BUNDLED row's card is not scraped** — plugins.astro reads ``plugins/*/`` and keys
+    that card by the MANIFEST id — so a bundled row's override must be keyed by ``id``,
+    and its ``site_id`` names something else: the card scraped from the standalone repo
+    the bundled copy retired. Those differ only when the repo slug isn't the plugin id
+    (``agent-browser-plugin`` → ``agent-browser`` vs id ``agent_browser``, #3451), and
+    keying the override by ``site_id`` there produced TWO cards — the unfolded bundled
+    one plus an override-only append. So a bundled row with a differing ``site_id`` emits
+    BOTH: the override under ``id``, and a ``hidden`` marker under ``site_id`` that drops
+    the retired repo's card until the repo is archived (the scraper skips archived repos).
     """
     out = []
     for e in entries:
@@ -147,8 +157,12 @@ def render_site(entries: list[dict]) -> str:
         if not e.get("site", True):
             continue
         bundled = bool(e.get("bundled"))
+        if bundled and e.get("site_id") and e["site_id"] != e["id"]:
+            # The retired standalone repo's scraped card — dropped, with a pointer to the
+            # bundled row that replaced it (the page only reads `hidden`).
+            out.append({"id": e["site_id"], "hidden": True, "superseded_by": e["id"]})
         entry: dict = {
-            "id": e.get("site_id") or e["id"],
+            "id": e["id"] if bundled else (e.get("site_id") or e["id"]),
             "name": e["name"],
             "category": e["category"],
             "official": bool(e.get("official", True)),

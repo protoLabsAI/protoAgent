@@ -531,6 +531,11 @@
   },
   {
     "id": "agent-browser",
+    "hidden": true,
+    "superseded_by": "agent_browser"
+  },
+  {
+    "id": "agent_browser",
     "name": "Agent Browser",
     "category": "Automation",
     "official": true,
