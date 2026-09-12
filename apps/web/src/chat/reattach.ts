@@ -91,11 +91,23 @@ export function shouldReattach(
   return true;
 }
 
+/** The lead turn's latest assistant bubble — skipping rows a PARTICIPANT spoke (`author`)
+ *  and the lead's outgoing asks to one (`addressedTo`), the #3449 room shape. Those land
+ *  as their own already-settled rows AFTER the live preview while the turn is still
+ *  running, so "the last assistant row" named one of them and read the turn as over: the
+ *  slot's reattach effect cancelled a live reattach, and when the turn really ended there
+ *  was no reattach left to release the session — it sat "streaming" for good. */
+export function leadAssistantMessage(messages: ChatMessage[] | undefined): ChatMessage | undefined {
+  return [...(messages ?? [])]
+    .reverse()
+    .find((message) => message.role === "assistant" && !message.author && !message.addressedTo);
+}
+
 /** Stable dependency key for the session slot's reattach effect. Hydration can
  * fill an already-mounted empty fixed-id tab, so sessionId alone is not enough
  * to trigger the effect when its durable streaming assistant appears later. */
 export function reattachKeyForMessages(messages: ChatMessage[] | undefined): string {
-  const last = [...(messages ?? [])].reverse().find((message) => message.role === "assistant");
+  const last = leadAssistantMessage(messages);
   return last?.status === "streaming" && last.taskId && last.id
     ? `${last.id}:${last.taskId}`
     : "";
@@ -247,6 +259,7 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
       }
       if (!sawTask || !state || TERMINAL.test(state)) {
         const { state: s2, text } = await api.getTask(taskId).catch(() => ({ state: "", text: "" }));
+        if (cancelled) return; // a late answer must not settle over a turn started since the cancel
         finalize(sessionId, assistantId, s2 || state, text);
         return;
       }
@@ -264,6 +277,10 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
         // and finalize off the durable task.
         if (cancelled) return;
         const { state, text } = await api.getTask(taskId).catch(() => ({ state: "completed", text: "" }));
+        // Cancelled while GetTask was out: the cancel already handed the session back, and a
+        // turn started since owns it now — finalize would set it idle mid-turn (Stop gone,
+        // Send live), inviting a second concurrent turn into this slot.
+        if (cancelled) return;
         if (PAUSED.test(state)) {
           // Waiting on the operator (HITL / auth): un-busy the session so the
           // re-rendered form's buttons work, but DON'T finalize — stamping the
