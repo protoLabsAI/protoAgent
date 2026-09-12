@@ -666,6 +666,13 @@ class InstancePaths:
         return self.box_root / ".instances"
 
     @property
+    def owned_trees_dir(self) -> Path:
+        """Per-process records of the process trees each owner spawned (#3463) — BOX
+        tier, beside ``.instances/``, so any instance on the machine can reap the trees
+        of an owner that died without tearing them down."""
+        return self.box_root / ".owned-trees"
+
+    @property
     def data_version_file(self) -> Path:
         return self.box_root / ".data-version"
 

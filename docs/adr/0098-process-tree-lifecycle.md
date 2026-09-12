@@ -89,6 +89,36 @@ the member's lifespan finishing.
 Plugins that spawn their own trees use the same seam (projectBoard's gate/test
 children are the first candidate, once this is in a release).
 
+### Amendment — trees whose owner died without teardown are swept (#3463, 2026-09-12)
+
+The #3428 registry lives in memory, so it dies with its owner. An owner that is
+**SIGKILLed** (the Tauri shell killing the hub sidecar, an OOM kill, `kill -9`) or
+that **crashes** runs no hook at all: not the signal-receipt teardown, not atexit, not
+the watchdog. Its trees run on at ppid=1. `codex-acp` doesn't even exit when its
+stdin loses its writer. Sixteen of them ran for 36h (~780 MB) before a hand cleanup.
+So the registry is also kept on disk, and swept:
+
+- **One record per owning process:** `<box_root>/.owned-trees/<pid>.json`
+  (`InstancePaths.owned_trees_dir`, BOX tier beside `.instances/`, so any instance on
+  the machine can reach it). It holds the owner's start time and each tree's root,
+  pgid and tracking time. `track_tree`/`untrack_tree` rewrite it atomically. The
+  exit-signal path never writes it (no file IO between bytecodes); a stale entry naming
+  a gone group costs nothing. `reap_tracked_trees` settles it, so a clean exit leaves
+  no record.
+- **`sweep_orphaned_trees()`** reaps the groups of every record whose owner is gone,
+  meaning its pid is dead or now belongs to a process that started later. The server
+  sweeps at boot and every `ORPHAN_SWEEP_INTERVAL_S` (10 min), off the loop.
+- **Nothing is killed on a guess.** A group is signalled only while it provably is the
+  recorded one: it still has members; if its leader (pid == pgid) runs, that leader
+  started *before* the record; if it's leaderless (a launcher that died, its binary
+  still running), POSIX never reissues a live group's id. The check is repeated before
+  the SIGKILL. An owner whose start time can't be read counts as alive: a missed reap
+  is recoverable, a wrong kill is not.
+
+POSIX only. Windows has no start-time probe here to tell a recycled pid from ours,
+and `taskkill /T` can't reach a rootless tree anyway: the same Job Object trigger as
+above.
+
 ## Consequences
 
 - Direct `os.killpg` / `start_new_session=True` / signal-escalation code
@@ -106,4 +136,4 @@ children are the first candidate, once this is in a release).
 
 #2412 (phase 2) · #2416 (shell repair this extracts) · #2413 review (bounded
 taskkill wait) · #1678/#1679 (`pid_alive`) · ADR 0065 (infra tier layering) ·
-#3428 (owned-tree registry — exit-time teardown)
+#3428 (owned-tree registry — exit-time teardown) · #3463 (owned-tree records — the SIGKILL/crash sweep)

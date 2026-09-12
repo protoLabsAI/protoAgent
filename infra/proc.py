@@ -35,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import contextlib
+import json
 import os
 import signal
 import subprocess
@@ -46,7 +47,7 @@ from typing import Any
 # os.kill(pid, 0), the #1678 sidecar-suicide class). One probe, one home;
 # proc re-exports it because every tree-teardown caller needs it next to
 # the kill primitives.
-from infra.paths import pid_alive
+from infra.paths import atomic_write, pid_alive
 
 #: Bound every taskkill wait (seconds) — a stalled tree-kill must not extend the
 #: caller's own timeout budget; the immediate-kill fallback still runs after it.
@@ -302,6 +303,7 @@ def track_tree(pid: int) -> None:
     with _TRACKED_LOCK:
         _prune_dead_locked()
         _TRACKED[pid] = key
+        _persist_locked()
         if not _atexit_armed:
             # Armed on first use, so a process that never owns a tree gets no hook.
             # Covers an ordinary interpreter exit; `os._exit` bypasses atexit, which
@@ -313,7 +315,8 @@ def track_tree(pid: int) -> None:
 def untrack_tree(pid: int) -> None:
     """Forget ``pid`` — call once the owner has reaped the tree itself. Never raises."""
     with _TRACKED_LOCK:
-        _TRACKED.pop(pid, None)
+        if _TRACKED.pop(pid, None) is not None:
+            _persist_locked()
 
 
 #: Strong refs to the pending reap-then-forget waits — an unreferenced task can be
@@ -365,6 +368,7 @@ def _untrack_if_group_gone(pid: int) -> None:
             os.killpg(key, 0)
         except ProcessLookupError:
             _TRACKED.pop(pid, None)
+            _persist_locked()
         except (PermissionError, OSError):
             pass
 
@@ -393,6 +397,14 @@ def tracked_trees() -> list[int]:
         return list(_TRACKED)
 
 
+def _drop(pid: int) -> None:
+    """Forget ``pid`` WITHOUT touching the on-disk record — for the exit-signal path,
+    which runs between bytecodes and must not write files. A record left naming a group
+    that is gone costs nothing: the sweep skips a group that no longer exists."""
+    with _TRACKED_LOCK:
+        _TRACKED.pop(pid, None)
+
+
 def _signal_tracked(*, force: bool) -> int:
     """Signal every tracked tree once, without waiting. Returns how many were still
     there to signal; prunes the ones that are gone. Never raises."""
@@ -410,7 +422,7 @@ def _signal_tracked(*, force: bool) -> int:
                 signal_tree(pid, force=force)
                 signalled += 1
             else:
-                untrack_tree(pid)
+                _drop(pid)
             continue
         try:
             # By the stored GROUP, not by getpgid(pid): the root is often the first to
@@ -419,7 +431,7 @@ def _signal_tracked(*, force: bool) -> int:
             os.killpg(key, signal.SIGKILL if force else signal.SIGTERM)
             signalled += 1
         except ProcessLookupError:
-            untrack_tree(pid)  # the whole group is gone
+            _drop(pid)  # the whole group is gone
         except (PermissionError, OSError):
             pass
     return signalled
@@ -458,11 +470,212 @@ def reap_tracked_trees(*, grace: float = 1.0) -> int:
     """
     try:
         n = _signal_tracked(force=False)
+        killed: list[int] = []
         if n:
             time.sleep(grace)
+            with _TRACKED_LOCK:
+                killed = list(_TRACKED)
             _signal_tracked(force=True)
+        # Settle the on-disk record (#3463) so a clean exit leaves none behind. A group
+        # that has had SIGKILL — which nothing can ignore — is done even if a member
+        # still shows as a zombie (a killed root this exit never waited on), so it is
+        # forgotten rather than pruned by a liveness probe that would call it alive.
+        # Only what that round signalled: a tree tracked meanwhile stays recorded.
+        with _TRACKED_LOCK:
+            for pid in killed:
+                _TRACKED.pop(pid, None)
+            _prune_dead_locked()
+            _persist_locked()
         return n
     except Exception:  # noqa: BLE001 — exit-path teardown is best-effort
+        return 0
+
+
+# ── owned-tree records: the SIGKILL / crash half (#3463) ─────────────────────
+#
+# The registry above lives in memory, so it dies with its owner. An owner that is
+# SIGKILLed (the Tauri shell killing the hub sidecar, an OOM kill, `kill -9`) or that
+# crashes runs no hook at all — not the signal-receipt teardown, not atexit, not the
+# watchdog — and its trees run on at ppid=1. `codex-acp` does not even exit when its
+# stdin loses its writer: sixteen of them ran for 36h (~780 MB) before a hand cleanup.
+#
+# So every owner also mirrors its registry to disk — one record per owning process in
+# the machine-shared `.owned-trees/` — and any protoAgent process that boots, or ticks
+# its periodic sweep, reaps the groups of owners that are gone. Nothing is killed on a
+# guess: an owner counts as gone only when its pid is dead or now belongs to a process
+# that started later, and a group is signalled only while it is provably still the
+# group that was recorded (`_is_that_group`).
+#
+# POSIX only. Windows has no start-time probe here to tell a recycled pid from ours, and
+# `taskkill /T` cannot reach a tree whose root is gone anyway — the Job Object upgrade
+# ADR 0098 defers is the fix there too.
+
+#: ``ps -o lstart=`` reads to the second; a start time within this of the record matches.
+_START_TOLERANCE = 2.0
+#: When each tracked root was recorded — the reference `_is_that_group` compares against.
+_TRACKED_AT: dict[int, float] = {}
+_owner_start: float | None = None
+_owner_start_read = False
+
+
+def _records_dir():
+    """``<box_root>/.owned-trees`` — shared by every instance on the machine, so a
+    sibling (or the next boot) can reap a dead owner's trees. None when unresolvable."""
+    try:
+        from infra.paths import instance_paths
+
+        return instance_paths().owned_trees_dir
+    except Exception:  # noqa: BLE001 — a record is best-effort; never break a spawn
+        return None
+
+
+def _proc_start(pid: int) -> float | None:
+    """When ``pid`` started, in epoch seconds — or None if that can't be read (gone, or
+    no probe on this platform). ``/proc`` on Linux; ``ps -o lstart=`` elsewhere."""
+    if _WINDOWS or pid <= 0:
+        return None
+    if os.path.isdir("/proc/self"):
+        try:
+            with open(f"/proc/{pid}/stat", "rb") as f:
+                raw = f.read()
+            ticks = int(raw[raw.rindex(b")") + 2 :].split()[19])  # field 22: starttime
+            with open("/proc/stat", "rb") as f:
+                btime = next(int(line.split()[1]) for line in f if line.startswith(b"btime"))
+            return btime + ticks / os.sysconf("SC_CLK_TCK")
+        except (OSError, ValueError, IndexError, StopIteration):
+            return None
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            env={**os.environ, "LC_ALL": "C"},
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    try:
+        return time.mktime(time.strptime(" ".join(out.split()), "%a %b %d %H:%M:%S %Y"))
+    except ValueError:
+        return None
+
+
+def _persist_locked() -> None:
+    """Mirror the registry to this process's record — or remove the record once nothing
+    is tracked. Caller holds ``_TRACKED_LOCK``. Never raises."""
+    global _owner_start, _owner_start_read
+    if _WINDOWS:
+        return
+    try:
+        d = _records_dir()
+        if d is None:
+            return
+        path = d / f"{os.getpid()}.json"
+        for pid in [p for p in _TRACKED_AT if p not in _TRACKED]:
+            _TRACKED_AT.pop(pid, None)
+        if not _TRACKED:
+            path.unlink(missing_ok=True)
+            return
+        if not _owner_start_read:
+            _owner_start, _owner_start_read = _proc_start(os.getpid()), True
+        now = time.time()
+        trees = [
+            {"root": pid, "pgid": key, "tracked_at": _TRACKED_AT.setdefault(pid, now)} for pid, key in _TRACKED.items()
+        ]
+        atomic_write(path, json.dumps({"owner": os.getpid(), "owner_start": _owner_start, "trees": trees}))
+    except Exception:  # noqa: BLE001 — a record is best-effort; never break a spawn
+        pass
+
+
+def _owner_alive(pid: int, recorded_start: float | None) -> bool:
+    """Is the process that wrote a record still running? A live pid that started at a
+    different time is a stranger holding a recycled pid — the owner is gone. When the
+    start time can't be read either way, lean alive: a missed reap is recoverable, a
+    wrong kill is not."""
+    if not pid_alive(pid):
+        return False
+    if recorded_start is None:
+        return True
+    now = _proc_start(pid)
+    return now is None or abs(now - float(recorded_start)) <= _START_TOLERANCE
+
+
+def _is_that_group(pgid: int, tracked_at: float) -> bool:
+    """Is ``pgid`` still the group recorded at ``tracked_at`` — so signalling it cannot
+    reach a stranger? Never our own group, never one we may not signal.
+
+    * Gone (no member left): nothing to do.
+    * Its leader (pid == pgid) runs: ours started BEFORE it was tracked; a process that
+      took the recycled pid, and leads a group of that id, started after.
+    * Leaderless but populated — the codex-acp shape, a launcher that died with its
+      binary still running: POSIX never reissues a pid that is still a live group's id,
+      so this is still the recorded group."""
+    if pgid <= 1 or pgid == os.getpgrp():
+        return False
+    try:
+        os.killpg(pgid, 0)
+    except OSError:  # ProcessLookupError: gone · PermissionError: not ours to signal
+        return False
+    if pid_alive(pgid):
+        started = _proc_start(pgid)
+        return started is not None and started <= tracked_at + _START_TOLERANCE
+    return True
+
+
+def sweep_orphaned_trees(*, grace: float = 1.0) -> int:
+    """Reap the trees of owners that died without tearing them down — SIGKILLed,
+    crashed, OOM-killed (#3463). Returns how many groups it signalled. Never raises.
+
+    Reads every record in ``.owned-trees/`` except this process's own. A record whose
+    owner still runs is left alone; for a dead owner, each group that passes
+    ``_is_that_group`` gets SIGTERM, then — re-checked, since the pid could in principle
+    be handed on once the group is gone — SIGKILL after ``grace``. The record is
+    removed once its groups have been dealt with. Blocking (it shells out to ``ps`` and
+    waits ``grace``): call it off the event loop."""
+    if _WINDOWS:
+        return 0
+    try:
+        d = _records_dir()
+        if d is None or not d.is_dir():
+            return 0
+        done: list = []
+        doomed: list[tuple[int, float]] = []
+        for path in d.glob("*.json"):
+            try:
+                owner = int(path.stem)
+            except ValueError:
+                continue
+            if owner == os.getpid():
+                continue
+            try:
+                rec = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                done.append(path)  # unreadable: it can guard nothing, so it goes
+                continue
+            if _owner_alive(owner, rec.get("owner_start")):
+                continue
+            for tree in rec.get("trees") or ():
+                try:
+                    pgid, at = int(tree["pgid"]), float(tree["tracked_at"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if _is_that_group(pgid, at):
+                    doomed.append((pgid, at))
+            done.append(path)
+        for pgid, _at in doomed:
+            with contextlib.suppress(OSError):
+                os.killpg(pgid, signal.SIGTERM)
+        if doomed:
+            time.sleep(grace)
+            for pgid, at in doomed:
+                if _is_that_group(pgid, at):
+                    with contextlib.suppress(OSError):
+                        os.killpg(pgid, signal.SIGKILL)
+        for path in done:
+            with contextlib.suppress(OSError):
+                path.unlink()
+        return len(doomed)
+    except Exception:  # noqa: BLE001 — a sweep is best-effort housekeeping
         return 0
 
 
@@ -475,6 +688,7 @@ __all__ = [
     "pid_alive",
     "reap_tracked_trees",
     "signal_tree",
+    "sweep_orphaned_trees",
     "terminate_tree",
     "track_tree",
     "tracked_trees",
