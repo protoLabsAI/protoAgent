@@ -314,7 +314,7 @@ class FakeRegistry:
 
     def register_setup_step(self, step: str, fn) -> None:
         """Records the step (``self.setup_steps[step] = fn``) so a plugin test can run it the
-        way the host's ``POST /api/plugins/<id>/setup-steps/<step>`` would — call it and
+        way the host's ``POST /api/plugin-setup/<id>/<step>`` would — call it and
         assert on the message / ``pending`` it returns. Same signature as the host method;
         the host also validates the id and caps the count."""
         self.setup_steps[step] = fn

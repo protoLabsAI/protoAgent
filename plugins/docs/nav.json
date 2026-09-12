@@ -899,6 +899,10 @@
           "title": "0109 — project_board: one board, one store, N repos"
         },
         {
+          "path": "adr/0110-plugin-setup-steps.md",
+          "title": "0110 — Plugin setup steps: a host-run, operator-only fix behind a setup-gap button"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
