@@ -1568,7 +1568,7 @@ requires-dist = [
     { name = "packaging", specifier = ">=23.2" },
     { name = "prometheus-client", specifier = ">=0.20" },
     { name = "protolabs-a2a", specifier = ">=0.3.0" },
-    { name = "pypdf", specifier = ">=4.0" },
+    { name = "pypdf", specifier = ">=6.8" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "qrcode", specifier = ">=8" },

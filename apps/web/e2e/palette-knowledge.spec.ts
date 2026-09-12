@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { routeSnapshot } from "./routeSnapshot";
+
 // Live knowledge search in the command palette (#3293), in a real browser against the built
 // dist — the layer the unit tripwire cannot reach.
 //
@@ -94,12 +96,14 @@ test("an instance with no knowledge store neither searches nor spins", async ({ 
   // console already fetches it on boot — so the palette can decline to register a provider
   // that could only ever answer `{enabled: false, results: []}`. Without the gate the root
   // raises "Searching…" on every typed query the moment ANY provider exists.
-  await page.route("**/api/runtime/status**", async (route) => {
-    const res = await route.fetch();
-    const body = await res.json();
-    body.knowledge = { ...(body.knowledge ?? {}), enabled: false, status: "disabled" };
-    await route.fulfill({ response: res, json: body });
-  });
+  await routeSnapshot(
+    page,
+    "/api/runtime/status",
+    (body) => {
+      body.knowledge = { ...(body.knowledge ?? {}), enabled: false, status: "disabled" };
+    },
+    { glob: "**/api/runtime/status**" },
+  );
   let searches = 0;
   await page.route("**/api/knowledge/search**", (route) => {
     searches += 1;

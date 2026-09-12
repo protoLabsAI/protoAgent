@@ -120,6 +120,20 @@ On every host that upgrades, that one field changes the lifecycle above:
   `plugins.enabled` along with its config section and secrets, even with `--purge`.
   They belong to the bundled copy now.
 
+**A copy you placed by hand** — dropped in or symlinked into your plugins dir, with no
+`plugins.lock` entry — is judged on version instead (that rule predates `supersedes`):
+older than the bundled copy and it stops being what runs. That used to happen in silence;
+now it says so, in the log and as a banner naming the path, and `plugin uninstall <id>`
+removes exactly that path (a symlinked dev checkout is unlinked, never followed, so your
+working tree survives). It never removes anything else: a folder named after the id that
+holds a *different* plugin, a folder with no plugin in it, or the bundled tree itself are
+all refused with the reason. A link at `<plugins dir>/<id>` whose checkout no longer
+exists is unlinked (it has no target, so nothing else can be touched) and named in the
+output. The same check guards every `plugin uninstall`, bundled id or not: with
+`plugins.dir` pointed at a folder of checkouts, a folder is removed only if it holds that
+plugin, or `plugins.lock` records installing it there. Links, including Windows directory
+junctions, are unlinked and never followed. Keep such a copy in charge by giving it a version above the bundled one.
+
 Three rules hold throughout. **A fork still wins**: a copy installed from any URL
 *not* listed is a deliberate override, exactly as before. **Matching is exact about
 the repo but not its spelling**: `https://`, `ssh://` and `git@host:` forms, letter

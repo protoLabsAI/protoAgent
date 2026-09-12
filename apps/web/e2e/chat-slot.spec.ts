@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { routeSnapshot } from "./routeSnapshot";
+
 // The chat surface is a SLOT (ADR 0045): a plugin view declaring `slot: "chat"`
 // replaces the built-in chat panel — rendered under the core "chat" rail id, kept
 // mounted for the app's lifetime (#613 streaming continuity), and given no extra
@@ -7,9 +9,7 @@ import { expect, test } from "@playwright/test";
 // every other spec keeps the default fixture, proving the built-in default.
 
 async function withChatSlotPlugin(page: import("@playwright/test").Page) {
-  await page.route("**/api/runtime/status", async (route) => {
-    const response = await route.fetch();
-    const json = await response.json();
+  await routeSnapshot(page, "/api/runtime/status", (json) => {
     json.plugins.push({
       id: "chatty",
       name: "Chatty",
@@ -20,7 +20,6 @@ async function withChatSlotPlugin(page: import("@playwright/test").Page) {
       skills: 0,
       views: [{ id: "panel", label: "Chatty", icon: "MessageSquare", path: "/plugins/chatty/panel", slot: "chat" }],
     });
-    await route.fulfill({ json });
   });
 }
 

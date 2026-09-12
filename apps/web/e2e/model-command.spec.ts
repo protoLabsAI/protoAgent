@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { routeSnapshot } from "./routeSnapshot";
+
 // /model quick-switch (#1957): bare /model opens an inline card picker (the /effort
 // pattern) fed by the PINNED FAVORITES from Settings ▸ Model ▸ Favorite models
 // (settings-schema fixture: favorites ["protolabs/fast", "protolabs/reasoning"] —
@@ -115,11 +117,8 @@ test("Esc dismisses the /model picker and hands focus back to the composer (#197
 
 test("no favorites configured → /model falls back to the FULL model list with a pin-favorites hint", async ({ page }) => {
   // Serve the same schema with the favorites emptied — the graceful-fallback state.
-  await page.route("**/api/settings/schema", async (route) => {
-    const response = await route.fetch();
-    const json = await response.json();
+  await routeSnapshot(page, "/api/settings/schema", (json) => {
     for (const g of json.groups) for (const f of g.fields ?? []) if (f.key === "model.favorites") f.value = [];
-    await route.fulfill({ response, json });
   });
   await page.goto("/app/", { waitUntil: "load" });
 

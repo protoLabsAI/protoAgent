@@ -21,8 +21,8 @@ from ops import OpContext, op
 
 class IngestError(Exception):
     """An expected, legible ingest failure. ``kind`` is a stable token the adapters map:
-    ``no_source`` / ``not_found`` / ``missing_dependency`` / ``unsupported`` / ``extraction``
-    / ``empty``. ``str(err)`` is the underlying detail (safe to show)."""
+    ``no_source`` / ``not_found`` / ``missing_dependency`` / ``unsupported`` / ``too_large``
+    / ``extraction`` / ``empty``. ``str(err)`` is the underlying detail (safe to show)."""
 
     def __init__(self, detail: str, *, kind: str):
         super().__init__(detail)
@@ -101,7 +101,14 @@ async def _extract(source: IngestSource, ctx: OpContext):
     """Turn a source into ``(ExtractResult, provenance_label)`` off the event loop — the
     shared half of ingest + preview. Never persists. Raises :class:`IngestError` on an
     expected failure; returns ``(None, "")`` when no source was given."""
-    from ingestion import ExtractResult, MissingDependency, UnsupportedSource, extract_bytes, extract_url
+    from ingestion import (
+        ExtractResult,
+        MissingDependency,
+        SourceTooLarge,
+        UnsupportedSource,
+        extract_bytes,
+        extract_url,
+    )
 
     transcribe, describe = _media_fns(ctx.graph_config)
     try:
@@ -133,6 +140,8 @@ async def _extract(source: IngestSource, ctx: OpContext):
         raise IngestError(str(exc), kind="missing_dependency") from exc
     except UnsupportedSource as exc:
         raise IngestError(str(exc), kind="unsupported") from exc
+    except SourceTooLarge as exc:
+        raise IngestError(str(exc), kind="too_large") from exc
     except IngestError:
         raise
     except Exception as exc:  # noqa: BLE001 — surface extraction failure, never crash the surface

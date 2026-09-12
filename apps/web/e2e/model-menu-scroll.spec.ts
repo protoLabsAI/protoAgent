@@ -1,12 +1,13 @@
 import { expect, test } from "@playwright/test";
 
+import { routeSnapshot } from "./routeSnapshot";
+
 // The composer's model menu must stay inside the viewport and scroll (#3111). The DS
 // caps its own DropSelect but never base `.pl-menu`, so a menu with more models than
 // fit simply ran off the bottom of the screen with no way to reach the rest — which is
 // every operator holding a gateway plus a subscription or two.
 test("the model menu is capped to the viewport and scrolls", async ({ page }) => {
-  await page.route("**/api/settings/schema", async (route) => {
-    const json = await (await route.fetch()).json();
+  await routeSnapshot(page, "/api/settings/schema", (json) => {
     const many = Array.from({ length: 36 }, (_, i) => `gateway:protolabs/model-${i + 1}`);
     for (const g of json.groups ?? [])
       for (const f of g.fields ?? []) {
@@ -15,7 +16,6 @@ test("the model menu is capped to the viewport and scrolls", async ({ page }) =>
         if (f.key === "model.favorites") { f.value = []; f.options = many; }
         if (f.key === "model.name") f.options = [...new Set([...(f.options ?? []), ...many])];
       }
-    await route.fulfill({ json });
   });
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByRole("button", { name: "Model for this chat" }).click();
