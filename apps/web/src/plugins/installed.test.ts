@@ -8,6 +8,7 @@ import {
   needsAttention,
   sortInstalled,
   statusCounts,
+  toggleToast,
   uninstallConfirmText,
   uninstallToast,
   type InstalledRow,
@@ -194,5 +195,25 @@ describe("uninstall wording for a plugin that now ships with protoAgent (#3445)"
     });
     expect(uninstallToast("Board", {})).toEqual({ title: "Plugin uninstalled", message: "Board removed." });
     expect(uninstallToast("Board", undefined).title).toBe("Plugin uninstalled");
+  });
+});
+
+
+describe("toggleToast", () => {
+  it("names a just-enabled plugin's missing packages and where to install them (#3450)", () => {
+    expect(toggleToast("Cowork", { enabled: true, deps_missing: ["pypdf", "openpyxl"] })).toEqual({
+      tone: "info",
+      title: "Plugin enabled",
+      message: "Cowork is live, but it's missing Python packages: pypdf, openpyxl. Use Install deps on its row.",
+    });
+  });
+
+  it("is the plain success toast when nothing is missing", () => {
+    expect(toggleToast("Notes", { enabled: true })).toEqual({ tone: "success", title: "Plugin enabled", message: "Notes is live." });
+  });
+
+  it("never mentions deps on a disable, and keeps the restart hint", () => {
+    expect(toggleToast("Cowork", { enabled: false, deps_missing: ["pypdf"] }).message).toBe("Cowork is off.");
+    expect(toggleToast("Cowork", { enabled: false, restart_recommended: true }).title).toBe("Plugin disabled");
   });
 });

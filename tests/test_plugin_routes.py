@@ -216,7 +216,19 @@ def _deps_posture(monkeypatch, *, source_url, acked=(), trust_unverified=False, 
     )
     monkeypatch.setattr(installer, "recorded_source_url", lambda pid: source_url)
     calls: list[str] = []
-    monkeypatch.setattr(installer, "install_deps", lambda pid: calls.append(pid) or ["dep-a"])
+    def _fake(pid, *, failed=None, newly_installed=None):
+        calls.append(pid)
+        if newly_installed is not None:
+            newly_installed.append("dep-a")
+        return ["dep-a"]
+
+    monkeypatch.setattr(installer, "install_deps", _fake)
+    # A successful install now reloads (#3450); never run the real hot-reload here. Set on
+    # the fake module `_wire` installed — a dotted-string target would re-import the real
+    # `server` package against that fake and fail.
+    import sys
+
+    monkeypatch.setattr(sys.modules["server.agent_init"], "_reload_langgraph_agent", lambda: (True, "stub"), raising=False)
     return calls
 
 
@@ -788,13 +800,18 @@ def test_install_deps_route_runs_installer(monkeypatch):
 
     calls: list[str] = []
 
-    def _fake_install_deps(pid):
+    def _fake_install_deps(pid, *, failed=None, newly_installed=None):
         calls.append(pid)
+        newly_installed.append("python-docx")  # openpyxl was already there
         return ["python-docx", "openpyxl"]
 
+    import runtime.state as rs
+
     monkeypatch.setattr(installer, "install_deps", _fake_install_deps)
+    monkeypatch.setattr(rs.STATE, "plugin_meta", [], raising=False)
     body = _client().post("/api/plugins/install-deps", json={"id": "cowork"}).json()
-    assert body == {"ok": True, "installed": ["python-docx", "openpyxl"]} and calls == ["cowork"]
+    # Only what NEWLY landed — an already-present package isn't "installed" (#3450).
+    assert body == {"ok": True, "installed": ["python-docx"], "refresh": "none"} and calls == ["cowork"]
 
 
 def test_install_deps_route_requires_id():
@@ -804,12 +821,203 @@ def test_install_deps_route_requires_id():
 def test_install_deps_route_maps_install_error(monkeypatch):
     from graph.plugins import installer
 
-    def _boom(pid):
+    def _boom(pid, **kw):
         raise installer.InstallError("pip install failed")
 
     monkeypatch.setattr(installer, "install_deps", _boom)
     r = _client().post("/api/plugins/install-deps", json={"id": "cowork"})
     assert r.status_code == 400 and "pip install failed" in r.json()["detail"]
+
+
+def _deps_failing(monkeypatch, *, installed, failed):
+    from graph.plugins import installer
+
+    def _fake(pid, *, failed=None, newly_installed=None, _names=tuple(failed), _got=tuple(installed)):
+        failed.extend(_names)
+        newly_installed.extend(_got)
+        return list(_got)
+
+    import runtime.state as rs
+
+    monkeypatch.setattr(rs.STATE, "plugin_meta", [], raising=False)
+    reloads: list[int] = []
+    monkeypatch.setattr(installer, "install_deps", _fake)
+    monkeypatch.setattr(installer, "effective_source_url", lambda pid: "")
+    monkeypatch.setattr("server.agent_init._reload_langgraph_agent", lambda: reloads.append(1) or (True, "ok"))
+    return reloads
+
+
+def test_install_deps_route_never_reports_success_when_nothing_landed(monkeypatch):
+    """All-optional deps fail SOFT in install_deps (no pip in a uv-only venv, an
+    unreachable index), so `[]` alone read exactly like "nothing to install" and the
+    wizard marked the row done (#3450). `failed` + `ok: false` tell them apart."""
+    reloads = _deps_failing(monkeypatch, installed=[], failed=["python-docx", "openpyxl"])
+    body = _client().post("/api/plugins/install-deps", json={"id": "cowork"}).json()
+    assert body == {"ok": False, "installed": [], "refresh": "none", "failed": ["python-docx", "openpyxl"]}
+    assert reloads == []  # nothing changed, so nothing to reload
+
+
+def test_install_deps_route_partial_install_is_ok_but_names_what_failed(monkeypatch):
+    reloads = _deps_failing(monkeypatch, installed=["requests>=2"], failed=["pillow"])
+    body = _client().post("/api/plugins/install-deps", json={"id": "demo"}).json()
+    assert body == {"ok": True, "installed": ["requests>=2"], "refresh": "none", "failed": ["pillow"]}
+    assert reloads == []  # "demo" isn't a loaded plugin here — the refresh-rule tests cover that
+
+
+def _refresh_case(monkeypatch, meta_entry, *, newly=("pypdf",)):
+    """The refresh rule, driven through the route: install_deps and both refresh paths
+    are faked, `STATE.plugin_meta` holds the one plugin under test."""
+    from graph.plugins import installer, loader
+
+    _wire(monkeypatch, enabled=[meta_entry["id"]], disabled=[], meta=[meta_entry])
+    monkeypatch.setattr(installer, "effective_source_url", lambda pid: "")
+
+    def _fake(pid, *, failed=None, newly_installed=None):
+        newly_installed.extend(newly)
+        return list(newly) or ["pypdf"]
+
+    spy = {"full": 0, "plugin": 0}
+
+    def _full():
+        spy["full"] += 1
+        return True, "ok"
+
+    def _one(pid):
+        spy["plugin"] += 1
+        return []
+
+    monkeypatch.setattr(installer, "install_deps", _fake)
+    monkeypatch.setattr(sys.modules["server.agent_init"], "_reload_langgraph_agent", _full, raising=False)
+    monkeypatch.setattr(loader, "refresh_plugin_deps", _one)
+    return spy
+
+
+def test_install_deps_already_satisfied_refreshes_nothing(monkeypatch):
+    spy = _refresh_case(monkeypatch, {"id": "cowork", "enabled": True, "loaded": True, "deps_missing": []}, newly=())
+    body = _client().post("/api/plugins/install-deps", json={"id": "cowork"}).json()
+    assert body == {"ok": True, "installed": [], "refresh": "none"}
+    assert spy == {"full": 0, "plugin": 0}  # no pip ran, nothing changed, nothing refreshed
+
+
+def test_install_deps_for_a_loaded_plugin_refreshes_just_that_plugin(monkeypatch):
+    """No graph rebuild: no MCP teardown, no surface reconnects — one list recomputed."""
+    import runtime.state as rs
+
+    entry = {"id": "cowork", "enabled": True, "loaded": True, "deps_missing": ["pypdf"]}
+    spy = _refresh_case(monkeypatch, entry)
+    body = _client().post("/api/plugins/install-deps", json={"id": "cowork"}).json()
+    assert body["refresh"] == "plugin" and spy == {"full": 0, "plugin": 1}
+    assert rs.STATE.plugin_meta[0]["deps_missing"] == []  # what /api/runtime/status now reports
+
+
+def test_install_deps_that_unblocks_a_failed_load_does_a_full_reload(monkeypatch):
+    """The one case a targeted refresh can't handle: the plugin's code imports the dep, so
+    it never loaded, and only a load can bring it up."""
+    entry = {
+        "id": "legacy",
+        "enabled": True,
+        "loaded": False,
+        "error": "declared deps not installed (nope-pkg) — run: python -m server plugin install-deps legacy",
+    }
+    spy = _refresh_case(monkeypatch, entry)
+    body = _client().post("/api/plugins/install-deps", json={"id": "legacy"}).json()
+    assert body["refresh"] == "full" and spy == {"full": 1, "plugin": 0}
+
+
+def test_install_deps_for_a_plugin_that_failed_for_another_reason_refreshes_nothing(monkeypatch):
+    entry = {"id": "envy", "enabled": True, "loaded": False, "error": "missing env: ENVY_TOKEN"}
+    spy = _refresh_case(monkeypatch, entry)
+    body = _client().post("/api/plugins/install-deps", json={"id": "envy"}).json()
+    assert body["refresh"] == "none" and spy == {"full": 0, "plugin": 0}
+
+
+def test_the_full_reload_trigger_matches_the_loaders_deps_error(tmp_path, monkeypatch):
+    """`_refresh_after_deps` decides "only a load can fix this" from the loader's error
+    text — pin the two together so a reworded loader message can't silently demote a
+    deps-blocked plugin to "refresh nothing"."""
+    from graph.config import LangGraphConfig
+    from graph.plugins import loader
+    from operator_api import plugin_routes
+
+    d = tmp_path / "imp"
+    d.mkdir()
+    (d / "protoagent.plugin.yaml").write_text(
+        "id: imp\nname: imp\nversion: 0.1.0\nenabled: true\nrequires_pip: [nope-pkg-imp]\n", encoding="utf-8"
+    )
+    (d / "__init__.py").write_text("import nope_pkg_imp\n\n\ndef register(registry):\n    pass\n", encoding="utf-8")
+    monkeypatch.setattr(loader, "_plugin_roots", lambda config: [tmp_path])
+    meta = next(m for m in loader.load_plugins(LangGraphConfig()).meta if m["id"] == "imp")
+    assert not meta["loaded"] and plugin_routes._DEPS_BLOCKED_LOAD in meta["error"]
+
+
+def test_enabling_a_plugin_with_missing_deps_says_so_in_the_response(monkeypatch):
+    """The enable is the one UI moment to name missing packages; the console's toggle
+    toast reads `deps_missing` from this response (#3450)."""
+    import runtime.state as rs
+
+    _wire(monkeypatch, enabled=[], disabled=["cowork"], meta=[{"id": "cowork", "views": []}])
+    fake = sys.modules["server.agent_init"]
+    applied = fake._apply_settings_changes
+
+    def _apply_then_load(config=None, soul=None):
+        out = applied(config=config, soul=soul)
+        # What the real reload leaves behind: the enabled plugin's meta, deps computed at load.
+        rs.STATE.plugin_meta = [{"id": "cowork", "views": [], "enabled": True, "loaded": True, "deps_missing": ["pypdf"]}]
+        return out
+
+    monkeypatch.setattr(fake, "_apply_settings_changes", _apply_then_load)
+    body = _client().post("/api/plugins/cowork/enabled", json={"enabled": True}).json()
+    assert body["enabled"] is True and body["deps_missing"] == ["pypdf"]
+
+
+def test_install_deps_clears_the_deps_banner_without_a_restart(tmp_path, monkeypatch):
+    """End to end: the banner is up, the operator does what it says, and it's gone —
+    because the route reloads, which re-runs the loader's dep check. Before, it stayed
+    until the next restart."""
+    from graph.config import LangGraphConfig
+    from graph.plugins import installer, loader, setup_gaps
+
+    d = tmp_path / "needsdep"
+    d.mkdir()
+    (d / "protoagent.plugin.yaml").write_text(
+        "id: needsdep\nname: Needs Dep\nversion: 0.1.0\nenabled: true\nrequires_pip: [nope-pkg-z]\n", encoding="utf-8"
+    )
+    (d / "__init__.py").write_text("def register(registry):\n    pass\n", encoding="utf-8")
+    monkeypatch.setattr(loader, "_plugin_roots", lambda config: [tmp_path])
+    present: set[str] = set()
+    monkeypatch.setattr(installer, "_importable", lambda pkg: pkg in present)
+    monkeypatch.setattr(installer, "effective_source_url", lambda pid: "")
+    setup_gaps.reset()
+
+    def _banner():
+        return [g for g in setup_gaps.active() if g["key"] == loader.DEPS_GAP_KEY]
+
+    import pytest
+
+    import runtime.state as rs
+    from graph.plugins.manifest import load_manifest
+
+    res = loader.load_plugins(LangGraphConfig())
+    monkeypatch.setattr(rs.STATE, "plugin_meta", res.meta, raising=False)
+    assert _banner(), "precondition: the required dep is missing, so the banner is up"
+
+    def _fake_install(pid, *, failed=None, newly_installed=None):
+        present.add("nope-pkg-z")  # pip succeeded
+        newly_installed.append("nope-pkg-z")
+        return ["nope-pkg-z"]
+
+    monkeypatch.setattr(installer, "install_deps", _fake_install)
+    monkeypatch.setattr(installer, "effective_copies", lambda: {"needsdep": load_manifest(d)})
+    # A LOADED plugin must not cost a full graph reload (#3450): its code is already up,
+    # only its deps state is stale.
+    monkeypatch.setattr(
+        "server.agent_init._reload_langgraph_agent", lambda: pytest.fail("full reload for a loaded plugin")
+    )
+    body = _client().post("/api/plugins/install-deps", json={"id": "needsdep"}).json()
+    assert body["ok"] and body["refresh"] == "plugin"
+    assert not _banner()
+    assert next(m for m in rs.STATE.plugin_meta if m["id"] == "needsdep")["deps_missing"] == []
+    setup_gaps.reset()
 
 
 def test_installed_carries_bundle_provenance(monkeypatch, tmp_path):

@@ -49,6 +49,7 @@ See [Plugins](/guides/plugins) for how to use these fields, and
 | [`homepage`](#field-homepage) | `str` | `''` | provenance, shown in the install review |
 | [`min_protoagent_version`](#field-min-protoagent-version) | `str` | `''` | compat guard — the loader refuses to load the plugin when the host is older than declared (malformed strings only warn and load) |
 | [`supersedes`](#field-supersedes) | `list[str]` | `[]` | The standalone repo(s) this BUNDLED plugin replaces — how an external plugin moves into core under the SAME id (so `plugins.enabled`, its config section and every archetype's enable list keep… |
+| [`enables`](#field-enables) | `list[str]` | `[]` | Other plugins this BUNDLED plugin turns on ([#3450](https://github.com/protoLabsAI/protoAgent/issues/3450)) |
 
 ## Fields
 
@@ -231,3 +232,9 @@ compat guard — the loader refuses to load the plugin when the host is older th
 - **Type** `list[str]` · **Default** `[]`
 
 The standalone repo(s) this BUNDLED plugin replaces — how an external plugin moves into core under the SAME id (so `plugins.enabled`, its config section and every archetype's enable list keep working). Honored only on the copy shipped in protoAgent's own `plugins/` tree; inert anywhere else. Each entry is the git URL of a retired repo. When `plugins.lock` records the installed copy of this id as fetched from one of them, the bundled copy wins over it — at any version — and the operator gets a setup gap saying the installed copy can be removed. Installing or updating from a listed URL (directly, or as a bundle/archetype member) is skipped rather than refused, so archetype repos that still list the old URL keep working on old and new hosts alike. A copy installed from any OTHER URL (a fork) still wins as a deliberate override. Matching ignores the transport spelling (`https://`, `ssh://`, `git@host:path`), userinfo, port, letter case, and a trailing `.git` or slash. An entry that isn't a remote git URL naming a repo (a local path, `file://`, a glob) is dropped with a warning; a bare string is read as a one-entry list.
+
+### `enables` {#field-enables}
+
+- **Type** `list[str]` · **Default** `[]`
+
+Other plugins this BUNDLED plugin turns on ([#3450](https://github.com/protoLabsAI/protoAgent/issues/3450)). While this plugin is enabled, each listed plugin id is enabled too, unless the operator turned that plugin off explicitly (`plugins.disabled` always wins). Turning this plugin off returns each one to its own default (off, unless the operator enabled it themselves). Honored only on the copy shipped in protoAgent's own `plugins/` tree, like `supersedes`: a plugin that can switch another on could switch on code execution, so it's inert anywhere else. A bare string is read as a one-entry list; a non-string, blank or self entry is dropped with a warning.

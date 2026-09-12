@@ -11,7 +11,7 @@ Usage:
     python -m evals.runner                                # all cases
     python -m evals.runner --category tool                # one category
     python -m evals.runner --tasks current_time_intent,memory_ingest_intent
-    python -m evals.runner --tasks-file ../cowork-plugin/evals/tasks.json
+    python -m evals.runner --tasks-file plugins/cowork/evals/tasks.json
     python -m evals.runner --base-url http://host:7870
 
 Cases are described in ``tasks.json``. Each case picks one of three

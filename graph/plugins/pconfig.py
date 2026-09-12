@@ -82,8 +82,15 @@ def discover_plugin_config(roots, enabled_ids, disabled_ids=None, *, strict: boo
         disabled = set(disabled_ids or set())
         out: list[PluginConfigSchema] = []
         claimed: dict[str, str] = {}
-        for m in discover_plugins(list(roots)):
-            if m.id in disabled or not (m.enabled or m.id in enabled):
+        from graph.plugins import installer
+        from graph.plugins.manifest import implied_enabled
+
+        manifests = list(discover_plugins(list(roots)))
+        # The loader's own rule (#3450): a plugin another bundled plugin `enables` is on,
+        # so its settings section must resolve here too, or it binds with no config group.
+        implied = implied_enabled(manifests, enabled, disabled, bundled_dir=installer.bundled_plugins_dir())
+        for m in manifests:
+            if m.id in disabled or not (m.enabled or m.id in enabled or m.id in implied):
                 continue
             if not (m.config or m.settings or m.secrets):
                 continue

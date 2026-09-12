@@ -232,23 +232,6 @@
     }
   },
   {
-    "id": "cowork",
-    "name": "Cowork (document skills)",
-    "category": "Productivity",
-    "official": true,
-    "tagline": "Office-document skills for the Cowork archetype — Word, Excel, PowerPoint, and PDF as real files — plus a /daily-brief, drop-folder watches over your fenced work folders, schedule, memory-consolidation, and writing-voice habits (ADR 0083).",
-    "adds": [
-      "skill",
-      "verifier"
-    ],
-    "bundled": false,
-    "install": "https://github.com/protoLabsAI/cowork-plugin",
-    "links": {
-      "source": "https://github.com/protoLabsAI/cowork-plugin",
-      "docs": "https://github.com/protoLabsAI/cowork-plugin#readme"
-    }
-  },
-  {
     "id": "claude-bridge",
     "name": "Claude Bridge",
     "category": "Tools",
@@ -526,6 +509,23 @@
     "enable": "craft",
     "links": {
       "source": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/craft",
+      "docs": "/docs/guides/plugins"
+    }
+  },
+  {
+    "id": "cowork",
+    "name": "Cowork (document skills)",
+    "category": "Productivity",
+    "official": true,
+    "tagline": "Office-document skills for the Cowork archetype — Word, Excel, PowerPoint, and PDF as real files — plus a /daily-brief, drop-folder watches over your fenced work folders, schedule, memory-consolidation, and writing-voice habits (ADR 0083). Ships in-tree, on by default.",
+    "adds": [
+      "skill",
+      "verifier"
+    ],
+    "bundled": true,
+    "enable": "cowork",
+    "links": {
+      "source": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/cowork",
       "docs": "/docs/guides/plugins"
     }
   },

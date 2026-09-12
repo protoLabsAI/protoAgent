@@ -609,6 +609,107 @@ def _is_blank(value: object) -> bool:
     return False
 
 
+# The setup-gap key the loader reports unsatisfied declared pip deps under (#3450).
+DEPS_GAP_KEY = "deps-missing"
+_MAX_NAMED_DEPS = 6
+
+
+def _named(names: list[str]) -> str:
+    head = ", ".join(sorted(names)[:_MAX_NAMED_DEPS])
+    extra = len(names) - _MAX_NAMED_DEPS
+    return f"{head} (+{extra} more)" if extra > 0 else head
+
+
+def _deps_gap_message(plugin_id: str, hard: list[str], soft: list[str]) -> str | None:
+    """The banner line for an enabled plugin whose REQUIRED pip deps are absent, or
+    ``None`` when none are. Reads as a continuation of the banner's ``"<Plugin>: "``
+    prefix, like every other gap message; missing optional deps ride along as a note.
+
+    Optional-only gaps get no banner on purpose: the optional tier's contract (#1954) is
+    "runs without them", and a warning banner that returns every session is heavier than
+    that. They stay visible where the operator installs things instead — the plugin's row
+    in Settings ▸ Plugins and the setup wizard's dependency report (both read
+    ``deps_missing``) — and in the log."""
+    if not hard:
+        return None
+    also = f" (and optional {_named(soft)})" if soft else ""
+    return (
+        f"can't run until its Python packages are installed: {_named(hard)}{also}. "
+        f"Install them from Settings ▸ Plugins or with `protoagent plugin install-deps {plugin_id}`."
+    )
+
+
+def _report_deps_gap(manifest: PluginManifest) -> list[str]:
+    """Report (or clear) the "declared pip deps aren't installed" gap for an ENABLED
+    plugin, and return the missing dist names.
+
+    Nothing else covers this. ``install`` deliberately doesn't install deps (ADR 0027
+    D4); the ``ModuleNotFoundError`` branch below only fires for a plugin that imports
+    them at MODULE level; and ``/api/plugins/installed`` — what the console's deps report
+    and the wizard's post-install step read — enumerates the live plugins dir, so a
+    BUNDLED plugin has no row there to carry a ``deps_missing`` badge at all.
+
+    cowork (#3450) is both: bundled, and its document skills import the libraries inside
+    ``execute_code`` rather than in-process. On a fresh server a Cowork-archetype first
+    run therefore completed with the plugin enabled and four of five document libraries
+    absent, and the first symptom was an ImportError from inside a code run.
+
+    What is surfaced where: BOTH tiers go to the log and into the returned
+    ``deps_missing`` (the loader's runtime meta, which the Plugins row and the wizard's
+    report read — that is what makes a bundled plugin's gap visible at all). Only a
+    missing REQUIRED dep also raises the global banner; see ``_deps_gap_message``.
+    """
+    from graph.plugins import installer
+    from graph.plugins import setup_gaps
+
+    hard, soft = list(manifest.requires_pip or []), list(manifest.optional_pip or [])
+    if not hard and not soft:
+        setup_gaps.report(manifest.id, DEPS_GAP_KEY, None)
+        return []
+    scopes = getattr(manifest, "pip_scopes", {}) or {}
+    hard_missing = installer._deps_satisfied(hard, scopes)[1] if hard else []
+    soft_missing = installer._deps_satisfied(soft, scopes)[1] if soft else []
+    message = _deps_gap_message(manifest.id, hard_missing, soft_missing)
+    # Logged for EITHER tier — independent of the banner, which only a required gap raises.
+    # An optional-only gap has no banner by design, so the log is one of its surfaces.
+    if hard_missing or soft_missing:
+        log.warning(
+            "[plugins] %s enabled but declared deps are missing (%s) — run: protoagent plugin install-deps %s",
+            manifest.id,
+            ", ".join(sorted([*hard_missing, *soft_missing])),
+            manifest.id,
+        )
+    setup_gaps.report(
+        manifest.id,
+        DEPS_GAP_KEY,
+        message,
+        label=str(manifest.name or manifest.id),
+        # The one fix, as closed data. NOT `plugin_config`: that opens the per-plugin
+        # Configure dialog, which renders the plugin's settings and has no deps UI. The
+        # "Install deps" button lives on the plugin's row in Settings ▸ Plugins, which is
+        # the `plugins` settings section. Never a URL or a callback (ACTION_KINDS).
+        action={"kind": "global_settings", "target": "plugins", "label": "Open Plugins"},
+    )
+    return sorted([*hard_missing, *soft_missing])
+
+
+def refresh_plugin_deps(plugin_id: str) -> list[str] | None:
+    """Recompute ONE plugin's deps state — its gap and its missing list — with no reload.
+
+    What the install-deps route runs after pip lands something for a plugin that is
+    already loaded (#3450). A full reload reaches the same answer by rebuilding the whole
+    graph: every plugin re-registered, every MCP client closed and reopened, and every
+    running surface's ``reload(cfg)`` fired (Discord / Telegram gateways reconnect) — to
+    flip one list. Returns the plugin's new ``deps_missing``, or ``None`` when the plugin
+    can't be resolved (the caller then leaves its state alone)."""
+    from graph.plugins import installer
+
+    manifest = installer.effective_copies().get(plugin_id)
+    if manifest is None:
+        return None
+    return _report_deps_gap(manifest)
+
+
 def _missing_required_config(manifest: PluginManifest, resolved: dict) -> list[dict]:
     """Required settings (``settings[].required``) left blank in the resolved config.
     Returns ``[{key, label}]`` — empty ⇒ the plugin has everything it declared it needs.
@@ -667,19 +768,34 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
     seen_tool_names = set(core_tool_names or set())
     superseded: dict[str, dict] = {}
 
-    for manifest in discover_plugins(roots, superseded=superseded):
+    manifests = list(discover_plugins(roots, superseded=superseded))
+    # `enables:` (#3450): a BUNDLED plugin can turn another on (cowork turns on execute_code).
+    # One rule, shared with the plugin-config resolver so the two can't disagree about
+    # which plugins are on (an implied plugin with no config group would still bind).
+    from graph.plugins import installer as _installer
+    from graph.plugins.manifest import implied_enabled
+
+    implied = implied_enabled(manifests, enabled_ids, disabled_ids, bundled_dir=_installer.bundled_plugins_dir())
+
+    for manifest in manifests:
         # A builtin (core runtime infrastructure, e.g. the delegate registry) always
         # loads — it ignores the enable gate AND the disabled list, so it can't be
         # turned off. Otherwise plugins.disabled wins: turn off a bundled plugin (e.g.
-        # a first-party surface) without deleting it or editing core.
+        # a first-party surface) without deleting it or editing core. Another bundled
+        # plugin's `enables:` counts as an enable, and plugins.disabled wins over it too.
         enabled = manifest.builtin or (
-            (manifest.enabled or manifest.id in enabled_ids) and manifest.id not in disabled_ids
+            (manifest.enabled or manifest.id in enabled_ids or manifest.id in implied)
+            and manifest.id not in disabled_ids
         )
         entry = {
             "id": manifest.id,
             "name": manifest.name,
             "version": manifest.version,
             "enabled": enabled,
+            # Which plugins' `enables:` turned this one on (#3450) — `[]` when it's on by
+            # its own manifest or the operator's `plugins.enabled`, or when it's off. Lets a
+            # surface say WHY a plugin is on instead of implying the operator chose it.
+            "enabled_by": list(implied.get(manifest.id, [])) if enabled else [],
             # Built-in plugins are filtered out of the Plugins management list (they
             # aren't optional add-ons) — the flag rides along in /api/runtime/status.
             "builtin": manifest.builtin,
@@ -689,6 +805,10 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
             # entry so consumers can rely on the shape.
             "incomplete": False,
             "needs_config": [],
+            # Declared pip deps that aren't installed anywhere this plugin can import
+            # them (#3450) — populated for a plugin that LOADS; `[]` on every other
+            # entry so consumers can rely on the shape.
+            "deps_missing": [],
             "tools": [],
             "skills": 0,
             # Console surfaces (ADR 0026) — the rail reads these from /api/runtime/status. Views
@@ -759,8 +879,9 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
             _setup_gaps.clear_plugin(manifest.id)
             # …but an ignored copy on disk is the HOST's finding about the operator's
             # filesystem, not the plugin's own health, so a plugin that is merely OFF still
-            # gets it — both first-party moves ship `enabled: false`, which made that the
-            # common case: the copy is inert and nothing anywhere said so. An EXPLICIT
+            # gets it. A bundled move that ships `enabled: false` (agent_browser does; cowork
+            # ships ON and reports like any enabled plugin) makes that the common case: the
+            # copy is inert and nothing anywhere said so. An EXPLICIT
             # `plugins.disabled` entry is the operator's own "leave this alone" and keeps
             # #3445's rule (a disabled plugin's banners don't outlive it). The log lines
             # above fire either way: a packaging invariant isn't an operator nag.
@@ -840,6 +961,12 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
                 manifest.id,
                 ", ".join(n["key"] for n in needs_config),
             )
+
+        # Declared-deps gate (#3450) — the plugin loaded, but its `requires_pip` /
+        # `optional_pip` may not be installed anywhere it can import them. Reported as a
+        # setup gap (and cleared the same way) on every (re)load, so `install-deps` +
+        # reload self-heals the banner. See `_report_deps_gap` for why nothing else sees it.
+        entry["deps_missing"] = _report_deps_gap(manifest)
 
         kept = []
         for tool in registry.tools:

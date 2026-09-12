@@ -202,19 +202,22 @@ Declare an `acp` delegate, export `EVAL_CODING_AGENT=1`, and run
 
 ## Plugin-owned suites — `--tasks-file`
 
-A plugin repo can ship its own eval cases (same JSON shape, every assertion
-channel available) and run them with this runner against an instance that has
-the plugin installed:
+A plugin ships its own eval cases (same JSON shape, every assertion channel
+available) and runs them with this runner against an instance that has the
+plugin enabled — a bundled plugin from in-tree, an external one from its own
+checkout:
 
 ```bash
-python -m evals.runner --tasks-file ../cowork-plugin/evals/tasks.json
+python -m evals.runner --tasks-file plugins/cowork/evals/tasks.json
+python -m evals.runner --tasks-file ../some-plugin/evals/tasks.json
 ```
 
 The file **replaces** the built-in suite for that run; compose with `--tasks`
 to filter within it. Reports land in `evals/results/` model-tagged like the
 core suite, so `evals/report.py` and `evals/compare.py` trend plugin suites
-alongside it. First consumer: the cowork pack's suite (document deliverables,
-daily-brief contract, drop-folder watch round-trip).
+alongside it. First consumer: the bundled cowork pack's suite
+(`plugins/cowork/evals/tasks.json` — document deliverables, daily-brief
+contract, drop-folder watch round-trip).
 
 ## Asserting the agent layer (subagents & workflows)
 

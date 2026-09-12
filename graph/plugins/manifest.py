@@ -230,6 +230,15 @@ class PluginManifest:
     # path, ``file://``, a glob) is dropped with a warning; a bare string is read as a
     # one-entry list.
     supersedes: list[str] = field(default_factory=list)
+    # Other plugins this BUNDLED plugin turns on (#3450). While this plugin is enabled, each
+    # listed plugin id is enabled too, unless the operator turned that plugin off explicitly
+    # (``plugins.disabled`` always wins). Turning this plugin off returns each one to its own
+    # default (off, unless the operator enabled it themselves). Honored only on the copy
+    # shipped in protoAgent's own ``plugins/`` tree, like ``supersedes``: a plugin that can
+    # switch another on could switch on code execution, so it's inert anywhere else. A bare
+    # string is read as a one-entry list; a non-string, blank or self entry is dropped with a
+    # warning.
+    enables: list[str] = field(default_factory=list)
 
 
 # A view path that carries a scheme/host instead of being a same-origin relative
@@ -1200,6 +1209,65 @@ def display_source(url: object) -> str:
     return f"{host}:{path}"
 
 
+_ENABLES_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+
+def _parse_enables(raw, plugin_id: str) -> list[str]:
+    """Validate ``enables:`` → the plugin ids worth keeping (stripped, deduped, in order)."""
+    if raw is None:
+        return []
+    items = [raw] if isinstance(raw, str) else raw
+    if not isinstance(items, (list, tuple)):
+        log.warning("[plugins] %s: enables must be a list of plugin ids — ignored", plugin_id)
+        return []
+    out: list[str] = []
+    for item in items:
+        pid = item.strip() if isinstance(item, str) else ""
+        if not pid or pid == plugin_id or not _ENABLES_ID_RE.match(pid):
+            log.warning("[plugins] %s: enables entry %r is not another plugin's id — dropped", plugin_id, item)
+            continue
+        if pid not in out:
+            out.append(pid)
+    return out
+
+
+def _is_bundled_copy(manifest, bundled_dir) -> bool:
+    try:
+        return bundled_dir is not None and Path(manifest.path).resolve().parent == Path(bundled_dir).resolve()
+    except (OSError, TypeError):
+        return False
+
+
+def implied_enabled(manifests, enabled_ids, disabled_ids, *, bundled_dir) -> dict[str, list[str]]:
+    """Plugins turned on by another plugin's ``enables:`` → ``{id: [the plugins enabling it]}``.
+
+    The one rule every "is this plugin on?" site applies (the loader, and the plugin-config
+    resolver, so an implied plugin's settings resolve too). A plugin is on when it is a
+    builtin, or when (its manifest says ``enabled: true``, OR ``plugins.enabled`` lists it,
+    OR an enabled BUNDLED plugin ``enables`` it) AND ``plugins.disabled`` doesn't list it.
+    Resolved to a fixpoint, so a chain holds, and the explicit disable always wins: a
+    disabled plugin neither turns on nor turns anything else on."""
+    enabled_ids, disabled_ids = set(enabled_ids or ()), set(disabled_ids or ())
+    manifests = list(manifests)
+    known = {m.id for m in manifests}
+    sources: dict[str, set[str]] = {}
+
+    def _on(m) -> bool:
+        return m.builtin or ((m.enabled or m.id in enabled_ids or m.id in sources) and m.id not in disabled_ids)
+
+    changed = True
+    while changed:
+        changed = False
+        for m in manifests:
+            if not m.enables or not _on(m) or not _is_bundled_copy(m, bundled_dir):
+                continue
+            for dep in m.enables:
+                if dep in known and dep not in disabled_ids and m.id not in sources.get(dep, set()):
+                    sources.setdefault(dep, set()).add(m.id)
+                    changed = True
+    return {dep: sorted(src) for dep, src in sources.items()}
+
+
 def _parse_supersedes(raw, plugin_id: str) -> list[str]:
     """Validate ``supersedes:`` → the declared URLs worth keeping (stripped, deduped).
 
@@ -1362,4 +1430,5 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
         homepage=str(data.get("homepage", "")).strip(),
         min_protoagent_version=str(data.get("min_protoagent_version", "")).strip(),
         supersedes=_parse_supersedes(data.get("supersedes"), pid),
+        enables=_parse_enables(data.get("enables"), pid),
     )

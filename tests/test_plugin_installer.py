@@ -497,6 +497,7 @@ def test_install_deps_runs_pip_with_declared_deps(env, monkeypatch):
         return _OK()
 
     monkeypatch.setattr(installer.subprocess, "run", _fake_run)  # don't hit the network
+    _fresh_env(monkeypatch)
     deps = installer.install_deps("demo_ext")
     assert deps == ["requests>=2", "rich"]
     assert calls and calls[0][1:4] == ["-m", "pip", "install"]
@@ -541,6 +542,13 @@ class _PipResult:
         self.stdout = ""
 
 
+def _fresh_env(monkeypatch):
+    """A host where no declared dep is installed yet, so pip really runs. install_deps
+    pre-checks and pips only what's missing (#3450), and this venv already has requests
+    and rich — without this, these tests would exercise the skip path instead."""
+    monkeypatch.setattr(installer, "_spec_satisfied", lambda spec: False)
+
+
 def test_install_deps_includes_optional_in_own_pip_call(env, monkeypatch):
     repo = _make_plugin_repo(
         env,
@@ -549,6 +557,7 @@ def test_install_deps_includes_optional_in_own_pip_call(env, monkeypatch):
     installer.install(str(repo))
     calls = []
     monkeypatch.setattr(installer.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or _PipResult())
+    _fresh_env(monkeypatch)
     deps = installer.install_deps("demo_ext")
     assert deps == ["requests>=2", "pillow>=10"]
     # hard deps first (fail-hard), then the optional tier best-effort — both behind `--`
@@ -568,17 +577,51 @@ def test_install_deps_optional_pip_failure_warns_not_fails(env, monkeypatch, cap
     monkeypatch.setattr(
         installer.subprocess, "run", lambda cmd, **kw: _PipResult(returncode=1 if "pillow>=10" in cmd else 0)
     )
+    _fresh_env(monkeypatch)
+    failed: list[str] = []
     with caplog.at_level(_logging.WARNING):
-        deps = installer.install_deps("demo_ext")  # no raise
+        deps = installer.install_deps("demo_ext", failed=failed)  # no raise
     assert deps == ["requests>=2"]  # only what actually installed
     assert "optional dep install failed" in caplog.text
+    assert failed == ["pillow"]  # …and named to the caller, not only the log (#3450)
 
 
 def test_install_deps_only_optional_failure_still_succeeds(env, monkeypatch):
     repo = _make_plugin_repo(env, manifest_extra="requires_pip: [{pkg: 'pillow>=10', optional: true}]\n")
     installer.install(str(repo))
     monkeypatch.setattr(installer.subprocess, "run", lambda cmd, **kw: _PipResult(returncode=1))
-    assert installer.install_deps("demo_ext") == []  # warned, not raised
+    _fresh_env(monkeypatch)
+    failed: list[str] = []
+    assert installer.install_deps("demo_ext", failed=failed) == []  # warned, not raised
+    # …but distinguishable from "nothing to install": an all-optional plugin (the cowork
+    # pack) whose install failed used to come back as exactly this `[]` (#3450).
+    assert failed == ["pillow"]
+
+
+def test_cli_install_deps_exits_nonzero_when_nothing_landed(monkeypatch, capsys):
+    from graph.plugins import cli as plugin_cli
+
+    def _all_failed(pid, *, failed=None):
+        failed.append("pillow")
+        return []
+
+    monkeypatch.setattr(installer, "install_deps", _all_failed)
+    assert plugin_cli.run_plugin_cli(["install-deps", "demo_ext"]) == 1
+    err = capsys.readouterr().err
+    assert "failed to install" in err and "pillow" in err
+
+
+def test_cli_install_deps_partial_install_names_the_failure_but_succeeds(monkeypatch, capsys):
+    from graph.plugins import cli as plugin_cli
+
+    def _partial(pid, *, failed=None):
+        failed.append("pillow")
+        return ["requests>=2"]
+
+    monkeypatch.setattr(installer, "install_deps", _partial)
+    assert plugin_cli.run_plugin_cli(["install-deps", "demo_ext"]) == 0
+    out = capsys.readouterr()
+    assert "requests>=2" in out.out and "pillow" in out.err
 
 
 def test_install_deps_hard_pip_failure_still_raises(env, monkeypatch):
@@ -589,8 +632,49 @@ def test_install_deps_hard_pip_failure_still_raises(env, monkeypatch):
     )
     installer.install(str(repo))
     monkeypatch.setattr(installer.subprocess, "run", lambda cmd, **kw: _PipResult(returncode=1))
+    _fresh_env(monkeypatch)
     with pytest.raises(installer.InstallError, match="pip install failed"):
         installer.install_deps("demo_ext")
+
+
+def test_install_deps_already_satisfied_runs_no_pip_and_reports_nothing_new(env, monkeypatch):
+    """The confirmed waste (#3450): pip ran for every declared dep regardless, the route
+    counted already-present packages as "installed", and that triggered a refresh for a
+    plugin whose state had not changed. Real pre-check here, on two LOCKED core deps
+    (packaging, pyyaml) so it holds in any environment — not on whatever the dev's venv
+    happens to carry (`rich` arrived with import-linter locally and isn't in uv.lock)."""
+    repo = _make_plugin_repo(env, manifest_extra="requires_pip: [packaging>=1, {pkg: 'pyyaml', optional: true}]\n")
+    installer.install(str(repo))
+    monkeypatch.setattr(installer.subprocess, "run", lambda *a, **kw: pytest.fail("pip ran for deps already there"))
+    newly: list[str] = []
+    assert installer.install_deps("demo_ext", newly_installed=newly) == ["packaging>=1", "pyyaml"]  # satisfied
+    assert newly == []
+
+
+def test_install_deps_pips_only_what_is_missing(env, monkeypatch):
+    repo = _make_plugin_repo(env, manifest_extra="requires_pip: [packaging>=1, nope-pkg-q]\n")
+    installer.install(str(repo))
+    calls = []
+    monkeypatch.setattr(installer.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or _PipResult())
+    newly: list[str] = []
+    assert installer.install_deps("demo_ext", newly_installed=newly) == ["packaging>=1", "nope-pkg-q"]
+    assert [c[4:] for c in calls] == [["--", "nope-pkg-q"]]  # packaging was already there
+    assert newly == ["nope-pkg-q"]
+
+
+@pytest.mark.parametrize(
+    "spec,met",
+    [
+        ("packaging>=1", True),  # a locked core dep — present in every environment
+        ("packaging>=9999", False),  # installed, but too old: pip must still run (it upgrades)
+        ("nope-pkg-q", False),
+        ('packaging>=9999; python_version < "3"', True),  # ruled out on this Python
+    ],
+)
+def test_spec_satisfied_checks_the_version_not_just_the_name(spec, met):
+    """A name-only pre-check would silently drop the upgrade pip used to perform as a side
+    effect of re-installing everything."""
+    assert installer._spec_satisfied(spec) is met
 
 
 def test_uninstall_removes_enabled_ref_keeps_config(env):

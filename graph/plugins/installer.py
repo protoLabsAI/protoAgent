@@ -800,6 +800,38 @@ def _deps_satisfied(deps: list[str], scopes: dict[str, str] | None = None) -> tu
     return (not missing, missing)
 
 
+def _spec_satisfied(spec: str) -> bool:
+    """Is ``spec`` already met in THIS interpreter — installed AND at a version it allows?
+
+    The install-time pre-check (#3450). ``_deps_satisfied`` answers "is it importable" by
+    NAME, which is the right question for the loader's deps gap, but the wrong one for
+    deciding whether to run pip: pip used to upgrade a too-old dep as a side effect of
+    re-installing everything, and a name-only skip would silently stop doing that. A dist
+    with no metadata (no version to compare) counts as met only when the spec pins none.
+    A marker that rules the dep out on this platform/Python counts as met.
+    """
+    name = _dep_pkg_name(spec)
+    if not name:
+        return False
+    try:
+        from packaging.requirements import Requirement
+
+        req = Requirement(spec)
+    except Exception:  # noqa: BLE001 — _validate_pip_specs vetted it; when unsure, let pip decide
+        return False
+    if req.marker is not None and not req.marker.evaluate():
+        return True
+    import importlib.metadata as md
+
+    try:
+        version = md.version(req.name)
+    except md.PackageNotFoundError:
+        return not req.specifier and _importable(req.name)
+    except Exception:  # noqa: BLE001 — metadata read is best-effort; let pip decide
+        return False
+    return req.specifier.contains(version, prereleases=True)
+
+
 def _managed_runtime_dists() -> set[str]:
     """Normalized dist names in the managed runtime — only consulted in the frozen app
     (a source run's ``sys.executable`` IS the host, so host-importability already
@@ -1815,11 +1847,25 @@ def recorded_source_url(plugin_id: str) -> str:
     return str((_lock_entry(plugin_id) or {}).get("source_url") or "")
 
 
-def install_deps(plugin_id: str) -> list[str]:
+def install_deps(
+    plugin_id: str, *, failed: list[str] | None = None, newly_installed: list[str] | None = None
+) -> list[str]:
     """Pip-install a plugin's declared ``requires_pip`` — the explicit code-exec
     step that ``install`` deliberately skips (ADR 0027 D4). Optional deps (#1953)
     ride along best-effort: a failed optional install warns instead of failing
     the command. Returns the deps actually installed/satisfied.
+
+    ``failed`` (an optional out-parameter, #3450) collects the dist names of optional
+    deps that could NOT be installed. That failure used to live only in the log, so a
+    plugin whose deps are ALL optional (the cowork pack) got ``[]`` back — the same
+    answer as "nothing to install" — and callers reported success to an operator whose
+    install had actually failed (no pip in a uv-only venv, an unreachable index).
+
+    ``newly_installed`` (optional out-parameter, #3450) collects the specs pip actually
+    installed on THIS call. The return value stays "what ended up satisfied" (the CLI
+    prints it as such, #2638); this is what changed, which is what a caller reports as
+    "installed" and what decides whether anything needs refreshing. Already-met deps
+    are pre-checked and never re-pipped.
 
     Acts on the copy the loader RUNS (``effective_copies``) — not simply whichever
     folder exists: with a bundled copy superseding an old git install, the git copy's
@@ -1932,42 +1978,68 @@ def install_deps(plugin_id: str) -> list[str]:
                 ", ".join(soft_missing),
                 "; ".join(errors) or "no target",
             )
+            if failed is not None:
+                failed.extend(soft_missing)
             return deps + [d for d in optional if _dep_pkg_name(d) not in soft_missing]
         _audit("install_deps", {"id": plugin_id, "deps": to_install, "targets": targets_tried}, "ok")
+        if newly_installed is not None:
+            newly_installed.extend([*to_install, *to_install_soft])
         return deps + [d for d in optional if _dep_pkg_name(d) not in soft_missing or d in to_install_soft]
-    installed: list[str] = []
-    if deps:
+    # Pre-check (#3450): pip only what is actually missing — absent, or present at a
+    # version the spec rules out. Re-installing every declared dep reported packages that
+    # were already there as "installed", and made the caller refresh when nothing changed.
+    to_pip = [d for d in deps if not _spec_satisfied(d)]
+    to_pip_soft = [d for d in optional if not _spec_satisfied(d)]
+    if not to_pip and not to_pip_soft:
+        log.info("[plugins] %s deps already satisfied — nothing to install", plugin_id)
+        return deps + optional
+    newly: list[str] = []
+    if to_pip:
         proc = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--", *deps],
+            [sys.executable, "-m", "pip", "install", "--", *to_pip],
             capture_output=True,
             text=True,
         )
         if proc.returncode != 0:
-            _audit("install_deps", {"id": plugin_id, "deps": deps}, "pip install failed", success=False)
+            _audit("install_deps", {"id": plugin_id, "deps": to_pip}, "pip install failed", success=False)
             raise InstallError(f"pip install failed: {(proc.stderr or proc.stdout).strip()[-400:]}")
-        installed += deps
-    if optional:
+        newly += to_pip
+    soft_failed: list[str] = []
+    if to_pip_soft:
         # Best-effort (#1953): the plugin runs without these, so a failure is
         # audited + warned, never fatal — the hard deps above already landed.
         proc = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--", *optional],
+            [sys.executable, "-m", "pip", "install", "--", *to_pip_soft],
             capture_output=True,
             text=True,
         )
         if proc.returncode != 0:
             _audit(
-                "install_deps", {"id": plugin_id, "optional": optional}, "optional pip install failed", success=False
+                "install_deps", {"id": plugin_id, "optional": to_pip_soft}, "optional pip install failed", success=False
             )
             log.warning(
                 "[plugins] %s: optional dep install failed (continuing without): %s",
                 plugin_id,
                 (proc.stderr or proc.stdout).strip()[-400:],
             )
+            soft_failed = list(to_pip_soft)
+            if failed is not None:
+                failed.extend(_dep_pkg_name(d) for d in to_pip_soft)
         else:
-            installed += optional
-    _audit("install_deps", {"id": plugin_id, "deps": installed}, f"installed {len(installed)} dep(s)")
-    log.info("[plugins] installed %d dep(s) for %s", len(installed), plugin_id)
-    return installed
+            newly += to_pip_soft
+    if newly_installed is not None:
+        newly_installed.extend(newly)
+    _audit("install_deps", {"id": plugin_id, "deps": newly}, f"installed {len(newly)} dep(s)")
+    log.info("[plugins] installed %d dep(s) for %s", len(newly), plugin_id)
+    if newly:
+        # A dist pip just wrote must be findable by THIS process's next dep check — the
+        # refresh that clears the deps gap — without a restart: drop the finders' caches.
+        import importlib
+
+        importlib.invalidate_caches()
+    # What ENDED UP satisfied (the CLI prints it as such, #2638): every hard dep, plus
+    # each optional one that was already there or just landed.
+    return deps + [d for d in optional if d not in soft_failed]
 
 
 def list_installed() -> list[dict]:

@@ -29,7 +29,9 @@ desktop app, ADR 0094) with:
 
 Security posture
 ----------------
-Opt-in (``plugins.enabled: [execute_code]``); runs **arbitrary model-authored
+Off in its own manifest, but ON by default through the bundled cowork pack (its
+``enables: [execute_code]``, #3450); ``plugins.disabled: [execute_code]`` always turns it
+off, and ``plugins.enabled`` turns it on without cowork. Runs **arbitrary model-authored
 code**. Subprocess + env-scrub + timeout is *isolation, not a true sandbox*: the
 child can still touch the filesystem and network as the server user. The ``tools``
 allowlist only scopes the convenience bridge — it is **not** a security boundary;

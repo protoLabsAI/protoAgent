@@ -114,6 +114,10 @@ export type RuntimeStatus = {
     // is still blank — its tools return a "needs setup" notice until it's configured.
     incomplete?: boolean;
     needs_config?: { key: string; label: string }[];
+    // Declared pip deps the plugin can't import anywhere (#3450). The loader computes
+    // this for every plugin it loads, BUNDLED ones included — which /api/plugins/installed
+    // can't, since it enumerates the live plugins dir. Absent on older backends.
+    deps_missing?: string[];
     // Ordered Configure-dialog registry (#3179/#3180). A path marks a
     // plugin-owned sandbox tab; pathless descriptors organize schema fields.
     settings_tabs?: PluginSettingsTabDescriptor[];

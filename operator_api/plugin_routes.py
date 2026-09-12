@@ -149,6 +149,42 @@ def _purge_plugin_modules(plugin_id: str) -> None:
     purge_plugin_modules(plugin_id)
 
 
+# What to refresh after install-deps lands something (#3450):
+#   the plugin failed to load BECAUSE its deps weren't installed
+#       → FULL reload: its code can't import until the dep exists, and only a load can
+#         bring it up;
+#   it is loaded
+#       → recompute just its deps state (`refresh_plugin_deps`). A full reload would
+#         close every MCP client and fire every running surface's reload (Discord /
+#         Telegram reconnect) to flip one list;
+#   it is off, or failed for another reason
+#       → nothing: an enable computes it fresh, and a deps refresh can't fix the rest.
+# Matched against the loader's ModuleNotFoundError message ("declared deps not installed
+# (…) — run: … install-deps <id>"); a test pins the two together.
+_DEPS_BLOCKED_LOAD = "declared deps not installed"
+
+
+def _refresh_after_deps(plugin_id: str) -> str:
+    """Apply the rule above; returns ``"full"``, ``"plugin"`` or ``"none"``."""
+    meta = next((p for p in (STATE.plugin_meta or []) if p.get("id") == plugin_id), None)
+    if meta is None or not meta.get("enabled"):
+        return "none"
+    if not meta.get("loaded"):
+        if _DEPS_BLOCKED_LOAD not in str(meta.get("error") or ""):
+            return "none"
+        from server.agent_init import _reload_langgraph_agent
+
+        ok, _ = _reload_langgraph_agent()
+        return "full" if ok else "none"
+    from graph.plugins.loader import refresh_plugin_deps
+
+    missing = refresh_plugin_deps(plugin_id)
+    if missing is None:
+        return "none"
+    meta["deps_missing"] = missing  # /api/runtime/status reads STATE.plugin_meta live
+    return "plugin"
+
+
 def register_plugin_routes(app) -> None:
     """Register `/api/plugins/installed`, `/install`, `/updates`, `/{id}/enabled`,
     `/{id}/update`, and DELETE `/{id}`."""
@@ -249,11 +285,24 @@ def register_plugin_routes(app) -> None:
             needs_ack = _consent_needs_ack(source_url)
             if needs_ack is not None:
                 return needs_ack
+        failed: list[str] = []
+        newly: list[str] = []
         try:
-            installed = await asyncio.to_thread(installer.install_deps, plugin_id)
+            satisfied = await asyncio.to_thread(installer.install_deps, plugin_id, failed=failed, newly_installed=newly)
         except installer.InstallError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"ok": True, "installed": installed}
+        # The deps banner and the row's `deps_missing` are computed at load, so something
+        # has to recompute them once packages land (#3450) — see `_refresh_after_deps`
+        # for which something. Nothing newly landed → nothing changed → nothing to do.
+        refresh = await asyncio.to_thread(_refresh_after_deps, plugin_id) if newly else "none"
+        # `installed` is what NEWLY landed — a package that was already there isn't one.
+        # All-optional deps fail soft, so an empty install can mean "nothing to do" or
+        # "everything failed": `failed` tells them apart, and `ok` is false when nothing
+        # is satisfied at all, so a client never reports that as a success.
+        out: dict = {"ok": bool(satisfied) or not failed, "installed": newly, "refresh": refresh}
+        if failed:
+            out["failed"] = failed
+        return out
 
     # NOT under /api/plugins/<id>/: that subtree is one a plugin may exempt from the auth gate
     # (manifest `public_paths`) or open to fleet peers (`federation_paths`), and a core route
@@ -465,7 +514,14 @@ def register_plugin_routes(app) -> None:
         # (no FastAPI unmount) → recommend a restart. A surface no longer does — it stops
         # on the reload reconcile (ADR 0018) — so a surface-ONLY plugin turns off cleanly.
         restart = bool(not want and _lingers_on_disable(prev_meta))
-        return {"ok": True, "enabled": want, "reloaded": True, "restart_recommended": restart}
+        out: dict = {"ok": True, "enabled": want, "reloaded": True, "restart_recommended": restart}
+        if want:
+            # The one UI moment to mention missing packages (#3450): the operator just
+            # turned it on. The reload above computed them (a disabled plugin's are []).
+            now = next((p for p in (STATE.plugin_meta or []) if p.get("id") == plugin_id), None)
+            if now and now.get("deps_missing"):
+                out["deps_missing"] = list(now["deps_missing"])
+        return out
 
     @app.post("/api/plugins/ack")
     async def _ack(body: dict | None = None):

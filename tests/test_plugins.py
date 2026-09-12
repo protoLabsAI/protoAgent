@@ -157,6 +157,123 @@ def test_requires_pip_malformed_entries_warn_not_fail(tmp_path, caplog) -> None:
     assert "has no 'pkg'" in caplog.text
 
 
+# --- Declared deps that aren't installed are REPORTED, not silent (#3450) ---
+
+
+def _absent(monkeypatch, *names: str) -> None:
+    """A host where `names` can't be imported — a fresh server, not a dev box that
+    happens to have the libraries. Only the environment probe is faked; the tier split
+    and the gap logic under test are real."""
+    from graph.plugins import installer
+
+    gone = {n.replace("-", "_") for n in names} | set(names)
+    real = installer._importable
+    monkeypatch.setattr(installer, "_importable", lambda pkg: False if pkg in gone else real(pkg))
+
+
+def _deps_gaps() -> list[dict]:
+    from graph.plugins import setup_gaps
+
+    return [g for g in setup_gaps.active() if g["key"] == plugin_loader.DEPS_GAP_KEY]
+
+
+def test_an_enabled_plugins_missing_hard_deps_raise_a_setup_gap(tmp_path, monkeypatch) -> None:
+    """`install` deliberately doesn't install deps (ADR 0027 D4) and a plugin that
+    imports them lazily never trips the loader's ModuleNotFoundError branch — so an
+    enabled plugin could be loaded and unusable with nothing said on any surface."""
+    from graph.plugins import setup_gaps
+
+    setup_gaps.reset()
+    _make_plugin(tmp_path, "hardp", enabled=True, manifest_extra='requires_pip: ["nope-pkg-a", "nope-pkg-b"]\n')
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [tmp_path])
+    _absent(monkeypatch, "nope-pkg-a", "nope-pkg-b")
+
+    res = load_plugins(_cfg())
+    meta = next(m for m in res.meta if m["id"] == "hardp")
+    assert meta["loaded"] and meta["deps_missing"] == ["nope-pkg-a", "nope-pkg-b"]
+    [gap] = _deps_gaps()
+    assert "can't run until its Python packages are installed: nope-pkg-a, nope-pkg-b" in gap["message"]
+    assert "install-deps hardp" in gap["message"]
+    # The one fix, as closed declarative data, aimed where the Install deps button
+    # actually lives — the Plugins section — NOT the per-plugin Configure dialog, which
+    # renders the plugin's settings and has no deps UI at all.
+    assert gap["actions"] == [{"kind": "global_settings", "target": "plugins", "label": "Open Plugins"}]
+    setup_gaps.reset()
+
+
+def test_missing_optional_deps_are_surfaced_but_raise_no_global_banner(tmp_path, monkeypatch, caplog) -> None:
+    """The optional tier's contract (#1954) is "runs without them", so a warning banner
+    that comes back every session is heavier than the tier. The gap stays visible where
+    the operator installs things — `deps_missing` feeds the Plugins row and the setup
+    wizard's report — and in the log. That is what still covers an all-optional pack
+    like cowork on a fresh server."""
+    import logging as _logging
+
+    from graph.plugins import setup_gaps
+
+    setup_gaps.reset()
+    _make_plugin(
+        tmp_path, "softp", enabled=True,
+        manifest_extra='requires_pip:\n  - { pkg: "nope-pkg-c", optional: true }\n',
+    )
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [tmp_path])
+    _absent(monkeypatch, "nope-pkg-c")
+
+    with caplog.at_level(_logging.WARNING, logger="protoagent.plugins"):
+        res = load_plugins(_cfg())
+    assert next(m for m in res.meta if m["id"] == "softp")["deps_missing"] == ["nope-pkg-c"]
+    assert "nope-pkg-c" in caplog.text and "install-deps softp" in caplog.text
+    assert not _deps_gaps()
+    setup_gaps.reset()
+
+
+def test_a_required_gap_names_missing_optional_deps_once(tmp_path, monkeypatch) -> None:
+    """When the banner does fire, it mentions the optional stragglers too — once, not
+    as "missing optional … optional: …"."""
+    from graph.plugins import setup_gaps
+
+    setup_gaps.reset()
+    _make_plugin(
+        tmp_path, "bothp", enabled=True,
+        manifest_extra='requires_pip:\n  - "nope-pkg-e"\n  - { pkg: "nope-pkg-f", optional: true }\n',
+    )
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [tmp_path])
+    _absent(monkeypatch, "nope-pkg-e", "nope-pkg-f")
+
+    res = load_plugins(_cfg())
+    assert next(m for m in res.meta if m["id"] == "bothp")["deps_missing"] == ["nope-pkg-e", "nope-pkg-f"]
+    [gap] = _deps_gaps()
+    assert "installed: nope-pkg-e (and optional nope-pkg-f)" in gap["message"]
+    assert gap["message"].count("optional") == 1
+    setup_gaps.reset()
+
+
+def test_the_deps_gap_clears_when_the_packages_arrive_and_never_fires_while_off(tmp_path, monkeypatch) -> None:
+    """`install-deps` + reload has to clear the banner live, and a plugin that is off (or
+    declares nothing) must never raise it."""
+    from graph.plugins import setup_gaps
+
+    setup_gaps.reset()
+    _make_plugin(tmp_path, "depp", enabled=True, manifest_extra='requires_pip: ["nope-pkg-d"]\n')
+    _make_plugin(tmp_path, "offp", enabled=False, manifest_extra='requires_pip: ["nope-pkg-d"]\n')
+    _make_plugin(tmp_path, "cleanp", enabled=True)
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [tmp_path])
+
+    with monkeypatch.context() as m:
+        _absent(m, "nope-pkg-d")
+        load_plugins(_cfg())
+    assert [g["plugin"] for g in _deps_gaps()] == ["depp"]  # not offp (disabled), not cleanp (declares none)
+
+    # The operator ran install-deps and reloaded: the package resolves now.
+    from graph.plugins import installer
+
+    monkeypatch.setattr(installer, "_importable", lambda pkg: True)
+    res = load_plugins(_cfg())
+    assert not _deps_gaps()
+    assert next(m for m in res.meta if m["id"] == "depp")["deps_missing"] == []
+    setup_gaps.reset()
+
+
 # --- Typed event contracts (#1636) — `emits:` entries may carry a payload schema ---
 
 
@@ -1392,3 +1509,65 @@ def test_registry_live_config_reads_state_then_falls_back(monkeypatch) -> None:
     # Section missing from live config → snapshot.
     cfg.plugin_config = {"other": {}}
     assert reg.live_config() == {"repos": ["o/snap"]}
+
+
+# --- `enables:` — a bundled plugin turning another on (#3450) ---
+
+
+def _bundled(monkeypatch, root: Path) -> None:
+    """Make `root` both the loader's only plugin root AND the bundled tree — `enables:` is
+    honored only on protoAgent's own bundled copies."""
+    from graph.plugins import installer
+
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [root])
+    monkeypatch.setattr(installer, "bundled_plugins_dir", lambda: root)
+
+
+def _on(res, pid):
+    return next(m for m in res.meta if m["id"] == pid)
+
+
+def test_manifest_enables_parses_ids_and_drops_the_rest(tmp_path) -> None:
+    _make_plugin(tmp_path, "a1", manifest_extra="enables: [b1, '', a1, 42, 'two words', b1, c1]\n")
+    assert load_manifest(tmp_path / "a1").enables == ["b1", "c1"]  # blank/self/non-str/spaced/dupe dropped
+    _make_plugin(tmp_path, "a2", manifest_extra="enables: b2\n")
+    assert load_manifest(tmp_path / "a2").enables == ["b2"]  # a bare string is one entry
+    _make_plugin(tmp_path, "a3")
+    assert load_manifest(tmp_path / "a3").enables == []
+
+
+def test_a_bundled_plugin_turns_another_on_and_an_explicit_disable_always_wins(tmp_path, monkeypatch) -> None:
+    _make_plugin(tmp_path, "pa", enabled=True, tool="pa_tool", manifest_extra="enables: [pb]\n")
+    _make_plugin(tmp_path, "pb", enabled=False, tool="pb_tool")
+    _bundled(monkeypatch, tmp_path)
+
+    res = load_plugins(_cfg())  # unset: on because pa is on
+    assert _on(res, "pb")["loaded"] and _on(res, "pb")["enabled_by"] == ["pa"]
+    assert _on(res, "pa")["enabled_by"] == []  # on by its own manifest
+
+    assert not _on(load_plugins(_cfg(plugins_disabled=["pb"])), "pb")["enabled"]  # explicit off wins
+    assert not _on(load_plugins(_cfg(plugins_disabled=["pa"])), "pb")["enabled"]  # back to its own default
+    both = load_plugins(_cfg(plugins_disabled=["pa"], plugins_enabled=["pb"]))
+    assert _on(both, "pb")["loaded"] and _on(both, "pb")["enabled_by"] == []  # the operator's own choice
+
+
+def test_enables_on_a_plugin_outside_the_bundled_tree_is_inert(tmp_path, monkeypatch) -> None:
+    """A git-installed plugin must not be able to switch another on (execute_code, say)."""
+    from graph.plugins import installer
+
+    _make_plugin(tmp_path, "pa", enabled=True, tool="pa_tool", manifest_extra="enables: [pb]\n")
+    _make_plugin(tmp_path, "pb", enabled=False, tool="pb_tool")
+    monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [tmp_path])
+    monkeypatch.setattr(installer, "bundled_plugins_dir", lambda: tmp_path / "not-here")
+    assert not _on(load_plugins(_cfg()), "pb")["enabled"]
+
+
+def test_the_config_resolver_applies_the_same_enables_rule(tmp_path, monkeypatch) -> None:
+    """Otherwise an implied plugin binds but its settings group never resolves."""
+    from graph.plugins.pconfig import discover_plugin_config
+
+    _make_plugin(tmp_path, "pa", enabled=True, tool="pa_tool", manifest_extra="enables: [pb]\n")
+    _make_plugin(tmp_path, "pb", enabled=False, tool="pb_tool", manifest_extra="config:\n  knob: 3\n")
+    _bundled(monkeypatch, tmp_path)
+    assert "pb" in {s.plugin_id for s in discover_plugin_config([tmp_path], set(), set())}
+    assert "pb" not in {s.plugin_id for s in discover_plugin_config([tmp_path], set(), {"pa"})}

@@ -34,6 +34,8 @@ import {
   type InstalledStatus,
 } from "./installed";
 import { api } from "../lib/api";
+import { mergeDeps } from "../setup/depsReport";
+import { toggleToast } from "./installed";
 import type { CatalogPlugin, PluginUpdate, RuntimeStatus } from "../lib/types";
 
 type Plugin = NonNullable<RuntimeStatus["plugins"]>[number];
@@ -306,11 +308,9 @@ function LocalTab() {
       refreshAll();
       // Enable hot-mounts the plugin's router (#822). Only DISABLE leaves a stale
       // route/surface behind (FastAPI can't unmount) → restart_recommended on OFF.
-      toast(
-        res.restart_recommended
-          ? { tone: "info", title: "Plugin disabled", message: `${p.name} — restart to fully remove its console view or background surface.` }
-          : { tone: "success", title: `Plugin ${res.enabled ? "enabled" : "disabled"}`, message: `${p.name} is ${res.enabled ? "live" : "off"}.` },
-      );
+      // On an enable, the response carries the plugin's missing packages (#3450), and
+      // the toast names them — once, while the operator is looking at its row.
+      toast(toggleToast(p.name, res));
     },
     onError: (err: unknown, p) => toast({ tone: "error", title: "Couldn't toggle plugin", message: `${p.name}: ${errMsg(err)}` }),
   });
@@ -342,11 +342,22 @@ function LocalTab() {
         requestDepsAck({ url: res.source ?? p.id, source: res.source ?? p.id, retry: () => installDeps.mutate(p) });
         return;
       }
-      toast({
-        tone: "success",
-        title: "Dependencies installed",
-        message: `${p.name}: ${(res.installed ?? []).join(", ") || "nothing to install"}.`,
-      });
+      // Optional deps fail soft server-side, so an empty `installed` isn't proof of success
+      // (#3450): `failed` names what didn't land, and `ok: false` means nothing did.
+      const failed = res.failed ?? [];
+      if (res.ok === false || failed.length) {
+        toast({
+          tone: res.ok === false ? "error" : "info",
+          title: res.ok === false ? "Dependencies didn't install" : "Some dependencies didn't install",
+          message: `${p.name}: ${failed.join(", ")} failed — check the server log (no pip, or the package index is unreachable).`,
+        });
+      } else {
+        toast({
+          tone: "success",
+          title: (res.installed ?? []).length ? "Dependencies installed" : "Dependencies already installed",
+          message: `${p.name}: ${(res.installed ?? []).join(", ") || "nothing new to install"}.`,
+        });
+      }
       refreshAll();
     },
     onError: (err: unknown, p) => toast({ tone: "error", title: "Couldn't install deps", message: `${p.name}: ${errMsg(err)}` }),
@@ -466,7 +477,10 @@ function LocalTab() {
   const rows: InstalledRow[] = plugins.map((p) => ({
     p,
     behind: Boolean(updateById.get(p.id)?.behind),
-    depsMissing: depsById.get(p.id) ?? [],
+    // Merged with the loader's runtime meta (#3450): the inventory has no row for a BUNDLED
+    // plugin, and reports the required tier only — so without the merge a bundled plugin's
+    // Install deps button never rendered. Same rule as the setup wizard's report.
+    depsMissing: mergeDeps(depsById.get(p.id), p.deps_missing),
     // Bundle provenance (ADR 0040) — labels rows a bundle installed, so a stack's
     // members stop reading as anonymous individual plugins.
     bundle: installedById.get(p.id)?.bundle,

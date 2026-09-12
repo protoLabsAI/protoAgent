@@ -78,6 +78,17 @@ left.
   libraries (`python-docx`, `openpyxl`, `python-pptx`, `pypdf`), declared via
   `requires_pip`. Vendoring Anthropic's skills is prohibited by their
   license; that finding is recorded here so nobody re-litigates it.
+  *(Amendment 2026-09, #3450: the pack moved in-tree to `plugins/cowork/` —
+  bundled and on by default, with `plugins.disabled: [cowork]` to turn it off — so it
+  is maintained with the host it runs on and every agent has its document skills.
+  Cowork being on also turns on `execute_code` (its manifest's `enables:`), since the
+  document skills produce files through it; `plugins.disabled: [execute_code]` still wins,
+  and disabling cowork returns execute_code to its own default, off.
+  Its manifest `supersedes` the retired `cowork-plugin` repo (#3445), so an
+  already-installed copy stands down with its enabled state and config intact,
+  and the `cowork-archetype` bundle keeps listing the member by URL. The
+  clean-room rule is unchanged and its tripwire moved to
+  `tests/test_cowork_plugin.py`.)*
 - **D4 — Migration respects the same license.** The claude-bridge skill
   importer must skip `creatorType: "anthropic"` skills and migrate only
   user-authored ones (including `my-writing-style`).
