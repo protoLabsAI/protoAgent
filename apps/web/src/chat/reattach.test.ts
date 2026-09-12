@@ -13,9 +13,12 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { resumedTurnRender, settleResumedTurn } from "../app/resumedTurn";
+import { applyProgressFrame } from "../app/serverTurnProgress";
 import { api } from "../lib/api";
 import { chatStore } from "./chat-store";
 import { reattachKeyForMessages, reattachTurn } from "./reattach";
+import { liveMessageId } from "./server-turn-store";
 import { messagesFromDurableTurn } from "./sessionHydration";
 
 vi.mock("../lib/api", async (importOriginal) => {
@@ -117,6 +120,181 @@ beforeEach(() => {
 afterEach(() => {
   cancels.forEach((cancel) => cancel());
   cancels = [];
+});
+
+// ---------------------------------------------------------------------------
+// cancelled before it settled: the session status it claimed must not be orphaned
+// ---------------------------------------------------------------------------
+
+describe("reattach cancelled before it settles", () => {
+  it("hands the session back when another producer settled the bubble first", async () => {
+    const sessionId = seedStuckSession();
+    resumeTask.mockImplementation(() => new Promise<never>(() => {})); // the resubscribe never answers
+    const cancel = attach(sessionId);
+    await settle();
+    expect(sessionStatus(sessionId)).toBe("streaming");
+
+    // The bus's `chat.resumed` replaces the preview with the final answer, so the slot's
+    // effect (keyed on the streaming bubble) cancels the reattach. THE BUG: nothing then
+    // released the "streaming" run() had set — Stop stayed up and Send disabled for good.
+    const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)!;
+    chatStore.updateMessages(
+      sessionId,
+      cur.messages.map((m) => (m.id === ASSISTANT_ID ? { ...m, content: "final answer", status: "done" as const } : m)),
+    );
+    cancel();
+
+    expect(sessionStatus(sessionId)).toBe("idle");
+    expect(getTask).not.toHaveBeenCalled(); // released by the cancel, not by a finalize
+    expect(assistantMessage(sessionId)?.content).toBe("final answer"); // the settled bubble is left alone
+  });
+
+  it("leaves a turn that is still live streaming, for the reattach the next mount starts", async () => {
+    const sessionId = seedStuckSession();
+    resumeTask.mockImplementation(() => new Promise<never>(() => {}));
+    const cancel = attach(sessionId);
+    await settle();
+    cancel(); // an unmount mid-turn: the bubble is still streaming
+    expect(sessionStatus(sessionId)).toBe("streaming");
+    expect(assistantMessage(sessionId)?.status).toBe("streaming");
+  });
+
+  it("never releases a status it no longer holds", async () => {
+    const sessionId = seedStuckSession();
+    resumeTask.mockResolvedValue(undefined);
+    getTask.mockResolvedValue({ state: "completed", text: "done" });
+    const cancel = attach(sessionId);
+    await settle();
+    expect(sessionStatus(sessionId)).toBe("idle"); // finalize settled it
+    chatStore.setSessionStatus(sessionId, "streaming"); // something else has claimed the session since
+    cancel();
+    expect(sessionStatus(sessionId)).toBe("streaming");
+  });
+
+  // A GetTask that was already out when the cancel landed must not finalize afterwards:
+  // the cancel handed the session back, and the turn started since owns it now.
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
+  /** `chat.resumed` settled the bubble; the slot cancels; then the operator (or a ladder
+   *  re-send) starts a fresh turn in the same slot. */
+  function settleCancelAndStartNewTurn(sessionId: string, cancel: () => void) {
+    const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)!;
+    chatStore.updateMessages(
+      sessionId,
+      cur.messages.map((m) => (m.id === ASSISTANT_ID ? { ...m, content: "final answer", status: "done" as const } : m)),
+    );
+    cancel();
+    expect(sessionStatus(sessionId)).toBe("idle");
+    const next = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)!;
+    chatStore.updateMessages(sessionId, [
+      ...next.messages,
+      { id: "u2", role: "user", content: "and the changelog", status: "done" },
+      { id: "a2", role: "assistant", content: "", status: "streaming" },
+    ]);
+    chatStore.setSessionStatus(sessionId, "streaming");
+  }
+
+  it("a late GetTask after the stream closed never finalizes over a turn started since", async () => {
+    const sessionId = seedStuckSession();
+    resumeTask.mockResolvedValue(undefined); // the stream closed: run() confirms off GetTask
+    const late = deferred<{ state: string; text: string }>();
+    getTask.mockReturnValue(late.promise);
+    const cancel = attach(sessionId);
+    await settle();
+    expect(getTask).toHaveBeenCalledTimes(1);
+
+    settleCancelAndStartNewTurn(sessionId, cancel);
+    late.resolve({ state: "completed", text: "late answer" });
+    await settle();
+
+    expect(sessionStatus(sessionId)).toBe("streaming"); // the new turn keeps Stop, Send stays locked
+    expect(assistantMessage(sessionId)?.content).toBe("final answer"); // nor is the settled bubble rewritten
+  });
+
+  it("a late GetTask on the fallback poller never finalizes over a turn started since", async () => {
+    const sessionId = seedStuckSession();
+    resumeTask.mockRejectedValue(new Error("task is not running")); // not cold: fall back to the poller
+    replayTask.mockResolvedValue("completed");
+    const late = deferred<{ state: string; text: string }>();
+    getTask.mockReturnValue(late.promise);
+    const cancel = attach(sessionId);
+    await settle();
+    expect(getTask).toHaveBeenCalledTimes(1);
+
+    settleCancelAndStartNewTurn(sessionId, cancel);
+    late.resolve({ state: "completed", text: "late answer" });
+    await settle();
+
+    expect(sessionStatus(sessionId)).toBe("streaming");
+    expect(assistantMessage(sessionId)?.content).toBe("final answer");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// a participant's row mid-turn is not the turn ending
+// ---------------------------------------------------------------------------
+
+describe("reattach key skips participant rows", () => {
+  it("a delegate's reply mid-turn keeps the reattach, so the turn's own end releases the session", async () => {
+    const session = chatStore.createSession();
+    const liveId = liveMessageId(TASK_ID, session.id);
+    chatStore.updateMessages(session.id, [
+      { id: "u1", role: "user", content: "ask claude-code to check the diff", status: "done" },
+      { id: liveId, role: "assistant", content: "Asking claude-code…", status: "streaming", taskId: TASK_ID },
+    ]);
+    chatStore.setSessionStatus(session.id, "streaming");
+    resumeTask.mockImplementation(() => new Promise<never>(() => {})); // the turn is still running
+    const messagesOf = () => chatStore.getSnapshot().sessions.find((s) => s.id === session.id)!.messages;
+
+    // The slot: its reattach effect is keyed on reattachKeyForMessages and cancels the
+    // reattach whenever that key changes (ChatSurface's `[sessionId, reattachKey]` deps).
+    const cancel = reattachTurn(session.id, liveId, TASK_ID);
+    cancels.push(cancel);
+    let key = reattachKeyForMessages(messagesOf());
+    let slotCancelled = false;
+    const rerender = () => {
+      const next = reattachKeyForMessages(messagesOf());
+      if (next === key) return;
+      key = next;
+      if (!slotCancelled) {
+        slotCancelled = true;
+        cancel();
+      }
+    };
+    await settle();
+
+    // A participant answers while the lead's turn runs: the bus folds it in as its own row,
+    // already settled, AFTER the still-streaming preview. The turn has not ended.
+    chatStore.updateMessages(
+      session.id,
+      applyProgressFrame(messagesOf(), {
+        session: session.id,
+        taskId: TASK_ID,
+        kind: "room",
+        id: "r1",
+        author: "claude-code",
+        text: "The diff is clean.",
+        ok: true,
+      }),
+    );
+    rerender();
+    expect(slotCancelled).toBe(false);
+    expect(sessionStatus(session.id)).toBe("streaming");
+
+    // The turn ends: `chat.resumed` settles the preview, which is what ends the reattach —
+    // and with the reattach still the one holding the status, the session is handed back.
+    const render = resumedTurnRender({ session_id: session.id, task_id: TASK_ID, text: "Checked: clean.", state: "completed" })!;
+    chatStore.updateMessages(session.id, settleResumedTurn(messagesOf(), render, undefined, "resume-1"));
+    rerender();
+    expect(slotCancelled).toBe(true);
+    expect(sessionStatus(session.id)).toBe("idle");
+  });
 });
 
 // ---------------------------------------------------------------------------

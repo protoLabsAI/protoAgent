@@ -91,11 +91,23 @@ export function shouldReattach(
   return true;
 }
 
+/** The lead turn's latest assistant bubble — skipping rows a PARTICIPANT spoke (`author`)
+ *  and the lead's outgoing asks to one (`addressedTo`), the #3449 room shape. Those land
+ *  as their own already-settled rows AFTER the live preview while the turn is still
+ *  running, so "the last assistant row" named one of them and read the turn as over: the
+ *  slot's reattach effect cancelled a live reattach, and when the turn really ended there
+ *  was no reattach left to release the session — it sat "streaming" for good. */
+export function leadAssistantMessage(messages: ChatMessage[] | undefined): ChatMessage | undefined {
+  return [...(messages ?? [])]
+    .reverse()
+    .find((message) => message.role === "assistant" && !message.author && !message.addressedTo);
+}
+
 /** Stable dependency key for the session slot's reattach effect. Hydration can
  * fill an already-mounted empty fixed-id tab, so sessionId alone is not enough
  * to trigger the effect when its durable streaming assistant appears later. */
 export function reattachKeyForMessages(messages: ChatMessage[] | undefined): string {
-  const last = [...(messages ?? [])].reverse().find((message) => message.role === "assistant");
+  const last = leadAssistantMessage(messages);
   return last?.status === "streaming" && last.taskId && last.id
     ? `${last.id}:${last.taskId}`
     : "";
@@ -145,12 +157,35 @@ function finalize(sessionId: string, assistantId: string, state: string, text: s
  * cancel function (unmount / a new live turn taking over). */
 export function reattachTurn(sessionId: string, assistantId: string, taskId: string, hooks: ReattachHooks = {}) {
   let cancelled = false;
+  // Whether the session's "streaming" is still this reattach's to hand back: claimed when
+  // run() sets it, given up once run() is over (finalize and the paused path settle it).
+  let holdsStatus = false;
   const controller = new AbortController();
   const token = Symbol(assistantId);
   driving.set(assistantId, token);
   const release = () => {
     if (driving.get(assistantId) === token) driving.delete(assistantId);
   };
+
+  /** Hand back the "streaming" this reattach set when it is cancelled before settling it.
+   *
+   *  The slot cancels a reattach whenever its bubble stops being a live one, and the usual
+   *  reason is that ANOTHER producer settled it first: the bus's `chat.resumed` replacing a
+   *  server turn's preview after a reload, while the resubscribe was still waiting on the
+   *  server. run() then never reaches finalize, nothing else releases the status it set, and
+   *  the session sat "streaming" for good — Stop up, Send disabled, and any interjection
+   *  queued for that turn held back as if this browser's own stream would drain it. Only
+   *  while nothing in the transcript is still live: an unmount mid-turn leaves the status
+   *  to the reattach the next mount starts, and a turn started since keeps its own. */
+  function releaseStatus() {
+    if (!holdsStatus) return;
+    holdsStatus = false;
+    const snap = chatStore.getSnapshot();
+    if (snap.sessionStatusMap[sessionId] !== "streaming") return;
+    const cur = snap.sessions.find((s) => s.id === sessionId);
+    if (!cur || cur.messages.some((m) => m.role === "assistant" && m.status === "streaming")) return;
+    chatStore.setSessionStatus(sessionId, "idle");
+  }
 
   const handlers: TurnStreamHandlers = {
     signal: controller.signal,
@@ -224,6 +259,7 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
       }
       if (!sawTask || !state || TERMINAL.test(state)) {
         const { state: s2, text } = await api.getTask(taskId).catch(() => ({ state: "", text: "" }));
+        if (cancelled) return; // a late answer must not settle over a turn started since the cancel
         finalize(sessionId, assistantId, s2 || state, text);
         return;
       }
@@ -233,6 +269,7 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
 
   async function run() {
     chatStore.setSessionStatus(sessionId, "streaming");
+    holdsStatus = true;
     for (let attempt = 0; attempt < MAX_ATTEMPTS && !cancelled; attempt++) {
       try {
         await api.resumeTask(taskId, sessionId, handlers);
@@ -240,6 +277,10 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
         // and finalize off the durable task.
         if (cancelled) return;
         const { state, text } = await api.getTask(taskId).catch(() => ({ state: "completed", text: "" }));
+        // Cancelled while GetTask was out: the cancel already handed the session back, and a
+        // turn started since owns it now — finalize would set it idle mid-turn (Stop gone,
+        // Send live), inviting a second concurrent turn into this slot.
+        if (cancelled) return;
         if (PAUSED.test(state)) {
           // Waiting on the operator (HITL / auth): un-busy the session so the
           // re-rendered form's buttons work, but DON'T finalize — stamping the
@@ -269,11 +310,15 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
     .catch(() => {
       /* reattach is best-effort — never crash the surface */
     })
-    .finally(release);
+    .finally(() => {
+      holdsStatus = false;
+      release();
+    });
 
   return () => {
     cancelled = true;
     controller.abort();
     release();
+    releaseStatus();
   };
 }
