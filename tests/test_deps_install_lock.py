@@ -31,11 +31,13 @@ from graph.plugins import installer
 REPO = Path(__file__).resolve().parents[1]
 PID = "depdemo"
 
-# The pip stand-in. argv: <log> <marker> <hold seconds> then what the installer passes
-# ("install -- <spec>"). One line per event, so the test can count runs and overlaps.
+# The pip stand-in. argv: <log> <marker> <hold> then what the installer passes
+# ("install -- <spec>"). <hold> is seconds, or a path: hold until that file exists (a test
+# releases it, so nothing depends on timing). One line per event, so the test can count
+# runs and overlaps.
 FAKE_PIP = """\
 import os, sys, time
-log, mark, hold = sys.argv[1], sys.argv[2], float(sys.argv[3])
+log, mark, hold = sys.argv[1], sys.argv[2], sys.argv[3]
 
 def note(event):
     with open(log, "a", encoding="utf-8") as f:
@@ -48,7 +50,12 @@ try:
 except FileExistsError:
     note("OVERLAP")
     inside = False
-time.sleep(hold)
+try:
+    time.sleep(float(hold))
+except ValueError:
+    deadline = time.time() + 120  # never hang a suite on a lost release
+    while not os.path.exists(hold) and time.time() < deadline:
+        time.sleep(0.01)
 if inside:
     os.remove(mark)
 note("end")
@@ -70,7 +77,7 @@ def plugin(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _fake_pip(tmp_path: Path, hold: float) -> tuple[list[str], Path]:
+def _fake_pip(tmp_path: Path, hold: float | Path) -> tuple[list[str], Path]:
     script = tmp_path / "fake_pip.py"
     script.write_text(FAKE_PIP, encoding="utf-8")
     log = tmp_path / "pip.log"
@@ -181,16 +188,29 @@ print("DONE")
 """
 
 
+def _wait_for(cond, what: str, timeout: float = 60.0) -> None:
+    deadline = time.time() + timeout
+    while not cond():
+        assert time.time() < deadline, f"timed out waiting for {what}"
+        time.sleep(0.01)
+
+
 def test_two_processes_on_one_environment_run_one_pip(plugin, monkeypatch):
     """Two interpreters sharing one environment and one box root: a dev and a default
     instance on one checkout's venv, fleet members on the managed runtime, the CLI beside a
-    server. Both released at the same instant, one pips and the other is refused
-    (naming the other process). The per-process table can't see this. Only the OS file
-    lock can."""
-    argv, log = _fake_pip(plugin, hold=1.5)
+    server. While one is mid-pip, the other is refused and names the holder's pid. The
+    per-process table can't see this. Only the OS file lock can.
+
+    A handshake, not a race. The fake pip starts only inside ``install_deps``, which runs
+    after the holder has taken the OS lock AND written its holder note (both happen before
+    ``install_lock`` yields). So B is released only once pip's "start" is logged, and
+    it then finds the lock held with the note in place. The fake pip holds until the test
+    releases it, so no step depends on timing. With the lock broken, B's pip starts too,
+    and the test sees the second "start" rather than waiting for B."""
+    release = plugin / "release"
+    argv, log = _fake_pip(plugin, hold=release)
     child = plugin / "child.py"
     child.write_text(CHILD, encoding="utf-8")
-    go = plugin / "go"
     env = {
         **os.environ,
         # The conftest pins data_home() in THIS process only; the children need the same
@@ -198,31 +218,33 @@ def test_two_processes_on_one_environment_run_one_pip(plugin, monkeypatch):
         "PROTOAGENT_BOX_ROOT": str(plugin / "box-root"),
         "PYTHONPATH": str(REPO),
     }
-    procs = []
-    for n in range(2):
-        ready = plugin / f"ready-{n}"
-        procs.append(
-            (
-                ready,
-                subprocess.Popen(
-                    [sys.executable, str(child), str(ready), str(go), *argv],
-                    cwd=REPO,
-                    env=env,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                ),
-            )
+    kids = []
+    for name in ("a", "b"):
+        ready, go = plugin / f"ready-{name}", plugin / f"go-{name}"
+        proc = subprocess.Popen(
+            [sys.executable, str(child), str(ready), str(go), *argv],
+            cwd=REPO,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
-    deadline = time.time() + 60
-    while not all(r.exists() for r, _ in procs):
-        assert time.time() < deadline, "the children never got ready"
-        assert all(p.poll() is None for _, p in procs), [p.communicate() for _, p in procs]
-        time.sleep(0.01)
-    go.touch()
-    outs = [(p.wait(60), *p.communicate()) for _, p in procs]
+        kids.append((ready, go, proc))
+    (ready_a, go_a, a), (ready_b, go_b, b) = kids
+    try:
+        _wait_for(lambda: ready_a.exists() and ready_b.exists(), "the children to import")
+        go_a.touch()
+        # A holds the lock and has written its note: its pip is running.
+        _wait_for(lambda: "start" in _events(log) or a.poll() is not None, "A's pip to start")
+        assert a.poll() is None, a.communicate()
+        go_b.touch()
+        # B is refused, or with a broken lock its own pip starts. Either ends the wait.
+        _wait_for(lambda: b.poll() is not None or _events(log).count("start") >= 2, "B to be refused")
+    finally:
+        release.touch()
+    a_code, a_out, a_err = a.wait(60), *a.communicate()
+    b_code, b_out, b_err = b.wait(60), *b.communicate()
 
-    assert sorted(code for code, _, _ in outs) == [0, 3], outs
-    busy = next(out for code, out, _ in outs if code == 3)
-    assert "already running" in busy and "pid" in busy
+    assert (a_code, b_code) == (0, 3), (a_out, a_err, b_out, b_err)
+    assert "already running" in b_out and f"pid {a.pid}" in b_out, b_out
     assert _events(log).count("start") == 1 and "OVERLAP" not in _events(log)

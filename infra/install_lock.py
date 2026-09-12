@@ -144,6 +144,8 @@ def _os_unlock(fd: int) -> None:
 
 
 def _read_holder(path: Path) -> dict | None:
+    """The holder's note, or None when it's unreadable, empty or half-written (the holder
+    may not have written it yet). A missing note only costs the message its detail."""
     try:
         data = json.loads(path.read_text(encoding="utf-8") or "{}")
     except (OSError, ValueError):
@@ -177,12 +179,17 @@ def _acquire_os_lock(path: Path, info: dict, label: str) -> int | None:
         return None
     if not held:
         os.close(fd)
+        # Best-effort: a process refused in the instant between the holder's lock and its
+        # note write reads an empty (or partial) note and gets a message without the pid.
         raise InstallBusy(label, _read_holder(path))
-    # Record who holds it, for the message a refused process shows. Best-effort.
+    # Record who holds it, first thing after acquiring, for the message a refused process
+    # shows. Write, then trim to length: the release left the file empty, so a reader sees
+    # nothing or a prefix of this, never a stale note. Best-effort.
     with contextlib.suppress(OSError):
-        os.ftruncate(fd, 0)
+        note = json.dumps(info).encode("utf-8")
         os.lseek(fd, 0, os.SEEK_SET)
-        os.write(fd, json.dumps(info).encode("utf-8"))
+        os.write(fd, note)
+        os.ftruncate(fd, len(note))
     return fd
 
 
