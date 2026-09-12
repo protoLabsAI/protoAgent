@@ -226,6 +226,9 @@ document.getElementById("dskit").href=BASE+"/_ds/plugin-kit.css";
   .card .t{font-size:15px;font-weight:600;margin-bottom:8px}
   .card .d{color:var(--pl-color-fg-muted);line-height:1.6}
   .card code{background:var(--pl-color-bg-subtle,rgba(127,127,127,.16));padding:.1em .35em;border-radius:4px}
+  .toast{position:absolute;left:12px;right:12px;bottom:12px;padding:8px 10px;border-radius:6px;
+    font-size:12px;line-height:1.5;background:var(--pl-color-bg,#111);color:var(--pl-color-fg,#eee);
+    border:var(--pl-border-width,1px) solid var(--pl-color-border,#444);box-shadow:0 4px 16px rgba(0,0,0,.25)}
 </style></head><body>
   <div class="bar">
     <button class="pl-btn pl-btn--ghost pl-btn--icon pl-btn--sm" title="Back" onclick="nav('back')">◀</button>
@@ -238,6 +241,7 @@ document.getElementById("dskit").href=BASE+"/_ds/plugin-kit.css";
   <div class="stage">
     <canvas id="cv" width="1280" height="800" tabindex="0"></canvas>
     <div id="msg"><div class="card"><div class="t" id="mt"></div><div class="d" id="md"></div></div></div>
+    <div id="toast" class="toast" hidden></div>
   </div>
 <script type="module">
 const BASE=location.pathname.split("/plugins/")[0];
@@ -257,7 +261,13 @@ async function nav(action,url){
     const r=await kit.apiFetch("/api/plugins/agent_browser/nav",{method:"POST",
       headers:{"Content-Type":"application/json"},body:JSON.stringify({action,url})});
     const b=await r.json().catch(()=>({}));
-    if(b && b.ok===false && b.error){ setStatus("err","error"); showStart(b.error); return; }
+    if(b && b.ok===false && b.error){
+      // A LIVE page is still on screen (e.g. `back` with no history exits non-zero), so
+      // toast it — covering the page with "No page open" would be a lie. Only a panel with
+      // no stream gets the empty-state card.
+      if(connected){ toast(b.error); } else { setStatus("err","error"); showStart(b.error); }
+      return;
+    }
   }catch(_){ setStatus("err","offline"); }
   if(!connected) connect();   // a just-created session now has a page to stream
 }
@@ -269,6 +279,9 @@ function setStatus(s,label){ $("dot").className="dot"+(s?(" "+s):""); $("cs").te
 function live(){ return (devW&&devH) ? ("live · "+devW+"×"+devH) : "live"; }  // show the real viewport size
 function showMsg(t,html){ $("mt").textContent=t; $("md").innerHTML=html||""; $("msg").style.display="flex"; }
 function hideMsg(){ $("msg").style.display="none"; }
+let toastTimer=null;
+function toast(msg){ const t=$("toast"); t.textContent=String(msg==null?"":msg); t.hidden=false;
+  clearTimeout(toastTimer); toastTimer=setTimeout(()=>{ t.hidden=true; },6000); }
 // Server-supplied notes (a setup hint, a CLI error) carry filesystem paths and command
 // text — escape before they touch innerHTML.
 function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,(c)=>

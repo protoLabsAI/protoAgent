@@ -11,29 +11,32 @@ browser action should inform the loop, not crash it.
 
 Three things the in-tree copy adds (#3451):
 
-* **A broken setup is an operator banner, not just a tool-loop error.** Any failing run —
-  ``FileNotFoundError`` (no CLI) *or* a non-zero exit (most often "a CLI with no Chrome to
-  drive") — asks ``preflight`` to re-report, and the next clean run clears it, so the
-  banner appears and self-heals mid-session (``graph/plugins/setup_gaps.py``). Only on a
-  CHANGE of state, so a failing loop doesn't run a probe per call.
+* **A broken setup is an operator banner, not just a tool-loop error.** The tools start
+  in the state the boot probe found, re-probe on a failing run (``FileNotFoundError``
+  always; a non-zero exit at most once a minute, since a missed click exits non-zero too)
+  and on a success while a banner is up — so the banner appears mid-session and clears on
+  the next good call, with no restart (``graph/plugins/setup_gaps.py``).
 * **Captures are fenced, and only claimed when they exist.** ``browser_screenshot`` /
   ``browser_pdf`` resolve their path inside this plugin's own instance store
   (``storage.resolve_capture_path``) and refuse an escape — what the manifest's
   ``filesystem: scoped`` claim had been asserting without enforcing — and the file is
   stat'd before the tool says "Saved to", because the CLI can exit 0 having written
   nothing.
-* **A model-supplied argv element may not start with ``-``.** The CLI reads options
-  anywhere in the command, so such a value is silently swallowed as a flag (verified on
-  0.27.1: ``fill '#q' '--help'`` prints help and fills nothing) — a correctness bug first
-  and an injection shape second.
+* **A model-supplied argv element may not look like a CLI option** (a dash, then a
+  letter: ``--headed``, ``-h``). The CLI reads options anywhere in the command, so such a
+  value is swallowed as a flag — and ``--headed`` / ``--allow-file-access`` take effect on
+  a first launch. Everything else (``-5``, ``-$50.00``, ``- buy milk``, a lone ``-``) goes
+  through untouched, so negative amounts and the minus key still work.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import subprocess
 import threading
+import time
 
 from langchain_core.tools import tool
 
@@ -46,14 +49,32 @@ log = logging.getLogger("protoagent.plugins.agent_browser")
 _DEFAULT_MAX_RESPONSE_BYTES = 200_000
 _READ_CHUNK = 65_536
 
+# Setup re-probe rate limits (see _recheck). A probe is ~40 ms, but it is two subprocesses,
+# and a failing agent loop can fire several calls a second.
+_RECHECK_AFTER_FAILURE_S = 60.0
+_RECHECK_AFTER_SUCCESS_S = 10.0
 
-def get_browser_tools(cfg: dict | None, refresh_gaps=None):
+# The CLI's option grammar — `-h`, `--help`, `--headed`, … : a dash, optionally another,
+# then a LETTER. See _bad_operand for why this, and not "any leading dash".
+_OPTION_LIKE = re.compile(r"^--?[A-Za-z]")
+_WORKAROUND = {
+    "text": ("To enter it anyway, set the field from JavaScript with browser_eval, e.g. "
+             "document.querySelector('#q').value = '--foo' (then dispatch an 'input' event if "
+             "the page reacts to typing)."),
+    "key": "Key names never start that way; for the minus key pass '-' (or 'Minus').",
+    "expression": "Wrap it in parentheses, e.g. (-a) instead of -a.",
+    "*": "No URL, selector or @ref starts that way — check the value.",
+}
+
+
+def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = False):
     """Build the browser toolset.
 
-    ``refresh_gaps`` (optional) is called with no arguments when a run FAILS in a way a
-    setup gap could explain, and once more on the first success afterwards —
-    ``register()`` passes a closure over ``preflight.report``, so the operator banner
-    tracks reality without a probe on every call. Omitted in unit tests, where the tools
+    ``refresh_gaps`` (optional) re-probes the setup and re-reports the banner. It should
+    return the ``preflight.Probe``, so the tools know whether a banner is ACTUALLY up
+    (``register()`` passes a closure over ``preflight.report``). ``start_gap`` is what the
+    boot probe found: without it, a banner raised at boot was never cleared if the operator
+    fixed the setup before any call failed. Both are omitted in unit tests, where the tools
     stay host-free.
     """
     cfg = cfg or {}
@@ -74,25 +95,45 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None):
             log.warning("[agent_browser] ignoring max_response_bytes=%r (must be > 0); using %d",
                         cfg.get("max_response_bytes"), _DEFAULT_MAX_RESPONSE_BYTES)
         max_bytes = _DEFAULT_MAX_RESPONSE_BYTES
-    degraded = threading.Event()  # the last run failed a setup-explicable way → re-check
+    # What the operator's banner currently says (seeded by the boot probe), and when each
+    # direction last re-probed. See _recheck.
+    gap = {"up": bool(start_gap), "fail_at": float("-inf"), "ok_at": float("-inf")}
+    gap_lock = threading.Lock()
 
-    def _gap_changed(*, degrade: bool) -> None:
-        """Ask the host to re-probe — but only on a CHANGE of state, so a failing loop
-        doesn't run a preflight per call."""
-        if degrade:
-            if degraded.is_set():
-                return          # already reported; don't re-probe once per failing call
-            degraded.set()
-        else:
-            if not degraded.is_set():
-                return          # steady-state success: nothing to clear
-            degraded.clear()
-        if not callable(refresh_gaps):
-            return
-        try:
-            refresh_gaps()
-        except Exception:  # noqa: BLE001 — a banner refresh must never fail a tool call
-            log.exception("[agent_browser] refreshing the setup gap failed")
+    def _recheck(*, failed: bool, force: bool = False) -> None:
+        """Re-probe the setup when a call's outcome disagrees with the banner.
+
+        * A FAILED call while no banner is up might be a new gap — but a missed click or a
+          stale ``@ref`` exits non-zero too, so this direction runs at most once per
+          ``_RECHECK_AFTER_FAILURE_S``. ``force`` bypasses that: ``FileNotFoundError`` is
+          unambiguous.
+        * A SUCCESSFUL call while a banner is up is evidence the setup was fixed — re-probe
+          so the banner clears (rate-limited too, in case the probe still disagrees).
+
+        The new state comes from the probe itself when ``refresh_gaps`` returns one, so a
+        routine failure the probe finds harmless doesn't leave the tools marked broken.
+        """
+        now = time.monotonic()
+        with gap_lock:
+            if failed:
+                if gap["up"] or (not force and now - gap["fail_at"] < _RECHECK_AFTER_FAILURE_S):
+                    return
+                gap["fail_at"] = now
+            else:
+                if not gap["up"] or now - gap["ok_at"] < _RECHECK_AFTER_SUCCESS_S:
+                    return
+                gap["ok_at"] = now
+        result = None
+        if callable(refresh_gaps):
+            try:
+                result = refresh_gaps()
+            except Exception:  # noqa: BLE001 — a banner refresh must never fail a tool call
+                log.exception("[agent_browser] refreshing the setup gap failed")
+                return
+        with gap_lock:
+            # A probe says what the banner now shows; without one (no host), take the call's
+            # outcome as the state.
+            gap["up"] = bool(preflight.hint(result)) if isinstance(result, preflight.Probe) else failed
 
     def _run(*args: str) -> str:
         """Run `agent-browser <args>` and return stdout, or a readable error.
@@ -108,7 +149,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None):
             # Surface it to the OPERATOR too, not just into the model's loop: the console
             # showed `warnings: []` while every browser call failed, which is the gap the
             # setup-gap seam exists for.
-            _gap_changed(degrade=True)
+            _recheck(failed=True, force=True)
             return (f"Error: {binary!r} not on PATH — install it: "
                     f"`{preflight.INSTALL_HINT}`. The console's setup banner now says so too.")
 
@@ -179,48 +220,57 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None):
             # — most often "the CLI is here but has no Chrome to drive", which never raises
             # FileNotFoundError. Re-probe so that banner appears (and clears) mid-session
             # too, instead of only on the CLI-missing path.
-            _gap_changed(degrade=True)
+            _recheck(failed=True)
             return f"Error: `agent-browser {' '.join(args)}` failed: {err[:500]}"
-        _gap_changed(degrade=False)  # a clean run proves the setup works — clear any banner
+        _recheck(failed=False)  # a clean run is evidence the setup works — clear any banner
         return out or "(ok)"
 
     async def _ab(*args: str) -> str:
         return await asyncio.to_thread(_run, *args)
 
     def _bad_operand(**values: str) -> str | None:
-        """Reject a model-supplied argv element that the CLI would read as an OPTION.
+        """Reject a model-supplied argv element the CLI would take as one of ITS options.
 
-        The CLI scans for options across the WHOLE argv, not just before the positionals
-        — verified against 0.27.1: ``fill '#q' '--help'`` prints help instead of filling,
-        and so does ``press '--help'``. So a value starting with ``-`` is (a) a silent
-        no-op today, which is the common case and a plain correctness bug, and (b) a way
-        for model- or page-chosen text to set a launch flag (``--auto-connect``,
-        ``--allow-file-access`` are single-element). Not exploitable as shipped — no CDP
-        port is opened — but there is no legitimate URL, selector or key that starts with
-        ``-``, and a refusal beats a silent no-op even for free text. The CLI has no
-        ``--`` end-of-options escape (``open -- --help`` still prints help), so refusing
-        is the only lever. Returns an error string, or None."""
+        The CLI scans the whole argv for options — verified on 0.27.1: ``fill '#q'
+        '--help'`` prints help instead of filling, and ``--headed`` / ``--allow-file-access``
+        in a value would change how a first launch happens, so model- or page-chosen text
+        could set a launch flag. But it only swallows what LOOKS like an option: ``-5``,
+        ``-$50.00``, ``- buy milk``, a lone ``-`` or ``--`` all go through untouched, and
+        ``eval '-1'`` returns -1. So the rule is the option grammar — a dash, then a letter
+        (``_OPTION_LIKE``) — not "starts with a dash"; the first version refused every
+        leading dash and blocked negative amounts and the minus key.
+
+        Deliberately the grammar, not the CLI's current option list: an option upstream adds
+        tomorrow is refused today. The price is that flag-shaped text the CLI happens not to
+        know (``--foo``, ``-x=1``) is refused too, and the message says how to enter it
+        anyway. The CLI has no ``--`` end-of-options escape (``open -- --help`` still prints
+        help), so refusing is the only lever. Returns an error string, or None.
+        """
         for what, value in values.items():
-            if str(value).startswith("-"):
-                return (f"Error: {what} may not start with '-' — the agent-browser CLI reads it "
-                        f"as an option anywhere in the command (it would silently do nothing). "
-                        f"Got {str(value)[:80]!r}.")
+            text = str(value)
+            if _OPTION_LIKE.match(text):
+                return (f"Error: {what} {text[:80]!r} looks like a command-line option (a dash and "
+                        f"then a letter), and the agent-browser CLI reads options anywhere in a "
+                        f"command, so it would be taken as a flag rather than as your {what}. "
+                        f"{_WORKAROUND.get(what, _WORKAROUND['*'])}")
         return None
 
     async def _capture(verb: str, path: str, default_name: str) -> str:
         """Run a file-producing command (``screenshot`` / ``pdf``) inside the fence.
 
         The fence is resolved BEFORE the subprocess, so a rejected path never reaches
-        Chrome, and the tool reports the absolute file on success — the handoff the
-        artifact plugin's ``save_file_artifact`` takes.
+        Chrome, and the tool reports the absolute file on success — the handoff the artifact
+        plugin's ``save_file_artifact`` takes.
 
-        **"Saved to …" is only said once the bytes are on disk.** The CLI can exit 0 having
-        written nothing (no page open, a swallowed renderer error), and reporting that as a
-        success sent the agent on to ``save_file_artifact``, which answered "No file at … —
-        write the file first": an undiagnosable dead end two tools away from the cause. A
-        zero-byte file was worse — stored, then downloaded as a broken PDF. So the file is
-        stat'd, and a partial file left behind by a failed run is removed rather than left
-        for the next call to report as a success.
+        **"Saved to …" means THIS call's bytes are on disk.** Three ways it used to lie:
+
+        * no page open — the CLI happily prints ``about:blank`` (a blank ~860-byte PDF that
+          passes any size check), so the current URL is checked first;
+        * exit 0 having written nothing, or a zero-byte file — so the file is stat'd;
+        * re-exporting to a name that already exists (the resume flow does exactly this) —
+          a run that writes nothing leaves the OLD file behind, indistinguishable by size.
+          So an existing file is parked first (``storage.set_aside``) and the target must be
+          re-created by this run; on failure the previous capture is put back.
         """
         try:
             target = await asyncio.to_thread(
@@ -231,9 +281,21 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None):
             return f"Error: {e}"
         except Exception as e:  # noqa: BLE001 — an unwritable store informs the loop
             return f"Error: could not prepare a capture directory: {e}"
-        existed = target.exists()
+
+        current = await _ab("get", "url")
+        if current.startswith("Error:"):
+            return current
+        if (current.splitlines() or [""])[0].strip() == "about:blank":
+            return ("Error: no page is open (the browser is on about:blank), so there is nothing "
+                    f"to capture — call browser_open with a URL first, then browser_{verb}.")
+
+        try:
+            parked = await asyncio.to_thread(storage.set_aside, target)
+        except OSError as e:
+            return f"Error: could not replace the existing {target.name}: {e}"
         out = await _ab(verb, str(target))
         failed = out.startswith("Error:")
+        size = -1
         if not failed:
             try:
                 size = target.stat().st_size
@@ -242,16 +304,12 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None):
             if size <= 0:
                 failed = True
                 out = (f"Error: `agent-browser {verb}` reported success but wrote "
-                       f"{'an empty file' if size == 0 else 'no file'} — is a page open? "
-                       f"Call browser_open first, then retry.")
+                       f"{'an empty file' if size == 0 else 'no file'}, so nothing was saved. "
+                       f"Check the page with browser_snapshot (or browser_open a URL), then retry.")
+        await asyncio.to_thread(storage.settle, target, parked, keep_new=not failed)
         if failed:
-            if not existed:  # don't leave a partial/empty file to be reported as a hit later
-                try:
-                    target.unlink(missing_ok=True)
-                except OSError:
-                    pass
             return out
-        await asyncio.to_thread(storage.prune_captures)
+        await asyncio.to_thread(storage.prune_captures, keep=target)
         note = ""
         if size > storage.ARTIFACT_BLOB_LIMIT_BYTES:
             # Say it HERE: save_file_artifact would reject it, and the agent would have no
@@ -346,8 +404,9 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None):
     @tool
     async def browser_eval(expression: str) -> str:
         """Evaluate a JavaScript `expression` in the page and return the result.
-        Use sparingly — prefer snapshot + the action tools. Wrap a leading `-` in
-        parentheses (`(-1)`) — the CLI would read it as an option."""
+        Use sparingly — prefer snapshot + the action tools. An expression that starts with
+        a dash and a letter (`-a`) must be wrapped, `(-a)`, or the CLI reads it as an
+        option; `-1` is fine."""
         return _bad_operand(expression=expression) or await _ab("eval", expression)
 
     # ── capture + session ─────────────────────────────────────────────────────

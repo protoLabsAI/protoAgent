@@ -66,18 +66,55 @@ def unique_default_name(default_name: str) -> str:
     return f"{stem or default_name}-{stamp}-{secrets.token_hex(2)}" + (f".{suffix}" if suffix else "")
 
 
-def prune_captures(*, max_files: int | None = None, max_bytes: int | None = None) -> int:
+def set_aside(target: Path) -> Path | None:
+    """Move an existing capture out of the way before a run that will write ``target``.
+
+    A re-export to an existing name (the resume flow re-exports ``resume.pdf``) could
+    otherwise "succeed" while writing nothing: the OLD file is still there and non-empty,
+    so no size check can tell it from a new one. With the old file moved aside, the target
+    has to be re-created by THIS run to count. Returns the parked path, or None.
+    """
+    if not target.is_file():
+        return None
+    parked = target.with_name(f".{target.name}.{secrets.token_hex(4)}.prev")
+    target.replace(parked)
+    return parked
+
+
+def settle(target: Path, parked: Path | None, *, keep_new: bool) -> None:
+    """Finish a capture started with :func:`set_aside`.
+
+    Success: keep the new file, drop the parked one. Failure: discard whatever this run
+    left at ``target`` (a partial or empty file) and put the previous capture back, so a
+    failed re-export never destroys the last good one. Never raises."""
+    try:
+        if keep_new:
+            if parked is not None:
+                parked.unlink(missing_ok=True)
+            return
+        target.unlink(missing_ok=True)
+        if parked is not None:
+            parked.replace(target)
+    except OSError:
+        log.exception("[agent_browser] settling capture %s failed", target)
+
+
+def prune_captures(*, max_files: int | None = None, max_bytes: int | None = None,
+                   keep: Path | None = None) -> int:
     """Drop the oldest captures past either budget. Returns how many were removed.
 
-    Best-effort and never raises: losing a disposable screenshot must not fail the tool
-    call that just succeeded. The budgets are read from the module at CALL time (not bound
-    as defaults) so an operator fork — or a test — can retune them.
+    ``keep`` is never deleted: it is the capture the caller just reported as saved, and a
+    single file bigger than the whole budget used to prune ITSELF while the tool still said
+    "Saved to". Best-effort and never raises: losing a disposable screenshot must not fail
+    the tool call that just succeeded. The budgets are read from the module at CALL time
+    (not bound as defaults) so an operator fork — or a test — can retune them.
     """
     max_files = MAX_CAPTURE_FILES if max_files is None else max_files
     max_bytes = MAX_CAPTURE_BYTES if max_bytes is None else max_bytes
     try:
         root = capture_root()
         files = sorted((p for p in root.rglob("*") if p.is_file()), key=lambda p: p.stat().st_mtime)
+        protected = keep.resolve() if keep is not None else None
     except OSError:
         return 0
     total = 0
@@ -91,6 +128,8 @@ def prune_captures(*, max_files: int | None = None, max_bytes: int | None = None
         if len(files) - removed <= max_files and total <= max_bytes:
             break
         try:
+            if protected is not None and p.resolve() == protected:
+                continue
             total -= p.stat().st_size
             p.unlink()
             removed += 1

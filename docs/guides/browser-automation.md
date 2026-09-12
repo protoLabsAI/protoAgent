@@ -89,10 +89,11 @@ Three details worth knowing:
 - **Leave the path blank** and the file is named for you (`page-20260911-174233-9f3a.pdf`).
   Two unnamed captures then never overwrite each other — which they did when both defaulted
   to `page.pdf`.
-- **"Saved to …" means the bytes are on disk.** The CLI can exit 0 having written nothing
-  (no page open, a swallowed renderer error), so the tool stats the file and reports an
-  error — naming `browser_open` as the likely fix — instead of handing a phantom path to
-  `save_file_artifact` two steps later.
+- **"Saved to …" means this call's bytes are on disk.** With no page open the CLI would
+  happily print `about:blank`, so that's refused up front. A run that exits 0 having
+  written nothing, or zero bytes, is reported as an error. And re-exporting to an existing
+  name parks the old file first, so a failed re-export can never pass the old file off as
+  the new one — the previous capture is put back instead.
 - **PDFs are always US Letter.** `agent-browser pdf` has no paper-size option and ignores a
   page's CSS `@page size`: an A4 page prints at 612 × 792 pt (Letter), not 595 × 842.
   Design pages that will be printed for Letter, and don't promise A4. (A live test pins this,

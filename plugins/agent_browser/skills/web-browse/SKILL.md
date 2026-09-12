@@ -34,14 +34,20 @@ same four-step loop:
 
 When finished, call `browser_close` to free the browser session.
 
+Text that starts with a dash and a letter (like `--foo`) is refused by `browser_fill`
+and `browser_type`: the CLI would read it as one of its own options. Set such a value
+with `browser_eval` instead. Negative numbers, `-$50.00`, list bullets and a lone `-`
+are fine.
+
 ## Capture a page as a file
 
 `browser_screenshot` (PNG) and `browser_pdf` (Chrome's print-to-PDF) both return
 the **absolute path** of the file they wrote. Pass a filename or a relative path —
 or leave it blank and one is generated for you, which is what you want unless the
 name matters. They always land in this plugin's own capture directory, and an
-absolute path outside it is refused. If a capture reports an error saying no file
-was written, call `browser_open` first — there was no page to capture.
+absolute path outside it is refused. Capturing with no page open is refused too —
+`browser_open` a URL first. Re-using a filename replaces that file only if the new
+capture succeeds; a failed one leaves the previous file in place.
 
 `browser_pdf` is the **HTML → PDF** route. To hand the user a real PDF (a resume, a
 report, an invoice): render or open the page, `browser_pdf`, then pass the returned
