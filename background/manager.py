@@ -283,17 +283,32 @@ class BackgroundManager:
             log.exception("[background] started-event publish failed for %s", job_id)
 
     def _publish_turn(
-        self, topic: str, *, session_id: str, origin: str, trigger: str, ok: bool | None = None
+        self,
+        topic: str,
+        *,
+        session_id: str,
+        origin: str,
+        trigger: str,
+        ok: bool | None = None,
+        task_id: str = "",
     ) -> None:
         """Emit a turn-lifecycle event (#1767) around a server-initiated self-POST so an
         open console can render its typing indicator during an otherwise-invisible turn
         (the push-resume nudge holds the connection open for the WHOLE origin-session
-        turn). Best-effort — a publish failure never disturbs the fire."""
+        turn). Best-effort — a publish failure never disturbs the fire.
+
+        ``task_id`` (on ``turn.finished``, once the self-POST has answered) says WHICH
+        turn ended. Two nudges can be in flight on one session — the A2A server
+        serializes them, but the second's control frame reaches the console while the
+        first is still running — and an un-addressed finish made the console drop the
+        live turn's control, taking a queued interjection with it."""
         if self._publish is None:
             return
         data = {"session_id": session_id, "origin": origin, "trigger": trigger}
         if ok is not None:
             data["ok"] = ok
+        if task_id:
+            data["task_id"] = task_id
         try:
             self._publish(topic, data)
         except Exception:  # noqa: BLE001 — the event is best-effort
@@ -416,7 +431,7 @@ class BackgroundManager:
         headers.update(self._auth_headers())
         return headers
 
-    async def _send_a2a_message(self, *, context_id: str, text: str, metadata: dict) -> None:
+    async def _send_a2a_message(self, *, context_id: str, text: str, metadata: dict) -> str:
         """POST one ``SendMessage`` turn to our own ``/a2a`` and hold the connection
         open until the turn finishes (the A2A handler runs it synchronously).
 
@@ -424,7 +439,11 @@ class BackgroundManager:
         ``{text}`` parts, contextId + metadata on the message, A2A-Version header.
         Raises on a non-2xx response or any network/timeout error — callers decide
         what a delivery failure means (a job fire marks the row failed; a push-resume
-        nudge just logs and lets the drain deliver on the next manual turn)."""
+        nudge just logs and lets the drain deliver on the next manual turn).
+
+        Returns the durable TASK ID the turn ran under (``""`` if the body can't be
+        read): the id the caller stamps on ``turn.finished`` so a console can tell which
+        turn ended — see a2a_impl.wire."""
         import httpx
 
         message_id = str(uuid.uuid4())
@@ -446,6 +465,12 @@ class BackgroundManager:
             r = await client.post(f"{self._invoke_url}/a2a", headers=self._a2a_headers(), json=body)
         if r.status_code >= 400:
             raise RuntimeError(f"HTTP {r.status_code}: {r.text[:200]}")
+        from a2a_impl.wire import task_id_from_response
+
+        try:
+            return task_id_from_response(r.json())
+        except Exception:  # noqa: BLE001 — an unreadable body is not a delivery failure
+            return ""
 
     async def _fire(self, job_id: str, prompt: str, fence: list[str] | None = None) -> None:
         """POST the job to our own /a2a as a turn in a dedicated background context.
@@ -516,8 +541,9 @@ class BackgroundManager:
         attended = self._session_attended(session_id)
         self._publish_turn("turn.started", session_id=session_id, origin="background-resume", trigger=job.id)
         ok = False
+        task_id = ""
         try:
-            await self._send_a2a_message(
+            task_id = await self._send_a2a_message(
                 context_id=session_id,
                 text=text,
                 metadata={
@@ -547,7 +573,12 @@ class BackgroundManager:
             return False
         finally:
             self._publish_turn(
-                "turn.finished", session_id=session_id, origin="background-resume", trigger=job.id, ok=ok
+                "turn.finished",
+                session_id=session_id,
+                origin="background-resume",
+                trigger=job.id,
+                ok=ok,
+                task_id=task_id,
             )
 
     # ── fan-out batch-join (#1766) ────────────────────────────────────────────
@@ -667,8 +698,9 @@ class BackgroundManager:
         # connection open for the whole origin-session briefing turn.
         self._publish_turn("turn.started", session_id=origin_session, origin="background-resume", trigger=batch_id)
         ok = False
+        task_id = ""
         try:
-            await self._send_a2a_message(
+            task_id = await self._send_a2a_message(
                 context_id=origin_session,
                 text=text,
                 metadata={
@@ -693,7 +725,12 @@ class BackgroundManager:
             return False
         finally:
             self._publish_turn(
-                "turn.finished", session_id=origin_session, origin="background-resume", trigger=batch_id, ok=ok
+                "turn.finished",
+                session_id=origin_session,
+                origin="background-resume",
+                trigger=batch_id,
+                ok=ok,
+                task_id=task_id,
             )
 
 

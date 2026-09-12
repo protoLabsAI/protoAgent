@@ -8,6 +8,8 @@ import {
   needsAttention,
   sortInstalled,
   statusCounts,
+  uninstallConfirmText,
+  uninstallToast,
   type InstalledRow,
 } from "./installed";
 
@@ -147,5 +149,37 @@ describe("distinctBundles (#2718 bundle actions strip)", () => {
   it("handles an empty/undefined inventory", () => {
     expect(distinctBundles(undefined)).toEqual([]);
     expect(distinctBundles([])).toEqual([]);
+  });
+});
+
+describe("uninstall wording for a plugin that now ships with protoAgent (#3445)", () => {
+  it("says the old copy goes and the built-in keeps running — not that its code is deleted", () => {
+    const text = uninstallConfirmText("Cowork", { superseded: true, bundled_version: "0.4.0" });
+    expect(text).toContain("now ships with protoAgent v0.4.0");
+    expect(text).toContain("removes the old installed copy");
+    expect(text).toContain("keeps running");
+    expect(text).toContain("Disable it instead");
+    expect(text).not.toContain("deletes its code");
+  });
+
+  it("promises only the lock entry when the old copy's files are already gone", () => {
+    const text = uninstallConfirmText("Cowork", { superseded: true, bundled_version: "0.4.0", copy_on_disk: false });
+    expect(text).toContain("clears the stale plugins.lock entry");
+    expect(text).toContain("files are already gone");
+    expect(text).not.toContain("removes the old installed copy");
+  });
+
+  it("keeps the delete warning for an ordinary installed plugin", () => {
+    expect(uninstallConfirmText("Board", undefined)).toContain("deletes its code from disk");
+    expect(uninstallConfirmText("Board", { superseded: false })).toContain("deletes its code from disk");
+  });
+
+  it("toasts 'old copy removed' only when the response says the bundled copy kept running", () => {
+    expect(uninstallToast("Cowork", { superseded_by_bundled: "0.4.0" })).toEqual({
+      title: "Old copy removed",
+      message: "Cowork keeps running — it ships with protoAgent (v0.4.0).",
+    });
+    expect(uninstallToast("Board", {})).toEqual({ title: "Plugin uninstalled", message: "Board removed." });
+    expect(uninstallToast("Board", undefined).title).toBe("Plugin uninstalled");
   });
 });

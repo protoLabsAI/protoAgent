@@ -574,7 +574,13 @@ def _install_pins(ws: Path, pins: list[PluginPin]) -> tuple[list[str], list[dict
         try:
             from graph.workspaces.manager import _enable_installed_in_config
 
-            _enable_installed_in_config(ws / "config" / "langgraph-config.yaml", ws / "plugins.lock")
+            # `sources`: a pin whose URL a bundled plugin now supersedes installed nothing
+            # (the plugin ships with protoAgent) — the bundled copy is what to turn on.
+            _enable_installed_in_config(
+                ws / "config" / "langgraph-config.yaml",
+                ws / "plugins.lock",
+                sources=[p.url for p in pins if p.id in installed],
+            )
         except Exception:  # noqa: BLE001 — installed but not enabled is recoverable in Settings
             log.warning("[snapshot] enabling imported plugins failed", exc_info=True)
             failed.append(

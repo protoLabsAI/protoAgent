@@ -23,6 +23,20 @@ describe("composer scratch state (Swap & Resume S3)", () => {
     expect(loadSteers("s1")).toEqual([]);
   });
 
+  it("keeps the server turn an interjection was sent to, so a reload can still reconcile it", () => {
+    saveSteers("s1", [
+      { id: "a", text: "yes 2024 as proposed", serverTaskId: "task-9" },
+      { id: "b", text: "a plain steer" },
+    ]);
+    expect(loadSteers("s1")).toEqual([
+      { id: "a", text: "yes 2024 as proposed", serverTaskId: "task-9" },
+      { id: "b", text: "a plain steer" },
+    ]);
+    // A malformed tag is dropped, not the message.
+    window.sessionStorage.setItem("protoagent.chat.steers:host:s1", '[{"id":"c","text":"ok","serverTaskId":7}]');
+    expect(loadSteers("s1")).toEqual([{ id: "c", text: "ok" }]);
+  });
+
   it("scroll memory: offset round-trips; null means pinned-to-bottom", () => {
     expect(loadScroll("s1")).toBeNull();
     saveScroll("s1", 1234.6);

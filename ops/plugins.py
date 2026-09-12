@@ -46,10 +46,13 @@ class InstallResult:
 
 def _enabled_ids_from_summary(summary: dict) -> list[str]:
     """Plugin id(s) to enable: a single plugin → its id; a bundle → its declared ``enabled``
-    set (else every installed member)."""
+    set (else every installed member, plus the members skipped because a bundled plugin
+    supersedes their URL — those were turned on by this fallback before they moved into
+    core, and the bundled copy is the member now)."""
     if "bundle" in summary:
         suggested = [str(x) for x in (summary.get("enabled") or [])]
         members = [str(s["id"]) for s in (summary.get("installed") or []) if s.get("id")]
+        members += [str(p) for p in (summary.get("skipped_superseded") or []) if str(p) not in members]
         return suggested or members
     pid = summary.get("id")
     return [str(pid)] if pid else []
@@ -57,11 +60,12 @@ def _enabled_ids_from_summary(summary: dict) -> list[str]:
 
 def _installed_ids_from_summary(summary: dict) -> list[str]:
     """Plugin id(s) whose CODE this install just placed on disk — for a bundle, its fetched
-    members only (``builtin`` members aren't fetched, so can't have been replaced live)."""
+    members only (``builtin`` members aren't fetched, so can't have been replaced live).
+    A superseded install (the URL's plugin ships with protoAgent) fetched nothing."""
     if "bundle" in summary:
         return [str(s["id"]) for s in (summary.get("installed") or []) if s.get("id")]
     pid = summary.get("id")
-    return [str(pid)] if pid else []
+    return [str(pid)] if pid and not summary.get("superseded") else []
 
 
 @op(
@@ -329,11 +333,17 @@ async def update_bundle(
     dropped = await asyncio.to_thread(installer.orphaned_bundle_members, bundle_id, before_members)
     for pid in dropped:
         try:
-            await asyncio.to_thread(installer.uninstall, pid)
+            report = await asyncio.to_thread(installer.uninstall, pid)
         except installer.InstallError as exc:
             retire_errors.append(f"{pid}: {exc}")
             continue
-        purge_plugin_modules(pid)
+        # A member dropped because it moved into core (a bundled plugin supersedes its
+        # URL) only lost its ignored copy — the bundled one is running; leave its modules.
+        # Unless this process was still running the removed copy (upgraded under a live
+        # server): then it lost its files and is unloaded like any retired member.
+        report = report if isinstance(report, dict) else {}
+        if not report.get("superseded_by_bundled") or report.get("was_loaded"):
+            purge_plugin_modules(pid)
     if dropped and apply_settings is not None:
         # The member uninstalls scrubbed the YAML's enabled refs — a pure reload
         # (config=None) picks the file state up and drops their live tools/routes.
@@ -367,11 +377,16 @@ async def uninstall_bundle(
     from graph.plugins.loader import purge_plugin_modules
 
     report = await asyncio.to_thread(installer.uninstall_bundle, bundle_id, purge=purge)
-    for pid in report.get("removed_members") or []:
+    # Unload what actually left: removed members, plus any superseded member this process
+    # was still running from the copy just deleted. A superseded member whose bundled copy
+    # is running is NOT touched — purging it would re-exec a live plugin for nothing (and
+    # split a mounted router from its fresh tools, #942/#3365).
+    unload = [*(report.get("removed_members") or []), *(report.get("superseded_was_loaded") or [])]
+    for pid in unload:
         purge_plugin_modules(pid)
     reloaded = False
     reload_error: str | None = None
-    if apply_settings is not None and report.get("removed_members"):
+    if apply_settings is not None and unload:
         # Off the event loop — full graph rebuild (2732/2735 reviews, D9 rule).
         ok, messages = await asyncio.to_thread(apply_settings, None)
         reloaded = bool(ok)
@@ -483,8 +498,13 @@ def _peek_bundle_sync(url: str, ref: str | None = None) -> dict:
                 )
                 continue
             try:
+                moved = None if entry.get("builtin") else installer.superseding_plugin(str(entry.get("url") or ""))
                 if entry.get("builtin"):
                     members.append(_peek_member_from(builtin_root / pid, entry))
+                elif moved is not None:
+                    # Listed by a URL a bundled plugin supersedes: install will skip it
+                    # and the bundled copy is what runs — preview THAT, without a fetch.
+                    members.append({**_peek_member_from(moved.path, entry), "superseded": True})
                 else:
                     member_dir = Path(tmp) / f"member-{pid}"
                     installer._fetch(entry["url"], entry.get("ref"), member_dir)

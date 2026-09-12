@@ -393,54 +393,71 @@ export const GOAL_PLAN = [
 
 // Watches (ADR 0067) — varied statuses so the Work overview card renders an active
 // count, a met-today pulse fragment, and tinted status badges. Times are epoch SECONDS.
-// Mirror the controller's write order: the met path sets `finished_at` and skips the
-// `last_checked` update, so a finished watch's last_checked is the PREVIOUS check.
-// "met today" derives from finished_at on the local day of NOW, so a bare `now - 600`
-// lands on YESTERDAY in the first 10 minutes after local midnight and the pulse
-// fragment vanishes (work-overview.spec flaked exactly there) — clamp it into today.
-const NOW_SEC = Math.floor(Date.now() / 1000);
-const TODAY_START_SEC = Math.floor(new Date().setHours(0, 0, 0, 0) / 1000);
-const MET_AT_SEC = Math.max(NOW_SEC - 600, TODAY_START_SEC);
-export const WATCHES = {
-  enabled: true,
-  watches: [
-    {
-      id: "watch-1",
-      condition: "CI is green on main",
-      status: "active",
-      verifier: { type: "llm" },
-      last_checked: NOW_SEC - 120,
-      // Lifetime knobs (ADR 0067 / #2325) so the panel's meta line is exercised. Relative
-      // to NOW so the rendered spans stay stable whenever the suite runs. Deliberately on
-      // the EXISTING active watch rather than a new row — an extra watch would shift the
-      // card's badge count and pulse, which other assertions in work-overview pin.
-      interval_s: 1800,
-      deadline: NOW_SEC + 7200,
-      stall_after: 3,
-    },
-    {
-      id: "watch-2",
-      condition: "The staging deploy finishes",
-      status: "met",
-      verifier: { type: "llm" },
-      last_checked: MET_AT_SEC - 300,
-      finished_at: MET_AT_SEC,
-      // Knobs deliberately SET on a terminal watch: the panel must suppress them (a met
-      // watch has nothing left to expire), so the spec proves suppression rather than
-      // just the absence of data.
-      interval_s: 600,
-      stall_after: 2,
-    },
-    {
-      id: "watch-3",
-      condition: "Inbox zero before Friday",
-      status: "expired",
-      verifier: { type: "llm" },
-      last_checked: Math.floor(Date.now() / 1000) - 7500,
-      finished_at: Math.floor(Date.now() / 1000) - 7200,
-    },
-  ],
-};
+/** The watches roster, with every timestamp relative to `nowMs` — built PER REQUEST.
+ *
+ * Never at module load. The mock server is one long-lived process, so a constant
+ * computed at import drifts from the browser's clock for as long as the run lasts: the
+ * panel's "expires in 2h" decays toward 1h, and once a real midnight falls between the
+ * import and the render, "met today" is simply gone. That is not hypothetical —
+ * work-overview.spec.ts went red at 00:02Z with 389 other specs passing, and the
+ * previous fix (clamping the offset into "today") could not help, because the day it
+ * clamped into was the day the module loaded, not the day the assertion runs.
+ *
+ * A spec pins both ends by sending `x-e2e-now` (see `nowFor` in mock-server.mjs) and
+ * setting the page clock to the same instant; without the header this is request time,
+ * which leaves only the response→render gap (milliseconds).
+ */
+export function buildWatches(nowMs = Date.now()) {
+  const nowSec = Math.floor(nowMs / 1000);
+  const dayStartSec = Math.floor(new Date(nowMs).setHours(0, 0, 0, 0) / 1000);
+  // Mirror the controller's write order: the met path sets `finished_at` and skips the
+  // `last_checked` update, so a finished watch's last_checked is the PREVIOUS check.
+  // "met today" derives from finished_at on the LOCAL day of the render, so the offset is
+  // clamped into that day — in the first 10 minutes after local midnight a bare
+  // `now - 600` lands on yesterday and the pulse fragment vanishes.
+  const metAtSec = Math.max(nowSec - 600, dayStartSec);
+  return {
+    enabled: true,
+    watches: [
+      {
+        id: "watch-1",
+        condition: "CI is green on main",
+        status: "active",
+        verifier: { type: "llm" },
+        last_checked: nowSec - 120,
+        // Lifetime knobs (ADR 0067 / #2325) so the panel's meta line is exercised.
+        // Relative to now so the rendered spans stay stable whenever the suite runs.
+        // Deliberately on the EXISTING active watch rather than a new row — an extra
+        // watch would shift the card's badge count and pulse, which other assertions in
+        // work-overview pin.
+        interval_s: 1800,
+        deadline: nowSec + 7200,
+        stall_after: 3,
+      },
+      {
+        id: "watch-2",
+        condition: "The staging deploy finishes",
+        status: "met",
+        verifier: { type: "llm" },
+        last_checked: metAtSec - 300,
+        finished_at: metAtSec,
+        // Knobs deliberately SET on a terminal watch: the panel must suppress them (a met
+        // watch has nothing left to expire), so the spec proves suppression rather than
+        // just the absence of data.
+        interval_s: 600,
+        stall_after: 2,
+      },
+      {
+        id: "watch-3",
+        condition: "Inbox zero before Friday",
+        status: "expired",
+        verifier: { type: "llm" },
+        last_checked: nowSec - 7500,
+        finished_at: nowSec - 7200,
+      },
+    ],
+  };
+}
 
 export const NOTES_WORKSPACE = {
   version: 1,

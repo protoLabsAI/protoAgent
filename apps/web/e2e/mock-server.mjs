@@ -18,6 +18,7 @@ import {
   ARCHETYPES,
   ARCHETYPE_PREVIEWS,
   buildFrames,
+  buildWatches,
   DELEGATES,
   DELEGATE_TYPES,
   FLEET,
@@ -47,7 +48,6 @@ import {
   TELEMETRY_INSIGHTS,
   TELEMETRY_SUMMARY,
   TELEMETRY_TURNS,
-  WATCHES,
   VERIFIERS,
   WORKFLOW_RECIPE_FULL,
   WORKFLOW_RUN_RECORD,
@@ -248,6 +248,15 @@ const stripFields = (rows, keys) =>
 // no header share the "default" scope.
 const fleetScopes = new Map();
 const cloneFleet = (f) => JSON.parse(JSON.stringify(f));
+// Fixture data that is RELATIVE TO NOW (watch deadlines, "met today") is built per
+// request from this clock, never at module load — see `buildWatches`. `x-e2e-now`
+// (epoch ms) lets a spec pin it and its own page clock to the same instant, which is
+// what makes a midnight-crossing assertion testable instead of a 24-hourly coin flip.
+function nowFor(req) {
+  const pinned = Number(req.headers["x-e2e-now"]);
+  return Number.isFinite(pinned) && pinned > 0 ? pinned : Date.now();
+}
+
 function fleetFor(req) {
   const scope = req.headers["x-e2e-fleet"] || "default";
   if (!fleetScopes.has(scope)) fleetScopes.set(scope, cloneFleet(FLEET));
@@ -304,6 +313,8 @@ function handleApiGet(
   // rollup alone — the two are independent, and a hub can run with telemetry
   // disabled while its members are busy (#3329).
   telemetryOff = false,
+  // Request time (`nowFor`) — the clock every now-relative fixture is built from.
+  nowMs = Date.now(),
 ) {
   switch (pathname) {
     case "/api/runtime/status":
@@ -386,7 +397,7 @@ function handleApiGet(
     case "/api/goals":
       return GOALS;
     case "/api/watches":
-      return WATCHES;
+      return buildWatches(nowMs);
     case "/api/verifiers":
       return VERIFIERS;
     case "/api/notes/workspace":
@@ -1062,6 +1073,7 @@ const server = createServer(async (req, res) => {
         url.searchParams,
         mcpFor(req),
         req.headers["x-e2e-telemetry"] === "off",
+        nowFor(req),
       );
       if (payload !== null) return sendJson(res, payload);
       return sendJson(res, { detail: "not mocked" }, 404);

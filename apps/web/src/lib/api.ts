@@ -2695,8 +2695,13 @@ export const api = {
   },
   // Items still queued for the session — read at turn-end: anything here arrived
   // after the turn's last model call and wasn't folded in (re-send as a new turn).
+  // `drained` names ids a turn actually folded in: absence from `pending` alone can't
+  // tell a message the agent READ from one that never arrived (the queue is in-memory,
+  // and the live boundary marker is best-effort), and the console must not guess between
+  // settling a message the agent never saw and re-offering one it already used. Absent
+  // from an older server, which reads as "can't say" rather than "not read".
   pendingSteer(sessionId: string) {
-    return request<{ pending: { id: string; text: string }[] }>(
+    return request<{ pending: { id: string; text: string }[]; drained?: string[] }>(
       `/api/chat/sessions/${encodeURIComponent(sessionId)}/steer`,
     );
   },
@@ -2749,6 +2754,33 @@ export const api = {
     if (!task) return { state: "", text: "" };
     const state = (task.status?.state || "").toString();
     return { state, text: textFromTerminalTask(task) };
+  },
+
+  /** A turn's state plus the interjection ids its DURABLE history records as folded in.
+   *
+   *  The steering queue is in-memory (graph/steering.py), so "no longer queued" cannot tell
+   *  a message the agent read from one a restart dropped. The executor's steer-consumed
+   *  marker is written into the task's history, which survives both — so this is what lets
+   *  the console settle an interjection on proof instead of inference. One GetTask, because
+   *  the reconcile needs the state anyway. */
+  async taskSteerState(taskId: string): Promise<{ state: string; consumed: string[] }> {
+    const res = await request<A2AFrame>("/a2a", {
+      method: "POST",
+      headers: { "A2A-Version": "1.0" },
+      body: { jsonrpc: "2.0", id: `steer-get-${Date.now()}`, method: "GetTask", params: { id: taskId } },
+    });
+    const result = res.result;
+    const task = (result?.task ?? (result?.kind === "task" ? result : result)) as
+      | NonNullable<A2AFrame["result"]>
+      | undefined;
+    if (!task) return { state: "", consumed: [] };
+    const history = ((task as { history?: Array<{ parts?: RawPart[] }> }).history || []) as Array<{
+      parts?: RawPart[];
+    }>;
+    return {
+      state: (task.status?.state || "").toString(),
+      consumed: history.flatMap((entry) => consumedSteersFromParts(entry.parts) ?? []).map((item) => item.id),
+    };
   },
 
   // Reattach to an IN-FLIGHT turn after an agent switch / reload (Swap & Resume
@@ -2980,7 +3012,12 @@ export const api = {
     return request<BrowseListing>(`/api/fs/browse${q ? `?${q}` : ""}`);
   },
   uninstallPlugin(id: string) {
-    return request<{ ok: boolean }>(`/api/plugins/${encodeURIComponent(id)}`, { method: "DELETE" });
+    // `superseded_by_bundled` (the bundled version) = only the ignored old copy of a
+    // plugin that now ships with protoAgent was removed; the built-in keeps running.
+    return request<{ ok: boolean; superseded_by_bundled?: string; restart_recommended?: boolean }>(
+      `/api/plugins/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    );
   },
   // Pip-install a plugin's declared requires_pip (the code-exec step `install`
   // deliberately skips) — previously CLI-only.
@@ -3051,10 +3088,11 @@ export const api = {
   },
   // Re-clone every locked plugin that's missing on disk (fresh clone / restored
   // data dir). Fetches at the lock's resolved_sha; already-enabled plugins come
-  // up live via the same hot-reload the enable toggle uses.
+  // up live via the same hot-reload the enable toggle uses. "superseded" = the locked
+  // copy's source is retired by a bundled plugin of the same id — nothing to fetch.
   syncPlugins() {
     return request<{
-      plugins: { id: string; status: "present" | "installed" | "failed"; error?: string }[];
+      plugins: { id: string; status: "present" | "installed" | "failed" | "superseded"; error?: string }[];
       reloaded: boolean;
       reload_error: string | null;
     }>("/api/plugins/sync", { method: "POST" });

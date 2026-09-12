@@ -178,6 +178,12 @@ def register_plugin_routes(app) -> None:
                     "url": b.get("source_url") or "",
                 }
         out = []
+        # The copy that RUNS per id (the loader's rule: supersedes, tracked overrides,
+        # #1574). The console joins these rows onto the running plugin — description,
+        # deps_missing and the "Install deps" action — so they must describe that copy,
+        # not whichever folder happens to sit in the live dir (for a superseded install
+        # that is the ignored old copy). Off the loop: it reads every manifest.
+        running = await asyncio.to_thread(installer.effective_copies)
         for e in installer.list_installed():
             mt = meta_by_id.get(e["id"], {})
             item = {
@@ -192,7 +198,7 @@ def register_plugin_routes(app) -> None:
             }
             if e["id"] in bundle_by_member:
                 item["bundle"] = bundle_by_member[e["id"]]
-            m = load_manifest(root / e["id"]) if e.get("present") else None
+            m = (running.get(e["id"]) or load_manifest(root / e["id"])) if e.get("present") else None
             if m is not None:
                 item["manifest"] = {
                     "name": m.name,
@@ -235,9 +241,10 @@ def register_plugin_routes(app) -> None:
         # without the same one-time "this runs code" ack install itself requires.
         # Same 200-with-needs_ack contract as the install endpoint — the client
         # renders the confirm dialog and retries after POST /api/plugins/ack; a 4xx
-        # here would dead-end as an error toast. Skipped when the lock records no
-        # origin (bundled / hand-copied working tree — nothing was fetched).
-        source_url = installer.recorded_source_url(plugin_id)
+        # here would dead-end as an error toast. Skipped when the copy that RUNS has
+        # no recorded origin (bundled — including one superseding an old git install —
+        # or a hand-copied working tree: nothing was fetched for it).
+        source_url = await asyncio.to_thread(installer.effective_source_url, plugin_id)
         if source_url:
             needs_ack = _consent_needs_ack(source_url)
             if needs_ack is not None:
@@ -622,6 +629,15 @@ def register_plugin_routes(app) -> None:
                 status_code=400,
                 detail=f"plugin {plugin_id!r} has no source_url — cannot update",
             )
+        # The plugin moved into core (a bundled copy supersedes this source): the
+        # installed copy is ignored, so there is nothing to pull. 409 with the reason and
+        # the fix — before, this reached the installer's built-in guard and 400'd with
+        # "cannot install over it", which read as a broken update.
+        bundled = installer.bundled_superseding(plugin_id, source_url)
+        if bundled is not None:
+            raise HTTPException(
+                status_code=409, detail=installer.superseded_reason(plugin_id, source_url, bundled)
+            )
         ref = entry.get("requested_ref", "") or None
         if ref and installer.is_release_tag(ref):
             # A release-tag pin is immutable — the update target is the newest
@@ -685,6 +701,32 @@ def register_plugin_routes(app) -> None:
             report = await asyncio.to_thread(installer.uninstall, plugin_id, purge=purge)
         except installer.InstallError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if report.get("superseded_by_bundled"):
+            # Only the IGNORED copy of a plugin that now ships with protoAgent went, and the
+            # enable entry stays — dropping it here would switch the bundled plugin off.
+            if not report.get("was_loaded"):
+                # The running code is the bundled copy: nothing to purge, scrub or reload.
+                return {"ok": True, **report, "reloaded": False, "restart_recommended": False}
+            # …unless this process was STILL running the removed copy (protoAgent was
+            # upgraded under it without a restart): its files just went, so unload it like
+            # any removal — purge + reload brings the bundled copy up in its place — and a
+            # router it mounted keeps serving the old code until a restart (#942).
+            _purge_plugin_modules(plugin_id)
+            reloaded = False
+            if was_enabled:
+                from server.agent_init import _apply_settings_changes
+
+                ok, messages = await asyncio.to_thread(_apply_settings_changes, config=_current_plugin_lists)
+                if not ok:
+                    raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
+                reloaded = True
+            return {
+                "ok": True,
+                **report,
+                "reloaded": reloaded,
+                "restart_recommended": bool(_has_surface(meta) or was_mounted),
+            }
 
         # Teardown, mirroring _update (#1955): the files are gone, so stale module
         # objects must not survive to the next import, and an ENABLED plugin must

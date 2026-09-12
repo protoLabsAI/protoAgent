@@ -872,6 +872,18 @@ class ProtoAgentExecutor(AgentExecutor):
                             TaskState.TASK_STATE_WORKING,
                             message=updater.new_agent_message([_data_part_proto(payload, STEER_CONSUMED_MIME)]),
                         )
+                        # A server-fired turn's stream is held by the server, so the
+                        # console that interjected into it never sees the frame above.
+                        # Mirror the boundary onto the progress hook — AFTER _flush_text
+                        # mirrored the text that preceded it — so the host can hand the
+                        # console the same acknowledgement a browser-owned stream carries
+                        # inline. Without it the operator's message sat "queued" under an
+                        # answer that had already used it.
+                        _notify_progress(
+                            context.context_id,
+                            context.task_id,
+                            {"phase": "steer_consumed", "items": payload.get("items") or [], "origin": _origin},
+                        )
 
                 elif event_type == "component":
                     # A renderable UI component (ADR 0051 Slice 2) — emit it as a
