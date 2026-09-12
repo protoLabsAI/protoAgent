@@ -83,11 +83,33 @@ def _store_etag() -> str:
 #
 # `_write_store` is atomic at the file level (tempfile + os.replace), so a lock-free READER
 # never sees a torn store; the lock is only for atomicity ACROSS a read and its write-back.
+#
+# Waiting is BOUNDED (``_LOCK_TIMEOUT_S``). A holder that never lets go — a process wedged
+# mid-save — would otherwise block every writer in every process forever; past the bound the
+# waiter fails with ``StoreLockTimeout`` and changes nothing. The lock is never stolen: a live
+# holder that is merely slow keeps exclusion however long it takes, and only its waiters give
+# up. A DEAD holder needs no stale-lock handling at all — both OS locks belong to an open file,
+# so the OS drops them the moment the holding process exits, however it exits.
 _MUTATION_LOCK = threading.RLock()
 _FILE_LOCK_DEPTH = 0  # this process's hold depth — only touched while _MUTATION_LOCK is held
-_FILE_LOCK_POLL_S = 0.01  # Windows polls a non-blocking lock (see _os_lock)
+_LOCK_TIMEOUT_S = 60.0  # the longest a writer waits for the store (a 25 MB blob save on a slow mount fits)
+_FILE_LOCK_POLL_S = 0.01  # how often a waiter retries the non-blocking OS lock (see _os_lock)
 _WIN_LOCK_BUSY = {errno.EACCES, getattr(errno, "EDEADLOCK", errno.EDEADLK)}
-_lock_unavailable_warned = False
+_POSIX_LOCK_BUSY = {errno.EAGAIN, errno.EWOULDBLOCK}
+# The holder stamps "<pid> <since>" here so a waiter that times out can name it. Past byte 0 on
+# purpose: that byte is the Windows lock region, which no other process can read while it's held.
+_HOLDER_OFFSET, _HOLDER_WIDTH = 64, 48
+# (errno, lock path) pairs whose degrade has been WARNED; a repeat logs at debug (see _log_degrade).
+_lock_degrades_warned: set[tuple[int | None, Path]] = set()
+
+
+class StoreLockTimeout(TimeoutError):
+    """The store lock stayed held elsewhere for longer than ``_LOCK_TIMEOUT_S``. Raised before
+    the caller's read-modify-write starts, so nothing was changed."""
+
+
+class _LockBusy(Exception):
+    """``_os_lock`` reached its deadline with the lock still held by another process."""
 
 
 def _lock_path() -> Path:
@@ -96,27 +118,40 @@ def _lock_path() -> Path:
     return _store_path().with_name("history.json.lock")
 
 
-def _os_lock(fd: int) -> None:
-    """Block until this process holds the exclusive OS lock on ``fd``."""
+def _os_lock(fd: int, deadline: float) -> None:
+    """Take the exclusive OS lock on ``fd``, retrying its non-blocking mode until ``deadline``
+    (a ``time.monotonic()`` value); ``_LockBusy`` if another process still holds it then. Any
+    other OSError means this filesystem can't lock at all, and is raised as it is.
+
+    Non-blocking + poll on both platforms, because a blocking acquire can't be bounded:
+    ``flock(LOCK_EX)`` waits forever, and msvcrt's blocking mode (LK_LOCK) gives up after a fixed
+    ~10 s — too short for a writer queued behind a slow save. On Windows the region is byte 0
+    (locking past EOF is allowed)."""
     if sys.platform == "win32":
         import msvcrt
 
-        # msvcrt's blocking mode (LK_LOCK) gives up with an error after ~10 s; a writer queued
-        # behind a slow save must wait, not fail, so poll the non-blocking mode instead. The
-        # region is byte 0 — locking past EOF is allowed, and the sidecar stays empty.
-        while True:
+        def attempt():
             os.lseek(fd, 0, os.SEEK_SET)
-            try:
-                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
-                return
-            except OSError as e:
-                if e.errno not in _WIN_LOCK_BUSY:
-                    raise
-            time.sleep(_FILE_LOCK_POLL_S)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+
+        busy = _WIN_LOCK_BUSY
     else:
         import fcntl
 
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        def attempt():
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        busy = _POSIX_LOCK_BUSY
+    while True:
+        try:
+            attempt()
+            return
+        except OSError as e:
+            if e.errno not in busy:
+                raise
+        if time.monotonic() >= deadline:
+            raise _LockBusy
+        time.sleep(_FILE_LOCK_POLL_S)
 
 
 def _os_unlock(fd: int) -> None:
@@ -131,30 +166,88 @@ def _os_unlock(fd: int) -> None:
         fcntl.flock(fd, fcntl.LOCK_UN)
 
 
-def _acquire_file_lock() -> int | None:
-    """Open the sidecar and take the OS lock; the held fd, or ``None`` when the filesystem
-    refuses locking (e.g. a network mount without lock support). That degrades to the thread
-    lock alone — the behaviour before this lock existed — with one warning, rather than
-    failing every store write."""
-    global _lock_unavailable_warned
+def _log_degrade(e: OSError) -> None:
+    """Report a degrade to the thread lock: a WARNING the first time each errno is seen for this
+    lock path, debug after that. Once per errno, not once per process: a lock that first failed
+    with, say, EBADF and later fails with ENOLCK is a different problem the operator must see —
+    and never silent, so a store that keeps writing without cross-process exclusion stays
+    visible. Only called under ``_MUTATION_LOCK``, which guards the set."""
+    path = _lock_path()
+    code = errno.errorcode.get(e.errno, str(e.errno)) if e.errno is not None else "no errno"
+    key = (e.errno, path)
+    if key in _lock_degrades_warned:
+        log.debug(
+            "[artifact] store cross-process lock still unavailable at %s (%s) — serialised within this process only",
+            path,
+            code,
+        )
+        return
+    _lock_degrades_warned.add(key)
+    log.warning(
+        "[artifact] cannot take the store's cross-process lock at %s (%s: %s) — store writes are "
+        "serialised within this process only while this lasts",
+        path,
+        code,
+        e.strerror or e,
+        exc_info=True,
+    )
+
+
+def _record_holder(fd: int) -> None:
+    """Stamp this process as the lock's holder (best effort — it only feeds a timeout message)."""
+    stamp = f"{os.getpid()} {time.time():.3f}".encode("ascii").ljust(_HOLDER_WIDTH)
+    try:
+        os.lseek(fd, _HOLDER_OFFSET, os.SEEK_SET)
+        os.write(fd, stamp)
+    except OSError:
+        log.debug("[artifact] could not stamp the store lock's holder", exc_info=True)
+
+
+def _read_holder(fd: int) -> tuple[int, float] | None:
+    """The last holder's ``(pid, since)`` stamp, or ``None`` when there's none to read."""
+    try:
+        os.lseek(fd, _HOLDER_OFFSET, os.SEEK_SET)
+        pid, since = os.read(fd, _HOLDER_WIDTH).decode("ascii").split()
+        return int(pid), float(since)
+    except (OSError, ValueError):
+        return None
+
+
+def _busy_message(holder: tuple[int, float] | None) -> str:
+    who = "another process"
+    if holder is not None:
+        who += f" (the lock was last taken by pid {holder[0]}, {max(0.0, time.time() - holder[1]):.0f}s ago)"
+    return (
+        f"The artifact store is busy: its lock at {_lock_path()} was still held by {who} after "
+        f"{_LOCK_TIMEOUT_S:g}s. Nothing was changed — try again. If this keeps happening, that "
+        f"process is stuck; the lock is released as soon as it exits."
+    )
+
+
+def _acquire_file_lock(deadline: float) -> int | None:
+    """Open the sidecar and take the OS lock by ``deadline``; the held fd, or ``None`` when the
+    filesystem refuses locking (e.g. a network mount without lock support). That degrades to
+    the thread lock alone — the behaviour before this lock existed — and says so
+    (``_log_degrade``), rather than failing every store write. A lock that is merely HELD past
+    the deadline raises ``StoreLockTimeout``: degrading then would break exclusion with a live
+    holder."""
     fd = None
     try:
         fd = os.open(_lock_path(), os.O_RDWR | os.O_CREAT, 0o600)
-        _os_lock(fd)
-        return fd
-    except OSError:
+        _os_lock(fd, deadline)
+    except _LockBusy:
+        holder = _read_holder(fd)
+        with contextlib.suppress(OSError):
+            os.close(fd)
+        raise StoreLockTimeout(_busy_message(holder)) from None
+    except OSError as e:
         if fd is not None:
             with contextlib.suppress(OSError):
                 os.close(fd)
-        if not _lock_unavailable_warned:
-            _lock_unavailable_warned = True
-            log.warning(
-                "[artifact] cannot take the store's cross-process lock at %s — store writes are "
-                "serialised within this process only",
-                _lock_path(),
-                exc_info=True,
-            )
+        _log_degrade(e)
         return None
+    _record_holder(fd)
+    return fd
 
 
 def _release_file_lock(fd: int) -> None:
@@ -169,11 +262,20 @@ def _release_file_lock(fd: int) -> None:
 
 @contextlib.contextmanager
 def _store_lock():
-    """Hold the store: this process's thread lock, then the cross-process file lock.
-    Reentrant — a nested hold neither re-opens nor releases the file lock."""
+    """Hold the store: this process's thread lock, then the cross-process file lock, both
+    within one ``_LOCK_TIMEOUT_S`` budget — ``StoreLockTimeout`` past it (a wedged thread in
+    this process can hang its writers just as a wedged process can). Reentrant — a nested hold
+    neither re-opens nor releases the file lock."""
     global _FILE_LOCK_DEPTH
-    with _MUTATION_LOCK:
-        fd = _acquire_file_lock() if _FILE_LOCK_DEPTH == 0 else None
+    budget = max(0.0, _LOCK_TIMEOUT_S)
+    deadline = time.monotonic() + budget
+    if not _MUTATION_LOCK.acquire(timeout=budget):
+        raise StoreLockTimeout(
+            f"The artifact store is busy: another writer in this process (pid {os.getpid()}) held it "
+            f"for longer than {_LOCK_TIMEOUT_S:g}s. Nothing was changed — try again."
+        )
+    try:
+        fd = _acquire_file_lock(deadline) if _FILE_LOCK_DEPTH == 0 else None
         _FILE_LOCK_DEPTH += 1
         try:
             yield
@@ -181,12 +283,16 @@ def _store_lock():
             _FILE_LOCK_DEPTH -= 1
             if fd is not None:
                 _release_file_lock(fd)
+    finally:
+        _MUTATION_LOCK.release()
 
 
 def serialized(fn):
     """Run ``fn`` holding the store lock (``_store_lock``) — for any path that reads the
     store, changes it, and writes it back. Read-only paths don't need it. Hold it for the
-    read-modify-write and nothing longer: a waiter may be another PROCESS.
+    read-modify-write and nothing longer: a waiter may be another PROCESS. Raises
+    ``StoreLockTimeout`` (before ``fn`` runs) when the store stays held past ``_LOCK_TIMEOUT_S``;
+    the agent tools and the panel routes turn that into a "busy, nothing changed" reply / a 503.
 
     Deliberately SYNC-only. An async wrapper that acquired this lock would block the
     event-loop thread for as long as a tool call held it, stalling unrelated requests —
@@ -231,7 +337,13 @@ def _gc_blobs(store: dict) -> None:
     Holds the store lock (reentrant — _write_store already does): ``store`` is only the
     on-disk truth while no other process can write, and every blob write happens inside a
     locked save, so a blob this sweep sees unreferenced can't be one another process has
-    just written and is about to reference."""
+    just written and is about to reference.
+
+    A blob can still be mid-DOWNLOAD when it's orphaned: the blob route streams from a handle
+    it opened before sending (see ``_routes._open_blob``). On POSIX deleting it is harmless — the
+    open handle keeps reading the unlinked file. On Windows the delete FAILS (PermissionError: the
+    handle doesn't share delete access), so each file is swept on its own and a refusal only
+    skips that one file; the next sweep (any later store write) retries it."""
     root = _blob_root()
     if not root.exists():
         return
@@ -251,17 +363,22 @@ def _gc_blobs(store: dict) -> None:
         try:
             if not art_dir.is_dir():
                 continue
-            keep = live.get(art_dir.name)
-            if keep is None:  # artifact gone (deleted / trimmed out) → drop its whole dir
-                for f in art_dir.iterdir():
-                    f.unlink(missing_ok=True)
-                art_dir.rmdir()
-                continue
-            for f in art_dir.iterdir():  # artifact lives; drop only orphaned versions' blobs
-                if f.name not in keep:
-                    f.unlink(missing_ok=True)
+            keep = live.get(art_dir.name)  # None: artifact gone (deleted / evicted) → drop its whole dir
+            for f in sorted(art_dir.iterdir()):
+                if keep is None or f.name not in keep:
+                    _unlink_orphan(f)
+            if keep is None:
+                art_dir.rmdir()  # fails while a refused blob is still in it; the next sweep retries
         except OSError:
             log.debug("[artifact] blob GC hiccup on %s", art_dir, exc_info=True)
+
+
+def _unlink_orphan(f: Path) -> None:
+    """Delete one orphaned blob; a refusal (Windows: a download still has it open) only skips it."""
+    try:
+        f.unlink(missing_ok=True)
+    except OSError:
+        log.debug("[artifact] blob GC: %s not removed yet (in use?) — the next sweep retries", f, exc_info=True)
 
 
 def _now() -> int:

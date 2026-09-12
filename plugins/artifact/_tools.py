@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
 import secrets
@@ -31,6 +32,21 @@ _recent_full_saves: dict[str, list[int]] = {}
 _PIN_NAMES_SHOWN = 5
 
 
+def _busy_reply(fn):
+    """A mutating tool whose store stays locked past its bound (``_store.StoreLockTimeout`` —
+    another process is wedged holding it) replies with why and that nothing changed, rather than
+    raising out of the agent's tool call. The lock is taken before any change, so a retry is safe."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except _store.StoreLockTimeout as e:
+            return str(e)
+
+    return wrapper
+
+
 def _save_nudge(art_id: str) -> str:
     """Record one full-body write to ``art_id``; the nudge string once the recent
     window crosses the threshold, else empty."""
@@ -49,6 +65,7 @@ def _save_nudge(art_id: str) -> str:
 
 
 @tool
+@_busy_reply
 def save_file_artifact(path: str, title: str = "", artifact_id: str = "") -> str:
     """Save a GENERATED FILE (a .docx / .xlsx / .pptx / .pdf / image / text file you already
     wrote to disk) into the Artifact panel as a VERSIONED download artifact — so the file gets
@@ -163,10 +180,13 @@ def _then_render(result: tuple[str, _RenderTarget | None]) -> str:
     the lock could only ever time out (and would stall every other writer, in any process,
     for the whole wait)."""
     msg, target = result
-    return msg + _render_status._render_suffix(*target) if target else msg
+    if target is None:
+        return msg
+    return msg + _render_status._render_suffix(*target)
 
 
 @tool
+@_busy_reply
 def show_artifact(kind: str, code: str, title: str = "") -> str:
     """CREATE a new generative-UI artifact in the console's Artifact panel.
 
@@ -228,6 +248,7 @@ def _show(kind: str, code: str, title: str) -> tuple[str, _RenderTarget | None]:
 
 
 @tool
+@_busy_reply
 def update_artifact(old_string: str, new_string: str, artifact_id: str = "") -> str:
     """Make a TARGETED edit to an existing artifact: replace ``old_string`` with ``new_string``
     in its current source, creating a new version. ``old_string`` must match the current source
@@ -268,6 +289,7 @@ def _update(old_string: str, new_string: str, artifact_id: str) -> tuple[str, _R
 
 
 @tool
+@_busy_reply
 def rewrite_artifact(code: str, title: str = "", artifact_id: str = "") -> str:
     """Replace an artifact's ENTIRE source with ``code``, creating a new version (the kind is
     kept). Use this for a large change where a targeted ``update_artifact`` would be awkward;
@@ -377,6 +399,7 @@ def check_artifact(artifact_id: str = "") -> str:
 
 
 @tool
+@_busy_reply
 @_store.serialized
 def pin_artifact(artifact_id: str, pinned: bool = True) -> str:
     """PIN an artifact so it is never evicted — for a LONG-LIVED artifact you'll come back to
@@ -441,6 +464,7 @@ def pin_artifact(artifact_id: str, pinned: bool = True) -> str:
 
 
 @tool
+@_busy_reply
 @_store.serialized
 def delete_artifact(artifact_id: str) -> str:
     """Delete an artifact (all its versions) from the panel — for cleanup. The user can also
