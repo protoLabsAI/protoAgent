@@ -8,9 +8,15 @@ import {
   noteTurnFinished,
   noteTurnStarted,
   rememberOrigin,
+  serverTurnLabel,
 } from "../chat/server-turn-store";
 import { onTopic } from "../lib/events";
-import { applyProgressFrame, type ChatProgressEvent, parseProgress } from "./serverTurnProgress";
+import {
+  applyProgressFrame,
+  type ChatProgressEvent,
+  parseProgress,
+  type ProgressFrame,
+} from "./serverTurnProgress";
 
 // Bridges the #1767 `turn.started` / `turn.finished` bus events into the server-turn store,
 // so ChatSurface can show its typing indicator during a server-initiated turn (background
@@ -76,17 +82,26 @@ function emitServerTurnControl(value: unknown) {
   window.dispatchEvent(new CustomEvent("protoagent:server-turn-control", { detail: control }));
 }
 
+/** Whether the BUS copy of a frame may land while a reattach is driving that bubble.
+ *
+ *  One producer per bubble: a reattach's resubscribe stream replays everything, so letting
+ *  the bus write the same chunks is what doubled the text. Two frame kinds are not part of
+ *  that contest and must land either way — a room reply and a delegation ask are their own
+ *  rows, which no reattach drives, and a consumed-interjection marker is one it NEVER
+ *  places (snapshot replay deliberately skips steer markers, because a flattened artifact
+ *  can't say where the boundary was). Dropping the marker for a reattached turn would leave
+ *  the operator's message queued under an answer that already used it — with no second
+ *  producer to fix it. Placement dedupes by id, so nothing can settle twice. */
+export function busMayFold(kind: ProgressFrame["kind"], reattaching: boolean): boolean {
+  return kind === "room" || kind === "ask" || kind === "steer" || !reattaching;
+}
+
 /** Fold one `chat.progress` bus event into the open session's live preview. Exported so
  *  the one-producer rule is testable against the real reattach, without mounting. */
 export function foldProgressEvent(data: ChatProgressEvent): void {
   const frame = parseProgress(data);
   if (!frame) return;
-  // One producer per bubble. When a reattach is driving this turn's preview — the console
-  // reloaded or opened the chat mid-turn, so it never saw the turn start — its resubscribe
-  // stream is authoritative and replays everything, so the bus copy must not also land:
-  // both writing the same chunks is what doubled the text. Room replies are their own
-  // bubbles, which no reattach drives.
-  if (frame.kind !== "room" && frame.kind !== "ask" && isReattaching(liveMessageId(frame.taskId, frame.session))) return;
+  if (!busMayFold(frame.kind, isReattaching(liveMessageId(frame.taskId, frame.session)))) return;
   const target = chatStore.getSnapshot().sessions.find((s) => s.id === frame.session);
   if (!target) return; // chat not open in this window — nothing to surface here
   chatStore.updateMessages(frame.session, applyProgressFrame(target.messages, frame));
@@ -107,11 +122,21 @@ export function ServerTurnWatch() {
     });
     const offFinished = onTopic("turn.finished", (data) => {
       const session = String(data.session_id ?? "");
-      if (session) {
-        const taskId = String(data.task_id ?? "");
-        chatStore.clearServerTurnControl(session, taskId || undefined);
-        noteTurnFinished(session);
+      if (!session) return;
+      const taskId = String(data.task_id ?? "");
+      // Disarm the indicator FIRST: its per-session count is what tells us whether this
+      // finish was the last server turn in flight, which decides the un-addressed case.
+      noteTurnFinished(session);
+      if (taskId) {
+        chatStore.clearServerTurnControl(session, taskId);
+        return;
       }
+      // An older server (or a fire that never got a task id back) can't say WHICH turn
+      // ended. Two nudges can overlap on one session — the second's control frame arrives
+      // while the first still runs — so clearing whatever control is there would drop the
+      // LIVE turn's, and with it the operator's queued interjection. Only clear once no
+      // server turn remains in flight here.
+      if (serverTurnLabel(session) === null) chatStore.clearServerTurnControl(session);
     });
     const offProgress = onTopic("chat.progress", (data) => {
       emitServerTurnControl(data.control);

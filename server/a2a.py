@@ -903,6 +903,22 @@ def _publish_chat_progress(context_id: str, task_id: str, frame: dict) -> None:
             }
         else:
             return
+    elif phase == "steer_consumed":
+        # The model-call boundary where an operator interjection was folded in. A
+        # browser-owned stream carries this inline; a server-fired turn's stream is held
+        # by the server, so this frame is the console's ONLY acknowledgement that the
+        # queued message reached the agent — without it the bubble stays "queued" under
+        # an answer that already used it. Ids + text travel whole: the console settles
+        # the operator's exact words at this point in the turn. Live-only like the rest;
+        # a console that misses it settles off the steer queue when the turn ends.
+        items = [
+            {"id": str(item["id"]), "text": str(item["text"])}
+            for item in (frame.get("items") or [])
+            if isinstance(item, dict) and item.get("id") and item.get("text")
+        ]
+        if not items:
+            return
+        data = {"phase": "steer_consumed", "items": items}
     else:
         return
     _event_bus.publish(

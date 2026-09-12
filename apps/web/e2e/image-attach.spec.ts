@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { routeSnapshot } from "./routeSnapshot";
+
 // Images always attach natively as multimodal parts (#1969): a vision model sees
 // them, and on a text-only model the server bridges them into the media store so
 // image tools can act on them by id — the old #1374 hard error is gone. A configured
@@ -29,14 +31,11 @@ test("a vision model attaches an image inline (no error)", async ({ page }) => {
 
 // Force the runtime model's vision / image_describe capabilities for a single test.
 async function forceModel(page, { vision, image_describe }) {
-  await page.route("**/api/runtime/status", async (route) => {
-    const resp = await route.fetch();
-    const json = await resp.json();
+  await routeSnapshot(page, "/api/runtime/status", (json) => {
     if (json?.model) {
       json.model.vision = vision;
       json.model.image_describe = image_describe;
     }
-    await route.fulfill({ json });
   });
 }
 

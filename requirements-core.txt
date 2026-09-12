@@ -84,7 +84,11 @@ zeroconf>=0.131  # mDNS fleet discovery (ADR 0042 §I)
 # in pyproject [project.dependencies] (the source of truth); mirrored here so the
 # Docker image (which installs from this file) matches. tests/test_requirements_core_sync.py
 # fails CI if these two lists drift again (the #874 dep-drift class).
-pypdf>=4.0                    # PDF → text
+# 6.8.0 is a security floor, not a whim: pypdf grew per-filter output limits for
+# decompression bombs across 6.x — FlateDecode in 6.0, LZW in 6.2, JBIG2 in 6.5,
+# RunLength in 6.8 — and NO 4.x/5.x release has any of them. The APIs this repo uses
+# (PdfReader, .pages, extract_text) are unchanged since 4.x.
+pypdf>=6.8                    # PDF → text
 youtube-transcript-api>=1.0   # YouTube captions → text (1.x instance API)
 markdown-it-py>=3.0           # Markdown → HTML for the `docs` plugin reader view (server-side, offline)
 

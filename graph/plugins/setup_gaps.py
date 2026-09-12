@@ -188,9 +188,21 @@ def active() -> list[dict]:
         return [_copy_gap(v) for _, v in sorted(_GAPS.items())]
 
 
-def warnings() -> list[str]:
-    """The operator-facing banner lines: ``"<Plugin>: <message>"``."""
-    return [f"{g['label']}: {g['message']}" for g in active()]
+def warning_line(gap: dict) -> str:
+    """The legacy operator-facing line for one gap: ``"<Plugin>: <message>"``. The console
+    drops exactly this line from ``warnings[]`` when it renders the gap's record as a banner
+    (``gapWarningLine`` in apps/web/src/app/SetupGapBanner.tsx), so the two must not drift."""
+    return f"{gap['label']}: {gap['message']}"
+
+
+def warnings(gaps: list[dict] | None = None) -> list[str]:
+    """The operator-facing banner lines: ``"<Plugin>: <message>"``.
+
+    Pass ``gaps`` — a snapshot from :func:`active` — when publishing the lines BESIDE those
+    records (runtime status does): two separate reads can straddle a plugin re-reporting or
+    clearing a gap on another thread, and a line whose record isn't in the same payload
+    renders as a plain alert the operator can neither act on nor dismiss."""
+    return [warning_line(g) for g in (active() if gaps is None else gaps)]
 
 
 def reset() -> None:

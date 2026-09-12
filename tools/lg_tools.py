@@ -642,6 +642,8 @@ def _tool_ingest_message(exc) -> str:
         return f"Can't ingest that source — a required dependency or model isn't available: {detail}"
     if kind == "unsupported":
         return f"Unsupported source type: {detail}"
+    if kind == "too_large":
+        return f"Too large to ingest: {detail}"
     if kind == "empty":
         return "Nothing ingested — no text could be extracted from that source."
     if kind == "no_source":

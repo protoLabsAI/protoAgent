@@ -54,7 +54,7 @@ of what the emitting call sites pass; a key may be absent on a given event.
 | `plugin.updated` | `by`, `id`, `reloaded`, `resolved_sha`, `version` | `server/agent_init.py` |
 | `scheduler.completed` | _(varies)_ | `server/a2a.py` |
 | `scheduler.fired` | `job_id`, `prompt`, `schedule` | `scheduler/local.py` |
-| `turn.finished` | `ok`, `origin`, `session_id`, `trigger` | `background/manager.py`, `scheduler/local.py` |
+| `turn.finished` | `ok`, `origin`, `session_id`, `task_id`, `trigger` | `background/manager.py`, `scheduler/local.py` |
 | `turn.input_required` | `context_id`, `prompt`, `task_id` | `server/a2a.py` |
 | `turn.resumed` | `context_id`, `task_id` | `server/a2a.py` |
 | `turn.started` | `origin`, `session_id`, `trigger` | `background/manager.py`, `scheduler/local.py` |

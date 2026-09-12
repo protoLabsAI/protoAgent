@@ -37,6 +37,7 @@ from typing import Any
 
 from croniter import croniter
 
+from a2a_impl.wire import task_id_from_response
 from events import ACTIVITY_CONTEXT
 from scheduler.interface import Job, is_cron, parse_iso_to_utc, parse_ttl
 
@@ -915,15 +916,31 @@ class LocalScheduler:
         finally:
             db.close()
 
-    def _publish_turn(self, topic: str, *, session_id: str, origin: str, trigger: str, ok: bool | None = None) -> None:
+    def _publish_turn(
+        self,
+        topic: str,
+        *,
+        session_id: str,
+        origin: str,
+        trigger: str,
+        ok: bool | None = None,
+        task_id: str = "",
+    ) -> None:
         """Emit a turn-lifecycle event (#1767) around the self-POST so an open console
         can render its typing indicator during an otherwise-invisible server-initiated
-        turn. Best-effort — a publish failure never disturbs the fire."""
+        turn. Best-effort — a publish failure never disturbs the fire.
+
+        ``task_id`` (on ``turn.finished``, once the fire has answered) says WHICH turn
+        ended, so a console holding a DIFFERENT live turn's control keeps it — an
+        un-addressed finish used to clear whichever one was there, dropping a queued
+        interjection with it."""
         if self._publish is None:
             return
         data: dict[str, Any] = {"session_id": session_id, "origin": origin, "trigger": trigger}
         if ok is not None:
             data["ok"] = ok
+        if task_id:
+            data["task_id"] = task_id
         try:
             self._publish(topic, data)
         except Exception:  # noqa: BLE001 — the event is best-effort
@@ -1034,6 +1051,7 @@ class LocalScheduler:
             },
         }
         ok = False
+        task_id = ""
         try:
             async with httpx.AsyncClient(timeout=self._fire_timeout_s) as client:
                 r = await client.post(f"{self._invoke_url}/a2a", headers=headers, json=body)
@@ -1049,7 +1067,11 @@ class LocalScheduler:
             # answers 200 with a failed task in the body, so read the outcome before
             # calling this a success.
             try:
-                failure = _a2a_turn_failure(r.json())
+                payload = r.json()
+                failure = _a2a_turn_failure(payload)
+                # The durable task id this fire ran under — stamped on `turn.finished`
+                # below so a console can tell WHICH turn ended (a2a_impl.wire).
+                task_id = task_id_from_response(payload)
             except Exception:  # noqa: BLE001 — an unreadable body must not fail the fire
                 failure = ""
             self._record_fire_outcome(job, failure=failure)
@@ -1082,7 +1104,14 @@ class LocalScheduler:
         finally:
             # Always clear the indicator, whatever the outcome — a failed fire that left
             # `turn.started` hanging would spin the console forever.
-            self._publish_turn("turn.finished", session_id=session_id, origin=fire_origin, trigger=job.id, ok=ok)
+            self._publish_turn(
+                "turn.finished",
+                session_id=session_id,
+                origin=fire_origin,
+                trigger=job.id,
+                ok=ok,
+                task_id=task_id,
+            )
 
     def _generate_id(self) -> str:
         # Agent-name prefix keeps cross-agent IDs distinct in shared

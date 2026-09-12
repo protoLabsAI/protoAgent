@@ -18,6 +18,7 @@ import {
   ARCHETYPES,
   ARCHETYPE_PREVIEWS,
   buildFrames,
+  buildWatches,
   DELEGATES,
   DELEGATE_TYPES,
   FLEET,
@@ -47,7 +48,7 @@ import {
   TELEMETRY_INSIGHTS,
   TELEMETRY_SUMMARY,
   TELEMETRY_TURNS,
-  WATCHES,
+  TOOL_CALL_EXT_URI,
   VERIFIERS,
   WORKFLOW_RECIPE_FULL,
   WORKFLOW_RUN_RECORD,
@@ -172,6 +173,10 @@ const drainedSteers = new Set();
 // never ride into a stream they have nothing to do with — and two parked turns at once
 // (fullyParallel spreads even one file across workers) would otherwise steal each other's.
 const parkedTurns = new Map();
+// Turns parked MID-TOOL until their spec releases them ("PARK THE TOOL", see handleA2AStream),
+// session id → release(). Keyed by session for the same reason as parkedTurns: one mock
+// serves every parallel worker, and a release must only ever free its own spec's turn.
+const releasableTurns = new Map();
 
 // Per-plugin update fixtures, keyed by id — seeds non-default freshness states
 // (behind / pinned / errored) for any pre-seeded plugin. After a successful
@@ -248,6 +253,15 @@ const stripFields = (rows, keys) =>
 // no header share the "default" scope.
 const fleetScopes = new Map();
 const cloneFleet = (f) => JSON.parse(JSON.stringify(f));
+// Fixture data that is RELATIVE TO NOW (watch deadlines, "met today") is built per
+// request from this clock, never at module load — see `buildWatches`. `x-e2e-now`
+// (epoch ms) lets a spec pin it and its own page clock to the same instant, which is
+// what makes a midnight-crossing assertion testable instead of a 24-hourly coin flip.
+function nowFor(req) {
+  const pinned = Number(req.headers["x-e2e-now"]);
+  return Number.isFinite(pinned) && pinned > 0 ? pinned : Date.now();
+}
+
 function fleetFor(req) {
   const scope = req.headers["x-e2e-fleet"] || "default";
   if (!fleetScopes.has(scope)) fleetScopes.set(scope, cloneFleet(FLEET));
@@ -304,6 +318,8 @@ function handleApiGet(
   // rollup alone — the two are independent, and a hub can run with telemetry
   // disabled while its members are busy (#3329).
   telemetryOff = false,
+  // Request time (`nowFor`) — the clock every now-relative fixture is built from.
+  nowMs = Date.now(),
 ) {
   switch (pathname) {
     case "/api/runtime/status":
@@ -386,7 +402,7 @@ function handleApiGet(
     case "/api/goals":
       return GOALS;
     case "/api/watches":
-      return WATCHES;
+      return buildWatches(nowMs);
     case "/api/verifiers":
       return VERIFIERS;
     case "/api/notes/workspace":
@@ -656,7 +672,27 @@ async function handleA2AStream(req, res, body) {
   // the continuation opens for text that never comes. That turn has to settle
   // without leaving a blank bubble under the answer.
   const parkBefore = /STEER LATE/i.test(prompt) ? frames.length - 2 : /STEER ME/i.test(prompt) ? 3 : -1;
+  // "PARK THE TOOL": stream through the tool's START frame — its card is RUNNING in the live
+  // spotlight — then park until the spec releases it (POST /api/__test__/turns/<session>/release),
+  // and finish NORMALLY: tool end, answer, terminal frame. "hold the tool open" can't do this
+  // (it only ends when the client disconnects, which is a stop, not a settle); this is the
+  // ordinary live → settled transition on a card the spec has already touched, which is what
+  // e2e/toolcard-settle.spec.ts needs. The release is registered BEFORE the first frame is
+  // written, so a spec that releases the moment it sees the running card can never beat it.
+  const toolEndIndex = frames.findIndex(
+    (f) => f.result?.status?.message?.metadata?.[TOOL_CALL_EXT_URI]?.phase === "completed",
+  );
+  let released = null;
+  if (/PARK THE TOOL/i.test(prompt) && toolEndIndex > 0) {
+    released = new Promise((resolve) => releasableTurns.set(sessionId, resolve));
+  }
   for (const [index, frame] of frames.entries()) {
+    if (released && index === toolEndIndex) {
+      // Bounded, like STEER ME's park: a spec that fails before releasing must not leave this
+      // handler (and its timer) alive for the rest of the worker's run.
+      await Promise.race([released, clientGone, new Promise((r) => setTimeout(r, 15_000))]);
+      releasableTurns.delete(sessionId);
+    }
     if (index === parkBefore) {
       const parked = { items: [] };
       parkedTurns.set(sessionId, parked);
@@ -1062,6 +1098,7 @@ const server = createServer(async (req, res) => {
         url.searchParams,
         mcpFor(req),
         req.headers["x-e2e-telemetry"] === "off",
+        nowFor(req),
       );
       if (payload !== null) return sendJson(res, payload);
       return sendJson(res, { detail: "not mocked" }, 404);
@@ -1218,6 +1255,15 @@ const server = createServer(async (req, res) => {
       // Per-test hermeticity: undo any promote (private→commons) from a prior test.
       playbooks = clonePlaybooks();
       return sendJson(res, { ok: true });
+    }
+    // Release a "PARK THE TOOL" turn (handleA2AStream) — only the one parked under THIS
+    // session id. `released: false` means nothing of that session is parked (yet, or any more),
+    // so a spec asserting on it fails loudly instead of waiting out the park's timeout.
+    const releaseMatch = /^\/api\/__test__\/turns\/([^/]+)\/release$/.exec(pathname);
+    if (releaseMatch && req.method === "POST") {
+      const release = releasableTurns.get(decodeURIComponent(releaseMatch[1]));
+      release?.();
+      return sendJson(res, { released: Boolean(release) });
     }
     if (pathname === "/api/__test__/mcp/reset" && req.method === "POST") {
       mcpScopes.set(req.headers["x-e2e-mcp"] || "default", cloneMcp());

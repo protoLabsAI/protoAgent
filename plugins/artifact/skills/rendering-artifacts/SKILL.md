@@ -125,8 +125,17 @@ guess; read the error and make the targeted edit.
 
 ## Managing artifacts
 
-- **`list_artifacts()`** — see the ids/kinds/titles/version counts (to target an edit or delete).
+- **`list_artifacts()`** — see the ids/kinds/titles/version counts and which are pinned (to target
+  an edit, pin or delete).
 - **`check_artifact(artifact_id?)`** — the latest render verdict (see above).
+- **`pin_artifact(artifact_id, pinned=True)`** — keep a **long-lived** artifact (a master resume, a
+  reference doc, a plan you'll revisit) from being evicted. Only the most recent ~20 unpinned
+  artifacts are kept, counting everything rendered on this agent, so an unpinned one silently
+  disappears after enough unrelated renders — and any id you wrote down then points at nothing.
+  Pin it as soon as you know it will outlive the conversation. Pins are capped: if it refuses, unpin
+  one you no longer need (`pinned=False`). A cap of 0 means the operator turned new pins off —
+  artifacts already pinned stay protected until unpinned. A pin keeps the latest versions, not
+  every edit.
 - **`delete_artifact(artifact_id)`** — remove one for cleanup. (The user can also delete from the
   panel's trash button.)
 

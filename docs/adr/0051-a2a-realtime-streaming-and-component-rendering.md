@@ -141,6 +141,17 @@ for a registered webhook (on every status/artifact frame, including terminal). N
     replay ring holds 128 events total, so one long turn's progress would evict the durable
     events a reconnecting client needs — and replaying a progress frame from a finished turn
     renders work that is already over.
+  * **The steer-consumed boundary rides it too** (`phase: "steer_consumed"`, `items: [{id,
+    text}]`). An operator can interject into an ATTENDED server turn (#3092); the server
+    queues the text on the ordinary steering queue and the next model call folds it in —
+    but the frame that says so went only to the stream the server itself holds, so the
+    console left the message "queued" under an answer that had already used it, with no
+    way to settle or cancel it. The executor now also hands the boundary to the progress
+    hook (after `_flush_text`, so bus order matches stream order) and the console splits
+    the live preview there, exactly as it does for its own stream. Being live-only, a
+    missed frame is covered at turn end from the steering queue itself
+    (`GET …/steer`): whatever left the queue was consumed; whatever the turn never reached
+    is dequeued and sent as the operator's next message.
 - **Component rendering rides the proven DataPart pipeline** — new widgets are a MIME + a
   registry entry, not new transport.
 - **Cost note.** The progress hook is a no-op unless a host hook is registered; the

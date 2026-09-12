@@ -470,13 +470,41 @@ def test_steer_enqueue_then_cancel_roundtrip(monkeypatch):
     c = _client(monkeypatch)
     posted = c.post("/api/chat/sessions/s1/steer", json={"id": "m1", "text": "do X instead"}).json()
     assert posted == {"ok": True, "id": "m1", "pending": 1}
-    assert c.get("/api/chat/sessions/s1/steer").json() == {"pending": [{"id": "m1", "text": "do X instead"}]}
+    assert c.get("/api/chat/sessions/s1/steer").json() == {
+        "pending": [{"id": "m1", "text": "do X instead"}],
+        "drained": [],
+    }
 
     # ✕ before the turn folds it in → removed, queue empties.
     assert c.delete("/api/chat/sessions/s1/steer/m1").json() == {"removed": True, "pending": 0}
     # ✕ again (or after it's drained) → too late, nothing removed.
     assert c.delete("/api/chat/sessions/s1/steer/m1").json() == {"removed": False, "pending": 0}
     steering._QUEUES.clear()
+
+
+def test_steer_read_reports_what_a_turn_folded_in(monkeypatch):
+    """The console can't tell a message the agent READ from one that never arrived by
+    absence from the queue alone — the queue is in-memory and the live boundary marker is
+    best-effort. `drained` is the server answering it, which is what keeps a read message
+    from sitting "queued" under the answer that used it (#3446 review N2)."""
+    from graph import steering
+    from graph.middleware.steering import SteeringMiddleware
+
+    steering._QUEUES.clear()
+    steering._DRAINED.clear()
+    c = _client(monkeypatch)
+    try:
+        c.post("/api/chat/sessions/s1/steer", json={"id": "m1", "text": "yes 2024 as proposed"})
+        assert c.get("/api/chat/sessions/s1/steer").json()["drained"] == []
+
+        # The turn folds it in (the sync middleware path — the one that emitted nothing).
+        SteeringMiddleware().before_model({"session_id": "s1", "messages": []}, None)
+
+        read = c.get("/api/chat/sessions/s1/steer").json()
+        assert read["pending"] == [] and read["drained"] == ["m1"]
+    finally:
+        steering._QUEUES.clear()
+        steering._DRAINED.clear()
 
 
 def test_server_turn_interject_is_task_scoped_and_noops_when_stale(monkeypatch):

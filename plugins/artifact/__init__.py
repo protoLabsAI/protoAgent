@@ -5,7 +5,8 @@ console's Artifact panel, then iterates it with ``update_artifact`` (a targeted 
 edit) or ``rewrite_artifact`` (a full replacement) — the Claude "update vs rewrite" model, so an
 artifact is a VERSION CHAIN you can step back through, not a flood of near-duplicates.
 ``list_artifacts`` / ``get_artifact`` (read the current source — how you take over an artifact you
-didn't author) / ``delete_artifact`` manage them. ``save_file_artifact`` (ADR 0092) versions a
+didn't author) / ``pin_artifact`` (exempt a long-lived one from history eviction) /
+``delete_artifact`` manage them. ``save_file_artifact`` (ADR 0092) versions a
 generated FILE (docx/xlsx/pptx/pdf/image) as a download artifact — bytes in a sidecar blob, a
 diffable text preview in ``code``, an image thumbnail — rendered as a download card, not iframed.
 The panel is a plugin-served shell page
@@ -28,13 +29,13 @@ import logging
 #   _preview        file previews: mime/clip/extractors/thumbnails
 #   _render_status  browser render feedback (#1458)
 #   _bundle         chat-bundle consumption seam (#2681)
-#   _tools          the eight agent-facing tools + the full-body-write nudge
+#   _tools          the nine agent-facing tools + the full-body-write nudge
 #   _routes         the public PAGE router + the gated DATA router
 #   _shell          the console shell page as one static string
 # Cross-module references are MODULE-QUALIFIED (``_store._now()``) so a test that
 # monkeypatches the owning module's global patches every reader.
 from ._bundle import resolve_for_bundle
-from ._config import _ask_enabled, _max_history
+from ._config import _ask_enabled, _max_history, _max_pinned
 from ._preview import _PREVIEW_TRUNC, _clip
 from ._render_status import _RENDER_ERR_MAX, _render_suffix, _renderer_live
 from ._routes import _VENDOR_FILES, _build_data_router, _build_view_router
@@ -55,6 +56,7 @@ from ._tools import (
     delete_artifact,
     get_artifact,
     list_artifacts,
+    pin_artifact,
     rewrite_artifact,
     save_file_artifact,
     show_artifact,
@@ -74,6 +76,7 @@ __all__ = [
     "list_artifacts",
     "get_artifact",
     "check_artifact",
+    "pin_artifact",
     "delete_artifact",
 ]
 
@@ -88,6 +91,7 @@ def register(registry) -> None:
         list_artifacts,
         get_artifact,
         check_artifact,
+        pin_artifact,
         delete_artifact,
     ):
         registry.register_tool(t)
