@@ -29,6 +29,14 @@ function timestamp(value: string | null): number {
   return Number.isFinite(parsed) ? parsed : Date.now();
 }
 
+/** The instant the store recorded, or `undefined` when it has none. A MESSAGE's `createdAt`
+ *  is shown to the operator as when it was sent, so it is never the hydration-time "now"
+ *  `timestamp` falls back to for session ordering. */
+function recordedAt(value: string | null): number | undefined {
+  const parsed = value ? Date.parse(value) : NaN;
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 type DurableMessage = NonNullable<DurableChatTurn["history"]>[number];
 
 /** A durable user frame the OPERATOR sent — the console's own send. A server-fired
@@ -76,17 +84,20 @@ function titleFromPrompt(prompt: string): string {
 /** Pure conversion of one task into the prompt, the interjections the agent read
  *  mid-turn, and the answer. */
 export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
-  const at = timestamp(turn.last_updated);
+  // A durable turn records only when it last changed — for a finished turn, when its REPLY
+  // landed. That is the final answer's sent time; the prompt and any interjection were sent
+  // earlier, at a time the store never kept, so they carry no `createdAt` rather than a
+  // borrowed one (the sent-time footer shows nothing for them instead of the wrong time).
+  const repliedAt = recordedAt(turn.last_updated);
   const prompt = operatorPrompt(turn);
   const messages: ChatMessage[] = prompt
-    ? [{ id: `durable-${turn.task_id}-user`, role: "user", content: prompt, createdAt: at, status: "done" }]
+    ? [{ id: `durable-${turn.task_id}-user`, role: "user", content: prompt, status: "done" }]
     : [];
   const anchorId = `durable-${turn.task_id}-assistant`;
   const fresh = (): ChatMessage => ({
     id: anchorId,
     role: "assistant",
     content: "",
-    createdAt: at,
     status: "streaming",
     taskId: turn.task_id,
   });
@@ -116,7 +127,6 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
           id: item.id,
           role: "user" as const,
           content: item.text,
-          createdAt: at + index,
           status: "done" as const,
         })),
       );
@@ -141,6 +151,7 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
   if (terminal) {
     assistant = {
       ...assistant,
+      ...(repliedAt !== undefined ? { createdAt: repliedAt } : {}),
       status: FAILED.test(turn.state) ? "error" : "done",
       toolCalls: assistant.toolCalls?.map((call) =>
         call.status === "running" ? { ...call, status: "done" as const } : call,
