@@ -1447,6 +1447,72 @@ def test_parallel_update_artifact_calls_both_land(monkeypatch, tmp_path):
     assert sorted(r.split("version ")[1].rstrip(".") for r in results) == ["2", "3"]
 
 
+# ── html artifacts keep their document prologue first ────────────────────────────────
+# The shell used to build an html srcdoc as dsLink() + base() + code — content AHEAD of the
+# artifact's own doctype and <head>, which the parser then discards as parse errors
+# (document.doctype null and the <head> attributes lost in the panel). The real-browser proof
+# is apps/web/e2e/artifact-panel.spec.ts; these pin the prologue detection itself.
+
+
+def _html_doc(art):
+    """Python twin of shell.js ``htmlDoc()``, driven by the SAME ``DOC_PROLOGUE`` regex source
+    read out of shell.js — so the detection is unit-tested here without a browser."""
+    import re
+
+    m = re.search(r"var DOC_PROLOGUE = /(.+)/i;", art._SHELL_JS)
+    assert m, "DOC_PROLOGUE moved or changed shape — keep this extraction in sync"
+    rx = re.compile(m.group(1), re.I)
+
+    def build(code, inject="<INJ>"):
+        mm = rx.match(code)
+        if not mm or not (mm.group(1) or mm.group(2)):
+            return inject + code
+        return mm.group(0) + inject + code[len(mm.group(0)) :]
+
+    return build
+
+
+def test_html_kind_injects_through_the_prologue_aware_builder(monkeypatch, tmp_path):
+    js = _load(monkeypatch, tmp_path)._SHELL_JS
+    assert 'if (kind === "html") return htmlDoc(code, dsLink() + base(kind));' in js
+    assert "dsLink() + base(kind) + code" not in js  # the prepend that displaced the doctype
+
+
+@pytest.mark.parametrize(
+    "code, expected",
+    [
+        # Full documents: the injection lands inside the head, after the doctype.
+        (
+            '<!doctype html><html lang="en"><head><meta charset="utf-8"></head><body>x</body></html>',
+            '<!doctype html><html lang="en"><head><INJ><meta charset="utf-8"></head><body>x</body></html>',
+        ),
+        # BOM + comment before the doctype (the parser allows both), upper-case tags, newlines.
+        (
+            "\ufeff<!-- gen -->\n<!DOCTYPE html>\n<HTML>\n<HEAD>\n<title>t</title>",
+            "\ufeff<!-- gen -->\n<!DOCTYPE html>\n<HTML>\n<HEAD><INJ>\n<title>t</title>",
+        ),
+        # Doctype only (no <html>/<head> tags): straight after the doctype.
+        ("<!doctype html><title>t</title><p>x", "<!doctype html><INJ><title>t</title><p>x"),
+        # <html> but no <head>: after <html>; a <header> is not a <head>.
+        ("<!doctype html>\n<html><body><header>h</header>", "<!doctype html>\n<html><INJ><body><header>h</header>"),
+        # XHTML: XML prolog + a legacy doctype with a public id.
+        (
+            '<?xml version="1.0"?>\n<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "x.dtd"><html><head>',
+            '<?xml version="1.0"?>\n<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "x.dtd"><html><head><INJ>',
+        ),
+        # <html> without a doctype is a document too.
+        ("<html><head><title>t</title></head>", "<html><head><INJ><title>t</title></head>"),
+        # Fragments keep the prepend — including ones that merely MENTION markup later on.
+        ("<p>x</p>", "<INJ><p>x</p>"),
+        ("<div>use <html> here</div>", "<INJ><div>use <html> here</div>"),
+        ("<!-- <!doctype html> --><p>x</p>", "<INJ><!-- <!doctype html> --><p>x</p>"),
+        ("", "<INJ>"),
+    ],
+)
+def test_html_injection_keeps_the_document_prologue_first(monkeypatch, tmp_path, code, expected):
+    assert _html_doc(_load(monkeypatch, tmp_path))(code) == expected
+
+
 # ── pinning: exempt a long-lived artifact from history eviction ─────────────────────
 # Field case (careercoach resume skill): a master resume kept as an HTML artifact, its id
 # recorded elsewhere, was silently evicted after ~20 unrelated artifacts — history counts

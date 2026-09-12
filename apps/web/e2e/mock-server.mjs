@@ -17,6 +17,7 @@ import {
   ACTIVITY_HISTORY,
   ARCHETYPES,
   ARCHETYPE_PREVIEWS,
+  ARTIFACT_STORE,
   buildFrames,
   buildWatches,
   DELEGATES,
@@ -60,6 +61,9 @@ import {
 
 const PORT = Number(process.argv[2] || process.env.E2E_PORT || 4319);
 const DIST = fileURLToPath(new URL("../dist", import.meta.url));
+// The in-tree artifact plugin (plugins/artifact) — its shell page, shell.js and vendored libs
+// are served as-is so artifact-panel.spec.ts drives the REAL srcdoc builder.
+const ARTIFACT_PLUGIN = fileURLToPath(new URL("../../../plugins/artifact/", import.meta.url));
 
 // ---------------------------------------------------------------------------
 // Optional bearer gate (auth-gated-views.spec.ts, #2886). The default mock is
@@ -779,6 +783,39 @@ const server = createServer(async (req, res) => {
     if (pathname === "/api/sse-token" && req.method === "GET") {
       return sendJson(res, { token: GATE_SSE_TOKEN });
     }
+  }
+
+  // Artifact panel: the REAL plugin shell (shell.html as /view, shell.js, the vendored libs),
+  // read from plugins/artifact at request time — so a shell.js change needs no console rebuild
+  // — against the canned ARTIFACT_STORE. Everything else about the plugin stays in pytest.
+  if (pathname.startsWith("/plugins/artifact/") && req.method === "GET") {
+    const rest = pathname.slice("/plugins/artifact/".length);
+    const vendor = rest.startsWith("vendor/") && /^[\w.-]+$/.test(rest.slice("vendor/".length));
+    const file = rest === "view" ? "shell.html" : rest === "shell.js" || vendor ? rest : null;
+    if (!file) {
+      res.writeHead(404).end("not found");
+      return;
+    }
+    try {
+      const data = await readFile(join(ARTIFACT_PLUGIN, file));
+      res.writeHead(200, {
+        "content-type": MIME[extname(file)] || "application/octet-stream",
+        // The sandboxed artifact frame is an opaque origin, so its vendor loads (SRI'd UMD
+        // scripts, ES modules) are CORS fetches — the real vendor route sends this header too.
+        "access-control-allow-origin": "*",
+        "cache-control": "no-cache",
+      });
+      res.end(data);
+    } catch {
+      res.writeHead(404).end("not found");
+    }
+    return;
+  }
+  if (pathname === "/api/plugins/artifact/history" && req.method === "GET") {
+    return sendJson(res, ARTIFACT_STORE);
+  }
+  if (pathname === "/api/plugins/artifact/render-status" && req.method === "POST") {
+    return sendJson(res, { ok: true, recorded: false });
   }
 
   // Non-streaming chat send — the Fleet Room address/broadcast (/api/chat) and the desktop
