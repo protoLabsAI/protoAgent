@@ -64,14 +64,18 @@ class Probe:
     cli_version: str = ""       # "" when the CLI wouldn't answer --version
     chrome: str = "unknown"     # ok | missing | unknown
     chrome_detail: str = ""
+    # Found, but the OS wouldn't start it: the npm launcher (`#!/usr/bin/env node`) with no
+    # node on the host's PATH, a non-executable file, the wrong architecture.
+    cli_error: str = ""
 
     @property
     def cli_ok(self) -> bool:
-        return bool(self.cli_path)
+        return bool(self.cli_path) and not self.cli_error
 
     def as_dict(self) -> dict:
         return {"binary": self.binary, "cli_path": self.cli_path, "cli_version": self.cli_version,
-                "cli_ok": self.cli_ok, "chrome": self.chrome, "chrome_detail": self.chrome_detail}
+                "cli_ok": self.cli_ok, "cli_error": self.cli_error, "chrome": self.chrome,
+                "chrome_detail": self.chrome_detail}
 
 
 def resolve_binary(binary: str) -> str:
@@ -94,14 +98,19 @@ def resolve_binary(binary: str) -> str:
     return ""
 
 
-def _cli_version(path: str, timeout: float) -> str:
+def _cli_version(path: str, timeout: float) -> tuple[str, str]:
+    """``(version, launch_error)``. An OSError here means the binary exists but can't be
+    STARTED — which used to be swallowed as "no version", leaving a CLI that could never run
+    reported as healthy: no banner, and every tool call hit the unrate-limited re-probe path."""
     try:
         p = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=timeout)
-    except (OSError, subprocess.SubprocessError):
-        return ""
+    except OSError as e:
+        return "", (e.strerror or str(e) or e.__class__.__name__)
+    except subprocess.SubprocessError:
+        return "", ""
     if p.returncode != 0:
-        return ""
-    return (p.stdout or "").strip().splitlines()[0].strip() if p.stdout else ""
+        return "", ""
+    return ((p.stdout or "").strip().splitlines()[0].strip() if p.stdout else ""), ""
 
 
 def _chrome_status(path: str, timeout: float) -> tuple[str, str]:
@@ -148,7 +157,9 @@ def probe(cfg: dict | None, *, timeout: float = PREFLIGHT_BUDGET_S) -> Probe:
     budget = max(0.1, float(timeout))
     deadline = time.monotonic() + budget
     try:
-        version = _cli_version(path, budget / 2)
+        version, launch_error = _cli_version(path, budget / 2)
+        if launch_error:
+            return Probe(binary=binary, cli_path=path, cli_error=launch_error)
         remaining = deadline - time.monotonic()
         chrome, detail = _chrome_status(path, remaining) if remaining > 0 else ("unknown", "")
     except Exception:  # noqa: BLE001
@@ -164,11 +175,16 @@ def gaps(p: Probe) -> list[tuple[str, str | None, object]]:
     clear signal, and reporting it unconditionally is what makes the banner self-heal
     when the operator installs the binary mid-session.
     """
-    if not p.cli_ok:
+    action = {"kind": "plugin_config", "label": "Set the CLI path", "fields": ["binary"]}
+    if not p.cli_path:
         cli_msg = (f"the {p.binary!r} CLI isn't on PATH, so the browser tools and the Browser panel "
                    f"can't run. Install it with `{INSTALL_HINT}`, or set the plugin's `binary` "
                    f"setting to its full path.")
-        action = {"kind": "plugin_config", "label": "Set the CLI path", "fields": ["binary"]}
+        return [(CLI_GAP, cli_msg, action), (CHROME_GAP, None, None)]
+    if p.cli_error:
+        cli_msg = (f"the {p.binary!r} CLI was found but can't be started ({p.cli_error}). If it's the "
+                   f"npm launcher script, its node interpreter isn't on the host's PATH — point the "
+                   f"plugin's `binary` setting at the native agent-browser binary, or put node on PATH.")
         return [(CLI_GAP, cli_msg, action), (CHROME_GAP, None, None)]
     chrome_msg = None
     if p.chrome == "missing":

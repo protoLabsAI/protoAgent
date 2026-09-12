@@ -28,6 +28,7 @@ binary and no real browser are needed (except the explicitly-skipped live test).
 from __future__ import annotations
 
 import ast
+import asyncio
 import importlib
 import io
 import json
@@ -35,6 +36,9 @@ import os
 import re
 import shutil
 import subprocess
+import sys
+import textwrap
+import time
 import types
 from pathlib import Path
 
@@ -401,8 +405,12 @@ def test_preflight_never_raises_when_the_probe_explodes(monkeypatch):
         raise OSError("exec format error")
 
     monkeypatch.setattr(preflight.subprocess, "run", boom)
-    probe = preflight.probe({})
-    assert probe.cli_ok is True and probe.chrome == "unknown"   # degraded, not raised
+    probe = preflight.probe({})                                  # degraded, never raised…
+    # …and an OSError from STARTING the binary is a real gap, not "healthy": a CLI that
+    # can't be exec'd is as useless as a missing one (#3451 round 3)
+    assert probe.cli_path == "/opt/ab" and probe.cli_ok is False and probe.chrome == "unknown"
+    assert "exec format error" in probe.cli_error
+    assert "can't be started" in preflight.hint(probe)
 
 
 def test_preflight_resolves_an_operator_pinned_absolute_path(monkeypatch, tmp_path):
@@ -441,7 +449,7 @@ async def test_a_tool_run_refreshes_the_gap_when_the_cli_vanishes(monkeypatch):
         raise FileNotFoundError()
 
     monkeypatch.setattr(tools.subprocess, "Popen", boom)
-    t = _toolmap({"binary": "ab"}, refresh_gaps=lambda: calls.append("refresh"))
+    t = _toolmap({"binary": "no-such-agent-browser"}, refresh_gaps=lambda: calls.append("refresh"))
     out = await t["browser_snapshot"].ainvoke({})
     assert calls == ["refresh"] and "setup banner" in out
     await t["browser_snapshot"].ainvoke({})
@@ -552,7 +560,7 @@ async def test_a_failing_gap_refresh_never_breaks_the_tool(monkeypatch):
         raise RuntimeError("registry gone")
 
     monkeypatch.setattr(tools.subprocess, "Popen", boom)
-    out = await _toolmap({"binary": "ab"}, refresh_gaps=explode)["browser_click"].ainvoke({"selector": "x"})
+    out = await _toolmap({"binary": "no-such-agent-browser"}, refresh_gaps=explode)["browser_click"].ainvoke({"selector": "x"})
     assert "not on PATH" in out
 
 
@@ -625,7 +633,7 @@ def test_an_absolute_path_already_inside_the_fence_is_accepted():
     assert storage.resolve_capture_path(str(first), default_name="page.png") == first
 
 
-def _writing_popen(data=b"bytes", record=None, rc=0, url="https://example.test/"):
+def _writing_popen(data=b"bytes", record=None, rc=0, url="https://example.test/", content="1"):
     """A scripted CLI. `get url` answers `url` (a page is open); `screenshot` / `pdf`
     WRITE `data` to the requested path (None = write nothing — even on a failing run, to
     model a partial write) and exit `rc`. So the post-run checks see what a real run leaves."""
@@ -634,6 +642,8 @@ def _writing_popen(data=b"bytes", record=None, rc=0, url="https://example.test/"
             record.append(list(argv))
         if argv[1:3] == ["get", "url"]:
             return _FakeProc(argv, out=url.encode())
+        if argv[1] == "eval":   # the page-has-content check
+            return _FakeProc(argv, out=content.encode())
         if argv[1] in ("screenshot", "pdf"):
             if data is not None:
                 Path(argv[2]).write_bytes(data)
@@ -649,7 +659,9 @@ async def test_screenshot_passes_the_fenced_path_to_the_cli(monkeypatch):
     out = await _toolmap({"binary": "ab"})["browser_screenshot"].ainvoke({"path": "shot.png"})
     root = storage.capture_root().resolve()
     assert rec[-1][:2] == ["ab", "screenshot"]
-    assert Path(rec[-1][2]) == root / "shot.png"
+    written = Path(rec[-1][2])     # the CLI writes a short temp name beside the target…
+    assert written.parent == root and written.suffix == ".png" and written.name.startswith(".")
+    assert (root / "shot.png").is_file() and not written.exists()   # …swapped into place
     assert str(root / "shot.png") in out   # the absolute path, for save_file_artifact
 
 
@@ -685,7 +697,8 @@ async def test_a_zero_byte_capture_is_refused_and_cleaned_up(monkeypatch):
     monkeypatch.setattr(tools.subprocess, "Popen", _writing_popen(data=b""))
     out = await _toolmap({"binary": "ab"})["browser_pdf"].ainvoke({"path": "empty.pdf"})
     assert out.startswith("Error:") and "an empty file" in out
-    assert not (storage.capture_root().resolve() / "empty.pdf").exists()   # partial removed
+    assert not (storage.capture_root().resolve() / "empty.pdf").exists()   # never swapped in
+    assert not [p for p in storage.capture_root().iterdir() if p.name.startswith(".")]   # temp dropped
 
 
 async def test_a_failed_run_does_not_delete_a_pre_existing_file(monkeypatch):
@@ -697,7 +710,7 @@ async def test_a_failed_run_does_not_delete_a_pre_existing_file(monkeypatch):
     monkeypatch.setattr(tools.subprocess, "Popen", _writing_popen(data=b"partial", rc=1))
     out = await _toolmap({"binary": "ab"})["browser_pdf"].ainvoke({"path": "keep.pdf"})
     assert out.startswith("Error:") and keep.read_bytes() == b"%PDF-1.4 previous"
-    assert not list(keep.parent.glob(".keep.pdf.*.prev"))   # put back, not left parked
+    assert not [p for p in keep.parent.iterdir() if p.name.startswith(".")]   # no temp left behind
 
 
 async def test_a_re_export_that_writes_nothing_is_not_passed_off_as_the_old_file(monkeypatch):
@@ -710,7 +723,7 @@ async def test_a_re_export_that_writes_nothing_is_not_passed_off_as_the_old_file
     out = await _toolmap({"binary": "ab"})["browser_pdf"].ainvoke({"path": "resume.pdf"})
     assert out.startswith("Error:") and "wrote no file" in out and "Saved to" not in out
     assert target.read_bytes() == b"%PDF-1.4 OLD-PAGE"          # the previous capture survives
-    assert not list(target.parent.glob(".resume.pdf.*.prev"))
+    assert not [p for p in target.parent.iterdir() if p.name.startswith(".")]
 
 
 async def test_a_successful_re_export_replaces_the_old_file(monkeypatch):
@@ -719,18 +732,30 @@ async def test_a_successful_re_export_replaces_the_old_file(monkeypatch):
     monkeypatch.setattr(tools.subprocess, "Popen", _writing_popen(data=b"%PDF-1.4 NEW-PAGE"))
     out = await _toolmap({"binary": "ab"})["browser_pdf"].ainvoke({"path": "resume.pdf"})
     assert "Saved to" in out and target.read_bytes() == b"%PDF-1.4 NEW-PAGE"
-    assert not list(target.parent.glob(".resume.pdf.*.prev"))   # the old copy is dropped
+    assert not [p for p in target.parent.iterdir() if p.name.startswith(".")]   # no temp left behind
 
 
-async def test_capturing_with_no_page_open_is_refused_before_printing(monkeypatch):
-    """With no page the real CLI exits 0 and writes a blank ~860-byte PDF of about:blank,
-    which passes any size check — so the page is checked first (live premise test below)."""
+async def test_printing_an_empty_blank_page_is_refused_before_printing(monkeypatch):
+    """With no page, the real CLI exits 0 and writes a blank ~860-byte PDF of about:blank,
+    which passes any size check — so an EMPTY blank page is refused up front."""
     rec = []
-    monkeypatch.setattr(tools.subprocess, "Popen", _writing_popen(url="about:blank", record=rec))
+    monkeypatch.setattr(tools.subprocess, "Popen", _writing_popen(url="about:blank", content="0", record=rec))
     out = await _toolmap({"binary": "ab"})["browser_pdf"].ainvoke({"path": "blank.pdf"})
-    assert out.startswith("Error:") and "no page is open" in out and "browser_open" in out
-    assert [a[1] for a in rec] == ["get"]                        # never reached `pdf`
+    assert out.startswith("Error:") and "blank" in out
+    # the way through for an agent that has HTML but no URL
+    assert "browser_open" in out and "data:text/html" in out and "file://" in out and "browser_eval" in out
+    assert [a[1] for a in rec] == ["get", "eval"]                # never reached `pdf`
     assert not (storage.capture_root().resolve() / "blank.pdf").exists()
+
+
+async def test_a_blank_page_the_agent_wrote_content_into_is_printed(monkeypatch):
+    """The misfire: open a blank page, write a report into it with browser_eval, print it.
+    The URL is still about:blank, but the page is not empty — so it must print."""
+    monkeypatch.setattr(tools.subprocess, "Popen",
+                        _writing_popen(url="about:blank", content="1", data=b"%PDF report"))
+    out = await _toolmap({"binary": "ab"})["browser_pdf"].ainvoke({"path": "report.pdf"})
+    assert "Saved to" in out
+    assert (storage.capture_root().resolve() / "report.pdf").read_bytes() == b"%PDF report"
 
 
 async def test_prune_never_deletes_the_capture_it_just_saved(monkeypatch):
@@ -785,7 +810,7 @@ async def test_pdf_wraps_the_cli_pdf_command(monkeypatch):
     monkeypatch.setattr(tools.subprocess, "Popen", _writing_popen(data=b"%PDF-1.4", record=rec))
     out = await _toolmap({"binary": "ab"})["browser_pdf"].ainvoke({"path": "resume.pdf"})
     assert rec[-1][:2] == ["ab", "pdf"]
-    assert Path(rec[-1][2]) == storage.capture_root().resolve() / "resume.pdf"
+    assert (storage.capture_root().resolve() / "resume.pdf").read_bytes() == b"%PDF-1.4"
     assert "Saved to" in out
 
 
@@ -793,10 +818,8 @@ async def test_pdf_defaults_to_a_collision_free_filename(monkeypatch):
     rec = []
     monkeypatch.setattr(tools.subprocess, "Popen", _writing_popen(data=b"%PDF", record=rec))
     t = _toolmap({"binary": "ab"})
-    await t["browser_pdf"].ainvoke({})
-    await t["browser_pdf"].ainvoke({})
-    pdfs = [a for a in rec if a[1] == "pdf"]
-    first, second = Path(pdfs[0][2]).name, Path(pdfs[1][2]).name
+    outs = [await t["browser_pdf"].ainvoke({}), await t["browser_pdf"].ainvoke({})]
+    first, second = (Path(o.split("Saved to ", 1)[1].splitlines()[0]).name for o in outs)
     assert first != second, "two unnamed captures must not clobber each other"
     for name in (first, second):
         assert re.fullmatch(r"page-\d{8}-\d{6}-[0-9a-f]{4}\.pdf", name), name
@@ -1679,7 +1702,7 @@ async def test_the_real_cli_reports_about_blank_when_no_page_is_open(monkeypatch
     t = _toolmap({"binary": "agent-browser", "timeout_s": 120})
     try:
         out = await t["browser_pdf"].ainvoke({"path": "nopage.pdf"})
-        assert out.startswith("Error:") and "no page is open" in out, out
+        assert out.startswith("Error:") and "the page is blank" in out, out
         assert not (storage.capture_root().resolve() / "nopage.pdf").exists()
     finally:
         await t["browser_close"].ainvoke({})
@@ -1711,5 +1734,349 @@ async def test_the_real_cli_prints_a_real_pdf_into_the_fence(monkeypatch):
         written = storage.capture_root().resolve() / "live.pdf"
         assert written.is_file() and written.read_bytes()[:4] == b"%PDF"
         assert str(written) in out
+    finally:
+        await t["browser_close"].ainvoke({})
+
+
+# ── round 3: a capture never moves the previous file (the reviewer's M1-M4, permanent) ──
+# b790c1a8 "parked" an existing target as `.name.<hex>.prev` before a re-export and put it
+# back on failure. Anything between park and restore — a cancelled turn, a kill -9, a
+# concurrent export to the same name, another capture's prune — lost the user's last good
+# export. The fix never moves the old file: the CLI writes a temp name beside it and a good
+# run swaps that into place with one os.replace. These drive a REAL subprocess (a stateful
+# fake CLI) through the real tools, and each fails on b790c1a8.
+
+posix_only = pytest.mark.skipif(os.name == "nt", reason="drives an executable #! fake CLI (POSIX exec)")
+
+_FAKE_CLI = '''#!{python} -S
+import os, sys, time, pathlib
+ST = pathlib.Path({state!r})
+
+
+def read(name, default=""):
+    try:
+        return (ST / name).read_text()
+    except OSError:
+        return default
+
+
+a = sys.argv[1:]
+verb = a[0] if a else ""
+if verb == "--version":
+    print("agent-browser 0.27.1"); sys.exit(0)
+if verb == "doctor":
+    print('{{"checks":[{{"id":"chrome.installed","status":"pass","message":"ok"}}]}}'); sys.exit(0)
+if verb == "get" and a[1:2] == ["url"]:
+    print(read("url", "https://example.test/")); sys.exit(0)
+if verb == "eval":
+    print(read("eval", "1")); sys.exit(0)
+if verb in ("pdf", "screenshot"):
+    out = pathlib.Path(a[1])
+    mode = read("mode_" + verb) or read("mode", "write")
+    if mode.startswith("first-"):
+        try:
+            (ST / "lock_first").mkdir()
+            mode = mode[len("first-"):].split("-else-")[0]
+        except FileExistsError:
+            mode = "write:B-BYTES"
+    (ST / ("started_" + verb)).write_text(str(os.getpid()))
+    try:
+        if mode == "nothing":
+            pass
+        elif mode == "slownothing":
+            time.sleep(float(read("slow", "1.0")))
+        elif mode == "slowfail":
+            time.sleep(float(read("slow", "1.0")))
+            sys.stderr.write("renderer crashed\\n")
+            sys.exit(1)
+        else:
+            tag = mode.split(":", 1)[1] if mode.startswith("write:") else read("tag", "PAGE")
+            out.write_bytes(b"%PDF-1.4 " + tag.encode())
+    finally:
+        (ST / ("done_" + verb)).write_text("1")
+    sys.exit(0)
+print("ok")
+'''
+
+
+class _FakeCLI:
+    """A stateful stand-in for the agent-browser binary: a real executable the tools exec,
+    steered through files in `state/` (mode, tag, timing) and leaving `started_*` / `done_*`
+    markers so a test can act at a precise moment in a capture."""
+
+    def __init__(self, root: Path):
+        self.state = root / "state"
+        self.state.mkdir(parents=True)
+        self.path = root / "agent-browser"
+        self.path.write_text(_FAKE_CLI.format(python=sys.executable, state=str(self.state)), encoding="utf-8")
+        self.path.chmod(0o755)
+
+    def set(self, name: str, value) -> None:
+        (self.state / name).write_text(str(value), encoding="utf-8")
+
+    def clear(self, *names: str) -> None:
+        for name in names:
+            p = self.state / name
+            if p.is_dir():
+                p.rmdir()
+            else:
+                p.unlink(missing_ok=True)
+
+    async def reached(self, marker: str, timeout: float = 20.0) -> None:
+        deadline = time.monotonic() + timeout
+        while not (self.state / marker).exists():
+            if time.monotonic() > deadline:
+                raise AssertionError(f"the fake CLI never wrote {marker!r}")
+            await asyncio.sleep(0.02)
+
+    def tools(self):
+        return _toolmap({"binary": str(self.path), "timeout_s": 30})
+
+
+@pytest.fixture
+def fake_cli(tmp_path):
+    return _FakeCLI(tmp_path / "fake-cli")
+
+
+def _hidden(root: Path) -> list[str]:
+    """Dot-files in the capture dir: parked copies (old) or temps (new) left behind."""
+    return sorted(p.name for p in root.iterdir() if p.name.startswith("."))
+
+
+@posix_only
+async def test_m1_a_cancelled_re_export_never_loses_the_last_good_file(fake_cli):
+    """M1: the turn is cancelled while the CLI is rendering. b790c1a8 had already moved
+    resume.pdf aside, so it was gone — surviving only as a hidden `.prev` the next export
+    neither restored nor removed."""
+    t = fake_cli.tools()
+    root = storage.capture_root().resolve()
+    fake_cli.set("tag", "LAST-GOOD")
+    assert "Saved to" in await t["browser_pdf"].ainvoke({"path": "resume.pdf"})
+    fake_cli.clear("started_pdf", "done_pdf")
+    fake_cli.set("mode", "slownothing")
+    task = asyncio.create_task(t["browser_pdf"].ainvoke({"path": "resume.pdf"}))
+    await fake_cli.reached("started_pdf")
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert (root / "resume.pdf").read_bytes() == b"%PDF-1.4 LAST-GOOD"   # right where it was
+    await fake_cli.reached("done_pdf")                                    # let the orphan finish
+    fake_cli.set("mode", "write")
+    fake_cli.set("tag", "NEXT")
+    assert "Saved to" in await t["browser_pdf"].ainvoke({"path": "resume.pdf"})
+    assert (root / "resume.pdf").read_bytes() == b"%PDF-1.4 NEXT"
+    assert _hidden(root) == []
+
+
+@posix_only
+async def test_m2_a_kill_9_mid_capture_never_loses_the_last_good_file(fake_cli, tmp_path, monkeypatch):
+    """M2: the whole process is SIGKILLed mid-capture — no finally, no cleanup of any kind.
+    Driven in a real child process that shares this test's instance root."""
+    from infra.paths import reset_instance_paths
+
+    home = tmp_path / "instance-home"
+    # PROTOAGENT_HOME is TERMINAL: parent and child resolve the SAME root and neither can
+    # ever reach the real ~/.protoagent (conftest's isolation is in-process only).
+    monkeypatch.setenv("PROTOAGENT_HOME", str(home))
+    reset_instance_paths()
+    root = storage.capture_root().resolve()
+    assert root.is_relative_to(home.resolve())
+    t = fake_cli.tools()
+    fake_cli.set("tag", "LAST-GOOD")
+    assert "Saved to" in await t["browser_pdf"].ainvoke({"path": "resume.pdf"})
+    fake_cli.clear("started_pdf", "done_pdf")
+    fake_cli.set("mode", "slownothing")
+    fake_cli.set("slow", "3")
+    seen = tmp_path / "child-capture-root.txt"
+    child = textwrap.dedent(f"""
+        import asyncio, importlib, pathlib, sys
+        sys.path.insert(0, {str(REPO)!r})
+        from graph.plugins.testkit import load_plugin
+        pkg = load_plugin({str(ROOT)!r}, "agent_browser")
+        storage = importlib.import_module(pkg.__name__ + ".storage")
+        tools = importlib.import_module(pkg.__name__ + ".tools")
+        pathlib.Path({str(seen)!r}).write_text(str(storage.capture_root().resolve()))
+        T = {{t.name: t for t in tools.get_browser_tools({{"binary": {str(fake_cli.path)!r}}})}}
+        asyncio.run(T["browser_pdf"].ainvoke({{"path": "resume.pdf"}}))
+    """)
+    proc = subprocess.Popen([sys.executable, "-c", child], cwd=str(REPO), env=dict(os.environ))
+    try:
+        await fake_cli.reached("started_pdf", timeout=90)   # the child is mid-capture…
+        proc.kill()                                           # …and dies without cleanup
+        proc.wait(timeout=30)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    assert seen.read_text() == str(root)                     # the child used THIS instance
+    assert (root / "resume.pdf").read_bytes() == b"%PDF-1.4 LAST-GOOD"
+    await fake_cli.reached("done_pdf", timeout=30)
+    fake_cli.set("mode", "write")
+    fake_cli.set("tag", "NEXT")
+    assert "Saved to" in await t["browser_pdf"].ainvoke({"path": "resume.pdf"})
+    assert (root / "resume.pdf").read_bytes() == b"%PDF-1.4 NEXT"
+    assert _hidden(root) == []
+
+
+@posix_only
+async def test_m3_a_failing_concurrent_export_never_deletes_the_winners_file(fake_cli):
+    """M3: two exports to one name; the slow one fails. b790c1a8's failure handling
+    deleted the FAST call's just-reported file and restored the old one."""
+    t = fake_cli.tools()
+    root = storage.capture_root().resolve()
+    fake_cli.set("tag", "OLD-GOOD")
+    await t["browser_pdf"].ainvoke({"path": "report.pdf"})
+    fake_cli.clear("started_pdf", "lock_first")
+    fake_cli.set("mode", "first-slowfail-else-write")
+    a = asyncio.create_task(t["browser_pdf"].ainvoke({"path": "report.pdf"}))
+    await fake_cli.reached("started_pdf")                         # A is rendering (and will fail)
+    rb = await t["browser_pdf"].ainvoke({"path": "report.pdf"})   # B finishes first
+    ra = await a
+    assert "Saved to" in rb and ra.startswith("Error:"), (ra, rb)
+    assert (root / "report.pdf").read_bytes() == b"%PDF-1.4 B-BYTES"   # B's output stands
+    assert _hidden(root) == []
+
+
+@posix_only
+async def test_m3b_a_concurrent_export_that_wrote_nothing_cannot_claim_the_others_bytes(fake_cli):
+    """M3b: as M3, but the slow call exits 0 having written NOTHING — b790c1a8 then saw the
+    other call's file at the target and reported "Saved to" for bytes it never wrote."""
+    t = fake_cli.tools()
+    root = storage.capture_root().resolve()
+    fake_cli.set("tag", "OLD-GOOD")
+    await t["browser_pdf"].ainvoke({"path": "report.pdf"})
+    fake_cli.clear("started_pdf", "lock_first")
+    fake_cli.set("mode", "first-slownothing-else-write")
+    a = asyncio.create_task(t["browser_pdf"].ainvoke({"path": "report.pdf"}))
+    await fake_cli.reached("started_pdf")
+    rb = await t["browser_pdf"].ainvoke({"path": "report.pdf"})
+    ra = await a
+    assert "Saved to" in rb
+    assert ra.startswith("Error:") and "wrote no file" in ra, ra
+    assert (root / "report.pdf").read_bytes() == b"%PDF-1.4 B-BYTES"
+    assert _hidden(root) == []
+
+
+@posix_only
+async def test_m4_another_captures_prune_never_takes_a_file_mid_re_export(fake_cli, monkeypatch):
+    """M4: at the retention cap (a long-running instance lives there), another capture's
+    prune runs while resume.pdf is being re-exported. b790c1a8's parked copy kept the old
+    mtime, so it was the oldest file and was pruned first; the failed re-export's restore
+    then hit FileNotFoundError and the last good export was gone."""
+    t = fake_cli.tools()
+    root = storage.capture_root().resolve()
+    fake_cli.set("tag", "LAST-GOOD-RESUME")
+    await t["browser_pdf"].ainvoke({"path": "resume.pdf"})
+    day_ago = time.time() - 86400
+    os.utime(root / "resume.pdf", (day_ago, day_ago))            # yesterday: the OLDEST capture
+    for i in range(2):
+        await t["browser_screenshot"].ainvoke({"path": f"shot{i}.png"})
+    monkeypatch.setattr(storage, "MAX_CAPTURE_FILES", 3)
+    fake_cli.clear("started_pdf")
+    fake_cli.set("mode_pdf", "slowfail")
+    fake_cli.set("mode_screenshot", "write")
+    a = asyncio.create_task(t["browser_pdf"].ainvoke({"path": "resume.pdf"}))   # will fail
+    await fake_cli.reached("started_pdf")
+    assert "Saved to" in await t["browser_screenshot"].ainvoke({"path": "shot2.png"})   # prunes now
+    assert (await a).startswith("Error:")
+    assert (root / "resume.pdf").read_bytes() == b"%PDF-1.4 LAST-GOOD-RESUME"
+    assert _hidden(root) == []
+
+
+@posix_only
+async def test_a_name_near_the_filesystem_limit_can_be_re_exported(fake_cli):
+    """The parked copy was named `.<name>.<hex>.prev` — 15 chars longer than the target —
+    so a ~240-char name exported once and could then never be re-exported."""
+    t = fake_cli.tools()
+    root = storage.capture_root().resolve()
+    name = "r" * 240 + ".pdf"
+    fake_cli.set("tag", "ONE")
+    assert "Saved to" in await t["browser_pdf"].ainvoke({"path": name})
+    fake_cli.set("tag", "TWO")
+    out = await t["browser_pdf"].ainvoke({"path": name})
+    assert "Saved to" in out, out
+    assert (root / name).read_bytes() == b"%PDF-1.4 TWO"
+
+
+def test_temp_names_are_short_fixed_and_keep_the_extension():
+    temp = storage.temp_path_for(Path("/x") / ("r" * 250 + ".pdf"))
+    assert temp.parent == Path("/x") and temp.suffix == ".pdf" and storage.is_temp(temp)
+    assert len(temp.name) <= 32                      # never embeds the (long) stem
+
+
+async def test_orphaned_temps_are_swept_and_live_ones_are_left_alone(monkeypatch):
+    """A cancelled or killed capture can leave a temp once its CLI finishes writing; the next
+    prune sweeps it once it's clearly abandoned. A YOUNG temp is someone's capture in
+    progress — never deleted, and not counted against the budget."""
+    root = storage.capture_root().resolve()
+    stale = root / f"{storage.TEMP_PREFIX}{'0' * 16}.pdf"
+    stale.write_bytes(b"orphan")
+    old = time.time() - storage.STALE_TEMP_S - 60
+    os.utime(stale, (old, old))
+    live = root / f"{storage.TEMP_PREFIX}{'1' * 16}.pdf"
+    live.write_bytes(b"in flight")
+    monkeypatch.setattr(storage, "MAX_CAPTURE_FILES", 1)
+    monkeypatch.setattr(tools.subprocess, "Popen", _writing_popen(data=b"%PDF new"))
+    assert "Saved to" in await _toolmap({"binary": "ab"})["browser_pdf"].ainvoke({"path": "new.pdf"})
+    assert not stale.exists() and live.exists() and (root / "new.pdf").is_file()
+
+
+# ── a binary that exists but can't be started is not "missing" ────────────────────
+
+
+def _unstartable(tmp_path: Path) -> Path:
+    """The npm launcher shape: a script whose interpreter isn't there."""
+    shim = tmp_path / "agent-browser"
+    shim.write_text("#!/nonexistent/interpreter/node\nconsole.log('x')\n", encoding="utf-8")
+    shim.chmod(0o755)
+    return shim
+
+
+@posix_only
+async def test_a_binary_that_exists_but_cannot_start_is_not_called_missing(tmp_path):
+    """With no node on the host's PATH the kernel refuses the npm launcher with the SAME
+    FileNotFoundError as a missing binary. "Install it" is the wrong advice — and the probe
+    used to call it healthy."""
+    shim = _unstartable(tmp_path)
+    out = await _toolmap({"binary": str(shim)})["browser_snapshot"].ainvoke({})
+    assert out.startswith("Error:") and "could not be started" in out and "not on PATH" not in out
+    probe = preflight.probe({"binary": str(shim)})
+    assert probe.cli_path and probe.cli_ok is False and probe.cli_error
+    assert "can't be started" in preflight.hint(probe)
+
+
+@posix_only
+async def test_an_unstartable_binary_raises_the_banner_at_boot_and_stops_re_probing(tmp_path, monkeypatch):
+    """Before: no banner ever, and since the probe kept saying "healthy", every failing call
+    re-probed (a FileNotFoundError bypasses the rate limit)."""
+    shim = _unstartable(tmp_path)
+    probes = []
+    real_report = preflight.report
+    monkeypatch.setattr(preflight, "report", lambda *a, **k: probes.append(1) or real_report(*a, **k))
+    reg = _registry({"binary": str(shim)})
+    _PKG.register(reg)
+    assert preflight.CLI_GAP in reg.setup_gaps and "can't be started" in reg.setup_gaps[preflight.CLI_GAP]
+    probes.clear()
+    tool = next(x for x in reg.tools if x.name == "browser_snapshot")
+    for _ in range(5):
+        assert "could not be started" in await tool.ainvoke({})
+    assert probes == []                     # the banner is up: no re-probe per call
+
+
+@needs_cli
+async def test_the_real_cli_prints_html_written_into_a_blank_page(monkeypatch):
+    """The no-page check's misfire, against the binary: open a blank page, write a report
+    into it with browser_eval, print it. The URL is still about:blank; the page isn't empty."""
+    pypdf = pytest.importorskip("pypdf")
+    monkeypatch.setenv("AGENT_BROWSER_SESSION", f"protoagent-blankhtml-{os.getpid()}")
+    t = _toolmap({"binary": "agent-browser", "timeout_s": 120})
+    try:
+        opened = await t["browser_open"].ainvoke({})
+        if opened.startswith("Error:"):
+            pytest.skip(f"no browser available here: {opened[:120]}")
+        await t["browser_eval"].ainvoke({"expression": "document.body.innerHTML = '<h1>Quarterly report</h1>'"})
+        out = await t["browser_pdf"].ainvoke({"path": "written.pdf"})
+        assert "Saved to" in out, out
+        text = pypdf.PdfReader(storage.capture_root().resolve() / "written.pdf").pages[0].extract_text()
+        assert "Quarterly report" in text
     finally:
         await t["browser_close"].ainvoke({})

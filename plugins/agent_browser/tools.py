@@ -66,6 +66,10 @@ _WORKAROUND = {
     "*": "No URL, selector or @ref starts that way — check the value.",
 }
 
+# "Does this page have anything on it?" — 1 or 0. The URL alone can't say: an agent can open
+# a blank page, write a report into it with browser_eval and print THAT, all at about:blank.
+_PAGE_HAS_CONTENT_JS = "+!!(document.body && (document.body.innerText.trim() || document.body.children.length))"
+
 
 def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = False):
     """Build the browser toolset.
@@ -135,6 +139,23 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
             # outcome as the state.
             gap["up"] = bool(preflight.hint(result)) if isinstance(result, preflight.Probe) else failed
 
+    def _launch_error(e: OSError) -> str:
+        """Two problems raise from Popen and one of them is misleading: a binary that ISN'T
+        there, and one that is but the kernel won't start — the npm launcher
+        (`#!/usr/bin/env node`) with no node on this process's PATH raises the SAME
+        FileNotFoundError, and a non-executable file raises PermissionError. "Install it"
+        is the wrong advice for the second, so tell them apart."""
+        found = preflight.resolve_binary(binary)
+        if isinstance(e, FileNotFoundError) and not found:
+            return (f"Error: {binary!r} not on PATH — install it: "
+                    f"`{preflight.INSTALL_HINT}`. The console's setup banner now says so too.")
+        reason = e.strerror or str(e) or e.__class__.__name__
+        where = f" at {found}" if found else ""
+        return (f"Error: {binary!r} was found{where} but could not be started ({reason}). If it's "
+                f"the npm launcher script, its interpreter (node) isn't on this process's PATH — "
+                f"point the plugin's `binary` setting at the native agent-browser binary, or put "
+                f"node on PATH. The console's setup banner says so too.")
+
     def _run(*args: str) -> str:
         """Run `agent-browser <args>` and return stdout, or a readable error.
 
@@ -145,13 +166,12 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         """
         try:
             proc = subprocess.Popen([binary, *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        except FileNotFoundError:
+        except OSError as e:
             # Surface it to the OPERATOR too, not just into the model's loop: the console
             # showed `warnings: []` while every browser call failed, which is the gap the
             # setup-gap seam exists for.
             _recheck(failed=True, force=True)
-            return (f"Error: {binary!r} not on PATH — install it: "
-                    f"`{preflight.INSTALL_HINT}`. The console's setup banner now says so too.")
+            return _launch_error(e)
 
         out_buf, err_buf = bytearray(), bytearray()
         total = 0
@@ -262,15 +282,23 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         Chrome, and the tool reports the absolute file on success — the handoff the artifact
         plugin's ``save_file_artifact`` takes.
 
-        **"Saved to …" means THIS call's bytes are on disk.** Three ways it used to lie:
+        **"Saved to …" means THIS call's bytes are on disk, and the previous file is never
+        at risk.** The CLI writes a short temp name beside the target (``storage.temp_path_for``);
+        only a finished, non-empty temp is swapped into place with one ``os.replace``, and on
+        any failure — including the turn being cancelled — just the temp is dropped. So:
 
-        * no page open — the CLI happily prints ``about:blank`` (a blank ~860-byte PDF that
-          passes any size check), so the current URL is checked first;
-        * exit 0 having written nothing, or a zero-byte file — so the file is stat'd;
-        * re-exporting to a name that already exists (the resume flow does exactly this) —
-          a run that writes nothing leaves the OLD file behind, indistinguishable by size.
-          So an existing file is parked first (``storage.set_aside``) and the target must be
-          re-created by this run; on failure the previous capture is put back.
+        * a run that exits 0 having written nothing (or zero bytes) is an error, and any
+          previous file with that name is untouched;
+        * a cancelled turn or a ``kill -9`` can leave at most a disposable temp (swept by the
+          next prune once it's an hour old) — never a missing target;
+        * two exports racing for one name: the last to FINISH wins, and neither deletes the
+          other's output;
+        * the target is marked in flight, so a concurrent capture's prune can't take it.
+
+        A blank page is refused up front: with nothing open the CLI still exits 0 and prints a
+        blank ~860-byte PDF of ``about:blank``. But ``about:blank`` isn't necessarily EMPTY —
+        an agent can write a report into it with ``browser_eval`` — so the check is on the
+        page's content, and the URL only decides whether that check is needed.
         """
         try:
             target = await asyncio.to_thread(
@@ -286,29 +314,44 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         if current.startswith("Error:"):
             return current
         if (current.splitlines() or [""])[0].strip() == "about:blank":
-            return ("Error: no page is open (the browser is on about:blank), so there is nothing "
-                    f"to capture — call browser_open with a URL first, then browser_{verb}.")
+            has = await _ab("eval", _PAGE_HAS_CONTENT_JS)
+            if (has.splitlines() or [""])[0].strip() != "1":
+                return ("Error: the page is blank (about:blank, with nothing on it), so there is "
+                        "nothing to capture. Open a page with browser_open first. If you have HTML "
+                        "rather than a URL, open it as a data:text/html,… URL (URL-encoded) or save "
+                        "it to a file and open its file:// URL — or write it into this blank page "
+                        f"with browser_eval — then call browser_{verb} again.")
 
-        try:
-            parked = await asyncio.to_thread(storage.set_aside, target)
-        except OSError as e:
-            return f"Error: could not replace the existing {target.name}: {e}"
-        out = await _ab(verb, str(target))
-        failed = out.startswith("Error:")
-        size = -1
-        if not failed:
+        with storage.in_flight(target):
+            temp = storage.temp_path_for(target)
             try:
-                size = target.stat().st_size
-            except OSError:
-                size = -1
-            if size <= 0:
-                failed = True
-                out = (f"Error: `agent-browser {verb}` reported success but wrote "
-                       f"{'an empty file' if size == 0 else 'no file'}, so nothing was saved. "
-                       f"Check the page with browser_snapshot (or browser_open a URL), then retry.")
-        await asyncio.to_thread(storage.settle, target, parked, keep_new=not failed)
-        if failed:
-            return out
+                out = await _ab(verb, str(temp))
+            except BaseException:
+                # Cancelled mid-capture: the target was never touched. Drop our temp; if the
+                # CLI writes it after we've gone, the next prune sweeps the orphan.
+                storage.discard(temp)
+                raise
+            failed = out.startswith("Error:")
+            size = -1
+            if not failed:
+                try:
+                    size = temp.stat().st_size
+                except OSError:
+                    size = -1
+                if size <= 0:
+                    failed = True
+                    out = (f"Error: `agent-browser {verb}` reported success but wrote "
+                           f"{'an empty file' if size == 0 else 'no file'}, so nothing was saved"
+                           f"{' and ' + target.name + ' is unchanged' if target.exists() else ''}. "
+                           f"Check the page with browser_snapshot (or browser_open a URL), then retry.")
+            if failed:
+                storage.discard(temp)
+                return out
+            try:
+                storage.commit(temp, target)
+            except OSError as e:
+                storage.discard(temp)
+                return f"Error: could not save {target.name}: {e}"
         await asyncio.to_thread(storage.prune_captures, keep=target)
         note = ""
         if size > storage.ARTIFACT_BLOB_LIMIT_BYTES:

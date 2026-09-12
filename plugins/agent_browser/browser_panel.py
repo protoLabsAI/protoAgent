@@ -88,10 +88,11 @@ def build_panel_data_router(cfg: dict | None):
         try:
             p = subprocess.run([binary, *args], capture_output=True, text=True, timeout=timeout)
             return p.returncode, (p.stderr or p.stdout or "").strip()
-        except FileNotFoundError:
-            # Say what to DO about it — the same sentence the operator's setup banner
-            # carries — instead of a bare "not on PATH" in a toolbar toast.
-            return 127, preflight.hint(preflight.probe(cfg)) or f"{binary!r} not on PATH"
+        except OSError:
+            # Missing OR unstartable (FileNotFoundError covers both, PermissionError the
+            # latter). Say what to DO about it — the same sentence the operator's setup
+            # banner carries — instead of a bare "not on PATH" in a toolbar toast.
+            return 127, preflight.hint(preflight.probe(cfg)) or f"{binary!r} could not be started"
         except subprocess.TimeoutExpired:
             return 124, "timed out"
 
