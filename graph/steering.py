@@ -76,6 +76,19 @@ def drained(session_id: str) -> list[str]:
     return list(_DRAINED.get(session_id, ()))
 
 
+def forget(session_id: str) -> None:
+    """Drop everything remembered for ``session_id`` — a deleted or cleared chat.
+
+    ``_QUEUES`` pops itself empty on drain, but the drain log is keyed by session and would
+    otherwise keep a row for every chat and server-fired context that ever folded a message
+    in, for the life of the process. Called where a session is retired."""
+    sid = str(session_id or "").strip()
+    if not sid:
+        return
+    _QUEUES.pop(sid, None)
+    _DRAINED.pop(sid, None)
+
+
 def dequeue(session_id: str, msg_id: str) -> bool:
     """Remove a still-queued steering message by id BEFORE it's folded in (the
     console's ✕-cancel on a pending bubble). Returns True if it was found and

@@ -122,6 +122,12 @@ type Harness = {
   setDrained: (ids: string[]) => void;
   /** Fail the next N `DELETE …/steer/{id}` calls. */
   failDeletes: (n: number) => void;
+  /** Kill a held interject POST so no answer ever comes back (the bubble stays unconfirmed). */
+  abortInterjects: () => Promise<void>;
+  /** Make this id's DELETE answer `removed: false` AND appear in `drained` — the server
+   *  folded it in between the reconcile's read and its dequeue. */
+  drainOnDelete: (id: string) => void;
+  drained: () => string[];
   deletes: string[];
   a2aSends: string[];
   /** Dequeues and sends, in the order the console made them. */
@@ -187,6 +193,7 @@ async function openAttendedServerTurn(page: Page, session: string): Promise<Harn
   let steerReads = 0;
   let deleteFailures = 0;
   let drained: string[] = [];
+  const drainDuringDelete = new Set<string>();
   const taskState = new Map<string, string>();
   const taskConsumed = new Map<string, string[]>();
   await page.route("**/api/chat/sessions/*/server-turns/*/interject", async (route) => {
@@ -249,6 +256,12 @@ async function openAttendedServerTurn(page: Page, session: string): Promise<Harn
     }
     deletes.push(id);
     order.push("dequeue");
+    if (drainDuringDelete.has(id)) {
+      // A turn folded it in just after the read that said "not queued, not drained".
+      drained = [...drained, id];
+      pending = pending.filter((item) => item.id !== id);
+      return route.fulfill({ json: { removed: false, pending: pending.length } }).catch(() => {});
+    }
     const removed = !denyRemoval && pending.some((item) => item.id === id);
     pending = pending.filter((item) => item.id !== id);
     await route.fulfill({ json: { removed, pending: pending.length } });
@@ -308,6 +321,13 @@ async function openAttendedServerTurn(page: Page, session: string): Promise<Harn
     failDeletes: (n) => {
       deleteFailures = n;
     },
+    abortInterjects: async () => {
+      for (const { route } of heldI.splice(0)) await route.abort("failed").catch(() => {});
+    },
+    drainOnDelete: (id) => {
+      drainDuringDelete.add(id);
+    },
+    drained: () => drained,
     deletes,
     a2aSends,
     order,
@@ -836,4 +856,60 @@ test("switching windows doesn't refund the grace, and a blip doesn't spend it", 
   }
   await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(0, { timeout: 15_000 });
   await expect(page.locator(`${SLOT} .pl-message--user`).filter({ hasText: INTERJECTION })).toHaveCount(1);
+});
+
+test("words are not re-offered when the dequeue proves the agent just read them", async ({ page }) => {
+  const session = "chat-interject-reclaim-race";
+  const h = await openAttendedServerTurn(page, session);
+
+  // The window the dequeue-first rule exists to close, INVERTED. The submission never got
+  // an answer (unconfirmed), the queue read says neither queued nor drained — and then a
+  // turn folds the message in between that read and the dequeue. The dequeue takes nothing
+  // back and the server's drain log now names the id: that answer is in hand, so the only
+  // honest outcome is to settle. Handing the words over here is the "delivered AND
+  // re-offered" hole — the operator re-sends what the agent already used.
+  h.holdInterject(true);
+  const field = page.locator(`${SLOT} .pl-prompt__field`);
+  await field.fill(INTERJECTION);
+  await field.press("Enter");
+  await expect.poll(() => h.heldInterjects()).toBe(1);
+  const sent = h.interjected()!;
+  h.setPending([]);
+  h.setDrained([]);
+  await h.abortInterjects();
+  h.drainOnDelete(sent.id);
+  h.taskState.set(TASK, "TASK_STATE_COMPLETED");
+  h.release(terminalFrames(session));
+
+  await expect.poll(() => h.deletes.length, { timeout: 25_000 }).toBeGreaterThanOrEqual(1);
+  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(0, { timeout: 15_000 });
+  expect(h.drained()).toContain(sent.id); // the server says the agent has it
+  expect(await field.inputValue(), "its words must not be re-offered").not.toContain(INTERJECTION);
+  await expect(page.locator(`${SLOT} .pl-message--user`).filter({ hasText: INTERJECTION })).toHaveCount(1);
+  expect(h.a2aSends.filter((body) => body.includes(INTERJECTION))).toEqual([]);
+});
+
+test("words DO come back when the dequeue proves nothing was delivered", async ({ page }) => {
+  const session = "chat-interject-reclaim-clean";
+  const h = await openAttendedServerTurn(page, session);
+
+  // The other side of the same answer: the submission was never acknowledged, the server
+  // tracks folds and reports neither a queued nor a drained copy, and our dequeue takes
+  // nothing back — it never landed, so the operator gets their words.
+  h.holdInterject(true);
+  const field = page.locator(`${SLOT} .pl-prompt__field`);
+  await field.fill(INTERJECTION);
+  await field.press("Enter");
+  await expect.poll(() => h.heldInterjects()).toBe(1);
+  h.setPending([]);
+  h.setDrained([]);
+  await h.abortInterjects();
+  h.taskState.set(TASK, "TASK_STATE_COMPLETED");
+  h.release(terminalFrames(session));
+
+  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(0, { timeout: 25_000 });
+  await expect.poll(() => field.inputValue(), { timeout: 10_000 }).toContain(INTERJECTION);
+  await expect(page.locator(`${SLOT} .pl-message--user`).filter({ hasText: INTERJECTION })).toHaveCount(0);
+  // (The aborted submission toasts too — "couldn't confirm" — so match the hand-back one.)
+  await expect(page.locator(".pl-toast--error").filter({ hasText: /never reached the agent/i })).toBeVisible();
 });

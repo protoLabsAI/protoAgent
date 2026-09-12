@@ -112,6 +112,27 @@ def test_middleware_noop_without_session_or_queue():
     assert SteeringMiddleware._inject({"session_id": "sess", "messages": []}) is None  # empty queue
 
 
+def test_forget_drops_a_retired_session_from_both_records():
+    """`_QUEUES` pops itself empty on drain, but the drain log is keyed by session — without
+    this it would keep a row for every chat and server-fired context that ever folded a
+    message in, for the life of the process. A deleted chat has nobody left to ask."""
+    steering.enqueue("gone", "read by the turn", msg_id="d1")
+    steering.drain("gone")  # takes the whole queue, and remembers what it took
+    steering.enqueue("gone", "still queued", msg_id="q2")
+    steering.enqueue("stays", "other chat", msg_id="o1")
+    steering.drain("stays")
+    assert steering.drained("gone") == ["d1"] and steering.pending("gone") == 1
+
+    steering.forget("gone")
+
+    assert steering.drained("gone") == [] and steering.pending("gone") == 0
+    assert "gone" not in steering._DRAINED and "gone" not in steering._QUEUES
+    # Scoped: another session keeps its own record.
+    assert steering.drained("stays") == ["o1"]
+    steering.forget("")  # blank is a no-op, not a wipe
+    assert steering.drained("stays") == ["o1"]
+
+
 @pytest.mark.asyncio
 async def test_async_middleware_emits_the_consumption_boundary(monkeypatch):
     seen = []

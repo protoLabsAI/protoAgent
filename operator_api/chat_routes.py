@@ -435,6 +435,12 @@ def register_chat_routes(app, ui: str) -> None:
                     # could not be written. The other cleanup is idempotent, so a
                     # caller may retry this partially completed deletion safely.
                     raise
+        # Mid-turn steering state is per session: a queued message nobody can act on any
+        # more, and the log of what earlier turns folded in (which answers "did the agent
+        # read this?" for a console that is asking — a deleted chat has no one asking).
+        from graph import steering
+
+        steering.forget(session_id)
         return {"deleted": True, "harvested": chunk_id is not None}
 
     @app.post("/api/chat/sessions/{session_id}/compact")

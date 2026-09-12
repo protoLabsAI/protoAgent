@@ -1536,6 +1536,10 @@ function ChatSessionSlot({
   // turn, because each anchors to its own turn's bubbles.
   function settleServerInterjections(items: QueuedSteer[]) {
     if (!session || !items.length) return;
+    // Read the transcript BEFORE retiring anything from the queue: a bail-out between the
+    // two would drop the bubble without ever placing the message.
+    let next = chatStore.getSnapshot().sessions.find((s) => s.id === session.id)?.messages;
+    if (!next) return;
     const ids = new Set(items.map((item) => item.id));
     setSteerQueue(steerQueueRef.current.filter((q) => !ids.has(q.id)));
     const byTask = new Map<string, QueuedSteer[]>();
@@ -1543,8 +1547,6 @@ function ChatSessionSlot({
       const key = item.serverTaskId ?? "";
       byTask.set(key, [...(byTask.get(key) ?? []), item]);
     }
-    let next = chatStore.getSnapshot().sessions.find((s) => s.id === session.id)?.messages;
-    if (!next) return;
     for (const [taskId, group] of byTask) {
       next = placeServerTurnSteers(next, group, {
         liveId: liveMessageId(taskId, session.id),
@@ -1713,20 +1715,49 @@ function ChatSessionSlot({
 
   /** A submission the server never acknowledged and can't account for. Take it back FIRST:
    *  that is what makes handing the words over safe — a copy the server still held could
-   *  otherwise be read after the operator was told it wasn't sent. The dequeue's answer is
-   *  also the only thing allowed to overrule the hand-back: `removed: false` with the server
-   *  reporting neither a queued nor a drained copy means it never landed. */
+   *  otherwise be read after the operator was told it wasn't sent.
+   *
+   *  The dequeue's ANSWER then decides, because it is the only thing that knows what the
+   *  read a moment ago could not. `removed` means we hold the only copy: the words are the
+   *  operator's again. `removed: false` means we took nothing back — which is exactly the
+   *  window this dequeue exists to close, inverted: a turn can fold the message in between
+   *  the read and the dequeue. So ask once more before speaking: if the server's drain log
+   *  now names it, the agent has it and the bubble settles; only a server that can keep a
+   *  drain log AND reports neither a queued nor a drained copy has actually shown the
+   *  message never landed. Anything less definite settles rather than re-offering words the
+   *  agent may have used. */
   async function reclaimInterjections(items: QueuedSteer[]) {
     if (!session) return;
     const back: QueuedSteer[] = [];
+    const read: QueuedSteer[] = [];
     for (const item of items) {
+      let removed: boolean;
       try {
-        await api.cancelSteer(session.id, item.id);
-        back.push(item);
+        ({ removed } = await api.cancelSteer(session.id, item.id));
       } catch {
         scheduleInterjectRecheck(); // couldn't take it back — leave it queued and ask again
+        continue;
+      }
+      if (removed) {
+        back.push(item);
+        continue;
+      }
+      let queue: { pending: { id: string }[]; drained?: string[] };
+      try {
+        queue = await api.pendingSteer(session.id);
+      } catch {
+        scheduleInterjectRecheck(); // the answer exists, we just couldn't read it — retry
+        continue;
+      }
+      if (queue.pending.some((row) => row.id === item.id)) {
+        scheduleInterjectRecheck(); // it landed after all: the ordinary rules apply next pass
+      } else if (Array.isArray(queue.drained) && !queue.drained.includes(item.id)) {
+        back.push(item); // this server tracks folds and has none of it: it never landed
+      } else {
+        read.push(item); // the agent has it (or nothing can say it doesn't)
       }
     }
+    if (read.length) settleServerInterjections(read);
     if (back.length) {
       handBackQueued(
         back,
