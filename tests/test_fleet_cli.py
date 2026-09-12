@@ -93,16 +93,35 @@ def sup(monkeypatch):
 # ── the deck entry (bare `fleet`, `top`) ──────────────────────────────────────
 
 
-def test_bare_fleet_needs_a_terminal(monkeypatch, capsys):
+def test_bare_fleet_needs_a_terminal_on_both_ends(monkeypatch, capsys):
+    import importlib
+
+    real = importlib.import_module
+    monkeypatch.setattr(importlib, "import_module", lambda name, *a, **kw: (_ for _ in ()).throw(AssertionError("must not import the deck")) if name.startswith("deck.") else real(name, *a, **kw))
     monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     assert cli.run_fleet_cli([]) == 2
     assert "needs a terminal" in capsys.readouterr().err
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    assert cli.run_fleet_cli([]) == 2
+
+
+def test_bare_fleet_json_is_the_roster_not_a_tui(monkeypatch, capsys):
+    """Review MEDIUM-3: `fleet --json` on a pipe used to start Textual against the pipe and hang."""
+    _live(monkeypatch, FakeClient())
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    assert cli.run_fleet_cli(["--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["mode"] == "live"
+    assert cli.run_deck_cli(["ls", "--json"]) == 0  # `top ls --json` → the roster too
 
 
 def test_bare_fleet_without_the_deck_module_prints_a_hint(monkeypatch, capsys):
     """A frozen build that does not bundle Textual (S6's call) must say so, not traceback."""
     import importlib
 
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     real = importlib.import_module
 
     def fake(name, *a, **kw):
@@ -117,6 +136,7 @@ def test_bare_fleet_without_the_deck_module_prints_a_hint(monkeypatch, capsys):
 
 def test_bare_fleet_opens_the_deck_on_the_live_backend(monkeypatch):
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     seen: dict = {}
     _live(monkeypatch, FakeClient())
 
@@ -132,7 +152,8 @@ def test_bare_fleet_opens_the_deck_on_the_live_backend(monkeypatch):
     monkeypatch.setattr(importlib, "import_module", lambda name, *a, **kw: FakeApp if name == "deck.app" else real(name, *a, **kw))
     assert cli.run_fleet_cli([]) == 0
     assert seen == {"mode": "live"}
-    assert cli.run_deck_cli(["--json"]) == 0  # `top` strips verbs and opens the deck
+    assert cli.run_deck_cli(["ls"]) == 0  # `top` strips verbs and opens the deck
+    assert seen == {"mode": "live"}
 
 
 def test_flags_work_before_and_after_the_verb(monkeypatch, capsys):

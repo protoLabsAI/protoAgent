@@ -26,7 +26,6 @@ project_board plugin's own resolution (explicit ``BR_BIN`` > its fetched copy >
 from __future__ import annotations
 
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -203,6 +202,11 @@ EXCLUDE = ["tkinter"]
 # runtime/operator-mcp, i.e. ACP). MUST stay in sync with `server.cli._FORWARD` — the
 # test `test_sidecar_bundles_every_forwarded_cli_module` fails if a new verb is added
 # without collecting it here. --hidden-import pulls the module + its static import chain.
+# NOTE (fleet deck, #3468 → #3473): `graph.fleet.cli` imports `deck.app` / `deck.data` BY NAME
+# (importlib) so the frozen sidecar does not pull Textual and its .tcss assets by accident;
+# in this build bare `protoagent fleet` / `top` print a one-line hint and exit 2. Bundling the
+# deck (`--collect-all textual` + these two modules) is S6's decision — do not add them here
+# piecemeal.
 CLI_FORWARD_MODULES = [
     "graph.plugins.cli",
     "graph.workspaces.cli",

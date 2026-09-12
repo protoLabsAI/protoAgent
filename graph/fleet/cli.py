@@ -347,6 +347,13 @@ def _cmd_deck(args: argparse.Namespace) -> int:
     it gets a one-line hint instead of a traceback (the sidecar decision is S6, #3473)."""
     import importlib
 
+    if args.as_json:
+        # "fleet, as JSON" can only mean the roster — Textual against a pipe would hang.
+        return _cmd_ls(args)
+    if not (sys.stdout.isatty() and sys.stdin.isatty()):
+        # Checked BEFORE importing Textual: a redirected run should not load it just to say no.
+        print("✗ the deck needs a terminal — for scripts use `protoagent fleet ls --json`", file=sys.stderr)
+        return 2
     try:
         deckapp = importlib.import_module("deck.app")
         deckdata = importlib.import_module("deck.data")
@@ -356,9 +363,6 @@ def _cmd_deck(args: argparse.Namespace) -> int:
             "or run from a source checkout / `uv tool install protolabs-agent`",
             file=sys.stderr,
         )
-        return 2
-    if not sys.stdout.isatty() and not args.as_json:
-        print("✗ the deck needs a terminal — for scripts use `protoagent fleet ls --json`", file=sys.stderr)
         return 2
     conn = _open_hub(args)
     if conn is not None:

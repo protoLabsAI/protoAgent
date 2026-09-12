@@ -99,7 +99,10 @@ class RosterScreen(Screen):
             banner.display = False
         table = self.query_one("#roster", DataTable)
         rows = [a for a in snap.roster if self._matches(a)]
-        keep = self._selected_slug
+        # Keep the row under the cursor NOW (a `j` whose RowHighlighted has not landed yet
+        # would otherwise be undone by a coincident poll); fall back to the last known slug.
+        cur = self.selected()
+        keep = slug_of(cur) if cur is not None else self._selected_slug
         table.clear()
         self._rows = rows
         for a in rows:
@@ -173,7 +176,7 @@ class RosterScreen(Screen):
         if action == "stop":
             return pres == "online"
         if action == "restart":
-            return pres == "online"
+            return pres == "online" and not offline  # offline: start/stop only, as documented
         return True
 
     # ── actions ──
@@ -215,7 +218,7 @@ class RosterScreen(Screen):
 
     def action_restart(self) -> None:
         a = self.selected()
-        if a is not None:
+        if a is not None and self.app.backend.mode != "offline":  # type: ignore[attr-defined]
             self.app.lifecycle("restart", a)  # type: ignore[attr-defined]
 
     def action_open_console(self) -> None:
@@ -226,17 +229,15 @@ class RosterScreen(Screen):
         if not href:
             self.notify("no console URL in offline mode", severity="warning")
             return
-        try:
-            webbrowser.open(href)
-            self.notify(f"opened {href}")
-        except Exception as exc:  # noqa: BLE001 — a browser hand-off must never crash the deck
-            self.notify(f"could not open a browser: {exc}", severity="error")
+        self.app.open_in_browser(href)  # type: ignore[attr-defined]
 
     def action_filter(self) -> None:
         self.app.push_screen(FilterScreen(self._filter), self._set_filter)
 
     def _set_filter(self, value: str | None) -> None:
-        self._filter = (value or "").strip()
+        if value is None:  # the prompt was cancelled — keep whatever filter was active
+            return
+        self._filter = value.strip()
         if self.app.snapshot is not None:  # type: ignore[attr-defined]
             self.render_snapshot(self.app.snapshot)  # type: ignore[attr-defined]
 
@@ -298,20 +299,18 @@ class DetailScreen(Screen):
         self.following = True
         self._focus_logs = focus_logs
         self._seen_logs = 0
+        self._last_rec: tuple | None = None
         self._log_note = ""
         self._timer: Any = None
 
     def compose(self) -> ComposeResult:
-        a = self.agent
-        pres = presence_of(a)
-        head = f"◂ {display_name(a)}   {pres} · :{a.get('port') or '—'}" + (f" · pid {a['pid']}" if a.get("pid") else "") + (f" · v{a['version']}" if a.get("version") else "")
-        yield Static(head, id="detail-head")
+        yield Static(self._head_text(), id="detail-head")
         with Horizontal(id="detail-body"):
             with VerticalScroll(id="detail-left"):
                 yield Static("RUNTIME\n  loading…", id="runtime")
                 yield Static("SESSIONS", id="sessions-head")
                 sessions: DataTable = DataTable(id="sessions", cursor_type="row")
-                sessions.add_columns("SESSION", "STATE", "TURNS", "UPDATED")
+                sessions.add_columns("SESSION", "STATE", "LAST ACTIVITY")
                 yield sessions
                 yield Static("", id="telemetry")
             with Vertical(id="detail-right"):
@@ -324,10 +323,55 @@ class DetailScreen(Screen):
         self._timer = self.set_interval(LOG_POLL_S, self._tick)
         if self._focus_logs:
             self.query_one("#log", RichLog).focus()
+        self._relayout(self.size.width)
+
+    def on_resize(self, event: Any) -> None:
+        self._relayout(event.size.width)
+
+    def _relayout(self, width: int) -> None:
+        # Below ~100 columns two side-by-side panes leave the sessions table unreadable;
+        # stack them instead (80×24 is a supported size).
+        self.query_one("#detail-body").set_class(width < 100, "narrow")
+
+    def _current(self) -> dict:
+        """The member's CURRENT roster row (the app polls every 3 s), falling back to the
+        row captured at push time — so the head and the x/r keys follow a stop/start."""
+        snap = self.app.snapshot  # type: ignore[attr-defined]
+        if snap is not None:
+            for a in snap.roster:
+                if slug_of(a) == self.slug:
+                    self.agent = a
+                    return a
+        return self.agent
+
+    def _head_text(self) -> str:
+        a = self._current()
+        pres = presence_of(a)
+        return f"◂ {display_name(a)}   {pres} · :{a.get('port') or '—'}" + (f" · pid {a['pid']}" if a.get("pid") and pres in ("online", "host") else "") + (f" · v{a['version']}" if a.get("version") else "")
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action in ("stop", "restart"):
+            a = self._current()
+            return presence_of(a) == "online" and not a.get("host") and not a.get("remote")
+        return True
+
+    def on_roster_update(self) -> None:
+        """The app polled the roster: the head and the x/r keys follow the member's
+        current state (a stop from this screen shows here within one poll)."""
+        try:
+            self.query_one("#detail-head", Static).update(self._head_text())
+        except Exception:  # noqa: BLE001 — the screen may be mid-teardown
+            return
+        self.refresh_bindings()
 
     def _tick(self) -> None:
-        if self.following:
-            self.refresh_detail()
+        if not self.following:
+            return
+        # A stalled member (three proxied GETs at up to 5 s each) must not accumulate a new
+        # thread every 2 s — each stale one would then re-render older data over newer.
+        if any(w.group == "detail" and w.is_running for w in self.workers):
+            return
+        self.refresh_detail()
 
     @work(thread=True, exclusive=True, group="detail")
     def refresh_detail(self) -> None:
@@ -338,6 +382,8 @@ class DetailScreen(Screen):
         app.call_from_thread(self.render_detail, detail)
 
     def render_detail(self, d: MemberDetail) -> None:
+        self.query_one("#detail-head", Static).update(self._head_text())
+        self.refresh_bindings()
         rt = d.runtime
         if d.runtime_error:
             runtime_text = f"RUNTIME\n  ⚠ {d.runtime_error}"
@@ -362,10 +408,13 @@ class DetailScreen(Screen):
             self.query_one("#sessions-head", Static).update(f"SESSIONS  ⚠ {d.sessions_error}")
         else:
             self.query_one("#sessions-head", Static).update(f"SESSIONS  newest first · {len(d.sessions)}")
+            # GET /api/diagnostics/sessions rows (#3171): session_id, context_id,
+            # latest_task_id, latest_task_state, last_activity, status, malformed.
             for s in d.sessions[:50]:
-                sid = str(s.get("context_id") or s.get("session_id") or "")
-                short = sid if len(sid) <= 24 else f"{sid[:10]}…{sid[-8:]}"
-                table.add_row(short, str(s.get("state") or s.get("last_state") or ""), str(s.get("task_count") or s.get("turn_count") or ""), str(s.get("last_updated") or "")[:16])
+                sid = str(s.get("session_id") or s.get("context_id") or "")
+                short = sid if len(sid) <= 26 else f"{sid[:12]}…{sid[-8:]}"
+                state = str(s.get("latest_task_state") or s.get("status") or "").replace("TASK_STATE_", "").lower()
+                table.add_row(short, state, str(s.get("last_activity") or "")[:16].replace("T", " "))
 
         r = d.rollup
         if r is None:
@@ -383,9 +432,21 @@ class DetailScreen(Screen):
         if d.logs_error:
             head.update(f"LOG  ⚠ {d.logs_error}")
             return
-        # The ring returns the newest N; only write lines we have not shown yet.
-        new = d.logs[self._seen_logs :] if len(d.logs) >= self._seen_logs else d.logs
-        if len(d.logs) < self._seen_logs:
+        # The ring answers the NEWEST N records, so a count can't say what is new once the
+        # window is full (review HIGH-1: the tail froze at 200 while the header said
+        # "following"). Anchor on the last record we rendered, by identity; write what
+        # follows it; if it has rotated out of the window, re-render the whole window.
+        def _key(rec: dict) -> tuple:
+            return (str(rec.get("ts") or ""), str(rec.get("logger") or ""), str(rec.get("message") or ""))
+
+        new = d.logs
+        if self._last_rec is not None:
+            idx = next((i for i in range(len(d.logs) - 1, -1, -1) if _key(d.logs[i]) == self._last_rec), None)
+            if idx is None:
+                log.clear()
+            else:
+                new = d.logs[idx + 1 :]
+        elif self._seen_logs:
             log.clear()
         self._log_note = d.logs_note
         for rec in new:
@@ -397,6 +458,8 @@ class DetailScreen(Screen):
             elif lvl == "WARNING":
                 line.stylize("yellow")
             log.write(line)
+        if d.logs:
+            self._last_rec = _key(d.logs[-1])
         self._seen_logs = len(d.logs)
         head.update(self._log_head())
 
@@ -422,8 +485,7 @@ class DetailScreen(Screen):
     def action_open_console(self) -> None:
         href = self.app.backend.console_href(self.agent)  # type: ignore[attr-defined]
         if href:
-            webbrowser.open(href)
-            self.notify(f"opened {href}")
+            self.app.open_in_browser(href)  # type: ignore[attr-defined]
 
 
 # ── the app ───────────────────────────────────────────────────────────────────
@@ -441,6 +503,9 @@ class FleetDeck(App[int]):
     #filter-input { margin: 0 1; }
     #detail-head { height: 1; padding: 0 1; text-style: bold; background: $surface; }
     #detail-body { height: 1fr; }
+    #detail-body.narrow { layout: vertical; }
+    #detail-body.narrow #detail-left { width: 1fr; height: auto; max-height: 45%; border-right: none; border-bottom: solid $surface-lighten-2; }
+    #detail-body.narrow #detail-right { width: 1fr; height: 1fr; }
     #detail-left { width: 46%; min-width: 30; padding: 0 1; border-right: solid $surface-lighten-2; }
     #detail-right { width: 1fr; padding: 0 1; }
     #runtime, #sessions-head, #telemetry, #log-head { height: auto; margin: 0 0 1 0; }
@@ -474,6 +539,8 @@ class FleetDeck(App[int]):
         roster = self._roster_screen()
         if roster is not None:
             roster.render_snapshot(snap)
+        if isinstance(self.screen, DetailScreen):
+            self.screen.on_roster_update()
 
     def _roster_screen(self) -> RosterScreen | None:
         for scr in self.screen_stack:
@@ -513,6 +580,16 @@ class FleetDeck(App[int]):
             self.call_from_thread(self.notify, f"{verb} {name}: {res.get('reason') or res.get('error') or 'failed'}", severity="error", timeout=8)
         self.poll()
 
+    @work(thread=True, group="browser")
+    def open_in_browser(self, href: str) -> None:
+        # webbrowser.open blocks on macOS (it waits for osascript) — keep it off the UI loop.
+        try:
+            webbrowser.open(href)
+        except Exception as exc:  # noqa: BLE001 — a browser hand-off must never crash the deck
+            self.call_from_thread(self.notify, f"could not open a browser: {exc}", severity="error")
+            return
+        self.call_from_thread(self.notify, f"opened {href}")
+
     def action_quit(self) -> None:
         self.exit(0)
 
@@ -522,7 +599,10 @@ class FleetDeck(App[int]):
 
 
 def run(backend: Backend) -> int:
-    """Run the deck to completion and return an exit code."""
+    """Run the deck to completion and return an exit code. A fatal error inside the app
+    (Textual sets ``return_code``) must not read as a clean exit."""
     app = FleetDeck(backend)
     code = app.run()
+    if app.return_code:
+        return int(app.return_code)
     return int(code or 0)

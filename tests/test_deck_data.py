@@ -114,6 +114,8 @@ def test_live_detail_reads_through_the_slug_proxy_and_degrades_per_pane():
             return httpx.Response(200, json={"enabled": True, "capacity": 1024, "returned": 1, "lines": [{"ts": "2026-09-12T09:41:02+00:00", "level": "INFO", "logger": "a2a", "message": "task working"}]})
         if p == "/agents/protoEngineer-ba4c/api/diagnostics/sessions":
             return httpx.Response(503, json={"sessions": [], "detail": "task store is not configured on this member"})
+        if p == "/agents/old-1/api/diagnostics/sessions":
+            return httpx.Response(200, json={"sessions": [{"session_id": "chat-1", "context_id": "chat-1", "latest_task_id": "t1", "latest_task_state": "TASK_STATE_WORKING", "last_activity": "2026-09-12T09:00:00+00:00", "status": "ok", "malformed": []}]})
         return httpx.Response(404)
 
     be = deckdata.LiveBackend(_conn(handler))

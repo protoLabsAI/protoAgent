@@ -5,7 +5,7 @@ host/remotes, the detail screen renders every pane, offline mode hides what need
 from __future__ import annotations
 
 import pytest
-from textual.widgets import DataTable, Static
+from textual.widgets import DataTable, RichLog, Static
 
 from deck import data as deckdata
 from deck.app import DetailScreen, FleetDeck, RosterScreen
@@ -54,7 +54,10 @@ class FakeBackend:
             {"ts": "2026-09-12T09:41:02+00:00", "level": "INFO", "logger": "a2a", "message": "task 7f3a state=working"},
             {"ts": "2026-09-12T09:41:31+00:00", "level": "WARNING", "logger": "gateway", "message": "429, retry 2/5"},
         ]
-        d.sessions = [{"context_id": "chat-1789169255449-mw1pz8", "state": "completed", "task_count": 12, "last_updated": "2026-09-11T23:29:04"}]
+        # the diagnostics/sessions route's real row shape (#3171)
+        d.sessions = [
+            {"session_id": "chat-1789169255449-mw1pz8", "context_id": "chat-1789169255449-mw1pz8", "latest_task_id": "3137…", "latest_task_state": "TASK_STATE_COMPLETED", "last_activity": "2026-09-11T23:29:04+00:00", "status": "ok", "malformed": []}
+        ]
         return d
 
     def console_href(self, agent):
@@ -149,6 +152,8 @@ async def test_detail_screen_renders_runtime_logs_sessions_and_telemetry():
         assert "claude-fable-5-1 via gateway" in runtime and "protoEngineer · kj" in runtime and "warnings   none" in runtime
         sessions = app.screen.query_one("#sessions", DataTable)
         assert sessions.row_count == 1
+        cells = [str(c) for c in sessions.get_row_at(0)]
+        assert cells == ["chat-1789169255449-mw1pz8", "completed", "2026-09-11 23:29"]
         tele = str(app.screen.query_one("#telemetry", Static).content)
         assert "turns 38" in tele and "$12.40" in tele and "cache hit 61%" in tele
         log_head = str(app.screen.query_one("#log-head", Static).content)
@@ -181,6 +186,13 @@ async def test_filter_narrows_the_roster_and_escape_clears_it():
         await pilot.pause(0.3)
         assert [r[1] for r in _rows(app)] == ["Cindi"]
         assert "filter: 'stopped'" in str(app.screen.query_one("#status", Static).content)
+        # Esc INSIDE the prompt cancels and keeps the active filter (review MEDIUM-4)
+        await pilot.press("slash")
+        await pilot.pause(0.2)
+        await pilot.press("escape")
+        await pilot.pause(0.3)
+        assert [r[1] for r in _rows(app)] == ["Cindi"]
+        # Esc on the roster clears it
         await pilot.press("escape")
         await pilot.pause(0.3)
         assert len(_rows(app)) == 5
@@ -201,6 +213,71 @@ async def test_offline_mode_is_badged_and_hides_hub_only_keys():
         await pilot.press("enter")
         await pilot.pause(0.2)
         assert isinstance(app.screen, RosterScreen)  # enter does nothing offline
+
+
+@pytest.mark.asyncio
+async def test_log_tail_follows_a_rotating_ring_by_identity():
+    """Review HIGH-1: the ring answers the newest N; slicing by count froze the tail at N."""
+    be = FakeBackend()
+    window: list[dict] = [{"ts": f"2026-09-12T09:00:{i:02d}+00:00", "level": "INFO", "logger": "t", "message": f"line {i}"} for i in range(5)]
+    n = {"next": 5}
+
+    def detail(agent):
+        d = deckdata.MemberDetail(slug=deckdata.slug_of(agent), name=agent["name"])
+        d.logs = list(window[-5:])  # a 5-line window over a growing ring
+        return d
+
+    be.detail = detail  # type: ignore[assignment]
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause(0.3)
+        await pilot.press("j", "enter")
+        await pilot.pause(0.5)
+        assert isinstance(app.screen, DetailScreen)
+        log = app.screen.query_one("#log", RichLog)
+        assert len(log.lines) == 5
+        # three new lines arrive; the window still holds 5 → only the 3 new ones are written
+        for _ in range(3):
+            window.append({"ts": f"2026-09-12T09:00:{n['next']:02d}+00:00", "level": "INFO", "logger": "t", "message": f"line {n['next']}"})
+            n["next"] += 1
+        app.screen.refresh_detail()
+        await pilot.pause(0.5)
+        assert len(log.lines) == 8
+        assert "line 7" in str(log.lines[-1])
+        # a burst larger than the window rotates the anchor out → the window is re-rendered whole
+        for _ in range(9):
+            window.append({"ts": f"2026-09-12T09:00:{n['next']:02d}+00:00", "level": "INFO", "logger": "t", "message": f"line {n['next']}"})
+            n["next"] += 1
+        app.screen.refresh_detail()
+        await pilot.pause(0.5)
+        assert len(log.lines) == 5 and "line 16" in str(log.lines[-1])
+
+
+@pytest.mark.asyncio
+async def test_detail_head_and_keys_follow_the_current_roster_row():
+    be = FakeBackend()
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause(0.3)
+        await pilot.press("j", "enter")  # protoEngineer, online
+        await pilot.pause(0.5)
+        assert app.screen.check_action("stop", ()) is True
+        await pilot.press("x")
+        await pilot.pause(0.6)
+        assert be.calls == [("stop", "protoEngineer")]
+        assert "stopped" in str(app.screen.query_one("#detail-head", Static).content)
+        assert app.screen.check_action("stop", ()) is False
+
+
+@pytest.mark.asyncio
+async def test_narrow_terminal_stacks_the_detail_panes():
+    be = FakeBackend()
+    app = FleetDeck(be, poll_s=0)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.pause(0.3)
+        await pilot.press("j", "enter")
+        await pilot.pause(0.5)
+        assert app.screen.query_one("#detail-body").has_class("narrow")
 
 
 @pytest.mark.asyncio
